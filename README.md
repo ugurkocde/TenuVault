@@ -19,9 +19,9 @@ to third-party web apps, or whose Conditional Access policies block them.
 </picture>
 
 <p align="center">
-  <a href="https://github.com/ugurkocde/TenuVault/releases/latest"><img src="docs/assets/download-windows.svg" alt="Download the latest stable TenuVault release for Windows" width="252" height="60"></a>
+  <a href="https://github.com/ugurkocde/TenuVault/releases/latest"><img src="docs/assets/download-windows.svg" alt="Download the latest stable TenuVault release for Windows" width="240" height="64"></a>
   &nbsp;
-  <a href="https://github.com/ugurkocde/TenuVault/releases/latest"><img src="docs/assets/download-macos.svg" alt="Download the latest stable TenuVault release for macOS" width="252" height="60"></a>
+  <a href="https://github.com/ugurkocde/TenuVault/releases/latest"><img src="docs/assets/download-macos.svg" alt="Download the latest stable TenuVault release for macOS" width="240" height="64"></a>
 </p>
 
 **Download the latest stable release:** choose the Windows `.exe` setup, or the macOS `.dmg` for

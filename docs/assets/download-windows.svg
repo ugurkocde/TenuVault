@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="252" height="60" viewBox="0 0 252 60" role="img" aria-label="Download for Windows, latest stable release">
-  <rect width="252" height="60" rx="12" fill="#18181b"/>
-  <g fill="#fff"><path d="M18 17h11v11H18zm14 0h11v11H32zM18 31h11v11H18zm14 0h11v11H32z"/>
-  <text x="58" y="27" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="700">Download for Windows</text></g>
-  <text x="58" y="45" fill="#d4d4d8" font-family="Arial,Helvetica,sans-serif" font-size="12">Latest stable · x64 and Arm64</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="64" viewBox="0 0 240 64" role="img" aria-label="Windows download, latest stable release">
+  <rect width="240" height="64" rx="12" fill="#18181b"/>
+  <g fill="#fff" transform="translate(20 20)"><path d="M0 0h10.5v10.5H0zm13.5 0H24v10.5H13.5zM0 13.5h10.5V24H0zm13.5 0H24V24H13.5z"/></g>
+  <text x="58" y="28" fill="#fff" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="700">Windows download</text>
+  <text x="58" y="47" fill="#d4d4d8" font-family="Arial,Helvetica,sans-serif" font-size="12">Latest stable release</text>
 </svg>

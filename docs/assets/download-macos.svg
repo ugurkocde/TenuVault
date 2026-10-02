@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="252" height="60" viewBox="0 0 252 60" role="img" aria-label="Download for macOS, latest stable release">
-  <rect width="252" height="60" rx="12" fill="#18181b"/>
-  <g fill="#fff"><path d="M34 15c0 3-2 6-5 6-1-3 2-6 5-6zm8 23c-1 3-4 8-7 8-2 0-3-1-5-1s-3 1-5 1c-3 0-7-6-8-11-2-7 1-12 6-13 3-1 5 1 7 1s5-2 8-1c2 1 4 2 5 4-6 3-6 10-1 12z"/>
-  <text x="58" y="27" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="700">Download for macOS</text></g>
-  <text x="58" y="45" fill="#d4d4d8" font-family="Arial,Helvetica,sans-serif" font-size="12">Latest stable · Apple silicon / Intel</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="64" viewBox="0 0 240 64" role="img" aria-label="macOS download, latest stable release">
+  <rect width="240" height="64" rx="12" fill="#18181b"/>
+  <g fill="#fff" transform="translate(20 20)"><svg viewBox="16 14 28 34" width="24" height="24"><path d="M34 15c0 3-2 6-5 6-1-3 2-6 5-6zm8 23c-1 3-4 8-7 8-2 0-3-1-5-1s-3 1-5 1c-3 0-7-6-8-11-2-7 1-12 6-13 3-1 5 1 7 1s5-2 8-1c2 1 4 2 5 4-6 3-6 10-1 12z"/></svg></g>
+  <text x="58" y="28" fill="#fff" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="700">macOS download</text>
+  <text x="58" y="47" fill="#d4d4d8" font-family="Arial,Helvetica,sans-serif" font-size="12">Latest stable release</text>
 </svg>
