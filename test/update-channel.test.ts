@@ -325,6 +325,25 @@ describe("installing an update on Windows", () => {
 })
 
 describe("installing on quit on macOS", () => {
+  it.each([true, false])("honors quit after a staging failure only for installs started on quit (%s)", async (onQuit) => {
+    const platform = process.platform
+    Object.defineProperty(process, "platform", { value: "darwin" })
+    try {
+      autoUpdater.quitAndInstall.mockClear()
+      vi.mocked(app.quit).mockClear()
+      const updates = new Updates(() => {})
+      updates.configure(true, false)
+      emit("update-downloaded", { version: "0.2.1" })
+      await updates.install(onQuit)
+      emit("error", new Error("Squirrel could not stage the update"))
+      expect(app.quit).toHaveBeenCalledTimes(onQuit ? 1 : 0)
+      expect(updates.current()).toEqual({ state: "error", message: "Squirrel could not stage the update" })
+      updates.configure(false, false)
+    } finally {
+      Object.defineProperty(process, "platform", { value: platform })
+    }
+  })
+
   it("stages only the selected ready update and lets Squirrel finish before quitting", async () => {
     const platform = process.platform
     Object.defineProperty(process, "platform", { value: "darwin" })

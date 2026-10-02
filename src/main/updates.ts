@@ -85,6 +85,7 @@ export class Updates {
   private checking: { generation: number; done: Promise<void> } | null = null
   private downloading: { generation: number; token: CancellationToken; done: Promise<void> } | null = null
   private installing = false
+  private quitAfterInstallError = false
 
   constructor(private readonly notify: (status: UpdateStatus) => void) {
     // Downloads start from update-available, only for a check of the current channel.
@@ -121,10 +122,13 @@ export class Updates {
       if (this.currentActivity()) this.set({ state: "ready", version: info.version })
     })
     autoUpdater.on("error", (error) => {
-      if (!this.currentActivity()) return
+      const quitAfterError = this.quitAfterInstallError
+      if (!this.currentActivity() && !quitAfterError) return
       // Also reports a setup program that could not be started, so installing may be tried again.
       this.installing = false
+      this.quitAfterInstallError = false
       this.set({ state: "error", message: error.message })
+      if (quitAfterError) app.quit()
     })
     app.on("before-quit", (event) => {
       if (!this.enabled || this.status.state !== "ready" || this.installing) return
@@ -215,6 +219,7 @@ export class Updates {
     }
     // macOS must let Squirrel fetch the selected update before quitting.
     if (process.platform === "darwin") {
+      this.quitAfterInstallError = true
       autoUpdater.quitAndInstall()
       return this.installing
     }
