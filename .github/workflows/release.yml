@@ -135,7 +135,7 @@ jobs:
   package:
     name: Package (${{ matrix.name }})
     needs: [meta, checks]
-    if: always() && needs.meta.result == 'success' && needs.meta.outputs.skip != 'true' && (needs.checks.result == 'success' || needs.checks.result == 'skipped')
+    if: ${{ !cancelled() && needs.meta.result == 'success' && needs.meta.outputs.skip != 'true' && (needs.checks.result == 'success' || needs.checks.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
@@ -285,7 +285,7 @@ jobs:
     name: Publish ${{ needs.meta.outputs.channel }} release
     needs: [meta, package]
     # Nightlies skip the checks job (CI ran it), and a skipped ancestor would skip this job by default.
-    if: always() && needs.meta.result == 'success' && needs.package.result == 'success'
+    if: ${{ !cancelled() && needs.meta.result == 'success' && needs.package.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
