@@ -54,7 +54,7 @@ Native framework pages link to the publisher with **Publisher reference**. Polic
 | CIS comparisons and their reports (coming soon) | No | Yes | Yes |
 | Create missing settings from a policy-pack comparison | Yes | Yes | Yes |
 
-Non-CIS native comparisons, the UK NCSC Device Security Guidance pack, administrator-imported Microsoft, STIG and Custom comparisons, and their PDF, CSV and JSON reports are free in Community from the next TenuVault release. CIS assessments and CIS reports will need Pro or MSP; CIS stays unavailable on every plan until its commercial-use agreement is signed.
+Non-CIS native comparisons, the UK NCSC Device Security Guidance pack, administrator-imported Microsoft, STIG and Custom comparisons, and their PDF, CSV and JSON reports are free in Community in TenuVault 0.2.0. CIS assessments and CIS reports will need Pro or MSP; CIS stays unavailable on every plan until its commercial-use agreement is signed.
 
 Every report and export is built on this device from the saved comparison or assessment, without reading the tenant again. It names the tenant, framework, version and profile, the assessed scope, the collection date, the supported coverage, what stayed unknown and the limitations, and states that it is not a certification and does not prove device enforcement. Secrets, tokens and credentials are redacted. You choose where the file is saved; nothing is uploaded.
 

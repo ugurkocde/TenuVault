@@ -45,8 +45,8 @@ To start a trial or buy a plan, go to [tenuvault.com/desktop#pricing](https://te
 | Cross tenant dashboard, including **Check all** for drift | | | Yes |
 | Actions across several tenants: **Backup Selected**, **Copy to other tenants instead** when restoring, **Also deploy to** in OpenIntuneBaseline | | | Yes |
 
-:::note[Changed in the next release]
-Starting with the next TenuVault release, Community includes New Deployment, Existing Deployment comparison, Policy Validation and deployment of new policies for every OpenIntuneBaseline platform, and framework PDF, CSV and JSON reports for every framework except CIS. The audit log, CIS assessments and CIS reports stay in Pro and MSP. Until you update, the earlier limits apply.
+:::note[Included in 0.2.0]
+Community includes New Deployment, Existing Deployment comparison, Policy Validation and deployment of new policies for every OpenIntuneBaseline platform, and framework PDF, CSV and JSON reports for every framework except CIS. Audit-log access requires Pro or MSP. CIS remains unavailable on every plan while its commercial-use agreement is pending.
 :::
 
 TenuVault enforces these limits in the app itself, not just in the interface. When you try a feature your plan does not include, the app shows which plan includes it, for example: "Replacing items in place: included in TenuVault Pro and MSP. Upgrade on the License page." Features that need a higher plan are marked with a plan badge in the app.
