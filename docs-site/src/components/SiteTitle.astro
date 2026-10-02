@@ -1,0 +1,59 @@
+---
+// Logo, product name and a muted "Docs" label, as in the marketing site header.
+import { logos } from 'virtual:starlight/user-images';
+import config from 'virtual:starlight/user-config';
+const { siteTitleHref } = Astro.locals.starlightRoute;
+const hasThemedLogos = config.logo && !('src' in config.logo);
+---
+
+<a href={siteTitleHref} class="site-title sl-flex" aria-label="TenuVault Docs home">
+	{
+		logos.dark && (
+			<img
+				class:list={{ 'light:sl-hidden print:hidden': hasThemedLogos }}
+				alt=""
+				src={logos.dark.src}
+				width={logos.dark.width}
+				height={logos.dark.height}
+			/>
+		)
+	}
+	{
+		hasThemedLogos && logos.light && (
+			<img
+				class="dark:sl-hidden print:block"
+				alt=""
+				src={logos.light.src}
+				width={logos.light.width}
+				height={logos.light.height}
+			/>
+		)
+	}
+	<span class="site-title-name" translate="no">TenuVault</span>
+	<span class="site-title-tag">Docs</span>
+</a>
+
+<style>
+	.site-title {
+		align-items: center;
+		gap: 0.625rem;
+		color: var(--sl-color-white);
+		text-decoration: none;
+		white-space: nowrap;
+		min-width: 0;
+	}
+	img {
+		height: 2rem;
+		width: auto;
+	}
+	.site-title-name {
+		font-size: 1.125rem;
+		font-weight: 600;
+		letter-spacing: -0.01em;
+	}
+	.site-title-tag {
+		font-size: 0.875rem;
+		font-weight: 400;
+		color: var(--sl-color-gray-3);
+	}
+</style>

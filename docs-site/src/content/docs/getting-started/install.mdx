@@ -1,0 +1,102 @@
+---
+title: "Install and update TenuVault"
+description: Download, install, update and uninstall TenuVault on Windows and macOS.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Download TenuVault from the releases page on GitHub and install it like any other desktop app. Updates then arrive in the background.
+
+## Download
+
+Open the [TenuVault releases page](https://github.com/ugurkocde/TenuVault/releases) and download the latest release for your computer.
+
+| File | For |
+| --- | --- |
+| `TenuVault-<version>-win-x64.exe` | Windows on x64 |
+| `TenuVault-<version>-win-arm64.exe` | Windows on Arm64 |
+| `TenuVault-<version>-win.exe` | Windows, either architecture (one setup program for both) |
+| `TenuVault-<version>-win-x64.msi` | Windows x64, per-machine install for Intune or Configuration Manager |
+| `TenuVault-<version>-mac-arm64.dmg` or `.zip` | Mac with Apple silicon |
+| `TenuVault-<version>-mac-x64.dmg` or `.zip` | Mac with an Intel processor |
+
+Ignore the `.blockmap` and `.yml` files. The updater uses them.
+
+### Release channels
+
+| Channel | Version format | Marked on GitHub as |
+| --- | --- | --- |
+| Stable | `0.1.0` | Release |
+| Nightly | `0.1.0-nightly.20260928132604` (next stable version plus the UTC build time) | Pre-release |
+
+Nightly builds are produced from every change that passes the automated checks. A nightly install keeps updating to newer nightlies; a stable install only updates to newer stable releases.
+
+## Install
+
+<Tabs>
+<TabItem label="Windows">
+
+1. Run the `.exe` you downloaded.
+2. Choose whether to install for yourself only or for all users of this computer, and optionally change the installation folder.
+3. Finish the installer. It creates a desktop shortcut and a Start menu entry.
+
+Windows builds are code signed with Azure Trusted Signing.
+
+To install silently on many computers, use the MSI. See [Deploy TenuVault in your organization](/deploy/).
+
+</TabItem>
+
+<TabItem label="macOS">
+
+1. Open the `.dmg` you downloaded.
+2. Drag **TenuVault** onto the **Applications** folder in the window that opens.
+3. Eject the disk image and start TenuVault from Applications or Launchpad.
+
+If you downloaded the `.zip`, unzip it and move **TenuVault** to Applications.
+
+macOS builds are signed and notarized by Apple, so Gatekeeper opens them without extra steps.
+
+</TabItem>
+</Tabs>
+
+TenuVault runs one instance at a time. Starting it again brings the existing window to the front.
+
+## Updates
+
+TenuVault keeps itself up to date:
+
+1. It checks for a new version 15 seconds after it starts, then every 6 hours.
+2. When a new version is available, it downloads it in the background.
+3. A banner appears: **TenuVault &lt;version&gt; is ready. It installs the next time TenuVault restarts.** Select **Restart now** to install it immediately, or let it install the next time you quit TenuVault.
+
+You can also check manually in **Settings** > **Updates** with **Check now**, and turn automatic updates off with **Download and install updates automatically**. See [Settings reference](/settings/#updates).
+
+Updates never install an older version. To move from nightly to stable, install the stable release manually once it is newer than your nightly build; it then follows the stable channel.
+
+:::note
+Organizations can turn off automatic updates with a registry value on Windows or a managed preference on macOS. **Settings** then shows **Your organization manages updates for TenuVault.** See [Deploy TenuVault in your organization](/deploy/#control-automatic-updates).
+:::
+
+## Uninstall
+
+Before you uninstall, open **Settings** > **Background and retention** and select **Remove background launch** if it is installed, so the operating system stops trying to start TenuVault.
+
+<Tabs>
+<TabItem label="Windows">
+
+Open **Settings** > **Apps** > **Installed apps** in Windows, find **TenuVault** and select **Uninstall**.
+
+</TabItem>
+
+<TabItem label="macOS">
+
+Quit TenuVault from its menu bar icon, then move **TenuVault** from Applications to the Trash.
+
+</TabItem>
+</Tabs>
+
+Uninstalling does not delete your backups. Backups on this device stay in their folder (by default `Documents/TenuVault Backups`), and Azure backups stay in your storage account. To read them after a reinstall or on another computer, you need your [recovery key](/security/encryption/).
+
+## Next step
+
+[Create the app registration](/getting-started/app-registration/).

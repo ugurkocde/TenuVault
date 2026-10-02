@@ -1,0 +1,144 @@
+---
+title: "Deploy TenuVault in your organization"
+description: Roll TenuVault out to your admins with Intune, control updates by policy and restrict who can sign in.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+This page is for rolling TenuVault out to several admins: installing it on managed devices, controlling automatic updates, and deciding who can sign in.
+
+## Plan the rollout
+
+1. **One app registration per tenant.** Create it once with the [setup script](/getting-started/app-registration/). Every admin signs in through the same app registration with their own account, so you share the client ID, not a secret.
+2. **Decide who can sign in.** Restrict sign-in to one group if TenuVault should only be used by a defined set of admins. See [Restrict who can sign in](#restrict-who-can-sign-in).
+3. **Give admins the right roles.** Each admin needs an Intune role, and **Storage Blob Data Contributor** on the storage account if backups go to Azure. See [Requirements](/getting-started/requirements/#admins-who-use-tenuvault).
+4. **Decide how updates reach devices.** Either let TenuVault update itself, or turn automatic updates off by policy and deploy new versions yourself. See [Control automatic updates](#control-automatic-updates).
+5. **Share licenses.** The admin who holds the license key can share it with the tenant's other admins, so they do not need the key. See [Activate and manage your license](/licensing/manage/).
+
+## Deploy with Intune
+
+<Tabs>
+<TabItem label="Windows">
+
+Use the MSI (`TenuVault-<version>-win-x64.msi`) from the [releases page](https://github.com/ugurkocde/TenuVault/releases). It installs per machine, without prompts, and creates a desktop shortcut. TenuVault installed from the MSI never updates itself, so deploy each new version's MSI through Intune.
+
+1. In the [Intune admin center](https://intune.microsoft.com), go to **Apps** > **Windows** > **Create**.
+2. For **App type**, choose **Line-of-business app** and upload the MSI.
+3. Complete the app information, then assign the app to a group of admin devices as **Required** or **Available for enrolled devices**.
+
+Intune reads the product code and version from the MSI and installs it silently.
+
+To install the MSI manually or with Configuration Manager:
+
+```powershell
+msiexec /i "TenuVault-<version>-win-x64.msi" /qn
+```
+
+The MSI is x64 only. For Arm64 devices, use the setup program `TenuVault-<version>-win-arm64.exe`.
+
+</TabItem>
+
+<TabItem label="macOS">
+
+Use the DMG for each architecture: `TenuVault-<version>-mac-arm64.dmg` for Apple silicon and `TenuVault-<version>-mac-x64.dmg` for Intel.
+
+1. In the [Intune admin center](https://intune.microsoft.com), go to **Apps** > **macOS** > **Create**.
+2. For **App type**, choose **macOS app (DMG)** and upload the DMG.
+3. Complete the app information and assign it to a group of admin Macs.
+
+Create one app per architecture and assign each to the Macs it matches. The apps are signed and notarized.
+
+</TabItem>
+</Tabs>
+
+Each admin still signs in and chooses storage on first launch; see [Getting started](/getting-started/). TenuVault stores sign-ins, settings and the backup key per user account on the device.
+
+## Control automatic updates
+
+By default, TenuVault checks GitHub for updates 15 seconds after it starts and every 6 hours, downloads them in the background and installs them on restart. When you deploy TenuVault centrally, you can turn this off with a policy and ship new versions through Intune instead, so every device runs the version you approved.
+
+When the policy is set:
+
+* Automatic update checks and downloads stop.
+* **Settings** > **Updates** shows **Your organization manages updates for TenuVault.** and the **Download and install updates automatically** checkbox is locked.
+
+TenuVault reads the policy when it starts. Restart TenuVault after the policy reaches the device.
+
+<Tabs>
+<TabItem label="Windows">
+
+Set a DWORD value `DisableAutoUpdate` = `1` under either of these keys:
+
+* `HKEY_LOCAL_MACHINE\SOFTWARE\Policies\TenuVault` (all users on the device)
+* `HKEY_CURRENT_USER\SOFTWARE\Policies\TenuVault` (one user)
+
+To deploy it with Intune, create a platform script (**Devices** > **Scripts and remediations** > **Platform scripts**) with this content:
+
+```powershell
+$key = "HKLM:\SOFTWARE\Policies\TenuVault"
+New-Item -Path $key -Force | Out-Null
+New-ItemProperty -Path $key -Name "DisableAutoUpdate" -PropertyType DWord -Value 1 -Force | Out-Null
+```
+
+Set **Run this script using the logged on credentials** to **No** and **Run script in 64 bit PowerShell Host** to **Yes**. In a 32 bit host, the value lands under `WOW6432Node` and TenuVault does not see it.
+
+To turn updates back on, delete the value or set it to `0`.
+
+</TabItem>
+
+<TabItem label="macOS">
+
+Set the managed preference `DisableAutoUpdate` to `true` (boolean) for the preference domain `com.tenuvault.desktop`.
+
+To deploy it with Intune:
+
+1. Save this as `com.tenuvault.desktop.plist`:
+
+   ```xml
+   <?xml version="1.0" encoding="UTF-8"?>
+   <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+   <plist version="1.0">
+   <dict>
+       <key>DisableAutoUpdate</key>
+       <true/>
+   </dict>
+   </plist>
+   ```
+
+2. Go to **Devices** > **macOS** > **Configuration** > **Create** > **New policy**, choose **Templates** > **Preference file**.
+3. Enter `com.tenuvault.desktop` as the **Preference domain name** and upload the file.
+4. Assign the profile to your admin Macs.
+
+</TabItem>
+</Tabs>
+
+:::note
+If GitHub is blocked on your network, update checks fail and TenuVault keeps running the installed version. Backup and restore are not affected. See [Network connections and data flows](/security/data-flows/).
+:::
+
+## Restrict who can sign in
+
+By default, any user in the tenant can sign in through the TenuVault app registration. What they can do is still limited by their own Intune and Azure roles, because every permission is delegated.
+
+To allow only one group:
+
+* **New app registration:** run the setup script with `-AllowedGroupId <group object id>`. The script sets **Assignment required** on the enterprise application and assigns the group.
+* **Existing app registration:** in the Microsoft Entra admin center, open **Enterprise apps** > **TenuVault Desktop** > **Properties**, set **Assignment required?** to **Yes**, then add the group under **Users and groups**.
+
+Users outside the group get a Microsoft sign-in error when they try to connect the tenant.
+
+:::note
+Group assignment to an enterprise application requires Microsoft Entra ID P1 or P2, and applies to direct group members only.
+:::
+
+You can also target the app with Conditional Access like any other cloud app. TenuVault signs in through the default browser on Windows and macOS. Device-based Conditional Access, such as requiring a compliant or Entra-joined device, is checked in the browser. On Windows it works in Microsoft Edge when you are signed in to the browser profile, in Chrome with the Microsoft Single Sign On extension or the `CloudAPAuthEnabled` policy, and in Firefox with Windows single sign-on turned on. On macOS it needs the Microsoft Enterprise SSO extension on the device, and Chrome there also needs the Microsoft Single Sign On extension, unless it is Chrome 135 or later on a Mac that stores the device key in the Secure Enclave.
+
+## Scheduled backups on admin devices
+
+Scheduled backups run on the admin's computer, as that admin, while TenuVault is running. For reliable schedules, ask admins to:
+
+* Keep **Keep running in the tray when I close the window** turned on.
+* Turn on **Start TenuVault in the tray when I sign in to this computer**.
+* Optionally select **Install background launch**, which reopens TenuVault within five minutes if it was closed.
+
+Backups do not run while the admin is signed out or the computer is asleep or off. See [Schedule backups](/backups/schedules/) and [Settings reference](/settings/#background-and-retention).

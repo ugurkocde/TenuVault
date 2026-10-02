@@ -1,0 +1,79 @@
+---
+title: "Sign in to your tenant"
+description: Sign in to your tenant with your own admin account and the client ID from the setup script.
+---
+
+You connect a tenant by signing in with your own admin account, through the app registration you created. TenuVault never asks for a password or a client secret.
+
+You need the **Application (client) id** printed by the [setup script](/getting-started/app-registration/), and your tenant ID or a domain of your tenant.
+
+## Open the guided setup
+
+TenuVault opens **Set up TenuVault** after you select **Start free with Community** on the welcome screen. You can also open it at any time:
+
+* From the dashboard, when no tenant is connected: **Guided setup**.
+* From the tenant switcher at the top of the sidebar: **Connect a tenant**.
+
+The guided setup has four steps: **Prepare**, **Sign in**, **Storage** and **First backup**. Use **Previous** to go back a step. Setup remembers where you were while TenuVault stays open, so you can leave to check something (for example in **Settings**) and come back.
+
+## Step 1: Prepare
+
+The **Prepare** step shows the **Create the app registration** card with **Copy setup script**, and lists what admins need:
+
+* An Intune role, for example Intune Administrator.
+* For backups in Azure: the Storage Blob Data Contributor role on the storage account.
+
+If you have not created the app registration yet, do it now: see [Create the app registration](/getting-started/app-registration/). When you have the client ID, select **I have the client id**.
+
+## Step 2: Sign in
+
+1. Fill in the form:
+
+   | Field | Enter | Example |
+   | --- | --- | --- |
+   | **Tenant id or domain** | Your tenant ID (GUID) or a verified domain of the tenant | `contoso.onmicrosoft.com` |
+   | **Application (client) id** | The client ID printed by the setup script | `00000000-0000-0000-0000-000000000000` |
+   | **Display name (optional)** | The name TenuVault shows for this tenant. If you leave it empty, TenuVault uses your organization's name from Microsoft Entra ID. | `Contoso Production` |
+
+2. Select **Sign in with Microsoft**. The button changes to **Waiting for sign-in...** and TenuVault shows **Complete the sign-in in your browser.**
+3. Complete the Microsoft sign-in with your admin account, including MFA if your policies require it.
+
+The sign-in opens in your default browser, on Windows and on macOS. When it finishes, the browser shows **Signed in to TenuVault**. Close the tab and return to TenuVault.
+
+You can use a separate admin account. It does not have to be the account you are signed in to Windows or macOS with. Pick it in the Microsoft account list, choose **Use another account**, or start the sign-in while a browser profile signed in as that admin account is your default.
+
+Device-based Conditional Access, such as requiring a compliant or Entra-joined device, is checked in the browser. On Windows it works in Microsoft Edge when you are signed in to the browser profile, in Chrome with the Microsoft Single Sign On extension or the `CloudAPAuthEnabled` policy, and in Firefox with Windows single sign-on turned on. On macOS it needs the Microsoft Enterprise SSO extension on the device, and Chrome there also needs the Microsoft Single Sign On extension, unless it is Chrome 135 or later on a Mac that stores the device key in the Secure Enclave.
+
+4. After a successful sign-in, TenuVault checks the license for this tenant and moves to **Storage**, showing **Signed in as &lt;your account&gt;**.
+
+### Form errors
+
+| Message | Fix |
+| --- | --- |
+| **Enter a tenant id or a domain such as contoso.onmicrosoft.com.** | Enter the tenant GUID or a full domain name. |
+| **The client id is a GUID, printed by the setup script.** | Paste the **Application (client) id**, not the app name or object ID. |
+
+If the sign-in itself fails, TenuVault shows the error Microsoft returned under the form. Common causes are a mistyped client ID, a tenant ID from another tenant, or a sign-in restricted to a group you are not a member of. See [Troubleshooting](/troubleshooting/).
+
+### License check at sign-in
+
+TenuVault checks that your license covers the tenant when you sign in, and again before it saves the tenant. If the license does not cover it, the tenant is not added, the new sign-in is removed and the reason is shown. For example:
+
+* **TenuVault Community covers one tenant, and it is used for tenant &lt;tenant id&gt;. Add a Pro or MSP license on the License page to use more tenants.**
+* **A TenuVault license is required for this tenant. Add your license key on the License page, or start a 30 day free trial.**
+
+See [Activate and manage your license](/licensing/manage/) for all license messages.
+
+## Other ways to connect a tenant
+
+**Tenants** > **Connect tenant** opens a shorter dialog, **Connect a tenant**, with the same sign-in form. Expand **First time? Create an app registration** to copy the setup script. After you sign in, the dialog asks **Where should backups be stored?**; choose storage and select **Connect tenant**. This dialog does not offer a first backup; run it from **Backup & Restore**.
+
+To add more tenants and switch between them, see [Manage tenants](/tenants/).
+
+## Staying signed in
+
+TenuVault keeps your sign-in in a token cache encrypted with Windows data protection or the macOS Keychain. Background tasks such as scheduled backups never open a sign-in window. When Microsoft needs you to sign in again, a banner appears with a **Sign in** button, or you use **Settings** > **Sign-in**. See [Settings reference](/settings/#sign-in).
+
+## Next step
+
+[Choose where backups are stored](/getting-started/choose-storage/).

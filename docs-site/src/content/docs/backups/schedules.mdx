@@ -1,0 +1,145 @@
+---
+title: "Schedule backups"
+description: Back up each tenant automatically, keep TenuVault running in the tray, and relaunch it in the background.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+TenuVault can back up each tenant automatically, daily or weekly, at a time you choose. Scheduled backups run inside the TenuVault app on your computer, as you, with no cloud service involved. This page explains how to set up a schedule and how to keep TenuVault running so the schedule is met.
+
+## How scheduled backups run
+
+* Each tenant has its own schedule: daily or weekly, at a time in your computer's local timezone. Daylight saving and timezone changes are followed.
+* Backups run while TenuVault is running, in the window or in the system tray (the menu bar on macOS) after you close the window.
+* TenuVault checks the schedules every minute. The first check runs 30 seconds after TenuVault starts.
+* If the computer was off or TenuVault was not running at the scheduled time, the missed backup runs once as soon as TenuVault starts again. Only the most recent missed slot runs, not every missed one.
+* When several backups are due, they run one after another.
+* A failed backup is not repeated right away. The next attempt is the next scheduled slot.
+* Saving a schedule never triggers a catch-up backup for slots before the change.
+* Each scheduled backup uses the tenant's saved backup choice. See [Choose what automatic backups cover](#choose-what-automatic-backups-cover).
+
+## Set up a schedule
+
+1. Select the tenant in the tenant switcher.
+2. Open **Backup & Restore** and click the **Schedule** tab. You can also click **Set up automatic backups** or **Edit schedule** on the Dashboard.
+3. Under **Automatic backups**, tick **Back up** *tenant name* **automatically**.
+4. In **Repeat**, choose **Every day** or **Every week**.
+5. For a weekly backup, choose the day in **On**.
+6. In **At**, choose the time. The label shows your computer's timezone.
+7. Click **Save**.
+
+TenuVault confirms that automatic backups for the tenant are on. The new schedule starts at 02:00 by default, and a weekly schedule starts on Sunday. To stop automatic backups, clear the check box and click **Save**.
+
+:::note
+Daily backups are part of Pro and MSP. On Community, **Repeat** offers **Every day (Pro)** as an unavailable option and you schedule weekly backups.
+:::
+
+### The Status panel
+
+Next to the schedule, **Status** shows:
+
+| Field | What it shows |
+| --- | --- |
+| **Next backup** | When the next automatic backup runs, or **Not scheduled** |
+| **Last automatic backup** | When it ran, whether it worked, and its result message |
+| **Kept for** | How long backups are kept. See [Retention](/backups/storage/#retention). |
+| **Not backed up because of the license** | Recent automatic backups TenuVault refused to run, with the time, whether they were scheduled or started from the tray, and the reason |
+
+## Choose what automatic backups cover
+
+Below the schedule, **What to back up** holds the tenant's saved backup choice: **Everything except apps**, **Everything** or **Custom**. It is "Used by automatic backups and "Back up all tenants now", and preselected when you run a backup by hand."
+
+1. Choose the option, or with **Custom** tick the areas and types to include.
+2. Click **Save**.
+
+A tenant that never saved a choice uses **Everything except apps**, shown as "(default)". See [What gets backed up](/backups/coverage/) for the types in each area.
+
+## License and plan checks
+
+Before every automatic backup, TenuVault checks that:
+
+* your license covers the tenant
+* the plan includes daily backups, for a daily schedule
+* the plan includes Azure storage, when the tenant's backups go to an Azure storage account
+
+If a check fails, the backup does not run. TenuVault shows a notification, records the refusal under **Not backed up because of the license** and shows "Not backed up:" with the reason as the schedule's last result. When the tenant is not licensed, the Schedule tab also says "Your license does not cover" the tenant "right now, so its automatic backups do not run."
+
+Refusals are kept on this device, not in the tenant's audit log, because the tenant's storage is not opened without a license. TenuVault keeps the 200 most recent refusals across all tenants.
+
+## When a scheduled backup fails
+
+* TenuVault shows a notification: "Scheduled backup of *tenant* failed", with the reason.
+* **Last automatic backup** on the Schedule tab, the Dashboard and the All tenants page show the failure.
+* The result is recorded in the tenant's [audit log](/audit-log/) as "Scheduled backup".
+
+If your sign-in has expired or Conditional Access requires you to sign in again, the backup fails and a banner at the top of the TenuVault window asks you to **Sign in**. Scheduled backups never open a sign-in window by themselves.
+
+## Keep TenuVault running
+
+Scheduled backups only run while TenuVault runs. Three settings help with that. They apply to all tenants and are saved right away.
+
+### Keep running in the tray
+
+**Keep running in the tray when I close the window** is on by default. Closing the window then hides it, and TenuVault keeps running in the system tray (Windows) or the menu bar (macOS). The first time, a notification says "TenuVault is still running".
+
+When this setting is off, closing the window quits TenuVault on Windows.
+
+### The tray icon
+
+Click the icon to open TenuVault. Its menu has:
+
+| Item | What it does |
+| --- | --- |
+| **Open TenuVault** | Shows the window |
+| **Back up all tenants now** | Backs up every connected tenant right away with its saved backup choice. The license and plan checks above apply. |
+| **Next backup:** | The next scheduled backup across all tenants, or **No scheduled backups** |
+| **Quit TenuVault** | Quits the app and stops scheduled backups |
+
+Backups started from the tray are shown as **From tray** in the backup history.
+
+### Start at login
+
+**Start TenuVault in the tray when I sign in to this computer** opens TenuVault in the tray, without a window, when you sign in to your computer. It is off by default.
+
+You find both check boxes on the **Schedule** tab under **App-wide preferences**, and in **Settings** under **Background and retention**.
+
+### Background launch
+
+Background launch registers a task with your operating system that starts TenuVault in the tray when you sign in to the computer, and again every five minutes. If TenuVault is not running, it is reopened in the tray within five minutes. Background launch is available in installed Windows and macOS builds.
+
+1. Open **Settings** and go to **Background and retention**.
+2. Under **Restart TenuVault for scheduled backups**, click **Install background launch**.
+
+<Tabs>
+<TabItem label="Windows">
+
+TenuVault creates a Task Scheduler task for your user account, named **TenuVault Background** followed by your account's security identifier. It runs at logon and every five minutes, with your normal (limited) rights. No password is stored.
+
+</TabItem>
+
+<TabItem label="macOS">
+
+TenuVault installs a LaunchAgent for your user account that runs at login and every five minutes and opens TenuVault in the background. No password is stored.
+
+</TabItem>
+</Tabs>
+
+If TenuVault is already running, the task does nothing: TenuVault runs only once.
+
+Background launch has limits:
+
+* It runs only while you are signed in to the computer. It does not run while you are signed out, or while the computer is asleep or off, and it does not wake the computer.
+* Backups still need a valid Microsoft sign-in, a license that covers the tenant and available storage. It does not bypass MFA, Conditional Access, licensing or encryption.
+* It does not guarantee a backup at the exact scheduled minute. The missed backup runs when TenuVault starts.
+* If you move the TenuVault application, install background launch again.
+
+To stop automatic restarts, click **Remove background launch** and turn off **Start TenuVault in the tray when I sign in to this computer** before you quit. Removing background launch leaves your schedules unchanged and does not stop a backup that is running.
+
+## Plan requirements
+
+| Feature | Community | Pro | MSP |
+| --- | --- | --- | --- |
+| Weekly automatic backups | Yes | Yes | Yes |
+| Daily automatic backups | No | Yes | Yes |
+| Automatic backups to your Azure storage account | No | Yes | Yes |
+| Tray, start at login, background launch | Yes | Yes | Yes |

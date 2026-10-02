@@ -1,0 +1,219 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "astro",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "ignoreCommand": "git diff --quiet \"${VERCEL_GIT_PREVIOUS_SHA:-HEAD^}\" HEAD -- . 2>/dev/null && exit 0 || exit 1",
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "/getting-started/",
+      "permanent": false
+    },
+    {
+      "source": "/readme",
+      "destination": "/getting-started/",
+      "permanent": true
+    },
+    {
+      "source": "/readme.md",
+      "destination": "/getting-started/",
+      "permanent": true
+    },
+    {
+      "source": "/get-started",
+      "destination": "/getting-started/",
+      "permanent": true
+    },
+    {
+      "source": "/get-started/getting-started",
+      "destination": "/getting-started/",
+      "permanent": true
+    },
+    {
+      "source": "/security/security",
+      "destination": "/security/",
+      "permanent": true
+    },
+    {
+      "source": "/use-tenuvault",
+      "destination": "/tenants/",
+      "permanent": true
+    },
+    {
+      "source": "/use-tenuvault/tenants",
+      "destination": "/tenants/",
+      "permanent": true
+    },
+    {
+      "source": "/use-tenuvault/backups",
+      "destination": "/backups/",
+      "permanent": true
+    },
+    {
+      "source": "/use-tenuvault/restore",
+      "destination": "/restore/",
+      "permanent": true
+    },
+    {
+      "source": "/use-tenuvault/drift",
+      "destination": "/drift/",
+      "permanent": true
+    },
+    {
+      "source": "/use-tenuvault/audit-log",
+      "destination": "/audit-log/",
+      "permanent": true
+    },
+    {
+      "source": "/use-tenuvault/quick-start",
+      "destination": "/baselines/quick-start/",
+      "permanent": true
+    },
+    {
+      "source": "/use-tenuvault/frameworks",
+      "destination": "/baselines/frameworks/",
+      "permanent": true
+    },
+    {
+      "source": "/administration",
+      "destination": "/licensing/",
+      "permanent": true
+    },
+    {
+      "source": "/administration/licensing",
+      "destination": "/licensing/",
+      "permanent": true
+    },
+    {
+      "source": "/administration/licensing/manage",
+      "destination": "/licensing/manage/",
+      "permanent": true
+    },
+    {
+      "source": "/administration/settings",
+      "destination": "/settings/",
+      "permanent": true
+    },
+    {
+      "source": "/administration/deploy",
+      "destination": "/deploy/",
+      "permanent": true
+    },
+    {
+      "source": "/help",
+      "destination": "/troubleshooting/",
+      "permanent": true
+    },
+    {
+      "source": "/help/troubleshooting",
+      "destination": "/troubleshooting/",
+      "permanent": true
+    },
+    {
+      "source": "/changelog",
+      "destination": "https://github.com/ugurkocde/TenuVault/releases",
+      "permanent": true
+    },
+    {
+      "source": "/changelog/",
+      "destination": "https://github.com/ugurkocde/TenuVault/releases",
+      "permanent": true
+    },
+    {
+      "source": "/help/changelog",
+      "destination": "https://github.com/ugurkocde/TenuVault/releases",
+      "permanent": true
+    },
+    {
+      "source": "/get-started/getting-started/requirements",
+      "destination": "/getting-started/requirements/",
+      "permanent": true
+    },
+    {
+      "source": "/get-started/getting-started/install",
+      "destination": "/getting-started/install/",
+      "permanent": true
+    },
+    {
+      "source": "/get-started/getting-started/app-registration",
+      "destination": "/getting-started/app-registration/",
+      "permanent": true
+    },
+    {
+      "source": "/get-started/getting-started/first-launch",
+      "destination": "/getting-started/first-launch/",
+      "permanent": true
+    },
+    {
+      "source": "/get-started/getting-started/connect-tenant",
+      "destination": "/getting-started/connect-tenant/",
+      "permanent": true
+    },
+    {
+      "source": "/get-started/getting-started/choose-storage",
+      "destination": "/getting-started/choose-storage/",
+      "permanent": true
+    },
+    {
+      "source": "/get-started/getting-started/first-backup",
+      "destination": "/getting-started/first-backup/",
+      "permanent": true
+    },
+    {
+      "source": "/security/security/permissions",
+      "destination": "/security/permissions/",
+      "permanent": true
+    },
+    {
+      "source": "/security/security/data-flows",
+      "destination": "/security/data-flows/",
+      "permanent": true
+    },
+    {
+      "source": "/security/security/encryption",
+      "destination": "/security/encryption/",
+      "permanent": true
+    },
+    {
+      "source": "/use-tenuvault/backups/coverage",
+      "destination": "/backups/coverage/",
+      "permanent": true
+    },
+    {
+      "source": "/use-tenuvault/backups/schedules",
+      "destination": "/backups/schedules/",
+      "permanent": true
+    },
+    {
+      "source": "/use-tenuvault/backups/storage",
+      "destination": "/backups/storage/",
+      "permanent": true
+    },
+    {
+      "source": "/use-tenuvault/backups/compare",
+      "destination": "/backups/compare/",
+      "permanent": true
+    },
+    {
+      "source": "/use-tenuvault/restore/modes",
+      "destination": "/restore/modes/",
+      "permanent": true
+    },
+    {
+      "source": "/use-tenuvault/restore/cross-tenant",
+      "destination": "/restore/cross-tenant/",
+      "permanent": true
+    },
+    {
+      "source": "/use-tenuvault/restore/limitations",
+      "destination": "/restore/limitations/",
+      "permanent": true
+    },
+    {
+      "source": "/use-tenuvault/restore/disaster-recovery",
+      "destination": "/restore/disaster-recovery/",
+      "permanent": true
+    }
+  ]
+}

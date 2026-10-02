@@ -1,0 +1,68 @@
+---
+// Header links in a gray pill (Pricing, Changelog, GitHub), then Download as the black primary pill.
+// Starlight also renders this component in the mobile menu footer.
+import Default from '@astrojs/starlight/components/SocialIcons.astro';
+---
+
+<nav class="header-pill" aria-label="Product">
+	<a class="header-link" href="https://tenuvault.com/pricing">Pricing</a>
+	<a class="header-link" href="https://github.com/ugurkocde/TenuVault/releases">Changelog</a>
+	<Default />
+</nav>
+<a class="header-cta" href="https://tenuvault.com/">Download</a>
+
+<style>
+	.header-pill {
+		display: flex;
+		align-items: center;
+		gap: 0.25rem;
+		padding: 0.3125rem;
+		border-radius: 999px;
+		background-color: var(--tv-surface);
+	}
+	.header-link,
+	.header-pill :global(a.sl-flex) {
+		display: inline-flex;
+		align-items: center;
+		height: 2rem;
+		padding-inline: 0.875rem;
+		border-radius: 999px;
+		color: var(--sl-color-gray-2);
+		font-size: var(--sl-text-sm);
+		font-weight: 400;
+		text-decoration: none;
+		white-space: nowrap;
+		transition:
+			background-color 150ms ease,
+			color 150ms ease;
+	}
+	.header-pill :global(a.sl-flex) {
+		padding-inline: 0.625rem;
+	}
+	.header-link:hover,
+	.header-pill :global(a.sl-flex:hover) {
+		background-color: var(--tv-pill-hover);
+		color: var(--sl-color-white);
+	}
+	.header-cta {
+		display: inline-flex;
+		align-items: center;
+		height: 2.5rem;
+		padding-inline: 1.125rem;
+		border-radius: 999px;
+		background-color: var(--tv-ink-button);
+		color: var(--tv-ink-button-text);
+		font-size: var(--sl-text-sm);
+		font-weight: 500;
+		text-decoration: none;
+		white-space: nowrap;
+		transition:
+			background-color 150ms ease,
+			transform 150ms ease;
+	}
+	.header-cta:hover {
+		background-color: var(--tv-ink-button-hover);
+		color: var(--tv-ink-button-text);
+		transform: translateY(-1px);
+	}
+</style>
