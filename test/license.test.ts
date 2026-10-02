@@ -279,6 +279,42 @@ describe("LicenseService key activations", () => {
     expect(license.status([TENANT]).tenants[0]).toMatchObject({ activated: false, message: expect.stringMatching(/revoked/) })
   })
 
+  it.each([200, 401, 403, 407, 502])("keeps the activation when a network intermediary returns HTML (%s)", async (status) => {
+    answer = () => granted("act-a")
+    const license = service()
+    await license.setKey("TEST-LICENSE-KEY", [TENANT])
+    answer = () => new Response("<html>Access blocked</html>", { status, headers: { "Content-Type": "text/html" } })
+    await license.refreshAll()
+    expect(entitled(license)).toBe(true)
+    expect(license.status([TENANT]).offline).toBe(true)
+    expect(service().status([TENANT]).tenants[0]?.activated).toBe(true)
+    answer = () => granted("act-a")
+    await license.refreshAll()
+    expect(license.status([TENANT]).offline).toBe(false)
+  })
+
+  it.each(["null", "[]", "{", '{"reason":"firewall_block"}'])("preserves the activation on an unrecognized JSON refusal: %s", async (body) => {
+    answer = () => granted("act-a")
+    const license = service()
+    await license.setKey("TEST-LICENSE-KEY", [TENANT])
+    answer = () => new Response(body, { status: 403, headers: { "Content-Type": "application/json" } })
+    await license.refreshAll()
+    expect(entitled(license)).toBe(true)
+    expect(license.status([TENANT]).offline).toBe(true)
+  })
+
+  it.each([
+    ["net::ERR_CERT_AUTHORITY_INVALID", "trusted certificates"],
+    ["net::ERR_PROXY_CONNECTION_FAILED", "proxy settings"],
+    ["net::ERR_CONNECTION_TIMED_OUT", "timed out"],
+    ["net::ERR_NAME_NOT_RESOLVED", "allow HTTPS"],
+  ])("explains network failures without exposing request data: %s", async (code, guidance) => {
+    answer = () => { throw new Error(`${code} secret-request-data`) }
+    const license = service()
+    await expect(license.setKey("TEST-LICENSE-KEY", [TENANT])).rejects.toThrow(guidance)
+    await expect(license.setKey("TEST-LICENSE-KEY", [TENANT])).rejects.not.toThrow("secret-request-data")
+  })
+
   it("does not keep a key that no signed-in tenant accepts", async () => {
     answer = () => denied("not_found")
     const license = service()

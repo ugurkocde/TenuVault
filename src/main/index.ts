@@ -3,7 +3,7 @@ import { readFile, stat } from "node:fs/promises"
 import { pathToFileURL } from "node:url"
 import { isGuid, sameRendererDocument } from "../shared/security"
 import { prepareSaveFile } from "./save-file"
-import { app, BrowserWindow, dialog, ipcMain, Notification, safeStorage, shell } from "electron"
+import { app, BrowserWindow, dialog, ipcMain, net, Notification, safeStorage, shell } from "electron"
 import { join } from "node:path"
 import type { ApiRequest, AppPreferences, ScheduleInput } from "../shared/ipc"
 import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN } from "../shared/constants"
@@ -150,8 +150,9 @@ async function bootstrap(): Promise<void> {
     // the app registration the tenant is signed in with.
     idToken: (tenantId) => auth.getIdToken(tenantId),
     clientId: (tenantId) => accounts.get(tenantId)?.clientId ?? null,
-    // Captured before the bridged fetch below replaces the global one.
-    fetch: globalThis.fetch.bind(globalThis),
+    // Chromium networking uses the system proxy and certificate configuration.
+    // Keep licensing outside the local API/storage bridge below.
+    fetch: (input, init) => net.fetch(input instanceof URL ? input.href : input, init),
     onChange: pushLicense,
   })
   const refreshLicenses = () => license.refreshAll().catch((error: unknown) => console.warn("[license]", error))

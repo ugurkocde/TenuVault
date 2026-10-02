@@ -311,16 +311,38 @@ export class LicenseService {
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(20_000),
       })
-    } catch {
+    } catch (error) {
       this.offline = true
       console.warn(`[license] Licensing service unreachable (${action})`)
-      throw new Error("The licensing service could not be reached.")
+      const code = error instanceof Error ? error.message.match(/\bERR_[A-Z_]+\b/)?.[0] : undefined
+      const host = new URL(this.options.apiBase).host
+      const guidance = code && /CERT|SSL/.test(code)
+        ? `Ask IT to check this device's trusted certificates and HTTPS inspection for ${host}.`
+        : code && /PROXY|TUNNEL|PAC_/.test(code)
+          ? `Check this device's proxy settings and ask IT to allow HTTPS requests to ${host}.`
+          : error instanceof Error && (error.name === "TimeoutError" || /TIMED_OUT/.test(code ?? ""))
+            ? "The request timed out. Check your connection and retry."
+            : `Check your connection and ask IT to allow HTTPS requests to ${host}.`
+      throw new Error(`The licensing service could not be reached. ${guidance}${code ? ` (${code})` : ""}`)
+    }
+    // A proxy or captive portal can answer with an HTML 401/403 page. It is
+    // not a license refusal and must never remove a cached activation.
+    const contentType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase()
+    const data: unknown = contentType === "application/json" ? await response.json().catch(() => null) : null
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      this.offline = true
+      throw new Error("The licensing service returned an unexpected response. Check for a firewall block or network sign-in page and retry.")
+    }
+    const result = data as Record<string, unknown>
+    const reason = typeof result.reason === "string" ? result.reason.slice(0, 40) : undefined
+    if ((response.status === 401 && reason !== "invalid_token") ||
+      (response.status === 403 && (!reason || !Object.hasOwn(REASONS, reason)))) {
+      this.offline = true
+      throw new Error("The licensing service could not confirm this request. Check your network or proxy and retry.")
     }
     // Like a network failure, any refusal other than 403 and 401 means the service could
     // not answer the request.
     this.offline = !response.ok && response.status !== 403 && response.status !== 401
-    const data = (await response.json().catch(() => ({}))) as Record<string, unknown>
-    const reason = typeof data.reason === "string" ? data.reason.slice(0, 40) : undefined
     if (!response.ok) console.warn(`[license] ${action} answered ${response.status}${reason ? ` (${reason})` : ""}`)
     if (response.status === 403) {
       throw new LicenseDenied(REASONS[reason ?? ""] ?? "The license was not accepted.", reason ?? "")
@@ -336,7 +358,7 @@ export class LicenseService {
           : "The licensing service is unavailable. Please try again later.",
       )
     }
-    return data
+    return result
   }
 
   // Stores the activation the service returned, after verifying its token.
