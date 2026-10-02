@@ -130,7 +130,8 @@ See [Backup storage and retention](/backups/storage/) and [Schedule backups](/ba
 
 | Control | What it does |
 | --- | --- |
-| **Download and install updates automatically** | On by default. TenuVault checks 15 seconds after start and every 6 hours, downloads updates in the background and installs them when it restarts. Turning it off also stops a pending download. |
+| **Download and install updates automatically** | On by default. TenuVault checks 15 seconds after start and every 6 hours, downloads updates in the background and installs them when it restarts. Turning it off prevents installation of a pending update. |
+| **Get nightly builds** | Opt into previews between stable releases. Turn it off to return to the current stable release, even if it is older than the installed nightly. |
 | **Check now** | Checks immediately. Disabled while automatic updates are off. |
 | **Restart and update** | Appears when an update has downloaded. Restarts TenuVault and installs it. |
 
@@ -146,7 +147,7 @@ The status line shows the current state:
 | **Automatic updates are off.** | You turned automatic updates off. |
 | **Your organization manages updates for TenuVault.** | An administrator turned updates off by policy. The checkbox is locked. See [Deploy TenuVault in your organization](/deploy/#control-automatic-updates). |
 
-Nightly installs follow the nightly channel and stable installs follow stable. See [Install and update TenuVault](/getting-started/install/#updates).
+Stable installs follow stable by default. Enable **Get nightly builds** to receive previews between stable releases. Turn it off to download the current stable release, even if it is older than your installed nightly. Changing channels replaces a pending update and checks the selected channel immediately. See [Install and update TenuVault](/getting-started/install/#updates).
 
 ## About
 

@@ -407,9 +407,9 @@ function Updates() {
           Get nightly builds
         </label>
         <p className="text-xs text-gray-500">
-          Nightly builds ship every change on main before it reaches a stable release, and may contain bugs. When you
-          turn this off, TenuVault keeps the installed nightly until a newer stable release is available. An update that
-          is already downloaded still installs.
+          Enable this to try preview builds between stable releases. Turn it off to download the current stable
+          release, even if its version is older than your installed nightly. Changing channels replaces any pending
+          update. Nightly builds may contain bugs.
         </p>
         <p className="text-gray-600">{describe()}</p>
         <div className="flex gap-2">

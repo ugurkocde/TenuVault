@@ -24,7 +24,7 @@ const autoUpdater = vi.hoisted(() => ({
   logger: undefined as unknown,
   on: vi.fn((event: string, handler: (...args: unknown[]) => void) => void handlers.set(event, handler)),
   checkForUpdates: vi.fn(),
-  downloadUpdate: vi.fn(() => Promise.resolve([])),
+  downloadUpdate: vi.fn((_token?: unknown) => Promise.resolve<string[]>([])),
   quitAndInstall: vi.fn(),
   // NsisUpdater internals the signature check before installing uses.
   installerPath: "C:\\Users\\admin\\AppData\\Local\\tenuvault-updater\\pending\\TenuVault-Setup.exe" as string | null,
@@ -32,10 +32,13 @@ const autoUpdater = vi.hoisted(() => ({
 }))
 
 vi.mock("electron", () => ({
-  app: { isPackaged: true, getVersion: () => "0.1.0", on: (event: string, handler: (...args: unknown[]) => void) => void handlers.set(`app:${event}`, handler), quit: vi.fn() },
+  app: { isPackaged: true, getVersion: vi.fn(() => "0.2.0"), on: (event: string, handler: (...args: unknown[]) => void) => void handlers.set(`app:${event}`, handler), quit: vi.fn() },
   systemPreferences: {},
 }))
-vi.mock("electron-updater", () => ({ default: { autoUpdater } }))
+vi.mock("electron-updater", async (importOriginal) => {
+  const original = await importOriginal<typeof import("electron-updater")>()
+  return { default: { autoUpdater }, CancellationToken: original.CancellationToken }
+})
 
 const { Updates, installedBySetup, isNightly, SIGNATURE_CHECK_TIMEOUT_MS } = await import("../src/main/updates")
 const { app } = await import("electron")
@@ -83,11 +86,12 @@ describe("update channel", () => {
     vi.useFakeTimers()
     Object.assign(autoUpdater, { current: null, allowPrerelease: false, allowDowngrade: false })
     autoUpdater.checkForUpdates.mockReset()
-    autoUpdater.downloadUpdate.mockClear()
+    autoUpdater.downloadUpdate.mockReset().mockResolvedValue([])
+    vi.mocked(app.getVersion).mockReturnValue("0.2.0")
   })
   afterEach(() => vi.useRealTimers())
 
-  it("follows nightly prereleases when opted in and stable releases otherwise, never downgrading", () => {
+  it("follows nightly prereleases when opted in and prevents ordinary stable downgrades", () => {
     const updates = new Updates(() => {})
     updates.configure(true, true)
     expect(autoUpdater).toMatchObject({ channel: "nightly", allowPrerelease: true, allowDowngrade: false })
@@ -104,6 +108,7 @@ describe("update channel", () => {
     let finish = () => {}
     autoUpdater.checkForUpdates.mockImplementationOnce(() => new Promise<void>((resolve) => (finish = resolve)))
     const stale = updates.check()
+    await Promise.resolve()
     updates.configure(true, true)
     // The check for "latest" completes after the switch to nightly.
     emit("update-available", { version: "0.2.0" })
@@ -127,15 +132,69 @@ describe("update channel", () => {
     updates.configure(false, false)
   })
 
-  it("keeps a downloaded update when the channel changes", async () => {
+  it("discards a downloaded update from the old channel and checks the selected channel immediately", async () => {
     const updates = new Updates(() => {})
     updates.configure(true, false)
     emit("update-downloaded", { version: "0.2.0" })
     updates.configure(true, true)
     await updates.check()
-    expect(updates.current()).toEqual({ state: "ready", version: "0.2.0" })
-    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled()
+    expect(updates.current().state).not.toBe("ready")
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1)
+    expect(await updates.install()).toBe(false)
     updates.configure(false, false)
+  })
+
+  it("allows returning from an installed nightly to the current stable, including after restarting", async () => {
+    vi.mocked(app.getVersion).mockReturnValue("0.2.1-nightly.20261002120000")
+    const updates = new Updates(() => {})
+    updates.configure(true, true)
+    expect(autoUpdater.allowDowngrade).toBe(false)
+    updates.configure(true, false)
+    await updates.check()
+    expect(autoUpdater).toMatchObject({ channel: "latest", allowPrerelease: false, allowDowngrade: true })
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1)
+    updates.configure(false, false)
+
+    const restarted = new Updates(() => {})
+    restarted.configure(true, false)
+    expect(autoUpdater.allowDowngrade).toBe(true)
+    restarted.configure(false, false)
+    vi.mocked(app.getVersion).mockReturnValue("0.2.0")
+  })
+
+  it("cancels an old-channel download, ignores its late events, then downloads the selected stable", async () => {
+    vi.mocked(app.getVersion).mockReturnValue("0.2.1-nightly.20261002120000")
+    const updates = new Updates(() => {})
+    updates.configure(true, true)
+    let finish!: () => void
+    autoUpdater.downloadUpdate.mockImplementationOnce(() => new Promise<never[]>((resolve) => {
+      finish = () => resolve([])
+    }))
+    autoUpdater.checkForUpdates.mockImplementationOnce(async () => {
+      emit("update-available", { version: "0.2.1-nightly.20261002130000" })
+    })
+    await updates.check()
+    const token = autoUpdater.downloadUpdate.mock.calls[0]?.[0] as unknown as { cancelled: boolean }
+    updates.configure(true, false)
+    expect(token.cancelled).toBe(true)
+    emit("download-progress", { percent: 90 })
+    emit("update-downloaded", { version: "0.2.1-nightly.20261002130000" })
+    emit("error", new Error("cancelled old download"))
+    expect(updates.current().state).toBe("idle")
+    expect(autoUpdater.autoInstallOnAppQuit).toBe(false)
+    expect(await updates.install()).toBe(false)
+    autoUpdater.checkForUpdates.mockImplementationOnce(async () => {
+      emit("update-available", { version: "0.2.0" })
+    })
+    finish()
+    await updates.check()
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2)
+    expect(autoUpdater.downloadUpdate).toHaveBeenCalledTimes(2)
+    expect(updates.current()).toEqual({ state: "downloading", version: "0.2.0", percent: 0 })
+    emit("update-downloaded", { version: "0.2.0" })
+    expect(updates.current()).toEqual({ state: "ready", version: "0.2.0" })
+    updates.configure(false, false)
+    vi.mocked(app.getVersion).mockReturnValue("0.2.0")
   })
 
   it("does not download when updates are off", async () => {
@@ -232,6 +291,20 @@ describe("installing an update on Windows", () => {
     expect(app.quit).toHaveBeenCalled()
   })
 
+  it("does not install a different channel's update after a signature check finishes", async () => {
+    const updates = ready()
+    let finish!: (value: string | null) => void
+    autoUpdater.verifySignature.mockReturnValueOnce(new Promise((resolve) => { finish = resolve }))
+    const result = updates.install()
+    updates.configure(true, true)
+    // Even if the new channel becomes ready before the old signature check finishes.
+    emit("update-downloaded", { version: "0.2.1-nightly.20261002120000" })
+    finish(null)
+    expect(await result).toBe(false)
+    expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled()
+    updates.configure(false, false)
+  })
+
   it("installs nothing when updates are off", async () => {
     const updates = new Updates(() => {})
     updates.configure(false, false)
@@ -248,6 +321,29 @@ describe("installing an update on Windows", () => {
     await vi.waitFor(() => expect(autoUpdater.quitAndInstall).toHaveBeenCalledWith(true, false))
     expect(autoUpdater.verifySignature).toHaveBeenCalledTimes(1)
     updates.configure(false, false)
+  })
+})
+
+describe("installing on quit on macOS", () => {
+  it("stages only the selected ready update and lets Squirrel finish before quitting", async () => {
+    const platform = process.platform
+    Object.defineProperty(process, "platform", { value: "darwin" })
+    try {
+      autoUpdater.quitAndInstall.mockClear()
+      vi.mocked(app.quit).mockClear()
+      const updates = new Updates(() => {})
+      updates.configure(true, false)
+      expect(autoUpdater.autoInstallOnAppQuit).toBe(false)
+      emit("update-downloaded", { version: "0.2.1" })
+      const event = { preventDefault: vi.fn() }
+      emit("app:before-quit", event)
+      await vi.waitFor(() => expect(autoUpdater.quitAndInstall).toHaveBeenCalledWith())
+      expect(event.preventDefault).toHaveBeenCalled()
+      expect(app.quit).not.toHaveBeenCalled()
+      updates.configure(false, false)
+    } finally {
+      Object.defineProperty(process, "platform", { value: platform })
+    }
   })
 })
 

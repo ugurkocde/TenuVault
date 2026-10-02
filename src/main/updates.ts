@@ -3,7 +3,7 @@ import { existsSync } from "node:fs"
 import { basename, dirname, join } from "node:path"
 import { promisify } from "node:util"
 import { app, systemPreferences } from "electron"
-import electronUpdater from "electron-updater"
+import electronUpdater, { CancellationToken } from "electron-updater"
 import type { UpdateStatus } from "../shared/ipc"
 
 const { autoUpdater } = electronUpdater
@@ -79,42 +79,58 @@ export function isNightly(version: string): boolean {
 export class Updates {
   private status: UpdateStatus = { state: "idle" }
   private timer: NodeJS.Timeout | null = null
+  private startupTimer: NodeJS.Timeout | null = null
   // Bumped when the channel changes, so a check still running for the previous channel is recognised.
   private generation = 0
   private checking: { generation: number; done: Promise<void> } | null = null
+  private downloading: { generation: number; token: CancellationToken; done: Promise<void> } | null = null
   private installing = false
-  // Windows installs on quit through install(), which checks the signature first.
-  private readonly verifyBeforeInstall = process.platform === "win32"
 
   constructor(private readonly notify: (status: UpdateStatus) => void) {
     // Downloads start from update-available, only for a check of the current channel.
     autoUpdater.autoDownload = false
-    autoUpdater.autoInstallOnAppQuit = true
+    // Only install the selected channel's ready update. On macOS this also keeps Squirrel
+    // from staging an update before the user has finished choosing the channel.
+    autoUpdater.autoInstallOnAppQuit = false
     autoUpdater.logger = null
-    autoUpdater.on("checking-for-update", () => this.set({ state: "checking" }))
-    autoUpdater.on("update-not-available", () => this.set({ state: "not-available" }))
-    autoUpdater.on("download-progress", (p) => this.set({ state: "downloading", version: this.version, percent: Math.round(p.percent) }))
+    autoUpdater.on("checking-for-update", () => {
+      if (this.currentActivity()) this.set({ state: "checking" })
+    })
+    autoUpdater.on("update-not-available", () => {
+      if (this.currentActivity()) this.set({ state: "not-available" })
+    })
+    autoUpdater.on("download-progress", (p) => {
+      if (this.currentActivity()) this.set({ state: "downloading", version: this.version, percent: Math.round(p.percent) })
+    })
     autoUpdater.on("update-available", (info) => {
       // electron-updater emits this before returning the check, so this.checking is still the check.
       if (!this.enabled || this.checking?.generation !== this.generation) return
       this.version = info.version
       this.set({ state: "downloading", version: info.version, percent: 0 })
       // Failures also arrive as error events.
-      autoUpdater.downloadUpdate().catch(() => {})
+      const download = { generation: this.generation, token: new CancellationToken(), done: Promise.resolve() }
+      this.downloading = download
+      download.done = Promise.resolve()
+        .then(() => autoUpdater.downloadUpdate(download.token))
+        .then(() => {}, () => {})
+        .finally(() => {
+          if (this.downloading === download) this.downloading = null
+        })
     })
-    autoUpdater.on("update-downloaded", (info) => this.set({ state: "ready", version: info.version }))
+    autoUpdater.on("update-downloaded", (info) => {
+      if (this.currentActivity()) this.set({ state: "ready", version: info.version })
+    })
     autoUpdater.on("error", (error) => {
+      if (!this.currentActivity()) return
       // Also reports a setup program that could not be started, so installing may be tried again.
       this.installing = false
       this.set({ state: "error", message: error.message })
     })
-    if (this.verifyBeforeInstall) {
-      app.on("before-quit", (event) => {
-        if (!this.enabled || this.status.state !== "ready" || this.installing) return
-        event.preventDefault()
-        void this.install(true)
-      })
-    }
+    app.on("before-quit", (event) => {
+      if (!this.enabled || this.status.state !== "ready" || this.installing) return
+      event.preventDefault()
+      void this.install(true)
+    })
   }
 
   private version = ""
@@ -127,30 +143,35 @@ export class Updates {
 
   /** Starts or stops background checks and picks the release channel. Development builds never update. */
   configure(enabled: boolean, nightly: boolean): void {
+    const channelChanged = this.nightly !== null && nightly !== this.nightly
     this.useChannel(nightly)
     if (this.timer) clearInterval(this.timer)
+    if (this.startupTimer) clearTimeout(this.startupTimer)
     this.timer = null
+    this.startupTimer = null
     this.enabled = enabled && app.isPackaged
-    // Turning updates off also stops installing on quit.
-    autoUpdater.autoInstallOnAppQuit = this.enabled && !this.verifyBeforeInstall
     if (!this.enabled) {
       this.set({ state: "disabled" })
       return
     }
     if (this.status.state === "disabled") this.set({ state: "idle" })
     // A check still running for the previous channel is followed right away by one for this channel.
-    if (this.checking && this.checking.generation !== this.generation) void this.check()
-    setTimeout(() => void this.check(), 15 * 1000)
+    if (channelChanged) void this.check()
+    else this.startupTimer = setTimeout(() => void this.check(), 15 * 1000)
     this.timer = setInterval(() => void this.check(), CHECK_EVERY_MS)
   }
 
   async check(): Promise<UpdateStatus> {
     // electron-updater hands out a running check again, even one for the previous channel, so
     // that one has to settle before this channel is checked.
-    while (this.checking && this.checking.generation !== this.generation) await this.checking.done
-    if (this.status.state === "disabled" || this.status.state === "ready") return this.status
+    while ((this.checking && this.checking.generation !== this.generation) ||
+           (this.downloading && this.downloading.generation !== this.generation)) {
+      await Promise.all([this.checking?.done, this.downloading?.done])
+    }
+    if (!this.enabled || this.status.state === "ready" || this.downloading) return this.status
     if (!this.checking) {
-      const checking = { generation: this.generation, done: this.run() }
+      const generation = this.generation
+      const checking = { generation, done: Promise.resolve().then(() => this.run(generation)) }
       this.checking = checking
       void checking.done.finally(() => {
         if (this.checking === checking) this.checking = null
@@ -160,11 +181,12 @@ export class Updates {
     return this.status
   }
 
-  private async run(): Promise<void> {
+  private async run(generation: number): Promise<void> {
+    if (!this.enabled || generation !== this.generation) return
     try {
       await autoUpdater.checkForUpdates()
     } catch (error) {
-      this.set({ state: "error", message: error instanceof Error ? error.message : String(error) })
+      if (generation === this.generation) this.set({ state: "error", message: error instanceof Error ? error.message : String(error) })
     }
   }
 
@@ -172,9 +194,10 @@ export class Updates {
   async install(onQuit = false): Promise<boolean> {
     if (!this.enabled || this.status.state !== "ready" || this.installing) return false
     this.installing = true
+    const generation = this.generation
     const rejected = await stagedSetupRejected()
     // Updates may have been turned off while the check ran; then nothing is installed.
-    if (!this.enabled || this.status.state !== "ready") {
+    if (!this.enabled || this.status.state !== "ready" || generation !== this.generation) {
       this.installing = false
       if (onQuit) app.quit()
       return false
@@ -190,6 +213,11 @@ export class Updates {
       // An installer that fails to start reports an error right away, which clears installing.
       return this.installing
     }
+    // macOS must let Squirrel fetch the selected update before quitting.
+    if (process.platform === "darwin") {
+      autoUpdater.quitAndInstall()
+      return this.installing
+    }
     // Quits like quitAndInstall does after starting the setup program, and also when it could not.
     autoUpdater.quitAndInstall(true, false)
     setImmediate(() => app.quit())
@@ -198,19 +226,26 @@ export class Updates {
 
   /**
    * Nightly follows the nightly feed (nightly.yml on prereleases), stable only stable releases
-   * (latest.yml). Downgrades stay off, so leaving nightly keeps the installed build until a
-   * newer stable release ships.
+   * (latest.yml). A nightly install returning to stable may install the current stable even
+   * when it is older. Stable installs and ordinary nightly updates never downgrade.
    */
   private useChannel(nightly: boolean): void {
     if (nightly === this.nightly) return
     this.nightly = nightly
     this.generation++
+    this.downloading?.token.cancel()
     autoUpdater.channel = nightly ? "nightly" : "latest"
     autoUpdater.allowPrerelease = nightly
     // Setting a channel also allows downgrades.
-    autoUpdater.allowDowngrade = false
-    // A result from the other channel no longer applies.
-    if (this.status.state === "not-available" || this.status.state === "error") this.set({ state: "idle" })
+    autoUpdater.allowDowngrade = !nightly && isNightly(app.getVersion())
+    // A ready or partially downloaded update from the other channel must never install.
+    this.set({ state: "idle" })
+  }
+
+  private currentActivity(): boolean {
+    return this.enabled &&
+      (!this.checking || this.checking.generation === this.generation) &&
+      (!this.downloading || this.downloading.generation === this.generation)
   }
 
   private set(status: UpdateStatus): void {

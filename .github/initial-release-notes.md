@@ -6,7 +6,9 @@ TenuVault brings Intune backup, restore and drift detection into a desktop appli
 
 ### Release channels
 
-Signed Windows installers and signed, notarized macOS builds are distributed from this repository. Nightly builds provide previews; stable builds are published separately. The update preference selects which channel the application follows. Updates do not downgrade an installed build when switching channels.
+Signed Windows installers and signed, notarized macOS builds are distributed from this repository. Stable is the default for stable installations. Enable **Settings > Updates > Get nightly builds** to receive previews between stable releases, such as `0.2.1-nightly.…` after `0.2.0`.
+
+Turn the option off to download the current stable release immediately, even if its version is older than the installed nightly. Changing channels cancels a pending download and replaces any ready update from the previous channel. Select **Restart and update** when the selected release is ready, or let it install when you quit. Ordinary updates within a channel do not downgrade the application.
 
 Windows MSI installations are managed deployments and do not self-update. Deploy a newer MSI through your normal software distribution process. Automatic updates for the setup installer and macOS application also respect the administrator's update policy.
 
