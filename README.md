@@ -19,13 +19,14 @@ to third-party web apps, or whose Conditional Access policies block them.
 </picture>
 
 <p align="center">
-  <a href="https://github.com/ugurkocde/TenuVault/releases/latest"><img src="docs/assets/download-windows.svg" alt="Download the latest stable TenuVault release for Windows" width="240" height="64"></a>
+  <a href="https://www.tenuvault.com/download/windows"><img src="docs/assets/download-windows.svg" alt="Download the latest stable TenuVault release for Windows" width="240" height="64"></a>
   &nbsp;
-  <a href="https://github.com/ugurkocde/TenuVault/releases/latest"><img src="docs/assets/download-macos.svg" alt="Download the latest stable TenuVault release for macOS" width="240" height="64"></a>
+  <a href="https://www.tenuvault.com/download/mac-arm64"><img src="docs/assets/download-macos.svg" alt="Download the latest stable TenuVault release for macOS" width="240" height="64"></a>
 </p>
 
-**Download the latest stable release:** choose the Windows `.exe` setup, or the macOS `.dmg` for
-Apple silicon or Intel. A Windows x64 `.msi` is also available for managed deployment.
+The buttons download the latest stable Windows `.exe` setup or macOS `.dmg` for Apple silicon directly.
+For Intel Macs, use the [Intel download](https://www.tenuvault.com/download/mac-x64).
+A Windows x64 `.msi` is also available on the [release page](https://github.com/ugurkocde/TenuVault/releases/latest) for managed deployment.
 See the [installation guide](https://docs.tenuvault.com/getting-started/install/) for help choosing.
 
 ## What it does
