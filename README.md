@@ -18,7 +18,15 @@ to third-party web apps, or whose Conditional Access policies block them.
   <img src="docs/screenshots/dashboard-light.webp" alt="TenuVault Desktop dashboard with the last backup, success rate, next scheduled backup, protected policies and drift status of a tenant">
 </picture>
 
-<sub>Screenshot shows fictional demo data.</sub>
+<p align="center">
+  <a href="https://github.com/ugurkocde/TenuVault/releases/latest"><img src="docs/assets/download-windows.svg" alt="Download the latest stable TenuVault release for Windows" width="252" height="60"></a>
+  &nbsp;
+  <a href="https://github.com/ugurkocde/TenuVault/releases/latest"><img src="docs/assets/download-macos.svg" alt="Download the latest stable TenuVault release for macOS" width="252" height="60"></a>
+</p>
+
+**Download the latest stable release:** choose the Windows `.exe` setup, or the macOS `.dmg` for
+Apple silicon or Intel. A Windows x64 `.msi` is also available for managed deployment.
+See the [installation guide](https://docs.tenuvault.com/getting-started/install/) for help choosing.
 
 ## What it does
 
