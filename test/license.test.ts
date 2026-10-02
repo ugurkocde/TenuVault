@@ -293,6 +293,22 @@ describe("LicenseService key activations", () => {
     expect(license.status([TENANT]).offline).toBe(false)
   })
 
+  it("treats a JSON block page with HTTP 200 as an outage, including during deactivation", async () => {
+    answer = () => granted("act-a")
+    const license = service()
+    await license.setKey("TEST-LICENSE-KEY", [TENANT])
+    answer = () => Response.json({ error: "blocked" })
+    await license.refreshAll()
+    expect(entitled(license)).toBe(true)
+    expect(license.status([TENANT]).offline).toBe(true)
+    await expect(license.deactivate()).rejects.toThrow("invalid response")
+    expect(entitled(license)).toBe(true)
+    expect(license.status([TENANT]).hasKey).toBe(true)
+    answer = () => Response.json({ success: true })
+    await license.deactivate()
+    expect(license.status([TENANT])).toMatchObject({ hasKey: false, offline: false })
+  })
+
   it.each(["null", "[]", "{", '{"reason":"firewall_block"}'])("preserves the activation on an unrecognized JSON refusal: %s", async (body) => {
     answer = () => granted("act-a")
     const license = service()

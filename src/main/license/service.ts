@@ -299,6 +299,7 @@ export class LicenseService {
     return payload
   }
 
+  /** Accepts only licensing responses; network intermediaries must not revoke cached access. */
   private async call(
     action: "activate" | "refresh" | "deactivate" | "tenant",
     body: object,
@@ -334,6 +335,14 @@ export class LicenseService {
       throw new Error("The licensing service returned an unexpected response. Check for a firewall block or network sign-in page and retry.")
     }
     const result = data as Record<string, unknown>
+    const deactivating = action === "deactivate" || (action === "tenant" && "action" in body && body.action === "deactivate")
+    const validSuccess = deactivating
+      ? result.success === true
+      : typeof result.token === "string" && typeof result.activationId === "string"
+    if (response.ok && !validSuccess) {
+      this.offline = true
+      throw new Error("The licensing service returned an invalid response. Check for a firewall block or network sign-in page and retry.")
+    }
     const reason = typeof result.reason === "string" ? result.reason.slice(0, 40) : undefined
     if ((response.status === 401 && reason !== "invalid_token") ||
       (response.status === 403 && (!reason || !Object.hasOwn(REASONS, reason)))) {
