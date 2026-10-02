@@ -2,7 +2,7 @@
 
 <img src="build/icon.png" alt="" width="88" height="88">
 
-# TenuVault Desktop
+# TenuVault
 
 **Intune backup, restore, drift detection and OpenIntuneBaseline, on your machine.**
 
