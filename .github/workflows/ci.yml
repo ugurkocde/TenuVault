@@ -19,8 +19,23 @@ jobs:
   checks:
     name: Typecheck, test and smoke test
     runs-on: ubuntu-latest
+    outputs:
+      package_required: ${{ steps.changes.outputs.package_required }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Detect installer changes
+        id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node .github/scripts/ci-packaging.mjs
+
+      - name: Test installer change detection
+        run: node --test .github/scripts/ci-packaging.test.mjs
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -53,9 +68,9 @@ jobs:
           if-no-files-found: ignore
 
   # Unsigned installers for pull requests, so contributors see that packaging still works.
-  package:
-    name: Package (${{ matrix.name }})
-    if: github.event_name != 'push'
+  installers:
+    name: Build installers (${{ matrix.name }})
+    if: github.event_name != 'push' && needs.checks.outputs.package_required == 'true'
     needs: checks
     strategy:
       fail-fast: false
@@ -143,3 +158,28 @@ jobs:
           name: smoke-screenshots-${{ matrix.name }}
           path: out/smoke
           if-no-files-found: ignore
+
+  # Preserve the required check names even when no installer build is needed.
+  # These lightweight gates fail if validation or a required installer build fails.
+  package:
+    name: Package (${{ matrix.name }})
+    if: always() && github.event_name != 'push'
+    needs: [checks, installers]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        name: [Windows, macOS]
+    steps:
+      - name: Verify installer requirement
+        env:
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          PACKAGE_REQUIRED: ${{ needs.checks.outputs.package_required }}
+          INSTALLERS_RESULT: ${{ needs.installers.result }}
+        run: |
+          test "$CHECKS_RESULT" = success
+          if [ "$PACKAGE_REQUIRED" = false ]; then
+            echo "Documentation-only changes: installer build not needed." >> "$GITHUB_STEP_SUMMARY"
+          else
+            test "$PACKAGE_REQUIRED" = true
+            test "$INSTALLERS_RESULT" = success
+          fi
