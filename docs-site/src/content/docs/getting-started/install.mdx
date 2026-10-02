@@ -26,10 +26,10 @@ Ignore the `.blockmap` and `.yml` files. The updater uses them.
 
 | Channel | Version format | Marked on GitHub as |
 | --- | --- | --- |
-| Stable | `0.1.0` | Release |
-| Nightly | `0.1.0-nightly.20260928132604` (next stable version plus the UTC build time) | Pre-release |
+| Stable | `0.2.0` | Release |
+| Nightly | `0.2.1-nightly.20261002092217` (next patch version plus the UTC build time) | Pre-release |
 
-Nightly builds are produced from every change that passes the automated checks. A nightly install keeps updating to newer nightlies; a stable install only updates to newer stable releases.
+Nightly builds are produced from application changes that pass the automated checks. By default, a nightly install follows newer nightlies and a stable install follows newer stable releases. You can switch channels in Settings at any time when automatic updates are enabled and your organization allows them.
 
 ## Install
 
@@ -71,7 +71,33 @@ TenuVault keeps itself up to date:
 
 You can also check manually in **Settings** > **Updates** with **Check now**, and turn automatic updates off with **Download and install updates automatically**. See [Settings reference](/settings/#updates).
 
-In **Settings** > **Updates**, enable **Get nightly builds** to try previews between stable releases. For example, a stable `0.2.0` installation can update to `0.2.1-nightly.…`. Turn the option off to download the current stable release immediately, even when its version is older than your installed nightly. Select **Restart and update** when the download is ready. Changing channels replaces any pending update from the previous channel.
+### Try nightly builds from stable
+
+1. Open **Settings** and select **Updates**.
+2. Keep **Download and install updates automatically** enabled.
+3. Enable **Get nightly builds**. TenuVault checks the nightly channel immediately and downloads the available update.
+4. When the version is ready, select **Restart and update**.
+
+The screenshots below show the installed stable **0.2.0** app offering **0.2.1-nightly.20261002092217**. The checkbox and version are real update states captured on Windows and macOS; the available version changes as new builds are published.
+
+<Tabs>
+<TabItem label="Windows">
+
+![TenuVault 0.2.0 on Windows with Get nightly builds enabled and the nightly update ready to install](/images/updates/windows-nightly-ready.png)
+
+</TabItem>
+<TabItem label="macOS">
+
+![TenuVault 0.2.0 on macOS with Get nightly builds enabled and the nightly update ready to install](/images/updates/macos-nightly-ready.png)
+
+</TabItem>
+</Tabs>
+
+### Return to stable
+
+Turn **Get nightly builds** off to download the current stable release immediately, even when its version is older than your installed nightly. Select **Restart and update** when the download is ready. Changing channels replaces any pending update from the previous channel.
+
+Nightly builds are previews and may contain bugs. Windows may open the setup wizard after **Restart and update**; finish its prompts to complete installation. Windows MSI installations do not self-update; deploy a newer MSI through your organization's software distribution process.
 
 :::note
 Organizations can turn off automatic updates with a registry value on Windows or a managed preference on macOS. **Settings** then shows **Your organization manages updates for TenuVault.** See [Deploy TenuVault in your organization](/deploy/#control-automatic-updates).

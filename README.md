@@ -250,6 +250,11 @@ Signing turns on when these repository secrets exist, and release tags fail with
 - macOS: `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD` (Developer ID Application certificate) and
   `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` for notarization.
 
+## Maintainers
+
+- [Ugur Koc (@ugurkocde)](https://github.com/ugurkocde)
+- [James Robinson (@SkipToTheEndpoint)](https://github.com/SkipToTheEndpoint)
+
 ## License
 
 TenuVault Desktop is licensed under the [Business Source License 1.1](LICENSE). It is source

@@ -128,6 +128,8 @@ See [Backup storage and retention](/backups/storage/) and [Schedule backups](/ba
 
 ## Updates
 
+For screenshots and a walkthrough of switching from stable to nightly, see [Try nightly builds from stable](/getting-started/install/#try-nightly-builds-from-stable).
+
 | Control | What it does |
 | --- | --- |
 | **Download and install updates automatically** | On by default. TenuVault checks 15 seconds after start and every 6 hours, downloads updates in the background and installs them when it restarts. Turning it off prevents installation of a pending update. |
