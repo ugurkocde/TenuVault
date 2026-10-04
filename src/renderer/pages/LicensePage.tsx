@@ -62,7 +62,7 @@ function TrialCallToAction() {
         </p>
         <p className="mt-2 text-sm text-gray-600">
           Community covers one tenant with manual and weekly backups. Pro covers two tenants and adds daily backups, full
-          restore, replace in place, drift revert, Azure storage and the audit log. MSP includes 5 tenants and adds cross
+          restore, replace in place, drift revert, Azure storage and the audit log. New MSP subscriptions include 5 tenants and add cross
           tenant views and bulk actions. Your license key arrives by email right after checkout, and you are not charged
           until the trial ends.
         </p>
