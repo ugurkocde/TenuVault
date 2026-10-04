@@ -1,6 +1,17 @@
 ---
 title: "Disaster recovery"
 description: Prepare for and recover from lost Intune configuration, a lost admin device, or a rebuild in another tenant.
+faq:
+  - question: "What should I do before I need to recover Intune configuration?"
+    answer: "Schedule backups, save the recovery key in your password manager, keep backups off the admin device (in an Azure storage account on Pro and MSP, or on a network share), keep an independent copy of important backups, check recovery readiness and practice a restore with Create copies."
+  - question: "How do I restore Intune items that were deleted?"
+    answer: "Go to Backup & Restore > Backup History, pick the last backup from before the problem and click Restore from this backup. Select the items and choose Replace in place, which needs Pro or MSP. Deleted items are recreated under their original names. Turn on Restore assignments if their assignments must come back too."
+  - question: "Can I read my backups on a new or reinstalled computer?"
+    answer: "Yes, with your recovery key. Install TenuVault, sign in with the same app registration, activate your license, import the recovery key under Settings > Storage and recovery, and point the tenant at the existing backup folder or Azure storage account. Without the recovery key, backups can only be read on the device that made them."
+  - question: "What cannot be recovered automatically?"
+    answer: "Anything Microsoft Graph does not export: app installer files, Apple automated device enrollment tokens, and private keys or other secret material. Upload the original installer again, renew the Apple token through Apple Business Manager or Apple School Manager, and run a new backup for profiles that hold a masked OMA-URI value."
+  - question: "Can I rebuild Intune configuration in another tenant?"
+    answer: "Yes, with the MSP plan. You can copy items from a backup of one connected tenant into another connected tenant. Copies keep their original names, get the Default scope tag and are never assigned, so you recreate groups, exclusions and filters and then assign the copies."
 ---
 
 A backup is only useful if you can restore from it when things go wrong. This page shows how to prepare, and which TenuVault workflow to use for each recovery scenario.
