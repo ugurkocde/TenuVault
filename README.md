@@ -232,7 +232,7 @@ a real tenant. It needs `TENUVAULT_E2E_TENANT_ID`, `TENUVAULT_E2E_CLIENT_ID` and
 ## Licensing
 
 Community is free for one tenant and needs no license key. Pro covers two tenants and MSP the
-subscribed quantity (starting at three tenants); the features each plan includes are defined in
+subscribed quantity (new subscriptions include five tenants; existing subscriptions keep their quantity, minimum three); the features each plan includes are defined in
 `src/shared/plans.ts`. Pro and MSP are bought on [tenuvault.com/pricing](https://tenuvault.com/pricing)
 (Polar checkout, 30 day free trial). The key holder receives a `TENU` license key by email and pastes
 it on the License page; other admins can use a shared organization license without receiving the key.
