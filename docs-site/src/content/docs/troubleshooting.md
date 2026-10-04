@@ -44,7 +44,7 @@ If the browser shows `AADSTS50011` (redirect URI mismatch), the app registration
 
 | Message | Cause | Fix |
 | --- | --- | --- |
-| A TenuVault license is required for this tenant. Add your license key on the License page, or start a 30 day free trial. | The tenant has no license and is not the free Community tenant on this device. | Add a license key on the **License** page, or start a trial at [tenuvault.com](https://tenuvault.com/desktop#pricing). |
+| A TenuVault license is required for this tenant. Add your license key on the License page, or buy Pro or MSP. | The tenant has no license and is not the free Community tenant on this device. | Add a license key on the **License** page, or buy one at [tenuvault.com](https://tenuvault.com/desktop#pricing). |
 | TenuVault Community covers one tenant, and it is used for tenant *ID*. Add a Pro or MSP license on the License page to use more tenants. | Community is free for one tenant, and another tenant already uses it. | Add a Pro or MSP license key. See [Plans and features](/licensing/). |
 | An active license is required for backup and restore operations. | Notice on the backup, drift and audit pages: the tenant is signed in but not licensed. | Click **Open license** and activate a license for the tenant. |
 | *Feature*: included in TenuVault Pro and MSP. Upgrade on the License page. | The action needs a higher plan, for example daily schedules, Azure storage, restoring several items or replacing in place. | Upgrade on the **License** page, or use an option your plan includes. |

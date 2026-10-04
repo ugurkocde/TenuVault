@@ -113,7 +113,7 @@ export const communityLimit = (tenantId: string) =>
   `TenuVault Community covers one tenant, and it is used for tenant ${tenantId}. Add a Pro or MSP license on the License page to use more tenants.`
 
 export const LICENSE_REQUIRED =
-  "A TenuVault license is required for this tenant. Add your license key on the License page, or start a 30 day free trial."
+  "A TenuVault license is required for this tenant. Add your license key on the License page, or buy Pro or MSP."
 
 const REASONS: Record<string, string> = {
   invalid_key: "This license key is not valid for TenuVault.",

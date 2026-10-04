@@ -55,9 +55,11 @@ export function ActivationScreen({ onSignIn }: { onSignIn: () => void }) {
             <Building2 className="mr-2 h-4 w-4" /> Start free with Community
           </Button>
           <Button variant="outline" size="lg" className="w-full" onClick={() => void bridge.license.open("buy")}>
-            <ExternalLink className="mr-2 h-4 w-4" /> Try Pro or MSP free for 30 days
+            <ExternalLink className="mr-2 h-4 w-4" /> Buy Pro or MSP
           </Button>
-          <p className="text-xs text-gray-600">You can upgrade any time from the License page.</p>
+          <p className="text-xs text-gray-600">
+            Pro and MSP come with a 30-day money-back guarantee. You can upgrade any time from the License page.
+          </p>
         </div>
 
         <form

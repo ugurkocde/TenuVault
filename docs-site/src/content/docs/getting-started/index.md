@@ -20,7 +20,7 @@ Check the [Requirements](/getting-started/requirements/) first. In short, you ne
 | --- | --- | --- |
 | 1 | Download and install TenuVault. | [Install and update TenuVault](/getting-started/install/) |
 | 2 | Run the setup script that creates the app registration in your tenant, and note the client ID it prints. | [Create the app registration](/getting-started/app-registration/) |
-| 3 | Start TenuVault and choose Community, a trial, or enter a license key. | [Choose a plan on first launch](/getting-started/first-launch/) |
+| 3 | Start TenuVault and choose Community, buy Pro or MSP, or enter a license key. | [Choose a plan on first launch](/getting-started/first-launch/) |
 | 4 | Sign in to your tenant with your own admin account. | [Sign in to your tenant](/getting-started/connect-tenant/) |
 | 5 | Choose whether backups stay on this device or go to your Azure storage account, and save your recovery key. | [Choose where backups are stored](/getting-started/choose-storage/) |
 | 6 | Run the first backup and check the result. | [Run your first backup](/getting-started/first-backup/) |

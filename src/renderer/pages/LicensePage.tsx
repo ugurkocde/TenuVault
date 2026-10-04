@@ -50,7 +50,7 @@ function useAction() {
   return { busy, error, notice, run }
 }
 
-function TrialCallToAction() {
+function BuyCallToAction() {
   return (
     <div className="flex flex-wrap items-center justify-between gap-4 rounded-3xl bg-blue-50/60 p-5">
       <div className="min-w-0 flex-1">
@@ -58,18 +58,18 @@ function TrialCallToAction() {
           <span className="flex size-9 flex-shrink-0 items-center justify-center rounded-full bg-coral-500 text-white" aria-hidden="true">
             <Sparkles className="h-4 w-4" />
           </span>
-          You are on Community, the free plan. Try Pro or MSP free for 30 days.
+          You are on Community, the free plan. Upgrade to Pro or MSP.
         </p>
         <p className="mt-2 text-sm text-gray-600">
           Community covers one tenant with manual and weekly backups. Pro covers two tenants and adds daily backups, full
           restore, replace in place, drift revert, Azure storage and the audit log. New MSP subscriptions include 5
-          tenants and add cross tenant views and bulk actions. Your license key arrives by email right after checkout, and
-          you are not charged until the trial ends.
+          tenants and add cross tenant views and bulk actions. Your license key arrives by email right after checkout,
+          with a 30-day money-back guarantee.
         </p>
       </div>
       <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void bridge.license.open("buy")}>
         <ExternalLink className="mr-2 h-4 w-4" />
-        Start 30 day free trial
+        Buy a license
       </Button>
     </div>
   )
@@ -244,7 +244,7 @@ export default function LicensePage() {
               </CardTitle>
               <CardDescription className="mt-2">
                 {isUnlicensed(status)
-                  ? "Paste the license key from your purchase email, or start a free trial."
+                  ? "Paste the license key from your purchase email, or buy a license."
                   : status.plan
                     ? `Your license covers ${status.tenantLimit ?? 1} tenant${status.tenantLimit === 1 ? "" : "s"}. ${activeKeyTenants} ${activeKeyTenants === 1 ? "is" : "are"} active on this machine.`
                     : status.hasKey
@@ -274,7 +274,7 @@ export default function LicensePage() {
             </Alert>
           )}
 
-          {isUnlicensed(status) && <TrialCallToAction />}
+          {isUnlicensed(status) && <BuyCallToAction />}
 
           {status.hasKey ? (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-gray-50 px-5 py-4">

@@ -145,7 +145,7 @@ await check("first run shows the welcome screen", async () => {
   await disableAnimations()
   assert(!(await evaluate(`document.body.innerText.includes("Backup & Restore")`)), "welcome screen missing, app shown instead")
   assert(await waitForText("Start free with Community"), "Community call to action missing")
-  assert(await waitForText("Try Pro or MSP free for 30 days"), "trial call to action missing")
+  assert(await waitForText("Buy Pro or MSP"), "buy call to action missing")
   await screenshot("00-welcome")
 })
 
@@ -190,10 +190,10 @@ await check("platform sign-in support", async () => {
   assert(info.trayIconLoaded, "tray icon image did not load")
 })
 
-await check("license page asks for a license and offers the free trial", async () => {
+await check("license page asks for a license and offers to buy one", async () => {
   await go("#/license", "Add your license")
   assert(await waitForText("Official TenuVault builds are licensed under the license agreement"), "license agreement link missing on the license page")
-  assert(await waitForText("Start 30 day free trial"), "trial call to action missing")
+  assert(await waitForText("Buy a license"), "buy call to action missing")
   const status = await evaluate(`window.tenuvault.license.status()`)
   assert(!status.hasKey && status.tenants.length === 0, `unexpected license state ${JSON.stringify(status)}`)
   await screenshot("02-license-none")

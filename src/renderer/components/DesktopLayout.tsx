@@ -91,7 +91,7 @@ function LicenseBanner() {
   if (isUnlicensed(status)) {
     return (
       <BannerLink tone="coral" icon={<Sparkles className="h-4 w-4" />}>
-        You are on Community, the free plan. Try Pro or MSP free for 30 days, or add your license key.
+        You are on Community, the free plan. Buy Pro or MSP, or add your license key.
       </BannerLink>
     )
   }

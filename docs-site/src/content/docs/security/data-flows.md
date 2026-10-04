@@ -144,7 +144,7 @@ A local notification option shows a system notification on your machine and make
 
 ## Links that open in your browser
 
-Some buttons open a web page in your default browser instead of making a request from the app, for example **Try Pro or MSP free for 30 days**, **Start 30 day free trial**, **Manage subscription** and **Setup guide**. These pages are visited by your browser only when you click them. TenuVault only opens `https` and `mailto` links, and never loads external pages inside the app window.
+Some buttons open a web page in your default browser instead of making a request from the app, for example **Buy Pro or MSP**, **Buy a license**, **Manage subscription** and **Setup guide**. These pages are visited by your browser only when you click them. TenuVault only opens `https` and `mailto` links, and never loads external pages inside the app window.
 
 ## Firewall allow list
 

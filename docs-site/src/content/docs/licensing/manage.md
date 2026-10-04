@@ -97,7 +97,7 @@ To use a different key, first click **Deactivate this machine**, then enter the 
 
 Click **Manage subscription** on the **License** page to open the customer portal at [polar.sh/ugurlabs/portal](https://polar.sh/ugurlabs/portal) in your browser. There you can manage your subscription and release installations you no longer use.
 
-To upgrade from Community, click **Start 30 day free trial** on the **License** page, or go to [tenuvault.com/desktop#pricing](https://tenuvault.com/desktop#pricing).
+To upgrade from Community, click **Buy a license** on the **License** page, or go to [tenuvault.com/desktop#pricing](https://tenuvault.com/desktop#pricing).
 
 ## License messages
 

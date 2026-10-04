@@ -1,9 +1,9 @@
 ---
 title: "Choose a plan on first launch"
-description: What the welcome screen offers and how to pick Community, a trial or a license key.
+description: What the welcome screen offers and how to pick Community, a paid plan or a license key.
 ---
 
-The first time you start TenuVault, it shows **Welcome to TenuVault**. Here you choose how to start: free with Community, with a 30 day trial of Pro or MSP, or with a license key you already have.
+The first time you start TenuVault, it shows **Welcome to TenuVault**. Here you choose how to start: free with Community, by buying Pro or MSP, or with a license key you already have.
 
 The welcome screen appears while this computer has no license key and no connected tenant. Once you connect a tenant or save a key, TenuVault opens straight into the app.
 
@@ -12,7 +12,7 @@ The welcome screen appears while this computer has no license key and no connect
 | Option | What it does | Choose it when |
 | --- | --- | --- |
 | **Start free with Community** | Opens the guided setup, **Set up TenuVault**. No key is needed. | You want to try TenuVault on one tenant, or your organization already shares a TenuVault license with your tenant. |
-| **Try Pro or MSP free for 30 days** | Opens the TenuVault pricing page in your browser, where you start a trial. | You want Pro or MSP features, such as daily schedules or Azure storage. |
+| **Buy Pro or MSP** | Opens the TenuVault pricing page in your browser, where you buy a plan with a 30-day money-back guarantee. | You want Pro or MSP features, such as daily schedules or Azure storage. |
 | **Already have a license key?** | Saves the key you paste on this device. | You received a key by email. |
 
 Community is free for one tenant, with manual and weekly backups. You can upgrade any time from the **License** page. For what each plan includes, see [Plans and features](/licensing/).
@@ -24,9 +24,9 @@ Community is free for one tenant, with manual and weekly backups. You can upgrad
 
 The first tenant you sign in to without a key uses Community. If your organization shares a TenuVault license with that tenant, TenuVault picks it up when you sign in, and the tenant uses that plan instead.
 
-## Start a trial
+## Buy Pro or MSP
 
-1. Select **Try Pro or MSP free for 30 days**. The pricing page opens in your browser.
+1. Select **Buy Pro or MSP**. The pricing page opens in your browser.
 2. Complete the checkout for the plan you want. Your license key arrives by email. Keys start with `TENU`.
 3. Return to TenuVault and follow [Enter a license key](#enter-a-license-key).
 

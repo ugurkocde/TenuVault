@@ -5,7 +5,7 @@ each value goes. Nothing on this list is ever compiled into the app as a secret.
 
 | Where | What |
 |---|---|
-| Polar dashboard | Products, license key benefits, trial, checkout links, organization access token |
+| Polar dashboard | Products, license key benefits, checkout links, organization access token |
 | Vercel, the tenuvault.com project, Settings > Environment Variables | Licensing service settings and signing key, checkout links for the /desktop page |
 | GitHub, this repository, Settings > Secrets and variables > Actions | License public key, portal URL, signing secrets |
 
@@ -55,8 +55,11 @@ Create one *License Keys* benefit per plan (Benefits > Create benefit > License 
 | TenuVault Desktop MSP, monthly | Per unit, quantity = tenants, minimum 3 | TenuVault MSP |
 | TenuVault Desktop MSP, yearly | Per unit, quantity = tenants, minimum 3 | TenuVault MSP |
 
-**Trial:** every product has a 30 day trial. The key is issued when the trial starts, so trial users
-activate the app right away.
+**Money-back guarantee:** products have no trial. New subscriptions are charged at checkout, so the
+first invoice shows the full amount, and the first payment is covered by a 30-day money-back
+guarantee (refund it in Polar, which revokes the key). The key is issued at checkout, so buyers
+activate the app right away. Trials that started before October 4, 2026 continue under their
+original terms, and their keys keep working.
 
 ### Checkout links and token
 
@@ -155,7 +158,7 @@ A *Developer ID Installer* certificate is not needed: the app ships as DMG and Z
 3. CI builds, signs and smoke tests both platforms, then publishes the GitHub release with the
    update feed. Release tags fail if a signing secret is missing.
 4. Before tagging, test licensing with a sandbox key in a development build against a preview
-   deployment (see section 3). After the release, check production once: start the trial (or use a
+   deployment (see section 3). After the release, check production once: buy a plan (or use a
    100% discount code), install the release, activate the key and connect a tenant. The License page
    should list the tenant as active.
 

@@ -12,9 +12,9 @@ TenuVault has three plans: Community, which is free, and the paid Pro and MSP pl
 | Price | Free, no license key needed | Paid subscription | Paid subscription |
 | Tenants | 1 | 2 (for example production and test) | The number of tenants in your subscription. New subscriptions include 5; existing subscriptions keep their quantity (minimum 3) |
 | Installations per tenant | | 5 | 5 |
-| Free trial | | 30 days | 30 days |
+| Money-back guarantee | | 30 days | 30 days |
 
-To start a trial or buy a plan, go to [tenuvault.com/desktop#pricing](https://tenuvault.com/desktop#pricing), or click **Try Pro or MSP free for 30 days** on the welcome screen or **Start 30 day free trial** on the **License** page. Your license key arrives by email right after checkout, and you are not charged until the trial ends.
+To buy a plan, go to [tenuvault.com/desktop#pricing](https://tenuvault.com/desktop#pricing), or click **Buy Pro or MSP** on the welcome screen or **Buy a license** on the **License** page. You pay at checkout and your license key arrives by email right after. The first payment of a new subscription is covered by a 30-day money-back guarantee. Trials that started before October 4, 2026 continue under their original terms.
 
 ## Features by plan
 
