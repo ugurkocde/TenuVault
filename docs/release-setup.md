@@ -57,7 +57,9 @@ Create one *License Keys* benefit per plan (Benefits > Create benefit > License 
 
 **Money-back guarantee:** products have no trial. New subscriptions are charged at checkout, so the
 first invoice shows the full amount, and the first payment is covered by a 30-day money-back
-guarantee (refund it in Polar, which revokes the key). The key is issued at checkout, so buyers
+guarantee. To honor it, refund the order in Polar and also revoke the subscription immediately:
+a refund alone leaves a subscription and its license key active, and the key is only revoked
+once the subscription is revoked. The key is issued at checkout, so buyers
 activate the app right away. Trials that started before October 4, 2026 continue under their
 original terms, and their keys keep working.
 
