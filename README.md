@@ -88,7 +88,7 @@ Azure storage account on Pro and MSP. Backups never reach a TenuVault server. Se
 ### Is TenuVault free?
 
 Community is free for one tenant and needs no license key. Pro covers two tenants and MSP the
-subscribed number of tenants, starting at three, both with a 30 day free trial. See
+subscribed number of tenants (new subscriptions include five), both with a 30 day free trial. See
 [Plans and features](https://docs.tenuvault.com/licensing/) and [pricing](https://tenuvault.com/pricing).
 
 ### How does TenuVault differ from IntuneBackupAndRestore?
@@ -232,7 +232,7 @@ a real tenant. It needs `TENUVAULT_E2E_TENANT_ID`, `TENUVAULT_E2E_CLIENT_ID` and
 ## Licensing
 
 Community is free for one tenant and needs no license key. Pro covers two tenants and MSP the
-subscribed quantity (starting at three tenants); the features each plan includes are defined in
+subscribed quantity (new subscriptions include five tenants; existing subscriptions keep their quantity, minimum three); the features each plan includes are defined in
 `src/shared/plans.ts`. Pro and MSP are bought on [tenuvault.com/pricing](https://tenuvault.com/pricing)
 (Polar checkout, 30 day free trial). The key holder receives a `TENU` license key by email and pastes
 it on the License page; other admins can use a shared organization license without receiving the key.

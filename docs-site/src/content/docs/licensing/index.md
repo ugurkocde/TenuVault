@@ -10,7 +10,7 @@ TenuVault has three plans: Community, which is free, and the paid Pro and MSP pl
 | | Community | Pro | MSP |
 | --- | --- | --- | --- |
 | Price | Free, no license key needed | Paid subscription | Paid subscription |
-| Tenants | 1 | 2 (for example production and test) | The number of tenants in your subscription, starting at 3 |
+| Tenants | 1 | 2 (for example production and test) | The number of tenants in your subscription. New subscriptions include 5; existing subscriptions keep their quantity (minimum 3) |
 | Installations per tenant | | 5 | 5 |
 | Free trial | | 30 days | 30 days |
 
