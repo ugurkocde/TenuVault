@@ -91,15 +91,6 @@ Community is free for one tenant and needs no license key. Pro covers two tenant
 subscribed number of tenants (new subscriptions include five), both with a 30 day free trial. See
 [Plans and features](https://docs.tenuvault.com/licensing/) and [pricing](https://tenuvault.com/pricing).
 
-### How does TenuVault differ from IntuneBackupAndRestore?
-
-[IntuneBackupAndRestore](https://github.com/jseerden/IntuneBackupAndRestore) by John Seerden is a
-long-standing open source PowerShell module that exports Intune configuration to JSON files and
-imports it again, and it suits scripted workflows well. TenuVault is a desktop app with encrypted
-backup storage, scheduled backups, drift detection between backups, restore with assignment and
-in-place options, and OpenIntuneBaseline workflows, signing in through an app registration in your
-own tenant.
-
 ## Restore, recovery and assessment scope
 
 Desktop backups include **Administrative Templates** by default, under Device configuration in
