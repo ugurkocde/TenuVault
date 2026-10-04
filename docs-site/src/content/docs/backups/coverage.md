@@ -1,6 +1,17 @@
 ---
 title: "What gets backed up"
 description: Every Intune object type TenuVault backs up, grouped by area, and what is not covered.
+faq:
+  - question: "Which Intune objects does TenuVault back up?"
+    answer: "39 Intune object types in nine areas: device configuration, compliance, endpoint security, scripts and remediations, Windows updates, apps, app protection and configuration, enrollment, and tenant administration. Each object is saved as it is in Microsoft Graph (beta), with its settings and, where Intune has them, its assignments."
+  - question: "Does TenuVault back up app installer files?"
+    answer: "No. Apps are saved as their Intune details, assignments, categories, and dependency and supersedence links. Installer files are never downloaded, so Win32 and line-of-business apps cannot be recreated from a backup; store, web and Microsoft 365 apps can."
+  - question: "Are the groups that assignments target backed up?"
+    answer: "No. Assignments are saved as references to groups; the groups themselves are not part of the backup."
+  - question: "Are Windows update rings included?"
+    answer: "Yes. Update rings are device configuration profiles, so they are backed up with Device configuration."
+  - question: "Why are some types missing from a backup?"
+    answer: "TenuVault skips types it is denied access to, for example when the app registration lacks a permission or its admin consent, or when your Intune role excludes the type. The backup log and Backup Details say which types were skipped."
 ---
 
 TenuVault backs up 39 Intune object types in nine areas. Each object is saved as it is in Microsoft Graph (beta), with its settings and, where Intune has them, its assignments.

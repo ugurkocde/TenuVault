@@ -13,6 +13,11 @@ to third-party web apps, or whose Conditional Access policies block them.
 
 </div>
 
+> **Formerly a PowerShell script.** The first versions of TenuVault were a free PowerShell script
+> and a hosted web portal. TenuVault Desktop, released in October 2026, is the current product for
+> new users; the web portal remains available for existing users. This repository contains
+> TenuVault Desktop.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dashboard-dark.webp">
   <img src="docs/screenshots/dashboard-light.webp" alt="TenuVault Desktop dashboard with the last backup, success rate, next scheduled backup, protected policies and drift status of a tenant">
@@ -55,6 +60,45 @@ See the [installation guide](https://docs.tenuvault.com/getting-started/install/
   the Intune portal, and every change is attributed to you in the Entra and Intune audit logs.
 - **Backups stay where you want them.** Encrypted on this device by default (AES-256-GCM, key
   protected by Windows DPAPI or the macOS Keychain), or in your own Azure storage account.
+
+## Frequently asked questions
+
+### Does Intune have built-in backup?
+
+No. Intune has no native backup or recycle bin for policies. Microsoft Graph's
+[Tenant Configuration Management](https://learn.microsoft.com/graph/unified-tenant-configuration-management-concept-overview)
+APIs can take configuration snapshots, but a snapshot is retained for at most seven days
+([API limits](https://learn.microsoft.com/graph/api/resources/unified-tenant-configuration-management-api-overview#api-limits)),
+and the APIs offer snapshots, monitors and drift reports, not a restore: drifts are resolved in the
+admin centers.
+
+### What does TenuVault back up?
+
+39 Intune object types in nine areas, from device configuration, compliance and endpoint security
+to scripts, Windows updates, apps, app protection, enrollment and tenant administration, with their
+assignments where Intune has them. App installer files, Apple tokens and private keys cannot be
+exported by Microsoft Graph. See [What gets backed up](https://docs.tenuvault.com/backups/coverage/).
+
+### Where is my data stored?
+
+Encrypted on your device by default, in a folder you choose (a network share works), or in your own
+Azure storage account on Pro and MSP. Backups never reach a TenuVault server. See
+[Backup storage and retention](https://docs.tenuvault.com/backups/storage/).
+
+### Is TenuVault free?
+
+Community is free for one tenant and needs no license key. Pro covers two tenants and MSP the
+subscribed number of tenants, starting at three, both with a 30 day free trial. See
+[Plans and features](https://docs.tenuvault.com/licensing/) and [pricing](https://tenuvault.com/pricing).
+
+### How does TenuVault differ from IntuneBackupAndRestore?
+
+[IntuneBackupAndRestore](https://github.com/jseerden/IntuneBackupAndRestore) by John Seerden is a
+long-standing open source PowerShell module that exports Intune configuration to JSON files and
+imports it again, and it suits scripted workflows well. TenuVault is a desktop app with encrypted
+backup storage, scheduled backups, drift detection between backups, restore with assignment and
+in-place options, and OpenIntuneBaseline workflows, signing in through an app registration in your
+own tenant.
 
 ## Restore, recovery and assessment scope
 

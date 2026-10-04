@@ -1,0 +1,80 @@
+---
+// Starlight's default head plus JSON-LD: TechArticle and BreadcrumbList on every docs page, and
+// FAQPage when the frontmatter defines `faq` (remark-faq renders the same text on the page).
+import { getEntry } from 'astro:content';
+import Default from '@astrojs/starlight/components/Head.astro';
+
+const route = Astro.locals.starlightRoute;
+const { entry, lastUpdated } = route;
+const site = Astro.site ?? new URL('https://docs.tenuvault.com/');
+const isNotFound = entry.id === '404';
+
+// Starlight falls back to the site description on its generated 404 page; give it its own.
+if (isNotFound) {
+	const notFound = 'This page does not exist. Search the TenuVault documentation or start from Getting started.';
+	for (const tag of route.head) {
+		if (tag.attrs?.name === 'description' || tag.attrs?.property === 'og:description') {
+			tag.attrs.content = notFound;
+		}
+	}
+}
+
+const organization = {
+	'@type': 'Organization',
+	'@id': 'https://www.tenuvault.com/#organization',
+	name: 'TenuVault',
+	url: 'https://www.tenuvault.com',
+};
+
+const schemas: Record<string, unknown>[] = [];
+
+if (!isNotFound) {
+	const url = new URL(Astro.url.pathname, site).href;
+	const description = entry.data.description ?? route.head.find((tag) => tag.attrs?.name === 'description')?.attrs?.content;
+
+	schemas.push({
+		'@context': 'https://schema.org',
+		'@type': 'TechArticle',
+		headline: entry.data.title,
+		...(description ? { description } : {}),
+		url,
+		mainEntityOfPage: url,
+		...(lastUpdated ? { dateModified: lastUpdated.toISOString() } : {}),
+		inLanguage: 'en',
+		publisher: organization,
+		about: { '@id': 'https://www.tenuvault.com/#software' },
+	});
+
+	// One crumb per path segment that has its own page, so no crumb points at a 404.
+	const segments = Astro.url.pathname.split('/').filter(Boolean);
+	const crumbs: { name: string; item: string }[] = [{ name: 'TenuVault Docs', item: new URL('/', site).href }];
+	for (let i = 0; i < segments.length; i++) {
+		const id = segments.slice(0, i + 1).join('/');
+		const page = id === entry.id ? entry : await getEntry('docs', id);
+		if (page) crumbs.push({ name: page.data.title, item: new URL(`/${id}/`, site).href });
+	}
+	schemas.push({
+		'@context': 'https://schema.org',
+		'@type': 'BreadcrumbList',
+		itemListElement: crumbs.map((crumb, index) => ({ '@type': 'ListItem', position: index + 1, ...crumb })),
+	});
+
+	const faq = entry.data.faq;
+	if (faq?.length) {
+		schemas.push({
+			'@context': 'https://schema.org',
+			'@type': 'FAQPage',
+			mainEntity: faq.map(({ question, answer }) => ({
+				'@type': 'Question',
+				name: question,
+				acceptedAnswer: { '@type': 'Answer', text: answer },
+			})),
+		});
+	}
+}
+
+const toJsonLd = (schema: Record<string, unknown>) => JSON.stringify(schema).replace(/</g, '\\u003c');
+---
+
+<Default />
+{schemas.map((schema) => <script type="application/ld+json" set:html={toJsonLd(schema)} />)}

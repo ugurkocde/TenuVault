@@ -4,6 +4,7 @@ import starlight from '@astrojs/starlight';
 import starlightLinksValidator from 'starlight-links-validator';
 import starlightLlmsTxt from 'starlight-llms-txt';
 import rehypeTableWrap from './src/plugins/rehype-table-wrap.mjs';
+import remarkFaq from './src/plugins/remark-faq.mjs';
 
 export default defineConfig({
 	site: 'https://docs.tenuvault.com',
@@ -11,6 +12,7 @@ export default defineConfig({
 	// Vercel redirects / in vercel.json; this keeps local preview and other hosts in sync.
 	redirects: { '/': '/getting-started/' },
 	markdown: {
+		remarkPlugins: [remarkFaq],
 		rehypePlugins: [rehypeTableWrap],
 	},
 	integrations: [
@@ -29,6 +31,12 @@ export default defineConfig({
 				{ tag: 'link', attrs: { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' } },
 				{ tag: 'meta', attrs: { name: 'theme-color', content: '#fdfcfb', media: '(prefers-color-scheme: light)' } },
 				{ tag: 'meta', attrs: { name: 'theme-color', content: '#111010', media: '(prefers-color-scheme: dark)' } },
+				{ tag: 'meta', attrs: { property: 'og:image', content: 'https://docs.tenuvault.com/og-image.png' } },
+				{ tag: 'meta', attrs: { property: 'og:image:width', content: '1200' } },
+				{ tag: 'meta', attrs: { property: 'og:image:height', content: '630' } },
+				{ tag: 'meta', attrs: { property: 'og:image:alt', content: 'TenuVault Desktop: OpenIntuneBaseline, backup, restore and drift detection for Windows and macOS' } },
+				{ tag: 'meta', attrs: { name: 'twitter:card', content: 'summary_large_image' } },
+				{ tag: 'meta', attrs: { name: 'twitter:image', content: 'https://docs.tenuvault.com/og-image.png' } },
 			],
 			customCss: ['@fontsource-variable/geist', '@fontsource-variable/geist-mono', './src/styles/custom.css'],
 			expressiveCode: {
@@ -66,12 +74,32 @@ export default defineConfig({
 				{ icon: 'github', label: 'GitHub', href: 'https://github.com/ugurkocde/TenuVault' },
 			],
 			components: {
+				Head: './src/components/Head.astro',
 				SocialIcons: './src/components/HeaderLinks.astro',
 				PageTitle: './src/components/PageTitle.astro',
 				SiteTitle: './src/components/SiteTitle.astro',
 			},
-			lastUpdated: false,
-			plugins: [starlightLinksValidator(), starlightLlmsTxt()],
+			lastUpdated: true,
+			plugins: [
+				starlightLinksValidator(),
+				starlightLlmsTxt({
+					projectName: 'TenuVault',
+					description:
+						'TenuVault is a desktop app for Windows and macOS that backs up and restores Microsoft Intune configuration through Microsoft Graph using the admin\'s own delegated sign-in.',
+					details: [
+						'Key facts:',
+						'',
+						'- Product: TenuVault Desktop. Features: Intune backup, restore, drift detection between backups, OpenIntuneBaseline deployment, comparison and validation, and framework comparisons.',
+						'- History: the first versions of TenuVault were a free PowerShell script and a hosted web portal. TenuVault Desktop, released in October 2026, is the current product for new users; the web portal remains available for existing users. This documentation covers TenuVault Desktop only.',
+						'- Sign-in: delegated sign-in with the admin\'s own account through an app registration in the customer\'s tenant (a public client with no secret). MFA and Conditional Access apply, and changes are attributed to the admin in the Intune and Entra audit logs.',
+						'- Coverage: 39 Intune object types in nine areas, with their assignments where Intune has them. App installer files, Apple tokens and private keys cannot be exported by Microsoft Graph and are not in backups.',
+						'- Storage: backups are encrypted on the device (a local folder or a network share) on every plan, or in the customer\'s own Azure storage account on Pro and MSP. Backups are never sent to a TenuVault server.',
+						'- Encryption: AES-256-GCM on the admin\'s machine before backups are written or uploaded, with a key protected by Windows DPAPI or the macOS Keychain. A recovery key lets backups be read on another device.',
+						'- Plans: Community is free for one tenant and needs no license key (manual and weekly scheduled backups, backup history up to 30 days, restore one item as a copy). Pro covers 2 tenants and adds daily schedules, Azure storage, history from 7 to 365 days or forever, bulk restore, replace in place and assignment restore. MSP covers the subscribed number of tenants, starting at 3, and adds the cross tenant dashboard and actions across several tenants. Pro and MSP include a 30 day free trial; each tenant can be active on up to 5 installations.',
+						'- Product overview: [Intune backup with TenuVault](https://www.tenuvault.com/intune-backup). Plans and prices: [TenuVault pricing](https://www.tenuvault.com/pricing).',
+					].join('\n'),
+				}),
+			],
 			// Mirrors docs/gitbook/SUMMARY.md.
 			sidebar: [
 				{

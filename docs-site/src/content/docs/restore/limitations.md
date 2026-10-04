@@ -1,6 +1,15 @@
 ---
 title: "What cannot be restored and restore write history"
 description: Items TenuVault cannot restore automatically, and how to resolve restore writes with an unknown outcome.
+faq:
+  - question: "Why can't TenuVault restore Win32 and line-of-business apps?"
+    answer: "Intune does not let apps download installer files, so a backup holds only the app details and assignments. Get the original installer from its trusted source and upload it again through Intune's app workflow. Store, web and Microsoft 365 apps restore without an installer."
+  - question: "Are Apple enrollment tokens included in a backup?"
+    answer: "No. Intune does not export Apple enrollment and content tokens. The token details and enrollment profiles are kept for reference. Renew or upload the token through Apple Business Manager or Apple School Manager and Intune."
+  - question: "Why does a profile with a masked OMA-URI value need a new backup?"
+    answer: "The backup holds the masked value (****) instead of the secret, and restoring it would send **** to devices. Run a new backup, then restore from it."
+  - question: "What happens when the outcome of a restore write is unknown?"
+    answer: "TenuVault records every restore write in an encrypted journal on your device and blocks an identical write whose outcome is uncertain. Check the object in Intune, then confirm the write as applied or not applied under Settings > Storage and recovery > Restore write history before you retry."
 ---
 
 Most Intune items restore directly from a backup. A few cannot, because Intune does not export everything needed to recreate them. This page lists those cases and explains **Restore write history**, which protects you from duplicate writes when a restore is interrupted.
