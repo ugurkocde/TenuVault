@@ -73,8 +73,10 @@ export function missingPermissionError(scope: string, error: unknown): Error | n
   const code = /AADSTS(650057|65001)\b/.exec(message)?.[0]
   if (!code || !isResourceScope(scope)) return null
   const resource = RESOURCE_NAMES[scope]
+  // Microsoft Graph has several delegated permissions; the Azure resources have user_impersonation.
+  const permission = scope === RESOURCE_SCOPES.graph ? "Microsoft Graph permissions listed in the setup guide" : `${resource} user_impersonation permission`
   return new Error(
-    `The app registration has no admin consent for ${resource} (${code}). Add the ${resource} user_impersonation permission to the app registration, grant admin consent, and sign in again.`,
+    `The app registration has no admin consent for ${resource} (${code}). Add the ${permission} to the app registration, grant admin consent, and sign in again.`,
   )
 }
 
@@ -158,7 +160,7 @@ export class AuthManager {
   async getAccessToken(tenantId: string, clientId: string, scope: string, forceRefresh = false): Promise<AuthenticationResult> {
     const stored = this.host.accountStore.get(tenantId.toLowerCase())
     if (!stored || stored.clientId !== clientId) {
-      throw new SignInRequiredError(tenantId, clientId, "You are not signed in to this tenant. Sign in to continue.")
+      throw new SignInRequiredError(tenantId, clientId, "You are not signed in to this tenant. Sign in to continue.", scope)
     }
 
     const app = this.app(clientId)

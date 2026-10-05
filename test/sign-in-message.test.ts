@@ -33,6 +33,9 @@ describe("missingPermissionError", () => {
       "The app registration has no admin consent for Azure Storage (AADSTS650057). Add the Azure Storage user_impersonation permission to the app registration, grant admin consent, and sign in again.",
     )
     expect(missingPermissionError(RESOURCE_SCOPES.management, new Error("AADSTS65001: not consented"))?.message).toContain("Azure Service Management (AADSTS65001)")
+    expect(missingPermissionError(RESOURCE_SCOPES.graph, new Error("AADSTS65001: not consented"))?.message).toBe(
+      "The app registration has no admin consent for Microsoft Graph (AADSTS65001). Add the Microsoft Graph permissions listed in the setup guide to the app registration, grant admin consent, and sign in again.",
+    )
   })
 
   it("leaves other sign-in errors alone", () => {
