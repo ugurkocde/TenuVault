@@ -178,7 +178,7 @@ async function bootstrap(): Promise<void> {
         const key = tenantId.toLowerCase()
         if (Date.now() - (lastPrompt.get(key) ?? 0) > 3000) {
           lastPrompt.set(key, Date.now())
-          mainWindow?.webContents.send("auth:signInRequired", { tenantId, clientId, message: error.message })
+          mainWindow?.webContents.send("auth:signInRequired", { tenantId, clientId, message: error.message, scope: error.scope })
         }
       }
       throw error
@@ -526,8 +526,8 @@ async function bootstrap(): Promise<void> {
     return account
   })
   // Signing in again also renews the ID token an organization license is checked with.
-  handleTrusted("auth:reauthenticate", async (_event, tenantId: string, clientId: string) => {
-    const account = await auth.reauthenticate(tenantId, clientId)
+  handleTrusted("auth:reauthenticate", async (_event, tenantId: string, clientId: string, scope?: unknown) => {
+    const account = await auth.reauthenticate(tenantId, clientId, scope === undefined ? undefined : String(scope))
     try {
       await license.requireEntitlement(tenantId, { retry: true })
     } finally {

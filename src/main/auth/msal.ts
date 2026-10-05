@@ -34,10 +34,48 @@ export class SignInRequiredError extends Error {
     readonly tenantId: string,
     readonly clientId: string,
     reason: string,
+    /** The resource scope that needs the sign-in, so signing in again requests that scope. */
+    readonly scope: string = RESOURCE_SCOPES.graph,
   ) {
     super(reason)
     this.name = "SignInRequiredError"
   }
+}
+
+const RESOURCE_NAMES: Record<string, string> = {
+  [RESOURCE_SCOPES.graph]: "Microsoft Graph",
+  [RESOURCE_SCOPES.management]: "Azure Service Management",
+  [RESOURCE_SCOPES.storage]: "Azure Storage",
+}
+
+/** Whether `scope` is one of the resource scopes TenuVault signs in for. */
+export function isResourceScope(scope: unknown): scope is string {
+  return typeof scope === "string" && Object.hasOwn(RESOURCE_NAMES, scope)
+}
+
+/**
+ * Message for a silent token request Microsoft refused. It names the resource and the AADSTS
+ * code, because a refusal for one resource (such as AADSTS65001, no consent for Azure Storage)
+ * can persist while signing in to Microsoft Graph succeeds.
+ */
+export function signInAgainMessage(username: string, scope: string, error: { errorCode?: string; errorMessage?: string }): string {
+  const codes = [error.errorCode, /AADSTS\d+/.exec(error.errorMessage ?? "")?.[0]].filter(Boolean)
+  const resource = isResourceScope(scope) ? RESOURCE_NAMES[scope] : undefined
+  return `Microsoft needs you to sign in again as ${username}${resource ? ` for ${resource}` : ""}${codes.length ? ` (${codes.join(", ")})` : ""}.`
+}
+
+/**
+ * An actionable error when the app registration lacks the permission (AADSTS650057) or admin
+ * consent (AADSTS65001) for `scope`, which signing in again cannot fix; null otherwise.
+ */
+export function missingPermissionError(scope: string, error: unknown): Error | null {
+  const message = error instanceof Error ? error.message : String(error)
+  const code = /AADSTS(650057|65001)\b/.exec(message)?.[0]
+  if (!code || !isResourceScope(scope)) return null
+  const resource = RESOURCE_NAMES[scope]
+  return new Error(
+    `The app registration has no admin consent for ${resource} (${code}). Add the ${resource} user_impersonation permission to the app registration, grant admin consent, and sign in again.`,
+  )
 }
 
 // The licensing service accepts ID tokens issued within the last 15 minutes. Entra
@@ -126,22 +164,18 @@ export class AuthManager {
     const app = this.app(clientId)
     const account = await this.findAccount(app, stored.homeAccountId)
     if (!account) {
-      throw new SignInRequiredError(tenantId, clientId, `Your session for ${stored.username} has ended. Sign in again to continue.`)
+      throw new SignInRequiredError(tenantId, clientId, `Your session for ${stored.username} has ended. Sign in again to continue.`, scope)
     }
     try {
       const result = await app.acquireTokenSilent({ account, scopes: [scope], authority: authority(tenantId), forceRefresh })
       if (result) return result
     } catch (error) {
       if (error instanceof InteractionRequiredAuthError) {
-        throw new SignInRequiredError(
-          tenantId,
-          clientId,
-          `Microsoft needs you to sign in again as ${stored.username}${error.errorCode ? ` (${error.errorCode})` : ""}.`,
-        )
+        throw new SignInRequiredError(tenantId, clientId, signInAgainMessage(stored.username, scope, error), scope)
       }
       throw error
     }
-    throw new SignInRequiredError(tenantId, clientId, "Sign in again to continue.")
+    throw new SignInRequiredError(tenantId, clientId, "Sign in again to continue.", scope)
   }
 
   /**
@@ -173,10 +207,17 @@ export class AuthManager {
     return null
   }
 
-  /** Interactive sign-in for an existing tenant profile, pre-filled with its account. */
-  async reauthenticate(tenantId: string, clientId: string): Promise<SignedInAccount> {
+  /**
+   * Interactive sign-in for an existing tenant profile, pre-filled with its account. It asks
+   * for `scope`, the resource that needed the sign-in, so Microsoft can show the consent or
+   * Conditional Access step that resource requires instead of succeeding for Graph alone.
+   */
+  async reauthenticate(tenantId: string, clientId: string, scope: string = RESOURCE_SCOPES.graph): Promise<SignedInAccount> {
+    if (!isResourceScope(scope)) throw new Error("Unknown sign-in scope.")
     const stored = this.host.accountStore.get(tenantId.toLowerCase())
-    const result = await this.acquireInteractive(clientId, tenantId, RESOURCE_SCOPES.graph, undefined, stored?.username)
+    const result = await this.acquireInteractive(clientId, tenantId, scope, undefined, stored?.username).catch((error: unknown) => {
+      throw missingPermissionError(scope, error) ?? error
+    })
     const account = result.account
     if (!account) throw new Error("Microsoft did not return an account for this sign-in.")
     if (account.tenantId.toLowerCase() !== tenantId.toLowerCase()) {
