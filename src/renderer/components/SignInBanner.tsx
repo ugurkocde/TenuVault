@@ -23,7 +23,7 @@ export function SignInBanner() {
   const signIn = async () => {
     setBusy(true)
     try {
-      const account = await bridge.auth.reauthenticate(pending.tenantId, pending.clientId)
+      const account = await bridge.auth.reauthenticate(pending.tenantId, pending.clientId, pending.scope)
       setPending(null)
       toast(`Signed in as ${account.username}. Reloading...`, "success")
       setTimeout(() => window.location.reload(), 800)

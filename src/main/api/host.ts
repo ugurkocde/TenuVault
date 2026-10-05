@@ -39,12 +39,14 @@ export class ApiHost {
 
     // Every portal route shares this boundary, including internal API calls.
     let tenantId: unknown
+    let storageAccountName: unknown
     if (request.method !== "GET" && request.method !== "HEAD") {
       const input: unknown = await request.clone().json().catch(() => null)
       if (input && typeof input === "object" && "tenantId" in input) tenantId = input.tenantId
       if (input && typeof input === "object" && "storageAccountName" in input) {
         try { assertStorageAccountName(input.storageAccountName) }
         catch { return Response.json({ error: "Invalid storage account name" }, { status: 400 }) }
+        storageAccountName = input.storageAccountName
       }
     }
 
@@ -54,7 +56,7 @@ export class ApiHost {
     const body = request.method === "GET" || request.method === "HEAD" ? "" : await request.clone().text()
     let response: Response
     try {
-      response = await withRouteTenant(tenantId, () => handler(new NextRequest(request)))
+      response = await withRouteTenant(tenantId, () => handler(new NextRequest(request)), storageAccountName)
     } catch (error) {
       console.error(`[api] ${request.method} ${url.pathname} failed:`, error)
       response = Response.json(

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
-import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN } from "../src/shared/constants"
+import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, localStorageAccountName } from "../src/shared/constants"
+import { withRouteTenant } from "../src/main/storage/blob-emulator"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const CLIENT = "22222222-2222-2222-2222-222222222222"
@@ -28,6 +29,27 @@ describe("createBridgedFetch", () => {
     expect(body.token_type).toBe("Bearer")
     expect(body.expires_in).toBeGreaterThan(590)
     expect(getDelegatedToken).toHaveBeenCalledWith(TENANT, CLIENT, "https://management.azure.com/.default", false)
+    expect(realFetch).not.toHaveBeenCalled()
+  })
+
+  it("needs no Azure Storage token for a route on local storage", async () => {
+    const realFetch = vi.fn<typeof fetch>()
+    const getDelegatedToken = vi.fn(async () => {
+      throw new Error("AADSTS65001: no consent for Azure Storage")
+    })
+    const bridged = createBridgedFetch({ dispatch: vi.fn(), getDelegatedToken, fetch: realFetch })
+    const storage = "https://storage.azure.com/.default"
+
+    const local = await withRouteTenant(TENANT, () => routeTokenRequest(bridged, DELEGATED_CLIENT_SECRET, storage), localStorageAccountName(TENANT))
+    expect(local.ok).toBe(true)
+    expect(getDelegatedToken).not.toHaveBeenCalled()
+
+    // Azure storage accounts, other tenants' local stores and other scopes still need the real token.
+    for (const [account, scope] of [["mystorageaccount", storage], [localStorageAccountName("33333333-3333-3333-3333-333333333333"), storage], [localStorageAccountName(TENANT), "https://graph.microsoft.com/.default"]]) {
+      const response = await withRouteTenant(TENANT, () => routeTokenRequest(bridged, DELEGATED_CLIENT_SECRET, scope), account)
+      expect(response.status).toBe(401)
+    }
+    expect(getDelegatedToken).toHaveBeenCalledTimes(3)
     expect(realFetch).not.toHaveBeenCalled()
   })
 

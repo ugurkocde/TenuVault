@@ -24,7 +24,7 @@ const bridge: TenuVaultBridge = {
     signIn: (tenant, clientId) => invoke("auth:signIn", tenant, clientId),
     signOut: (tenantId) => invoke("auth:signOut", tenantId),
     accounts: () => invoke("auth:accounts"),
-    reauthenticate: (tenantId, clientId) => invoke("auth:reauthenticate", tenantId, clientId),
+    reauthenticate: (tenantId, clientId, scope) => invoke("auth:reauthenticate", tenantId, clientId, scope),
     onSignInRequired: (listener) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: SignInRequiredEvent) => listener(payload)
       ipcRenderer.on("auth:signInRequired", handler)

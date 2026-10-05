@@ -19,14 +19,25 @@ export function localAccountFromUrl(url: URL): string | null {
 }
 
 /**
- * The tenant of the API route being handled, or null for a route without one. Work a route
- * starts (such as a backup) keeps its tenant. Outside any route (scheduled backups) there is none.
+ * The tenant and storage account of the API route being handled (null for a route without
+ * one). Work a route starts (such as a backup) keeps them. Outside any route (scheduled
+ * backups) there is none.
  */
-const routeTenant = new AsyncLocalStorage<string | null>()
+const routeContext = new AsyncLocalStorage<{ tenant: string | null; storageAccount: string | null }>()
+
+const text = (value: unknown) => (typeof value === "string" && value ? value : null)
 
 /** Runs a route handler so local storage only serves the tenant named in its request. */
-export function withRouteTenant<T>(tenantId: unknown, run: () => T): T {
-  return routeTenant.run(typeof tenantId === "string" && tenantId ? tenantId : null, run)
+export function withRouteTenant<T>(tenantId: unknown, run: () => T, storageAccountName?: unknown): T {
+  return routeContext.run({ tenant: text(tenantId), storageAccount: text(storageAccountName)?.toLowerCase() ?? null }, run)
+}
+
+/**
+ * Whether the route being handled keeps the backups of `tenantId` on this device. Such a
+ * route needs no Azure Storage token: local blob requests are served without one.
+ */
+export function routeUsesLocalStorage(tenantId: string): boolean {
+  return routeContext.getStore()?.storageAccount === localStorageAccountName(tenantId)
 }
 
 export function isLocalAccount(storageAccountName: string | undefined): boolean {
@@ -104,8 +115,8 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
   const url = new URL(request.url)
   const account = localAccountFromUrl(url)
   if (!account) return error(400, "InvalidUri", "Not a local TenuVault storage account.")
-  const tenant = routeTenant.getStore()
-  if (tenant !== undefined && (tenant === null || localStorageAccountName(tenant) !== account)) {
+  const context = routeContext.getStore()
+  if (context !== undefined && (context.tenant === null || localStorageAccountName(context.tenant) !== account)) {
     return error(403, "AuthorizationFailure", "This request may only use the local backups of its own tenant.")
   }
 

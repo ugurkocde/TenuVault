@@ -1,6 +1,6 @@
 import { registerStorageToken } from "../storage/azure-seal"
 import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, LOCAL_STORAGE_PREFIX } from "../../shared/constants"
-import { localAccountFromUrl } from "../storage/blob-emulator"
+import { localAccountFromUrl, routeUsesLocalStorage } from "../storage/blob-emulator"
 
 export interface DelegatedToken {
   accessToken: string
@@ -22,6 +22,9 @@ export interface FetchBridgeOptions {
   handleLocalBlob?: (request: Request) => Promise<Response>
   fetch?: typeof fetch
 }
+
+/** Answers Azure Storage token requests of routes on local storage. Never valid at Azure. */
+const LOCAL_STORAGE_TOKEN = "tenuvault-local-storage"
 
 const TOKEN_PATH = /^\/([^/]+)\/oauth2\/v2\.0\/token$/
 
@@ -106,6 +109,11 @@ async function delegatedTokenResponse(
   const scope = form.get("scope")
   if (!clientId || !scope) {
     return Response.json({ error: "invalid_request", error_description: "client_id and scope are required" }, { status: 400 })
+  }
+  // Local blob requests need no token, so a route on this device's backups must not depend
+  // on Azure Storage consent (the backup engine skips this token the same way).
+  if (scope.includes("storage.azure.com") && routeUsesLocalStorage(tenant)) {
+    return Response.json({ token_type: "Bearer", access_token: LOCAL_STORAGE_TOKEN, expires_in: 3600, ext_expires_in: 3600 })
   }
   try {
     const token = await options.getDelegatedToken(tenant, clientId, scope, form.get("force_refresh") === "true")

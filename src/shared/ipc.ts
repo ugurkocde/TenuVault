@@ -72,6 +72,8 @@ export interface SignInRequiredEvent {
   tenantId: string
   clientId: string
   message: string
+  /** The resource scope that needs the sign-in. */
+  scope: string
 }
 
 export interface BackupSettings {
@@ -150,8 +152,8 @@ export interface TenuVaultBridge {
     signIn: (tenant: string, clientId: string) => Promise<SignedInAccount>
     signOut: (tenantId: string) => Promise<void>
     accounts: () => Promise<SignedInAccount[]>
-    /** Signs in again to an existing tenant profile. */
-    reauthenticate: (tenantId: string, clientId: string) => Promise<SignedInAccount>
+    /** Signs in again to an existing tenant profile, for `scope` (Microsoft Graph when omitted). */
+    reauthenticate: (tenantId: string, clientId: string, scope?: string) => Promise<SignedInAccount>
     /** Called when a background request needs the admin to sign in again. Returns an unsubscribe function. */
     onSignInRequired: (listener: (event: SignInRequiredEvent) => void) => () => void
   }
