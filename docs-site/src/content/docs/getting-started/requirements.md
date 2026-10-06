@@ -59,6 +59,8 @@ TenuVault connects to the global Microsoft cloud endpoints below over HTTPS (TCP
 | `github.com`, `release-assets.githubusercontent.com`, `objects.githubusercontent.com` | Automatic updates | For updates |
 | `api.github.com`, `raw.githubusercontent.com` | OpenIntuneBaseline content for the OpenIntuneBaseline section and My baselines | For OpenIntuneBaseline |
 
+TenuVault uses the device's proxy settings, including a proxy auto-config (PAC) file, and the operating system's trusted certificates. Behind HTTPS inspection, it works when the inspection certificate is trusted by Windows or macOS, as it is for Microsoft Edge.
+
 If GitHub is blocked, updates and baseline packs fail, but backup and restore keep working. For what is sent to each destination, see [Network connections and data flows](/security/data-flows/).
 
 If your storage account uses firewall rules, the computer running TenuVault must be allowed through them. Otherwise TenuVault reports that the storage account rejected the request from this network.
