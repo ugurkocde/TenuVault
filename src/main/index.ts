@@ -11,6 +11,7 @@ import { createAuditRecorder } from "./api/audit"
 import { setAuditOutboxStore } from "../portal/lib/audit/outbox"
 import { backupRoutes, surfaceTokenErrors } from "./api/desktop-routes"
 import { createBridgedFetch } from "./api/fetch-bridge"
+import { withNetworkErrors } from "./api/network-error"
 import { ApiHost } from "./api/host"
 import { routes } from "./api/routes"
 import { AuthManager, SignInRequiredError } from "./auth/msal"
@@ -116,6 +117,13 @@ function openStore(filePath: string, cipher: Cipher, startOver = "your saved dat
   }
 }
 
+/**
+ * Requests to Microsoft, Azure and licensing use Chromium's network stack, which follows the
+ * system proxy (including PAC) and certificate store. Node's fetch uses neither, so behind a
+ * corporate proxy or HTTPS inspection it fails with "fetch failed".
+ */
+const chromiumFetch: typeof fetch = (input, init) => net.fetch(input instanceof URL ? input.href : input, init)
+
 async function bootstrap(): Promise<void> {
   const cipher = osCipher()
   const userData = app.getPath("userData")
@@ -150,9 +158,8 @@ async function bootstrap(): Promise<void> {
     // the app registration the tenant is signed in with.
     idToken: (tenantId) => auth.getIdToken(tenantId),
     clientId: (tenantId) => accounts.get(tenantId)?.clientId ?? null,
-    // Chromium networking uses the system proxy and certificate configuration.
     // Keep licensing outside the local API/storage bridge below.
-    fetch: (input, init) => net.fetch(input instanceof URL ? input.href : input, init),
+    fetch: chromiumFetch,
     onChange: pushLicense,
   })
   const refreshLicenses = () => license.refreshAll().catch((error: unknown) => console.warn("[license]", error))
@@ -185,10 +192,9 @@ async function bootstrap(): Promise<void> {
     }
   }
 
-  const nativeFetch = globalThis.fetch.bind(globalThis)
   const bridgedFetch = createBridgedFetch({
     dispatch: (request) => host.dispatch(request),
-    fetch: encryptedAzureFetch(globalThis.fetch, () => backupKeys.keyring(), () => {
+    fetch: encryptedAzureFetch(withNetworkErrors(chromiumFetch), () => backupKeys.keyring(), () => {
       if (appStore.get("backup.recovery-exported") !== backupKeys.fingerprint()) throw new Error("Save your current backup recovery key in Settings before the first encrypted Azure backup.")
     }),
     authorizeTenant: (tenant) => license.requireEntitlement(tenant),
@@ -285,8 +291,8 @@ async function bootstrap(): Promise<void> {
         body: JSON.stringify(apiBody(tenantId, profile, body)),
       }))
     },
-    // Captured before any bridge: only customer-configured endpoints use it.
-    externalFetch: nativeFetch,
+    // Outside the bridge: only customer-configured endpoints use it.
+    externalFetch: withNetworkErrors(chromiumFetch),
     notify: (title, body) => {
       if (Notification.isSupported()) new Notification({ title, body }).show()
     },

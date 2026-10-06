@@ -1,6 +1,7 @@
 import { createPublicKey, randomUUID, verify, type KeyObject } from "node:crypto"
 import type { LicenseStatus, TenantLicenseStatus } from "../../shared/ipc"
 import type { Plan } from "../../shared/plans"
+import { networkFailure } from "../api/network-error"
 import type { KeyValueStore } from "../storage/secure-store"
 
 /**
@@ -315,15 +316,7 @@ export class LicenseService {
     } catch (error) {
       this.offline = true
       console.warn(`[license] Licensing service unreachable (${action})`)
-      const code = error instanceof Error ? error.message.match(/\bERR_[A-Z_]+\b/)?.[0] : undefined
-      const host = new URL(this.options.apiBase).host
-      const guidance = code && /CERT|SSL/.test(code)
-        ? `Ask IT to check this device's trusted certificates and HTTPS inspection for ${host}.`
-        : code && /PROXY|TUNNEL|PAC_/.test(code)
-          ? `Check this device's proxy settings and ask IT to allow HTTPS requests to ${host}.`
-          : error instanceof Error && (error.name === "TimeoutError" || /TIMED_OUT/.test(code ?? ""))
-            ? "The request timed out. Check your connection and retry."
-            : `Check your connection and ask IT to allow HTTPS requests to ${host}.`
+      const { code, guidance } = networkFailure(error, new URL(this.options.apiBase).host)
       throw new Error(`The licensing service could not be reached. ${guidance}${code ? ` (${code})` : ""}`)
     }
     // A proxy or captive portal can answer with an HTML 401/403 page. It is
