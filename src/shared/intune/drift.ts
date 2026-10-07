@@ -94,7 +94,10 @@ export type DriftScanPhase = "checking" | "listing" | "comparing" | "history"
 export interface DriftScanProgress {
   phase: DriftScanPhase
   detail: string
-  /** Items compared so far, while comparing. */
+  /**
+   * Steps done so far and in total: steps taken while checking (total 0, not known in advance),
+   * backups listed while listing, items compared while comparing.
+   */
   done: number
   total: number
 }

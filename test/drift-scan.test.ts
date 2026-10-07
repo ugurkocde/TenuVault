@@ -10,7 +10,8 @@ import { parseBackupName } from '../src/shared/intune/backup-names'
 import { POST as listBackups } from '../src/portal/app/api/list-backups/route'
 import { compareBackups, summarize } from '../src/shared/intune/backup-changes'
 import { createAuditRecorder } from '../src/main/api/audit'
-import { CANCELLED_HEADER } from '../src/portal/lib/drift/scan-hooks'
+import { CANCELLED_HEADER, registerDriftScan } from '../src/portal/lib/drift/scan-hooks'
+import type { DriftScanProgress } from '../src/shared/intune/drift'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -94,9 +95,9 @@ function fakeStorage(backups: Record<string, FakeBackup>, options: { unreadable?
     if (url.searchParams.get('delimiter')) return new Response(Object.keys(backups).map(name => `<BlobPrefix><Name>${name}/</Name></BlobPrefix>`).join(''))
     const prefix = url.searchParams.get('prefix')
     if (prefix) {
-      const [backup, folder] = prefix.split('/')
-      const names = Object.keys(backups[backup!]?.files ?? {}).filter(path => path.startsWith(`${folder}/`))
-      return new Response(names.map(path => `<Blob><Name>${backup}/${path}</Name></Blob>`).join(''))
+      // Every blob whose name starts with the prefix, as Azure lists them.
+      const names = Object.entries(backups).flatMap(([backup, { files }]) => Object.keys(files).map(path => `${backup}/${path}`)).filter(name => name.startsWith(prefix))
+      return new Response(names.map(name => `<Blob><Name>${name}</Name></Blob>`).join(''))
     }
     const [, , backup, ...rest] = url.pathname.split('/').map(decodeURIComponent)
     const path = rest.join('/')
@@ -174,6 +175,27 @@ describe('Drift scan', () => {
     const result = await response.json()
     expect(result.warnings).toEqual([{ file: 'DeviceConfigurations/B.json', backup: NEW, message: expect.stringContaining('403') }])
     expect(result.drifts.map((d: any) => d.configName).sort()).toEqual(['C', 'D'])
+  })
+
+  it('lists each compared backup once and reports progress while checking and listing', async () => {
+    const storage = fakeStorage(twoBackups(true))
+    const progress: DriftScanProgress[] = []
+    const unregister = registerDriftScan('scan-progress', { tenantId: TENANT_A, signal: new AbortController().signal, onProgress: (step) => void progress.push(step) })
+    const response = await drift(request({ scanId: 'scan-progress' }))
+    unregister()
+    expect(response.status).toBe(200)
+    expect((await response.json()).summary.total).toBe(3)
+
+    // The container once for its backups, then each backup once. Listing every type folder of
+    // both backups took 1 + 2 x 40 requests.
+    const lists = storage.stub.mock.calls.map(([input]) => new URL(String(input))).filter(url => url.searchParams.get('comp') === 'list')
+    expect(lists.map(url => url.searchParams.get('prefix'))).toEqual([null, `${NEW}/`, `${OLD}/`])
+
+    // Found the backups, read both metadata files, listed both backups, then compared.
+    expect(progress.slice(0, 7).map(step => `${step.phase} ${step.done}/${step.total}`)).toEqual([
+      'checking 0/0', 'checking 1/0', 'checking 2/0', 'checking 3/0', 'listing 0/2', 'listing 1/2', 'listing 2/2',
+    ])
+    expect(progress[7]).toMatchObject({ phase: 'comparing', done: 0, total: 3 })
   })
 
   it('compares an explicit pair and refuses another tenant\'s backup', async () => {
@@ -347,6 +369,25 @@ describe('Drift scan jobs', () => {
     expect(saved.drifts).toHaveLength(3)
     expect(store.values.has(`drift.result.v1.${TENANT_A}`)).toBe(true)
     expect(saved.storageAccountName).toBe('store')
+  })
+
+  it('moves the progress bar between listing the two backups', async () => {
+    const storage = fakeStorage(twoBackups(true))
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    // The older backup's listing waits, so the scan stays between its two listings.
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (new URL(String(input)).searchParams.get('prefix') === `${OLD}/`) await held
+      return storage.stub(input)
+    }))
+    const { jobs } = setup()
+    const job = await jobs.start(TENANT_A)
+    await vi.waitFor(() => expect(jobs.list()[0]).toMatchObject({ phase: 'listing', done: 1, total: 2 }))
+    // Past checking (at most 5) and short of comparing (from 10).
+    expect(jobs.list()[0]!.percent).toBe(8)
+    release()
+    await jobs.settled(job.jobId)
+    expect(jobs.list()[0]).toMatchObject({ status: 'completed', percent: 100 })
   })
 
   it('does not show a result saved for the storage account the tenant used before', async () => {

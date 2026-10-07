@@ -23,18 +23,22 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
   const parsed = parseBackupName(name)!
   const legacy = parsed.precision === "day"
   const date = parsed.timestamp.slice(0, 10)
-  let metadata: any = null
-  let metadataError: string | undefined
-  try {
-    const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}/metadata.json`, { headers: storageHeaders(accessToken) })
-    if (response.ok) {
-      metadata = await response.json()
-      if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) throw new Error('Invalid metadata')
-    } else if (response.status !== 404) metadataError = `Backup metadata is unavailable (${response.status}).`
-  } catch {
-    metadata = null
-    metadataError = 'Backup metadata could not be read or parsed.'
-  }
+  // metadata.json and the file listing are read at the same time.
+  const metadataRead = (async (): Promise<{ metadata: any; metadataError?: string }> => {
+    try {
+      const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}/metadata.json`, { headers: storageHeaders(accessToken) })
+      if (response.ok) {
+        const metadata = await response.json()
+        if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) throw new Error('Invalid metadata')
+        return { metadata }
+      }
+      return { metadata: null, metadataError: response.status !== 404 ? `Backup metadata is unavailable (${response.status}).` : undefined }
+    } catch {
+      return { metadata: null, metadataError: 'Backup metadata could not be read or parsed.' }
+    }
+  })()
+  const filesRead = listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${name}/`)}`, accessToken).catch(() => { throw new Error(`Backup ${name} inventory is unavailable. Check storage access and retry.`) })
+  const [{ metadata, metadataError }, filesText] = await Promise.all([metadataRead, filesRead])
   const recordedTimestamp = metadata?.timestamp ?? metadata?.Timestamp ?? metadata?.BackupDate
   const timestamp = legacy
     ? typeof recordedTimestamp === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(recordedTimestamp) && Number.isFinite(Date.parse(recordedTimestamp)) ? recordedTimestamp : date
@@ -43,7 +47,6 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
   let size = 0
   let files = 0
   const counts: Record<string, number> = {}
-  const filesText = await listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${name}/`)}`, accessToken).catch(() => { throw new Error(`Backup ${name} inventory is unavailable. Check storage access and retry.`) })
   for (const match of filesText.matchAll(/<Blob>[\s\S]*?<Name>(.*?)<\/Name>[\s\S]*?<Content-Length>(\d+)<\/Content-Length>[\s\S]*?<\/Blob>/g)) {
     const parts = decodeXml(match[1] ?? '').split('/')
     size += parseInt(match[2]!)
