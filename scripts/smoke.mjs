@@ -502,7 +502,7 @@ await check("switching tenants cannot show an older tenant's drift results", asy
         const created = { jobId: 'job-' + tenantId, tenantId, status: 'running', phase: 'comparing', detail: 'Comparing', done: 0, total: 1, percent: 10, startedAt: new Date().toISOString(), baseline: null, comparison: null };
         if (job) jobs.splice(jobs.indexOf(job), 1);
         jobs.push(created);
-        if (tenantId.startsWith('11111111')) window.__oldScanResolve = () => Object.assign(created, { status: 'completed', percent: 100, finishedAt: new Date().toISOString() });
+        if (tenantId.startsWith('11111111')) window.__oldScanStatus = () => created.status, window.__oldScanResolve = () => Object.assign(created, { status: 'completed', percent: 100, finishedAt: new Date().toISOString() });
         else Object.assign(created, { status: 'completed', percent: 100, finishedAt: new Date().toISOString() });
         return Promise.resolve(Response.json({ job: created }));
       }
@@ -522,11 +522,12 @@ await check("switching tenants cannot show an older tenant's drift results", asy
     await sleep(150)
     await evaluate(`[...document.querySelectorAll('[role="menuitem"]')].find(item => item.innerText.includes('Contoso 2')).click()`)
     await sleep(650)
+    assert((await evaluate(`window.__oldScanStatus()`)) === 'running', 'switching tenants ended the first scan')
     await evaluate(`window.__oldScanResolve()`)
     await sleep(2500)
     assert(!(await evaluate(`document.body.innerText.includes('OLD-TENANT-RESULT')`)), 'old tenant scan replaced the active tenant results')
   } finally {
-    await evaluate(`window.fetch = window.__originalFetch; delete window.__originalFetch; delete window.__oldScanResolve`)
+    await evaluate(`window.fetch = window.__originalFetch; delete window.__originalFetch; delete window.__oldScanResolve; delete window.__oldScanStatus`)
     await evaluate(`document.querySelector('button[aria-label^="Switch tenant"]').dispatchEvent(new PointerEvent('pointerdown', {bubbles:true,button:0,pointerType:'mouse'}))`)
     await sleep(150)
     await evaluate(`[...document.querySelectorAll('[role="menuitem"]')].find(item => item.innerText.includes('Contoso 1')).click()`)
