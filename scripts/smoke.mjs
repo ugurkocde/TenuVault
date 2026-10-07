@@ -484,26 +484,46 @@ await check("unsaved schedule drafts stay with their tenant", async () => {
 })
 
 await check("switching tenants cannot show an older tenant's drift results", async () => {
+  // Scans run as main-process jobs; this stands in for /api/drift-scan and holds the first tenant's scan open.
   await evaluate(`(() => {
     window.__originalFetch = window.fetch;
+    const jobs = [];
+    const result = (tenantId, drifts) => ({ schemaVersion: 1, tenantId, jobId: 'job-' + tenantId, storageAccountName: 'tvlocal-' + tenantId, drifts, summary: { total: drifts.length, critical: 0, warning: 0, info: drifts.length, affectedTenants: 1 }, lastScan: new Date().toISOString(), backupsAnalyzed: 2, baseline: { id: 'backup-2026-01-01-000000', timestamp: '2026-01-01T00:00:00.000Z' }, comparison: { id: 'backup-2026-01-02-000000', timestamp: '2026-01-02T00:00:00.000Z' }, warnings: [], stats: { compared: 1, unchanged: 0 } });
+    const old = [{ id: 'old', configName: 'OLD-TENANT-RESULT', type: 'Device Configuration', severity: 'info', changeType: 'added', affectedPolicies: 1, affectedDevices: 0, detectedAt: new Date().toISOString() }];
     window.fetch = (input, init) => {
-      if (String(input) !== '/api/detect-drifts') return window.__originalFetch(input, init);
+      if (String(input) !== '/api/drift-scan') return window.__originalFetch(input, init);
       const body = JSON.parse(init.body);
-      const result = { drifts: [], summary: { total: 0, critical: 0, warning: 0, info: 0, affectedTenants: 0 }, lastScan: new Date().toISOString(), backupsAnalyzed: 2 };
-      if (body.tenantId.startsWith('11111111')) return new Promise(resolve => { window.__oldScanResolve = () => resolve(Response.json({...result, drifts: [{id:'old',configName:'OLD-TENANT-RESULT',type:'Device Configuration',severity:'info',changeType:'added',affectedPolicies:1,affectedDevices:0,detectedAt:new Date().toISOString()}]})); });
-      return Promise.resolve(Response.json(result));
+      const tenantId = String(body.tenantId ?? '').toLowerCase();
+      const job = jobs.find(j => j.tenantId === tenantId);
+      if (body.action === 'jobs') return Promise.resolve(Response.json({ jobs }));
+      if (body.action === 'result') return Promise.resolve(Response.json({ result: job?.status === 'completed' ? result(tenantId, tenantId.startsWith('11111111') ? old : []) : null }));
+      if (body.action === 'cancel') { if (job) job.status = 'cancelled'; return Promise.resolve(Response.json({ ok: true })); }
+      if (body.action === 'start') {
+        const created = { jobId: 'job-' + tenantId, tenantId, status: 'running', phase: 'comparing', detail: 'Comparing', done: 0, total: 1, percent: 10, startedAt: new Date().toISOString(), baseline: null, comparison: null };
+        if (job) jobs.splice(jobs.indexOf(job), 1);
+        jobs.push(created);
+        if (tenantId.startsWith('11111111')) window.__oldScanResolve = () => Object.assign(created, { status: 'completed', percent: 100, finishedAt: new Date().toISOString() });
+        else Object.assign(created, { status: 'completed', percent: 100, finishedAt: new Date().toISOString() });
+        return Promise.resolve(Response.json({ job: created }));
+      }
+      return window.__originalFetch(input, init);
     };
   })()`)
   try {
     await go("#/portal/drift", "Drift Detection")
     await sleep(300)
+    // The page may have scanned this tenant already, so start one explicitly when it did not.
+    if (!(await evaluate(`typeof window.__oldScanResolve === 'function'`))) {
+      await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.includes('Compare latest backups')).click()`)
+      await sleep(300)
+    }
     assert(await evaluate(`typeof window.__oldScanResolve === 'function'`), 'first tenant scan did not start')
     await evaluate(`document.querySelector('button[aria-label^="Switch tenant"]').dispatchEvent(new PointerEvent('pointerdown', {bubbles:true,button:0,pointerType:'mouse'}))`)
     await sleep(150)
     await evaluate(`[...document.querySelectorAll('[role="menuitem"]')].find(item => item.innerText.includes('Contoso 2')).click()`)
     await sleep(650)
     await evaluate(`window.__oldScanResolve()`)
-    await sleep(650)
+    await sleep(2500)
     assert(!(await evaluate(`document.body.innerText.includes('OLD-TENANT-RESULT')`)), 'old tenant scan replaced the active tenant results')
   } finally {
     await evaluate(`window.fetch = window.__originalFetch; delete window.__originalFetch; delete window.__oldScanResolve`)
