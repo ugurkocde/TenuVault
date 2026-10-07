@@ -70,6 +70,8 @@ export default function BackupRestorePage() {
   const [restoreFrom, setRestoreFrom] = useState<string | null>(null)
   const [setupError, setSetupError] = useState("")
   const error = setupError || backupList.error
+  // A failed refresh leaves the kept list (and its Refresh button) shown below the error.
+  const blockingError = setupError || (backupList.backups === null ? backupList.error : "")
   const [runOpen, setRunOpen] = useState(false)
   const [jobId, setJobId] = useState<string | null>(null)
   const [showProgress, setShowProgress] = useState(false)
@@ -234,7 +236,7 @@ export default function BackupRestorePage() {
         </Alert>
       )}
 
-      {activeTab === "backup" && selectedTenant && !isLoading && !error && (
+      {activeTab === "backup" && selectedTenant && !isLoading && !blockingError && (
         <div className="space-y-6">
           <div className="rounded-3xl bg-white p-6 sm:p-8">
             <div className="mb-6 flex items-center justify-between">
@@ -324,7 +326,7 @@ export default function BackupRestorePage() {
         </div>
       )}
 
-      {activeTab === "restore" && tenant && !isLoading && !error && (
+      {activeTab === "restore" && tenant && !isLoading && !blockingError && (
         <RestoreWizard
           key={`${selectedTenant?.id}:${restoreFrom ?? ""}`}
           tenant={tenant}

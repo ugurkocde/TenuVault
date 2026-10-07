@@ -12,6 +12,7 @@ import { compareBackups, summarize } from '../src/shared/intune/backup-changes'
 import { createAuditRecorder } from '../src/main/api/audit'
 import { CANCELLED_HEADER, registerDriftScan } from '../src/portal/lib/drift/scan-hooks'
 import type { DriftScanProgress } from '../src/shared/intune/drift'
+import { listBlobPages } from '../src/portal/lib/storage/list'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -196,6 +197,19 @@ describe('Drift scan', () => {
       'checking 0/0', 'checking 1/0', 'checking 2/0', 'checking 3/0', 'listing 0/2', 'listing 1/2', 'listing 2/2',
     ])
     expect(progress[7]).toMatchObject({ phase: 'comparing', done: 0, total: 3 })
+  })
+
+  it('requests no further listing pages once the scan is cancelled', async () => {
+    const controller = new AbortController()
+    const stub = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.signal).toBe(controller.signal)
+      // The scan is cancelled while the first page is read; that page still names a next one.
+      controller.abort()
+      return new Response('<Blobs /><NextMarker>page-2</NextMarker>')
+    })
+    vi.stubGlobal('fetch', stub)
+    await expect(listBlobPages('https://store.blob.core.windows.net/intune-backups?restype=container&comp=list', 'test', controller.signal)).rejects.toThrow()
+    expect(stub).toHaveBeenCalledTimes(1)
   })
 
   it('compares an explicit pair and refuses another tenant\'s backup', async () => {

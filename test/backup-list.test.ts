@@ -8,8 +8,8 @@ afterEach(() => {
 })
 
 const TENANT = '11111111-1111-1111-1111-111111111111'
-const tenant = (storageAccountName = 'store') => ({
-  credentials: { tenantId: TENANT.toUpperCase(), appId: 'app', clientSecret: '' },
+const tenant = (storageAccountName = 'store', appId = 'app') => ({
+  credentials: { tenantId: TENANT.toUpperCase(), appId, clientSecret: '' },
   resources: { subscriptionId: '', subscriptionName: '', resourceGroupName: '', storageAccountName, automationAccountName: '' },
 }) as unknown as Tenant
 const backup = (id: string) => ({ id, timestamp: '2026-10-01T00:00:00.000Z', status: 'Success' })
@@ -65,6 +65,26 @@ describe('Backup list cache', () => {
     // Read before the newest backup finished, so it must not replace the newer list.
     fetches.answer(0, Response.json({ backups: [backup('b1')] }))
     await before
+    expect(backupListOf(key)).toEqual({ backups: [backup('b2'), backup('b1')], error: '', loading: false })
+  })
+
+  it('does not join a refresh sent with credentials that changed since, and keeps the list meanwhile', async () => {
+    const fetches = pendingFetch()
+    const key = backupListKey(tenant())
+    const first = refreshBackupList(tenant())
+    fetches.answer(0, Response.json({ backups: [backup('b1')] }))
+    await first
+    const stale = refreshBackupList(tenant())
+    const changed = refreshBackupList(tenant('store', 'new-app'))
+    expect(changed).not.toBe(stale)
+    expect(refreshBackupList(tenant('store', 'new-app'))).toBe(changed)
+    expect(JSON.parse(String((fetches.stub.mock.calls[2] as unknown as [string, RequestInit])[1].body))).toMatchObject({ appId: 'new-app' })
+    expect(backupListOf(key)).toMatchObject({ backups: [backup('b1')], loading: true })
+    fetches.answer(2, Response.json({ backups: [backup('b2'), backup('b1')] }))
+    await changed
+    // The answer to the old credentials arrives last and is dropped.
+    fetches.answer(1, Response.json({ backups: [] }))
+    await stale
     expect(backupListOf(key)).toEqual({ backups: [backup('b2'), backup('b1')], error: '', loading: false })
   })
 })

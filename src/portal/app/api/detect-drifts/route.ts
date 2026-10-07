@@ -81,7 +81,7 @@ export async function POST(request: NextRequest) {
 
     // Using delimiter=/ to get folder prefixes instead of all blobs
     const listUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&delimiter=/`
-    const listText = await listBlobPages(listUrl, accessToken)
+    const listText = await listBlobPages(listUrl, accessToken, signal)
     const backupFolders = parseBackupFolders(listText)
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
     // done counts the steps taken: the backups listed, then each metadata.json read.
@@ -236,8 +236,7 @@ async function fetchPolicyFiles(
 
   signal?.throwIfAborted()
   const listUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${backupFolder}/`)}`
-  const text = await listBlobPages(listUrl, accessToken)
-  signal?.throwIfAborted()
+  const text = await listBlobPages(listUrl, accessToken, signal)
   for (const blob of text.match(/<Blob>[\s\S]*?<\/Blob>/g) || []) {
     const nameMatch = blob.match(/<Name>([^<]+)<\/Name>/)
     const lastModifiedMatch = blob.match(/<Last-Modified>([^<]+)<\/Last-Modified>/)
