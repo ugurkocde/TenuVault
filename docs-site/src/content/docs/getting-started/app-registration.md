@@ -49,13 +49,13 @@ The two Azure permissions are only used when backups go to your Azure storage ac
 
 ## Get the script
 
-The setup script is built into TenuVault.
+[Download `New-TenuVaultDesktopApp.ps1`](/downloads/New-TenuVaultDesktopApp.ps1) and save it to a folder of your choice. If someone else creates the app registration for you, send them this link or the file.
+
+The same script is also built into TenuVault:
 
 1. Start TenuVault. If it shows **Welcome to TenuVault**, select a plan first; see [Choose a plan on first launch](/getting-started/first-launch/). You can change your plan later.
 2. On the **Prepare** step of **Set up TenuVault**, select **Copy setup script**. You also find this button in **Tenants** > **Connect tenant** under **First time? Create an app registration**.
 3. Paste the script into a text editor and save it as `New-TenuVaultDesktopApp.ps1`.
-
-If someone else creates the app registration for you, send them the saved file.
 
 ## Run the script
 
@@ -97,7 +97,7 @@ In the app, the button is called **Connect tenant**, not **Add tenant**. The scr
 
 ### Execution policy
 
-If PowerShell refuses to run the saved script because of the execution policy, allow scripts for the current session only and run it again:
+If PowerShell refuses to run the saved script because of the execution policy, or because Windows marks the downloaded file as coming from the internet, allow scripts for the current session only and run it again:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
