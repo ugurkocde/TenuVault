@@ -6,6 +6,8 @@ import { DriftJobs, driftScanRoutes, DriftJobError } from '../src/main/drift/job
 import { apiBody } from '../src/main/features/deps'
 import { call, TENANT_A } from './feature-helpers'
 import { memoryStore } from './helpers'
+import { parseBackupName } from '../src/shared/intune/backup-names'
+import { POST as listBackups } from '../src/portal/app/api/list-backups/route'
 import { compareBackups, summarize } from '../src/shared/intune/backup-changes'
 import { createAuditRecorder } from '../src/main/api/audit'
 import { CANCELLED_HEADER } from '../src/portal/lib/drift/scan-hooks'
@@ -240,12 +242,58 @@ describe('Drift item matching', () => {
     ])
   })
 
+  it('names the renamed newer file when it cannot be read', async () => {
+    fakeStorage({
+      [NEW]: { metadata: meta({ 'DeviceConfigurations/a': { file: 'A v2.json', hash: 'h2' } }), files: { 'DeviceConfigurations/A v2.json': policy('a', 'A v2') } },
+      [OLD]: { metadata: meta({ 'DeviceConfigurations/a': { file: 'A v1.json', hash: 'h1' } }), files: { 'DeviceConfigurations/A v1.json': policy('a', 'A v1') } },
+    }, { unreadable: [`${NEW}/DeviceConfigurations/A v2.json`] })
+    const result = await (await drift(request())).json()
+    expect(result.drifts).toEqual([])
+    expect(result.warnings).toEqual([{ file: 'DeviceConfigurations/A v2.json', backup: NEW, message: expect.stringContaining('403') }])
+  })
+
   it('agrees with the backup list counts for the same pair', async () => {
     const backups = twoBackups(true)
     fakeStorage(backups)
     const result = await (await drift(request())).json()
     const listed = summarize(compareBackups(backups[OLD]!.metadata as any, backups[NEW]!.metadata as any))
     expect({ added: result.summary.added, modified: result.summary.modified, removed: result.summary.deleted }).toEqual(listed)
+  })
+})
+
+describe('Backup folder names', () => {
+  const DAY_OLD = '2024-08-01'
+  const UNDERSCORE_NEW = '2024-08-02_09-30-00_1722591000000'
+
+  it('parses every format the backup list and drift detection share', () => {
+    expect(parseBackupName('backup-2026-09-25-120000')).toEqual({ name: 'backup-2026-09-25-120000', timestamp: '2026-09-25T12:00:00.000Z', precision: 'second' })
+    expect(parseBackupName('2026-09-25_12-00-00')).toMatchObject({ timestamp: '2026-09-25T12:00:00.000Z', precision: 'second' })
+    expect(parseBackupName(UNDERSCORE_NEW)).toMatchObject({ timestamp: '2024-08-02T09:30:00.000Z' })
+    expect(parseBackupName(DAY_OLD)).toEqual({ name: DAY_OLD, timestamp: DAY_OLD, precision: 'day' })
+    for (const name of ['backup-2026-13-45-999999', 'tenant-metadata.json', 'backup-2026-09-25', '2026-09-25_12']) expect(parseBackupName(name)).toBeNull()
+  })
+
+  it('lists and compares legacy day-only and underscore backups alike', async () => {
+    const backups: Record<string, FakeBackup> = {
+      [UNDERSCORE_NEW]: { metadata: { Status: 'Success' }, files: { 'DeviceConfigurations/A.json': policy('a', 'A', { passwordMinimumLength: 12 }) } },
+      [DAY_OLD]: { metadata: { Status: 'Success' }, files: { 'DeviceConfigurations/A.json': policy('a', 'A', { passwordMinimumLength: 8 }) } },
+    }
+    fakeStorage(backups)
+    const listed = await (await listBackups(new NextRequest('http://tenuvault.internal/api/list-backups', { method: 'POST', body: JSON.stringify({ tenantId: TENANT_A, appId: 'app', clientSecret: 'test', storageAccountName: 'store', subscriptionId: 'local', resourceGroupName: 'local' }) }))).json()
+    expect(listed.backups.map((backup: any) => [backup.id, backup.timestamp])).toEqual([[UNDERSCORE_NEW, '2024-08-02T09:30:00.000Z'], [DAY_OLD, DAY_OLD]])
+
+    const byDefault = await (await drift(request())).json()
+    expect([byDefault.baseline.id, byDefault.comparison.id]).toEqual([DAY_OLD, UNDERSCORE_NEW])
+    expect(byDefault.drifts.map((d: any) => d.changeType)).toEqual(['modified'])
+    expect((await drift(request({ baseline: DAY_OLD, comparison: UNDERSCORE_NEW }))).status).toBe(200)
+  })
+
+  it('lets the scan job start an explicit legacy pair', async () => {
+    fakeStorage({})
+    const jobs = new DriftJobs({ store: memoryStore(), tenant: () => ({ tenantId: TENANT_A, name: 'Contoso', clientId: 'app', storageAccountName: 'store' }), plan: async () => 'community', api: async () => Response.json({ error: 'x' }, { status: 500 }) })
+    const job = await jobs.start(TENANT_A, { baseline: DAY_OLD, comparison: UNDERSCORE_NEW })
+    expect(job).toMatchObject({ baseline: DAY_OLD, comparison: UNDERSCORE_NEW })
+    await jobs.settled(job.jobId)
   })
 })
 

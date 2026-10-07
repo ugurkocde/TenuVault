@@ -4,6 +4,7 @@ import type { RouteModule } from "../api/host"
 import type { NextRequest } from "../api/next-server-shim"
 import type { FeatureDeps } from "../features/deps"
 import { isGuid } from "../../shared/security"
+import { isBackupName } from "../../shared/intune/backup-names"
 import type { DriftResult, DriftScanPhase, DriftScanProgress, DriftSummary } from "../../shared/intune/drift"
 import { registerDriftScan } from "../../portal/lib/drift/scan-hooks"
 
@@ -66,7 +67,6 @@ export class DriftJobError extends Error {
 const FINISHED_JOB_TTL = 30 * 60_000
 /** Results larger than this stay in memory for the session instead of being saved. */
 const MAX_SAVED_LENGTH = 4_000_000
-const BACKUP_NAME = /^(?:backup-\d{4}-\d{2}-\d{2}-\d{6}|\d{4}-\d{2}-\d{2}_[0-9_-]+)$/
 
 const PHASE_PERCENT: Record<DriftScanPhase, number> = { checking: 2, listing: 6, comparing: 10, history: 96 }
 
@@ -109,7 +109,7 @@ export class DriftJobs {
     const baseline = pair.baseline ?? null
     const comparison = pair.comparison ?? null
     if ((baseline === null) !== (comparison === null)) throw new DriftJobError("Choose both a baseline and a comparison backup.")
-    if (baseline !== null && (typeof baseline !== "string" || typeof comparison !== "string" || !BACKUP_NAME.test(baseline) || !BACKUP_NAME.test(comparison))) {
+    if (baseline !== null && (typeof baseline !== "string" || typeof comparison !== "string" || !isBackupName(baseline) || !isBackupName(comparison))) {
       throw new DriftJobError("Choose backups from this tenant's backup list.")
     }
 

@@ -6,6 +6,7 @@ import { itemsOf, sameItem, type BackupFingerprint, type BackupItems } from "../
 import { backupRef, DriftPairError, selectBackupPair, summarizeDrifts, type BackupMetadata, type Drift, type DriftResult, type DriftScanProgress, type DriftWarning, type SelectedBackup } from "../../../../shared/intune/drift"
 import { CANCELLED_HEADER, driftScanHooks, type DriftScanHooks } from "~/lib/drift/scan-hooks"
 import { mapLimit } from "~/lib/map-limit"
+import { backupFoldersIn } from "../../../../shared/intune/backup-names"
 import { type NextRequest, NextResponse } from "next/server"
 
 interface PolicyFile {
@@ -202,56 +203,9 @@ export async function POST(request: NextRequest) {
   }
 }
 
+/** The backup folders of a container listing; the same names /api/list-backups lists. */
 export function parseBackupFolders(xmlText: string): { name: string; timestamp: string }[] {
-  const folders: { name: string; timestamp: string }[] = []
-  const blobPrefixes = xmlText.match(/<BlobPrefix>[\s\S]*?<\/BlobPrefix>/g) || []
-  
-  for (const prefix of blobPrefixes) {
-    const nameMatch = prefix.match(/<Name>([^<]+)<\/Name>/)
-    if (nameMatch?.[1]) {
-      const name = nameMatch[1].replace(/\/$/, '')
-      
-      // Try different parsing formats
-      // Format 1: backup-2024-08-01-020200 (from list-backups API)
-      // Format 2: 2024-08-01_02-02-00_1234567890123
-      // Format 3: 2024-08-01_02-02-00
-      
-      // Check for backup- prefix format
-      if (name.startsWith('backup-')) {
-        const dateMatch = /backup-(\d{4}-\d{2}-\d{2})-(\d{6})/.exec(name)
-        if (dateMatch) {
-          const [, dateStr, timeStr] = dateMatch
-          const formattedTime = timeStr!.replace(/(\d{2})(\d{2})(\d{2})/, '$1:$2:$3')
-          try {
-            const timestamp = new Date(`${dateStr}T${formattedTime}Z`).toISOString()
-            folders.push({ name, timestamp })
-            console.log("Parsed backup folder (backup- format):", { name, timestamp })
-          } catch (e) {
-            console.error("Failed to parse date for folder:", name, e)
-          }
-        }
-      } else {
-        // Try underscore format
-        const parts = name.split('_')
-        if (parts.length >= 2) {
-          const dateStr = parts[0]
-          const timeStr = parts[1]?.replace(/-/g, ':')
-          if (dateStr && timeStr) {
-            try {
-              const timestamp = new Date(`${dateStr}T${timeStr}Z`).toISOString()
-              folders.push({ name, timestamp })
-              console.log("Parsed backup folder (underscore format):", { name, timestamp })
-            } catch (e) {
-              console.error("Failed to parse date for folder:", name, e)
-            }
-          }
-        }
-      }
-    }
-  }
-  
-  console.log("Total folders parsed:", folders.length)
-  return folders
+  return backupFoldersIn(xmlText).map(({ name, timestamp }) => ({ name, timestamp }))
 }
 
 async function fetchPolicyFiles(
@@ -412,7 +366,7 @@ async function detectDrifts(
         return await fetchPolicyContent(file.url, accessToken, signal)
       } catch (error) {
         if (signal?.aborted) throw error
-        warnings.push({ file: task.name, backup, message: error instanceof Error ? error.message : 'The file could not be read.' })
+        warnings.push({ file: relative(file), backup, message: error instanceof Error ? error.message : 'The file could not be read.' })
         return null
       }
     }
