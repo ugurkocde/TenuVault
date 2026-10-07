@@ -3,6 +3,7 @@ import { typeForFolder } from "../../../../shared/intune/registry"
 import { describeScope } from "../../../../shared/intune/scope"
 import { comparable, compareBackups, summarize, type BackupFingerprint, type ChangeSummary } from "../../../../shared/intune/backup-changes"
 import { blobPath } from "../../../../shared/security"
+import { mapLimit } from "~/lib/map-limit"
 import { type NextRequest, NextResponse } from "next/server"
 
 // Helper function to format bytes to human readable format
@@ -15,18 +16,6 @@ function formatBytes(bytes: number): string {
 }
 
 const storageHeaders = (token: string) => ({ 'x-ms-version': '2021-12-02', 'x-ms-date': new Date().toUTCString(), Authorization: `Bearer ${token}` })
-
-async function mapLimit<T, R>(entries: T[], limit: number, task: (entry: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(entries.length)
-  let next = 0
-  await Promise.all(Array.from({ length: Math.min(limit, entries.length) }, async () => {
-    while (next < entries.length) {
-      const index = next++
-      results[index] = await task(entries[index]!)
-    }
-  }))
-  return results
-}
 
 /** One backup-yyyy-MM-dd-HHmmss folder, from its metadata.json and its file listing. */
 async function describeBackup(storageAccountName: string, name: string, accessToken: string) {

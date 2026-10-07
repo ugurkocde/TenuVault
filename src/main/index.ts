@@ -49,6 +49,7 @@ import { installedBySetup, isNightly, Updates, updatesDisabledByPolicy } from ".
 import { featureRoutes, startFeatures } from "./features"
 import { apiBody, type FeatureDeps } from "./features/deps"
 import { TenantRecords } from "./features/records"
+import { DriftJobs, driftScanRoutes } from "./drift/jobs"
 import { graphCaller } from "../portal/lib/policies/graph-restore"
 
 const RENDERER_STORAGE_PREFIX = "renderer."
@@ -302,8 +303,30 @@ async function bootstrap(): Promise<void> {
   const disclaimer = new DisclaimerAcknowledgements(appStore)
   const checkDisclaimer = disclaimerGuard(disclaimer)
   const checkPlan = planGuard((tenantId) => license.requireEntitlement(tenantId).catch(() => null))
+  // Drift scans run in the background; each tenant's last result is kept with the workflow records.
+  const memoryResults = new Map<string, string>()
+  const driftJobs = new DriftJobs({
+    api: featureDeps.api,
+    tenant: featureDeps.tenant,
+    plan: featureDeps.plan,
+    store: canEncrypt() ? workspaceStore : { get: (key) => memoryResults.get(key) ?? null, set: (key, value) => void memoryResults.set(key, value), delete: (key) => void memoryResults.delete(key) },
+    // When the window is not in front, a system notification says the scan finished; the app itself shows a toast.
+    notify: (job) => {
+      if (job.status === "cancelled" || mainWindow?.isFocused() || !Notification.isSupported()) return
+      const tenant = tenantProfile(job.tenantId)?.name ?? "your tenant"
+      const notification = new Notification({
+        title: job.status === "completed" ? "Drift scan ready" : "Drift scan failed",
+        body: job.status === "completed" ? `The backups of ${tenant} were compared. Click to review the drift.` : job.error ?? "Open TenuVault for details.",
+      })
+      notification.on("click", () => {
+        showWindow()
+        void mainWindow?.webContents.executeJavaScript(`location.hash = ${JSON.stringify(`/portal/drift?tenant=${job.tenantId}`)}`)
+      })
+      notification.show()
+    },
+  })
   const host: ApiHost = new ApiHost({
-    routes: { ...routes, ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope), ...featureRoutes(featureDeps) },
+    routes: { ...routes, ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope), ...featureRoutes(featureDeps), ...driftScanRoutes(driftJobs) },
     transform: surfaceTokenErrors,
     // The plan comes first, so the disclaimer is never accepted for a change the plan refuses anyway.
     guard: async (request) => (await checkPlan(request)) ?? checkDisclaimer(request),
