@@ -9,7 +9,7 @@ For the step-by-step setup, see [Create the app registration](/getting-started/a
 
 ## What the setup script creates
 
-The setup script, `New-TenuVaultDesktopApp.ps1`, is available from the sign-in screen in TenuVault (**Copy setup script**) and in the public repository. It creates:
+The setup script, `New-TenuVaultDesktopApp.ps1`, is available as a [download from this site](/downloads/New-TenuVaultDesktopApp.ps1), from the sign-in screen in TenuVault (**Copy setup script**) and in the public repository. It creates:
 
 | Setting | Value |
 | --- | --- |
