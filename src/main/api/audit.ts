@@ -1,5 +1,6 @@
 import { AuditEventType, AuditResult, AuditSeverity, type CreateAuditLogInput } from "~/lib/audit/types"
 import type { SignedInAccount } from "../../shared/ipc"
+import { CANCELLED_HEADER } from "../../portal/lib/drift/scan-hooks"
 import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, localStorageAccountName } from "../../shared/constants"
 
 /** Which API calls are audited, and how they are described. */
@@ -55,6 +56,8 @@ export function createAuditRecorder(
       return method === request.method && configPath !== undefined && path.startsWith(configPath)
     })?.[1]
     if (!config) return
+    // A drift scan the admin cancelled neither succeeded nor failed.
+    if (response.headers.get(CANCELLED_HEADER)) return
 
     let body: AuditBody
     try {

@@ -26,6 +26,7 @@ import { BrandMark } from "./BrandMark"
 import { formatDateTime, isUnlicensed, planName, unlicensedTenants, useLicense } from "../lib/license"
 import { Toaster } from "../lib/toast"
 import { FrameworkJobNotifier } from "../lib/framework-jobs"
+import { DriftScanIndicator, DriftScanNotifier } from "../lib/drift-jobs"
 import { SignInBanner } from "./SignInBanner"
 import { SupportDialog } from "./SupportDialog"
 import { TenantSwitcher } from "./TenantSwitcher"
@@ -183,6 +184,7 @@ export function DesktopLayout() {
           </span>
         )}
         <span className="truncate">{item.name}</span>
+        {item.href === "/portal/drift" && <DriftScanIndicator />}
       </Link>
     )
   }
@@ -237,6 +239,7 @@ export function DesktopLayout() {
       <FloatingProgress />
       <Toaster />
       <FrameworkJobNotifier />
+      <DriftScanNotifier />
       <SupportDialog open={supportOpen} onOpenChange={setSupportOpen} />
     </div>
   )

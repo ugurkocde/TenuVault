@@ -2,6 +2,11 @@ import { decodeXml, listBlobPages } from "~/lib/storage/list"
 import { typeForFolder } from "../../../../shared/intune/registry"
 import { withoutUnreadAssignments } from "../../../../shared/intune/read"
 import { coveredFolders, type ScopeMetadata } from "../../../../shared/intune/scope"
+import { itemsOf, sameItem, type BackupFingerprint, type BackupItems } from "../../../../shared/intune/backup-changes"
+import { backupRef, DriftPairError, selectBackupPair, summarizeDrifts, type BackupMetadata, type Drift, type DriftResult, type DriftScanProgress, type DriftWarning, type SelectedBackup } from "../../../../shared/intune/drift"
+import { CANCELLED_HEADER, driftScanHooks, type DriftScanHooks } from "~/lib/drift/scan-hooks"
+import { mapLimit } from "~/lib/map-limit"
+import { backupFoldersIn } from "../../../../shared/intune/backup-names"
 import { type NextRequest, NextResponse } from "next/server"
 
 interface PolicyFile {
@@ -19,42 +24,8 @@ interface PolicyContent {
   [key: string]: any
 }
 
-interface Drift {
-  id: string
-  tenant: string
-  tenantId: string
-  severity: "critical" | "warning" | "info"
-  type: string
-  configName: string
-  configId: string
-  changeType: "added" | "modified" | "deleted"
-  detectedAt: string
-  fromBackup: string // Now contains the actual backup folder name
-  toBackup: string // Now contains the actual backup folder name
-  fromBackupTimestamp?: string // Timestamp for display purposes
-  toBackupTimestamp?: string // Timestamp for display purposes
-  description: string
-  impact: string
-  affectedPolicies: number
-  affectedDevices: number
-  comparisonIndex?: number  // Which backup comparison (0 = most recent)
-  revertHistory?: Array<{  // Revert history for this policy
-    timestamp: string
-    action: "revert" | "restore"
-  }>
-  lastRevertedAt?: string  // Timestamp of last revert
-  isRevertDrift?: boolean  // True if this drift is the result of a revert action
-  revertTimestamp?: string // When the revert that caused this drift happened
-  /** The item's path inside a backup folder, such as DeviceConfigurations/Name.json. */
-  backupFile?: string
-  changes?: {
-    field: string
-    oldValue: any
-    newValue: any
-  }[]
-}
-
 export async function POST(request: NextRequest) {
+  let hooks: DriftScanHooks | undefined
   try {
     const body = await request.json()
     const { 
@@ -62,7 +33,9 @@ export async function POST(request: NextRequest) {
       appId, 
       clientSecret,
       storageAccountName,
-      backupLimit = 10
+      backupLimit,
+      baseline,
+      comparison,
     } = body
 
     if (!tenantId || !appId || !clientSecret || !storageAccountName) {
@@ -71,6 +44,12 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       )
     }
+
+    // A background scan (see ~/lib/drift/scan-hooks) follows the progress and can cancel it.
+    hooks = driftScanHooks(body.scanId, tenantId)
+    const signal = hooks?.signal
+    const report = (progress: DriftScanProgress) => hooks?.onProgress(progress)
+    report({ phase: "checking", detail: "Checking the backups", done: 0, total: 0 })
 
     // Get access token for Azure Storage
     const tokenResponse = await fetch(
@@ -98,63 +77,42 @@ export async function POST(request: NextRequest) {
 
     const tokenData = await tokenResponse.json()
     const accessToken = tokenData.access_token
+    signal?.throwIfAborted()
 
-    // List backups (limited to recent ones)
     // Using delimiter=/ to get folder prefixes instead of all blobs
     const listUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&delimiter=/`
-    
     const listText = await listBlobPages(listUrl, accessToken)
-
-    console.log("Raw Azure response (first 1000 chars):", listText.substring(0, 1000))
-    
-    // Parse backup folders and sort by date
     const backupFolders = parseBackupFolders(listText)
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-      .slice(0, backupLimit)
 
-    console.log("Parsed backup folders:", backupFolders)
-
-    // Compare the two newest complete backups. Incomplete snapshots are missing policies and
-    // would report them as deleted, and a running backup has no metadata yet, so both are skipped.
-    const completeBackups: Array<(typeof backupFolders)[number] & { metadata: ScopeMetadata }> = []
-    for (const backup of backupFolders.length < 2 ? [] : backupFolders) {
-      const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${encodeURIComponent(backup.name)}/metadata.json`, { headers: { 'x-ms-version': '2021-12-02', Authorization: `Bearer ${accessToken}` } })
-      if (response.status === 404) continue
+    // Incomplete snapshots are missing policies and would report them as deleted, and a running
+    // backup has no metadata yet, so the default pair skips both (see selectBackupPair).
+    const loadMetadata = async (name: string): Promise<BackupMetadata | null> => {
+      const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${encodeURIComponent(name)}/metadata.json`, { headers: { 'x-ms-version': '2021-12-02', Authorization: `Bearer ${accessToken}` }, signal })
+      if (response.status === 404) return null
       if (!response.ok) throw new Error(`Cannot verify that the backups are complete (${response.status}). Check storage access and retry.`)
-      const metadata = await response.json()
-      if (['success', 'completed'].includes(String(metadata.Status ?? metadata.status).toLowerCase())) completeBackups.push({ ...backup, metadata })
-      if (completeBackups.length === 2) break
+      return await response.json()
     }
-
-    if (completeBackups.length < 2) {
-      return NextResponse.json({ error: `Drift comparison needs two complete backups, and the latest ${backupFolders.length} include fewer than two. Incomplete backups are skipped. Create a successful backup and try again.`, code: 'INSUFFICIENT_BACKUPS' }, { status: 409 })
-    }
-
-    const newerBackup = completeBackups[0]!
-    const olderBackup = completeBackups[1]!
+    const pair = await selectBackupPair({ folders: backupFolders, tenantId, baseline, comparison, limit: typeof backupLimit === "number" && backupLimit > 0 ? backupLimit : undefined, load: loadMetadata, signal })
+    const newerBackup = pair.comparison
+    const olderBackup = pair.baseline
 
     // Only types both backups hold are compared: a backup that left apps out has not seen them deleted.
-    const olderFolders = coveredFolders(olderBackup.metadata)
-    const shared = [...coveredFolders(newerBackup.metadata)].filter(folder => olderFolders.has(folder))
+    report({ phase: "listing", detail: "Listing the backed-up policies", done: 0, total: 0 })
+    const olderFolders = coveredFolders(olderBackup.metadata as ScopeMetadata)
+    const shared = [...coveredFolders(newerBackup.metadata as ScopeMetadata)].filter(folder => olderFolders.has(folder))
     const [newerPolicies, olderPolicies] = await Promise.all([
-      fetchPolicyFiles(storageAccountName, newerBackup.name, accessToken, shared),
-      fetchPolicyFiles(storageAccountName, olderBackup.name, accessToken, shared)
+      fetchPolicyFiles(storageAccountName, newerBackup.name, accessToken, shared, signal),
+      fetchPolicyFiles(storageAccountName, olderBackup.name, accessToken, shared, signal)
     ])
     
-    // Detect changes between the two most recent backups
-    const drifts = await detectDrifts(
-      newerPolicies,
-      olderPolicies,
-      newerBackup,
-      olderBackup,
-      storageAccountName,
-      accessToken,
-      0  // Pass comparison index
-    )
+    const { drifts, warnings, stats } = await detectDrifts(newerPolicies, olderPolicies, newerBackup, olderBackup, accessToken, { signal, report, folders: new Set(shared) })
+    signal?.throwIfAborted()
     
     // Fetch revert metadata for all drift policy IDs
     const policyIds = drifts.map(d => d.configId).filter(id => id)
     if (policyIds.length > 0) {
+      report({ phase: "history", detail: "Checking the revert history", done: stats.compared, total: stats.compared })
       try {
         const metadataResponse = await fetch(
           `${request.nextUrl.origin}/api/revert-metadata`,
@@ -220,23 +178,23 @@ export async function POST(request: NextRequest) {
         // Continue without metadata - don't fail the whole operation
       }
     }
+    signal?.throwIfAborted()
 
-    // Calculate summary
-    const summary = {
-      total: drifts.length,
-      critical: drifts.filter(d => d.severity === "critical").length,
-      warning: drifts.filter(d => d.severity === "warning").length,
-      info: drifts.filter(d => d.severity === "info").length,
-      affectedTenants: 1 // Since we're checking one tenant
-    }
-
-    return NextResponse.json({
+    const result: DriftResult = {
       drifts,
-      summary,
+      summary: summarizeDrifts(drifts),
       lastScan: new Date().toISOString(),
-      backupsAnalyzed: backupFolders.length
-    })
+      backupsAnalyzed: 2,
+      baseline: backupRef(olderBackup),
+      comparison: backupRef(newerBackup),
+      warnings,
+      stats,
+    }
+    return NextResponse.json(result)
   } catch (error) {
+    // The header tells the audit recorder that the admin stopped the scan; it did not fail.
+    if (hooks?.signal.aborted) return NextResponse.json({ error: "The drift scan was cancelled.", code: "CANCELLED" }, { status: 409, headers: { [CANCELLED_HEADER]: "1" } })
+    if (error instanceof DriftPairError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status })
     console.error("Detect drifts error:", error)
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Internal server error while detecting drifts" },
@@ -245,63 +203,17 @@ export async function POST(request: NextRequest) {
   }
 }
 
+/** The backup folders of a container listing; the same names /api/list-backups lists. */
 export function parseBackupFolders(xmlText: string): { name: string; timestamp: string }[] {
-  const folders: { name: string; timestamp: string }[] = []
-  const blobPrefixes = xmlText.match(/<BlobPrefix>[\s\S]*?<\/BlobPrefix>/g) || []
-  
-  for (const prefix of blobPrefixes) {
-    const nameMatch = prefix.match(/<Name>([^<]+)<\/Name>/)
-    if (nameMatch?.[1]) {
-      const name = nameMatch[1].replace(/\/$/, '')
-      
-      // Try different parsing formats
-      // Format 1: backup-2024-08-01-020200 (from list-backups API)
-      // Format 2: 2024-08-01_02-02-00_1234567890123
-      // Format 3: 2024-08-01_02-02-00
-      
-      // Check for backup- prefix format
-      if (name.startsWith('backup-')) {
-        const dateMatch = /backup-(\d{4}-\d{2}-\d{2})-(\d{6})/.exec(name)
-        if (dateMatch) {
-          const [, dateStr, timeStr] = dateMatch
-          const formattedTime = timeStr!.replace(/(\d{2})(\d{2})(\d{2})/, '$1:$2:$3')
-          try {
-            const timestamp = new Date(`${dateStr}T${formattedTime}Z`).toISOString()
-            folders.push({ name, timestamp })
-            console.log("Parsed backup folder (backup- format):", { name, timestamp })
-          } catch (e) {
-            console.error("Failed to parse date for folder:", name, e)
-          }
-        }
-      } else {
-        // Try underscore format
-        const parts = name.split('_')
-        if (parts.length >= 2) {
-          const dateStr = parts[0]
-          const timeStr = parts[1]?.replace(/-/g, ':')
-          if (dateStr && timeStr) {
-            try {
-              const timestamp = new Date(`${dateStr}T${timeStr}Z`).toISOString()
-              folders.push({ name, timestamp })
-              console.log("Parsed backup folder (underscore format):", { name, timestamp })
-            } catch (e) {
-              console.error("Failed to parse date for folder:", name, e)
-            }
-          }
-        }
-      }
-    }
-  }
-  
-  console.log("Total folders parsed:", folders.length)
-  return folders
+  return backupFoldersIn(xmlText).map(({ name, timestamp }) => ({ name, timestamp }))
 }
 
 async function fetchPolicyFiles(
   storageAccountName: string,
   backupFolder: string,
   accessToken: string,
-  folders: string[]
+  folders: string[],
+  signal?: AbortSignal
 ): Promise<PolicyFile[]> {
   const policies: PolicyFile[] = []
   
@@ -309,6 +221,7 @@ async function fetchPolicyFiles(
   const policyTypes = folders.includes('CompliancePolicies') ? [...folders, 'DeviceCompliancePolicies'] : folders
   
   for (const policyType of policyTypes) {
+    signal?.throwIfAborted()
     const listUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${backupFolder}/${policyType}/`)}`
     
     {
@@ -335,143 +248,193 @@ async function fetchPolicyFiles(
   return policies
 }
 
+/** "<type folder>/<Intune ID>" to the item's file path (Type/Name.json) and fingerprint, from a backup's metadata.json Items. */
+function itemsByIdentity(metadata: BackupMetadata): Map<string, { path: string; item: BackupItems[string] }> | null {
+  const items = itemsOf(metadata as BackupFingerprint)
+  if (!items) return null
+  const entries = new Map<string, { path: string; item: BackupItems[string] }>()
+  for (const [key, item] of Object.entries(items)) {
+    if (item && typeof item.file === 'string' && typeof item.hash === 'string') entries.set(key, { path: `${key.slice(0, key.indexOf('/'))}/${item.file}`, item })
+  }
+  return entries
+}
+
+/** Policy files read at once. */
+const READ_CONCURRENCY = 8
+
+/**
+ * Added, changed and deleted items between the two backups. Items whose stored fingerprints
+ * match in both backups are unchanged and not read; backups without fingerprints (made by older
+ * versions) are compared file by file. The rest are read a few at a time. A file that cannot be
+ * read is reported as a warning and left out, rather than failing the whole comparison.
+ *
+ * For backups with Items, the counts match the backup list's changes (compareBackups) for the same
+ * pair, except where drift deliberately reports less: new "[Restored]" copies are left out, and an
+ * item whose fingerprint changed only in properties compareObjects ignores (such as description or
+ * @odata.type) is not reported as modified.
+ */
 async function detectDrifts(
   newerPolicies: PolicyFile[],
   olderPolicies: PolicyFile[],
-  newerBackup: { name: string; timestamp: string },
-  olderBackup: { name: string; timestamp: string },
-  storageAccountName: string,
+  newerBackup: SelectedBackup,
+  olderBackup: SelectedBackup,
   accessToken: string,
-  comparisonIndex: number = 0
-): Promise<Drift[]> {
-  const drifts: Drift[] = []
-  let driftIdCounter = Date.now()
+  options: { signal?: AbortSignal; report: (progress: DriftScanProgress) => void; /** The type folders both backups cover. */ folders: Set<string> }
+): Promise<{ drifts: Drift[]; warnings: DriftWarning[]; stats: DriftResult["stats"] }> {
+  const { signal, report } = options
+  const detectedAt = new Date().toISOString()
+  const warnings: DriftWarning[] = []
   
-  console.log(`Comparing ${newerBackup.name} (newer) with ${olderBackup.name} (older)`)
-  console.log(`Newer backup has ${newerPolicies.length} policies`)
-  console.log(`Older backup has ${olderPolicies.length} policies`)
-  
-  // Create maps for easier comparison
   // Remove the backup folder prefix to compare just the policy path
-  const newerMap = new Map(newerPolicies.map(p => {
-    const relativePath = p.name.substring(p.name.indexOf('/') + 1) // Remove backup-YYYY-MM-DD-HHMMSS/ prefix
-    return [relativePath, p]
-  }))
-  const olderMap = new Map(olderPolicies.map(p => {
-    const relativePath = p.name.substring(p.name.indexOf('/') + 1) // Remove backup-YYYY-MM-DD-HHMMSS/ prefix
-    return [relativePath, p]
-  }))
-  
-  // Check for added and modified policies
-  for (const [name, newerPolicy] of newerMap) {
-    const olderPolicy = olderMap.get(name)
-    
-    if (!olderPolicy) {
-      // Policy was added
-      const policyContent = await fetchPolicyContent(newerPolicy.url, accessToken)
-      const policyType = getPolicyType(name)
-      
-      // Skip policies that were restored by the user (those with [Restored] prefix)
-      if ([policyContent?.displayName, policyContent?.name].some(name => typeof name === 'string' && name.startsWith('[Restored]'))) {
-        console.log('Skipping restored policy from drift detection:', policyContent.displayName ?? policyContent.name)
+  const relative = (p: PolicyFile) => p.name.substring(p.name.indexOf('/') + 1)
+  const newerMap = new Map(newerPolicies.map(p => [relative(p), p]))
+  const olderMap = new Map(olderPolicies.map(p => [relative(p), p]))
+
+  // Items are matched by their Intune ID, as compareBackups (the backup list) does, so a renamed
+  // policy is one modified item rather than a deleted and an added file. Backups made before
+  // metadata recorded Items, and any file Items does not name, are matched by file path.
+  type Task = { name: string; change: Drift["changeType"]; newer?: PolicyFile; older?: PolicyFile }
+  const tasks: Task[] = []
+  const pairedNewer = new Set<string>()
+  const pairedOlder = new Set<string>()
+  let unchanged = 0
+  const newerItems = itemsByIdentity(newerBackup.metadata)
+  const olderItems = itemsByIdentity(olderBackup.metadata)
+  if (newerItems && olderItems) {
+    // A file metadata names but storage does not hold cannot be compared; reported rather than
+    // shown as the item being added or deleted.
+    const missing = (path: string, backup: string) => warnings.push({ file: path, backup, message: 'Could not be compared: the file is missing from the backup.' })
+    const compared = (path: string) => options.folders.has(path.slice(0, path.indexOf('/')))
+    for (const [key, after] of newerItems) {
+      const before = olderItems.get(key)
+      const newer = newerMap.get(after.path)
+      if (!newer) {
+        if (!compared(after.path)) continue
+        missing(after.path, newerBackup.name)
+        if (before) pairedOlder.add(before.path)
         continue
       }
-      
-      drifts.push({
-        id: `drift-${driftIdCounter++}`,
-        tenant: "Current Tenant", // This would come from tenant context
-        tenantId: "current-tenant",
-        severity: determineSeverity(policyType, "added", policyContent),
-        type: policyType,
-        configName: policyContent?.displayName || policyContent?.name || name.split('/').pop()?.replace('.json', '') || 'Unknown',
-        backupFile: name,
-        configId: policyContent?.id || '',
-        changeType: "added",
-        detectedAt: new Date().toISOString(),
-        fromBackup: olderBackup.name, // Use actual folder name instead of timestamp
-        toBackup: newerBackup.name, // Use actual folder name instead of timestamp
-        fromBackupTimestamp: olderBackup.timestamp, // Keep timestamp for display
-        toBackupTimestamp: newerBackup.timestamp, // Keep timestamp for display
-        description: `New ${policyType} policy added`,
-        impact: determineImpact(policyType, "added", policyContent),
-        affectedPolicies: 1,
-        affectedDevices: 0, // Would need to fetch assignment data
-        comparisonIndex
-      })
-    } else {
-      // Policy exists in both backups - check if content changed
-      const [newerContent, olderContent] = await Promise.all([
-        fetchPolicyContent(newerPolicy.url, accessToken),
-        fetchPolicyContent(olderPolicy.url, accessToken)
-      ])
-      
-      const changes = compareObjects(...withoutUnreadAssignments(typeOfFile(name), olderContent, newerContent))
-      
-      if (changes.length > 0) {
-        const policyType = getPolicyType(name)
-        
-        drifts.push({
-          id: `drift-${driftIdCounter++}`,
-          tenant: "Current Tenant",
-          tenantId: "current-tenant",
-          severity: determineSeverity(policyType, "modified", newerContent, changes),
-          type: policyType,
-          configName: newerContent?.displayName || newerContent?.name || name.split('/').pop()?.replace('.json', '') || 'Unknown',
-          backupFile: name,
-          configId: newerContent?.id || '',
-          changeType: "modified",
-          detectedAt: new Date().toISOString(),
-          fromBackup: olderBackup.name, // Use actual folder name instead of timestamp
-          toBackup: newerBackup.name, // Use actual folder name instead of timestamp
-          fromBackupTimestamp: olderBackup.timestamp, // Keep timestamp for display
-          toBackupTimestamp: newerBackup.timestamp, // Keep timestamp for display
-          description: generateChangeDescription(policyType, changes),
-          impact: determineImpact(policyType, "modified", newerContent, changes),
-          affectedPolicies: 1,
-          affectedDevices: 0,
-          changes,
-          comparisonIndex
-        })
+      pairedNewer.add(after.path)
+      if (before && !olderMap.has(before.path) && compared(before.path)) { missing(before.path, olderBackup.name); continue }
+      const older = before && !pairedOlder.has(before.path) ? olderMap.get(before.path) : undefined
+      if (!before || !older) { tasks.push({ name: after.path, change: 'added', newer }); continue }
+      pairedOlder.add(before.path)
+      // The same assignment handling as compareBackups: reading assignments now that an older version could not is no change.
+      if (sameItem(before.item, after.item)) { unchanged++; continue }
+      // Named by the baseline file: reverting a modified item restores it from the baseline backup.
+      tasks.push({ name: before.path, change: 'modified', newer, older })
+    }
+    for (const [key, before] of olderItems) {
+      const older = olderMap.get(before.path)
+      if (!older || pairedOlder.has(before.path) || newerItems.has(key)) continue
+      pairedOlder.add(before.path)
+      tasks.push({ name: before.path, change: 'deleted', older })
+    }
+  }
+  for (const [name, newer] of newerMap) {
+    if (pairedNewer.has(name)) continue
+    const older = pairedOlder.has(name) ? undefined : olderMap.get(name)
+    if (!older) { tasks.push({ name, change: 'added', newer }); continue }
+    pairedOlder.add(name)
+    tasks.push({ name, change: 'modified', newer, older })
+  }
+  for (const [name, older] of olderMap) if (!pairedOlder.has(name)) tasks.push({ name, change: 'deleted', older })
+
+  const base = {
+    tenant: "Current Tenant",
+    tenantId: "current-tenant",
+    detectedAt,
+    fromBackup: olderBackup.name,
+    toBackup: newerBackup.name,
+    fromBackupTimestamp: olderBackup.timestamp,
+    toBackupTimestamp: newerBackup.timestamp,
+    affectedPolicies: 1,
+    affectedDevices: 0,
+    comparisonIndex: 0,
+  }
+  const fallbackName = (name: string) => name.split('/').pop()?.replace('.json', '') || 'Unknown'
+
+  let done = 0
+  const progress = () => report({ phase: "comparing", detail: `Comparing policies: ${done} of ${tasks.length}`, done, total: tasks.length })
+  progress()
+
+  const results = await mapLimit(tasks, READ_CONCURRENCY, async (task): Promise<Omit<Drift, 'id'> | null> => {
+    // Checked before every read, so a cancelled scan reads nothing further.
+    signal?.throwIfAborted()
+    const read = async (file: PolicyFile, backup: string): Promise<PolicyContent | null> => {
+      try {
+        return await fetchPolicyContent(file.url, accessToken, signal)
+      } catch (error) {
+        if (signal?.aborted) throw error
+        warnings.push({ file: relative(file), backup, message: error instanceof Error ? error.message : 'The file could not be read.' })
+        return null
       }
     }
-  }
-  
-  // Check for deleted policies
-  for (const [name, olderPolicy] of olderMap) {
-    if (!newerMap.has(name)) {
-      const policyContent = await fetchPolicyContent(olderPolicy.url, accessToken)
-      const policyType = getPolicyType(name)
-      
-      drifts.push({
-        id: `drift-${driftIdCounter++}`,
-        tenant: "Current Tenant",
-        tenantId: "current-tenant",
-        severity: determineSeverity(policyType, "deleted", policyContent),
+    try {
+      const policyType = getPolicyType(task.name)
+      if (task.change === 'added') {
+        const policyContent = await read(task.newer!, newerBackup.name)
+        // Skip policies that were restored by the user (those with [Restored] prefix)
+        if ([policyContent?.displayName, policyContent?.name].some(name => typeof name === 'string' && name.startsWith('[Restored]'))) return null
+        return {
+          ...base,
+          severity: determineSeverity(policyType, "added", policyContent),
+          type: policyType,
+          configName: policyContent?.displayName || policyContent?.name || fallbackName(task.name),
+          backupFile: task.name,
+          configId: policyContent?.id || '',
+          changeType: "added",
+          description: `New ${policyType} policy added`,
+          impact: determineImpact(policyType, "added", policyContent),
+        }
+      }
+      if (task.change === 'deleted') {
+        const policyContent = await read(task.older!, olderBackup.name)
+        return {
+          ...base,
+          severity: determineSeverity(policyType, "deleted", policyContent),
+          type: policyType,
+          configName: policyContent?.displayName || policyContent?.name || fallbackName(task.name),
+          backupFile: task.name,
+          configId: policyContent?.id || '',
+          changeType: "deleted",
+          description: `${policyType} policy deleted`,
+          impact: determineImpact(policyType, "deleted", policyContent),
+        }
+      }
+      const [newerContent, olderContent] = await Promise.all([read(task.newer!, newerBackup.name), read(task.older!, olderBackup.name)])
+      // Without both versions there is nothing to compare; the warning says which file is missing.
+      if (!newerContent || !olderContent) return null
+      const changes = compareObjects(...withoutUnreadAssignments(typeOfFile(task.name), olderContent, newerContent))
+      if (changes.length === 0) return null
+      const previousName = olderContent?.displayName || olderContent?.name
+      return {
+        ...base,
+        severity: determineSeverity(policyType, "modified", newerContent, changes),
         type: policyType,
-        configName: policyContent?.displayName || policyContent?.name || name.split('/').pop()?.replace('.json', '') || 'Unknown',
-        backupFile: name,
-        configId: policyContent?.id || '',
-        changeType: "deleted",
-        detectedAt: new Date().toISOString(),
-        fromBackup: olderBackup.name, // Use actual folder name instead of timestamp
-        toBackup: newerBackup.name, // Use actual folder name instead of timestamp
-        fromBackupTimestamp: olderBackup.timestamp, // Keep timestamp for display
-        toBackupTimestamp: newerBackup.timestamp, // Keep timestamp for display
-        description: `${policyType} policy deleted`,
-        impact: determineImpact(policyType, "deleted", policyContent),
-        affectedPolicies: 1,
-        affectedDevices: 0,
-        comparisonIndex
-      })
+        configName: newerContent?.displayName || newerContent?.name || fallbackName(task.name),
+        ...(previousName && previousName !== (newerContent?.displayName || newerContent?.name) ? { previousName } : {}),
+        backupFile: task.name,
+        configId: newerContent?.id || '',
+        changeType: "modified",
+        description: generateChangeDescription(policyType, changes),
+        impact: determineImpact(policyType, "modified", newerContent, changes),
+        changes,
+      }
+    } finally {
+      done++
+      progress()
     }
-  }
-  
-  return drifts
+  })
+
+  let driftIdCounter = Date.now()
+  const drifts = results.filter((drift): drift is Omit<Drift, 'id'> => drift !== null).map(drift => ({ id: `drift-${driftIdCounter++}`, ...drift }))
+  return { drifts, warnings, stats: { compared: tasks.length, unchanged } }
 }
 
-async function fetchPolicyContent(url: string, accessToken: string): Promise<PolicyContent> {
-  const response = await fetch(url, { headers: { 'x-ms-version': '2021-12-02', Authorization: `Bearer ${accessToken}` } })
-  if (!response.ok) throw new Error(`A backed-up policy could not be read (${response.status}). Drift results are unavailable.`)
+async function fetchPolicyContent(url: string, accessToken: string, signal?: AbortSignal): Promise<PolicyContent> {
+  const response = await fetch(url, { headers: { 'x-ms-version': '2021-12-02', Authorization: `Bearer ${accessToken}` }, signal })
+  if (!response.ok) throw new Error(`The file could not be read (${response.status}).`)
   return await response.json()
 }
 
@@ -529,6 +492,7 @@ export function compareObjects(
     '@odata.type', 
     'lastModifiedDateTime', 
     'createdDateTime',
+    'modifiedDateTime',  // Changes on every write, like lastModifiedDateTime; backup fingerprints leave it out too
     'id',  // ID changes when policy is recreated
     'version',  // Version auto-increments
     'description',  // Description contains our revert notices
@@ -573,7 +537,7 @@ export function compareObjects(
   
   for (const key of allKeys) {
     // Annotations such as assignments@odata.context describe the read, not the configuration.
-    if (skipFields.includes(key) || key.endsWith('@odata.context')) continue
+    if (skipFields.includes(key) || key.endsWith('@odata.context') || key.endsWith('@odata.nextLink')) continue
     
     const oldValue = oldObj?.[key]
     const newValue = newObj?.[key]

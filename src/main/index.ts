@@ -49,6 +49,7 @@ import { installedBySetup, isNightly, Updates, updatesDisabledByPolicy } from ".
 import { featureRoutes, startFeatures } from "./features"
 import { apiBody, type FeatureDeps } from "./features/deps"
 import { TenantRecords } from "./features/records"
+import { DriftJobs, driftScanRoutes } from "./drift/jobs"
 import { graphCaller } from "../portal/lib/policies/graph-restore"
 
 const RENDERER_STORAGE_PREFIX = "renderer."
@@ -131,7 +132,9 @@ async function bootstrap(): Promise<void> {
   const tokenStore = appStore && openStore(join(userData, "token-cache.bin"), cipher)
   // Records of the review, evidence and change workflows, kept apart so the app state stays small.
   const workspaceStore = tokenStore && openStore(join(userData, "workspace.bin"), cipher, "your saved review records (baselines, promotions and health reviews) are kept as a backup copy and start empty. Tenant access and your license are not affected.")
-  if (!appStore || !tokenStore || !workspaceStore) {
+  // Drift results are large and rewritten on every scan, so they do not share a file with the records.
+  const driftStore = workspaceStore && canEncrypt() ? openStore(join(userData, "drift-results.bin"), cipher, "saved drift results are kept as a backup copy and start empty; the next drift scan saves new ones. Tenant access and your license are not affected.") : undefined
+  if (!appStore || !tokenStore || !workspaceStore || driftStore === null) {
     app.quit()
     return
   }
@@ -302,8 +305,33 @@ async function bootstrap(): Promise<void> {
   const disclaimer = new DisclaimerAcknowledgements(appStore)
   const checkDisclaimer = disclaimerGuard(disclaimer)
   const checkPlan = planGuard((tenantId) => license.requireEntitlement(tenantId).catch(() => null))
+  // Drift scans run in the background; each tenant's last result is kept in its own store, or in
+  // memory for the session without OS encryption.
+  const memoryResults = new Map<string, string>()
+  // Earlier builds of this branch kept the results with the workflow records.
+  for (const key of workspaceStore.keys()) if (key.startsWith("drift.result.")) workspaceStore.delete(key)
+  const driftJobs = new DriftJobs({
+    api: featureDeps.api,
+    tenant: featureDeps.tenant,
+    plan: featureDeps.plan,
+    store: driftStore ?? { get: (key) => memoryResults.get(key) ?? null, set: (key, value) => void memoryResults.set(key, value), delete: (key) => void memoryResults.delete(key) },
+    // When the window is not in front, a system notification says the scan finished; the app itself shows a toast.
+    notify: (job) => {
+      if (job.status === "cancelled" || mainWindow?.isFocused() || !Notification.isSupported()) return
+      const tenant = tenantProfile(job.tenantId)?.name ?? "your tenant"
+      const notification = new Notification({
+        title: job.status === "completed" ? "Drift scan ready" : "Drift scan failed",
+        body: job.status === "completed" ? `The backups of ${tenant} were compared. Click to review the drift.` : job.error ?? "Open TenuVault for details.",
+      })
+      notification.on("click", () => {
+        showWindow()
+        void mainWindow?.webContents.executeJavaScript(`location.hash = ${JSON.stringify(`/portal/drift?tenant=${job.tenantId}`)}`)
+      })
+      notification.show()
+    },
+  })
   const host: ApiHost = new ApiHost({
-    routes: { ...routes, ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope), ...featureRoutes(featureDeps) },
+    routes: { ...routes, ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope), ...featureRoutes(featureDeps), ...driftScanRoutes(driftJobs) },
     transform: surfaceTokenErrors,
     // The plan comes first, so the disclaimer is never accepted for a change the plan refuses anyway.
     guard: async (request) => (await checkPlan(request)) ?? checkDisclaimer(request),

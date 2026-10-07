@@ -74,7 +74,7 @@ export function compareBackups(older: BackupFingerprint, newer: BackupFingerprin
  * assignments, so the newer item is compared as that version would have recorded it: reading the
  * assignments now is not a change.
  */
-function sameItem(previous: BackupItems[string], item: BackupItems[string]): boolean {
+export function sameItem(previous: BackupItems[string], item: BackupItems[string]): boolean {
   if (previous.hash === item.hash) return true
   return previous.hashWithEmptyAssignments === undefined && item.hashWithEmptyAssignments !== undefined && previous.hash === item.hashWithEmptyAssignments
 }

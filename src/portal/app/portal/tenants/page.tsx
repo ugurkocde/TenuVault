@@ -234,7 +234,7 @@ function TenantsPageContent() {
     setIsBulkBackup(false)
   }
 
-  // Compares each tenant's two latest backups, one tenant at a time.
+  // Compares each tenant's two newest complete backups, one tenant at a time.
   const checkAllDrift = async () => {
     setCheckingDrift(true)
     for (const tenant of tenants) {
@@ -244,7 +244,7 @@ function TenantsPageContent() {
         const response = await fetch("/api/detect-drifts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.resources.storageAccountName, backupLimit: 2 }),
+          body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.resources.storageAccountName }),
         })
         const data = await response.json()
         setDriftByTenant((current) => ({

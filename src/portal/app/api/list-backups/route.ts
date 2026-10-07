@@ -3,6 +3,8 @@ import { typeForFolder } from "../../../../shared/intune/registry"
 import { describeScope } from "../../../../shared/intune/scope"
 import { comparable, compareBackups, summarize, type BackupFingerprint, type ChangeSummary } from "../../../../shared/intune/backup-changes"
 import { blobPath } from "../../../../shared/security"
+import { mapLimit } from "~/lib/map-limit"
+import { backupFoldersIn, parseBackupName } from "../../../../shared/intune/backup-names"
 import { type NextRequest, NextResponse } from "next/server"
 
 // Helper function to format bytes to human readable format
@@ -16,23 +18,11 @@ function formatBytes(bytes: number): string {
 
 const storageHeaders = (token: string) => ({ 'x-ms-version': '2021-12-02', 'x-ms-date': new Date().toUTCString(), Authorization: `Bearer ${token}` })
 
-async function mapLimit<T, R>(entries: T[], limit: number, task: (entry: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(entries.length)
-  let next = 0
-  await Promise.all(Array.from({ length: Math.min(limit, entries.length) }, async () => {
-    while (next < entries.length) {
-      const index = next++
-      results[index] = await task(entries[index]!)
-    }
-  }))
-  return results
-}
-
 /** One backup-yyyy-MM-dd-HHmmss folder, from its metadata.json and its file listing. */
 async function describeBackup(storageAccountName: string, name: string, accessToken: string) {
-  const legacy = /^\d{4}-\d{2}-\d{2}$/.test(name)
-  const date = legacy ? name : name.slice(7, 17)
-  const time = legacy ? "" : name.slice(18)
+  const parsed = parseBackupName(name)!
+  const legacy = parsed.precision === "day"
+  const date = parsed.timestamp.slice(0, 10)
   let metadata: any = null
   let metadataError: string | undefined
   try {
@@ -48,7 +38,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
   const recordedTimestamp = metadata?.timestamp ?? metadata?.Timestamp ?? metadata?.BackupDate
   const timestamp = legacy
     ? typeof recordedTimestamp === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(recordedTimestamp) && Number.isFinite(Date.parse(recordedTimestamp)) ? recordedTimestamp : date
-    : `${date}T${time.slice(0, 2)}:${time.slice(2, 4)}:${time.slice(4, 6)}Z`
+    : parsed.timestamp
 
   let size = 0
   let files = 0
@@ -196,7 +186,7 @@ export async function POST(request: NextRequest) {
     }
     
     // Parse XML response to extract backup folders
-    const backupFolders = extractBackupFolders(blobsText)
+    const backupFolders = backupFoldersIn(blobsText).map((folder) => folder.name)
     
     // Get details for each backup folder
     const backups: any[] = []
@@ -231,11 +221,4 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     )
   }
-}
-
-
-function extractBackupFolders(xmlText: string): string[] {
-  const names = [...xmlText.matchAll(/<Name>((?:backup-\d{4}-\d{2}-\d{2}-\d{6}|\d{4}-\d{2}-\d{2}))\/?<\/Name>/g)]
-    .map((match) => match[1]!)
-  return [...new Set(names)]
 }
