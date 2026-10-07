@@ -81,14 +81,19 @@ export async function POST(request: NextRequest) {
 
     // Using delimiter=/ to get folder prefixes instead of all blobs
     const listUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&delimiter=/`
-    const listText = await listBlobPages(listUrl, accessToken)
+    const listText = await listBlobPages(listUrl, accessToken, signal)
     const backupFolders = parseBackupFolders(listText)
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    // done counts the steps taken: the backups listed, then each metadata.json read.
+    let checked = 1
+    report({ phase: "checking", detail: `Checking the backups: ${backupFolders.length} found`, done: checked, total: 0 })
 
     // Incomplete snapshots are missing policies and would report them as deleted, and a running
     // backup has no metadata yet, so the default pair skips both (see selectBackupPair).
     const loadMetadata = async (name: string): Promise<BackupMetadata | null> => {
       const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${encodeURIComponent(name)}/metadata.json`, { headers: { 'x-ms-version': '2021-12-02', Authorization: `Bearer ${accessToken}` }, signal })
+      checked++
+      report({ phase: "checking", detail: `Checking the backups: ${checked - 1} read`, done: checked, total: 0 })
       if (response.status === 404) return null
       if (!response.ok) throw new Error(`Cannot verify that the backups are complete (${response.status}). Check storage access and retry.`)
       return await response.json()
@@ -98,13 +103,18 @@ export async function POST(request: NextRequest) {
     const olderBackup = pair.baseline
 
     // Only types both backups hold are compared: a backup that left apps out has not seen them deleted.
-    report({ phase: "listing", detail: "Listing the backed-up policies", done: 0, total: 0 })
     const olderFolders = coveredFolders(olderBackup.metadata as ScopeMetadata)
     const shared = [...coveredFolders(newerBackup.metadata as ScopeMetadata)].filter(folder => olderFolders.has(folder))
-    const [newerPolicies, olderPolicies] = await Promise.all([
-      fetchPolicyFiles(storageAccountName, newerBackup.name, accessToken, shared, signal),
-      fetchPolicyFiles(storageAccountName, olderBackup.name, accessToken, shared, signal)
-    ])
+    let listed = 0
+    const listing = () => report({ phase: "listing", detail: `Listing the backed-up policies: ${listed} of 2 backups`, done: listed, total: 2 })
+    listing()
+    const list = async (backup: string) => {
+      const files = await fetchPolicyFiles(storageAccountName, backup, accessToken, shared, signal)
+      listed++
+      listing()
+      return files
+    }
+    const [newerPolicies, olderPolicies] = await Promise.all([list(newerBackup.name), list(olderBackup.name)])
     
     const { drifts, warnings, stats } = await detectDrifts(newerPolicies, olderPolicies, newerBackup, olderBackup, accessToken, { signal, report, folders: new Set(shared) })
     signal?.throwIfAborted()
@@ -208,6 +218,11 @@ export function parseBackupFolders(xmlText: string): { name: string; timestamp: 
   return backupFoldersIn(xmlText).map(({ name, timestamp }) => ({ name, timestamp }))
 }
 
+/**
+ * The policy files of the compared type folders in one backup, folder by folder in the order of
+ * `folders`. The backup is listed in one paginated listing rather than once per folder, which took
+ * about 40 storage requests per backup.
+ */
 async function fetchPolicyFiles(
   storageAccountName: string,
   backupFolder: string,
@@ -215,37 +230,31 @@ async function fetchPolicyFiles(
   folders: string[],
   signal?: AbortSignal
 ): Promise<PolicyFile[]> {
-  const policies: PolicyFile[] = []
-  
   // The compared types, plus the folder older backups used for compliance policies.
   const policyTypes = folders.includes('CompliancePolicies') ? [...folders, 'DeviceCompliancePolicies'] : folders
-  
-  for (const policyType of policyTypes) {
-    signal?.throwIfAborted()
-    const listUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${backupFolder}/${policyType}/`)}`
-    
-    {
-      const text = await listBlobPages(listUrl, accessToken)
-      const blobs = text.match(/<Blob>[\s\S]*?<\/Blob>/g) || []
-      
-      for (const blob of blobs) {
-        const nameMatch = blob.match(/<Name>([^<]+)<\/Name>/)
-        const lastModifiedMatch = blob.match(/<Last-Modified>([^<]+)<\/Last-Modified>/)
-        const sizeMatch = blob.match(/<Content-Length>([^<]+)<\/Content-Length>/)
-        
-        if (nameMatch?.[1] && nameMatch[1].endsWith('.json')) {
-          policies.push({
-            name: decodeXml(nameMatch[1]),
-            url: `https://${storageAccountName}.blob.core.windows.net/intune-backups/${decodeXml(nameMatch[1]).split("/").map(encodeURIComponent).join("/")}`,
-            lastModified: lastModifiedMatch?.[1] || '',
-            size: parseInt(sizeMatch?.[1] || '0')
-          })
-        }
-      }
-    }
+  const byFolder = new Map<string, PolicyFile[]>(policyTypes.map(folder => [folder, []]))
+
+  signal?.throwIfAborted()
+  const listUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${backupFolder}/`)}`
+  const text = await listBlobPages(listUrl, accessToken, signal)
+  for (const blob of text.match(/<Blob>[\s\S]*?<\/Blob>/g) || []) {
+    const nameMatch = blob.match(/<Name>([^<]+)<\/Name>/)
+    const lastModifiedMatch = blob.match(/<Last-Modified>([^<]+)<\/Last-Modified>/)
+    const sizeMatch = blob.match(/<Content-Length>([^<]+)<\/Content-Length>/)
+    if (!nameMatch?.[1] || !nameMatch[1].endsWith('.json')) continue
+    const name = decodeXml(nameMatch[1])
+    // Files in the backup's own folder (metadata.json) and in types not compared are left out.
+    const rest = name.slice(backupFolder.length + 1)
+    const files = rest.includes('/') ? byFolder.get(rest.slice(0, rest.indexOf('/'))) : undefined
+    files?.push({
+      name,
+      url: `https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`,
+      lastModified: lastModifiedMatch?.[1] || '',
+      size: parseInt(sizeMatch?.[1] || '0')
+    })
   }
-  
-  return policies
+
+  return [...byFolder.values()].flat()
 }
 
 /** "<type folder>/<Intune ID>" to the item's file path (Type/Name.json) and fingerprint, from a backup's metadata.json Items. */

@@ -15,12 +15,15 @@ import { formatDate, formatDuration, formatSize, STATUS_LABEL, statusKind, TRIGG
 import { BackupSchedulePanel } from "@desktop/components/BackupSchedulePanel"
 import { RunBackupDialog } from "@desktop/components/RunBackupDialog"
 import { useTenantPlan } from "@desktop/lib/license"
+import { useBackupList } from "@desktop/lib/backup-list"
 import { allows } from "../../../../shared/plans"
 import { AREAS } from "../../../../shared/intune/scope"
 import { typeForFolder } from "../../../../shared/intune/registry"
 import { storageLabel } from "~/lib/storage-label"
 
 type Tab = "backup" | "restore" | "schedule"
+
+const NO_BACKUPS: BackupSummary[] = []
 
 const STATUS_STYLE: Record<StatusKind, { icon: typeof CheckCircle; iconBg: string; iconColor: string; badge: string }> = {
   success: { icon: CheckCircle, iconBg: "bg-green-50", iconColor: "text-green-700", badge: "bg-green-50 text-green-700" },
@@ -59,17 +62,21 @@ export default function BackupRestorePage() {
   // Copying to other tenants is an MSP action; the main process also checks every target.
   const canCopyToTenants = plan !== null && allows(plan, "bulkActions")
 
-  const [backups, setBackups] = useState<BackupSummary[]>([])
+  // Shared with the drift page and kept between visits: shown at once, refreshed in the background.
+  const backupList = useBackupList(selectedTenant)
+  const backups = backupList.backups ?? NO_BACKUPS
+  const isLoading = backupList.loading && backupList.backups === null
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [restoreFrom, setRestoreFrom] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState("")
+  const [setupError, setSetupError] = useState("")
+  const error = setupError || backupList.error
+  // A failed refresh leaves the kept list (and its Refresh button) shown below the error.
+  const blockingError = setupError || (backupList.backups === null ? backupList.error : "")
   const [runOpen, setRunOpen] = useState(false)
   const [jobId, setJobId] = useState<string | null>(null)
   const [showProgress, setShowProgress] = useState(false)
   const [changesOpen, setChangesOpen] = useState(false)
   const [isDownloading, setIsDownloading] = useState(false)
-  const abortRef = useRef<AbortController | null>(null)
   const detailRef = useRef<HTMLDivElement | null>(null)
 
   const tenant: BackupTenant | null = useMemo(
@@ -89,58 +96,21 @@ export default function BackupRestorePage() {
     if (!selectedTenantId && tenants[0]) setSelectedTenantId(tenants[0].id)
   }, [tenants, selectedTenantId, setSelectedTenantId])
 
-  const fetchBackups = async () => {
-    if (!selectedTenant?.credentials || !selectedTenant.resources) return
-    abortRef.current?.abort()
-    const controller = new AbortController()
-    abortRef.current = controller
-    setIsLoading(true)
-    setError("")
-    try {
-      const response = await fetch("/api/list-backups", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: controller.signal,
-        body: JSON.stringify({
-          ...selectedTenant.credentials,
-          subscriptionId: selectedTenant.resources.subscriptionId,
-          resourceGroupName: selectedTenant.resources.resourceGroupName,
-          storageAccountName: selectedTenant.resources.storageAccountName,
-        }),
-      })
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(data.details || data.error || "Backups are unavailable. Check this tenant's sign-in, license, and storage access.")
-      if (abortRef.current !== controller) return
-      const next: BackupSummary[] = data.backups ?? []
-      setBackups(next)
-      setSelectedId((current) => (current && next.some((backup) => backup.id === current) ? current : next[0]?.id ?? null))
-    } catch (failure) {
-      if (failure instanceof DOMException && failure.name === "AbortError") return
-      if (abortRef.current === controller) {
-        setError(failure instanceof Error ? failure.message : "Failed to load backup history")
-        setBackups([])
-        setSelectedId(null)
-      }
-    } finally {
-      if (abortRef.current === controller) {
-        abortRef.current = null
-        setIsLoading(false)
-      }
-    }
-  }
+  // A refresh keeps the selected backup while it is still listed.
+  useEffect(() => {
+    setSelectedId((current) => (current && backups.some((backup) => backup.id === current) ? current : backups[0]?.id ?? null))
+  }, [backups])
+
+  const fetchBackups = () => backupList.refresh({ force: true })
 
   useEffect(() => {
     setRestoreFrom(null)
+    setSetupError("")
     if (!selectedTenant) return
-    if (selectedTenant.credentials && selectedTenant.resources) {
-      void fetchBackups()
-    } else {
-      setError(!selectedTenant.credentials ? "Tenant credentials are missing. Please reconfigure the tenant." : "Backup storage is not configured for this tenant. Choose local or Azure storage in Settings.")
-      setBackups([])
-      setSelectedId(null)
+    if (!selectedTenant.credentials || !selectedTenant.resources?.storageAccountName) {
+      setSetupError(!selectedTenant.credentials ? "Tenant credentials are missing. Please reconfigure the tenant." : "Backup storage is not configured for this tenant. Choose local or Azure storage in Settings.")
     }
-    return () => abortRef.current?.abort()
-  }, [selectedTenant?.id])
+  }, [selectedTenant?.id, !!selectedTenant?.credentials, selectedTenant?.resources?.storageAccountName])
 
   const backupStarted = (id: string) => {
     setJobId(id)
@@ -266,13 +236,13 @@ export default function BackupRestorePage() {
         </Alert>
       )}
 
-      {activeTab === "backup" && selectedTenant && !isLoading && !error && (
+      {activeTab === "backup" && selectedTenant && !isLoading && !blockingError && (
         <div className="space-y-6">
           <div className="rounded-3xl bg-white p-6 sm:p-8">
             <div className="mb-6 flex items-center justify-between">
               <h2 className="text-xl font-medium tracking-tight text-gray-900">Backup Timeline</h2>
-              <Button variant="outline" size="sm" onClick={() => void fetchBackups()} disabled={isLoading}>
-                <RefreshCw className="mr-2 h-4 w-4" />
+              <Button variant="outline" size="sm" onClick={() => void fetchBackups()} disabled={backupList.loading}>
+                <RefreshCw className={cn("mr-2 h-4 w-4", backupList.loading && "animate-spin")} />
                 Refresh
               </Button>
             </div>
@@ -356,7 +326,7 @@ export default function BackupRestorePage() {
         </div>
       )}
 
-      {activeTab === "restore" && tenant && !isLoading && !error && (
+      {activeTab === "restore" && tenant && !isLoading && !blockingError && (
         <RestoreWizard
           key={`${selectedTenant?.id}:${restoreFrom ?? ""}`}
           tenant={tenant}

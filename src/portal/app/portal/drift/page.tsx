@@ -36,6 +36,7 @@ import { cn } from "~/lib/utils"
 import { useTenantPlan } from "@desktop/lib/license"
 import { GatedButton } from "@desktop/components/PlanGate"
 import { cancelDriftScan, startDriftScan, useDriftJob, useDriftResult } from "@desktop/lib/drift-jobs"
+import { useBackupList } from "@desktop/lib/backup-list"
 import { Button } from "~/components/ui/button"
 import { Alert, AlertDescription } from "~/components/ui/alert"
 import { RevertProgressModal } from "~/components/drift/revert-progress-modal"
@@ -55,6 +56,8 @@ function backupLabel(backup: DriftBackupRef): string {
   const trigger = backup.trigger && backup.trigger in TRIGGER_LABEL ? TRIGGER_LABEL[backup.trigger as keyof typeof TRIGGER_LABEL].toLowerCase() : "trigger not recorded"
   return `${formatDate(backup.timestamp)} (${trigger})`
 }
+
+const NO_BACKUPS: BackupSummary[] = []
 
 /** Tenants whose page already started its first scan in this session. */
 const autoStarted = new Set<string>()
@@ -89,9 +92,11 @@ export default function DriftDetectionPage() {
   const [selectedDrift, setSelectedDrift] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<"list" | "timeline" | "analysis">("list")
   const [error, setError] = useState("")
-  const [backups, setBackups] = useState<BackupSummary[]>([])
-  const [backupsLoading, setBackupsLoading] = useState(false)
-  const [backupsLoaded, setBackupsLoaded] = useState(false)
+  // Kept between visits and refreshed in the background, so the picker does not wait for the list again.
+  const backupList = useBackupList(selectedTenant)
+  const backups = backupList.backups ?? NO_BACKUPS
+  const backupsLoaded = backupList.backups !== null
+  const backupsLoading = backupList.loading && !backupsLoaded
   const [pair, setPair] = useState<{ baseline: string | null; comparison: string | null }>({ baseline: null, comparison: null })
   // Set once the admin picks a backup, so loading the list or a result does not override the choice.
   const pairTouched = useRef(false)
@@ -133,45 +138,16 @@ export default function DriftDetectionPage() {
     setParams({}, { replace: true })
   }, [requestedTenant, tenants])
 
-  // The tenant's backups, for the picker.
+  // Another tenant starts with its own default pair.
   useEffect(() => {
     pairTouched.current = false
     setPair({ baseline: null, comparison: null })
-    setBackups([])
-    setBackupsLoaded(false)
     setError("")
     setSelectedDrift(null)
-    if (!selectedTenant?.credentials || !selectedTenant.resources?.storageAccountName) return
-    const controller = new AbortController()
-    setBackupsLoading(true)
-    fetch("/api/list-backups", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-      body: JSON.stringify({
-        ...selectedTenant.credentials,
-        subscriptionId: selectedTenant.resources.subscriptionId || "local",
-        resourceGroupName: selectedTenant.resources.resourceGroupName || "local",
-        storageAccountName: selectedTenant.resources.storageAccountName,
-      }),
-    })
-      .then(async (response) => {
-        const data = await response.json().catch(() => ({}))
-        if (!response.ok) throw new Error(data.details || data.error || "Backups are unavailable.")
-        setBackups(data.backups ?? [])
-        setBackupsLoaded(true)
-      })
-      .catch((failure: unknown) => {
-        if (controller.signal.aborted) return
-        setError(failure instanceof Error ? failure.message : "Backups are unavailable.")
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setBackupsLoading(false)
-      })
-    return () => controller.abort()
   }, [selectedTenant?.id, selectedTenant?.credentials, storageAccountName])
 
   const completeBackups = backups.filter(backup => backupCompleteness(backup.status) === "complete")
+  const shownError = error || backupList.error
 
   // The picker shows the pair of the shown result, or the default pair: the two newest complete backups.
   useEffect(() => {
@@ -696,10 +672,10 @@ export default function DriftDetectionPage() {
       )}
 
       {/* Error State */}
-      {error && (
+      {shownError && (
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription>{shownError}</AlertDescription>
         </Alert>
       )}
       {failedJob && failedJob.code !== "INSUFFICIENT_BACKUPS" && (

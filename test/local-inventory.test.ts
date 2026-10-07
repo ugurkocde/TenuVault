@@ -1,8 +1,8 @@
-import { mkdtempSync, readdirSync, writeFileSync, rmSync } from 'node:fs'
+import { copyFileSync, mkdtempSync, readdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { LocalBlobStore } from '../src/main/storage/local-blob-store'
 import { handleLocalBlobRequest } from '../src/main/storage/blob-emulator'
 const account = 'tvlocal-test'
@@ -40,4 +40,23 @@ it('blocks reads and listings when an authenticated manifest lists a missing fil
   const fresh = new LocalBlobStore(root, [key])
   await expect(fresh.get(account, container, 'backup-test/metadata.json')).rejects.toThrow('manifest are missing')
   await expect(store.list(account, container)).rejects.toThrow('manifest are missing')
+})
+it('shares one inventory reread between listings made together, and each still sees earlier changes', async () => {
+  const { store, root, key } = await setup()
+  const rereads = vi.spyOn(store as unknown as { readIndex: () => Promise<unknown> }, 'readIndex')
+  const together = await Promise.all(Array.from({ length: 6 }, () => store.list(account, container)))
+  expect(together.map(list => list.length)).toEqual([1, 1, 1, 1, 1, 1])
+  expect(rereads).toHaveBeenCalledTimes(1)
+
+  // A listing made while a reread runs waits for the next one, so it sees a file written meanwhile.
+  const first = store.list(account, container)
+  await new LocalBlobStore(root, [key]).put(account, container, 'backup-test/Policies/two.json', Buffer.from('{}'), 'application/json')
+  expect(await store.list(account, container)).toHaveLength(2)
+  await first
+})
+it('still rejects two files for the same blob when headers are read together', async () => {
+  const { store, dir } = await setup()
+  const [file] = readdirSync(dir)
+  copyFileSync(join(dir, file!), join(dir, `${'0'.repeat(40)}.tvb`))
+  await expect(store.list(account, container)).rejects.toThrow('1 encrypted file(s)')
 })

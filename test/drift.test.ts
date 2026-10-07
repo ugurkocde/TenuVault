@@ -46,7 +46,7 @@ describe('Drift comparison', () => {
       const prefix = url.searchParams.get('prefix')
       if (prefix) {
         const folder = prefix.split('/')[0]!
-        return new Response(prefix.endsWith('/DeviceConfigurations/') ? `<Blob><Name>${folder}/DeviceConfigurations/A.json</Name></Blob>` : '')
+        return new Response(`${folder}/DeviceConfigurations/A.json`.startsWith(prefix) ? `<Blob><Name>${folder}/DeviceConfigurations/A.json</Name></Blob>` : '')
       }
       const folder = decodeURIComponent(url.pathname.split('/')[2]!)
       if (url.pathname.endsWith('/metadata.json')) return status[folder] ? Response.json({ Status: status[folder] }) : new Response('', { status: 404 })

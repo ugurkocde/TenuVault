@@ -8,15 +8,19 @@ export class BlobListError extends Error {
   }
 }
 
-/** Keep continuation tokens intact and never turn a failed page into an empty listing. */
-export async function listBlobPages(url: string, token: string): Promise<string> {
+/**
+ * Keep continuation tokens intact and never turn a failed page into an empty listing. With a
+ * signal, an aborted listing requests no further pages.
+ */
+export async function listBlobPages(url: string, token: string, signal?: AbortSignal): Promise<string> {
   const target = new URL(url)
   const pages: string[] = []
   const seen = new Set<string>()
   let marker = ''
   do {
     target.searchParams.set('marker', marker)
-    const response = await fetch(target, { headers: { 'x-ms-version': '2021-12-02', Authorization: `Bearer ${token}` } })
+    signal?.throwIfAborted()
+    const response = await fetch(target, { headers: { 'x-ms-version': '2021-12-02', Authorization: `Bearer ${token}` }, signal })
     if (!response.ok) throw new BlobListError(response.status, await response.text().catch(() => ''), pages.length)
     const xml = await response.text()
     pages.push(xml)

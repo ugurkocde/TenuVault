@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto"
 import { link, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { join } from "node:path"
+import { mapLimit } from "../../portal/lib/map-limit"
 
 /**
  * Encrypted on-disk blob storage for backups kept on this device.
@@ -36,6 +37,8 @@ const MAGIC_LENGTH = 4
 const IV = 12
 const TAG = 16
 const EXT = ".tvb"
+/** File headers read at once while reading a container's inventory. */
+const HEADER_CONCURRENCY = 16
 
 export interface StoredBlob {
   name: string
@@ -109,6 +112,8 @@ export class IncompleteInventoryError extends Error {
 export class LocalBlobStore {
   private readonly keyring: Keys[]
   private readonly index = new Map<string, Promise<Map<string, Entry>>>()
+  /** The inventory reread per container that list() calls share; `started` once it reads the disk. */
+  private readonly rereads = new Map<string, { started: boolean; entries: Promise<Map<string, Entry>> }>()
 
   /**
    * @param root   Folder that holds the encrypted backups.
@@ -149,8 +154,7 @@ export class LocalBlobStore {
   }
 
   async list(account: string, container: string): Promise<StoredBlob[]> {
-    this.index.delete(this.dir(account, container))
-    const entries = await this.entries(account, container)
+    const entries = await this.reread(account, container)
     return [...entries.values()].map(({ file: _file, version: _version, ...blob }) => blob).sort((a, b) => (a.name < b.name ? -1 : 1))
   }
 
@@ -221,6 +225,31 @@ export class LocalBlobStore {
     return join(this.root, safeSegment(account), safeSegment(container))
   }
 
+  /**
+   * Every listing rereads the container's inventory from disk, so it shows files changed by anything
+   * else. A listing made while a reread runs waits for it and shares the next reread with the other
+   * listings made meanwhile: each still sees the files as they were when it was made, but listings
+   * made together (the backup list makes one per backup) no longer each decrypt every header.
+   */
+  private reread(account: string, container: string): Promise<Map<string, Entry>> {
+    const dir = this.dir(account, container)
+    const pending = this.rereads.get(dir)
+    if (pending && !pending.started) return pending.entries
+    const running = pending?.entries.catch(() => undefined)
+    const reread = { started: false, entries: Promise.resolve(new Map<string, Entry>()) }
+    reread.entries = (async () => {
+      await running
+      reread.started = true
+      this.index.delete(dir)
+      return this.entries(account, container)
+    })()
+    this.rereads.set(dir, reread)
+    void reread.entries.catch(() => undefined).then(() => {
+      if (this.rereads.get(dir) === reread) this.rereads.delete(dir)
+    })
+    return reread.entries
+  }
+
   /** Reads and decrypts every file header once per container; later calls use the cache. */
   private entries(account: string, container: string): Promise<Map<string, Entry>> {
     const dir = this.dir(account, container)
@@ -242,8 +271,8 @@ export class LocalBlobStore {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return entries
       throw error
     }
-    let unreadable = 0
-    for (const file of files) {
+    // Headers are read a few at a time and added in directory order, so duplicates are found as before.
+    const read = await mapLimit(files, HEADER_CONCURRENCY, async (file): Promise<Entry | null> => {
       const path = join(dir, file)
       let handle: Awaited<ReturnType<typeof open>> | undefined
       try {
@@ -261,12 +290,12 @@ export class LocalBlobStore {
           contentType: string
           created: string
         }
-        if (!header || typeof header.name !== "string" || !header.name || typeof header.contentType !== "string" || !Number.isFinite(Date.parse(header.created)) || entries.has(header.name)) {
-          throw new Error("Invalid or duplicate backup header")
+        if (!header || typeof header.name !== "string" || !header.name || typeof header.contentType !== "string" || !Number.isFinite(Date.parse(header.created))) {
+          throw new Error("Invalid backup header")
         }
         const info = await handle.stat()
         if (info.size < prefix.length + headerLength + IV + TAG) throw new Error("Truncated backup body")
-        entries.set(header.name, {
+        return {
           file,
           version,
           name: header.name,
@@ -274,12 +303,18 @@ export class LocalBlobStore {
           created: new Date(header.created),
           lastModified: info.mtime,
           size: info.size - prefix.length - headerLength - IV - TAG,
-        })
+        }
       } catch {
-        unreadable++
+        return null
       } finally {
         await handle?.close()
       }
+    })
+    let unreadable = 0
+    for (const entry of read) {
+      // A file that cannot be read, or a second file for the same blob, is unreadable.
+      if (!entry || entries.has(entry.name)) unreadable++
+      else entries.set(entry.name, entry)
     }
     if (unreadable) throw new IncompleteInventoryError(unreadable)
     // Desktop metadata already contains a per-item manifest. Check it before

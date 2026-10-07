@@ -15,7 +15,7 @@ export interface DriftJobSummary {
   phase: DriftScanPhase
   /** Human readable description of the current step. */
   detail: string
-  /** Items compared so far and in total, while comparing. */
+  /** Progress within the phase; see DriftScanProgress. */
   done: number
   total: number
   /** 0 to 100. */
@@ -68,11 +68,18 @@ const FINISHED_JOB_TTL = 30 * 60_000
 /** Results larger than this stay in memory for the session instead of being saved. */
 const MAX_SAVED_LENGTH = 4_000_000
 
-const PHASE_PERCENT: Record<DriftScanPhase, number> = { checking: 2, listing: 6, comparing: 10, history: 96 }
-
+/**
+ * Checking (listing the backups and reading their metadata) moves from 2 to 5 percent, listing the
+ * two backups' files from 5 to 10, comparing from 10 to 95, and the revert history is 96.
+ */
 function percentOf(progress: DriftScanProgress): number {
-  if (progress.phase !== "comparing") return PHASE_PERCENT[progress.phase]
-  return Math.round(10 + (progress.total ? progress.done / progress.total : 1) * 85)
+  const share = progress.total ? Math.min(progress.done / progress.total, 1) : 1
+  switch (progress.phase) {
+    case "checking": return Math.min(2 + progress.done, 5)
+    case "listing": return Math.round(5 + (progress.total ? share : 0) * 5)
+    case "comparing": return Math.round(10 + share * 85)
+    case "history": return 96
+  }
 }
 
 /**
