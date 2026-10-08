@@ -93,6 +93,11 @@ function fakeStorage(backups: Record<string, FakeBackup>, options: { unreadable?
     const url = new URL(String(input))
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
     if (url.pathname === '/api/revert-metadata') return Response.json({ reverts: {} })
+    // Setting definitions, as GET beta deviceManagement/configurationSettings/{id} answers.
+    if (url.hostname === 'graph.microsoft.com') {
+      const id = decodeURIComponent(url.pathname.split('/').pop()!)
+      return Response.json({ id, displayName: `Name of ${id}`, options: [0, 1].map(n => ({ itemId: `${id}_${n}`, displayName: n ? 'Enabled' : 'Disabled' })) })
+    }
     if (url.searchParams.get('delimiter')) return new Response(Object.keys(backups).map(name => `<BlobPrefix><Name>${name}/</Name></BlobPrefix>`).join(''))
     const prefix = url.searchParams.get('prefix')
     if (prefix) {
@@ -241,6 +246,11 @@ describe('Drift item matching', () => {
     expect(result.drifts[0].changes.map((change: any) => change.field).sort()).toEqual(['name', 'settings[device_vendor_msft_policy_config_a_b].settingInstance.choiceSettingValue.value'])
     expect(result.summary).toMatchObject({ added: 0, modified: 1, deleted: 0 })
     expect(reads.reads).toHaveLength(2)
+    // The changed setting's name and choices come from its Graph definition.
+    expect(result.settingNames).toEqual({
+      settings: { device_vendor_msft_policy_config_a_b: 'Name of device_vendor_msft_policy_config_a_b' },
+      options: { device_vendor_msft_policy_config_a_b_0: 'Disabled', device_vendor_msft_policy_config_a_b_1: 'Enabled' },
+    })
   })
 
   it('keeps a new ID that reuses a deleted item\'s file name as added and deleted', async () => {

@@ -7,6 +7,9 @@ import { backupRef, DriftPairError, selectBackupPair, summarizeDrifts, type Back
 import { CANCELLED_HEADER, driftScanHooks, type DriftScanHooks } from "~/lib/drift/scan-hooks"
 import { mapLimit } from "~/lib/map-limit"
 import { backupFoldersIn } from "../../../../shared/intune/backup-names"
+import { definitionIdsIn } from "../../../../shared/intune/drift-format"
+import { graphCaller } from "~/lib/policies/graph-restore"
+import { readSettingNames } from "~/lib/drift/setting-names"
 import { type NextRequest, NextResponse } from "next/server"
 
 interface PolicyFile {
@@ -190,6 +193,21 @@ export async function POST(request: NextRequest) {
     }
     signal?.throwIfAborted()
 
+    // Readable names for the changed Settings Catalog settings; without them the page derives names from the IDs.
+    const definitionIds = definitionIdsIn(drifts.flatMap(drift => drift.changes ?? []))
+    let settingNames: DriftResult["settingNames"]
+    if (definitionIds.length > 0) {
+      report({ phase: "history", detail: "Reading setting names", done: stats.compared, total: stats.compared })
+      try {
+        const token = () => getGraphToken(tenantId, appId, clientSecret, signal)
+        settingNames = await readSettingNames(definitionIds, graphCaller(await token(), fetch, { refreshToken: token }), signal)
+      } catch (error) {
+        if (signal?.aborted) throw error
+        console.error("Failed to read setting names:", error)
+      }
+    }
+    signal?.throwIfAborted()
+
     const result: DriftResult = {
       drifts,
       summary: summarizeDrifts(drifts),
@@ -199,6 +217,7 @@ export async function POST(request: NextRequest) {
       comparison: backupRef(newerBackup),
       warnings,
       stats,
+      ...(settingNames ? { settingNames } : {}),
     }
     return NextResponse.json(result)
   } catch (error) {
@@ -211,6 +230,17 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     )
   }
+}
+
+async function getGraphToken(tenantId: string, appId: string, clientSecret: string, signal?: AbortSignal): Promise<string> {
+  const response = await fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: appId, client_secret: clientSecret, scope: "https://graph.microsoft.com/.default", grant_type: "client_credentials" }),
+    signal,
+  })
+  if (!response.ok) throw new Error(`Microsoft Graph sign-in failed (${response.status})`)
+  return (await response.json()).access_token
 }
 
 /** The backup folders of a container listing; the same names /api/list-backups lists. */

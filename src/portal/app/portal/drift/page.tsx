@@ -8,23 +8,17 @@ import {
   GitCompare,
   AlertTriangle,
   Info,
-  Clock,
   Download,
-  Play,
   Settings,
   FileText,
   Shield,
   Smartphone,
   Package,
   RefreshCw,
-  Eye,
   Check,
   X,
-  GitBranch,
-  Activity,
-  BarChart3,
   Plus,
-  Edit,
+  Pencil,
   Minus,
   Loader2,
   FileJson,
@@ -43,7 +37,9 @@ import { RevertProgressModal } from "~/components/drift/revert-progress-modal"
 import { ChangeList } from "~/components/drift/change-list"
 import { BackupPairPicker } from "~/components/drift/backup-pair-picker"
 import { formatDate, TRIGGER_LABEL, type BackupSummary } from "~/components/backup/types"
-import { backupCompleteness, type Drift, type DriftBackupRef } from "../../../../shared/intune/drift"
+import { backupCompleteness, type Drift, type DriftBackupRef, type SettingNames } from "../../../../shared/intune/drift"
+import { settingLabel } from "../../../../shared/intune/drift-format"
+import { driftCsv, driftExportName, driftJson } from "../../../../shared/intune/drift-export"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -58,6 +54,31 @@ function backupLabel(backup: DriftBackupRef): string {
 }
 
 const NO_BACKUPS: BackupSummary[] = []
+
+/** Added green, modified amber, deleted red: the same on every badge, icon and count. */
+const CHANGE_STYLE: Record<Drift["changeType"], { label: string; tone: string; dot: string; Icon: typeof Plus }> = {
+  added: { label: "Added", tone: "bg-green-50 text-green-700", dot: "bg-green-600", Icon: Plus },
+  modified: { label: "Modified", tone: "bg-amber-50 text-amber-800", dot: "bg-amber-500", Icon: Pencil },
+  deleted: { label: "Deleted", tone: "bg-red-50 text-red-700", dot: "bg-red-600", Icon: Minus },
+}
+
+/** The first changed settings by name, such as "Allow Cloud Protection, Password minimum length and 3 more". */
+function changedSettings(drift: Drift, names?: SettingNames): string {
+  const labels = [...new Set((drift.changes ?? []).map(change => settingLabel(change, names).label))]
+  if (labels.length <= 3) return labels.join(", ")
+  return `${labels.slice(0, 3).join(", ")} and ${labels.length - 3} more`
+}
+
+function download(name: string, content: string, type: string) {
+  const url = URL.createObjectURL(new Blob([content], { type }))
+  const link = document.createElement("a")
+  link.href = url
+  link.download = name
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
 
 /** Tenants whose page already started its first scan in this session. */
 const autoStarted = new Set<string>()
@@ -90,7 +111,6 @@ export default function DriftDetectionPage() {
   const running = job?.status === "running"
 
   const [selectedDrift, setSelectedDrift] = useState<string | null>(null)
-  const [viewMode, setViewMode] = useState<"list" | "timeline" | "analysis">("list")
   const [error, setError] = useState("")
   // Kept between visits and refreshed in the background, so the picker does not wait for the list again.
   const backupList = useBackupList(selectedTenant)
@@ -105,6 +125,8 @@ export default function DriftDetectionPage() {
     isOpen: boolean
     driftId: string
     action: "revert" | "restore"
+    /** A Revert of a deleted policy, which creates it again. */
+    recreate: boolean
     title: string
     message: string
   } | null>(null)
@@ -174,11 +196,7 @@ export default function DriftDetectionPage() {
     }
   }
 
-  const compareLatest = () => {
-    pairTouched.current = false
-    if (completeBackups.length >= 2) setPair({ baseline: completeBackups[1]!.id, comparison: completeBackups[0]!.id })
-    void startScan()
-  }
+  const latestPair = completeBackups.length >= 2 ? { baseline: completeBackups[1]!.id, comparison: completeBackups[0]!.id } : null
 
   const drifts: Drift[] = useMemo(
     () => (result?.drifts ?? []).map(drift => ({ ...drift, tenant: selectedTenant?.name ?? drift.tenant })),
@@ -195,33 +213,6 @@ export default function DriftDetectionPage() {
     deleted: drifts.filter(d => d.changeType === "deleted").length,
   }
 
-  // Generate drift trends from actual data
-  const generateDriftTrends = () => {
-    const trends = []
-    const now = new Date()
-
-    for (let i = 6; i >= 0; i--) {
-      const date = new Date(now)
-      date.setDate(date.getDate() - i)
-      const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-
-      // Count drifts for this day
-      const dayDrifts = drifts.filter(drift => {
-        const driftDate = new Date(drift.toBackupTimestamp ?? drift.detectedAt)
-        return driftDate.toDateString() === date.toDateString()
-      })
-
-      trends.push({
-        date: dateStr,
-        added: dayDrifts.filter(d => d.changeType === "added").length,
-        modified: dayDrifts.filter(d => d.changeType === "modified").length
-      })
-    }
-
-    return trends
-  }
-
-  const driftTrends = generateDriftTrends()
 
   // Puts the policy back to the backed-up version in place, or recreates a deleted policy under its original name.
   const handleRevertAction = (drift: Drift) => {
@@ -229,6 +220,7 @@ export default function DriftDetectionPage() {
       isOpen: true,
       driftId: drift.id,
       action: "revert",
+      recreate: drift.changeType === "deleted",
       title: drift.changeType === "deleted" ? "Recreate Deleted Policy" : "Revert to Previous Version",
       message: drift.changeType === "deleted"
         ? `Recreate "${drift.configName}" from the backup under its original name? Assignments are not restored.`
@@ -241,6 +233,7 @@ export default function DriftDetectionPage() {
       isOpen: true,
       driftId: drift.id,
       action: "restore",
+      recreate: false,
       title: drift.changeType === "deleted" ? "Restore Deleted Policy" : "Restore Previous Version",
       message: drift.changeType === "deleted"
         ? `Are you sure you want to restore "${drift.configName}"? This will create a new policy with the prefix "[Restored]".`
@@ -364,18 +357,6 @@ export default function DriftDetectionPage() {
   }
 
 
-  const getChangeTypeIcon = (type: string) => {
-    switch (type) {
-      case "added":
-        return <Plus className="h-4 w-4 text-green-500" />
-      case "modified":
-        return <Edit className="h-4 w-4 text-yellow-500" />
-      case "deleted":
-        return <X className="h-4 w-4 text-red-500" />
-      default:
-        return <GitBranch className="h-4 w-4 text-gray-500" />
-    }
-  }
 
   const getConfigTypeIcon = (type: string) => {
     switch (type) {
@@ -405,140 +386,13 @@ export default function DriftDetectionPage() {
     return `${Math.floor(diffInHours / 24)}d ago`
   }
 
-  // Calculate drift by type for analysis view
-  const getDriftsByType = () => {
-    const typeMap = new Map<string, number>()
-
-    drifts.forEach(drift => {
-      const count = typeMap.get(drift.type) || 0
-      typeMap.set(drift.type, count + 1)
-    })
-
-    return Array.from(typeMap.entries()).map(([type, count]) => ({
-      type,
-      count,
-      percentage: drifts.length > 0 ? (count / drifts.length) * 100 : 0
-    }))
+  const handleExport = (format: "csv" | "json") => {
+    if (!result) return
+    const shown = { ...result, drifts }
+    const name = driftExportName(result, selectedTenant?.name)
+    if (format === "csv") download(`${name}.csv`, `\ufeff${driftCsv(shown)}`, "text/csv;charset=utf-8")
+    else download(`${name}.json`, driftJson(shown, selectedTenant?.name), "application/json")
   }
-
-  // Export report functionality
-  const handleExportReport = (format: 'json' | 'csv') => {
-    if (drifts.length === 0) {
-      setError("No drift data to export")
-      return
-    }
-
-    const timestamp = new Date().toISOString()
-    const filename = `drift-report-${new Date().toISOString().split('T')[0]}`
-
-    if (format === 'json') {
-      exportAsJSON(filename, timestamp)
-    } else if (format === 'csv') {
-      exportAsCSV(filename)
-    }
-  }
-
-  const exportAsJSON = (filename: string, timestamp: string) => {
-    const exportData = {
-      metadata: {
-        exportDate: timestamp,
-        tenant: selectedTenant?.name || 'Unknown',
-        tenantDomain: selectedTenant?.domain || 'Unknown',
-        lastScan: result?.lastScan ?? null,
-        baseline: result?.baseline,
-        comparison: result?.comparison,
-      },
-      summary: {
-        ...result?.summary,
-        byChangeType: counts,
-        byPolicyType: getDriftsByType()
-      },
-      warnings: result?.warnings ?? [],
-      drifts: drifts.map(drift => ({
-        ...drift,
-        // Ensure dates are properly formatted
-        detectedAt: drift.detectedAt,
-        fromBackup: drift.fromBackup,
-        toBackup: drift.toBackup,
-        // Exclude UI-specific fields
-        isRevertDrift: undefined,
-        revertTimestamp: undefined
-      }))
-    }
-
-    // Create and download JSON file
-    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${filename}.json`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-  }
-
-  const exportAsCSV = (filename: string) => {
-    // CSV Headers
-    const headers = [
-      'Config Name',
-      'Type',
-      'Change Type',
-      'Severity',
-      'Detected At',
-      'Impact',
-      'Affected Policies',
-      'Affected Devices',
-      'Description',
-      'From Backup',
-      'To Backup'
-    ]
-
-    // Convert drifts to CSV rows
-    const rows = drifts.map(drift => [
-      drift.configName,
-      drift.type,
-      drift.changeType,
-      drift.severity,
-      new Date(drift.detectedAt).toLocaleString(),
-      drift.impact,
-      drift.affectedPolicies.toString(),
-      drift.affectedDevices.toString(),
-      drift.description,
-      backupTime(drift.fromBackupTimestamp, drift.fromBackup),
-      backupTime(drift.toBackupTimestamp, drift.toBackup)
-    ])
-
-    // Create CSV content
-    const csvContent = [
-      headers.join(','),
-      ...rows.map(row =>
-        row.map(value => {
-          // Escape quotes and wrap in quotes if contains comma, newline, or quotes
-          const escaped = String(value).replace(/"/g, '""')
-          return /[,\n"]/.test(escaped) ? `"${escaped}"` : escaped
-        }).join(',')
-      )
-    ].join('\n')
-
-    // Create and download CSV file
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${filename}.csv`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-  }
-
-  const viewTabClass = (mode: typeof viewMode) => cn(
-    "h-9 rounded-full px-4 transition-colors",
-    viewMode === mode
-      ? "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground"
-      : "text-gray-500 hover:text-gray-900"
-  )
 
   /** What an added or deleted item is, and where its backed-up copy is. */
   const itemDetails = (drift: Drift) => (
@@ -569,49 +423,25 @@ export default function DriftDetectionPage() {
           <h1 className="text-4xl font-medium tracking-tight text-gray-900">Drift Detection</h1>
           <p className="mt-2 text-base text-gray-500">See what changed in Intune between two backups</p>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="lg"
-                disabled={drifts.length === 0}
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Export Report
-                <ChevronDown className="h-4 w-4 ml-1" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => handleExportReport('json')}>
-                <FileJson className="h-4 w-4 mr-2" />
-                Export as JSON
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleExportReport('csv')}>
-                <FileSpreadsheet className="h-4 w-4 mr-2" />
-                Export as CSV
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Button
-            size="lg"
-            className="bg-coral-600 text-white hover:bg-coral-700"
-            onClick={compareLatest}
-            disabled={running || !selectedTenant || !storageAccountName}
-          >
-            {running ? (
-              <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                Comparing...
-              </>
-            ) : (
-              <>
-                <Play className="h-4 w-4 mr-2" />
-                Compare latest backups
-              </>
-            )}
-          </Button>
-        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="lg" disabled={!result || drifts.length === 0}>
+              <Download className="h-4 w-4 mr-2" />
+              Export
+              <ChevronDown className="h-4 w-4 ml-1" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => handleExport("csv")}>
+              <FileSpreadsheet className="h-4 w-4 mr-2" />
+              CSV, one row per changed setting
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => handleExport("json")}>
+              <FileJson className="h-4 w-4 mr-2" />
+              JSON
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* No Tenant Alert */}
@@ -631,7 +461,7 @@ export default function DriftDetectionPage() {
         </Alert>
       )}
 
-      {/* Backup pair */}
+      {/* Backup pair: the page's one action */}
       {selectedTenant && storageAccountName && (
         <BackupPairPicker
           backups={backups}
@@ -639,6 +469,7 @@ export default function DriftDetectionPage() {
           baseline={pair.baseline}
           comparison={pair.comparison}
           busy={running}
+          latest={latestPair}
           onChange={(next) => { pairTouched.current = true; setPair(next) }}
           onCompare={() => { if (pair.baseline && pair.comparison) void startScan({ baseline: pair.baseline, comparison: pair.comparison }) }}
         />
@@ -691,20 +522,31 @@ export default function DriftDetectionPage() {
       {/* Nothing compared yet */}
       {selectedTenant && storageAccountName && loaded && !result && !running && !insufficient && !failedJob && (
         <EmptyState icon={<GitCompare className="h-6 w-6" />} title="No comparison yet">
-          <p>Choose two backups above and click Compare, or compare the latest two backups.</p>
+          <p>Choose two backups above and click Compare.</p>
         </EmptyState>
       )}
 
       {showResult && result && (
         <>
-          {/* The compared pair */}
-          <div className="flex flex-col gap-2 rounded-3xl bg-white px-6 py-4 text-sm text-gray-700 sm:flex-row sm:items-center sm:justify-between">
+          {/* The compared pair and what changed */}
+          <div className="space-y-3 rounded-3xl bg-white px-6 py-5 text-sm text-gray-700">
             <p>
               <span className="text-gray-500">Baseline:</span> <span className="font-medium text-gray-900">{backupLabel(result.baseline)}</span>
               <span className="mx-2 text-gray-400" aria-label="compared with">→</span>
               <span className="text-gray-500">Comparison:</span> <span className="font-medium text-gray-900">{backupLabel(result.comparison)}</span>
             </p>
-            <p className="text-xs text-gray-500">{running ? "Previous result, shown while the new scan runs" : `Scanned ${new Date(result.lastScan).toLocaleString()}`}</p>
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+              <span className="font-medium text-gray-900">{drifts.length} {drifts.length === 1 ? "change" : "changes"}</span>
+              {(["added", "modified", "deleted"] as const).map(change => (
+                <span key={change} className="inline-flex items-center gap-1.5">
+                  <span className={cn("h-2 w-2 rounded-full", CHANGE_STYLE[change].dot)} aria-hidden="true" />
+                  {counts[change]} {CHANGE_STYLE[change].label.toLowerCase()}
+                </span>
+              ))}
+              <span className="text-xs text-gray-500 sm:ml-auto">
+                {result.stats.compared + result.stats.unchanged} items checked. {running ? "Previous result, shown while the new scan runs." : `Scanned ${new Date(result.lastScan).toLocaleString()}.`}
+              </span>
+            </div>
           </div>
 
           {result.warnings.length > 0 && (
@@ -720,7 +562,6 @@ export default function DriftDetectionPage() {
             </Alert>
           )}
 
-          {/* Baseline Warning */}
           {counts.added > 50 && (
             <Alert className="rounded-3xl border-transparent bg-white p-5 [&>svg]:left-5 [&>svg]:top-5">
               <Info className="h-4 w-4" />
@@ -731,133 +572,14 @@ export default function DriftDetectionPage() {
             </Alert>
           )}
 
-          {/* Summary Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-            <div className="rounded-3xl bg-white p-6">
-              <div className="flex items-center justify-between mb-6">
-                <span className="text-sm text-gray-500">Total Drifts</span>
-                <span className="flex h-10 w-10 items-center justify-center rounded-full bg-gray-100">
-                  <GitCompare className="h-4 w-4 text-gray-600" />
-                </span>
-              </div>
-              <p className="text-4xl font-medium tracking-tight text-gray-900">{drifts.length}</p>
-              <p className="text-xs text-gray-500 mt-2">{result.stats.compared + result.stats.unchanged} items checked</p>
-            </div>
-
-            <div className="rounded-3xl bg-white p-6">
-              <div className="flex items-center justify-between mb-6">
-                <span className="text-sm text-gray-500">Added</span>
-                <span className="flex h-10 w-10 items-center justify-center rounded-full bg-green-50">
-                  <Plus className="h-4 w-4 text-green-700" />
-                </span>
-              </div>
-              <p className="text-4xl font-medium tracking-tight text-gray-900">{counts.added}</p>
-              <p className="text-xs text-gray-500 mt-2">New since the baseline</p>
-            </div>
-
-            <div className="rounded-3xl bg-white p-6">
-              <div className="flex items-center justify-between mb-6">
-                <span className="text-sm text-gray-500">Modified</span>
-                <span className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-50">
-                  <Edit className="h-4 w-4 text-blue-600" />
-                </span>
-              </div>
-              <p className="text-4xl font-medium tracking-tight text-gray-900">{counts.modified}</p>
-              <p className="text-xs text-gray-500 mt-2">Settings changed</p>
-            </div>
-
-            <div className="rounded-3xl bg-white p-6">
-              <div className="flex items-center justify-between mb-6">
-                <span className="text-sm text-gray-500">Deleted</span>
-                <span className="flex h-10 w-10 items-center justify-center rounded-full bg-red-50">
-                  <Minus className="h-4 w-4 text-red-600" />
-                </span>
-              </div>
-              <p className="text-4xl font-medium tracking-tight text-gray-900">{counts.deleted}</p>
-              <p className="text-xs text-gray-500 mt-2">Gone since the baseline</p>
-            </div>
-
-            <div className="rounded-3xl bg-white p-6">
-              <div className="flex items-center justify-between mb-6">
-                <span className="text-sm text-gray-500">Last Scan</span>
-                <span className="flex h-10 w-10 items-center justify-center rounded-full bg-gray-100">
-                  <Clock className="h-4 w-4 text-gray-600" />
-                </span>
-              </div>
-              <p className="text-4xl font-medium tracking-tight text-gray-900">{getRelativeTime(result.lastScan)}</p>
-              <Button
-                size="sm"
-                variant="outline"
-                className="mt-3"
-                onClick={() => void startScan({ baseline: result.baseline.id, comparison: result.comparison.id })}
-                disabled={running}
-              >
-                <RefreshCw className="h-3 w-3" />
-                Rescan
-              </Button>
-            </div>
-          </div>
-
-          {/* Filters and View Toggle */}
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <div className="flex items-center gap-4">
-              <p className="inline-flex h-9 items-center gap-2 rounded-full border border-gray-200 bg-white px-4 text-sm text-gray-700">
-                <span className="h-1.5 w-1.5 rounded-full bg-coral-500" />
-                Scope: {selectedTenant!.name}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1 rounded-full bg-white p-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setViewMode("list")}
-                  className={viewTabClass("list")}
-                >
-                  <GitBranch className="h-4 w-4 mr-2" />
-                  List
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setViewMode("timeline")}
-                  className={viewTabClass("timeline")}
-                >
-                  <Activity className="h-4 w-4 mr-2" />
-                  Timeline
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setViewMode("analysis")}
-                  className={viewTabClass("analysis")}
-                >
-                  <BarChart3 className="h-4 w-4 mr-2" />
-                  Analysis
-                </Button>
-              </div>
-            </div>
-          </div>
-
-          {/* Empty state, the same in every view */}
           {drifts.length === 0 && (
             <EmptyState icon={<Check className="h-6 w-6" />} title={noDriftText}>
               <p>Every item both backups include is the same in each. Choose other backups above to compare a different period.</p>
             </EmptyState>
           )}
 
-          {/* Info about filtered restored policies */}
-          {viewMode === "list" && drifts.length > 0 && (
-            <Alert className="rounded-3xl border-transparent bg-blue-50/50 p-5 [&>svg]:left-5 [&>svg]:top-5">
-              <Info className="h-4 w-4 text-blue-600" />
-              <AlertDescription className="text-blue-900">
-                <strong>Note:</strong> Policies that you've restored (those with "[Restored]" prefix) are automatically excluded from drift detection to avoid confusion.
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {/* List View, grouped by policy type */}
-          {viewMode === "list" && drifts.length > 0 && (
+          {/* Changes, grouped by policy type */}
+          {drifts.length > 0 && (
             <div className="space-y-8">
               {byType(drifts).map((group) => (
                 <section key={group.type} aria-label={group.type} className="space-y-3">
@@ -865,275 +587,135 @@ export default function DriftDetectionPage() {
                     {group.type}
                     <span className="rounded-full bg-white px-2.5 py-0.5 text-xs font-medium text-gray-600">{group.drifts.length}</span>
                   </h2>
-                  {group.drifts.map((drift) => (
-                    <div
-                      key={drift.id}
-                      className={cn(
-                        "rounded-3xl bg-white border p-6 transition-colors cursor-pointer",
-                        drift.isRevertDrift && "opacity-60",
-                        selectedDrift === drift.id
-                          ? "border-blue-200"
-                          : "border-transparent hover:border-gray-200"
-                      )}
-                      onClick={() => setSelectedDrift(selectedDrift === drift.id ? null : drift.id)}
-                    >
-                      <div className="flex items-start justify-between mb-4">
-                        <div className="flex items-start gap-4">
-                          <div className={cn(
-                            "h-12 w-12 shrink-0 rounded-full flex items-center justify-center",
-                            drift.changeType === "added" && "bg-green-50 text-green-700",
-                            drift.changeType === "modified" && "bg-blue-50 text-blue-600",
-                            drift.changeType === "deleted" && "bg-red-50 text-red-600"
-                          )}>
+                  {group.drifts.map((drift) => {
+                    const style = CHANGE_STYLE[drift.changeType]
+                    const open = selectedDrift === drift.id
+                    const settings = changedSettings(drift, result.settingNames)
+                    return (
+                      <div
+                        key={drift.id}
+                        className={cn(
+                          "rounded-3xl border bg-white transition-colors",
+                          drift.isRevertDrift && "opacity-60",
+                          open ? "border-gray-200" : "border-transparent hover:border-gray-200"
+                        )}
+                      >
+                        <button
+                          type="button"
+                          className="flex w-full items-start gap-4 rounded-3xl p-6 text-left"
+                          aria-expanded={open}
+                          aria-controls={open ? `drift-${drift.id}` : undefined}
+                          onClick={() => setSelectedDrift(open ? null : drift.id)}
+                        >
+                          <span className={cn("flex h-12 w-12 shrink-0 items-center justify-center rounded-full", style.tone)} aria-hidden="true">
                             {getConfigTypeIcon(drift.type)}
-                          </div>
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1">
-                              <h3 className="font-medium text-gray-900">{drift.configName}</h3>
-                              {getChangeTypeIcon(drift.changeType)}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="mb-1 flex flex-wrap items-center gap-2">
+                              <span className="font-medium text-gray-900">{drift.configName}</span>
                               {drift.lastRevertedAt && !drift.isRevertDrift && (
-                                <span className="flex items-center gap-1 px-2.5 py-0.5 bg-green-50 text-green-700 text-xs font-medium rounded-full">
+                                <span className="flex items-center gap-1 rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-700">
                                   <Check className="h-3 w-3" />
-                                  Reverted
+                                  Reverted {getRelativeTime(drift.lastRevertedAt)}
                                 </span>
                               )}
                               {drift.isRevertDrift && (
-                                <span className="flex items-center gap-1 px-2.5 py-0.5 bg-muted text-gray-600 text-xs font-medium rounded-full">
+                                <span className="flex items-center gap-1 rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-gray-600">
                                   <Info className="h-3 w-3" />
                                   Result of Revert
                                 </span>
                               )}
-                            </div>
-                            {drift.previousName && <p className="mb-1 text-xs text-gray-500">Renamed from "{drift.previousName}"</p>}
-                            <p className="text-sm text-gray-500 mb-2">{drift.tenant} • {drift.type}</p>
-                            <p className="text-sm text-gray-700">{drift.description}</p>
-                            <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
-                              <span className="flex items-center gap-1">
-                                <Clock className="h-3 w-3" />
-                                {getRelativeTime(drift.toBackupTimestamp ?? drift.detectedAt)}
+                            </span>
+                            {drift.previousName && <span className="mb-1 block text-xs text-gray-500">Renamed from "{drift.previousName}"</span>}
+                            {drift.changeType === "modified" && drift.changes && drift.changes.length > 0 && (
+                              <span className="block text-sm text-gray-600">
+                                <span className="font-medium text-gray-700">{drift.changes.length} changed setting{drift.changes.length === 1 ? "" : "s"}:</span> {settings}
                               </span>
-                              <span className="flex items-center gap-1">
-                                <GitBranch className="h-3 w-3" />
-                                {drift.changeType}
-                              </span>
-                              {drift.changes && drift.changes.length > 0 && (
-                                <span className="flex items-center gap-1">
-                                  <Edit className="h-3 w-3" />
-                                  {drift.changes.length} changed setting{drift.changes.length === 1 ? "" : "s"}
-                                </span>
-                              )}
-                              {drift.lastRevertedAt && (
-                                <span className="flex items-center gap-1 text-green-600">
-                                  <RefreshCw className="h-3 w-3" />
-                                  Reverted {getRelativeTime(drift.lastRevertedAt)}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex flex-col items-end gap-2">
-                          <span className={cn(
-                            "px-3 py-1 text-xs font-medium rounded-full capitalize",
-                            drift.changeType === "added" && "bg-green-50 text-green-700",
-                            drift.changeType === "modified" && "bg-blue-50 text-blue-700",
-                            drift.changeType === "deleted" && "bg-red-50 text-red-700"
-                          )}>
-                            {drift.changeType}
+                            )}
                           </span>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setSelectedDrift(selectedDrift === drift.id ? null : drift.id)
-                            }}
-                          >
-                            <Eye className="h-4 w-4 mr-1" />
-                            {drift.changeType === "modified" ? "View changes" : "View details"}
-                          </Button>
-                        </div>
-                      </div>
+                          <span className="flex shrink-0 items-center gap-3">
+                            <span className={cn("inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium", style.tone)}>
+                              <style.Icon className="h-3 w-3" aria-hidden="true" />
+                              {style.label}
+                            </span>
+                            <ChevronDown className={cn("h-4 w-4 text-gray-500 transition-transform", open && "rotate-180")} aria-hidden="true" />
+                          </span>
+                        </button>
 
-                      {selectedDrift === drift.id && (
-                        <div className="border-t border-gray-100 pt-5 mt-5 space-y-3" onClick={(event) => event.stopPropagation()}>
-                          {drift.isRevertDrift && (
-                            <div className="bg-gray-50 rounded-2xl p-4">
-                              <h4 className="font-medium text-gray-900 mb-1">Revert Drift Information</h4>
-                              <p className="text-sm text-gray-700">
-                                This change was detected because you reverted the policy on {new Date(drift.revertTimestamp!).toLocaleString()}.
-                                This is expected behavior and no action is needed.
-                              </p>
-                            </div>
-                          )}
-
-                          <div className="bg-amber-50 rounded-2xl p-4">
-                            <h4 className="font-medium text-amber-900 mb-1">Impact Assessment</h4>
-                            <p className="text-sm text-amber-800">{drift.impact}</p>
-                          </div>
-
-                          {drift.changes && drift.changes.length > 0 && (
-                            <div className="bg-gray-50 rounded-2xl p-4">
-                              <h4 className="font-medium text-gray-900 mb-3">Changed settings</h4>
-                              <ChangeList changes={drift.changes} />
-                            </div>
-                          )}
-
-                          {drift.changeType !== "modified" && itemDetails(drift)}
-
-                          <div className="bg-blue-50 rounded-2xl px-4 py-3">
-                            <p className="text-xs text-blue-700">
-                              <span className="font-medium">Detected between:</span> {backupTime(drift.fromBackupTimestamp, drift.fromBackup)} → {backupTime(drift.toBackupTimestamp, drift.toBackup)}
-                            </p>
-                          </div>
-
-                          {drift.revertHistory && drift.revertHistory.length > 0 && (
-                            <div className="bg-green-50 rounded-2xl px-4 py-3">
-                              <h4 className="font-medium text-green-900 text-sm mb-2">Revert History</h4>
-                              <div className="space-y-1">
-                                {drift.revertHistory.map((revert, idx) => (
-                                  <div key={idx} className="flex items-center justify-between text-xs text-green-700">
-                                    <span className="flex items-center gap-2">
-                                      <RefreshCw className="h-3 w-3" />
-                                      {revert.action === "revert" ? "Reverted" : "Restored as new policy"}
-                                    </span>
-                                    <span>{new Date(revert.timestamp).toLocaleString()}</span>
-                                  </div>
-                                ))}
+                        {open && (
+                          <div id={`drift-${drift.id}`} className="mx-6 space-y-3 border-t border-gray-100 pb-6 pt-5">
+                            {drift.isRevertDrift && (
+                              <div className="bg-gray-50 rounded-2xl p-4">
+                                <h4 className="font-medium text-gray-900 mb-1">Revert Drift Information</h4>
+                                <p className="text-sm text-gray-700">
+                                  This change was detected because you reverted the policy on {new Date(drift.revertTimestamp!).toLocaleString()}.
+                                  This is expected behavior and no action is needed.
+                                </p>
                               </div>
-                            </div>
-                          )}
+                            )}
 
-                          {!drift.lastRevertedAt && !drift.isRevertDrift && (drift.changeType === "deleted" || drift.changeType === "modified") && (
-                            <div className="flex flex-wrap items-center gap-2">
-                            <GatedButton
-                              feature="driftRevert"
-                              plan={plan}
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleRevertAction(drift)}
-                              disabled={revertingDriftId === drift.id}
-                            >
-                              <RefreshCw className="h-4 w-4 mr-1" />
-                              {drift.changeType === "deleted" ? "Recreate" : "Revert"}
-                            </GatedButton>
-                            <Button
-                              size="sm"
-                              className="bg-coral-600 text-white hover:bg-coral-700"
-                              onClick={() => handleRestoreAction(drift)}
-                              disabled={revertingDriftId === drift.id}
-                            >
-                              {revertingDriftId === drift.id ? (
-                                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                              ) : (
-                                <Plus className="h-4 w-4 mr-1" />
-                              )}
-                              {drift.changeType === "deleted" ? "Restore as copy" : "Restore previous version as copy"}
-                            </Button>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                            {drift.changes && drift.changes.length > 0 && (
+                              <div className="bg-gray-50 rounded-2xl p-4">
+                                <h4 className="font-medium text-gray-900 mb-3">Changed settings</h4>
+                                <ChangeList changes={drift.changes} names={result.settingNames} />
+                              </div>
+                            )}
+
+                            {drift.changeType !== "modified" && itemDetails(drift)}
+
+                            {drift.revertHistory && drift.revertHistory.length > 0 && (
+                              <div className="bg-green-50 rounded-2xl px-4 py-3">
+                                <h4 className="font-medium text-green-900 text-sm mb-2">Revert History</h4>
+                                <div className="space-y-1">
+                                  {drift.revertHistory.map((revert, idx) => (
+                                    <div key={idx} className="flex items-center justify-between text-xs text-green-700">
+                                      <span className="flex items-center gap-2">
+                                        <RefreshCw className="h-3 w-3" />
+                                        {revert.action === "revert" ? "Reverted" : "Restored as new policy"}
+                                      </span>
+                                      <span>{new Date(revert.timestamp).toLocaleString()}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {!drift.lastRevertedAt && !drift.isRevertDrift && (drift.changeType === "deleted" || drift.changeType === "modified") && (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <GatedButton
+                                  feature="driftRevert"
+                                  plan={plan}
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleRevertAction(drift)}
+                                  disabled={revertingDriftId === drift.id}
+                                >
+                                  <RefreshCw className="h-4 w-4 mr-1" />
+                                  {drift.changeType === "deleted" ? "Recreate" : "Revert"}
+                                </GatedButton>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleRestoreAction(drift)}
+                                  disabled={revertingDriftId === drift.id}
+                                >
+                                  {revertingDriftId === drift.id ? (
+                                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                                  ) : (
+                                    <Plus className="h-4 w-4 mr-1" />
+                                  )}
+                                  {drift.changeType === "deleted" ? "Restore as copy" : "Restore previous version as copy"}
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
                 </section>
               ))}
-            </div>
-          )}
-
-          {/* Timeline View: the comparison, its types and every changed setting */}
-          {viewMode === "timeline" && drifts.length > 0 && (
-            <div className="rounded-3xl bg-white p-6 sm:p-8">
-              <h2 className="text-xl font-medium tracking-tight text-gray-900 mb-1">Drift Timeline</h2>
-              <p className="mb-6 text-sm text-gray-500">{backupLabel(result.baseline)} → {backupLabel(result.comparison)}</p>
-              <div className="relative">
-                <div className="absolute left-6 top-0 bottom-0 w-px bg-gray-200" />
-                {byType(drifts).map((group) => (
-                  <div key={group.type} className="mb-8 last:mb-0">
-                    <div className="relative mb-4 flex items-center gap-4">
-                      <div className="z-10 flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-600">{getConfigTypeIcon(group.type)}</div>
-                      <h3 className="font-medium text-gray-900">{group.type} <span className="text-sm font-normal text-gray-500">({group.drifts.length})</span></h3>
-                    </div>
-                    {group.drifts.map((drift) => (
-                      <div key={drift.id} className="relative mb-4 ml-16 last:mb-0">
-                        <div className="rounded-2xl bg-gray-50 p-4">
-                          <div className="mb-2 flex items-start justify-between gap-3">
-                            <div className="flex items-center gap-2">
-                              {getChangeTypeIcon(drift.changeType)}
-                              <h4 className="font-medium text-gray-900">{drift.configName}</h4>
-                              {drift.previousName && <span className="text-xs text-gray-500">Renamed from "{drift.previousName}"</span>}
-                            </div>
-                            <span className={cn(
-                              "rounded-full px-2.5 py-0.5 text-xs font-medium capitalize",
-                              drift.changeType === "added" && "bg-green-50 text-green-700",
-                              drift.changeType === "modified" && "bg-blue-50 text-blue-700",
-                              drift.changeType === "deleted" && "bg-red-50 text-red-700"
-                            )}>{drift.changeType}</span>
-                          </div>
-                          {drift.changes && drift.changes.length > 0
-                            ? <ChangeList changes={drift.changes} limit={5} />
-                            : <p className="text-sm text-gray-700">{drift.description}{drift.backupFile ? <span className="block font-mono text-xs text-gray-400">{drift.backupFile}</span> : null}</p>}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Analysis View */}
-          {viewMode === "analysis" && drifts.length > 0 && (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="rounded-3xl bg-white p-6 sm:p-8">
-                <h2 className="text-xl font-medium tracking-tight text-gray-900 mb-4">Drift Trends (7 Days)</h2>
-                <div className="h-64 flex items-end justify-between gap-2">
-                  {driftTrends.map((day) => (
-                    <div key={day.date} className="flex-1 flex flex-col items-center gap-1">
-                      <div className="w-full flex flex-col justify-end" style={{ height: "200px" }}>
-                        <div
-                          className="w-full bg-green-500 rounded-t"
-                          style={{ height: `${Math.min(day.added / 10, 1) * 100}%` }}
-                        />
-                        <div
-                          className="w-full bg-coral-500 rounded-b"
-                          style={{ height: `${Math.min(day.modified / 10, 1) * 100}%` }}
-                        />
-                      </div>
-                      <span className="text-xs text-gray-500">{day.date}</span>
-                    </div>
-                  ))}
-                </div>
-                <div className="flex items-center justify-center gap-4 mt-4">
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 bg-green-500 rounded-full" />
-                    <span className="text-xs text-gray-600">Added</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 bg-coral-500 rounded-full" />
-                    <span className="text-xs text-gray-600">Modified</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-3xl bg-white p-6 sm:p-8">
-                <h2 className="text-xl font-medium tracking-tight text-gray-900 mb-4">Drift by Configuration Type</h2>
-                <div className="space-y-4">
-                  {getDriftsByType().map(({ type, count, percentage }) => (
-                    <div key={type}>
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm font-medium text-gray-700">{type}</span>
-                        <span className="text-sm text-gray-900">{count} drift{count !== 1 ? 's' : ''}</span>
-                      </div>
-                      <div className="w-full bg-gray-100 rounded-full h-2">
-                        <div
-                          className="bg-coral-500 h-2 rounded-full"
-                          style={{ width: `${percentage}%` }}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              <p className="px-1 text-xs text-gray-500">Copies made with Restore as copy (named "[Restored] ...") are not listed as added.</p>
             </div>
           )}
         </>
@@ -1185,13 +767,17 @@ export default function DriftDetectionPage() {
               >
                 Cancel
               </Button>
-              <Button
-                className="flex-1 text-white font-medium bg-coral-600 hover:bg-coral-700"
-                onClick={executeRevert}
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                Create Restored Policy
-              </Button>
+              {confirmDialog.action === "revert" ? (
+                <Button variant="destructive" className="flex-1 font-medium" onClick={executeRevert}>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  {confirmDialog.recreate ? "Recreate policy" : "Revert policy"}
+                </Button>
+              ) : (
+                <Button className="flex-1 text-white font-medium bg-coral-600 hover:bg-coral-700" onClick={executeRevert}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Create copy
+                </Button>
+              )}
             </div>
           </DialogContent>
         )}

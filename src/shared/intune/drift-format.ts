@@ -1,9 +1,11 @@
-import type { DriftChange } from "./drift"
+import type { DriftChange, SettingNames } from "./drift"
 
 /**
  * Readable names and values for drift changes. compareObjects reports raw property paths such as
  * settings[device_vendor_msft_policy_config_defender_allowcloudprotection].settingInstance.choiceSettingValue.value;
  * the drift page shows them as "Defender: Allow cloud protection" with the path as secondary text.
+ * When the scan read the setting definitions from Graph (SettingNames), their display names are
+ * used instead, such as "Allow Cloud Protection" and the choice "Allowed. Turns on Cloud Protection.".
  */
 
 export interface SettingLabel {
@@ -91,13 +93,18 @@ export function humanize(name: string): string {
   return text || name
 }
 
+/** A name from the scan's SettingNames; own keys only, since IDs and values are arbitrary strings. */
+const lookup = (map: Record<string, string> | undefined, key: string): string | undefined => (map && Object.hasOwn(map, key) ? map[key] : undefined)
+
 const VENDOR_PREFIX = /^(?:device|user)_vendor_msft_(?:policy_(?:config|result)_)?|^vendor_msft_|^com\.apple\./i
 
 /**
  * A Settings Catalog definition ID as "Area: Setting", from its last two parts:
  * device_vendor_msft_policy_config_defender_allowcloudprotection -> "Defender: Allow cloud protection".
  */
-export function definitionLabel(definitionId: string): string {
+export function definitionLabel(definitionId: string, names?: SettingNames): string {
+  const named = lookup(names?.settings, definitionId)
+  if (named) return named
   const parts = definitionId.replace(VENDOR_PREFIX, "").split(/[_.]/).filter(Boolean)
   if (parts.length === 0) return definitionId
   const setting = humanize(parts[parts.length - 1]!)
@@ -118,7 +125,7 @@ function segmentLabel(segment: string): string {
   return `${base}: ${key.replace(/^"(.*)"$/, "$1")}`
 }
 
-export function settingLabel(change: Pick<DriftChange, "field" | "displayName">): SettingLabel {
+export function settingLabel(change: Pick<DriftChange, "field" | "displayName">, names?: SettingNames): SettingLabel {
   const path = change.field
   if (!path) return { label: "Whole item", path }
 
@@ -137,7 +144,7 @@ export function settingLabel(change: Pick<DriftChange, "field" | "displayName">)
   if (/^settings\[/.test(path) && last) {
     const definitionId = last[1]!
     const rest = path.slice(last.index! + last[0].length)
-    const label = definitionLabel(definitionId)
+    const label = definitionLabel(definitionId, names)
     if (VALUE_PATH.test(rest)) return { label, path, definitionId }
     const property = rest.split(".").filter(Boolean).pop()
     return { label: property ? `${label} (${segmentLabel(property).toLowerCase()})` : label, path, definitionId }
@@ -160,13 +167,13 @@ export type FormattedValue =
 export const LONG_VALUE = 160
 
 /** A Settings Catalog setting's value: the choice or simple value of its instance. */
-function settingSummary(value: any): string | undefined {
+function settingSummary(value: any, names?: SettingNames): string | undefined {
   const instance = value?.settingInstance ?? (value?.settingDefinitionId ? value : undefined)
   if (!instance || typeof instance.settingDefinitionId !== "string") return undefined
-  const label = definitionLabel(instance.settingDefinitionId)
+  const label = definitionLabel(instance.settingDefinitionId, names)
   const choice = instance.choiceSettingValue?.value
   const simple = instance.simpleSettingValue?.value
-  if (typeof choice === "string") return `${label} = ${choiceText(choice, instance.settingDefinitionId)}`
+  if (typeof choice === "string") return `${label} = ${lookup(names?.options, choice) ?? choiceText(choice, instance.settingDefinitionId)}`
   if (simple !== undefined && (typeof simple !== "object" || simple === null)) return `${label} = ${String(simple)}`
   return label
 }
@@ -180,16 +187,44 @@ function choiceText(value: string, definitionId?: string): string {
 /** A choice value of some Settings Catalog setting, recognized without knowing which. */
 const CHOICE_VALUE = /^(?:device|user)_vendor_msft_[a-z0-9_.]+_([a-z0-9]+)$|^com\.apple\.[a-z0-9_.]+_([a-z0-9]+)$/i
 
-export function formatValue(value: unknown, definitionId?: string): FormattedValue {
+export function formatValue(value: unknown, definitionId?: string, names?: SettingNames): FormattedValue {
   if (value === null || value === undefined || value === "") return { kind: "empty", text: "Not set" }
   if (typeof value === "boolean" || typeof value === "number") return { kind: "text", text: String(value) }
   if (typeof value === "string") {
+    const option = lookup(names?.options, value)
+    if (option) return { kind: "text", text: option, raw: value }
     const shortened = choiceText(value, definitionId)
     if (shortened !== value) return { kind: "text", text: shortened, raw: value }
     const choice = CHOICE_VALUE.exec(value)
     if (choice) return { kind: "text", text: humanize(choice[1] ?? choice[2]!), raw: value }
     return { kind: "text", text: value }
   }
-  const summary = settingSummary(value)
+  const summary = settingSummary(value, names)
   return { kind: "json", text: JSON.stringify(value, null, 2), ...(summary ? { summary } : {}) }
+}
+
+/** At most this many setting definitions are looked up per scan. */
+export const MAX_DEFINITIONS = 500
+
+/**
+ * The Settings Catalog setting definition IDs the changes mention: in their paths (including child
+ * settings inside groups) and in whole settings reported as added or removed.
+ */
+export function definitionIdsIn(changes: DriftChange[]): string[] {
+  const ids = new Set<string>()
+  const walk = (value: unknown, depth: number): void => {
+    if (ids.size >= MAX_DEFINITIONS || depth > 12 || !value || typeof value !== "object") return
+    if (Array.isArray(value)) return value.forEach((entry) => walk(entry, depth + 1))
+    const id = (value as { settingDefinitionId?: unknown }).settingDefinitionId
+    if (typeof id === "string") ids.add(id)
+    for (const entry of Object.values(value)) walk(entry, depth + 1)
+  }
+  for (const change of changes) {
+    if (!/^settings\[/.test(change.field)) continue
+    for (const match of change.field.matchAll(/\[([^\]"]*[_.][^\]"]*)\]/g)) ids.add(match[1]!)
+    walk(change.oldValue, 0)
+    walk(change.newValue, 0)
+    if (ids.size >= MAX_DEFINITIONS) break
+  }
+  return [...ids].slice(0, MAX_DEFINITIONS)
 }

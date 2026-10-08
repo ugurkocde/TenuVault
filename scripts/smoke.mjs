@@ -490,7 +490,10 @@ await check("switching tenants cannot show an older tenant's drift results", asy
     const jobs = [];
     const result = (tenantId, drifts) => ({ schemaVersion: 1, tenantId, jobId: 'job-' + tenantId, storageAccountName: 'tvlocal-' + tenantId, drifts, summary: { total: drifts.length, critical: 0, warning: 0, info: drifts.length, affectedTenants: 1 }, lastScan: new Date().toISOString(), backupsAnalyzed: 2, baseline: { id: 'backup-2026-01-01-000000', timestamp: '2026-01-01T00:00:00.000Z' }, comparison: { id: 'backup-2026-01-02-000000', timestamp: '2026-01-02T00:00:00.000Z' }, warnings: [], stats: { compared: 1, unchanged: 0 } });
     const old = [{ id: 'old', configName: 'OLD-TENANT-RESULT', type: 'Device Configuration', severity: 'info', changeType: 'added', affectedPolicies: 1, affectedDevices: 0, detectedAt: new Date().toISOString() }];
+    const backups = ['2026-01-02', '2026-01-01'].map(day => ({ id: 'backup-' + day + '-000000', timestamp: day + 'T00:00:00.000Z', type: 'manual', status: 'Success', totalPolicies: 1, scope: null, size: 1, duration: 1 }));
     window.fetch = (input, init) => {
+      // Two complete backups, so the picker can compare them.
+      if (String(input) === '/api/list-backups') return Promise.resolve(Response.json({ backups }));
       if (String(input) !== '/api/drift-scan') return window.__originalFetch(input, init);
       const body = JSON.parse(init.body);
       const tenantId = String(body.tenantId ?? '').toLowerCase();
@@ -514,7 +517,8 @@ await check("switching tenants cannot show an older tenant's drift results", asy
     await sleep(300)
     // The page may have scanned this tenant already, so start one explicitly when it did not.
     if (!(await evaluate(`typeof window.__oldScanResolve === 'function'`))) {
-      await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.includes('Compare latest backups')).click()`)
+      await sleep(500)
+      await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Compare').click()`)
       await sleep(300)
     }
     assert(await evaluate(`typeof window.__oldScanResolve === 'function'`), 'first tenant scan did not start')

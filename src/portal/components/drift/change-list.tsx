@@ -3,13 +3,13 @@
 import { useState } from "react"
 import { ChevronDown } from "lucide-react"
 import { cn } from "~/lib/utils"
-import type { DriftChange } from "../../../shared/intune/drift"
+import type { DriftChange, SettingNames } from "../../../shared/intune/drift"
 import { formatValue, LONG_VALUE, settingLabel } from "../../../shared/intune/drift-format"
 
 /** One before or after value: plain text cut at LONG_VALUE with "Show more", objects as collapsible JSON. */
-function ValueView({ value, definitionId, tone }: { value: unknown; definitionId?: string; tone: "before" | "after" }) {
+function ValueView({ value, definitionId, names, tone }: { value: unknown; definitionId?: string; names?: SettingNames; tone: "before" | "after" }) {
   const [open, setOpen] = useState(false)
-  const formatted = formatValue(value, definitionId)
+  const formatted = formatValue(value, definitionId, names)
   const color = tone === "before" ? "bg-red-50 text-red-800" : "bg-green-50 text-green-800"
   if (formatted.kind === "empty") return <span className="rounded-md bg-gray-100 px-2 py-0.5 text-xs italic text-gray-500">{formatted.text}</span>
   if (formatted.kind === "json") {
@@ -37,13 +37,11 @@ function ValueView({ value, definitionId, tone }: { value: unknown; definitionId
 }
 
 /** Every changed setting of a modified item, with a readable name and its value before and after. */
-export function ChangeList({ changes, limit }: { changes: DriftChange[]; limit?: number }) {
-  const [showAll, setShowAll] = useState(false)
-  const shown = limit && !showAll ? changes.slice(0, limit) : changes
+export function ChangeList({ changes, names }: { changes: DriftChange[]; names?: SettingNames }) {
   return (
     <div className="space-y-3">
-      {shown.map((change, index) => {
-        const { label, path, definitionId } = settingLabel(change)
+      {changes.map((change, index) => {
+        const { label, path, definitionId } = settingLabel(change, names)
         return (
           <div key={`${change.field}-${index}`} className="border-l-2 border-gray-300 pl-3">
             <p className="text-sm font-medium text-gray-800">{label}</p>
@@ -51,21 +49,16 @@ export function ChangeList({ changes, limit }: { changes: DriftChange[]; limit?:
             <div className="space-y-1">
               <div className="flex items-start gap-2">
                 <span className="w-12 shrink-0 pt-0.5 text-xs text-gray-500">Before</span>
-                <ValueView value={change.oldValue} definitionId={definitionId} tone="before" />
+                <ValueView value={change.oldValue} definitionId={definitionId} names={names} tone="before" />
               </div>
               <div className="flex items-start gap-2">
                 <span className="w-12 shrink-0 pt-0.5 text-xs text-gray-500">After</span>
-                <ValueView value={change.newValue} definitionId={definitionId} tone="after" />
+                <ValueView value={change.newValue} definitionId={definitionId} names={names} tone="after" />
               </div>
             </div>
           </div>
         )
       })}
-      {limit && changes.length > limit && (
-        <button type="button" onClick={(event) => { event.stopPropagation(); setShowAll(!showAll) }} className="text-xs font-medium text-blue-700 hover:underline">
-          {showAll ? "Show fewer" : `Show all ${changes.length} changed settings`}
-        </button>
-      )}
     </div>
   )
 }

@@ -75,6 +75,15 @@ export interface DriftWarning {
   message: string
 }
 
+/**
+ * Display names of the Settings Catalog settings the changes mention, read from Graph's setting
+ * definitions: setting definition ID to name, and choice option ID to its label.
+ */
+export interface SettingNames {
+  settings: Record<string, string>
+  options: Record<string, string>
+}
+
 /** What /api/detect-drifts answers, and what the background scan saves per tenant. */
 export interface DriftResult {
   drifts: Drift[]
@@ -87,6 +96,8 @@ export interface DriftResult {
   warnings: DriftWarning[]
   /** Items read and compared, and items skipped because their stored fingerprints match. */
   stats: { compared: number; unchanged: number }
+  /** Missing in results saved before names were read, or when Graph could not be reached. */
+  settingNames?: SettingNames
 }
 
 export type DriftScanPhase = "checking" | "listing" | "comparing" | "history"
