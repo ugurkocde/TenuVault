@@ -93,6 +93,9 @@ export function humanize(name: string): string {
   return text || name
 }
 
+/** A name from the scan's SettingNames; own keys only, since IDs and values are arbitrary strings. */
+const lookup = (map: Record<string, string> | undefined, key: string): string | undefined => (map && Object.hasOwn(map, key) ? map[key] : undefined)
+
 const VENDOR_PREFIX = /^(?:device|user)_vendor_msft_(?:policy_(?:config|result)_)?|^vendor_msft_|^com\.apple\./i
 
 /**
@@ -100,7 +103,7 @@ const VENDOR_PREFIX = /^(?:device|user)_vendor_msft_(?:policy_(?:config|result)_
  * device_vendor_msft_policy_config_defender_allowcloudprotection -> "Defender: Allow cloud protection".
  */
 export function definitionLabel(definitionId: string, names?: SettingNames): string {
-  const named = names?.settings[definitionId]
+  const named = lookup(names?.settings, definitionId)
   if (named) return named
   const parts = definitionId.replace(VENDOR_PREFIX, "").split(/[_.]/).filter(Boolean)
   if (parts.length === 0) return definitionId
@@ -170,7 +173,7 @@ function settingSummary(value: any, names?: SettingNames): string | undefined {
   const label = definitionLabel(instance.settingDefinitionId, names)
   const choice = instance.choiceSettingValue?.value
   const simple = instance.simpleSettingValue?.value
-  if (typeof choice === "string") return `${label} = ${names?.options[choice] ?? choiceText(choice, instance.settingDefinitionId)}`
+  if (typeof choice === "string") return `${label} = ${lookup(names?.options, choice) ?? choiceText(choice, instance.settingDefinitionId)}`
   if (simple !== undefined && (typeof simple !== "object" || simple === null)) return `${label} = ${String(simple)}`
   return label
 }
@@ -188,7 +191,7 @@ export function formatValue(value: unknown, definitionId?: string, names?: Setti
   if (value === null || value === undefined || value === "") return { kind: "empty", text: "Not set" }
   if (typeof value === "boolean" || typeof value === "number") return { kind: "text", text: String(value) }
   if (typeof value === "string") {
-    const option = names?.options[value]
+    const option = lookup(names?.options, value)
     if (option) return { kind: "text", text: option, raw: value }
     const shortened = choiceText(value, definitionId)
     if (shortened !== value) return { kind: "text", text: shortened, raw: value }

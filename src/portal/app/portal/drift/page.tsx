@@ -604,7 +604,7 @@ export default function DriftDetectionPage() {
                           type="button"
                           className="flex w-full items-start gap-4 rounded-3xl p-6 text-left"
                           aria-expanded={open}
-                          aria-controls={`drift-${drift.id}`}
+                          aria-controls={open ? `drift-${drift.id}` : undefined}
                           onClick={() => setSelectedDrift(open ? null : drift.id)}
                         >
                           <span className={cn("flex h-12 w-12 shrink-0 items-center justify-center rounded-full", style.tone)} aria-hidden="true">

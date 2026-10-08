@@ -3,6 +3,7 @@ import type { Drift, DriftResult, SettingNames } from '../src/shared/intune/drif
 import { definitionIdsIn, formatValue, settingLabel } from '../src/shared/intune/drift-format'
 import { driftCsv, driftExportName, driftJson } from '../src/shared/intune/drift-export'
 import { clearSettingNames, readSettingNames } from '../src/portal/lib/drift/setting-names'
+import type { GraphCall } from '../src/portal/lib/policies/graph-restore'
 
 const DEFENDER = 'device_vendor_msft_policy_config_defender_allowcloudprotection'
 const REVEAL = 'device_vendor_msft_policy_config_credentialsui_disablepasswordreveal'
@@ -49,9 +50,9 @@ describe('readSettingNames', () => {
 
   it('reads each definition once, skips unknown ones and keeps option labels', async () => {
     const calls: string[] = []
-    const graph = async (_method: string, path: string) => {
+    const graph: GraphCall = async (_method, path) => {
       calls.push(path)
-      if (path.endsWith(encodeURIComponent('missing_setting'))) return { status: 404, body: {} }
+      if (path.endsWith(encodeURIComponent('missing_setting'))) return { status: 404, body: {} as Record<string, never> }
       return { status: 200, body: { displayName: 'Allow Cloud Protection', options: [{ itemId: `${DEFENDER}_1`, displayName: 'Allowed. Turns on Cloud Protection.' }] } }
     }
     const names = await readSettingNames([DEFENDER, 'missing_setting'], graph)
