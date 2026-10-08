@@ -38,6 +38,7 @@ export function BackupPairPicker({
   onChange,
   onCompare,
   busy,
+  latest,
 }: {
   backups: BackupSummary[]
   loading: boolean
@@ -46,6 +47,8 @@ export function BackupPairPicker({
   onChange: (pair: { baseline: string | null; comparison: string | null }) => void
   onCompare: () => void
   busy: boolean
+  /** The two newest complete backups, offered when another pair is chosen. */
+  latest: { baseline: string; comparison: string } | null
 }) {
   const problem = pairProblem(backups, baseline, comparison)
   const warned = [baseline, comparison].some((id) => backupCompleteness(backups.find((backup) => backup.id === id)?.status) === "warnings")
@@ -91,6 +94,11 @@ export function BackupPairPicker({
           Compare
         </Button>
       </div>
+      {latest && (latest.baseline !== baseline || latest.comparison !== comparison) && (
+        <button type="button" className="mt-3 text-xs font-medium text-blue-700 hover:underline disabled:opacity-50" disabled={busy || loading} onClick={() => onChange(latest)}>
+          Use the latest two backups
+        </button>
+      )}
       {!loading && backups.length > 0 && problem && <p className="mt-3 text-xs text-gray-500">{problem}</p>}
       {warned && <p className="mt-3 text-xs text-amber-700">A chosen backup completed with warnings. Items it could not read may show up as deleted or added.</p>}
     </div>

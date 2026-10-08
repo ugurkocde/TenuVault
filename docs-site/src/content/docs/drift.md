@@ -30,7 +30,7 @@ At the top of the page, choose:
 
 Each backup is listed with its date and time and how it started (**Manual**, **Scheduled** or **From tray**). Backups that did not complete are shown but cannot be chosen. Backups that completed with warnings can be chosen and are marked, because items they could not read may show up as deleted or added. A backup that is already chosen on one side cannot be chosen on the other, and the swap button between the two lists exchanges them. The baseline must be older than the comparison.
 
-Click **Compare** to compare the chosen pair. **Compare latest backups** at the top right compares the two newest complete backups again, for example after a new backup.
+Click **Compare** to compare the chosen pair, or to compare the shown pair again. When another pair is chosen, **Use the latest two backups** under the lists picks the two newest complete backups, for example after a new backup.
 
 ### Scans run in the background
 
@@ -45,45 +45,33 @@ Each tenant runs one scan at a time. The last result of every tenant is kept on 
 
 ## Read the results
 
-Above the results, a line names the two compared backups, for example "Baseline: Oct 1, 2026, 10:00 (manual) → Comparison: Oct 6, 2026, 02:00 (scheduled)".
+Above the results, a line names the two compared backups, for example "Baseline: Oct 1, 2026, 10:00 (manual) → Comparison: Oct 6, 2026, 02:00 (scheduled)". Under it are the number of changes, how many items were **added** (in the comparison backup but not the baseline), **modified** (settings changed) and **deleted** (in the baseline but no longer in the comparison backup), how many items were checked and when the comparison ran.
 
-The summary cards show:
-
-| Card | What it shows |
-| --- | --- |
-| **Total Drifts** | All changes found between the two backups, and how many items were checked |
-| **Added** | Items in the comparison backup that the baseline does not have |
-| **Modified** | Items whose settings changed |
-| **Deleted** | Items in the baseline that the comparison backup no longer has |
-| **Last Scan** | When the shown result was compared; **Rescan** compares the same pair again |
+The same colors mark each change type everywhere on the page: green for added, amber for modified and red for deleted. Each change also carries its type as a word.
 
 If a backed-up file could not be read, a notice lists it. That item is left out of the result; the rest is compared normally.
 
-The **Scope** label shows the tenant being compared. Switch between three views:
+The changes are grouped by type, with the number of changes per type. Each change shows the item name, its change type, its previous name if it was renamed, and for a modified item the number of changed settings and the first of their names.
 
-* **List**: the changes grouped by type, with the number of changes per type. Each change shows the item name, a short description, when it was detected and the change type (**added**, **modified** or **deleted**).
-* **Timeline**: the comparison grouped by type, with the changed settings of every modified item.
-* **Analysis**: **Drift Trends (7 Days)** with added and modified items per day, and **Drift by Configuration Type**.
+When the two backups hold the same configuration, the page says "No drift between" followed by the dates of the two backups.
 
-When the two backups hold the same configuration, every view says "No drift between" followed by the dates of the two backups.
+Copies TenuVault made with **Restore as copy** are not listed as added; see below.
 
 ### Look at one change
 
-In the **List** view, click a change or its **View changes** (or **View details**) button. The card expands and shows:
+Click a change to expand it (or press Enter or Space on it), and click it again to collapse it. The expanded card shows:
 
-* **Impact Assessment**: what the change means for devices, for example that a deleted item is "no longer applied to devices"
 * **Changed settings**: for a modified item, every changed setting with its value **Before** and **After**
 * For an added or deleted item: its type, name, ID and the backup file it is stored in
-* **Detected between**: the times of the two backups compared
 * **Revert History**: earlier reverts of this item, if any
 
 Changed settings are named so you can read them:
 
-* Settings Catalog settings are named after the setting, for example "Defender: Allow cloud protection" for `device_vendor_msft_policy_config_defender_allowcloudprotection`.
+* Settings Catalog settings use the name Intune shows for them, for example "Do not display the password reveal button" for `device_vendor_msft_policy_config_credentialsui_disablepasswordreveal`, and their choices use Intune's option names, such as **Enabled**. TenuVault reads these names from Microsoft Graph when the scan runs. When Graph cannot be reached, the name is derived from the setting's ID instead, for example "Defender: Allow cloud protection".
 * Custom OMA-URI settings use their name.
 * Other properties are written out, for example "Password minimum length" for `passwordMinimumLength`.
 
-The original property path is shown in small print under each name. Values show as they are; a setting without a value shows **Not set**. Settings Catalog choice values are shortened to the option (hover to see the full value), lists and objects open as formatted JSON, and long values are cut off with **Show more**.
+The original property path is shown in small print under each name. Values show as they are; a setting without a value shows **Not set**. Lists and objects open as formatted JSON, and long values are cut off with **Show more**. Hover over a shortened choice to see its full value.
 
 A change marked **Reverted** was already reverted with TenuVault. A change marked **Result of Revert** appeared because you reverted the item between the two backups; no action is needed.
 
@@ -121,7 +109,7 @@ To run an action:
 
 1. Click the action button.
 2. Read the confirmation, which names the item and what will happen.
-3. Click **Create Restored Policy** to go ahead, or **Cancel**.
+3. Click the confirming button to go ahead, or **Cancel**. It names the action: **Revert policy** or **Recreate policy** (shown in red, since they change the live item), or **Create copy**.
 
 A progress dialog shows each step: **Fetching policy from backup**, **Preparing policy data**, **Applying changes to Intune** (or **Creating new policy in Intune**), **Updating metadata** and **Refreshing drift detection**, which compares the same two backups again in the background. It cannot be cancelled once started. When it finishes, click **Done**, or **View in Intune** to open the Intune admin center. If a step fails, the dialog shows **Operation Failed** with the reason.
 
@@ -135,12 +123,12 @@ For restoring several items, choosing assignments or restoring into another tena
 
 ## Export a drift report
 
-Click **Export Report** and choose:
+Click **Export** and choose:
 
-* **Export as JSON**: the tenant, the time of the scan, the two compared backups, a summary by change type and by type, files that could not be read, and every change with its details
-* **Export as CSV**: one row per change with Config Name, Type, Change Type, Severity, Detected At, Impact, Affected Policies, Affected Devices, Description, From Backup and To Backup
+* **CSV, one row per changed setting**: the columns Item, Item type, Change, Severity, Previous name, Setting, Setting path, Before and After, plus the item's ID. Added and deleted items get one row without a setting.
+* **JSON**: the tenant, when the comparison ran, the two compared backups, the number of added, modified and deleted items, files that could not be read, and every item with its changed settings (readable values and the values as stored)
 
-The file is named `drift-report-` followed by the date. **Export Report** is unavailable when no drift was found.
+The file is named after the tenant and the two compared backups, for example `drift-contoso-backup-2026-10-06-020000-to-backup-2026-10-07-020000.csv`. **Export** is unavailable when no drift was found.
 
 ## Check drift across tenants
 
@@ -160,7 +148,7 @@ TenuVault compares each tenant's two newest complete backups, one tenant after a
 
 | Feature | Community | Pro | MSP |
 | --- | --- | --- | --- |
-| Drift detection, views and export | Yes | Yes | Yes |
+| Drift detection and export | Yes | Yes | Yes |
 | Restore a copy from a drift | Yes | Yes | Yes |
 | **Revert** and **Recreate** | No | Yes | Yes |
 | **Check all** across tenants | No | No | Yes |
