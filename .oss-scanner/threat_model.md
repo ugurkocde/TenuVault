@@ -22,15 +22,15 @@ Most important:
 - Restore and every other code path that writes to a tenant: `src/portal/app/api/restore-backup/`, `src/portal/lib/policies/`, `src/shared/intune/restore-plan.ts`, `src/main/oib/service.ts`, `src/main/features/*`. Includes cross-tenant copy, assignment replacement, `planGuard` and `disclaimerGuard`.
 - Archive import validation and anything that turns archive content into file paths, Graph URLs or request bodies. Path and ID helpers live in `src/shared/security.ts`.
 - Cryptography and secret storage: `src/main/storage/secure-store.ts`, `azure-seal.ts`, `local-blob-store.ts`, `src/main/backup/keys.ts` (recovery key export and import), `src/main/auth/`.
-- Electron hardening: window options, CSP (injected at build time by `electron.vite.config.ts`), navigation and window-open handlers, the hidden PDF window in `reports:savePdf`, fuses in `electron-builder.config.cjs`.
+- Electron hardening: window options, CSP (injected at build time by `electron.vite.config.ts`), navigation and window-open handlers, the hidden PDF window in `reports:savePdf` (sandboxed with JavaScript off; it renders HTML supplied by the renderer and relies on the CSP inside that HTML), fuses in `electron-builder.config.cjs`.
 
 Less important but in scope: report and export generation (PDF, HTML, CSV in `src/shared/`, `src/main/save-file.ts`), the renderer UI in `src/renderer` and `src/portal`, license verification.
 
-Out of scope: `docs-site/` (static documentation site), `marketing/`, `build/`, `resources/`, `scripts/` (build and release tooling), `.github/`, and test code under `test/`.
+Out of scope: `docs-site/` (static documentation site), `build/`, `resources/`, `scripts/` (build and release tooling), `.github/`, and test code under `test/`.
 
 ## How to exercise it
 
-- `npm test` runs the vitest unit tests offline (about 935 tests, a few seconds). Security relevant suites include `test/security-boundaries.test.ts`, `test/api-host.test.ts`, `test/backup-archive.test.ts`, `test/azure-seal.test.ts`, `test/secure-store.test.ts`, `test/storage-url-hardening.test.ts`, `test/backup-tenant-binding.test.ts`, `test/restore*.test.ts`, `test/assignment-replacement.test.ts` and `test/oib-*.test.ts`. Fakes for Graph and storage live next to them (`*-fakes.ts`, `test/helpers.ts`).
+- `npm test` runs the vitest unit tests offline (about 935 tests, a few seconds). Security relevant suites include `test/security-boundaries.test.ts`, `test/api-host.test.ts`, `test/backup-archive.test.ts`, `test/azure-seal.test.ts`, `test/secure-store.test.ts`, `test/storage-url-hardening.test.ts`, `test/backup-tenant-binding.test.ts`, `test/restore*.test.ts`, `test/assignment-replacement.test.ts` and `test/oib-*.test.ts`. Fakes live in `test/feature-change-sets-fakes.ts` (a fake tenant), `test/feature-helpers.ts` (`fakeDeps`, `call`) and `test/helpers.ts` (`memoryStore`).
 - Malicious archives are easiest to build in memory with JSZip, as `test/backup-archive.test.ts` does.
 - `xvfb-run -a npm run smoke -- out/smoke` launches the built app (`out/`) headless with a throwaway profile and drives it over the Chrome DevTools Protocol. It needs no tenant and no network.
 - `*.e2e.test.ts` files need a live lab tenant and cannot run here.
