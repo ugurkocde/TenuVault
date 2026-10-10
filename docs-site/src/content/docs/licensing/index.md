@@ -16,6 +16,8 @@ TenuVault has three plans: Community, which is free, and the paid Pro and MSP pl
 
 To start a trial or buy a plan, go to [tenuvault.com/desktop#pricing](https://tenuvault.com/desktop#pricing), or click **Try Pro or MSP free for 30 days** on the welcome screen or **Start 30 day free trial** on the **License** page. Your license key arrives by email right after checkout, and you are not charged until the trial ends.
 
+If your organization buys through procurement, yearly Pro and MSP plans are also available by invoice. Email [support@ugurlabs.com](mailto:support@ugurlabs.com) for a PDF quote; after your order you receive an invoice from Ugurlabs UG, payable by bank transfer. A 30 day trial key without a credit card is available on request.
+
 ## Features by plan
 
 | Feature | Community | Pro | MSP |
