@@ -126,9 +126,9 @@ Click the refresh button on a tenant card, or choose **Refresh Data** in the act
 ### Rename a tenant
 
 1. Click the pencil next to the tenant's name, or choose **Edit Name** in the tenant's actions menu.
-2. Type the new name and press Enter, or click the check mark. Press Escape to cancel.
+2. Type the new name and press Enter, or click the green check mark (**Save**). Press Escape or click **Cancel** to cancel.
 
-The name is saved in TenuVault and in the tenant's backup storage, so it comes back if you connect the tenant again later.
+The name is saved locally in TenuVault. A small check mark and **Saved** appear next to the name for about two seconds in both views. This confirms the local rename and does not track background updates to the tenant's backup storage. Saving an unchanged or blank name closes the editor without showing **Saved**.
 
 ### Tag tenants
 
