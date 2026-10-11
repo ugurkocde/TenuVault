@@ -1,6 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { assessCapabilities, assessCompliance } from "../src/shared/compliance/engine";
-import { createEvidenceManifest } from "../src/shared/compliance/manifest";
 import { assignmentDetails } from "../src/shared/compliance/assignments";
 import type { DetailedExportData } from "../src/shared/compliance/input";
 import type { ComplianceCapability } from "../src/shared/compliance/types";

@@ -18,6 +18,16 @@ export default defineConfig(({ mode }) => {
       exclude: e2e ? [] : ["test/**/*.e2e.test.ts"],
       testTimeout: e2e ? 120_000 : 5_000,
       environment: "node",
+      coverage: e2e ? undefined : {
+        provider: "v8",
+        reporter: ["text-summary", "lcov"],
+        include: ["src/**"],
+        exclude: ["src/**/*.html"],
+        thresholds: {
+          "src/main/**": { lines: 84 },
+          "src/shared/**": { lines: 91 },
+        },
+      },
     },
   }
 })

@@ -216,6 +216,8 @@ describe("Restorer", () => {
       calls.push({ method, path, ...(body ? { body } : {}) })
       const key = `${method} ${path}`
       if (responses[key]) return responses[key]!
+      // Keep the existing empty-body fallback explicit in this mock response.
+      // oxlint-disable-next-line unicorn/no-useless-fallback-in-spread
       if (method === "POST" && !/\/(assign|assignments)$/.test(path)) return { status: 201, body: { id: `new${++created}`, ...(body ?? {}) } }
       return { status: 204, body: {} }
     }

@@ -1,0 +1,25 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error",
+    "style": "off",
+    "pedantic": "off"
+  },
+  "rules": {
+    "eslint/no-unused-expressions": ["error", { "allowTernary": true }],
+    "unicorn/prefer-string-starts-ends-with": "off",
+    "unicorn/no-new-array": "off",
+    "unicorn/no-useless-spread": "off"
+  },
+  "overrides": [
+    {
+      "files": ["src/portal/**"],
+      "rules": {
+        "eslint/no-unused-vars": "warn",
+        "eslint/no-unused-expressions": "warn",
+        "eslint/no-control-regex": "warn",
+        "eslint/no-useless-escape": "warn"
+      }
+    }
+  ]
+}

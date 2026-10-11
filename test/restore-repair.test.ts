@@ -35,7 +35,7 @@ it('retains the created ID and blocks replay when a follow-up response is lost',
 it('reports a partial API operation and repairs across requests without another creation', async () => {
   let reject = true
   let creates = 0
-  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(String(input))
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
     if (url.hostname.endsWith('.blob.core.windows.net')) return Response.json(snapshot)

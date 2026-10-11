@@ -58,6 +58,8 @@ export interface ExportContext {
 /** A validated tenant label from untrusted input: a short single line, or undefined. */
 export function tenantLabel(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
+  // Control characters are intentionally removed from single-line tenant labels.
+  // oxlint-disable-next-line no-control-regex
   const text = value.replace(/[\u0000-\u001f\u007f]/g, ' ').trim()
   return text ? text.slice(0, 120) : undefined
 }
