@@ -2,6 +2,7 @@ import { acknowledgeEvent, acknowledgeEvents, pendingEvents, queueEvent } from '
 import { BlobListError, decodeXml, listBlobPages } from '../storage/list'
 import { blobPath } from '../../../shared/security'
 import { entriesForTenant } from './export'
+import { auditDateFilter, defaultAuditDateRange } from './date-range'
 import { 
   AuditLogEntry, 
   AuditLogFilter, 
@@ -185,13 +186,13 @@ export class AuditStorageService {
 
   /** Complete matching history for exports and aggregates, independent of UI pagination. */
   async queryAllLogs(filter: AuditLogFilter): Promise<AuditLogEntry[]> {
-    const now = new Date()
-    const startDate = filter.startDate || new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000) // Default: last 7 days
-    const endDate = filter.endDate || now
+    const defaultDates = auditDateFilter(defaultAuditDateRange())
+    const startDate = filter.startDate || new Date(defaultDates.startDate!)
+    const endDate = filter.endDate || new Date(defaultDates.endDate!)
     const startTime = startDate.getTime()
     const endTime = endDate.getTime()
     const dates = this.getDateRange(startDate, endDate)
-    const allEntries: AuditLogEntry[] = []
+    const allEntries = new Map<string, AuditLogEntry>()
     
     // Fetch logs from each date in parallel
     const promises = dates.map(async (date) => {
@@ -238,10 +239,18 @@ export class AuditStorageService {
     })
     
     const results = await Promise.all(promises)
-    results.forEach(entries => allEntries.push(...entries))
+    // An upgrade retry can save the same ID under both local and UTC days. Prefer the UTC copy.
+    results.forEach((entries, index) => {
+      const dayPath = this.getLogFilePath(dates[index]!)
+      for (const entry of entries) {
+        if (!allEntries.has(entry.id) || this.getLogFilePath(new Date(entry.timestamp)) === dayPath) {
+          allEntries.set(entry.id, entry)
+        }
+      }
+    })
     
     // Apply filters
-    let filteredEntries = allEntries.filter(entry => {
+    let filteredEntries = Array.from(allEntries.values()).filter(entry => {
       const timestamp = new Date(entry.timestamp).getTime()
       return timestamp >= startTime && timestamp <= endTime
     })

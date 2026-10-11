@@ -12,7 +12,7 @@ function localDateValue(date: Date): string {
 
 export function defaultAuditDateRange(now = new Date()): AuditDateRange {
   const start = new Date(now)
-  start.setDate(start.getDate() - 7)
+  start.setDate(start.getDate() - 6)
   return { startDate: localDateValue(start), endDate: localDateValue(now) }
 }
 

@@ -52,6 +52,8 @@ If TenuVault cannot write an event, for example because the storage is unreachab
 * If they "are kept encrypted on this device", keep this installation until they are saved.
 * If they "are held in memory for this session", keep TenuVault open until they are saved.
 
+If an upgrade retries an event that was already saved, the table, totals and exports show it once.
+
 ## View the audit log
 
 1. Select the tenant in the tenant switcher.
@@ -73,7 +75,7 @@ Below the cards, the table lists the events, newest first, with **Timestamp**, *
 ## Find events
 
 * **Search**: type in **Search by user, action, or resource...** and click **Search**. The search also looks in each event's details.
-* **From:** and **To:**: the date range. The default is the last 7 days. Dates use your local time zone and include the full first and last days, so today's events appear throughout the day.
+* **From:** and **To:**: the date range. The default is the last 7 calendar days, including today. Dates use your local time zone and include the full first and last days, so today's events appear throughout the day.
 * **Filters**: choose one or more values in **Event Type**, **Severity** and **Result**.
 
 The cards, table and exports all follow the date range and filters.

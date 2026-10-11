@@ -5,7 +5,7 @@ import { randomBytes } from 'node:crypto'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { AuditStorageService } from '../src/portal/lib/audit/storage'
 import { auditDateFilter, defaultAuditDateRange } from '../src/portal/lib/audit/date-range'
-import { setAuditOutboxStore } from '../src/portal/lib/audit/outbox'
+import { queueEvent, setAuditOutboxStore } from '../src/portal/lib/audit/outbox'
 import { AuditEventType, AuditSeverity, AuditResult, type AuditLogEntry } from '../src/portal/lib/audit/types'
 import { POST as queryLogs } from '../src/portal/app/api/audit/logs/route'
 import { POST as exportLogs } from '../src/portal/app/api/audit/export/route'
@@ -74,7 +74,7 @@ export function auditDateWindowTests(zone: string, originalTZ: string | undefine
 
       const range = defaultAuditDateRange()
       expect(range.endDate).toBe(clock.slice(0, 10))
-      expect(range.startDate).toBe(`${clock.slice(0, 7)}-08`)
+      expect(range.startDate).toBe(`${clock.slice(0, 7)}-09`)
       const filter = auditDateFilter(range)
       expect(new Date(filter.startDate!).getHours()).toBe(0)
       expect(new Date(filter.endDate!).getHours()).toBe(23)
@@ -91,6 +91,74 @@ export function auditDateWindowTests(zone: string, originalTZ: string | undefine
       const exported = await exportLogs(request('export', { exportOptions: { format: 'json', filter } }))
       expect(exported.status).toBe(200)
       expect((await exported.json()).logs.map((log: AuditLogEntry) => log.id)).toEqual(['now'])
+    })
+
+    it.each(['2026-01-15T12:00:00', zone === 'America/New_York' ? '2026-03-10T12:00:00' : '2026-10-06T12:00:00'])('defaults to seven local calendar days including today at %s', async (clock) => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date(clock))
+      const { service, request } = await setup()
+      const sixDaysAgo = new Date()
+      sixDaysAgo.setDate(sixDaysAgo.getDate() - 6)
+      sixDaysAgo.setHours(0, 0, 0, 0)
+      const sevenDaysAgo = new Date(sixDaysAgo)
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 1)
+      sevenDaysAgo.setHours(23, 59, 59, 999)
+      await service.writeLog(entry('seven-days-ago', sevenDaysAgo.toISOString()))
+      await service.writeLog(entry('six-days-ago', sixDaysAgo.toISOString()))
+      await service.writeLog(entry('now'))
+
+      const filter = auditDateFilter(defaultAuditDateRange())
+      expect(filter.startDate).toBe(sixDaysAgo.toISOString())
+      const expectedIds = ['now', 'six-days-ago']
+      expect((await service.queryAllLogs({})).map(log => log.id)).toEqual(expectedIds)
+      for (const dates of [filter, {}]) {
+        const logs = await queryLogs(request('logs', { filter: dates }))
+        expect(logs.status).toBe(200)
+        expect((await logs.json()).data.map((log: AuditLogEntry) => log.id)).toEqual(expectedIds)
+        const exported = await exportLogs(request('export', { exportOptions: { format: 'json', filter: dates } }))
+        expect(exported.status).toBe(200)
+        expect((await exported.json()).logs.map((log: AuditLogEntry) => log.id)).toEqual(expectedIds)
+      }
+      const stats = await getStats(request('stats', { filter }))
+      expect(stats.status).toBe(200)
+      expect((await stats.json()).data.totalEvents).toBe(2)
+    })
+
+    it('counts an upgrade retry in local and UTC day files once before pagination, stats and export', async () => {
+      const { store, service, request } = await setup()
+      const timestamp = new Date(zone === 'America/New_York' ? '2026-01-15T23:30:00' : '2026-01-15T00:30:00').toISOString()
+      const retry = entry('retry', timestamp)
+      const legacyPath = '2026/01/15/audit-log-20260115-event-retry.json'
+      const currentPath = `${utcPath(new Date(timestamp))}-event-retry.json`
+      expect(currentPath).not.toBe(legacyPath)
+      await store.put(ACCOUNT, 'audit-logs', legacyPath,
+        new TextEncoder().encode(JSON.stringify({ entries: [retry] })), 'application/json')
+      queueEvent(ACCOUNT, retry)
+      expect(await service.retryPending()).toBe(0)
+      expect((await store.list(ACCOUNT, 'audit-logs')).map(blob => blob.name).sort()).toEqual([legacyPath, currentPath].sort())
+
+      const filter = auditDateFilter({ startDate: '2026-01-15', endDate: '2026-01-15' })
+      expect(await service.queryAllLogs({ startDate: new Date(filter.startDate!), endDate: new Date(filter.endDate!) })).toEqual([retry])
+      for (const offset of [0, 1]) {
+        const logs = await queryLogs(request('logs', { filter: { ...filter, limit: 1, offset } }))
+        expect(logs.status).toBe(200)
+        const data = await logs.json()
+        expect(data.count).toBe(offset === 0 ? 1 : 0)
+        expect(data.data.map((log: AuditLogEntry) => log.id)).toEqual(offset === 0 ? ['retry'] : [])
+      }
+      const stats = await getStats(request('stats', { filter }))
+      expect(stats.status).toBe(200)
+      expect((await stats.json()).data).toMatchObject({
+        totalEvents: 1, eventsByType: { BACKUP_COMPLETED: 1 }, eventsByResult: { SUCCESS: 1 }, topUsers: [{ count: 1 }],
+      })
+      const json = await exportLogs(request('export', { exportOptions: { format: 'json', filter } }))
+      expect(json.status).toBe(200)
+      expect((await json.json()).logs.map((log: AuditLogEntry) => log.id)).toEqual(['retry'])
+      const csv = await exportLogs(request('export', { exportOptions: { format: 'csv', filter } }))
+      expect(csv.status).toBe(200)
+      const lines = (await csv.text()).split('\r\n')
+      expect(lines).toHaveLength(7)
+      expect(lines[6]).toContain(timestamp)
     })
 
     it.each([-1, 1])('finds an older local-date file %s day from its timestamp', async (offset) => {
