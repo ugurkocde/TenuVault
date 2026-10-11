@@ -131,6 +131,10 @@ export function setting(definitionId: string, value: string): Item {
   return { id: "0", settingInstance: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance", settingDefinitionId: definitionId, settingInstanceTemplateReference: null, choiceSettingValue: { settingValueTemplateReference: null, value, children: [] } } }
 }
 
+export function stringSetting(definitionId: string, value: string): Item {
+  return { settingInstance: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationSimpleSettingInstance", settingDefinitionId: definitionId, simpleSettingValue: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationStringSettingValue", value } } }
+}
+
 export function referenceSetting(reusableId: string): Item {
   return { id: "1", settingInstance: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationSimpleSettingInstance", settingDefinitionId: "device_vendor_msft_policy_privilegemanagement_elevationrules_{elevationrulename}_signaturesource", settingInstanceTemplateReference: null, simpleSettingValue: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationReferenceSettingValue", settingValueTemplateReference: null, value: reusableId, note: null } } }
 }

@@ -5,8 +5,10 @@ import { DOMAINS } from "../src/main/features/domains"
 import { SHARED_SCOPE } from "../src/main/features/records"
 import type { Item } from "../src/shared/intune/registry"
 import type { Plan } from "../src/shared/plans"
-import { call, fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
-import { FakeTenant, referenceSetting, setting, wire } from "./feature-change-sets-fakes"
+import type { BaselineSources } from "../src/main/features/baseline-upgrades/sources"
+import type { OibPack } from "../src/main/oib/source"
+import { call, fakeDeps, fakeOibSources, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
+import { FakeTenant, referenceSetting, setting, stringSetting, wire } from "./feature-change-sets-fakes"
 
 const PATH = "/api/standards"
 const REF_DEF = "device_vendor_msft_policy_privilegemanagement_elevationrules_{elevationrulename}_signaturesource"
@@ -111,12 +113,12 @@ describe("golden standard model", () => {
 
 // ---------------------------------------------------------------------------------------------
 
-function setup(plans: Record<string, Plan> = { [TENANT_A]: "msp", [TENANT_B]: "msp", [TENANT_C]: "msp" }) {
+function setup(plans: Record<string, Plan> = { [TENANT_A]: "msp", [TENANT_B]: "msp", [TENANT_C]: "msp" }, sources?: BaselineSources) {
   let now = new Date("2026-09-30T12:00:00Z")
   const deps = fakeDeps({ plans, now: () => now })
   const tenants = [new FakeTenant(TENANT_A), new FakeTenant(TENANT_B), new FakeTenant(TENANT_C)]
   wire(deps, tenants)
-  const api = routes(deps)
+  const api = routes(deps, sources)
   const post = (body: Record<string, unknown>, tenantId = TENANT_A) => call(api, PATH, { tenantId, ...body })
   return { deps, customer: tenants[1]!, other: tenants[2]!, post, advance: (days: number) => { now = new Date(now.getTime() + days * 86_400_000) } }
 }
@@ -135,6 +137,41 @@ async function applyAdoption(context: ReturnType<typeof setup>, id: string, chan
 }
 
 describe("/api/standards", () => {
+  it.each([TENANT_B, TENANT_C])("adopts OIB placeholders for customer %s and keeps shared versions reusable", async (target) => {
+    const content: OibPack = {
+      platform: "windows", commit: "a".repeat(40), reference: "OpenIntuneBaseline Windows v1", source: "", license: "GPL-3.0",
+      items: ["Created", "Updated"].map((name) => ({ folder: "ConfigurationPolicies", name, source: `${name}.json`, snapshot: policy(name, [stringSetting("org", "prefix/%OrganizationId%/suffix")]) })),
+    }
+    const context = setup(undefined, fakeOibSources([content]))
+    const published = await context.post({ action: "standard-create", standardKey: "oib", name: "OIB", changeNotes: "First version", source: { type: "oib", platform: "windows", commit: content.commit } })
+    expect(published.status).toBe(200)
+    const version = published.body.standard
+    const tenant = target === TENANT_B ? context.customer : context.other
+    const existing = tenant.addPolicy({ name: "Customer policy", settings: [stringSetting("org", "old")] })
+    const adoption = await context.post({ action: "standard-adopt", versionId: version.id }, target)
+    expect(adoption.status).toBe(200)
+    const id = adoption.body.adoption.id
+    expect((await context.post({ action: "standard-configure", id, mappings: [{ policyKey: "created", objectId: null }, { policyKey: "updated", objectId: existing.id }] }, target)).status).toBe(200)
+    const planned = await context.post({ action: "standard-plan", id }, target)
+    expect(planned.status).toBe(200)
+    expect((await applyAdoption(context, id, planned.body.changeSet.id, target)).body.changeSet.status).toBe("applied")
+    const writes = tenant.calls.filter((entry) => entry.method !== "GET")
+    expect(writes.map((entry) => entry.method)).toEqual(["POST", "PUT"])
+    for (const write of writes) {
+      expect(JSON.stringify(write.body)).toContain(`prefix/${target}/suffix`)
+      expect(JSON.stringify(write.body)).not.toContain("%OrganizationId%")
+    }
+    expect((await context.post({ action: "standard-preview", id }, target)).body.policies.map((entry: { action: string }) => entry.action)).toEqual(["none", "none"])
+    const assessed = await context.post({ action: "standard-assess", id }, target)
+    expect(assessed.status).toBe(200)
+    expect(assessed.body.state.deviations).toBe(0)
+    const stored = context.deps.records.get(DOMAINS.standards, SHARED_SCOPE, version.id)!
+    expect(stored).toMatchObject(version)
+    expect(JSON.stringify(stored)).toContain("%OrganizationId%")
+    expect(JSON.stringify(stored)).not.toContain(target)
+    expect(JSON.stringify(content)).toContain("%OrganizationId%")
+  })
+
   it("gates customizations to Pro and reusable standards to MSP, and keeps records readable after a downgrade", async () => {
     const community = setup({ [TENANT_A]: "community" })
     const denied = await community.post({ action: "create-customization", title: "Camera on", settingKey: "camera", reason: "Kiosks", owner: "IT" })

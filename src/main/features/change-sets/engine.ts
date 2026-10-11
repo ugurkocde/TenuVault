@@ -1,6 +1,7 @@
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
 import { typeForFolder, type IntuneType, type Item } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
+import { replaceTenantVariables } from "../../../shared/oib/variables"
 import { PlanRequired } from "../../../shared/plans"
 import type { FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
@@ -203,6 +204,7 @@ function validateAssignments(value: unknown): Item[] | null {
  */
 export async function createChangeSet(deps: FeatureDeps, tenantId: string, input: CreateChangeSetInput, actor: Actor): Promise<Stored_> {
   const tenant = tenantId.toLowerCase()
+  const resolveVariables = input.kind !== "rollback" && ["custom-baseline", "baseline-upgrade", "standard-adoption"].includes(input.origin?.workflow ?? "")
   if (!input.title.trim() || input.title.length > 200) throw new FeatureError("A title of at most 200 characters is required.")
   if (!Array.isArray(input.operations) || !input.operations.length) throw new FeatureError("Select at least one operation.")
   if (input.operations.length > MAX_OPERATIONS) throw new FeatureError(`A change set holds at most ${MAX_OPERATIONS} operations. Split the change.`)
@@ -228,7 +230,8 @@ export async function createChangeSet(deps: FeatureDeps, tenantId: string, input
       if (containsSecret(proposed)) throw new FeatureError("The proposed configuration contains a secret value Intune masks. Secrets are never copied or written back; set them in Intune.")
     }
     const assignments = operation.action === "delete" ? null : validateAssignments(operation.assignments)
-    const body = proposed ? (() => { const { assignments: _a, ...rest } = structuredClone(proposed); return rest as Item })() : null
+    // Freeze the target's values before review so writes, retries and read-back agree.
+    const body = proposed ? (() => { const { assignments: _a, ...rest } = structuredClone(proposed); return resolveVariables ? replaceTenantVariables(rest as Item, tenant) : rest as Item })() : null
     let observed: Observation
     try {
       observed = await observe(graph, type, { action: operation.action, targetId, name: String(body?.[type.nameKey] ?? operation.name ?? "") })

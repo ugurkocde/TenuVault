@@ -6,9 +6,10 @@ import type { OibPack } from "../src/main/oib/source"
 import type { OibRun } from "../src/shared/oib/types"
 import type { Item } from "../src/shared/intune/registry"
 import { DOMAINS } from "../src/main/features/domains"
+import { hashOf } from "../src/main/features/change-sets/model"
 import { signals as baselineSignalsOf } from "../src/main/features/baseline-upgrades"
 import { call, fakeDeps, TENANT_A, TENANT_B } from "./feature-helpers"
-import { FakeTenant, setting, wire } from "./feature-change-sets-fakes"
+import { FakeTenant, setting, stringSetting, wire } from "./feature-change-sets-fakes"
 
 const PATH = "/api/baseline-upgrades"
 const OLD = "a".repeat(40)
@@ -133,7 +134,7 @@ function setup(options: { plan?: "community" | "pro" | "msp"; unknownRelease?: b
   }
   const api = routes(deps, sources)
   const post = (body: Record<string, unknown>, tenantId = TENANT_A) => call(api, PATH, { tenantId, ...body })
-  return { deps, tenant, other, defender, firewall, run, post }
+  return { deps, tenant, other, defender, firewall, oldPack, newPack, run, post }
 }
 
 async function install(context: ReturnType<typeof setup>) {
@@ -152,6 +153,86 @@ async function approveAndApply(context: ReturnType<typeof setup>, id: string, ch
 }
 
 describe("/api/baseline-upgrades", () => {
+  it.each(["renamed", "unchanged"])("records resolved deviations for legacy placeholders with %s release names", async (name) => {
+    const context = setup()
+    context.oldPack.items = [context.oldPack.items[1]!]
+    context.newPack.items = [context.newPack.items[1]!]
+    context.run.created = context.run.created.filter((entry) => entry.id === context.firewall.id)
+    for (const content of [context.oldPack, context.newPack]) {
+      content.items[0]!.snapshot.settings = [stringSetting("org", "%OrganizationId%")]
+    }
+    context.firewall.settings = [stringSetting("org", "%OrganizationId%")]
+    if (name === "unchanged") {
+      context.newPack.items[0]!.name = context.oldPack.items[0]!.name
+      context.newPack.items[0]!.snapshot.name = context.oldPack.items[0]!.name
+    }
+    const installed = await install(context)
+    const compared = await context.post({ action: "compare", installId: installed.id, commit: NEW })
+    expect(compared.status).toBe(200)
+    const upgrade = compared.body.upgrade
+    expect(upgrade.status).toBe("ready")
+    const policyKey = upgrade.policies[0].key
+    const planned = await context.post({ action: "create-change-set", id: upgrade.id })
+    expect(planned.status).toBe(200)
+    expect((await approveAndApply(context, upgrade.id, planned.body.changeSet.id)).body.changeSet.status).toBe("applied")
+    const writes = context.tenant.calls.filter((entry) => entry.method !== "GET")
+    expect(writes).toHaveLength(1)
+    expect(writes[0]!.method).toBe("PUT")
+    expect(JSON.stringify(writes[0]!.body)).toContain(TENANT_A)
+    expect(JSON.stringify(writes[0]!.body)).not.toContain("%OrganizationId%")
+    expect(JSON.stringify(context.tenant.policies.get(context.firewall.id as string)!.settings)).toContain(TENANT_A)
+    const listed = await context.post({ action: "list" })
+    const finished = listed.body.upgrades[0]
+    expect(finished.status).toBe("applied")
+    expect(finished.policies[0].resultingDeviations).toBe(0)
+    expect(finished.resultingCustomizationHash).toBe(hashOf([[policyKey, []]]))
+    expect(listed.body.installs[0].customizationHash).toBe(finished.resultingCustomizationHash)
+  })
+
+  it("compares and merges substituted release content and preserves frozen source tokens", async () => {
+    const context = setup()
+    for (const content of [context.oldPack, context.newPack]) {
+      for (const item of content.items) {
+        (item.snapshot.settings as Item[]).push(stringSetting("org", "prefix/%OrganizationId%/suffix"))
+      }
+      (content.items[0]!.snapshot.settings as Item[]).push(stringSetting("endpoint", `https://example.test/${content.commit === OLD ? "old" : "new"}/%OrganizationId%`))
+    }
+    for (const live of [context.defender, context.firewall]) {
+      (live.settings as Item[]).push(stringSetting("org", `prefix/${TENANT_A}/suffix`))
+    }
+    (context.defender.settings as Item[]).push(stringSetting("endpoint", `https://example.test/old/${TENANT_A}`))
+    const installed = await install(context)
+    const compared = await context.post({ action: "compare", installId: installed.id, commit: NEW })
+    expect(compared.status).toBe(200)
+    for (const policy of compared.body.comparison.policies) {
+      expect(policy.comparison.settings.find((entry: { key: string }) => entry.key === "org").kind).toBe("unchanged")
+    }
+    const defender = compared.body.comparison.policies.find((entry: { key: string }) => entry.key.includes("defender"))
+    expect(defender.comparison.settings.find((entry: { key: string }) => entry.key === "endpoint").kind).toBe("upstream-changed")
+    const upgrade = compared.body.upgrade
+    expect(upgrade.unresolved).toBe(1)
+    expect((await context.post({ action: "resolve", id: upgrade.id, settings: [{ policyKey: defender.key, settingKey: "c", choice: "local" }] })).status).toBe(200)
+    const planned = await context.post({ action: "create-change-set", id: upgrade.id })
+    expect(planned.status).toBe(200)
+    expect(planned.body.upgrade.policies.find((entry: { key: string }) => entry.key === defender.key).resultingDeviations).toBe(2)
+    expect(planned.body.upgrade.policies.find((entry: { key: string }) => entry.key.includes("firewall")).resultingDeviations).toBe(0)
+    expect((await approveAndApply(context, upgrade.id, planned.body.changeSet.id)).body.changeSet.status).toBe("applied")
+    const writes = context.tenant.calls.filter((entry) => entry.method !== "GET")
+    expect(writes.map((entry) => entry.method).sort()).toEqual(["POST", "PUT", "PUT"])
+    for (const write of writes) {
+      expect(JSON.stringify(write.body)).toContain(`prefix/${TENANT_A}/suffix`)
+      expect(JSON.stringify(write.body)).not.toContain("%OrganizationId%")
+    }
+    expect(JSON.stringify(context.tenant.policies.get(context.defender.id as string))).toContain(`https://example.test/new/${TENANT_A}`)
+    for (const sourceId of [installed.sourceId, upgrade.to.sourceId]) {
+      const source = context.deps.records.get<{ policies: unknown[] }>(DOMAINS.baselineInstalls, TENANT_A, sourceId)!
+      expect(JSON.stringify(source.policies)).toContain("%OrganizationId%")
+      expect(JSON.stringify(source.policies)).not.toContain(TENANT_A)
+    }
+    expect(JSON.stringify(context.oldPack)).toContain("%OrganizationId%")
+    expect(JSON.stringify(context.newPack)).toContain("%OrganizationId%")
+  })
+
   it("records provenance with the exact installed source per policy", async () => {
     const context = setup()
     const recorded = await install(context)
