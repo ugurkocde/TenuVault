@@ -91,6 +91,34 @@ For these four types, replacing assignments in place is not supported. If you se
 For Intune roles, restoring assignments can reinstate access you revoked after the backup. Review role memberships before and after the restore.
 :::
 
+## Password policies can force a password change
+
+Some password policies make users set a new local password when the policy reaches their device, even when their current password already meets the rules. Restoring one of these policies to assigned devices has the same effect.
+
+**macOS.** Password settings in macOS compliance policies and macOS device restrictions profiles turn on Change At Next Auth. Microsoft documents both cases:
+
+* A password requirement in a macOS compliance policy "will automatically expire the existing password for all accounts on the device, including those created by LAPS and Platform SSO." See [Device compliance settings for macOS](https://learn.microsoft.com/intune/device-security/compliance/ref-macos-settings#system-security).
+* For a device restrictions profile, "any time the password policy is updated, all users running these macOS versions must change the password, even if the current password is compliant with the new requirements." See [Apple device restriction settings](https://learn.microsoft.com/intune/device-configuration/templates/ref-device-restrictions-apple?pivots=macos#password).
+
+A settings catalog policy only does this when **Change At Next Auth** is set to **True**.
+
+**Windows.** "When the password requirement is changed on a Windows desktop, users are impacted the next time they sign in, as that's when the device goes from idle to active. Users with passwords that meet the requirement are still prompted to change their passwords." This applies to password settings in Windows compliance policies, Windows device restrictions profiles and settings catalog policies that enable **Device Password Enabled**. It affects local accounts, such as a local administrator. Microsoft Entra ID and Active Directory accounts keep their directory password rules. See [Device compliance settings for Windows](https://learn.microsoft.com/intune/device-security/compliance/ref-windows-settings#system-security) and [Windows device restriction settings](https://learn.microsoft.com/intune/device-configuration/templates/ref-device-restrictions-windows#password).
+
+### When a restore triggers it
+
+* **Replace in place** on an item labelled **Overwrite the current version** or **Restore: the current version could not be checked**. TenuVault writes the whole item, so this can happen even when only another setting or the assignments differ. Items labelled **Skip** are not written.
+* **Recreate: deleted from the tenant** or **Create copies**, with **Restore assignments** on. Items restored without assignments reach no device.
+
+On the **Review** step, TenuVault shows a warning under each item that would trigger a password change.
+
+### Before you restore one of these items
+
+1. Check which devices the item targets and tell those users to expect a password change at their next sign-in.
+2. Restore it in its own selection, so it does not go out as a side effect of a larger restore.
+3. If the targeted Macs use LAPS or Platform SSO accounts, restore to a small pilot group first and confirm those accounts can still sign in.
+
+To avoid this on macOS, Microsoft recommends setting password rules in a settings catalog policy with **Change At Next Auth** set to **False**, and leaving password settings out of compliance policies and device restrictions profiles.
+
 ## Where restored items go
 
 By default, items are restored to the tenant selected at the top of **Backup & Restore**. On MSP, **Copy to other tenants instead** sends copies to other connected tenants. Copies to other tenants always use **Create copies**, keep their original names, get the Default scope tag and are never assigned. See [Restore to another tenant](/restore/cross-tenant/).

@@ -62,6 +62,7 @@ Built-in scope tags and built-in Intune roles are not backed up, because they ex
 * **Types with limited assignment restore.** Windows Autopilot deployment profiles, Apple user enrollment profiles, terms and conditions and Intune roles cannot have their assignments replaced in place. See [Restore modes and assignments](/restore/modes/#types-that-need-assignments-reconciled-in-intune).
 * **Exclusions.** Enrollment configurations and terms and conditions do not accept exclusion assignments, so exclusions are left out when their assignments are restored.
 * **Cross-tenant copies** are always unassigned and get the Default scope tag. See [Restore to another tenant](/restore/cross-tenant/).
+* **Password policies.** Restoring an assigned macOS or Windows policy with password settings can make users on targeted devices set a new local password. See [Password policies can force a password change](/restore/modes/#password-policies-can-force-a-password-change).
 
 ## Incomplete restores
 
