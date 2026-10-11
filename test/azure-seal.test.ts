@@ -1,6 +1,8 @@
 import { expect, it, vi } from 'vitest'
 import { encryptedAzureFetch, openAzure, registerStorageToken, sealAzure } from '../src/main/storage/azure-seal'
 import { Restorer } from '../src/portal/lib/policies/graph-restore'
+import { createBridgedFetch } from '../src/main/api/fetch-bridge'
+import { withNetworkErrors } from '../src/main/api/network-error'
 const tenant = '11111111-1111-1111-1111-111111111111', master = Buffer.alloc(32, 4)
 const url = new URL('https://example.blob.core.windows.net/intune-backups/backup-1/DeviceConfigurations/policy.json')
 it('encrypts uploads and binds authentication to tenant, account and path', async () => {
@@ -31,4 +33,30 @@ it('requires the recovery-key export before uploading', async () => {
   const bridge = encryptedAzureFetch(fetch, () => [master], () => { throw new Error('Save recovery key') })
   await expect(bridge(url, { method: 'PUT', headers: { Authorization: 'Bearer token' }, body: '{}' })).rejects.toThrow('recovery')
   expect(fetch).not.toHaveBeenCalled()
+})
+it.each(['GET', 'PUT'])('forwards %s aborts through the bridge, seal and network wrapper', async method => {
+  registerStorageToken('abort-token', tenant)
+  const controller = new AbortController()
+  let networkSignal!: AbortSignal
+  let arrived!: () => void
+  const started = new Promise<void>(resolve => { arrived = resolve })
+  const networkFetch: typeof fetch = async input => {
+    networkSignal = (input as Request).signal
+    arrived()
+    return new Promise((_resolve, reject) => {
+      networkSignal.addEventListener('abort', () => reject(networkSignal.reason), { once: true })
+    })
+  }
+  const bridge = createBridgedFetch({
+    dispatch: async () => new Response(),
+    getDelegatedToken: async () => ({ accessToken: 'abort-token', expiresOn: null }),
+    fetch: encryptedAzureFetch(withNetworkErrors(networkFetch), () => [master], () => {}),
+  })
+  const pending = bridge(url, { method, signal: controller.signal, headers: { Authorization: 'Bearer abort-token' }, ...(method === 'PUT' ? { body: '{}' } : {}) })
+  const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+  await started
+  expect(networkSignal.aborted).toBe(false)
+  controller.abort()
+  expect(networkSignal.aborted).toBe(true)
+  await rejected
 })

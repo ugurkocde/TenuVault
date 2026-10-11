@@ -79,6 +79,7 @@ const MAX_JOBS = 25
 const CONCURRENCY = 8
 const REQUEST_TIMEOUT_MS = 90_000
 const REQUEST_ATTEMPTS = 3
+const MAX_RETRY_DELAY_MS = 5 * 60_000
 
 /**
  * The storage provider refused a delete because the blob is protected by an immutability
@@ -107,6 +108,9 @@ class GraphError extends Error {
     super(message)
   }
 }
+
+/** Another reader extended the shared pause while this reader acquired its token. */
+class GraphPauseError extends Error {}
 
 class StorageError extends Error {}
 
@@ -410,6 +414,7 @@ export class BackupEngine {
 /** Graph reads for one backup. A throttled request (429) pauses every reader until Graph allows requests again. */
 class GraphSession {
   private resumeAt = 0
+  private throttleError: Error | undefined
 
   constructor(
     private readonly fetchImpl: typeof fetch,
@@ -436,21 +441,36 @@ class GraphSession {
   /** GET with bounded retries for throttling, transient status codes and network failures. */
   async get<T = Record<string, unknown>>(url: string): Promise<T> {
     for (let attempt = 0; ; attempt++) {
-      const wait = this.resumeAt - Date.now()
-      if (wait > 0) await sleep(wait)
+      while (this.resumeAt > Date.now() && !this.throttleError) await sleep(this.resumeAt - Date.now())
+      if (this.throttleError) throw this.throttleError
       let response: Response | undefined
       try {
         return await withRequestTimeout(async (signal) => {
           const token = await this.token()
           signal.throwIfAborted()
+          if (this.throttleError) throw this.throttleError
+          if (this.resumeAt > Date.now()) throw new GraphPauseError()
           response = await this.fetchImpl(url, { signal, headers: { Authorization: `Bearer ${token}` } })
           if (response.ok) return (await response.json()) as T
           throw new GraphError(await graphError(response), response.status)
         })
       } catch (error) {
-        if (error instanceof TokenError || (error instanceof GraphError && !retryableStatus(error.status)) || attempt >= REQUEST_ATTEMPTS - 1) throw error
-        const delay = retryDelay(response, attempt)
+        if (error instanceof GraphPauseError) {
+          attempt--
+          continue
+        }
+        if (this.throttleError && error === this.throttleError) throw error
+        if (error instanceof TokenError || (error instanceof GraphError && !retryableStatus(error.status))) throw error
+        let delay: number
+        try {
+          delay = retryDelay(response, attempt)
+        } catch (delayError) {
+          // A pause beyond our bound stops readers instead of sending requests before Graph permits them.
+          if (response?.status === 429 && delayError instanceof Error) this.throttleError = delayError
+          throw delayError
+        }
         if (response?.status === 429) this.resumeAt = Math.max(this.resumeAt, Date.now() + delay)
+        if (attempt >= REQUEST_ATTEMPTS - 1) throw error
         await sleep(delay)
       }
     }
@@ -530,8 +550,21 @@ class BlobWriter {
       method: "PUT",
       headers: { "x-ms-blob-type": "BlockBlob", "content-type": "application/json" },
       body,
-    }, async (response) => {
-      if (!response.ok) throw new StorageError(await storageError(response, this.account))
+    }, async (response, signal, ambiguous) => {
+      if (response.ok) return
+      if (ambiguous && (response.status === 409 || response.status === 412
+        || isImmutabilityRefusal(response.status, response.headers.get("x-ms-error-code") ?? ""))) {
+        // The earlier PUT may have landed. Read through the same decrypting wrapper and compare plaintext.
+        const stored = await this.request(path, { method: "GET", signal }, async (readBack) => {
+          if (!readBack.ok) throw new StorageError(await storageError(readBack, this.account))
+          return readBack.text()
+        })
+        if (stored === body) {
+          void response.body?.cancel().catch(() => undefined)
+          return
+        }
+      }
+      throw new StorageError(await storageError(response, this.account))
     })
   }
 
@@ -589,7 +622,8 @@ class BlobWriter {
     })
   }
 
-  private async request<T>(path: string, init: RequestInit, read: (response: Response) => Promise<T>): Promise<T> {
+  private async request<T>(path: string, init: RequestInit, read: (response: Response, signal: AbortSignal, ambiguous: boolean) => Promise<T>): Promise<T> {
+    let ambiguous = false
     for (let attempt = 0; ; attempt++) {
       let response: Response | undefined
       try {
@@ -610,10 +644,11 @@ class BlobWriter {
             void response.body?.cancel().catch(() => undefined)
             throw new Error(`Storage returned ${response.status}`)
           }
-          return read(response)
+          return read(response, signal, ambiguous)
         })
       } catch (error) {
         if (error instanceof TokenError || error instanceof StorageError || error instanceof ProtectedBlobError || init.signal?.aborted || attempt >= REQUEST_ATTEMPTS - 1) throw error
+        ambiguous = true
         await sleep(retryDelay(response, attempt))
       }
     }
@@ -638,9 +673,12 @@ async function withRequestTimeout<T>(request: (signal: AbortSignal) => Promise<T
 const retryableStatus = (status: number) => status === 429 || status >= 500
 
 function retryDelay(response: Response | undefined, attempt: number): number {
-  const retryAfter = Number(response?.headers.get("retry-after"))
-  // A malformed or very long Retry-After must not hold up every scheduled tenant indefinitely.
-  return Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 60_000) : 1000 * 2 ** attempt
+  const header = response?.headers.get("retry-after")
+  const seconds = Number(header)
+  const retryAfter = Number.isFinite(seconds) ? seconds * 1000 : header ? Date.parse(header) - Date.now() : NaN
+  // Never shorten a server's pause. A longer interval fails this bounded request instead.
+  if (retryAfter > MAX_RETRY_DELAY_MS) throw new Error("The service requested a retry delay longer than 5 minutes. Retry this backup later.")
+  return Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 1000 * 2 ** attempt
 }
 
 async function graphError(response: Response): Promise<string> {

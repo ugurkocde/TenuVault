@@ -33,8 +33,10 @@ Put these in the next stable release's notes, then remove them here.
 
 - Malformed stored backup keyrings now stop key creation and recovery key import instead of silently replacing keys. Recover the original `app-state.bin` before continuing.
 
-- Scheduled backups now save `lastAttemptAt` and `attempts` alongside the last successful
-  `lastRunAt`. Existing schedules load automatically. A failure recorded by an older version
+- Scheduled backups now save `lastAttemptAt`, `attemptSlot` and `attempts` alongside the last successful
+  `lastRunAt`. The slot recorded when an attempt starts keeps its budget even if the run finishes
+  after the next scheduled time. Existing schedules load automatically. Records without `attemptSlot`
+  infer it from the last attempt's timestamp. A failure recorded by an older version
   becomes a failed attempt rather than a successful run and can be retried after 15 minutes,
   within the three-attempt limit for that slot. Downgrading loses this retry behavior because
   older versions do not use the new fields.

@@ -110,6 +110,8 @@ export interface BackupSchedule extends ScheduleInput {
   lastRunAt?: string
   /** When the last automatic attempt finished, including failures. */
   lastAttemptAt?: string
+  /** Scheduled slot whose attempt budget is recorded, as an ISO timestamp. */
+  attemptSlot?: string
   /** Failed attempts in the most recent attempted slot; reset on success. */
   attempts: number
   lastStatus?: "Completed" | "Failed"

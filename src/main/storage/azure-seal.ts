@@ -43,7 +43,7 @@ export function encryptedAzureFetch(fetchImpl: typeof fetch, keys: () => Buffer[
       requireRecovery()
       const body = sealAzure(Buffer.from(await request.arrayBuffer()), keys()[0]!, context.tenant, url)
       const headers = new Headers(request.headers); headers.set('content-type', 'application/octet-stream'); headers.delete('content-length')
-      return fetchImpl(new Request(url, { method: 'PUT', headers, body: new Uint8Array(body) }))
+      return fetchImpl(new Request(url, { method: 'PUT', headers, body: new Uint8Array(body), signal: request.signal }))
     }
     const response = await fetchImpl(request)
     if (!response.ok) return response

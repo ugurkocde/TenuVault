@@ -139,9 +139,32 @@ describe("BackupScheduler", () => {
     setNow(local(2026, 9, 25, 9))
     await scheduler.tick()
     const restarted = new BackupScheduler(store, run, () => undefined, () => new Date(local(2026, 9, 25, 9, 14)))
-    expect(restarted.list()[0]).toMatchObject({ attempts: 1, lastAttemptAt: local(2026, 9, 25, 9), nextRunAt: local(2026, 9, 25, 9, 15) })
+    expect(restarted.list()[0]).toMatchObject({ attempts: 1, attemptSlot: local(2026, 9, 25, 2), lastAttemptAt: local(2026, 9, 25, 9), nextRunAt: local(2026, 9, 25, 9, 15) })
     await restarted.tick()
     expect(run).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(["daily", "weekly"] as const)("keeps a third attempt crossing the next %s slot on its original budget", async (frequency) => {
+    const { scheduler, store, run, setNow } = setup(local(2026, 9, 19, 10))
+    const originalSlot = frequency === "daily" ? local(2026, 9, 26, 2) : local(2026, 9, 20, 2)
+    run.mockResolvedValue({ status: "Failed", message: "Network unavailable" })
+    scheduler.set({ tenantId: TENANT, enabled: true, frequency, weekday: 0, time: "02:00" })
+    for (const minute of [29, 44]) {
+      setNow(local(2026, 9, 27, 1, minute))
+      await scheduler.tick()
+    }
+    run.mockImplementationOnce(async () => {
+      setNow(local(2026, 9, 27, 2, 4))
+      return { status: "Failed", message: "Network unavailable" }
+    })
+    setNow(local(2026, 9, 27, 1, 59))
+    await scheduler.tick()
+    expect(scheduler.list()[0]).toMatchObject({ attempts: 3, attemptSlot: originalSlot, lastAttemptAt: local(2026, 9, 27, 2, 4), nextRunAt: local(2026, 9, 27, 2, 4) })
+    const restarted = new BackupScheduler(store, run, () => undefined, () => new Date(local(2026, 9, 27, 2, 4)))
+    expect(restarted.isDue(restarted.list()[0]!)).toBe(true)
+    await restarted.tick()
+    expect(run).toHaveBeenCalledTimes(4)
+    expect(restarted.list()[0]).toMatchObject({ attempts: 1, attemptSlot: local(2026, 9, 27, 2) })
   })
 
   it("clears both timers on stop and can restart", async () => {
@@ -187,7 +210,7 @@ describe("BackupScheduler", () => {
     const good = scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
     const invalid = [null, [], { time: "25:00" }, { since: "not a date" }, { frequency: "monthly" },
       { enabled: "yes" }, { frequency: "weekly", weekday: 1.5 }, { lastAttemptAt: "bad" }, { attempts: -1 },
-      { attempts: 4 }, { lastStatus: "Running" }, { lastRunAt: "bad" }]
+      { attempts: 4 }, { lastStatus: "Running" }, { lastRunAt: "bad" }, { attemptSlot: "bad" }]
     const entries = Object.fromEntries(invalid.map((value, index) => {
       const id = `bad-${index}`
       return [id, value === null || Array.isArray(value) ? value : { ...good, tenantId: id, ...value }]

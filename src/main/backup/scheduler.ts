@@ -108,7 +108,8 @@ export class BackupScheduler {
       for (const tenantId of Object.keys(this.read())) {
         const schedule = this.read()[tenantId]
         if (!schedule || !this.isDue(schedule)) continue
-        const attempts = this.slotAttempts(schedule) + 1
+        const slot = this.lastSlot(schedule)
+        const attempts = this.slotAttempts(schedule, slot) + 1
         const result = await this.run(schedule.tenantId).catch((error: unknown) => ({
           status: "Failed" as const,
           message: error instanceof Error ? error.message : String(error),
@@ -121,6 +122,7 @@ export class BackupScheduler {
             ...current,
             lastRunAt: result.status === "Completed" ? at : current.lastRunAt,
             lastAttemptAt: at,
+            attemptSlot: current.since === schedule.since ? slot.toISOString() : current.attemptSlot,
             // Edits made during a backup start a new schedule with a fresh attempt budget.
             attempts: result.status === "Completed" || current.since !== schedule.since ? 0 : attempts,
             lastStatus: result.status,
@@ -148,8 +150,13 @@ export class BackupScheduler {
   nextRun(schedule: BackupSchedule): Date | null {
     if (!schedule.enabled) return null
     if (this.isDue(schedule)) return this.now()
-    const next = this.slotOn(schedule, this.now())
-    while (next <= this.now()) next.setDate(next.getDate() + (schedule.frequency === "weekly" ? 7 : 1))
+    const now = this.now()
+    let next = this.slotOn(schedule, now)
+    if (next <= now) {
+      const reference = new Date(now)
+      reference.setDate(reference.getDate() + (schedule.frequency === "weekly" ? 7 : 1))
+      next = this.slotOn(schedule, reference)
+    }
     const attempts = this.slotAttempts(schedule)
     if (attempts > 0 && attempts < MAX_ATTEMPTS) {
       const retry = new Date(Date.parse(schedule.lastAttemptAt!) + RETRY_MS)
@@ -158,24 +165,26 @@ export class BackupScheduler {
     return next
   }
 
-  private slotAttempts(schedule: BackupSchedule): number {
+  private slotAttempts(schedule: BackupSchedule, slot = this.lastSlot(schedule)): number {
     const lastAttempt = schedule.lastAttemptAt ? Date.parse(schedule.lastAttemptAt) : 0
-    return lastAttempt >= this.lastSlot(schedule).getTime() && lastAttempt > Date.parse(schedule.since) ? schedule.attempts : 0
+    return schedule.attemptSlot === slot.toISOString() && lastAttempt > Date.parse(schedule.since) ? schedule.attempts : 0
   }
 
   /** The most recent slot at or before now, in local time. */
-  private lastSlot(schedule: BackupSchedule): Date {
-    const slot = this.slotOn(schedule, this.now())
-    while (slot > this.now()) slot.setDate(slot.getDate() - (schedule.frequency === "weekly" ? 7 : 1))
-    return slot
+  private lastSlot(schedule: BackupSchedule, reference = this.now()): Date {
+    const slot = this.slotOn(schedule, reference)
+    if (slot <= reference) return slot
+    const previous = new Date(reference)
+    previous.setDate(previous.getDate() - (schedule.frequency === "weekly" ? 7 : 1))
+    return this.slotOn(schedule, previous)
   }
 
   /** The slot in the week (weekly) or on the day (daily) of `reference`. */
   private slotOn(schedule: BackupSchedule, reference: Date): Date {
     const [hours, minutes] = schedule.time.split(":").map(Number) as [number, number]
     const slot = new Date(reference)
-    slot.setHours(hours, minutes, 0, 0)
     if (schedule.frequency === "weekly") slot.setDate(slot.getDate() + ((schedule.weekday ?? 0) - slot.getDay()))
+    slot.setHours(hours, minutes, 0, 0)
     return slot
   }
 
@@ -186,7 +195,11 @@ export class BackupScheduler {
       const schedules: Record<string, BackupSchedule> = {}
       for (const [id, value] of Object.entries(parsed)) {
         const schedule = parseSchedule(id, value)
-        if (schedule) schedules[id] = schedule
+        if (schedule) {
+          // Records without a slot predate slot tracking; infer it once from their attempt timestamp.
+          if (!schedule.attemptSlot && schedule.lastAttemptAt) schedule.attemptSlot = this.lastSlot(schedule, new Date(schedule.lastAttemptAt)).toISOString()
+          schedules[id] = schedule
+        }
         else console.warn(`[backup-scheduler] Skipping malformed schedule: ${id}`)
       }
       return schedules
@@ -215,6 +228,7 @@ function parseSchedule(id: string, value: unknown): BackupSchedule | null {
     || (entry.weekday !== undefined && !validWeekday(entry.weekday))
     || (entry.lastRunAt !== undefined && !validDate(entry.lastRunAt))
     || (entry.lastAttemptAt !== undefined && !validDate(entry.lastAttemptAt))
+    || (entry.attemptSlot !== undefined && !validDate(entry.attemptSlot))
     || (entry.lastStatus !== undefined && entry.lastStatus !== "Completed" && entry.lastStatus !== "Failed")
     || (entry.lastMessage !== undefined && typeof entry.lastMessage !== "string")
     || (entry.attempts !== undefined && (typeof entry.attempts !== "number" || !Number.isInteger(entry.attempts) || entry.attempts < 0 || entry.attempts > MAX_ATTEMPTS))) return null
