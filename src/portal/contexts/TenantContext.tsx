@@ -4,6 +4,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import type { TenantCredentials } from "~/components/tenants/add-tenant-modal"
 import type { TenantMetadata } from "~/types/tenant-metadata"
 import { tenantStorage } from "~/lib/tenant-storage"
+import { clearTenantSyncTimers, deserializeTenants, scheduleTenantSync, serializeTenants, type TenantSyncTimers } from "~/lib/tenant-state"
 
 /** Where a tenant's backups are stored (and, for Azure storage, its location). */
 export interface SelectedResources {
@@ -70,25 +71,21 @@ const TenantContext = createContext<TenantContextType | undefined>(undefined)
 const STORAGE_KEY = "tenuvault_tenants"
 const SELECTED_TENANT_KEY = "tenuvault_selected_tenant"
 
-// Simple encryption for sensitive data (in production, use a proper encryption library)
-const encrypt = (text: string): string => {
-  // Simple base64 encoding for demo - in production use proper encryption
-  return btoa(text)
-}
-
-const decrypt = (text: string): string => {
-  try {
-    return atob(text)
-  } catch {
-    return text
-  }
-}
-
 export function TenantProvider({ children }: { children: React.ReactNode }) {
   const [tenants, setTenants] = useState<Tenant[]>([])
   const [selectedTenantId, setSelectedTenantId] = useState<number | null>(null)
   const [isLoaded, setIsLoaded] = useState(false)
-  const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const tenantsRef = useRef(tenants)
+  const syncTimeoutsRef = useRef<TenantSyncTimers>(new Map())
+
+  useEffect(() => {
+    tenantsRef.current = tenants
+  }, [tenants])
+
+  useEffect(() => {
+    const timers = syncTimeoutsRef.current
+    return () => clearTenantSyncTimers(timers)
+  }, [])
 
   // Load tenants from sessionStorage on mount
   useEffect(() => {
@@ -98,16 +95,7 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
         const selectedId = tenantStorage.getItem(SELECTED_TENANT_KEY)
         
         if (stored) {
-          const parsed = JSON.parse(stored) as Tenant[]
-          // Decrypt sensitive data
-          const decrypted = parsed.map(tenant => ({
-            ...tenant,
-            credentials: tenant.credentials ? {
-              ...tenant.credentials,
-              clientSecret: decrypt(tenant.credentials.clientSecret)
-            } : undefined
-          }))
-          setTenants(decrypted)
+          setTenants(deserializeTenants(stored))
         }
         
         if (selectedId) {
@@ -124,15 +112,7 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (isLoaded && typeof window !== "undefined") {
       try {
-        // Encrypt sensitive data before storing
-        const toStore = tenants.map(tenant => ({
-          ...tenant,
-          credentials: tenant.credentials ? {
-            ...tenant.credentials,
-            clientSecret: encrypt(tenant.credentials.clientSecret)
-          } : undefined
-        }))
-        tenantStorage.setItem(STORAGE_KEY, JSON.stringify(toStore))
+        tenantStorage.setItem(STORAGE_KEY, serializeTenants(tenants))
       } catch (error) {
         console.error("Error saving tenants to sessionStorage:", error)
       }
@@ -391,32 +371,19 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
 
   // Auto-sync to Azure when tenant is updated (with debouncing)
   const updateTenantWithSync = useCallback((id: number, updates: Partial<Tenant>) => {
-    // First update the tenant locally
-    setTenants(prev => {
-      const updated = prev.map(tenant => 
-        tenant.id === id ? { ...tenant, ...updates } : tenant
-      )
-      
-      // Schedule sync with the updated tenant data
-      if (syncTimeoutRef.current) {
-        clearTimeout(syncTimeoutRef.current)
+    updateTenant(id, updates)
+    scheduleTenantSync(syncTimeoutsRef.current, id, () => {
+      const updatedTenant = tenantsRef.current.find(t => t.id === id)
+      if (updatedTenant) {
+        console.log("Auto-syncing tenant to Azure after update:", {
+          id: updatedTenant.id,
+          tags: updatedTenant.tags,
+          name: updatedTenant.name
+        })
+        void syncTenantToAzureDirect(updatedTenant)
       }
-      
-      syncTimeoutRef.current = setTimeout(() => {
-        const updatedTenant = updated.find(t => t.id === id)
-        if (updatedTenant) {
-          console.log("Auto-syncing tenant to Azure after update:", { 
-            id: updatedTenant.id, 
-            tags: updatedTenant.tags,
-            name: updatedTenant.name 
-          })
-          void syncTenantToAzureDirect(updatedTenant)
-        }
-      }, 2000)
-      
-      return updated
     })
-  }, [syncTenantToAzureDirect])
+  }, [updateTenant, syncTenantToAzureDirect])
 
   return (
     <TenantContext.Provider value={{

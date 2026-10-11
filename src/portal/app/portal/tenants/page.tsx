@@ -1231,8 +1231,12 @@ function TenantsPageContent() {
       {/* Tag Management Modal */}
       {tagModalTenant && (
         <TagManagementModal
+          key={tagModalTenant.id}
           open={showTagModal}
-          onOpenChange={setShowTagModal}
+          onOpenChange={(open) => {
+            setShowTagModal(open)
+            if (!open) setTagModalTenant(null)
+          }}
           tenantName={tagModalTenant.name}
           currentTags={tagModalTenant.id === -1 ? [] : tagModalTenant.tags || []}
           availableTags={allTenantTags}
