@@ -22,9 +22,10 @@ import { BackupScopes } from "./backup/scopes"
 import { includedTypes, normalizeScope, type BackupScope } from "../shared/intune/scope"
 import { RefusalLog, refuseUnlicensedBackup } from "./backup/refusals"
 import { BackupKeys } from "./backup/keys"
+import { readBackupSettings } from "./backup/settings"
 import { encryptedAzureFetch, registerStorageToken } from "./storage/azure-seal"
 import { handleLocalBlobRequest, isLocalAccount } from "./storage/blob-emulator"
-import { LocalBlobStore, localBackupsExist } from "./storage/local-blob-store"
+import { LocalBlobStore } from "./storage/local-blob-store"
 import { setRestoreJournalStore, setRestoreJournalAuthorization } from "./storage/restore-journal"
 import { accountStore, secureCachePlugin } from "./auth/stores"
 import {
@@ -174,14 +175,7 @@ async function bootstrap(): Promise<void> {
   const localFolder = () => appStore.get(LOCAL_FOLDER_KEY) ?? join(app.getPath("documents"), "TenuVault Backups")
   let localStore: LocalBlobStore | null = null
   const getLocalStore = () => (localStore ??= new LocalBlobStore(localFolder(), backupKeys.keyring()))
-  const backupSettings = async () => {
-    const keyFingerprint = backupKeys.fingerprint()
-    return {
-      localFolder: localFolder(), keyFingerprint,
-      recoveryExported: appStore.get("backup.recovery-exported") === keyFingerprint,
-      hasLocalBackups: await localBackupsExist(localFolder()),
-    }
-  }
+  const backupSettings = () => readBackupSettings(localFolder(), backupKeys, appStore)
 
   // Background requests never open a sign-in window; the renderer shows a prompt instead.
   const lastPrompt = new Map<string, number>()

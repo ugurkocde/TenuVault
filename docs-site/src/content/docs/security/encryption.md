@@ -39,6 +39,8 @@ When you choose **This device, encrypted** as storage:
 
 If local backup files exist or a tenant uses local storage, **Overview** and **Settings** show a persistent notice until you save the current recovery key. Select **Go to Save recovery key** to reach the export action in Settings. Local backups remain available while the notice is shown. The notice disappears after a successful export.
 
+If TenuVault cannot check the backup folder because access is denied or a drive is offline, Settings still shows the folder and key fingerprint. The recovery notice stays visible until you save the current recovery key, even if TenuVault cannot confirm whether the folder contains backups. You can save the key while the backup folder is unavailable.
+
 ## Backups in Azure
 
 When you choose **Your Azure storage account, encrypted** as storage:

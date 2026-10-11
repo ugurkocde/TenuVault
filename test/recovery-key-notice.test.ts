@@ -22,6 +22,14 @@ describe("recovery key notice", () => {
     expect(needsRecoveryKeyExport({ ...settings, hasLocalBackups: true, recoveryExported: true }, [])).toBe(false)
   })
 
+  it("warns conservatively when the local folder cannot be scanned, then hides after export", () => {
+    const unknown = { ...settings, hasLocalBackups: null }
+    expect(needsRecoveryKeyExport(unknown, [])).toBe(true)
+    expect(needsRecoveryKeyExport(unknown, ["tvlocal-tenant"])).toBe(true)
+    expect(needsRecoveryKeyExport(unknown, ["azure-account"])).toBe(true)
+    expect(needsRecoveryKeyExport({ ...unknown, recoveryExported: true }, ["tvlocal-tenant"])).toBe(false)
+  })
+
   it("does not warn while loading or when local backups are not in use", () => {
     expect(needsRecoveryKeyExport(null, ["tvlocal-tenant"])).toBe(false)
     expect(needsRecoveryKeyExport(settings, [])).toBe(false)

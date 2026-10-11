@@ -83,8 +83,8 @@ export interface BackupSettings {
   keyFingerprint: string
   /** The current key fingerprint matches the recorded recovery key export. */
   recoveryExported: boolean
-  /** Encrypted backup files exist in the current local folder, even without a connected tenant. */
-  hasLocalBackups: boolean
+  /** Encrypted backup files exist in the local folder. Null means the scan could not rule them out. */
+  hasLocalBackups: boolean | null
 }
 
 /** What a tenant backs up. `saved` is false while the tenant uses the default. */

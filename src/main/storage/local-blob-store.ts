@@ -38,23 +38,32 @@ const IV = 12
 const TAG = 16
 const EXT = ".tvb"
 
-/** Detects encrypted local backup files without needing their keys or reading their content. */
-export async function localBackupsExist(root: string): Promise<boolean> {
+/** Detects encrypted local backup files. Returns null if an incomplete scan cannot rule them out. */
+export async function localBackupsExist(
+  root: string,
+  readDirectory = (path: string) => readdir(path, { withFileTypes: true }),
+): Promise<boolean | null> {
   try {
-    const accounts = await readdir(root, { withFileTypes: true })
+    const accounts = await readDirectory(root)
+    let incomplete = false
     for (const account of accounts) {
       if (!account.isDirectory()) continue
+      const folder = join(root, account.name, "intune-backups")
       try {
-        const files = await readdir(join(root, account.name, "intune-backups"), { withFileTypes: true })
+        const files = await readDirectory(folder)
         if (files.some((file) => file.isFile() && file.name.endsWith(EXT))) return true
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+        if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+          incomplete = true
+          console.warn(`[backups] Could not scan local backup folder ${folder}:`, error)
+        }
       }
     }
-    return false
+    return incomplete ? null : false
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false
-    throw error
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return false
+    console.warn(`[backups] Could not scan local backup folder ${root}:`, error)
+    return null
   }
 }
 
