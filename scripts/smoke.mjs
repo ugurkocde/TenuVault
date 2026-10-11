@@ -562,6 +562,9 @@ await check("tag drafts stay with their tenant and bulk tags sync every tenant",
     assert(await waitForCondition(`[...document.querySelectorAll('[role="menuitem"]')].some(b => b.innerText.trim() === 'Manage Tags')`), "tenant actions menu did not open")
     await evaluate(`[...document.querySelectorAll('[role="menuitem"]')].find(b => b.innerText.trim() === 'Manage Tags').click()`)
     assert(await waitForText(`Manage Tags for ${name}`), "tag dialog did not open")
+    assert(await waitForCondition(`document.querySelector('[role="dialog"]')?.contains(document.activeElement)`), "tag dialog did not receive focus")
+    // Radix attaches its outside-pointer listener in a deferred task after mounting.
+    await evaluate(`new Promise(resolve => setTimeout(resolve, 0))`)
   }
   const closeTags = async (method = "cancel") => {
     if (method === "escape") {
