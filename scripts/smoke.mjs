@@ -553,6 +553,122 @@ await check("restarting clears interrupted tenant backup and refresh flags", asy
   assert(await waitForCondition(`JSON.parse(window.tenuvault.storage.getItemSync('tenuvault_tenants')).every(t => !Object.hasOwn(t, 'isLoading') && t.syncStatus !== 'pending')`), "in-flight flags were saved again")
 })
 
+await check("tenant renames show Saved in both views and clear confirmation timers", async () => {
+  await go("#/portal/tenants", "Tenant Management")
+  const editor = `document.querySelector('main input[type="text"]:not([aria-label="Search tenants"])')`
+  const saved = `[...document.querySelectorAll('main [role="status"]')].filter(s => s.textContent.trim() === 'Saved')`
+  const noCloudSync = `!document.querySelector('[title="Syncing to cloud..."]') && !document.querySelector('main .lucide-cloud-upload') && !document.querySelector('main').innerText.includes('Syncing to cloud')`
+  const startEditing = async name => {
+    await evaluate(`document.querySelector(${JSON.stringify(`button[aria-label="Rename tenant: ${name}"]`)}).click()`)
+    assert(await waitForCondition(`${editor}?.value === ${JSON.stringify(name)}`), "rename editor did not open")
+    assert(await evaluate(`document.querySelector('button[aria-label="Save tenant name"]')?.title === 'Save' && document.querySelector('button[aria-label="Save tenant name"] svg')?.classList.contains('text-green-600')`), "Save tooltip or green check missing")
+    assert(await evaluate(`document.querySelector('button[aria-label^="Cancel editing tenant name:"]')?.title === 'Cancel' && Boolean(document.querySelector('button[aria-label^="Cancel editing tenant name:"] .lucide-x'))`), "Cancel tooltip or icon missing")
+  }
+  const setName = async name => {
+    await evaluate(`(() => {
+      const input = ${editor}
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(name)})
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })()`)
+    assert(await waitForCondition(`${editor}?.value === ${JSON.stringify(name)}`), "name draft did not update")
+  }
+  const pressKey = async key => {
+    await send("Input.dispatchKeyEvent", { type: "keyDown", key, code: key })
+    await send("Input.dispatchKeyEvent", { type: "keyUp", key, code: key })
+  }
+  const saveName = async (name, method = "button") => {
+    await setName(name)
+    if (method === "enter") await pressKey("Enter")
+    else await evaluate(`document.querySelector('button[aria-label="Save tenant name"]').click()`)
+    assert(await waitForCondition(`!${editor}`), "save did not close the editor")
+  }
+  const assertSaved = async name => {
+    assert(await waitForCondition(`${saved}.some(s => s.parentElement.textContent.includes(${JSON.stringify(name)}))`), "Saved confirmation missing next to the renamed tenant")
+    assert(await evaluate(`${saved}.every(s => s.getAttribute('aria-live') === 'polite' && Boolean(s.querySelector('.lucide-check[aria-hidden="true"]')) && s.classList.contains('text-green-700'))`), "Saved confirmation is missing polite status, check or success style")
+    assert(await evaluate(noCloudSync), "rename displayed a cloud sync indicator")
+    return evaluate(`window.__tenantRenameTimers.scheduled.at(-1)`)
+  }
+  await evaluate(`(() => {
+    const timers = { active: new Set(), scheduled: [], cleared: new Set() }
+    window.__tenantRenameTimers = timers
+    window.__tenantRenameSetTimeout = window.setTimeout
+    window.__tenantRenameClearTimeout = window.clearTimeout
+    const setTimeout = window.setTimeout.bind(window)
+    const clearTimeout = window.clearTimeout.bind(window)
+    window.setTimeout = (callback, delay, ...args) => {
+      if (delay !== 2000) return setTimeout(callback, delay, ...args)
+      const timer = setTimeout(() => {
+        timers.active.delete(timer)
+        callback(...args)
+      }, delay)
+      timers.active.add(timer)
+      timers.scheduled.push(timer)
+      return timer
+    }
+    window.clearTimeout = timer => {
+      if (timers.active.delete(timer)) timers.cleared.add(timer)
+      clearTimeout(timer)
+    }
+  })()`)
+  try {
+    for (const view of ["Grid", "List"]) {
+      await evaluate(`document.querySelector('button[aria-label="${view} view"]').click()`)
+      await startEditing("Contoso 1")
+      const scheduled = await evaluate(`window.__tenantRenameTimers.scheduled.length`)
+      for (const name of ["Contoso 1", "  Contoso 1  ", "   "]) {
+        await saveName(name)
+        assert(await evaluate(`${saved}.length === 0 && window.__tenantRenameTimers.scheduled.length === ${scheduled}`), "unchanged or blank name showed Saved or scheduled a timer")
+        assert(await evaluate(`Boolean(document.querySelector('button[aria-label="Rename tenant: Contoso 1"]'))`), "unchanged or blank name changed the tenant")
+        await startEditing("Contoso 1")
+      }
+      await setName("Cancelled rename")
+      await pressKey("Escape")
+      assert(await waitForCondition(`!${editor} && ${saved}.length === 0`), "Escape did not cancel without Saved")
+      await startEditing("Contoso 1")
+      await setName("Cancelled rename")
+      await evaluate(`document.querySelector('button[title="Cancel"]').click()`)
+      assert(await waitForCondition(`!${editor} && ${saved}.length === 0`), "Cancel did not close without Saved")
+
+      await startEditing("Contoso 1")
+      await saveName(`  Contoso ${view} renamed  `, "enter")
+      const firstTimer = await assertSaved(`Contoso ${view} renamed`)
+      assert(await waitForCondition(`JSON.parse(window.tenuvault.storage.getItemSync('tenuvault_tenants')).find(t => t.id === 1).name === 'Contoso ${view} renamed'`), "trimmed rename was not saved locally")
+      assert(await evaluate(`${saved}.length === 1`), "rename showed more than one confirmation")
+      await sleep(1100)
+      await startEditing(`Contoso ${view} renamed`)
+      assert(await evaluate(`${saved}.length === 0 && window.__tenantRenameTimers.cleared.has(${firstTimer}) && !window.__tenantRenameTimers.active.has(${firstTimer})`), "new edit did not clear the prior confirmation timer")
+      await saveName("Contoso 1")
+      const replacementTimer = await assertSaved("Contoso 1")
+      await sleep(1100)
+      assert(await evaluate(`${saved}.length === 1 && window.__tenantRenameTimers.active.has(${replacementTimer})`), "the previous timer hid the new confirmation early")
+      assert(await waitForCondition(`${saved}.length === 0`, 4000), "Saved did not disappear after two seconds")
+      assert(await evaluate(`!window.__tenantRenameTimers.active.has(${replacementTimer})`), "expired confirmation timer was retained")
+
+      await startEditing("Contoso 1")
+      await saveName(`Contoso ${view} first`)
+      const firstTenantTimer = await assertSaved(`Contoso ${view} first`)
+      await startEditing("Contoso 2")
+      await saveName(`Contoso ${view} second`)
+      const secondTenantTimer = await assertSaved(`Contoso ${view} second`)
+      assert(await evaluate(`${saved}.length === 2 && window.__tenantRenameTimers.active.has(${firstTenantTimer}) && window.__tenantRenameTimers.active.has(${secondTenantTimer})`), "tenants did not keep independent confirmation timers")
+      await go("#/portal/overview", "All tenants")
+      assert(await evaluate(`window.__tenantRenameTimers.cleared.has(${firstTenantTimer}) && window.__tenantRenameTimers.cleared.has(${secondTenantTimer})`), "unmount did not clear all confirmation timers")
+      await go("#/portal/tenants", "Tenant Management")
+      assert(await evaluate(`${saved}.length === 0`), "Saved lingered after remount")
+      await startEditing(`Contoso ${view} first`)
+      await saveName("Contoso 1")
+      await startEditing(`Contoso ${view} second`)
+      await saveName("Contoso 2")
+      await go("#/portal/overview", "All tenants")
+      await go("#/portal/tenants", "Tenant Management")
+    }
+    // Let the restored names finish their metadata updates before the tag check.
+    assert(await waitForCondition(`window.__tenantRenameTimers.active.size === 0`, 4000), "restored tenant names still had pending metadata timers")
+  } finally {
+    await evaluate(`window.setTimeout = window.__tenantRenameSetTimeout; window.clearTimeout = window.__tenantRenameClearTimeout; delete window.__tenantRenameSetTimeout; delete window.__tenantRenameClearTimeout; delete window.__tenantRenameTimers`)
+  }
+})
+
 await check("tag drafts stay with their tenant and bulk tags sync every tenant", async () => {
   await go("#/portal/tenants", "Tenant Management")
   const currentTags = `document.querySelector('[role="dialog"] h3')?.nextElementSibling.innerText.trim()`
@@ -598,6 +714,7 @@ await check("tag drafts stay with their tenant and bulk tags sync every tenant",
     assert((await evaluate(currentTags)) === "Testing", "second tenant inherited the first tenant's tags or draft")
     await clickDialogButton("Save Tags")
     assert(await waitForCondition(`!document.querySelector('[role="dialog"]')`), "saved tag dialog did not close")
+    assert(await evaluate(`!document.querySelector('[title="Syncing to cloud..."]') && !document.querySelector('main .lucide-cloud-upload')`), "tag save displayed a cloud sync indicator")
     assert(await waitForCondition(`window.__tenantTagSaves.length === 1`), "second tenant tags were not synced")
     assert(await evaluate(`window.__tenantTagSaves[0].tenantId.startsWith('33333333') && window.__tenantTagSaves[0].metadata.tags.length === 1 && window.__tenantTagSaves[0].metadata.tags[0] === 'Testing'`), "metadata sync saved another tenant's tags")
     assert(await evaluate(`JSON.parse(window.tenuvault.storage.getItemSync('tenuvault_tenants')).every(t => JSON.stringify(t.tags) === JSON.stringify(t.id === 1 ? ['Production'] : ['Testing']))`), "tag draft leaked into saved profiles")
