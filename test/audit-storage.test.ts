@@ -19,6 +19,7 @@ function fixture() {
     const url = new URL(String(input))
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
     if (url.searchParams.get('comp') === 'list') {
+      if (!/202609(24|25)/.test(url.searchParams.get('prefix')!)) return new Response('<Blobs />')
       const day = url.searchParams.get('prefix')!.includes('20260924') ? 0 : 1
       const page = url.searchParams.get('marker') ? 1 : 0
       return new Response(`<Blobs><Blob><Name>${day}-${page}.json</Name></Blob></Blobs><NextMarker>${page ? '' : 'next&amp;page'}</NextMarker>`)

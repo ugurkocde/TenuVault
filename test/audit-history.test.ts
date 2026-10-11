@@ -25,7 +25,8 @@ function storage(entries: AuditLogEntry[]) {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(String(input))
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'storage-token' })
-    if (url.searchParams.get('comp') === 'list') return new Response('<Blobs><Blob><Name>day.json</Name></Blob></Blobs><NextMarker></NextMarker>')
+    if (url.searchParams.get('comp') === 'list') return new Response(url.searchParams.get('prefix')!.includes('20260924')
+      ? '<Blobs><Blob><Name>day.json</Name></Blob></Blobs><NextMarker></NextMarker>' : '<Blobs />')
     return Response.json({ entries })
   }))
 }

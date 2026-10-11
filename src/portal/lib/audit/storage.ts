@@ -2,6 +2,7 @@ import { acknowledgeEvent, acknowledgeEvents, pendingEvents, queueEvent } from '
 import { BlobListError, decodeXml, listBlobPages } from '../storage/list'
 import { blobPath } from '../../../shared/security'
 import { entriesForTenant } from './export'
+import { auditDateFilter, defaultAuditDateRange } from './date-range'
 import { 
   AuditLogEntry, 
   AuditLogFilter, 
@@ -64,22 +65,25 @@ export class AuditStorageService {
   }
 
   private getLogFilePath(date: Date): string {
-    const year = date.getFullYear()
-    const month = String(date.getMonth() + 1).padStart(2, '0')
-    const day = String(date.getDate()).padStart(2, '0')
+    const year = date.getUTCFullYear()
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+    const day = String(date.getUTCDate()).padStart(2, '0')
     return `${year}/${month}/${day}/audit-log-${year}${month}${day}.json`
   }
 
-  private getDateRange(filter: AuditLogFilter): Date[] {
-    const startDate = filter.startDate || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) // Default: last 7 days
-    const endDate = filter.endDate || new Date()
-    
+  private getDateRange(startDate: Date, endDate: Date): Date[] {
     const dates: Date[] = []
     const currentDate = new Date(startDate)
-    
-    while (currentDate <= endDate) {
+    const lastDate = new Date(endDate)
+    currentDate.setUTCHours(0, 0, 0, 0)
+    lastDate.setUTCHours(0, 0, 0, 0)
+    // Older writers grouped events by local day, which can neighbor their UTC day.
+    currentDate.setUTCDate(currentDate.getUTCDate() - 1)
+    lastDate.setUTCDate(lastDate.getUTCDate() + 1)
+
+    while (currentDate <= lastDate) {
       dates.push(new Date(currentDate))
-      currentDate.setDate(currentDate.getDate() + 1)
+      currentDate.setUTCDate(currentDate.getUTCDate() + 1)
     }
     
     return dates
@@ -182,13 +186,17 @@ export class AuditStorageService {
 
   /** Complete matching history for exports and aggregates, independent of UI pagination. */
   async queryAllLogs(filter: AuditLogFilter): Promise<AuditLogEntry[]> {
-    const dates = this.getDateRange(filter)
-    const allEntries: AuditLogEntry[] = []
+    const defaultDates = auditDateFilter(defaultAuditDateRange())
+    const startDate = filter.startDate || new Date(defaultDates.startDate!)
+    const endDate = filter.endDate || new Date(defaultDates.endDate!)
+    const startTime = startDate.getTime()
+    const endTime = endDate.getTime()
+    const dates = this.getDateRange(startDate, endDate)
+    const allEntries = new Map<string, AuditLogEntry>()
     
     // Fetch logs from each date in parallel
     const promises = dates.map(async (date) => {
       const filePath = this.getLogFilePath(date)
-      const baseUrl = `${this.getBaseUrl()}/${AUDIT_CONTAINER}/${filePath}`
       
       // Also check for archived files
       const listUrl = `${this.getBaseUrl()}/${AUDIT_CONTAINER}?restype=container&comp=list&prefix=${filePath.replace('.json', '')}`
@@ -231,10 +239,22 @@ export class AuditStorageService {
     })
     
     const results = await Promise.all(promises)
-    results.forEach(entries => allEntries.push(...entries))
+    // An upgrade retry can save the same ID under both local and UTC days. Prefer the UTC copy.
+    results.forEach((entries, index) => {
+      const dayPath = this.getLogFilePath(dates[index]!)
+      for (const entry of entries) {
+        if (!allEntries.has(entry.id) || this.getLogFilePath(new Date(entry.timestamp)) === dayPath) {
+          allEntries.set(entry.id, entry)
+        }
+      }
+    })
     
     // Apply filters
-    let filteredEntries = filter.tenantId ? entriesForTenant(allEntries, filter.tenantId) : allEntries
+    let filteredEntries = Array.from(allEntries.values()).filter(entry => {
+      const timestamp = new Date(entry.timestamp).getTime()
+      return timestamp >= startTime && timestamp <= endTime
+    })
+    if (filter.tenantId) filteredEntries = entriesForTenant(filteredEntries, filter.tenantId)
     
     if (filter.eventTypes?.length) {
       filteredEntries = filteredEntries.filter(e => filter.eventTypes!.includes(e.eventType))

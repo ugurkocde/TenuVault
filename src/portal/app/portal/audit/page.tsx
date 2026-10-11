@@ -26,6 +26,7 @@ import { canUse, GatedButton, LockedPreview } from "@desktop/components/PlanGate
 import { useTenantPlan } from "@desktop/lib/license"
 import { toast } from "@desktop/lib/toast"
 import { OWN_OPERATION_NOTICE } from "~/lib/audit/export"
+import { auditDateFilter, defaultAuditDateRange } from "~/lib/audit/date-range"
 
 function AuditPageContent() {
   const { selectedTenant } = useSelectedTenant()
@@ -40,10 +41,8 @@ function AuditPageContent() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
-  const [dateRange, setDateRange] = useState({
-    startDate: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-    endDate: new Date().toISOString().split('T')[0]
-  })
+  const [dateRange, setDateRange] = useState(defaultAuditDateRange)
+  const dateFilter = auditDateFilter(dateRange)
   const [filters, setFilters] = useState({
     eventTypes: [] as AuditEventType[],
     severities: [] as AuditSeverity[],
@@ -87,8 +86,7 @@ function AuditPageContent() {
           clientSecret: selectedTenant.credentials?.clientSecret,
           storageAccountName: selectedTenant.resources?.storageAccountName,
           filter: {
-            startDate: dateRange.startDate,
-            endDate: dateRange.endDate,
+            ...dateFilter,
             searchQuery: searchQuery || undefined,
             eventTypes: filters.eventTypes.length > 0 ? filters.eventTypes : undefined,
             severities: filters.severities.length > 0 ? filters.severities : undefined,
@@ -145,8 +143,7 @@ function AuditPageContent() {
           clientSecret: selectedTenant.credentials?.clientSecret,
           storageAccountName: selectedTenant.resources?.storageAccountName,
           filter: {
-            startDate: dateRange.startDate,
-            endDate: dateRange.endDate,
+            ...dateFilter,
           }
         }),
       })
@@ -211,8 +208,7 @@ function AuditPageContent() {
           exportOptions: {
             format,
             filter: {
-              startDate: dateRange.startDate,
-              endDate: dateRange.endDate,
+              ...dateFilter,
               searchQuery: searchQuery || undefined,
               eventTypes: filters.eventTypes.length > 0 ? filters.eventTypes : undefined,
               severities: filters.severities.length > 0 ? filters.severities : undefined,
