@@ -164,8 +164,8 @@ export default function OverviewPage() {
                     <span className={cn("flex items-center gap-2", failed && "text-red-700")}>
                       {failed ? <AlertCircle className="h-4 w-4 shrink-0 text-red-600" /> : <CheckCircle2 className="h-4 w-4 shrink-0 text-gray-400" />}
                       <span className="truncate">
-                        {schedule?.lastRunAt
-                          ? `${failed ? "Last automatic backup failed" : "Last automatic backup"} ${formatWhen(schedule.lastRunAt)}`
+                        {schedule?.lastAttemptAt
+                          ? `${failed ? "Last automatic backup attempt failed" : "Last automatic backup"} ${formatWhen(schedule.lastAttemptAt)}`
                           : tenant.lastBackup
                             ? `Last backup ${formatWhen(tenant.lastBackup)}`
                             : "No backups yet"}

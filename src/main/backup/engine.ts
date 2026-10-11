@@ -77,6 +77,8 @@ const listUrl = (type: IntuneType) => `${GRAPH}/beta/${type.path}${type.listQuer
 
 const MAX_JOBS = 25
 const CONCURRENCY = 8
+const REQUEST_TIMEOUT_MS = 90_000
+const REQUEST_ATTEMPTS = 3
 
 /**
  * The storage provider refused a delete because the blob is protected by an immutability
@@ -105,6 +107,8 @@ class GraphError extends Error {
     super(message)
   }
 }
+
+class StorageError extends Error {}
 
 async function tokenOrStop(get: () => Promise<string>): Promise<string> {
   try {
@@ -417,6 +421,7 @@ class GraphSession {
     let next: string | undefined = url
     const seen = new Set<string>()
     while (next) {
+      if (seen.size >= MAX_LIST_PAGES) throw new Error(`Graph listing did not finish after ${MAX_LIST_PAGES} pages`)
       const parsed = new URL(next)
       if (parsed.origin !== GRAPH || !parsed.pathname.startsWith("/beta/") || seen.has(next)) throw new Error("Invalid Graph continuation link")
       seen.add(next)
@@ -428,21 +433,26 @@ class GraphSession {
     return items
   }
 
-  /** GET with retries for Graph throttling (429) and transient errors (5xx). */
+  /** GET with bounded retries for throttling, transient status codes and network failures. */
   async get<T = Record<string, unknown>>(url: string): Promise<T> {
     for (let attempt = 0; ; attempt++) {
       const wait = this.resumeAt - Date.now()
       if (wait > 0) await sleep(wait)
-      const response = await this.fetchImpl(url, { headers: { Authorization: `Bearer ${await this.token()}` } })
-      if (response.ok) return (await response.json()) as T
-      const retryable = response.status === 429 || response.status >= 500
-      if (!retryable || attempt >= 4) {
-        throw new GraphError(await graphError(response), response.status)
+      let response: Response | undefined
+      try {
+        return await withRequestTimeout(async (signal) => {
+          const token = await this.token()
+          signal.throwIfAborted()
+          response = await this.fetchImpl(url, { signal, headers: { Authorization: `Bearer ${token}` } })
+          if (response.ok) return (await response.json()) as T
+          throw new GraphError(await graphError(response), response.status)
+        })
+      } catch (error) {
+        if (error instanceof TokenError || (error instanceof GraphError && !retryableStatus(error.status)) || attempt >= REQUEST_ATTEMPTS - 1) throw error
+        const delay = retryDelay(response, attempt)
+        if (response?.status === 429) this.resumeAt = Math.max(this.resumeAt, Date.now() + delay)
+        await sleep(delay)
       }
-      const retryAfter = Number(response.headers.get("retry-after"))
-      const delay = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1000 * 2 ** attempt
-      if (response.status === 429) this.resumeAt = Math.max(this.resumeAt, Date.now() + delay)
-      await sleep(delay)
     }
   }
 }
@@ -508,19 +518,21 @@ class BlobWriter {
   }
 
   async ensureContainer(): Promise<void> {
-    const response = await this.request(`${BACKUP_CONTAINER}?restype=container`, { method: "PUT" })
-    if (response.ok || response.status === 409) return
-    throw new Error(await storageError(response, this.account))
+    await this.request(`${BACKUP_CONTAINER}?restype=container`, { method: "PUT" }, async (response) => {
+      if (response.ok || response.status === 409) return
+      throw new StorageError(await storageError(response, this.account))
+    })
   }
 
   async put(name: string, body: string): Promise<void> {
     const path = `${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`
-    const response = await this.request(path, {
+    await this.request(path, {
       method: "PUT",
       headers: { "x-ms-blob-type": "BlockBlob", "content-type": "application/json" },
       body,
+    }, async (response) => {
+      if (!response.ok) throw new StorageError(await storageError(response, this.account))
     })
-    if (!response.ok) throw new Error(await storageError(response, this.account))
   }
 
   /** Lists blob names and, with a delimiter, virtual folders under a prefix. */
@@ -532,10 +544,12 @@ class BlobWriter {
     do {
       if (seen.size >= MAX_LIST_PAGES) throw new Error(`Storage listing did not finish after ${MAX_LIST_PAGES} pages`)
       const query = new URLSearchParams({ restype: "container", comp: "list", prefix, ...(delimiter ? { delimiter } : {}), ...(marker ? { marker } : {}) })
-      const response = await this.request(`${BACKUP_CONTAINER}?${query.toString()}`, { method: "GET" })
-      if (response.status === 404) break
-      if (!response.ok) throw new Error(await storageError(response, this.account))
-      const xml = await response.text()
+      const xml = await this.request(`${BACKUP_CONTAINER}?${query.toString()}`, { method: "GET" }, async (response) => {
+        if (response.status === 404) return null
+        if (!response.ok) throw new StorageError(await storageError(response, this.account))
+        return response.text()
+      })
+      if (xml === null) break
       const decode = (value: string) => value.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
       for (const m of xml.matchAll(/<BlobPrefix><Name>([^<]*)<\/Name><\/BlobPrefix>/g)) prefixes.push(decode(m[1]!))
       for (const m of xml.matchAll(/<Blob><Name>([^<]*)<\/Name>/g)) blobs.push(decode(m[1]!))
@@ -548,38 +562,85 @@ class BlobWriter {
 
   /** A JSON blob, or null when it does not exist or is not valid JSON. */
   async readJson(name: string): Promise<Record<string, unknown> | null> {
-    const response = await this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, { method: "GET" })
-    if (response.status === 404) return null
-    if (!response.ok) throw new Error(await storageError(response, this.account))
-    return (await response.json().catch(() => null)) as Record<string, unknown> | null
+    return this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, { method: "GET" }, async (response) => {
+      if (response.status === 404) return null
+      if (!response.ok) throw new StorageError(await storageError(response, this.account))
+      try {
+        return (await response.json()) as Record<string, unknown>
+      } catch (error) {
+        if (error instanceof SyntaxError) return null
+        throw error
+      }
+    })
   }
 
   async delete(name: string): Promise<void> {
-    const response = await this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, {
+    await this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, {
       method: "DELETE",
+    }, async (response) => {
+      if (!response.ok && response.status !== 404) {
+        const code = response.headers.get("x-ms-error-code") ?? ""
+        if (isImmutabilityRefusal(response.status, code)) throw new ProtectedBlobError(code)
+        const text = await response.clone().text()
+        const bodyCode = /<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? ""
+        if (isImmutabilityRefusal(response.status, bodyCode)) throw new ProtectedBlobError(bodyCode)
+        throw new StorageError(await storageError(response, this.account))
+      }
     })
-    if (!response.ok && response.status !== 404) {
-      const code = response.headers.get("x-ms-error-code") ?? ""
-      if (isImmutabilityRefusal(response.status, code)) throw new ProtectedBlobError(code)
-      const text = await response.clone().text().catch(() => "")
-      const bodyCode = /<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? ""
-      if (isImmutabilityRefusal(response.status, bodyCode)) throw new ProtectedBlobError(bodyCode)
-      throw new Error(await storageError(response, this.account))
-    }
   }
 
-  private async request(path: string, init: RequestInit): Promise<Response> {
-    const token = await this.token()
-    return this.fetchImpl(`https://${this.account}.blob.core.windows.net/${path}`, {
-      ...init,
-      headers: {
-        ...(init.headers as Record<string, string> | undefined),
-        "x-ms-version": "2021-12-02",
-        "x-ms-date": new Date().toUTCString(),
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-    })
+  private async request<T>(path: string, init: RequestInit, read: (response: Response) => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      let response: Response | undefined
+      try {
+        return await withRequestTimeout(async (signal) => {
+          const token = await this.token()
+          signal.throwIfAborted()
+          response = await this.fetchImpl(`https://${this.account}.blob.core.windows.net/${path}`, {
+            ...init,
+            signal: init.signal ? AbortSignal.any([init.signal, signal]) : signal,
+            headers: {
+              ...(init.headers as Record<string, string> | undefined),
+              "x-ms-version": "2021-12-02",
+              "x-ms-date": new Date().toUTCString(),
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+          })
+          if (retryableStatus(response.status) && attempt < REQUEST_ATTEMPTS - 1) {
+            void response.body?.cancel().catch(() => undefined)
+            throw new Error(`Storage returned ${response.status}`)
+          }
+          return read(response)
+        })
+      } catch (error) {
+        if (error instanceof TokenError || error instanceof StorageError || error instanceof ProtectedBlobError || init.signal?.aborted || attempt >= REQUEST_ATTEMPTS - 1) throw error
+        await sleep(retryDelay(response, attempt))
+      }
+    }
   }
+}
+
+/** Bound the whole request, including token acquisition and response reads, even for a fetch bridge that ignores aborts. */
+async function withRequestTimeout<T>(request: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+  let onAbort: () => void = () => undefined
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(signal.reason)
+    signal.addEventListener("abort", onAbort, { once: true })
+  })
+  try {
+    return await Promise.race([request(signal), aborted])
+  } finally {
+    signal.removeEventListener("abort", onAbort)
+  }
+}
+
+const retryableStatus = (status: number) => status === 429 || status >= 500
+
+function retryDelay(response: Response | undefined, attempt: number): number {
+  const retryAfter = Number(response?.headers.get("retry-after"))
+  // A malformed or very long Retry-After must not hold up every scheduled tenant indefinitely.
+  return Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 60_000) : 1000 * 2 ** attempt
 }
 
 async function graphError(response: Response): Promise<string> {

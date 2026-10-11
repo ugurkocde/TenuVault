@@ -106,7 +106,12 @@ export interface ScheduleInput {
 export interface BackupSchedule extends ScheduleInput {
   /** When the schedule was last changed; slots before it are not caught up. */
   since: string
+  /** The last successful automatic backup. */
   lastRunAt?: string
+  /** When the last automatic attempt finished, including failures. */
+  lastAttemptAt?: string
+  /** Failed attempts in the most recent attempted slot; reset on success. */
+  attempts: number
   lastStatus?: "Completed" | "Failed"
   lastMessage?: string
   nextRunAt: string | null

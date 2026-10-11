@@ -33,6 +33,12 @@ Put these in the next stable release's notes, then remove them here.
 
 - Malformed stored backup keyrings now stop key creation and recovery key import instead of silently replacing keys. Recover the original `app-state.bin` before continuing.
 
+- Scheduled backups now save `lastAttemptAt` and `attempts` alongside the last successful
+  `lastRunAt`. Existing schedules load automatically. A failure recorded by an older version
+  becomes a failed attempt rather than a successful run and can be retried after 15 minutes,
+  within the three-attempt limit for that slot. Downgrading loses this retry behavior because
+  older versions do not use the new fields.
+
 - Settings Catalog assignments. Released versions backed up Settings Catalog policies (including
   endpoint security) with `assignments: []`, because Graph answers `$expand=assignments` on a single
   policy with an empty list. They are now read from `{id}/assignments`; Settings Catalog compliance

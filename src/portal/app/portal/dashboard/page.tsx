@@ -405,9 +405,9 @@ function DashboardContent() {
               <p className="mt-1 text-sm text-gray-500">Configure backup schedules</p>
             </>
           )}
-          {schedule?.lastRunAt && (
+          {schedule?.lastAttemptAt && (
             <p className={cn("mt-2 text-xs", schedule.lastStatus === "Failed" ? "text-red-700" : "text-gray-500")}>
-              {schedule.lastStatus === "Failed" ? "Last automatic backup failed" : "Last automatic backup"} {formatWhen(schedule.lastRunAt)}
+              {schedule.lastStatus === "Failed" ? "Last automatic backup attempt failed" : "Last automatic backup"} {formatWhen(schedule.lastAttemptAt)}
             </p>
           )}
           <div className="mt-auto pt-5">

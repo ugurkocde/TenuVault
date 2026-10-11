@@ -176,9 +176,9 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
             <dd className="mt-0.5 text-base text-gray-900">{formatWhen(current?.nextRunAt)}</dd>
           </div>
           <div>
-            <dt className="text-xs text-gray-500">Last automatic backup</dt>
+            <dt className="text-xs text-gray-500">{current?.lastStatus === "Failed" ? "Last automatic backup attempt failed" : "Last automatic backup"}</dt>
             <dd className="mt-0.5 flex items-start gap-2 text-base text-gray-900">
-              {current?.lastRunAt ? (
+              {current?.lastAttemptAt ? (
                 <>
                   {current.lastStatus === "Completed" ? (
                     <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0 text-green-600" />
@@ -186,7 +186,7 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
                     <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-600" />
                   )}
                   <span>
-                    {formatWhen(current.lastRunAt)}
+                    {formatWhen(current.lastAttemptAt)}
                     {current.lastMessage && <span className="block text-xs text-gray-500">{current.lastMessage}</span>}
                   </span>
                 </>
