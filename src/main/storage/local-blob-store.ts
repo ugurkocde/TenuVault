@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto"
-import { link, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
+import { link, mkdir, open, readdir, readFile, rename, rm, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { mapLimit } from "../../portal/lib/map-limit"
 
@@ -194,13 +194,27 @@ export class LocalBlobStore {
 
     const path = join(this.dir(account, container), file)
     const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`
-    await writeFile(tmp, Buffer.concat([version === 1 ? MAGIC_V1 : MAGIC_V2, length, header, body]), { mode: 0o600 })
     try {
+      const handle = await open(tmp, "wx", 0o600)
+      try {
+        await handle.writeFile(Buffer.concat([version === 1 ? MAGIC_V1 : MAGIC_V2, length, header, body]))
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
       if (createOnly) await link(tmp, path) // Atomic creation across store/process instances.
       else await rename(tmp, path)
+      if (process.platform !== "win32") {
+        const directory = await open(this.dir(account, container), "r")
+        try {
+          await directory.sync()
+        } finally {
+          await directory.close()
+        }
+      }
     } catch (error) {
+      this.index.delete(this.dir(account, container))
       if (createOnly && (error as NodeJS.ErrnoException).code === "EEXIST") {
-        this.index.delete(this.dir(account, container))
         throw new BlobAlreadyExistsError(name)
       }
       throw error

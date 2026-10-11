@@ -1,4 +1,5 @@
 import { copyFileSync, mkdtempSync, readdirSync, writeFileSync, rmSync } from 'node:fs'
+import { open, type FileHandle } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
@@ -8,7 +9,10 @@ import { handleLocalBlobRequest } from '../src/main/storage/blob-emulator'
 const account = 'tvlocal-test'
 const container = 'intune-backups'
 const roots: string[] = []
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+afterEach(() => {
+  vi.restoreAllMocks()
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+})
 async function setup() {
   const root = mkdtempSync(join(tmpdir(), 'tv-inventory-')); roots.push(root)
   const key = randomBytes(32)
@@ -59,4 +63,33 @@ it('still rejects two files for the same blob when headers are read together', a
   const [file] = readdirSync(dir)
   copyFileSync(join(dir, file!), join(dir, `${'0'.repeat(40)}.tvb`))
   await expect(store.list(account, container)).rejects.toThrow('1 encrypted file(s)')
+})
+it.each([false, true])('syncs a complete file before resolving put (createOnly=%s)', async (createOnly) => {
+  const { store, root, key, dir } = await setup()
+  const probe = await open(join(root, 'probe'), 'w')
+  const prototype = Object.getPrototypeOf(probe) as FileHandle
+  await probe.close()
+  const original = prototype.sync
+  const synced: string[] = []
+  vi.spyOn(prototype, 'sync').mockImplementation(async function (this: FileHandle) {
+    const directory = (await this.stat()).isDirectory()
+    synced.push(directory ? 'directory' : 'file')
+    expect(readdirSync(dir).filter(file => file.endsWith('.tvb'))).toHaveLength(directory ? 2 : 1)
+    await original.call(this)
+  })
+  const data = randomBytes(256 * 1024)
+  await store.put(account, container, 'backup-new/Policies/complete.json', data, 'application/json', createOnly)
+  expect(synced).toEqual(process.platform === 'win32' ? ['file'] : ['file', 'directory'])
+  expect((await new LocalBlobStore(root, [key]).get(account, container, 'backup-new/Policies/complete.json')).data).toEqual(data)
+  expect(readdirSync(dir).every(file => file.endsWith('.tvb'))).toBe(true)
+})
+it('keeps the original blob and cleans up its temp file if syncing fails', async () => {
+  const { store, root, key, dir } = await setup()
+  const probe = await open(join(root, 'probe'), 'w')
+  const prototype = Object.getPrototypeOf(probe) as FileHandle
+  await probe.close()
+  vi.spyOn(prototype, 'sync').mockRejectedValueOnce(new Error('sync failed'))
+  await expect(store.put(account, container, 'backup-test/Policies/one.json', Buffer.from('replacement'), 'application/json')).rejects.toThrow('sync failed')
+  expect((await new LocalBlobStore(root, [key]).get(account, container, 'backup-test/Policies/one.json')).data.toString()).toBe('{}')
+  expect(readdirSync(dir)).toHaveLength(1)
 })
