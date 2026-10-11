@@ -121,10 +121,10 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
       assert(await evaluate(`window.__scheduleFixture.calls.length === 1 && window.__scheduleFixture.calls[0].weekday === 2`), "valid draft was not saved")
       assert(await waitForCondition(`${body}.innerText.includes('Background restart is not installed. Backups run while TenuVault is running.')`), "missing runner note absent from saved summary")
       assert(await evaluate(`${doc}.querySelector('label[for="schedule-weekday"]').textContent === 'Day' && ${doc}.querySelector('label[for="schedule-time"]').textContent.startsWith('Time (')`), "block field labels missing")
-      const link = `[...${body}.querySelectorAll('a')].find(element => element.textContent === 'Settings > Background and retention')`
+      const link = `[...${body}.querySelectorAll('a')].find(element => element.textContent === 'Settings > Background runner')`
       assert(await evaluate(`${link}?.getAttribute('href') === '#/portal/settings'`), "Settings link missing")
       await evaluate(`${link}.click()`)
-      assert(await waitForCondition(`${body}.innerText.includes('Background and retention') && Boolean(${doc}.getElementById('settings-background'))`), "Settings link did not open the background section page")
+      assert(await waitForCondition(`${body}.innerText.includes('Background runner') && Boolean(${doc}.getElementById('settings-background'))`), "Settings link did not open the background section page")
     } finally {
       await close()
     }
