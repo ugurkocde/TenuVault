@@ -22,6 +22,7 @@ import { BackupScopes } from "./backup/scopes"
 import { includedTypes, normalizeScope, type BackupScope } from "../shared/intune/scope"
 import { RefusalLog, refuseUnlicensedBackup } from "./backup/refusals"
 import { BackupKeys } from "./backup/keys"
+import { readBackupSettings } from "./backup/settings"
 import { encryptedAzureFetch, registerStorageToken } from "./storage/azure-seal"
 import { handleLocalBlobRequest, isLocalAccount } from "./storage/blob-emulator"
 import { LocalBlobStore } from "./storage/local-blob-store"
@@ -42,7 +43,7 @@ import { setOibCacheDir } from "./oib/source"
 import { setFrameworkStore } from "./frameworks/workspaces"
 import { setNativeFrameworkStore, setNativeFrameworkAuthorization, setNativeFrameworkNotifier } from "./frameworks/native"
 import { allows, COMMUNITY_RETENTION_DAYS, PlanRequired } from "../shared/plans"
-import { SecureStore, UnreadableStoreError, type Cipher } from "./storage/secure-store"
+import { APP_STATE_START_OVER_BUTTON, APP_STATE_START_OVER_DETAIL, SecureStore, UnreadableStoreError, type Cipher } from "./storage/secure-store"
 import { Preferences } from "./preferences"
 import { AppTray } from "./tray"
 import { installedBySetup, isNightly, Updates, updatesDisabledByPolicy } from "./updates"
@@ -92,7 +93,7 @@ function osCipher(): Cipher {
  * `startOver` says what starting over means for this store; the default fits the stores
  * that hold sign-ins and the license.
  */
-function openStore(filePath: string, cipher: Cipher, startOver = "your saved data is kept as a backup, and you sign in to your tenants and activate your license again."): SecureStore | null {
+function openStore(filePath: string, cipher: Cipher, startOver = "your saved data is kept as a backup, and you sign in to your tenants and activate your license again.", startOverButton = "Start over"): SecureStore | null {
   const store = new SecureStore(filePath, cipher)
   try {
     store.open()
@@ -108,7 +109,7 @@ function openStore(filePath: string, cipher: Cipher, startOver = "your saved dat
         process.platform === "darwin"
           ? `Allow TenuVault to access its Keychain item and start the app again. If that does not help, start over: ${startOver}`
           : `The data may have been created by another Windows user. Start the app as that user, or start over: ${startOver}`,
-      buttons: ["Quit", "Start over"],
+      buttons: ["Quit", startOverButton],
       defaultId: 0,
       cancelId: 0,
     })
@@ -128,7 +129,7 @@ const chromiumFetch: typeof fetch = (input, init) => net.fetch(input instanceof 
 async function bootstrap(): Promise<void> {
   const cipher = osCipher()
   const userData = app.getPath("userData")
-  const appStore = openStore(join(userData, "app-state.bin"), cipher)
+  const appStore = openStore(join(userData, "app-state.bin"), cipher, APP_STATE_START_OVER_DETAIL, APP_STATE_START_OVER_BUTTON)
   const tokenStore = appStore && openStore(join(userData, "token-cache.bin"), cipher)
   // Records of the review, evidence and change workflows, kept apart so the app state stays small.
   const workspaceStore = tokenStore && openStore(join(userData, "workspace.bin"), cipher, "your saved review records (baselines, promotions and health reviews) are kept as a backup copy and start empty. Tenant access and your license are not affected.")
@@ -174,7 +175,7 @@ async function bootstrap(): Promise<void> {
   const localFolder = () => appStore.get(LOCAL_FOLDER_KEY) ?? join(app.getPath("documents"), "TenuVault Backups")
   let localStore: LocalBlobStore | null = null
   const getLocalStore = () => (localStore ??= new LocalBlobStore(localFolder(), backupKeys.keyring()))
-  const backupSettings = () => ({ localFolder: localFolder(), keyFingerprint: backupKeys.fingerprint() })
+  const backupSettings = () => readBackupSettings(localFolder(), backupKeys, appStore)
 
   // Background requests never open a sign-in window; the renderer shows a prompt instead.
   const lastPrompt = new Map<string, number>()

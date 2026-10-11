@@ -50,11 +50,16 @@ export class BackupKeys {
   }
 
   private read(): Buffer[] {
+    const value = this.store.get(KEYRING)
+    if (value === null) return []
     try {
-      const parsed: unknown = JSON.parse(this.store.get(KEYRING) ?? "[]")
-      return Array.isArray(parsed) ? parsed.map((k) => Buffer.from(String(k), "base64")).filter((k) => k.length === 32) : []
+      const parsed: unknown = JSON.parse(value)
+      if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some((key) =>
+        typeof key !== "string" || !/^[A-Za-z0-9+/]{43}=$/.test(key) || Buffer.from(key, "base64").toString("base64") !== key,
+      )) throw new Error("Invalid keyring")
+      return parsed.map((key: string) => Buffer.from(key, "base64"))
     } catch {
-      return []
+      throw new Error("The stored backup encryption keyring is malformed. TenuVault will not replace it. Recover the original app-state.bin before continuing.")
     }
   }
 
