@@ -3,7 +3,7 @@
 import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { trackBackup } from "@desktop/lib/backups"
 import { RunBackupDialog } from "@desktop/components/RunBackupDialog"
-import { useState, useEffect, Suspense } from "react"
+import { useState, useEffect, useRef, Suspense } from "react"
 import { useSearchParams } from "next/navigation"
 import {
   Search,
@@ -22,7 +22,6 @@ import {
   Grid3X3,
   List,
   Cloud,
-  CloudUpload,
   Pencil,
   Check,
   X,
@@ -81,8 +80,17 @@ function TenantsPageContent() {
   const [showProgressModal, setShowProgressModal] = useState(false)
   const [backupJobId, setBackupJobId] = useState<string | null>(null)
   const [backupTenant, setBackupTenant] = useState<Tenant | null>(null)
-  const [syncingTenants, setSyncingTenants] = useState<Set<number>>(new Set())
+  const [savedTenants, setSavedTenants] = useState<Set<number>>(new Set())
+  const savedTimers = useRef(new Map<number, ReturnType<typeof setTimeout>>())
   const [isBulkBackup, setIsBulkBackup] = useState(false)
+
+  useEffect(() => {
+    const timers = savedTimers.current
+    return () => {
+      timers.forEach(clearTimeout)
+      timers.clear()
+    }
+  }, [])
 
   // Get all unique tags from tenants
   const allTenantTags = Array.from(
@@ -101,26 +109,38 @@ function TenantsPageContent() {
     )
   }
 
+  const clearSavedConfirmation = (tenantId: number) => {
+    clearTimeout(savedTimers.current.get(tenantId))
+    savedTimers.current.delete(tenantId)
+    setSavedTenants(prev => {
+      const next = new Set(prev)
+      next.delete(tenantId)
+      return next
+    })
+  }
+
   const startEditingTenant = (tenant: Tenant) => {
+    clearSavedConfirmation(tenant.id)
     setEditingTenantId(tenant.id)
     setEditingTenantName(tenant.name)
   }
 
   const saveTenantName = () => {
-    if (editingTenantId && editingTenantName.trim()) {
-      updateTenant(editingTenantId, { name: editingTenantName.trim() })
-
-      // Show syncing status
-      setSyncingTenants(prev => new Set(prev).add(editingTenantId))
-
-      // Remove syncing status after a delay
-      setTimeout(() => {
-        setSyncingTenants(prev => {
-          const newSet = new Set(prev)
-          newSet.delete(editingTenantId)
-          return newSet
+    const tenantId = editingTenantId
+    const name = editingTenantName.trim()
+    const tenant = tenantId !== null ? getTenant(tenantId) : undefined
+    if (tenant && name && name !== tenant.name) {
+      clearSavedConfirmation(tenant.id)
+      updateTenant(tenant.id, { name })
+      setSavedTenants(prev => new Set(prev).add(tenant.id))
+      savedTimers.current.set(tenant.id, setTimeout(() => {
+        savedTimers.current.delete(tenant.id)
+        setSavedTenants(prev => {
+          const next = new Set(prev)
+          next.delete(tenant.id)
+          return next
         })
-      }, 3000)
+      }, 2000))
     }
     setEditingTenantId(null)
     setEditingTenantName("")
@@ -150,18 +170,6 @@ function TenantsPageContent() {
     if (tagModalTenant) {
       // Update locally
       updateTenant(tagModalTenant.id, { tags })
-
-      // Show syncing status
-      setSyncingTenants(prev => new Set(prev).add(tagModalTenant.id))
-
-      // Remove syncing status after a delay (sync happens automatically with debounce)
-      setTimeout(() => {
-        setSyncingTenants(prev => {
-          const newSet = new Set(prev)
-          newSet.delete(tagModalTenant.id)
-          return newSet
-        })
-      }, 3000)
     }
   }
 
@@ -706,7 +714,7 @@ function TenantsPageContent() {
                           autoFocus
                           onClick={(e) => e.stopPropagation()}
                         />
-                        <Button aria-label={`Save tenant name: ${tenant.name}`}
+                        <Button aria-label="Save tenant name" title="Save"
                           variant="ghost"
                           size="sm"
                           onClick={(e) => {
@@ -717,7 +725,7 @@ function TenantsPageContent() {
                         >
                           <Check className="h-4 w-4 text-green-600" />
                         </Button>
-                        <Button aria-label={`Cancel editing tenant name: ${tenant.name}`}
+                        <Button aria-label={`Cancel editing tenant name: ${tenant.name}`} title="Cancel"
                           variant="ghost"
                           size="sm"
                           onClick={(e) => {
@@ -740,9 +748,10 @@ function TenantsPageContent() {
                           ) : (
                             <span className="flex items-center gap-2">
                               {tenant.name}
-                              {syncingTenants.has(tenant.id) && (
-                                <span title="Syncing to cloud...">
-                                  <CloudUpload className="h-4 w-4 text-blue-600 animate-pulse" />
+                              {savedTenants.has(tenant.id) && (
+                                <span role="status" aria-live="polite" className="inline-flex items-center gap-1 text-xs font-normal text-green-700">
+                                  <Check aria-hidden="true" className="h-3 w-3" />
+                                  Saved
                                 </span>
                               )}
                             </span>
@@ -1040,7 +1049,7 @@ function TenantsPageContent() {
                                   className="px-3 py-1 text-sm font-medium border border-gray-300 rounded-full focus:outline-none focus:border-blue-500"
                                   autoFocus
                                 />
-                                <Button aria-label={`Save tenant name: ${tenant.name}`}
+                                <Button aria-label="Save tenant name" title="Save"
                                   variant="ghost"
                                   size="sm"
                                   onClick={saveTenantName}
@@ -1048,7 +1057,7 @@ function TenantsPageContent() {
                                 >
                                   <Check className="h-3 w-3 text-green-600" />
                                 </Button>
-                                <Button aria-label={`Cancel editing tenant name: ${tenant.name}`}
+                                <Button aria-label={`Cancel editing tenant name: ${tenant.name}`} title="Cancel"
                                   variant="ghost"
                                   size="sm"
                                   onClick={cancelEditingTenant}
@@ -1068,9 +1077,10 @@ function TenantsPageContent() {
                                   ) : (
                                     <span className="flex items-center gap-2">
                                       {tenant.name}
-                                      {syncingTenants.has(tenant.id) && (
-                                        <span title="Syncing to cloud...">
-                                          <CloudUpload className="h-3 w-3 text-blue-600 animate-pulse" />
+                                      {savedTenants.has(tenant.id) && (
+                                        <span role="status" aria-live="polite" className="inline-flex items-center gap-1 text-xs font-normal text-green-700">
+                                          <Check aria-hidden="true" className="h-3 w-3" />
+                                          Saved
                                         </span>
                                       )}
                                     </span>

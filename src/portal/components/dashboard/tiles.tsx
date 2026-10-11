@@ -184,11 +184,11 @@ export function BarList({ items }: { items: { label: string; value: number }[] }
 }
 
 /** Label and value pair for fact lists. */
-export function Fact({ label, children }: { label: string; children: ReactNode }) {
+export function Fact({ label, children, wrap = false }: { label: string; children: ReactNode; wrap?: boolean }) {
   return (
     <div className="min-w-0">
       <dt className="text-xs text-gray-500">{label}</dt>
-      <dd className="mt-0.5 truncate text-sm font-medium text-gray-900">{children}</dd>
+      <dd className={cn("mt-0.5 text-sm font-medium text-gray-900", !wrap && "truncate")}>{children}</dd>
     </div>
   )
 }

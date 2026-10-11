@@ -16,6 +16,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
+import { checkSchedulePanel } from "./schedule-panel-smoke.mjs"
 
 const require = createRequire(import.meta.url)
 const electronPath = require("electron")
@@ -508,7 +509,7 @@ await check("policy pack frameworks keep the coverage notice collapsed", async (
 })
 
 await check("settings show background backups, retention and updates", async () => {
-  await go("#/portal/settings", "Background and retention")
+  await go("#/portal/settings", "Background runner")
   assert(await waitForText("Keep backups for"), "retention setting missing")
   assert(await waitForText("Download and install updates automatically"), "update setting missing")
   assert(await waitForText("Get nightly builds"), "nightly update setting missing")
@@ -516,6 +517,88 @@ await check("settings show background backups, retention and updates", async () 
   assert(prefs.nightlyUpdates === true, `nightly preference not stored ${JSON.stringify(prefs)}`)
   await evaluate(`window.tenuvault.preferences.set({ nightlyUpdates: false })`)
 })
+
+for (const [platform, installed] of [["darwin", false], ["win32", true]]) {
+  await check(`background runner status recovery and progress on ${platform}`, async () => {
+    try {
+      await evaluate(`(async () => {
+        const status = await window.tenuvault.license.status()
+        window.__runner = { calls: 0, installCalls: 0, removeCalls: 0 }
+        const frame = document.createElement("iframe")
+        frame.style.cssText = "position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 9999;"
+        document.body.appendChild(frame)
+        window.__runnerFrame = frame
+        frame.contentDocument.open()
+        frame.contentDocument.write('<html><head></head><body><div id="root"></div></body></html>')
+        frame.contentDocument.close()
+        frame.contentWindow.location.hash = "#/portal/settings"
+        frame.contentWindow.tenuvault = {
+          ...window.tenuvault,
+          app: { ...window.tenuvault.app, info: () => Promise.resolve({ version: "0.2.0", platform: ${JSON.stringify(platform)}, trayIconLoaded: true }) },
+          license: { ...window.tenuvault.license, status: () => Promise.resolve({ ...status, hasKey: true }) },
+          backgroundLaunch: {
+            status: () => {
+              if (++window.__runner.calls <= 2) return Promise.reject(new Error("Smoke runner status failure"))
+              return new Promise(resolve => { window.__runner.resolveStatus = () => resolve({ supported: true, installed: ${installed} }) })
+            },
+            install: () => {
+              window.__runner.installCalls++
+              return new Promise(resolve => { window.__runner.resolveChange = () => resolve({ supported: true, installed: true }) })
+            },
+            remove: () => {
+              window.__runner.removeCalls++
+              return new Promise(resolve => { window.__runner.resolveChange = () => resolve({ supported: true, installed: false }) })
+            },
+          },
+        }
+        document.querySelectorAll('link[rel="stylesheet"]').forEach(link => frame.contentDocument.head.appendChild(link.cloneNode()))
+        const script = frame.contentDocument.createElement("script")
+        script.type = "module"
+        script.src = document.querySelector('script[type="module"]').src
+        frame.contentDocument.head.appendChild(script)
+      })()`)
+      const section = `window.__runnerFrame.contentDocument.getElementById("settings-background")`
+      const message = "Could not check background startup. Try again."
+      const button = label => `[...${section}.querySelectorAll("button")].find(b => b.textContent.trim() === ${JSON.stringify(label)})`
+      const state = text => `${section}?.querySelector('[role="status"]')?.textContent === ${JSON.stringify(text)}`
+      assert(await waitForCondition(`${state("Unable to check")} && ${section}.innerText.includes(${JSON.stringify(message)})`), "persistent status error missing")
+      await evaluate(`${section}.scrollIntoView({ block: "start" })`)
+      assert(await evaluate(`${button("Install background launch")}.disabled && !${button("Retry check")}.disabled`), "error did not disable installation or offer Retry check")
+      await evaluate(`(() => { const retry = ${button("Retry check")}; retry.click(); retry.click() })()`)
+      assert(await evaluate("window.__runner.calls === 2"), "repeated Retry check clicks submitted overlapping status requests")
+      assert(await waitForCondition(`window.__runner.calls === 2 && ${state("Unable to check")}`), "Retry check did not re-request status or preserve a repeated failure")
+      await screenshot(`runner-status-error-${platform}`)
+      await evaluate(`(() => { const retry = ${button("Retry check")}; retry.click(); retry.click() })()`)
+      assert(await evaluate("window.__runner.calls === 3"), "repeated Retry check clicks submitted overlapping status requests")
+      assert(await waitForCondition(`window.__runner.calls === 3 && ${state("Checking...")}`), "pending retry did not show checking state")
+      assert(await evaluate(`${section}.innerText.includes(${JSON.stringify(message)}) && ${button("Retry check")}.disabled && ${button("Install background launch")}.disabled`), "retry lost the persistent error or enabled installation before success")
+      await evaluate("window.__runner.resolveStatus()")
+      assert(await waitForCondition(state(installed ? "Installed" : "Not installed")), "successful retry did not show the explicit runner state")
+      assert(await evaluate("window.__runner.calls === 3"), "repeated Retry check clicks submitted overlapping status requests")
+      assert(await evaluate(`!${section}.innerText.includes(${JSON.stringify(message)}) && !${button("Retry check")}`), "successful retry did not replace the error and Retry check")
+      await screenshot(`runner-status-success-${platform}`)
+      const location = platform === "darwin" ? "menu bar" : "tray"
+      const artifact = platform === "darwin" ? "Adds a LaunchAgent for your user account" : "Adds a scheduled task for your user account"
+      assert(await evaluate(`${section}.innerText.includes(${JSON.stringify(artifact)}) && ${section}.innerText.includes(${JSON.stringify(`Keep running in the ${location} when I close the window`)}) && ${section}.innerText.includes(${JSON.stringify(`Start TenuVault in the ${location} when I sign in to this computer`)})`), "platform artifact or icon wording missing")
+      assert(await evaluate(`${section}.innerText.includes("Backups need an awake computer and a signed in session. Locking the screen does not sign you out; closing a laptop lid may put it to sleep.")`), "power and session explanation missing")
+      for (const removing of [installed, !installed]) {
+        const label = removing ? "Remove background launch" : "Install background launch"
+        const progress = removing ? "Removing..." : "Installing..."
+        await evaluate(`(() => { const change = ${button(label)}; change.click(); change.click() })()`)
+        assert(await waitForCondition(`Boolean(${button(progress)}?.disabled)`), `${progress} did not appear on a disabled button`)
+        const calls = removing ? "removeCalls" : "installCalls"
+        assert(await evaluate(`window.__runner.${calls} === 1`), `repeated ${label} clicks submitted overlapping requests`)
+        await screenshot(`runner-${removing ? "removing" : "installing"}-${platform}`)
+        await evaluate("window.__runner.resolveChange()")
+        assert(await waitForCondition(`${state(removing ? "Not installed" : "Installed")} && ${button(removing ? "Install background launch" : "Remove background launch")}?.disabled === false`), "completed change did not update the state and re-enable the button")
+        assert(await evaluate(`window.__runner.${calls} === 1`), "completed change left an overlapping request pending")
+      }
+      assert(await evaluate("window.__runner.installCalls === 1 && window.__runner.removeCalls === 1"), "change controls did not call the matching operation once")
+    } finally {
+      await evaluate("window.__runnerFrame?.remove(); delete window.__runnerFrame; delete window.__runner")
+    }
+  })
+}
 
 await check("schedules are stored by the main process", async () => {
   const list = await evaluate(`window.tenuvault.schedules.set({ tenantId: "11111111-1111-1111-1111-111111111111", enabled: true, frequency: "daily", time: "02:00" })`)
@@ -553,6 +636,122 @@ await check("restarting clears interrupted tenant backup and refresh flags", asy
   assert(await waitForCondition(`JSON.parse(window.tenuvault.storage.getItemSync('tenuvault_tenants')).every(t => !Object.hasOwn(t, 'isLoading') && t.syncStatus !== 'pending')`), "in-flight flags were saved again")
 })
 
+await check("tenant renames show Saved in both views and clear confirmation timers", async () => {
+  await go("#/portal/tenants", "Tenant Management")
+  const editor = `document.querySelector('main input[type="text"]:not([aria-label="Search tenants"])')`
+  const saved = `[...document.querySelectorAll('main [role="status"]')].filter(s => s.textContent.trim() === 'Saved')`
+  const noCloudSync = `!document.querySelector('[title="Syncing to cloud..."]') && !document.querySelector('main .lucide-cloud-upload') && !document.querySelector('main').innerText.includes('Syncing to cloud')`
+  const startEditing = async name => {
+    await evaluate(`document.querySelector(${JSON.stringify(`button[aria-label="Rename tenant: ${name}"]`)}).click()`)
+    assert(await waitForCondition(`${editor}?.value === ${JSON.stringify(name)}`), "rename editor did not open")
+    assert(await evaluate(`document.querySelector('button[aria-label="Save tenant name"]')?.title === 'Save' && document.querySelector('button[aria-label="Save tenant name"] svg')?.classList.contains('text-green-600')`), "Save tooltip or green check missing")
+    assert(await evaluate(`document.querySelector('button[aria-label^="Cancel editing tenant name:"]')?.title === 'Cancel' && Boolean(document.querySelector('button[aria-label^="Cancel editing tenant name:"] .lucide-x'))`), "Cancel tooltip or icon missing")
+  }
+  const setName = async name => {
+    await evaluate(`(() => {
+      const input = ${editor}
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(name)})
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })()`)
+    assert(await waitForCondition(`${editor}?.value === ${JSON.stringify(name)}`), "name draft did not update")
+  }
+  const pressKey = async key => {
+    await send("Input.dispatchKeyEvent", { type: "keyDown", key, code: key })
+    await send("Input.dispatchKeyEvent", { type: "keyUp", key, code: key })
+  }
+  const saveName = async (name, method = "button") => {
+    await setName(name)
+    if (method === "enter") await pressKey("Enter")
+    else await evaluate(`document.querySelector('button[aria-label="Save tenant name"]').click()`)
+    assert(await waitForCondition(`!${editor}`), "save did not close the editor")
+  }
+  const assertSaved = async name => {
+    assert(await waitForCondition(`${saved}.some(s => s.parentElement.textContent.includes(${JSON.stringify(name)}))`), "Saved confirmation missing next to the renamed tenant")
+    assert(await evaluate(`${saved}.every(s => s.getAttribute('aria-live') === 'polite' && Boolean(s.querySelector('.lucide-check[aria-hidden="true"]')) && s.classList.contains('text-green-700'))`), "Saved confirmation is missing polite status, check or success style")
+    assert(await evaluate(noCloudSync), "rename displayed a cloud sync indicator")
+    return evaluate(`window.__tenantRenameTimers.scheduled.at(-1)`)
+  }
+  await evaluate(`(() => {
+    const timers = { active: new Set(), scheduled: [], cleared: new Set() }
+    window.__tenantRenameTimers = timers
+    window.__tenantRenameSetTimeout = window.setTimeout
+    window.__tenantRenameClearTimeout = window.clearTimeout
+    const setTimeout = window.setTimeout.bind(window)
+    const clearTimeout = window.clearTimeout.bind(window)
+    window.setTimeout = (callback, delay, ...args) => {
+      if (delay !== 2000) return setTimeout(callback, delay, ...args)
+      const timer = setTimeout(() => {
+        timers.active.delete(timer)
+        callback(...args)
+      }, delay)
+      timers.active.add(timer)
+      timers.scheduled.push(timer)
+      return timer
+    }
+    window.clearTimeout = timer => {
+      if (timers.active.delete(timer)) timers.cleared.add(timer)
+      clearTimeout(timer)
+    }
+  })()`)
+  try {
+    for (const view of ["Grid", "List"]) {
+      await evaluate(`document.querySelector('button[aria-label="${view} view"]').click()`)
+      await startEditing("Contoso 1")
+      const scheduled = await evaluate(`window.__tenantRenameTimers.scheduled.length`)
+      for (const name of ["Contoso 1", "  Contoso 1  ", "   "]) {
+        await saveName(name)
+        assert(await evaluate(`${saved}.length === 0 && window.__tenantRenameTimers.scheduled.length === ${scheduled}`), "unchanged or blank name showed Saved or scheduled a timer")
+        assert(await evaluate(`Boolean(document.querySelector('button[aria-label="Rename tenant: Contoso 1"]'))`), "unchanged or blank name changed the tenant")
+        await startEditing("Contoso 1")
+      }
+      await setName("Cancelled rename")
+      await pressKey("Escape")
+      assert(await waitForCondition(`!${editor} && ${saved}.length === 0`), "Escape did not cancel without Saved")
+      await startEditing("Contoso 1")
+      await setName("Cancelled rename")
+      await evaluate(`document.querySelector('button[title="Cancel"]').click()`)
+      assert(await waitForCondition(`!${editor} && ${saved}.length === 0`), "Cancel did not close without Saved")
+
+      await startEditing("Contoso 1")
+      await saveName(`  Contoso ${view} renamed  `, "enter")
+      const firstTimer = await assertSaved(`Contoso ${view} renamed`)
+      assert(await waitForCondition(`JSON.parse(window.tenuvault.storage.getItemSync('tenuvault_tenants')).find(t => t.id === 1).name === 'Contoso ${view} renamed'`), "trimmed rename was not saved locally")
+      assert(await evaluate(`${saved}.length === 1`), "rename showed more than one confirmation")
+      await sleep(1100)
+      await startEditing(`Contoso ${view} renamed`)
+      assert(await evaluate(`${saved}.length === 0 && window.__tenantRenameTimers.cleared.has(${firstTimer}) && !window.__tenantRenameTimers.active.has(${firstTimer})`), "new edit did not clear the prior confirmation timer")
+      await saveName("Contoso 1")
+      const replacementTimer = await assertSaved("Contoso 1")
+      await sleep(1100)
+      assert(await evaluate(`${saved}.length === 1 && window.__tenantRenameTimers.active.has(${replacementTimer})`), "the previous timer hid the new confirmation early")
+      assert(await waitForCondition(`${saved}.length === 0`, 4000), "Saved did not disappear after two seconds")
+      assert(await evaluate(`!window.__tenantRenameTimers.active.has(${replacementTimer})`), "expired confirmation timer was retained")
+
+      await startEditing("Contoso 1")
+      await saveName(`Contoso ${view} first`)
+      const firstTenantTimer = await assertSaved(`Contoso ${view} first`)
+      await startEditing("Contoso 2")
+      await saveName(`Contoso ${view} second`)
+      const secondTenantTimer = await assertSaved(`Contoso ${view} second`)
+      assert(await evaluate(`${saved}.length === 2 && window.__tenantRenameTimers.active.has(${firstTenantTimer}) && window.__tenantRenameTimers.active.has(${secondTenantTimer})`), "tenants did not keep independent confirmation timers")
+      await go("#/portal/overview", "All tenants")
+      assert(await evaluate(`window.__tenantRenameTimers.cleared.has(${firstTenantTimer}) && window.__tenantRenameTimers.cleared.has(${secondTenantTimer})`), "unmount did not clear all confirmation timers")
+      await go("#/portal/tenants", "Tenant Management")
+      assert(await evaluate(`${saved}.length === 0`), "Saved lingered after remount")
+      await startEditing(`Contoso ${view} first`)
+      await saveName("Contoso 1")
+      await startEditing(`Contoso ${view} second`)
+      await saveName("Contoso 2")
+      await go("#/portal/overview", "All tenants")
+      await go("#/portal/tenants", "Tenant Management")
+    }
+    // Let the restored names finish their metadata updates before the tag check.
+    assert(await waitForCondition(`window.__tenantRenameTimers.active.size === 0`, 4000), "restored tenant names still had pending metadata timers")
+  } finally {
+    await evaluate(`window.setTimeout = window.__tenantRenameSetTimeout; window.clearTimeout = window.__tenantRenameClearTimeout; delete window.__tenantRenameSetTimeout; delete window.__tenantRenameClearTimeout; delete window.__tenantRenameTimers`)
+  }
+})
+
 await check("tag drafts stay with their tenant and bulk tags sync every tenant", async () => {
   await go("#/portal/tenants", "Tenant Management")
   const currentTags = `document.querySelector('[role="dialog"] h3')?.nextElementSibling.innerText.trim()`
@@ -562,6 +761,9 @@ await check("tag drafts stay with their tenant and bulk tags sync every tenant",
     assert(await waitForCondition(`[...document.querySelectorAll('[role="menuitem"]')].some(b => b.innerText.trim() === 'Manage Tags')`), "tenant actions menu did not open")
     await evaluate(`[...document.querySelectorAll('[role="menuitem"]')].find(b => b.innerText.trim() === 'Manage Tags').click()`)
     assert(await waitForText(`Manage Tags for ${name}`), "tag dialog did not open")
+    assert(await waitForCondition(`document.querySelector('[role="dialog"]')?.contains(document.activeElement)`), "tag dialog did not receive focus")
+    // Radix attaches its outside-pointer listener in a deferred task after mounting.
+    await evaluate(`new Promise(resolve => setTimeout(resolve, 0))`)
   }
   const closeTags = async (method = "cancel") => {
     if (method === "escape") {
@@ -598,6 +800,7 @@ await check("tag drafts stay with their tenant and bulk tags sync every tenant",
     assert((await evaluate(currentTags)) === "Testing", "second tenant inherited the first tenant's tags or draft")
     await clickDialogButton("Save Tags")
     assert(await waitForCondition(`!document.querySelector('[role="dialog"]')`), "saved tag dialog did not close")
+    assert(await evaluate(`!document.querySelector('[title="Syncing to cloud..."]') && !document.querySelector('main .lucide-cloud-upload')`), "tag save displayed a cloud sync indicator")
     assert(await waitForCondition(`window.__tenantTagSaves.length === 1`), "second tenant tags were not synced")
     assert(await evaluate(`window.__tenantTagSaves[0].tenantId.startsWith('33333333') && window.__tenantTagSaves[0].metadata.tags.length === 1 && window.__tenantTagSaves[0].metadata.tags[0] === 'Testing'`), "metadata sync saved another tenant's tags")
     assert(await evaluate(`JSON.parse(window.tenuvault.storage.getItemSync('tenuvault_tenants')).every(t => JSON.stringify(t.tags) === JSON.stringify(t.id === 1 ? ['Production'] : ['Testing']))`), "tag draft leaked into saved profiles")
@@ -1103,6 +1306,8 @@ await check("tenant changes wait for the disclaimer, once per tenant", async () 
   const again = await evaluate(deploy)
   assert(again[0] !== 428 && !(await evaluate(`!!document.querySelector("[role=dialog]")`)), "disclaimer asked twice for one tenant")
 })
+
+await checkSchedulePanel({ check, evaluate, waitForCondition, screenshot, assert })
 
 if (licenseKey) {
   // No tenant is signed in, so the key is only saved; it activates when a tenant is used.
