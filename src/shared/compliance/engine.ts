@@ -415,7 +415,7 @@ function evaluateConfiguration(
           }
         }
         matches = verdictsFor(values, signal);
-        for (const value of [...new Set(values)]) {
+        for (const value of new Set(values)) {
           const readable = comparableValue(value, signal.enforcedWhen);
           checks.push({
             assessmentStatus:

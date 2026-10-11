@@ -188,7 +188,7 @@ export class BackupEngine {
     // List everything first so progress reflects the real amount of work.
     job.progressMessage = "Reading Intune configuration..."
     const counts: Record<string, number> = Object.fromEntries(types.map((type) => [type.folder, 0]))
-    const lists: Array<{ type: IntuneType; items: GraphItem[] } | null> = new Array(types.length).fill(null)
+    const lists: Array<{ type: IntuneType; items: GraphItem[] } | null> = Array.from({ length: types.length }, () => null)
     const skippedTypes: string[] = []
     const failedTypes: string[] = []
     let failures = 0
@@ -324,7 +324,7 @@ export class BackupEngine {
     // Who each backup belongs to. Every metadata file is read first, because backups from versions
     // that did not record the tenant count as this tenant's only while no backup names another one.
     const tenant = job.tenantId.toLowerCase()
-    const owners = new Array<{ metadata: Record<string, unknown>; owner: "this" | "other" | "untagged" } | null>(backups.length).fill(null)
+    const owners: Array<{ metadata: Record<string, unknown>; owner: "this" | "other" | "untagged" } | null> = Array.from({ length: backups.length }, () => null)
     await pool(backups.map((backup, index) => ({ backup, index })), CONCURRENCY, async ({ backup, index }) => {
       const metadata = await storage.readJson(`${backup.prefix}metadata.json`)
       if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return // Missing or unreadable: never ours.
