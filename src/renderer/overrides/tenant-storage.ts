@@ -35,6 +35,7 @@ function tenantIds(serialized: string | null): Set<string> | null {
 }
 
 const cache = new Map<string, string | null>()
+const cachedTenantIds = new Map<string, Set<string> | null>()
 let preservationWarningShown = false
 
 async function releaseOrphanedTenants(saved: Set<string>): Promise<void> {
@@ -51,16 +52,21 @@ export const tenantStorage = {
       cache.set(key, value)
       if (key === TENANTS_KEY) {
         const saved = tenantIds(value)
+        cachedTenantIds.set(key, saved)
         if (saved) void releaseOrphanedTenants(saved).catch((error) => console.error("Could not release orphaned tenants:", error))
       }
     }
+    // Hide unreadable data so the context cannot turn it into a replacement list.
+    // Keep the raw value and its classification cached for recovery and the write guard.
+    if (key === TENANTS_KEY && cachedTenantIds.get(key) === null) return null
     return cache.get(key) ?? null
   },
   setItem(key: string, value: string): void {
     if (key === TENANTS_KEY) {
       const next = tenantIds(value)
-      const previous = tenantIds(tenantStorage.getItem(key))
-      if (previous === null && next && (value === "" || (JSON.parse(value) as unknown[]).length === 0)) {
+      tenantStorage.getItem(key)
+      const previous = cachedTenantIds.get(key)
+      if (previous === null && (next === null || next.size === 0)) {
         if (!preservationWarningShown) {
           console.error("The saved tenant list is being preserved for recovery. An empty replacement was not saved.")
           preservationWarningShown = true
@@ -70,12 +76,14 @@ export const tenantStorage = {
       if (next && previous) for (const id of previous) {
         if (!next.has(id)) void bridge.license.releaseTenant(id).catch((error) => console.error("Could not release removed tenant:", error))
       }
+      cachedTenantIds.set(key, next)
     }
     cache.set(key, value)
     void bridge.storage.setItem(key, value)
   },
   removeItem(key: string): void {
     cache.set(key, null)
+    if (key === TENANTS_KEY) cachedTenantIds.set(key, new Set())
     void bridge.storage.removeItem(key)
   },
 }

@@ -78,7 +78,7 @@ describe("tenantStorage", () => {
     bridge.storage.getItemSync.mockReturnValue(stored)
     const { tenantStorage } = await import("../src/renderer/overrides/tenant-storage")
 
-    expect(tenantStorage.getItem(TENANTS_KEY)).toBe(stored)
+    expect(tenantStorage.getItem(TENANTS_KEY)).toBeNull()
     await setImmediate()
 
     expect(bridge.license.status).not.toHaveBeenCalled()
@@ -138,7 +138,7 @@ describe("tenantStorage", () => {
     expect(bridge.license.releaseTenant).not.toHaveBeenCalled()
   })
 
-  it.each(["[]", " [ ] ", ""])("preserves an unreadable list instead of saving an empty value: %s", async (value) => {
+  it.each(["[]", " [ ] ", "", "[{}]", '[{"id":1,"name":"No credentials"}]'])("preserves an unreadable list instead of saving a value without tenant ids: %s", async (value) => {
     bridge.storage.getItemSync.mockReturnValue("{broken")
     const { tenantStorage } = await import("../src/renderer/overrides/tenant-storage")
 
@@ -146,13 +146,14 @@ describe("tenantStorage", () => {
     tenantStorage.setItem(TENANTS_KEY, value)
     await setImmediate()
 
-    expect(tenantStorage.getItem(TENANTS_KEY)).toBe("{broken")
+    expect(tenantStorage.getItem(TENANTS_KEY)).toBeNull()
     expect(bridge.storage.setItem).not.toHaveBeenCalled()
     expect(bridge.license.status).not.toHaveBeenCalled()
     expect(bridge.license.releaseTenant).not.toHaveBeenCalled()
-    expect(vi.mocked(console.error).mock.calls.filter(([message]) =>
-      message === "The saved tenant list is being preserved for recovery. An empty replacement was not saved."
-    )).toHaveLength(1)
+    expect(vi.mocked(console.error).mock.calls).toEqual([
+      ["Could not read the stored tenant list. Tenant activations were kept:", expect.any(Error)],
+      ["The saved tenant list is being preserved for recovery. An empty replacement was not saved."],
+    ])
   })
 
   it("keeps the corrupt stored list and activations after an empty save and a restart", async () => {
@@ -162,16 +163,16 @@ describe("tenantStorage", () => {
     bridge.storage.setItem.mockImplementation(async (_key, value) => { stored = value })
     const { tenantStorage } = await import("../src/renderer/overrides/tenant-storage")
 
-    expect(tenantStorage.getItem(TENANTS_KEY)).toBe(corrupt)
+    expect(tenantStorage.getItem(TENANTS_KEY)).toBeNull()
     tenantStorage.setItem(TENANTS_KEY, "[]")
     await setImmediate()
 
-    expect(tenantStorage.getItem(TENANTS_KEY)).toBe(corrupt)
+    expect(tenantStorage.getItem(TENANTS_KEY)).toBeNull()
     expect(stored).toBe(corrupt)
     vi.resetModules()
     const { tenantStorage: restartedStorage } = await import("../src/renderer/overrides/tenant-storage")
 
-    expect(restartedStorage.getItem(TENANTS_KEY)).toBe(corrupt)
+    expect(restartedStorage.getItem(TENANTS_KEY)).toBeNull()
     await setImmediate()
 
     expect(stored).toBe(corrupt)
@@ -181,22 +182,87 @@ describe("tenantStorage", () => {
     expect(bridge.license.releaseTenant).not.toHaveBeenCalled()
   })
 
-  it.each([
-    JSON.stringify([{ credentials: { tenantId: "saved-tenant" } }]),
-    JSON.stringify([{ id: 1, name: "No credentials" }]),
-  ])("saves a non-empty valid list after an unreadable read without releasing tenants: %s", async (next) => {
+  it.each(["[1]", "[[]]"])("preserves an unreadable array after a context save and a restart: %s", async (corrupt) => {
+    let stored = corrupt
+    bridge.storage.getItemSync.mockImplementation(() => stored)
+    bridge.storage.setItem.mockImplementation(async (_key, value) => { stored = value })
+    const { tenantStorage } = await import("../src/renderer/overrides/tenant-storage")
+
+    expect(tenantStorage.getItem(TENANTS_KEY)).toBeNull()
+    await setImmediate()
+    expect(bridge.license.status).not.toHaveBeenCalled()
+    expect(bridge.license.releaseTenant).not.toHaveBeenCalled()
+
+    tenantStorage.setItem(TENANTS_KEY, "[{}]")
+    await setImmediate()
+
+    expect(tenantStorage.getItem(TENANTS_KEY)).toBeNull()
+    expect(stored).toBe(corrupt)
+    expect(bridge.storage.setItem).not.toHaveBeenCalled()
+    vi.resetModules()
+    const { tenantStorage: restartedStorage } = await import("../src/renderer/overrides/tenant-storage")
+
+    expect(restartedStorage.getItem(TENANTS_KEY)).toBeNull()
+    await setImmediate()
+
+    expect(stored).toBe(corrupt)
+    expect(bridge.storage.getItemSync).toHaveBeenCalledTimes(2)
+    expect(bridge.license.status).not.toHaveBeenCalled()
+    expect(bridge.license.releaseTenant).not.toHaveBeenCalled()
+  })
+
+  it("refuses an unreadable replacement when the stored list is already unreadable", async () => {
     let stored = "{broken"
     bridge.storage.getItemSync.mockImplementation(() => stored)
     bridge.storage.setItem.mockImplementation(async (_key, value) => { stored = value })
     const { tenantStorage } = await import("../src/renderer/overrides/tenant-storage")
 
-    expect(tenantStorage.getItem(TENANTS_KEY)).toBe("{broken")
+    tenantStorage.setItem(TENANTS_KEY, "{}")
+    await setImmediate()
+
+    expect(stored).toBe("{broken")
+    expect(tenantStorage.getItem(TENANTS_KEY)).toBeNull()
+    expect(bridge.storage.setItem).not.toHaveBeenCalled()
+    expect(bridge.license.status).not.toHaveBeenCalled()
+    expect(bridge.license.releaseTenant).not.toHaveBeenCalled()
+  })
+
+  it("saves a valid list with a tenant id without releasing tenants, then resumes removal cleanup", async () => {
+    const next = JSON.stringify([{ credentials: { tenantId: "saved-tenant" } }])
+    let stored = "{broken"
+    bridge.storage.getItemSync.mockImplementation(() => stored)
+    bridge.storage.setItem.mockImplementation(async (_key, value) => { stored = value })
+    const { tenantStorage } = await import("../src/renderer/overrides/tenant-storage")
+
+    expect(tenantStorage.getItem(TENANTS_KEY)).toBeNull()
     tenantStorage.setItem(TENANTS_KEY, next)
     await setImmediate()
 
     expect(stored).toBe(next)
     expect(tenantStorage.getItem(TENANTS_KEY)).toBe(next)
     expect(bridge.storage.setItem).toHaveBeenCalledExactlyOnceWith(TENANTS_KEY, next)
+    expect(bridge.license.status).not.toHaveBeenCalled()
+    expect(bridge.license.releaseTenant).not.toHaveBeenCalled()
+
+    tenantStorage.setItem(TENANTS_KEY, "[]")
+    await setImmediate()
+
+    expect(stored).toBe("[]")
+    expect(bridge.license.releaseTenant).toHaveBeenCalledExactlyOnceWith("saved-tenant")
+  })
+
+  it("clears the unreadable classification when the stored list is removed", async () => {
+    bridge.storage.getItemSync.mockReturnValue("{broken")
+    const { tenantStorage } = await import("../src/renderer/overrides/tenant-storage")
+
+    expect(tenantStorage.getItem(TENANTS_KEY)).toBeNull()
+    tenantStorage.removeItem(TENANTS_KEY)
+    tenantStorage.setItem(TENANTS_KEY, "[]")
+    await setImmediate()
+
+    expect(tenantStorage.getItem(TENANTS_KEY)).toBe("[]")
+    expect(bridge.storage.removeItem).toHaveBeenCalledExactlyOnceWith(TENANTS_KEY)
+    expect(bridge.storage.setItem).toHaveBeenCalledExactlyOnceWith(TENANTS_KEY, "[]")
     expect(bridge.license.status).not.toHaveBeenCalled()
     expect(bridge.license.releaseTenant).not.toHaveBeenCalled()
   })
@@ -206,7 +272,7 @@ describe("tenantStorage", () => {
     bridge.storage.getItemSync.mockImplementation(() => stored)
     const { tenantStorage } = await import("../src/renderer/overrides/tenant-storage")
 
-    expect(tenantStorage.getItem(TENANTS_KEY)).toBe(stored)
+    expect(tenantStorage.getItem(TENANTS_KEY)).toBeNull()
     tenantStorage.setItem(TENANTS_KEY, "[]")
     await setImmediate()
     expect(bridge.license.status).not.toHaveBeenCalled()
