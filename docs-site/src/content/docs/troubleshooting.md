@@ -159,7 +159,7 @@ A stable install follows stable releases by default. Enable **Settings** > **Upd
 
 | Message | Cause | Fix |
 | --- | --- | --- |
-| Scheduled backup of *tenant* failed | Desktop notification after a scheduled or tray backup fails. The body holds the reason. | Open TenuVault and check the backup log in **Backup & Restore**. TenuVault retries 15 minutes after the failed attempt finishes, up to three attempts per slot. After the third failure, the next attempt is at the next scheduled slot. |
+| Scheduled backup of *tenant* failed | Desktop notification after a scheduled or tray backup fails. The body holds the reason. | Open TenuVault and check the backup log in **Backup & Restore**. For a scheduled backup, TenuVault retries 15 minutes after the failed attempt finishes, up to three attempts per slot, then waits for the next scheduled slot. A backup started from the tray is not retried: start it again from the tray or from **Backup & Restore**. |
 | Not backed up: *reason* | A scheduled or tray backup was refused because the license or plan does not cover it. The schedule panel lists these under "Not backed up because of the license". | Fix the license, or change the schedule to one your plan includes. Daily schedules and Azure storage need Pro or MSP. |
 | This tenant is no longer connected. | A schedule exists for a tenant that was removed. | Add the tenant again, or remove its schedule. |
 | Choose a time such as 02:00. / Choose a day of the week. | The schedule time or day is invalid. | Enter a 24 hour time and, for weekly schedules, a weekday. |
