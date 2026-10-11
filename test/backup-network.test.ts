@@ -79,7 +79,7 @@ describe("backup request recovery", () => {
     expect(job.endTime).toBeDefined()
     expect(new Date(job.endTime!).getTime() - started).toBe(273_000)
     expect(new Date(job.endTime!).getTime() - started).toBeLessThan(5 * 60_000)
-    expect(job.exception).toBe("Backup stopped: the network did not respond for 24 consecutive requests. Earlier policies in this run were saved; the backup is incomplete.")
+    expect(job.exception).toBe("Backup stopped: Microsoft Graph did not respond for 24 consecutive requests. Earlier policies in this run were saved; the backup is incomplete.")
     expect(job.log.some(line => line.includes(job.exception!))).toBe(true)
     expect(signals.every(signal => signal.aborted)).toBe(true)
     expect(signals.some(signal => signal.reason.message === job.exception)).toBe(true)
@@ -91,6 +91,50 @@ describe("backup request recovery", () => {
 
     hanging = false
     const next = engine.start(outageRequest)
+    expect(next.id).not.toBe(job.id)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(next.status).toBe("Completed")
+  })
+
+  it.each(["hung fetch", "HTTP 503 with a hung body"])("stops 1,000 uploads with a %s despite healthy Graph reads within five minutes", async failure => {
+    requestTimers()
+    const started = Date.now()
+    const signals: AbortSignal[] = []
+    const items = Array.from({ length: 1000 }, (_, index) => ({ id: `policy-${index}`, displayName: `Policy ${index}` }))
+    let hanging = true
+    const { engine, fetchImpl } = setup((url, init) => {
+      if (!hanging) return
+      if (url.hostname === "graph.microsoft.com") {
+        if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: items })
+        return Response.json({ id: url.pathname.split("/").at(-1) })
+      }
+      if (url.search) return
+      signals.push(init!.signal!)
+      // Ignore aborts to prove the job does not depend on the bridge settling.
+      return failure === "hung fetch" ? new Promise(() => {}) : new Response(new ReadableStream(), { status: 503 })
+    })
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(272_999)
+    expect(job.status).toBe("Running")
+    await vi.advanceTimersByTimeAsync(1)
+    expect(job).toMatchObject({ status: "Failed", progress: 100 })
+    expect(job.endTime).toBeDefined()
+    expect(new Date(job.endTime!).getTime() - started).toBe(273_000)
+    expect(new Date(job.endTime!).getTime() - started).toBeLessThan(5 * 60_000)
+    expect(job.exception).toBe("Backup stopped: backup storage did not respond for 24 consecutive requests. Earlier policies in this run were saved; the backup is incomplete.")
+    expect(signals.length).toBeGreaterThanOrEqual(24)
+    expect(signals.length).toBeLessThanOrEqual(31)
+    expect(signals.every(signal => signal.aborted)).toBe(true)
+    expect(signals.some(signal => signal.reason.message === job.exception)).toBe(true)
+    // 31 uploads, 15 healthy policy reads, container creation and the initial Graph list.
+    expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(48)
+    expect(fetchImpl.mock.calls.some(([input]) => String(input).endsWith("/metadata.json"))).toBe(false)
+    const calls = fetchImpl.mock.calls.length
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(fetchImpl.mock.calls).toHaveLength(calls)
+
+    hanging = false
+    const next = engine.start(request)
     expect(next.id).not.toBe(job.id)
     await vi.advanceTimersByTimeAsync(0)
     expect(next.status).toBe("Completed")
@@ -182,6 +226,64 @@ describe("backup request recovery", () => {
     expect(fetchImpl.mock.calls).toHaveLength(calls)
   })
 
+  it.each(["first listing", "metadata read", "delete"])("reports one cleanup warning when a single retention %s hangs", async failure => {
+    requestTimers()
+    vi.setSystemTime(new Date("2026-10-11T12:00:00Z"))
+    const oldPrefix = "backup-2026-08-01-020000/"
+    const oldManifest = `/intune-backups/${oldPrefix}metadata.json`
+    const oldPolicy = `/intune-backups/${oldPrefix}DeviceConfigurations/Old.json`
+    const saved = new Map([
+      [oldManifest, JSON.stringify({ Status: "Success", TenantId: TENANT, Scope: { Excluded: request.scope.excluded } })],
+      [oldPolicy, JSON.stringify({ id: "old" })],
+    ])
+    const original = new Map(saved)
+    const signals: AbortSignal[] = []
+    const { fetchImpl } = setup((url, init) => {
+      if (url.hostname === "graph.microsoft.com") return
+      if (init?.method === "PUT" && !url.search) {
+        saved.set(url.pathname, init.body as string)
+        return
+      }
+      if ((failure === "first listing" && init?.method === "GET" && url.searchParams.get("delimiter") === "/")
+        || (failure === "metadata read" && init?.method === "GET" && url.pathname === oldManifest)
+        || (failure === "delete" && init?.method === "DELETE")) {
+        signals.push(init!.signal!)
+        return new Promise(() => {})
+      }
+      if (init?.method === "GET" && url.search) {
+        const entries = url.searchParams.get("delimiter") === "/"
+          ? `<BlobPrefix><Name>${oldPrefix}</Name></BlobPrefix>`
+          : [oldManifest, oldPolicy].map(path => `<Blob><Name>${path.slice("/intune-backups/".length)}</Name></Blob>`).join("")
+        return new Response(`<EnumerationResults><Blobs>${entries}</Blobs></EnumerationResults>`)
+      }
+      if (init?.method === "GET") return new Response(saved.get(url.pathname), { headers: { "content-type": "application/json" } })
+      if (init?.method === "DELETE") saved.delete(url.pathname)
+    })
+    const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30 })
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(0)
+    const manifest = `/intune-backups/${job.backupFolder}/metadata.json`
+    const committed = saved.get(manifest)
+    expect(JSON.parse(committed!)).toMatchObject({ Status: "Success", Failures: 0 })
+    await vi.advanceTimersByTimeAsync(273_000)
+    expect(job).toMatchObject({ status: "Completed", progress: 100, progressMessage: "Backup completed with 1 warning" })
+    expect(job.endTime).toBeDefined()
+    expect(job.exception).toBeUndefined()
+    expect(job.log.filter(line => line.includes("Could not remove old backups:"))).toHaveLength(1)
+    expect(job.log.join("\n")).toContain("timed out. They will be reconsidered on the next run.")
+    expect(signals).toHaveLength(3)
+    expect(signals.every(signal => signal.aborted)).toBe(true)
+    expect(saved.get(manifest)).toBe(committed)
+    expect(saved.size).toBe(original.size + 1)
+    for (const [path, body] of original) expect(saved.get(path)).toBe(body)
+    const deletes = fetchImpl.mock.calls.filter(([, init]) => init?.method === "DELETE")
+    expect(deletes).toHaveLength(failure === "delete" ? 3 : 0)
+    expect(deletes.every(([input]) => new URL(String(input)).pathname === oldManifest)).toBe(true)
+    const calls = fetchImpl.mock.calls.length
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(fetchImpl.mock.calls).toHaveLength(calls)
+  })
+
   it.each(["Graph", "blob"])("resets a network failure streak on %s success and keeps per-item warnings", async service => {
     requestTimers()
     const failures: number[] = []
@@ -193,6 +295,10 @@ describe("backup request recovery", () => {
           setTimeout(() => resolve(new Response(null, { status: 201 })), service === "Graph" ? 2000 : 4500)
         })
         if (url.pathname.endsWith("/metadata.json")) metadata = JSON.parse(init!.body as string) as Record<string, unknown>
+        if (service === "blob" && url.pathname.includes("/Bad")) {
+          failures.push(Date.now() - started)
+          throw new TypeError("Connection reset")
+        }
         return
       }
       if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: [
@@ -201,6 +307,7 @@ describe("backup request recovery", () => {
       if (url.pathname.endsWith("/reset")) return service === "blob" ? Response.json({ id: "reset" }) : new Promise<Response>(resolve => {
         setTimeout(() => resolve(Response.json({ id: "reset" })), 4500)
       })
+      if (service === "blob") return Response.json({ id: url.pathname.split("/").at(-1) })
       failures.push(Date.now() - started)
       throw new TypeError("Connection reset")
     }, 2)
@@ -215,6 +322,40 @@ describe("backup request recovery", () => {
     expect(job.status).toBe("Completed")
     expect(job.progressMessage).toBe("Backup completed with 2 warnings")
     expect(metadata).toMatchObject({ Status: "CompletedWithWarnings", Failures: 2, ItemCounts: { TotalPolicies: 1 } })
+  })
+
+  it("does not reset Graph failures when a storage upload succeeds", async () => {
+    requestTimers()
+    const saved = new Map<string, string>()
+    let startFailures: () => void = () => undefined
+    const uploading = new Promise<void>(resolve => { startFailures = resolve })
+    const { engine } = setup((url, init) => {
+      if (url.hostname !== "graph.microsoft.com") {
+        if (url.pathname.endsWith("/Saved.json")) {
+          startFailures()
+          return new Promise<Response>(resolve => {
+            setTimeout(() => {
+              saved.set(url.pathname, init!.body as string)
+              resolve(new Response(null, { status: 201 }))
+            }, 4500)
+          })
+        }
+        return
+      }
+      if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: [
+        { id: "bad-1", displayName: "Bad 1" }, { id: "saved", displayName: "Saved" }, { id: "bad-2", displayName: "Bad 2" },
+      ] })
+      if (url.pathname.endsWith("/saved")) return Response.json({ id: "saved" })
+      return uploading.then(() => { throw new TypeError("Connection reset") })
+    }, 2)
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(4500)
+    expect(job.status).toBe("Running")
+    expect(saved.size).toBe(1)
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(job.status).toBe("Failed")
+    expect(job.exception).toBe("Backup stopped: Microsoft Graph did not respond for 6 consecutive requests. Earlier policies in this run were saved; the backup is incomplete.")
+    expect([...saved.keys()]).toEqual([`/intune-backups/${job.backupFolder}/DeviceConfigurations/Saved.json`])
   })
 
   it("stops hung blob uploads without marking earlier saved policies complete", async () => {

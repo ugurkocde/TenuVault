@@ -124,10 +124,12 @@ function requestFailure(error: unknown): "network" | "status" | "token" | "other
   return "network"
 }
 
-/** One outage must stop the job before readers drain every policy or type. */
+type NetworkService = "Microsoft Graph" | "backup storage"
+
+/** One service outage must stop the job before readers drain every policy or type. */
 class NetworkCircuit {
   private readonly controller = new AbortController()
-  private consecutiveFailures = 0
+  private readonly consecutiveFailures: Record<NetworkService, number> = { "Microsoft Graph": 0, "backup storage": 0 }
 
   constructor(private readonly threshold: number) {}
 
@@ -135,15 +137,15 @@ class NetworkCircuit {
     return this.controller.signal
   }
 
-  succeeded(): void {
+  succeeded(service: NetworkService): void {
     this.signal.throwIfAborted()
-    this.consecutiveFailures = 0
+    this.consecutiveFailures[service] = 0
   }
 
-  failed(): void {
+  failed(service: NetworkService): void {
     this.signal.throwIfAborted()
-    if (++this.consecutiveFailures < this.threshold) return
-    this.controller.abort(new Error(`Backup stopped: the network did not respond for ${this.consecutiveFailures} consecutive requests. Earlier policies in this run were saved; the backup is incomplete.`))
+    if (++this.consecutiveFailures[service] < this.threshold) return
+    this.controller.abort(new Error(`Backup stopped: ${service} did not respond for ${this.consecutiveFailures[service]} consecutive requests. Earlier policies in this run were saved; the backup is incomplete.`))
     this.signal.throwIfAborted()
   }
 }
@@ -335,11 +337,11 @@ export class BackupEngine {
       const retentionNetwork = new NetworkCircuit(3 * concurrency)
       const retentionStorage = new BlobWriter(this.deps.fetch, request.storageAccountName, storageToken, retentionNetwork)
       await this.applyRetention(job, retentionStorage, backupFolder, coveredFolders(metadata), retentionNetwork.signal).catch((error: unknown) => {
+        retentionWarnings++
         if (retentionNetwork.signal.aborted) {
-          retentionWarnings++
           this.write(job, "Old backups were not removed because the network stopped responding. They will be reconsidered on the next run.")
         } else {
-          this.write(job, `Could not remove old backups: ${error instanceof Error ? error.message : String(error)}`)
+          this.write(job, `Could not remove old backups: ${error instanceof Error ? error.message : String(error)}. They will be reconsidered on the next run.`)
         }
       })
     } else {
@@ -505,14 +507,14 @@ class GraphSession {
           if (response.ok) {
             const result = (await response.json()) as T
             signal.throwIfAborted()
-            this.network.succeeded()
+            this.network.succeeded("Microsoft Graph")
             return result
           }
           throw new GraphError(await graphError(response), response.status)
         }, this.network.signal)
       } catch (error) {
         this.network.signal.throwIfAborted()
-        if ((attempted || error instanceof RequestTimeoutError) && requestFailure(error) === "network") this.network.failed()
+        if ((attempted || error instanceof RequestTimeoutError) && requestFailure(error) === "network") this.network.failed("Microsoft Graph")
         if (error instanceof GraphPauseError) {
           attempt--
           continue
@@ -708,12 +710,12 @@ class BlobWriter {
           }
           const result = await read(response, signal, ambiguous)
           signal.throwIfAborted()
-          if (response.ok) this.network?.succeeded()
+          if (response.ok) this.network?.succeeded("backup storage")
           return result
         }, this.network?.signal, init.signal ?? undefined)
       } catch (error) {
         this.network?.signal.throwIfAborted()
-        if ((attempted || error instanceof RequestTimeoutError) && requestFailure(error) === "network" && !init.signal?.aborted) this.network?.failed()
+        if ((attempted || error instanceof RequestTimeoutError) && requestFailure(error) === "network" && !init.signal?.aborted) this.network?.failed("backup storage")
         if (error instanceof TokenError || error instanceof StorageError || error instanceof ProtectedBlobError || init.signal?.aborted || attempt >= REQUEST_ATTEMPTS - 1) throw error
         ambiguous = true
         await sleep(retryDelay(response, attempt), this.network?.signal)
