@@ -4,7 +4,18 @@ import { resolveHref } from "../src/renderer/shims/paths"
 
 describe("resolveHref", () => {
   it("keeps portal routes inside the app", () => {
+    expect(resolveHref("/portal/dashboard")).toEqual({ kind: "internal", path: "/portal/dashboard" })
     expect(resolveHref("/portal/backup?tenant=1")).toEqual({ kind: "internal", path: "/portal/backup?tenant=1" })
+  })
+
+  it("keeps license routes inside the app", () => {
+    expect(resolveHref("/license")).toEqual({ kind: "internal", path: "/license" })
+    expect(resolveHref("/license?tenant=1#activation")).toEqual({ kind: "internal", path: "/license?tenant=1#activation" })
+  })
+
+  it("matches app routes at segment boundaries", () => {
+    expect(resolveHref("/portalfoo")).toEqual({ kind: "external", url: "https://tenuvault.com/portalfoo" })
+    expect(resolveHref("/licensefoo")).toEqual({ kind: "external", url: "https://tenuvault.com/licensefoo" })
   })
 
   it("sends the website home page to the dashboard", () => {
