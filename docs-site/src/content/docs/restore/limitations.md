@@ -84,7 +84,7 @@ The journal stores the method, target path, tenant, time, a short policy name an
 
 1. Go to **Settings** > **Storage and recovery**.
 2. Under **Restore history tenant**, select the tenant.
-3. The **Restore write history** card lists every recorded write for that tenant, newest first. Click **Refresh history** to reload it.
+3. The **Restore write history** card lists every recorded write for that tenant, newest first. Click **Refresh history** to reload it. If the refresh fails, the previous records stay visible with an error.
 
 Opening or changing the history requires the tenant's stored sign-in, an active license, and live Intune management access for that tenant. Records of other tenants are never shown.
 
@@ -100,9 +100,11 @@ Each record shows the policy name (or "Object name unavailable"), the time, its 
 
 1. Open the Intune admin center for the tenant shown in the record and look for the object named in the record.
 2. Choose the action that matches what you found:
-   * **Confirm applied**: the object exists. Enter its object ID when asked. A later retry reuses this result instead of sending the write again.
+   * **Confirm applied**: the object exists. Enter its object ID in the inline form and choose **Save applied ID**. The ID must be a GUID. A later retry reuses this result instead of sending the write again.
    * **Confirm not applied**: the object does not exist. Confirm "I checked the target tenant in Intune and confirmed this request was NOT applied. Allow another attempt?" The next retry sends the write again.
 3. Retry the restore from the wizard.
+
+Invalid IDs and failed requests show an error in the form. The form stays open so you can correct the ID or try saving again. **Cancel** closes it without saving.
 
 :::caution
 Do not confirm a write as not applied just because its response was lost. Check Intune first. Confirming wrongly can create a duplicate object.
@@ -112,7 +114,7 @@ Do not confirm a write as not applied just because its response was lost. Check 
 
 Reconciled records offer two actions:
 
-* **Correct applied ID** fixes a mistaken object ID without allowing another create. After you enter the corrected ID, the next retry reads the object and verifies its creation fields before any follow-up writes.
+* **Correct applied ID** fixes a mistaken object ID without allowing another create. The inline form starts with the recorded ID. Enter the corrected GUID and choose **Save applied ID**. The next retry reads the object and verifies its creation fields before any follow-up writes.
 * **Allow a new operation** clears the record so an identical request can be sent again. Use it only for a genuinely new operation, and never while you are resuming a repair.
 
 When a retry reuses a reconciled creation, TenuVault reads the object in the recorded tenant and checks its ID and the fields from the original request before continuing. If they do not match or cannot be read, it stops with "The reconciled object does not match the original creation request, or its fields cannot be verified. No follow-up writes were sent. Review the ID and complete recovery manually in Intune." Some policy types then need manual completion in Intune.

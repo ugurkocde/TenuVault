@@ -1,6 +1,6 @@
 import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
-import { useEffect, useState } from "react"
+import { useEffect, useId, useState } from "react"
 import { Link } from "react-router-dom"
 import { Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, RefreshCw, Save, Upload } from "lucide-react"
 import { useTenantOperations, useTenants, type Tenant } from "~/contexts/TenantContext"
@@ -11,6 +11,7 @@ import { storageLabel } from "~/lib/storage-label"
 import type { AppInfo, AppPreferences, BackupSettings, SignedInAccount, UpdateStatus } from "../../shared/ipc"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import { COMMUNITY_RETENTION_DAYS } from "../../shared/plans"
+import { isGuid } from "../../shared/security"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
 import { StorageChooser } from "../components/StorageChooser"
 import { bridge } from "../lib/bridge"
@@ -21,38 +22,138 @@ function RestoreWrites() {
   const tenants = useTenants().filter(tenant => tenant.credentials?.tenantId)
   const [selected, setSelected] = useState("")
   const tenantId = tenants.some(tenant => tenant.credentials?.tenantId === selected) ? selected : tenants[0]?.credentials?.tenantId
-  if (!tenantId) return <Card><CardContent className="pt-6">Connect and sign in to a tenant to view restore write history.</CardContent></Card>
-  return <div className="space-y-3"><label className="block text-sm">Restore history tenant<select className="ml-3 rounded border bg-background p-2" value={tenantId} onChange={event => setSelected(event.target.value)}>{tenants.map(tenant => <option key={tenant.id} value={tenant.credentials!.tenantId}>{tenant.name}</option>)}</select></label><TenantRestoreWrites key={tenantId} tenantId={tenantId} /></div>
+  if (!tenantId) {
+    return (
+      <Card>
+        <CardContent className="pt-6">Connect and sign in to a tenant to view restore write history.</CardContent>
+      </Card>
+    )
+  }
+  return (
+    <div className="space-y-3">
+      <label className="block text-sm">
+        Restore history tenant
+        <select className="ml-3 rounded border bg-background p-2" value={tenantId} onChange={event => setSelected(event.target.value)}>
+          {tenants.map(tenant => <option key={tenant.id} value={tenant.credentials!.tenantId}>{tenant.name}</option>)}
+        </select>
+      </label>
+      <TenantRestoreWrites key={tenantId} tenantId={tenantId} />
+    </div>
+  )
+}
+
+function RestoreAppliedInput({ record, request, onClose }: { record: WriteRecord; request: (body: object) => Promise<void>; onClose: () => void }) {
+  const id = useId()
+  const [objectId, setObjectId] = useState(record.state === "reconciled" ? record.objectId ?? "" : "")
+  const [error, setError] = useState("")
+  const [saving, setSaving] = useState(false)
+  const description = record.state === "reconciled"
+    ? "After checking the original policy name and tenant in Intune, enter the corrected object ID. The next retry will read and verify its creation fields before any follow-up writes."
+    : "After checking Intune, enter the ID of the object this request applied to. A retry will reuse this result instead of repeating the write."
+
+  const submit = async () => {
+    if (saving) return
+    const value = objectId.trim()
+    if (!isGuid(value)) {
+      setError("Enter a valid object ID (GUID).")
+      return
+    }
+    setError("")
+    setSaving(true)
+    try {
+      await request({ action: "applied", key: record.key, objectId: value, confirmed: true })
+      onClose()
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <form className="mt-3 space-y-3" aria-label={record.state === "reconciled" ? "Correct applied ID" : "Confirm applied"} onSubmit={event => { event.preventDefault(); void submit() }}>
+      <div className="space-y-1">
+        <label htmlFor={id} className="block font-medium">Object ID</label>
+        <p id={`${id}-description`} className="text-sm text-gray-500">{description}</p>
+        <input
+          id={id}
+          className="w-full rounded border bg-background p-2 font-mono text-sm"
+          value={objectId}
+          onChange={event => { setObjectId(event.target.value); setError("") }}
+          aria-describedby={`${id}-description${error ? ` ${id}-error` : ""}`}
+          aria-invalid={!!error}
+          autoFocus
+          spellCheck={false}
+          disabled={saving}
+        />
+      </div>
+      {error && <p id={`${id}-error`} role="alert" className="text-red-700">{error}</p>}
+      <div className="flex gap-3">
+        <Button type="submit" disabled={saving}>{saving ? "Saving..." : "Save applied ID"}</Button>
+        <Button type="button" variant="outline" disabled={saving} onClick={onClose}>Cancel</Button>
+      </div>
+    </form>
+  )
 }
 
 function TenantRestoreWrites({ tenantId }: { tenantId: string }) {
   const [records, setRecords] = useState<WriteRecord[]>([])
   const [error, setError] = useState("")
+  const [editing, setEditing] = useState<string | null>(null)
   const request = async (body: object) => {
-    try {
-      const response = await fetch("/api/restore-journal", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, tenantId }) })
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.error)
-      if (!Array.isArray(data.records)) throw new Error("Invalid restore history response")
-      setError("")
-      setRecords(data.records)
-    } catch (error) { setRecords([]); throw error }
+    const response = await fetch("/api/restore-journal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...body, tenantId }),
+    })
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.error)
+    if (!Array.isArray(data.records)) throw new Error("Invalid restore history response")
+    setError("")
+    setRecords(data.records)
   }
   useEffect(() => { void request({ action: "list" }).catch(e => setError(String(e))) }, [])
-  return <Card><CardHeader><CardTitle>Restore write history</CardTitle><Button variant="outline" onClick={() => void request({ action: "list" }).catch(e => setError(String(e)))}>Refresh history</Button><CardDescription>Interrupted writes stay blocked across restarts. Check the target tenant in Intune before resolving an uncertain result. Request payloads and tokens are not stored here.</CardDescription></CardHeader><CardContent>
-    {error && <p role="alert" className="text-red-700">{error}</p>}
-    {!records.length && <p>No restore writes recorded.</p>}
-    {records.slice().reverse().map(record => <div key={record.key} className="border-t py-3 text-sm">
-      <p className="font-medium">{record.label ?? "Object name unavailable"}</p>
-      <p>{record.at} · {record.state} · Tenant {record.tenant}</p><p className="break-all">{record.method} {record.path}{record.objectId ? ` · Object ${record.objectId}` : ""}</p>
-      {record.state === "reconciled" && <Button className="mt-2 mr-2" variant="outline" onClick={() => { const objectId = window.prompt("After checking the original policy name and tenant in Intune, enter the corrected object ID. The next retry will read and verify its creation fields before any follow-up writes.", record.objectId); if (objectId) void request({ action: "applied", key: record.key, objectId, confirmed: true }).catch(e => setError(String(e))) }}>Correct applied ID</Button>}
-      {record.state === "reconciled" && <Button className="mt-2" variant="outline" onClick={() => { if (window.confirm("Start a new operation with this request? Future attempts will send the write again and may create another object. Do not clear this while resuming a repair.")) void request({ action: "new-operation", key: record.key, confirmed: true }).catch(e => setError(String(e))) }}>Allow a new operation</Button>}
-      {record.state === "uncertain" && <div className="mt-2 flex gap-3">
-        <Button variant="outline" onClick={() => { const objectId = window.prompt("After checking Intune, enter the ID of the object this request applied to. A retry will reuse this result instead of repeating the write."); if (objectId) void request({ action: "applied", key: record.key, objectId, confirmed: true }).catch(e => setError(String(e))) }}>Confirm applied</Button>
-        <Button variant="outline" onClick={() => { if (window.confirm("I checked the target tenant in Intune and confirmed this request was NOT applied. Allow another attempt?")) void request({ action: "not-applied", key: record.key, confirmed: true }).catch(e => setError(String(e))) }}>Confirm not applied</Button>
-      </div>}
-    </div>)}
-  </CardContent></Card>
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Restore write history</CardTitle>
+        <Button variant="outline" onClick={() => void request({ action: "list" }).catch(e => setError(String(e)))}>Refresh history</Button>
+        <CardDescription>Interrupted writes stay blocked across restarts. Check the target tenant in Intune before resolving an uncertain result. Request payloads and tokens are not stored here.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {error && <p role="alert" className="text-red-700">{error}</p>}
+        {!records.length && <p>No restore writes recorded.</p>}
+        {records.slice().reverse().map(record => (
+          <div key={record.key} className="border-t py-3 text-sm">
+            <p className="font-medium">{record.label ?? "Object name unavailable"}</p>
+            <p>{record.at} · {record.state} · Tenant {record.tenant}</p>
+            <p className="break-all">{record.method} {record.path}{record.objectId ? ` · Object ${record.objectId}` : ""}</p>
+            {record.state === "reconciled" && (
+              <>
+                <Button className="mt-2 mr-2" variant="outline" aria-expanded={editing === record.key} onClick={() => setEditing(record.key)}>Correct applied ID</Button>
+                <Button className="mt-2" variant="outline" onClick={() => {
+                  if (window.confirm("Start a new operation with this request? Future attempts will send the write again and may create another object. Do not clear this while resuming a repair.")) {
+                    void request({ action: "new-operation", key: record.key, confirmed: true }).catch(e => setError(String(e)))
+                  }
+                }}>Allow a new operation</Button>
+              </>
+            )}
+            {record.state === "uncertain" && (
+              <div className="mt-2 flex gap-3">
+                <Button variant="outline" aria-expanded={editing === record.key} onClick={() => setEditing(record.key)}>Confirm applied</Button>
+                <Button variant="outline" onClick={() => {
+                  if (window.confirm("I checked the target tenant in Intune and confirmed this request was NOT applied. Allow another attempt?")) {
+                    void request({ action: "not-applied", key: record.key, confirmed: true }).catch(e => setError(String(e)))
+                  }
+                }}>Confirm not applied</Button>
+              </div>
+            )}
+            {editing === record.key && <RestoreAppliedInput record={record} request={request} onClose={() => setEditing(current => current === record.key ? null : current)} />}
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  )
 }
 
 function BackupsOnDevice() {

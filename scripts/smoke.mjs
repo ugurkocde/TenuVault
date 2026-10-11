@@ -637,6 +637,122 @@ await check("tag drafts stay with their tenant and bulk tags sync every tenant",
   }
 })
 
+await check("restore journal applied IDs use validated inline inputs", async () => {
+  const tenantId = "11111111-1111-1111-1111-111111111111"
+  const originalId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+  const appliedId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+  const correctedId = "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC"
+  await evaluate(`(() => {
+    window.__restoreFetch = window.fetch;
+    window.__restoreRequests = [];
+    window.__restoreFailList = false;
+    window.__restoreFailApplied = true;
+    const records = [
+      { key: 'smoke-uncertain', tenant: '${tenantId}', method: 'POST', path: '/deviceManagement/deviceConfigurations', at: '2026-01-01T00:00:00.000Z', state: 'uncertain', label: 'Interrupted smoke policy' },
+      { key: 'smoke-correct', tenant: '${tenantId}', method: 'POST', path: '/deviceManagement/deviceConfigurations', at: '2026-01-01T00:00:00.000Z', state: 'reconciled', label: 'Reconciled smoke policy', objectId: '${originalId}' }
+    ];
+    window.fetch = (input, init) => {
+      if (String(input) !== '/api/restore-journal') return window.__restoreFetch(input, init);
+      const body = JSON.parse(init.body);
+      window.__restoreRequests.push(body);
+      if (body.action === 'list' && window.__restoreFailList) return Promise.reject(new Error('Restore history unavailable.'));
+      if (body.action === 'applied') {
+        if (window.__restoreFailApplied) return Promise.resolve(Response.json({ error: 'Restore reconciliation unavailable.' }, { status: 503 }));
+        Object.assign(records.find(record => record.key === body.key), { state: 'reconciled', objectId: body.objectId });
+      }
+      return Promise.resolve(Response.json({ records }));
+    };
+  })()`)
+  const form = label => `document.querySelector('form[aria-label="${label}"]')`
+  const click = label => evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent.trim() === ${JSON.stringify(label)}).click()`)
+  const fill = (label, value) => evaluate(`(() => {
+    const input = ${form(label)}.querySelector('input');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(value)});
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`)
+  const submit = label => evaluate(`${form(label)}.querySelector('button[type="submit"]').click()`)
+  try {
+    await go("#/portal/settings", "Restore write history")
+    assert(await waitForText("Interrupted smoke policy"), "journal records did not load")
+    await evaluate(`window.__restoreFailList = true`)
+    await click("Refresh history")
+    assert(await waitForText("Restore history unavailable."), "journal refresh error was hidden")
+    assert(await evaluate(`document.body.innerText.includes('Interrupted smoke policy') && document.body.innerText.includes('Reconciled smoke policy')`), "failed refresh cleared the journal")
+    await evaluate(`window.__restoreFailList = false`)
+    await click("Refresh history")
+    assert(await waitForCondition(`!document.body.innerText.includes('Restore history unavailable.')`), "successful refresh did not clear the error")
+
+    await click("Confirm applied")
+    assert(await waitForCondition(`!!${form("Confirm applied")}`), "Confirm applied did not open the input")
+    assert(await evaluate(`${form("Confirm applied")}.querySelector('input').value === ''`), "uncertain write input was not blank")
+    assert(await evaluate(`${form("Confirm applied")}.innerText.includes('A retry will reuse this result instead of repeating the write.')`), "confirmation description missing")
+    await fill("Confirm applied", "invalid-id")
+    await submit("Confirm applied")
+    assert(await waitForText("Enter a valid object ID (GUID)."), "invalid object ID did not show validation")
+    assert(await evaluate(`!window.__restoreRequests.some(r => r.action === 'applied')`), "invalid object ID sent a request")
+    await evaluate(`${form("Confirm applied")}.querySelector('button[type="button"]').click()`)
+    assert(await waitForCondition(`!${form("Confirm applied")}`), "Cancel did not close the input")
+    assert(await evaluate(`!window.__restoreRequests.some(r => r.action === 'applied')`), "Cancel sent a request")
+
+    await click("Confirm applied")
+    await fill("Confirm applied", ` ${appliedId} `)
+    await submit("Confirm applied")
+    assert(await waitForCondition(`${form("Confirm applied")}?.querySelector('[role="alert"]')?.innerText === 'Restore reconciliation unavailable.'`), "request error did not appear inside the input form")
+    assert(await evaluate(`window.__restoreRequests.some(r => r.action === 'applied' && r.key === 'smoke-uncertain' && r.objectId === '${appliedId}' && r.confirmed === true && r.tenantId === '${tenantId}')`), "valid ID did not send the confirmed reconciliation")
+    await screenshot("05d-restore-journal-error")
+    await evaluate(`window.__restoreFailApplied = false`)
+    assert(await waitForCondition(`!${form("Confirm applied")}.querySelector('button[type="submit"]').disabled`), "input stayed disabled after failure")
+    await submit("Confirm applied")
+    assert(await waitForCondition(`!${form("Confirm applied")}`), "successful reconciliation did not close the input")
+    assert(await waitForText(`Object ${appliedId}`), "saved object ID was not displayed")
+
+    await evaluate(`(() => {
+      const row = [...document.querySelectorAll('p')].find(p => p.textContent === 'Reconciled smoke policy').parentElement;
+      [...row.querySelectorAll('button')].find(b => b.textContent.trim() === 'Correct applied ID').click();
+    })()`)
+    assert(await waitForCondition(`!!${form("Correct applied ID")}`), "Correct applied ID did not open the input")
+    assert(await evaluate(`${form("Correct applied ID")}.querySelector('input').value === '${originalId}'`), "correction input did not keep the recorded ID")
+    assert(await evaluate(`${form("Correct applied ID")}.innerText.includes('The next retry will read and verify its creation fields before any follow-up writes.')`), "correction description missing")
+    await fill("Correct applied ID", correctedId)
+    await submit("Correct applied ID")
+    assert(await waitForCondition(`!${form("Correct applied ID")}`), "successful correction did not close the input")
+    assert(await evaluate(`window.__restoreRequests.some(r => r.action === 'applied' && r.key === 'smoke-correct' && r.objectId === '${correctedId}' && r.confirmed === true && r.tenantId === '${tenantId}')`), "corrected ID did not send the confirmed reconciliation")
+    assert(await waitForText(`Object ${correctedId}`), "corrected object ID was not displayed")
+  } finally {
+    await evaluate(`window.fetch = window.__restoreFetch; delete window.__restoreFetch; delete window.__restoreRequests; delete window.__restoreFailList; delete window.__restoreFailApplied`)
+  }
+})
+
+await check("OpenIntuneBaseline run loading errors offer retry without an empty state", async () => {
+  await evaluate(`(() => {
+    window.__runsFetch = window.fetch;
+    window.__runsRequests = 0;
+    window.fetch = (input, init) => {
+      if (String(input) !== '/api/oib' || JSON.parse(init.body).action !== 'oib-runs') return window.__runsFetch(input, init);
+      window.__runsRequests++;
+      return window.__runsRequests === 1
+        ? Promise.reject(new Error('Deployment history unavailable.'))
+        : Promise.resolve(Response.json({ runs: [] }));
+    };
+  })()`)
+  const history = `document.querySelector('section[aria-label="Deployment runs"]')`
+  try {
+    await go("#/portal/oib", "Deployment history")
+    assert(await waitForCondition(`${history}?.innerText.includes('Deployment history unavailable.')`), "run loading failure was hidden")
+    // Allow unrelated version requests and renders to settle before counting initial run requests.
+    await sleep(500)
+    assert(await evaluate(`window.__runsRequests === 1`), "mount sent duplicate run requests")
+    assert(!(await evaluate(`${history}.innerText.includes('No deployments that can be undone are recorded for this tenant.')`)), "failed request showed the empty state")
+    await screenshot("19-oib-run-error")
+    await evaluate(`[...${history}.querySelectorAll('button')].find(b => b.textContent.trim() === 'Retry').click()`)
+    assert(await waitForCondition(`${history}?.innerText.includes('No deployments that can be undone are recorded for this tenant.')`), "successful retry did not show the empty state")
+    assert(await evaluate(`window.__runsRequests === 2`), "Retry did not send one run request")
+    assert(!(await evaluate(`${history}.innerText.includes('Deployment history unavailable.')`)), "successful retry did not clear the error")
+  } finally {
+    await evaluate(`window.fetch = window.__runsFetch; delete window.__runsFetch; delete window.__runsRequests`)
+  }
+})
+
 // Network independent: the landing page renders before the OIB source is read from GitHub.
 await check("OpenIntuneBaseline has its own section and left the framework catalog", async () => {
   assert(await evaluate(`[...document.querySelectorAll("nav a")].some(a => a.getAttribute("href") === "#/portal/oib")`), "sidebar item missing")

@@ -127,6 +127,8 @@ Only one OpenIntuneBaseline deployment or undo can run per tenant at a time.
 
 Every deployment and drift fix is recorded on this device with the IDs of the objects it created and the previous version of every policy it updated. **Deployment history** on the section's start page lists the runs that can be undone for the selected tenant.
 
+If the run list cannot load, it shows the error with a **Retry** button. Retry reloads the history. A load failure does not mean there are no runs to undo.
+
 Undo deletes the objects the run created and puts the previous versions of updated policies back. It does not touch anything else. To go back further, restore from the backup taken before the run. See [Restore items](/restore/).
 
 Failed writes follow the same safety rules as restores. A write with an unknown outcome is not repeated automatically; resolve it in **Settings** > **Storage and recovery** > **Restore write history**. See [Restore write history](/restore/limitations/#restore-write-history).
