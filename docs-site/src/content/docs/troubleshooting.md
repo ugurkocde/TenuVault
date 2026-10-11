@@ -159,7 +159,7 @@ A stable install follows stable releases by default. Enable **Settings** > **Upd
 
 | Message | Cause | Fix |
 | --- | --- | --- |
-| Scheduled backup of *tenant* failed | Desktop notification after a scheduled or tray backup fails. The body holds the reason. | Open TenuVault and check the backup log in **Backup & Restore**. The next scheduled slot retries. |
+| Scheduled backup of *tenant* failed / Tray backup of *tenant* failed | Desktop notification after a scheduled or tray backup fails. The title identifies how it started. The body holds the reason. | Click the notification to open that tenant's **Schedule** tab in **Backup & Restore**. Check the failure reason there. A failure before any backup was saved can leave no entry in stored backup history. The next scheduled slot retries. |
 | Not backed up: *reason* | A scheduled or tray backup was refused because the license or plan does not cover it. The schedule panel lists these under "Not backed up because of the license". | Fix the license, or change the schedule to one your plan includes. Daily schedules and Azure storage need Pro or MSP. |
 | This tenant is no longer connected. | A schedule exists for a tenant that was removed. | Add the tenant again, or remove its schedule. |
 | Choose a time such as 02:00. / Choose a day of the week. | The schedule time or day is invalid. | Enter a 24 hour time and, for weekly schedules, a weekday. |
@@ -168,6 +168,8 @@ A stable install follows stable releases by default. Enable **Settings** > **Upd
 | Background launch requires an installed Windows or macOS build. / Available in installed Windows and macOS builds. | The background runner only works in the installed app. | Install TenuVault with the installer and try again. |
 | An older direct-launch agent is loaded. Remove background launch first, then log out and back in before reinstalling; active backups are left running. | macOS still has an agent from a pre-release build. | Click **Remove background launch**, log out and back in, then install it again. |
 | TenuVault is still running | Shown when you close the window. TenuVault keeps running in the menu bar on macOS or the tray on Windows so schedules can run. | Quit TenuVault from that icon to stop the current process. An installed background runner may reopen it within five minutes, as the row above Quit explains. To stop automatic restarts, select **Remove background launch** in **Settings** > **Background runner** and turn off start at login before quitting. |
+
+Overlapping tray and scheduled requests for one tenant share the running backup and produce one failure notification. Its title identifies the request that started the backup. The tenant label uses its friendly name, then its domain, then "this tenant". The tenant ID is not used as the label, though the reported error message can contain one.
 
 Scheduled backups also stop when:
 

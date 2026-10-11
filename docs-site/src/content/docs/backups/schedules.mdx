@@ -68,8 +68,12 @@ Refusals are kept on this device, not in the tenant's audit log, because the ten
 
 ## When a scheduled backup fails
 
-* TenuVault shows a notification: "Scheduled backup of *tenant* failed", with the reason.
+* TenuVault shows a notification: "Scheduled backup of *tenant* failed", with the reason. A backup started from the tray uses "Tray backup of *tenant* failed". Click either notification to bring TenuVault to the front and open that tenant's **Schedule** tab, even if its window was closed.
+* If a tray request and a scheduled request overlap for one tenant, they share the running backup. A failure produces one notification, named for the request that started the backup.
+* The notification uses the tenant's friendly name, then its domain, then "this tenant" if neither is available. It does not use the tenant ID as the label. An error message can still contain an ID supplied by the service that reported it.
 * **Last automatic backup** on the Schedule tab, the Dashboard and the All tenants page show the failure.
+* On All tenants, the full failure timestamp wraps and **Action required** appears. Click the failure row to open that tenant's schedule.
+* Dashboard successful and failed counts use stored backup history. If the last automatic attempt failed and no backup is stored, the status says "Automatic backup failed before a backup was saved." The **Failed** count can remain zero.
 * The result is recorded in the tenant's [audit log](/audit-log/) as "Scheduled backup".
 
 If your sign-in has expired or Conditional Access requires you to sign in again, the backup fails and a banner at the top of the TenuVault window asks you to **Sign in**. Scheduled backups never open a sign-in window by themselves.

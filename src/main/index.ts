@@ -21,6 +21,7 @@ import { BackgroundLaunch } from "./backup/background-launch"
 import { BackupScopes } from "./backup/scopes"
 import { includedTypes, normalizeScope, type BackupScope } from "../shared/intune/scope"
 import { RefusalLog, refuseUnlicensedBackup } from "./backup/refusals"
+import { backupTenantLabel, notifyBackupFailure } from "./backup/notifications"
 import { BackupKeys } from "./backup/keys"
 import { readBackupSettings } from "./backup/settings"
 import { encryptedAzureFetch, registerStorageToken } from "./storage/azure-seal"
@@ -344,12 +345,13 @@ async function bootstrap(): Promise<void> {
     try {
       const tenants = JSON.parse(appStore.get(`${RENDERER_STORAGE_PREFIX}tenuvault_tenants`) ?? "[]") as Array<{
         name?: string
+        domain?: string
         credentials?: { tenantId?: string; appId?: string }
         resources?: { storageAccountName?: string }
       }>
       const tenant = tenants.find((t) => t.credentials?.tenantId?.toLowerCase() === tenantId.toLowerCase())
       if (!tenant?.credentials?.appId || !tenant.resources?.storageAccountName) return null
-      return { name: tenant.name ?? tenantId, clientId: tenant.credentials.appId, storageAccountName: tenant.resources.storageAccountName }
+      return { name: backupTenantLabel(tenant), clientId: tenant.credentials.appId, storageAccountName: tenant.resources.storageAccountName }
     } catch {
       return null
     }
@@ -401,11 +403,17 @@ async function bootstrap(): Promise<void> {
     notification.show()
   })
 
-  const notifyFailure = (name: string, message: string) => {
-    if (Notification.isSupported()) new Notification({ title: `Scheduled backup of ${name} failed`, body: message }).show()
+  const notifyFailure = (tenantId: string, name: string, message: string, trigger: "scheduled" | "tray") => {
+    notifyBackupFailure({ tenantId, name }, message, trigger, () => {
+      showWindow()
+      return mainWindow
+    })
   }
 
   const refusals = new RefusalLog(appStore, () => mainWindow?.webContents.send("schedules:refusalsChanged"))
+
+  // Joined requests share one notification and the trigger that started the job.
+  const unattendedBackupTriggers = new WeakMap<BackupJob, { trigger: "scheduled" | "tray"; notified: boolean }>()
 
   const runScheduledBackup = async (tenantId: string, trigger: "scheduled" | "tray") => {
     const profile = tenantProfile(tenantId)
@@ -421,14 +429,15 @@ async function bootstrap(): Promise<void> {
       if (!isLocalAccount(profile.storageAccountName) && !allows(plan, "azureStorage")) throw new PlanRequired("azureStorage")
     }
     const refused = await refuseUnlicensedBackup(
-      { requireEntitlement: requirePlan, log: refusals, notify: notifyFailure },
+      { requireEntitlement: requirePlan, log: refusals, notify: (name, message) => notifyFailure(tenantId, name, message, trigger) },
       { tenantId, name: profile.name },
       trigger,
     )
     if (refused) return { status: "Failed" as const, message: refused }
-    const job = await waitForJob(
-      engine.start({ tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, scope: scopes.get(tenantId).scope, trigger }),
-    )
+    const job = engine.start({ tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, scope: scopes.get(tenantId).scope, trigger })
+    const origin = unattendedBackupTriggers.get(job) ?? { trigger, notified: false }
+    unattendedBackupTriggers.set(job, origin)
+    await waitForJob(job)
     const ok = job.status === "Completed"
     const account = accounts.get(tenantId)
     // Record scheduled backups in the tenant's audit log, attributed to the signed-in admin.
@@ -455,7 +464,10 @@ async function bootstrap(): Promise<void> {
         }),
       )
       .catch(() => undefined)
-    if (!ok) notifyFailure(profile.name, job.exception ?? "Open TenuVault for details.")
+    if (!ok && !origin.notified) {
+      origin.notified = true
+      notifyFailure(tenantId, profile.name, job.exception ?? "Open TenuVault for details.", origin.trigger)
+    }
     return { status: ok ? ("Completed" as const) : ("Failed" as const), message: job.exception ?? job.progressMessage }
   }
 
