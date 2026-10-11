@@ -1,6 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 
+export const APP_STATE_START_OVER_DETAIL = "Your saved data is kept as an unreadable backup copy. Starting over deletes the backup encryption key from TenuVault, along with your sign-ins and license. Existing local and Azure backups become unreadable unless you exported their recovery key. To export it first, choose Quit, restore access to the saved data, then open Settings > Storage and recovery > Save recovery key. If you already exported it, use Import a recovery key in the same Settings section after starting over. Sign in to your tenants and activate your license again."
+export const APP_STATE_START_OVER_BUTTON = "Delete backup key and start over"
+
 export interface Cipher {
   encrypt: (plainText: string) => Buffer
   decrypt: (cipherText: Buffer) => string

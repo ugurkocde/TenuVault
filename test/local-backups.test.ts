@@ -1,10 +1,10 @@
-import { mkdtempSync, readdirSync, readFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { handleLocalBlobRequest } from "../src/main/storage/blob-emulator"
-import { LocalBlobStore } from "../src/main/storage/local-blob-store"
+import { LocalBlobStore, localBackupsExist } from "../src/main/storage/local-blob-store"
 import { BackupKeys } from "../src/main/backup/keys"
 import { memoryStore } from "./helpers"
 
@@ -26,6 +26,27 @@ const put = (call: ReturnType<typeof setup>["call"], name: string, body: string)
   })
 
 describe("encrypted local backups", () => {
+  it("detects local backup files without decrypting them or needing connected tenants", async () => {
+    const { root } = setup()
+    expect(await localBackupsExist(join(root, "missing"))).toBe(false)
+    expect(await localBackupsExist(root)).toBe(false)
+    const folder = join(root, ACCOUNT, "intune-backups")
+    mkdirSync(folder, { recursive: true })
+    writeFileSync(join(folder, "other.txt"), "unrelated file")
+    mkdirSync(join(folder, "directory.tvb"))
+    expect(await localBackupsExist(root)).toBe(false)
+    writeFileSync(join(folder, "encrypted.tvb"), "unreadable backup")
+    expect(await localBackupsExist(root)).toBe(true)
+  })
+
+  it("does not count local audit records as backups", async () => {
+    const { root } = setup()
+    const folder = join(root, ACCOUNT, "audit-logs")
+    mkdirSync(folder, { recursive: true })
+    writeFileSync(join(folder, "record.tvb"), "encrypted record")
+    expect(await localBackupsExist(root)).toBe(false)
+  })
+
   it("keeps policy names and content off the disk in plain text", async () => {
     const { root, call } = setup()
     expect((await call("/intune-backups?restype=container", { method: "PUT" })).status).toBe(201)

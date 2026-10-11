@@ -37,6 +37,27 @@ const MAGIC_LENGTH = 4
 const IV = 12
 const TAG = 16
 const EXT = ".tvb"
+
+/** Detects encrypted local backup files without needing their keys or reading their content. */
+export async function localBackupsExist(root: string): Promise<boolean> {
+  try {
+    const accounts = await readdir(root, { withFileTypes: true })
+    for (const account of accounts) {
+      if (!account.isDirectory()) continue
+      try {
+        const files = await readdir(join(root, account.name, "intune-backups"), { withFileTypes: true })
+        if (files.some((file) => file.isFile() && file.name.endsWith(EXT))) return true
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+      }
+    }
+    return false
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false
+    throw error
+  }
+}
+
 /** File headers read at once while reading a container's inventory. */
 const HEADER_CONCURRENCY = 16
 

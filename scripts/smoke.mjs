@@ -538,6 +538,7 @@ await check("several tenants get the overview, switcher and schedule tab", async
   await disableAnimations()
   assert(await waitForText("All tenants", 20000), "overview did not open for several tenants")
   assert(await waitForText("Contoso 2"), "second tenant missing from the overview")
+  assert(await waitForText("Save your backup recovery key"), "local storage recovery key notice missing from Overview")
   await screenshot("08-overview")
   await go("#/portal/backup", "Backup History")
   await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Schedule")?.click()`)
@@ -829,6 +830,15 @@ await check("OpenIntuneBaseline run loading errors offer retry without an empty 
   } finally {
     await evaluate(`window.fetch = window.__runsFetch; delete window.__runsFetch; delete window.__runsRequests`)
   }
+})
+
+await check("local recovery key notices link to the export action", async () => {
+  await go("#/portal/overview", "Save your backup recovery key")
+  await evaluate(`[...document.querySelectorAll("a")].find(a => a.textContent.trim() === "Go to Save recovery key").click()`)
+  assert(await waitForText("Backups on this device"), "recovery key notice did not open Settings")
+  assert(await waitForText("Save your backup recovery key"), "local storage recovery key notice missing from Settings")
+  assert(await waitForCondition(`document.activeElement?.id === "save-recovery-key"`), "recovery key notice did not focus the export action")
+  await screenshot("09b-recovery-key-notice")
 })
 
 // Network independent: the landing page renders before the OIB source is read from GitHub.

@@ -7,9 +7,10 @@ import { Button } from "~/components/ui/button"
 import { Chip, Fact, RoundIconButton, Tile, TileLabel } from "~/components/dashboard/tiles"
 import { cn } from "~/lib/utils"
 import { storageLabel } from "~/lib/storage-label"
-import type { SignedInAccount } from "../../shared/ipc"
+import type { BackupSettings, SignedInAccount } from "../../shared/ipc"
 import { backupTarget, trackBackup } from "../lib/backups"
 import { RunBackupDialog } from "../components/RunBackupDialog"
+import { RecoveryKeyNotice } from "../components/RecoveryKeyNotice"
 import { bridge } from "../lib/bridge"
 import { planName, tenantLicense, useLicense } from "../lib/license"
 import { describeSchedule, formatWhen, useSchedules } from "../lib/schedules"
@@ -25,8 +26,10 @@ export default function OverviewPage() {
   const navigate = useNavigate()
   const [accounts, setAccounts] = useState<SignedInAccount[]>([])
   const [backingUp, setBackingUp] = useState<Tenant | null>(null)
+  const [backupSettings, setBackupSettings] = useState<BackupSettings | null>(null)
 
   useEffect(() => void bridge.auth.accounts().then(setAccounts), [])
+  useEffect(() => { void bridge.backups.settings().then(setBackupSettings).catch((error) => toast(String(error), "error")) }, [])
 
   const open = (tenant: Tenant, path = "/portal/dashboard") => {
     setSelectedTenantId(tenant.id)
@@ -60,6 +63,8 @@ export default function OverviewPage() {
           <Plus className="h-4 w-4" /> Connect a tenant
         </Button>
       </div>
+
+      <RecoveryKeyNotice settings={backupSettings} />
 
       {/* Summary row: counts from the tenant list, sign-ins, license state and schedules */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">

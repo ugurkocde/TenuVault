@@ -37,6 +37,8 @@ When you choose **This device, encrypted** as storage:
 * The default folder is `TenuVault Backups` in your Documents folder. You can change it under **Settings** > **Storage and recovery** with **Change folder**. Changing the folder does not move existing backups.
 * Because the files are encrypted, you can keep the folder on a network share.
 
+If local backup files exist or a tenant uses local storage, **Overview** and **Settings** show a persistent notice until you save the current recovery key. Select **Go to Save recovery key** to reach the export action in Settings. Local backups remain available while the notice is shown. The notice disappears after a successful export.
+
 ## Backups in Azure
 
 When you choose **Your Azure storage account, encrypted** as storage:
@@ -56,6 +58,7 @@ The recovery key is a copy of your backup keys. You need it to:
 
 * Read your backups on another machine.
 * Read your backups after reinstalling TenuVault, or after your Windows or macOS user profile is reset.
+* Read existing local and Azure backups after choosing to start over with empty app data.
 * Share Azure backups with another admin's machine.
 
 :::danger
@@ -94,7 +97,11 @@ The **Download** button on a backup creates a ZIP file with the backup's content
 If the operating system refuses access to TenuVault's encrypted store, for example because a macOS Keychain prompt was denied or the data was created by another Windows user, TenuVault shows **TenuVault cannot unlock its saved data.** with two choices:
 
 * **Quit:** nothing is changed. Fix the cause (allow Keychain access, or start TenuVault as the user who created the data) and start again.
-* **Start over:** the unreadable data is kept aside as a backup file and TenuVault starts empty. You sign in to your tenants and activate your license again. To read existing backups, import your recovery key.
+* **Delete backup key and start over:** the unreadable data is kept aside as a backup file and TenuVault starts empty. This deletes the backup encryption key from the active app state, along with your sign-ins and license. Existing local and Azure backups become unreadable unless you exported their recovery key. You sign in to your tenants and activate your license again.
+
+To save the key before starting over, choose **Quit**, restore access to the saved data, then use **Settings** > **Storage and recovery** > **Save recovery key**. An unreadable saved-data copy does not replace an exported recovery key. If you already saved the key, use **Import a recovery key** in the same Settings section after starting over. Starting over leaves the backup files in their folder or Azure storage account.
+
+If a stored backup keyring is malformed, TenuVault reports an error and preserves it instead of creating a replacement key or importing over it. Recover the original `app-state.bin` before continuing.
 
 ## What encryption does not protect against
 

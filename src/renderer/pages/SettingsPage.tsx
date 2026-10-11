@@ -1,7 +1,7 @@
 import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
 import { useEffect, useId, useRef, useState } from "react"
-import { Link } from "react-router-dom"
+import { Link, useLocation } from "react-router-dom"
 import { Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, RefreshCw, Save, Upload } from "lucide-react"
 import { useTenantOperations, useTenants, type Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
@@ -14,6 +14,7 @@ import { COMMUNITY_RETENTION_DAYS } from "../../shared/plans"
 import { isGuid } from "../../shared/security"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
 import { StorageChooser } from "../components/StorageChooser"
+import { RecoveryKeyNotice } from "../components/RecoveryKeyNotice"
 import { bridge } from "../lib/bridge"
 import { storageResources, type StorageChoice } from "../lib/storage"
 import { toast } from "../lib/toast"
@@ -196,8 +197,15 @@ function BackupsOnDevice() {
   const [settings, setSettings] = useState<BackupSettings | null>(null)
   const [recoveryKey, setRecoveryKey] = useState("")
   const [importing, setImporting] = useState(false)
+  const { hash } = useLocation()
 
-  useEffect(() => void bridge.backups.settings().then(setSettings), [])
+  useEffect(() => { void bridge.backups.settings().then(setSettings).catch((error) => toast(String(error), "error")) }, [])
+  useEffect(() => {
+    if (hash !== "#recovery-key") return
+    const button = document.getElementById("save-recovery-key")
+    button?.scrollIntoView({ block: "center" })
+    button?.focus({ preventScroll: true })
+  }, [hash])
 
   const run = async (action: () => Promise<void>) => {
     try {
@@ -221,7 +229,10 @@ function BackupsOnDevice() {
       <CardContent className="space-y-5 px-7 pb-7">
         <Button variant="outline" onClick={() => void run(async () => {
           const result = await bridge.backups.importArchive()
-          if (result.imported) toast(`Imported ${result.backupId}. Select this device as storage for tenant ${result.tenantId} to preview and restore it.`, "success")
+          if (result.imported) {
+            setSettings(await bridge.backups.settings())
+            toast(`Imported ${result.backupId}. Select this device as storage for tenant ${result.tenantId} to preview and restore it.`, "success")
+          }
         })}><Upload className="mr-2 h-4 w-4" /> Import backup ZIP</Button>
         <div className="space-y-2">
           <p className="text-xs font-medium text-gray-500">Folder</p>
@@ -241,6 +252,7 @@ function BackupsOnDevice() {
         </div>
 
         <div className="space-y-2 border-t border-gray-100 pt-5">
+          <RecoveryKeyNotice settings={settings} />
           <p className="flex items-center gap-2 text-sm font-medium text-gray-900">
             <Lock className="h-4 w-4" /> Encryption key
           </p>
@@ -255,12 +267,16 @@ function BackupsOnDevice() {
           </p>
           <div className="flex flex-wrap gap-2">
             <Button
+              id="save-recovery-key"
               variant="outline"
               size="sm"
               onClick={() =>
                 void run(async () => {
                   const result = await bridge.backups.exportRecoveryKey()
-                  if (result.saved) toast(`Recovery key saved to ${result.path}. Move it to a safe place.`, "success")
+                  if (result.saved) {
+                    setSettings(await bridge.backups.settings())
+                    toast(`Recovery key saved to ${result.path}. Move it to a safe place.`, "success")
+                  }
                 })
               }
             >

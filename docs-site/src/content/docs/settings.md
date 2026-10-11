@@ -67,6 +67,8 @@ The backup encryption key is protected by your Windows account or macOS Keychain
 
 After you import a key, the imported key encrypts new backups, and backups made with the previous key stay readable. Save a new bundle after importing keys, so your saved recovery key covers every key on this device.
 
+When local backup files exist or a tenant uses local storage, **Settings** and **Overview** show a recovery key notice if no export is recorded for the current key. Select **Go to Save recovery key** to reach the export action. The notice disappears after you save the key. It does not block local backups. Starting over deletes the backup encryption key from the active app state. Existing local and Azure backups become unreadable unless you exported their recovery key.
+
 :::caution
 Without the recovery key, backups can only be read on this computer by this user account. Save it in your password manager and delete the file. See [Encryption and recovery key](/security/encryption/).
 :::
