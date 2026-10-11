@@ -1,4 +1,5 @@
 import { registerStorageToken } from "../storage/azure-seal"
+import { FetchPreconditionError } from "./network-error"
 import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import { localAccountFromUrl, routeUsesLocalStorage } from "../storage/blob-emulator"
 
@@ -42,61 +43,71 @@ const TOKEN_PATH = /^\/([^/]+)\/oauth2\/v2\.0\/token$/
  * see main/license/service.ts).
  */
 export function createBridgedFetch(options: FetchBridgeOptions): typeof fetch {
-  const realFetch = options.fetch ?? globalThis.fetch
+  const networkFetch = options.fetch ?? globalThis.fetch
 
   return async function bridgedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url)
-
-    if (url.origin === INTERNAL_API_ORIGIN) {
-      return options.dispatch(new Request(input, init))
+    let networkAttempted = false
+    const realFetch: typeof fetch = (input, init) => {
+      networkAttempted = true
+      return networkFetch(input, init)
     }
+    try {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url)
 
-    const localAccount = options.handleLocalBlob ? localAccountFromUrl(url) : null
-    if (options.handleLocalBlob && localAccount) {
-      try {
-        await options.authorizeTenant?.(localAccount.slice(LOCAL_STORAGE_PREFIX.length))
-      } catch (error) {
-        const message = (error instanceof Error ? error.message : String(error)).replace(/[<>&]/g, "")
-        return new Response(
-          `<?xml version="1.0" encoding="utf-8"?><Error><Code>AuthorizationFailure</Code><Message>${message}</Message></Error>`,
-          { status: 403, headers: { "content-type": "application/xml", "x-ms-error-code": "AuthorizationFailure" } },
-        )
+      if (url.origin === INTERNAL_API_ORIGIN) {
+        return await options.dispatch(new Request(input, init))
       }
-      const response = await options.handleLocalBlob(new Request(input, init))
-      if (response.ok) response.headers.set("x-tenuvault-authenticated", "true")
-      return response
-    }
 
-    const tokenPath = url.hostname === "login.microsoftonline.com" ? TOKEN_PATH.exec(url.pathname) : null
-    if (tokenPath?.[1]) {
-      const request = new Request(input, init)
-      if (request.method === "POST") {
-        const tenant = decodeURIComponent(tokenPath[1])
-        const form = new URLSearchParams(await request.clone().text())
-        if (form.get("grant_type") === "client_credentials") {
-          try {
-            await options.authorizeTenant?.(tenant)
-          } catch (error) {
-            return tokenError(403, "unauthorized_client", error)
-          }
-          if (form.get("client_secret") === DELEGATED_CLIENT_SECRET) {
-            return delegatedTokenResponse(options, tenant, form)
+      const localAccount = options.handleLocalBlob ? localAccountFromUrl(url) : null
+      if (options.handleLocalBlob && localAccount) {
+        try {
+          await options.authorizeTenant?.(localAccount.slice(LOCAL_STORAGE_PREFIX.length))
+        } catch (error) {
+          const message = (error instanceof Error ? error.message : String(error)).replace(/[<>&]/g, "")
+          return new Response(
+            `<?xml version="1.0" encoding="utf-8"?><Error><Code>AuthorizationFailure</Code><Message>${message}</Message></Error>`,
+            { status: 403, headers: { "content-type": "application/xml", "x-ms-error-code": "AuthorizationFailure" } },
+          )
+        }
+        const response = await options.handleLocalBlob(new Request(input, init))
+        if (response.ok) response.headers.set("x-tenuvault-authenticated", "true")
+        return response
+      }
+
+      const tokenPath = url.hostname === "login.microsoftonline.com" ? TOKEN_PATH.exec(url.pathname) : null
+      if (tokenPath?.[1]) {
+        const request = new Request(input, init)
+        if (request.method === "POST") {
+          const tenant = decodeURIComponent(tokenPath[1])
+          const form = new URLSearchParams(await request.clone().text())
+          if (form.get("grant_type") === "client_credentials") {
+            try {
+              await options.authorizeTenant?.(tenant)
+            } catch (error) {
+              return tokenError(403, "unauthorized_client", error)
+            }
+            if (form.get("client_secret") === DELEGATED_CLIENT_SECRET) {
+              return await delegatedTokenResponse(options, tenant, form)
+            }
           }
         }
-      }
-      const requestForm = request.method === "POST" ? await request.clone().text() : ""
-      const response = await realFetch(request)
-      if (request.method === "POST" && response.ok) {
-        const form = new URLSearchParams(requestForm)
-        if (form.get("scope")?.includes("storage.azure.com")) {
-          const token = await response.clone().json() as { access_token?: unknown }
-          if (typeof token.access_token === "string") registerStorageToken(token.access_token, decodeURIComponent(tokenPath[1]))
+        const requestForm = request.method === "POST" ? await request.clone().text() : ""
+        const response = await realFetch(request)
+        if (request.method === "POST" && response.ok) {
+          const form = new URLSearchParams(requestForm)
+          if (form.get("scope")?.includes("storage.azure.com")) {
+            const token = await response.clone().json() as { access_token?: unknown }
+            if (typeof token.access_token === "string") registerStorageToken(token.access_token, decodeURIComponent(tokenPath[1]))
+          }
         }
+        return response
       }
-      return response
-    }
 
-    return realFetch(input, init)
+      return realFetch(input, init)
+    } catch (error) {
+      if (networkAttempted || error instanceof FetchPreconditionError) throw error
+      throw new FetchPreconditionError(error)
+    }
   }
 }
 

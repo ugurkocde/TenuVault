@@ -9,12 +9,12 @@ TenuVault can back up each tenant automatically, daily or weekly, at a time you 
 
 ## How scheduled backups run
 
-* Each tenant has its own schedule: daily or weekly, at a time in your computer's local timezone. Daylight saving and timezone changes are followed.
+* Each tenant has its own schedule: daily or weekly, at a time in your computer's local timezone. Daylight saving and timezone changes are followed. A time skipped by the spring clock change moves forward by the clock change. A repeated autumn time uses its first occurrence, with one attempt budget for both occurrences.
 * Backups run while TenuVault is running, in the window or in the system tray (the menu bar on macOS) after you close the window.
 * TenuVault checks the schedules every minute. The first check runs 30 seconds after TenuVault starts.
 * If the computer was off or TenuVault was not running at the scheduled time, the missed backup runs once as soon as TenuVault starts again. Only the most recent missed slot runs, not every missed one.
 * When several backups are due, they run one after another.
-* A failed backup is not repeated right away. The next attempt is the next scheduled slot.
+* A failed scheduled backup is retried after 15 minutes, with up to three attempts in the same slot. Each attempt belongs to the slot when it started. After the third failure, TenuVault waits until the next scheduled time. If that time passed during the failed run, it is due at the next check with a fresh attempt budget. A successful backup resets the attempt count.
 * Saving a schedule never triggers a catch-up backup for slots before the change.
 * Each scheduled backup uses the tenant's saved backup choice. See [Choose what automatic backups cover](#choose-what-automatic-backups-cover).
 
@@ -47,7 +47,7 @@ Next to the schedule, **Status** shows:
 | Field | What it shows |
 | --- | --- |
 | **Next backup** | When the next automatic backup runs, or **Not scheduled** |
-| **Last automatic backup** | When it ran, whether it worked, and its result message |
+| **Last automatic backup** | When the last successful attempt ran and its result message. After a failure, the label changes to **Last automatic backup attempt failed** and shows the failed attempt's time and message. |
 | **Kept for** | How long backups are kept. See [Retention](/backups/storage/#retention). |
 | **Not backed up because of the license** | Recent automatic backups TenuVault refused to run, with the time, whether they were scheduled or started from the menu bar or tray icon, and the reason |
 
@@ -77,10 +77,15 @@ Refusals are kept on this device, not in the tenant's audit log, because the ten
 * TenuVault shows a notification: "Scheduled backup of *tenant* failed", with the reason. A backup started from the tray uses "Tray backup of *tenant* failed". Click either notification to bring TenuVault to the front and open that tenant's **Schedule** tab, even if its window was closed.
 * If a tray request and a scheduled request overlap for one tenant, they share the running backup. A failure produces one notification, named for the request that started the backup.
 * The notification uses the tenant's friendly name, then its domain, then "this tenant" if neither is available. It does not use the tenant ID as the label. An error message can still contain an ID supplied by the service that reported it.
-* **Last automatic backup** on the Schedule tab, the Dashboard and the All tenants page show the failure.
+* The Schedule tab, the Dashboard and the All tenants page show **Last automatic backup attempt failed**, with the failed attempt's time. The Schedule tab also shows its result message.
 * On All tenants, the full failure timestamp wraps and **Action required** appears. Click the failure row to open that tenant's schedule.
 * Dashboard successful and failed counts use stored backup history. If the last automatic attempt failed and no backup is stored, the status says "Automatic backup failed before a backup was saved." The **Failed** count can remain zero.
 * The result is recorded in the tenant's [audit log](/audit-log/) as "Scheduled backup".
+* **Next backup** shows the retry time. Retries wait 15 minutes after a failed run, with a maximum of three attempts per slot, including the first run. After three failures, the next attempt is at the next scheduled time. Retry state is saved when TenuVault closes.
+
+Requests that stop responding time out after 90 seconds, including encrypted Azure uploads. TenuVault retries temporary connection and service failures before reporting a policy warning or a failed backup. If an upload loses its response and a retry is refused, it counts as saved only when the stored content matches the intended backup. Graph throttling pauses all readers for the server's requested interval, up to five minutes. A longer interval fails the request so the backup can finish and be retried later. Once the run finishes, later backups can start again.
+
+When Microsoft Graph or backup storage stops responding during a backup, the backup stops within a few minutes and is retried under the schedule rules above. Successful requests to one service do not reset repeated failures from the other. If removing old backups fails, cleanup stops and the saved backup remains completed with a warning. Old backups that were not removed are reconsidered on the next run.
 
 If your sign-in has expired or Conditional Access requires you to sign in again, the backup fails and a banner at the top of the TenuVault window asks you to **Sign in**. Scheduled backups never open a sign-in window by themselves.
 

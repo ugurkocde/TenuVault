@@ -89,7 +89,7 @@ The default is 30 days. The setting applies to every tenant on this computer. Th
 
 How retention works:
 
-* Old backups are deleted at the end of each backup that finished without warnings. A backup that completed with warnings, failed or was incomplete deletes nothing: "Older backups were kept because this backup is incomplete."
+* Old backups are deleted at the end of each backup that saved every selected policy. A backup that failed or left policies unsaved deletes nothing: "Older backups were kept because this backup is incomplete." Cleanup itself can add a warning: if the metadata of an older backup cannot be decrypted, that backup and any backup without a recorded tenant are kept, while other eligible backups are still removed.
 * The backup that just finished is never deleted, so at least the newest backup is always kept.
 * A backup that left out some types never removes the newest copy of those types. For example, if your daily backups leave out apps, the newest backup that includes apps is kept even after it ages out. The log says "Kept N older backup(s) because they hold the newest copy of types this backup leaves out."
 * Retention deletes backup folders only. It does not delete audit log events.

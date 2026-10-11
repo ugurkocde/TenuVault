@@ -170,7 +170,7 @@ export default function OverviewPage() {
                         <button type="button" className="flex w-full items-start gap-2 text-left text-red-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2" onClick={() => open(tenant, "/portal/backup?tab=schedule")}>
                           <AlertCircle className="h-4 w-4 shrink-0 text-red-600" />
                           <span className="min-w-0 break-words">
-                            Last automatic backup failed{schedule.lastRunAt ? ` ${formatWhen(schedule.lastRunAt)}` : ""}
+                            Last automatic backup attempt failed{schedule.lastAttemptAt ? ` ${formatWhen(schedule.lastAttemptAt)}` : ""}
                           </span>
                         </button>
                         <Chip tone="danger">Action required</Chip>
@@ -179,8 +179,8 @@ export default function OverviewPage() {
                       <span className="flex items-start gap-2">
                         <CheckCircle2 className="h-4 w-4 shrink-0 text-gray-400" />
                         <span className="min-w-0 break-words">
-                          {schedule?.lastRunAt
-                            ? `Last automatic backup ${formatWhen(schedule.lastRunAt)}`
+                          {schedule?.lastAttemptAt
+                            ? `Last automatic backup ${formatWhen(schedule.lastAttemptAt)}`
                             : tenant.lastBackup
                               ? `Last backup ${formatWhen(tenant.lastBackup)}`
                               : "No backups yet"}

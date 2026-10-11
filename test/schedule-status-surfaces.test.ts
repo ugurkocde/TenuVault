@@ -39,7 +39,7 @@ vi.mock("@tanstack/react-query", () => ({ useQuery: (options: { queryFn: () => P
   return { data: state.stats, isLoading: !state.stats, isFetching: false }
 } }))
 
-const schedule: BackupSchedule = { tenantId: "tenant", enabled: true, frequency: "weekly", weekday: 0, time: "19:48", since: "2026-10-01T00:00:00Z", nextRunAt: "2026-10-18T17:48:00Z", lastRunAt: "2026-10-11T17:48:00Z", lastStatus: "Failed" }
+const schedule: BackupSchedule = { tenantId: "tenant", enabled: true, frequency: "weekly", weekday: 0, time: "19:48", since: "2026-10-01T00:00:00Z", nextRunAt: "2026-10-18T17:48:00Z", lastRunAt: "2026-10-04T17:48:00Z", lastAttemptAt: "2026-10-11T17:48:00Z", attempts: 1, lastStatus: "Failed" }
 const emptyStats: TenantDashboardStats = {
   tenants: { total: 1, healthy: 0, warning: 1, critical: 0 },
   backups: { successful: 0, failed: 0, inProgress: 0, scheduled: 1, successRate: 100, trend: 0 },
@@ -66,7 +66,7 @@ describe("Overview schedule status", () => {
     const markup = renderToStaticMarkup(createElement(OverviewPage))
     expect(markup).toContain(`<span class="block break-words">${describeSchedule(schedule)}</span>`)
     expect(markup).toContain(`Next ${formatWhen(schedule.nextRunAt)}</span>`)
-    expect(markup).toContain(`Last automatic backup failed ${formatWhen(schedule.lastRunAt)}</span>`)
+    expect(markup).toContain(`Last automatic backup attempt failed ${formatWhen(schedule.lastAttemptAt)}</span>`)
     const facts = [...markup.matchAll(/<dt[^>]*>(Automatic backups|Last backup)<\/dt><dd class="([^"]*)">/g)]
     expect(facts).toHaveLength(2)
     for (const fact of facts) expect(fact[2]).not.toContain("truncate")
@@ -74,7 +74,7 @@ describe("Overview schedule status", () => {
   })
 
   it("selects the affected tenant and opens Schedule from the failure row", () => {
-    const button = elements(OverviewPage()).find(element => element.type === "button" && renderToStaticMarkup(element).includes("Last automatic backup failed"))!
+    const button = elements(OverviewPage()).find(element => element.type === "button" && renderToStaticMarkup(element).includes("Last automatic backup attempt failed"))!
     expect(button.props.type).toBe("button")
     const click = button.props.onClick as () => void
     click()
@@ -83,13 +83,13 @@ describe("Overview schedule status", () => {
   })
 
   it("shows the failure action without a timestamp and removes it after success", () => {
-    state.schedules = [{ ...schedule, lastRunAt: undefined }]
-    expect(renderToStaticMarkup(createElement(OverviewPage))).toContain("Last automatic backup failed")
+    state.schedules = [{ ...schedule, lastAttemptAt: undefined }]
+    expect(renderToStaticMarkup(createElement(OverviewPage))).toContain("Last automatic backup attempt failed")
     state.schedules = [{ ...schedule, lastStatus: "Completed" }]
     const markup = renderToStaticMarkup(createElement(OverviewPage))
     expect(markup).not.toContain("Action required")
-    expect(markup).not.toContain("Last automatic backup failed")
-    expect(markup).toContain(`Last automatic backup ${formatWhen(schedule.lastRunAt)}`)
+    expect(markup).not.toContain("Last automatic backup attempt failed")
+    expect(markup).toContain(`Last automatic backup ${formatWhen(schedule.lastAttemptAt)}`)
   })
 })
 
