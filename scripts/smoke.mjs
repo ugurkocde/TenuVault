@@ -16,6 +16,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
+import { checkSchedulePanel } from "./schedule-panel-smoke.mjs"
 
 const require = createRequire(import.meta.url)
 const electronPath = require("electron")
@@ -1302,6 +1303,8 @@ await check("tenant changes wait for the disclaimer, once per tenant", async () 
   const again = await evaluate(deploy)
   assert(again[0] !== 428 && !(await evaluate(`!!document.querySelector("[role=dialog]")`)), "disclaimer asked twice for one tenant")
 })
+
+await checkSchedulePanel({ check, evaluate, waitForCondition, screenshot, assert })
 
 if (licenseKey) {
   // No tenant is signed in, so the key is only saved; it activates when a tenant is used.

@@ -17,6 +17,7 @@ import { routes } from "./api/routes"
 import { AuthManager, SignInRequiredError } from "./auth/msal"
 import { BackupEngine, verifyStorageAccess, type BackupJob } from "./backup/engine"
 import { BackupScheduler } from "./backup/scheduler"
+import { prepareScheduleInput } from "./backup/schedule-input"
 import { BackgroundLaunch } from "./backup/background-launch"
 import { BackupScopes } from "./backup/scopes"
 import { includedTypes, normalizeScope, type BackupScope } from "../shared/intune/scope"
@@ -533,8 +534,8 @@ async function bootstrap(): Promise<void> {
 
   handleTrusted("schedules:list", () => scheduler.list())
   handleTrusted("schedules:set", (_event, schedule: ScheduleInput) => {
-    if (schedule.frequency === "daily" && license.plan(schedule.tenantId) === "community") throw new PlanRequired("dailySchedule")
-    scheduler.set(schedule)
+    const current = scheduler.list().find((saved) => saved.tenantId === schedule.tenantId.toLowerCase())
+    scheduler.set(prepareScheduleInput(schedule, license.plan(schedule.tenantId), current))
     return scheduler.list()
   })
   handleTrusted("schedules:remove", (_event, tenantId: string) => {
