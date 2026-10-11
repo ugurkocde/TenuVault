@@ -135,6 +135,8 @@ describe('Copy to other tenants', () => {
         return Response.json({ id: 'p1', displayName: 'Firewall', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [], roleScopeTagIds: ['7'], assignments: [{ target: { '@odata.type': '#microsoft.graph.allDevicesAssignmentTarget' } }] })
       }
       if (url.hostname === 'graph.microsoft.com') {
+        // Graph requests in this test always provide authentication headers.
+        // oxlint-disable-next-line no-unsafe-optional-chaining
         created.push({ token: String((init?.headers as Record<string, string>).Authorization), body: JSON.parse(String(init?.body)) })
         return Response.json({ id: `new-${created.length}` }, { status: 201 })
       }

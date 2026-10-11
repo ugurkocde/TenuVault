@@ -26,6 +26,8 @@ function inspectDirectory(raw: Buffer): void {
     const flags = raw.readUInt16LE(offset + 8), method = raw.readUInt16LE(offset + 10)
     const mode = raw.readUInt32LE(offset + 38) >>> 16
     total += raw.readUInt32LE(offset + 24)
+    // Control characters are intentionally rejected in archive entry names.
+    // oxlint-disable-next-line no-control-regex
     if (flags & 1 || ![0, 8].includes(method) || (mode & 0xf000) === 0xa000 || total > MAX || !name || name.includes('\\') || name.startsWith('/') || name.includes(':') || /[\x00-\x1f]/.test(name) || name.split('/').some(p => p === '.' || p === '..') || names.has(name.toLowerCase())) throw new Error('Unsafe or oversized ZIP entry')
     names.add(name.toLowerCase()); offset += 46 + length + extra + comment
   }

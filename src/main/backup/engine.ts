@@ -624,6 +624,8 @@ function displayTime(date: Date): string {
 export function safeFileName(name: string): string {
   return (
     name
+      // Control characters are intentionally replaced in safe filenames.
+      // oxlint-disable-next-line no-control-regex
       .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
       .replace(/\s+/g, " ")
       .trim()

@@ -206,7 +206,9 @@ secrets they need are described in [RELEASING.md](RELEASING.md).
 npm ci
 npm run dev          # Electron with hot reload
 npm run typecheck
+npm run lint
 npm test             # unit tests
+npm run test:coverage # unit tests with coverage
 npm run build && npm run smoke -- out/smoke [license-key-file]   # drive the built app, save screenshots
 npm run build && node scripts/marketing-shots.mjs out/marketing   # product screenshots with demo data
 ```
@@ -275,9 +277,9 @@ it on the License page; other admins can use a shared organization license witho
 Everything to set up before the first release (Polar, Vercel, GitHub variables and secrets, Apple
 and Azure signing) is in [docs/release-setup.md](docs/release-setup.md).
 
-`.github/workflows/ci.yml` typechecks, tests and smoke tests on Linux, then builds and smoke tests
-installers on Windows (NSIS for x64 and arm64, MSI for Intune deployment) and macOS (DMG and ZIP
-for arm64 and x64). Pushing a `v*` tag (matching `version` in package.json) publishes the installers and
+`.github/workflows/ci.yml` typechecks, lints, runs unit tests with coverage and smoke tests on Linux,
+then builds and smoke tests installers on Windows (NSIS for x64 and arm64, MSI for Intune deployment)
+and macOS (DMG and ZIP for arm64 and x64). Pushing a `v*` tag (matching `version` in package.json) publishes the installers and
 the auto-update feed to this repository's GitHub releases.
 
 The app checks for updates every 6 hours and installs them on restart. Admins can turn this off in
