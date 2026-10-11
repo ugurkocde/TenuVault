@@ -4,6 +4,7 @@ import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { encryptedAzureFetch, openAzure, registerStorageToken, sealAzure } from "../src/main/storage/azure-seal"
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
 import { withNetworkErrors } from "../src/main/api/network-error"
+import { localStorageAccountName } from "../src/shared/constants"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const request = {
@@ -23,12 +24,12 @@ function requestTimers() {
   })
 }
 
-function setup(override: (url: URL, init?: RequestInit) => Response | Promise<Response> | undefined) {
+function setup(override: (url: URL, init?: RequestInit) => Response | Promise<Response> | undefined, concurrency?: number) {
   const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
     return override(url, init) ?? (url.hostname === "graph.microsoft.com" ? Response.json({ value: [] }) : new Response(null, { status: 201 }))
   })
-  const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token" })
+  const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", concurrency })
   return { engine, fetchImpl }
 }
 
@@ -48,6 +49,176 @@ afterEach(() => {
 })
 
 describe("backup request recovery", () => {
+  it.each(["after listing", "before listing"])("stops an outage %s within five minutes and releases the tenant", async scenario => {
+    requestTimers()
+    const started = Date.now()
+    const signals: AbortSignal[] = []
+    const items = Array.from({ length: 1000 }, (_, index) => ({ id: `policy-${index}`, displayName: `Policy ${index}` }))
+    let hanging = true
+    let listed = false
+    const { engine, fetchImpl } = setup((url, init) => {
+      if (!hanging) return
+      if (scenario === "before listing" && url.hostname !== "graph.microsoft.com") return
+      if (scenario === "after listing" && !listed) {
+        if (url.hostname !== "graph.microsoft.com") return
+        listed = true
+        return Response.json({ value: items })
+      }
+      signals.push(init!.signal!)
+      // The job must finish even if a bridge ignores both timeout and job aborts.
+      return new Promise(() => {})
+    })
+    const outageRequest = scenario === "before listing"
+      ? { ...request, storageAccountName: localStorageAccountName(TENANT), scope: { excluded: [] } }
+      : request
+    const job = engine.start(outageRequest)
+    await vi.advanceTimersByTimeAsync(272_999)
+    expect(job.status).toBe("Running")
+    await vi.advanceTimersByTimeAsync(1)
+    expect(job).toMatchObject({ status: "Failed", progress: 100 })
+    expect(job.endTime).toBeDefined()
+    expect(new Date(job.endTime!).getTime() - started).toBe(273_000)
+    expect(new Date(job.endTime!).getTime() - started).toBeLessThan(5 * 60_000)
+    expect(job.exception).toBe("Backup stopped: the network did not respond for 24 consecutive requests. Earlier policies in this run were saved; the backup is incomplete.")
+    expect(job.log.some(line => line.includes(job.exception!))).toBe(true)
+    expect(signals.every(signal => signal.aborted)).toBe(true)
+    expect(signals.some(signal => signal.reason.message === job.exception)).toBe(true)
+    // 24 failed attempts plus at most seven already in flight. Include container and optional list.
+    expect(signals.length).toBeGreaterThanOrEqual(24)
+    expect(signals.length).toBeLessThanOrEqual(31)
+    expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(scenario === "after listing" ? 33 : 32)
+    expect(fetchImpl.mock.calls.some(([input]) => String(input).endsWith("/metadata.json"))).toBe(false)
+
+    hanging = false
+    const next = engine.start(outageRequest)
+    expect(next.id).not.toBe(job.id)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(next.status).toBe("Completed")
+  })
+
+  it.each(["Graph", "blob"])("resets a network failure streak on %s success and keeps per-item warnings", async service => {
+    requestTimers()
+    const failures: number[] = []
+    const started = Date.now()
+    let metadata: Record<string, unknown> | undefined
+    const { engine } = setup((url, init) => {
+      if (url.hostname !== "graph.microsoft.com") {
+        if (url.pathname.endsWith("/Reset.json")) return new Promise<Response>(resolve => {
+          setTimeout(() => resolve(new Response(null, { status: 201 })), service === "Graph" ? 2000 : 4500)
+        })
+        if (url.pathname.endsWith("/metadata.json")) metadata = JSON.parse(init!.body as string) as Record<string, unknown>
+        return
+      }
+      if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: [
+        { id: "bad-1", displayName: "Bad 1" }, { id: "reset", displayName: "Reset" }, { id: "bad-2", displayName: "Bad 2" },
+      ] })
+      if (url.pathname.endsWith("/reset")) return service === "blob" ? Response.json({ id: "reset" }) : new Promise<Response>(resolve => {
+        setTimeout(() => resolve(Response.json({ id: "reset" })), 4500)
+      })
+      failures.push(Date.now() - started)
+      throw new TypeError("Connection reset")
+    }, 2)
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(4499)
+    expect(failures).toEqual([0, 1000, 3000, 3000, 4000])
+    expect(job.status).toBe("Running")
+    await vi.advanceTimersByTimeAsync(1501)
+    // Six failures would open this two-worker circuit without the success after the first five.
+    expect(failures).toHaveLength(6)
+    await vi.advanceTimersByTimeAsync(500)
+    expect(job.status).toBe("Completed")
+    expect(job.progressMessage).toBe("Backup completed with 2 warnings")
+    expect(metadata).toMatchObject({ Status: "CompletedWithWarnings", Failures: 2, ItemCounts: { TotalPolicies: 1 } })
+  })
+
+  it("stops hung blob uploads without marking earlier saved policies complete", async () => {
+    requestTimers()
+    const saved = new Map<string, string>()
+    const signals: AbortSignal[] = []
+    const { engine } = setup((url, init) => {
+      if (url.hostname === "graph.microsoft.com") {
+        if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: [
+          { id: "saved", displayName: "Saved" },
+          ...Array.from({ length: 8 }, (_, index) => ({ id: `hung-${index}`, displayName: `Hung ${index}` })),
+        ] })
+        return Response.json({ id: url.pathname.split("/").at(-1) })
+      }
+      if (url.search) return
+      if (url.pathname.endsWith("/Saved.json")) {
+        saved.set(url.pathname, init!.body as string)
+        return
+      }
+      signals.push(init!.signal!)
+      return new Promise(() => {})
+    })
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(273_000)
+    expect(job.status).toBe("Failed")
+    expect(job.exception).toContain("24 consecutive requests")
+    expect(job.endTime).toBeDefined()
+    expect(signals).toHaveLength(24)
+    expect(signals.every(signal => signal.aborted)).toBe(true)
+    expect(saved.size).toBe(1)
+    expect([...saved.keys()]).toEqual([`/intune-backups/${job.backupFolder}/DeviceConfigurations/Saved.json`])
+  })
+
+  it.each([429, 503, 404])("does not count Graph HTTP %s responses toward the network circuit", async status => {
+    requestTimers()
+    let attempts = 0
+    let metadata: Record<string, unknown> | undefined
+    const { engine } = setup((url, init) => {
+      if (url.hostname !== "graph.microsoft.com") {
+        if (url.pathname.endsWith("/metadata.json")) metadata = JSON.parse(init!.body as string) as Record<string, unknown>
+        return
+      }
+      if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: [
+        ...Array.from({ length: 6 }, (_, index) => ({ id: `bad-${index}`, displayName: `Bad ${index}` })),
+        { id: "good", displayName: "Good" },
+      ] })
+      if (url.pathname.endsWith("/good")) return Response.json({ id: "good" })
+      attempts++
+      return new Response(null, { status, headers: { "Retry-After": "1" } })
+    }, 1)
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(attempts).toBe(status === 404 ? 6 : 18)
+    expect(job.status).toBe("Completed")
+    expect(job.exception).toBeUndefined()
+    expect(metadata).toMatchObject({ Status: "CompletedWithWarnings", Failures: 6, ItemCounts: { TotalPolicies: 1 } })
+  })
+
+  it("aborts a blob Retry-After wait when Graph opens the job circuit", async () => {
+    requestTimers()
+    let puts = 0
+    const signals: AbortSignal[] = []
+    const { engine, fetchImpl } = setup((url, init) => {
+      if (url.hostname !== "graph.microsoft.com") {
+        if (url.pathname.endsWith("/Waiting.json")) {
+          puts++
+          signals.push(init!.signal!)
+          return new Response(null, { status: 503, headers: { "Retry-After": "300" } })
+        }
+        return
+      }
+      if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: [
+        { id: "waiting", displayName: "Waiting" }, { id: "bad-1", displayName: "Bad 1" }, { id: "bad-2", displayName: "Bad 2" },
+      ] })
+      if (url.pathname.endsWith("/waiting")) return Response.json({ id: "waiting" })
+      throw new TypeError("Connection reset")
+    }, 2)
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(job.status).toBe("Failed")
+    expect(job.endTime).toBeDefined()
+    expect(job.exception).toContain("6 consecutive requests")
+    expect(signals).toHaveLength(1)
+    expect(signals[0]!.aborted).toBe(true)
+    expect(puts).toBe(1)
+    const calls = fetchImpl.mock.calls.length
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(fetchImpl.mock.calls).toHaveLength(calls)
+  })
+
   it("aborts encrypted uploads at the network boundary when the engine times out", async () => {
     requestTimers()
     const signals: AbortSignal[] = []

@@ -114,6 +114,30 @@ class GraphPauseError extends Error {}
 
 class StorageError extends Error {}
 
+/** One outage must stop the job before readers drain every policy or type. */
+class NetworkCircuit {
+  private readonly controller = new AbortController()
+  private consecutiveFailures = 0
+
+  constructor(private readonly threshold: number) {}
+
+  get signal(): AbortSignal {
+    return this.controller.signal
+  }
+
+  succeeded(): void {
+    this.signal.throwIfAborted()
+    this.consecutiveFailures = 0
+  }
+
+  failed(): void {
+    this.signal.throwIfAborted()
+    if (++this.consecutiveFailures < this.threshold) return
+    this.controller.abort(new Error(`Backup stopped: the network did not respond for ${this.consecutiveFailures} consecutive requests. Earlier policies in this run were saved; the backup is incomplete.`))
+    this.signal.throwIfAborted()
+  }
+}
+
 async function tokenOrStop(get: () => Promise<string>): Promise<string> {
   try {
     return await get()
@@ -180,18 +204,19 @@ export class BackupEngine {
       ? async () => ""
       : () => tokenOrStop(() => this.deps.getToken(request.tenantId, request.clientId, "https://storage.azure.com/.default"))
 
-    const storage = new BlobWriter(this.deps.fetch, request.storageAccountName, storageToken)
+    const concurrency = this.deps.concurrency ?? CONCURRENCY
+    const network = new NetworkCircuit(3 * concurrency)
+    const storage = new BlobWriter(this.deps.fetch, request.storageAccountName, storageToken, network)
     await storage.ensureContainer()
 
     const scope = normalizeScope(request.scope ?? EVERYTHING)
     const types = includedTypes(scope)
     if (scope.excluded.length) this.write(job, `Leaving out ${scope.excluded.length} of ${INTUNE_TYPES.length} types: ${scope.excluded.join(", ")}.`)
-    const graph = new GraphSession(this.deps.fetch, graphToken)
+    const graph = new GraphSession(this.deps.fetch, graphToken, network)
     const reader = {
       get: (path: string) => graph.get<Item>(`${GRAPH}/beta/${path}`),
       list: (path: string) => graph.list(graphUrl(path)) as Promise<Item[]>,
     }
-    const concurrency = this.deps.concurrency ?? CONCURRENCY
 
     // List everything first so progress reflects the real amount of work.
     job.progressMessage = "Reading Intune configuration..."
@@ -208,6 +233,7 @@ export class BackupEngine {
         this.write(job, `Found ${items.length} ${type.label}${skipped ? ` (${skipped} built-in skipped)` : ""}.`)
         lists[index] = { type, items }
       } catch (error) {
+        network.signal.throwIfAborted()
         if (error instanceof TokenError || (error instanceof GraphError && error.status === 401)) throw error
         // Access denied: the app registration lacks the permission or its admin consent (for example
         // one created before the type was supported), or the admin's Intune role does not cover the
@@ -221,7 +247,7 @@ export class BackupEngine {
         failedTypes.push(type.folder)
         this.write(job, `Could not read ${type.label}: ${error instanceof Error ? error.message : String(error)}`)
       }
-    })
+    }, network.signal)
 
     // File names are chosen in list order, before the parallel reads, so they do not depend on timing.
     const work: Array<{ type: IntuneType; item: GraphItem; displayName: string; fileName: string }> = []
@@ -251,6 +277,7 @@ export class BackupEngine {
         }
         counts[type.folder]!++
       } catch (error) {
+        network.signal.throwIfAborted()
         // An expired sign-in fails every remaining item the same way, so it stops the backup once.
         if (error instanceof TokenError || (error instanceof GraphError && error.status === 401)) throw error
         failures++
@@ -261,7 +288,7 @@ export class BackupEngine {
       const left = remaining.get(type.folder)! - 1
       remaining.set(type.folder, left)
       if (left === 0) this.write(job, `Backed up ${counts[type.folder]} ${type.label}.`)
-    })
+    }, network.signal)
 
     const ended = this.now()
     const seconds = Math.round((ended.getTime() - started.getTime()) / 1000)
@@ -294,6 +321,7 @@ export class BackupEngine {
     // example after a permission change), keep every existing backup.
     if (failures === 0) {
       await this.applyRetention(job, storage, backupFolder, coveredFolders(metadata)).catch((error: unknown) => {
+        network.signal.throwIfAborted()
         this.write(job, `Could not remove old backups: ${error instanceof Error ? error.message : String(error)}`)
       })
     } else {
@@ -419,6 +447,7 @@ class GraphSession {
   constructor(
     private readonly fetchImpl: typeof fetch,
     private readonly token: () => Promise<string>,
+    private readonly network: NetworkCircuit,
   ) {}
 
   async list(url: string): Promise<GraphItem[]> {
@@ -441,20 +470,30 @@ class GraphSession {
   /** GET with bounded retries for throttling, transient status codes and network failures. */
   async get<T = Record<string, unknown>>(url: string): Promise<T> {
     for (let attempt = 0; ; attempt++) {
-      while (this.resumeAt > Date.now() && !this.throttleError) await sleep(this.resumeAt - Date.now())
+      this.network.signal.throwIfAborted()
+      while (this.resumeAt > Date.now() && !this.throttleError) await sleep(this.resumeAt - Date.now(), this.network.signal)
       if (this.throttleError) throw this.throttleError
       let response: Response | undefined
+      let attempted = false
       try {
         return await withRequestTimeout(async (signal) => {
           const token = await this.token()
           signal.throwIfAborted()
           if (this.throttleError) throw this.throttleError
           if (this.resumeAt > Date.now()) throw new GraphPauseError()
+          attempted = true
           response = await this.fetchImpl(url, { signal, headers: { Authorization: `Bearer ${token}` } })
-          if (response.ok) return (await response.json()) as T
+          if (response.ok) {
+            const result = (await response.json()) as T
+            signal.throwIfAborted()
+            this.network.succeeded()
+            return result
+          }
           throw new GraphError(await graphError(response), response.status)
-        })
+        }, this.network.signal)
       } catch (error) {
+        this.network.signal.throwIfAborted()
+        if (attempted && (!response || response.ok) && !(error instanceof SyntaxError)) this.network.failed()
         if (error instanceof GraphPauseError) {
           attempt--
           continue
@@ -471,7 +510,7 @@ class GraphSession {
         }
         if (response?.status === 429) this.resumeAt = Math.max(this.resumeAt, Date.now() + delay)
         if (attempt >= REQUEST_ATTEMPTS - 1) throw error
-        await sleep(delay)
+        await sleep(delay, this.network.signal)
       }
     }
   }
@@ -481,11 +520,11 @@ class GraphSession {
  * Runs `task` for every entry with at most `limit` running at once. The first error stops new
  * tasks from starting and is thrown once the running ones have settled.
  */
-async function pool<T>(entries: T[], limit: number, task: (entry: T) => Promise<void>): Promise<void> {
+async function pool<T>(entries: T[], limit: number, task: (entry: T) => Promise<void>, signal?: AbortSignal): Promise<void> {
   let next = 0
   let failure: { error: unknown } | null = null
   const worker = async () => {
-    while (!failure && next < entries.length) {
+    while (!failure && !signal?.aborted && next < entries.length) {
       const entry = entries[next++]!
       try {
         await task(entry)
@@ -495,6 +534,7 @@ async function pool<T>(entries: T[], limit: number, task: (entry: T) => Promise<
     }
   }
   await Promise.all(Array.from({ length: Math.min(limit, entries.length) }, worker))
+  signal?.throwIfAborted()
   if (failure) throw (failure as { error: unknown }).error
 }
 
@@ -533,6 +573,7 @@ class BlobWriter {
     private readonly fetchImpl: typeof fetch,
     private readonly account: string,
     private readonly token: () => Promise<string>,
+    private readonly network?: NetworkCircuit,
   ) {
     assertStorageAccountName(account)
   }
@@ -625,14 +666,17 @@ class BlobWriter {
   private async request<T>(path: string, init: RequestInit, read: (response: Response, signal: AbortSignal, ambiguous: boolean) => Promise<T>): Promise<T> {
     let ambiguous = false
     for (let attempt = 0; ; attempt++) {
+      this.network?.signal.throwIfAborted()
       let response: Response | undefined
+      let attempted = false
       try {
         return await withRequestTimeout(async (signal) => {
           const token = await this.token()
           signal.throwIfAborted()
+          attempted = true
           response = await this.fetchImpl(`https://${this.account}.blob.core.windows.net/${path}`, {
             ...init,
-            signal: init.signal ? AbortSignal.any([init.signal, signal]) : signal,
+            signal,
             headers: {
               ...(init.headers as Record<string, string> | undefined),
               "x-ms-version": "2021-12-02",
@@ -644,20 +688,26 @@ class BlobWriter {
             void response.body?.cancel().catch(() => undefined)
             throw new Error(`Storage returned ${response.status}`)
           }
-          return read(response, signal, ambiguous)
-        })
+          const result = await read(response, signal, ambiguous)
+          signal.throwIfAborted()
+          if (response.ok) this.network?.succeeded()
+          return result
+        }, this.network?.signal, init.signal ?? undefined)
       } catch (error) {
+        this.network?.signal.throwIfAborted()
+        if (attempted && (!response || response.ok) && !(error instanceof SyntaxError) && !init.signal?.aborted) this.network?.failed()
         if (error instanceof TokenError || error instanceof StorageError || error instanceof ProtectedBlobError || init.signal?.aborted || attempt >= REQUEST_ATTEMPTS - 1) throw error
         ambiguous = true
-        await sleep(retryDelay(response, attempt))
+        await sleep(retryDelay(response, attempt), this.network?.signal)
       }
     }
   }
 }
 
 /** Bound the whole request, including token acquisition and response reads, even for a fetch bridge that ignores aborts. */
-async function withRequestTimeout<T>(request: (signal: AbortSignal) => Promise<T>): Promise<T> {
-  const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+async function withRequestTimeout<T>(request: (signal: AbortSignal) => Promise<T>, ...signals: Array<AbortSignal | undefined>): Promise<T> {
+  const signal = AbortSignal.any([AbortSignal.timeout(REQUEST_TIMEOUT_MS), ...signals.filter((value): value is AbortSignal => value !== undefined)])
+  signal.throwIfAborted()
   let onAbort: () => void = () => undefined
   const aborted = new Promise<never>((_resolve, reject) => {
     onAbort = () => reject(signal.reason)
@@ -750,4 +800,17 @@ function uniqueName(name: string, id: string, used: Set<string>): string {
   return unique
 }
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted()
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(signal!.reason)
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener("abort", onAbort, { once: true })
+  })
+}
