@@ -1,6 +1,6 @@
 ---
 title: "Schedule backups"
-description: Back up each tenant automatically, keep TenuVault running in the tray, and relaunch it in the background.
+description: Back up each tenant automatically, keep TenuVault running in the menu bar or tray, and relaunch it in the background.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
@@ -43,7 +43,7 @@ Next to the schedule, **Status** shows:
 | **Next backup** | When the next automatic backup runs, or **Not scheduled** |
 | **Last automatic backup** | When it ran, whether it worked, and its result message |
 | **Kept for** | How long backups are kept. See [Retention](/backups/storage/#retention). |
-| **Not backed up because of the license** | Recent automatic backups TenuVault refused to run, with the time, whether they were scheduled or started from the tray, and the reason |
+| **Not backed up because of the license** | Recent automatic backups TenuVault refused to run, with the time, whether they were scheduled or started from the menu bar or tray icon, and the reason |
 
 ## Choose what automatic backups cover
 
@@ -78,36 +78,38 @@ If your sign-in has expired or Conditional Access requires you to sign in again,
 
 Scheduled backups only run while TenuVault runs. Three settings help with that. They apply to all tenants and are saved right away.
 
-### Keep running in the tray
+In **Settings** > **Background runner**, these labels say **menu bar** on macOS and **tray** on Windows. The **Schedule** tab uses **tray** on both platforms.
 
-**Keep running in the tray when I close the window** is on by default. Closing the window then hides it, and TenuVault keeps running in the system tray (Windows) or the menu bar (macOS). The first time, a notification says "TenuVault is still running".
+### Keep running in the menu bar or tray
+
+**Keep running in the menu bar/tray when I close the window** is on by default. Closing the window then hides it, and TenuVault keeps running in the system tray (Windows) or the menu bar (macOS). The first time, a notification says "TenuVault is still running".
 
 When this setting is off, closing the window quits TenuVault on Windows.
 
-### The tray icon
+### The menu bar or tray icon
 
-Click the icon to open TenuVault. Its menu has:
+Click the menu bar icon on macOS or the tray icon on Windows to open TenuVault. Its menu has:
 
 | Item | What it does |
 | --- | --- |
 | **Open TenuVault** | Shows the window |
 | **Back up all tenants now** | Backs up every connected tenant right away with its saved backup choice. The license and plan checks above apply. |
 | **Next backup:** | The next scheduled backup across all tenants, or **No scheduled backups** |
-| **Quit TenuVault** | Quits the app and stops scheduled backups |
+| **Quit TenuVault** | Quits the current app process and stops scheduled backups. When background launch is installed, the operating system may reopen TenuVault within five minutes. To stop restarts completely, select **Settings** > **Background runner** > **Remove background launch** and turn off **Start TenuVault in the menu bar/tray when I sign in to this computer** before quitting. |
 
-Backups started from the tray are shown as **From tray** in the backup history.
+Backups started from the menu bar or tray icon are shown as **From tray** in the backup history.
 
 ### Start at login
 
-**Start TenuVault in the tray when I sign in to this computer** opens TenuVault in the tray, without a window, when you sign in to your computer. It is off by default.
+**Start TenuVault in the menu bar/tray when I sign in to this computer** opens TenuVault in the menu bar on macOS or the tray on Windows, without a window, when you sign in to your computer. It is off by default.
 
-You find both check boxes on the **Schedule** tab under **App-wide preferences**, and in **Settings** under **Background and retention**.
+You find both check boxes on the **Schedule** tab under **App-wide preferences**, and in **Settings** under **Background runner**.
 
 ### Background launch
 
-Background launch registers a task with your operating system that starts TenuVault in the tray when you sign in to the computer, and again every five minutes. If TenuVault is not running, it is reopened in the tray within five minutes. Background launch is available in installed Windows and macOS builds.
+Background launch registers a task with your operating system that starts TenuVault in the menu bar on macOS or the tray on Windows when you sign in to the computer, and again every five minutes. If TenuVault is not running, it is reopened there within five minutes. Background launch is available in installed Windows and macOS builds.
 
-1. Open **Settings** and go to **Background and retention**.
+1. Open **Settings** and go to **Background runner**.
 2. Under **Restart TenuVault for scheduled backups**, click **Install background launch**.
 
 <Tabs>
@@ -133,7 +135,7 @@ Background launch has limits:
 * It does not guarantee a backup at the exact scheduled minute. The missed backup runs when TenuVault starts.
 * If you move the TenuVault application, install background launch again.
 
-To stop automatic restarts, click **Remove background launch** and turn off **Start TenuVault in the tray when I sign in to this computer** before you quit. Removing background launch leaves your schedules unchanged and does not stop a backup that is running.
+To stop automatic restarts, open **Settings** > **Background runner**, click **Remove background launch** and turn off **Start TenuVault in the menu bar/tray when I sign in to this computer** before you quit. Removing background launch leaves your schedules unchanged and does not stop a backup that is running.
 
 ## Plan requirements
 
@@ -142,4 +144,4 @@ To stop automatic restarts, click **Remove background launch** and turn off **St
 | Weekly automatic backups | Yes | Yes | Yes |
 | Daily automatic backups | No | Yes | Yes |
 | Automatic backups to your Azure storage account | No | Yes | Yes |
-| Tray, start at login, background launch | Yes | Yes | Yes |
+| Menu bar or tray, start at login, background launch | Yes | Yes | Yes |

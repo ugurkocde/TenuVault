@@ -504,9 +504,20 @@ async function bootstrap(): Promise<void> {
   keepInTray = () => preferences.get().keepRunningInTray
 
   const backgroundLaunch = new BackgroundLaunch({ platform: process.platform, packaged: app.isPackaged, executable: process.execPath, home: app.getPath("home"), data: app.getPath("userData"), uid: process.getuid?.(), systemRoot: process.env.SystemRoot })
-  handleTrusted("backgroundLaunch:status", () => backgroundLaunch.status())
-  handleTrusted("backgroundLaunch:install", () => backgroundLaunch.install())
-  handleTrusted("backgroundLaunch:remove", () => backgroundLaunch.remove())
+  // Status checks and changes share the Windows script path.
+  let backgroundLaunchPending: Promise<unknown> = Promise.resolve()
+  const updateBackgroundLaunch = (action: () => ReturnType<BackgroundLaunch["status"]>) => {
+    const request = backgroundLaunchPending.then(action).then(status => {
+      tray.setBackgroundRunnerInstalled(status.installed)
+      return status
+    })
+    backgroundLaunchPending = request.catch(() => undefined)
+    return request
+  }
+  void updateBackgroundLaunch(() => backgroundLaunch.status()).catch(error => console.warn("Could not check background startup.", error))
+  handleTrusted("backgroundLaunch:status", () => updateBackgroundLaunch(() => backgroundLaunch.status()))
+  handleTrusted("backgroundLaunch:install", () => updateBackgroundLaunch(() => backgroundLaunch.install()))
+  handleTrusted("backgroundLaunch:remove", () => updateBackgroundLaunch(() => backgroundLaunch.remove()))
 
   handleTrusted("schedules:list", () => scheduler.list())
   handleTrusted("schedules:set", (_event, schedule: ScheduleInput) => {

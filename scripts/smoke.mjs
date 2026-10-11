@@ -508,7 +508,7 @@ await check("policy pack frameworks keep the coverage notice collapsed", async (
 })
 
 await check("settings show background backups, retention and updates", async () => {
-  await go("#/portal/settings", "Background and retention")
+  await go("#/portal/settings", "Background runner")
   assert(await waitForText("Keep backups for"), "retention setting missing")
   assert(await waitForText("Download and install updates automatically"), "update setting missing")
   assert(await waitForText("Get nightly builds"), "nightly update setting missing")
@@ -516,6 +516,88 @@ await check("settings show background backups, retention and updates", async () 
   assert(prefs.nightlyUpdates === true, `nightly preference not stored ${JSON.stringify(prefs)}`)
   await evaluate(`window.tenuvault.preferences.set({ nightlyUpdates: false })`)
 })
+
+for (const [platform, installed] of [["darwin", false], ["win32", true]]) {
+  await check(`background runner status recovery and progress on ${platform}`, async () => {
+    try {
+      await evaluate(`(async () => {
+        const status = await window.tenuvault.license.status()
+        window.__runner = { calls: 0, installCalls: 0, removeCalls: 0 }
+        const frame = document.createElement("iframe")
+        frame.style.cssText = "position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 9999;"
+        document.body.appendChild(frame)
+        window.__runnerFrame = frame
+        frame.contentDocument.open()
+        frame.contentDocument.write('<html><head></head><body><div id="root"></div></body></html>')
+        frame.contentDocument.close()
+        frame.contentWindow.location.hash = "#/portal/settings"
+        frame.contentWindow.tenuvault = {
+          ...window.tenuvault,
+          app: { ...window.tenuvault.app, info: () => Promise.resolve({ version: "0.2.0", platform: ${JSON.stringify(platform)}, trayIconLoaded: true }) },
+          license: { ...window.tenuvault.license, status: () => Promise.resolve({ ...status, hasKey: true }) },
+          backgroundLaunch: {
+            status: () => {
+              if (++window.__runner.calls <= 2) return Promise.reject(new Error("Smoke runner status failure"))
+              return new Promise(resolve => { window.__runner.resolveStatus = () => resolve({ supported: true, installed: ${installed} }) })
+            },
+            install: () => {
+              window.__runner.installCalls++
+              return new Promise(resolve => { window.__runner.resolveChange = () => resolve({ supported: true, installed: true }) })
+            },
+            remove: () => {
+              window.__runner.removeCalls++
+              return new Promise(resolve => { window.__runner.resolveChange = () => resolve({ supported: true, installed: false }) })
+            },
+          },
+        }
+        document.querySelectorAll('link[rel="stylesheet"]').forEach(link => frame.contentDocument.head.appendChild(link.cloneNode()))
+        const script = frame.contentDocument.createElement("script")
+        script.type = "module"
+        script.src = document.querySelector('script[type="module"]').src
+        frame.contentDocument.head.appendChild(script)
+      })()`)
+      const section = `window.__runnerFrame.contentDocument.getElementById("settings-background")`
+      const message = "Could not check background startup. Try again."
+      const button = label => `[...${section}.querySelectorAll("button")].find(b => b.textContent.trim() === ${JSON.stringify(label)})`
+      const state = text => `${section}?.querySelector('[role="status"]')?.textContent === ${JSON.stringify(text)}`
+      assert(await waitForCondition(`${state("Unable to check")} && ${section}.innerText.includes(${JSON.stringify(message)})`), "persistent status error missing")
+      await evaluate(`${section}.scrollIntoView({ block: "start" })`)
+      assert(await evaluate(`${button("Install background launch")}.disabled && !${button("Retry check")}.disabled`), "error did not disable installation or offer Retry check")
+      await evaluate(`(() => { const retry = ${button("Retry check")}; retry.click(); retry.click() })()`)
+      assert(await evaluate("window.__runner.calls === 2"), "repeated Retry check clicks submitted overlapping status requests")
+      assert(await waitForCondition(`window.__runner.calls === 2 && ${state("Unable to check")}`), "Retry check did not re-request status or preserve a repeated failure")
+      await screenshot(`runner-status-error-${platform}`)
+      await evaluate(`(() => { const retry = ${button("Retry check")}; retry.click(); retry.click() })()`)
+      assert(await evaluate("window.__runner.calls === 3"), "repeated Retry check clicks submitted overlapping status requests")
+      assert(await waitForCondition(`window.__runner.calls === 3 && ${state("Checking...")}`), "pending retry did not show checking state")
+      assert(await evaluate(`${section}.innerText.includes(${JSON.stringify(message)}) && ${button("Retry check")}.disabled && ${button("Install background launch")}.disabled`), "retry lost the persistent error or enabled installation before success")
+      await evaluate("window.__runner.resolveStatus()")
+      assert(await waitForCondition(state(installed ? "Installed" : "Not installed")), "successful retry did not show the explicit runner state")
+      assert(await evaluate("window.__runner.calls === 3"), "repeated Retry check clicks submitted overlapping status requests")
+      assert(await evaluate(`!${section}.innerText.includes(${JSON.stringify(message)}) && !${button("Retry check")}`), "successful retry did not replace the error and Retry check")
+      await screenshot(`runner-status-success-${platform}`)
+      const location = platform === "darwin" ? "menu bar" : "tray"
+      const artifact = platform === "darwin" ? "Adds a LaunchAgent for your user account" : "Adds a scheduled task for your user account"
+      assert(await evaluate(`${section}.innerText.includes(${JSON.stringify(artifact)}) && ${section}.innerText.includes(${JSON.stringify(`Keep running in the ${location} when I close the window`)}) && ${section}.innerText.includes(${JSON.stringify(`Start TenuVault in the ${location} when I sign in to this computer`)})`), "platform artifact or icon wording missing")
+      assert(await evaluate(`${section}.innerText.includes("Backups need an awake computer and a signed in session. Locking the screen does not sign you out; closing a laptop lid may put it to sleep.")`), "power and session explanation missing")
+      for (const removing of [installed, !installed]) {
+        const label = removing ? "Remove background launch" : "Install background launch"
+        const progress = removing ? "Removing..." : "Installing..."
+        await evaluate(`(() => { const change = ${button(label)}; change.click(); change.click() })()`)
+        assert(await waitForCondition(`Boolean(${button(progress)}?.disabled)`), `${progress} did not appear on a disabled button`)
+        const calls = removing ? "removeCalls" : "installCalls"
+        assert(await evaluate(`window.__runner.${calls} === 1`), `repeated ${label} clicks submitted overlapping requests`)
+        await screenshot(`runner-${removing ? "removing" : "installing"}-${platform}`)
+        await evaluate("window.__runner.resolveChange()")
+        assert(await waitForCondition(`${state(removing ? "Not installed" : "Installed")} && ${button(removing ? "Install background launch" : "Remove background launch")}?.disabled === false`), "completed change did not update the state and re-enable the button")
+        assert(await evaluate(`window.__runner.${calls} === 1`), "completed change left an overlapping request pending")
+      }
+      assert(await evaluate("window.__runner.installCalls === 1 && window.__runner.removeCalls === 1"), "change controls did not call the matching operation once")
+    } finally {
+      await evaluate("window.__runnerFrame?.remove(); delete window.__runnerFrame; delete window.__runner")
+    }
+  })
+}
 
 await check("schedules are stored by the main process", async () => {
   const list = await evaluate(`window.tenuvault.schedules.set({ tenantId: "11111111-1111-1111-1111-111111111111", enabled: true, frequency: "daily", time: "02:00" })`)

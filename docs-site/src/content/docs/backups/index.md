@@ -38,7 +38,7 @@ You can also start a backup from other places:
 | **All tenants** | **Back up now** on a tenant card | Opens the **Back up** dialog; progress appears in the lower right corner |
 | **Tenants** | **Backup Now** on a card, or the backup button in the list view | Opens the **Back up** dialog, then **Backup Progress** |
 | **Tenants** | **Backup Selected** (MSP) | Backs up every selected tenant with its saved choice, after you confirm |
-| Tray or menu bar icon | **Back up all tenants now** | Backs up every connected tenant with its saved choice. See [Schedule backups](/backups/schedules/#the-tray-icon). |
+| Menu bar icon on macOS or tray icon on Windows | **Back up all tenants now** | Backs up every connected tenant with its saved choice. See [Schedule backups](/backups/schedules/#the-menu-bar-or-tray-icon). |
 
 TenuVault runs one backup per tenant at a time. If you start a backup while one is already running for the same tenant, you follow the running one.
 
@@ -80,7 +80,7 @@ The **Backup Progress** dialog shows:
 Click **Run in Background**, or close the dialog, to keep working. The backup continues and a panel in the lower right corner of the window shows its progress. Expand the panel for details and **Show Output**, or dismiss it with the close button. The panel shows **Backup in progress**, **Backup completed** or **Backup failed**.
 
 :::caution
-Backups run inside TenuVault. If you quit TenuVault while a backup runs, the backup stops and is shown as **Incomplete**. Closing the window is fine when TenuVault keeps running in the tray. See [Schedule backups](/backups/schedules/#keep-tenuvault-running).
+Backups run inside TenuVault. If you quit TenuVault while a backup runs, the backup stops and is shown as **Incomplete**. Closing the window is fine when TenuVault keeps running in the menu bar on macOS or the tray on Windows. See [Schedule backups](/backups/schedules/#keep-tenuvault-running).
 :::
 
 ### The backup log

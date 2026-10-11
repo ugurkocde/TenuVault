@@ -5,7 +5,7 @@ description: Every control on the Settings page, what it does and when to use it
 
 **Settings** holds sign-in, backup storage, encryption, background backups and updates for this computer. Open it from the bottom of the sidebar.
 
-The buttons at the top of the page jump to each section: **Sign-in**, **Storage and recovery**, **Background and retention**, **Updates** and **About**.
+The buttons at the top of the page jump to each section: **Sign-in**, **Storage and recovery**, **Background runner**, **Updates** and **About**.
 
 Settings apply to this computer only. Other admins who use TenuVault have their own settings.
 
@@ -95,29 +95,45 @@ The object ID must be a GUID. Invalid IDs and failed requests show an error in t
 
 Always check the target tenant in Intune before you resolve an entry. See [What cannot be restored and restore write history](/restore/limitations/).
 
-## Background and retention
+## Background runner
 
-Automatic backups run while TenuVault is running, in the window or in the system tray (the menu bar on macOS).
+Automatic backups run while TenuVault is running, in the window or in the menu bar on macOS and the tray on Windows.
 
 ### Restart TenuVault for scheduled backups
 
 | Control | What it does |
 | --- | --- |
-| **Install background launch** | Registers an operating system task that reopens TenuVault in the tray within five minutes while you are signed in to the computer. On Windows this is a Task Scheduler task for your user account; on macOS a LaunchAgent. |
-| **Remove background launch** | Removes that task. Your backup schedules stay unchanged. |
+| **Install background launch** | Adds a LaunchAgent for your user account on macOS or a scheduled task for your user account on Windows. The background runner can reopen TenuVault in the menu bar or tray within five minutes while you are signed in to the computer. |
+| **Remove background launch** | Removes the background runner. Your backup schedules stay unchanged. |
+| **Retry check** | Requests the runner status again after a failed check. Installation stays disabled until a check succeeds. |
 
-Background launch only helps while you are signed in to the computer. It does not run while you are signed out, or while the computer is asleep or off, and it does not wake the computer. Backups still need a valid Microsoft sign-in, plan access and available storage. The button is disabled with **Available in installed Windows and macOS builds.** when TenuVault is not an installed build.
+The state appears beside the install or remove button:
 
-To stop automatic restarts completely, remove background launch and turn off start at login before you quit TenuVault. If you move the app, install background launch again.
+| State | Meaning |
+| --- | --- |
+| **Checking...** | TenuVault is checking the background runner status. The install or remove button is disabled. |
+| **Installed** | The status check reports that the background runner is installed. This does not confirm that a backup can run. |
+| **Not installed** | The status check reports that the background runner is not installed. |
+| **Unable to check** | The status request failed. **Could not check background startup. Try again.** stays visible with **Retry check** until a check succeeds. |
 
-### Tray options
+While a change is running, the button shows **Installing...** or **Removing...** and is disabled.
+
+The background runner only helps while you are signed in to the computer. It does not run while you are signed out, or while the computer is asleep or off, and it does not wake the computer. Backups still need a valid Microsoft sign-in, plan access and available storage. The button is disabled with **Available in installed Windows and macOS builds.** when TenuVault is not an installed build.
+
+Backups need an awake computer and a signed in session. Locking the screen does not sign you out; closing a laptop lid may put it to sleep.
+
+To stop automatic restarts completely, select **Remove background launch** and turn off start at login before you quit TenuVault. If you move the app, install the background runner again.
+
+### Menu bar and tray options
+
+On macOS, these Settings labels say **menu bar**. On Windows, they say **tray**.
 
 | Option | Default | Effect |
 | --- | --- | --- |
-| **Start TenuVault in the tray when I sign in to this computer** | Off | Starts TenuVault hidden in the tray when you sign in to Windows or macOS. |
-| **Keep running in the tray when I close the window** | On | Closing the window hides TenuVault instead of quitting, so schedules keep running. The first time, a notification says **TenuVault is still running**. When off, closing the window quits TenuVault on Windows; on macOS, TenuVault keeps running until you quit it. |
+| **Start TenuVault in the menu bar/tray when I sign in to this computer** | Off | Starts TenuVault hidden in the menu bar or tray when you sign in. |
+| **Keep running in the menu bar/tray when I close the window** | On | Closing the window hides TenuVault instead of quitting, so schedules keep running. The first time, a notification says **TenuVault is still running**. When off, closing the window quits TenuVault on Windows; on macOS, TenuVault keeps running until you quit it. |
 
-The tray icon menu has **Open TenuVault**, **Back up all tenants now**, the next scheduled backup (or **No scheduled backups**) and **Quit TenuVault**.
+The menu bar or tray icon menu has **Open TenuVault**, **Back up all tenants now**, the next scheduled backup (or **No scheduled backups**) and **Quit TenuVault**. When the background runner is installed, a disabled row directly above Quit says **Background restart may reopen TenuVault within five minutes**. Quit stops the current process, but the runner may reopen it.
 
 ### Keep backups for
 
