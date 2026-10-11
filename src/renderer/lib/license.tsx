@@ -5,6 +5,7 @@ import { bridge } from "./bridge"
 
 interface LicenseContextValue {
   status: LicenseStatus | null
+  error: string | null
   refresh: () => Promise<void>
 }
 
@@ -12,21 +13,31 @@ const LicenseContext = createContext<LicenseContextValue | null>(null)
 
 export function LicenseProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<LicenseStatus | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
-  const refresh = useCallback(async () => setStatus(await bridge.license.status()), [])
+  const refresh = useCallback(async () => {
+    try {
+      setStatus(await bridge.license.status())
+      setError(null)
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error))
+      console.error("Could not load license status:", error)
+      throw error
+    }
+  }, [])
 
   useEffect(() => {
-    void refresh()
+    void refresh().catch(() => {})
     const unsubscribe = bridge.license.onChanged(setStatus)
     // Tokens expire offline; keep the view current while the app stays open.
-    const timer = setInterval(() => void refresh(), 5 * 60 * 1000)
+    const timer = setInterval(() => void refresh().catch(() => {}), 5 * 60 * 1000)
     return () => {
       unsubscribe()
       clearInterval(timer)
     }
   }, [refresh])
 
-  return <LicenseContext.Provider value={{ status, refresh }}>{children}</LicenseContext.Provider>
+  return <LicenseContext.Provider value={{ status, error, refresh }}>{children}</LicenseContext.Provider>
 }
 
 export function useLicense(): LicenseContextValue {

@@ -23,6 +23,7 @@ import { FloatingProgress } from "~/components/backup/floating-progress"
 import { useTenants } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { BrandMark } from "./BrandMark"
+import { ErrorBoundary } from "./ErrorBoundary"
 import { formatDateTime, isUnlicensed, planName, unlicensedTenants, useLicense } from "../lib/license"
 import { Toaster } from "../lib/toast"
 import { FrameworkJobNotifier } from "../lib/framework-jobs"
@@ -232,7 +233,9 @@ export function DesktopLayout() {
         {[/portal\/backup/, /portal\/drift/, /portal\/audit/, /portal\/(governance|changes|operations)/].some(pattern => pattern.test(pathname)) && <TenantAccessNotice />}
         {/* Room to scroll the end of a page clear of the floating backup panel while it shows. */}
         <main className="pb-[var(--floating-progress-offset,0px)]">
-          <Outlet />
+          <ErrorBoundary key={pathname}>
+            <Outlet />
+          </ErrorBoundary>
         </main>
       </div>
 

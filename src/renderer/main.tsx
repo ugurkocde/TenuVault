@@ -6,6 +6,10 @@ import { installFetchBridge } from "./lib/fetch-bridge"
 import { replaceAlerts } from "./lib/toast"
 import "./desktop.css"
 
+window.addEventListener("unhandledrejection", (event) => {
+  console.error("Unhandled promise rejection:", event.reason)
+})
+
 installFetchBridge(bridge)
 replaceAlerts()
 

@@ -6,7 +6,9 @@ import { BackupProgressProvider } from "~/contexts/BackupProgressContext"
 import { TenantProvider } from "~/contexts/TenantContext"
 import { queryClient } from "~/lib/query-client"
 import { useTenants } from "~/contexts/TenantContext"
+import { Button } from "~/components/ui/button"
 import { DesktopLayout } from "./components/DesktopLayout"
+import { ErrorBoundary, ErrorPanel } from "./components/ErrorBoundary"
 import { ActivationScreen } from "./components/ActivationScreen"
 import { DisclaimerHost } from "./components/DisclaimerHost"
 import { isUnlicensed, LicenseProvider, useLicense } from "./lib/license"
@@ -48,10 +50,19 @@ function Home() {
  * backups), so admins licensed through their organization continue to the tenant sign-in.
  */
 function LicenseGate({ children }: { children: ReactNode }) {
-  const { status } = useLicense()
+  const { status, error, refresh } = useLicense()
   const tenants = useTenants()
   const [signingIn, setSigningIn] = useState(false)
-  if (!status) return <Spinner />
+  if (!status) {
+    if (error !== null) {
+      return (
+        <ErrorPanel title="Could not load license status" message={error}>
+          <Button type="button" onClick={() => void refresh().catch(() => {})}>Retry</Button>
+        </ErrorPanel>
+      )
+    }
+    return <Spinner />
+  }
   if (isUnlicensed(status) && tenants.length === 0 && !signingIn) {
     return (
       <ActivationScreen
@@ -72,6 +83,7 @@ export function App() {
         <TenantProvider>
           <BackupProgressProvider>
             <DisclaimerHost />
+            <ErrorBoundary>
             <LicenseGate>
             <HashRouter>
               <Suspense fallback={<Spinner />}>
@@ -105,6 +117,7 @@ export function App() {
               </Suspense>
             </HashRouter>
             </LicenseGate>
+            </ErrorBoundary>
           </BackupProgressProvider>
         </TenantProvider>
       </LicenseProvider>

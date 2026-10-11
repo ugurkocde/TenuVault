@@ -58,9 +58,17 @@ async function connect() {
 const ws = new WebSocket(await connect())
 await new Promise((r) => ws.addEventListener("open", r, { once: true }))
 let nextId = 1
+let renderFailures = 0
+let unhandledRejections = 0
 const pending = new Map()
 ws.addEventListener("message", (event) => {
   const message = JSON.parse(event.data)
+  if (message.method === "Runtime.consoleAPICalled" && message.params.args[0]?.value === "Screen failed to render:") {
+    renderFailures++
+  }
+  if (message.method === "Runtime.consoleAPICalled" && message.params.args[0]?.value === "Unhandled promise rejection:") {
+    unhandledRejections++
+  }
   if (message.id && pending.has(message.id)) {
     pending.get(message.id)(message)
     pending.delete(message.id)
@@ -172,6 +180,44 @@ await check("dashboard renders in the desktop shell", async () => {
   await go("#/portal/dashboard", "Dashboard")
   await sleep(1000)
   await screenshot("01-dashboard")
+})
+
+await check("a failed page keeps the sidebar and offers recovery", async () => {
+  await send("Network.enable")
+  await send("Network.setBlockedURLs", { urls: ["*OverviewPage-*.js"] })
+  try {
+    await go("#/portal/overview", "This screen could not be loaded")
+    assert(await evaluate(`Boolean(document.querySelector('main [role="alert"]'))`), "error panel is outside the layout")
+    assert(await evaluate(`document.querySelector('main [role="alert"] p').textContent.length > 0`), "error message missing")
+    const beforeRetry = renderFailures
+    await evaluate(`[...document.querySelectorAll('main button')].find(b => b.textContent === 'Try again').click()`)
+    for (let attempt = 0; renderFailures <= beforeRetry && attempt < 20; attempt++) await sleep(100)
+    assert(await waitForCondition(`Boolean(document.querySelector('main [role="alert"]'))`), "failed retry left a blank page")
+    assert(renderFailures > beforeRetry, "Try again did not re-render the failed page")
+    await screenshot("01b-page-error")
+    await evaluate(`document.querySelector('nav a[href="#/portal/dashboard"]').click()`)
+    assert(await waitForCondition(`document.querySelector('main')?.innerText.includes('Protect your Intune policies') && !document.querySelector('main [role="alert"]')`), "sidebar did not open a healthy page")
+    await send("Network.setBlockedURLs", { urls: [] })
+    // React keeps a rejected lazy import. Reload retries the module after the failure is removed.
+    await go("#/portal/overview", "This screen could not be loaded")
+    await evaluate(`[...document.querySelectorAll('main button')].find(b => b.textContent === 'Reload').click()`)
+    assert(await waitForText("Welcome to TenuVault"), "Reload did not restart the app")
+    await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent.includes('Start free with Community')).click()`)
+    await go("#/portal/overview", "All tenants")
+    assert(await waitForCondition(`Boolean(document.querySelector('main h1')?.textContent.includes('All tenants'))`), "Reload did not recover the page")
+    await go("#/portal/dashboard", "Dashboard")
+    await disableAnimations()
+  } finally {
+    await send("Network.setBlockedURLs", { urls: [] })
+  }
+})
+
+await check("unhandled promise rejections are logged without replacing the page", async () => {
+  const beforeRejection = unhandledRejections
+  await evaluate(`void Promise.reject(new Error('Smoke unhandled rejection'))`)
+  for (let attempt = 0; unhandledRejections <= beforeRejection && attempt < 20; attempt++) await sleep(100)
+  assert(unhandledRejections > beforeRejection, "unhandled rejection was not logged")
+  assert(await evaluate(`document.querySelector('main')?.innerText.includes('Protect your Intune policies') && !document.querySelector('main [role="alert"]')`), "unhandled rejection replaced the page")
 })
 
 await check("preload bridge is isolated", async () => {
