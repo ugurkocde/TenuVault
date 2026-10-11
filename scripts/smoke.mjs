@@ -16,6 +16,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
+import { checkSchedulePanel } from "./schedule-panel-smoke.mjs"
 
 const require = createRequire(import.meta.url)
 const electronPath = require("electron")
@@ -1195,6 +1196,8 @@ if (licenseKey) {
     await screenshot("11-license-saved")
   })
 }
+
+await checkSchedulePanel({ check, evaluate, waitForCondition, screenshot, assert })
 
 await finish()
 

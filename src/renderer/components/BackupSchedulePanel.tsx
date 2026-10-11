@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import { AlertCircle, AlertTriangle, CalendarClock, CheckCircle2, Info, Layers, Loader2, ShieldAlert } from "lucide-react"
 import { Button } from "~/components/ui/button"
@@ -32,36 +32,48 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
   const schedules = useSchedules()
   const { status } = useLicense()
   const license = tenantLicense(status, tenantId)
+  const plan = tenantPlan(license)
+  const planKnown = plan !== null
   // Community schedules weekly backups only and keeps 30 days of history.
-  const community = tenantPlan(license) === "community"
+  const community = plan === "community"
   const current = schedules.find((s) => s.tenantId === tenantId.toLowerCase())
   const refusals = useRefusals(tenantId)
   const [enabled, setEnabled] = useState(false)
-  const [frequency, setFrequency] = useState<"daily" | "weekly">("daily")
+  const [frequency, setFrequency] = useState<"daily" | "weekly">("weekly")
   const [time, setTime] = useState("02:00")
   const [weekday, setWeekday] = useState(0)
   const [saving, setSaving] = useState(false)
   const [prefs, setPrefs] = useState<AppPreferences | null>(null)
+  const [runner, setRunner] = useState<{ installed: boolean } | null>(null)
+  const [timeError, setTimeError] = useState(false)
+  const timeInput = useRef<HTMLInputElement>(null)
 
   useEffect(() => void bridge.preferences.get().then(setPrefs), [])
+  useEffect(() => void bridge.backgroundLaunch.status().then(setRunner).catch(() => undefined), [])
   useEffect(() => {
     const draft = drafts.get(tenantId)
     setEnabled(draft?.enabled ?? current?.enabled ?? false)
-    setFrequency(draft?.frequency ?? current?.frequency ?? (community ? "weekly" : "daily"))
+    setFrequency(draft?.frequency ?? current?.frequency ?? (planKnown && !community ? "daily" : "weekly"))
     setTime(draft?.time ?? current?.time ?? "02:00")
     setWeekday(draft?.weekday ?? current?.weekday ?? 0)
-  }, [tenantId, community, current?.enabled, current?.frequency, current?.time, current?.weekday])
+  }, [tenantId, community, planKnown, current?.enabled, current?.frequency, current?.time, current?.weekday])
 
   const dirty =
     enabled !== (current?.enabled ?? false) ||
     (enabled && (frequency !== current?.frequency || time !== current?.time || (frequency === "weekly" && weekday !== current?.weekday)))
 
   const save = async () => {
+    if (enabled && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
+      setTimeError(true)
+      timeInput.current?.focus()
+      return
+    }
+    setTimeError(false)
     setSaving(true)
     try {
       await bridge.schedules.set({ tenantId, enabled, frequency, time, weekday: frequency === "weekly" ? weekday : undefined })
       drafts.delete(tenantId)
-      toast(enabled ? `Automatic backups for ${tenantName} are on.` : `Automatic backups for ${tenantName} are off.`, "success")
+      toast(enabled ? "Schedule saved" : "Automatic backups paused", "success")
     } catch (error) {
       toast(error instanceof Error ? error.message : String(error), "error")
     } finally {
@@ -90,17 +102,17 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
         </label>
 
         {enabled && (
-          <div className="flex flex-wrap items-end gap-4">
+          <div className="flex flex-wrap items-start gap-4">
             <div className="space-y-1.5">
-              <Label htmlFor="schedule-frequency" className="flex items-center gap-2">Repeat{community && <PlanBadge feature="dailySchedule" />}</Label>
-              <select id="schedule-frequency" className={select} value={frequency} onChange={(e) => (drafts.set(tenantId, { enabled, frequency: e.target.value as "daily" | "weekly", time, weekday }), setFrequency(e.target.value as "daily" | "weekly"))}>
-                <option value="daily" disabled={community}>{community ? "Every day (Pro)" : "Every day"}</option>
+              <Label htmlFor="schedule-frequency" className="flex items-center gap-2">Repeat{!planKnown && <span className="text-xs text-gray-500">Checking plan</span>}{community && <PlanBadge feature="dailySchedule" />}</Label>
+              {!planKnown && frequency === "daily" ? <output id="schedule-frequency" className="block text-sm text-gray-700">Every day</output> : <select id="schedule-frequency" className={select} value={frequency} onChange={(e) => (drafts.set(tenantId, { enabled, frequency: e.target.value as "daily" | "weekly", time, weekday }), setFrequency(e.target.value as "daily" | "weekly"))}>
+                {planKnown && <option value="daily" disabled={community}>{community ? "Every day (Pro)" : "Every day"}</option>}
                 <option value="weekly">Every week</option>
-              </select>
+              </select>}
             </div>
             {frequency === "weekly" && (
               <div className="space-y-1.5">
-                <Label htmlFor="schedule-weekday">On</Label>
+                <Label htmlFor="schedule-weekday" className="block">Day</Label>
                 <select id="schedule-weekday" className={select} value={weekday} onChange={(e) => (drafts.set(tenantId, { enabled, frequency, time, weekday: Number(e.target.value) }), setWeekday(Number(e.target.value)))}>
                   {WEEKDAYS.map((day, index) => (
                     <option key={day} value={index}>
@@ -111,18 +123,22 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
               </div>
             )}
             <div className="space-y-1.5">
-              <Label htmlFor="schedule-time">At ({Intl.DateTimeFormat().resolvedOptions().timeZone})</Label>
-              <input id="schedule-time" type="time" className={select} value={time} onChange={(e) => (drafts.set(tenantId, { enabled, frequency, time: e.target.value, weekday }), setTime(e.target.value))} />
+              <Label htmlFor="schedule-time" className="block">Time ({Intl.DateTimeFormat().resolvedOptions().timeZone})</Label>
+              <input ref={timeInput} id="schedule-time" type="time" className={select} value={time} aria-invalid={timeError || undefined} aria-describedby={timeError ? "schedule-time-error" : undefined} onChange={(e) => (drafts.set(tenantId, { enabled, frequency, time: e.target.value, weekday }), setTime(e.target.value), setTimeError(false))} />
+              {timeError && <p id="schedule-time-error" className="text-xs text-red-600">Choose a time, for example 07:45.</p>}
             </div>
           </div>
         )}
 
-        <div className="flex items-center gap-3">
-          <Button disabled={!dirty || saving} onClick={() => void save()}>
-            {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Save
-          </Button>
-          {current && !dirty && <span className="text-sm text-gray-500">{describeSchedule(current)}</span>}
+        <div className="space-y-2">
+          <div className="flex items-center gap-3">
+            <Button disabled={!dirty || saving || (enabled && frequency === "daily" && !planKnown)} onClick={() => void save()}>
+              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Save
+            </Button>
+            {current && (!dirty || !enabled) && <span className="text-sm text-gray-500">{describeSchedule(!enabled ? { ...current, enabled: true } : current)}</span>}
+          </div>
+          {current && runner?.installed === false && <p className="text-xs text-gray-500">Background restart is not installed. Backups run while TenuVault is running.</p>}
         </div>
 
         {community && (current?.frequency === "daily" || (enabled && frequency === "daily")) && <UpgradeNote feature="dailySchedule" />}
@@ -146,9 +162,11 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
             while the computer was off runs as soon as TenuVault starts again. Times follow this computer’s local timezone, including daylight saving and timezone changes.
           </p>
         </div>
-        {prefs && (
-          <div className="space-y-2 border-t border-gray-100 pt-5 text-sm text-gray-700">
-            <h3 className="font-medium text-gray-900">App-wide preferences</h3><p className="text-xs text-gray-500">Saved automatically for all tenants.</p>
+        <div className="space-y-2 border-t border-gray-100 pt-5 text-sm text-gray-700">
+          <h3 className="font-medium text-gray-900">Background runner</h3>
+          <Link to="/portal/settings" className="font-medium underline">Settings &gt; Background and retention</Link>
+          {prefs && <>
+            <p className="text-xs text-gray-500">Saved automatically for all tenants.</p>
             <label className="flex items-center gap-3">
               <input type="checkbox" className="h-4 w-4" checked={prefs.startAtLogin} onChange={(e) => void setPreference({ startAtLogin: e.target.checked })} />
               Start TenuVault in the tray when I sign in to this computer
@@ -162,8 +180,8 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
               />
               Keep running in the tray when I close the window
             </label>
-          </div>
-        )}
+          </>}
+        </div>
       </div>
       <BackupScopeSettings tenantId={tenantId} tenantName={tenantName} />
       </div>

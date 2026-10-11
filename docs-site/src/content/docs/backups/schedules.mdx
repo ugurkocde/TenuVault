@@ -24,15 +24,21 @@ TenuVault can back up each tenant automatically, daily or weekly, at a time you 
 2. Open **Backup & Restore** and click the **Schedule** tab. You can also click **Set up automatic backups** or **Edit schedule** on the Dashboard.
 3. Under **Automatic backups**, tick **Back up** *tenant name* **automatically**.
 4. In **Repeat**, choose **Every day** or **Every week**.
-5. For a weekly backup, choose the day in **On**.
-6. In **At**, choose the time. The label shows your computer's timezone.
+5. For a weekly backup, choose the day in **Day**.
+6. In **Time**, choose the time. The label shows your computer's timezone.
 7. Click **Save**.
 
-TenuVault confirms that automatic backups for the tenant are on. The new schedule starts at 02:00 by default, and a weekly schedule starts on Sunday. To stop automatic backups, clear the check box and click **Save**.
+TenuVault confirms with **Schedule saved**. The new schedule starts at 02:00 by default, and a weekly schedule starts on Sunday.
+
+If the time is empty or invalid, **Choose a time, for example 07:45.** appears beside **Time**. Selecting **Save** moves focus to that field without saving. Your recurrence and weekday stay selected.
+
+To pause automatic backups on any plan, clear the check box and click **Save**. TenuVault confirms with **Automatic backups paused**. The saved recurrence, time, weekday and last result are kept. You can pause an existing daily schedule after moving from Pro or MSP to Community. Its recurrence summary stays visible while it is paused. Enabling daily backups again requires Pro or MSP.
 
 :::note
-Daily backups are part of Pro and MSP. On Community, **Repeat** offers **Every day (Pro)** as an unavailable option and you schedule weekly backups.
+Daily backups are part of Pro and MSP. While the tenant's plan is unknown, **Checking plan** appears beside **Repeat**, and daily backups are unavailable. On Community, **Repeat** offers **Every day (Pro)** as an unavailable option and you schedule weekly backups.
 :::
+
+If a schedule is saved and the background runner is not installed, the summary shows: **Background restart is not installed. Backups run while TenuVault is running.** Under **Background runner**, use **Settings > Background and retention** to open Settings, then select **Background and retention** to manage automatic restarts.
 
 ### The Status panel
 
@@ -103,7 +109,7 @@ Backups started from the menu bar or tray icon are shown as **From tray** in the
 
 **Start TenuVault in the menu bar/tray when I sign in to this computer** opens TenuVault in the menu bar on macOS or the tray on Windows, without a window, when you sign in to your computer. It is off by default.
 
-You find both check boxes on the **Schedule** tab under **App-wide preferences**, and in **Settings** under **Background runner**.
+You find both check boxes on the **Schedule** tab under **Background runner**, and in **Settings** under **Background runner**.
 
 ### Background launch
 
