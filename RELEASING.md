@@ -29,25 +29,7 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 Put these in the next stable release's notes, then remove them here.
 
-- An inaccessible or offline local backup folder no longer prevents Settings or the recovery key export notice from loading. Save the recovery key even while the backup drive is unavailable.
-
-- Malformed stored backup keyrings now stop key creation and recovery key import instead of silently replacing keys. Recover the original `app-state.bin` before continuing.
-
-- Scheduled backups now save `lastAttemptAt`, `attemptSlot` and `attempts` alongside the last successful
-  `lastRunAt`. The slot recorded when an attempt starts keeps its budget even if the run finishes
-  after the next scheduled time. Existing schedules load automatically. Records without `attemptSlot`
-  infer it from the last attempt's timestamp. A failure recorded by an older version
-  becomes a failed attempt rather than a successful run and can be retried after 15 minutes,
-  within the three-attempt limit for that slot. Downgrading loses this retry behavior because
-  older versions do not use the new fields.
-
-- Settings Catalog assignments. Released versions backed up Settings Catalog policies (including
-  endpoint security) with `assignments: []`, because Graph answers `$expand=assignments` on a single
-  policy with an empty list. They are now read from `{id}/assignments`; Settings Catalog compliance
-  policies too. Against a backup from a released version, backup changes and drift detection leave
-  these assignments out of the comparison, and replace in place with **Restore assignments** keeps
-  the live assignments (with a warning) instead of clearing them. See
-  `docs/roadmap/lokka-verification-features.md`.
+- None yet.
 
 ## Cutting a stable release
 
