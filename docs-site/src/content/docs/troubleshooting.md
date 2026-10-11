@@ -21,6 +21,7 @@ This page lists the messages TenuVault shows, grouped by area, with the cause an
 | --- | --- | --- |
 | OS encryption is not available. Enable the operating system credential store before opening TenuVault. | TenuVault encrypts its saved data with the operating system's credential protection (Windows data protection or the macOS Keychain) and cannot find it. | Make sure you are signed in to a normal user session with the credential store available, then start TenuVault again. |
 | TenuVault cannot unlock its saved data. | On macOS, access to TenuVault's Keychain item was denied. On Windows, the data was probably created by another Windows user. | On macOS, allow access to the Keychain item and start the app again. On Windows, start TenuVault as the user who set it up. If that is not possible, choose **Start over**: your saved data is kept as a backup, and you sign in to your tenants and activate your license again. **Quit** changes nothing. |
+| Could not load license status | The app could not read its license status during startup. The panel shows the error. A check that does not respond within 30 seconds shows "The license check did not respond. Try again." | Click **Retry**. A spinner appears while the check runs. If the check fails or times out again, the error and **Retry** return. |
 
 ## Sign in
 

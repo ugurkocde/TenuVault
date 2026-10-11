@@ -1,32 +1,59 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react"
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react"
 import type { LicenseStatus, TenantLicenseStatus } from "../../shared/ipc"
 import { planLabel, type Plan } from "../../shared/plans"
 import { bridge } from "./bridge"
 
 interface LicenseContextValue {
   status: LicenseStatus | null
+  error: string | null
   refresh: () => Promise<void>
 }
 
 const LicenseContext = createContext<LicenseContextValue | null>(null)
+const LICENSE_STATUS_TIMEOUT_MS = 30 * 1000
 
 export function LicenseProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<LicenseStatus | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const refreshing = useRef(false)
+  const attempt = useRef(0)
 
-  const refresh = useCallback(async () => setStatus(await bridge.license.status()), [])
+  const refresh = useCallback(async () => {
+    if (refreshing.current) return
+    refreshing.current = true
+    const currentAttempt = ++attempt.current
+    setError(null)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const nextStatus = await Promise.race([
+        bridge.license.status(),
+        new Promise<LicenseStatus>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("The license check did not respond. Try again.")), LICENSE_STATUS_TIMEOUT_MS)
+        }),
+      ])
+      if (attempt.current === currentAttempt) setStatus(nextStatus)
+    } catch (error) {
+      if (attempt.current === currentAttempt) setError(error instanceof Error ? error.message : String(error))
+      console.error("Could not load license status:", error)
+      throw error
+    } finally {
+      clearTimeout(timer)
+      if (attempt.current === currentAttempt) refreshing.current = false
+    }
+  }, [])
 
   useEffect(() => {
-    void refresh()
+    void refresh().catch(() => {})
     const unsubscribe = bridge.license.onChanged(setStatus)
     // Tokens expire offline; keep the view current while the app stays open.
-    const timer = setInterval(() => void refresh(), 5 * 60 * 1000)
+    const timer = setInterval(() => void refresh().catch(() => {}), 5 * 60 * 1000)
     return () => {
       unsubscribe()
       clearInterval(timer)
     }
   }, [refresh])
 
-  return <LicenseContext.Provider value={{ status, refresh }}>{children}</LicenseContext.Provider>
+  return <LicenseContext.Provider value={{ status, error, refresh }}>{children}</LicenseContext.Provider>
 }
 
 export function useLicense(): LicenseContextValue {
