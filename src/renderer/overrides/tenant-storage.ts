@@ -17,7 +17,7 @@ import { bridge } from "../lib/bridge"
 const TENANTS_KEY = "tenuvault_tenants"
 
 function tenantIds(serialized: string | null): Set<string> | null {
-  if (serialized === null) return new Set()
+  if (serialized === null || serialized === "") return new Set()
   try {
     const tenants = JSON.parse(serialized) as Array<{ credentials?: { tenantId?: string } }>
     if (!Array.isArray(tenants) || tenants.some((tenant) =>
@@ -35,6 +35,7 @@ function tenantIds(serialized: string | null): Set<string> | null {
 }
 
 const cache = new Map<string, string | null>()
+let preservationWarningShown = false
 
 async function releaseOrphanedTenants(saved: Set<string>): Promise<void> {
   const status = await bridge.license.status()
@@ -59,6 +60,13 @@ export const tenantStorage = {
     if (key === TENANTS_KEY) {
       const next = tenantIds(value)
       const previous = tenantIds(tenantStorage.getItem(key))
+      if (previous === null && next && (value === "" || (JSON.parse(value) as unknown[]).length === 0)) {
+        if (!preservationWarningShown) {
+          console.error("The saved tenant list is being preserved for recovery. An empty replacement was not saved.")
+          preservationWarningShown = true
+        }
+        return
+      }
       if (next && previous) for (const id of previous) {
         if (!next.has(id)) void bridge.license.releaseTenant(id).catch((error) => console.error("Could not release removed tenant:", error))
       }
