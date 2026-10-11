@@ -1,13 +1,20 @@
 const { getCurrentFuseWire, FuseV1Options } = require('@electron/fuses')
-const { FuseState } = require('@electron/fuses/dist/constants')
-const expected = {
-  RunAsNode: FuseState.DISABLE,
-  EnableNodeOptionsEnvironmentVariable: FuseState.DISABLE,
-  EnableNodeCliInspectArguments: FuseState.DISABLE,
-  EnableEmbeddedAsarIntegrityValidation: FuseState.ENABLE,
-  OnlyLoadAppFromAsar: FuseState.ENABLE,
+// Fuse wire states are ASCII '0' (disabled) and '1' (enabled).
+const disabled = '0'.charCodeAt(0)
+const enabled = '1'.charCodeAt(0)
+const app = process.argv[2]
+if (!app) {
+  console.error('Usage: node scripts/check-fuses.cjs <path-to-electron-binary>')
+  process.exit(1)
 }
-getCurrentFuseWire(process.argv[2]).then(wire => {
+const expected = {
+  RunAsNode: disabled,
+  EnableNodeOptionsEnvironmentVariable: disabled,
+  EnableNodeCliInspectArguments: disabled,
+  EnableEmbeddedAsarIntegrityValidation: enabled,
+  OnlyLoadAppFromAsar: enabled,
+}
+getCurrentFuseWire(app).then(wire => {
   for (const [name, value] of Object.entries(expected)) {
     if (wire[FuseV1Options[name]] !== value) throw new Error(`Unexpected fuse: ${name}`)
   }

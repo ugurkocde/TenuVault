@@ -5,6 +5,10 @@ dist/
 *.lic
 *.pem
 .env*
+.playwright-mcp/
+tasks/proxy-harness/
+*.log
+*.out
 
 # Docs site (docs-site/) build output
 .astro/
