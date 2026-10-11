@@ -1,3 +1,11 @@
+/** An application failure before the fetch bridge or encryption wrapper attempts a network request. */
+export class FetchPreconditionError extends Error {
+  constructor(error: unknown) {
+    super(error instanceof Error ? error.message : String(error), { cause: error })
+    this.name = "FetchPreconditionError"
+  }
+}
+
 /**
  * Explains a request that got no HTTP response (proxy, TLS inspection, DNS, firewall).
  *
@@ -20,7 +28,7 @@ export function networkFailure(error: unknown, host: string): { code: string | u
 
 /** Rethrows a request failure with the host, guidance and cause code; aborts and timeouts pass through unchanged. */
 export function describeNetworkFailure(error: unknown, host: string): unknown {
-  if (!(error instanceof Error) || error.name === "AbortError" || error.name === "TimeoutError") return error
+  if (!(error instanceof Error) || error instanceof FetchPreconditionError || error.name === "AbortError" || error.name === "TimeoutError") return error
   const { code, guidance } = networkFailure(error, host)
   return new Error(`${host} could not be reached. ${guidance}${code ? ` (${code})` : ""}`, { cause: error })
 }

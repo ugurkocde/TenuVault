@@ -34,12 +34,12 @@ function setup(override: (url: URL, init?: RequestInit) => Response | Promise<Re
 }
 
 const master = Buffer.alloc(32, 4)
-function azureBridge(networkFetch: typeof fetch): typeof fetch {
+function azureBridge(networkFetch: typeof fetch, requireRecovery: () => void = () => undefined): typeof fetch {
   registerStorageToken("token", TENANT)
   return createBridgedFetch({
     dispatch: async () => new Response(),
     getDelegatedToken: async () => ({ accessToken: "token", expiresOn: null }),
-    fetch: encryptedAzureFetch(withNetworkErrors(networkFetch), () => [master], () => undefined),
+    fetch: encryptedAzureFetch(withNetworkErrors(networkFetch), () => [master], requireRecovery),
   })
 }
 
@@ -49,6 +49,68 @@ afterEach(() => {
 })
 
 describe("backup request recovery", () => {
+  it("keeps recovery-key preconditions out of the storage circuit without retrying uploads", async () => {
+    requestTimers()
+    const message = "Save your current backup recovery key in Settings before the first encrypted Azure backup."
+    const items = Array.from({ length: 32 }, (_, index) => ({ id: `policy-${index}`, displayName: `Policy ${index}` }))
+    const networkFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const sent = input as Request
+      const url = new URL(sent.url)
+      if (url.hostname !== "graph.microsoft.com") return new Response(null, { status: 201 })
+      if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: items })
+      return Response.json({ id: url.pathname.split("/").at(-1) })
+    })
+    const requireRecovery = vi.fn(() => { throw new Error(message) })
+    const engine = new BackupEngine({ fetch: azureBridge(networkFetch, requireRecovery), getToken: async () => "token" })
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(job).toMatchObject({ status: "Failed", progress: 100, progressMessage: "Backup failed", exception: message })
+    expect(job.endTime).toBeDefined()
+    for (const item of items) expect(job.log.some(line => line.endsWith(`Could not back up "${item.displayName}": ${message}`))).toBe(true)
+    expect(job.log.some(line => line.endsWith(`Backup failed: ${message}`))).toBe(true)
+    expect(job.log.some(line => line.includes("did not respond"))).toBe(false)
+    // One precondition check per policy and for the manifest. Only container creation reaches Azure.
+    expect(requireRecovery).toHaveBeenCalledTimes(33)
+    expect(networkFetch).toHaveBeenCalledTimes(34)
+    expect(networkFetch.mock.calls.filter(([input]) => new URL((input as Request).url).hostname !== "graph.microsoft.com")).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(requireRecovery).toHaveBeenCalledTimes(33)
+    expect(networkFetch).toHaveBeenCalledTimes(34)
+  })
+
+  it("does not retry application failures from the local fetch bridge", async () => {
+    requestTimers()
+    const message = "Backup encryption is unavailable on this device."
+    const items = Array.from({ length: 32 }, (_, index) => ({ id: `policy-${index}`, displayName: `Policy ${index}` }))
+    const networkFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: items })
+      return Response.json({ id: url.pathname.split("/").at(-1) })
+    })
+    const handleLocalBlob = vi.fn(async (sent: Request) => {
+      if (new URL(sent.url).search) return new Response(null, { status: 201 })
+      throw new Error(message)
+    })
+    const bridge = createBridgedFetch({
+      dispatch: async () => new Response(),
+      getDelegatedToken: async () => ({ accessToken: "token", expiresOn: null }),
+      handleLocalBlob,
+      fetch: withNetworkErrors(networkFetch),
+    })
+    const engine = new BackupEngine({ fetch: bridge, getToken: async () => "token" })
+    const job = engine.start({ ...request, storageAccountName: localStorageAccountName(TENANT) })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(job).toMatchObject({ status: "Failed", progress: 100, exception: message })
+    expect(job.log.filter(line => line.includes("Could not back up") && line.endsWith(message))).toHaveLength(32)
+    expect(job.log.some(line => line.includes("did not respond"))).toBe(false)
+    // Container creation, one attempt per policy, and the manifest.
+    expect(handleLocalBlob).toHaveBeenCalledTimes(34)
+    expect(networkFetch).toHaveBeenCalledTimes(33)
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(handleLocalBlob).toHaveBeenCalledTimes(34)
+    expect(networkFetch).toHaveBeenCalledTimes(33)
+  })
+
   it.each(["after listing", "before listing"])("stops an outage %s within five minutes and releases the tenant", async scenario => {
     requestTimers()
     const started = Date.now()

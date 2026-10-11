@@ -3,6 +3,7 @@ export { assertStorageAccountName } from "../../shared/storage-account"
 import { createHash, randomUUID } from "node:crypto"
 import { BACKUP_CONTAINER } from "../../shared/constants"
 import { isLocalAccount } from "../storage/blob-emulator"
+import { FetchPreconditionError } from "../api/network-error"
 import { INTUNE_TYPES, itemName, type IntuneType, type Item } from "../../shared/intune/registry"
 import { readObject } from "../../shared/intune/read"
 import { comparableSnapshot } from "../../shared/intune/compare"
@@ -120,7 +121,7 @@ class RequestTimeoutError extends Error {}
 function requestFailure(error: unknown): "network" | "status" | "token" | "other" {
   if (error instanceof TokenError) return "token"
   if (error instanceof GraphError || error instanceof StorageError || error instanceof RetryableStorageError || error instanceof ProtectedBlobError) return "status"
-  if (error instanceof SyntaxError || error instanceof GraphPauseError) return "other"
+  if (error instanceof SyntaxError || error instanceof GraphPauseError || error instanceof FetchPreconditionError) return "other"
   return "network"
 }
 
@@ -520,7 +521,7 @@ class GraphSession {
           continue
         }
         if (this.throttleError && error === this.throttleError) throw error
-        if (error instanceof TokenError || (error instanceof GraphError && !retryableStatus(error.status))) throw error
+        if (error instanceof FetchPreconditionError || error instanceof TokenError || (error instanceof GraphError && !retryableStatus(error.status))) throw error
         let delay: number
         try {
           delay = retryDelay(response, attempt)
@@ -716,7 +717,7 @@ class BlobWriter {
       } catch (error) {
         this.network?.signal.throwIfAborted()
         if ((attempted || error instanceof RequestTimeoutError) && requestFailure(error) === "network" && !init.signal?.aborted) this.network?.failed("backup storage")
-        if (error instanceof TokenError || error instanceof StorageError || error instanceof ProtectedBlobError || init.signal?.aborted || attempt >= REQUEST_ATTEMPTS - 1) throw error
+        if (error instanceof FetchPreconditionError || error instanceof TokenError || error instanceof StorageError || error instanceof ProtectedBlobError || init.signal?.aborted || attempt >= REQUEST_ATTEMPTS - 1) throw error
         ambiguous = true
         await sleep(retryDelay(response, attempt), this.network?.signal)
       }
