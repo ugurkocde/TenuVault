@@ -34,6 +34,8 @@ Secret values are never stored. A setting with a secret value, or one that refer
 
 **Deploy** plans the change against the target tenant: a policy with the same name (without its version suffix) is updated in place and keeps its assignments and scope tags; any other policy is created unassigned with the Default scope tag. TenuVault then shows a change set to review, approve and apply. A backup runs before anything is written, every write is read back, and a rollback is available as a new reviewed change set. Assignments are never written. A change set holds at most 25 policies.
 
+OIB placeholders such as `%OrganizationId%` use the target tenant ID for deployment and tenant comparisons; saved sources and baseline versions keep the placeholder.
+
 ## Newer OpenIntuneBaseline versions
 
 For a customized OIB baseline, **OIB updates** offers the platform's latest OIB release (or `main` for a platform without releases) when it differs from the baseline's base commit. **Compare** shows, per setting, the original OIB version, your version and the latest OIB version. OIB changes you did not touch are taken over, your edits are kept, and settings both sides changed need your decision. **Create rebased version** saves a new version based on the latest OIB version. The tenant is not read or changed; deploy the new version when you are ready.

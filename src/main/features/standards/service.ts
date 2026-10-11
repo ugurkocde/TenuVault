@@ -1,5 +1,6 @@
 import { typeForFolder, type Item } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
+import { replaceTenantVariables } from "../../../shared/oib/variables"
 import type { ListedRecord, WorkSignal } from "../contracts"
 import type { FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
@@ -321,7 +322,7 @@ async function plan(deps: FeatureDeps, tenantId: string, adoption: AdoptionRecor
       continue
     }
     if (!mapping.objectId) {
-      const diff = diffConfigurations(policyType(), null, policy.snapshot)
+      const diff = diffConfigurations(policyType(), null, replaceTenantVariables(policy.snapshot, tenantId))
       rows.push({ key: policy.key, name: policy.name, action: "create", objectId: null, diff: diff.entries, truncated: diff.truncated })
       operations.push({ policyKey: policy.key, folder: FOLDER, action: "create", proposed: policy.snapshot, assignments: null, source: { tenantId: null, objectId: null, version: version.id, label: version.title } })
       continue
@@ -353,8 +354,9 @@ async function plan(deps: FeatureDeps, tenantId: string, adoption: AdoptionRecor
     // The customer's name, description and scope tags stay; the standard decides the settings.
     const { assignments: _assignments, ...kept } = snapshot
     const proposed: Item = { ...kept, settings: policy.snapshot.settings ?? [] }
-    const diff = diffConfigurations(policyType(), snapshot, proposed)
-    const unchanged = policyHash(proposed) === policyHash(snapshot)
+    const expected = replaceTenantVariables(proposed, tenantId)
+    const diff = diffConfigurations(policyType(), snapshot, expected)
+    const unchanged = policyHash(expected) === policyHash(snapshot)
     rows.push({ key: policy.key, name: policy.name, action: unchanged ? "none" : "update", objectId: mapping.objectId, diff: diff.entries, truncated: diff.truncated })
     if (!unchanged) operations.push({ policyKey: policy.key, folder: FOLDER, action: "update", targetId: mapping.objectId, proposed, assignments: null, source: { tenantId: null, objectId: null, version: version.id, label: version.title } })
   }
@@ -492,7 +494,7 @@ export async function assessAdoption(deps: FeatureDeps, tenantId: string, id: st
         rows.push({ policyKey: policy.key, state: "missing", deviations: 0, message: "The mapped policy no longer exists." })
         continue
       }
-      const states = assessPolicy(policy.snapshot, sanitizeSnapshot(policyType(), live).snapshot, policy.key, adoption.overlay.exceptions, now)
+      const states = assessPolicy(replaceTenantVariables(policy.snapshot, tenantId), sanitizeSnapshot(policyType(), live).snapshot, policy.key, adoption.overlay.exceptions, now)
       for (const entry of states) counts[entry.state] += 1
       rows.push({ policyKey: policy.key, state: "assessed", deviations: states.filter((entry) => entry.state === "differs" || entry.state === "missing" || entry.state === "extra").length, message: null })
     } catch (error) {

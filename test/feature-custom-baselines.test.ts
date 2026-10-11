@@ -8,8 +8,8 @@ import { REDACTED } from "../src/main/features/change-sets/model"
 import { createEvidenceManifest } from "../src/shared/compliance/manifest"
 import { DOMAINS } from "../src/main/features/domains"
 import type { Plan } from "../src/shared/plans"
-import { call, fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
-import { FakeTenant, setting, wire } from "./feature-change-sets-fakes"
+import { call, fakeDeps, fakeOibSources, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
+import { FakeTenant, setting, stringSetting, wire } from "./feature-change-sets-fakes"
 
 const PATH = "/api/custom-baselines"
 const OLD = "a".repeat(40)
@@ -93,7 +93,7 @@ function setup(plans: Record<string, Plan> = { [TENANT_A]: "pro", [TENANT_B]: "p
     for (const [id, list] of Object.entries(items)) backupItems.set(id, list)
     skipped = skip
   }
-  return { deps, tenantA, tenantB, tenantC, backups: wired.backups, post, setBackups }
+  return { deps, sources, tenantA, tenantB, tenantC, backups: wired.backups, post, setBackups }
 }
 
 type Context = ReturnType<typeof setup>
@@ -157,6 +157,52 @@ describe("custom baseline model", () => {
 })
 
 describe("/api/custom-baselines", () => {
+  it.each([TENANT_A, TENANT_B])("resolves placeholders for writes into %s and keeps sources and versions reusable", async (target) => {
+    const context = setup()
+    const content = pack(OLD, "v3.8", [
+      { name: DEFENDER, settings: [stringSetting("org", "prefix/%OrganizationId%/%organizationid%/suffix")] },
+      { name: FIREWALL, settings: [stringSetting("org", "%OrganizationId%")] },
+    ])
+    Object.assign(context.sources, fakeOibSources([content]))
+    const baseline = await customize(context)
+    const before = (await version(context, baseline.id)).version
+    const tenant = target === TENANT_A ? context.tenantA : context.tenantB
+    tenant.addPolicy(policy(`${FIREWALL} - v3.8`, [stringSetting("org", "old")]) as Item & { name: string })
+    const deployed = await context.post({ action: "deploy", id: baseline.id, ...(target === TENANT_A ? {} : { sourceTenantId: TENANT_A, targetTenants: [{ tenantId: TENANT_A }] }) }, target)
+    expect(deployed.status).toBe(200)
+    expect(deployed.body.changeSet.operations.map((entry: { action: string }) => entry.action)).toEqual(["create", "update"])
+    const applied = await approveAndApply(context, deployed.body.deployment.id, deployed.body.changeSet.id, target)
+    expect(applied.body.changeSet.status).toBe("applied")
+    const writes = tenant.calls.filter((entry) => entry.method !== "GET")
+    expect(writes).toHaveLength(2)
+    for (const write of writes) {
+      expect(JSON.stringify(write.body)).toContain(target)
+      expect(JSON.stringify(write.body)).not.toMatch(/%OrganizationId%/i)
+    }
+    expect(JSON.stringify(writes[0]!.body)).toContain(`prefix/${target}/${target}/suffix`)
+    expect((await version(context, baseline.id)).version).toEqual(before)
+    const source = context.deps.records.get(DOMAINS.baselineInstalls, TENANT_A, baseline.provenance.sourceId)!
+    expect(JSON.stringify(source)).toContain("%OrganizationId%")
+    expect(JSON.stringify(before)).toContain("%OrganizationId%")
+    expect(JSON.stringify(content)).toContain("%OrganizationId%")
+    expect((await context.post({ action: "deploy", id: baseline.id, ...(target === TENANT_A ? {} : { sourceTenantId: TENANT_A, targetTenants: [{ tenantId: TENANT_A }] }) }, target)).body.error).toContain("already matches")
+  })
+
+  it.each(["live", "backup"])("compares substituted Quick Start content from %s without a deviation", async (source) => {
+    const context = setup()
+    const content = pack(OLD, "v3.8", [{ name: DEFENDER, settings: [stringSetting("org", "prefix/%OrganizationId%/suffix")] }])
+    Object.assign(context.sources, fakeOibSources([content]))
+    const baseline = await customize(context)
+    const live = context.tenantA.addPolicy(policy(`${DEFENDER} - v3.8`, [stringSetting("org", `prefix/${TENANT_A}/suffix`)]) as Item & { name: string })
+    context.setBackups([{ id: "backup-2026-09-29-100000", timestamp: "2026-09-29T10:00:00Z", status: "Success" }], { "backup-2026-09-29-100000": [live] })
+    const compared = await context.post({ action: "compare-tenant", id: baseline.id, source })
+    expect(compared.status).toBe(200)
+    expect(compared.body.comparison.counts).toMatchObject({ matched: 1, deviating: 0, differences: 0, unknownSettings: 0 })
+    expect(compared.body.comparison.tenantPolicies[0].differences).toEqual([])
+    expect(context.tenantA.writeCount()).toBe(0)
+    expect(JSON.stringify((await version(context, baseline.id)).version)).toContain("%OrganizationId%")
+  })
+
   it("customizes an OIB release into version 1 with provenance and per-policy base snapshots", async () => {
     const context = setup()
     const baseline = await customize(context)

@@ -4,11 +4,27 @@ import { TenantRecords } from "../src/main/features/records"
 import type { RouteModule } from "../src/main/api/host"
 import { NextRequest } from "../src/main/api/next-server-shim"
 import type { Plan } from "../src/shared/plans"
+import type { OibPack } from "../src/main/oib/source"
+import type { BaselineSources } from "../src/main/features/baseline-upgrades/sources"
 import { memoryStore } from "./helpers"
 
 export const TENANT_A = "11111111-1111-1111-1111-111111111111"
 export const TENANT_B = "22222222-2222-2222-2222-222222222222"
 export const TENANT_C = "33333333-3333-3333-3333-333333333333"
+
+/** Frozen OIB packs without network access; every read returns a fresh snapshot. */
+export function fakeOibSources(packs: OibPack[]): BaselineSources {
+  return {
+    runs: () => [],
+    releases: async () => ({ releases: packs.map((pack) => ({ platform: pack.platform, tag: pack.reference, commit: pack.commit, reference: pack.reference })) }),
+    pack: async (platform, commit) => {
+      const pack = packs.find((entry) => entry.platform === platform && entry.commit === commit)
+      if (!pack) throw new Error("This OIB pack is not available.")
+      return structuredClone(pack)
+    },
+    workspace: () => ({ policies: [], reference: "", creations: [] }),
+  }
+}
 
 /**
  * FeatureDeps with in-memory records, fixed plans per tenant and fake Graph. Override any

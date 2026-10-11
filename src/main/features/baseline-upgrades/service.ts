@@ -1,6 +1,7 @@
 import { typeForFolder, type Item } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
 import type { OibPlatform } from "../../../shared/oib/types"
+import { replaceTenantVariables } from "../../../shared/oib/variables"
 import type { ListedRecord, WorkSignal } from "../contracts"
 import type { FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
@@ -424,7 +425,7 @@ export async function compareUpgrade(deps: FeatureDeps, sources: BaselineSources
       continue
     }
     const base = manual ? null : baseOf(installed)
-    const comparison = comparePolicy(base, local.snapshot, release.snapshot)
+    const comparison = comparePolicy(base ? replaceTenantVariables(base, tenantId) : null, local.snapshot, replaceTenantVariables(release.snapshot, tenantId))
     const blockers = [...comparison.blockers]
     if (containsRedaction(local.snapshot)) blockers.push("The tenant policy holds values Intune masks; it cannot be written back automatically. Upgrade it manually.")
     const documented = documentedKeys(deps, tenantId, installId, installed.name)
@@ -556,12 +557,13 @@ export async function createUpgradeChangeSet(deps: FeatureDeps, tenantId: string
     if (threeWay && !base) throw new FeatureError(`The installed source of "${policy.name}" is missing. Compare again.`, 409)
     if (!comparison.policies.some((entry) => entry.key === policy.key)) throw new FeatureError(`The comparison of "${policy.name}" is missing. Compare again.`, 409)
     let merged: Item
+    const expected = replaceTenantVariables(release.snapshot, tenantId)
     try {
-      merged = mergePolicy(base, local.snapshot, release.snapshot, policy.resolutions)
+      merged = mergePolicy(base ? replaceTenantVariables(base, tenantId) : null, local.snapshot, expected, policy.resolutions)
     } catch (error) {
       throw new FeatureError(`"${policy.name}" cannot be merged: ${error instanceof Error ? error.message : String(error)}`, 409)
     }
-    deviationsByPolicy[policy.key] = deviations(release.snapshot, merged)
+    deviationsByPolicy[policy.key] = deviations(expected, merged)
     if (policyHash(merged) === policy.localHash) {
       unchanged.push(policy.key)
       continue

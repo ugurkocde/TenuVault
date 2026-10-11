@@ -8,6 +8,7 @@ import { allows, CIS_FRAMEWORKS, PlanRequired, type Plan } from "../../../shared
 import { assessPolicySet } from "../../frameworks/service"
 import { loadNcsc } from "../../frameworks/ncsc"
 import { OIB_REPO, type OibPlatform } from "../../../shared/oib/types"
+import { replaceTenantVariables } from "../../../shared/oib/variables"
 import type { ListedRecord } from "../contracts"
 import type { FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
@@ -431,7 +432,7 @@ export async function deployVersion(deps: FeatureDeps, context: { tenantId: stri
       continue
     }
     const body = proposedBody(policy, sanitized.snapshot)
-    if (policyHash(body) === policyHash(sanitized.snapshot)) {
+    if (policyHash(replaceTenantVariables(body, target)) === policyHash(sanitized.snapshot)) {
       planned.push({ key: policy.key, name: policy.name, action: "unchanged", reason: "The tenant policy already matches this version.", outcome: null })
       continue
     }
@@ -710,7 +711,8 @@ export async function compareWithTenant(deps: FeatureDeps, tenantId: string, inp
     if (!match.snapshot) return { key: policy.key, name: policy.name, state: "unreadable", note: match.error ? `The tenant policy could not be read (${match.error}). Its state is unknown.` : "The tenant policy disappeared during the read.", differences: [] }
     const tenantSnapshot = stripForBaseline(match.snapshot).snapshot
     // Base and upstream are the baseline: every tenant difference shows as a local difference.
-    const comparison = comparePolicy(policy.snapshot, tenantSnapshot, policy.snapshot)
+    const expected = replaceTenantVariables(policy.snapshot, tenantId)
+    const comparison = comparePolicy(expected, tenantSnapshot, expected)
     return { key: policy.key, name: policy.name, state: "matched", note: comparison.blockers.length ? comparison.blockers.join(" ") : null, differences: comparison.settings.filter((setting) => setting.kind !== "unchanged") }
   })
   // Secret and reference values cannot be compared: they are unknown, not deviations.
