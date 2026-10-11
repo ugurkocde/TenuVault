@@ -105,8 +105,12 @@ export async function POST(request: NextRequest) {
 
       if (metadataResponse.ok) {
         metadata = await metadataResponse.json()
+      } else {
+        const error = new BlobListError(metadataResponse.status, await metadataResponse.text())
+        if (error.code === 'IncompleteInventory') throw error
       }
     } catch (err) {
+      if (err instanceof BlobListError && err.code === 'IncompleteInventory') throw err
       console.error("Failed to fetch metadata:", err)
     }
 

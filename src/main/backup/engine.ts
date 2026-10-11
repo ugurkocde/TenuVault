@@ -588,6 +588,7 @@ class BlobWriter {
     const response = await this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, {
       method: "DELETE",
     })
+    await assertRetentionReadable(response)
     if (!response.ok && response.status !== 404) {
       const code = response.headers.get("x-ms-error-code") ?? ""
       if (isImmutabilityRefusal(response.status, code)) throw new ProtectedBlobError(code)

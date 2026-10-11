@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto"
+import { lstatSync, readdirSync, unlinkSync } from "node:fs"
 import { link, mkdir, open, readdir, readFile, rename, rm, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { mapLimit } from "../../portal/lib/map-limit"
@@ -75,7 +76,7 @@ function emptyInventory(): Inventory {
 }
 
 function fileState(info: Awaited<ReturnType<typeof stat>>): string {
-  return `${info.size}:${info.mtimeMs}:${info.ctimeMs}`
+  return `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`
 }
 
 interface Keys {
@@ -272,11 +273,38 @@ export class LocalBlobStore {
   }
 
   async delete(account: string, container: string, name: string): Promise<void> {
-    const entries = (await this.entries(account, container)).entries
-    const entry = entries.get(name)
-    if (!entry) throw new BlobNotFoundError(name)
-    await rm(join(this.dir(account, container), entry.file), { force: true })
-    this.index.delete(this.dir(account, container))
+    const dir = this.dir(account, container)
+    // Delete is the only destructive operation, so it carries its own clean-inventory
+    // precondition. Never use the cache or a listing's shared reread for this check.
+    try {
+      let inventory: Inventory
+      try {
+        inventory = await this.readIndex(dir, account, container)
+      } catch {
+        throw new IncompleteInventoryError(1, "Cannot delete local backup files because a fresh inventory could not be read. Recover the files or finish folder sync before retrying.")
+      }
+      const backup = name.split("/")[0]!
+      const unavailable = inventory.unavailableBackups.get(backup) ?? inventory.blockedBackups.get(backup)
+      if (inventory.damagedFiles.length || inventory.unavailableBackups.size || inventory.blockedBackups.size || unavailable) {
+        throw new IncompleteInventoryError(Math.max(inventory.damagedFiles.length, inventory.unavailableBackups.size, inventory.blockedBackups.size), `Cannot delete local backup files while the container has damaged files or unavailable backups. ${unavailable ?? "Recover the reported files or import their recovery keys before retrying."}`)
+      }
+      const entry = inventory.entries.get(name)
+      if (!entry) throw new BlobNotFoundError(name)
+      try {
+        const files = readdirSync(dir).filter((file) => file.endsWith(EXT))
+        if (files.length !== inventory.files.size || files.some((file) => inventory.files.get(file) !== fileState(lstatSync(join(dir, file))))) {
+          throw new Error("Inventory changed")
+        }
+        if (inventory.files.get(entry.file) !== fileState(lstatSync(join(dir, entry.file)))) throw new Error("Target changed")
+      } catch {
+        throw new IncompleteInventoryError(1, "Cannot delete local backup files because files changed during the fresh inventory check. Finish folder sync and retry.")
+      }
+      // Validate every scanned file, including the exact target's identity, size and times,
+      // then unlink without an async yield where another app request could change the folder.
+      unlinkSync(join(dir, entry.file))
+    } finally {
+      this.index.delete(dir)
+    }
   }
 
   private dir(account: string, container: string): string {
