@@ -445,7 +445,11 @@ function BackgroundAndRetention() {
   const [launchBusy, setLaunchBusy] = useState<"install" | "remove" | null>(null)
   const [checkBusy, setCheckBusy] = useState(true)
   const [checkError, setCheckError] = useState(false)
+  const launchInFlight = useRef(false)
+  const checkInFlight = useRef(false)
   const checkLauncher = async () => {
+    if (checkInFlight.current || launchInFlight.current) return
+    checkInFlight.current = true
     setCheckBusy(true)
     try {
       setLauncher(await bridge.backgroundLaunch.status())
@@ -454,7 +458,21 @@ function BackgroundAndRetention() {
       setLauncher(null)
       setCheckError(true)
     } finally {
+      checkInFlight.current = false
       setCheckBusy(false)
+    }
+  }
+  const changeLauncher = async () => {
+    if (launchInFlight.current || checkInFlight.current || !launcher?.supported) return
+    launchInFlight.current = true
+    setLaunchBusy(launcher.installed ? "remove" : "install")
+    try {
+      setLauncher(await (launcher.installed ? bridge.backgroundLaunch.remove() : bridge.backgroundLaunch.install()))
+    } catch (error) {
+      toast(String(error), "error")
+    } finally {
+      launchInFlight.current = false
+      setLaunchBusy(null)
     }
   }
   useEffect(() => { void checkLauncher() }, [])
@@ -482,10 +500,7 @@ function BackgroundAndRetention() {
           <p className="font-medium">Restart TenuVault for scheduled backups</p>
           <p className="mt-2 text-sm">{info.platform === "darwin" ? "Adds a LaunchAgent for your user account" : "Adds a scheduled task for your user account"}. The background runner can reopen TenuVault in the {iconLocation} within five minutes while you are signed in. Backups still require valid Microsoft sign-in, plan access and available storage. This does not run while signed out, asleep or powered off.</p>
           <div className="mt-3 flex flex-wrap items-center gap-3">
-            <Button variant="outline" disabled={!launcher?.supported || checkBusy || !!launchBusy} onClick={() => {
-              setLaunchBusy(launcher?.installed ? "remove" : "install")
-              void (launcher?.installed ? bridge.backgroundLaunch.remove() : bridge.backgroundLaunch.install()).then(setLauncher).catch(error => toast(String(error), "error")).finally(() => setLaunchBusy(null))
-            }}>{launchBusy === "install" ? "Installing..." : launchBusy === "remove" ? "Removing..." : launcher?.installed ? "Remove background launch" : "Install background launch"}</Button>
+            <Button variant="outline" disabled={!launcher?.supported || checkBusy || !!launchBusy} onClick={() => void changeLauncher()}>{launchBusy === "install" ? "Installing..." : launchBusy === "remove" ? "Removing..." : launcher?.installed ? "Remove background launch" : "Install background launch"}</Button>
             <p role="status">{checkBusy ? "Checking..." : checkError ? "Unable to check" : launcher?.installed ? "Installed" : "Not installed"}</p>
           </div>
           {checkError && <div className="mt-3 flex flex-wrap items-center gap-3">

@@ -563,14 +563,17 @@ for (const [platform, installed] of [["darwin", false], ["win32", true]]) {
       assert(await waitForCondition(`${state("Unable to check")} && ${section}.innerText.includes(${JSON.stringify(message)})`), "persistent status error missing")
       await evaluate(`${section}.scrollIntoView({ block: "start" })`)
       assert(await evaluate(`${button("Install background launch")}.disabled && !${button("Retry check")}.disabled`), "error did not disable installation or offer Retry check")
-      await evaluate(`${button("Retry check")}.click()`)
+      await evaluate(`(() => { const retry = ${button("Retry check")}; retry.click(); retry.click() })()`)
+      assert(await evaluate("window.__runner.calls === 2"), "repeated Retry check clicks submitted overlapping status requests")
       assert(await waitForCondition(`window.__runner.calls === 2 && ${state("Unable to check")}`), "Retry check did not re-request status or preserve a repeated failure")
       await screenshot(`runner-status-error-${platform}`)
-      await evaluate(`${button("Retry check")}.click()`)
+      await evaluate(`(() => { const retry = ${button("Retry check")}; retry.click(); retry.click() })()`)
+      assert(await evaluate("window.__runner.calls === 3"), "repeated Retry check clicks submitted overlapping status requests")
       assert(await waitForCondition(`window.__runner.calls === 3 && ${state("Checking...")}`), "pending retry did not show checking state")
       assert(await evaluate(`${section}.innerText.includes(${JSON.stringify(message)}) && ${button("Retry check")}.disabled && ${button("Install background launch")}.disabled`), "retry lost the persistent error or enabled installation before success")
       await evaluate("window.__runner.resolveStatus()")
       assert(await waitForCondition(state(installed ? "Installed" : "Not installed")), "successful retry did not show the explicit runner state")
+      assert(await evaluate("window.__runner.calls === 3"), "repeated Retry check clicks submitted overlapping status requests")
       assert(await evaluate(`!${section}.innerText.includes(${JSON.stringify(message)}) && !${button("Retry check")}`), "successful retry did not replace the error and Retry check")
       await screenshot(`runner-status-success-${platform}`)
       const location = platform === "darwin" ? "menu bar" : "tray"
@@ -580,11 +583,14 @@ for (const [platform, installed] of [["darwin", false], ["win32", true]]) {
       for (const removing of [installed, !installed]) {
         const label = removing ? "Remove background launch" : "Install background launch"
         const progress = removing ? "Removing..." : "Installing..."
-        await evaluate(`${button(label)}.click()`)
+        await evaluate(`(() => { const change = ${button(label)}; change.click(); change.click() })()`)
         assert(await waitForCondition(`Boolean(${button(progress)}?.disabled)`), `${progress} did not appear on a disabled button`)
+        const calls = removing ? "removeCalls" : "installCalls"
+        assert(await evaluate(`window.__runner.${calls} === 1`), `repeated ${label} clicks submitted overlapping requests`)
         await screenshot(`runner-${removing ? "removing" : "installing"}-${platform}`)
         await evaluate("window.__runner.resolveChange()")
         assert(await waitForCondition(`${state(removing ? "Not installed" : "Installed")} && ${button(removing ? "Install background launch" : "Remove background launch")}?.disabled === false`), "completed change did not update the state and re-enable the button")
+        assert(await evaluate(`window.__runner.${calls} === 1`), "completed change left an overlapping request pending")
       }
       assert(await evaluate("window.__runner.installCalls === 1 && window.__runner.removeCalls === 1"), "change controls did not call the matching operation once")
     } finally {
