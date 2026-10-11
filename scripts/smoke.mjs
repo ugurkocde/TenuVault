@@ -157,6 +157,59 @@ await check("first run shows the welcome screen", async () => {
   await screenshot("00-welcome")
 })
 
+await check("a pending license retry shows progress without overlapping requests", async () => {
+  try {
+    await evaluate(`(async () => {
+      const status = await window.tenuvault.license.status()
+      window.__licenseRetry = { calls: 0 }
+      const frame = document.createElement("iframe")
+      frame.style.cssText = "position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 9999;"
+      document.body.appendChild(frame)
+      window.__licenseRetryFrame = frame
+      // Run the built renderer with a mock status response, without changing the frozen preload bridge.
+      frame.contentWindow.tenuvault = {
+        ...window.tenuvault,
+        license: {
+          ...window.tenuvault.license,
+          status: () => {
+            window.__licenseRetry.calls++
+            // Tenant storage reads status before the license provider checks it.
+            if (window.__licenseRetry.calls === 1) return Promise.resolve(status)
+            if (window.__licenseRetry.calls === 2) return Promise.reject(new Error("Smoke license status failure"))
+            return new Promise(resolve => { window.__licenseRetry.resolve = () => resolve(status) })
+          },
+        },
+      }
+      const setInterval = frame.contentWindow.setInterval.bind(frame.contentWindow)
+      frame.contentWindow.setInterval = (callback, delay, ...args) => {
+        if (delay === 5 * 60 * 1000) window.__licenseRetry.refresh = callback
+        return setInterval(callback, delay, ...args)
+      }
+      frame.contentDocument.body.innerHTML = '<div id="root"></div>'
+      document.querySelectorAll('link[rel="stylesheet"]').forEach(link => frame.contentDocument.head.appendChild(link.cloneNode()))
+      const script = frame.contentDocument.createElement("script")
+      script.type = "module"
+      script.src = document.querySelector('script[type="module"]').src
+      frame.contentDocument.head.appendChild(script)
+    })()`)
+    const body = `window.__licenseRetryFrame.contentDocument.body`
+    assert(await waitForCondition(`${body}.innerText.includes("Could not load license status")`), "startup license error missing")
+    const beforeRetry = await evaluate(`window.__licenseRetry.calls`)
+    await evaluate(`(() => {
+      const retry = [...${body}.querySelectorAll("button")].find(b => b.textContent === "Retry")
+      retry.click()
+      retry.click()
+    })()`)
+    assert(await waitForCondition(`Boolean(${body}.querySelector(".animate-spin")) && !${body}.querySelector('[role="alert"]')`), "pending retry did not show the spinner")
+    await evaluate(`window.__licenseRetry.refresh()`)
+    assert(await evaluate(`window.__licenseRetry.calls === ${beforeRetry + 1}`), "pending retry started overlapping status requests")
+    await evaluate(`window.__licenseRetry.resolve()`)
+    assert(await waitForCondition(`${body}.innerText.includes("Welcome to TenuVault") && !${body}.querySelector(".animate-spin")`), "successful retry did not open the welcome screen")
+  } finally {
+    await evaluate(`window.__licenseRetryFrame?.remove(); delete window.__licenseRetryFrame; delete window.__licenseRetry`)
+  }
+})
+
 await check("malformed license keys are rejected", async () => {
   await evaluate(`(() => {
     const input = document.getElementById("license-key")

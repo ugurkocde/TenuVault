@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react"
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react"
 import type { LicenseStatus, TenantLicenseStatus } from "../../shared/ipc"
 import { planLabel, type Plan } from "../../shared/plans"
 import { bridge } from "./bridge"
@@ -14,15 +14,20 @@ const LicenseContext = createContext<LicenseContextValue | null>(null)
 export function LicenseProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<LicenseStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const refreshing = useRef(false)
 
   const refresh = useCallback(async () => {
+    if (refreshing.current) return
+    refreshing.current = true
+    setError(null)
     try {
       setStatus(await bridge.license.status())
-      setError(null)
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error))
       console.error("Could not load license status:", error)
       throw error
+    } finally {
+      refreshing.current = false
     }
   }, [])
 
