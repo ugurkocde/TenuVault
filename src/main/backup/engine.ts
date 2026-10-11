@@ -403,7 +403,9 @@ export class BackupEngine {
       const owner = typeof metadata.TenantId !== "string" ? "untagged" : metadata.TenantId.toLowerCase() === tenant ? "this" : "other"
       owners[index] = { metadata, owner }
     }, signal)
-    const shared = owners.some((entry) => entry?.owner === "other")
+    // An unreadable backup may be another tenant's, so while one exists the container counts as
+    // shared and untagged backups from earlier versions stay, as they did before.
+    const shared = owners.some((entry) => entry?.owner === "other") || unreadable.size > 0
 
     // Types no newer backup holds yet, walking from the newest backup to the oldest.
     const uncovered = new Set(INTUNE_TYPES.map((type) => type.folder).filter((folder) => !covered.has(folder)))

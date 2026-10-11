@@ -356,6 +356,52 @@ describe("backup request recovery", () => {
     expect([...saved.keys()].filter(path => path.includes("backup-2026-08-02-"))).toHaveLength(2)
   })
 
+  it("keeps untagged backups when an unreadable backup may belong to another tenant", async () => {
+    requestTimers()
+    vi.setSystemTime(new Date("2026-10-11T12:00:00Z"))
+    const saved = new Map<string, Uint8Array>()
+    const prefixes = ["backup-2026-08-01-020000/", "backup-2026-08-02-020000/"]
+    for (const [index, prefix] of prefixes.entries()) {
+      const url = new URL(`https://contoso.blob.core.windows.net/intune-backups/${prefix}metadata.json`)
+      // The older backup predates tenant tagging; the newer one cannot be decrypted with this tenant's key.
+      const payload = index === 0 ? { Status: "Success" } : { Status: "Success", TenantId: "22222222-2222-2222-2222-222222222222" }
+      saved.set(url.pathname, new Uint8Array(sealAzure(Buffer.from(JSON.stringify(payload)), index === 0 ? master : Buffer.alloc(32, 8), TENANT, url)))
+    }
+    const deleted: string[] = []
+    const networkFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const sent = input as Request
+      const url = new URL(sent.url)
+      if (url.hostname === "graph.microsoft.com") return Response.json({ value: [] })
+      if (url.search) {
+        if (sent.method === "PUT") return new Response(null, { status: 201 })
+        const params = url.searchParams
+        if (params.get("delimiter")) return new Response(`<EnumerationResults><Blobs>${prefixes.map(prefix => `<BlobPrefix><Name>${prefix}</Name></BlobPrefix>`).join("")}</Blobs></EnumerationResults>`)
+        const names = [...saved.keys()].filter(path => path.startsWith(`/intune-backups/${params.get("prefix")}`)).map(path => path.slice("/intune-backups/".length))
+        return new Response(`<EnumerationResults><Blobs>${names.map(name => `<Blob><Name>${name}</Name></Blob>`).join("")}</Blobs></EnumerationResults>`)
+      }
+      if (sent.method === "PUT") {
+        saved.set(url.pathname, new Uint8Array(await sent.arrayBuffer()))
+        return new Response(null, { status: 201 })
+      }
+      if (sent.method === "DELETE") {
+        deleted.push(url.pathname)
+        saved.delete(url.pathname)
+        return new Response(null, { status: 202 })
+      }
+      const body = saved.get(url.pathname)
+      return body ? new Response(new Uint8Array(body)) : new Response(null, { status: 404 })
+    })
+    const engine = new BackupEngine({ fetch: azureBridge(networkFetch), getToken: async () => "token", retentionDays: () => 30 })
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(job).toMatchObject({ status: "Completed", progress: 100, progressMessage: "Backup completed with 1 warning" })
+    expect(deleted).toHaveLength(0)
+    const log = job.log.join("\n")
+    expect(log).toContain("Kept 1 older backup not recorded as this tenant's")
+    expect(log).toContain("Could not read the metadata of 1 older backup")
+    expect(log).not.toContain("Removed")
+  })
+
   it("keeps a committed backup completed when eight retention reads hang", async () => {
     requestTimers()
     const started = Date.now()
