@@ -19,7 +19,7 @@ export function CustomizationsPanel({ tenant, allowed }: { tenant: Tenant; allow
   const tenantId = tenant.credentials?.tenantId
   const [form, setForm] = useState(EMPTY)
   const [busy, setBusy] = useState(false)
-  // Electron has no window.prompt; owner changes and retirements are entered inline.
+  // Electron has no native text prompt; owner changes and retirements are entered inline.
   const [editing, setEditing] = useState<{ id: string; mode: "owner" | "retire"; text: string } | null>(null)
   const list = useQuery({ queryKey: ["customizations", tenantId], queryFn: () => listCustomizations(tenant), enabled: !!tenantId })
   const records = list.data?.customizations ?? []

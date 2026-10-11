@@ -1,15 +1,27 @@
-import { mkdtempSync, readdirSync, readFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import * as fileSystem from "node:fs/promises"
 import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { handleLocalBlobRequest } from "../src/main/storage/blob-emulator"
-import { LocalBlobStore } from "../src/main/storage/local-blob-store"
+import { LocalBlobStore, localBackupsExist } from "../src/main/storage/local-blob-store"
 import { BackupKeys } from "../src/main/backup/keys"
+import { readBackupSettings } from "../src/main/backup/settings"
 import { memoryStore } from "./helpers"
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>()
+  return { ...actual, readdir: vi.fn(actual.readdir) }
+})
 
 const ACCOUNT = "tvlocal-11111111-1111-1111-1111-111111111111"
 const base = `https://${ACCOUNT}.blob.core.windows.net`
+
+afterEach(() => {
+  vi.mocked(fileSystem.readdir).mockReset()
+  vi.restoreAllMocks()
+})
 
 function setup(keys = [randomBytes(32)]) {
   const root = mkdtempSync(join(tmpdir(), "tv-backups-"))
@@ -26,6 +38,91 @@ const put = (call: ReturnType<typeof setup>["call"], name: string, body: string)
   })
 
 describe("encrypted local backups", () => {
+  it("detects local backup files without decrypting them or needing connected tenants", async () => {
+    const { root } = setup()
+    expect(await localBackupsExist(join(root, "missing"))).toBe(false)
+    expect(await localBackupsExist(root)).toBe(false)
+    const folder = join(root, ACCOUNT, "intune-backups")
+    mkdirSync(folder, { recursive: true })
+    writeFileSync(join(folder, "other.txt"), "unrelated file")
+    mkdirSync(join(folder, "directory.tvb"))
+    expect(await localBackupsExist(root)).toBe(false)
+    writeFileSync(join(folder, "encrypted.tvb"), "unreadable backup")
+    expect(await localBackupsExist(root)).toBe(true)
+  })
+
+  it("does not count local audit records as backups", async () => {
+    const { root } = setup()
+    const folder = join(root, ACCOUNT, "audit-logs")
+    mkdirSync(folder, { recursive: true })
+    writeFileSync(join(folder, "record.tvb"), "encrypted record")
+    expect(await localBackupsExist(root)).toBe(false)
+  })
+
+  it.each(["EACCES", "EPERM", "ENODEV", "EIO", "ENOTCONN", "ETIMEDOUT"])("returns unknown and logs a root scan failure with %s", async (code) => {
+    const error = Object.assign(new Error("Backup folder unavailable"), { code })
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const readDirectory = vi.fn().mockRejectedValue(error)
+    expect(await localBackupsExist("/unavailable-backups", readDirectory)).toBeNull()
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining("/unavailable-backups"), error)
+  })
+
+  it.skipIf(process.platform === "win32")("returns unknown for an unreadable root folder", async (context) => {
+    const { root } = setup()
+    const mode = statSync(root).mode & 0o777
+    let permissionsChanged = false
+    vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      try {
+        chmodSync(root, 0)
+        permissionsChanged = true
+      } catch {
+        context.skip("The platform does not allow directory permissions to be changed")
+      }
+      const result = await localBackupsExist(root)
+      if (result !== null) context.skip("This user can read directories without permission bits")
+      expect(result).toBeNull()
+    } finally {
+      if (permissionsChanged) chmodSync(root, mode)
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it.each([true, false])("continues after an inaccessible account folder when a sibling has backups: %s", async (hasBackup) => {
+    const { root } = setup()
+    const blocked = join(root, "blocked-account", "intune-backups")
+    const sibling = join(root, "readable-account", "intune-backups")
+    mkdirSync(blocked, { recursive: true })
+    mkdirSync(sibling, { recursive: true })
+    if (hasBackup) writeFileSync(join(sibling, "encrypted.tvb"), "unreadable backup")
+    const error = Object.assign(new Error("Account folder unavailable"), { code: "EACCES" })
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const readDirectory = vi.fn(async (path: string) => {
+      if (path === blocked) throw error
+      const entries = await fileSystem.readdir(path, { withFileTypes: true })
+      return entries.sort((a, b) => a.name.localeCompare(b.name))
+    })
+    expect(await localBackupsExist(root, readDirectory)).toBe(hasBackup ? true : null)
+    expect(readDirectory).toHaveBeenCalledWith(sibling)
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining(blocked), error)
+  })
+
+  it.each(["EACCES", "ENODEV", "ENOTCONN"])("keeps settings and the export marker available after a scan fails with %s", async (code) => {
+    const store = memoryStore()
+    const keys = new BackupKeys(store)
+    const keyFingerprint = keys.fingerprint()
+    const localFolder = "/unavailable-backups"
+    vi.mocked(fileSystem.readdir).mockRejectedValue(Object.assign(new Error("Backup folder unavailable"), { code }))
+    vi.spyOn(console, "warn").mockImplementation(() => {})
+    expect(await readBackupSettings(localFolder, keys, store)).toEqual({
+      localFolder, keyFingerprint, recoveryExported: false, hasLocalBackups: null,
+    })
+    store.set("backup.recovery-exported", keyFingerprint)
+    expect(await readBackupSettings(localFolder, keys, store)).toEqual({
+      localFolder, keyFingerprint, recoveryExported: true, hasLocalBackups: null,
+    })
+  })
+
   it("keeps policy names and content off the disk in plain text", async () => {
     const { root, call } = setup()
     expect((await call("/intune-backups?restype=container", { method: "PUT" })).status).toBe(201)

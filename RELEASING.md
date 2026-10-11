@@ -29,6 +29,10 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 Put these in the next stable release's notes, then remove them here.
 
+- An inaccessible or offline local backup folder no longer prevents Settings or the recovery key export notice from loading. Save the recovery key even while the backup drive is unavailable.
+
+- Malformed stored backup keyrings now stop key creation and recovery key import instead of silently replacing keys. Recover the original `app-state.bin` before continuing.
+
 - Settings Catalog assignments. Released versions backed up Settings Catalog policies (including
   endpoint security) with `assignments: []`, because Graph answers `$expand=assignments` on a single
   policy with an empty list. They are now read from `{id}/assignments`; Settings Catalog compliance

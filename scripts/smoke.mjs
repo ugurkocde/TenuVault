@@ -16,6 +16,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
+import { checkSchedulePanel } from "./schedule-panel-smoke.mjs"
 
 const require = createRequire(import.meta.url)
 const electronPath = require("electron")
@@ -508,7 +509,7 @@ await check("policy pack frameworks keep the coverage notice collapsed", async (
 })
 
 await check("settings show background backups, retention and updates", async () => {
-  await go("#/portal/settings", "Background and retention")
+  await go("#/portal/settings", "Background runner")
   assert(await waitForText("Keep backups for"), "retention setting missing")
   assert(await waitForText("Download and install updates automatically"), "update setting missing")
   assert(await waitForText("Get nightly builds"), "nightly update setting missing")
@@ -516,6 +517,88 @@ await check("settings show background backups, retention and updates", async () 
   assert(prefs.nightlyUpdates === true, `nightly preference not stored ${JSON.stringify(prefs)}`)
   await evaluate(`window.tenuvault.preferences.set({ nightlyUpdates: false })`)
 })
+
+for (const [platform, installed] of [["darwin", false], ["win32", true]]) {
+  await check(`background runner status recovery and progress on ${platform}`, async () => {
+    try {
+      await evaluate(`(async () => {
+        const status = await window.tenuvault.license.status()
+        window.__runner = { calls: 0, installCalls: 0, removeCalls: 0 }
+        const frame = document.createElement("iframe")
+        frame.style.cssText = "position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 9999;"
+        document.body.appendChild(frame)
+        window.__runnerFrame = frame
+        frame.contentDocument.open()
+        frame.contentDocument.write('<html><head></head><body><div id="root"></div></body></html>')
+        frame.contentDocument.close()
+        frame.contentWindow.location.hash = "#/portal/settings"
+        frame.contentWindow.tenuvault = {
+          ...window.tenuvault,
+          app: { ...window.tenuvault.app, info: () => Promise.resolve({ version: "0.2.0", platform: ${JSON.stringify(platform)}, trayIconLoaded: true }) },
+          license: { ...window.tenuvault.license, status: () => Promise.resolve({ ...status, hasKey: true }) },
+          backgroundLaunch: {
+            status: () => {
+              if (++window.__runner.calls <= 2) return Promise.reject(new Error("Smoke runner status failure"))
+              return new Promise(resolve => { window.__runner.resolveStatus = () => resolve({ supported: true, installed: ${installed} }) })
+            },
+            install: () => {
+              window.__runner.installCalls++
+              return new Promise(resolve => { window.__runner.resolveChange = () => resolve({ supported: true, installed: true }) })
+            },
+            remove: () => {
+              window.__runner.removeCalls++
+              return new Promise(resolve => { window.__runner.resolveChange = () => resolve({ supported: true, installed: false }) })
+            },
+          },
+        }
+        document.querySelectorAll('link[rel="stylesheet"]').forEach(link => frame.contentDocument.head.appendChild(link.cloneNode()))
+        const script = frame.contentDocument.createElement("script")
+        script.type = "module"
+        script.src = document.querySelector('script[type="module"]').src
+        frame.contentDocument.head.appendChild(script)
+      })()`)
+      const section = `window.__runnerFrame.contentDocument.getElementById("settings-background")`
+      const message = "Could not check background startup. Try again."
+      const button = label => `[...${section}.querySelectorAll("button")].find(b => b.textContent.trim() === ${JSON.stringify(label)})`
+      const state = text => `${section}?.querySelector('[role="status"]')?.textContent === ${JSON.stringify(text)}`
+      assert(await waitForCondition(`${state("Unable to check")} && ${section}.innerText.includes(${JSON.stringify(message)})`), "persistent status error missing")
+      await evaluate(`${section}.scrollIntoView({ block: "start" })`)
+      assert(await evaluate(`${button("Install background launch")}.disabled && !${button("Retry check")}.disabled`), "error did not disable installation or offer Retry check")
+      await evaluate(`(() => { const retry = ${button("Retry check")}; retry.click(); retry.click() })()`)
+      assert(await evaluate("window.__runner.calls === 2"), "repeated Retry check clicks submitted overlapping status requests")
+      assert(await waitForCondition(`window.__runner.calls === 2 && ${state("Unable to check")}`), "Retry check did not re-request status or preserve a repeated failure")
+      await screenshot(`runner-status-error-${platform}`)
+      await evaluate(`(() => { const retry = ${button("Retry check")}; retry.click(); retry.click() })()`)
+      assert(await evaluate("window.__runner.calls === 3"), "repeated Retry check clicks submitted overlapping status requests")
+      assert(await waitForCondition(`window.__runner.calls === 3 && ${state("Checking...")}`), "pending retry did not show checking state")
+      assert(await evaluate(`${section}.innerText.includes(${JSON.stringify(message)}) && ${button("Retry check")}.disabled && ${button("Install background launch")}.disabled`), "retry lost the persistent error or enabled installation before success")
+      await evaluate("window.__runner.resolveStatus()")
+      assert(await waitForCondition(state(installed ? "Installed" : "Not installed")), "successful retry did not show the explicit runner state")
+      assert(await evaluate("window.__runner.calls === 3"), "repeated Retry check clicks submitted overlapping status requests")
+      assert(await evaluate(`!${section}.innerText.includes(${JSON.stringify(message)}) && !${button("Retry check")}`), "successful retry did not replace the error and Retry check")
+      await screenshot(`runner-status-success-${platform}`)
+      const location = platform === "darwin" ? "menu bar" : "tray"
+      const artifact = platform === "darwin" ? "Adds a LaunchAgent for your user account" : "Adds a scheduled task for your user account"
+      assert(await evaluate(`${section}.innerText.includes(${JSON.stringify(artifact)}) && ${section}.innerText.includes(${JSON.stringify(`Keep running in the ${location} when I close the window`)}) && ${section}.innerText.includes(${JSON.stringify(`Start TenuVault in the ${location} when I sign in to this computer`)})`), "platform artifact or icon wording missing")
+      assert(await evaluate(`${section}.innerText.includes("Backups need an awake computer and a signed in session. Locking the screen does not sign you out; closing a laptop lid may put it to sleep.")`), "power and session explanation missing")
+      for (const removing of [installed, !installed]) {
+        const label = removing ? "Remove background launch" : "Install background launch"
+        const progress = removing ? "Removing..." : "Installing..."
+        await evaluate(`(() => { const change = ${button(label)}; change.click(); change.click() })()`)
+        assert(await waitForCondition(`Boolean(${button(progress)}?.disabled)`), `${progress} did not appear on a disabled button`)
+        const calls = removing ? "removeCalls" : "installCalls"
+        assert(await evaluate(`window.__runner.${calls} === 1`), `repeated ${label} clicks submitted overlapping requests`)
+        await screenshot(`runner-${removing ? "removing" : "installing"}-${platform}`)
+        await evaluate("window.__runner.resolveChange()")
+        assert(await waitForCondition(`${state(removing ? "Not installed" : "Installed")} && ${button(removing ? "Install background launch" : "Remove background launch")}?.disabled === false`), "completed change did not update the state and re-enable the button")
+        assert(await evaluate(`window.__runner.${calls} === 1`), "completed change left an overlapping request pending")
+      }
+      assert(await evaluate("window.__runner.installCalls === 1 && window.__runner.removeCalls === 1"), "change controls did not call the matching operation once")
+    } finally {
+      await evaluate("window.__runnerFrame?.remove(); delete window.__runnerFrame; delete window.__runner")
+    }
+  })
+}
 
 await check("schedules are stored by the main process", async () => {
   const list = await evaluate(`window.tenuvault.schedules.set({ tenantId: "11111111-1111-1111-1111-111111111111", enabled: true, frequency: "daily", time: "02:00" })`)
@@ -538,6 +621,7 @@ await check("several tenants get the overview, switcher and schedule tab", async
   await disableAnimations()
   assert(await waitForText("All tenants", 20000), "overview did not open for several tenants")
   assert(await waitForText("Contoso 2"), "second tenant missing from the overview")
+  assert(await waitForText("Save your backup recovery key"), "local storage recovery key notice missing from Overview")
   await screenshot("08-overview")
   await go("#/portal/backup", "Backup History")
   await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Schedule")?.click()`)
@@ -552,6 +636,122 @@ await check("restarting clears interrupted tenant backup and refresh flags", asy
   assert(await waitForCondition(`JSON.parse(window.tenuvault.storage.getItemSync('tenuvault_tenants')).every(t => !Object.hasOwn(t, 'isLoading') && t.syncStatus !== 'pending')`), "in-flight flags were saved again")
 })
 
+await check("tenant renames show Saved in both views and clear confirmation timers", async () => {
+  await go("#/portal/tenants", "Tenant Management")
+  const editor = `document.querySelector('main input[type="text"]:not([aria-label="Search tenants"])')`
+  const saved = `[...document.querySelectorAll('main [role="status"]')].filter(s => s.textContent.trim() === 'Saved')`
+  const noCloudSync = `!document.querySelector('[title="Syncing to cloud..."]') && !document.querySelector('main .lucide-cloud-upload') && !document.querySelector('main').innerText.includes('Syncing to cloud')`
+  const startEditing = async name => {
+    await evaluate(`document.querySelector(${JSON.stringify(`button[aria-label="Rename tenant: ${name}"]`)}).click()`)
+    assert(await waitForCondition(`${editor}?.value === ${JSON.stringify(name)}`), "rename editor did not open")
+    assert(await evaluate(`document.querySelector('button[aria-label="Save tenant name"]')?.title === 'Save' && document.querySelector('button[aria-label="Save tenant name"] svg')?.classList.contains('text-green-600')`), "Save tooltip or green check missing")
+    assert(await evaluate(`document.querySelector('button[aria-label^="Cancel editing tenant name:"]')?.title === 'Cancel' && Boolean(document.querySelector('button[aria-label^="Cancel editing tenant name:"] .lucide-x'))`), "Cancel tooltip or icon missing")
+  }
+  const setName = async name => {
+    await evaluate(`(() => {
+      const input = ${editor}
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(name)})
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })()`)
+    assert(await waitForCondition(`${editor}?.value === ${JSON.stringify(name)}`), "name draft did not update")
+  }
+  const pressKey = async key => {
+    await send("Input.dispatchKeyEvent", { type: "keyDown", key, code: key })
+    await send("Input.dispatchKeyEvent", { type: "keyUp", key, code: key })
+  }
+  const saveName = async (name, method = "button") => {
+    await setName(name)
+    if (method === "enter") await pressKey("Enter")
+    else await evaluate(`document.querySelector('button[aria-label="Save tenant name"]').click()`)
+    assert(await waitForCondition(`!${editor}`), "save did not close the editor")
+  }
+  const assertSaved = async name => {
+    assert(await waitForCondition(`${saved}.some(s => s.parentElement.textContent.includes(${JSON.stringify(name)}))`), "Saved confirmation missing next to the renamed tenant")
+    assert(await evaluate(`${saved}.every(s => s.getAttribute('aria-live') === 'polite' && Boolean(s.querySelector('.lucide-check[aria-hidden="true"]')) && s.classList.contains('text-green-700'))`), "Saved confirmation is missing polite status, check or success style")
+    assert(await evaluate(noCloudSync), "rename displayed a cloud sync indicator")
+    return evaluate(`window.__tenantRenameTimers.scheduled.at(-1)`)
+  }
+  await evaluate(`(() => {
+    const timers = { active: new Set(), scheduled: [], cleared: new Set() }
+    window.__tenantRenameTimers = timers
+    window.__tenantRenameSetTimeout = window.setTimeout
+    window.__tenantRenameClearTimeout = window.clearTimeout
+    const setTimeout = window.setTimeout.bind(window)
+    const clearTimeout = window.clearTimeout.bind(window)
+    window.setTimeout = (callback, delay, ...args) => {
+      if (delay !== 2000) return setTimeout(callback, delay, ...args)
+      const timer = setTimeout(() => {
+        timers.active.delete(timer)
+        callback(...args)
+      }, delay)
+      timers.active.add(timer)
+      timers.scheduled.push(timer)
+      return timer
+    }
+    window.clearTimeout = timer => {
+      if (timers.active.delete(timer)) timers.cleared.add(timer)
+      clearTimeout(timer)
+    }
+  })()`)
+  try {
+    for (const view of ["Grid", "List"]) {
+      await evaluate(`document.querySelector('button[aria-label="${view} view"]').click()`)
+      await startEditing("Contoso 1")
+      const scheduled = await evaluate(`window.__tenantRenameTimers.scheduled.length`)
+      for (const name of ["Contoso 1", "  Contoso 1  ", "   "]) {
+        await saveName(name)
+        assert(await evaluate(`${saved}.length === 0 && window.__tenantRenameTimers.scheduled.length === ${scheduled}`), "unchanged or blank name showed Saved or scheduled a timer")
+        assert(await evaluate(`Boolean(document.querySelector('button[aria-label="Rename tenant: Contoso 1"]'))`), "unchanged or blank name changed the tenant")
+        await startEditing("Contoso 1")
+      }
+      await setName("Cancelled rename")
+      await pressKey("Escape")
+      assert(await waitForCondition(`!${editor} && ${saved}.length === 0`), "Escape did not cancel without Saved")
+      await startEditing("Contoso 1")
+      await setName("Cancelled rename")
+      await evaluate(`document.querySelector('button[title="Cancel"]').click()`)
+      assert(await waitForCondition(`!${editor} && ${saved}.length === 0`), "Cancel did not close without Saved")
+
+      await startEditing("Contoso 1")
+      await saveName(`  Contoso ${view} renamed  `, "enter")
+      const firstTimer = await assertSaved(`Contoso ${view} renamed`)
+      assert(await waitForCondition(`JSON.parse(window.tenuvault.storage.getItemSync('tenuvault_tenants')).find(t => t.id === 1).name === 'Contoso ${view} renamed'`), "trimmed rename was not saved locally")
+      assert(await evaluate(`${saved}.length === 1`), "rename showed more than one confirmation")
+      await sleep(1100)
+      await startEditing(`Contoso ${view} renamed`)
+      assert(await evaluate(`${saved}.length === 0 && window.__tenantRenameTimers.cleared.has(${firstTimer}) && !window.__tenantRenameTimers.active.has(${firstTimer})`), "new edit did not clear the prior confirmation timer")
+      await saveName("Contoso 1")
+      const replacementTimer = await assertSaved("Contoso 1")
+      await sleep(1100)
+      assert(await evaluate(`${saved}.length === 1 && window.__tenantRenameTimers.active.has(${replacementTimer})`), "the previous timer hid the new confirmation early")
+      assert(await waitForCondition(`${saved}.length === 0`, 4000), "Saved did not disappear after two seconds")
+      assert(await evaluate(`!window.__tenantRenameTimers.active.has(${replacementTimer})`), "expired confirmation timer was retained")
+
+      await startEditing("Contoso 1")
+      await saveName(`Contoso ${view} first`)
+      const firstTenantTimer = await assertSaved(`Contoso ${view} first`)
+      await startEditing("Contoso 2")
+      await saveName(`Contoso ${view} second`)
+      const secondTenantTimer = await assertSaved(`Contoso ${view} second`)
+      assert(await evaluate(`${saved}.length === 2 && window.__tenantRenameTimers.active.has(${firstTenantTimer}) && window.__tenantRenameTimers.active.has(${secondTenantTimer})`), "tenants did not keep independent confirmation timers")
+      await go("#/portal/overview", "All tenants")
+      assert(await evaluate(`window.__tenantRenameTimers.cleared.has(${firstTenantTimer}) && window.__tenantRenameTimers.cleared.has(${secondTenantTimer})`), "unmount did not clear all confirmation timers")
+      await go("#/portal/tenants", "Tenant Management")
+      assert(await evaluate(`${saved}.length === 0`), "Saved lingered after remount")
+      await startEditing(`Contoso ${view} first`)
+      await saveName("Contoso 1")
+      await startEditing(`Contoso ${view} second`)
+      await saveName("Contoso 2")
+      await go("#/portal/overview", "All tenants")
+      await go("#/portal/tenants", "Tenant Management")
+    }
+    // Let the restored names finish their metadata updates before the tag check.
+    assert(await waitForCondition(`window.__tenantRenameTimers.active.size === 0`, 4000), "restored tenant names still had pending metadata timers")
+  } finally {
+    await evaluate(`window.setTimeout = window.__tenantRenameSetTimeout; window.clearTimeout = window.__tenantRenameClearTimeout; delete window.__tenantRenameSetTimeout; delete window.__tenantRenameClearTimeout; delete window.__tenantRenameTimers`)
+  }
+})
+
 await check("tag drafts stay with their tenant and bulk tags sync every tenant", async () => {
   await go("#/portal/tenants", "Tenant Management")
   const currentTags = `document.querySelector('[role="dialog"] h3')?.nextElementSibling.innerText.trim()`
@@ -561,6 +761,9 @@ await check("tag drafts stay with their tenant and bulk tags sync every tenant",
     assert(await waitForCondition(`[...document.querySelectorAll('[role="menuitem"]')].some(b => b.innerText.trim() === 'Manage Tags')`), "tenant actions menu did not open")
     await evaluate(`[...document.querySelectorAll('[role="menuitem"]')].find(b => b.innerText.trim() === 'Manage Tags').click()`)
     assert(await waitForText(`Manage Tags for ${name}`), "tag dialog did not open")
+    assert(await waitForCondition(`document.querySelector('[role="dialog"]')?.contains(document.activeElement)`), "tag dialog did not receive focus")
+    // Radix attaches its outside-pointer listener in a deferred task after mounting.
+    await evaluate(`new Promise(resolve => setTimeout(resolve, 0))`)
   }
   const closeTags = async (method = "cancel") => {
     if (method === "escape") {
@@ -597,6 +800,7 @@ await check("tag drafts stay with their tenant and bulk tags sync every tenant",
     assert((await evaluate(currentTags)) === "Testing", "second tenant inherited the first tenant's tags or draft")
     await clickDialogButton("Save Tags")
     assert(await waitForCondition(`!document.querySelector('[role="dialog"]')`), "saved tag dialog did not close")
+    assert(await evaluate(`!document.querySelector('[title="Syncing to cloud..."]') && !document.querySelector('main .lucide-cloud-upload')`), "tag save displayed a cloud sync indicator")
     assert(await waitForCondition(`window.__tenantTagSaves.length === 1`), "second tenant tags were not synced")
     assert(await evaluate(`window.__tenantTagSaves[0].tenantId.startsWith('33333333') && window.__tenantTagSaves[0].metadata.tags.length === 1 && window.__tenantTagSaves[0].metadata.tags[0] === 'Testing'`), "metadata sync saved another tenant's tags")
     assert(await evaluate(`JSON.parse(window.tenuvault.storage.getItemSync('tenuvault_tenants')).every(t => JSON.stringify(t.tags) === JSON.stringify(t.id === 1 ? ['Production'] : ['Testing']))`), "tag draft leaked into saved profiles")
@@ -635,6 +839,209 @@ await check("tag drafts stay with their tenant and bulk tags sync every tenant",
   } finally {
     await evaluate(`window.fetch = window.__tenantTagFetch; delete window.__tenantTagFetch; delete window.__tenantTagSaves`)
   }
+})
+
+await check("restore journal applied IDs use validated inline inputs", async () => {
+  const tenantId = "11111111-1111-1111-1111-111111111111"
+  const originalId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+  const appliedId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+  const correctedId = "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC"
+  await evaluate(`(() => {
+    window.__restoreFetch = window.fetch;
+    window.__restoreRequests = [];
+    window.__restoreFailList = false;
+    window.__restoreFailApplied = true;
+    window.__restoreHoldApplied = false;
+    const records = [
+      { key: 'smoke-uncertain', tenant: '${tenantId}', method: 'POST', path: '/deviceManagement/deviceConfigurations', at: '2026-01-01T00:00:00.000Z', state: 'uncertain', label: 'Interrupted smoke policy' },
+      { key: 'smoke-correct', tenant: '${tenantId}', method: 'POST', path: '/deviceManagement/deviceConfigurations', at: '2026-01-01T00:00:00.000Z', state: 'reconciled', label: 'Reconciled smoke policy', objectId: '${originalId}' }
+    ];
+    window.fetch = (input, init) => {
+      if (String(input) !== '/api/restore-journal') return window.__restoreFetch(input, init);
+      const body = JSON.parse(init.body);
+      window.__restoreRequests.push(body);
+      if (body.action === 'list' && window.__restoreFailList) return Promise.reject(new Error('Restore history unavailable.'));
+      if (body.action === 'applied') {
+        if (window.__restoreFailApplied) return new Promise(resolve => {
+          window.__restoreFailAppliedResponse = () => resolve(Response.json({ error: 'Restore reconciliation unavailable.' }, { status: 503 }));
+        });
+        Object.assign(records.find(record => record.key === body.key), { state: 'reconciled', objectId: body.objectId });
+        if (window.__restoreHoldApplied) return new Promise(resolve => {
+          window.__restoreAppliedResponse = () => resolve(Response.json({ records }));
+        });
+      }
+      if (body.action === 'new-operation') {
+        const index = records.findIndex(record => record.key === body.key);
+        if (index !== -1) records.splice(index, 1);
+      }
+      return Promise.resolve(Response.json({ records }));
+    };
+  })()`)
+  const form = label => `document.querySelector('form[aria-label="${label}"]')`
+  const click = label => evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent.trim() === ${JSON.stringify(label)}).click()`)
+  const open = (label, policy) => evaluate(`(() => {
+    const row = [...document.querySelectorAll('p')].find(p => p.textContent === ${JSON.stringify(policy)}).parentElement;
+    window.__restoreRecoveryButton = [...row.querySelectorAll('button')].find(b => b.textContent.trim() === ${JSON.stringify(label)});
+    window.__restoreRecoveryButton.click();
+  })()`)
+  const press = async key => {
+    const params = { key, code: key, windowsVirtualKeyCode: key === "Escape" ? 27 : 13 }
+    await send("Input.dispatchKeyEvent", { type: "keyDown", ...params, ...(key === "Enter" ? { text: "\r" } : {}) })
+    await send("Input.dispatchKeyEvent", { type: "keyUp", ...params })
+  }
+  const fill = (label, value) => evaluate(`(() => {
+    const input = ${form(label)}.querySelector('input');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(value)});
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`)
+  const submit = label => evaluate(`${form(label)}.querySelector('button[type="submit"]').click()`)
+  try {
+    await go("#/portal/settings", "Restore write history")
+    assert(await waitForText("Interrupted smoke policy"), "journal records did not load")
+    await evaluate(`window.__restoreFailList = true`)
+    await click("Refresh history")
+    assert(await waitForText("Restore history unavailable."), "journal refresh error was hidden")
+    assert(await evaluate(`document.body.innerText.includes('Interrupted smoke policy') && document.body.innerText.includes('Reconciled smoke policy')`), "failed refresh cleared the journal")
+    await evaluate(`window.__restoreFailList = false`)
+    await click("Refresh history")
+    assert(await waitForCondition(`!document.body.innerText.includes('Restore history unavailable.')`), "successful refresh did not clear the error")
+
+    await open("Confirm applied", "Interrupted smoke policy")
+    assert(await waitForCondition(`!!${form("Confirm applied")}`), "Confirm applied did not open the input")
+    assert(await evaluate(`${form("Confirm applied")}.querySelector('input').value === ''`), "uncertain write input was not blank")
+    assert(await evaluate(`${form("Confirm applied")}.innerText.includes('A retry will reuse this result instead of repeating the write.')`), "confirmation description missing")
+    await fill("Confirm applied", "invalid-id")
+    await submit("Confirm applied")
+    assert(await waitForText("Enter a valid object ID (GUID)."), "invalid object ID did not show validation")
+    assert(await evaluate(`!window.__restoreRequests.some(r => r.action === 'applied')`), "invalid object ID sent a request")
+    await evaluate(`${form("Confirm applied")}.querySelector('button[type="button"]').click()`)
+    assert(await waitForCondition(`!${form("Confirm applied")}`), "Cancel did not close the input")
+    assert(await waitForCondition(`document.activeElement === window.__restoreRecoveryButton`), "Cancel did not return focus to Confirm applied")
+    assert(await evaluate(`!window.__restoreRequests.some(r => r.action === 'applied')`), "Cancel sent a request")
+
+    await open("Confirm applied", "Interrupted smoke policy")
+    assert(await waitForCondition(`document.activeElement === ${form("Confirm applied")}?.querySelector('input')`), "Confirm applied did not focus the input")
+    await press("Escape")
+    assert(await waitForCondition(`!${form("Confirm applied")}`), "Escape did not close Confirm applied")
+    assert(await waitForCondition(`document.activeElement === window.__restoreRecoveryButton`), "Escape did not return focus to Confirm applied")
+    assert(await evaluate(`!window.__restoreRequests.some(r => r.action === 'applied')`), "Escape sent a request")
+
+    await open("Confirm applied", "Interrupted smoke policy")
+    await fill("Confirm applied", ` ${appliedId} `)
+    await submit("Confirm applied")
+    assert(await waitForCondition(`${form("Confirm applied")}?.querySelector('input')?.disabled`), "input was not disabled during saving")
+    assert(await waitForCondition(`${form("Confirm applied")}?.contains(document.activeElement)`), "pending save lost focus outside the form")
+    await evaluate(`(() => {
+      window.__restoreEscapeEvents = [];
+      window.__restoreEscapeProbe = event => {
+        if (event.key === 'Escape') window.__restoreEscapeEvents.push(event.defaultPrevented);
+      };
+      document.addEventListener('keydown', window.__restoreEscapeProbe);
+    })()`)
+    await press("Escape")
+    assert(await evaluate(`!!${form("Confirm applied")}`), "Escape closed the input while saving")
+    assert(await evaluate(`!window.__restoreEscapeEvents.includes(false)`), "pending Escape reached the document without preventing dismissal")
+    assert(await evaluate(`${form("Confirm applied")}.contains(document.activeElement)`), "pending Escape lost focus outside the form")
+    await evaluate(`window.__restoreFailAppliedResponse()`)
+    assert(await waitForCondition(`${form("Confirm applied")}?.querySelector('[role="alert"]')?.innerText === 'Restore reconciliation unavailable.'`), "request error did not appear inside the input form")
+    assert(await waitForCondition(`document.activeElement === ${form("Confirm applied")}?.querySelector('input')`), "failed reconciliation did not refocus the input")
+    assert(await evaluate(`window.__restoreRequests.some(r => r.action === 'applied' && r.key === 'smoke-uncertain' && r.objectId === '${appliedId}' && r.confirmed === true && r.tenantId === '${tenantId}')`), "valid ID did not send the confirmed reconciliation")
+    await screenshot("05d-restore-journal-error")
+    await evaluate(`window.__restoreFailApplied = false`)
+    assert(await waitForCondition(`!${form("Confirm applied")}.querySelector('button[type="submit"]').disabled`), "input stayed disabled after failure")
+    await press("Enter")
+    assert(await waitForCondition(`window.__restoreRequests.filter(r => r.action === 'applied' && r.key === 'smoke-uncertain').length === 2`), "Enter did not submit the recovery form")
+    assert(await waitForCondition(`!${form("Confirm applied")}`), "successful reconciliation did not close the input")
+    assert(await waitForText(`Object ${appliedId}`), "saved object ID was not displayed")
+    assert(await waitForCondition(`(() => {
+      const row = [...document.querySelectorAll('p')].find(p => p.textContent === 'Interrupted smoke policy').parentElement;
+      return document.activeElement === [...row.querySelectorAll('button')].find(b => b.textContent.trim() === 'Correct applied ID');
+    })()`), "successful reconciliation did not focus the record's recovery button")
+
+    await open("Correct applied ID", "Reconciled smoke policy")
+    assert(await waitForCondition(`!!${form("Correct applied ID")}`), "Correct applied ID did not open the input")
+    assert(await evaluate(`${form("Correct applied ID")}.querySelector('input').value === '${originalId}'`), "correction input did not keep the recorded ID")
+    assert(await evaluate(`${form("Correct applied ID")}.innerText.includes('The next retry will read and verify its creation fields before any follow-up writes.')`), "correction description missing")
+    await evaluate(`${form("Correct applied ID")}.querySelector('button[type="button"]').click()`)
+    assert(await waitForCondition(`!${form("Correct applied ID")}`), "Cancel did not close Correct applied ID")
+    assert(await waitForCondition(`document.activeElement === window.__restoreRecoveryButton`), "Cancel did not return focus to Correct applied ID")
+    await open("Correct applied ID", "Reconciled smoke policy")
+    assert(await waitForCondition(`document.activeElement === ${form("Correct applied ID")}?.querySelector('input')`), "Correct applied ID did not focus the input")
+    await press("Escape")
+    assert(await waitForCondition(`!${form("Correct applied ID")}`), "Escape did not close Correct applied ID")
+    assert(await waitForCondition(`document.activeElement === window.__restoreRecoveryButton`), "Escape did not return focus to Correct applied ID")
+    assert(await evaluate(`!window.__restoreRequests.some(r => r.action === 'applied' && r.key === 'smoke-correct')`), "closing Correct applied ID sent a request")
+    await open("Correct applied ID", "Reconciled smoke policy")
+    await fill("Correct applied ID", correctedId)
+    await submit("Correct applied ID")
+    assert(await waitForCondition(`!${form("Correct applied ID")}`), "successful correction did not close the input")
+    assert(await evaluate(`window.__restoreRequests.some(r => r.action === 'applied' && r.key === 'smoke-correct' && r.objectId === '${correctedId}' && r.confirmed === true && r.tenantId === '${tenantId}')`), "corrected ID did not send the confirmed reconciliation")
+    assert(await waitForText(`Object ${correctedId}`), "corrected object ID was not displayed")
+    assert(await waitForCondition(`document.activeElement === window.__restoreRecoveryButton`), "successful correction did not return focus to Correct applied ID")
+
+    await evaluate(`window.__restoreHoldApplied = true`)
+    await open("Correct applied ID", "Reconciled smoke policy")
+    await submit("Correct applied ID")
+    assert(await waitForCondition(`${form("Correct applied ID")}?.querySelector('input')?.disabled && typeof window.__restoreAppliedResponse === 'function'`), "correction save was not held pending")
+    await evaluate(`(() => {
+      const row = window.__restoreRecoveryButton.parentElement;
+      const confirm = window.confirm;
+      window.confirm = () => true;
+      try {
+        [...row.querySelectorAll('button')].find(b => b.textContent.trim() === 'Allow a new operation').click();
+      } finally {
+        window.confirm = confirm;
+      }
+    })()`)
+    assert(await waitForCondition(`!document.body.innerText.includes('Reconciled smoke policy')`), "new operation did not remove the edited record")
+    assert(await evaluate(`window.__restoreRequests.some(r => r.action === 'new-operation' && r.key === 'smoke-correct' && r.confirmed === true)`), "new operation did not send the confirmed request")
+    assert(await evaluate(`!${form("Correct applied ID")} && !window.__restoreRecoveryButton.isConnected`), "removed record left its recovery form open")
+    assert(await waitForCondition(`document.activeElement?.textContent.trim() === 'Refresh history'`), "removing the edited record did not focus Refresh history before the save resolved")
+    await evaluate(`window.__restoreAppliedResponse()`)
+    await click("Refresh history")
+    assert(await waitForCondition(`!${form("Correct applied ID")} && document.activeElement?.textContent.trim() === 'Refresh history'`), "completed save for a removed record did not keep focus on Refresh history")
+  } finally {
+    await evaluate(`window.__restoreFailAppliedResponse?.(); window.__restoreAppliedResponse?.(); document.removeEventListener('keydown', window.__restoreEscapeProbe); window.fetch = window.__restoreFetch; delete window.__restoreFetch; delete window.__restoreRequests; delete window.__restoreFailList; delete window.__restoreFailApplied; delete window.__restoreFailAppliedResponse; delete window.__restoreHoldApplied; delete window.__restoreAppliedResponse; delete window.__restoreRecoveryButton; delete window.__restoreEscapeEvents; delete window.__restoreEscapeProbe`)
+  }
+})
+
+await check("OpenIntuneBaseline run loading errors offer retry without an empty state", async () => {
+  await evaluate(`(() => {
+    window.__runsFetch = window.fetch;
+    window.__runsRequests = 0;
+    window.fetch = (input, init) => {
+      if (String(input) !== '/api/oib' || JSON.parse(init.body).action !== 'oib-runs') return window.__runsFetch(input, init);
+      window.__runsRequests++;
+      return window.__runsRequests === 1
+        ? Promise.reject(new Error('Deployment history unavailable.'))
+        : Promise.resolve(Response.json({ runs: [] }));
+    };
+  })()`)
+  const history = `document.querySelector('section[aria-label="Deployment runs"]')`
+  try {
+    await go("#/portal/oib", "Deployment history")
+    assert(await waitForCondition(`${history}?.innerText.includes('Deployment history unavailable.')`), "run loading failure was hidden")
+    // Allow unrelated version requests and renders to settle before counting initial run requests.
+    await sleep(500)
+    assert(await evaluate(`window.__runsRequests === 1`), "mount sent duplicate run requests")
+    assert(!(await evaluate(`${history}.innerText.includes('No deployments that can be undone are recorded for this tenant.')`)), "failed request showed the empty state")
+    await screenshot("19-oib-run-error")
+    await evaluate(`[...${history}.querySelectorAll('button')].find(b => b.textContent.trim() === 'Retry').click()`)
+    assert(await waitForCondition(`${history}?.innerText.includes('No deployments that can be undone are recorded for this tenant.')`), "successful retry did not show the empty state")
+    assert(await evaluate(`window.__runsRequests === 2`), "Retry did not send one run request")
+    assert(!(await evaluate(`${history}.innerText.includes('Deployment history unavailable.')`)), "successful retry did not clear the error")
+  } finally {
+    await evaluate(`window.fetch = window.__runsFetch; delete window.__runsFetch; delete window.__runsRequests`)
+  }
+})
+
+await check("local recovery key notices link to the export action", async () => {
+  await go("#/portal/overview", "Save your backup recovery key")
+  await evaluate(`[...document.querySelectorAll("a")].find(a => a.textContent.trim() === "Go to Save recovery key").click()`)
+  assert(await waitForText("Backups on this device"), "recovery key notice did not open Settings")
+  assert(await waitForText("Save your backup recovery key"), "local storage recovery key notice missing from Settings")
+  assert(await waitForCondition(`document.activeElement?.id === "save-recovery-key"`), "recovery key notice did not focus the export action")
+  await screenshot("09b-recovery-key-notice")
 })
 
 // Network independent: the landing page renders before the OIB source is read from GitHub.
@@ -899,6 +1306,8 @@ await check("tenant changes wait for the disclaimer, once per tenant", async () 
   const again = await evaluate(deploy)
   assert(again[0] !== 428 && !(await evaluate(`!!document.querySelector("[role=dialog]")`)), "disclaimer asked twice for one tenant")
 })
+
+await checkSchedulePanel({ check, evaluate, waitForCondition, screenshot, assert })
 
 if (licenseKey) {
   // No tenant is signed in, so the key is only saved; it activates when a tenant is used.

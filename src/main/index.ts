@@ -17,11 +17,14 @@ import { routes } from "./api/routes"
 import { AuthManager, SignInRequiredError } from "./auth/msal"
 import { BackupEngine, verifyStorageAccess, type BackupJob } from "./backup/engine"
 import { BackupScheduler } from "./backup/scheduler"
+import { prepareScheduleInput } from "./backup/schedule-input"
 import { BackgroundLaunch } from "./backup/background-launch"
 import { BackupScopes } from "./backup/scopes"
 import { includedTypes, normalizeScope, type BackupScope } from "../shared/intune/scope"
 import { RefusalLog, refuseUnlicensedBackup } from "./backup/refusals"
+import { backupTenantLabel, notifyBackupFailure } from "./backup/notifications"
 import { BackupKeys } from "./backup/keys"
+import { readBackupSettings } from "./backup/settings"
 import { encryptedAzureFetch, registerStorageToken } from "./storage/azure-seal"
 import { handleLocalBlobRequest, isLocalAccount } from "./storage/blob-emulator"
 import { LocalBlobStore } from "./storage/local-blob-store"
@@ -42,7 +45,7 @@ import { setOibCacheDir } from "./oib/source"
 import { setFrameworkStore } from "./frameworks/workspaces"
 import { setNativeFrameworkStore, setNativeFrameworkAuthorization, setNativeFrameworkNotifier } from "./frameworks/native"
 import { allows, COMMUNITY_RETENTION_DAYS, PlanRequired } from "../shared/plans"
-import { SecureStore, UnreadableStoreError, type Cipher } from "./storage/secure-store"
+import { APP_STATE_START_OVER_BUTTON, APP_STATE_START_OVER_DETAIL, SecureStore, UnreadableStoreError, type Cipher } from "./storage/secure-store"
 import { Preferences } from "./preferences"
 import { AppTray } from "./tray"
 import { installedBySetup, isNightly, Updates, updatesDisabledByPolicy } from "./updates"
@@ -92,7 +95,7 @@ function osCipher(): Cipher {
  * `startOver` says what starting over means for this store; the default fits the stores
  * that hold sign-ins and the license.
  */
-function openStore(filePath: string, cipher: Cipher, startOver = "your saved data is kept as a backup, and you sign in to your tenants and activate your license again."): SecureStore | null {
+function openStore(filePath: string, cipher: Cipher, startOver = "your saved data is kept as a backup, and you sign in to your tenants and activate your license again.", startOverButton = "Start over"): SecureStore | null {
   const store = new SecureStore(filePath, cipher)
   try {
     store.open()
@@ -108,7 +111,7 @@ function openStore(filePath: string, cipher: Cipher, startOver = "your saved dat
         process.platform === "darwin"
           ? `Allow TenuVault to access its Keychain item and start the app again. If that does not help, start over: ${startOver}`
           : `The data may have been created by another Windows user. Start the app as that user, or start over: ${startOver}`,
-      buttons: ["Quit", "Start over"],
+      buttons: ["Quit", startOverButton],
       defaultId: 0,
       cancelId: 0,
     })
@@ -128,7 +131,7 @@ const chromiumFetch: typeof fetch = (input, init) => net.fetch(input instanceof 
 async function bootstrap(): Promise<void> {
   const cipher = osCipher()
   const userData = app.getPath("userData")
-  const appStore = openStore(join(userData, "app-state.bin"), cipher)
+  const appStore = openStore(join(userData, "app-state.bin"), cipher, APP_STATE_START_OVER_DETAIL, APP_STATE_START_OVER_BUTTON)
   const tokenStore = appStore && openStore(join(userData, "token-cache.bin"), cipher)
   // Records of the review, evidence and change workflows, kept apart so the app state stays small.
   const workspaceStore = tokenStore && openStore(join(userData, "workspace.bin"), cipher, "your saved review records (baselines, promotions and health reviews) are kept as a backup copy and start empty. Tenant access and your license are not affected.")
@@ -174,7 +177,7 @@ async function bootstrap(): Promise<void> {
   const localFolder = () => appStore.get(LOCAL_FOLDER_KEY) ?? join(app.getPath("documents"), "TenuVault Backups")
   let localStore: LocalBlobStore | null = null
   const getLocalStore = () => (localStore ??= new LocalBlobStore(localFolder(), backupKeys.keyring()))
-  const backupSettings = () => ({ localFolder: localFolder(), keyFingerprint: backupKeys.fingerprint() })
+  const backupSettings = () => readBackupSettings(localFolder(), backupKeys, appStore)
 
   // Background requests never open a sign-in window; the renderer shows a prompt instead.
   const lastPrompt = new Map<string, number>()
@@ -343,12 +346,13 @@ async function bootstrap(): Promise<void> {
     try {
       const tenants = JSON.parse(appStore.get(`${RENDERER_STORAGE_PREFIX}tenuvault_tenants`) ?? "[]") as Array<{
         name?: string
+        domain?: string
         credentials?: { tenantId?: string; appId?: string }
         resources?: { storageAccountName?: string }
       }>
       const tenant = tenants.find((t) => t.credentials?.tenantId?.toLowerCase() === tenantId.toLowerCase())
       if (!tenant?.credentials?.appId || !tenant.resources?.storageAccountName) return null
-      return { name: tenant.name ?? tenantId, clientId: tenant.credentials.appId, storageAccountName: tenant.resources.storageAccountName }
+      return { name: backupTenantLabel(tenant), clientId: tenant.credentials.appId, storageAccountName: tenant.resources.storageAccountName }
     } catch {
       return null
     }
@@ -400,11 +404,17 @@ async function bootstrap(): Promise<void> {
     notification.show()
   })
 
-  const notifyFailure = (name: string, message: string) => {
-    if (Notification.isSupported()) new Notification({ title: `Scheduled backup of ${name} failed`, body: message }).show()
+  const notifyFailure = (tenantId: string, name: string, message: string, trigger: "scheduled" | "tray") => {
+    notifyBackupFailure({ tenantId, name }, message, trigger, () => {
+      showWindow()
+      return mainWindow
+    })
   }
 
   const refusals = new RefusalLog(appStore, () => mainWindow?.webContents.send("schedules:refusalsChanged"))
+
+  // Joined requests share one notification and the trigger that started the job.
+  const unattendedBackupTriggers = new WeakMap<BackupJob, { trigger: "scheduled" | "tray"; notified: boolean }>()
 
   const runScheduledBackup = async (tenantId: string, trigger: "scheduled" | "tray") => {
     const profile = tenantProfile(tenantId)
@@ -420,14 +430,15 @@ async function bootstrap(): Promise<void> {
       if (!isLocalAccount(profile.storageAccountName) && !allows(plan, "azureStorage")) throw new PlanRequired("azureStorage")
     }
     const refused = await refuseUnlicensedBackup(
-      { requireEntitlement: requirePlan, log: refusals, notify: notifyFailure },
+      { requireEntitlement: requirePlan, log: refusals, notify: (name, message) => notifyFailure(tenantId, name, message, trigger) },
       { tenantId, name: profile.name },
       trigger,
     )
     if (refused) return { status: "Failed" as const, message: refused }
-    const job = await waitForJob(
-      engine.start({ tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, scope: scopes.get(tenantId).scope, trigger }),
-    )
+    const job = engine.start({ tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, scope: scopes.get(tenantId).scope, trigger })
+    const origin = unattendedBackupTriggers.get(job) ?? { trigger, notified: false }
+    unattendedBackupTriggers.set(job, origin)
+    await waitForJob(job)
     const ok = job.status === "Completed"
     const account = accounts.get(tenantId)
     // Record scheduled backups in the tenant's audit log, attributed to the signed-in admin.
@@ -454,7 +465,10 @@ async function bootstrap(): Promise<void> {
         }),
       )
       .catch(() => undefined)
-    if (!ok) notifyFailure(profile.name, job.exception ?? "Open TenuVault for details.")
+    if (!ok && !origin.notified) {
+      origin.notified = true
+      notifyFailure(tenantId, profile.name, job.exception ?? "Open TenuVault for details.", origin.trigger)
+    }
     return { status: ok ? ("Completed" as const) : ("Failed" as const), message: job.exception ?? job.progressMessage }
   }
 
@@ -503,14 +517,25 @@ async function bootstrap(): Promise<void> {
   keepInTray = () => preferences.get().keepRunningInTray
 
   const backgroundLaunch = new BackgroundLaunch({ platform: process.platform, packaged: app.isPackaged, executable: process.execPath, home: app.getPath("home"), data: app.getPath("userData"), uid: process.getuid?.(), systemRoot: process.env.SystemRoot })
-  handleTrusted("backgroundLaunch:status", () => backgroundLaunch.status())
-  handleTrusted("backgroundLaunch:install", () => backgroundLaunch.install())
-  handleTrusted("backgroundLaunch:remove", () => backgroundLaunch.remove())
+  // Status checks and changes share the Windows script path.
+  let backgroundLaunchPending: Promise<unknown> = Promise.resolve()
+  const updateBackgroundLaunch = (action: () => ReturnType<BackgroundLaunch["status"]>) => {
+    const request = backgroundLaunchPending.then(action).then(status => {
+      tray.setBackgroundRunnerInstalled(status.installed)
+      return status
+    })
+    backgroundLaunchPending = request.catch(() => undefined)
+    return request
+  }
+  void updateBackgroundLaunch(() => backgroundLaunch.status()).catch(error => console.warn("Could not check background startup.", error))
+  handleTrusted("backgroundLaunch:status", () => updateBackgroundLaunch(() => backgroundLaunch.status()))
+  handleTrusted("backgroundLaunch:install", () => updateBackgroundLaunch(() => backgroundLaunch.install()))
+  handleTrusted("backgroundLaunch:remove", () => updateBackgroundLaunch(() => backgroundLaunch.remove()))
 
   handleTrusted("schedules:list", () => scheduler.list())
   handleTrusted("schedules:set", (_event, schedule: ScheduleInput) => {
-    if (schedule.frequency === "daily" && license.plan(schedule.tenantId) === "community") throw new PlanRequired("dailySchedule")
-    scheduler.set(schedule)
+    const current = scheduler.list().find((saved) => saved.tenantId === schedule.tenantId.toLowerCase())
+    scheduler.set(prepareScheduleInput(schedule, license.plan(schedule.tenantId), current))
     return scheduler.list()
   })
   handleTrusted("schedules:remove", (_event, tenantId: string) => {

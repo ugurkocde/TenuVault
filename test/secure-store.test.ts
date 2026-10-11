@@ -2,7 +2,7 @@ import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { SecureStore, UnreadableStoreError, type Cipher } from "../src/main/storage/secure-store"
+import { APP_STATE_START_OVER_BUTTON, APP_STATE_START_OVER_DETAIL, SecureStore, UnreadableStoreError, type Cipher } from "../src/main/storage/secure-store"
 
 const xor = (key: number): Cipher => ({
   encrypt: (text) => Buffer.from(Buffer.from(text).map((b) => b ^ key)),
@@ -14,6 +14,15 @@ const xor = (key: number): Cipher => ({
 })
 
 describe("SecureStore", () => {
+  it("warns that starting over deletes the backup key and explains recovery", () => {
+    expect(APP_STATE_START_OVER_DETAIL).toContain("deletes the backup encryption key")
+    expect(APP_STATE_START_OVER_DETAIL).toContain("Existing local and Azure backups become unreadable unless you exported their recovery key")
+    expect(APP_STATE_START_OVER_DETAIL).toContain("choose Quit, restore access to the saved data")
+    expect(APP_STATE_START_OVER_DETAIL).toContain("Settings > Storage and recovery > Save recovery key")
+    expect(APP_STATE_START_OVER_DETAIL).toContain("Import a recovery key")
+    expect(APP_STATE_START_OVER_BUTTON).toBe("Delete backup key and start over")
+  })
+
   it("persists values encrypted", () => {
     const dir = mkdtempSync(join(tmpdir(), "tv-store-"))
     const file = join(dir, "state.bin")

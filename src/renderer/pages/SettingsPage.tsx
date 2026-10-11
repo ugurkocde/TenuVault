@@ -1,7 +1,7 @@
 import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
-import { useEffect, useState } from "react"
-import { Link } from "react-router-dom"
+import { useEffect, useId, useRef, useState } from "react"
+import { Link, useLocation } from "react-router-dom"
 import { Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, RefreshCw, Save, Upload } from "lucide-react"
 import { useTenantOperations, useTenants, type Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
@@ -11,8 +11,10 @@ import { storageLabel } from "~/lib/storage-label"
 import type { AppInfo, AppPreferences, BackupSettings, SignedInAccount, UpdateStatus } from "../../shared/ipc"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import { COMMUNITY_RETENTION_DAYS } from "../../shared/plans"
+import { isGuid } from "../../shared/security"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
 import { StorageChooser } from "../components/StorageChooser"
+import { RecoveryKeyNotice } from "../components/RecoveryKeyNotice"
 import { bridge } from "../lib/bridge"
 import { storageResources, type StorageChoice } from "../lib/storage"
 import { toast } from "../lib/toast"
@@ -21,46 +23,189 @@ function RestoreWrites() {
   const tenants = useTenants().filter(tenant => tenant.credentials?.tenantId)
   const [selected, setSelected] = useState("")
   const tenantId = tenants.some(tenant => tenant.credentials?.tenantId === selected) ? selected : tenants[0]?.credentials?.tenantId
-  if (!tenantId) return <Card><CardContent className="pt-6">Connect and sign in to a tenant to view restore write history.</CardContent></Card>
-  return <div className="space-y-3"><label className="block text-sm">Restore history tenant<select className="ml-3 rounded border bg-background p-2" value={tenantId} onChange={event => setSelected(event.target.value)}>{tenants.map(tenant => <option key={tenant.id} value={tenant.credentials!.tenantId}>{tenant.name}</option>)}</select></label><TenantRestoreWrites key={tenantId} tenantId={tenantId} /></div>
+  if (!tenantId) {
+    return (
+      <Card>
+        <CardContent className="pt-6">Connect and sign in to a tenant to view restore write history.</CardContent>
+      </Card>
+    )
+  }
+  return (
+    <div className="space-y-3">
+      <label className="block text-sm">
+        Restore history tenant
+        <select className="ml-3 rounded border bg-background p-2" value={tenantId} onChange={event => setSelected(event.target.value)}>
+          {tenants.map(tenant => <option key={tenant.id} value={tenant.credentials!.tenantId}>{tenant.name}</option>)}
+        </select>
+      </label>
+      <TenantRestoreWrites key={tenantId} tenantId={tenantId} />
+    </div>
+  )
+}
+
+function RestoreAppliedInput({ record, request, onClose }: { record: WriteRecord; request: (body: object) => Promise<void>; onClose: () => void }) {
+  const id = useId()
+  const input = useRef<HTMLInputElement>(null)
+  const inputContainer = useRef<HTMLDivElement>(null)
+  const [objectId, setObjectId] = useState(record.state === "reconciled" ? record.objectId ?? "" : "")
+  const [error, setError] = useState("")
+  const [saving, setSaving] = useState(false)
+  const description = record.state === "reconciled"
+    ? "After checking the original policy name and tenant in Intune, enter the corrected object ID. The next retry will read and verify its creation fields before any follow-up writes."
+    : "After checking Intune, enter the ID of the object this request applied to. A retry will reuse this result instead of repeating the write."
+
+  useEffect(() => {
+    if (saving) inputContainer.current?.focus()
+    else if (error) input.current?.focus()
+  }, [error, saving])
+
+  const submit = async () => {
+    if (saving) return
+    const value = objectId.trim()
+    if (!isGuid(value)) {
+      setError("Enter a valid object ID (GUID).")
+      return
+    }
+    setError("")
+    setSaving(true)
+    try {
+      await request({ action: "applied", key: record.key, objectId: value, confirmed: true })
+      onClose()
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <form className="mt-3 space-y-3" aria-label={record.state === "reconciled" ? "Correct applied ID" : "Confirm applied"} onSubmit={event => { event.preventDefault(); void submit() }} onKeyDown={event => {
+      if (event.key === "Escape") {
+        event.preventDefault()
+        event.stopPropagation()
+        if (!saving) onClose()
+      }
+    }}>
+      <div ref={inputContainer} tabIndex={-1} className="space-y-1">
+        <label htmlFor={id} className="block font-medium">Object ID</label>
+        <p id={`${id}-description`} className="text-sm text-gray-500">{description}</p>
+        <input
+          id={id}
+          ref={input}
+          className="w-full rounded border bg-background p-2 font-mono text-sm"
+          value={objectId}
+          onChange={event => { setObjectId(event.target.value); setError("") }}
+          aria-describedby={`${id}-description${error ? ` ${id}-error` : ""}`}
+          aria-invalid={!!error}
+          autoFocus
+          spellCheck={false}
+          disabled={saving}
+        />
+      </div>
+      {error && <p id={`${id}-error`} role="alert" className="text-red-700">{error}</p>}
+      <div className="flex gap-3">
+        <Button type="submit" disabled={saving}>{saving ? "Saving..." : "Save applied ID"}</Button>
+        <Button type="button" variant="outline" disabled={saving} onClick={onClose}>Cancel</Button>
+      </div>
+    </form>
+  )
 }
 
 function TenantRestoreWrites({ tenantId }: { tenantId: string }) {
   const [records, setRecords] = useState<WriteRecord[]>([])
   const [error, setError] = useState("")
+  const [editing, setEditing] = useState<string | null>(null)
+  const recoveryButton = useRef<{ key: string; button: HTMLButtonElement } | null>(null)
+  const refreshButton = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (editing !== null && !records.some(record => record.key === editing)) setEditing(null)
+  }, [editing, records])
+  useEffect(() => {
+    if (editing === null && recoveryButton.current) {
+      const button = recoveryButton.current.button
+      if (button.isConnected) button.focus()
+      else refreshButton.current?.focus()
+      recoveryButton.current = null
+    }
+  }, [editing])
+  const trackRecoveryButton = (key: string, button: HTMLButtonElement | null) => {
+    if (button && recoveryButton.current?.key === key) recoveryButton.current.button = button
+  }
   const request = async (body: object) => {
-    try {
-      const response = await fetch("/api/restore-journal", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, tenantId }) })
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.error)
-      if (!Array.isArray(data.records)) throw new Error("Invalid restore history response")
-      setError("")
-      setRecords(data.records)
-    } catch (error) { setRecords([]); throw error }
+    const response = await fetch("/api/restore-journal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...body, tenantId }),
+    })
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.error)
+    if (!Array.isArray(data.records)) throw new Error("Invalid restore history response")
+    setError("")
+    setRecords(data.records)
   }
   useEffect(() => { void request({ action: "list" }).catch(e => setError(String(e))) }, [])
-  return <Card><CardHeader><CardTitle>Restore write history</CardTitle><Button variant="outline" onClick={() => void request({ action: "list" }).catch(e => setError(String(e)))}>Refresh history</Button><CardDescription>Interrupted writes stay blocked across restarts. Check the target tenant in Intune before resolving an uncertain result. Request payloads and tokens are not stored here.</CardDescription></CardHeader><CardContent>
-    {error && <p role="alert" className="text-red-700">{error}</p>}
-    {!records.length && <p>No restore writes recorded.</p>}
-    {records.slice().reverse().map(record => <div key={record.key} className="border-t py-3 text-sm">
-      <p className="font-medium">{record.label ?? "Object name unavailable"}</p>
-      <p>{record.at} · {record.state} · Tenant {record.tenant}</p><p className="break-all">{record.method} {record.path}{record.objectId ? ` · Object ${record.objectId}` : ""}</p>
-      {record.state === "reconciled" && <Button className="mt-2 mr-2" variant="outline" onClick={() => { const objectId = window.prompt("After checking the original policy name and tenant in Intune, enter the corrected object ID. The next retry will read and verify its creation fields before any follow-up writes.", record.objectId); if (objectId) void request({ action: "applied", key: record.key, objectId, confirmed: true }).catch(e => setError(String(e))) }}>Correct applied ID</Button>}
-      {record.state === "reconciled" && <Button className="mt-2" variant="outline" onClick={() => { if (window.confirm("Start a new operation with this request? Future attempts will send the write again and may create another object. Do not clear this while resuming a repair.")) void request({ action: "new-operation", key: record.key, confirmed: true }).catch(e => setError(String(e))) }}>Allow a new operation</Button>}
-      {record.state === "uncertain" && <div className="mt-2 flex gap-3">
-        <Button variant="outline" onClick={() => { const objectId = window.prompt("After checking Intune, enter the ID of the object this request applied to. A retry will reuse this result instead of repeating the write."); if (objectId) void request({ action: "applied", key: record.key, objectId, confirmed: true }).catch(e => setError(String(e))) }}>Confirm applied</Button>
-        <Button variant="outline" onClick={() => { if (window.confirm("I checked the target tenant in Intune and confirmed this request was NOT applied. Allow another attempt?")) void request({ action: "not-applied", key: record.key, confirmed: true }).catch(e => setError(String(e))) }}>Confirm not applied</Button>
-      </div>}
-    </div>)}
-  </CardContent></Card>
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Restore write history</CardTitle>
+        <Button ref={refreshButton} variant="outline" onClick={() => void request({ action: "list" }).catch(e => setError(String(e)))}>Refresh history</Button>
+        <CardDescription>Interrupted writes stay blocked across restarts. Check the target tenant in Intune before resolving an uncertain result. Request payloads and tokens are not stored here.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {error && <p role="alert" className="text-red-700">{error}</p>}
+        {!records.length && <p>No restore writes recorded.</p>}
+        {records.slice().reverse().map(record => (
+          <div key={record.key} className="border-t py-3 text-sm">
+            <p className="font-medium">{record.label ?? "Object name unavailable"}</p>
+            <p>{record.at} · {record.state} · Tenant {record.tenant}</p>
+            <p className="break-all">{record.method} {record.path}{record.objectId ? ` · Object ${record.objectId}` : ""}</p>
+            {record.state === "reconciled" && (
+              <>
+                <Button ref={button => trackRecoveryButton(record.key, button)} className="mt-2 mr-2" variant="outline" aria-expanded={editing === record.key} onClick={event => {
+                  recoveryButton.current = { key: record.key, button: event.currentTarget }
+                  setEditing(record.key)
+                }}>Correct applied ID</Button>
+                <Button className="mt-2" variant="outline" onClick={() => {
+                  if (window.confirm("Start a new operation with this request? Future attempts will send the write again and may create another object. Do not clear this while resuming a repair.")) {
+                    void request({ action: "new-operation", key: record.key, confirmed: true }).catch(e => setError(String(e)))
+                  }
+                }}>Allow a new operation</Button>
+              </>
+            )}
+            {record.state === "uncertain" && (
+              <div className="mt-2 flex gap-3">
+                <Button ref={button => trackRecoveryButton(record.key, button)} variant="outline" aria-expanded={editing === record.key} onClick={event => {
+                  recoveryButton.current = { key: record.key, button: event.currentTarget }
+                  setEditing(record.key)
+                }}>Confirm applied</Button>
+                <Button variant="outline" onClick={() => {
+                  if (window.confirm("I checked the target tenant in Intune and confirmed this request was NOT applied. Allow another attempt?")) {
+                    void request({ action: "not-applied", key: record.key, confirmed: true }).catch(e => setError(String(e)))
+                  }
+                }}>Confirm not applied</Button>
+              </div>
+            )}
+            {editing === record.key && <RestoreAppliedInput record={record} request={request} onClose={() => setEditing(current => current === record.key ? null : current)} />}
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  )
 }
 
 function BackupsOnDevice() {
   const [settings, setSettings] = useState<BackupSettings | null>(null)
   const [recoveryKey, setRecoveryKey] = useState("")
   const [importing, setImporting] = useState(false)
+  const { hash } = useLocation()
 
-  useEffect(() => void bridge.backups.settings().then(setSettings), [])
+  useEffect(() => { void bridge.backups.settings().then(setSettings).catch((error) => toast(String(error), "error")) }, [])
+  useEffect(() => {
+    if (hash !== "#recovery-key") return
+    const button = document.getElementById("save-recovery-key")
+    button?.scrollIntoView({ block: "center" })
+    button?.focus({ preventScroll: true })
+  }, [hash])
 
   const run = async (action: () => Promise<void>) => {
     try {
@@ -84,7 +229,10 @@ function BackupsOnDevice() {
       <CardContent className="space-y-5 px-7 pb-7">
         <Button variant="outline" onClick={() => void run(async () => {
           const result = await bridge.backups.importArchive()
-          if (result.imported) toast(`Imported ${result.backupId}. Select this device as storage for tenant ${result.tenantId} to preview and restore it.`, "success")
+          if (result.imported) {
+            setSettings(await bridge.backups.settings())
+            toast(`Imported ${result.backupId}. Select this device as storage for tenant ${result.tenantId} to preview and restore it.`, "success")
+          }
         })}><Upload className="mr-2 h-4 w-4" /> Import backup ZIP</Button>
         <div className="space-y-2">
           <p className="text-xs font-medium text-gray-500">Folder</p>
@@ -104,6 +252,7 @@ function BackupsOnDevice() {
         </div>
 
         <div className="space-y-2 border-t border-gray-100 pt-5">
+          <RecoveryKeyNotice settings={settings} />
           <p className="flex items-center gap-2 text-sm font-medium text-gray-900">
             <Lock className="h-4 w-4" /> Encryption key
           </p>
@@ -118,12 +267,16 @@ function BackupsOnDevice() {
           </p>
           <div className="flex flex-wrap gap-2">
             <Button
+              id="save-recovery-key"
               variant="outline"
               size="sm"
               onClick={() =>
                 void run(async () => {
                   const result = await bridge.backups.exportRecoveryKey()
-                  if (result.saved) toast(`Recovery key saved to ${result.path}. Move it to a safe place.`, "success")
+                  if (result.saved) {
+                    setSettings(await bridge.backups.settings())
+                    toast(`Recovery key saved to ${result.path}. Move it to a safe place.`, "success")
+                  }
                 })
               }
             >
@@ -287,9 +440,43 @@ function TenantSettings() {
 
 function BackgroundAndRetention() {
   const [prefs, setPrefs] = useState<AppPreferences | null>(null)
+  const [info, setInfo] = useState<AppInfo | null>(null)
   const [launcher, setLauncher] = useState<{ supported: boolean; installed: boolean } | null>(null)
-  const [launchBusy, setLaunchBusy] = useState(false)
-  useEffect(() => { void bridge.backgroundLaunch.status().then(setLauncher).catch(error => toast(String(error), "error")) }, [])
+  const [launchBusy, setLaunchBusy] = useState<"install" | "remove" | null>(null)
+  const [checkBusy, setCheckBusy] = useState(true)
+  const [checkError, setCheckError] = useState(false)
+  const launchInFlight = useRef(false)
+  const checkInFlight = useRef(false)
+  const checkLauncher = async () => {
+    if (checkInFlight.current || launchInFlight.current) return
+    checkInFlight.current = true
+    setCheckBusy(true)
+    try {
+      setLauncher(await bridge.backgroundLaunch.status())
+      setCheckError(false)
+    } catch {
+      setLauncher(null)
+      setCheckError(true)
+    } finally {
+      checkInFlight.current = false
+      setCheckBusy(false)
+    }
+  }
+  const changeLauncher = async () => {
+    if (launchInFlight.current || checkInFlight.current || !launcher?.supported) return
+    launchInFlight.current = true
+    setLaunchBusy(launcher.installed ? "remove" : "install")
+    try {
+      setLauncher(await (launcher.installed ? bridge.backgroundLaunch.remove() : bridge.backgroundLaunch.install()))
+    } catch (error) {
+      toast(String(error), "error")
+    } finally {
+      launchInFlight.current = false
+      setLaunchBusy(null)
+    }
+  }
+  useEffect(() => { void checkLauncher() }, [])
+  useEffect(() => void bridge.app.info().then(setInfo), [])
   useEffect(() => void bridge.preferences.get().then(setPrefs), [])
   const set = async (changes: Partial<AppPreferences>) => {
     try {
@@ -298,33 +485,39 @@ function BackgroundAndRetention() {
       toast(error instanceof Error ? error.message : String(error), "error")
     }
   }
-  if (!prefs) return null
+  if (!prefs || !info) return null
+  const iconLocation = info.platform === "darwin" ? "menu bar" : "tray"
   return (
     <Card>
       <CardHeader className="p-7 pb-4">
         <CardTitle className="flex items-center gap-3 text-xl font-medium">
-          <span className="flex size-10 items-center justify-center rounded-full bg-secondary" aria-hidden="true"><MonitorCog className="h-[18px] w-[18px]" /></span> Background and retention
+          <span className="flex size-10 items-center justify-center rounded-full bg-secondary" aria-hidden="true"><MonitorCog className="h-[18px] w-[18px]" /></span> Background runner
         </CardTitle>
-        <CardDescription>Automatic backups run while TenuVault is running, in the window or in the system tray.</CardDescription>
+        <CardDescription>Automatic backups run while TenuVault is running, in the window or in the {iconLocation}.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4 px-7 pb-7 text-sm text-gray-700">
         <div className="rounded-xl border border-gray-200 p-4">
           <p className="font-medium">Restart TenuVault for scheduled backups</p>
-          <p className="mt-2 text-sm">An OS task can reopen TenuVault in the tray within five minutes while you are signed in. Backups still require valid Microsoft sign-in, plan access and available storage. This does not run while signed out, asleep or powered off.</p>
-          <Button className="mt-3" variant="outline" disabled={!launcher?.supported || launchBusy} onClick={() => {
-            setLaunchBusy(true)
-            void (launcher?.installed ? bridge.backgroundLaunch.remove() : bridge.backgroundLaunch.install()).then(setLauncher).catch(error => toast(String(error), "error")).finally(() => setLaunchBusy(false))
-          }}>{launcher?.installed ? "Remove background launch" : "Install background launch"}</Button>
+          <p className="mt-2 text-sm">{info.platform === "darwin" ? "Adds a LaunchAgent for your user account" : "Adds a scheduled task for your user account"}. The background runner can reopen TenuVault in the {iconLocation} within five minutes while you are signed in. Backups still require valid Microsoft sign-in, plan access and available storage. This does not run while signed out, asleep or powered off.</p>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <Button variant="outline" disabled={!launcher?.supported || checkBusy || !!launchBusy} onClick={() => void changeLauncher()}>{launchBusy === "install" ? "Installing..." : launchBusy === "remove" ? "Removing..." : launcher?.installed ? "Remove background launch" : "Install background launch"}</Button>
+            <p role="status">{checkBusy ? "Checking..." : checkError ? "Unable to check" : launcher?.installed ? "Installed" : "Not installed"}</p>
+          </div>
+          {checkError && <div className="mt-3 flex flex-wrap items-center gap-3">
+            <p role="alert">Could not check background startup. Try again.</p>
+            <Button variant="outline" size="sm" disabled={checkBusy} onClick={() => void checkLauncher()}>Retry check</Button>
+          </div>}
           {launcher && !launcher.supported && <p className="mt-2 text-xs">Available in installed Windows and macOS builds.</p>}
-          <p className="mt-2 text-xs">To stop automatic restarts, remove background launch and turn off Start at login before quitting. Removing it leaves your backup schedules unchanged.</p>
+          <p className="mt-2 text-xs">Backups need an awake computer and a signed in session. Locking the screen does not sign you out; closing a laptop lid may put it to sleep.</p>
+          <p className="mt-2 text-xs">To stop automatic restarts, remove the background runner and turn off Start at login before quitting. Removing it leaves your backup schedules unchanged.</p>
         </div>
         <label className="flex items-center gap-3">
           <input type="checkbox" className="h-4 w-4" checked={prefs.startAtLogin} onChange={(e) => void set({ startAtLogin: e.target.checked })} />
-          Start TenuVault in the tray when I sign in to this computer
+          Start TenuVault in the {iconLocation} when I sign in to this computer
         </label>
         <label className="flex items-center gap-3">
           <input type="checkbox" className="h-4 w-4" checked={prefs.keepRunningInTray} onChange={(e) => void set({ keepRunningInTray: e.target.checked })} />
-          Keep running in the tray when I close the window
+          Keep running in the {iconLocation} when I close the window
         </label>
         <div className="flex items-center gap-3 border-t border-gray-100 pt-4">
           <label htmlFor="retention">Keep backups for</label>
@@ -473,7 +666,7 @@ export default function SettingsPage() {
       </label>
       </div>
       <nav aria-label="Settings sections" className="flex flex-wrap gap-2 text-sm">
-        {[['signin', 'Sign-in'], ['storage', 'Storage and recovery'], ['background', 'Background and retention'], ['updates', 'Updates'], ['about', 'About']].map(([id, title]) => <button key={id} type="button" className="h-9 rounded-full bg-card px-4 font-medium text-foreground transition-colors hover:bg-primary hover:text-primary-foreground" onClick={() => document.getElementById(`settings-${id}`)?.scrollIntoView({ block: 'start' })}>{title}</button>)}
+        {[['signin', 'Sign-in'], ['storage', 'Storage and recovery'], ['background', 'Background runner'], ['updates', 'Updates'], ['about', 'About']].map(([id, title]) => <button key={id} type="button" className="h-9 rounded-full bg-card px-4 font-medium text-foreground transition-colors hover:bg-primary hover:text-primary-foreground" onClick={() => document.getElementById(`settings-${id}`)?.scrollIntoView({ block: 'start' })}>{title}</button>)}
       </nav>
       <section className="scroll-mt-6" id="settings-signin"><TenantSettings /></section>
       <section className="scroll-mt-6" id="settings-storage"><BackupsOnDevice />

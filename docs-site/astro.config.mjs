@@ -37,6 +37,12 @@ export default defineConfig({
 				{ tag: 'meta', attrs: { property: 'og:image:alt', content: 'TenuVault Desktop: OpenIntuneBaseline, backup, restore and drift detection for Windows and macOS' } },
 				{ tag: 'meta', attrs: { name: 'twitter:card', content: 'summary_large_image' } },
 				{ tag: 'meta', attrs: { name: 'twitter:image', content: 'https://docs.tenuvault.com/og-image.png' } },
+				// Plausible, served through the first-party paths rewritten in vercel.json so ad blockers
+				// that block plausible.io do not drop docs visits. Same site as www: subdomains share it.
+				{
+					tag: 'script',
+					attrs: { defer: true, 'data-domain': 'tenuvault.com', 'data-api': '/vault/api/event', src: '/vault/js/script.js' },
+				},
 			],
 			customCss: ['@fontsource-variable/geist', '@fontsource-variable/geist-mono', './src/styles/custom.css'],
 			expressiveCode: {

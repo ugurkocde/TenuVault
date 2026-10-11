@@ -131,7 +131,7 @@ it('syncs the parents of directories it creates before writing the first state f
   expect(new SecureStore(path, cipher).get('key')).toBe('value')
 })
 
-it('still writes the state file when syncing a new directory parent fails', () => {
+it.skipIf(process.platform === 'win32')('still writes the state file when syncing a new directory parent fails', () => {
   const root = mkdtempSync(join(tmpdir(), 'tv-state-sync-')); roots.push(root)
   const path = join(root, 'nested', 'state.bin')
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

@@ -37,6 +37,36 @@ const MAGIC_LENGTH = 4
 const IV = 12
 const TAG = 16
 const EXT = ".tvb"
+
+/** Detects encrypted local backup files. Returns null if an incomplete scan cannot rule them out. */
+export async function localBackupsExist(
+  root: string,
+  readDirectory = (path: string) => readdir(path, { withFileTypes: true }),
+): Promise<boolean | null> {
+  try {
+    const accounts = await readDirectory(root)
+    let incomplete = false
+    for (const account of accounts) {
+      if (!account.isDirectory()) continue
+      const folder = join(root, account.name, "intune-backups")
+      try {
+        const files = await readDirectory(folder)
+        if (files.some((file) => file.isFile() && file.name.endsWith(EXT))) return true
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+          incomplete = true
+          console.warn(`[backups] Could not scan local backup folder ${folder}:`, error)
+        }
+      }
+    }
+    return incomplete ? null : false
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return false
+    console.warn(`[backups] Could not scan local backup folder ${root}:`, error)
+    return null
+  }
+}
+
 /** File headers read at once while reading a container's inventory. */
 const HEADER_CONCURRENCY = 16
 

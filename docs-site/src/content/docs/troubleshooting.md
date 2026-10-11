@@ -20,7 +20,7 @@ This page lists the messages TenuVault shows, grouped by area, with the cause an
 | Message | Cause | Fix |
 | --- | --- | --- |
 | OS encryption is not available. Enable the operating system credential store before opening TenuVault. | TenuVault encrypts its saved data with the operating system's credential protection (Windows data protection or the macOS Keychain) and cannot find it. | Make sure you are signed in to a normal user session with the credential store available, then start TenuVault again. |
-| TenuVault cannot unlock its saved data. | On macOS, access to TenuVault's Keychain item was denied. On Windows, the data was probably created by another Windows user. | On macOS, allow access to the Keychain item and start the app again. On Windows, start TenuVault as the user who set it up. If that is not possible, choose **Start over**: your saved data is kept as a backup, and you sign in to your tenants and activate your license again. **Quit** changes nothing. |
+| TenuVault cannot unlock its saved data. | On macOS, access to TenuVault's Keychain item was denied. On Windows, the data was probably created by another Windows user. | Choose **Quit** and restore access first. Export the key in **Settings** > **Storage and recovery** > **Save recovery key**. **Delete backup key and start over** keeps an unreadable saved-data copy but deletes the backup encryption key from the active app state, along with sign-ins and the license. Existing local and Azure backups become unreadable unless you exported their recovery key. After starting over, use **Import a recovery key** in the same Settings section. |
 | Could not load license status | The app could not read its license status during startup. The panel shows the error. A check that does not respond within 30 seconds shows "The license check did not respond. Try again." | Click **Retry**. A spinner appears while the check runs. If the check fails or times out again, the error and **Retry** return. |
 
 ## Sign in
@@ -159,17 +159,21 @@ A stable install follows stable releases by default. Enable **Settings** > **Upd
 
 | Message | Cause | Fix |
 | --- | --- | --- |
-| Scheduled backup of *tenant* failed | Desktop notification after a scheduled or tray backup fails. The body holds the reason. | Open TenuVault and check the backup log in **Backup & Restore**. The next scheduled slot retries. |
+| Scheduled backup of *tenant* failed / Tray backup of *tenant* failed | Desktop notification after a scheduled or tray backup fails. The title identifies how it started. The body holds the reason. | Click the notification to open that tenant's **Schedule** tab in **Backup & Restore**. Check the failure reason there. A failure before any backup was saved can leave no entry in stored backup history. The next scheduled slot retries. |
 | Not backed up: *reason* | A scheduled or tray backup was refused because the license or plan does not cover it. The schedule panel lists these under "Not backed up because of the license". | Fix the license, or change the schedule to one your plan includes. Daily schedules and Azure storage need Pro or MSP. |
 | This tenant is no longer connected. | A schedule exists for a tenant that was removed. | Add the tenant again, or remove its schedule. |
 | Choose a time such as 02:00. / Choose a day of the week. | The schedule time or day is invalid. | Enter a 24 hour time and, for weekly schedules, a weekday. |
-| Background launch requires an installed Windows or macOS build. / Available in installed Windows and macOS builds. | Background launch only works in the installed app. | Install TenuVault with the installer and try again. |
+| Unable to check / Could not check background startup. Try again. | The background runner status request failed. Installation stays disabled. | Open **Settings** > **Background runner** and select **Retry check**. A successful check replaces the message with **Installed** or **Not installed**. |
+| Not installed | The status check reports that the background runner is absent. | In an installed build, select **Install background launch** in **Settings** > **Background runner**. This adds a LaunchAgent for your user account on macOS or a scheduled task for your user account on Windows. |
+| Background launch requires an installed Windows or macOS build. / Available in installed Windows and macOS builds. | The background runner only works in the installed app. | Install TenuVault with the installer and try again. |
 | An older direct-launch agent is loaded. Remove background launch first, then log out and back in before reinstalling; active backups are left running. | macOS still has an agent from a pre-release build. | Click **Remove background launch**, log out and back in, then install it again. |
-| TenuVault is still running | Shown when you close the window. TenuVault keeps running in the tray so schedules can run. | Quit TenuVault from its tray icon if you want it to stop. |
+| TenuVault is still running | Shown when you close the window. TenuVault keeps running in the menu bar on macOS or the tray on Windows so schedules can run. | Quit TenuVault from that icon to stop the current process. An installed background runner may reopen it within five minutes, as the row above Quit explains. To stop automatic restarts, select **Remove background launch** in **Settings** > **Background runner** and turn off start at login before quitting. |
+
+Overlapping tray and scheduled requests for one tenant share the running backup and produce one failure notification. Its title identifies the request that started the backup. The tenant label uses its friendly name, then its domain, then "this tenant". The tenant ID is not used as the label, though the reported error message can contain one.
 
 Scheduled backups also stop when:
 
-* **The machine is asleep, off, or you are signed out.** Background launch only runs in your own signed-in session and does not wake the machine. A missed slot runs once at the next start.
+* **The machine is asleep, off, or you are signed out.** The background runner only runs in your own signed-in session and does not wake the machine. Locking the screen does not sign you out; closing a laptop lid may put it to sleep. A missed slot runs once at the next start.
 * **The sign-in needs interaction.** A background backup cannot complete MFA or Conditional Access prompts. Sign in again when TenuVault shows the banner.
 * **The backup storage is unavailable.** Check the storage messages above.
 

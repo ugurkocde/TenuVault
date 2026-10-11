@@ -5,11 +5,11 @@ import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { useSelectedTenant, useTenants, type Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
 import { Chip, Fact, RoundIconButton, Tile, TileLabel } from "~/components/dashboard/tiles"
-import { cn } from "~/lib/utils"
 import { storageLabel } from "~/lib/storage-label"
-import type { SignedInAccount } from "../../shared/ipc"
+import type { BackupSettings, SignedInAccount } from "../../shared/ipc"
 import { backupTarget, trackBackup } from "../lib/backups"
 import { RunBackupDialog } from "../components/RunBackupDialog"
+import { RecoveryKeyNotice } from "../components/RecoveryKeyNotice"
 import { bridge } from "../lib/bridge"
 import { planName, tenantLicense, useLicense } from "../lib/license"
 import { describeSchedule, formatWhen, useSchedules } from "../lib/schedules"
@@ -25,8 +25,10 @@ export default function OverviewPage() {
   const navigate = useNavigate()
   const [accounts, setAccounts] = useState<SignedInAccount[]>([])
   const [backingUp, setBackingUp] = useState<Tenant | null>(null)
+  const [backupSettings, setBackupSettings] = useState<BackupSettings | null>(null)
 
   useEffect(() => void bridge.auth.accounts().then(setAccounts), [])
+  useEffect(() => { void bridge.backups.settings().then(setBackupSettings).catch((error) => toast(String(error), "error")) }, [])
 
   const open = (tenant: Tenant, path = "/portal/dashboard") => {
     setSelectedTenantId(tenant.id)
@@ -60,6 +62,8 @@ export default function OverviewPage() {
           <Plus className="h-4 w-4" /> Connect a tenant
         </Button>
       </div>
+
+      <RecoveryKeyNotice settings={backupSettings} />
 
       {/* Summary row: counts from the tenant list, sign-ins, license state and schedules */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -146,26 +150,43 @@ export default function OverviewPage() {
                     <span className="truncate">{storageLabel(tenant.resources?.storageAccountName)}</span>
                   </span>
                 </Fact>
-                <Fact label="Automatic backups">
-                  <span className="flex items-center gap-2">
+                <Fact label="Automatic backups" wrap>
+                  <span className="flex items-start gap-2">
                     <CalendarClock className="h-4 w-4 shrink-0 text-gray-400" />
-                    <span className="truncate" title={schedule?.enabled ? formatWhen(schedule.nextRunAt) : undefined}>
-                      {schedule?.enabled ? `${describeSchedule(schedule)}, next ${formatWhen(schedule.nextRunAt)}` : "No automatic backups"}
+                    <span className="min-w-0">
+                      {schedule?.enabled ? (
+                        <>
+                          <span className="block break-words">{describeSchedule(schedule)}</span>
+                          <span className="mt-1 block break-words text-gray-500">Next {formatWhen(schedule.nextRunAt)}</span>
+                        </>
+                      ) : "No automatic backups"}
                     </span>
                   </span>
                 </Fact>
                 <div className="sm:col-span-2">
-                  <Fact label="Last backup">
-                    <span className={cn("flex items-center gap-2", failed && "text-red-700")}>
-                      {failed ? <AlertCircle className="h-4 w-4 shrink-0 text-red-600" /> : <CheckCircle2 className="h-4 w-4 shrink-0 text-gray-400" />}
-                      <span className="truncate">
-                        {schedule?.lastRunAt
-                          ? `${failed ? "Last automatic backup failed" : "Last automatic backup"} ${formatWhen(schedule.lastRunAt)}`
-                          : tenant.lastBackup
-                            ? `Last backup ${formatWhen(tenant.lastBackup)}`
-                            : "No backups yet"}
+                  <Fact label="Last backup" wrap>
+                    {failed ? (
+                      <div className="space-y-2">
+                        <button type="button" className="flex w-full items-start gap-2 text-left text-red-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2" onClick={() => open(tenant, "/portal/backup?tab=schedule")}>
+                          <AlertCircle className="h-4 w-4 shrink-0 text-red-600" />
+                          <span className="min-w-0 break-words">
+                            Last automatic backup failed{schedule.lastRunAt ? ` ${formatWhen(schedule.lastRunAt)}` : ""}
+                          </span>
+                        </button>
+                        <Chip tone="danger">Action required</Chip>
+                      </div>
+                    ) : (
+                      <span className="flex items-start gap-2">
+                        <CheckCircle2 className="h-4 w-4 shrink-0 text-gray-400" />
+                        <span className="min-w-0 break-words">
+                          {schedule?.lastRunAt
+                            ? `Last automatic backup ${formatWhen(schedule.lastRunAt)}`
+                            : tenant.lastBackup
+                              ? `Last backup ${formatWhen(tenant.lastBackup)}`
+                              : "No backups yet"}
+                        </span>
                       </span>
-                    </span>
+                    )}
                   </Fact>
                 </div>
               </dl>
