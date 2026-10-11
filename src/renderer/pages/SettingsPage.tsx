@@ -1,6 +1,6 @@
 import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
-import { useEffect, useId, useState } from "react"
+import { useEffect, useId, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import { Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, RefreshCw, Save, Upload } from "lucide-react"
 import { useTenantOperations, useTenants, type Tenant } from "~/contexts/TenantContext"
@@ -44,12 +44,15 @@ function RestoreWrites() {
 
 function RestoreAppliedInput({ record, request, onClose }: { record: WriteRecord; request: (body: object) => Promise<void>; onClose: () => void }) {
   const id = useId()
+  const input = useRef<HTMLInputElement>(null)
   const [objectId, setObjectId] = useState(record.state === "reconciled" ? record.objectId ?? "" : "")
   const [error, setError] = useState("")
   const [saving, setSaving] = useState(false)
   const description = record.state === "reconciled"
     ? "After checking the original policy name and tenant in Intune, enter the corrected object ID. The next retry will read and verify its creation fields before any follow-up writes."
     : "After checking Intune, enter the ID of the object this request applied to. A retry will reuse this result instead of repeating the write."
+
+  useEffect(() => { if (error && !saving) input.current?.focus() }, [error, saving])
 
   const submit = async () => {
     if (saving) return
@@ -71,12 +74,19 @@ function RestoreAppliedInput({ record, request, onClose }: { record: WriteRecord
   }
 
   return (
-    <form className="mt-3 space-y-3" aria-label={record.state === "reconciled" ? "Correct applied ID" : "Confirm applied"} onSubmit={event => { event.preventDefault(); void submit() }}>
+    <form className="mt-3 space-y-3" aria-label={record.state === "reconciled" ? "Correct applied ID" : "Confirm applied"} onSubmit={event => { event.preventDefault(); void submit() }} onKeyDown={event => {
+      if (event.key === "Escape" && !saving) {
+        event.preventDefault()
+        event.stopPropagation()
+        onClose()
+      }
+    }}>
       <div className="space-y-1">
         <label htmlFor={id} className="block font-medium">Object ID</label>
         <p id={`${id}-description`} className="text-sm text-gray-500">{description}</p>
         <input
           id={id}
+          ref={input}
           className="w-full rounded border bg-background p-2 font-mono text-sm"
           value={objectId}
           onChange={event => { setObjectId(event.target.value); setError("") }}
@@ -100,6 +110,16 @@ function TenantRestoreWrites({ tenantId }: { tenantId: string }) {
   const [records, setRecords] = useState<WriteRecord[]>([])
   const [error, setError] = useState("")
   const [editing, setEditing] = useState<string | null>(null)
+  const recoveryButton = useRef<{ key: string; button: HTMLButtonElement } | null>(null)
+  useEffect(() => {
+    if (editing === null && recoveryButton.current) {
+      recoveryButton.current.button.focus()
+      recoveryButton.current = null
+    }
+  }, [editing])
+  const trackRecoveryButton = (key: string, button: HTMLButtonElement | null) => {
+    if (button && recoveryButton.current?.key === key) recoveryButton.current.button = button
+  }
   const request = async (body: object) => {
     const response = await fetch("/api/restore-journal", {
       method: "POST",
@@ -130,7 +150,10 @@ function TenantRestoreWrites({ tenantId }: { tenantId: string }) {
             <p className="break-all">{record.method} {record.path}{record.objectId ? ` · Object ${record.objectId}` : ""}</p>
             {record.state === "reconciled" && (
               <>
-                <Button className="mt-2 mr-2" variant="outline" aria-expanded={editing === record.key} onClick={() => setEditing(record.key)}>Correct applied ID</Button>
+                <Button ref={button => trackRecoveryButton(record.key, button)} className="mt-2 mr-2" variant="outline" aria-expanded={editing === record.key} onClick={event => {
+                  recoveryButton.current = { key: record.key, button: event.currentTarget }
+                  setEditing(record.key)
+                }}>Correct applied ID</Button>
                 <Button className="mt-2" variant="outline" onClick={() => {
                   if (window.confirm("Start a new operation with this request? Future attempts will send the write again and may create another object. Do not clear this while resuming a repair.")) {
                     void request({ action: "new-operation", key: record.key, confirmed: true }).catch(e => setError(String(e)))
@@ -140,7 +163,10 @@ function TenantRestoreWrites({ tenantId }: { tenantId: string }) {
             )}
             {record.state === "uncertain" && (
               <div className="mt-2 flex gap-3">
-                <Button variant="outline" aria-expanded={editing === record.key} onClick={() => setEditing(record.key)}>Confirm applied</Button>
+                <Button ref={button => trackRecoveryButton(record.key, button)} variant="outline" aria-expanded={editing === record.key} onClick={event => {
+                  recoveryButton.current = { key: record.key, button: event.currentTarget }
+                  setEditing(record.key)
+                }}>Confirm applied</Button>
                 <Button variant="outline" onClick={() => {
                   if (window.confirm("I checked the target tenant in Intune and confirmed this request was NOT applied. Allow another attempt?")) {
                     void request({ action: "not-applied", key: record.key, confirmed: true }).catch(e => setError(String(e)))

@@ -89,7 +89,7 @@ Each entry shows the object name, time, state, tenant and the request (method an
 | `reconciled` | **Correct applied ID** | You entered the wrong object ID earlier. Edit the recorded ID in the inline form and choose **Save applied ID**. The next retry reads and verifies the object before any follow-up writes. |
 | `reconciled` | **Allow a new operation** | You deliberately want to send the same request again, which may create another object. Do not use it while resuming a repair. |
 
-The object ID must be a GUID. Invalid IDs and failed requests show an error in the form. **Cancel** closes it without saving.
+The object ID must be a GUID. Invalid IDs and failed requests show an error in the form. After a failed save, focus returns to the input. **Cancel** or **Escape** closes the form without saving while no save is in progress. Closing the form returns focus to the record's recovery button, including after a successful save.
 
 Always check the target tenant in Intune before you resolve an entry. See [What cannot be restored and restore write history](/restore/limitations/).
 

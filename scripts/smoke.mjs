@@ -657,7 +657,9 @@ await check("restore journal applied IDs use validated inline inputs", async () 
       window.__restoreRequests.push(body);
       if (body.action === 'list' && window.__restoreFailList) return Promise.reject(new Error('Restore history unavailable.'));
       if (body.action === 'applied') {
-        if (window.__restoreFailApplied) return Promise.resolve(Response.json({ error: 'Restore reconciliation unavailable.' }, { status: 503 }));
+        if (window.__restoreFailApplied) return new Promise(resolve => {
+          window.__restoreFailAppliedResponse = () => resolve(Response.json({ error: 'Restore reconciliation unavailable.' }, { status: 503 }));
+        });
         Object.assign(records.find(record => record.key === body.key), { state: 'reconciled', objectId: body.objectId });
       }
       return Promise.resolve(Response.json({ records }));
@@ -665,6 +667,16 @@ await check("restore journal applied IDs use validated inline inputs", async () 
   })()`)
   const form = label => `document.querySelector('form[aria-label="${label}"]')`
   const click = label => evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent.trim() === ${JSON.stringify(label)}).click()`)
+  const open = (label, policy) => evaluate(`(() => {
+    const row = [...document.querySelectorAll('p')].find(p => p.textContent === ${JSON.stringify(policy)}).parentElement;
+    window.__restoreRecoveryButton = [...row.querySelectorAll('button')].find(b => b.textContent.trim() === ${JSON.stringify(label)});
+    window.__restoreRecoveryButton.click();
+  })()`)
+  const press = async key => {
+    const params = { key, code: key, windowsVirtualKeyCode: key === "Escape" ? 27 : 13 }
+    await send("Input.dispatchKeyEvent", { type: "keyDown", ...params, ...(key === "Enter" ? { text: "\r" } : {}) })
+    await send("Input.dispatchKeyEvent", { type: "keyUp", ...params })
+  }
   const fill = (label, value) => evaluate(`(() => {
     const input = ${form(label)}.querySelector('input');
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(value)});
@@ -682,7 +694,7 @@ await check("restore journal applied IDs use validated inline inputs", async () 
     await click("Refresh history")
     assert(await waitForCondition(`!document.body.innerText.includes('Restore history unavailable.')`), "successful refresh did not clear the error")
 
-    await click("Confirm applied")
+    await open("Confirm applied", "Interrupted smoke policy")
     assert(await waitForCondition(`!!${form("Confirm applied")}`), "Confirm applied did not open the input")
     assert(await evaluate(`${form("Confirm applied")}.querySelector('input').value === ''`), "uncertain write input was not blank")
     assert(await evaluate(`${form("Confirm applied")}.innerText.includes('A retry will reuse this result instead of repeating the write.')`), "confirmation description missing")
@@ -692,34 +704,60 @@ await check("restore journal applied IDs use validated inline inputs", async () 
     assert(await evaluate(`!window.__restoreRequests.some(r => r.action === 'applied')`), "invalid object ID sent a request")
     await evaluate(`${form("Confirm applied")}.querySelector('button[type="button"]').click()`)
     assert(await waitForCondition(`!${form("Confirm applied")}`), "Cancel did not close the input")
+    assert(await waitForCondition(`document.activeElement === window.__restoreRecoveryButton`), "Cancel did not return focus to Confirm applied")
     assert(await evaluate(`!window.__restoreRequests.some(r => r.action === 'applied')`), "Cancel sent a request")
 
-    await click("Confirm applied")
+    await open("Confirm applied", "Interrupted smoke policy")
+    assert(await waitForCondition(`document.activeElement === ${form("Confirm applied")}?.querySelector('input')`), "Confirm applied did not focus the input")
+    await press("Escape")
+    assert(await waitForCondition(`!${form("Confirm applied")}`), "Escape did not close Confirm applied")
+    assert(await waitForCondition(`document.activeElement === window.__restoreRecoveryButton`), "Escape did not return focus to Confirm applied")
+    assert(await evaluate(`!window.__restoreRequests.some(r => r.action === 'applied')`), "Escape sent a request")
+
+    await open("Confirm applied", "Interrupted smoke policy")
     await fill("Confirm applied", ` ${appliedId} `)
     await submit("Confirm applied")
+    assert(await waitForCondition(`${form("Confirm applied")}?.querySelector('input')?.disabled`), "input was not disabled during saving")
+    await evaluate(`${form("Confirm applied")}.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`)
+    assert(await evaluate(`!!${form("Confirm applied")}`), "Escape closed the input while saving")
+    await evaluate(`window.__restoreFailAppliedResponse()`)
     assert(await waitForCondition(`${form("Confirm applied")}?.querySelector('[role="alert"]')?.innerText === 'Restore reconciliation unavailable.'`), "request error did not appear inside the input form")
+    assert(await waitForCondition(`document.activeElement === ${form("Confirm applied")}?.querySelector('input')`), "failed reconciliation did not refocus the input")
     assert(await evaluate(`window.__restoreRequests.some(r => r.action === 'applied' && r.key === 'smoke-uncertain' && r.objectId === '${appliedId}' && r.confirmed === true && r.tenantId === '${tenantId}')`), "valid ID did not send the confirmed reconciliation")
     await screenshot("05d-restore-journal-error")
     await evaluate(`window.__restoreFailApplied = false`)
     assert(await waitForCondition(`!${form("Confirm applied")}.querySelector('button[type="submit"]').disabled`), "input stayed disabled after failure")
-    await submit("Confirm applied")
+    await press("Enter")
+    assert(await waitForCondition(`window.__restoreRequests.filter(r => r.action === 'applied' && r.key === 'smoke-uncertain').length === 2`), "Enter did not submit the recovery form")
     assert(await waitForCondition(`!${form("Confirm applied")}`), "successful reconciliation did not close the input")
     assert(await waitForText(`Object ${appliedId}`), "saved object ID was not displayed")
+    assert(await waitForCondition(`(() => {
+      const row = [...document.querySelectorAll('p')].find(p => p.textContent === 'Interrupted smoke policy').parentElement;
+      return document.activeElement === [...row.querySelectorAll('button')].find(b => b.textContent.trim() === 'Correct applied ID');
+    })()`), "successful reconciliation did not focus the record's recovery button")
 
-    await evaluate(`(() => {
-      const row = [...document.querySelectorAll('p')].find(p => p.textContent === 'Reconciled smoke policy').parentElement;
-      [...row.querySelectorAll('button')].find(b => b.textContent.trim() === 'Correct applied ID').click();
-    })()`)
+    await open("Correct applied ID", "Reconciled smoke policy")
     assert(await waitForCondition(`!!${form("Correct applied ID")}`), "Correct applied ID did not open the input")
     assert(await evaluate(`${form("Correct applied ID")}.querySelector('input').value === '${originalId}'`), "correction input did not keep the recorded ID")
     assert(await evaluate(`${form("Correct applied ID")}.innerText.includes('The next retry will read and verify its creation fields before any follow-up writes.')`), "correction description missing")
+    await evaluate(`${form("Correct applied ID")}.querySelector('button[type="button"]').click()`)
+    assert(await waitForCondition(`!${form("Correct applied ID")}`), "Cancel did not close Correct applied ID")
+    assert(await waitForCondition(`document.activeElement === window.__restoreRecoveryButton`), "Cancel did not return focus to Correct applied ID")
+    await open("Correct applied ID", "Reconciled smoke policy")
+    assert(await waitForCondition(`document.activeElement === ${form("Correct applied ID")}?.querySelector('input')`), "Correct applied ID did not focus the input")
+    await press("Escape")
+    assert(await waitForCondition(`!${form("Correct applied ID")}`), "Escape did not close Correct applied ID")
+    assert(await waitForCondition(`document.activeElement === window.__restoreRecoveryButton`), "Escape did not return focus to Correct applied ID")
+    assert(await evaluate(`!window.__restoreRequests.some(r => r.action === 'applied' && r.key === 'smoke-correct')`), "closing Correct applied ID sent a request")
+    await open("Correct applied ID", "Reconciled smoke policy")
     await fill("Correct applied ID", correctedId)
     await submit("Correct applied ID")
     assert(await waitForCondition(`!${form("Correct applied ID")}`), "successful correction did not close the input")
     assert(await evaluate(`window.__restoreRequests.some(r => r.action === 'applied' && r.key === 'smoke-correct' && r.objectId === '${correctedId}' && r.confirmed === true && r.tenantId === '${tenantId}')`), "corrected ID did not send the confirmed reconciliation")
     assert(await waitForText(`Object ${correctedId}`), "corrected object ID was not displayed")
+    assert(await waitForCondition(`document.activeElement === window.__restoreRecoveryButton`), "successful correction did not return focus to Correct applied ID")
   } finally {
-    await evaluate(`window.fetch = window.__restoreFetch; delete window.__restoreFetch; delete window.__restoreRequests; delete window.__restoreFailList; delete window.__restoreFailApplied`)
+    await evaluate(`window.__restoreFailAppliedResponse?.(); window.fetch = window.__restoreFetch; delete window.__restoreFetch; delete window.__restoreRequests; delete window.__restoreFailList; delete window.__restoreFailApplied; delete window.__restoreFailAppliedResponse; delete window.__restoreRecoveryButton`)
   }
 })
 
