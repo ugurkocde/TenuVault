@@ -647,6 +647,7 @@ await check("restore journal applied IDs use validated inline inputs", async () 
     window.__restoreRequests = [];
     window.__restoreFailList = false;
     window.__restoreFailApplied = true;
+    window.__restoreHoldApplied = false;
     const records = [
       { key: 'smoke-uncertain', tenant: '${tenantId}', method: 'POST', path: '/deviceManagement/deviceConfigurations', at: '2026-01-01T00:00:00.000Z', state: 'uncertain', label: 'Interrupted smoke policy' },
       { key: 'smoke-correct', tenant: '${tenantId}', method: 'POST', path: '/deviceManagement/deviceConfigurations', at: '2026-01-01T00:00:00.000Z', state: 'reconciled', label: 'Reconciled smoke policy', objectId: '${originalId}' }
@@ -661,6 +662,13 @@ await check("restore journal applied IDs use validated inline inputs", async () 
           window.__restoreFailAppliedResponse = () => resolve(Response.json({ error: 'Restore reconciliation unavailable.' }, { status: 503 }));
         });
         Object.assign(records.find(record => record.key === body.key), { state: 'reconciled', objectId: body.objectId });
+        if (window.__restoreHoldApplied) return new Promise(resolve => {
+          window.__restoreAppliedResponse = () => resolve(Response.json({ records }));
+        });
+      }
+      if (body.action === 'new-operation') {
+        const index = records.findIndex(record => record.key === body.key);
+        if (index !== -1) records.splice(index, 1);
       }
       return Promise.resolve(Response.json({ records }));
     };
@@ -718,8 +726,18 @@ await check("restore journal applied IDs use validated inline inputs", async () 
     await fill("Confirm applied", ` ${appliedId} `)
     await submit("Confirm applied")
     assert(await waitForCondition(`${form("Confirm applied")}?.querySelector('input')?.disabled`), "input was not disabled during saving")
-    await evaluate(`${form("Confirm applied")}.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`)
+    assert(await waitForCondition(`${form("Confirm applied")}?.contains(document.activeElement)`), "pending save lost focus outside the form")
+    await evaluate(`(() => {
+      window.__restoreEscapeEvents = [];
+      window.__restoreEscapeProbe = event => {
+        if (event.key === 'Escape') window.__restoreEscapeEvents.push(event.defaultPrevented);
+      };
+      document.addEventListener('keydown', window.__restoreEscapeProbe);
+    })()`)
+    await press("Escape")
     assert(await evaluate(`!!${form("Confirm applied")}`), "Escape closed the input while saving")
+    assert(await evaluate(`!window.__restoreEscapeEvents.includes(false)`), "pending Escape reached the document without preventing dismissal")
+    assert(await evaluate(`${form("Confirm applied")}.contains(document.activeElement)`), "pending Escape lost focus outside the form")
     await evaluate(`window.__restoreFailAppliedResponse()`)
     assert(await waitForCondition(`${form("Confirm applied")}?.querySelector('[role="alert"]')?.innerText === 'Restore reconciliation unavailable.'`), "request error did not appear inside the input form")
     assert(await waitForCondition(`document.activeElement === ${form("Confirm applied")}?.querySelector('input')`), "failed reconciliation did not refocus the input")
@@ -756,8 +774,30 @@ await check("restore journal applied IDs use validated inline inputs", async () 
     assert(await evaluate(`window.__restoreRequests.some(r => r.action === 'applied' && r.key === 'smoke-correct' && r.objectId === '${correctedId}' && r.confirmed === true && r.tenantId === '${tenantId}')`), "corrected ID did not send the confirmed reconciliation")
     assert(await waitForText(`Object ${correctedId}`), "corrected object ID was not displayed")
     assert(await waitForCondition(`document.activeElement === window.__restoreRecoveryButton`), "successful correction did not return focus to Correct applied ID")
+
+    await evaluate(`window.__restoreHoldApplied = true`)
+    await open("Correct applied ID", "Reconciled smoke policy")
+    await submit("Correct applied ID")
+    assert(await waitForCondition(`${form("Correct applied ID")}?.querySelector('input')?.disabled && typeof window.__restoreAppliedResponse === 'function'`), "correction save was not held pending")
+    await evaluate(`(() => {
+      const row = window.__restoreRecoveryButton.parentElement;
+      const confirm = window.confirm;
+      window.confirm = () => true;
+      try {
+        [...row.querySelectorAll('button')].find(b => b.textContent.trim() === 'Allow a new operation').click();
+      } finally {
+        window.confirm = confirm;
+      }
+    })()`)
+    assert(await waitForCondition(`!document.body.innerText.includes('Reconciled smoke policy')`), "new operation did not remove the edited record")
+    assert(await evaluate(`window.__restoreRequests.some(r => r.action === 'new-operation' && r.key === 'smoke-correct' && r.confirmed === true)`), "new operation did not send the confirmed request")
+    assert(await evaluate(`!${form("Correct applied ID")} && !window.__restoreRecoveryButton.isConnected`), "removed record left its recovery form open")
+    assert(await waitForCondition(`document.activeElement?.textContent.trim() === 'Refresh history'`), "removing the edited record did not focus Refresh history before the save resolved")
+    await evaluate(`window.__restoreAppliedResponse()`)
+    await click("Refresh history")
+    assert(await waitForCondition(`!${form("Correct applied ID")} && document.activeElement?.textContent.trim() === 'Refresh history'`), "completed save for a removed record did not keep focus on Refresh history")
   } finally {
-    await evaluate(`window.__restoreFailAppliedResponse?.(); window.fetch = window.__restoreFetch; delete window.__restoreFetch; delete window.__restoreRequests; delete window.__restoreFailList; delete window.__restoreFailApplied; delete window.__restoreFailAppliedResponse; delete window.__restoreRecoveryButton`)
+    await evaluate(`window.__restoreFailAppliedResponse?.(); window.__restoreAppliedResponse?.(); document.removeEventListener('keydown', window.__restoreEscapeProbe); window.fetch = window.__restoreFetch; delete window.__restoreFetch; delete window.__restoreRequests; delete window.__restoreFailList; delete window.__restoreFailApplied; delete window.__restoreFailAppliedResponse; delete window.__restoreHoldApplied; delete window.__restoreAppliedResponse; delete window.__restoreRecoveryButton; delete window.__restoreEscapeEvents; delete window.__restoreEscapeProbe`)
   }
 })
 

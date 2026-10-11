@@ -45,6 +45,7 @@ function RestoreWrites() {
 function RestoreAppliedInput({ record, request, onClose }: { record: WriteRecord; request: (body: object) => Promise<void>; onClose: () => void }) {
   const id = useId()
   const input = useRef<HTMLInputElement>(null)
+  const inputContainer = useRef<HTMLDivElement>(null)
   const [objectId, setObjectId] = useState(record.state === "reconciled" ? record.objectId ?? "" : "")
   const [error, setError] = useState("")
   const [saving, setSaving] = useState(false)
@@ -52,7 +53,10 @@ function RestoreAppliedInput({ record, request, onClose }: { record: WriteRecord
     ? "After checking the original policy name and tenant in Intune, enter the corrected object ID. The next retry will read and verify its creation fields before any follow-up writes."
     : "After checking Intune, enter the ID of the object this request applied to. A retry will reuse this result instead of repeating the write."
 
-  useEffect(() => { if (error && !saving) input.current?.focus() }, [error, saving])
+  useEffect(() => {
+    if (saving) inputContainer.current?.focus()
+    else if (error) input.current?.focus()
+  }, [error, saving])
 
   const submit = async () => {
     if (saving) return
@@ -75,13 +79,13 @@ function RestoreAppliedInput({ record, request, onClose }: { record: WriteRecord
 
   return (
     <form className="mt-3 space-y-3" aria-label={record.state === "reconciled" ? "Correct applied ID" : "Confirm applied"} onSubmit={event => { event.preventDefault(); void submit() }} onKeyDown={event => {
-      if (event.key === "Escape" && !saving) {
+      if (event.key === "Escape") {
         event.preventDefault()
         event.stopPropagation()
-        onClose()
+        if (!saving) onClose()
       }
     }}>
-      <div className="space-y-1">
+      <div ref={inputContainer} tabIndex={-1} className="space-y-1">
         <label htmlFor={id} className="block font-medium">Object ID</label>
         <p id={`${id}-description`} className="text-sm text-gray-500">{description}</p>
         <input
@@ -111,9 +115,15 @@ function TenantRestoreWrites({ tenantId }: { tenantId: string }) {
   const [error, setError] = useState("")
   const [editing, setEditing] = useState<string | null>(null)
   const recoveryButton = useRef<{ key: string; button: HTMLButtonElement } | null>(null)
+  const refreshButton = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (editing !== null && !records.some(record => record.key === editing)) setEditing(null)
+  }, [editing, records])
   useEffect(() => {
     if (editing === null && recoveryButton.current) {
-      recoveryButton.current.button.focus()
+      const button = recoveryButton.current.button
+      if (button.isConnected) button.focus()
+      else refreshButton.current?.focus()
       recoveryButton.current = null
     }
   }, [editing])
@@ -137,7 +147,7 @@ function TenantRestoreWrites({ tenantId }: { tenantId: string }) {
     <Card>
       <CardHeader>
         <CardTitle>Restore write history</CardTitle>
-        <Button variant="outline" onClick={() => void request({ action: "list" }).catch(e => setError(String(e)))}>Refresh history</Button>
+        <Button ref={refreshButton} variant="outline" onClick={() => void request({ action: "list" }).catch(e => setError(String(e)))}>Refresh history</Button>
         <CardDescription>Interrupted writes stay blocked across restarts. Check the target tenant in Intune before resolving an uncertain result. Request payloads and tokens are not stored here.</CardDescription>
       </CardHeader>
       <CardContent>

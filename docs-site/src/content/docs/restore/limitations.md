@@ -104,7 +104,7 @@ Each record shows the policy name (or "Object name unavailable"), the time, its 
    * **Confirm not applied**: the object does not exist. Confirm "I checked the target tenant in Intune and confirmed this request was NOT applied. Allow another attempt?" The next retry sends the write again.
 3. Retry the restore from the wizard.
 
-Invalid IDs and failed requests show an error in the form. The form stays open so you can correct the ID or try saving again. After a failed save, focus returns to the input. **Cancel** or **Escape** closes the form without saving while no save is in progress. Closing the form returns focus to the record's recovery button, including after a successful save.
+Invalid IDs and failed requests show an error in the form. The form stays open so you can correct the ID or try saving again. After a failed save, focus returns to the input. **Cancel** or **Escape** closes the form without saving while no save is in progress. Closing the form returns focus to the record's recovery button or, if the entry is gone, to **Refresh history**, including after a successful save.
 
 :::caution
 Do not confirm a write as not applied just because its response was lost. Check Intune first. Confirming wrongly can create a duplicate object.
