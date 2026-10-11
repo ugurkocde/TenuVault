@@ -1231,6 +1231,7 @@ function TenantsPageContent() {
       {/* Tag Management Modal */}
       {tagModalTenant && (
         <TagManagementModal
+          key={tagModalTenant.id}
           open={showTagModal}
           onOpenChange={setShowTagModal}
           tenantName={tagModalTenant.name}

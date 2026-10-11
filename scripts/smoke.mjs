@@ -336,8 +336,8 @@ await check("schedules are stored by the main process", async () => {
 await check("several tenants get the overview, switcher and schedule tab", async () => {
   const tenant = (id, n) => ({
     id: n, name: `Contoso ${n}`, domain: `contoso${n}.onmicrosoft.com`, status: "healthy", lastBackup: "", configCount: 0, storageUsed: "",
-    client: "", license: "", region: "", tags: [], users: 0, devices: 0, complianceRate: 0, industry: "", environment: "", lastSync: "",
-    syncStatus: "idle", policies: { compliance: 0, configuration: 0, apps: 0 },
+    client: "", license: "", region: "", tags: [n === 1 ? "Production" : "Testing"], users: 0, devices: 0, complianceRate: 0, industry: "", environment: "", lastSync: "",
+    isLoading: n === 1, syncStatus: n === 1 ? "pending" : "idle", policies: { compliance: 0, configuration: 0, apps: 0 },
     credentials: { tenantId: id, appId: "22222222-2222-2222-2222-222222222222", clientSecret: "x" },
     resources: { subscriptionId: "local", subscriptionName: "", resourceGroupName: "local", storageAccountName: `tvlocal-${id}`, automationAccountName: "" },
   })
@@ -353,6 +353,67 @@ await check("several tenants get the overview, switcher and schedule tab", async
   await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Schedule")?.click()`)
   assert(await waitForText("Automatic backups"), "schedule panel missing")
   await screenshot("09-schedule")
+})
+
+await check("restarting clears interrupted tenant backup and refresh flags", async () => {
+  await go("#/portal/tenants", "Tenant Management")
+  assert(await waitForCondition(`[...document.querySelectorAll('button')].filter(b => b.innerText.trim() === 'Backup Now' && !b.disabled).length === 2`), "backup buttons stayed disabled after restart")
+  assert(await evaluate(`document.querySelectorAll('button[title="Refresh data"]').length === 2`), "refresh buttons stayed hidden after restart")
+  assert(await waitForCondition(`JSON.parse(window.tenuvault.storage.getItemSync('tenuvault_tenants')).every(t => !Object.hasOwn(t, 'isLoading') && t.syncStatus !== 'pending')`), "in-flight flags were saved again")
+})
+
+await check("tag drafts stay with their tenant and bulk tags sync every tenant", async () => {
+  await go("#/portal/tenants", "Tenant Management")
+  const currentTags = `document.querySelector('[role="dialog"] h3')?.nextElementSibling.innerText.trim()`
+  const clickDialogButton = (text) => evaluate(`[...document.querySelectorAll('[role="dialog"] button')].find(b => b.innerText.trim() === ${JSON.stringify(text)}).click()`)
+  const openTags = async (name) => {
+    await evaluate(`document.querySelector('button[aria-label="Tenant actions: ${name}"]').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerType: 'mouse' }))`)
+    assert(await waitForCondition(`[...document.querySelectorAll('[role="menuitem"]')].some(b => b.innerText.trim() === 'Manage Tags')`), "tenant actions menu did not open")
+    await evaluate(`[...document.querySelectorAll('[role="menuitem"]')].find(b => b.innerText.trim() === 'Manage Tags').click()`)
+    assert(await waitForText(`Manage Tags for ${name}`), "tag dialog did not open")
+  }
+  const closeTags = async () => {
+    await clickDialogButton("Cancel")
+    assert(await waitForCondition(`!document.querySelector('[role="dialog"]')`), "tag dialog did not close")
+  }
+  await evaluate(`(() => {
+    window.__tenantTagFetch = window.fetch
+    window.__tenantTagSaves = []
+    window.fetch = (input, init) => {
+      if (input !== '/api/tenant-metadata/save') return window.__tenantTagFetch(input, init)
+      window.__tenantTagSaves.push(JSON.parse(init.body))
+      return Promise.resolve(Response.json({ success: true }))
+    }
+  })()`)
+  try {
+    await openTags("Contoso 1")
+    assert((await evaluate(currentTags)) === "Production", "first tenant tags missing")
+    await clickDialogButton("Non-Production")
+    assert(await waitForCondition(`${currentTags}.includes('Development')`), "unsaved tag edit was not applied")
+    await closeTags()
+    await openTags("Contoso 2")
+    assert((await evaluate(currentTags)) === "Testing", "second tenant inherited the first tenant's tags or draft")
+    await clickDialogButton("Save Tags")
+    assert(await waitForCondition(`!document.querySelector('[role="dialog"]')`), "saved tag dialog did not close")
+    assert(await waitForCondition(`window.__tenantTagSaves.length === 1`), "second tenant tags were not synced")
+    assert(await evaluate(`window.__tenantTagSaves[0].tenantId.startsWith('33333333') && window.__tenantTagSaves[0].metadata.tags.length === 1 && window.__tenantTagSaves[0].metadata.tags[0] === 'Testing'`), "metadata sync saved another tenant's tags")
+    assert(await evaluate(`JSON.parse(window.tenuvault.storage.getItemSync('tenuvault_tenants')).every(t => JSON.stringify(t.tags) === JSON.stringify(t.id === 1 ? ['Production'] : ['Testing']))`), "tag draft leaked into saved profiles")
+    await openTags("Contoso 1")
+    assert((await evaluate(currentTags)) === "Production", "returning to the first tenant kept its discarded draft")
+    await closeTags()
+    await evaluate(`document.querySelector('input[aria-label="Select Contoso 1"]').click()`)
+    await evaluate(`document.querySelector('input[aria-label="Select Contoso 2"]').click()`)
+    await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Tag Selected').click()`)
+    assert(await waitForText("Manage Tags for 2 tenants"), "bulk tag dialog did not open")
+    assert((await evaluate(currentTags)) === "No tags selected", "bulk tagging inherited a tenant's tags")
+    await clickDialogButton("Non-Production")
+    await clickDialogButton("Save Tags")
+    assert(await waitForCondition(`window.__tenantTagSaves.length === 3`), "bulk tags did not sync both tenants")
+    const saves = await evaluate(`window.__tenantTagSaves.slice(1).map(s => ({ tenantId: s.tenantId, tags: s.metadata.tags }))`)
+    assert(new Set(saves.map(s => s.tenantId)).size === 2 && saves.every(s => JSON.stringify(s.tags) === JSON.stringify(["Development", "Testing", "Staging"])), `unexpected bulk tag sync ${JSON.stringify(saves)}`)
+  } finally {
+    await evaluate(`window.fetch = window.__tenantTagFetch; delete window.__tenantTagFetch; delete window.__tenantTagSaves`)
+  }
 })
 
 // Network independent: the landing page renders before the OIB source is read from GitHub.
