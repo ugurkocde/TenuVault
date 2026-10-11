@@ -531,7 +531,33 @@ describe("backup request recovery", () => {
     expect(metadata).toMatchObject({ Status: "CompletedWithWarnings", Failures: 6, ItemCounts: { TotalPolicies: 1 } })
   })
 
-  it("does not retry Graph JSON syntax errors or count them toward the network circuit", async () => {
+  it("retries a Graph response whose JSON body arrived incomplete", async () => {
+    requestTimers()
+    let reads = 0
+    let metadata: Record<string, unknown> | undefined
+    const { engine } = setup((url, init) => {
+      if (url.hostname !== "graph.microsoft.com") {
+        if (url.pathname.endsWith("/metadata.json")) metadata = JSON.parse(String(init?.body)) as Record<string, unknown>
+        return
+      }
+      if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: [{ id: "flaky", displayName: "Flaky" }, { id: "good", displayName: "Good" }] })
+      if (url.pathname.endsWith("/flaky") && ++reads === 1) {
+        return new Response(new ReadableStream({ start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"id":"flaky"'))
+          controller.close()
+        } }))
+      }
+      return Response.json({ id: url.pathname.split("/").at(-1) })
+    }, 1)
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(reads).toBe(2)
+    expect(job.status).toBe("Completed")
+    expect(job.progressMessage).toBe("Backup completed successfully")
+    expect(metadata).toMatchObject({ Status: "Success", Failures: 0, ItemCounts: { TotalPolicies: 2 } })
+  })
+
+  it("retries persistent Graph JSON syntax errors a bounded number of times without counting them toward the network circuit", async () => {
     requestTimers()
     let attempts = 0
     const { engine } = setup(url => {
@@ -546,7 +572,7 @@ describe("backup request recovery", () => {
     }, 1)
     const job = engine.start(request)
     await vi.advanceTimersByTimeAsync(30_000)
-    expect(attempts).toBe(6)
+    expect(attempts).toBe(18)
     expect(job.status).toBe("Completed")
     expect(job.exception).toBeUndefined()
     expect(job.progressMessage).toBe("Backup completed with 6 warnings")

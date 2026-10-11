@@ -521,7 +521,7 @@ class GraphSession {
           continue
         }
         if (this.throttleError && error === this.throttleError) throw error
-        if (requestFailure(error) === "other" || error instanceof TokenError || (error instanceof GraphError && !retryableStatus(error.status))) throw error
+        if (error instanceof FetchApplicationError || error instanceof TokenError || (error instanceof GraphError && !retryableStatus(error.status))) throw error
         let delay: number
         try {
           delay = retryDelay(response, attempt)
@@ -717,7 +717,7 @@ class BlobWriter {
       } catch (error) {
         this.network?.signal.throwIfAborted()
         if ((attempted || error instanceof RequestTimeoutError) && requestFailure(error) === "network" && !init.signal?.aborted) this.network?.failed("backup storage")
-        if (requestFailure(error) === "other" || error instanceof TokenError || error instanceof StorageError || error instanceof ProtectedBlobError || init.signal?.aborted || attempt >= REQUEST_ATTEMPTS - 1) throw error
+        if (error instanceof FetchApplicationError || error instanceof TokenError || error instanceof StorageError || error instanceof ProtectedBlobError || init.signal?.aborted || attempt >= REQUEST_ATTEMPTS - 1) throw error
         ambiguous = true
         await sleep(retryDelay(response, attempt), this.network?.signal)
       }
