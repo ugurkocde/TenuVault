@@ -28,7 +28,7 @@ describe("tenant profile persistence", () => {
     const loaded = deserializeTenants(JSON.stringify(stored))
 
     expect(loaded).toEqual(profiles.map(profile => {
-      const { isLoading, ...persistent } = profile
+      const { isLoading: _isLoading, ...persistent } = profile
       return { ...persistent, syncStatus: "idle" }
     }))
     expect(loaded.every(profile => !profile.isLoading && profile.syncStatus !== "pending")).toBe(true)
