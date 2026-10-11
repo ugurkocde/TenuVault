@@ -48,8 +48,9 @@ export class SecureStore {
   }
 
   set(key: string, value: string): void {
-    this.load()[key] = value
-    this.flush()
+    const values = { ...this.load(), [key]: value }
+    this.flush(values)
+    this.values = values
   }
 
   delete(key: string): void {
@@ -97,24 +98,29 @@ export class SecureStore {
     return this.values
   }
 
-  private flush(): void {
+  private flush(values: Record<string, string> = this.values ?? {}): void {
     mkdirSync(dirname(this.filePath), { recursive: true })
     const tmp = `${this.filePath}.tmp`
     try {
       const handle = openSync(tmp, "w", 0o600)
       try {
-        writeFileSync(handle, this.cipher.encrypt(JSON.stringify(this.values ?? {})))
+        writeFileSync(handle, this.cipher.encrypt(JSON.stringify(values)))
         fsyncSync(handle)
       } finally {
         closeSync(handle)
       }
       renameSync(tmp, this.filePath)
       if (process.platform !== "win32") {
-        const directory = openSync(dirname(this.filePath), "r")
+        const dir = dirname(this.filePath)
         try {
-          fsyncSync(directory)
-        } finally {
-          closeSync(directory)
+          const directory = openSync(dir, "r")
+          try {
+            fsyncSync(directory)
+          } finally {
+            closeSync(directory)
+          }
+        } catch (error) {
+          console.warn(`Failed to sync directory ${dir}: ${(error as NodeJS.ErrnoException).code ?? "UNKNOWN"}`)
         }
       }
     } finally {

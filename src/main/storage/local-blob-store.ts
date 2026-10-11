@@ -205,11 +205,16 @@ export class LocalBlobStore {
       if (createOnly) await link(tmp, path) // Atomic creation across store/process instances.
       else await rename(tmp, path)
       if (process.platform !== "win32") {
-        const directory = await open(this.dir(account, container), "r")
+        const dir = this.dir(account, container)
         try {
-          await directory.sync()
-        } finally {
-          await directory.close()
+          const directory = await open(dir, "r")
+          try {
+            await directory.sync()
+          } finally {
+            await directory.close()
+          }
+        } catch (error) {
+          console.warn(`Failed to sync directory ${dir}: ${(error as NodeJS.ErrnoException).code ?? "UNKNOWN"}`)
         }
       }
     } catch (error) {

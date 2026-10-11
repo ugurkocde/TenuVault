@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { afterEach, expect, it, vi } from 'vitest'
-import { LocalBlobStore } from '../src/main/storage/local-blob-store'
+import { BlobAlreadyExistsError, LocalBlobStore } from '../src/main/storage/local-blob-store'
 import { handleLocalBlobRequest } from '../src/main/storage/blob-emulator'
 const account = 'tvlocal-test'
 const container = 'intune-backups'
@@ -81,6 +81,42 @@ it.each([false, true])('syncs a complete file before resolving put (createOnly=%
   await store.put(account, container, 'backup-new/Policies/complete.json', data, 'application/json', createOnly)
   expect(synced).toEqual(process.platform === 'win32' ? ['file'] : ['file', 'directory'])
   expect((await new LocalBlobStore(root, [key]).get(account, container, 'backup-new/Policies/complete.json')).data).toEqual(data)
+  expect(readdirSync(dir).every(file => file.endsWith('.tvb'))).toBe(true)
+})
+it.skipIf(process.platform === 'win32').each([false, true])('resolves published writes and warns once when directory sync fails (createOnly=%s)', async (createOnly) => {
+  const { store, root, key, dir } = await setup()
+  const probe = await open(join(root, 'probe'), 'w')
+  const prototype = Object.getPrototypeOf(probe) as FileHandle
+  await probe.close()
+  const original = prototype.sync
+  const error = Object.assign(new Error('directory sync failed'), { code: 'EIO' })
+  let failDirectorySync = true
+  vi.spyOn(prototype, 'sync').mockImplementation(async function (this: FileHandle) {
+    if ((await this.stat()).isDirectory() && failDirectorySync) {
+      failDirectorySync = false
+      throw error
+    }
+    await original.call(this)
+  })
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const name = 'backup-new/Policies/complete.json'
+  const data = randomBytes(256 * 1024)
+  await expect(store.put(account, container, name, data, 'application/json', createOnly)).resolves.toMatchObject({ name, size: data.length })
+  expect((await new LocalBlobStore(root, [key]).get(account, container, name)).data).toEqual(data)
+  await expect(store.put(account, container, name, Buffer.from('duplicate'), 'application/json', true)).rejects.toBeInstanceOf(BlobAlreadyExistsError)
+  expect(warn).toHaveBeenCalledTimes(1)
+  expect(warn).toHaveBeenCalledWith(`Failed to sync directory ${dir}: EIO`)
+  expect(readdirSync(dir).every(file => file.endsWith('.tvb'))).toBe(true)
+})
+it('rejects genuine create-only duplicates even with a stale inventory cache', async () => {
+  const { store, root, key, dir } = await setup()
+  const stale = new LocalBlobStore(root, [key])
+  await stale.list(account, container)
+  const name = 'backup-new/Policies/complete.json'
+  await store.put(account, container, name, Buffer.from('original'), 'application/json', true)
+  await expect(stale.put(account, container, name, Buffer.from('duplicate'), 'application/json', true)).rejects.toBeInstanceOf(BlobAlreadyExistsError)
+  expect((await new LocalBlobStore(root, [key]).get(account, container, name)).data.toString()).toBe('original')
+  expect(readdirSync(dir)).toHaveLength(2)
   expect(readdirSync(dir).every(file => file.endsWith('.tvb'))).toBe(true)
 })
 it('keeps the original blob and cleans up its temp file if syncing fails', async () => {
