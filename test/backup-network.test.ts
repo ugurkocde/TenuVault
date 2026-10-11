@@ -96,6 +96,92 @@ describe("backup request recovery", () => {
     expect(next.status).toBe("Completed")
   })
 
+  it.each([["Graph", 1000], ["blob", 8]] as const)("counts hung HTTP 503 %s bodies and stops %s items within five minutes", async (service, count) => {
+    requestTimers()
+    const started = Date.now()
+    const signals: AbortSignal[] = []
+    const items = Array.from({ length: count }, (_, index) => ({ id: `policy-${index}`, displayName: `Policy ${index}` }))
+    const { engine, fetchImpl } = setup((url, init) => {
+      if (url.hostname === "graph.microsoft.com") {
+        if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: items })
+        if (service === "blob") return Response.json({ id: url.pathname.split("/").at(-1) })
+      } else if (service === "Graph" || url.search) return
+      signals.push(init!.signal!)
+      return new Response(new ReadableStream(), { status: 503 })
+    })
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(273_000)
+    expect(job).toMatchObject({ status: "Failed", progress: 100 })
+    expect(job.endTime).toBeDefined()
+    expect(new Date(job.endTime!).getTime() - started).toBeLessThan(5 * 60_000)
+    expect(job.exception).toContain("24 consecutive requests")
+    expect(signals.length).toBeGreaterThanOrEqual(24)
+    expect(signals.length).toBeLessThanOrEqual(31)
+    expect(signals.every(signal => signal.aborted)).toBe(true)
+    expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(service === "Graph" ? 33 : 41)
+    expect(fetchImpl.mock.calls.some(([input]) => String(input).endsWith("/metadata.json"))).toBe(false)
+  })
+
+  it.each(["Graph", "blob"])("counts transport errors while reading an HTTP 503 %s body", async service => {
+    requestTimers()
+    let failures = 0
+    const { engine } = setup((url) => {
+      if (url.hostname === "graph.microsoft.com") {
+        if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: Array.from({ length: 8 }, (_, index) => ({ id: `policy-${index}`, displayName: `Policy ${index}` })) })
+        if (service === "blob") return Response.json({ id: url.pathname.split("/").at(-1) })
+      } else if (service === "Graph" || url.search) return
+      failures++
+      return new Response(new ReadableStream({ start(controller) { controller.error(new TypeError("Connection reset while reading body")) } }), { status: 503 })
+    })
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(job.status).toBe("Failed")
+    expect(job.endTime).toBeDefined()
+    expect(job.exception).toContain("24 consecutive requests")
+    expect(failures).toBe(24)
+  })
+
+  it("keeps a committed backup completed when eight retention reads hang", async () => {
+    requestTimers()
+    const started = Date.now()
+    const saved = new Map<string, string>()
+    const signals: AbortSignal[] = []
+    const prefixes = Array.from({ length: 8 }, (_, index) => `backup-2026-08-01-02000${index}/`)
+    const { fetchImpl } = setup((url, init) => {
+      if (url.hostname === "graph.microsoft.com") return
+      if (init?.method === "PUT" && !url.search) {
+        saved.set(url.pathname, init.body as string)
+        return
+      }
+      if (init?.method !== "GET") return
+      if (url.search) return new Response(`<EnumerationResults><Blobs>${prefixes.map(prefix => `<BlobPrefix><Name>${prefix}</Name></BlobPrefix>`).join("")}</Blobs></EnumerationResults>`)
+      expect(saved.size).toBe(1)
+      signals.push(init.signal!)
+      return new Promise(() => {})
+    })
+    const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30 })
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(0)
+    const manifest = `/intune-backups/${job.backupFolder}/metadata.json`
+    const committed = saved.get(manifest)
+    expect(JSON.parse(committed!)).toMatchObject({ Status: "Success", Failures: 0 })
+    await vi.advanceTimersByTimeAsync(273_000)
+    expect(job).toMatchObject({ status: "Completed", progress: 100, progressMessage: "Backup completed with 1 warning" })
+    expect(job.endTime).toBeDefined()
+    expect(new Date(job.endTime!).getTime() - started).toBeLessThan(5 * 60_000)
+    expect(job.exception).toBeUndefined()
+    expect(job.log.join("\n")).toContain("Old backups were not removed because the network stopped responding. They will be reconsidered on the next run.")
+    expect(signals).toHaveLength(24)
+    expect(new Set(fetchImpl.mock.calls.filter(([input, init]) => init?.method === "GET" && !new URL(String(input)).search).map(([input]) => String(input))).size).toBe(8)
+    expect(signals.every(signal => signal.aborted)).toBe(true)
+    expect(saved.get(manifest)).toBe(committed)
+    expect(saved.size).toBe(1)
+    expect(fetchImpl.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false)
+    const calls = fetchImpl.mock.calls.length
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(fetchImpl.mock.calls).toHaveLength(calls)
+  })
+
   it.each(["Graph", "blob"])("resets a network failure streak on %s success and keeps per-item warnings", async service => {
     requestTimers()
     const failures: number[] = []
@@ -187,15 +273,63 @@ describe("backup request recovery", () => {
     expect(metadata).toMatchObject({ Status: "CompletedWithWarnings", Failures: 6, ItemCounts: { TotalPolicies: 1 } })
   })
 
+  it("does not count Graph JSON syntax errors toward the network circuit", async () => {
+    requestTimers()
+    let attempts = 0
+    const { engine } = setup(url => {
+      if (url.hostname !== "graph.microsoft.com") return
+      if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: [
+        ...Array.from({ length: 6 }, (_, index) => ({ id: `bad-${index}`, displayName: `Bad ${index}` })),
+        { id: "good", displayName: "Good" },
+      ] })
+      if (url.pathname.endsWith("/good")) return Response.json({ id: "good" })
+      attempts++
+      return new Response("Invalid JSON")
+    }, 1)
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(attempts).toBe(18)
+    expect(job.status).toBe("Completed")
+    expect(job.exception).toBeUndefined()
+    expect(job.progressMessage).toBe("Backup completed with 6 warnings")
+  })
+
+  it.each([429, 503, 404])("does not count completed blob HTTP %s responses toward the network circuit", async status => {
+    requestTimers()
+    let attempts = 0
+    const { engine } = setup(url => {
+      if (url.hostname === "graph.microsoft.com") {
+        if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: [
+          ...Array.from({ length: 6 }, (_, index) => ({ id: `bad-${index}`, displayName: `Bad ${index}` })),
+          { id: "good", displayName: "Good" },
+        ] })
+        return Response.json({ id: url.pathname.split("/").at(-1) })
+      }
+      if (!url.pathname.includes("/Bad")) return
+      attempts++
+      return new Response("<Error><Message>Service refused the request</Message></Error>", { status, headers: { "Retry-After": "1" } })
+    }, 1)
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(attempts).toBe(status === 404 ? 6 : 18)
+    expect(job.status).toBe("Completed")
+    expect(job.exception).toBeUndefined()
+    expect(job.progressMessage).toBe("Backup completed with 6 warnings")
+  })
+
   it("aborts a blob Retry-After wait when Graph opens the job circuit", async () => {
     requestTimers()
     let puts = 0
     const signals: AbortSignal[] = []
+    let startFailures: () => void = () => undefined
+    // Finish the successful Graph read before its peer failures can start the streak.
+    const waitingUpload = new Promise<void>(resolve => { startFailures = resolve })
     const { engine, fetchImpl } = setup((url, init) => {
       if (url.hostname !== "graph.microsoft.com") {
         if (url.pathname.endsWith("/Waiting.json")) {
           puts++
           signals.push(init!.signal!)
+          startFailures()
           return new Response(null, { status: 503, headers: { "Retry-After": "300" } })
         }
         return
@@ -204,7 +338,7 @@ describe("backup request recovery", () => {
         { id: "waiting", displayName: "Waiting" }, { id: "bad-1", displayName: "Bad 1" }, { id: "bad-2", displayName: "Bad 2" },
       ] })
       if (url.pathname.endsWith("/waiting")) return Response.json({ id: "waiting" })
-      throw new TypeError("Connection reset")
+      return waitingUpload.then(() => { throw new TypeError("Connection reset") })
     }, 2)
     const job = engine.start(request)
     await vi.advanceTimersByTimeAsync(6000)

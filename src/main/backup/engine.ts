@@ -113,6 +113,16 @@ class GraphError extends Error {
 class GraphPauseError extends Error {}
 
 class StorageError extends Error {}
+class RetryableStorageError extends Error {}
+class RequestTimeoutError extends Error {}
+
+/** Only a fully read HTTP error is a status failure; failed body reads are network failures. */
+function requestFailure(error: unknown): "network" | "status" | "token" | "other" {
+  if (error instanceof TokenError) return "token"
+  if (error instanceof GraphError || error instanceof StorageError || error instanceof RetryableStorageError || error instanceof ProtectedBlobError) return "status"
+  if (error instanceof SyntaxError || error instanceof GraphPauseError) return "other"
+  return "network"
+}
 
 /** One outage must stop the job before readers drain every policy or type. */
 class NetworkCircuit {
@@ -319,18 +329,27 @@ export class BackupEngine {
 
     // Only a complete backup may replace older ones: if policies could not be read (for
     // example after a permission change), keep every existing backup.
+    let retentionWarnings = 0
     if (failures === 0) {
-      await this.applyRetention(job, storage, backupFolder, coveredFolders(metadata)).catch((error: unknown) => {
-        network.signal.throwIfAborted()
-        this.write(job, `Could not remove old backups: ${error instanceof Error ? error.message : String(error)}`)
+      // Cleanup cannot invalidate the backup whose manifest has already been committed.
+      const retentionNetwork = new NetworkCircuit(3 * concurrency)
+      const retentionStorage = new BlobWriter(this.deps.fetch, request.storageAccountName, storageToken, retentionNetwork)
+      await this.applyRetention(job, retentionStorage, backupFolder, coveredFolders(metadata), retentionNetwork.signal).catch((error: unknown) => {
+        if (retentionNetwork.signal.aborted) {
+          retentionWarnings++
+          this.write(job, "Old backups were not removed because the network stopped responding. They will be reconsidered on the next run.")
+        } else {
+          this.write(job, `Could not remove old backups: ${error instanceof Error ? error.message : String(error)}`)
+        }
       })
     } else {
       this.write(job, "Older backups were kept because this backup is incomplete.")
     }
 
     job.status = failures > 0 && totalPolicies === 0 ? "Failed" : "Completed"
+    const warnings = failures + retentionWarnings
     job.progressMessage =
-      job.status === "Failed" ? "Backup failed: no policies could be saved" : failures > 0 ? `Backup completed with ${failures} warning${failures === 1 ? "" : "s"}` : "Backup completed successfully"
+      job.status === "Failed" ? "Backup failed: no policies could be saved" : warnings > 0 ? `Backup completed with ${warnings} warning${warnings === 1 ? "" : "s"}` : "Backup completed successfully"
     this.write(job, `Backup completed: ${totalPolicies} policies in ${metadata.Duration}.`)
   }
 
@@ -342,7 +361,7 @@ export class BackupEngine {
    * versions that did not record the tenant count as this tenant's unless the container also
    * holds a backup recorded as another tenant's.
    */
-  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, covered: Set<string>): Promise<void> {
+  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, covered: Set<string>, signal: AbortSignal): Promise<void> {
     const days = this.deps.retentionDays?.(job.tenantId) ?? 0
     if (days <= 0) return
     const cutoff = this.now().getTime() - days * 24 * 60 * 60 * 1000
@@ -366,7 +385,7 @@ export class BackupEngine {
       if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return // Missing or unreadable: never ours.
       const owner = typeof metadata.TenantId !== "string" ? "untagged" : metadata.TenantId.toLowerCase() === tenant ? "this" : "other"
       owners[index] = { metadata, owner }
-    })
+    }, signal)
     const shared = owners.some((entry) => entry?.owner === "other")
 
     // Types no newer backup holds yet, walking from the newest backup to the oldest.
@@ -493,7 +512,7 @@ class GraphSession {
         }, this.network.signal)
       } catch (error) {
         this.network.signal.throwIfAborted()
-        if (attempted && (!response || response.ok) && !(error instanceof SyntaxError)) this.network.failed()
+        if ((attempted || error instanceof RequestTimeoutError) && requestFailure(error) === "network") this.network.failed()
         if (error instanceof GraphPauseError) {
           attempt--
           continue
@@ -685,8 +704,7 @@ class BlobWriter {
             },
           })
           if (retryableStatus(response.status) && attempt < REQUEST_ATTEMPTS - 1) {
-            void response.body?.cancel().catch(() => undefined)
-            throw new Error(`Storage returned ${response.status}`)
+            throw new RetryableStorageError(await storageError(response, this.account))
           }
           const result = await read(response, signal, ambiguous)
           signal.throwIfAborted()
@@ -695,7 +713,7 @@ class BlobWriter {
         }, this.network?.signal, init.signal ?? undefined)
       } catch (error) {
         this.network?.signal.throwIfAborted()
-        if (attempted && (!response || response.ok) && !(error instanceof SyntaxError) && !init.signal?.aborted) this.network?.failed()
+        if ((attempted || error instanceof RequestTimeoutError) && requestFailure(error) === "network" && !init.signal?.aborted) this.network?.failed()
         if (error instanceof TokenError || error instanceof StorageError || error instanceof ProtectedBlobError || init.signal?.aborted || attempt >= REQUEST_ATTEMPTS - 1) throw error
         ambiguous = true
         await sleep(retryDelay(response, attempt), this.network?.signal)
@@ -706,7 +724,8 @@ class BlobWriter {
 
 /** Bound the whole request, including token acquisition and response reads, even for a fetch bridge that ignores aborts. */
 async function withRequestTimeout<T>(request: (signal: AbortSignal) => Promise<T>, ...signals: Array<AbortSignal | undefined>): Promise<T> {
-  const signal = AbortSignal.any([AbortSignal.timeout(REQUEST_TIMEOUT_MS), ...signals.filter((value): value is AbortSignal => value !== undefined)])
+  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+  const signal = AbortSignal.any([timeout, ...signals.filter((value): value is AbortSignal => value !== undefined)])
   signal.throwIfAborted()
   let onAbort: () => void = () => undefined
   const aborted = new Promise<never>((_resolve, reject) => {
@@ -715,6 +734,11 @@ async function withRequestTimeout<T>(request: (signal: AbortSignal) => Promise<T
   })
   try {
     return await Promise.race([request(signal), aborted])
+  } catch (error) {
+    if (timeout.aborted && signal.reason === timeout.reason) {
+      throw new RequestTimeoutError(timeout.reason instanceof Error ? timeout.reason.message : String(timeout.reason))
+    }
+    throw error
   } finally {
     signal.removeEventListener("abort", onAbort)
   }

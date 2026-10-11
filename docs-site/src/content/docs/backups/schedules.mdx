@@ -75,7 +75,7 @@ Refusals are kept on this device, not in the tenant's audit log, because the ten
 
 Requests that stop responding time out after 90 seconds, including encrypted Azure uploads. TenuVault retries temporary connection and service failures before reporting a policy warning or a failed backup. If an upload loses its response and a retry is refused, it counts as saved only when the stored content matches the intended backup. Graph throttling pauses all readers for the server's requested interval, up to five minutes. A longer interval fails the request so the backup can finish and be retried later. Once the run finishes, later backups can start again.
 
-When the network stops responding, the backup stops within a few minutes and is retried under the schedule rules above.
+When the network stops responding during a backup, the backup stops within a few minutes and is retried under the schedule rules above. If the network stops responding while removing old backups, cleanup is skipped within a few minutes. The saved backup remains completed with a warning, and old backups are reconsidered on the next run.
 
 If your sign-in has expired or Conditional Access requires you to sign in again, the backup fails and a banner at the top of the TenuVault window asks you to **Sign in**. Scheduled backups never open a sign-in window by themselves.
 
