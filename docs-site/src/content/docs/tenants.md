@@ -59,15 +59,15 @@ When no tenant is connected, the Dashboard shows **Protect your Intune policies*
 
 The **Dashboard** shows the backup state of the tenant selected in the switcher. Its header shows the tenant name and "Backup overview for" the tenant's domain.
 
-Use the **Reporting period** list to choose **Last 24 hours**, **Last 7 days** (the default) or **Last 30 days**. The period applies to **Success Rate** and **Backup Status**. The dashboard reloads every 30 seconds; the refresh button reloads it right away, and **Last updated** shows when it last did.
+Use the **Reporting period** list to choose **Last 24 hours**, **Last 7 days** (the default) or **Last 30 days**. The period applies to **Success Rate** and the successful and failed counts in **Stored backups**. The dashboard reloads every 30 seconds; the refresh button reloads it right away, and **Last updated** shows when it last did.
 
 | Tile | What it shows |
 | --- | --- |
 | **Last backup** | How long ago the newest backup ran, its date and item count, and its state: **Running**, **Completed**, **Completed with warnings**, **Incomplete**, **Failed** or **Status unknown**. Also shows **Tenant Health** (see below), the number of backups stored, and the buttons **Run Backup** (or **Sign in** when you are not signed in) and **Restore policies**. |
 | **Success Rate** | Successful backups as a share of finished backups in the period, against a 95% target. Backups completed with warnings, incomplete backups and failed backups count as not successful. Shows **No data** when no backup finished in the period. |
-| **Next Backup** | Time until the next automatic backup, the schedule and the result of the last automatic backup. **Set up automatic backups** or **Edit schedule** opens the schedule. See [Schedule backups](/backups/schedules/). |
+| **Next Backup** | Time until the next automatic backup, the schedule and the result of the last automatic backup. If the last attempt failed and no backup is stored, it also says "Automatic backup failed before a backup was saved." **Set up automatic backups** or **Edit schedule** opens the schedule. See [Schedule backups](/backups/schedules/). |
 | **Policies protected** | The number of items in the newest complete backup, with a breakdown for settings catalog, device configurations, compliance policies and app protection policies. |
-| **Backup Status** | Successful backups in the period, plus counts for **Failed**, **Running** and **Scheduled**. |
+| **Stored backups** | Successful and **Failed** counts from stored backup history in the period. Automatic attempts that fail before saving a backup do not increase these counts. **Running** counts active jobs and **Scheduled** counts enabled schedules. |
 | **Drift** | When backups of this tenant were last compared, and whether the comparison worked. **Check drift** opens [Drift detection](/drift/). |
 | **License** | **Licensed**, **Free plan**, **Not licensed** or **Not checked**, the plan name and how the tenant is licensed. **Manage license** or **Check license** opens the License page. |
 | **Storage** | **This device** or the Azure storage account name, and the account you are **Signed in as**. |
@@ -96,8 +96,8 @@ The top row counts **Tenants connected**, **Signed in**, **Licensed** and **Auto
 * **Account**: the admin signed in to the tenant
 * **License**: how the tenant is licensed, **Community (free)**, **Not licensed**, or **License checked at first use** for a tenant whose license has not been checked yet
 * **Storage**: where the tenant's backups go
-* **Automatic backups**: the schedule and next run, or **No automatic backups**
-* **Last backup**: the last automatic backup and whether it failed, or the last backup
+* **Automatic backups**: the schedule and next run on separate wrapping rows, or **No automatic backups**
+* **Last backup**: the last automatic backup and whether it failed, or the last backup. A failed attempt shows its full timestamp and an **Action required** badge. Click the failure row to select the tenant and open its **Schedule** tab.
 
 The buttons on each card:
 

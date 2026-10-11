@@ -21,6 +21,7 @@ import { BackgroundLaunch } from "./backup/background-launch"
 import { BackupScopes } from "./backup/scopes"
 import { includedTypes, normalizeScope, type BackupScope } from "../shared/intune/scope"
 import { RefusalLog, refuseUnlicensedBackup } from "./backup/refusals"
+import { notifyBackupFailure } from "./backup/notifications"
 import { BackupKeys } from "./backup/keys"
 import { readBackupSettings } from "./backup/settings"
 import { encryptedAzureFetch, registerStorageToken } from "./storage/azure-seal"
@@ -401,8 +402,11 @@ async function bootstrap(): Promise<void> {
     notification.show()
   })
 
-  const notifyFailure = (name: string, message: string) => {
-    if (Notification.isSupported()) new Notification({ title: `Scheduled backup of ${name} failed`, body: message }).show()
+  const notifyFailure = (tenantId: string, name: string, message: string, trigger: "scheduled" | "tray") => {
+    notifyBackupFailure({ tenantId, name }, message, trigger, () => {
+      showWindow()
+      return mainWindow
+    })
   }
 
   const refusals = new RefusalLog(appStore, () => mainWindow?.webContents.send("schedules:refusalsChanged"))
@@ -421,7 +425,7 @@ async function bootstrap(): Promise<void> {
       if (!isLocalAccount(profile.storageAccountName) && !allows(plan, "azureStorage")) throw new PlanRequired("azureStorage")
     }
     const refused = await refuseUnlicensedBackup(
-      { requireEntitlement: requirePlan, log: refusals, notify: notifyFailure },
+      { requireEntitlement: requirePlan, log: refusals, notify: (name, message) => notifyFailure(tenantId, name, message, trigger) },
       { tenantId, name: profile.name },
       trigger,
     )
@@ -455,7 +459,7 @@ async function bootstrap(): Promise<void> {
         }),
       )
       .catch(() => undefined)
-    if (!ok) notifyFailure(profile.name, job.exception ?? "Open TenuVault for details.")
+    if (!ok) notifyFailure(tenantId, profile.name, job.exception ?? "Open TenuVault for details.", trigger)
     return { status: ok ? ("Completed" as const) : ("Failed" as const), message: job.exception ?? job.progressMessage }
   }
 
