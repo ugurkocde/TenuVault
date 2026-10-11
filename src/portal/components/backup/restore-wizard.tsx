@@ -1,5 +1,6 @@
 import { reviewedDependencyMappings, type RecoveryReadiness } from "../../../shared/intune/recovery"
 import { typeForFolder } from "../../../shared/intune/registry"
+import { passwordResetWarning } from "../../../shared/intune/restore-plan"
 import { ACKNOWLEDGEMENT_REQUIRED } from "../../../shared/disclaimer"
 "use client"
 
@@ -762,6 +763,9 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                     const state = review[path]
                     const reason = plan === "cannot" ? (copying || mode === "copy" || state?.live === "missing" ? state?.blocker ?? item?.blocker : state?.replaceBlocker ?? item?.replaceBlocker) : plan === "unchecked" ? state?.error : undefined
                     const assignmentWarning = assignments && (plan === "create" || plan === "recreate") && item ? typeForFolder(item.folder)?.assignmentWarning : undefined
+                    // Overwrites keep or replace live assignments; copies and recreated items reach devices only with assignments.
+                    const reachesDevices = plan === "overwrite" || plan === "unchecked" || (assignments && (plan === "create" || plan === "recreate"))
+                    const passwordWarning = reachesDevices ? passwordResetWarning(state?.snapshot ?? item?.snapshot) : undefined
                     return (
                       <li key={path} className="flex items-start justify-between gap-4 px-4 py-3 text-sm">
                         <span className="min-w-0">
@@ -773,6 +777,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                           {state?.snapshot !== undefined && <details className="mt-2"><summary className="cursor-pointer text-xs text-blue-700">Review snapshot content (may contain secrets)</summary><pre className="max-h-64 max-w-xl overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(state.snapshot, null, 2)}</pre></details>}
                           {reason && <span className="block text-xs text-gray-500">{reason}</span>}
                           {assignmentWarning && <span className="block text-xs text-amber-800">{assignmentWarning}</span>}
+                          {passwordWarning && <span className="block text-xs text-amber-800">{passwordWarning}</span>}
                         </span>
                         <span className={cn("flex-shrink-0 text-right text-xs font-medium", PLAN_TONE[plan])}>{PLAN_TEXT[plan]}</span>
                       </li>

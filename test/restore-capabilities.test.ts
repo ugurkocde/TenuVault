@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { typeForFolder } from '../src/shared/intune/registry'
-import { buildRestorePlan, buildUpdatePlan, restoreCapabilities } from '../src/shared/intune/restore-plan'
+import { buildRestorePlan, buildUpdatePlan, passwordResetWarning, restoreCapabilities } from '../src/shared/intune/restore-plan'
 
 describe('default object restore capabilities', () => {
   it.each([
@@ -21,4 +21,32 @@ it('checks administrative-template replacement with snapshot data and then the a
   expect(restoreCapabilities(type, snapshot).replaceBlocker).toBeUndefined()
   expect(restoreCapabilities(type, snapshot, { definitionValues: [] }).replaceBlocker).toBeUndefined()
   expect(restoreCapabilities(type, snapshot, {}).replaceBlocker).toContain('could not be read')
+})
+
+describe('password reset warning', () => {
+  const choice = (value: string) => ({ settingInstance: { choiceSettingValue: { value, children: [] } } })
+
+  it.each([
+    ['#microsoft.graph.macOSCompliancePolicy', 'Macs'],
+    ['#microsoft.graph.macOSGeneralDeviceConfiguration', 'Macs'],
+    ['#microsoft.graph.windows10CompliancePolicy', 'Windows'],
+    ['#microsoft.graph.windows10GeneralConfiguration', 'Windows'],
+  ])('warns for %s only when a password is required', (type, platform) => {
+    expect(passwordResetWarning({ '@odata.type': type, passwordRequired: true })).toContain(platform)
+    expect(passwordResetWarning({ '@odata.type': type, passwordRequired: false, passwordMinimumLength: 8 })).toBeUndefined()
+  })
+
+  it('warns for settings catalog choices that force a password change', () => {
+    const nested = { settingInstance: { groupSettingCollectionValue: [{ children: [{ choiceSettingValue: { value: 'com.apple.mobiledevice.passwordpolicy_changeatnextauth_true' } }] }] } }
+    expect(passwordResetWarning({ name: 'Passcode', settings: [nested] })).toContain('Macs')
+    expect(passwordResetWarning({ name: 'Device lock', settings: [choice('device_vendor_msft_policy_config_devicelock_devicepasswordenabled_0')] })).toContain('Windows')
+  })
+
+  it('ignores safe settings catalog choices and unrelated items', () => {
+    expect(passwordResetWarning({ settings: [choice('com.apple.mobiledevice.passwordpolicy_changeatnextauth_false')] })).toBeUndefined()
+    expect(passwordResetWarning({ settings: [choice('device_vendor_msft_policy_config_devicelock_devicepasswordenabled_1')] })).toBeUndefined()
+    expect(passwordResetWarning({ '@odata.type': '#microsoft.graph.iosCompliancePolicy', passcodeRequired: true })).toBeUndefined()
+    expect(passwordResetWarning({ displayName: 'com.apple.mobiledevice.passwordpolicy_changeatnextauth_true' })).toBeUndefined()
+    expect(passwordResetWarning(undefined)).toBeUndefined()
+  })
 })

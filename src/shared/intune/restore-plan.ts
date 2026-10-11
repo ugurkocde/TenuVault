@@ -30,6 +30,40 @@ export function restoreBlocker(type: IntuneType, snapshot: Item): string | undef
   return type.restorable?.(snapshot)
 }
 
+const MAC_PASSWORD_RESET = "Macs that get this policy make every local account, including LAPS and Platform SSO accounts, set a new password at the next sign-in. Tell those users before you restore it."
+const WINDOWS_PASSWORD_RESET = "Windows devices that get this policy can make local accounts, such as a local administrator, set a new password at the next sign-in, even when the current one meets the rules. Tell those users before you restore it."
+const PASSWORD_REQUIRED: Record<string, string> = {
+  "#microsoft.graph.macOSCompliancePolicy": MAC_PASSWORD_RESET,
+  "#microsoft.graph.macOSGeneralDeviceConfiguration": MAC_PASSWORD_RESET,
+  "#microsoft.graph.windows10CompliancePolicy": WINDOWS_PASSWORD_RESET,
+  "#microsoft.graph.windows10GeneralConfiguration": WINDOWS_PASSWORD_RESET,
+}
+/** Settings catalog choices that force a password change: macOS Change At Next Auth = True, and Windows DeviceLock DevicePasswordEnabled = Enabled (0). */
+const PASSWORD_RESET_CHOICES: Record<string, string> = {
+  "com.apple.mobiledevice.passwordpolicy_changeatnextauth_true": MAC_PASSWORD_RESET,
+  "device_vendor_msft_policy_config_devicelock_devicepasswordenabled_0": WINDOWS_PASSWORD_RESET,
+}
+
+/**
+ * Why writing this snapshot to devices makes users set a new local password, or undefined. macOS compliance and
+ * device restrictions password settings expire existing passwords; on Windows, a changed password requirement
+ * prompts local accounts even when their password complies.
+ */
+export function passwordResetWarning(snapshot: unknown): string | undefined {
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return undefined
+  const item = snapshot as Item
+  const type = item["@odata.type"]
+  if (typeof type === "string" && Object.hasOwn(PASSWORD_REQUIRED, type)) return item.passwordRequired === true ? PASSWORD_REQUIRED[type] : undefined
+  if (!Array.isArray(item.settings)) return undefined
+  const pending: Json[] = [item.settings]
+  while (pending.length) {
+    const value = pending.pop()
+    if (typeof value === "string" && Object.hasOwn(PASSWORD_RESET_CHOICES, value)) return PASSWORD_RESET_CHOICES[value]
+    if (value && typeof value === "object") pending.push(...Object.values(value))
+  }
+  return undefined
+}
+
 /** Separate creation from replacement; defaults can only be updated in place. */
 export function restoreCapabilities(type: IntuneType, snapshot: Item, current: Item = snapshot): { blocker?: string; replaceBlocker?: string } {
   let blocker = restoreBlocker(type, snapshot)
