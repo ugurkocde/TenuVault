@@ -167,6 +167,8 @@ A stable install follows stable releases by default. Enable **Settings** > **Upd
 | An older direct-launch agent is loaded. Remove background launch first, then log out and back in before reinstalling; active backups are left running. | macOS still has an agent from a pre-release build. | Click **Remove background launch**, log out and back in, then install it again. |
 | TenuVault is still running | Shown when you close the window. TenuVault keeps running in the tray so schedules can run. | Quit TenuVault from its tray icon if you want it to stop. |
 
+Overlapping tray and scheduled requests for one tenant share the running backup and produce one failure notification. Its title identifies the request that started the backup. The tenant label uses its friendly name, then its domain, then "this tenant". The tenant ID is not used as the label, though the reported error message can contain one.
+
 Scheduled backups also stop when:
 
 * **The machine is asleep, off, or you are signed out.** Background launch only runs in your own signed-in session and does not wake the machine. A missed slot runs once at the next start.
