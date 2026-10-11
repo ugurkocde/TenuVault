@@ -167,7 +167,7 @@ describe("/api/custom-baselines", () => {
     const baseline = await customize(context)
     const before = (await version(context, baseline.id)).version
     const tenant = target === TENANT_A ? context.tenantA : context.tenantB
-    tenant.addPolicy(policy(`${FIREWALL} - v3.8`, [stringSetting("org", "old")]) as Item & { name: string })
+    tenant.addPolicy(policy(content.items[1]!.name, [stringSetting("org", "old")]) as Item & { name: string })
     const deployed = await context.post({ action: "deploy", id: baseline.id, ...(target === TENANT_A ? {} : { sourceTenantId: TENANT_A, targetTenants: [{ tenantId: TENANT_A }] }) }, target)
     expect(deployed.status).toBe(200)
     expect(deployed.body.changeSet.operations.map((entry: { action: string }) => entry.action)).toEqual(["create", "update"])
@@ -193,7 +193,7 @@ describe("/api/custom-baselines", () => {
     const content = pack(OLD, "v3.8", [{ name: DEFENDER, settings: [stringSetting("org", "prefix/%OrganizationId%/suffix")] }])
     Object.assign(context.sources, fakeOibSources([content]))
     const baseline = await customize(context)
-    const live = context.tenantA.addPolicy(policy(`${DEFENDER} - v3.8`, [stringSetting("org", `prefix/${TENANT_A}/suffix`)]) as Item & { name: string })
+    const live = context.tenantA.addPolicy(policy(content.items[0]!.name, [stringSetting("org", `prefix/${TENANT_A}/suffix`)]) as Item & { name: string })
     context.setBackups([{ id: "backup-2026-09-29-100000", timestamp: "2026-09-29T10:00:00Z", status: "Success" }], { "backup-2026-09-29-100000": [live] })
     const compared = await context.post({ action: "compare-tenant", id: baseline.id, source })
     expect(compared.status).toBe(200)

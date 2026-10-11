@@ -6,6 +6,7 @@ import type { OibPack } from "../src/main/oib/source"
 import type { OibRun } from "../src/shared/oib/types"
 import type { Item } from "../src/shared/intune/registry"
 import { DOMAINS } from "../src/main/features/domains"
+import { hashOf } from "../src/main/features/change-sets/model"
 import { signals as baselineSignalsOf } from "../src/main/features/baseline-upgrades"
 import { call, fakeDeps, TENANT_A, TENANT_B } from "./feature-helpers"
 import { FakeTenant, setting, stringSetting, wire } from "./feature-change-sets-fakes"
@@ -152,6 +153,42 @@ async function approveAndApply(context: ReturnType<typeof setup>, id: string, ch
 }
 
 describe("/api/baseline-upgrades", () => {
+  it.each(["renamed", "unchanged"])("records resolved deviations for legacy placeholders with %s release names", async (name) => {
+    const context = setup()
+    context.oldPack.items = [context.oldPack.items[1]!]
+    context.newPack.items = [context.newPack.items[1]!]
+    context.run.created = context.run.created.filter((entry) => entry.id === context.firewall.id)
+    for (const content of [context.oldPack, context.newPack]) {
+      content.items[0]!.snapshot.settings = [stringSetting("org", "%OrganizationId%")]
+    }
+    context.firewall.settings = [stringSetting("org", "%OrganizationId%")]
+    if (name === "unchanged") {
+      context.newPack.items[0]!.name = context.oldPack.items[0]!.name
+      context.newPack.items[0]!.snapshot.name = context.oldPack.items[0]!.name
+    }
+    const installed = await install(context)
+    const compared = await context.post({ action: "compare", installId: installed.id, commit: NEW })
+    expect(compared.status).toBe(200)
+    const upgrade = compared.body.upgrade
+    expect(upgrade.status).toBe("ready")
+    const policyKey = upgrade.policies[0].key
+    const planned = await context.post({ action: "create-change-set", id: upgrade.id })
+    expect(planned.status).toBe(200)
+    expect((await approveAndApply(context, upgrade.id, planned.body.changeSet.id)).body.changeSet.status).toBe("applied")
+    const writes = context.tenant.calls.filter((entry) => entry.method !== "GET")
+    expect(writes).toHaveLength(1)
+    expect(writes[0]!.method).toBe("PUT")
+    expect(JSON.stringify(writes[0]!.body)).toContain(TENANT_A)
+    expect(JSON.stringify(writes[0]!.body)).not.toContain("%OrganizationId%")
+    expect(JSON.stringify(context.tenant.policies.get(context.firewall.id as string)!.settings)).toContain(TENANT_A)
+    const listed = await context.post({ action: "list" })
+    const finished = listed.body.upgrades[0]
+    expect(finished.status).toBe("applied")
+    expect(finished.policies[0].resultingDeviations).toBe(0)
+    expect(finished.resultingCustomizationHash).toBe(hashOf([[policyKey, []]]))
+    expect(listed.body.installs[0].customizationHash).toBe(finished.resultingCustomizationHash)
+  })
+
   it("compares and merges substituted release content and preserves frozen source tokens", async () => {
     const context = setup()
     for (const content of [context.oldPack, context.newPack]) {

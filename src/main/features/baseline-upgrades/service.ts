@@ -563,6 +563,7 @@ export async function createUpgradeChangeSet(deps: FeatureDeps, tenantId: string
     } catch (error) {
       throw new FeatureError(`"${policy.name}" cannot be merged: ${error instanceof Error ? error.message : String(error)}`, 409)
     }
+    merged = replaceTenantVariables(merged, tenantId)
     deviationsByPolicy[policy.key] = deviations(expected, merged)
     if (policyHash(merged) === policy.localHash) {
       unchanged.push(policy.key)
