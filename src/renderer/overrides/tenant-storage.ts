@@ -16,13 +16,21 @@ import { bridge } from "../lib/bridge"
 
 const TENANTS_KEY = "tenuvault_tenants"
 
-function tenantIds(serialized: string | null): Set<string> {
-  if (!serialized) return new Set()
+function tenantIds(serialized: string | null): Set<string> | null {
+  if (serialized === null) return new Set()
   try {
     const tenants = JSON.parse(serialized) as Array<{ credentials?: { tenantId?: string } }>
+    if (!Array.isArray(tenants) || tenants.some((tenant) =>
+      !tenant || typeof tenant !== "object" || Array.isArray(tenant) ||
+      (tenant.credentials !== undefined && (
+        !tenant.credentials || typeof tenant.credentials !== "object" || Array.isArray(tenant.credentials) ||
+        typeof tenant.credentials.tenantId !== "string" || !tenant.credentials.tenantId.trim()
+      ))
+    )) throw new Error("Stored tenant list has an invalid shape")
     return new Set(tenants.map((t) => t.credentials?.tenantId?.toLowerCase()).filter((id): id is string => Boolean(id)))
-  } catch {
-    return new Set()
+  } catch (error) {
+    console.error("Could not read the stored tenant list. Tenant activations were kept:", error)
+    return null
   }
 }
 
@@ -40,15 +48,19 @@ export const tenantStorage = {
     if (!cache.has(key)) {
       const value = bridge.storage.getItemSync(key)
       cache.set(key, value)
-      if (key === TENANTS_KEY) void releaseOrphanedTenants(tenantIds(value))
+      if (key === TENANTS_KEY) {
+        const saved = tenantIds(value)
+        if (saved) void releaseOrphanedTenants(saved).catch((error) => console.error("Could not release orphaned tenants:", error))
+      }
     }
     return cache.get(key) ?? null
   },
   setItem(key: string, value: string): void {
     if (key === TENANTS_KEY) {
       const next = tenantIds(value)
-      for (const id of tenantIds(tenantStorage.getItem(key))) {
-        if (!next.has(id)) void bridge.license.releaseTenant(id)
+      const previous = tenantIds(tenantStorage.getItem(key))
+      if (next && previous) for (const id of previous) {
+        if (!next.has(id)) void bridge.license.releaseTenant(id).catch((error) => console.error("Could not release removed tenant:", error))
       }
     }
     cache.set(key, value)
