@@ -39,7 +39,7 @@ vi.mock("@tanstack/react-query", () => ({ useQuery: (options: { queryFn: () => P
   return { data: state.stats, isLoading: !state.stats, isFetching: false }
 } }))
 
-const schedule: BackupSchedule = { tenantId: "tenant", enabled: true, frequency: "weekly", weekday: 0, time: "19:48", since: "2026-10-01T00:00:00Z", nextRunAt: "2026-10-18T17:48:00Z", lastRunAt: "2026-10-11T17:48:00Z", lastAttemptAt: "2026-10-11T17:48:00Z", attempts: 1, lastStatus: "Failed" }
+const schedule: BackupSchedule = { tenantId: "tenant", enabled: true, frequency: "weekly", weekday: 0, time: "19:48", since: "2026-10-01T00:00:00Z", nextRunAt: "2026-10-18T17:48:00Z", lastRunAt: "2026-10-04T17:48:00Z", lastAttemptAt: "2026-10-11T17:48:00Z", attempts: 1, lastStatus: "Failed" }
 const emptyStats: TenantDashboardStats = {
   tenants: { total: 1, healthy: 0, warning: 1, critical: 0 },
   backups: { successful: 0, failed: 0, inProgress: 0, scheduled: 1, successRate: 100, trend: 0 },
