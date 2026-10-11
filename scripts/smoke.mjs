@@ -372,8 +372,17 @@ await check("tag drafts stay with their tenant and bulk tags sync every tenant",
     await evaluate(`[...document.querySelectorAll('[role="menuitem"]')].find(b => b.innerText.trim() === 'Manage Tags').click()`)
     assert(await waitForText(`Manage Tags for ${name}`), "tag dialog did not open")
   }
-  const closeTags = async () => {
-    await clickDialogButton("Cancel")
+  const closeTags = async (method = "cancel") => {
+    if (method === "escape") {
+      await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape" })
+      await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape" })
+    } else if (method === "overlay") {
+      assert(await evaluate(`document.elementFromPoint(5, 5)?.classList.contains('inset-0')`), "tag dialog overlay missing")
+      await send("Input.dispatchMouseEvent", { type: "mousePressed", x: 5, y: 5, button: "left", clickCount: 1 })
+      await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: 5, y: 5, button: "left", clickCount: 1 })
+    } else {
+      await clickDialogButton("Cancel")
+    }
     assert(await waitForCondition(`!document.querySelector('[role="dialog"]')`), "tag dialog did not close")
   }
   await evaluate(`(() => {
@@ -391,6 +400,9 @@ await check("tag drafts stay with their tenant and bulk tags sync every tenant",
     await clickDialogButton("Non-Production")
     assert(await waitForCondition(`${currentTags}.includes('Development')`), "unsaved tag edit was not applied")
     await closeTags()
+    await openTags("Contoso 1")
+    assert((await evaluate(currentTags)) === "Production", "reopening the same tenant kept its cancelled draft")
+    await closeTags()
     await openTags("Contoso 2")
     assert((await evaluate(currentTags)) === "Testing", "second tenant inherited the first tenant's tags or draft")
     await clickDialogButton("Save Tags")
@@ -400,12 +412,31 @@ await check("tag drafts stay with their tenant and bulk tags sync every tenant",
     assert(await evaluate(`JSON.parse(window.tenuvault.storage.getItemSync('tenuvault_tenants')).every(t => JSON.stringify(t.tags) === JSON.stringify(t.id === 1 ? ['Production'] : ['Testing']))`), "tag draft leaked into saved profiles")
     await openTags("Contoso 1")
     assert((await evaluate(currentTags)) === "Production", "returning to the first tenant kept its discarded draft")
+    for (const method of ["escape", "overlay"]) {
+      await clickDialogButton("Non-Production")
+      assert(await waitForCondition(`${currentTags}.includes('Development')`), "unsaved tag edit was not applied")
+      await closeTags(method)
+      await openTags("Contoso 1")
+      assert((await evaluate(currentTags)) === "Production", `reopening the same tenant after ${method} kept its discarded draft`)
+    }
     await closeTags()
     await evaluate(`document.querySelector('input[aria-label="Select Contoso 1"]').click()`)
     await evaluate(`document.querySelector('input[aria-label="Select Contoso 2"]').click()`)
     await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Tag Selected').click()`)
     assert(await waitForText("Manage Tags for 2 tenants"), "bulk tag dialog did not open")
     assert((await evaluate(currentTags)) === "No tags selected", "bulk tagging inherited a tenant's tags")
+    await clickDialogButton("Non-Production")
+    assert(await waitForCondition(`${currentTags}.includes('Development')`), "unsaved bulk tag edit was not applied")
+    await closeTags()
+    await evaluate(`document.querySelector('input[aria-label="Select Contoso 1"]').click()`)
+    await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Tag Selected').click()`)
+    assert(await waitForText("Manage Tags for 1 tenants"), "second bulk selection tag dialog did not open")
+    assert((await evaluate(currentTags)) === "No tags selected", "second bulk selection inherited the cancelled bulk draft")
+    await closeTags()
+    await evaluate(`document.querySelector('input[aria-label="Select Contoso 1"]').click()`)
+    await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Tag Selected').click()`)
+    assert(await waitForText("Manage Tags for 2 tenants"), "bulk tag dialog did not reopen")
+    assert((await evaluate(currentTags)) === "No tags selected", "reopening bulk tagging kept its discarded draft")
     await clickDialogButton("Non-Production")
     await clickDialogButton("Save Tags")
     assert(await waitForCondition(`window.__tenantTagSaves.length === 3`), "bulk tags did not sync both tenants")
