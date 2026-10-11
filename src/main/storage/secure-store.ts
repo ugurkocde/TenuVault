@@ -54,11 +54,11 @@ export class SecureStore {
   }
 
   delete(key: string): void {
-    const values = this.load()
-    if (key in values) {
-      delete values[key]
-      this.flush()
-    }
+    const current = this.load()
+    if (!(key in current)) return
+    const { [key]: _removed, ...values } = current
+    this.flush(values)
+    this.values = values
   }
 
   keys(): string[] {
