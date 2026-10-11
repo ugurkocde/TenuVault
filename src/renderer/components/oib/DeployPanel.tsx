@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useParams } from "react-router-dom"
 import { Undo2 } from "lucide-react"
 import { cn } from "~/lib/utils"
@@ -34,15 +34,38 @@ export function RunsList({ tenant, empty, flow, onChanged }: { tenant: OibTenant
   const [runs, setRuns] = useState<OibRun[]>([])
   const [confirming, setConfirming] = useState<string | null>(null)
   const [error, setError] = useState("")
+  const [loadError, setLoadError] = useState("")
+  const [loading, setLoading] = useState(true)
   const running = useRunningJob(tenant.tenantId)
   const undo = useOibJob<UndoResult>(tenant.tenantId, { kind: "undo" })
   // Any finished job of the tenant (deploy, fix or undo) can change the list.
   const finished = useOibJobs().filter(j => j.tenantId === tenant.tenantId && j.finishedAt).map(j => j.finishedAt).sort().pop()
   const shownTenant = useRef(tenant.tenantId)
+  const loadedTenant = useRef(tenant.tenantId)
   shownTenant.current = tenant.tenantId
-  const refresh = () => { const id = tenant.tenantId; return oibRequest<{ runs: OibRun[] }>({ action: "oib-runs", tenantId: id }).then(r => { if (shownTenant.current === id) setRuns(r.runs) }).catch(() => { if (shownTenant.current === id) setRuns([]) }) }
-  useEffect(() => { setRuns([]); void refresh() }, [tenant.tenantId])
-  useEffect(() => void refresh(), [finished])
+  const refresh = useCallback(async () => {
+    const id = tenant.tenantId
+    setLoading(true)
+    try {
+      const response = await oibRequest<{ runs: OibRun[] }>({ action: "oib-runs", tenantId: id })
+      if (shownTenant.current === id) {
+        setRuns(response.runs)
+        setLoadError("")
+      }
+    } catch (error) {
+      if (shownTenant.current === id) setLoadError(errorText(error))
+    } finally {
+      if (shownTenant.current === id) setLoading(false)
+    }
+  }, [tenant.tenantId])
+  useEffect(() => {
+    if (loadedTenant.current !== tenant.tenantId) {
+      loadedTenant.current = tenant.tenantId
+      setRuns([])
+      setLoadError("")
+    }
+    void refresh()
+  }, [tenant.tenantId, finished, refresh])
   useJobFinished(undo, () => onChanged?.())
 
   function start(run: OibRun) {
@@ -57,9 +80,14 @@ export function RunsList({ tenant, empty, flow, onChanged }: { tenant: OibTenant
 
   const result = undo?.finishedAt ? undo : undefined
   // Its own card or below a card heading: no divider, no top margin when it comes first.
-  if (!runs.length && !undo) return empty ? <p className="mt-4 text-sm text-gray-500 first:mt-0">{empty}</p> : null
+  if (!runs.length && !undo && !loadError && !loading && !error) return empty ? <p className="mt-4 text-sm text-gray-500 first:mt-0">{empty}</p> : null
   return <div className="mt-4 first:mt-0">
     <h3 className="text-sm font-medium text-gray-800">Runs that can be undone</h3>
+    {loading && <p role="status" className="mt-2 text-sm text-gray-500">Loading runs...</p>}
+    {loadError && <div role="alert" className="mt-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800">
+      <p>{loadError}</p>
+      <button type="button" className={cn(button, "mt-2")} disabled={loading} onClick={() => void refresh()}>Retry</button>
+    </div>}
     <ul className="mt-2 divide-y divide-gray-100">{runs.map(run => {
       const parts = [run.created.length && `deletes the ${run.created.length === 1 ? "policy" : `${run.created.length} policies`} it created`, run.updated.length && `puts back the previous version of the ${run.updated.length === 1 ? "policy" : `${run.updated.length} policies`} it updated`].filter(Boolean).join(" and ")
       return <li key={run.runId} className="py-3 text-sm">

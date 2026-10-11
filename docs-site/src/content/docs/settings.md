@@ -78,16 +78,18 @@ When a restore write to Intune ends without a clear answer (for example a timeou
 | Control | What it does |
 | --- | --- |
 | **Restore history tenant** | Chooses the tenant whose history is shown. Viewing it needs a current sign-in to that tenant, a license that covers it and Intune management access. |
-| **Refresh history** | Reloads the list. |
+| **Refresh history** | Reloads the list. If it fails, the previous records stay visible with an error. |
 
 Each entry shows the object name, time, state, tenant and the request (method and path). Request payloads and tokens are not stored. Interrupted writes stay blocked across restarts.
 
 | State | Buttons | Use them when |
 | --- | --- | --- |
-| `uncertain` | **Confirm applied** | You checked the target tenant in Intune and the change was made. Enter the object ID; a retry reuses it instead of repeating the write. |
+| `uncertain` | **Confirm applied** | You checked the target tenant in Intune and the change was made. Enter the object ID in the inline form and choose **Save applied ID**; a retry reuses it instead of repeating the write. |
 | `uncertain` | **Confirm not applied** | You checked in Intune and the change was not made. The next attempt sends the write again. |
-| `reconciled` | **Correct applied ID** | You entered the wrong object ID earlier. The next retry reads and verifies the object before any follow-up writes. |
+| `reconciled` | **Correct applied ID** | You entered the wrong object ID earlier. Edit the recorded ID in the inline form and choose **Save applied ID**. The next retry reads and verifies the object before any follow-up writes. |
 | `reconciled` | **Allow a new operation** | You deliberately want to send the same request again, which may create another object. Do not use it while resuming a repair. |
+
+The object ID must be a GUID. Invalid IDs and failed requests show an error in the form. After a failed save, focus returns to the input. **Cancel** or **Escape** closes the form without saving while no save is in progress. Closing the form returns focus to the record's recovery button or, if the entry is gone, to **Refresh history**, including after a successful save.
 
 Always check the target tenant in Intune before you resolve an entry. See [What cannot be restored and restore write history](/restore/limitations/).
 

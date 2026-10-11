@@ -637,6 +637,200 @@ await check("tag drafts stay with their tenant and bulk tags sync every tenant",
   }
 })
 
+await check("restore journal applied IDs use validated inline inputs", async () => {
+  const tenantId = "11111111-1111-1111-1111-111111111111"
+  const originalId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+  const appliedId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+  const correctedId = "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC"
+  await evaluate(`(() => {
+    window.__restoreFetch = window.fetch;
+    window.__restoreRequests = [];
+    window.__restoreFailList = false;
+    window.__restoreFailApplied = true;
+    window.__restoreHoldApplied = false;
+    const records = [
+      { key: 'smoke-uncertain', tenant: '${tenantId}', method: 'POST', path: '/deviceManagement/deviceConfigurations', at: '2026-01-01T00:00:00.000Z', state: 'uncertain', label: 'Interrupted smoke policy' },
+      { key: 'smoke-correct', tenant: '${tenantId}', method: 'POST', path: '/deviceManagement/deviceConfigurations', at: '2026-01-01T00:00:00.000Z', state: 'reconciled', label: 'Reconciled smoke policy', objectId: '${originalId}' }
+    ];
+    window.fetch = (input, init) => {
+      if (String(input) !== '/api/restore-journal') return window.__restoreFetch(input, init);
+      const body = JSON.parse(init.body);
+      window.__restoreRequests.push(body);
+      if (body.action === 'list' && window.__restoreFailList) return Promise.reject(new Error('Restore history unavailable.'));
+      if (body.action === 'applied') {
+        if (window.__restoreFailApplied) return new Promise(resolve => {
+          window.__restoreFailAppliedResponse = () => resolve(Response.json({ error: 'Restore reconciliation unavailable.' }, { status: 503 }));
+        });
+        Object.assign(records.find(record => record.key === body.key), { state: 'reconciled', objectId: body.objectId });
+        if (window.__restoreHoldApplied) return new Promise(resolve => {
+          window.__restoreAppliedResponse = () => resolve(Response.json({ records }));
+        });
+      }
+      if (body.action === 'new-operation') {
+        const index = records.findIndex(record => record.key === body.key);
+        if (index !== -1) records.splice(index, 1);
+      }
+      return Promise.resolve(Response.json({ records }));
+    };
+  })()`)
+  const form = label => `document.querySelector('form[aria-label="${label}"]')`
+  const click = label => evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent.trim() === ${JSON.stringify(label)}).click()`)
+  const open = (label, policy) => evaluate(`(() => {
+    const row = [...document.querySelectorAll('p')].find(p => p.textContent === ${JSON.stringify(policy)}).parentElement;
+    window.__restoreRecoveryButton = [...row.querySelectorAll('button')].find(b => b.textContent.trim() === ${JSON.stringify(label)});
+    window.__restoreRecoveryButton.click();
+  })()`)
+  const press = async key => {
+    const params = { key, code: key, windowsVirtualKeyCode: key === "Escape" ? 27 : 13 }
+    await send("Input.dispatchKeyEvent", { type: "keyDown", ...params, ...(key === "Enter" ? { text: "\r" } : {}) })
+    await send("Input.dispatchKeyEvent", { type: "keyUp", ...params })
+  }
+  const fill = (label, value) => evaluate(`(() => {
+    const input = ${form(label)}.querySelector('input');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(value)});
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`)
+  const submit = label => evaluate(`${form(label)}.querySelector('button[type="submit"]').click()`)
+  try {
+    await go("#/portal/settings", "Restore write history")
+    assert(await waitForText("Interrupted smoke policy"), "journal records did not load")
+    await evaluate(`window.__restoreFailList = true`)
+    await click("Refresh history")
+    assert(await waitForText("Restore history unavailable."), "journal refresh error was hidden")
+    assert(await evaluate(`document.body.innerText.includes('Interrupted smoke policy') && document.body.innerText.includes('Reconciled smoke policy')`), "failed refresh cleared the journal")
+    await evaluate(`window.__restoreFailList = false`)
+    await click("Refresh history")
+    assert(await waitForCondition(`!document.body.innerText.includes('Restore history unavailable.')`), "successful refresh did not clear the error")
+
+    await open("Confirm applied", "Interrupted smoke policy")
+    assert(await waitForCondition(`!!${form("Confirm applied")}`), "Confirm applied did not open the input")
+    assert(await evaluate(`${form("Confirm applied")}.querySelector('input').value === ''`), "uncertain write input was not blank")
+    assert(await evaluate(`${form("Confirm applied")}.innerText.includes('A retry will reuse this result instead of repeating the write.')`), "confirmation description missing")
+    await fill("Confirm applied", "invalid-id")
+    await submit("Confirm applied")
+    assert(await waitForText("Enter a valid object ID (GUID)."), "invalid object ID did not show validation")
+    assert(await evaluate(`!window.__restoreRequests.some(r => r.action === 'applied')`), "invalid object ID sent a request")
+    await evaluate(`${form("Confirm applied")}.querySelector('button[type="button"]').click()`)
+    assert(await waitForCondition(`!${form("Confirm applied")}`), "Cancel did not close the input")
+    assert(await waitForCondition(`document.activeElement === window.__restoreRecoveryButton`), "Cancel did not return focus to Confirm applied")
+    assert(await evaluate(`!window.__restoreRequests.some(r => r.action === 'applied')`), "Cancel sent a request")
+
+    await open("Confirm applied", "Interrupted smoke policy")
+    assert(await waitForCondition(`document.activeElement === ${form("Confirm applied")}?.querySelector('input')`), "Confirm applied did not focus the input")
+    await press("Escape")
+    assert(await waitForCondition(`!${form("Confirm applied")}`), "Escape did not close Confirm applied")
+    assert(await waitForCondition(`document.activeElement === window.__restoreRecoveryButton`), "Escape did not return focus to Confirm applied")
+    assert(await evaluate(`!window.__restoreRequests.some(r => r.action === 'applied')`), "Escape sent a request")
+
+    await open("Confirm applied", "Interrupted smoke policy")
+    await fill("Confirm applied", ` ${appliedId} `)
+    await submit("Confirm applied")
+    assert(await waitForCondition(`${form("Confirm applied")}?.querySelector('input')?.disabled`), "input was not disabled during saving")
+    assert(await waitForCondition(`${form("Confirm applied")}?.contains(document.activeElement)`), "pending save lost focus outside the form")
+    await evaluate(`(() => {
+      window.__restoreEscapeEvents = [];
+      window.__restoreEscapeProbe = event => {
+        if (event.key === 'Escape') window.__restoreEscapeEvents.push(event.defaultPrevented);
+      };
+      document.addEventListener('keydown', window.__restoreEscapeProbe);
+    })()`)
+    await press("Escape")
+    assert(await evaluate(`!!${form("Confirm applied")}`), "Escape closed the input while saving")
+    assert(await evaluate(`!window.__restoreEscapeEvents.includes(false)`), "pending Escape reached the document without preventing dismissal")
+    assert(await evaluate(`${form("Confirm applied")}.contains(document.activeElement)`), "pending Escape lost focus outside the form")
+    await evaluate(`window.__restoreFailAppliedResponse()`)
+    assert(await waitForCondition(`${form("Confirm applied")}?.querySelector('[role="alert"]')?.innerText === 'Restore reconciliation unavailable.'`), "request error did not appear inside the input form")
+    assert(await waitForCondition(`document.activeElement === ${form("Confirm applied")}?.querySelector('input')`), "failed reconciliation did not refocus the input")
+    assert(await evaluate(`window.__restoreRequests.some(r => r.action === 'applied' && r.key === 'smoke-uncertain' && r.objectId === '${appliedId}' && r.confirmed === true && r.tenantId === '${tenantId}')`), "valid ID did not send the confirmed reconciliation")
+    await screenshot("05d-restore-journal-error")
+    await evaluate(`window.__restoreFailApplied = false`)
+    assert(await waitForCondition(`!${form("Confirm applied")}.querySelector('button[type="submit"]').disabled`), "input stayed disabled after failure")
+    await press("Enter")
+    assert(await waitForCondition(`window.__restoreRequests.filter(r => r.action === 'applied' && r.key === 'smoke-uncertain').length === 2`), "Enter did not submit the recovery form")
+    assert(await waitForCondition(`!${form("Confirm applied")}`), "successful reconciliation did not close the input")
+    assert(await waitForText(`Object ${appliedId}`), "saved object ID was not displayed")
+    assert(await waitForCondition(`(() => {
+      const row = [...document.querySelectorAll('p')].find(p => p.textContent === 'Interrupted smoke policy').parentElement;
+      return document.activeElement === [...row.querySelectorAll('button')].find(b => b.textContent.trim() === 'Correct applied ID');
+    })()`), "successful reconciliation did not focus the record's recovery button")
+
+    await open("Correct applied ID", "Reconciled smoke policy")
+    assert(await waitForCondition(`!!${form("Correct applied ID")}`), "Correct applied ID did not open the input")
+    assert(await evaluate(`${form("Correct applied ID")}.querySelector('input').value === '${originalId}'`), "correction input did not keep the recorded ID")
+    assert(await evaluate(`${form("Correct applied ID")}.innerText.includes('The next retry will read and verify its creation fields before any follow-up writes.')`), "correction description missing")
+    await evaluate(`${form("Correct applied ID")}.querySelector('button[type="button"]').click()`)
+    assert(await waitForCondition(`!${form("Correct applied ID")}`), "Cancel did not close Correct applied ID")
+    assert(await waitForCondition(`document.activeElement === window.__restoreRecoveryButton`), "Cancel did not return focus to Correct applied ID")
+    await open("Correct applied ID", "Reconciled smoke policy")
+    assert(await waitForCondition(`document.activeElement === ${form("Correct applied ID")}?.querySelector('input')`), "Correct applied ID did not focus the input")
+    await press("Escape")
+    assert(await waitForCondition(`!${form("Correct applied ID")}`), "Escape did not close Correct applied ID")
+    assert(await waitForCondition(`document.activeElement === window.__restoreRecoveryButton`), "Escape did not return focus to Correct applied ID")
+    assert(await evaluate(`!window.__restoreRequests.some(r => r.action === 'applied' && r.key === 'smoke-correct')`), "closing Correct applied ID sent a request")
+    await open("Correct applied ID", "Reconciled smoke policy")
+    await fill("Correct applied ID", correctedId)
+    await submit("Correct applied ID")
+    assert(await waitForCondition(`!${form("Correct applied ID")}`), "successful correction did not close the input")
+    assert(await evaluate(`window.__restoreRequests.some(r => r.action === 'applied' && r.key === 'smoke-correct' && r.objectId === '${correctedId}' && r.confirmed === true && r.tenantId === '${tenantId}')`), "corrected ID did not send the confirmed reconciliation")
+    assert(await waitForText(`Object ${correctedId}`), "corrected object ID was not displayed")
+    assert(await waitForCondition(`document.activeElement === window.__restoreRecoveryButton`), "successful correction did not return focus to Correct applied ID")
+
+    await evaluate(`window.__restoreHoldApplied = true`)
+    await open("Correct applied ID", "Reconciled smoke policy")
+    await submit("Correct applied ID")
+    assert(await waitForCondition(`${form("Correct applied ID")}?.querySelector('input')?.disabled && typeof window.__restoreAppliedResponse === 'function'`), "correction save was not held pending")
+    await evaluate(`(() => {
+      const row = window.__restoreRecoveryButton.parentElement;
+      const confirm = window.confirm;
+      window.confirm = () => true;
+      try {
+        [...row.querySelectorAll('button')].find(b => b.textContent.trim() === 'Allow a new operation').click();
+      } finally {
+        window.confirm = confirm;
+      }
+    })()`)
+    assert(await waitForCondition(`!document.body.innerText.includes('Reconciled smoke policy')`), "new operation did not remove the edited record")
+    assert(await evaluate(`window.__restoreRequests.some(r => r.action === 'new-operation' && r.key === 'smoke-correct' && r.confirmed === true)`), "new operation did not send the confirmed request")
+    assert(await evaluate(`!${form("Correct applied ID")} && !window.__restoreRecoveryButton.isConnected`), "removed record left its recovery form open")
+    assert(await waitForCondition(`document.activeElement?.textContent.trim() === 'Refresh history'`), "removing the edited record did not focus Refresh history before the save resolved")
+    await evaluate(`window.__restoreAppliedResponse()`)
+    await click("Refresh history")
+    assert(await waitForCondition(`!${form("Correct applied ID")} && document.activeElement?.textContent.trim() === 'Refresh history'`), "completed save for a removed record did not keep focus on Refresh history")
+  } finally {
+    await evaluate(`window.__restoreFailAppliedResponse?.(); window.__restoreAppliedResponse?.(); document.removeEventListener('keydown', window.__restoreEscapeProbe); window.fetch = window.__restoreFetch; delete window.__restoreFetch; delete window.__restoreRequests; delete window.__restoreFailList; delete window.__restoreFailApplied; delete window.__restoreFailAppliedResponse; delete window.__restoreHoldApplied; delete window.__restoreAppliedResponse; delete window.__restoreRecoveryButton; delete window.__restoreEscapeEvents; delete window.__restoreEscapeProbe`)
+  }
+})
+
+await check("OpenIntuneBaseline run loading errors offer retry without an empty state", async () => {
+  await evaluate(`(() => {
+    window.__runsFetch = window.fetch;
+    window.__runsRequests = 0;
+    window.fetch = (input, init) => {
+      if (String(input) !== '/api/oib' || JSON.parse(init.body).action !== 'oib-runs') return window.__runsFetch(input, init);
+      window.__runsRequests++;
+      return window.__runsRequests === 1
+        ? Promise.reject(new Error('Deployment history unavailable.'))
+        : Promise.resolve(Response.json({ runs: [] }));
+    };
+  })()`)
+  const history = `document.querySelector('section[aria-label="Deployment runs"]')`
+  try {
+    await go("#/portal/oib", "Deployment history")
+    assert(await waitForCondition(`${history}?.innerText.includes('Deployment history unavailable.')`), "run loading failure was hidden")
+    // Allow unrelated version requests and renders to settle before counting initial run requests.
+    await sleep(500)
+    assert(await evaluate(`window.__runsRequests === 1`), "mount sent duplicate run requests")
+    assert(!(await evaluate(`${history}.innerText.includes('No deployments that can be undone are recorded for this tenant.')`)), "failed request showed the empty state")
+    await screenshot("19-oib-run-error")
+    await evaluate(`[...${history}.querySelectorAll('button')].find(b => b.textContent.trim() === 'Retry').click()`)
+    assert(await waitForCondition(`${history}?.innerText.includes('No deployments that can be undone are recorded for this tenant.')`), "successful retry did not show the empty state")
+    assert(await evaluate(`window.__runsRequests === 2`), "Retry did not send one run request")
+    assert(!(await evaluate(`${history}.innerText.includes('Deployment history unavailable.')`)), "successful retry did not clear the error")
+  } finally {
+    await evaluate(`window.fetch = window.__runsFetch; delete window.__runsFetch; delete window.__runsRequests`)
+  }
+})
+
 // Network independent: the landing page renders before the OIB source is read from GitHub.
 await check("OpenIntuneBaseline has its own section and left the framework catalog", async () => {
   assert(await evaluate(`[...document.querySelectorAll("nav a")].some(a => a.getAttribute("href") === "#/portal/oib")`), "sidebar item missing")
