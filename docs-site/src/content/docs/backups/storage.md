@@ -82,7 +82,7 @@ TenuVault deletes old backups automatically so storage does not grow without lim
 
 To choose how long backups are kept:
 
-1. Open **Settings** and go to **Background and retention**.
+1. Open **Settings** and go to **Background runner**.
 2. In **Keep backups for**, choose **7 days**, **14 days**, **30 days**, **60 days**, **90 days**, **180 days**, **365 days** or **Forever**.
 
 The default is 30 days. The setting applies to every tenant on this computer. The **Kept for** field on the **Schedule** tab shows the value that applies to the selected tenant.

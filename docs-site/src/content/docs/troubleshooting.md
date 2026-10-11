@@ -163,13 +163,15 @@ A stable install follows stable releases by default. Enable **Settings** > **Upd
 | Not backed up: *reason* | A scheduled or tray backup was refused because the license or plan does not cover it. The schedule panel lists these under "Not backed up because of the license". | Fix the license, or change the schedule to one your plan includes. Daily schedules and Azure storage need Pro or MSP. |
 | This tenant is no longer connected. | A schedule exists for a tenant that was removed. | Add the tenant again, or remove its schedule. |
 | Choose a time such as 02:00. / Choose a day of the week. | The schedule time or day is invalid. | Enter a 24 hour time and, for weekly schedules, a weekday. |
-| Background launch requires an installed Windows or macOS build. / Available in installed Windows and macOS builds. | Background launch only works in the installed app. | Install TenuVault with the installer and try again. |
+| Unable to check / Could not check background startup. Try again. | The background runner status request failed. Installation stays disabled. | Open **Settings** > **Background runner** and select **Retry check**. A successful check replaces the message with **Installed** or **Not installed**. |
+| Not installed | The status check reports that the background runner is absent. | In an installed build, select **Install background launch** in **Settings** > **Background runner**. This adds a LaunchAgent for your user account on macOS or a scheduled task for your user account on Windows. |
+| Background launch requires an installed Windows or macOS build. / Available in installed Windows and macOS builds. | The background runner only works in the installed app. | Install TenuVault with the installer and try again. |
 | An older direct-launch agent is loaded. Remove background launch first, then log out and back in before reinstalling; active backups are left running. | macOS still has an agent from a pre-release build. | Click **Remove background launch**, log out and back in, then install it again. |
-| TenuVault is still running | Shown when you close the window. TenuVault keeps running in the tray so schedules can run. | Quit TenuVault from its tray icon if you want it to stop. |
+| TenuVault is still running | Shown when you close the window. TenuVault keeps running in the menu bar on macOS or the tray on Windows so schedules can run. | Quit TenuVault from that icon to stop the current process. An installed background runner may reopen it within five minutes, as the row above Quit explains. To stop automatic restarts, select **Remove background launch** in **Settings** > **Background runner** and turn off start at login before quitting. |
 
 Scheduled backups also stop when:
 
-* **The machine is asleep, off, or you are signed out.** Background launch only runs in your own signed-in session and does not wake the machine. A missed slot runs once at the next start.
+* **The machine is asleep, off, or you are signed out.** The background runner only runs in your own signed-in session and does not wake the machine. Locking the screen does not sign you out; closing a laptop lid may put it to sleep. A missed slot runs once at the next start.
 * **The sign-in needs interaction.** A background backup cannot complete MFA or Conditional Access prompts. Sign in again when TenuVault shows the banner.
 * **The backup storage is unavailable.** Check the storage messages above.
 

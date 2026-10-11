@@ -440,9 +440,25 @@ function TenantSettings() {
 
 function BackgroundAndRetention() {
   const [prefs, setPrefs] = useState<AppPreferences | null>(null)
+  const [info, setInfo] = useState<AppInfo | null>(null)
   const [launcher, setLauncher] = useState<{ supported: boolean; installed: boolean } | null>(null)
-  const [launchBusy, setLaunchBusy] = useState(false)
-  useEffect(() => { void bridge.backgroundLaunch.status().then(setLauncher).catch(error => toast(String(error), "error")) }, [])
+  const [launchBusy, setLaunchBusy] = useState<"install" | "remove" | null>(null)
+  const [checkBusy, setCheckBusy] = useState(true)
+  const [checkError, setCheckError] = useState(false)
+  const checkLauncher = async () => {
+    setCheckBusy(true)
+    try {
+      setLauncher(await bridge.backgroundLaunch.status())
+      setCheckError(false)
+    } catch {
+      setLauncher(null)
+      setCheckError(true)
+    } finally {
+      setCheckBusy(false)
+    }
+  }
+  useEffect(() => { void checkLauncher() }, [])
+  useEffect(() => void bridge.app.info().then(setInfo), [])
   useEffect(() => void bridge.preferences.get().then(setPrefs), [])
   const set = async (changes: Partial<AppPreferences>) => {
     try {
@@ -451,33 +467,42 @@ function BackgroundAndRetention() {
       toast(error instanceof Error ? error.message : String(error), "error")
     }
   }
-  if (!prefs) return null
+  if (!prefs || !info) return null
+  const iconLocation = info.platform === "darwin" ? "menu bar" : "tray"
   return (
     <Card>
       <CardHeader className="p-7 pb-4">
         <CardTitle className="flex items-center gap-3 text-xl font-medium">
-          <span className="flex size-10 items-center justify-center rounded-full bg-secondary" aria-hidden="true"><MonitorCog className="h-[18px] w-[18px]" /></span> Background and retention
+          <span className="flex size-10 items-center justify-center rounded-full bg-secondary" aria-hidden="true"><MonitorCog className="h-[18px] w-[18px]" /></span> Background runner
         </CardTitle>
-        <CardDescription>Automatic backups run while TenuVault is running, in the window or in the system tray.</CardDescription>
+        <CardDescription>Automatic backups run while TenuVault is running, in the window or in the {iconLocation}.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4 px-7 pb-7 text-sm text-gray-700">
         <div className="rounded-xl border border-gray-200 p-4">
           <p className="font-medium">Restart TenuVault for scheduled backups</p>
-          <p className="mt-2 text-sm">An OS task can reopen TenuVault in the tray within five minutes while you are signed in. Backups still require valid Microsoft sign-in, plan access and available storage. This does not run while signed out, asleep or powered off.</p>
-          <Button className="mt-3" variant="outline" disabled={!launcher?.supported || launchBusy} onClick={() => {
-            setLaunchBusy(true)
-            void (launcher?.installed ? bridge.backgroundLaunch.remove() : bridge.backgroundLaunch.install()).then(setLauncher).catch(error => toast(String(error), "error")).finally(() => setLaunchBusy(false))
-          }}>{launcher?.installed ? "Remove background launch" : "Install background launch"}</Button>
+          <p className="mt-2 text-sm">{info.platform === "darwin" ? "Adds a LaunchAgent for your user account" : "Adds a scheduled task for your user account"}. The background runner can reopen TenuVault in the {iconLocation} within five minutes while you are signed in. Backups still require valid Microsoft sign-in, plan access and available storage. This does not run while signed out, asleep or powered off.</p>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <Button variant="outline" disabled={!launcher?.supported || checkBusy || !!launchBusy} onClick={() => {
+              setLaunchBusy(launcher?.installed ? "remove" : "install")
+              void (launcher?.installed ? bridge.backgroundLaunch.remove() : bridge.backgroundLaunch.install()).then(setLauncher).catch(error => toast(String(error), "error")).finally(() => setLaunchBusy(null))
+            }}>{launchBusy === "install" ? "Installing..." : launchBusy === "remove" ? "Removing..." : launcher?.installed ? "Remove background launch" : "Install background launch"}</Button>
+            <p role="status">{checkBusy ? "Checking..." : checkError ? "Unable to check" : launcher?.installed ? "Installed" : "Not installed"}</p>
+          </div>
+          {checkError && <div className="mt-3 flex flex-wrap items-center gap-3">
+            <p role="alert">Could not check background startup. Try again.</p>
+            <Button variant="outline" size="sm" disabled={checkBusy} onClick={() => void checkLauncher()}>Retry check</Button>
+          </div>}
           {launcher && !launcher.supported && <p className="mt-2 text-xs">Available in installed Windows and macOS builds.</p>}
-          <p className="mt-2 text-xs">To stop automatic restarts, remove background launch and turn off Start at login before quitting. Removing it leaves your backup schedules unchanged.</p>
+          <p className="mt-2 text-xs">Backups need an awake computer and a signed in session. Locking the screen does not sign you out; closing a laptop lid may put it to sleep.</p>
+          <p className="mt-2 text-xs">To stop automatic restarts, remove the background runner and turn off Start at login before quitting. Removing it leaves your backup schedules unchanged.</p>
         </div>
         <label className="flex items-center gap-3">
           <input type="checkbox" className="h-4 w-4" checked={prefs.startAtLogin} onChange={(e) => void set({ startAtLogin: e.target.checked })} />
-          Start TenuVault in the tray when I sign in to this computer
+          Start TenuVault in the {iconLocation} when I sign in to this computer
         </label>
         <label className="flex items-center gap-3">
           <input type="checkbox" className="h-4 w-4" checked={prefs.keepRunningInTray} onChange={(e) => void set({ keepRunningInTray: e.target.checked })} />
-          Keep running in the tray when I close the window
+          Keep running in the {iconLocation} when I close the window
         </label>
         <div className="flex items-center gap-3 border-t border-gray-100 pt-4">
           <label htmlFor="retention">Keep backups for</label>
@@ -626,7 +651,7 @@ export default function SettingsPage() {
       </label>
       </div>
       <nav aria-label="Settings sections" className="flex flex-wrap gap-2 text-sm">
-        {[['signin', 'Sign-in'], ['storage', 'Storage and recovery'], ['background', 'Background and retention'], ['updates', 'Updates'], ['about', 'About']].map(([id, title]) => <button key={id} type="button" className="h-9 rounded-full bg-card px-4 font-medium text-foreground transition-colors hover:bg-primary hover:text-primary-foreground" onClick={() => document.getElementById(`settings-${id}`)?.scrollIntoView({ block: 'start' })}>{title}</button>)}
+        {[['signin', 'Sign-in'], ['storage', 'Storage and recovery'], ['background', 'Background runner'], ['updates', 'Updates'], ['about', 'About']].map(([id, title]) => <button key={id} type="button" className="h-9 rounded-full bg-card px-4 font-medium text-foreground transition-colors hover:bg-primary hover:text-primary-foreground" onClick={() => document.getElementById(`settings-${id}`)?.scrollIntoView({ block: 'start' })}>{title}</button>)}
       </nav>
       <section className="scroll-mt-6" id="settings-signin"><TenantSettings /></section>
       <section className="scroll-mt-6" id="settings-storage"><BackupsOnDevice />

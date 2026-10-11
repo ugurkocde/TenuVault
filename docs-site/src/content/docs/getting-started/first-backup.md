@@ -55,5 +55,5 @@ The log ends with a summary such as **Backup completed: 214 policies in 1m 12s.*
 TenuVault is set up. Next:
 
 * [Schedule backups](/backups/schedules/). Community tenants can back up weekly; Pro and MSP can also back up daily.
-* Keep TenuVault running in the tray so schedules run. See [Settings reference](/settings/#background-and-retention).
+* Keep TenuVault running in the tray so schedules run. See [Settings reference](/settings/#background-runner).
 * Learn how to [restore items](/restore/) and [detect drift](/drift/).
