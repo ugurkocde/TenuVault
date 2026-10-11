@@ -61,7 +61,7 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
 
   async function community() {
     await evaluate(`window.__scheduleFixture.planChanged({ ...window.__scheduleFixture.status, tenants: [{ tenantId: ${JSON.stringify(tenantId)}, plan: "community", entitled: true }] })`)
-    assert(await waitForCondition(`!${body}.innerText.includes("Checking plan")`), "known plan still shows Checking plan")
+    assert(await waitForCondition(`!${body}.innerText.includes("Checking plan") && !${body}.innerText.includes("Plan not verified")`), "known plan still shows an unavailable plan message")
   }
 
   async function setValue(id, value) {
@@ -101,6 +101,16 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
         assert(afterToast === beforeToast, `invalid time produced a toast: ${afterToast}`)
       }
       await screenshot("09a-schedule-time-validation")
+      await evaluate(`window.__scheduleFixture.status = {
+        ...window.__scheduleFixture.status, hasKey: true, plan: "msp", tenantLimit: 5,
+        tenants: [{ tenantId: ${JSON.stringify(tenantId)}, entitled: false, plan: null, message: "This license already covers its maximum number of tenants." }],
+      }`)
+      for (let response = 0; response < 2; response++) {
+        await evaluate(`window.__scheduleFixture.planChanged({ ...window.__scheduleFixture.status })`)
+        assert(await waitForCondition(`${body}.innerText.includes("Plan not verified") && !${body}.innerText.includes("Checking plan")`), "loaded MSP denial still shows Checking plan")
+        assert(await evaluate(`${body}.innerText.includes("Your license does not cover Contoso 1 right now, so its automatic backups do not run.")`), "loaded MSP denial lost the coverage warning")
+        assert(await evaluate(`!${doc}.querySelector('#schedule-frequency option[value="daily"]')`), "uncovered MSP tenant offers Daily")
+      }
       await community()
       assert(await evaluate(`${doc}.querySelector('#schedule-frequency option[value="daily"]').disabled`), "Community offers Daily")
       assert(await evaluate(`${body}.innerText.includes('Every day (Pro)')`), "Community daily explanation missing")
@@ -121,12 +131,16 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
   })
 
   await check("Community can pause an existing daily schedule with its saved summary intact", async () => {
+    const originalCommunityTenant = (await evaluate(`window.tenuvault.license.status()`)).communityTenantId
     try {
       const schedules = await evaluate(`window.tenuvault.schedules.set({ tenantId: ${JSON.stringify(tenantId)}, enabled: true, frequency: 'daily', time: '07:45' })`)
       const current = schedules.find(schedule => schedule.tenantId === tenantId)
       await open(current, true)
       assert(await waitForCondition(`${body}.innerText.includes('Checking plan')`), "saved daily schedule lacks unknown plan state")
       assert(await evaluate(`!${doc}.querySelector('option[value="daily"]')`), "existing Daily offered while checking the plan")
+      if (originalCommunityTenant) await evaluate(`window.tenuvault.license.releaseTenant(${JSON.stringify(originalCommunityTenant)})`)
+      const status = await evaluate(`window.tenuvault.license.retry(${JSON.stringify(tenantId)})`)
+      assert(status.communityTenantId === tenantId, "main-process Community seat does not belong to the schedule fixture")
       await community()
       assert(await evaluate(`${doc}.querySelector('#schedule-frequency option[value="daily"]').disabled`), "downgraded daily option is enabled")
       await evaluate(`${automatic}.click()`)
@@ -135,12 +149,20 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
       assert(await waitForCondition(`${body}.innerText.includes('Automatic backups paused')`), "pause success message missing")
       const saved = await evaluate(`window.tenuvault.schedules.list()`)
       assert(saved.some(schedule => schedule.tenantId === tenantId && !schedule.enabled && schedule.frequency === 'daily' && schedule.time === '07:45'), "pausing changed the stored daily schedule")
+      const refusal = await evaluate(`window.tenuvault.schedules.set({ tenantId: ${JSON.stringify(tenantId)}, enabled: true, frequency: 'daily', time: '07:45' }).then(() => null, error => error.message)`)
+      assert(refusal === "PlanRequired: Daily scheduled backups: included in TenuVault Pro and MSP. Upgrade on the License page.", `Community daily re-enable did not return the PlanRequired message: ${JSON.stringify(refusal)}`)
+      assert((await evaluate(`window.tenuvault.schedules.list()`)).some(schedule => schedule.tenantId === tenantId && !schedule.enabled), "refused daily re-enable changed the paused schedule")
       assert(await evaluate(`${body}.innerText.includes('Daily at 07:45')`), "paused recurrence summary missing")
       assert(await evaluate(`!${body}.innerText.includes('Background restart is not installed.')`), "installed runner shows the missing runner note")
       assert(await evaluate(`window.__scheduleFixture.runnerChecks === 1`), "runner status was polled")
       await screenshot("09b-schedule-daily-paused")
     } finally {
       await close()
+      await evaluate(`window.tenuvault.license.releaseTenant(${JSON.stringify(tenantId)})`)
+      if (originalCommunityTenant) {
+        const restored = await evaluate(`window.tenuvault.license.retry(${JSON.stringify(originalCommunityTenant)})`)
+        assert(restored.communityTenantId === originalCommunityTenant, "original Community seat was not restored")
+      }
     }
   })
 }

@@ -104,7 +104,7 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
         {enabled && (
           <div className="flex flex-wrap items-start gap-4">
             <div className="space-y-1.5">
-              <Label htmlFor="schedule-frequency" className="flex items-center gap-2">Repeat{!planKnown && <span className="text-xs text-gray-500">Checking plan</span>}{community && <PlanBadge feature="dailySchedule" />}</Label>
+              <Label htmlFor="schedule-frequency" className="flex items-center gap-2">Repeat{!planKnown && <span className="text-xs text-gray-500">{license ? "Plan not verified" : "Checking plan"}</span>}{community && <PlanBadge feature="dailySchedule" />}</Label>
               {!planKnown && frequency === "daily" ? <output id="schedule-frequency" className="block text-sm text-gray-700">Every day</output> : <select id="schedule-frequency" className={select} value={frequency} onChange={(e) => (drafts.set(tenantId, { enabled, frequency: e.target.value as "daily" | "weekly", time, weekday }), setFrequency(e.target.value as "daily" | "weekly"))}>
                 {planKnown && <option value="daily" disabled={community}>{community ? "Every day (Pro)" : "Every day"}</option>}
                 <option value="weekly">Every week</option>

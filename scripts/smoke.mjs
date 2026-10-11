@@ -1187,6 +1187,8 @@ await check("tenant changes wait for the disclaimer, once per tenant", async () 
   assert(again[0] !== 428 && !(await evaluate(`!!document.querySelector("[role=dialog]")`)), "disclaimer asked twice for one tenant")
 })
 
+await checkSchedulePanel({ check, evaluate, waitForCondition, screenshot, assert })
+
 if (licenseKey) {
   // No tenant is signed in, so the key is only saved; it activates when a tenant is used.
   await check("a license key is saved until a tenant signs in", async () => {
@@ -1196,8 +1198,6 @@ if (licenseKey) {
     await screenshot("11-license-saved")
   })
 }
-
-await checkSchedulePanel({ check, evaluate, waitForCondition, screenshot, assert })
 
 await finish()
 
