@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest'
 import { encryptedAzureFetch, openAzure, registerStorageToken, sealAzure } from '../src/main/storage/azure-seal'
 import { Restorer } from '../src/portal/lib/policies/graph-restore'
 import { createBridgedFetch } from '../src/main/api/fetch-bridge'
-import { withNetworkErrors } from '../src/main/api/network-error'
+import { FetchApplicationError, withNetworkErrors } from '../src/main/api/network-error'
 const tenant = '11111111-1111-1111-1111-111111111111', master = Buffer.alloc(32, 4)
 const url = new URL('https://example.blob.core.windows.net/intune-backups/backup-1/DeviceConfigurations/policy.json')
 it('encrypts uploads and binds authentication to tenant, account and path', async () => {
@@ -33,6 +33,27 @@ it('requires the recovery-key export before uploading', async () => {
   const bridge = encryptedAzureFetch(fetch, () => [master], () => { throw new Error('Save recovery key') })
   await expect(bridge(url, { method: 'PUT', headers: { Authorization: 'Bearer token' }, body: '{}' })).rejects.toThrow('recovery')
   expect(fetch).not.toHaveBeenCalled()
+})
+it.each(['missing key', 'wrong key', 'damaged ciphertext', 'truncated envelope', 'invalid legacy JSON', 'key store failure'])('marks a fully read %s as an application failure', async failure => {
+  registerStorageToken('read-token', tenant)
+  let raw = sealAzure(Buffer.from('{"id":"policy"}'), master, tenant, url)
+  if (failure === 'damaged ciphertext') raw[raw.length - 1]! ^= 1
+  if (failure === 'truncated envelope') raw = raw.subarray(0, 8)
+  if (failure === 'invalid legacy JSON') raw = Buffer.from('Invalid JSON')
+  const keyError = new Error('Recovery keys are unavailable on this device.')
+  const bridge = withNetworkErrors(encryptedAzureFetch(async () => new Response(new Uint8Array(raw)), () => {
+    if (failure === 'key store failure') throw keyError
+    return failure === 'missing key' ? [] : failure === 'wrong key' ? [Buffer.alloc(32, 8)] : [master]
+  }, () => {}))
+  const pending = bridge(url, { headers: { Authorization: 'Bearer read-token' } })
+  await expect(pending).rejects.toBeInstanceOf(FetchApplicationError)
+  await expect(pending).rejects.toThrow(failure === 'key store failure' ? keyError.message : 'Backup authentication failed')
+  if (failure === 'key store failure') await expect(pending).rejects.toMatchObject({ cause: keyError })
+})
+it.each([new TypeError('Connection reset while reading body'), new DOMException('The request timed out', 'TimeoutError')])('preserves a successful response body transport failure: %s', async error => {
+  registerStorageToken('body-token', tenant)
+  const bridge = encryptedAzureFetch(async () => new Response(new ReadableStream({ start(controller) { controller.error(error) } })), () => [master], () => {})
+  await expect(bridge(url, { headers: { Authorization: 'Bearer body-token' } })).rejects.toBe(error)
 })
 it.each(['GET', 'PUT'])('forwards %s aborts through the bridge, seal and network wrapper', async method => {
   registerStorageToken('abort-token', tenant)

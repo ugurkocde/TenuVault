@@ -247,6 +247,61 @@ describe("backup request recovery", () => {
     expect(failures).toBe(24)
   })
 
+  it.each(["unavailable key", "damaged ciphertext", "malformed envelope"])("keeps eight encrypted retention failures out of both circuits: %s", async failure => {
+    requestTimers()
+    vi.setSystemTime(new Date("2026-10-11T12:00:00Z"))
+    const message = failure === "malformed envelope"
+      ? "Backup authentication failed or the legacy snapshot is invalid"
+      : "Backup authentication failed. Import the correct recovery key or recover an undamaged snapshot."
+    const saved = new Map<string, Uint8Array>()
+    const prefixes = Array.from({ length: 8 }, (_, index) => `backup-2026-08-01-02000${index}/`)
+    for (const prefix of prefixes) {
+      const url = new URL(`https://contoso.blob.core.windows.net/intune-backups/${prefix}metadata.json`)
+      const sealed = sealAzure(Buffer.from(JSON.stringify({ Status: "Success", TenantId: TENANT })), failure === "unavailable key" ? Buffer.alloc(32, 8) : master, TENANT, url)
+      if (failure === "damaged ciphertext") sealed[sealed.length - 1]! ^= 1
+      saved.set(url.pathname, new Uint8Array(failure === "malformed envelope" ? Buffer.from("Invalid envelope") : sealed))
+    }
+    const original = new Map(saved)
+    let reads = 0
+    let deletes = 0
+    const networkFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const sent = input as Request
+      const url = new URL(sent.url)
+      if (url.hostname === "graph.microsoft.com") return Response.json({ value: [] })
+      if (url.search) {
+        if (sent.method === "PUT") return new Response(null, { status: 201 })
+        return new Response(`<EnumerationResults><Blobs>${prefixes.map(prefix => `<BlobPrefix><Name>${prefix}</Name></BlobPrefix>`).join("")}</Blobs></EnumerationResults>`)
+      }
+      if (sent.method === "PUT") {
+        saved.set(url.pathname, new Uint8Array(await sent.arrayBuffer()))
+        return new Response(null, { status: 201 })
+      }
+      if (sent.method === "DELETE") deletes++
+      reads++
+      return new Response(new Uint8Array(saved.get(url.pathname)!))
+    })
+    const engine = new BackupEngine({ fetch: azureBridge(networkFetch), getToken: async () => "token", retentionDays: () => 30 })
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(job).toMatchObject({ status: "Completed", progress: 100, progressMessage: "Backup completed with 1 warning" })
+    expect(job.endTime).toBeDefined()
+    expect(job.exception).toBeUndefined()
+    expect(reads).toBe(8)
+    expect(deletes).toBe(0)
+    expect(job.log.join("\n")).toContain(`Could not remove old backups: ${message}. They will be reconsidered on the next run.`)
+    expect(job.log.join("\n")).not.toMatch(/did not respond|network stopped responding/)
+    const manifestUrl = new URL(`https://contoso.blob.core.windows.net/intune-backups/${job.backupFolder}/metadata.json`)
+    const committed = saved.get(manifestUrl.pathname)!
+    expect(JSON.parse(openAzure(Buffer.from(committed), [master], TENANT, manifestUrl).data.toString())).toMatchObject({ Status: "Success", Failures: 0 })
+    expect(saved.size).toBe(9)
+    for (const [path, body] of original) expect(saved.get(path)).toBe(body)
+    const calls = networkFetch.mock.calls.length
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(reads).toBe(8)
+    expect(networkFetch).toHaveBeenCalledTimes(calls)
+    expect(saved.get(manifestUrl.pathname)).toBe(committed)
+  })
+
   it("keeps a committed backup completed when eight retention reads hang", async () => {
     requestTimers()
     const started = Date.now()
@@ -476,7 +531,7 @@ describe("backup request recovery", () => {
     expect(metadata).toMatchObject({ Status: "CompletedWithWarnings", Failures: 6, ItemCounts: { TotalPolicies: 1 } })
   })
 
-  it("does not count Graph JSON syntax errors toward the network circuit", async () => {
+  it("does not retry Graph JSON syntax errors or count them toward the network circuit", async () => {
     requestTimers()
     let attempts = 0
     const { engine } = setup(url => {
@@ -491,7 +546,7 @@ describe("backup request recovery", () => {
     }, 1)
     const job = engine.start(request)
     await vi.advanceTimersByTimeAsync(30_000)
-    expect(attempts).toBe(18)
+    expect(attempts).toBe(6)
     expect(job.status).toBe("Completed")
     expect(job.exception).toBeUndefined()
     expect(job.progressMessage).toBe("Backup completed with 6 warnings")
@@ -630,6 +685,48 @@ describe("backup request recovery", () => {
     if (matches) expect(job.progressMessage).toBe("Backup completed successfully")
     else if (blob === "policy") expect(job.log.some(line => line.includes("Could not back up") && line.includes("409"))).toBe(true)
     else expect(job.exception).toContain("409")
+  })
+
+  it("reports a failed encrypted read-back as an item failure without network retries", async () => {
+    requestTimers()
+    const message = "Backup authentication failed. Import the correct recovery key or recover an undamaged snapshot."
+    let puts = 0
+    let reads = 0
+    let metadata: Record<string, unknown> | undefined
+    const networkFetch: typeof fetch = async input => {
+      const sent = input as Request
+      const url = new URL(sent.url)
+      if (url.hostname === "graph.microsoft.com") {
+        return url.pathname.endsWith("/deviceConfigurations")
+          ? Response.json({ value: [{ id: "bad", displayName: "Bad" }, { id: "good", displayName: "Good" }] })
+          : Response.json({ id: url.pathname.split("/").at(-1) })
+      }
+      if (url.search) return new Response(null, { status: 201 })
+      if (url.pathname.endsWith("/Bad.json")) {
+        if (sent.method === "GET") {
+          reads++
+          return new Response(new Uint8Array(sealAzure(Buffer.from('{"id":"bad"}'), Buffer.alloc(32, 8), TENANT, url)))
+        }
+        if (++puts === 1) throw new TypeError("Response lost after upload")
+        return new Response(null, { status: 409 })
+      }
+      if (url.pathname.endsWith("/metadata.json")) metadata = JSON.parse(openAzure(Buffer.from(await sent.arrayBuffer()), [master], TENANT, url).data.toString()) as Record<string, unknown>
+      return new Response(null, { status: 201 })
+    }
+    const engine = new BackupEngine({ fetch: azureBridge(networkFetch), getToken: async () => "token", concurrency: 1 })
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(job).toMatchObject({ status: "Completed", progress: 100, progressMessage: "Backup completed with 1 warning" })
+    expect(job.endTime).toBeDefined()
+    expect(job.exception).toBeUndefined()
+    expect(puts).toBe(2)
+    expect(reads).toBe(1)
+    expect(job.log.some(line => line.endsWith(`Could not back up "Bad": ${message}`))).toBe(true)
+    expect(job.log.join("\n")).not.toMatch(/did not respond|network stopped responding/)
+    expect(metadata).toMatchObject({ Status: "CompletedWithWarnings", Failures: 1, ItemCounts: { TotalPolicies: 1 } })
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(puts).toBe(2)
+    expect(reads).toBe(1)
   })
 
   it("does not accept a conflict without an earlier ambiguous upload", async () => {

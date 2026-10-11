@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from 'node:crypto'
-import { FetchPreconditionError } from '../api/network-error'
+import { FetchApplicationError, FetchPreconditionError } from '../api/network-error'
 const MAGIC = Buffer.from('TVAZ1\n')
 const tokens = new Map<string, { tenant: string; expires: number }>()
 const digest = (token: string) => createHash('sha256').update(token).digest('hex')
@@ -54,7 +54,11 @@ export function encryptedAzureFetch(fetchImpl: typeof fetch, keys: () => Buffer[
       }
       const response = await send(request)
       if (!response.ok) return response
-      const opened = openAzure(Buffer.from(await response.arrayBuffer()), keys(), context.tenant, url)
+      // Body reads can fail in transit. Only failures after the complete read are application errors.
+      const raw = Buffer.from(await response.arrayBuffer())
+      let opened: ReturnType<typeof openAzure>
+      try { opened = openAzure(raw, keys(), context.tenant, url) }
+      catch (error) { throw new FetchApplicationError(error) }
       const headers = new Headers(response.headers); headers.set('content-type', 'application/json'); headers.set('x-tenuvault-authenticated', String(opened.authenticated)); headers.delete('content-length'); headers.delete('content-encoding')
       return new Response(new Uint8Array(opened.data), { status: response.status, headers })
     } catch (error) {
