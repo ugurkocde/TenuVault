@@ -1,6 +1,32 @@
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 
+/** Syncs a directory so its entries survive a crash; a failure is logged, since the data itself is already written. */
+function syncDirectorySync(dir: string): void {
+  try {
+    const directory = openSync(dir, "r")
+    try {
+      fsyncSync(directory)
+    } finally {
+      closeSync(directory)
+    }
+  } catch (error) {
+    console.warn(`Failed to sync directory ${dir}: ${(error as NodeJS.ErrnoException).code ?? "UNKNOWN"}`)
+  }
+}
+
+/** Creates a directory and syncs the parent of every directory it had to create, so the new entries survive a crash. */
+function mkdirDurableSync(path: string): void {
+  const created: string[] = []
+  for (let probe = path; !existsSync(probe); probe = dirname(probe)) {
+    created.unshift(probe)
+    if (dirname(probe) === probe) break
+  }
+  mkdirSync(path, { recursive: true })
+  if (process.platform === "win32") return
+  for (const dir of created) syncDirectorySync(dirname(dir))
+}
+
 export interface Cipher {
   encrypt: (plainText: string) => Buffer
   decrypt: (cipherText: Buffer) => string
@@ -99,7 +125,7 @@ export class SecureStore {
   }
 
   private flush(values: Record<string, string> = this.values ?? {}): void {
-    mkdirSync(dirname(this.filePath), { recursive: true })
+    mkdirDurableSync(dirname(this.filePath))
     const tmp = `${this.filePath}.tmp`
     try {
       const handle = openSync(tmp, "w", 0o600)
@@ -110,19 +136,7 @@ export class SecureStore {
         closeSync(handle)
       }
       renameSync(tmp, this.filePath)
-      if (process.platform !== "win32") {
-        const dir = dirname(this.filePath)
-        try {
-          const directory = openSync(dir, "r")
-          try {
-            fsyncSync(directory)
-          } finally {
-            closeSync(directory)
-          }
-        } catch (error) {
-          console.warn(`Failed to sync directory ${dir}: ${(error as NodeJS.ErrnoException).code ?? "UNKNOWN"}`)
-        }
-      }
+      if (process.platform !== "win32") syncDirectorySync(dirname(this.filePath))
     } finally {
       rmSync(tmp, { force: true })
     }

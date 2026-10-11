@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto"
 import { link, mkdir, open, readdir, readFile, rename, rm, stat } from "node:fs/promises"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { mapLimit } from "../../portal/lib/map-limit"
 
 /**
@@ -109,6 +109,37 @@ export class IncompleteInventoryError extends Error {
   }
 }
 
+/** Syncs a directory so its entries survive a crash; a failure is logged, since the data itself is already written. */
+async function syncDirectory(dir: string): Promise<void> {
+  try {
+    const directory = await open(dir, "r")
+    try {
+      await directory.sync()
+    } finally {
+      await directory.close()
+    }
+  } catch (error) {
+    console.warn(`Failed to sync directory ${dir}: ${(error as NodeJS.ErrnoException).code ?? "UNKNOWN"}`)
+  }
+}
+
+/** Creates a directory and syncs the parent of every directory it had to create, so the new entries survive a crash. */
+async function mkdirDurable(path: string): Promise<void> {
+  const created: string[] = []
+  for (let probe = path; ; probe = dirname(probe)) {
+    try {
+      await stat(probe)
+      break
+    } catch {
+      created.unshift(probe)
+      if (dirname(probe) === probe) break
+    }
+  }
+  await mkdir(path, { recursive: true, mode: 0o700 })
+  if (process.platform === "win32") return
+  for (const dir of created) await syncDirectory(dirname(dir))
+}
+
 export class LocalBlobStore {
   private readonly keyring: Keys[]
   private readonly index = new Map<string, Promise<Map<string, Entry>>>()
@@ -140,7 +171,7 @@ export class LocalBlobStore {
   /** Returns false when the container already existed. */
   async createContainer(account: string, container: string): Promise<boolean> {
     const existed = await this.containerExists(account, container)
-    await mkdir(this.dir(account, container), { recursive: true, mode: 0o700 })
+    await mkdirDurable(this.dir(account, container))
     return !existed
   }
 
@@ -204,19 +235,7 @@ export class LocalBlobStore {
       }
       if (createOnly) await link(tmp, path) // Atomic creation across store/process instances.
       else await rename(tmp, path)
-      if (process.platform !== "win32") {
-        const dir = this.dir(account, container)
-        try {
-          const directory = await open(dir, "r")
-          try {
-            await directory.sync()
-          } finally {
-            await directory.close()
-          }
-        } catch (error) {
-          console.warn(`Failed to sync directory ${dir}: ${(error as NodeJS.ErrnoException).code ?? "UNKNOWN"}`)
-        }
-      }
+      if (process.platform !== "win32") await syncDirectory(this.dir(account, container))
     } catch (error) {
       this.index.delete(this.dir(account, container))
       if (createOnly && (error as NodeJS.ErrnoException).code === "EEXIST") {

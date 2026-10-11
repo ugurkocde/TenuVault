@@ -1,4 +1,4 @@
-import { copyFileSync, mkdtempSync, readdirSync, writeFileSync, rmSync } from 'node:fs'
+import { copyFileSync, mkdtempSync, readdirSync, statSync, writeFileSync, rmSync } from 'node:fs'
 import { open, type FileHandle } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -128,4 +128,24 @@ it('keeps the original blob and cleans up its temp file if syncing fails', async
   await expect(store.put(account, container, 'backup-test/Policies/one.json', Buffer.from('replacement'), 'application/json')).rejects.toThrow('sync failed')
   expect((await new LocalBlobStore(root, [key]).get(account, container, 'backup-test/Policies/one.json')).data.toString()).toBe('{}')
   expect(readdirSync(dir)).toHaveLength(1)
+})
+
+it.skipIf(process.platform === 'win32')('syncs the parents of the directories a new container creates', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'tv-inventory-')); roots.push(root)
+  const store = new LocalBlobStore(root, [randomBytes(32)])
+  const probe = await open(join(root, 'probe'), 'w')
+  const prototype = Object.getPrototypeOf(probe) as FileHandle
+  await probe.close()
+  const original = prototype.sync
+  const synced: number[] = []
+  vi.spyOn(prototype, 'sync').mockImplementation(async function (this: FileHandle) {
+    synced.push((await this.stat()).ino)
+    await original.call(this)
+  })
+  expect(await store.createContainer(account, container)).toBe(true)
+  const accountDir = join(root, readdirSync(root).find(name => name !== 'probe')!)
+  // The root gains the account directory and the account directory gains the container.
+  expect(synced).toEqual([statSync(root).ino, statSync(accountDir).ino])
+  expect(await store.createContainer(account, container)).toBe(false)
+  expect(synced).toHaveLength(2)
 })
