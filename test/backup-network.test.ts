@@ -288,7 +288,8 @@ describe("backup request recovery", () => {
     expect(job.exception).toBeUndefined()
     expect(reads).toBe(8)
     expect(deletes).toBe(0)
-    expect(job.log.join("\n")).toContain(`Could not remove old backups: ${message}. They will be reconsidered on the next run.`)
+    expect(job.log.join("\n")).toContain(`Could not read the metadata of 8 older backups: ${message.replace(/\.$/, "")}. They were left in place.`)
+    expect(job.log.join("\n")).not.toContain("Could not remove old backups")
     expect(job.log.join("\n")).not.toMatch(/did not respond|network stopped responding/)
     const manifestUrl = new URL(`https://contoso.blob.core.windows.net/intune-backups/${job.backupFolder}/metadata.json`)
     const committed = saved.get(manifestUrl.pathname)!
@@ -300,6 +301,59 @@ describe("backup request recovery", () => {
     expect(reads).toBe(8)
     expect(networkFetch).toHaveBeenCalledTimes(calls)
     expect(saved.get(manifestUrl.pathname)).toBe(committed)
+  })
+
+  it("still removes the other expired backups when one metadata blob cannot be decrypted", async () => {
+    requestTimers()
+    vi.setSystemTime(new Date("2026-10-11T12:00:00Z"))
+    const saved = new Map<string, Uint8Array>()
+    const prefixes = ["backup-2026-08-01-020000/", "backup-2026-08-02-020000/", "backup-2026-08-03-020000/"]
+    for (const [index, prefix] of prefixes.entries()) {
+      const url = new URL(`https://contoso.blob.core.windows.net/intune-backups/${prefix}metadata.json`)
+      const key = index === 1 ? Buffer.alloc(32, 8) : master
+      saved.set(url.pathname, new Uint8Array(sealAzure(Buffer.from(JSON.stringify({ Status: "Success", TenantId: TENANT })), key, TENANT, url)))
+      saved.set(`/intune-backups/${prefix}DeviceConfigurations/policy.json`, new Uint8Array(sealAzure(Buffer.from("{}"), key, TENANT, new URL(`https://contoso.blob.core.windows.net/intune-backups/${prefix}DeviceConfigurations/policy.json`))))
+    }
+    const deleted: string[] = []
+    const networkFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const sent = input as Request
+      const url = new URL(sent.url)
+      if (url.hostname === "graph.microsoft.com") return Response.json({ value: [] })
+      if (url.search) {
+        if (sent.method === "PUT") return new Response(null, { status: 201 })
+        const params = url.searchParams
+        if (params.get("delimiter")) return new Response(`<EnumerationResults><Blobs>${prefixes.map(prefix => `<BlobPrefix><Name>${prefix}</Name></BlobPrefix>`).join("")}</Blobs></EnumerationResults>`)
+        const names = [...saved.keys()].filter(path => path.startsWith(`/intune-backups/${params.get("prefix")}`)).map(path => path.slice("/intune-backups/".length))
+        return new Response(`<EnumerationResults><Blobs>${names.map(name => `<Blob><Name>${name}</Name></Blob>`).join("")}</Blobs></EnumerationResults>`)
+      }
+      if (sent.method === "PUT") {
+        saved.set(url.pathname, new Uint8Array(await sent.arrayBuffer()))
+        return new Response(null, { status: 201 })
+      }
+      if (sent.method === "DELETE") {
+        deleted.push(url.pathname)
+        saved.delete(url.pathname)
+        return new Response(null, { status: 202 })
+      }
+      const body = saved.get(url.pathname)
+      return body ? new Response(new Uint8Array(body)) : new Response(null, { status: 404 })
+    })
+    const engine = new BackupEngine({ fetch: azureBridge(networkFetch), getToken: async () => "token", retentionDays: () => 30 })
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(job).toMatchObject({ status: "Completed", progress: 100, progressMessage: "Backup completed with 1 warning" })
+    expect(job.exception).toBeUndefined()
+    const log = job.log.join("\n")
+    // The newest readable backup is kept because it holds types this backup leaves out; the oldest is removed.
+    expect(log).toContain("Removed 1 backup older than 30 days.")
+    expect(log).toContain("Kept 1 older backup because it holds the newest copy of types this backup leaves out.")
+    expect(log).toContain("Could not read the metadata of 1 older backup: Backup authentication failed. Import the correct recovery key or recover an undamaged snapshot. It was left in place.")
+    expect(log).not.toContain("Could not remove old backups")
+    expect(log).not.toContain("not recorded as this tenant's")
+    expect(deleted.filter(path => path.includes("backup-2026-08-01-"))).toHaveLength(2)
+    expect(deleted.filter(path => path.includes("backup-2026-08-02-"))).toHaveLength(0)
+    expect(deleted.filter(path => path.includes("backup-2026-08-03-"))).toHaveLength(0)
+    expect([...saved.keys()].filter(path => path.includes("backup-2026-08-02-"))).toHaveLength(2)
   })
 
   it("keeps a committed backup completed when eight retention reads hang", async () => {

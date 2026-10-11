@@ -337,14 +337,16 @@ export class BackupEngine {
       // Cleanup cannot invalidate the backup whose manifest has already been committed.
       const retentionNetwork = new NetworkCircuit(3 * concurrency)
       const retentionStorage = new BlobWriter(this.deps.fetch, request.storageAccountName, storageToken, retentionNetwork)
-      await this.applyRetention(job, retentionStorage, backupFolder, coveredFolders(metadata), retentionNetwork.signal).catch((error: unknown) => {
+      const unreadable = await this.applyRetention(job, retentionStorage, backupFolder, coveredFolders(metadata), retentionNetwork.signal).catch((error: unknown) => {
         retentionWarnings++
         if (retentionNetwork.signal.aborted) {
           this.write(job, "Old backups were not removed because the network stopped responding. They will be reconsidered on the next run.")
         } else {
           this.write(job, `Could not remove old backups: ${error instanceof Error ? error.message : String(error)}. They will be reconsidered on the next run.`)
         }
+        return 0
       })
+      if (unreadable > 0) retentionWarnings++
     } else {
       this.write(job, "Older backups were kept because this backup is incomplete.")
     }
@@ -364,9 +366,9 @@ export class BackupEngine {
    * versions that did not record the tenant count as this tenant's unless the container also
    * holds a backup recorded as another tenant's.
    */
-  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, covered: Set<string>, signal: AbortSignal): Promise<void> {
+  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, covered: Set<string>, signal: AbortSignal): Promise<number> {
     const days = this.deps.retentionDays?.(job.tenantId) ?? 0
-    if (days <= 0) return
+    if (days <= 0) return 0
     const cutoff = this.now().getTime() - days * 24 * 60 * 60 * 1000
     const { prefixes } = await storage.list("backup-", "/")
     const backups = prefixes
@@ -383,8 +385,20 @@ export class BackupEngine {
     // that did not record the tenant count as this tenant's only while no backup names another one.
     const tenant = job.tenantId.toLowerCase()
     const owners = new Array<{ metadata: Record<string, unknown>; owner: "this" | "other" | "untagged" } | null>(backups.length).fill(null)
+    const unreadable = new Set<number>()
+    let unreadableReason = ""
     await pool(backups.map((backup, index) => ({ backup, index })), CONCURRENCY, async ({ backup, index }) => {
-      const metadata = await storage.readJson(`${backup.prefix}metadata.json`)
+      let metadata: Record<string, unknown> | null
+      try {
+        metadata = await storage.readJson(`${backup.prefix}metadata.json`)
+      } catch (error) {
+        // Metadata that cannot be decrypted (a wrong or rotated key, damaged ciphertext) is
+        // unreadable: never ours, and it must not stop the cleanup of the other backups.
+        if (!(error instanceof FetchApplicationError)) throw error
+        unreadable.add(index)
+        unreadableReason ||= error.message
+        return
+      }
       if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return // Missing or unreadable: never ours.
       const owner = typeof metadata.TenantId !== "string" ? "untagged" : metadata.TenantId.toLowerCase() === tenant ? "this" : "other"
       owners[index] = { metadata, owner }
@@ -401,7 +415,7 @@ export class BackupEngine {
     for (const [index, backup] of backups.entries()) {
       const entry = owners[index]
       if (!entry || entry.owner === "other" || (entry.owner === "untagged" && shared)) {
-        if (backup.time < cutoff) unowned++
+        if (backup.time < cutoff && !unreadable.has(index)) unowned++
         continue
       }
       const metadata = entry.metadata
@@ -442,6 +456,8 @@ export class BackupEngine {
       this.write(job, `Kept ${protectedKept} older backup${protectedKept === 1 ? "" : "s"} protected by the storage account's immutability policy or legal hold.${partlyRemoved > 0 ? ` ${partlyRemoved} of them lost some files before the protected ones were reached, including ${partlyRemoved === 1 ? "its" : "their"} metadata, so ${partlyRemoved === 1 ? "it is" : "they are"} no longer offered as complete.` : ""}`)
     }
     if (unowned > 0) this.write(job, `Kept ${unowned} older backup${unowned === 1 ? "" : "s"} not recorded as this tenant's (another tenant's, without readable metadata, or from an earlier version in a container another tenant also uses).`)
+    if (unreadable.size > 0) this.write(job, `Could not read the metadata of ${unreadable.size} older backup${unreadable.size === 1 ? "" : "s"}: ${unreadableReason.replace(/\.$/, "")}. ${unreadable.size === 1 ? "It was" : "They were"} left in place.`)
+    return unreadable.size
   }
 
   private write(job: BackupJob, line: string): void {
