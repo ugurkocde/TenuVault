@@ -99,6 +99,19 @@ export function isImmutabilityRefusal(status: number, code: string): boolean {
 /** Sign-in or license problems affect every request, so they stop the backup instead of becoming per-policy warnings. */
 class TokenError extends Error {}
 
+class RetentionPausedError extends Error {
+  constructor(completenessUnknown = false) {
+    const reason = completenessUnknown ? "damaged files cannot be attributed to a backup" : "the backup folder contains damaged files or unavailable backups"
+    super(`Retention paused because ${reason}. Older backups were kept. Recover or remove the reported damage before retention can continue.`)
+  }
+}
+
+async function assertRetentionReadable(response: Response): Promise<void> {
+  if (!response.ok && (response.headers.get("x-ms-error-code") === "IncompleteInventory" || (await response.clone().text()).includes("<Code>IncompleteInventory</Code>"))) {
+    throw new RetentionPausedError()
+  }
+}
+
 /** A Graph error with its status, so an expired sign-in (401) stops the backup while a missing permission for one type does not. */
 class GraphError extends Error {
   constructor(message: string, readonly status: number) {
@@ -287,6 +300,10 @@ export class BackupEngine {
     let retentionWarning: string | null = null
     if (failures === 0) {
       retentionWarning = await this.applyRetention(job, storage, backupFolder, coveredFolders(metadata)).catch((error: unknown) => {
+        if (error instanceof RetentionPausedError) {
+          this.write(job, error.message)
+          return error.message
+        }
         this.write(job, `Could not remove old backups: ${error instanceof Error ? error.message : String(error)}`)
         return `Retention paused: ${error instanceof Error ? error.message : String(error)}`
       })
@@ -313,13 +330,7 @@ export class BackupEngine {
     const days = this.deps.retentionDays?.(job.tenantId) ?? 0
     if (days <= 0) return null
     const cutoff = this.now().getTime() - days * 24 * 60 * 60 * 1000
-    const { prefixes, retentionPaused, completenessUnknown } = await storage.list("", "/")
-    if (retentionPaused) {
-      const reason = completenessUnknown ? "damaged files cannot be attributed to a backup" : "the backup folder contains damaged files or unavailable backups"
-      const warning = `Retention paused because ${reason}. Older backups were kept. Recover or remove the reported damage before retention can continue.`
-      this.write(job, warning)
-      return warning
-    }
+    const { prefixes } = await storage.list("", "/")
     const backups = prefixes
       .map((prefix) => {
         const match = /^backup-(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})\/$/.exec(prefix)
@@ -374,6 +385,8 @@ export class BackupEngine {
       let deleted = 0
       try {
         for (const blob of [...blobs.filter((name) => name === manifest), ...blobs.filter((name) => name !== manifest)]) {
+          // Folder sync can introduce damage after ownership or the deletion list was read.
+          await storage.list(backup.prefix)
           await storage.delete(blob)
           deleted++
         }
@@ -545,11 +558,13 @@ class BlobWriter {
       if (seen.size >= MAX_LIST_PAGES) throw new Error(`Storage listing did not finish after ${MAX_LIST_PAGES} pages`)
       const query = new URLSearchParams({ restype: "container", comp: "list", prefix, ...(delimiter ? { delimiter } : {}), ...(marker ? { marker } : {}) })
       const response = await this.request(`${BACKUP_CONTAINER}?${query.toString()}`, { method: "GET" })
+      await assertRetentionReadable(response)
       if (response.status === 404) break
       if (!response.ok) throw new Error(await storageError(response, this.account))
       const xml = await response.text()
       retentionPaused ||= xml.includes("<RetentionPaused>true</RetentionPaused>") || xml.includes("<DamagedFile>")
       completenessUnknown ||= xml.includes("<CompletenessUnknown>true</CompletenessUnknown>")
+      if (retentionPaused || completenessUnknown) throw new RetentionPausedError(completenessUnknown)
       const decode = (value: string) => value.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
       for (const m of xml.matchAll(/<BlobPrefix><Name>([^<]*)<\/Name><\/BlobPrefix>/g)) prefixes.push(decode(m[1]!))
       for (const m of xml.matchAll(/<Blob><Name>([^<]*)<\/Name>/g)) blobs.push(decode(m[1]!))
@@ -563,8 +578,8 @@ class BlobWriter {
   /** A JSON blob, or null when it does not exist or is not valid JSON. */
   async readJson(name: string): Promise<Record<string, unknown> | null> {
     const response = await this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, { method: "GET" })
+    await assertRetentionReadable(response)
     if (response.status === 404) return null
-    if (response.headers.get("x-ms-error-code") === "IncompleteInventory") return null // Damaged metadata never establishes ownership.
     if (!response.ok) throw new Error(await storageError(response, this.account))
     return (await response.json().catch(() => null)) as Record<string, unknown> | null
   }

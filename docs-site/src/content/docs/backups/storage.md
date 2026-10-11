@@ -41,7 +41,7 @@ When damage can be assigned to a backup, only that backup becomes **Unavailable*
 
 When a damaged header cannot be identified by a readable inventory, TenuVault cannot know which backup lost a file. Downloads, drift detection, backup changes and restore previews pause for every backup in that tenant's local backup folder until the unidentifiable files are recovered or removed. History still shows the folders it can identify, with a notice listing damaged files, reasons and whether ownership is unknown. This notice also appears when no backup folder can be identified.
 
-Retention pauses for the whole folder whenever any damaged file or unavailable backup remains. A new backup still completes and reports why older backups were kept.
+Retention aborts before deletion whenever damage is observed at any point during the run. It checks the folder immediately before each deletion. A new backup still completes and reports why older backups were kept.
 
 Let folder sync finish, then refresh the backup list. If files are still damaged, restore an intact copy from your folder's version history or another saved copy. For duplicate conflict copies or unidentifiable files, preserve them outside the backup folder before putting a verified original back or removing the damaged copies. If the files came from another device, import its recovery key in **Settings**. TenuVault leaves damaged files in place. Removing unidentifiable files restores operations on the remaining backups; it does not recover missing policies. A readable inventory continues to block any backup whose listed files are missing.
 
@@ -105,7 +105,7 @@ How retention works:
 * The backup that just finished is never deleted, so at least the newest backup is always kept.
 * A backup that left out some types never removes the newest copy of those types. For example, if your daily backups leave out apps, the newest backup that includes apps is kept even after it ages out. The log says "Kept N older backup(s) because they hold the newest copy of types this backup leaves out."
 * Retention deletes backup folders only. It does not delete audit log events.
-* Any damage or unavailable backup in a local backup folder pauses retention for the whole folder. Damaged metadata never establishes ownership or permits deletion.
+* Any damage or unavailable backup observed at any point during retention stops deletion for the whole folder. Retention checks again immediately before each deletion. Damaged metadata never establishes ownership or permits deletion.
 
 :::caution
 Retention applies to every backup in the tenant's storage location, including backups made from other computers. If several admins share one Azure storage account, the shortest retention setting among them wins.

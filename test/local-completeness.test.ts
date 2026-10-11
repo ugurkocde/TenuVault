@@ -11,6 +11,8 @@ import { POST as download } from '../src/portal/app/api/download-backup/route'
 import { POST as drift } from '../src/portal/app/api/detect-drifts/route'
 import { POST as preview } from '../src/portal/app/api/restore-preview/route'
 import { POST as changes } from '../src/portal/app/api/backup-changes/route'
+import { POST as contents } from '../src/portal/app/api/list-backup-contents/route'
+import { POST as restore } from '../src/portal/app/api/restore-backup/route'
 
 const account = 'tvlocal-test'
 const container = 'intune-backups'
@@ -123,4 +125,23 @@ it('shows damage and unknown ownership when an unreadable metadata header leaves
   const history = await listBackups(request())
   expect(history.status).toBe(200)
   expect(await history.json()).toEqual({ backups: [], damagedFiles: [{ file: keep, reason: 'Truncated backup header', ownershipUnknown: true }], completenessUnknown: true, retentionPaused: true })
+})
+
+it('returns the inventory error and recovery reason from contents and full restore when a header is truncated', async () => {
+  const { dir, files } = await setup(true)
+  writeFileSync(join(dir, files.get(`${folders[0]}/DeviceConfigurations/A.json`)!), 'TVB1')
+  for (const response of [await contents(request({ backupId: folders[2] })), await restore(request({ backupId: folders[2], restoreType: 'full' }))]) {
+    expect(response.status).toBe(500)
+    expect(await response.json()).toMatchObject({ code: 'IncompleteInventory', error: expect.stringContaining('Remove or recover the reported files') })
+  }
+  expect(vi.mocked(fetch).mock.calls.some(([input, init]) => new Request(input, init).method === 'POST' && new URL(new Request(input, init).url).hostname === 'graph.microsoft.com')).toBe(false)
+})
+
+it('preserves newline-containing damaged filenames in history diagnostics', async () => {
+  const { dir } = await setup()
+  const file = 'conflict\ncopy.tvb'
+  writeFileSync(join(dir, file), 'TVB1')
+  const history = await listBackups(request())
+  expect(history.status).toBe(200)
+  expect(await history.json()).toMatchObject({ damagedFiles: [{ file, reason: 'Truncated backup header', ownershipUnknown: true }], completenessUnknown: true, retentionPaused: true })
 })

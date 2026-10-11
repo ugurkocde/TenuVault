@@ -34,8 +34,9 @@ Put these in the next stable release's notes, then remove them here.
   pauses downloads, drift comparisons, backup changes and restore previews only for its affected
   backup, including files missing from an authenticated manifest. Unidentifiable damaged files
   pause those operations for the whole tenant backup folder until recovered or removed. History
-  shows a damage notice even when no folders can be identified. Retention pauses while any damage
-  or unavailable backup remains. Damaged metadata never establishes ownership for deletion.
+  shows a damage notice even when no folders can be identified. Retention aborts before deletion
+  whenever damage is observed at any point during the run, including checks immediately before
+  each deletion. Damaged metadata never establishes ownership for deletion.
   The encrypted file format and recovery keys are unchanged.
 
 - Settings Catalog assignments. Released versions backed up Settings Catalog policies (including

@@ -228,7 +228,7 @@ export async function POST(request: NextRequest) {
     }
     const owners = new Map(described.map((backup) => [backup.id, backup.owner]))
     for (const backup of backups) { delete backup.fingerprint; delete backup.owner }
-    const damagedFiles = [...blobsText.matchAll(/<DamagedFile><File>(.*?)<\/File><Reason>(.*?)<\/Reason>(?:<Name>(.*?)<\/Name>)?<\/DamagedFile>/g)]
+    const damagedFiles = [...blobsText.matchAll(/<DamagedFile><File>(.*?)<\/File><Reason>(.*?)<\/Reason>(?:<Name>(.*?)<\/Name>)?<\/DamagedFile>/gs)]
       .map((match) => {
         const name = match[3] ? decodeXml(match[3]) : undefined
         return { file: decodeXml(match[1]!), reason: decodeXml(match[2]!), ...(name ? { name } : {}), ownershipUnknown: !name || !owners.get(name.split('/')[0]!) }

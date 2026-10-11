@@ -205,6 +205,103 @@ describe("surfaceTokenErrors", () => {
 })
 
 describe("retention", () => {
+  it.each(["after the top-level listing", "after the per-backup listing"])("aborts without deleting the last intact Apps copy when a foreign duplicate arrives %s", async (timing) => {
+    const root = mkdtempSync(join(tmpdir(), "tv-retention-late-damage-"))
+    try {
+      const store = new LocalBlobStore(root, [randomBytes(32)])
+      const account = localStorageAccountName(TENANT)
+      const other = localStorageAccountName("33333333-3333-3333-3333-333333333333")
+      const container = "intune-backups"
+      await store.createContainer(account, container)
+      await store.createContainer(other, container)
+      const put = (owner: string, name: string, body: unknown) => store.put(owner, container, name, Buffer.from(JSON.stringify(body)), "application/json")
+      const older = "backup-2026-07-01-020000"
+      const newer = "backup-2026-08-01-020000"
+      await put(account, `${older}/metadata.json`, { Status: "Success", TenantId: TENANT, Scope: { Excluded: [] } })
+      await put(account, `${older}/Apps/Intact.json`, { id: "intact" })
+      await put(account, `${newer}/metadata.json`, { Status: "Success", Scope: { Excluded: [] } })
+      await put(account, `${newer}/Apps/Newer.json`, { id: "newer" })
+      await put(other, `${newer}/Apps/Newer.json`, { id: "foreign" })
+      const foreignDir = join(root, other, container)
+      const foreignFile = readdirSync(foreignDir)[0]!
+      const graph = fakeGraph()
+      let injected = false
+      const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        const url = new URL(request.url)
+        if (!localAccountFromUrl(url)) return graph(url)
+        const response = await handleLocalBlobRequest(store, request)
+        const targetPrefix = timing === "after the top-level listing" ? "" : `${older}/`
+        if (!injected && url.searchParams.get("comp") === "list" && url.searchParams.get("prefix") === targetPrefix) {
+          expect(await response.clone().text()).toContain("<RetentionPaused>false</RetentionPaused>")
+          copyFileSync(join(foreignDir, foreignFile), join(root, account, container, "foreign.tvb"))
+          injected = true
+        }
+        return response
+      })
+      const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => new Date("2026-09-24T12:00:00Z") })
+      const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account, scope: { excluded: ["Apps"] } }).id)
+      expect(injected).toBe(true)
+      expect(job.status).toBe("Completed")
+      expect(job.progressMessage).toContain("Retention paused because")
+      expect(job.log.join("\n")).toContain("Older backups were kept")
+      expect(fetchImpl.mock.calls.filter(([input, init]) => new Request(input, init).method === "DELETE")).toHaveLength(0)
+      expect((await store.get(account, container, `${older}/Apps/Intact.json`)).data.toString()).toBe('{"id":"intact"}')
+      expect((await store.get(account, container, `${older}/metadata.json`)).data.toString()).toContain(TENANT)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("aborts ownership checks without deleting an untagged backup when foreign metadata is duplicated after the initial listing", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tv-retention-late-owner-"))
+    try {
+      const store = new LocalBlobStore(root, [randomBytes(32)])
+      const account = localStorageAccountName(TENANT)
+      const other = localStorageAccountName("33333333-3333-3333-3333-333333333333")
+      const container = "intune-backups"
+      const older = "backup-2026-07-01-020000"
+      const foreign = "backup-2026-07-15-020000"
+      await store.createContainer(account, container)
+      await store.createContainer(other, container)
+      await store.put(account, container, `${older}/metadata.json`, Buffer.from('{"Status":"Success"}'), "application/json")
+      await store.put(account, container, `${older}/Apps/Intact.json`, Buffer.from('{"id":"intact"}'), "application/json")
+      await store.put(other, container, `${foreign}/metadata.json`, Buffer.from(JSON.stringify({ Status: "Success", TenantId: "33333333-3333-3333-3333-333333333333" })), "application/json")
+      const foreignDir = join(root, other, container)
+      const foreignFile = readdirSync(foreignDir)[0]!
+      const dir = join(root, account, container)
+      copyFileSync(join(foreignDir, foreignFile), join(dir, "foreign.tvb"))
+      const graph = fakeGraph()
+      let injected = false
+      let ownershipBlocked = false
+      const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        const url = new URL(request.url)
+        if (!localAccountFromUrl(url)) return graph(url)
+        const response = await handleLocalBlobRequest(store, request)
+        if (!injected && url.searchParams.get("comp") === "list" && url.searchParams.get("prefix") === "") {
+          expect(await response.clone().text()).toContain("<RetentionPaused>false</RetentionPaused>")
+          copyFileSync(join(dir, "foreign.tvb"), join(dir, "conflict.tvb"))
+          injected = true
+        }
+        if (url.pathname.endsWith(`${foreign}/metadata.json`)) ownershipBlocked = response.headers.get("x-ms-error-code") === "IncompleteInventory"
+        return response
+      })
+      const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => new Date("2026-09-24T12:00:00Z") })
+      const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+      expect(injected).toBe(true)
+      expect(ownershipBlocked).toBe(true)
+      expect(job.status).toBe("Completed")
+      expect(job.progressMessage).toContain("Retention paused because")
+      expect(job.log.join("\n")).toContain("Older backups were kept")
+      expect(fetchImpl.mock.calls.filter(([input, init]) => new Request(input, init).method === "DELETE")).toHaveLength(0)
+      expect((await store.get(account, container, `${older}/Apps/Intact.json`)).data.toString()).toBe('{"id":"intact"}')
+      expect((await store.get(account, container, `${older}/metadata.json`)).data.toString()).toBe('{"Status":"Success"}')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it.each(["duplicate Apps", "duplicate foreign metadata", "unknown header", "missing manifest item"])("keeps the last intact Apps copy and all older backups when inventory has %s", async (damage) => {
     const root = mkdtempSync(join(tmpdir(), "tv-retention-damage-"))
     try {
