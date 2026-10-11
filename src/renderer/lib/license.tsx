@@ -10,24 +10,35 @@ interface LicenseContextValue {
 }
 
 const LicenseContext = createContext<LicenseContextValue | null>(null)
+const LICENSE_STATUS_TIMEOUT_MS = 30 * 1000
 
 export function LicenseProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<LicenseStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
   const refreshing = useRef(false)
+  const attempt = useRef(0)
 
   const refresh = useCallback(async () => {
     if (refreshing.current) return
     refreshing.current = true
+    const currentAttempt = ++attempt.current
     setError(null)
+    let timer: ReturnType<typeof setTimeout> | undefined
     try {
-      setStatus(await bridge.license.status())
+      const nextStatus = await Promise.race([
+        bridge.license.status(),
+        new Promise<LicenseStatus>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("The license check did not respond. Try again.")), LICENSE_STATUS_TIMEOUT_MS)
+        }),
+      ])
+      if (attempt.current === currentAttempt) setStatus(nextStatus)
     } catch (error) {
-      setError(error instanceof Error ? error.message : String(error))
+      if (attempt.current === currentAttempt) setError(error instanceof Error ? error.message : String(error))
       console.error("Could not load license status:", error)
       throw error
     } finally {
-      refreshing.current = false
+      clearTimeout(timer)
+      if (attempt.current === currentAttempt) refreshing.current = false
     }
   }, [])
 

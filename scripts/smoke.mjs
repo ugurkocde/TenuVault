@@ -210,6 +210,97 @@ await check("a pending license retry shows progress without overlapping requests
   }
 })
 
+await check("hung license checks time out and ignore late responses after retry", async () => {
+  try {
+    await evaluate(`(async () => {
+      const status = await window.tenuvault.license.status()
+      window.__licenseTimeout = { calls: 0, expired: 0, timers: new Set(), status }
+      const frame = document.createElement("iframe")
+      frame.style.cssText = "position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 9999;"
+      document.body.appendChild(frame)
+      window.__licenseTimeoutFrame = frame
+      // Give the router the app's URL instead of about:blank.
+      frame.contentDocument.open()
+      frame.contentDocument.write('<html><head></head><body><div id="root"></div></body></html>')
+      frame.contentDocument.close()
+      frame.contentWindow.location.hash = "#/portal/onboarding"
+      frame.contentWindow.tenuvault = {
+        ...window.tenuvault,
+        license: {
+          ...window.tenuvault.license,
+          status: () => {
+            const call = ++window.__licenseTimeout.calls
+            // The first call belongs to tenant storage, before the provider starts.
+            if (call === 2) return new Promise(resolve => {
+              window.__licenseTimeout.resolveFirst = () => resolve({ ...status, hasKey: true })
+            })
+            if (call === 4) return new Promise(resolve => {
+              window.__licenseTimeout.resolveBackground = () => resolve({ ...status, hasKey: true })
+            })
+            return Promise.resolve(status)
+          },
+          onChanged: listener => {
+            window.__licenseTimeout.onChanged = listener
+            return () => { window.__licenseTimeout.onChanged = null }
+          },
+        },
+      }
+      const setTimeout = frame.contentWindow.setTimeout.bind(frame.contentWindow)
+      const clearTimeout = frame.contentWindow.clearTimeout.bind(frame.contentWindow)
+      frame.contentWindow.setTimeout = (callback, delay, ...args) => {
+        if (delay !== 30000) return setTimeout(callback, delay, ...args)
+        // Shorten only the renderer's 30-second deadline in this isolated smoke frame.
+        const timer = setTimeout(() => {
+          window.__licenseTimeout.expired++
+          callback(...args)
+        }, 2000)
+        window.__licenseTimeout.timers.add(timer)
+        return timer
+      }
+      frame.contentWindow.clearTimeout = timer => {
+        window.__licenseTimeout.timers.delete(timer)
+        clearTimeout(timer)
+      }
+      const setInterval = frame.contentWindow.setInterval.bind(frame.contentWindow)
+      frame.contentWindow.setInterval = (callback, delay, ...args) => {
+        if (delay === 5 * 60 * 1000) window.__licenseTimeout.refresh = callback
+        return setInterval(callback, delay, ...args)
+      }
+      document.querySelectorAll('link[rel="stylesheet"]').forEach(link => frame.contentDocument.head.appendChild(link.cloneNode()))
+      const script = frame.contentDocument.createElement("script")
+      script.type = "module"
+      script.src = document.querySelector('script[type="module"]').src
+      frame.contentDocument.head.appendChild(script)
+    })()`)
+    const body = `window.__licenseTimeoutFrame.contentDocument.body`
+    assert(await waitForCondition(`window.__licenseTimeout.calls === 2 && Boolean(${body}.querySelector(".animate-spin"))`), "hung startup check did not show the spinner")
+    await evaluate(`window.__licenseTimeout.refresh()`)
+    assert(await evaluate(`window.__licenseTimeout.calls === 2`), "hung startup check allowed an overlapping request")
+    assert(await waitForCondition(`${body}.innerText.includes("The license check did not respond. Try again.")`), "hung startup check did not display the timeout error")
+    assert(await evaluate(`window.__licenseTimeout.timers.size === 0`), "timed-out license check did not clear its timer")
+    assert(await evaluate(`[...${body}.querySelectorAll("button")].some(b => b.textContent === "Retry" && !b.disabled)`), "Retry is unavailable after the timeout")
+    await evaluate(`[...${body}.querySelectorAll("button")].find(b => b.textContent === "Retry").click()`)
+    assert(await waitForCondition(`window.__licenseTimeout.calls === 3 && ${body}.innerText.includes("Welcome to TenuVault")`), "Retry did not send a new request and recover")
+    assert(await evaluate(`window.__licenseTimeout.timers.size === 0`), "successful license check did not clear its timer")
+    await evaluate(`window.__licenseTimeout.resolveFirst()`)
+    await sleep(250)
+    assert(await evaluate(`${body}.innerText.includes("Welcome to TenuVault") && !${body}.querySelector('[role="alert"]')`), "late startup response overwrote the successful retry")
+    await evaluate(`window.__licenseTimeout.refresh()`)
+    assert(await evaluate(`window.__licenseTimeout.calls === 4 && ${body}.innerText.includes("Welcome to TenuVault")`), "background check did not keep the loaded status")
+    await evaluate(`window.__licenseTimeout.onChanged({ ...window.__licenseTimeout.status, hasKey: true })`)
+    assert(await waitForCondition(`${body}.innerText.includes("Backup & Restore")`), "license change was not delivered during the pending check")
+    assert(await waitForCondition(`window.__licenseTimeout.expired === 2 && window.__licenseTimeout.timers.size === 0`), "hung background check did not time out")
+    assert(await evaluate(`${body}.innerText.includes("Backup & Restore") && !${body}.querySelector('[role="alert"]')`), "background timeout discarded the loaded status")
+    await evaluate(`window.__licenseTimeout.refresh()`)
+    assert(await waitForCondition(`window.__licenseTimeout.calls === 5 && ${body}.innerText.includes("Welcome to TenuVault")`), "background timeout left the refresh guard locked")
+    await evaluate(`window.__licenseTimeout.resolveBackground()`)
+    await sleep(250)
+    assert(await evaluate(`${body}.innerText.includes("Welcome to TenuVault")`), "late background response overwrote the current status")
+  } finally {
+    await evaluate(`window.__licenseTimeoutFrame?.remove(); delete window.__licenseTimeoutFrame; delete window.__licenseTimeout`)
+  }
+})
+
 await check("malformed license keys are rejected", async () => {
   await evaluate(`(() => {
     const input = document.getElementById("license-key")
