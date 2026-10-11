@@ -1,4 +1,4 @@
-import { decodeXml, listBlobPages } from "~/lib/storage/list"
+import { BlobListError, decodeXml, listBlobPages } from "~/lib/storage/list"
 import { typeForFolder } from "../../../../shared/intune/registry"
 import { withoutUnreadAssignments } from "../../../../shared/intune/read"
 import { coveredFolders, type ScopeMetadata } from "../../../../shared/intune/scope"
@@ -83,7 +83,7 @@ export async function POST(request: NextRequest) {
     signal?.throwIfAborted()
 
     // Using delimiter=/ to get folder prefixes instead of all blobs
-    const listUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&delimiter=/`
+    const listUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=backup-&delimiter=/`
     const listText = await listBlobPages(listUrl, accessToken, signal)
     const backupFolders = parseBackupFolders(listText)
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
@@ -226,7 +226,7 @@ export async function POST(request: NextRequest) {
     if (error instanceof DriftPairError) return NextResponse.json({ error: error.message, code: error.code }, { status: error.status })
     console.error("Detect drifts error:", error)
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Internal server error while detecting drifts" },
+      { error: error instanceof Error ? error.message : "Internal server error while detecting drifts", ...(error instanceof BlobListError && error.code === 'IncompleteInventory' ? { code: error.code } : {}) },
       { status: 500 }
     )
   }

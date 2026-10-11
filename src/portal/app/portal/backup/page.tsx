@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~
 import { Alert, AlertDescription } from "~/components/ui/alert"
 import { BackupProgressModal } from "~/components/tenants/backup-progress-modal"
 import { BackupChangesDialog } from "~/components/backup/backup-changes-dialog"
+import { BackupInventoryNotice } from "~/components/backup/backup-inventory-notice"
 import { RestoreWizard } from "~/components/backup/restore-wizard"
 import { formatDate, formatDuration, formatSize, STATUS_LABEL, statusKind, TRIGGER_LABEL, type BackupSummary, type BackupTenant, type StatusKind } from "~/components/backup/types"
 import { BackupSchedulePanel } from "@desktop/components/BackupSchedulePanel"
@@ -236,6 +237,7 @@ export default function BackupRestorePage() {
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
+      {selectedTenant && !isLoading && <BackupInventoryNotice damagedFiles={backupList.damagedFiles} completenessUnknown={backupList.completenessUnknown} retentionPaused={backupList.retentionPaused} />}
 
       {activeTab === "backup" && selectedTenant && !isLoading && !blockingError && (
         <div className="space-y-6">

@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs"
+import { copyFileSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -205,6 +205,58 @@ describe("surfaceTokenErrors", () => {
 })
 
 describe("retention", () => {
+  it.each(["duplicate Apps", "duplicate foreign metadata", "unknown header", "missing manifest item"])("keeps the last intact Apps copy and all older backups when inventory has %s", async (damage) => {
+    const root = mkdtempSync(join(tmpdir(), "tv-retention-damage-"))
+    try {
+      const store = new LocalBlobStore(root, [randomBytes(32)])
+      const account = localStorageAccountName(TENANT)
+      const other = localStorageAccountName("33333333-3333-3333-3333-333333333333")
+      const container = "intune-backups"
+      await store.createContainer(account, container)
+      await store.createContainer(other, container)
+      const put = (owner: string, name: string, body: unknown) => store.put(owner, container, name, Buffer.from(JSON.stringify(body)), "application/json")
+      const older = "backup-2026-07-01-020000"
+      const newer = "backup-2026-08-01-020000"
+      await put(account, `${older}/metadata.json`, { Status: "Success", TenantId: TENANT, Scope: { Excluded: [] } })
+      await put(account, `${older}/Apps/Intact.json`, { id: "intact" })
+      // Legacy metadata has no Items manifest and still claims coverage of Apps.
+      await put(account, `${newer}/metadata.json`, { Status: "Success", Scope: { Excluded: [] } })
+      const dir = join(root, account, container)
+      if (damage === "duplicate Apps" || damage === "duplicate foreign metadata") {
+        const name = damage === "duplicate Apps" ? `${newer}/Apps/Newer.json` : "backup-2026-07-15-020000/metadata.json"
+        if (damage === "duplicate Apps") await put(account, name, { id: "newer" })
+        await put(other, name, damage === "duplicate Apps" ? { id: "foreign" } : { Status: "Success", TenantId: "33333333-3333-3333-3333-333333333333" })
+        const foreignDir = join(root, other, container)
+        const foreignFile = readdirSync(foreignDir)[0]!
+        copyFileSync(join(foreignDir, foreignFile), join(dir, "foreign.tvb"))
+        if (damage === "duplicate foreign metadata") copyFileSync(join(foreignDir, foreignFile), join(dir, "conflict.tvb"))
+      } else if (damage === "unknown header") writeFileSync(join(dir, "unknown.tvb"), "TVB1")
+      else await put(account, `${newer}/metadata.json`, { Status: "Success", Items: { "Apps/missing": { file: "Missing.json" } } })
+      const graph = fakeGraph()
+      const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init)
+        const url = new URL(request.url)
+        return localAccountFromUrl(url) ? handleLocalBlobRequest(store, request) : graph(url)
+      })
+      const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", retentionDays: () => 30, now: () => new Date("2026-09-24T12:00:00Z") })
+      const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account, scope: { excluded: ["Apps"] } }).id)
+      expect(job.status).toBe("Completed")
+      expect(job.progressMessage).toContain("Retention paused because")
+      expect(job.log.join("\n")).toContain("Older backups were kept")
+      expect((await store.get(account, container, `${older}/Apps/Intact.json`)).data.toString()).toBe('{"id":"intact"}')
+      expect((await store.list(account, container)).some(blob => blob.name === `${older}/metadata.json`)).toBe(true)
+      expect((await store.list(account, container)).some(blob => blob.name === `${job.backupFolder}/metadata.json`)).toBe(true)
+      expect(fetchImpl.mock.calls.some(([input, init]) => new Request(input, init).method === "DELETE")).toBe(false)
+      if (damage === "duplicate foreign metadata") {
+        const response = await handleLocalBlobRequest(store, new Request(`https://${account}.blob.core.windows.net/${container}?restype=container&comp=list&prefix=backup-&delimiter=/`))
+        expect(response.status).toBe(200)
+        expect(await response.text()).toContain("<BlobPrefix><Name>backup-2026-07-15-020000/</Name></BlobPrefix>")
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it("deletes backups older than the retention period after a backup, keeping newer ones", async () => {
     const store = new LocalBlobStore(mkdtempSync(join(tmpdir(), "tv-retention-")), [randomBytes(32)])
     const account = localStorageAccountName(TENANT)

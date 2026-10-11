@@ -75,6 +75,11 @@ async function listBlobs(store: LocalBlobStore, account: string, container: stri
   const marker = query.get("marker") ?? ""
   const maxResults = Math.min(Number(query.get("maxresults")) || 5000, 5000)
   const inventory = await store.inventory(account, container)
+  // Only history's top-level folder enumeration may return a partial inventory. All other
+  // backup listings promise a complete set and fail closed until unknown damage is removed.
+  if (container === "intune-backups" && inventory.completenessUnknown && !(prefix === "" && delimiter === "/")) {
+    throw new IncompleteInventoryError(inventory.damagedFiles.length, "Backup folder completeness is unknown because damaged files cannot be attributed. Remove or recover the reported files before downloading, comparing or previewing restores. Retention is paused.")
+  }
   const unavailable = inventory.unavailableBackups.find((backup) => prefix.startsWith(`${backup.name}/`))
   if (unavailable) throw new IncompleteInventoryError(1, unavailable.reason)
 
@@ -96,8 +101,9 @@ async function listBlobs(store: LocalBlobStore, account: string, container: stri
     }
   }
   // Keep folders visible even when their only file has an authenticated but damaged body.
-  if (delimiter === "/" && !prefix) for (const backup of inventory.unavailableBackups) {
+  if (delimiter === "/") for (const backup of inventory.unavailableBackups) {
     const folder = `${backup.name}/`
+    if (!folder.startsWith(prefix) || folder.slice(prefix.length).indexOf("/") < 0) continue
     if (!prefixes.has(folder)) {
       prefixes.add(folder)
       items.push({ key: folder, xml: `<BlobPrefix><Name>${xml(folder)}</Name></BlobPrefix>` })
@@ -117,6 +123,7 @@ async function listBlobs(store: LocalBlobStore, account: string, container: stri
       (delimiter ? `<Delimiter>${xml(delimiter)}</Delimiter>` : "") +
       `<Blobs>${page.map((item) => item.xml).join("")}</Blobs>` +
       `<DamagedFiles>${inventory.damagedFiles.map((file) => `<DamagedFile><File>${xml(file.file)}</File><Reason>${xml(file.reason)}</Reason>${file.name ? `<Name>${xml(file.name)}</Name>` : ""}</DamagedFile>`).join("")}</DamagedFiles>` +
+      `<CompletenessUnknown>${inventory.completenessUnknown}</CompletenessUnknown><RetentionPaused>${inventory.retentionPaused}</RetentionPaused>` +
       (next ? `<NextMarker>${xml(next.key)}</NextMarker>` : "<NextMarker />") +
       `</EnumerationResults>`,
     { status: 200, headers: { "content-type": "application/xml" } },

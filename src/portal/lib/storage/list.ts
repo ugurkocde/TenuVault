@@ -3,8 +3,12 @@ export function decodeXml(value: string): string {
 }
 
 export class BlobListError extends Error {
+  readonly code: string | undefined
   constructor(readonly status: number, readonly body: string, readonly completedPages = 0) {
-    super(`Backup storage could not be read (${status}). Check storage access and retry.`)
+    const code = /<Code>([^<]+)<\/Code>/.exec(body)?.[1]
+    const message = /<Message>([\s\S]*?)<\/Message>/.exec(body)?.[1]
+    super(code === 'IncompleteInventory' ? `IncompleteInventory: ${decodeXml(message ?? 'Backup files are missing or damaged.')}` : `Backup storage could not be read (${status}). Check storage access and retry.`)
+    this.code = code
   }
 }
 

@@ -246,7 +246,7 @@ describe('pagination guards', () => {
       const url = new URL(request.url)
       requested.push(url.href)
       if (localAccountFromUrl(url)) {
-        if (url.searchParams.get('comp') === 'list' && url.searchParams.get('prefix') === 'backup-') return new Response(listing(url.searchParams.get('marker') ?? ''))
+        if (url.searchParams.get('comp') === 'list' && url.searchParams.get('delimiter') === '/') return new Response(listing(url.searchParams.get('marker') ?? ''))
         return handleLocalBlobRequest(store, request)
       }
       if (graph) return graph(url)
@@ -268,7 +268,7 @@ describe('pagination guards', () => {
   it('stops a storage listing after the page cap', async () => {
     const { job, requested } = await backupWithListing((marker) => `<EnumerationResults><Blobs></Blobs><NextMarker>m${Number(marker.slice(1) || 0) + 1}</NextMarker></EnumerationResults>`)
     expect(job.log.join('\n')).toContain('Could not remove old backups: Storage listing did not finish after 10000 pages')
-    expect(requested.filter((url) => url.includes('prefix=backup-')).length).toBe(10_000)
+    expect(requested.filter((url) => new URL(url).searchParams.get('comp') === 'list').length).toBe(10_000)
   }, 60_000)
   it('rejects expanded-collection nextLinks on another origin', async () => {
     const { job, requested } = await backupWithListing(() => '<EnumerationResults><Blobs></Blobs></EnumerationResults>', (url) => {

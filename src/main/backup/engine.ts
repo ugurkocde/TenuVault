@@ -284,9 +284,11 @@ export class BackupEngine {
 
     // Only a complete backup may replace older ones: if policies could not be read (for
     // example after a permission change), keep every existing backup.
+    let retentionWarning: string | null = null
     if (failures === 0) {
-      await this.applyRetention(job, storage, backupFolder, coveredFolders(metadata)).catch((error: unknown) => {
+      retentionWarning = await this.applyRetention(job, storage, backupFolder, coveredFolders(metadata)).catch((error: unknown) => {
         this.write(job, `Could not remove old backups: ${error instanceof Error ? error.message : String(error)}`)
+        return `Retention paused: ${error instanceof Error ? error.message : String(error)}`
       })
     } else {
       this.write(job, "Older backups were kept because this backup is incomplete.")
@@ -295,6 +297,7 @@ export class BackupEngine {
     job.status = failures > 0 && totalPolicies === 0 ? "Failed" : "Completed"
     job.progressMessage =
       job.status === "Failed" ? "Backup failed: no policies could be saved" : failures > 0 ? `Backup completed with ${failures} warning${failures === 1 ? "" : "s"}` : "Backup completed successfully"
+    if (retentionWarning) job.progressMessage = `Backup completed with a warning. ${retentionWarning}`
     this.write(job, `Backup completed: ${totalPolicies} policies in ${metadata.Duration}.`)
   }
 
@@ -306,11 +309,17 @@ export class BackupEngine {
    * versions that did not record the tenant count as this tenant's unless the container also
    * holds a backup recorded as another tenant's.
    */
-  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, covered: Set<string>): Promise<void> {
+  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, covered: Set<string>): Promise<string | null> {
     const days = this.deps.retentionDays?.(job.tenantId) ?? 0
-    if (days <= 0) return
+    if (days <= 0) return null
     const cutoff = this.now().getTime() - days * 24 * 60 * 60 * 1000
-    const { prefixes } = await storage.list("backup-", "/")
+    const { prefixes, retentionPaused, completenessUnknown } = await storage.list("", "/")
+    if (retentionPaused) {
+      const reason = completenessUnknown ? "damaged files cannot be attributed to a backup" : "the backup folder contains damaged files or unavailable backups"
+      const warning = `Retention paused because ${reason}. Older backups were kept. Recover or remove the reported damage before retention can continue.`
+      this.write(job, warning)
+      return warning
+    }
     const backups = prefixes
       .map((prefix) => {
         const match = /^backup-(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})\/$/.exec(prefix)
@@ -384,6 +393,7 @@ export class BackupEngine {
       this.write(job, `Kept ${protectedKept} older backup${protectedKept === 1 ? "" : "s"} protected by the storage account's immutability policy or legal hold.${partlyRemoved > 0 ? ` ${partlyRemoved} of them lost some files before the protected ones were reached, including ${partlyRemoved === 1 ? "its" : "their"} metadata, so ${partlyRemoved === 1 ? "it is" : "they are"} no longer offered as complete.` : ""}`)
     }
     if (unowned > 0) this.write(job, `Kept ${unowned} older backup${unowned === 1 ? "" : "s"} not recorded as this tenant's (another tenant's, without readable metadata, or from an earlier version in a container another tenant also uses).`)
+    return null
   }
 
   private write(job: BackupJob, line: string): void {
@@ -524,9 +534,11 @@ class BlobWriter {
   }
 
   /** Lists blob names and, with a delimiter, virtual folders under a prefix. */
-  async list(prefix: string, delimiter = ""): Promise<{ blobs: string[]; prefixes: string[] }> {
+  async list(prefix: string, delimiter = ""): Promise<{ blobs: string[]; prefixes: string[]; retentionPaused: boolean; completenessUnknown: boolean }> {
     const blobs: string[] = []
     const prefixes: string[] = []
+    let retentionPaused = false
+    let completenessUnknown = false
     let marker = ""
     const seen = new Set<string>()
     do {
@@ -536,6 +548,8 @@ class BlobWriter {
       if (response.status === 404) break
       if (!response.ok) throw new Error(await storageError(response, this.account))
       const xml = await response.text()
+      retentionPaused ||= xml.includes("<RetentionPaused>true</RetentionPaused>") || xml.includes("<DamagedFile>")
+      completenessUnknown ||= xml.includes("<CompletenessUnknown>true</CompletenessUnknown>")
       const decode = (value: string) => value.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
       for (const m of xml.matchAll(/<BlobPrefix><Name>([^<]*)<\/Name><\/BlobPrefix>/g)) prefixes.push(decode(m[1]!))
       for (const m of xml.matchAll(/<Blob><Name>([^<]*)<\/Name>/g)) blobs.push(decode(m[1]!))
@@ -543,13 +557,14 @@ class BlobWriter {
       if (marker && seen.has(marker)) throw new Error("Storage returned a repeated continuation marker")
       seen.add(marker)
     } while (marker)
-    return { blobs, prefixes }
+    return { blobs, prefixes, retentionPaused, completenessUnknown }
   }
 
   /** A JSON blob, or null when it does not exist or is not valid JSON. */
   async readJson(name: string): Promise<Record<string, unknown> | null> {
     const response = await this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, { method: "GET" })
     if (response.status === 404) return null
+    if (response.headers.get("x-ms-error-code") === "IncompleteInventory") return null // Damaged metadata never establishes ownership.
     if (!response.ok) throw new Error(await storageError(response, this.account))
     return (await response.json().catch(() => null)) as Record<string, unknown> | null
   }

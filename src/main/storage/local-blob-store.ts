@@ -187,6 +187,8 @@ export class LocalBlobStore {
       blobs: [...inventory.entries.values()].map(({ file: _file, version: _version, ...blob }) => blob).sort((a, b) => (a.name < b.name ? -1 : 1)),
       damagedFiles: inventory.damagedFiles.map((file) => ({ ...file })),
       unavailableBackups: [...inventory.unavailableBackups].map(([name, reason]) => ({ name, reason })),
+      completenessUnknown: inventory.damagedFiles.some((file) => !file.name || (container === "intune-backups" && !/^backup-[^/]+\//.test(file.name))),
+      retentionPaused: inventory.damagedFiles.length > 0 || inventory.unavailableBackups.size > 0,
     }
   }
 
@@ -393,10 +395,6 @@ export class LocalBlobStore {
       else if ("reason" in entry) damagedFiles.push(entry)
       else entries.set(entry.name, entry)
     }
-    for (const damaged of damagedFiles) {
-      const backup = damaged.name?.split("/")[0]
-      if (container === "intune-backups" && backup?.startsWith("backup-")) unavailableBackups.set(backup, `Backup is unavailable: ${damaged.file}: ${damaged.reason}. Recover the file or import its recovery key before downloading or restoring.`)
-    }
     // An authenticated manifest blocks only its backup's downloads and restores.
     for (const entry of entries.values()) {
       if (container !== "intune-backups" || !/^backup-[^/]+\/metadata\.json$/.test(entry.name)) continue
@@ -407,11 +405,21 @@ export class LocalBlobStore {
         if (!metadata.Items || typeof metadata.Items !== "object" || Array.isArray(metadata.Items)) throw new Error("Invalid backup inventory manifest")
         const prefix = entry.name.slice(0, -"metadata.json".length)
         let missing = 0
+        const names: string[] = []
         for (const [key, item] of Object.entries(metadata.Items)) {
           const folder = key.split("/")[0]
           const file = (item as { file?: unknown } | null)?.file
           if (!folder || typeof file !== "string" || !file || file.includes("/") || file.includes("\\")) throw new Error("Invalid backup inventory manifest")
-          if (!entries.has(`${prefix}${folder}/${file}`)) missing++
+          names.push(`${prefix}${folder}/${file}`)
+        }
+        for (const name of names) {
+          // A readable manifest and the keyed file name can attribute an unreadable header.
+          if (damagedFiles.some((file) => !file.name)) {
+            for (const damaged of this.damagedFor(inventory, account, container, name)) {
+              if (!damaged.name) damaged.name = name
+            }
+          }
+          if (!entries.has(name)) missing++
         }
         if (missing) throw new Error(`Backup inventory is incomplete: ${missing} file(s) listed in the manifest are missing or damaged. Recover the missing files before downloading or restoring.`)
       } catch (error) {
@@ -419,6 +427,10 @@ export class LocalBlobStore {
         unavailableBackups.set(backup, reason)
         inventory.blockedBackups.set(backup, reason)
       }
+    }
+    for (const damaged of damagedFiles) {
+      const backup = damaged.name?.split("/")[0]
+      if (container === "intune-backups" && backup?.startsWith("backup-") && !unavailableBackups.has(backup)) unavailableBackups.set(backup, `Backup is unavailable: ${damaged.file}: ${damaged.reason}. Recover the file or import its recovery key before downloading or restoring.`)
     }
     return inventory
   }

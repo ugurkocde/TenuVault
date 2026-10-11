@@ -1,3 +1,11 @@
+/** A damaged local file as /api/list-backups describes it. */
+export interface BackupDamagedFile {
+  file: string
+  reason: string
+  name?: string
+  ownershipUnknown: boolean
+}
+
 /** A backup as /api/list-backups describes it. */
 export interface BackupSummary {
   id: string

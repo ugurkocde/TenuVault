@@ -27,7 +27,7 @@ async function setup() {
 }
 it('reports wrong keys alongside the healthy inventory through the blob API', async () => {
   const { root, dir } = await setup()
-  const response = await handleLocalBlobRequest(new LocalBlobStore(root, [randomBytes(32)]), new Request(`https://${account}.blob.core.windows.net/${container}?restype=container&comp=list`))
+  const response = await handleLocalBlobRequest(new LocalBlobStore(root, [randomBytes(32)]), new Request(`https://${account}.blob.core.windows.net/${container}?restype=container&comp=list&delimiter=/`))
   expect(response.status).toBe(200)
   const xml = await response.text()
   expect(xml).toContain('<Blobs></Blobs>')
@@ -191,9 +191,11 @@ it.each(['missing', 'damaged', 'duplicate', 'damaged metadata', 'damaged metadat
   }))
   const response = await listBackups(new NextRequest('http://tenuvault.internal/api/list-backups', { method: 'POST', body: JSON.stringify({ tenantId: 'test', appId: 'app', clientSecret: 'test', storageAccountName: account, subscriptionId: 'local', resourceGroupName: 'local' }) }))
   expect(response.status).toBe(200)
-  const { backups, damagedFiles } = await response.json()
+  const { backups, damagedFiles, completenessUnknown, retentionPaused } = await response.json()
   expect(backups).toHaveLength(2)
-  expect(backups[0]).toMatchObject({ id: healthy, status: 'Success', changes: null })
+  expect(backups[0]).toMatchObject({ id: healthy, status: damage === 'damaged metadata header' ? 'unavailable' : 'Success', changes: null })
+  expect(completenessUnknown).toBe(damage === 'damaged metadata header')
+  expect(retentionPaused).toBe(true)
   expect(backups[1]).toMatchObject({ id: affected, status: 'unavailable', error: expect.stringMatching(/missing|damaged|authenticated|encrypted/) })
   expect(STATUS_LABEL[statusKind(backups[1].status)]).toBe('Unavailable')
   if (damage !== 'missing') expect(damagedFiles).toEqual(expect.arrayContaining([expect.objectContaining({ file: damage.startsWith('damaged metadata') ? metadataFile : policyFile })]))

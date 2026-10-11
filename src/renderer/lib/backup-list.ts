@@ -1,6 +1,6 @@
 import { useEffect, useSyncExternalStore } from "react"
 import type { Tenant } from "~/contexts/TenantContext"
-import type { BackupSummary } from "~/components/backup/types"
+import type { BackupDamagedFile, BackupSummary } from "~/components/backup/types"
 
 /**
  * Each tenant's backup list, kept for every page while the app runs. Listing backups reads every
@@ -11,13 +11,16 @@ import type { BackupSummary } from "~/components/backup/types"
 export interface BackupList {
   /** Null until the first list arrived. */
   backups: BackupSummary[] | null
+  damagedFiles: BackupDamagedFile[]
+  completenessUnknown: boolean
+  retentionPaused: boolean
   /** Why the last refresh failed; `backups` are then from an earlier one, if any. */
   error: string
   /** A refresh is running. */
   loading: boolean
 }
 
-const EMPTY: BackupList = { backups: null, error: "", loading: false }
+const EMPTY: BackupList = { backups: null, damagedFiles: [], completenessUnknown: false, retentionPaused: false, error: "", loading: false }
 
 let lists: Record<string, BackupList> = {}
 const listeners = new Set<() => void>()
@@ -83,7 +86,7 @@ export function refreshBackupList(tenant: Tenant, options: { force?: boolean } =
       })
       const data = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(data.details || data.error || "Backups are unavailable. Check this tenant's sign-in, license, and storage access.")
-      if (latest.get(key) === id) update(key, { backups: data.backups ?? [], error: "", loading: false })
+      if (latest.get(key) === id) update(key, { backups: data.backups ?? [], damagedFiles: data.damagedFiles ?? [], completenessUnknown: data.completenessUnknown === true, retentionPaused: data.retentionPaused === true, error: "", loading: false })
     } catch (failure) {
       if (latest.get(key) === id) update(key, { error: failure instanceof Error ? failure.message : "Backups are unavailable.", loading: false })
     }

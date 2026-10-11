@@ -105,6 +105,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     changes: null as ChangeSummary | null,
     comparedWith: null as string | null,
     fingerprint: (inventoryError ? null : metadata) as BackupFingerprint | null | undefined,
+    owner: typeof metadata?.TenantId === 'string' ? metadata.TenantId : null,
     error: inventoryError ?? metadataError,
     warning: undefined,
     runbookVersion: metadata?.RunbookVersion ?? metadata?.runbookVersion ?? null,
@@ -209,7 +210,7 @@ export async function POST(request: NextRequest) {
     // out; older backups that do not record a tenant are still listed.
     const described = await mapLimit(backupFolders, 6, (name) => describeBackup(storageAccountName, name, accessToken))
     backups.push(...described.filter((backup) => {
-      const owner = (backup.fingerprint as { TenantId?: unknown } | null | undefined)?.TenantId
+      const owner = backup.owner
       return typeof owner !== 'string' || owner.toLowerCase() === String(tenantId).toLowerCase()
     }))
 
@@ -225,11 +226,14 @@ export async function POST(request: NextRequest) {
       current.changes = summarize(compareBackups(previous.fingerprint, current.fingerprint))
       current.comparedWith = previous.id
     }
-    for (const backup of backups) delete backup.fingerprint
-
+    const owners = new Map(described.map((backup) => [backup.id, backup.owner]))
+    for (const backup of backups) { delete backup.fingerprint; delete backup.owner }
     const damagedFiles = [...blobsText.matchAll(/<DamagedFile><File>(.*?)<\/File><Reason>(.*?)<\/Reason>(?:<Name>(.*?)<\/Name>)?<\/DamagedFile>/g)]
-      .map((match) => ({ file: decodeXml(match[1]!), reason: decodeXml(match[2]!), ...(match[3] ? { name: decodeXml(match[3]) } : {}) }))
-    return NextResponse.json({ backups, damagedFiles: [...new Map(damagedFiles.map((file) => [file.file, file])).values()] })
+      .map((match) => {
+        const name = match[3] ? decodeXml(match[3]) : undefined
+        return { file: decodeXml(match[1]!), reason: decodeXml(match[2]!), ...(name ? { name } : {}), ownershipUnknown: !name || !owners.get(name.split('/')[0]!) }
+      })
+    return NextResponse.json({ backups, damagedFiles: [...new Map(damagedFiles.map((file) => [file.file, file])).values()], completenessUnknown: blobsText.includes('<CompletenessUnknown>true</CompletenessUnknown>'), retentionPaused: blobsText.includes('<RetentionPaused>true</RetentionPaused>') })
   } catch (error) {
     console.error("List backups error:", error)
     return NextResponse.json(
