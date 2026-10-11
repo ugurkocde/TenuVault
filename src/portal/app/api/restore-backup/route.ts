@@ -1,4 +1,5 @@
 import { parseDependencyMappings } from "../../../../shared/intune/recovery"
+import { BlobListError } from "~/lib/storage/list"
 import { randomUUID } from "node:crypto"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { graphCaller, Restorer, DependencyMappingError, type RestoreOutcome } from "~/lib/policies/graph-restore"
@@ -134,7 +135,7 @@ export async function POST(request: NextRequest) {
         const listUrl = new URL(`https://${storageAccountName}.blob.core.windows.net/intune-backups`)
         listUrl.search = new URLSearchParams({ restype: 'container', comp: 'list', prefix: `${backupId}/`, marker }).toString()
         const listResponse = await fetch(listUrl, { headers: { 'x-ms-version': '2021-12-02', Authorization: `Bearer ${storageToken}` } })
-        if (!listResponse.ok) throw new Error('Failed to list backup contents')
+        if (!listResponse.ok) throw new BlobListError(listResponse.status, await listResponse.text())
         const xmlText = await listResponse.text()
         for (const match of xmlText.matchAll(/<Blob>[\s\S]*?<Name>(.*?)<\/Name>[\s\S]*?<\/Blob>/g)) {
           const blobName = decodeXml(match[1] ?? '')
@@ -217,7 +218,7 @@ export async function POST(request: NextRequest) {
     console.error("Restore backup error:", error)
 
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Internal server error while restoring" },
+      { error: error instanceof Error ? error.message : "Internal server error while restoring", ...(error instanceof BlobListError && error.code === 'IncompleteInventory' ? { code: error.code } : {}) },
       { status: 500 }
     )
   }

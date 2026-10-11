@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { decodeXml, listBlobPages } from "~/lib/storage/list"
+import { BlobListError, decodeXml, listBlobPages } from "~/lib/storage/list"
 import { typeForFolder } from "../../../../shared/intune/registry"
 import { comparable, compareBackups, type BackupFingerprint } from "../../../../shared/intune/backup-changes"
 import { compareObjects } from "../detect-drifts/route"
@@ -40,6 +40,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    await listBlobPages(`${container}?restype=container&comp=list&prefix=${encodeURIComponent(`${backupId}/`)}`, accessToken)
     const current = (await read(`${backupId}/metadata.json`)) as BackupFingerprint | null
     if (!current || !comparable(current)) {
       return NextResponse.json({ error: "This backup was made by an older version of TenuVault or did not finish, so its changes cannot be listed.", code: "NOT_COMPARABLE" }, { status: 409 })
@@ -63,6 +64,7 @@ export async function POST(request: NextRequest) {
     if (!previous) {
       return NextResponse.json({ backupId, comparedWith: null, changes: [] })
     }
+    await listBlobPages(`${container}?restype=container&comp=list&prefix=${encodeURIComponent(`${previous.id}/`)}`, accessToken)
 
     const changes = compareBackups(previous.metadata, current)
     let detailed = 0
@@ -86,6 +88,6 @@ export async function POST(request: NextRequest) {
     items.sort((a, b) => order[a.change] - order[b.change] || a.typeLabel.localeCompare(b.typeLabel) || a.name.localeCompare(b.name))
     return NextResponse.json({ backupId, comparedWith: previous.id, changes: items })
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Changes could not be listed." }, { status: 500 })
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Changes could not be listed.", ...(error instanceof BlobListError && error.code === 'IncompleteInventory' ? { code: error.code } : {}) }, { status: 500 })
   }
 }

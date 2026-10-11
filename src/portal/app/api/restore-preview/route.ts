@@ -6,6 +6,7 @@ import { itemName, typeForFolder, type Item } from "../../../../shared/intune/re
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
 import { sameSnapshot } from "../../../../shared/intune/compare"
 import { assignmentsUnread } from "../../../../shared/intune/read"
+import { BlobListError, listBlobPages } from "~/lib/storage/list"
 
 const MAX_ITEMS = 2000
 const CONCURRENCY = 6
@@ -60,6 +61,7 @@ export async function POST(request: NextRequest) {
       live === true ? token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default") : Promise.resolve(""),
     ])
     const graph = graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) })
+    await listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${backupId}/`)}`, storageToken)
 
     const preview = async (path: string): Promise<PreviewItem> => {
       const folder = path.split("/")[1] ?? ""
@@ -105,6 +107,6 @@ export async function POST(request: NextRequest) {
     }))
     return NextResponse.json({ backupId, items })
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "The restore preview failed." }, { status: 500 })
+    return NextResponse.json({ error: error instanceof Error ? error.message : "The restore preview failed.", ...(error instanceof BlobListError && error.code === 'IncompleteInventory' ? { code: error.code } : {}) }, { status: 500 })
   }
 }

@@ -1,3 +1,11 @@
+/** A damaged local file as /api/list-backups describes it. */
+export interface BackupDamagedFile {
+  file: string
+  reason: string
+  name?: string
+  ownershipUnknown: boolean
+}
+
 /** A backup as /api/list-backups describes it. */
 export interface BackupSummary {
   id: string
@@ -5,6 +13,7 @@ export interface BackupSummary {
   /** How the backup started; null for backups made before this was recorded. */
   type: "manual" | "scheduled" | "tray" | null
   status: string
+  error?: string
   totalPolicies: number
   /** Items per registry folder. */
   counts?: Record<string, number>
@@ -59,10 +68,11 @@ export function formatDate(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" })
 }
 
-export type StatusKind = "success" | "warning" | "failed" | "running"
+export type StatusKind = "success" | "warning" | "failed" | "running" | "unavailable"
 
 export function statusKind(status: string): StatusKind {
   const value = status.toLowerCase()
+  if (value === "unavailable") return "unavailable"
   if (value.includes("fail") || value === "incomplete") return "failed"
   if (value.includes("warn") || value.includes("partial")) return "warning"
   if (value === "running") return "running"
@@ -74,4 +84,5 @@ export const STATUS_LABEL: Record<StatusKind, string> = {
   warning: "Completed with warnings",
   failed: "Failed",
   running: "Running",
+  unavailable: "Unavailable",
 }

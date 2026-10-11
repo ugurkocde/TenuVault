@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { backupListKey, backupListOf, refreshBackupList, resetBackupLists } from '../src/renderer/lib/backup-list'
 import type { Tenant } from '../src/portal/contexts/TenantContext'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { BackupInventoryNotice } from '../src/portal/components/backup/backup-inventory-notice'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -13,6 +16,7 @@ const tenant = (storageAccountName = 'store', appId = 'app') => ({
   resources: { subscriptionId: '', subscriptionName: '', resourceGroupName: '', storageAccountName, automationAccountName: '' },
 }) as unknown as Tenant
 const backup = (id: string) => ({ id, timestamp: '2026-10-01T00:00:00.000Z', status: 'Success' })
+const diagnostics = { damagedFiles: [], completenessUnknown: false, retentionPaused: false }
 
 /** Answers each /api/list-backups request when its `answer` is called, in any order. */
 function pendingFetch() {
@@ -28,7 +32,7 @@ describe('Backup list cache', () => {
     expect(backupListKey(tenant('Other'))).toBe(`${TENANT}/other`)
     expect(backupListKey(tenant(''))).toBeNull()
     expect(backupListKey(null)).toBeNull()
-    expect(backupListOf(null)).toEqual({ backups: null, error: '', loading: false })
+    expect(backupListOf(null)).toEqual({ ...diagnostics, backups: null, error: '', loading: false })
   })
 
   it('keeps the list for the next visit and joins a refresh already running', async () => {
@@ -39,17 +43,17 @@ describe('Backup list cache', () => {
     expect(second).toBe(first)
     expect(fetches.stub).toHaveBeenCalledTimes(1)
     expect(JSON.parse(String((fetches.stub.mock.calls[0] as unknown as [string, RequestInit])[1].body))).toMatchObject({ subscriptionId: 'local', resourceGroupName: 'local', storageAccountName: 'store' })
-    expect(backupListOf(key)).toEqual({ backups: null, error: '', loading: true })
+    expect(backupListOf(key)).toEqual({ ...diagnostics, backups: null, error: '', loading: true })
     fetches.answer(0, Response.json({ backups: [backup('b1')] }))
     await first
-    expect(backupListOf(key)).toEqual({ backups: [backup('b1')], error: '', loading: false })
+    expect(backupListOf(key)).toEqual({ ...diagnostics, backups: [backup('b1')], error: '', loading: false })
 
     // The next visit shows the kept list while it refreshes; a failed refresh keeps it too.
     const again = refreshBackupList(tenant())
     expect(backupListOf(key)).toMatchObject({ backups: [backup('b1')], loading: true })
     fetches.answer(1, Response.json({ error: 'Storage unavailable' }, { status: 503 }))
     await again
-    expect(backupListOf(key)).toEqual({ backups: [backup('b1')], error: 'Storage unavailable', loading: false })
+    expect(backupListOf(key)).toEqual({ ...diagnostics, backups: [backup('b1')], error: 'Storage unavailable', loading: false })
     expect(backupListOf(backupListKey(tenant('other')))).toMatchObject({ backups: null })
   })
 
@@ -65,7 +69,7 @@ describe('Backup list cache', () => {
     // Read before the newest backup finished, so it must not replace the newer list.
     fetches.answer(0, Response.json({ backups: [backup('b1')] }))
     await before
-    expect(backupListOf(key)).toEqual({ backups: [backup('b2'), backup('b1')], error: '', loading: false })
+    expect(backupListOf(key)).toEqual({ ...diagnostics, backups: [backup('b2'), backup('b1')], error: '', loading: false })
   })
 
   it('does not join a refresh sent with credentials that changed since, and keeps the list meanwhile', async () => {
@@ -85,6 +89,31 @@ describe('Backup list cache', () => {
     // The answer to the old credentials arrives last and is dropped.
     fetches.answer(1, Response.json({ backups: [] }))
     await stale
-    expect(backupListOf(key)).toEqual({ backups: [backup('b2'), backup('b1')], error: '', loading: false })
+    expect(backupListOf(key)).toEqual({ ...diagnostics, backups: [backup('b2'), backup('b1')], error: '', loading: false })
+  })
+
+  it('keeps damage notices even for empty history, preserves them on failure and clears them after recovery', async () => {
+    const fetches = pendingFetch()
+    const key = backupListKey(tenant())
+    const damagedFiles = [{ file: 'unreadable.tvb', reason: 'Truncated backup header', ownershipUnknown: true }]
+    const first = refreshBackupList(tenant())
+    fetches.answer(0, Response.json({ backups: [], damagedFiles, completenessUnknown: true, retentionPaused: true }))
+    await first
+    expect(backupListOf(key)).toMatchObject({ backups: [], damagedFiles, completenessUnknown: true, retentionPaused: true, error: '' })
+    const markup = renderToStaticMarkup(createElement(BackupInventoryNotice, backupListOf(key)))
+    expect(markup).toContain('unreadable.tvb')
+    expect(markup).toContain('Truncated backup header')
+    expect(markup).toContain('Ownership unknown.')
+    expect(markup).toContain('paused for this backup folder')
+    expect(markup).toContain('Retention is paused')
+    const failed = refreshBackupList(tenant())
+    fetches.answer(1, Response.json({ error: 'Offline' }, { status: 503 }))
+    await failed
+    expect(backupListOf(key)).toMatchObject({ damagedFiles, completenessUnknown: true, retentionPaused: true, error: 'Offline' })
+    const recovered = refreshBackupList(tenant())
+    fetches.answer(2, Response.json({ backups: [] }))
+    await recovered
+    expect(backupListOf(key)).toEqual({ ...diagnostics, backups: [], error: '', loading: false })
+    expect(renderToStaticMarkup(createElement(BackupInventoryNotice, backupListOf(key)))).toBe('')
   })
 })

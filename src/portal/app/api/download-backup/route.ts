@@ -1,4 +1,4 @@
-import { decodeXml } from "~/lib/storage/list"
+import { BlobListError, decodeXml } from "~/lib/storage/list"
 import { blobPath, isSafeArchivePath } from "../../../../shared/security"
 import { type NextRequest, NextResponse } from "next/server"
 
@@ -73,7 +73,7 @@ export async function POST(request: NextRequest) {
         })
 
         if (!listResponse.ok) {
-          throw new Error("Failed to list backup contents")
+          throw new BlobListError(listResponse.status, await listResponse.text())
         }
 
         const xmlText = await listResponse.text()
@@ -232,7 +232,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("Download backup error:", error)
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Internal server error while downloading backup" },
+      { error: error instanceof Error ? error.message : "Internal server error while downloading backup", ...(error instanceof BlobListError && error.code === 'IncompleteInventory' ? { code: error.code } : {}) },
       { status: 500 }
     )
   }

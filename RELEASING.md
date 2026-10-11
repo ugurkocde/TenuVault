@@ -29,6 +29,16 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 Put these in the next stable release's notes, then remove them here.
 
+- Local backup files and the encrypted app state are synced before their replacement is published.
+  Healthy policy files stay readable and new backups keep working beside damage. Attributed damage
+  pauses downloads, drift comparisons, backup changes and restore previews only for its affected
+  backup, including files missing from an authenticated manifest. Unidentifiable damaged files
+  pause those operations for the whole tenant backup folder until recovered or removed. History
+  shows a damage notice even when no folders can be identified. Retention aborts before deletion
+  whenever damage is observed at any point during the run, including checks immediately before
+  each deletion. Damaged metadata never establishes ownership for deletion.
+  The encrypted file format and recovery keys are unchanged.
+
 - Settings Catalog assignments. Released versions backed up Settings Catalog policies (including
   endpoint security) with `assignments: []`, because Graph answers `$expand=assignments` on a single
   policy with an empty list. They are now read from `{id}/assignments`; Settings Catalog compliance

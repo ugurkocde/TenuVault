@@ -1,4 +1,4 @@
-import { decodeXml, listBlobPages } from "~/lib/storage/list"
+import { BlobListError, decodeXml, listBlobPages } from "~/lib/storage/list"
 import { INTUNE_TYPES, typeForFolder } from "../../../../shared/intune/registry"
 import { blobPath, isSafeArchivePath } from "../../../../shared/security"
 import { type NextRequest, NextResponse } from "next/server"
@@ -105,8 +105,12 @@ export async function POST(request: NextRequest) {
 
       if (metadataResponse.ok) {
         metadata = await metadataResponse.json()
+      } else {
+        const error = new BlobListError(metadataResponse.status, await metadataResponse.text())
+        if (error.code === 'IncompleteInventory') throw error
       }
     } catch (err) {
+      if (err instanceof BlobListError && err.code === 'IncompleteInventory') throw err
       console.error("Failed to fetch metadata:", err)
     }
 
@@ -121,7 +125,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("List backup contents error:", error)
     return NextResponse.json(
-      { error: "Internal server error while listing backup contents" },
+      { error: error instanceof Error ? error.message : "Internal server error while listing backup contents", ...(error instanceof BlobListError && error.code === 'IncompleteInventory' ? { code: error.code } : {}) },
       { status: 500 }
     )
   }

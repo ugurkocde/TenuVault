@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto"
-import { link, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
+import { lstatSync, readdirSync, unlinkSync } from "node:fs"
+import { link, mkdir, open, readdir, readFile, rename, rm, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { mapLimit } from "../../portal/lib/map-limit"
 
@@ -37,7 +38,7 @@ const MAGIC_LENGTH = 4
 const IV = 12
 const TAG = 16
 const EXT = ".tvb"
-/** File headers read at once while reading a container's inventory. */
+/** Files authenticated at once while reading a container's inventory. */
 const HEADER_CONCURRENCY = 16
 
 export interface StoredBlob {
@@ -53,6 +54,29 @@ export type Version = 1 | 2
 interface Entry extends StoredBlob {
   file: string
   version: Version
+}
+
+export interface DamagedFile {
+  file: string
+  reason: string
+  /** Available only when the encrypted header could be authenticated. */
+  name?: string
+}
+
+interface Inventory {
+  entries: Map<string, Entry>
+  files: Map<string, string | null>
+  damagedFiles: DamagedFile[]
+  unavailableBackups: Map<string, string>
+  blockedBackups: Map<string, string>
+}
+
+function emptyInventory(): Inventory {
+  return { entries: new Map(), files: new Map(), damagedFiles: [], unavailableBackups: new Map(), blockedBackups: new Map() }
+}
+
+function fileState(info: Awaited<ReturnType<typeof stat>>): string {
+  return `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`
 }
 
 interface Keys {
@@ -104,16 +128,16 @@ export class BlobNotFoundError extends Error {}
 export class BlobAlreadyExistsError extends Error {}
 
 export class IncompleteInventoryError extends Error {
-  constructor(readonly unreadableFiles: number) {
-    super(`Backup inventory is incomplete: ${unreadableFiles} encrypted file(s) could not be read. Import the correct recovery keys or recover damaged files before continuing.`)
+  constructor(readonly unreadableFiles: number, reason?: string) {
+    super(reason ?? `Backup inventory is incomplete: ${unreadableFiles} encrypted file(s) could not be read. Import the correct recovery keys or recover damaged files before continuing.`)
   }
 }
 
 export class LocalBlobStore {
   private readonly keyring: Keys[]
-  private readonly index = new Map<string, Promise<Map<string, Entry>>>()
+  private readonly index = new Map<string, Promise<Inventory>>()
   /** The inventory reread per container that list() calls share; `started` once it reads the disk. */
-  private readonly rereads = new Map<string, { started: boolean; entries: Promise<Map<string, Entry>> }>()
+  private readonly rereads = new Map<string, { started: boolean; entries: Promise<Inventory> }>()
 
   /**
    * @param root   Folder that holds the encrypted backups.
@@ -154,18 +178,36 @@ export class LocalBlobStore {
   }
 
   async list(account: string, container: string): Promise<StoredBlob[]> {
-    const entries = await this.reread(account, container)
-    return [...entries.values()].map(({ file: _file, version: _version, ...blob }) => blob).sort((a, b) => (a.name < b.name ? -1 : 1))
+    return (await this.inventory(account, container)).blobs
+  }
+
+  /** Healthy blobs and diagnostics from the same shared inventory reread. */
+  async inventory(account: string, container: string) {
+    const inventory = await this.reread(account, container)
+    return {
+      blobs: [...inventory.entries.values()].map(({ file: _file, version: _version, ...blob }) => blob).sort((a, b) => (a.name < b.name ? -1 : 1)),
+      damagedFiles: inventory.damagedFiles.map((file) => ({ ...file })),
+      unavailableBackups: [...inventory.unavailableBackups].map(([name, reason]) => ({ name, reason })),
+      completenessUnknown: inventory.damagedFiles.some((file) => !file.name || (container === "intune-backups" && !/^backup-[^/]+\//.test(file.name))),
+      retentionPaused: inventory.damagedFiles.length > 0 || inventory.unavailableBackups.size > 0,
+    }
   }
 
   async get(account: string, container: string, name: string): Promise<{ blob: StoredBlob; data: Buffer }> {
     const dir = this.dir(account, container)
     const cached = await this.entries(account, container)
-    // Reconcile file membership even on selective reads, without decrypting every
-    // header again when the container's inventory is unchanged.
-    const files = new Set((await readdir(dir)).filter((file) => file.endsWith(EXT)))
-    if (files.size !== cached.size || [...cached.values()].some((entry) => !files.has(entry.file))) this.index.delete(dir)
-    const entry = (await this.entries(account, container)).get(name)
+    // Check membership and file changes without decrypting an unchanged inventory again.
+    const files = (await readdir(dir)).filter((file) => file.endsWith(EXT))
+    const states = await mapLimit(files, HEADER_CONCURRENCY, async (file) => {
+      try { return fileState(await stat(join(dir, file))) } catch { return null }
+    })
+    if (files.length !== cached.files.size || files.some((file, i) => !cached.files.has(file) || cached.files.get(file) !== states[i])) this.index.delete(dir)
+    const inventory = await this.entries(account, container)
+    const unavailable = container === "intune-backups" ? inventory.blockedBackups.get(name.split("/")[0]!) : undefined
+    if (unavailable) throw new IncompleteInventoryError(1, unavailable)
+    const damaged = this.damagedFor(inventory, account, container, name)
+    if (damaged.length) throw new IncompleteInventoryError(damaged.length)
+    const entry = inventory.entries.get(name)
     if (!entry) throw new BlobNotFoundError(name)
     const raw = await readFile(join(this.dir(account, container), entry.file))
     const version = versionOf(raw.subarray(0, MAGIC_LENGTH))
@@ -178,10 +220,11 @@ export class LocalBlobStore {
 
   async put(account: string, container: string, name: string, data: Uint8Array, contentType: string, createOnly = false): Promise<StoredBlob> {
     if (!(await this.containerExists(account, container))) throw new BlobNotFoundError(container)
-    const entries = await this.entries(account, container)
+    const inventory = await this.entries(account, container)
+    const entries = inventory.entries
     const current = this.keyring[0]!
     const existing = entries.get(name)
-    if (createOnly && existing) throw new BlobAlreadyExistsError(name)
+    if (createOnly && (existing || this.damagedFor(inventory, account, container, name).length)) throw new BlobAlreadyExistsError(name)
     // A version 1 file keeps its name when overwritten, so the blob never has two files.
     const version = this.writeFormat
     const file = existing?.file ?? fileName(version, current.naming, account, container, name)
@@ -194,13 +237,27 @@ export class LocalBlobStore {
 
     const path = join(this.dir(account, container), file)
     const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`
-    await writeFile(tmp, Buffer.concat([version === 1 ? MAGIC_V1 : MAGIC_V2, length, header, body]), { mode: 0o600 })
     try {
+      const handle = await open(tmp, "wx", 0o600)
+      try {
+        await handle.writeFile(Buffer.concat([version === 1 ? MAGIC_V1 : MAGIC_V2, length, header, body]))
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
       if (createOnly) await link(tmp, path) // Atomic creation across store/process instances.
       else await rename(tmp, path)
+      if (process.platform !== "win32") {
+        const directory = await open(this.dir(account, container), "r")
+        try {
+          await directory.sync()
+        } finally {
+          await directory.close()
+        }
+      }
     } catch (error) {
+      this.index.delete(this.dir(account, container))
       if (createOnly && (error as NodeJS.ErrnoException).code === "EEXIST") {
-        this.index.delete(this.dir(account, container))
         throw new BlobAlreadyExistsError(name)
       }
       throw error
@@ -210,19 +267,53 @@ export class LocalBlobStore {
 
     const blob: StoredBlob = { name, size: data.byteLength, contentType, created, lastModified: new Date() }
     entries.set(name, { ...blob, file, version })
+    inventory.files.set(file, fileState(await stat(path)))
+    if (name.endsWith("/metadata.json") || inventory.damagedFiles.length || inventory.unavailableBackups.size) this.index.delete(this.dir(account, container))
     return blob
   }
 
   async delete(account: string, container: string, name: string): Promise<void> {
-    const entries = await this.entries(account, container)
-    const entry = entries.get(name)
-    if (!entry) throw new BlobNotFoundError(name)
-    await rm(join(this.dir(account, container), entry.file), { force: true })
-    entries.delete(name)
+    const dir = this.dir(account, container)
+    // Delete is the only destructive operation, so it carries its own clean-inventory
+    // precondition. Never use the cache or a listing's shared reread for this check.
+    try {
+      let inventory: Inventory
+      try {
+        inventory = await this.readIndex(dir, account, container)
+      } catch {
+        throw new IncompleteInventoryError(1, "Cannot delete local backup files because a fresh inventory could not be read. Recover the files or finish folder sync before retrying.")
+      }
+      const backup = name.split("/")[0]!
+      const unavailable = inventory.unavailableBackups.get(backup) ?? inventory.blockedBackups.get(backup)
+      if (inventory.damagedFiles.length || inventory.unavailableBackups.size || inventory.blockedBackups.size || unavailable) {
+        throw new IncompleteInventoryError(Math.max(inventory.damagedFiles.length, inventory.unavailableBackups.size, inventory.blockedBackups.size), `Cannot delete local backup files while the container has damaged files or unavailable backups. ${unavailable ?? "Recover the reported files or import their recovery keys before retrying."}`)
+      }
+      const entry = inventory.entries.get(name)
+      if (!entry) throw new BlobNotFoundError(name)
+      try {
+        const files = readdirSync(dir).filter((file) => file.endsWith(EXT))
+        if (files.length !== inventory.files.size || files.some((file) => inventory.files.get(file) !== fileState(lstatSync(join(dir, file))))) {
+          throw new Error("Inventory changed")
+        }
+        if (inventory.files.get(entry.file) !== fileState(lstatSync(join(dir, entry.file)))) throw new Error("Target changed")
+      } catch {
+        throw new IncompleteInventoryError(1, "Cannot delete local backup files because files changed during the fresh inventory check. Finish folder sync and retry.")
+      }
+      // Validate every scanned file, including the exact target's identity, size and times,
+      // then unlink without an async yield where another app request could change the folder.
+      unlinkSync(join(dir, entry.file))
+    } finally {
+      this.index.delete(dir)
+    }
   }
 
   private dir(account: string, container: string): string {
     return join(this.root, safeSegment(account), safeSegment(container))
+  }
+
+  private damagedFor(inventory: Inventory, account: string, container: string, name: string): DamagedFile[] {
+    const candidates = new Set(this.keyring.flatMap((keys) => ([1, 2] as const).map((version) => fileName(version, keys.naming, account, container, name))))
+    return inventory.damagedFiles.filter((file) => file.name === name || candidates.has(file.file))
   }
 
   /**
@@ -231,12 +322,12 @@ export class LocalBlobStore {
    * listings made meanwhile: each still sees the files as they were when it was made, but listings
    * made together (the backup list makes one per backup) no longer each decrypt every header.
    */
-  private reread(account: string, container: string): Promise<Map<string, Entry>> {
+  private reread(account: string, container: string): Promise<Inventory> {
     const dir = this.dir(account, container)
     const pending = this.rereads.get(dir)
     if (pending && !pending.started) return pending.entries
     const running = pending?.entries.catch(() => undefined)
-    const reread = { started: false, entries: Promise.resolve(new Map<string, Entry>()) }
+    const reread = { started: false, entries: Promise.resolve(emptyInventory()) }
     reread.entries = (async () => {
       await running
       reread.started = true
@@ -250,8 +341,8 @@ export class LocalBlobStore {
     return reread.entries
   }
 
-  /** Reads and decrypts every file header once per container; later calls use the cache. */
-  private entries(account: string, container: string): Promise<Map<string, Entry>> {
+  /** Authenticates every file once per container; later calls use the cache. */
+  private entries(account: string, container: string): Promise<Inventory> {
     const dir = this.dir(account, container)
     let cached = this.index.get(dir)
     if (!cached) {
@@ -262,29 +353,34 @@ export class LocalBlobStore {
     return cached
   }
 
-  private async readIndex(dir: string, account: string, container: string): Promise<Map<string, Entry>> {
-    const entries = new Map<string, Entry>()
+  private async readIndex(dir: string, account: string, container: string): Promise<Inventory> {
+    const inventory = emptyInventory()
+    const { entries, damagedFiles, unavailableBackups } = inventory
     let files: string[]
     try {
-      files = (await readdir(dir)).filter((f) => f.endsWith(EXT))
+      files = (await readdir(dir)).filter((f) => f.endsWith(EXT)).sort()
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return entries
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return inventory
       throw error
     }
-    // Headers are read a few at a time and added in directory order, so duplicates are found as before.
-    const read = await mapLimit(files, HEADER_CONCURRENCY, async (file): Promise<Entry | null> => {
+    const metadataBodies = new Map<string, Buffer>()
+    const read = await mapLimit(files, HEADER_CONCURRENCY, async (file): Promise<Entry | DamagedFile> => {
       const path = join(dir, file)
       let handle: Awaited<ReturnType<typeof open>> | undefined
+      let name: string | undefined
+      inventory.files.set(file, null)
       try {
         handle = await open(path, "r")
-        const prefix = Buffer.alloc(MAGIC_LENGTH + 2)
-        const prefixRead = await handle.read(prefix, 0, prefix.length, 0)
-        const version = prefixRead.bytesRead === prefix.length ? versionOf(prefix.subarray(0, MAGIC_LENGTH)) : null
+        const info = await handle.stat()
+        inventory.files.set(file, fileState(info))
+        const raw = await handle.readFile()
+        const prefixLength = MAGIC_LENGTH + 2
+        if (raw.length < prefixLength) throw new Error("Truncated backup header")
+        const version = versionOf(raw.subarray(0, MAGIC_LENGTH))
         if (!version) throw new Error("Invalid backup header")
-        const headerLength = prefix.readUInt16BE(MAGIC_LENGTH)
-        const sealed = Buffer.alloc(headerLength)
-        const headerRead = await handle.read(sealed, 0, headerLength, prefix.length)
-        if (headerLength < IV + TAG || headerRead.bytesRead !== headerLength) throw new Error("Truncated backup header")
+        const headerLength = raw.readUInt16BE(MAGIC_LENGTH)
+        const sealed = raw.subarray(prefixLength, prefixLength + headerLength)
+        if (headerLength < IV + TAG || sealed.length !== headerLength) throw new Error("Truncated backup header")
         const header = JSON.parse(this.decrypt(sealed, headerAad(version, account, container, file)).toString()) as {
           name: string
           contentType: string
@@ -293,8 +389,16 @@ export class LocalBlobStore {
         if (!header || typeof header.name !== "string" || !header.name || typeof header.contentType !== "string" || !Number.isFinite(Date.parse(header.created))) {
           throw new Error("Invalid backup header")
         }
-        const info = await handle.stat()
-        if (info.size < prefix.length + headerLength + IV + TAG) throw new Error("Truncated backup body")
+        name = header.name
+        const body = raw.subarray(prefixLength + headerLength)
+        if (body.length < IV + TAG) throw new Error("Truncated backup body")
+        let plain: Buffer
+        try {
+          plain = this.decrypt(body, bodyAad(version, account, container, name))
+        } catch {
+          throw new Error("Backup body could not be decrypted or authenticated")
+        }
+        if (container === "intune-backups" && /^backup-[^/]+\/metadata\.json$/.test(name)) metadataBodies.set(file, plain)
         return {
           file,
           version,
@@ -302,41 +406,61 @@ export class LocalBlobStore {
           contentType: header.contentType,
           created: new Date(header.created),
           lastModified: info.mtime,
-          size: info.size - prefix.length - headerLength - IV - TAG,
+          size: body.length - IV - TAG,
         }
-      } catch {
-        return null
+      } catch (error) {
+        return { file, name, reason: error instanceof Error ? error.message : String(error) }
       } finally {
         await handle?.close()
       }
     })
-    let unreadable = 0
+    const counts = new Map<string, number>()
     for (const entry of read) {
-      // A file that cannot be read, or a second file for the same blob, is unreadable.
-      if (!entry || entries.has(entry.name)) unreadable++
+      if (entry.name) counts.set(entry.name, (counts.get(entry.name) ?? 0) + 1)
+    }
+    for (const entry of read) {
+      if (entry.name && counts.get(entry.name)! > 1) damagedFiles.push({ file: entry.file, name: entry.name, reason: "Duplicate blob name" })
+      else if ("reason" in entry) damagedFiles.push(entry)
       else entries.set(entry.name, entry)
     }
-    if (unreadable) throw new IncompleteInventoryError(unreadable)
-    // Desktop metadata already contains a per-item manifest. Check it before
-    // exposing any inventory to downloads or restores, including selective reads.
+    // An authenticated manifest blocks only its backup's downloads and restores.
     for (const entry of entries.values()) {
       if (container !== "intune-backups" || !/^backup-[^/]+\/metadata\.json$/.test(entry.name)) continue
-      const raw = await readFile(join(dir, entry.file))
-      const body = raw.subarray(MAGIC_LENGTH + 2 + raw.readUInt16BE(MAGIC_LENGTH))
-      const metadata = JSON.parse(this.decrypt(body, bodyAad(entry.version, account, container, entry.name)).toString())
-      if (metadata.Items === undefined) continue // Legacy backups have no inventory manifest.
-      if (!metadata.Items || typeof metadata.Items !== "object" || Array.isArray(metadata.Items)) throw new Error("Invalid backup inventory manifest")
-      const prefix = entry.name.slice(0, -"metadata.json".length)
-      let missing = 0
-      for (const [key, item] of Object.entries(metadata.Items)) {
-        const folder = key.split("/")[0]
-        const file = (item as { file?: unknown } | null)?.file
-        if (!folder || typeof file !== "string" || !file || file.includes("/") || file.includes("\\")) throw new Error("Invalid backup inventory manifest")
-        if (!entries.has(`${prefix}${folder}/${file}`)) missing++
+      const backup = entry.name.split("/")[0]!
+      try {
+        const metadata = JSON.parse(metadataBodies.get(entry.file)!.toString())
+        if (metadata?.Items === undefined) continue // Legacy backups have no inventory manifest.
+        if (!metadata.Items || typeof metadata.Items !== "object" || Array.isArray(metadata.Items)) throw new Error("Invalid backup inventory manifest")
+        const prefix = entry.name.slice(0, -"metadata.json".length)
+        let missing = 0
+        const names: string[] = []
+        for (const [key, item] of Object.entries(metadata.Items)) {
+          const folder = key.split("/")[0]
+          const file = (item as { file?: unknown } | null)?.file
+          if (!folder || typeof file !== "string" || !file || file.includes("/") || file.includes("\\")) throw new Error("Invalid backup inventory manifest")
+          names.push(`${prefix}${folder}/${file}`)
+        }
+        for (const name of names) {
+          // A readable manifest and the keyed file name can attribute an unreadable header.
+          if (damagedFiles.some((file) => !file.name)) {
+            for (const damaged of this.damagedFor(inventory, account, container, name)) {
+              if (!damaged.name) damaged.name = name
+            }
+          }
+          if (!entries.has(name)) missing++
+        }
+        if (missing) throw new Error(`Backup inventory is incomplete: ${missing} file(s) listed in the manifest are missing or damaged. Recover the missing files before downloading or restoring.`)
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        unavailableBackups.set(backup, reason)
+        inventory.blockedBackups.set(backup, reason)
       }
-      if (missing) throw new Error(`Backup inventory is incomplete: ${missing} file(s) listed in the manifest are missing. Recover the missing files before downloading or restoring.`)
     }
-    return entries
+    for (const damaged of damagedFiles) {
+      const backup = damaged.name?.split("/")[0]
+      if (container === "intune-backups" && backup?.startsWith("backup-") && !unavailableBackups.has(backup)) unavailableBackups.set(backup, `Backup is unavailable: ${damaged.file}: ${damaged.reason}. Recover the file or import its recovery key before downloading or restoring.`)
+    }
+    return inventory
   }
 
   private decrypt(sealed: Buffer, aad: string): Buffer {

@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~
 import { Alert, AlertDescription } from "~/components/ui/alert"
 import { BackupProgressModal } from "~/components/tenants/backup-progress-modal"
 import { BackupChangesDialog } from "~/components/backup/backup-changes-dialog"
+import { BackupInventoryNotice } from "~/components/backup/backup-inventory-notice"
 import { RestoreWizard } from "~/components/backup/restore-wizard"
 import { formatDate, formatDuration, formatSize, STATUS_LABEL, statusKind, TRIGGER_LABEL, type BackupSummary, type BackupTenant, type StatusKind } from "~/components/backup/types"
 import { BackupSchedulePanel } from "@desktop/components/BackupSchedulePanel"
@@ -30,6 +31,7 @@ const STATUS_STYLE: Record<StatusKind, { icon: typeof CheckCircle; iconBg: strin
   warning: { icon: AlertTriangle, iconBg: "bg-amber-50", iconColor: "text-amber-700", badge: "bg-amber-50 text-amber-800" },
   failed: { icon: AlertCircle, iconBg: "bg-red-50", iconColor: "text-red-600", badge: "bg-red-50 text-red-700" },
   running: { icon: Loader2, iconBg: "bg-blue-50", iconColor: "text-blue-600", badge: "bg-blue-50 text-blue-700" },
+  unavailable: { icon: AlertCircle, iconBg: "bg-red-50", iconColor: "text-red-600", badge: "bg-red-50 text-red-700" },
 }
 
 const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1)
@@ -235,6 +237,7 @@ export default function BackupRestorePage() {
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
+      {selectedTenant && !isLoading && <BackupInventoryNotice damagedFiles={backupList.damagedFiles} completenessUnknown={backupList.completenessUnknown} retentionPaused={backupList.retentionPaused} />}
 
       {activeTab === "backup" && selectedTenant && !isLoading && !blockingError && (
         <div className="space-y-6">
@@ -408,21 +411,22 @@ function BackupDetails({ backup, first, storageAccountName, downloading, onChang
             <GitBranch className="mr-1 h-4 w-4" />
             View Changes
           </Button>
-          <Button variant="outline" size="sm" onClick={onDownload} disabled={downloading}>
+          <Button variant="outline" size="sm" onClick={onDownload} disabled={downloading || kind === "unavailable"}>
             {downloading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Download className="mr-1 h-4 w-4" />}
             Download
           </Button>
-          <Button size="sm" className="bg-coral-600 text-white hover:bg-coral-700" onClick={onRestore} disabled={kind === "running" || backup.totalPolicies === 0}>
+          <Button size="sm" className="bg-coral-600 text-white hover:bg-coral-700" onClick={onRestore} disabled={kind === "running" || kind === "unavailable" || backup.totalPolicies === 0}>
             <RefreshCw className="mr-1 h-4 w-4" />
             Restore from this backup
           </Button>
         </div>
       </div>
 
-      {(kind === "warning" || kind === "failed" || (backup.skippedTypes?.length ?? 0) > 0) && (
-        <div className={cn("mb-6 flex gap-3 rounded-2xl px-4 py-3 text-sm", kind === "failed" ? "bg-red-50 text-red-800" : "bg-amber-50 text-amber-900")}>
+      {(kind === "warning" || kind === "failed" || kind === "unavailable" || (backup.skippedTypes?.length ?? 0) > 0) && (
+        <div className={cn("mb-6 flex gap-3 rounded-2xl px-4 py-3 text-sm", kind === "failed" || kind === "unavailable" ? "bg-red-50 text-red-800" : "bg-amber-50 text-amber-900")}>
           <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
           <div className="space-y-1">
+            {kind === "unavailable" && <p>{backup.error ?? "Local backup files are missing or damaged. Recover the files or import the correct recovery key, then refresh."}</p>}
             {backup.status === "incomplete" && <p>This backup stopped before it finished, for example because TenuVault was closed. It holds only part of the tenant.</p>}
             {(backup.failures ?? 0) > 0 && <p>{backup.failures} item{backup.failures === 1 ? "" : "s"} or type{backup.failures === 1 ? "" : "s"} could not be read. The backup log lists them.</p>}
             {(backup.failedTypes?.length ?? 0) > 0 && <p>Not read: {backup.failedTypes!.map(typeLabel).join(", ")}.</p>}
