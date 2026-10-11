@@ -24,7 +24,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
   const legacy = parsed.precision === "day"
   const date = parsed.timestamp.slice(0, 10)
   // metadata.json and the file listing are read at the same time.
-  const metadataRead = (async (): Promise<{ metadata: any; metadataError?: string }> => {
+  const metadataRead = (async (): Promise<{ metadata: any; metadataError?: string; localDamage?: boolean }> => {
     try {
       const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}/metadata.json`, { headers: storageHeaders(accessToken) })
       if (response.ok) {
@@ -32,13 +32,24 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
         if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) throw new Error('Invalid metadata')
         return { metadata }
       }
+      if (response.headers.get('x-ms-error-code') === 'IncompleteInventory') {
+        const text = await response.text()
+        return { metadata: null, localDamage: true, metadataError: decodeXml(/<Message>(.*?)<\/Message>/.exec(text)?.[1] ?? 'Local backup metadata is damaged.') }
+      }
       return { metadata: null, metadataError: response.status !== 404 ? `Backup metadata is unavailable (${response.status}).` : undefined }
     } catch {
       return { metadata: null, metadataError: 'Backup metadata could not be read or parsed.' }
     }
   })()
-  const filesRead = listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${name}/`)}`, accessToken).catch(() => { throw new Error(`Backup ${name} inventory is unavailable. Check storage access and retry.`) })
-  const [{ metadata, metadataError }, filesText] = await Promise.all([metadataRead, filesRead])
+  const filesRead = listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${name}/`)}`, accessToken)
+    .then((text) => ({ text, inventoryError: undefined as string | undefined }))
+    .catch((error: unknown) => {
+      if (error instanceof BlobListError && error.body.includes('<Code>IncompleteInventory</Code>')) {
+        return { text: '', inventoryError: decodeXml(/<Message>(.*?)<\/Message>/.exec(error.body)?.[1] ?? 'Local backup files are missing or damaged.') }
+      }
+      throw new Error(`Backup ${name} inventory is unavailable. Check storage access and retry.`)
+    })
+  const [{ metadata, metadataError, localDamage }, { text: filesText, inventoryError }] = await Promise.all([metadataRead, filesRead])
   const recordedTimestamp = metadata?.timestamp ?? metadata?.Timestamp ?? metadata?.BackupDate
   const timestamp = legacy
     ? typeof recordedTimestamp === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(recordedTimestamp) && Number.isFinite(Date.parse(recordedTimestamp)) ? recordedTimestamp : date
@@ -71,7 +82,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     type: typeof metadata?.Trigger === 'string' ? metadata.Trigger : typeof metadata?.trigger === 'string' ? metadata.trigger : null,
     // metadata.json is written last. Without it the backup is still running, or it stopped (for example
     // when the app quit) and holds only part of the tenant.
-    status: metadataError ? 'unknown' : metadata ? String(metadata.Status ?? metadata.status ?? 'unknown') : legacy ? 'unknown' : Date.now() - Date.parse(timestamp) < 6 * 3600_000 ? 'running' : 'incomplete',
+    status: inventoryError || localDamage ? 'unavailable' : metadataError ? 'unknown' : metadata ? String(metadata.Status ?? metadata.status ?? 'unknown') : legacy ? 'unknown' : Date.now() - Date.parse(timestamp) < 6 * 3600_000 ? 'running' : 'incomplete',
     configs: files,
     policyCount: totalPolicies,
     totalPolicies,
@@ -93,8 +104,8 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     duration: typeof metadata?.DurationSeconds === 'number' ? metadata.DurationSeconds : metadata?.Duration ?? metadata?.duration ?? null,
     changes: null as ChangeSummary | null,
     comparedWith: null as string | null,
-    fingerprint: metadata as BackupFingerprint | null | undefined,
-    error: metadataError,
+    fingerprint: (inventoryError ? null : metadata) as BackupFingerprint | null | undefined,
+    error: inventoryError ?? metadataError,
     warning: undefined,
     runbookVersion: metadata?.RunbookVersion ?? metadata?.runbookVersion ?? null,
   }
@@ -216,7 +227,9 @@ export async function POST(request: NextRequest) {
     }
     for (const backup of backups) delete backup.fingerprint
 
-    return NextResponse.json({ backups })
+    const damagedFiles = [...blobsText.matchAll(/<DamagedFile><File>(.*?)<\/File><Reason>(.*?)<\/Reason>(?:<Name>(.*?)<\/Name>)?<\/DamagedFile>/g)]
+      .map((match) => ({ file: decodeXml(match[1]!), reason: decodeXml(match[2]!), ...(match[3] ? { name: decodeXml(match[3]) } : {}) }))
+    return NextResponse.json({ backups, damagedFiles: [...new Map(damagedFiles.map((file) => [file.file, file])).values()] })
   } catch (error) {
     console.error("List backups error:", error)
     return NextResponse.json(

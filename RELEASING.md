@@ -29,6 +29,11 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 Put these in the next stable release's notes, then remove them here.
 
+- Local backup files and the encrypted app state are synced before their replacement is published.
+  Damaged or duplicate local files no longer block unrelated backups. Affected backups appear as
+  unavailable, and an authenticated manifest still blocks downloads and restores if any listed
+  file is missing or damaged. The encrypted file format and recovery keys are unchanged.
+
 - Settings Catalog assignments. Released versions backed up Settings Catalog policies (including
   endpoint security) with `assignments: []`, because Graph answers `$expand=assignments` on a single
   policy with an empty list. They are now read from `{id}/assignments`; Settings Catalog compliance

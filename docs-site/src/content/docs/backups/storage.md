@@ -33,6 +33,12 @@ Changing the folder does not move existing backups. Move the folder's contents y
 
 The encryption key is protected by your Windows account or macOS Keychain. Without the recovery key, backups can only be read on this device. Save it with **Save recovery key** on the same card. See [Encryption and recovery key](/security/encryption/).
 
+### Damaged local files
+
+From the next release, a missing, truncated, unreadable or duplicate encrypted file makes only its affected backup **Unavailable**. Other backups remain usable. Downloads and restores stay blocked when the backup's authenticated inventory lists a missing or damaged file.
+
+Let folder sync finish, then refresh the backup list. If files are still damaged, restore an intact copy from your folder's version history or another saved copy. For duplicate conflict copies, preserve both files outside the backup folder before putting one verified original back. If the files came from another device, import its recovery key in **Settings**. TenuVault leaves damaged files in place. If a file's header cannot be read, its backup name may be unknown. Restore the folder from an intact saved copy.
+
 ## Backups in your Azure storage account
 
 Use your own storage account when you want backups off the admin's computer, for example to share them between admins. This needs Pro or MSP.

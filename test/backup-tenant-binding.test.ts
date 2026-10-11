@@ -7,7 +7,7 @@ import { BackupEngine } from "../src/main/backup/engine"
 import { ApiHost } from "../src/main/api/host"
 import { NextRequest } from "../src/main/api/next-server-shim"
 import { handleLocalBlobRequest, localAccountFromUrl, withRouteTenant } from "../src/main/storage/blob-emulator"
-import { IncompleteInventoryError, LocalBlobStore, WRITE_FORMAT } from "../src/main/storage/local-blob-store"
+import { LocalBlobStore, WRITE_FORMAT } from "../src/main/storage/local-blob-store"
 import { POST as listBackups } from "../src/portal/app/api/list-backups/route"
 import { localStorageAccountName } from "../src/shared/constants"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
@@ -133,7 +133,9 @@ describe("local store format compatibility", () => {
     const file = writeV1(root, master, ACCOUNT, CONTAINER, "backup-2026-09-01-020000/metadata.json", "{}")
     const dir = join(root, ACCOUNT, CONTAINER)
     copyFileSync(join(dir, file), join(dir, `${"0".repeat(40)}.tvb`))
-    await expect(new LocalBlobStore(root, [master]).list(ACCOUNT, CONTAINER)).rejects.toBeInstanceOf(IncompleteInventoryError)
+    const inventory = await new LocalBlobStore(root, [master]).inventory(ACCOUNT, CONTAINER)
+    expect(inventory.blobs).toEqual([])
+    expect(inventory.damagedFiles).toHaveLength(2)
   })
 })
 
@@ -162,7 +164,10 @@ describe("version 2 binds files to their tenant", () => {
     const from = join(root, localStorageAccountName(OTHER), CONTAINER)
     const [file] = readdirSync(from)
     copyFileSync(join(from, file!), join(root, ACCOUNT, CONTAINER, file!))
-    await expect(new LocalBlobStore(root, [master]).list(ACCOUNT, CONTAINER)).rejects.toBeInstanceOf(IncompleteInventoryError)
+    const inventory = await new LocalBlobStore(root, [master]).inventory(ACCOUNT, CONTAINER)
+    expect(inventory.blobs.map(blob => blob.name)).toEqual(["backup-2026-09-30-020000/metadata.json"])
+    expect(inventory.damagedFiles).toEqual([expect.objectContaining({ file })])
+    expect(await text(new LocalBlobStore(root, [master]), ACCOUNT, "backup-2026-09-30-020000/metadata.json")).toBe(`{"tenant":"${ACCOUNT}"}`)
   })
 
   it("does not read a file that was renamed or moved to another container", async () => {
@@ -173,12 +178,17 @@ describe("version 2 binds files to their tenant", () => {
     renameSync(join(dir, first!), join(dir, "swap"))
     renameSync(join(dir, second!), join(dir, first!))
     renameSync(join(dir, "swap"), join(dir, second!))
-    await expect(new LocalBlobStore(root, [master]).list(ACCOUNT, CONTAINER)).rejects.toBeInstanceOf(IncompleteInventoryError)
+    const swapped = await new LocalBlobStore(root, [master]).inventory(ACCOUNT, CONTAINER)
+    expect(swapped.blobs).toEqual([])
+    expect(swapped.damagedFiles.map(file => file.file).sort()).toEqual([first, second].sort())
+    await expect(text(new LocalBlobStore(root, [master]), ACCOUNT, "backup-2026-09-30-020000/metadata.json")).rejects.toThrow()
 
     const other = join(root, ACCOUNT, "tenant-metadata")
     mkdirSync(other)
     copyFileSync(join(dir, first!), join(other, first!))
-    await expect(new LocalBlobStore(root, [master]).list(ACCOUNT, "tenant-metadata")).rejects.toBeInstanceOf(IncompleteInventoryError)
+    const moved = await new LocalBlobStore(root, [master]).inventory(ACCOUNT, "tenant-metadata")
+    expect(moved.blobs).toEqual([])
+    expect(moved.damagedFiles).toEqual([expect.objectContaining({ file: first })])
   })
 
   it.skipIf(process.platform === "win32")("creates backup folders readable only by the current user", async () => {

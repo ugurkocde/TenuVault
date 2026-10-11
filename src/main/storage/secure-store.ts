@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 
 export interface Cipher {
@@ -100,7 +100,25 @@ export class SecureStore {
   private flush(): void {
     mkdirSync(dirname(this.filePath), { recursive: true })
     const tmp = `${this.filePath}.tmp`
-    writeFileSync(tmp, this.cipher.encrypt(JSON.stringify(this.values ?? {})), { mode: 0o600 })
-    renameSync(tmp, this.filePath)
+    try {
+      const handle = openSync(tmp, "w", 0o600)
+      try {
+        writeFileSync(handle, this.cipher.encrypt(JSON.stringify(this.values ?? {})))
+        fsyncSync(handle)
+      } finally {
+        closeSync(handle)
+      }
+      renameSync(tmp, this.filePath)
+      if (process.platform !== "win32") {
+        const directory = openSync(dirname(this.filePath), "r")
+        try {
+          fsyncSync(directory)
+        } finally {
+          closeSync(directory)
+        }
+      }
+    } finally {
+      rmSync(tmp, { force: true })
+    }
   }
 }

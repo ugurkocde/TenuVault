@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { LOCAL_STORAGE_PREFIX, localStorageAccountName } from "../../shared/constants"
-import { BlobAlreadyExistsError, BlobNotFoundError, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
+import { BlobAlreadyExistsError, BlobNotFoundError, IncompleteInventoryError, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
 
 /**
  * Serves the subset of the Azure Blob REST API that the shared API routes use
@@ -74,11 +74,14 @@ async function listBlobs(store: LocalBlobStore, account: string, container: stri
   const delimiter = query.get("delimiter") ?? ""
   const marker = query.get("marker") ?? ""
   const maxResults = Math.min(Number(query.get("maxresults")) || 5000, 5000)
+  const inventory = await store.inventory(account, container)
+  const unavailable = inventory.unavailableBackups.find((backup) => prefix.startsWith(`${backup.name}/`))
+  if (unavailable) throw new IncompleteInventoryError(1, unavailable.reason)
 
   // Blobs and virtual folders in one lexicographic stream, like Azure.
   const items: Array<{ key: string; xml: string }> = []
   const prefixes = new Set<string>()
-  for (const blob of await store.list(account, container)) {
+  for (const blob of inventory.blobs) {
     if (!blob.name.startsWith(prefix)) continue
     const rest = blob.name.slice(prefix.length)
     const cut = delimiter ? rest.indexOf(delimiter) : -1
@@ -90,6 +93,14 @@ async function listBlobs(store: LocalBlobStore, account: string, container: stri
       }
     } else {
       items.push({ key: blob.name, xml: blobXml(blob) })
+    }
+  }
+  // Keep folders visible even when their only file has an authenticated but damaged body.
+  if (delimiter === "/" && !prefix) for (const backup of inventory.unavailableBackups) {
+    const folder = `${backup.name}/`
+    if (!prefixes.has(folder)) {
+      prefixes.add(folder)
+      items.push({ key: folder, xml: `<BlobPrefix><Name>${xml(folder)}</Name></BlobPrefix>` })
     }
   }
   items.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
@@ -105,6 +116,7 @@ async function listBlobs(store: LocalBlobStore, account: string, container: stri
       `<MaxResults>${maxResults}</MaxResults>` +
       (delimiter ? `<Delimiter>${xml(delimiter)}</Delimiter>` : "") +
       `<Blobs>${page.map((item) => item.xml).join("")}</Blobs>` +
+      `<DamagedFiles>${inventory.damagedFiles.map((file) => `<DamagedFile><File>${xml(file.file)}</File><Reason>${xml(file.reason)}</Reason>${file.name ? `<Name>${xml(file.name)}</Name>` : ""}</DamagedFile>`).join("")}</DamagedFiles>` +
       (next ? `<NextMarker>${xml(next.key)}</NextMarker>` : "<NextMarker />") +
       `</EnumerationResults>`,
     { status: 200, headers: { "content-type": "application/xml" } },
@@ -182,6 +194,7 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
     return error(400, "UnsupportedHttpVerb", `${method} is not supported on blobs.`)
   } catch (caught) {
     if (caught instanceof BlobAlreadyExistsError) return error(412, "ConditionNotMet", "The blob already exists.")
+    if (caught instanceof IncompleteInventoryError) return error(500, "IncompleteInventory", caught.message)
     if (caught instanceof BlobNotFoundError) {
       return (await store.containerExists(account, container))
         ? error(404, "BlobNotFound", "The specified blob does not exist.")
