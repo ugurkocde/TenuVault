@@ -1,3 +1,4 @@
+import { showFeaturePlanError } from "../../lib/plan-dialog"
 import { useState, type ReactNode } from "react"
 import { CheckCircle2, Cloud, Laptop, Monitor, Smartphone } from "lucide-react"
 import { useSelectedTenant } from "~/contexts/TenantContext"
@@ -68,7 +69,7 @@ export function useTask() {
   const [error, setError] = useState("")
   async function run(label: string, action: () => Promise<void>) {
     setBusy(label); setError("")
-    try { await action() } catch (e) { setError(e instanceof Error ? e.message : "The request failed.") } finally { setBusy("") }
+    try { await action() } catch (e) { showFeaturePlanError(e); setError(e instanceof Error ? e.message : "The request failed.") } finally { setBusy("") }
   }
   return { busy, error, setError, run, stage: setBusy }
 }
