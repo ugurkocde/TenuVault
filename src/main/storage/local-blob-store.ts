@@ -24,12 +24,13 @@ import { mapLimit } from "../../portal/lib/map-limit"
  */
 
 /**
- * The format new files and overwrites are written in. Stays 1 for now, because earlier
- * app versions read only TVB1 and would treat a folder holding TVB2 files as damaged
- * (shared backup folders, downgrades). Switch to 2 in a later release, once installs
- * that read TVB2 are widespread.
+ * The format new files and overwrites are written in. Version 2 since 0.3.0. Every released
+ * app version (0.2.0 and later) reads both versions, so a folder shared with or opened by an
+ * earlier release stays readable, and files written before the switch are never rewritten
+ * unless they are overwritten. Keep reading version 1 until at least 0.5.0 (two minor
+ * versions after the switch) and record the removal in RELEASING.md when it happens.
  */
-export const WRITE_FORMAT: Version = 1
+export const WRITE_FORMAT: Version = 2
 
 const MAGIC_V1 = Buffer.from("TVB1")
 const MAGIC_V2 = Buffer.from("TVB2")

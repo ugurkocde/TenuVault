@@ -52,6 +52,8 @@ export interface TargetReads {
   policyId: string | null
   /** Registry folder for re-checking the destination tags frozen into an update. */
   policyFolder?: string
+  /** Re-plan if secrets appear in a destination whose plan did not acknowledge them. */
+  requireUnredacted?: boolean
   filterIds: string[]
   scopeTagIds: string[]
   reusableSettingIds: string[]

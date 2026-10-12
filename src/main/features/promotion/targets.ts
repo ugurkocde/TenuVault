@@ -100,15 +100,20 @@ async function groupState(graph: GraphCall, id: string): Promise<{ state: "found
 
 /**
  * Hash of the destination objects a plan relied on: mapped filters (including their rule),
- * scope tags, reusable settings and groups. Only the destination policy's scope tags are
- * included here, since updates keep them. The change set's target fingerprint owns the
- * remaining content, so a retry after a verified update still matches.
+ * scope tags, reusable settings and groups. Destination tags and unacknowledged redaction
+ * are checked here so changes require a new plan. The change set's target fingerprint owns
+ * the remaining content, so a retry after a verified update still matches.
  */
 export async function targetStateHash(graph: GraphCall, reads: TargetReads, policySnapshot?: Item | null): Promise<string> {
   const state: Record<string, unknown> = {}
   if (reads.policyId && reads.policyFolder) {
-    const policy = policySnapshot === undefined ? await readCurrent(graph, typeForFolder(reads.policyFolder)!, reads.policyId) : policySnapshot
+    const type = typeForFolder(reads.policyFolder)!
+    const policy = policySnapshot === undefined ? await readCurrent(graph, type, reads.policyId) : policySnapshot
     state.policyScopeTags = policy ? policy.roleScopeTagIds ?? null : "missing"
+    if (reads.requireUnredacted) {
+      const sanitized = policy ? sanitizeSnapshot(type, policy) : null
+      state.policyRedacted = sanitized ? sanitized.redacted || containsRedaction(sanitized.snapshot) : null
+    }
   }
   const subset = async (kind: Exclude<ReferenceKind, "group">, ids: string[]) => {
     if (!ids.length) return []
@@ -188,7 +193,7 @@ export async function resolveTarget(deps: FeatureDeps, destinationTenantId: stri
   }
   sourceNames.group = sourceGroupNames
   const resolutions = resolveReferences(references, { mappings: input.mappings, sourceNames, targetObjects, groupStates, sameTenant })
-  findings.push(...referenceFindings(resolutions.filter((reference) => reference.kind !== "scopeTag")))
+  findings.push(...referenceFindings(resolutions.filter((reference) => reference.kind !== "scopeTag" || reference.state === "mapped-unverified")))
   const translated = translate(type, sourceSnapshot, resolutions, { includeAssignments: input.includeAssignments, dropUnsupportedExclusions: input.dropUnsupportedExclusions, destinationSnapshot: input.targetObjectId ? targetPolicy : undefined, acknowledgeRedacted: input.acknowledgeRedacted })
   findings.push(...translated.findings)
 
@@ -211,7 +216,7 @@ export async function resolveTarget(deps: FeatureDeps, destinationTenantId: stri
   }
 
   const confirmed = (kind: ReferenceKind) => resolutions.filter((entry) => entry.kind === kind && entry.targetId && entry.state !== "missing" && entry.state !== "rejected").map((entry) => entry.targetId!)
-  const targetReads: TargetReads = { policyId: input.targetObjectId, policyFolder: type.folder, filterIds: confirmed("filter"), scopeTagIds: input.targetObjectId ? destinationTags : confirmed("scopeTag"), reusableSettingIds: confirmed("reusableSetting"), groupIds: confirmed("group") }
+  const targetReads: TargetReads = { policyId: input.targetObjectId, policyFolder: type.folder, requireUnredacted: input.acknowledgeRedacted !== true, filterIds: confirmed("filter"), scopeTagIds: input.targetObjectId ? destinationTags : confirmed("scopeTag"), reusableSettingIds: confirmed("reusableSetting"), groupIds: confirmed("group") }
   const stateHash = await read("The destination state", () => targetStateHash(targetGraph, targetReads, targetPolicy))
   const blocked = findings.some((finding) => finding.severity === "blocking") || !translated.body
   return {

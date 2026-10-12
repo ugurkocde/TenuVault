@@ -186,6 +186,19 @@ describe("/api/promotion", () => {
     expect([...context.prod.policies.values()][0]!.roleScopeTagIds).toEqual(["0"])
   })
 
+  it("keeps the warning when a confirmed scope tag mapping cannot be verified", async () => {
+    const context = setup()
+    const graph = context.deps.graph
+    context.deps.graph = async (tenantId, options) => {
+      const reader = await graph(tenantId, options)
+      return (method, path, body) => tenantId === TENANT_B && path.startsWith("deviceManagement/roleScopeTags") ? Promise.resolve({ status: 403, body: {} }) : reader(method, path, body)
+    }
+    const promotion = await planned(context, [{ sourceId: context.simple.id }])
+    expect(promotion.status).toBe("in-review")
+    expect(proposal(context, promotion).entries["op-1"]!.body!.roleScopeTagIds).toEqual(["0", "9"])
+    expect(promotion.items[0]!.findings).toContainEqual(expect.objectContaining({ code: "unknown-membership", severity: "warning" }))
+  })
+
   it("aborts on a failed production backup before any write", async () => {
     const context = setup({ backup: "fail" })
     const promotion = await planned(context)
@@ -273,6 +286,20 @@ describe("/api/promotion", () => {
     const sent = context.prod.calls.find((entry) => entry.method === "PUT")!.body!
     expect(sent.roleScopeTagIds).toEqual(["9"])
     expect(containsSecret(sent) || containsRedaction(sent)).toBe(false)
+  })
+
+  it("requires replanning if destination secrets appear before approval", async () => {
+    const context = setup()
+    const existing = context.prod.addPolicy({ name: "OIB Defender" })
+    const promotion = await planned(context, [{ sourceId: context.simple.id, destinationId: existing.id }])
+    ;(existing.settings as Item[]).push(secretSetting())
+    const preview = await context.post({ action: "preview", id: promotion.id })
+    expect(preview.body.changeSet.blockers.join(" ")).toContain("relied on changed")
+    expect((await context.post({ action: "approve", id: promotion.id, contentHash: preview.body.changeSet.contentHash, targetFingerprint: preview.body.changeSet.targetFingerprint })).status).toBe(409)
+    const replanned = await planned(context, [{ sourceId: context.simple.id, destinationId: existing.id }])
+    expect(replanned.status).toBe("blocked")
+    expect(replanned.items[0]!.findings).toContainEqual(expect.objectContaining({ code: "secret-values", severity: "blocking" }))
+    expect(context.prod.writeCount()).toBe(0)
   })
 
   it.each([true, false])("requires acknowledgement for source redaction and omits whole settings, secret type: %j", async (secretType) => {

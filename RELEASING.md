@@ -29,6 +29,10 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 Put these in the next stable release's notes, then remove them here.
 
+- Local backup file format. New and overwritten local backup files are written in the TVB2
+  format, which binds each file to its tenant folder. Every released version since 0.2.0 reads
+  TVB2, and files written earlier stay readable. Reading the older TVB1 format is kept until at
+  least 0.5.0.
 - Promotion keeps the destination policy's scope tags on update and blocks promotion of redacted policies without acknowledgement. Acknowledged promotions omit secrets, which must be set again in the destination.
 
 ## Cutting a stable release
