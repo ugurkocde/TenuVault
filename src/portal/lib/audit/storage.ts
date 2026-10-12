@@ -1,6 +1,7 @@
 import { acknowledgeEvent, acknowledgeEvents, pendingEvents, queueEvent } from './outbox'
 import { BlobListError, decodeXml, listBlobPages } from '../storage/list'
 import { mapLimit } from '../map-limit'
+import { MetadataCache } from '../storage/metadata-cache'
 import { blobPath } from '../../../shared/security'
 import { entriesForTenant } from './export'
 import { auditDateFilter, defaultAuditDateRange } from './date-range'
@@ -19,7 +20,7 @@ export const MAX_AUDIT_RANGE_DAYS = 90
 export const AUDIT_READ_CONCURRENCY = 6
 export class AuditRangeError extends Error {}
 interface AuditBlob { name: string; dayPath: string; timestamp: number | null; version: string }
-const readCaches = new WeakMap<typeof fetch, Map<string, AuditLogEntry[]>>()
+const readCaches = new WeakMap<typeof fetch, MetadataCache<AuditLogEntry[]>>()
 
 /** Listings, stats and exports share one budget for each storage account. */
 const readLimiters = new Map<string, { active: number; waiting: Array<() => void> }>()
@@ -283,23 +284,18 @@ export class AuditStorageService {
 
   private async readLogBlob(blob: AuditBlob): Promise<AuditLogEntry[]> {
     let cache = readCaches.get(fetch)
-    if (!cache) { cache = new Map(); readCaches.set(fetch, cache) }
-    const key = JSON.stringify([this.credentials.storageAccountName, blob.name, blob.version])
-    const cached = blob.version ? cache.get(key) : undefined
-    if (cached) return cached
-    return limitRead(this.credentials.storageAccountName, async () => {
+    if (!cache) { cache = new MetadataCache(() => true); readCaches.set(fetch, cache) }
+    const key = JSON.stringify([this.credentials.storageAccountName.toLowerCase(), blob.name])
+    const load = () => limitRead(this.credentials.storageAccountName, async () => {
       const response = await fetch(this.blobUrl(blob.name), { headers: this.getHeaders() })
       if (!response.ok) throw new Error(`Audit history is unavailable: an event file could not be read (${response.status})`)
       const file: AuditLogFile = await response.json()
       if (!Array.isArray(file.entries) || (blob.timestamp !== null && (file.entries.length !== 1 || Date.parse(file.entries[0]!.timestamp) !== blob.timestamp || file.entries[0]!.id !== this.eventId(blob)))) {
         throw new Error('Audit history is unavailable: an event file does not match its listing metadata')
       }
-      if (blob.version) {
-        cache.set(key, file.entries)
-        while (cache.size > 5000) cache.delete(cache.keys().next().value!)
-      }
       return file.entries
     })
+    return blob.version ? cache.read(key, blob.version, load) : load()
   }
 
   private filterEntries(entries: AuditLogEntry[], filter: AuditLogFilter, startTime: number, endTime: number): AuditLogEntry[] {

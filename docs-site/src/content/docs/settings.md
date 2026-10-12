@@ -180,27 +180,6 @@ Stable installs follow stable by default. Enable **Get nightly builds** to recei
 | **License** | Opens the License page. See [Activate and manage your license](/licensing/manage/). |
 | **Website and support** | Opens [tenuvault.com/desktop](https://tenuvault.com/desktop) in your browser. |
 
-## Local review record retention
+## Review scan persistence
 
-Workflow hubs keep a bounded set of review records per tenant and domain. Writes remove only the oldest closed records that no surviving record references. Active workflows, saved decisions, and rollback and undo evidence are kept. If protected records fill a domain, creating another record is refused with a clear error asking you to close or export older records first. Updates to existing records still succeed. Record limits do not remove backups or audit events. Shared standards use their own shared scope. A plan downgrade alone does not prune records.
-
-| Record domain | Records kept |
-|---|---:|
-| Hygiene findings and scans | 2,000 |
-| Change sets | 500 |
-| Frozen change set content and pre-change captures | 1,000 |
-| Baseline installs and comparisons | 500 |
-| Baseline upgrades | 500 |
-| Promotions | 500 |
-| Health review schedules and runs | 200 in total, including the schedule record |
-| Health findings | 2,000 |
-| Notification endpoints | 50 |
-| Customizations | 1,000 |
-| Shared standard versions | 1,000 |
-| Standard adoptions | 1,000 |
-| Score snapshots | 365 |
-| Custom baselines, versions and rebases | 1,000 |
-| Custom baseline deployments | 500 |
-| Custom baseline comparisons | 365 |
-
-Each record keeps up to 200 revisions. Reading existing history does not delete anything. Existing data above a new limit stays intact when read after an upgrade. The next write can remove only closed, unreferenced records. Creating another record is refused if it cannot meet the limit safely; updates remove what is eligible and keep any protected records above the limit. Change sets in review or with outstanding writes keep their frozen proposals, pre-change captures and retained revisions. Completed rollback links stay available while their originals survive. Custom baselines keep their source content, versions and rebases; installs and upgrades keep their source and comparison evidence. Adoptions keep their shared standard versions, including pending and previous versions. Promotions in review or applied and hygiene findings with a saved acknowledgement or false positive decision stay available. Active configuration and open or unknown health findings are also kept. Scan findings are saved together before the scan returns, reducing repeated encryption and disk writes.
+Hygiene scan findings and health review finding reconciliation are saved together before returning, reducing repeated encryption and disk writes. A failed batch leaves the previous records intact.

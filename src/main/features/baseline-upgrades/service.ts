@@ -449,7 +449,6 @@ export async function compareUpgrade(deps: FeatureDeps, sources: BaselineSources
   }
   const unresolved = policies.reduce((sum, policy) => sum + policy.unresolved, 0)
   return deps.records.batch(() => {
-    // Pin reused source content before a comparison write can prune the source domain.
     // The comparison ID is filled before this batch is durably published.
     const upgrade = deps.records.create<UpgradeRecord>(UPGRADES, tenantId, {
       title: `${install.reference} to ${upstream.reference}`,

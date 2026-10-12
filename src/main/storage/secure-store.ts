@@ -46,7 +46,6 @@ export interface KeyValueStore {
    * key are refused before anything is written instead of being half saved.
    */
   setMany?: (values: Record<string, string>) => void
-  keys?: () => string[]
 }
 
 /** The store file exists but cannot be decrypted or parsed. */

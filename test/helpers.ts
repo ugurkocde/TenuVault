@@ -5,7 +5,6 @@ export function memoryStore() {
     set: (key: string, value: string) => void values.set(key, value),
     setMany: (changes: Record<string, string>) => { for (const [key, value] of Object.entries(changes)) values.set(key, value) },
     delete: (key: string) => void values.delete(key),
-    keys: () => [...values.keys()],
     values,
   }
 }

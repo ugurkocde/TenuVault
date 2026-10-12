@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto"
-import { DOMAINS } from "./domains"
-import { retainRule } from "./record-retention"
 import type { KeyValueStore } from "../storage/secure-store"
 
 /** One entry of a record's append-only history. */
@@ -62,27 +60,8 @@ export type Stored<T> = T & StoredRecord & { history: RecordRevision<T & StoredR
  */
 export const SHARED_SCOPE = "shared"
 
-/** Fallback for domains introduced before a dedicated retention count is defined. */
+/** Most records a tenant keeps per domain; the oldest closed records are dropped first by callers. */
 export const MAX_RECORDS = 2000
-/** Per-domain limits. Only closed, unreferenced records may be removed on writes. */
-export const RECORD_RETENTION: Record<string, number> = {
-  [DOMAINS.hygieneFindings]: 2000,
-  [DOMAINS.changeSets]: 500,
-  [DOMAINS.changeSetContent]: 1000,
-  [DOMAINS.baselineInstalls]: 500,
-  [DOMAINS.baselineUpgrades]: 500,
-  [DOMAINS.promotions]: 500,
-  [DOMAINS.healthReviews]: 200,
-  [DOMAINS.healthFindings]: 2000,
-  [DOMAINS.notificationEndpoints]: 50,
-  [DOMAINS.customizations]: 1000,
-  [DOMAINS.standards]: 1000,
-  [DOMAINS.adoptions]: 1000,
-  [DOMAINS.scoreSnapshots]: 365,
-  [DOMAINS.customBaselines]: 1000,
-  [DOMAINS.customBaselineDeployments]: 500,
-  [DOMAINS.customBaselineComparisons]: 365,
-}
 /** History entries kept per record. */
 export const MAX_REVISIONS = 200
 
@@ -90,14 +69,12 @@ export const MAX_REVISIONS = 200
  * Local records of the roadmap workflows (findings, change sets, promotions and so on),
  * one encrypted list per tenant and domain.
  *
- * Keys are `records.v1.<domain>.<tenant>`: every call names its tenant and a record ID
- * from another tenant is simply not found. Shared version and cross-tenant deployment
- * retention check parent references across persisted scopes. Updates never rewrite history, they append a revision with the actor
+ * Keys are `records.v1.<domain>.<tenant>`, so one tenant's records are never read while
+ * working on another: every call names its tenant and a record ID from another tenant is
+ * simply not found. Updates never rewrite history, they append a revision with the actor
  * and reason. The first revision holds the whole record; later ones hold only the fields they
- * changed, so frequent progress updates of a large record do not copy it again each time.
- * Reads and plan changes never delete records, including existing over-cap data after an
- * upgrade. Writes prune only closed, unreferenced records. Recovery evidence stays pinned.
- * `remove` handles records the admin explicitly discards.
+ * changed, so frequent progress updates of a large record do not copy it again each time. Nothing here is deleted by a plan change; only `remove` deletes, and callers
+ * use it only for records the admin explicitly discards.
  */
 export class TenantRecords {
   private staged: Map<string, Stored<unknown>[]> | null = null
@@ -127,10 +104,11 @@ export class TenantRecords {
   /** Stores a new record with a fresh ID and its first revision. */
   create<T extends object>(domain: string, tenantId: string, value: T, meta: { actor: string | null; reason: string }): Stored<T> {
     const records = this.list<T>(domain, tenantId)
+    if (records.length >= MAX_RECORDS) throw new Error("This tenant has too many stored records of this kind. Close or export older ones first.")
     const at = this.now().toISOString()
     const base = { ...value, id: randomUUID(), tenantId: tenantId.toLowerCase(), createdAt: at, updatedAt: at } as T & StoredRecord
     const record: Stored<T> = { ...base, history: [{ at, actor: meta.actor, reason: meta.reason, snapshot: base }] }
-    this.save(domain, tenantId, [...records, record], record.id, true)
+    this.save(domain, tenantId, [...records, record])
     return record
   }
 
@@ -163,7 +141,7 @@ export class TenantRecords {
     }
     const updated: Stored<T> = { ...next, history: revisions }
     records[index] = updated
-    this.save(domain, tenantId, records, updated.id, false)
+    this.save(domain, tenantId, records)
     return updated
   }
 
@@ -172,9 +150,7 @@ export class TenantRecords {
     const records = this.list(domain, tenantId)
     const kept = records.filter((record) => record.id !== id)
     if (kept.length === records.length) return false
-    const key = this.key(domain, tenantId)
-    if (this.staged) this.staged.set(key, kept)
-    else this.store.set(key, JSON.stringify(kept))
+    this.save(domain, tenantId, kept)
     return true
   }
 
@@ -199,33 +175,10 @@ export class TenantRecords {
     }
   }
 
-  private save<T>(domain: string, tenantId: string, records: Stored<T>[], writtenId: string, addsRecord: boolean): void {
-    const limit = Object.hasOwn(RECORD_RETENTION, domain) ? RECORD_RETENTION[domain]! : MAX_RECORDS
-    let kept = records
-    if (records.length > limit) {
-      const read = <Value>(readDomain: string, scope = tenantId): Stored<Value>[] =>
-        this.key(readDomain, scope) === this.key(domain, tenantId) ? records as unknown as Stored<Value>[] : this.list<Value>(readDomain, scope)
-      const retain = retainRule(domain, {
-        list: read,
-        all: <Value>(readDomain: string) => {
-          if (!this.store.keys) return null
-          const prefix = `records.v1.${readDomain}.`
-          const keys = new Set([...this.store.keys(), ...(this.staged?.keys() ?? [])])
-          return [...keys].filter(key => key.startsWith(prefix)).flatMap(key => read<Value>(readDomain, key.slice(prefix.length)))
-        },
-      })
-      const removable = records.map((record, index) => ({ record, index }))
-        .filter(({ record }) => record.id !== writtenId && !retain(record))
-        .sort((a, b) => a.record.updatedAt.localeCompare(b.record.updatedAt) || a.index - b.index)
-      const count = records.length - limit
-      // Existing workflows must still progress when protected upgrade data exceeds a new cap.
-      if (addsRecord && removable.length < count) throw new Error("This tenant has too many stored records of this kind. Close or export older ones first. Referenced records and rollback or undo evidence are kept.")
-      const removed = new Set(removable.slice(0, count).map(({ record }) => record.id))
-      kept = records.filter(record => !removed.has(record.id))
-    }
+  private save<T>(domain: string, tenantId: string, records: Stored<T>[]): void {
     const key = this.key(domain, tenantId)
-    if (this.staged) this.staged.set(key, kept as Stored<unknown>[])
-    else this.store.set(key, JSON.stringify(kept))
+    if (this.staged) this.staged.set(key, records as Stored<unknown>[])
+    else this.store.set(key, JSON.stringify(records))
   }
 
   private key(domain: string, tenantId: string): string {
