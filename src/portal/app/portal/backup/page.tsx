@@ -57,6 +57,16 @@ export default function BackupRestorePage() {
   const tenants = useTenants()
   const { selectedTenantId, selectedTenant, setSelectedTenantId } = useSelectedTenant()
   const { updateTenant } = useTenantOperations()
+  const requestedTenant = searchParams.get("tenant")?.toLowerCase()
+  // Notification links select the affected tenant and keep the requested tab.
+  useEffect(() => {
+    if (!requestedTenant || !tenants.length) return
+    const match = tenants.find(t => t.credentials?.tenantId.toLowerCase() === requestedTenant)
+    if (match && match.id !== selectedTenantId) setSelectedTenantId(match.id)
+    const next = new URLSearchParams(searchParams)
+    next.delete("tenant")
+    setSearchParams(next, { replace: true })
+  }, [requestedTenant, tenants, selectedTenantId, setSelectedTenantId, searchParams, setSearchParams])
   const plan = useTenantPlan(selectedTenant?.credentials?.tenantId)
   const community = plan === "community"
   // Copying to other tenants is an MSP action; the main process also checks every target.
@@ -93,8 +103,8 @@ export default function BackupRestorePage() {
   const latest = backups.find((backup) => backup.counts && statusKind(backup.status) === "success")
 
   useEffect(() => {
-    if (!selectedTenantId && tenants[0]) setSelectedTenantId(tenants[0].id)
-  }, [tenants, selectedTenantId, setSelectedTenantId])
+    if (!requestedTenant && !selectedTenantId && tenants[0]) setSelectedTenantId(tenants[0].id)
+  }, [tenants, selectedTenantId, setSelectedTenantId, requestedTenant])
 
   // A refresh keeps the selected backup while it is still listed.
   useEffect(() => {

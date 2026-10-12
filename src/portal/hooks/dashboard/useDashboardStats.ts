@@ -37,7 +37,7 @@ interface BackupHistoryResult {
 export interface TenantDashboardStats extends DashboardStats {
   latestBackup: DashboardBackup | null
   latestCompleteBackup: DashboardBackup | null
-  /** All backups found in storage, not limited to the reporting period. */
+  /** All backups found in storage, across reporting periods. Unsaved attempts are excluded. */
   totalBackups: number
   /** Set when the backup list could not be loaded, so an empty list is not shown as "no backups". */
   backupsError: string | null
@@ -184,7 +184,7 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
       // Filter backups within period
       const backupsInPeriod = backupHistory.filter(b => b.timestamp >= periodStart)
       
-      // Calculate backup stats
+      // Counts use stored backup history. Automatic attempts that saved nothing are absent.
       const counts = backupCounts(backupsInPeriod)
       const { successRate } = counts
       const tenantHealth = tenants.map((tenant, index) => backupHealth(

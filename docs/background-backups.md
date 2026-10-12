@@ -10,8 +10,9 @@ at login and every five minutes. Both launch the installed executable with `--hi
 launches use the app's single-instance lock and do not open another window or backup engine.
 
 The existing scheduler catches up the latest missed slot after launch. It serializes scheduled runs,
-and the backup engine prevents concurrent jobs for the same tenant. A failed backup is recorded and
-retried at the next scheduled slot; reopening the process does not reset its last attempt. Microsoft
+and the backup engine prevents concurrent jobs for the same tenant. A failed scheduled backup is recorded and
+retried 15 minutes after the attempt finishes, up to three attempts per slot, then at the next scheduled
+slot; reopening the process does not reset its last attempt. Microsoft
 credentials, current plan entitlement and the configured storage must remain available. Expired
 sessions requiring interaction fail with a sign-in request; no OS task bypasses Conditional Access,
 MFA, licensing, or encryption.

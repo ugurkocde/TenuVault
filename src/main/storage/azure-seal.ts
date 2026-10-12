@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from 'node:crypto'
+import { FetchApplicationError, FetchPreconditionError } from '../api/network-error'
 const MAGIC = Buffer.from('TVAZ1\n')
 const tokens = new Map<string, { tenant: string; expires: number }>()
 const digest = (token: string) => createHash('sha256').update(token).digest('hex')
@@ -34,21 +35,35 @@ export function openAzure(raw: Buffer, masters: Buffer[], tenant: string, url: U
 /** Main-process boundary: ciphertext is the only backup payload sent to Azure. */
 export function encryptedAzureFetch(fetchImpl: typeof fetch, keys: () => Buffer[], requireRecovery: () => void): typeof fetch {
   return async (input, init) => {
-    const request = new Request(input, init), url = new URL(request.url)
-    if (!/^[a-z0-9]{3,24}\.blob\.core\.windows\.net$/.test(url.hostname) || !url.pathname.startsWith('/intune-backups/') || url.search || !['GET', 'PUT'].includes(request.method)) return fetchImpl(request)
-    const bearer = request.headers.get('authorization')?.replace(/^Bearer /i, '') ?? ''
-    const context = tokens.get(digest(bearer))
-    if (!context || context.expires < Date.now()) throw new Error('Backup tenant context is unavailable. Sign in again.')
-    if (request.method === 'PUT') {
-      requireRecovery()
-      const body = sealAzure(Buffer.from(await request.arrayBuffer()), keys()[0]!, context.tenant, url)
-      const headers = new Headers(request.headers); headers.set('content-type', 'application/octet-stream'); headers.delete('content-length')
-      return fetchImpl(new Request(url, { method: 'PUT', headers, body: new Uint8Array(body) }))
+    let networkAttempted = false
+    const send: typeof fetch = (input, init) => {
+      networkAttempted = true
+      return fetchImpl(input, init)
     }
-    const response = await fetchImpl(request)
-    if (!response.ok) return response
-    const opened = openAzure(Buffer.from(await response.arrayBuffer()), keys(), context.tenant, url)
-    const headers = new Headers(response.headers); headers.set('content-type', 'application/json'); headers.set('x-tenuvault-authenticated', String(opened.authenticated)); headers.delete('content-length'); headers.delete('content-encoding')
-    return new Response(new Uint8Array(opened.data), { status: response.status, headers })
+    try {
+      const request = new Request(input, init), url = new URL(request.url)
+      if (!/^[a-z0-9]{3,24}\.blob\.core\.windows\.net$/.test(url.hostname) || !url.pathname.startsWith('/intune-backups/') || url.search || !['GET', 'PUT'].includes(request.method)) return send(request)
+      const bearer = request.headers.get('authorization')?.replace(/^Bearer /i, '') ?? ''
+      const context = tokens.get(digest(bearer))
+      if (!context || context.expires < Date.now()) throw new Error('Backup tenant context is unavailable. Sign in again.')
+      if (request.method === 'PUT') {
+        requireRecovery()
+        const body = sealAzure(Buffer.from(await request.arrayBuffer()), keys()[0]!, context.tenant, url)
+        const headers = new Headers(request.headers); headers.set('content-type', 'application/octet-stream'); headers.delete('content-length')
+        return send(new Request(url, { method: 'PUT', headers, body: new Uint8Array(body), signal: request.signal }))
+      }
+      const response = await send(request)
+      if (!response.ok) return response
+      // Body reads can fail in transit. Only failures after the complete read are application errors.
+      const raw = Buffer.from(await response.arrayBuffer())
+      let opened: ReturnType<typeof openAzure>
+      try { opened = openAzure(raw, keys(), context.tenant, url) }
+      catch (error) { throw new FetchApplicationError(error) }
+      const headers = new Headers(response.headers); headers.set('content-type', 'application/json'); headers.set('x-tenuvault-authenticated', String(opened.authenticated)); headers.delete('content-length'); headers.delete('content-encoding')
+      return new Response(new Uint8Array(opened.data), { status: response.status, headers })
+    } catch (error) {
+      if (networkAttempted || error instanceof FetchPreconditionError) throw error
+      throw new FetchPreconditionError(error)
+    }
   }
 }
