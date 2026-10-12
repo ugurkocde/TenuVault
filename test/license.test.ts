@@ -1,4 +1,7 @@
 import { generateKeyPairSync, sign } from "node:crypto"
+import { createElement } from "react"
+import { renderToStaticMarkup } from "react-dom/server"
+import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   CLOCK_TOLERANCE_MS,
@@ -8,9 +11,13 @@ import {
   type LicenseServiceOptions,
 } from "../src/main/license/service"
 import { memoryStore } from "./helpers"
-import { earliestExpiringTenant, licenseExpiryWarning, offlineDeadline } from "../src/renderer/lib/license"
+import { earliestExpiringTenant, licenseChipState, licenseExpiryWarning, offlineDeadline } from "../src/renderer/lib/license"
+import * as licenseUi from "../src/renderer/lib/license"
+import LicensePage from "../src/renderer/pages/LicensePage"
+import type { LicenseStatus } from "../src/shared/ipc"
 
 vi.mock("../src/renderer/lib/bridge", () => ({ bridge: {} }))
+vi.mock("../src/portal/contexts/TenantContext", () => ({ useTenants: () => [] }))
 
 const { publicKey, privateKey } = generateKeyPairSync("ed25519")
 const publicPem = publicKey.export({ type: "spki", format: "pem" }).toString()
@@ -93,6 +100,15 @@ function storeLicense(tokenValue: string, seen?: number): void {
 
 const entitled = (license: LicenseService, tenant = TENANT) =>
   license.status([tenant]).tenants.find((t) => t.tenantId === tenant)?.entitled ?? false
+
+function renderLicensePage(status: LicenseStatus): string {
+  const hook = vi.spyOn(licenseUi, "useLicense").mockReturnValue({ status, error: null, refresh: async () => {} })
+  try {
+    return renderToStaticMarkup(createElement(MemoryRouter, null, createElement(LicensePage)))
+  } finally {
+    hook.mockRestore()
+  }
+}
 
 beforeEach(() => {
   store = memoryStore()
@@ -510,6 +526,112 @@ describe("LicenseService key activations", () => {
     expect(calls.map((c) => c.body.activationId)).toEqual(["act-a", "act-b"])
     expect(license.status([TENANT])).toMatchObject({ hasKey: false, plan: null })
     expect(store.get("license.state")).toBeNull()
+  })
+})
+
+describe("LicenseService key outcomes", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(T0)
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it("keeps a saved key pending when the message only asks for a tenant sign-in", async () => {
+    const license = service()
+    await license.setKey("TEST-LICENSE-KEY", [])
+    const status = license.status([])
+    expect(status.message).toBe("Sign in to a tenant to activate the license for it.")
+    expect(licenseChipState(status)).toEqual({ label: "Key saved", tone: "neutral" })
+    expect(status).toMatchObject({ keyState: "pending", keyMessage: null })
+    expect(renderLicensePage(status)).toContain("License key saved")
+    expect(service().status([])).toMatchObject({ keyState: "pending", keyMessage: null })
+    expect(licenseChipState(service().status([]))).toEqual({ label: "Key saved", tone: "neutral" })
+    expect(calls).toHaveLength(0)
+  })
+
+  it.each([
+    ["not_found", /not valid/],
+    ["revoked", /revoked/],
+    ["disabled", /disabled/],
+    ["expired", /expired/],
+    ["tenant_not_licensed", /no license for this tenant/],
+    ["activation_mismatch", /no longer activated/],
+  ] as const)("remembers a %s key refusal after Community fallback and restart", async (reason, message) => {
+    answer = () => granted("act-a")
+    const license = service()
+    await license.setKey("TEST-LICENSE-KEY", [TENANT])
+    expect(license.status([TENANT]).plan).toBe("pro")
+    answer = ({ action }) => denied(action === "tenant" ? "tenant_not_licensed" : reason)
+    await license.refreshAll()
+    await expect(license.requireEntitlement(TENANT)).resolves.toBe("community")
+    const status = license.status([TENANT])
+    expect(licenseChipState(status)).toEqual({ label: "Inactive", tone: "inactive" })
+    expect(status).toMatchObject({ hasKey: true, plan: null, message: null, keyState: "failed", keyMessage: expect.stringMatching(message) })
+    expect(status.tenants[0]).toMatchObject({ activated: false, entitled: false, plan: "community", message: null })
+    const markup = renderLicensePage(status)
+    expect(markup).toContain("License key inactive")
+    expect(markup).toContain(status.keyMessage)
+    expect(service().status([TENANT])).toMatchObject({ keyState: "failed", keyMessage: status.keyMessage })
+    expect(licenseChipState(service().status([TENANT]))).toEqual({ label: "Inactive", tone: "inactive" })
+  })
+
+  it.each(["expired", "revoked"])("records a %s refusal on a saved key's first activation", async (reason) => {
+    const license = service()
+    await license.setKey("TEST-LICENSE-KEY", [])
+    answer = ({ action }) => denied(action === "tenant" ? "tenant_not_licensed" : reason)
+    await expect(license.requireEntitlement(TENANT)).resolves.toBe("community")
+    const status = license.status([TENANT])
+    expect(status).toMatchObject({ keyState: "failed", keyMessage: expect.stringContaining(reason) })
+    expect(licenseChipState(status)).toEqual({ label: "Inactive", tone: "inactive" })
+    expect(service().status([TENANT])).toMatchObject({ keyState: "failed", keyMessage: status.keyMessage })
+  })
+
+  it("clears a refusal after a successful retry and forgets the outcome on deactivation", async () => {
+    const license = service()
+    expect(license.status([])).toMatchObject({ keyState: "none", keyMessage: null })
+    await license.setKey("TEST-LICENSE-KEY", [])
+    answer = () => denied("revoked")
+    await license.requireEntitlement(TENANT)
+    answer = () => granted("act-a")
+    await license.retry([TENANT])
+    expect(license.status([TENANT])).toMatchObject({ keyState: "active", keyMessage: null, plan: "pro" })
+    expect(licenseChipState(license.status([TENANT]))).toEqual({ label: "Pro", tone: "neutral" })
+    expect(service().status([TENANT])).toMatchObject({ keyState: "active", keyMessage: null })
+    answer = () => Response.json({ success: true })
+    await license.deactivate()
+    expect(license.status([TENANT])).toMatchObject({ keyState: "none", keyMessage: null })
+  })
+
+  it("retains a refusal when activation of an already saved key fails", async () => {
+    const license = service()
+    await license.setKey("TEST-LICENSE-KEY", [])
+    answer = () => denied("expired")
+    await expect(license.setKey("TEST-LICENSE-KEY", [TENANT])).rejects.toThrow("expired")
+    expect(service().status([TENANT])).toMatchObject({ hasKey: true, keyState: "failed", keyMessage: "This license key has expired." })
+  })
+
+  it("does not save a new refused key and clears the refusal when a different key is saved", async () => {
+    const license = service()
+    answer = () => denied("expired")
+    await expect(license.setKey("TEST-LICENSE-KEY", [TENANT])).rejects.toThrow("expired")
+    expect(service().status([TENANT])).toMatchObject({ hasKey: false, keyState: "none", keyMessage: null })
+    await license.setKey("TEST-LICENSE-KEY", [])
+    await license.requireEntitlement(TENANT)
+    await license.setKey("OTHER-LICENSE-KEY", [])
+    expect(service().status([])).toMatchObject({ keyState: "pending", keyMessage: null })
+  })
+
+  it("keeps a valid cached key active during an outage and distinguishes expired verification from pending activation", async () => {
+    const license = service()
+    answer = () => granted("act-a")
+    await license.setKey("TEST-LICENSE-KEY", [TENANT])
+    answer = () => { throw new TypeError("fetch failed") }
+    await license.refreshAll()
+    expect(license.status([TENANT])).toMatchObject({ keyState: "active", keyMessage: null, offline: true })
+    vi.setSystemTime(T0 + 15 * DAY)
+    const status = license.status([TENANT])
+    expect(status).toMatchObject({ keyState: "failed", keyMessage: expect.stringContaining("could not be verified") })
+    expect(licenseChipState(status)).toEqual({ label: "Inactive", tone: "inactive" })
   })
 })
 

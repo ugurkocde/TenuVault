@@ -5,7 +5,7 @@ import { communityBannerVisible, licenseChipState } from "../src/renderer/lib/li
 vi.mock("../src/renderer/lib/bridge", () => ({ bridge: {} }))
 
 const status: LicenseStatus = {
-  hasKey: false, keyHint: null, persisted: true, offline: false, message: null,
+  hasKey: false, keyState: "none", keyMessage: null, keyHint: null, persisted: true, offline: false, message: null,
   plan: null, tenantLimit: null, validUntil: null, communityTenantId: null, tenants: [],
 }
 const tenant: TenantLicenseStatus = {
@@ -19,30 +19,20 @@ describe("license chip state", () => {
     expect(licenseChipState(status)).toEqual({ label: "Community", tone: "neutral" })
     expect(licenseChipState({ ...status, communityTenantId: tenant.tenantId })).toEqual({ label: "Community", tone: "neutral" })
     expect(licenseChipState({ ...status, tenants: [tenant] })).toEqual({ label: "Community", tone: "neutral" })
-    expect(licenseChipState({ ...status, tenants: [tenant, { ...tenant, tenantId: "other-community" }] })).toEqual({ label: "Community", tone: "neutral" })
   })
 
   it.each(["pro", "msp"] as const)("shows the %s plan name for an active key", (plan) => {
-    expect(licenseChipState({ ...status, hasKey: true, plan })).toEqual({ label: plan === "msp" ? "MSP" : "Pro", tone: "neutral" })
+    expect(licenseChipState({ ...status, hasKey: true, keyState: "active", plan, tenants: [{ ...tenant, activated: true, entitled: true, source: "key", plan }] })).toEqual({ label: plan === "msp" ? "MSP" : "Pro", tone: "neutral" })
   })
 
   it("shows Organization for a tenant with a shared paid license", () => {
     expect(licenseChipState({ ...status, tenants: [{ ...tenant, entitled: true, activated: true, source: "tenant", plan: "pro" }] })).toEqual({ label: "Organization", tone: "neutral" })
   })
 
-  it("keeps a failed saved key inactive even when a Community tenant is recorded", () => {
-    expect(licenseChipState({ ...status, hasKey: true, message: "The license key has expired.", communityTenantId: tenant.tenantId, tenants: [tenant] })).toEqual({ label: "Inactive", tone: "inactive" })
-    expect(licenseChipState({ ...status, hasKey: true, tenants: [{ ...tenant, activated: true, plan: null }] })).toEqual({ label: "Inactive", tone: "inactive" })
-  })
-
-  it("shows a saved key awaiting its first activation without a red failure state", () => {
-    expect(licenseChipState({ ...status, hasKey: true })).toEqual({ label: "Key saved", tone: "neutral" })
-  })
-
   it("keeps an uncovered signed-in tenant inactive alongside Community and preserves an active plan name", () => {
     const uncovered = { ...tenant, tenantId: "uncovered-tenant", plan: null }
     expect(licenseChipState({ ...status, communityTenantId: tenant.tenantId, tenants: [tenant, uncovered] })).toEqual({ label: "Inactive", tone: "inactive" })
-    expect(licenseChipState({ ...status, hasKey: true, plan: "pro", tenants: [uncovered] })).toEqual({ label: "Pro", tone: "neutral" })
+    expect(licenseChipState({ ...status, hasKey: true, keyState: "active", plan: "pro", tenants: [{ ...tenant, activated: true, entitled: true, source: "key", plan: "pro" }, uncovered] })).toEqual({ label: "Pro", tone: "neutral" })
   })
 
   it("ignores an uncovered tenant that is not signed in", () => {

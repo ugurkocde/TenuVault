@@ -229,9 +229,11 @@ export default function LicensePage() {
     ? "Add your license"
     : status.plan
       ? `${planName(status.plan)} plan active`
-      : status.hasKey
-        ? "License key saved"
-        : "Licensed through your organization"
+      : status.keyState === "failed"
+        ? "License key inactive"
+        : status.keyState === "pending"
+          ? "License key saved"
+          : "Licensed through your organization"
 
   return (
     <div className="max-w-5xl space-y-6 p-6 lg:p-8">
@@ -267,11 +269,13 @@ export default function LicensePage() {
                   ? "Paste the license key from your purchase email, or start a free trial."
                   : status.plan
                     ? `Your license covers ${status.tenantLimit ?? 1} tenant${status.tenantLimit === 1 ? "" : "s"}. ${activeKeyTenants} ${activeKeyTenants === 1 ? "is" : "are"} active on this machine.`
-                    : status.hasKey
-                      ? signedIn === 0
-                        ? "Your key is saved. It activates for a tenant when you sign in to it."
-                        : "Your key is saved but not active for your signed-in tenants. Check the tenants below."
-                      : "A tenant admin shared their TenuVault license with your tenant."}
+                    : status.keyState === "failed"
+                      ? "Your saved key is not active. Check the license message and the tenants below."
+                      : status.keyState === "pending"
+                        ? signedIn === 0
+                          ? "Your key is saved. It activates for a tenant when you sign in to it."
+                          : "Your key is saved but not active for your signed-in tenants. Check the tenants below."
+                        : "A tenant admin shared their TenuVault license with your tenant."}
               </CardDescription>
             </div>
             {status.plan && <Badge variant="secondary">{planName(status.plan)}</Badge>}
@@ -287,10 +291,10 @@ export default function LicensePage() {
               </AlertDescription>
             </Alert>
           )}
-          {status.message && signedIn > 0 && (
+          {(status.keyMessage || (status.message && signedIn > 0)) && (
             <Alert>
               <AlertTriangle className="h-4 w-4 text-amber-600" />
-              <AlertDescription>{status.message}</AlertDescription>
+              <AlertDescription>{status.keyMessage ?? status.message}</AlertDescription>
             </Alert>
           )}
 

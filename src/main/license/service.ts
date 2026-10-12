@@ -59,6 +59,8 @@ interface StoredActivation {
 // time (ms) the app has observed.
 interface StoredLicense {
   key?: string
+  /** Last confirmed key refusal, retained when a tenant falls back to Community. */
+  keyFailure?: string
   activations: Record<string, StoredActivation>
   seen?: number
 }
@@ -249,6 +251,7 @@ export class LicenseService {
         parsed.activations !== null
       ) {
         this.state = parsed as StoredLicense
+        if (typeof this.state.keyFailure !== "string" || !Object.hasOwn(REASONS, this.state.keyFailure)) delete this.state.keyFailure
         if (!Number.isFinite(this.state.seen)) delete this.state.seen
         this.savedSeen = this.state.seen ?? 0
         return
@@ -424,6 +427,7 @@ export class LicenseService {
       throw new Error("The license token could not be verified.")
     }
     this.message = null
+    if (source === "key") delete this.state.keyFailure
     this.messages.delete(tenantId)
     this.failures.delete(tenantId)
     this.save()
@@ -482,6 +486,10 @@ export class LicenseService {
       await this.activate(tenantId)
     } catch (keyError) {
       if (!(keyError instanceof LicenseDenied)) throw keyError
+      if (this.state?.key) {
+        this.state.keyFailure = keyError.reason
+        this.save()
+      }
       await this.activateTenant(tenantId).catch((error: unknown) => {
         throw (error instanceof LicenseDenied && error.reason === "tenant_not_licensed") || error instanceof NoIdToken
           ? keyError
@@ -517,6 +525,7 @@ export class LicenseService {
       this.accept(tenantId, data, "key")
     } catch (error) {
       if (error instanceof LicenseDenied) {
+        if (entry.source !== "tenant") this.state.keyFailure = error.reason
         delete this.state.activations[tenantId]
         this.save()
       }
@@ -571,6 +580,7 @@ export class LicenseService {
     }
     this.state = {
       key: trimmed,
+      ...(previous?.key === trimmed && previous.keyFailure ? { keyFailure: previous.keyFailure } : {}),
       activations: { ...previous?.activations },
       ...(previous?.seen !== undefined ? { seen: previous.seen } : {}),
     }
@@ -584,13 +594,18 @@ export class LicenseService {
         activated++
       } catch (error) {
         firstError ??= error
+        if (error instanceof LicenseDenied) this.state.keyFailure = error.reason
         this.messages.set(tenant, errorText(error))
       }
     }
     if (targets.length > 0 && activated === 0) {
+      const keyFailure = this.state.keyFailure
       this.state = previous
       for (const tenant of targets) this.messages.delete(tenant)
-      this.options.onChange?.()
+      if (this.state?.key === trimmed && keyFailure) {
+        this.state.keyFailure = keyFailure
+        this.save()
+      } else this.options.onChange?.()
       throw firstError
     }
     this.message = tenantIds.length === 0 ? "Sign in to a tenant to activate the license for it." : null
@@ -811,8 +826,16 @@ export class LicenseService {
     this.keepSeen()
     const key = this.state?.key
     const latest = keyToken as Entitlement | null
+    const keyMessage = !key || latest ? null
+      : this.state?.keyFailure ? (REASONS[this.state.keyFailure] ?? null)
+        : Object.values(this.state?.activations ?? {}).some((entry) => entry.source !== "tenant")
+          ? "The saved license could not be verified. Retry activation on the License page."
+          : null
+    const keyState: LicenseStatus["keyState"] = !key ? "none" : latest ? "active" : keyMessage ? "failed" : "pending"
     return {
       hasKey: Boolean(key),
+      keyState,
+      keyMessage,
       keyHint: key ? `****${key.slice(-4)}` : null,
       persisted: this.options.persist,
       offline: this.offline,

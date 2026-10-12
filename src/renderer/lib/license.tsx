@@ -94,10 +94,10 @@ export function licenseChipState(status: LicenseStatus): { label: string; tone: 
   if (status.tenants.some((tenant) => tenant.entitled && tenant.plan !== "community")) {
     return { label: "Organization", tone: "neutral" }
   }
-  if ((status.hasKey && (status.message || status.tenants.some((tenant) => tenant.activated && !tenant.entitled))) || unlicensedTenants(status).length > 0) {
+  if (status.keyState === "failed" || unlicensedTenants(status).length > 0) {
     return { label: "Inactive", tone: "inactive" }
   }
-  if (status.hasKey) return { label: "Key saved", tone: "neutral" }
+  if (status.keyState === "pending") return { label: "Key saved", tone: "neutral" }
   return { label: "Community", tone: "neutral" }
 }
 

@@ -767,7 +767,7 @@ await check("Community trial focuses the key input and procurement links use the
       frame.contentWindow.location.hash = "#/license"
       frame.contentWindow.tenuvault = {
         ...window.tenuvault,
-        license: { ...window.tenuvault.license, open: destination => { window.__communityTrial.opened.push(destination); return Promise.resolve() } },
+        license: { ...window.tenuvault.license, open: (destination, context) => { window.__communityTrial.opened.push({ destination, context }); return Promise.resolve() } },
         app: { ...window.tenuvault.app, openExternal: url => { window.__communityTrial.docs.push(url); return Promise.resolve() } },
       }
       document.querySelectorAll('link[rel="stylesheet"]').forEach(link => frame.contentDocument.head.appendChild(link.cloneNode()))
@@ -780,7 +780,7 @@ await check("Community trial focuses the key input and procurement links use the
     assert(await waitForCondition(`${body}.innerText.includes("Start 30 day free trial")`), "Community trial button missing")
     await evaluate(`[...${body}.querySelectorAll('button')].find(button => button.textContent.includes('Start 30 day free trial')).click()`)
     assert(await waitForCondition(`${body}.innerText.includes("Paste the key from your email to activate the trial.")`), "trial key hint missing")
-    assert(await evaluate(`window.__communityTrial.opened.length === 1 && window.__communityTrial.opened[0] === "buy"`), "trial did not open the existing buy destination")
+    assert(await evaluate(`window.__communityTrial.opened.length === 1 && window.__communityTrial.opened[0].destination === "buy" && window.__communityTrial.opened[0].context?.source === "license-page"`), "trial did not open pricing with the license-page source")
     assert(await evaluate(`window.__communityTrialFrame.contentDocument.activeElement.id === "license-key"`), "trial did not focus the key input")
     assert(await evaluate(`(() => { const input = ${body}.querySelector('#license-key'); const rect = input.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= window.__communityTrialFrame.contentWindow.innerHeight })()`), "trial key input was not scrolled into view")
     assert(await evaluate(`${body}.innerText.includes("Buying for a company? Yearly plans are available by quote, purchase order and invoice, and a 30 day trial key without a card on request.") && ${body}.innerText.includes("Eligible nonprofits can use Pro at no cost.")`), "company or nonprofit copy missing")
@@ -1500,6 +1500,23 @@ await check("tenant changes wait for the disclaimer, once per tenant", async () 
 })
 
 await checkSchedulePanel({ check, evaluate, waitForCondition, screenshot, assert })
+
+await check("a saved key before tenant sign-in stays neutral with activation guidance", async () => {
+  const chip = `document.querySelector('aside a[href="#/license"] span.ml-auto')`
+  try {
+    const status = await evaluate(`window.tenuvault.license.setKey("SMOKE-LICENSE-KEY")`)
+    assert(status.keyState === "pending" && status.keyMessage === null && status.message.includes("Sign in to a tenant"), "saving a key without tenants did not produce pending guidance")
+    await go("#/license", "License key saved")
+    assert(await waitForCondition(`${chip}?.textContent === "Key saved" && ${chip}.classList.contains("bg-gray-100")`), "saved key chip is not neutral")
+    await send("Page.reload")
+    assert(await waitForText("License key saved"), "saved key title changed after reload")
+    await disableAnimations()
+    assert(await waitForCondition(`${chip}?.textContent === "Key saved"`), "saved key chip changed after reload")
+  } finally {
+    await evaluate(`window.tenuvault.license.deactivate()`)
+    assert(await waitForCondition(`${chip}?.textContent === "Community"`), "deactivation did not restore Community")
+  }
+})
 
 if (licenseKey) {
   // No tenant is signed in, so the key is only saved; it activates when a tenant is used.
