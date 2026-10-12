@@ -98,6 +98,14 @@ Mapping errors you may see:
 * Adjust scope tags if the target tenant uses more than **Default**.
 * Review Intune roles and their memberships separately, so a copy does not grant access you did not intend.
 
+## Scope tags and secrets
+
+For Dev to Prod promotion, select the production tenant and open **Changes** > **Dev to Prod**. These rules apply to promotion from the next release:
+
+* **Update an existing policy:** the policy keeps its current destination scope tags. Source tags and their mappings do not replace them. When the tags differ, the preview names both sets where their display names are available.
+* **Create a new policy:** confirmed, usable scope tag mappings are copied. Each source tag without a usable mapping uses the destination's **Default** tag (`0`) instead, with a warning naming that source tag. The built-in Default tag is portable between tenants.
+* **Redacted secrets:** a source policy or existing destination policy with masked secrets blocks promotion until you tick **I understand that secrets in this policy are not promoted and must be set again in the destination** and plan again. The preview identifies the blocked policy and the reason. Acknowledged promotion omits settings containing secrets; set those secrets again in the destination after applying. Automatic rollback cannot recover masked destination secrets.
+
 ## Related pages
 
 * [Restore items](/restore/)

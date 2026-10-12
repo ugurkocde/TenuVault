@@ -5,7 +5,7 @@ import type { Plan } from "../../../shared/plans"
 import type { FeatureDeps } from "../deps"
 import { FeatureError } from "../route"
 import { getOne, GraphReadError, listAll, readCurrent, sameNameIds } from "../change-sets/graph"
-import { hashOf, sanitizeSnapshot, unsupportedReason } from "../change-sets/model"
+import { containsRedaction, hashOf, sanitizeSnapshot, unsupportedReason } from "../change-sets/model"
 import { extractReferences, referenceFindings, resolveReferences, translate, type DependencyFinding, type Mapping, type ReferenceKind, type ReferenceResolution, type TargetReads } from "./mapping"
 
 /**
@@ -25,6 +25,7 @@ export interface ResolveInput {
   targetObjectId: string | null
   includeAssignments: boolean
   dropUnsupportedExclusions: boolean
+  acknowledgeRedacted?: boolean
   mappings: Mapping[]
   /** A source snapshot already read and sanitized. */
   sourceSnapshot: Item
@@ -99,12 +100,16 @@ async function groupState(graph: GraphCall, id: string): Promise<{ state: "found
 
 /**
  * Hash of the destination objects a plan relied on: mapped filters (including their rule),
- * scope tags, reusable settings and groups. The destination policy itself is left out: the
- * change set's target fingerprint owns it, so a retry after a verified update write still
- * matches. Unreadable collections are recorded as unreadable rather than failing.
+ * scope tags, reusable settings and groups. Only the destination policy's scope tags are
+ * included here, since updates keep them. The change set's target fingerprint owns the
+ * remaining content, so a retry after a verified update still matches.
  */
-export async function targetStateHash(graph: GraphCall, reads: TargetReads): Promise<string> {
+export async function targetStateHash(graph: GraphCall, reads: TargetReads, policySnapshot?: Item | null): Promise<string> {
   const state: Record<string, unknown> = {}
+  if (reads.policyId && reads.policyFolder) {
+    const policy = policySnapshot === undefined ? await readCurrent(graph, typeForFolder(reads.policyFolder)!, reads.policyId) : policySnapshot
+    state.policyScopeTags = policy ? policy.roleScopeTagIds ?? null : "missing"
+  }
   const subset = async (kind: Exclude<ReferenceKind, "group">, ids: string[]) => {
     if (!ids.length) return []
     try {
@@ -158,15 +163,17 @@ export async function resolveTarget(deps: FeatureDeps, destinationTenantId: stri
   const sourceSnapshot = sanitized.snapshot
   const findings: DependencyFinding[] = []
   const unsupported = unsupportedReason(type.folder, input.targetObjectId ? "update" : "create")
-  if (sanitized.redacted) findings.push({ code: "secret-values", severity: "blocking", message: "The source holds values Intune masks. They are never stored or copied, so this policy cannot be promoted." })
   if (unsupported) findings.push({ code: "unsupported-type", severity: "blocking", message: unsupported })
 
-  const references = extractReferences(sourceSnapshot, input.includeAssignments)
+  const targetPolicy = input.targetObjectId ? await read("The destination object", () => readCurrent(targetGraph, type, input.targetObjectId!)) : null
+  const sourceTags = Array.isArray(sourceSnapshot.roleScopeTagIds) ? sourceSnapshot.roleScopeTagIds.map(String) : []
+  const destinationTags = Array.isArray(targetPolicy?.roleScopeTagIds) ? targetPolicy.roleScopeTagIds.map(String) : []
+  const references = extractReferences(sourceSnapshot, input.includeAssignments).filter((reference) => !input.targetObjectId || reference.kind !== "scopeTag")
   const kinds = new Set(references.map((reference) => reference.kind))
   const targetObjects: Partial<Record<ReferenceKind, Map<string, string> | null>> = {}
   const sourceNames: Partial<Record<ReferenceKind, Map<string, string>>> = {}
   for (const kind of ["filter", "scopeTag", "reusableSetting"] as const) {
-    if (!kinds.has(kind)) continue
+    if (!kinds.has(kind) && !(kind === "scopeTag" && input.targetObjectId && (sourceTags.length || destinationTags.length))) continue
     targetObjects[kind] = await read("Destination objects", () => names(targetGraph, kind))
     sourceNames[kind] = (sameTenant ? targetObjects[kind] : await read("Source objects", () => names(sourceGraph, kind))) ?? new Map()
   }
@@ -181,12 +188,22 @@ export async function resolveTarget(deps: FeatureDeps, destinationTenantId: stri
   }
   sourceNames.group = sourceGroupNames
   const resolutions = resolveReferences(references, { mappings: input.mappings, sourceNames, targetObjects, groupStates, sameTenant })
-  findings.push(...referenceFindings(resolutions))
-  const translated = translate(type, sourceSnapshot, resolutions, { includeAssignments: input.includeAssignments, dropUnsupportedExclusions: input.dropUnsupportedExclusions })
+  findings.push(...referenceFindings(resolutions.filter((reference) => reference.kind !== "scopeTag")))
+  const translated = translate(type, sourceSnapshot, resolutions, { includeAssignments: input.includeAssignments, dropUnsupportedExclusions: input.dropUnsupportedExclusions, destinationSnapshot: input.targetObjectId ? targetPolicy : undefined, acknowledgeRedacted: input.acknowledgeRedacted })
   findings.push(...translated.findings)
 
-  const targetPolicy = input.targetObjectId ? await read("The destination object", () => readCurrent(targetGraph, type, input.targetObjectId!)) : null
   if (input.targetObjectId && !targetPolicy) findings.push({ code: "missing-mapping", severity: "blocking", message: "The chosen destination object does not exist in the destination tenant." })
+  if (targetPolicy) {
+    const destinationSnapshot = sanitizeSnapshot(type, targetPolicy)
+    if (destinationSnapshot.redacted || containsRedaction(destinationSnapshot.snapshot)) findings.push({ code: "secret-values", severity: input.acknowledgeRedacted === true ? "warning" : "blocking", message: "The destination policy holds values Intune masks. Promotion can remove these secrets and they must be set again in the destination. Acknowledge this in the planner to continue. Automatic rollback cannot recover them." })
+    if (hashOf([...new Set(sourceTags)].sort()) !== hashOf([...new Set(destinationTags)].sort())) {
+      const labels = (ids: string[], lookup: Map<string, string> | null | undefined) => ids.map((id) => {
+        const name = lookup?.get(id.toLowerCase()) || (id === "0" ? "Default" : null)
+        return name ? `"${name}" (${id})` : id
+      }).join(", ") || "none"
+      findings.push({ code: "scope-tags-kept", severity: "info", message: `Scope tags of the destination are kept. Source: ${labels(sourceTags, sourceNames.scopeTag)}. Destination: ${labels(destinationTags, targetObjects.scopeTag)}.` })
+    }
+  }
   const sourceName = itemName(type, sourceSnapshot)
   if (!input.targetObjectId) {
     const existing = await read("Destination objects", () => sameNameIds(targetGraph, type, sourceName))
@@ -194,8 +211,8 @@ export async function resolveTarget(deps: FeatureDeps, destinationTenantId: stri
   }
 
   const confirmed = (kind: ReferenceKind) => resolutions.filter((entry) => entry.kind === kind && entry.targetId && entry.state !== "missing" && entry.state !== "rejected").map((entry) => entry.targetId!)
-  const targetReads: TargetReads = { policyId: input.targetObjectId, filterIds: confirmed("filter"), scopeTagIds: confirmed("scopeTag"), reusableSettingIds: confirmed("reusableSetting"), groupIds: confirmed("group") }
-  const stateHash = await read("The destination state", () => targetStateHash(targetGraph, targetReads))
+  const targetReads: TargetReads = { policyId: input.targetObjectId, policyFolder: type.folder, filterIds: confirmed("filter"), scopeTagIds: input.targetObjectId ? destinationTags : confirmed("scopeTag"), reusableSettingIds: confirmed("reusableSetting"), groupIds: confirmed("group") }
+  const stateHash = await read("The destination state", () => targetStateHash(targetGraph, targetReads, targetPolicy))
   const blocked = findings.some((finding) => finding.severity === "blocking") || !translated.body
   return {
     sourceName,

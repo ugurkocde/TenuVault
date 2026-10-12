@@ -1,6 +1,7 @@
 import type { IntuneType, Item, Json } from "../../../shared/intune/registry"
 import { cleanAssignment } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
+import { containsRedaction, containsSecret } from "../change-sets/model"
 
 /**
  * Pure model of promotion target resolution (#145): which tenant-specific references a
@@ -40,7 +41,7 @@ export interface ReferenceResolution {
 }
 
 export interface DependencyFinding {
-  code: "missing-mapping" | "rejected-mapping" | "unsupported-type" | "unsupported-target" | "ordering" | "unknown-membership" | "exclusion-unsupported" | "exclusion-dropped" | "display-name-only" | "assignments-excluded" | "secret-values"
+  code: "missing-mapping" | "rejected-mapping" | "unsupported-type" | "unsupported-target" | "ordering" | "unknown-membership" | "exclusion-unsupported" | "exclusion-dropped" | "display-name-only" | "assignments-excluded" | "secret-values" | "scope-tags-kept" | "scope-tag-default"
   severity: "blocking" | "warning" | "info"
   message: string
 }
@@ -49,6 +50,8 @@ export interface DependencyFinding {
 export interface TargetReads {
   /** The destination policy to update; its content is checked by the change set's target fingerprint. */
   policyId: string | null
+  /** Registry folder for re-checking the destination tags frozen into an update. */
+  policyFolder?: string
   filterIds: string[]
   scopeTagIds: string[]
   reusableSettingIds: string[]
@@ -171,7 +174,8 @@ export function referenceFindings(references: ReferenceResolution[]): Dependency
 
 /**
  * Translates the source configuration into the target tenant with confirmed mappings.
- * Returns null for the body when any tenant-specific reference is unresolved, so a source
+ * Updates keep the destination's scope tags; creates map tags or use Default with a warning.
+ * Returns null for the body when another tenant-specific reference is unresolved, so a source
  * GUID is never written. Assignments are translated only when included; exclusions keep their
  * exclusion target type, and on types that store exclusions as includes they are blocked
  * unless `dropUnsupportedExclusions` explicitly drops them.
@@ -180,7 +184,7 @@ export function translate(
   type: IntuneType,
   source: Item,
   references: ReferenceResolution[],
-  options: { includeAssignments: boolean; dropUnsupportedExclusions: boolean },
+  options: { includeAssignments: boolean; dropUnsupportedExclusions: boolean; destinationSnapshot?: Item | null; acknowledgeRedacted?: boolean },
 ): { body: Item | null; assignments: Item[] | null; findings: DependencyFinding[] } {
   const findings: DependencyFinding[] = []
   const usable = (kind: ReferenceKind, id: string): string | null => {
@@ -192,12 +196,30 @@ export function translate(
   let unresolved = false
   const { assignments: _assignments, ...rest } = structuredClone(source)
   const body = rest as Item
-  if (Array.isArray(body.roleScopeTagIds)) {
-    body.roleScopeTagIds = (body.roleScopeTagIds as Json[]).map((tag) => {
+  if (options.destinationSnapshot !== undefined) {
+    delete body.roleScopeTagIds
+    // PUT resets omitted tags to Default, so send the live destination array explicitly.
+    if (Array.isArray(options.destinationSnapshot?.roleScopeTagIds)) body.roleScopeTagIds = structuredClone(options.destinationSnapshot.roleScopeTagIds)
+  } else if (Array.isArray(body.roleScopeTagIds)) {
+    body.roleScopeTagIds = [...new Set((body.roleScopeTagIds as Json[]).map((tag) => {
       const mapped = typeof tag === "string" ? usable("scopeTag", tag) : null
-      if (!mapped) unresolved = true
-      return mapped ?? ""
-    })
+      if (!mapped) {
+        const reference = references.find((entry) => entry.kind === "scopeTag" && entry.sourceId === tag)
+        findings.push({ code: "scope-tag-default", severity: "warning", message: `The source scope tag ${reference?.sourceName ? `"${reference.sourceName}"` : String(tag)} has no usable destination mapping. The new policy uses Default (0) for this tag.` })
+      }
+      return mapped ?? "0"
+    }))]
+  }
+  if (containsRedaction(source) || containsSecret(source) || hasSecretValues(source)) {
+    findings.push({ code: "secret-values", severity: options.acknowledgeRedacted === true ? "warning" : "blocking", message: "The source policy holds values Intune masks. These secrets are not promoted and must be set again in the destination. Acknowledge this in the planner to continue." })
+    if (options.acknowledgeRedacted !== true) unresolved = true
+    else {
+      // Omit whole settings that hold secrets so no incomplete setting or marker is sent.
+      for (const [key, value] of Object.entries(body)) {
+        if (Array.isArray(value)) body[key] = value.filter((entry) => !containsRedaction(entry) && !containsSecret(entry))
+        else if (containsRedaction(value) || containsSecret(value)) delete body[key]
+      }
+    }
   }
   visit(body.settings ?? null, (object) => {
     if (object["@odata.type"] !== REFERENCE_VALUE) return
@@ -247,10 +269,6 @@ export function translate(
     }
   } else if (directAssignments(source).length) {
     findings.push({ code: "assignments-excluded", severity: "info", message: "Assignments are not copied. The object is created unassigned (or keeps its current assignments) until targeting is reviewed separately." })
-  }
-  if (hasSecretValues(source)) {
-    findings.push({ code: "secret-values", severity: "blocking", message: "The policy contains secret values Intune does not return in plain text; they cannot be copied." })
-    unresolved = true
   }
   return { body: unresolved ? null : body, assignments: unresolved ? null : assignments, findings }
 }

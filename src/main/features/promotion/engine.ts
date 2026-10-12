@@ -51,6 +51,7 @@ export interface PromotionRecord extends ListedRecord {
   destinationTenantId: string
   ticket: string | null
   includeAssignments: boolean
+  acknowledgeRedacted?: boolean
   items: PromotionItem[]
   changeSetId: string | null
   rollbackChangeSetId: string | null
@@ -62,6 +63,7 @@ export interface PlanInput {
   ticket: string | null
   includeAssignments: boolean
   dropUnsupportedExclusions: boolean
+  acknowledgeRedacted?: boolean
   items: Array<{ sourceId: string; destinationId: string | null }>
   mappings: Mapping[]
 }
@@ -118,6 +120,7 @@ export async function planPromotion(deps: FeatureDeps, destinationTenantId: stri
       targetObjectId: item.destinationId,
       includeAssignments: input.includeAssignments,
       dropUnsupportedExclusions: input.dropUnsupportedExclusions,
+      acknowledgeRedacted: input.acknowledgeRedacted,
       mappings: input.mappings,
       sourceSnapshot: snapshot,
     })
@@ -129,11 +132,12 @@ export async function planPromotion(deps: FeatureDeps, destinationTenantId: stri
   const promotion = deps.records.create<PromotionRecord>(DOMAINS.promotions, destination, {
     title: input.title,
     status: blockedCount ? "blocked" : "in-review",
-    summary: blockedCount ? `${blockedCount} of ${items.length} policies are blocked; resolve mappings and plan again.` : `${items.length} policies ready for review.`,
+    summary: blockedCount ? `${blockedCount} of ${items.length} policies are blocked; resolve findings and plan again.` : `${items.length} policies ready for review.`,
     sourceTenantId: source,
     destinationTenantId: destination,
     ticket: input.ticket,
     includeAssignments: input.includeAssignments,
+    acknowledgeRedacted: input.acknowledgeRedacted === true,
     items,
     changeSetId: null,
     rollbackChangeSetId: null,

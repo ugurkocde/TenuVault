@@ -29,7 +29,7 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 Put these in the next stable release's notes, then remove them here.
 
-- None yet.
+- Promotion keeps the destination policy's scope tags on update and blocks promotion of redacted policies without acknowledgement. Acknowledged promotions omit secrets, which must be set again in the destination.
 
 ## Cutting a stable release
 
