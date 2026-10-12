@@ -4,8 +4,9 @@ import { bridge } from "../lib/bridge"
 import { firstBackupNote } from "../lib/plan-notes"
 
 // Several manual backups can finish together; only one completion shows this machine's note.
-// The note counts as shown only once its preference is saved, so a failed write lets a later
-// completion try again instead of hiding the note until the next restart.
+// The note is shown before its preference is saved and counts as shown only once the write
+// succeeds, so neither a failed write nor a completion that disappears before the note renders
+// consumes it for good.
 let claimed = false
 let reserved = false
 
@@ -25,10 +26,10 @@ export function FirstBackupNote({ plan }: { plan: Plan | null }) {
     void (async () => {
       try {
         const preferences = await bridge.preferences.get()
-        if (claimed || !firstBackupNote(plan, preferences.firstBackupNoteSeen)) return
+        if (claimed || !mounted.current || !firstBackupNote(plan, preferences.firstBackupNoteSeen)) return
+        setShown(true)
         await bridge.preferences.set({ firstBackupNoteSeen: true })
         claimed = true
-        if (mounted.current) setShown(true)
       } catch (error: unknown) {
         console.error("Could not record the backup completion note:", error)
       } finally {
