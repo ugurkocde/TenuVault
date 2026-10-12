@@ -281,11 +281,13 @@ export class LocalBlobStore {
     return this.write(dir, async () => {
       const path = join(dir, file)
       const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`
+      let written: BigIntStats
       try {
         const handle = await open(tmp, "wx", 0o600)
         try {
           await handle.writeFile(Buffer.concat([version === 1 ? MAGIC_V1 : MAGIC_V2, length, header, body]))
           await handle.sync()
+          written = await handle.stat({ bigint: true })
         } finally {
           await handle.close()
         }
@@ -302,10 +304,17 @@ export class LocalBlobStore {
         await rm(tmp, { force: true })
       }
 
-      const info = await stat(path, { bigint: true })
+      const published = await stat(path, { bigint: true })
+      const sameFile = published.dev === written.dev && published.ino === written.ino && published.size === written.size && published.mtimeNs === written.mtimeNs
+      // Rename can change ctime. Use its final stamp only after verifying the written file's identity.
+      const info = sameFile ? published : written
       const stamp = fileStamp(info)
       const blob: StoredBlob = { name, size: data.byteLength, contentType, created, lastModified: info.mtime, etag: `"${stamp}"`, ...(metadata ? { metadata } : {}) }
-      this.updateEntry(dir, entries, name, { ...blob, file, version, stamp })
+      if (sameFile) this.updateEntry(dir, entries, name, { ...blob, file, version, stamp })
+      else {
+        this.updateEntry(dir, entries, name)
+        this.changed(dir)
+      }
       return blob
     })
   }

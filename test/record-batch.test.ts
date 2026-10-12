@@ -108,21 +108,87 @@ it('snapshots mutable callback inputs and detaches returned records from staged 
 })
 
 
-it('rejects an async callback without publishing its staged writes or leaving an unhandled rejection', async () => {
+it('rejects an async callback before execution without persisting its continuation or emitting an unhandled rejection', async () => {
   const store = memoryStore()
   const records = new TenantRecords(store)
   const write = vi.spyOn(store, 'setMany')
-  const callback = vi.fn(async () => {
-    records.create(DOMAINS.healthFindings, TENANT_A, { number: 1 }, meta)
-    throw new Error('async callback failed')
-  })
-  expect(() => records.batch(callback)).toThrow('Record batches must finish synchronously')
-  const pending = callback.mock.results[0]!.value as Promise<never>
-  // The batch refuses the promise synchronously, so handle its rejection in the same turn.
-  void pending.catch(() => undefined)
-  await expect(pending).rejects.toThrow('async callback failed')
-  expect(write).not.toHaveBeenCalled()
-  expect(records.list(DOMAINS.healthFindings, TENANT_A)).toEqual([])
+  const started = vi.fn()
+  const unhandled = vi.fn()
+  process.on('unhandledRejection', unhandled)
+  try {
+    const callback = async () => {
+      started()
+      records.create(DOMAINS.healthFindings, TENANT_A, { number: 1 }, meta)
+      await Promise.resolve()
+      records.create(DOMAINS.healthFindings, TENANT_A, { number: 2 }, meta)
+      throw new Error('async callback failed')
+    }
+    // @ts-expect-error Async callbacks are invalid even though the runtime guard also protects untyped callers.
+    expect(() => records.batch(callback)).toThrow('Record batches must finish synchronously')
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(started).not.toHaveBeenCalled()
+    expect(write).not.toHaveBeenCalled()
+    expect(new TenantRecords(store).list(DOMAINS.healthFindings, TENANT_A)).toEqual([])
+    expect(unhandled).not.toHaveBeenCalled()
+  } finally {
+    process.off('unhandledRejection', unhandled)
+  }
+})
+
+it.each(['promise', 'thenable'])('discards staged writes and consumes a returned %s rejection without test-side promise handling', async kind => {
+  const store = memoryStore()
+  const records = new TenantRecords(store)
+  const write = vi.spyOn(store, 'setMany')
+  const unhandled = vi.fn()
+  process.on('unhandledRejection', unhandled)
+  try {
+    const callback = (): unknown => {
+      records.create(DOMAINS.healthFindings, TENANT_A, { number: 1 }, meta)
+      const error = new Error('returned promise failed')
+      return kind === 'promise' ? Promise.reject(error) : {
+        // Exercise rejection handling for an untyped thenable callback.
+        // oxlint-disable-next-line no-thenable
+        then: (_resolve: unknown, reject: (error: Error) => void) => { reject(error) },
+      }
+    }
+    expect(() => records.batch(callback)).toThrow('Record batches must finish synchronously')
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(write).not.toHaveBeenCalled()
+    expect(new TenantRecords(store).list(DOMAINS.healthFindings, TENANT_A)).toEqual([])
+    expect(unhandled).not.toHaveBeenCalled()
+  } finally {
+    process.off('unhandledRejection', unhandled)
+  }
+})
+
+it.each(['create', 'batch'])('blocks a returned promise continuation from persisting a later %s while allowing a fresh synchronous batch', async operation => {
+  const store = memoryStore()
+  const records = new TenantRecords(store)
+  const write = vi.spyOn(store, 'setMany')
+  const resumed = vi.fn()
+  const unhandled = vi.fn()
+  process.on('unhandledRejection', unhandled)
+  try {
+    const callback = (): unknown => (async () => {
+      records.create(DOMAINS.healthFindings, TENANT_A, { number: 1 }, meta)
+      await Promise.resolve()
+      resumed()
+      const create = () => records.create(DOMAINS.healthFindings, TENANT_A, { number: 2 }, meta)
+      if (operation === 'batch') records.batch(create)
+      else create()
+      throw new Error('async continuation failed')
+    })()
+    expect(() => records.batch(callback)).toThrow('Record batches must finish synchronously')
+    records.batch(() => records.create(DOMAINS.healthReviews, TENANT_A, { kind: 'fresh batch' }, meta))
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(resumed).toHaveBeenCalledOnce()
+    expect(write).toHaveBeenCalledOnce()
+    expect(new TenantRecords(store).list(DOMAINS.healthFindings, TENANT_A)).toEqual([])
+    expect(new TenantRecords(store).list(DOMAINS.healthReviews, TENANT_A)).toHaveLength(1)
+    expect(unhandled).not.toHaveBeenCalled()
+  } finally {
+    process.off('unhandledRejection', unhandled)
+  }
 })
 
 it('merges a successful nested batch into the parent single setMany write', () => {

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks"
 import { randomUUID } from "node:crypto"
 import type { KeyValueStore } from "../storage/secure-store"
 
@@ -78,6 +79,7 @@ export const MAX_REVISIONS = 200
  */
 export class TenantRecords {
   private staged: Map<string, Stored<unknown>[]> | null = null
+  private readonly batchContext = new AsyncLocalStorage<{ active: boolean }>()
   constructor(
     private readonly store: KeyValueStore,
     private readonly now: () => Date = () => new Date(),
@@ -159,12 +161,17 @@ export class TenantRecords {
   }
 
   /** Synchronous scan writes share one durable flush. Failed batches leave no staged changes. */
-  batch<T>(run: () => T): T {
+  batch<T>(run: () => T & (T extends PromiseLike<unknown> ? never : unknown)): T {
+    if (run.constructor.name === "AsyncFunction" || this.batchContext.getStore()?.active === false) throw new Error("Record batches must finish synchronously")
+    const context = { active: true }
     const parent = this.staged
     this.staged = parent ? structuredClone(parent) : new Map()
     try {
-      const result = run()
-      if (result && typeof (result as { then?: unknown }).then === "function") throw new Error("Record batches must finish synchronously")
+      const result = this.batchContext.run(context, run)
+      if (result && typeof (result as { then?: unknown }).then === "function") {
+        this.batchContext.run(context, () => { void Promise.resolve(result).catch(() => undefined) })
+        throw new Error("Record batches must finish synchronously")
+      }
       if (!parent) {
         const changes = Object.fromEntries([...this.staged].map(([key, records]) => [key, JSON.stringify(records)]))
         if (this.store.setMany) this.store.setMany(changes)
@@ -175,11 +182,14 @@ export class TenantRecords {
       }
       return result
     } finally {
+      context.active = false
       this.staged = parent
     }
   }
 
   private save<T>(domain: string, tenantId: string, records: Stored<T>[]): void {
+    // A rejected promise can still resume, but it cannot publish writes from the discarded batch.
+    if (this.batchContext.getStore()?.active === false) throw new Error("Record batches must finish synchronously")
     const key = this.key(domain, tenantId)
     if (this.staged) this.staged.set(key, records as Stored<unknown>[])
     else this.store.set(key, JSON.stringify(records))
