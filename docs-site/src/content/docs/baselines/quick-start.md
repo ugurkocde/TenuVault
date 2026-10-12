@@ -164,7 +164,7 @@ If the old OpenIntuneBaseline framework page saved policy pack comparisons for t
 | The backup failed, so nothing was changed. | Open **Backup & Restore** and check the backup log. Fix the cause and retry. |
 | The backup did not finish within an hour, so nothing was changed. | Retry at a quieter time, or check the backup log for slow types. |
 | Tenant *type* could not be read (*status*). | Check your Intune role and the app registration permissions. |
-| An OpenIntuneBaseline deployment or undo is already running for this tenant. | Wait for the current run to finish. |
+| Another change is being applied to this tenant: *label*. Try again when it finishes. | Another deployment, undo, change set or framework creation is running for this tenant. Wait for it to finish. See [Troubleshooting](/troubleshooting/). |
 | This run was already undone or is not recorded on this device. | Runs are stored per device. Delete leftover policies in Intune. |
 | The pilot group must be an Entra group object ID. | Enter the group's object ID (GUID), not its name. |
 
