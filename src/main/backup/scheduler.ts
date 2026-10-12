@@ -113,7 +113,15 @@ export class BackupScheduler {
         // Reserve the attempt before starting work, so quitting during a request cannot reset the budget.
         this.write({
           ...this.read(),
-          [tenantId]: { ...schedule, lastAttemptAt: this.now().toISOString(), attemptSlot: slot.toISOString(), attempts },
+          [tenantId]: {
+            ...schedule,
+            lastAttemptAt: this.now().toISOString(),
+            attemptSlot: slot.toISOString(),
+            attempts,
+            // A cancellation belongs to its finished slot, not the new unfinished attempt.
+            lastStatus: schedule.lastStatus === "Cancelled" ? undefined : schedule.lastStatus,
+            lastMessage: schedule.lastStatus === "Cancelled" ? undefined : schedule.lastMessage,
+          },
         })
         const result = await this.run(schedule.tenantId).catch((error: unknown) => ({
           status: "Failed" as const,

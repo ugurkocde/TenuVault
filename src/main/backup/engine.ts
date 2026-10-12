@@ -796,7 +796,10 @@ class BlobWriter {
         if (!attempted && error instanceof RequestTimeoutError && attempt >= REQUEST_ATTEMPTS - 1) throw new TokenError(error.message)
         if (error instanceof FetchApplicationError || error instanceof TokenError || error instanceof StorageError || error instanceof ProtectedBlobError || init.signal?.aborted || attempt >= REQUEST_ATTEMPTS - 1) throw error
         ambiguous = true
-        await sleep(retryDelay(response, attempt), this.network?.signal ?? beforeCommit?.signal)
+        const retrySignal = beforeCommit
+          ? AbortSignal.any([beforeCommit.signal, ...(this.network ? [this.network.signal] : [])])
+          : this.network?.signal
+        await sleep(retryDelay(response, attempt), retrySignal)
       }
     }
   }

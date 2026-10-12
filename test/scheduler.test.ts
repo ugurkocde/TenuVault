@@ -104,6 +104,45 @@ describe("BackupScheduler", () => {
     expect(run).toHaveBeenCalledTimes(2)
   })
 
+  it.each(["daily", "weekly"] as const)("retries an unfinished next %s slot after restarting following cancellation", async frequency => {
+    const { scheduler, store, run, setNow } = setup(local(2026, 9, 27, 10))
+    scheduler.set({ tenantId: TENANT, enabled: true, frequency, weekday: 1, time: "02:00" })
+    run.mockResolvedValueOnce({ status: "Cancelled", message: "Backup cancelled by you." })
+    setNow(local(2026, 9, 28, 2))
+    await scheduler.tick()
+    expect(scheduler.list()[0]).toMatchObject({ lastStatus: "Cancelled", attempts: 0 })
+
+    const nextSlot = frequency === "daily" ? local(2026, 9, 29, 2) : local(2026, 10, 5, 2)
+    setNow(nextSlot)
+    let finish!: (result: ScheduledRunResult) => void
+    run.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const pending = scheduler.tick()
+    // A new process only sees the state saved before the unfinished attempt.
+    const restartedStore = memoryStore()
+    restartedStore.set("backup.schedules", store.get("backup.schedules")!)
+    finish({ status: "Failed", message: "Interrupted" })
+    await pending
+
+    let now = new Date(nextSlot)
+    const retry = vi.fn(async (): Promise<ScheduledRunResult> => ({ status: "Failed", message: "Network unavailable" }))
+    const restarted = new BackupScheduler(restartedStore, retry, () => undefined, () => now)
+    expect(restarted.list()[0]).toMatchObject({ attemptSlot: nextSlot, attempts: 1, nextRunAt: new Date(now.getTime() + 15 * 60_000).toISOString() })
+    expect(restarted.isDue(restarted.list()[0]!)).toBe(false)
+    await restarted.tick()
+    expect(retry).not.toHaveBeenCalled()
+    now = new Date(now.getTime() + 15 * 60_000)
+    expect(restarted.isDue(restarted.list()[0]!)).toBe(true)
+    await restarted.tick()
+    expect(restarted.list()[0]).toMatchObject({ attempts: 2, lastStatus: "Failed" })
+    now = new Date(now.getTime() + 15 * 60_000)
+    await restarted.tick()
+    expect(restarted.list()[0]!.attempts).toBe(3)
+    now = new Date(now.getTime() + 15 * 60_000)
+    await restarted.tick()
+    expect(retry).toHaveBeenCalledTimes(2)
+    expect(restarted.list()[0]!.lastRunAt).toBeUndefined()
+  })
+
   it("keeps the back-off and three-attempt budget across restarts with real clock timers", async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 9, 10, 1))

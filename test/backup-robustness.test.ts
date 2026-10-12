@@ -148,11 +148,11 @@ describe("bounded backup jobs", () => {
   })
 })
 
-function nearDeadlineListing(url: URL, page: number): Promise<Response> | undefined {
+function nearDeadlineListing(url: URL, page: number, lastPage = 30, lastDelay = 59_500): Promise<Response> | undefined {
   if (url.hostname !== "graph.microsoft.com") return
   return new Promise(resolve => { setTimeout(() => resolve(Response.json({ value: [],
-    ...(page < 30 ? { "@odata.nextLink": `https://graph.microsoft.com/beta/page?n=${page}` } : {}),
-  })), page < 30 ? 60_000 : 59_500) })
+    ...(page < lastPage ? { "@odata.nextLink": `https://graph.microsoft.com/beta/page?n=${page}` } : {}),
+  })), page < lastPage ? 60_000 : lastDelay) })
 }
 
 describe("storage read retries", () => {
@@ -304,6 +304,46 @@ describe("manifest commit and retention interruption", () => {
     await vi.advanceTimersByTimeAsync(300_000)
     expect(calls).toHaveLength(count)
     expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each(["cancel", "deadline"])("stops immediately when %s arrives during back-off after a manifest token timeout", async interrupt => {
+    vi.useFakeTimers()
+    let storageTokens = 0
+    let release!: (token: string) => void
+    let pages = 0
+    const { engine, saved, calls } = setup({
+      getToken: async (_tenant, _client, tokenScope) => {
+        if (tokenScope.includes("storage.azure.com") && ++storageTokens === 2) {
+          return new Promise(resolve => { release = resolve })
+        }
+        return "token"
+      },
+      override: url => interrupt === "deadline" && pages < 29 && url.hostname === "graph.microsoft.com" ? nearDeadlineListing(url, ++pages, 29, 29_500) : undefined,
+    })
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(interrupt === "deadline" ? JOB_DEADLINE_MS - 500 : 90_000)
+    expect(storageTokens).toBe(2)
+    expect(release).toBeDefined()
+    expect(job.status).toBe("Running")
+    // The token request has timed out, but its one second retry sleep is still pending.
+    if (interrupt === "cancel") engine.cancel(job.id)
+    else await vi.advanceTimersByTimeAsync(500)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(job.status).toBe(interrupt === "cancel" ? "Cancelled" : "Failed")
+    await engine.waitForJob(job)
+    expect(job.exception).toContain(interrupt === "cancel" ? "Backup cancelled by you" : "30 minute job deadline")
+    expect(saved.has(`${job.backupFolder}/metadata.json`)).toBe(false)
+    expect(calls.some(call => call.init.method === "PUT" && call.url.pathname.endsWith("/metadata.json"))).toBe(false)
+    expect(vi.getTimerCount()).toBe(0)
+    const count = calls.length
+    release("token")
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(storageTokens).toBe(2)
+    expect(calls).toHaveLength(count)
+    const next = engine.start(request)
+    await engine.waitForJob(next)
+    expect(next.id).not.toBe(job.id)
+    expect(next.status).toBe("Completed")
   })
 
   it.each(["cancel", "deadline"])("fails without a manifest when %s arrives after the last item read and before commit", async interrupt => {
