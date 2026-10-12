@@ -193,3 +193,76 @@ it.each(['addition', 'replacement'])('starts a fresh listing check after an exte
   expect(await pendingNextList).toContainEqual(expect.objectContaining({ name, size: published.size, etag: published.etag }))
   await pendingList
 })
+
+
+it.each([[1, false], [8, false], [1, true], [8, true]] as const)('rebuilds once after 64 own puts with %s concurrent writes and one listing (existing backup=%s)', async (concurrency, existing) => {
+  const root = mkdtempSync(join(tmpdir(), 'tv-write-index-')); roots.push(root)
+  const store = new LocalBlobStore(root, [randomBytes(32)])
+  await store.createContainer('account', 'intune-backups')
+  if (existing) {
+    await store.put('account', 'intune-backups', 'backup-earlier/Policies/Old.json', Buffer.from('{}'), 'application/json')
+    await store.put('account', 'intune-backups', 'backup-earlier/metadata.json', Buffer.from('{"Items":{"Policies/old":{"file":"Old.json"}}}'), 'application/json')
+    await store.list('account', 'intune-backups')
+  }
+  const readIndex = vi.spyOn(store as unknown as { readIndex: () => Promise<unknown> }, 'readIndex')
+  const items: Record<string, { file: string }> = {}
+  for (let offset = 0; offset < 64; offset += concurrency) {
+    await Promise.all(Array.from({ length: concurrency }, (_, index) => {
+      const number = offset + index
+      items[`Policies/${number}`] = { file: `${number}.json` }
+      return store.put('account', 'intune-backups', `backup-one/Policies/${number}.json`, Buffer.from('{}'), 'application/json')
+    }))
+  }
+  await store.put('account', 'intune-backups', 'backup-one/metadata.json', Buffer.from(JSON.stringify({ Items: items })), 'application/json')
+  expect(readIndex).not.toHaveBeenCalled()
+  expect(await store.list('account', 'intune-backups')).toHaveLength(existing ? 67 : 65)
+  expect(readIndex).toHaveBeenCalledTimes(1)
+})
+
+it.each(['addition', 'removal', 'replacement'])('reconciles an external %s during an own write before the next listing', async publication => {
+  const root = mkdtempSync(join(tmpdir(), 'tv-write-reconcile-')); roots.push(root)
+  const keys = [randomBytes(32)]
+  const store = new LocalBlobStore(root, keys)
+  const other = new LocalBlobStore(root, keys)
+  const account = 'account', container = 'intune-backups'
+  const externalName = 'backup-one/Policies/External.json'
+  const ownName = 'backup-one/Policies/Own.json'
+  await store.createContainer(account, container)
+  await store.put(account, container, externalName, Buffer.from('{}'), 'application/json')
+  freezeDirectoryStamp(store)
+  await store.list(account, container)
+  await other.list(account, container)
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  const newName = publication === 'addition' ? 'backup-two/Policies/New.json' : externalName
+  let published: { size: number; etag?: string } | undefined
+  vi.mocked(fileSystem.rename).mockImplementationOnce(async (...args) => {
+    await actual.rename(...args)
+    if (publication === 'removal') await other.delete(account, container, externalName)
+    else published = await other.put(account, container, newName, Buffer.from('{"external":true}'), 'application/json')
+  })
+  await store.put(account, container, ownName, Buffer.from('{}'), 'application/json')
+  const listed = await store.list(account, container)
+  expect(listed).toContainEqual(expect.objectContaining({ name: ownName }))
+  if (publication === 'removal') expect(listed.some(blob => blob.name === externalName)).toBe(false)
+  else expect(listed).toContainEqual(expect.objectContaining({ name: newName, size: published!.size, etag: published!.etag }))
+})
+
+
+it('updates the cached inventory across own deletes and still rejects a missing manifest item', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'tv-delete-index-')); roots.push(root)
+  const store = new LocalBlobStore(root, [randomBytes(32)])
+  const account = 'account', container = 'intune-backups'
+  const manifest = 'backup-one/metadata.json'
+  await store.createContainer(account, container)
+  for (let number = 0; number < 8; number++) await store.put(account, container, `backup-one/Policies/${number}.json`, Buffer.from('{}'), 'application/json')
+  await store.put(account, container, manifest, Buffer.from('{"Items":{"Policies/0":{"file":"0.json"}}}'), 'application/json')
+  await store.list(account, container)
+  const readIndex = vi.spyOn(store as unknown as { readIndex: () => Promise<unknown> }, 'readIndex')
+  for (let number = 1; number < 8; number++) await store.delete(account, container, `backup-one/Policies/${number}.json`)
+  expect(readIndex).not.toHaveBeenCalled()
+  expect(await store.list(account, container)).toHaveLength(2)
+  expect(readIndex).toHaveBeenCalledTimes(1)
+  await store.delete(account, container, 'backup-one/Policies/0.json')
+  await expect(store.get(account, container, manifest)).rejects.toThrow('manifest are missing')
+  await expect(store.list(account, container)).rejects.toThrow('manifest are missing')
+})

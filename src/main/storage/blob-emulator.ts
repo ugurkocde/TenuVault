@@ -66,7 +66,7 @@ function blobXml(blob: StoredBlob, includeMetadata = false): string {
     `<Content-Type>${xml(blob.contentType)}</Content-Type>` +
     `<BlobType>BlockBlob</BlobType><LeaseStatus>unlocked</LeaseStatus><LeaseState>available</LeaseState>` +
     `</Properties>` +
-    (includeMetadata && blob.metadata ? `<Metadata>${Object.entries(blob.metadata).map(([key, value]) => `<${key}>${xml(value)}</${key}>`).join("")}</Metadata>` : "") +
+    (includeMetadata && blob.metadata ? `<Metadata>${Object.entries(blob.metadata).filter(([key]) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)).map(([key, value]) => `<${key}>${xml(value)}</${key}>`).join("")}</Metadata>` : "") +
     `</Blob>`
   )
 }

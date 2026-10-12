@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
+import { DOMParser } from '@xmldom/xmldom'
 import { afterEach, expect, it } from 'vitest'
 import { LocalBlobStore } from '../src/main/storage/local-blob-store'
 import { handleLocalBlobRequest } from '../src/main/storage/blob-emulator'
@@ -35,4 +36,26 @@ it('returns stored metadata on GET and HEAD with the x-ms-meta prefix', async ()
   expect(plain.status).toBe(201)
   const head = await handleLocalBlobRequest(store, new Request(`https://${account}.blob.core.windows.net/${container}/plain.json`, { method: 'HEAD' }))
   expect([...head.headers.keys()].some((key) => key.startsWith('x-ms-meta-'))).toBe(false)
+})
+
+
+it('lists only metadata names with letters, digits and underscores and no initial digit', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'tv-emulator-meta-name-')); roots.push(root)
+  const store = new LocalBlobStore(root, [randomBytes(32)])
+  await store.createContainer(account, container)
+  const metadata = { audit_timestamp: 'a&b<c', _allowed1: 'underscore', letters123: 'digits', '1invalid': 'initial digit', 'bad-name': 'hyphen', 'bad.name': 'dot', '': 'empty' }
+  const url = `https://${account}.blob.core.windows.net/${container}/event.json`
+  const put = await handleLocalBlobRequest(store, new Request(url, {
+    method: 'PUT', headers: Object.fromEntries(Object.entries(metadata).map(([key, value]) => [`x-ms-meta-${key}`, value])), body: '{}',
+  }))
+  expect(put.status).toBe(201)
+  const listed = await handleLocalBlobRequest(store, new Request(`https://${account}.blob.core.windows.net/${container}?restype=container&comp=list&include=metadata`))
+  expect(listed.status).toBe(200)
+  const text = await listed.text()
+  const document = new DOMParser().parseFromString(text, 'application/xml')
+  const element = document.getElementsByTagName('Metadata')[0]!
+  expect(Array.from(element.childNodes).filter(node => node.nodeType === 1).map(node => [node.nodeName, node.textContent])).toEqual([
+    ['_allowed1', 'underscore'], ['audit_timestamp', 'a&b<c'], ['letters123', 'digits'],
+  ])
+  for (const key of ['1invalid', 'bad-name', 'bad.name', '']) expect(text).not.toContain(`<${key}>`)
 })

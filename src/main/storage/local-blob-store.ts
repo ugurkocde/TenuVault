@@ -181,6 +181,7 @@ export class LocalBlobStore {
   private readonly directoryStamps = new Map<string, string>()
   private readonly dirty = new Set<string>()
   private readonly generations = new Map<string, number>()
+  private readonly writes = new Map<string, number>()
   private readonly rebuilding = new Map<string, Promise<Map<string, Entry>>>()
   private readonly checks = new Map<string, { generation: number; started: boolean; entries: Promise<Map<string, Entry>> }>()
 
@@ -209,7 +210,14 @@ export class LocalBlobStore {
   /** Returns false when the container already existed. */
   async createContainer(account: string, container: string): Promise<boolean> {
     const existed = await this.containerExists(account, container)
-    await mkdirDurable(this.dir(account, container))
+    const dir = this.dir(account, container)
+    await mkdirDurable(dir)
+    if (!existed && !this.index.has(dir)) {
+      // A container we just created starts with a known empty inventory.
+      this.directoryStamps.set(dir, await this.directoryStamp(dir))
+      this.index.set(dir, Promise.resolve(new Map()))
+      this.changed(dir)
+    }
     return !existed
   }
 
@@ -269,45 +277,84 @@ export class LocalBlobStore {
     const length = Buffer.alloc(2)
     length.writeUInt16BE(header.length)
 
-    const path = join(this.dir(account, container), file)
-    const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`
-    try {
-      const handle = await open(tmp, "wx", 0o600)
+    const dir = this.dir(account, container)
+    return this.write(dir, async () => {
+      const path = join(dir, file)
+      const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`
       try {
-        await handle.writeFile(Buffer.concat([version === 1 ? MAGIC_V1 : MAGIC_V2, length, header, body]))
-        await handle.sync()
+        const handle = await open(tmp, "wx", 0o600)
+        try {
+          await handle.writeFile(Buffer.concat([version === 1 ? MAGIC_V1 : MAGIC_V2, length, header, body]))
+          await handle.sync()
+        } finally {
+          await handle.close()
+        }
+        if (createOnly) await link(tmp, path) // Atomic creation across store/process instances.
+        else await rename(tmp, path)
+        this.changed(dir)
+        if (process.platform !== "win32") await syncDirectory(dir)
+      } catch (error) {
+        if (createOnly && (error as NodeJS.ErrnoException).code === "EEXIST") {
+          throw new BlobAlreadyExistsError(name)
+        }
+        throw error
       } finally {
-        await handle.close()
+        await rm(tmp, { force: true })
       }
-      if (createOnly) await link(tmp, path) // Atomic creation across store/process instances.
-      else await rename(tmp, path)
-      this.changed(this.dir(account, container))
-      if (process.platform !== "win32") await syncDirectory(this.dir(account, container))
-    } catch (error) {
-      this.changed(this.dir(account, container))
-      this.index.delete(this.dir(account, container))
-      if (createOnly && (error as NodeJS.ErrnoException).code === "EEXIST") {
-        throw new BlobAlreadyExistsError(name)
-      }
-      throw error
-    } finally {
-      await rm(tmp, { force: true })
-    }
 
-    const info = await stat(path, { bigint: true })
-    const stamp = fileStamp(info)
-    const blob: StoredBlob = { name, size: data.byteLength, contentType, created, lastModified: info.mtime, etag: `"${stamp}"`, ...(metadata ? { metadata } : {}) }
-    entries.set(name, { ...blob, file, version, stamp })
-    return blob
+      const info = await stat(path, { bigint: true })
+      const stamp = fileStamp(info)
+      const blob: StoredBlob = { name, size: data.byteLength, contentType, created, lastModified: info.mtime, etag: `"${stamp}"`, ...(metadata ? { metadata } : {}) }
+      this.updateEntry(dir, entries, name, { ...blob, file, version, stamp })
+      return blob
+    })
   }
 
   async delete(account: string, container: string, name: string): Promise<void> {
     const entries = await this.entries(account, container)
     const entry = entries.get(name)
     if (!entry) throw new BlobNotFoundError(name)
-    await rm(join(this.dir(account, container), entry.file), { force: true })
-    this.changed(this.dir(account, container))
-    entries.delete(name)
+    const dir = this.dir(account, container)
+    await this.write(dir, async () => {
+      await rm(join(dir, entry.file), { force: true })
+      this.changed(dir)
+      this.updateEntry(dir, entries, name)
+    })
+  }
+
+  /** Own directory mutations update the cache without making the next put rebuild it. */
+  private async write<T>(dir: string, run: () => Promise<T>): Promise<T> {
+    this.writes.set(dir, (this.writes.get(dir) ?? 0) + 1)
+    this.changed(dir)
+    try {
+      const result = await run()
+      let generation: number, stamp: string
+      do {
+        generation = this.generations.get(dir) ?? 0
+        stamp = await this.directoryStamp(dir)
+      } while ((this.generations.get(dir) ?? 0) !== generation)
+      this.directoryStamps.set(dir, stamp)
+      // Keep the inventory dirty: this stamp may include an external mutation, so
+      // the next read/list must still reconcile membership and validate manifests.
+      this.changed(dir)
+      return result
+    } catch (error) {
+      this.changed(dir)
+      this.index.delete(dir)
+      throw error
+    } finally {
+      const remaining = this.writes.get(dir)! - 1
+      if (remaining) this.writes.set(dir, remaining)
+      else this.writes.delete(dir)
+    }
+  }
+
+  private updateEntry(dir: string, entries: Map<string, Entry>, name: string, entry?: Entry): void {
+    const update = (current: Map<string, Entry>) => { if (entry) current.set(name, entry); else current.delete(name) }
+    update(entries)
+    // A listing may have started another index while the write was publishing.
+    // Update it when ready without making publication wait for that listing.
+    void this.index.get(dir)?.then(update).catch(() => undefined)
   }
 
   private dir(account: string, container: string): string {
@@ -361,14 +408,14 @@ export class LocalBlobStore {
     return check.entries
   }
 
-  /** Keeps decrypted headers until a write or a change to the directory inventory. */
+  /** Reuses headers across own writes; external directory changes still rebuild the inventory. */
   private async entries(account: string, container: string, reuse?: Map<string, Entry>): Promise<Map<string, Entry>> {
     const dir = this.dir(account, container)
     const generation = this.generations.get(dir) ?? 0
     const stamp = await this.directoryStamp(dir)
     if ((this.generations.get(dir) ?? 0) !== generation) return this.entries(account, container, reuse)
     const previous = reuse ?? this.index.get(dir)
-    if (!this.rebuilding.has(dir) && this.directoryStamps.get(dir) !== stamp) this.index.delete(dir)
+    if (!this.writes.has(dir) && !this.rebuilding.has(dir) && this.directoryStamps.get(dir) !== stamp) this.index.delete(dir)
     let cached = this.index.get(dir)
     if (!cached) {
       cached = this.readIndex(dir, account, container, previous).then(entries => {

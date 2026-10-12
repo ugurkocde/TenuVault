@@ -106,3 +106,43 @@ it('snapshots mutable callback inputs and detaches returned records from staged 
   expect(stored.evidence.details.count).toBe(2)
   expect(stored.history.map(revision => revision.snapshot.evidence?.details.count)).toEqual([1, 2])
 })
+
+
+it('rejects an async callback without publishing its staged writes or leaving an unhandled rejection', async () => {
+  const store = memoryStore()
+  const records = new TenantRecords(store)
+  const write = vi.spyOn(store, 'setMany')
+  const callback = vi.fn(async () => {
+    records.create(DOMAINS.healthFindings, TENANT_A, { number: 1 }, meta)
+    throw new Error('async callback failed')
+  })
+  expect(() => records.batch(callback)).toThrow('Record batches must finish synchronously')
+  const pending = callback.mock.results[0]!.value as Promise<never>
+  // The batch refuses the promise synchronously, so handle its rejection in the same turn.
+  void pending.catch(() => undefined)
+  await expect(pending).rejects.toThrow('async callback failed')
+  expect(write).not.toHaveBeenCalled()
+  expect(records.list(DOMAINS.healthFindings, TENANT_A)).toEqual([])
+})
+
+it('merges a successful nested batch into the parent single setMany write', () => {
+  const store = memoryStore()
+  const records = new TenantRecords(store)
+  const write = vi.spyOn(store, 'setMany')
+  records.batch(() => {
+    records.create(DOMAINS.healthReviews, TENANT_A, { kind: 'parent' }, meta)
+    records.batch(() => records.create(DOMAINS.healthFindings, TENANT_A, { number: 1 }, meta))
+    expect(records.list(DOMAINS.healthReviews, TENANT_A)).toHaveLength(1)
+    expect(records.list(DOMAINS.healthFindings, TENANT_A)).toHaveLength(1)
+    expect(write).not.toHaveBeenCalled()
+  })
+  expect(write).toHaveBeenCalledTimes(1)
+  const [changes] = write.mock.calls[0]!
+  const saved = Object.values(changes).map(value => JSON.parse(value))
+  expect(saved).toHaveLength(2)
+  expect(saved).toContainEqual([expect.objectContaining({ kind: 'parent' })])
+  expect(saved).toContainEqual([expect.objectContaining({ number: 1 })])
+  const fresh = new TenantRecords(store)
+  expect(fresh.list(DOMAINS.healthReviews, TENANT_A)).toHaveLength(1)
+  expect(fresh.list(DOMAINS.healthFindings, TENANT_A)).toHaveLength(1)
+})
