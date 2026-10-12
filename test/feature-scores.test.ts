@@ -31,7 +31,20 @@ describe("score formula", () => {
     const run = makeRun({ runId: "r", tenantId: TENANT_A, caps: { a: ["matches", "different"], b: ["missing", "unknown"], c: ["outside"] } })
     const page = comparisonCounts(run)
     expect(scoreRun(run).counts).toEqual({ matching: page.matches, different: page.different, missing: page.missing, unknown: page.unableToCheck, outsideScope: page.outsideScope })
-    expect(scoreRun(run).score).toBe(33.3)
+    // Each capability now contributes one vote, using its best assigned evidence.
+    expect(scoreRun(run).score).toBe(50)
+  })
+
+  it("counts unavailable control rows as unknown or outside scope", () => {
+    const run = makeRun({ runId: "r", tenantId: TENANT_A, caps: {} })
+    run.assessment.frameworks[0]!.controls = ["unableToCheck", "outsideScope"].map((status, index) => ({
+      control: { id: `unavailable-${index}`, title: "Unavailable control", summary: "", evidenceStrength: "direct" },
+      capabilityIds: [], enforcedCapabilityIds: [], excludedCapabilityIds: [], status: "notAssessed", unassessedAspects: [],
+      unavailableCheck: { assessmentStatus: status as "unableToCheck" | "outsideScope", result: null, settingId: `unavailable-${index}`, expectedValue: "", actualValue: null },
+    }))
+    expect(comparisonCounts(run)).toEqual({ matches: 0, different: 0, missing: 0, unableToCheck: 1, outsideScope: 1 })
+    expect(scoreRun(run).counts).toMatchObject({ unknown: 1, outsideScope: 1 })
+    expect(scoreRun(run).score).toBeNull()
   })
 
   it("ignores negative or non-finite counts instead of inflating the score", () => {
@@ -75,6 +88,22 @@ describe("trend compatibility", () => {
 })
 
 describe("/api/scores route", () => {
+  it("resets current scores and trend history while reporting the older history notice", async () => {
+    const old = makeRun({ runId: "old", tenantId: TENANT_A });
+    const current = makeRun({ runId: "current", tenantId: TENANT_A, at: "2026-10-12T10:00:00Z" });
+    const base = fakeFrameworksApi({ [`${TENANT_A}:nist-csf`]: [current, old] }).api;
+    const api: typeof base = async (path, tenant, body = {}) => {
+      const response = await base(path, tenant, body);
+      if (body.frameworkId !== "nist-csf") return response;
+      return Response.json({ ...(await response.json()), scoringChanged: true, currentRunIds: [current.runId] });
+    };
+    const deps = fakeDeps({ plans: { [TENANT_A]: "pro" }, api });
+    const { body } = await call(routes(deps), "/api/scores", { tenantId: TENANT_A, action: "summary" });
+    expect(body.scoringChanged).toBe(true);
+    expect(body.frameworks.find((framework: any) => framework.frameworkId === "nist-csf").trend.map((point: any) => point.runId)).toEqual(["current"]);
+    expect((await call(routes(deps), "/api/scores", { tenantId: TENANT_A, action: "detail", frameworkId: "nist-csf", runId: "old" })).status).toBe(404);
+  });
+
   it("answers 402 for Community and allows Pro", async () => {
     const { api } = fakeFrameworksApi({})
     const community = fakeDeps({ plans: { [TENANT_A]: "community" }, api })
@@ -94,7 +123,8 @@ describe("/api/scores route", () => {
     const { body } = await call(routes(deps), "/api/scores", { tenantId: TENANT_A, action: "summary" })
     const nist = body.frameworks.find((f: any) => f.frameworkId === "nist-csf")
     expect(nist.latest.incompleteCollection).toEqual(["settingsCatalog: incomplete"])
-    expect(nist.latest.score).toMatchObject({ score: 100, coverage: 50 })
+    // A readable assigned match wins over an unknown observation of the same capability.
+    expect(nist.latest.score).toMatchObject({ score: 100, coverage: 100 })
     expect(nist.latest.identity).toMatchObject({ frameworkVersion: "2.0", profile: "Default", platforms: ["tenant", "windows"] })
     const iso = body.frameworks.find((f: any) => f.frameworkId === "iso-27001")
     expect(iso).toMatchObject({ state: "unavailable", message: "Denied", latest: null })
@@ -136,7 +166,8 @@ describe("portfolio scores", () => {
     expect(new Set(fake.calls.map((c) => c.tenantId))).toEqual(new Set([TENANT_A, TENANT_B]))
     const a = body.tenants[0].frameworks.find((f: any) => f.frameworkId === "nist-csf")
     const b = body.tenants[1].frameworks.find((f: any) => f.frameworkId === "nist-csf")
-    expect(a).toMatchObject({ score: 100, coverage: 50, unknown: 1, stale: false })
+    // Unknown observations no longer add votes beside a matching capability.
+    expect(a).toMatchObject({ score: 100, coverage: 100, unknown: 0, stale: false })
     expect(b).toMatchObject({ score: 0, coverage: 100, stale: true, gapCount: 1 })
   })
 

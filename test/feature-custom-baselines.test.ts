@@ -5,7 +5,8 @@ import type { CustomBaselineSources } from "../src/main/features/custom-baseline
 import type { OibPack } from "../src/main/oib/source"
 import type { Item } from "../src/shared/intune/registry"
 import { REDACTED } from "../src/main/features/change-sets/model"
-import { createEvidenceManifest } from "../src/shared/compliance/manifest"
+import { createEvidenceManifest, frameworkRulesetSha256 } from "../src/shared/compliance/manifest"
+import { ISO_27001, SOC_2, NIST_800_53 } from "../src/shared/compliance"
 import { DOMAINS } from "../src/main/features/domains"
 import type { Plan } from "../src/shared/plans"
 import { call, fakeDeps, fakeOibSources, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
@@ -402,6 +403,24 @@ describe("/api/custom-baselines", () => {
     expect(native.assessment.frameworks[0].controls.some((control: { status: string }) => control.status === "evidenceFound")).toBe(false)
     expect(native.assessment.capabilities.some((capability: { status: string }) => capability.status === "enforced" || capability.status === "noEvidence")).toBe(false)
     expect(result.body.comparison.label).toContain("not with the live tenant")
+  })
+
+  it("stores the selected native framework hash and scope for baseline comparisons", async () => {
+    const context = setup()
+    const baseline = await customize(context)
+    for (const [frameworkId, definition] of [["iso-27001", ISO_27001], ["soc2", SOC_2]] as const) {
+      const result = await context.post({ action: "compare-framework", id: baseline.id, framework: { kind: "native", frameworkId, scope: { platforms: ["windows"], essentialEightMaturityLevel: 1, defStanRiskLevel: 1 } } })
+      expect(result.status).toBe(200)
+      const native = result.body.comparison.native
+      expect(native.assessment.scope.platforms).toEqual(["windows"])
+      expect(native.assessment.frameworks[0].framework.id).toBe(definition.id)
+      expect(native.rulesetSha256).toBe(await frameworkRulesetSha256(definition))
+      expect(native.rulesetSha256).not.toBe(await frameworkRulesetSha256(NIST_800_53))
+      const listed = await context.post({ action: "get", kind: "comparison", id: result.body.comparison.id })
+      expect(listed.status).toBe(200)
+      expect(listed.body.comparison.native.rulesetSha256).toBe(native.rulesetSha256)
+    }
+    expect(context.tenantA.calls).toHaveLength(0)
   })
 
   it("reports a baseline's Settings Catalog values as checks while other evidence stays unable to check", async () => {

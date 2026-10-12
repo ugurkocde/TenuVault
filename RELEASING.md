@@ -35,6 +35,8 @@ Put these in the next stable release's notes, then remove them here.
   least 0.5.0.
 - Promotion keeps the destination policy's scope tags on update and blocks promotion of redacted policies without acknowledgement. Acknowledged promotions omit secrets, which must be set again in the destination.
 
+- Compliance scores are now per capability and only count assigned policies. Scheduled actions are evaluated, so scores change and trend history before this version is not comparable. Older comparisons remain readable; collect a new comparison to start current scores and trends.
+
 ## Cutting a stable release
 
 Either promote the newest nightly (recommended, it ships exactly what nightly users ran):

@@ -767,7 +767,7 @@ export async function compareWithFramework(deps: FeatureDeps, sources: CustomBas
     if (!framework.nativeId) throw new FeatureError("This framework has no native comparison.")
     const data = baselineEvidence(version.policies, version.createdAt)
     data.assessmentScope = target.scope
-    const manifest = await createEvidenceManifest(data)
+    const manifest = await createEvidenceManifest(data, target.scope, framework.nativeId)
     const selected = manifest.assessment.frameworks.find((entry) => entry.framework.id === framework.nativeId)
     if (!selected) throw new FeatureError("Native framework definition unavailable.", 500)
     const ids = new Set(selected.controls.flatMap((control) => [...control.capabilityIds, ...control.excludedCapabilityIds]))

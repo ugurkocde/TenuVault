@@ -9,6 +9,7 @@ import { evaluatePolicyCheck } from "./policy-checks";
 import { comparableValue, expectedValue } from "./check-results";
 import { policyCheckObservation } from "./policy-check-observation";
 import { canonicalOmaUri } from "./oma-uri";
+import { COMPLIANCE_DETECTOR_VERSION } from "./detector-version";
 import {
   buildCollectionCoverage,
   collectConfigurations,
@@ -168,24 +169,47 @@ function normalizeGroupNames(value: unknown): Map<string, string> {
   );
 }
 
-function compliancePolicyNote(
-  config: Record<string, unknown>,
-): string | undefined {
-  const odataType = normalizeOdataType(config["@odata.type"]);
-  if (!odataType.endsWith("compliancepolicy")) return undefined;
+const NO_COMPLIANCE_BLOCK_ACTION = "The assigned compliance policy has no action that blocks non-compliant devices.";
 
+function complianceBlockActions(
+  config: Record<string, unknown>,
+): Record<string, unknown>[] {
   const scheduledActions = Array.isArray(config.scheduledActionsForRule)
     ? config.scheduledActionsForRule
     : [];
-  const blockActions = scheduledActions
-    .flatMap((rule: any) => rule?.scheduledActionConfigurations ?? [])
+  return scheduledActions
+    .flatMap((rule: any) =>
+      Array.isArray(rule?.scheduledActionConfigurations)
+        ? rule.scheduledActionConfigurations
+        : [],
+    )
     .filter((action: any) => action?.actionType === "block");
-  const grace = blockActions.map((action: any) =>
+}
+
+function complianceActionsKnown(config: Record<string, unknown>): boolean {
+  // Omitted configurations mean the nested expand was not returned, and a policy without any rule
+  // is not something Intune produces, so both read as unknown. An explicit empty configurations array
+  // on a rule is known: that rule has no action.
+  return (
+    Array.isArray(config.scheduledActionsForRule) &&
+    config.scheduledActionsForRule.length > 0 &&
+    config.scheduledActionsForRule.every((rule: any) =>
+      Array.isArray(rule?.scheduledActionConfigurations),
+    )
+  );
+}
+
+function compliancePolicyNote(
+  config: Record<string, unknown>,
+): string | undefined {
+  if (!normalizeOdataType(config["@odata.type"]).endsWith("compliancepolicy"))
+    return undefined;
+  const grace = complianceBlockActions(config).map((action) =>
     typeof action.gracePeriodHours === "number"
       ? `${action.gracePeriodHours} hours`
       : "unknown grace period",
   );
-  return `Compliance requirement, not an observed device state. ${grace.length ? `Marks noncompliant after ${grace.join(", ")}. ` : "Noncompliance action timing is unavailable. "}Resource access depends on applicable Conditional Access policies; effective access is unverified.`;
+  return `Compliance requirement, not an observed device state. ${grace.length ? `Marks noncompliant after ${grace.join(", ")}. ` : complianceActionsKnown(config) ? "No block action is configured. " : "Noncompliance action timing is unavailable. "}Resource access depends on applicable Conditional Access policies; effective access is unverified.`;
 }
 
 function verdictsFor(
@@ -227,14 +251,15 @@ function legacyValues(
   }
   if (signal.source === "omaUri") {
     const uri = canonicalOmaUri(signal.settingId);
-    return (config.omaSettings ?? [])
+    return (Array.isArray(config.omaSettings) ? config.omaSettings : [])
       .filter((value: any) => canonicalOmaUri(value?.omaUri) === uri)
       .map((value: any) => value.value);
   }
   const settings = [
     ...(Array.isArray(config.settings) ? config.settings : []),
-    ...(config.categories ?? []).flatMap(
-      (category: any) => category?.settings ?? [],
+    ...(Array.isArray(config.categories) ? config.categories : []).flatMap(
+      (category: any) =>
+        Array.isArray(category?.settings) ? category.settings : [],
     ),
   ];
   return settings
@@ -277,6 +302,15 @@ function evaluateConfiguration(
       ? "accessPolicy"
       : "configuration";
   const note = compliancePolicyNote(config);
+  const blockAction = kind === "complianceRequirement"
+    ? complianceBlockActions(config).length > 0
+    : undefined;
+  const actionsKnown = complianceActionsKnown(config);
+  const requirementIssue = blockAction === false
+    ? actionsKnown
+      ? NO_COMPLIANCE_BLOCK_ACTION
+      : "Scheduled compliance actions are unavailable; a block action could not be verified."
+    : undefined;
   if (kind === "accessPolicy") {
     const ca = config as any;
     assignment.state = ca.state === "enabled" ? "assigned" : "notAssigned";
@@ -417,12 +451,13 @@ function evaluateConfiguration(
         matches = verdictsFor(values, signal);
         for (const value of new Set(values)) {
           const readable = comparableValue(value, signal.enforcedWhen);
+          const checkable = readable && !prerequisiteReason && !(requirementIssue && !actionsKnown);
           checks.push({
             assessmentStatus:
-              readable && !prerequisiteReason ? "checked" : "unableToCheck",
+              checkable ? "checked" : "unableToCheck",
             result:
-              readable && !prerequisiteReason
-                ? satisfies(value, signal.enforcedWhen)
+              checkable
+                ? satisfies(value, signal.enforcedWhen) && !requirementIssue
                   ? "matches"
                   : "different"
                 : null,
@@ -431,6 +466,7 @@ function evaluateConfiguration(
             actualValue: JSON.stringify(value) ?? null,
             reason:
               prerequisiteReason ??
+              requirementIssue ??
               (readable
                 ? undefined
                 : "Graph returned an unsupported value shape."),
@@ -469,6 +505,7 @@ function evaluateConfiguration(
           verdict: match.verdict,
           assignment,
           kind,
+          blockAction,
           note,
           requirementGroup: signal.requirementGroup,
           policyVersion:
@@ -494,7 +531,10 @@ function capabilityStatus(
   const assigned = evidence.filter(
     (item) => item.assignment.state === "assigned",
   );
-  const positive = assigned.filter((item) => item.verdict === "enforced");
+  const positive = assigned.filter(
+    (item) => item.verdict === "enforced" &&
+      (item.kind !== "complianceRequirement" || item.blockAction === true),
+  );
   if (positive.length && assigned.some((item) => item.verdict === "disabled"))
     return "conflictingEvidence";
   if (positive.length) {
@@ -529,6 +569,10 @@ function capabilityStatus(
       ? "enforced"
       : "requirementAssigned";
   }
+  if (assigned.some((item) => item.verdict === "disabled"))
+    return "disabledByPolicy";
+  if (assigned.some((item) => item.verdict === "enforced"))
+    return "partialConfiguration";
   if (evidence.some((item) => item.assignment.state === "unknown"))
     return "assignmentUnknown";
   if (evidence.some((item) => item.verdict === "enforced"))
@@ -630,7 +674,6 @@ export function assessCapabilities(
     if (status === "noEvidence" && incomplete) status = "collectionIncomplete";
     if (
       scope.platforms &&
-      capability.platform !== "tenant" &&
       !scope.platforms.includes(capability.platform)
     )
       status = "notApplicable";
@@ -652,15 +695,15 @@ export function assessCapabilities(
               "Assignment data is unavailable for some matching policies; effective targeting remains unknown.",
             ]
           : []),
-        ...(incomplete
+        ...(incomplete && status !== "notApplicable"
           ? [
               "Relevant policy collection is incomplete; additional or contradictory evidence may be missing.",
             ]
           : []),
-        ...collectionGaps.map((row) =>
+        ...collectionGaps.filter(() => status !== "notApplicable").map((row) =>
           row.family === "conditionalAccessPolicies" &&
           row.status === "notCollected"
-            ? "Conditional Access policies were not collected. Enable Include Conditional Access in Settings, complete sign-in or consent if requested, and refresh the policies to assess MFA and access requirements."
+            ? "Conditional Access policies were not collected. Select Conditional Access under Platforms in scope and compare again to assess tenant access requirements."
             : `${row.family}: ${row.status === "notCollected" ? "not collected" : "collection incomplete"}. Refresh the policies to retry collection. See collection coverage for the API error details.`,
         ),
         ...(status === "conflictingEvidence"
@@ -670,7 +713,9 @@ export function assessCapabilities(
           : []),
         ...(status === "partialConfiguration"
           ? [
-              "Not all required settings are present together on an assigned policy.",
+              checks.some((check) => check.assignment?.state === "assigned" && check.assessmentStatus === "checked" && check.reason === NO_COMPLIANCE_BLOCK_ACTION)
+                ? NO_COMPLIANCE_BLOCK_ACTION
+                : "Not all required settings are present together on an assigned policy.",
             ]
           : []),
         ...(capability.caveat ? [capability.caveat.en] : []),
@@ -845,26 +890,20 @@ export function assessCompliance(
     collectionCoverage: buildCollectionCoverage(data, capabilities),
     provenance: {
       rulesetVersion: COMPLIANCE_RULESET_VERSION,
+      detectorVersion: COMPLIANCE_DETECTOR_VERSION,
       collectedAt: data.collectedAt,
       collectionStartedAt: data.collectionStartedAt,
       deviceState: "notCollected",
       effectiveAccess: "unverified",
     },
-    frameworks: [
-      assessFramework(capabilities, NIST_800_53, scope),
-      assessFramework(capabilities, NIST_CSF, scope),
-      assessFramework(capabilities, BSI_IT_GRUNDSCHUTZ, scope),
-      assessFramework(capabilities, ISO_27001, scope),
-      assessFramework(capabilities, SOC_2, scope),
-      assessFramework(capabilities, DEF_STAN_05_138, scope),
-      assessFramework(capabilities, CYBER_ESSENTIALS, scope),
-      assessFramework(capabilities, NIST_800_171, scope),
-      assessFramework(capabilities, NIST_800_171_R3, scope),
-      assessFramework(
-        capabilities,
-        essentialEightFramework(scope.essentialEightMaturityLevel),
-        scope,
-      ),
-    ],
+    frameworks: complianceFrameworks(scope).map((framework) => assessFramework(capabilities, framework, scope)),
   };
+}
+
+export function complianceFrameworks(scope: AssessmentScope = {}): FrameworkDefinition[] {
+  return [
+    NIST_800_53, NIST_CSF, BSI_IT_GRUNDSCHUTZ, ISO_27001, SOC_2,
+    DEF_STAN_05_138, CYBER_ESSENTIALS, NIST_800_171, NIST_800_171_R3,
+    essentialEightFramework(essentialEightLevel(scope.essentialEightMaturityLevel)),
+  ];
 }

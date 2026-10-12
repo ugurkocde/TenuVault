@@ -107,10 +107,10 @@ export function nativeReportHeader(run: NativeAssessment, context: ExportContext
     runId: run.runId,
     supportedCoverage: [
       frameworkCoverageLabel(framework) ?? `${framework.controls.length} selected technical references. This subset is not the complete framework.`,
-      `${counts.matches} matches, ${counts.different} different, ${counts.missing} missing setting observations.`,
+      `${counts.matches} matches, ${counts.different} different, ${counts.missing} missing capabilities.`,
     ],
     unknowns: [
-      `${counts.unableToCheck} observations or references could not be checked; ${counts.outsideScope} are outside the selected scope.`,
+      `${counts.unableToCheck} capabilities could not be checked; ${counts.outsideScope} are outside the selected scope.`,
       ...gaps.map(f => `${COLLECTION_FAMILY_LABELS[f.family] ?? f.family}: ${COLLECTION_STATUS_LABELS[f.status] ?? f.status}${f.errors.length ? ` (${f.errors.map(redactText).join(' ')})` : ''}`),
       'Group membership, filter evaluation and device enforcement are unverified.',
     ],

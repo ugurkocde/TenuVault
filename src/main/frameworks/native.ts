@@ -2,13 +2,14 @@ import { randomUUID } from 'node:crypto'
 import type { KeyValueStore } from '../storage/secure-store'
 import { frameworks, type Framework } from '../../shared/frameworks/catalog'
 import { record, type RecordJson } from '../../shared/frameworks/policies'
-import { createEvidenceManifest } from '../../shared/compliance/manifest'
+import { createEvidenceManifest, frameworkRulesetSha256 } from '../../shared/compliance/manifest'
 import { FRAMEWORK_SOURCE_COMMIT, type NativeAssessment } from '../../shared/compliance/native'
 import type { AssessmentScope } from '../../shared/compliance/types'
 import { collectNativeEvidence, graphEvidenceReader, type CollectionProgress } from './collector'
 import { FrameworkError, tokenFor } from './service'
 import rights from '../../shared/compliance/rights.json'
-import { COMPLIANCE_RULESET_VERSION } from '../../shared/compliance/engine'
+import { COMPLIANCE_DETECTOR_VERSION } from '../../shared/compliance/detector-version'
+import { COMPLIANCE_RULESET_VERSION, complianceFrameworks } from '../../shared/compliance/engine'
 import essentialEightRequirements from '../../shared/compliance/frameworks/essential-eight-requirements.json'
 import { nativeExportCSV, nativeExportJSON, tenantLabel } from '../../shared/compliance/export'
 import { allows, CIS_FRAMEWORKS, upgradeMessage, type Plan } from '../../shared/plans'
@@ -123,7 +124,7 @@ async function runAssessment(job: NativeJob, framework: Framework, body: RecordJ
     signal.throwIfAborted()
     Object.assign(job, { step: 'evaluating', detail: 'Comparing settings with the framework mapping', percent: 92 })
     data.assessmentScope = scope
-    const manifest = await createEvidenceManifest(data)
+    const manifest = await createEvidenceManifest(data, scope, framework.nativeId)
     const selected = manifest.assessment.frameworks.find(f => f.framework.id === framework.nativeId)
     if (!selected) throw new FrameworkError('Native framework definition unavailable.', 500)
     signal.throwIfAborted()
@@ -196,7 +197,13 @@ export async function handleNativeFramework(body: RecordJson): Promise<Response>
   const history = loadNativeHistory(tenant, framework.id)
   if (body.action === 'native-history') {
     const recovered = unreadable.delete(key(tenant, framework.id))
-    return Response.json({ history, persistent, ...(recovered && { notice: 'Saved comparisons for this framework could not be read and were set aside. New comparisons are saved normally.' }) })
+    const scoringChanged = history.some(run => (run.assessment.provenance?.detectorVersion ?? 1) < COMPLIANCE_DETECTOR_VERSION)
+    const currentRulesets = await Promise.all(history.map(async run => {
+      const definition = complianceFrameworks(run.assessment.scope).find(item => item.id === framework.nativeId)!
+      return { runId: run.runId, sha256: await frameworkRulesetSha256(definition) }
+    }))
+    const currentRunIds = history.filter(run => run.assessment.provenance?.detectorVersion === COMPLIANCE_DETECTOR_VERSION && currentRulesets.some(item => item.runId === run.runId && item.sha256 === run.rulesetSha256)).map(run => run.runId)
+    return Response.json({ history, persistent, currentRunIds, scoringChanged: scoringChanged || currentRunIds.length < history.length, ...(recovered && { notice: 'Saved comparisons for this framework could not be read and were set aside. New comparisons are saved normally.' }) })
   }
   const run = history.find(item => item.runId === body.runId)
   if (!run) throw new FrameworkError('Saved comparison not found.', 404)

@@ -1,10 +1,12 @@
 import {
   assessCompliance,
+  complianceFrameworks,
   COMPLIANCE_RULESET_VERSION,
   type ComplianceExportData,
 } from "./engine";
 import { COMPLIANCE_CAPABILITIES } from "./capabilities";
-import type { AssessmentScope } from "./types";
+import { COMPLIANCE_DETECTOR_VERSION } from "./detector-version";
+import type { AssessmentScope, ComplianceCapability, FrameworkDefinition } from "./types";
 
 export function canonicalJson(value: unknown): string {
   const normalize = (item: any): any => {
@@ -30,31 +32,38 @@ async function sha256(value: unknown): Promise<string> {
     .join("");
 }
 
+/** Hash only this framework and the capability definitions it actually maps. Scope is a separate identity. */
+export function frameworkRulesetSha256(
+  framework: FrameworkDefinition,
+  capabilities: readonly ComplianceCapability[] = COMPLIANCE_CAPABILITIES,
+  detectorVersion = COMPLIANCE_DETECTOR_VERSION,
+): Promise<string> {
+  const ids = new Set(Object.entries(framework.mappings).filter(([, controls]) => controls.length).map(([id]) => id));
+  // Source verification metadata (URL, verified date) does not change what is scored, so it stays out of the hash.
+  const { source: _source, ...scoring } = framework;
+  return sha256({
+    version: COMPLIANCE_RULESET_VERSION,
+    detectorVersion,
+    framework: { ...scoring, mappings: Object.fromEntries(Object.entries(framework.mappings).filter(([id]) => ids.has(id))) },
+    capabilities: capabilities.filter((capability) => ids.has(capability.id)),
+  });
+}
+
 export async function createEvidenceManifest(
   data: ComplianceExportData,
   scope: AssessmentScope = data.assessmentScope ?? {},
+  frameworkId = "nist-800-53-r5",
 ) {
   const assessment = assessCompliance(data, scope);
+  const framework = complianceFrameworks(scope).find((definition) => definition.id === frameworkId);
+  if (!framework) throw new Error("Native framework definition unavailable.");
   // Branding and report generation time do not alter the source snapshot fingerprint.
   const snapshot = { ...data };
   delete snapshot.branding;
   delete snapshot.assessmentScope;
   const [snapshotSha256, rulesetSha256] = await Promise.all([
     sha256(snapshot),
-    sha256({
-      version: COMPLIANCE_RULESET_VERSION,
-      capabilities: COMPLIANCE_CAPABILITIES,
-      frameworks: assessment.frameworks.map((framework) => ({
-        ...framework.framework,
-        controls: framework.controls.map((control) => ({
-          control: control.control,
-          capabilityIds: [
-            ...control.capabilityIds,
-            ...control.excludedCapabilityIds,
-          ].sort(),
-        })),
-      })),
-    }),
+    frameworkRulesetSha256(framework),
   ]);
   return { schemaVersion: 1, snapshotSha256, rulesetSha256, assessment };
 }

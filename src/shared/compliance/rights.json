@@ -87,8 +87,8 @@
       "mappingCodeLicense": "Elastic-2.0",
       "mappingSourceCommit": "bb689bd025cbfb6f85ad97d230df907f7162f92c",
       "distributionDecision": "included",
-      "changedAt": "2026-09-30",
-      "sha256": "8fa04da46a0a0c057b59b1e47c19109ab310d74041409730bbe9027e69ab5a47",
+      "changedAt": "2026-10-12",
+      "sha256": "5803df8881eba4ed03b8c5c6831bde6028ebdc27779845369407e3501801a001",
       "publisher": "BSI",
       "attributionNotice": "framework-NOTICES.txt"
     },
@@ -102,8 +102,8 @@
       "mappingCodeLicense": "Elastic-2.0",
       "mappingSourceCommit": "bb689bd025cbfb6f85ad97d230df907f7162f92c",
       "distributionDecision": "included",
-      "changedAt": "2026-09-30",
-      "sha256": "b3701a74d2de4497aed17dd5c6b3fbac7e01f94eb6f728edd24b6374e42622cb",
+      "changedAt": "2026-10-12",
+      "sha256": "b834a3c80307e1e0af6386bcab31e2d5bc198113adbdb8ef1ad49cf665f31792",
       "publisher": "ISO / IEC",
       "attributionNotice": "framework-NOTICES.txt"
     },
@@ -117,8 +117,8 @@
       "mappingCodeLicense": "Elastic-2.0",
       "mappingSourceCommit": "bb689bd025cbfb6f85ad97d230df907f7162f92c",
       "distributionDecision": "included",
-      "changedAt": "2026-09-30",
-      "sha256": "e277bc759519e97f4a3d29caf86f6dfe428d7117cb076c5a3cad30718664c28c",
+      "changedAt": "2026-10-12",
+      "sha256": "a68b4114f0c87ddac41566fabed5e5687928ba2cb38821ca4d9964b62c5e6f43",
       "publisher": "AICPA",
       "attributionNotice": "framework-NOTICES.txt"
     },
@@ -132,8 +132,8 @@
       "mappingCodeLicense": "Elastic-2.0",
       "mappingSourceCommit": "bb689bd025cbfb6f85ad97d230df907f7162f92c",
       "distributionDecision": "included",
-      "changedAt": "2026-09-30",
-      "sha256": "5b1059f40278c9d75094955f75a841f23e603e0ccfb9e23b2956f6df479df0cd",
+      "changedAt": "2026-10-12",
+      "sha256": "f161e00fe11c96b0cd9f74f8504b4c4c1d8c3f3592b3b7c20ad380d015a9c42c",
       "publisher": "UK Ministry of Defence",
       "attributionNotice": "framework-NOTICES.txt"
     },
