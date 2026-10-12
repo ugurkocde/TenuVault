@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import type { LicenseStatus, TenantLicenseStatus } from "../src/shared/ipc"
-import { communityBannerVisible, licenseChipState } from "../src/renderer/lib/license"
+import { communityBannerVisible, licenseChipState, licensePageTitle } from "../src/renderer/lib/license"
 
 vi.mock("../src/renderer/lib/bridge", () => ({ bridge: {} }))
 
@@ -37,6 +37,19 @@ describe("license chip state", () => {
 
   it("ignores an uncovered tenant that is not signed in", () => {
     expect(licenseChipState({ ...status, tenants: [tenant, { ...tenant, signedIn: false, plan: null }] })).toEqual({ label: "Community", tone: "neutral" })
+  })
+})
+
+describe("License page title", () => {
+  it.each(["failed", "pending"] as const)("prioritizes organization coverage over a %s saved key", (keyState) => {
+    const covered: LicenseStatus = {
+      ...status, hasKey: true, keyState,
+      keyMessage: keyState === "failed" ? "This license has been revoked. Check your subscription." : null,
+      tenants: [{ ...tenant, entitled: true, activated: true, source: "tenant", plan: "pro" }],
+    }
+    expect(licenseChipState(covered)).toEqual({ label: "Organization", tone: "neutral" })
+    expect(licensePageTitle(covered)).toBe("Licensed through your organization")
+    expect(licensePageTitle({ ...covered, tenants: [tenant] })).toBe(keyState === "failed" ? "License key inactive" : "License key saved")
   })
 })
 

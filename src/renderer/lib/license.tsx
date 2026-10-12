@@ -101,6 +101,18 @@ export function licenseChipState(status: LicenseStatus): { label: string; tone: 
   return { label: "Community", tone: "neutral" }
 }
 
+/** Active paid coverage takes precedence over the saved key's separate outcome. */
+export function licensePageTitle(status: LicenseStatus): string {
+  if (status.plan) return `${planName(status.plan)} plan active`
+  if (status.tenants.some((tenant) => tenant.entitled && tenant.plan !== "community")) {
+    return "Licensed through your organization"
+  }
+  if (isUnlicensed(status)) return "Add your license"
+  if (status.keyState === "failed") return "License key inactive"
+  if (status.keyState === "pending") return "License key saved"
+  return "Licensed through your organization"
+}
+
 /** A Community notice returns 30 days after it was dismissed on this machine. */
 export function communityBannerVisible(dismissedAt: string | undefined, now = Date.now()): boolean {
   if (!dismissedAt) return true

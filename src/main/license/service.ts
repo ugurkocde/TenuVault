@@ -100,6 +100,13 @@ export class LicenseDenied extends Error {
   }
 }
 
+// A response for a license state that has since been replaced is ignored by its caller.
+class StaleLicenseRequest extends Error {
+  constructor() {
+    super("The license state changed. Retry the request.")
+  }
+}
+
 // No Microsoft ID token for the tenant could be had without user interaction.
 class NoIdToken extends Error {
   constructor() {
@@ -188,6 +195,7 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 
 export class LicenseService {
   private state: StoredLicense | null = null
+  private stateGeneration = 0
   private installId = ""
   private loaded = false
   private savedSeen = 0
@@ -262,6 +270,20 @@ export class LicenseService {
     }
   }
 
+  private invalidateRequests(): number {
+    this.pending.clear()
+    return ++this.stateGeneration
+  }
+
+  // Match the key, activation and reset generation, including when the same key is saved again.
+  private requestGuard(tenantId: string): () => boolean {
+    const key = this.state?.key
+    const activationId = this.state?.activations[tenantId]?.activationId
+    const generation = this.stateGeneration
+    return () => generation === this.stateGeneration && key === this.state?.key &&
+      activationId === this.state?.activations[tenantId]?.activationId
+  }
+
   // Refuses to write the key in plaintext: without OS encryption the license lives in
   // memory only and must be entered again after a restart.
   private save(): void {
@@ -316,7 +338,9 @@ export class LicenseService {
   private async call(
     action: "activate" | "refresh" | "deactivate" | "tenant",
     body: object,
+    current: () => boolean,
   ): Promise<Record<string, unknown>> {
+    if (!current()) throw new StaleLicenseRequest()
     let response: Response
     try {
       response = await this.fetchImpl(`${this.options.apiBase}/api/desktop-license/${action}`, {
@@ -326,6 +350,7 @@ export class LicenseService {
         signal: AbortSignal.timeout(20_000),
       })
     } catch (error) {
+      if (!current()) throw new StaleLicenseRequest()
       this.offline = true
       console.warn(`[license] Licensing service unreachable (${action})`)
       const { code, guidance } = networkFailure(error, new URL(this.options.apiBase).host)
@@ -335,6 +360,7 @@ export class LicenseService {
     // not a license refusal and must never remove a cached activation.
     const contentType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase()
     const data: unknown = contentType === "application/json" ? await response.json().catch(() => null) : null
+    if (!current()) throw new StaleLicenseRequest()
     if (!data || typeof data !== "object" || Array.isArray(data)) {
       this.offline = true
       throw new Error("The licensing service returned an unexpected response. Check for a firewall block or network sign-in page and retry.")
@@ -435,15 +461,17 @@ export class LicenseService {
 
   private async activate(tenantId: string): Promise<void> {
     if (!this.state?.key) throw new Error("Enter a license key first.")
+    const current = this.requestGuard(tenantId)
+    const key = this.state.key
     const data = await this.call("activate", {
-      key: this.state.key,
+      key,
       installId: this.installId,
       tenantId,
       os: this.platform,
       appVersion: this.options.appVersion,
       ...(await this.sharingFields(tenantId)),
-    })
-    this.accept(tenantId, data, "key")
+    }, current)
+    if (current()) this.accept(tenantId, data, "key")
   }
 
   // A request to the organization license route. Throws when no ID token for the tenant
@@ -451,10 +479,12 @@ export class LicenseService {
   private async tenantCall(
     tenantId: string,
     action: "activate" | "refresh" | "deactivate",
+    current: () => boolean,
     entry?: StoredActivation,
     token?: string,
   ): Promise<Record<string, unknown>> {
     const idToken = token ?? (await this.idToken(tenantId))
+    if (!current()) throw new StaleLicenseRequest()
     if (!idToken) throw new NoIdToken()
     return this.call("tenant", {
       idToken,
@@ -464,11 +494,13 @@ export class LicenseService {
       action,
       ...(entry ? { activationId: entry.activationId } : {}),
       ...(entry?.licenseKeyId ? { licenseKeyId: entry.licenseKeyId } : {}),
-    })
+    }, current)
   }
 
   private async activateTenant(tenantId: string): Promise<void> {
-    this.accept(tenantId, await this.tenantCall(tenantId, "activate"), "tenant")
+    const current = this.requestGuard(tenantId)
+    const data = await this.tenantCall(tenantId, "activate", current)
+    if (current()) this.accept(tenantId, data, "tenant")
   }
 
   // Activates with this machine's key, and falls back to the tenant's organization license
@@ -476,8 +508,10 @@ export class LicenseService {
   // organization license, or that cannot be checked for one without a sign-in, reports the
   // key's refusal, or that a license is needed.
   private async activateAny(tenantId: string): Promise<void> {
+    const current = this.requestGuard(tenantId)
     if (!this.state?.key) {
       await this.activateTenant(tenantId).catch((error: unknown) => {
+        if (!current()) return
         throw error instanceof NoIdToken ? new Error(LICENSE_REQUIRED) : error
       })
       return
@@ -485,12 +519,14 @@ export class LicenseService {
     try {
       await this.activate(tenantId)
     } catch (keyError) {
+      if (!current()) return
       if (!(keyError instanceof LicenseDenied)) throw keyError
       if (this.state?.key) {
         this.state.keyFailure = keyError.reason
         this.save()
       }
       await this.activateTenant(tenantId).catch((error: unknown) => {
+        if (!current()) return
         throw (error instanceof LicenseDenied && error.reason === "tenant_not_licensed") || error instanceof NoIdToken
           ? keyError
           : error
@@ -505,25 +541,29 @@ export class LicenseService {
   private async refresh(tenantId: string, share?: boolean): Promise<void> {
     const entry = this.state?.activations[tenantId]
     if (!this.state || !entry) return
+    const current = this.requestGuard(tenantId)
+    const key = this.state.key
     try {
       if (entry.source === "tenant") {
         const idToken = await this.idToken(tenantId)
-        if (!idToken) return
-        this.accept(tenantId, await this.tenantCall(tenantId, "refresh", entry, idToken), "tenant")
+        if (!idToken || !current()) return
+        const data = await this.tenantCall(tenantId, "refresh", current, entry, idToken)
+        if (current()) this.accept(tenantId, data, "tenant")
         return
       }
-      if (!this.state.key) throw new Error("Enter a license key first.")
+      if (!key) throw new Error("Enter a license key first.")
       const shareWithTenant = share ?? entry.shared
       const data = await this.call("refresh", {
-        key: this.state.key,
+        key,
         activationId: entry.activationId,
         installId: this.installId,
         tenantId,
         ...(await this.sharingFields(tenantId, shareWithTenant)),
         ...(shareWithTenant === undefined ? {} : { shareWithTenant }),
-      })
-      this.accept(tenantId, data, "key")
+      }, current)
+      if (current()) this.accept(tenantId, data, "key")
     } catch (error) {
+      if (!current()) return
       if (error instanceof LicenseDenied) {
         if (entry.source !== "tenant") this.state.keyFailure = error.reason
         delete this.state.activations[tenantId]
@@ -578,6 +618,7 @@ export class LicenseService {
     ) {
       throw new Error("Deactivate this machine before entering a different license key.")
     }
+    const generation = this.invalidateRequests()
     this.state = {
       key: trimmed,
       ...(previous?.key === trimmed && previous.keyFailure ? { keyFailure: previous.keyFailure } : {}),
@@ -591,8 +632,10 @@ export class LicenseService {
       this.failures.delete(tenant)
       try {
         await this.activate(tenant)
+        if (generation !== this.stateGeneration) return
         activated++
       } catch (error) {
+        if (generation !== this.stateGeneration || error instanceof StaleLicenseRequest) return
         firstError ??= error
         if (error instanceof LicenseDenied) this.state.keyFailure = error.reason
         this.messages.set(tenant, errorText(error))
@@ -600,6 +643,7 @@ export class LicenseService {
     }
     if (targets.length > 0 && activated === 0) {
       const keyFailure = this.state.keyFailure
+      this.invalidateRequests()
       this.state = previous
       for (const tenant of targets) this.messages.delete(tenant)
       if (this.state?.key === trimmed && keyFailure) {
@@ -633,17 +677,28 @@ export class LicenseService {
       this.community.delete(tenant)
     }
     if ((this.community.get(tenant) ?? 0) > Date.now()) return "community"
+    const generation = this.stateGeneration
     try {
       const failure = this.failures.get(tenant)
       if (failure && failure.until > Date.now()) throw failure.error
       let pending = this.pending.get(tenant)
       if (!pending) {
-        pending = this.entitle(tenant).finally(() => this.pending.delete(tenant))
-        this.pending.set(tenant, pending)
+        const request = this.entitle(tenant).finally(() => {
+          if (this.pending.get(tenant) === request) this.pending.delete(tenant)
+        })
+        pending = request
+        this.pending.set(tenant, request)
       }
       await pending
-      return this.valid(tenant)?.plan ?? "community"
-    } catch (error) {
+      const plan = this.valid(tenant)?.plan
+      if (plan) return plan
+      if (generation !== this.stateGeneration) throw new StaleLicenseRequest()
+      return "community"
+    } catch (caught) {
+      const superseded = generation !== this.stateGeneration
+      const plan = superseded ? this.valid(tenant)?.plan : null
+      if (plan) return plan
+      const error = superseded ? new StaleLicenseRequest() : caught
       if (!this.lapsedOrUnlicensed(tenant, error)) throw error
       return this.useCommunity(tenant)
     }
@@ -683,6 +738,7 @@ export class LicenseService {
   }
 
   private async entitle(tenant: string): Promise<void> {
+    const generation = this.stateGeneration
     try {
       if (this.state?.activations[tenant]) {
         // A refused refresh drops the activation (for example after it was released in
@@ -694,6 +750,7 @@ export class LicenseService {
       } else {
         await this.activateAny(tenant)
       }
+      if (generation !== this.stateGeneration) return
       if (!this.valid(tenant)) {
         throw new Error(
           this.state?.activations[tenant]?.source === "tenant"
@@ -702,6 +759,7 @@ export class LicenseService {
         )
       }
     } catch (caught) {
+      if (generation !== this.stateGeneration) return
       // Without a key and an organization license there is nothing to fix but adding a
       // key, which the License page already asks for.
       const error =
@@ -730,6 +788,7 @@ export class LicenseService {
    */
   async releaseTenant(tenantId: string): Promise<void> {
     this.load()
+    this.invalidateRequests()
     const tenant = tenantId.toLowerCase()
     this.messages.delete(tenant)
     this.failures.delete(tenant)
@@ -741,10 +800,13 @@ export class LicenseService {
     }
     const entry = this.state?.activations[tenant]
     if (!this.state || !entry) return
+    const current = this.requestGuard(tenant)
+    const key = this.state.key
     try {
-      if (entry.source === "tenant") await this.tenantCall(tenant, "deactivate", entry)
-      else if (this.state.key) await this.call("deactivate", { key: this.state.key, activationId: entry.activationId })
+      if (entry.source === "tenant") await this.tenantCall(tenant, "deactivate", current, entry)
+      else if (key) await this.call("deactivate", { key, activationId: entry.activationId }, current)
     } catch (error) {
+      if (!current()) return
       if (!(error instanceof LicenseDenied) && entry.source !== "tenant") {
         this.options.onChange?.()
         throw error
@@ -753,6 +815,7 @@ export class LicenseService {
         console.warn(`[license] Organization license activation for ${tenant} not released: ${errorText(error)}`)
       }
     }
+    if (!current()) return
     delete this.state.activations[tenant]
     this.save()
   }
@@ -760,14 +823,19 @@ export class LicenseService {
   /** Releases every activation of this machine and forgets the key. */
   async deactivate(): Promise<void> {
     this.load()
+    this.invalidateRequests()
     if (!this.state) return
     let failure: unknown = null
+    const key = this.state.key
     for (const [tenantId, entry] of Object.entries(this.state.activations)) {
+      const current = this.requestGuard(tenantId)
       try {
-        if (entry.source === "tenant") await this.tenantCall(tenantId, "deactivate", entry)
-        else if (this.state.key) await this.call("deactivate", { key: this.state.key, activationId: entry.activationId })
+        if (entry.source === "tenant") await this.tenantCall(tenantId, "deactivate", current, entry)
+        else if (key) await this.call("deactivate", { key, activationId: entry.activationId }, current)
+        if (!current()) return
         delete this.state.activations[tenantId]
       } catch (error) {
+        if (!current()) return
         // An organization license activation needs a sign-in to release, so, as in
         // releaseTenant, it is forgotten rather than blocking the key's deactivation.
         if (error instanceof LicenseDenied) delete this.state.activations[tenantId]
@@ -781,6 +849,7 @@ export class LicenseService {
       this.save()
       throw failure
     }
+    this.invalidateRequests()
     this.state = null
     this.message = null
     this.messages.clear()
