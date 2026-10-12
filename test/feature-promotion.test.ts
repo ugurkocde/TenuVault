@@ -6,6 +6,7 @@ import { readCurrent } from "../src/main/features/change-sets/graph"
 import { DOMAINS } from "../src/main/features/domains"
 import type { PromotionRecord } from "../src/main/features/promotion/engine"
 import { resolveReferences, translate, type Mapping } from "../src/main/features/promotion/mapping"
+import { staleTargets } from "../src/main/features/promotion/targets"
 import { buildUpdatePlan } from "../src/shared/intune/restore-plan"
 import { typeForFolder, type IntuneType, type Item } from "../src/shared/intune/registry"
 import type { Plan } from "../src/shared/plans"
@@ -566,5 +567,15 @@ describe("promotion destination scope tags", () => {
     const [step] = buildUpdatePlan(type, proposed.body!, existing.id as string, { includeAssignments: false, current: existing })
     expect(step!.method).toBe(method)
     expect(step!.body.roleScopeTagIds).toEqual(["9"])
+  })
+})
+
+describe("plans from earlier versions", () => {
+  it("asks for a new plan when an update item predates the destination policy checks", async () => {
+    const deps = fakeDeps()
+    const reasons = await staleTargets(deps, TENANT_B, [
+      { sourceName: "Legacy policy", targetReads: { policyId: "11111111-1111-1111-1111-111111111111", filterIds: [], scopeTagIds: [], reusableSettingIds: [], groupIds: [] } as never, targetStateHash: "stale" },
+    ])
+    expect(reasons).toEqual(['The destination objects "Legacy policy" relied on were planned before destination policy checks existed. Plan again.'])
   })
 })

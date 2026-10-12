@@ -244,6 +244,11 @@ export async function staleTargets(deps: FeatureDeps, tenantId: string, items: A
   }
   const reasons: string[] = []
   for (const item of items) {
+    // Plans made before destination tags and redaction were part of the hash cannot be re-checked.
+    if (item.targetReads.policyId && !item.targetReads.policyFolder) {
+      reasons.push(`The destination objects "${item.sourceName}" relied on were planned before destination policy checks existed. Plan again.`)
+      continue
+    }
     try {
       if (await targetStateHash(graph, item.targetReads) !== item.targetStateHash) reasons.push(`The destination objects "${item.sourceName}" relied on changed after planning. Plan again.`)
     } catch (error) {
