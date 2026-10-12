@@ -4,6 +4,7 @@ import { isGuid } from "../../shared/security"
 import type { RouteModule } from "../api/host"
 import type { NextRequest } from "../api/next-server-shim"
 import type { FeatureDeps } from "./deps"
+import { TenantWriteConflict } from "./write-lock"
 
 /** An error with the HTTP status the route answers with. */
 export class FeatureError extends Error {
@@ -64,7 +65,7 @@ export function featureRoute(path: FeatureRoutePath, deps: FeatureDeps, handlers
           return Response.json(result ?? { ok: true })
         } catch (error) {
           if (error instanceof PlanRequired) return Response.json({ error: error.message, upgrade: error.feature }, { status: 402 })
-          if (error instanceof FeatureError) return Response.json({ error: error.message }, { status: error.status })
+          if (error instanceof FeatureError || error instanceof TenantWriteConflict) return Response.json({ error: error.message }, { status: error.status })
           throw error
         }
       },

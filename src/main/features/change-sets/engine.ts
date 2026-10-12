@@ -7,6 +7,7 @@ import type { FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
 import type { Stored } from "../records"
 import { FeatureError } from "../route"
+import { withTenantWrite } from "../write-lock"
 import { requirePreChangeBackup } from "./backup"
 import { GraphReadError, observe, readBack, readCurrent, sameNameIds, writeOperation, type Observation } from "./graph"
 import {
@@ -141,7 +142,6 @@ export interface RollbackPreview {
 }
 
 const NOTICE = "Applying writes operations one by one. There is no atomic tenant transaction and no guaranteed reversal: a failure leaves earlier operations in place, and rollback is a new reviewed change set."
-const running = new Set<string>()
 
 type Actor = string | null
 type Stored_ = Stored<ChangeSetRecord>
@@ -494,9 +494,7 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
 export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: string, input: ApplyInput, actor: Actor): Promise<Stored_> {
   if (input.confirmed !== true) throw new FeatureError("Confirm the change, including its irreversible steps, before applying.")
   const tenant = tenantId.toLowerCase()
-  if (running.has(tenant)) throw new FeatureError("A change set is already being applied to this tenant.", 409)
-  running.add(tenant)
-  try {
+  return withTenantWrite(tenant, "Change set apply", async () => {
     const record = getChangeSet(deps, tenant, id)
     if (["in-review", "rejected", "stale"].includes(record.status)) throw new FeatureError("This change set needs an approval of its current content and target state.", 409)
     if (record.status === "applied") throw new FeatureError("This change set was already applied and verified.", 409)
@@ -628,9 +626,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     const results = final.operations.map((operation) => final.results[operation.key] ?? emptyResult())
     const status = statusFromResults(results)
     return deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenant, id, (current) => ({ ...current, status, summary: resultSummary(results) }), { actor, reason: `Apply finished: ${status}` })!
-  } finally {
-    running.delete(tenant)
-  }
+  })
 }
 
 // ---------------------------------------------------------------------------------------------

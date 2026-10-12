@@ -260,7 +260,7 @@ Conflicts with other policy families are not evaluated. Profile selection and ap
 | Request failed (403) at ... Check Intune permissions for this tenant. | Your account or the app registration cannot read Settings Catalog policies. Check your Intune role. |
 | Policy settings changed during the read. Compare again. | A policy changed while TenuVault read it. Run the comparison again. |
 | This assessment has expired or was already used. Run comparison again. | More than 15 minutes passed, or policies were already created from it. Compare again. |
-| Another baseline creation is in progress for this tenant. | Wait for the current creation to finish. |
+| Another change is being applied to this tenant: *label*. Try again when it finishes. | Another creation, deployment, undo or change set is running for this tenant. Wait for it to finish. See [Troubleshooting](/troubleshooting/). |
 | The selection repeats a setting across multiple policies. Select it from one policy only. | Deselect the duplicate setting in one of the policies. |
 | Provide a source version and profile (up to 200 characters). | Fill in **Source version / profile**. |
 | The policy pack exceeds 8 MB. | Import fewer or smaller files. |
