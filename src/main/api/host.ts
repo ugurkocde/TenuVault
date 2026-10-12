@@ -65,7 +65,11 @@ export class ApiHost {
       )
     }
     if (this.options.transform) response = await this.options.transform(response)
-    this.options.onHandled?.(request, body, response)
+    try {
+      this.options.onHandled?.(request, body, response)
+    } catch (error) {
+      console.error(`[api] ${request.method} ${url.pathname} onHandled failed:`, error)
+    }
     return response
   }
 

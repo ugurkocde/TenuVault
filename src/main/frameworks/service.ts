@@ -7,11 +7,12 @@ import { comparePolicies, parsePolicies, record, remediationPayload, type Assess
 import { DELEGATED_CLIENT_SECRET } from "../../shared/constants"
 import { CIS_FRAMEWORKS } from "../../shared/plans"
 import { loadNcsc } from "./ncsc"
+import { tenantWriteLabel, withTenantWrite } from "../features/write-lock"
 
 const GRAPH = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies"
 interface Run { assessment: Assessment; policies: BaselinePolicy[]; fingerprint: string; expires: number; consumed: boolean }
 const runs = new Map<string, Run>()
-const locks = new Set<string>()
+const WRITE_LABEL = "Framework policy creation"
 export class FrameworkError extends Error {
   constructor(message: string, public status = 400) { super(message) }
 }
@@ -155,7 +156,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     if (typeof body.tenantId !== "string" || typeof body.frameworkId !== "string" || (!legacy && !frameworks.some(f => f.id === body.frameworkId))) throw new FrameworkError("Select a tenant and framework.")
     const tenantKey = body.tenantId.toLowerCase()
     if (["workspace-delete", "workspace-delete-assessment"].includes(body.action)) {
-      if (locks.has(tenantKey)) throw new FrameworkError("Wait for policy creation to finish before deleting its assessment.", 409)
+      if (tenantWriteLabel(tenantKey) === WRITE_LABEL) throw new FrameworkError("Wait for policy creation to finish before deleting its assessment.", 409)
       for (const [id, run] of runs) if (run.assessment.tenantId === tenantKey && run.assessment.frameworkId === body.frameworkId && (body.action === "workspace-delete" || id === body.runId)) runs.delete(id)
     }
     const workspace = loadWorkspace(body.tenantId, body.frameworkId)
@@ -186,17 +187,15 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     return assessment
   }
   if (body.action !== "create") throw new FrameworkError("Unknown framework action.")
-  const run = typeof body.runId === "string" ? runs.get(body.runId) : undefined
-  if (!run || run.assessment.tenantId !== tenant || run.consumed) throw new FrameworkError("This assessment has expired or was already used. Run comparison again.", 409)
-  if (body.confirmUnassigned !== true || !Array.isArray(body.keys) || !body.keys.length || body.keys.some(k => typeof k !== "string")) throw new FrameworkError("Review and confirm the selected unassigned policies.")
-  if (locks.has(tenant)) throw new FrameworkError("Another baseline creation is in progress for this tenant.", 409)
-  const keys = new Set(body.keys)
-  const selected = run.assessment.findings.filter(f => keys.has(f.key))
-  if (keys.size !== selected.length || selected.some(f => f.status !== "Missing")) throw new FrameworkError("Only missing settings from this assessment can be created.")
-  const definitions = selected.map(f => `${run.policies[f.policyIndex]!.platforms}:${f.settingId}`)
-  if (new Set(definitions).size !== definitions.length) throw new FrameworkError("The selection repeats a setting across multiple policies. Select it from one policy only.")
-  locks.add(tenant)
-  try {
+  return withTenantWrite(tenant, WRITE_LABEL, async () => {
+    const run = typeof body.runId === "string" ? runs.get(body.runId) : undefined
+    if (!run || run.assessment.tenantId !== tenant || run.consumed) throw new FrameworkError("This assessment has expired or was already used. Run comparison again.", 409)
+    if (body.confirmUnassigned !== true || !Array.isArray(body.keys) || !body.keys.length || body.keys.some(k => typeof k !== "string")) throw new FrameworkError("Review and confirm the selected unassigned policies.")
+    const keys = new Set(body.keys)
+    const selected = run.assessment.findings.filter(f => keys.has(f.key))
+    if (keys.size !== selected.length || selected.some(f => f.status !== "Missing")) throw new FrameworkError("Only missing settings from this assessment can be created.")
+    const definitions = selected.map(f => `${run.policies[f.policyIndex]!.platforms}:${f.settingId}`)
+    if (new Set(definitions).size !== definitions.length) throw new FrameworkError("The selection repeats a setting across multiple policies. Select it from one policy only.")
     const current = await landscape(token)
     if (fingerprint(current) !== run.fingerprint) throw new FrameworkError("The tenant policy landscape changed. Compare again before creating policies.", 409)
     run.consumed = true // A network failure may hide a successful write. Never blindly repeat it.
@@ -216,5 +215,5 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     const outcome = { success: results.every(r => !r.error), results }
     recordCreation(run.assessment, outcome)
     return outcome
-  } finally { locks.delete(tenant) }
+  })
 }
