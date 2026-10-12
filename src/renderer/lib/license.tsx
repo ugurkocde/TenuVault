@@ -88,6 +88,38 @@ export function unlicensedTenants(status: LicenseStatus): TenantLicenseStatus[] 
   return status.tenants.filter((tenant) => tenant.signedIn && !tenantPlan(tenant))
 }
 
+/** Community is a plan state; only a failed key or uncovered signed-in tenant is inactive. */
+export function licenseChipState(status: LicenseStatus): { label: string; tone: "neutral" | "inactive" } {
+  if (status.plan) return { label: planName(status.plan), tone: "neutral" }
+  if (status.tenants.some((tenant) => tenant.entitled && tenant.plan !== "community")) {
+    return { label: "Organization", tone: "neutral" }
+  }
+  if (status.keyState === "failed" || unlicensedTenants(status).length > 0) {
+    return { label: "Inactive", tone: "inactive" }
+  }
+  if (status.keyState === "pending") return { label: "Key saved", tone: "neutral" }
+  return { label: "Community", tone: "neutral" }
+}
+
+/** Active paid coverage takes precedence over the saved key's separate outcome. */
+export function licensePageTitle(status: LicenseStatus): string {
+  if (status.plan) return `${planName(status.plan)} plan active`
+  if (status.tenants.some((tenant) => tenant.entitled && tenant.plan !== "community")) {
+    return "Licensed through your organization"
+  }
+  if (isUnlicensed(status)) return "Add your license"
+  if (status.keyState === "failed") return "License key inactive"
+  if (status.keyState === "pending") return "License key saved"
+  return "Organization license inactive"
+}
+
+/** A Community notice returns 30 days after it was dismissed on this machine. */
+export function communityBannerVisible(dismissedAt: string | undefined, now = Date.now()): boolean {
+  if (!dismissedAt) return true
+  const dismissed = Date.parse(dismissedAt)
+  return !Number.isFinite(dismissed) || dismissed > now || now - dismissed >= 30 * 24 * 60 * 60 * 1000
+}
+
 export function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
 }

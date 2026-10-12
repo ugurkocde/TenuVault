@@ -1,5 +1,6 @@
 import { createElement, isValidElement, type ReactElement, type ReactNode } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
+import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import OverviewPage from "../src/renderer/pages/OverviewPage"
 import DashboardPage from "../src/portal/app/portal/dashboard/page"
@@ -53,6 +54,10 @@ function elements(node: ReactNode): ReactElement<Record<string, unknown>>[] {
   return [node, ...elements(node.props.children as ReactNode)]
 }
 
+function renderDashboard(): string {
+  return renderToStaticMarkup(createElement(MemoryRouter, null, createElement(DashboardPage)))
+}
+
 beforeEach(() => {
   state.schedules = [{ ...schedule }]
   state.stats = { ...emptyStats }
@@ -100,7 +105,7 @@ describe("Dashboard stored backup status", () => {
     state.stats = await state.queryFn!()
     expect(state.stats.totalBackups).toBe(0)
     expect(state.stats.backups.failed).toBe(0)
-    const markup = renderToStaticMarkup(createElement(DashboardPage))
+    const markup = renderDashboard()
     expect(markup).toContain('aria-label="Stored backups"')
     expect(markup).toContain("Successful and failed counts use stored backup history.")
     expect(markup).toContain("Automatic backup failed before a backup was saved.")
@@ -114,11 +119,11 @@ describe("Dashboard stored backup status", () => {
   ] as const)("does not claim an unsaved failure for %j", ({ totalBackups, backupsError, lastStatus }) => {
     state.stats = { ...emptyStats, totalBackups, backupsError }
     state.schedules = [{ ...schedule, lastStatus }]
-    expect(renderToStaticMarkup(createElement(DashboardPage))).not.toContain("Automatic backup failed before a backup was saved.")
+    expect(renderDashboard()).not.toContain("Automatic backup failed before a backup was saved.")
   })
 
   it("waits for backup history before describing an unsaved failure", () => {
     state.stats = null
-    expect(renderToStaticMarkup(createElement(DashboardPage))).not.toContain("Automatic backup failed before a backup was saved.")
+    expect(renderDashboard()).not.toContain("Automatic backup failed before a backup was saved.")
   })
 })

@@ -59,6 +59,8 @@ interface StoredActivation {
 // time (ms) the app has observed.
 interface StoredLicense {
   key?: string
+  /** Last confirmed key refusal, retained when a tenant falls back to Community. */
+  keyFailure?: string
   activations: Record<string, StoredActivation>
   seen?: number
 }
@@ -81,6 +83,8 @@ export interface LicenseServiceOptions {
   platform?: string
   idToken?: IdTokenProvider
   clientId?: ClientIdProvider
+  /** Whether the tenant is still saved or has a new sign-in being added. */
+  tenantPresent?: (tenantId: string) => boolean
   fetch?: typeof fetch
   /** Called after the stored license or a tenant's license message changed. */
   onChange?: () => void
@@ -95,6 +99,13 @@ export class LicenseDenied extends Error {
   ) {
     super(message)
     this.name = "LicenseDenied"
+  }
+}
+
+// A request whose key, activation or tenant no longer matches cannot write state.
+class StaleLicenseRequest extends Error {
+  constructor() {
+    super("The license state changed. Retry the request.")
   }
 }
 
@@ -186,6 +197,9 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 
 export class LicenseService {
   private state: StoredLicense | null = null
+  private keyMutation: Promise<void> | null = null
+  private readonly tenantMutations = new Map<string, Promise<void>>()
+  private readonly removedTenants = new Map<string, object>()
   private installId = ""
   private loaded = false
   private savedSeen = 0
@@ -193,7 +207,6 @@ export class LicenseService {
   private offline = false
   private readonly messages = new Map<string, string>()
   private readonly failures = new Map<string, { error: unknown; until: number }>()
-  private readonly pending = new Map<string, Promise<void>>()
   // Community tenants, until their next check for a license.
   private readonly community = new Map<string, number>()
   private readonly publicKey: KeyObject
@@ -249,6 +262,7 @@ export class LicenseService {
         parsed.activations !== null
       ) {
         this.state = parsed as StoredLicense
+        if (typeof this.state.keyFailure !== "string" || !Object.hasOwn(REASONS, this.state.keyFailure)) delete this.state.keyFailure
         if (!Number.isFinite(this.state.seen)) delete this.state.seen
         this.savedSeen = this.state.seen ?? 0
         return
@@ -257,6 +271,40 @@ export class LicenseService {
     } catch {
       console.warn("[license] Stored license ignored: invalid JSON")
     }
+  }
+
+  // Reserve all chains together, so a key reset can wait for tenant checks without
+  // holding one mutex while acquiring another. This machine has one saved key slot.
+  private mutate<T>(tenants: string[], key: boolean, action: () => Promise<T>): Promise<T> {
+    const ids = [...new Set(tenants)]
+    const preceding = ids.map((id) => this.tenantMutations.get(id) ?? Promise.resolve())
+    if (key && this.keyMutation) preceding.push(this.keyMutation)
+    const result = Promise.all(preceding).then(action)
+    const tail = result.then(() => undefined, () => undefined)
+    if (key) this.keyMutation = tail
+    for (const id of ids) this.tenantMutations.set(id, tail)
+    void tail.then(() => {
+      if (this.keyMutation === tail) this.keyMutation = null
+      for (const id of ids) if (this.tenantMutations.get(id) === tail) this.tenantMutations.delete(id)
+    })
+    return result
+  }
+
+  private tenantPresent(tenantId: string): boolean {
+    return !this.removedTenants.has(tenantId) && (this.options.tenantPresent?.(tenantId) ?? true)
+  }
+
+  // Bind writes to the actual saved key and activation, independently of other tenants.
+  // Releases also work after removal, while activation and Community writes require presence.
+  private requestGuard(tenantId: string, requirePresent = true): () => boolean {
+    const key = this.state?.key
+    const activationId = this.state?.activations[tenantId]?.activationId
+    return () => key === this.state?.key && activationId === this.state?.activations[tenantId]?.activationId &&
+      (!requirePresent || this.tenantPresent(tenantId))
+  }
+
+  private assertCurrent(current: () => boolean): void {
+    if (!current()) throw new StaleLicenseRequest()
   }
 
   // Refuses to write the key in plaintext: without OS encryption the license lives in
@@ -313,7 +361,9 @@ export class LicenseService {
   private async call(
     action: "activate" | "refresh" | "deactivate" | "tenant",
     body: object,
+    current: () => boolean,
   ): Promise<Record<string, unknown>> {
+    this.assertCurrent(current)
     let response: Response
     try {
       response = await this.fetchImpl(`${this.options.apiBase}/api/desktop-license/${action}`, {
@@ -322,7 +372,9 @@ export class LicenseService {
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(20_000),
       })
+      this.assertCurrent(current)
     } catch (error) {
+      this.assertCurrent(current)
       this.offline = true
       console.warn(`[license] Licensing service unreachable (${action})`)
       const { code, guidance } = networkFailure(error, new URL(this.options.apiBase).host)
@@ -332,6 +384,7 @@ export class LicenseService {
     // not a license refusal and must never remove a cached activation.
     const contentType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase()
     const data: unknown = contentType === "application/json" ? await response.json().catch(() => null) : null
+    this.assertCurrent(current)
     if (!data || typeof data !== "object" || Array.isArray(data)) {
       this.offline = true
       throw new Error("The licensing service returned an unexpected response. Check for a firewall block or network sign-in page and retry.")
@@ -424,6 +477,7 @@ export class LicenseService {
       throw new Error("The license token could not be verified.")
     }
     this.message = null
+    if (source === "key") delete this.state.keyFailure
     this.messages.delete(tenantId)
     this.failures.delete(tenantId)
     this.save()
@@ -431,14 +485,17 @@ export class LicenseService {
 
   private async activate(tenantId: string): Promise<void> {
     if (!this.state?.key) throw new Error("Enter a license key first.")
+    const current = this.requestGuard(tenantId)
+    const key = this.state.key
     const data = await this.call("activate", {
-      key: this.state.key,
+      key,
       installId: this.installId,
       tenantId,
       os: this.platform,
       appVersion: this.options.appVersion,
       ...(await this.sharingFields(tenantId)),
-    })
+    }, current)
+    this.assertCurrent(current)
     this.accept(tenantId, data, "key")
   }
 
@@ -447,10 +504,12 @@ export class LicenseService {
   private async tenantCall(
     tenantId: string,
     action: "activate" | "refresh" | "deactivate",
+    current: () => boolean,
     entry?: StoredActivation,
     token?: string,
   ): Promise<Record<string, unknown>> {
     const idToken = token ?? (await this.idToken(tenantId))
+    this.assertCurrent(current)
     if (!idToken) throw new NoIdToken()
     return this.call("tenant", {
       idToken,
@@ -460,11 +519,14 @@ export class LicenseService {
       action,
       ...(entry ? { activationId: entry.activationId } : {}),
       ...(entry?.licenseKeyId ? { licenseKeyId: entry.licenseKeyId } : {}),
-    })
+    }, current)
   }
 
   private async activateTenant(tenantId: string): Promise<void> {
-    this.accept(tenantId, await this.tenantCall(tenantId, "activate"), "tenant")
+    const current = this.requestGuard(tenantId)
+    const data = await this.tenantCall(tenantId, "activate", current)
+    this.assertCurrent(current)
+    this.accept(tenantId, data, "tenant")
   }
 
   // Activates with this machine's key, and falls back to the tenant's organization license
@@ -472,8 +534,10 @@ export class LicenseService {
   // organization license, or that cannot be checked for one without a sign-in, reports the
   // key's refusal, or that a license is needed.
   private async activateAny(tenantId: string): Promise<void> {
+    const current = this.requestGuard(tenantId)
     if (!this.state?.key) {
       await this.activateTenant(tenantId).catch((error: unknown) => {
+        this.assertCurrent(current)
         throw error instanceof NoIdToken ? new Error(LICENSE_REQUIRED) : error
       })
       return
@@ -481,8 +545,14 @@ export class LicenseService {
     try {
       await this.activate(tenantId)
     } catch (keyError) {
+      this.assertCurrent(current)
       if (!(keyError instanceof LicenseDenied)) throw keyError
+      if (this.state?.key) {
+        this.state.keyFailure = keyError.reason
+        this.save()
+      }
       await this.activateTenant(tenantId).catch((error: unknown) => {
+        this.assertCurrent(current)
         throw (error instanceof LicenseDenied && error.reason === "tenant_not_licensed") || error instanceof NoIdToken
           ? keyError
           : error
@@ -494,29 +564,37 @@ export class LicenseService {
   // stop; otherwise the last confirmed choice is sent again, or nothing so the service
   // applies the plan's default. A tenant activation without an ID token keeps its cached
   // token until it expires.
-  private async refresh(tenantId: string, share?: boolean): Promise<void> {
+  private async refreshCurrent(tenantId: string, share?: boolean): Promise<void> {
     const entry = this.state?.activations[tenantId]
     if (!this.state || !entry) return
+    const current = this.requestGuard(tenantId)
+    const key = this.state.key
     try {
       if (entry.source === "tenant") {
         const idToken = await this.idToken(tenantId)
+        this.assertCurrent(current)
         if (!idToken) return
-        this.accept(tenantId, await this.tenantCall(tenantId, "refresh", entry, idToken), "tenant")
+        const data = await this.tenantCall(tenantId, "refresh", current, entry, idToken)
+        this.assertCurrent(current)
+        this.accept(tenantId, data, "tenant")
         return
       }
-      if (!this.state.key) throw new Error("Enter a license key first.")
+      if (!key) throw new Error("Enter a license key first.")
       const shareWithTenant = share ?? entry.shared
       const data = await this.call("refresh", {
-        key: this.state.key,
+        key,
         activationId: entry.activationId,
         installId: this.installId,
         tenantId,
         ...(await this.sharingFields(tenantId, shareWithTenant)),
         ...(shareWithTenant === undefined ? {} : { shareWithTenant }),
-      })
+      }, current)
+      this.assertCurrent(current)
       this.accept(tenantId, data, "key")
     } catch (error) {
+      this.assertCurrent(current)
       if (error instanceof LicenseDenied) {
+        if (entry.source !== "tenant") this.state.keyFailure = error.reason
         delete this.state.activations[tenantId]
         this.save()
       }
@@ -528,8 +606,19 @@ export class LicenseService {
   /** Refreshes every cached activation. Network failures keep the cached token until it expires; a confirmed refusal drops it. */
   async refreshAll(): Promise<void> {
     this.load()
-    for (const tenantId of Object.keys(this.state?.activations ?? {})) {
-      await this.refresh(tenantId).catch(() => undefined)
+    const key = this.state?.key
+    const entries = Object.entries(this.state?.activations ?? {})
+    for (const [tenantId, entry] of entries) {
+      await this.mutate([tenantId], Boolean(key) || entry.source !== "tenant", async () => {
+        this.assertCurrent(() => key === this.state?.key && this.tenantPresent(tenantId))
+        // A preceding refresh may have refused and removed this activation. A queued
+        // check can validate the same saved key again, but cannot restore a reset key.
+        if (!this.state?.activations[tenantId] && entry.source !== "tenant" && key && this.state?.keyFailure) {
+          await this.activateAny(tenantId)
+          return
+        }
+        await this.refreshCurrent(tenantId)
+      }).catch(() => undefined)
     }
     this.options.onChange?.()
   }
@@ -538,17 +627,19 @@ export class LicenseService {
   async setShared(tenantId: string, share: boolean): Promise<void> {
     this.load()
     const tenant = tenantId.toLowerCase()
-    const entry = this.state?.activations[tenant]
-    if (!this.state?.key || !entry || entry.source === "tenant") {
-      throw new Error("Only the machine that holds the license key can change sharing.")
-    }
-    await this.refresh(tenant, share)
-    if (share && this.state?.activations[tenant]?.shareNeedsSignIn) {
-      throw new Error("Sign in to this tenant again to share the license with it.")
-    }
-    if (this.state?.activations[tenant]?.shared !== share) {
-      throw new Error("The sharing setting could not be saved. Please try again later.")
-    }
+    return this.mutate([tenant], true, async () => {
+      const entry = this.state?.activations[tenant]
+      if (!this.state?.key || !entry || entry.source === "tenant") {
+        throw new Error("Only the machine that holds the license key can change sharing.")
+      }
+      await this.refreshCurrent(tenant, share)
+      if (share && this.state?.activations[tenant]?.shareNeedsSignIn) {
+        throw new Error("Sign in to this tenant again to share the license with it.")
+      }
+      if (this.state?.activations[tenant]?.shared !== share) {
+        throw new Error("The sharing setting could not be saved. Please try again later.")
+      }
+    })
   }
 
   /**
@@ -560,41 +651,56 @@ export class LicenseService {
     this.load()
     const trimmed = key.trim()
     if (!/^[\x21-\x7e]{8,128}$/.test(trimmed)) throw new Error("Enter a valid license key.")
-    const previous = this.state
-    // Organization license activations do not depend on the key and stay.
-    if (
-      previous?.key &&
-      previous.key !== trimmed &&
-      Object.values(previous.activations).some((entry) => !entry.source)
-    ) {
-      throw new Error("Deactivate this machine before entering a different license key.")
-    }
-    this.state = {
-      key: trimmed,
-      activations: { ...previous?.activations },
-      ...(previous?.seen !== undefined ? { seen: previous.seen } : {}),
-    }
-    const targets = [...new Set(tenantIds.map((id) => id.toLowerCase()))].filter((id) => !this.valid(id))
-    let activated = 0
-    let firstError: unknown = null
-    for (const tenant of targets) {
-      this.failures.delete(tenant)
-      try {
-        await this.activate(tenant)
-        activated++
-      } catch (error) {
-        firstError ??= error
-        this.messages.set(tenant, errorText(error))
+    const tenants = [...new Set(tenantIds.map((id) => id.toLowerCase()))]
+    return this.mutate([...this.tenantMutations.keys(), ...Object.keys(this.state?.activations ?? {}), ...tenants], true, async () => {
+      const previous = this.state
+      // Organization license activations do not depend on the key and stay.
+      if (
+        previous?.key &&
+        previous.key !== trimmed &&
+        Object.values(previous.activations).some((entry) => !entry.source)
+      ) {
+        throw new Error("Deactivate this machine before entering a different license key.")
       }
-    }
-    if (targets.length > 0 && activated === 0) {
-      this.state = previous
-      for (const tenant of targets) this.messages.delete(tenant)
-      this.options.onChange?.()
-      throw firstError
-    }
-    this.message = tenantIds.length === 0 ? "Sign in to a tenant to activate the license for it." : null
-    this.save()
+      this.state = {
+        key: trimmed,
+        ...(previous?.key === trimmed && previous.keyFailure ? { keyFailure: previous.keyFailure } : {}),
+        activations: { ...previous?.activations },
+        ...(previous?.seen !== undefined ? { seen: previous.seen } : {}),
+      }
+      const targets = tenants.filter((id) => this.tenantPresent(id) && !this.valid(id))
+      let activated = 0
+      let firstError: unknown = null
+      for (const tenant of targets) {
+        this.failures.delete(tenant)
+        try {
+          await this.activate(tenant)
+          this.assertCurrent(() => this.state?.key === trimmed && this.tenantPresent(tenant))
+          activated++
+        } catch (error) {
+          this.assertCurrent(() => this.state?.key === trimmed)
+          firstError ??= error
+          if (this.tenantPresent(tenant) && !(error instanceof StaleLicenseRequest)) {
+            if (error instanceof LicenseDenied) this.state.keyFailure = error.reason
+            this.messages.set(tenant, errorText(error))
+          }
+        }
+      }
+      if (targets.length > 0 && activated === 0) {
+        const keyFailure = this.state.keyFailure
+        this.assertCurrent(() => this.state?.key === trimmed)
+        this.state = previous
+        for (const tenant of targets) this.messages.delete(tenant)
+        if (this.state?.key === trimmed && keyFailure) {
+          this.state.keyFailure = keyFailure
+          this.save()
+        } else this.options.onChange?.()
+        throw firstError
+      }
+      this.assertCurrent(() => this.state?.key === trimmed)
+      this.message = tenantIds.length === 0 ? "Sign in to a tenant to activate the license for it." : null
+      this.save()
+    })
   }
 
   /**
@@ -608,6 +714,30 @@ export class LicenseService {
     this.load()
     const tenant = tenantId.toLowerCase()
     if (!guidPattern.test(tenant)) throw new Error("TenuVault licenses tenants by their tenant ID. Sign in to the tenant again.")
+    // An explicit retry after release can check this tenant again. Requests already queued
+    // during removal remain cancelled and cannot admit it through this path.
+    if (options.retry && this.removedTenants.has(tenant) && !this.tenantMutations.has(tenant)) {
+      return this.checkNewTenant(tenant, options)
+    }
+    return this.mutate([tenant], Boolean(this.state?.key || this.keyMutation), () => this.requireCurrent(tenant, options))
+  }
+
+  /** Checks explicit tenant use or a new sign-in after an earlier removal. */
+  async checkNewTenant(tenantId: string, options: { retry?: boolean } = { retry: true }): Promise<Plan> {
+    this.load()
+    const tenant = tenantId.toLowerCase()
+    if (!guidPattern.test(tenant)) throw new Error("TenuVault licenses tenants by their tenant ID. Sign in to the tenant again.")
+    const removal = this.removedTenants.get(tenant)
+    return this.mutate([tenant], Boolean(this.state?.key || this.keyMutation), async () => {
+      // A removal requested after this sign-in check must still take precedence.
+      this.assertCurrent(() => this.removedTenants.get(tenant) === removal)
+      this.removedTenants.delete(tenant)
+      return this.requireCurrent(tenant, options)
+    })
+  }
+
+  private async requireCurrent(tenant: string, options: { retry?: boolean }): Promise<Plan> {
+    this.assertCurrent(() => this.tenantPresent(tenant))
     const valid = this.valid(tenant)
     if (valid) {
       this.keepSeen()
@@ -618,18 +748,19 @@ export class LicenseService {
       this.community.delete(tenant)
     }
     if ((this.community.get(tenant) ?? 0) > Date.now()) return "community"
+    const key = this.state?.key
+    const current = () => key === this.state?.key && this.tenantPresent(tenant)
     try {
       const failure = this.failures.get(tenant)
       if (failure && failure.until > Date.now()) throw failure.error
-      let pending = this.pending.get(tenant)
-      if (!pending) {
-        pending = this.entitle(tenant).finally(() => this.pending.delete(tenant))
-        this.pending.set(tenant, pending)
-      }
-      await pending
-      return this.valid(tenant)?.plan ?? "community"
+      await this.entitle(tenant)
+      this.assertCurrent(current)
+      const plan = this.valid(tenant)?.plan
+      if (plan) return plan
+      throw new Error("The license is not valid for this tenant.")
     } catch (error) {
-      if (!this.lapsedOrUnlicensed(tenant, error)) throw error
+      this.assertCurrent(current)
+      if (error instanceof StaleLicenseRequest || !this.lapsedOrUnlicensed(tenant, error)) throw error
       return this.useCommunity(tenant)
     }
   }
@@ -647,6 +778,7 @@ export class LicenseService {
   }
 
   private useCommunity(tenant: string): Plan {
+    this.assertCurrent(() => this.tenantPresent(tenant))
     const owner = this.options.store.get(COMMUNITY_KEY)
     if (owner && owner !== tenant) throw new CommunityLimitError(owner, communityLimit(owner))
     if (owner !== tenant) this.options.store.set(COMMUNITY_KEY, tenant)
@@ -668,17 +800,20 @@ export class LicenseService {
   }
 
   private async entitle(tenant: string): Promise<void> {
+    const key = this.state?.key
+    const current = () => key === this.state?.key && this.tenantPresent(tenant)
     try {
       if (this.state?.activations[tenant]) {
         // A refused refresh drops the activation (for example after it was released in
         // the customer portal); try one fresh activation.
-        await this.refresh(tenant).catch((error: unknown) => {
+        await this.refreshCurrent(tenant).catch((error: unknown) => {
           if (!(error instanceof LicenseDenied)) throw error
           return this.activateAny(tenant)
         })
       } else {
         await this.activateAny(tenant)
       }
+      this.assertCurrent(current)
       if (!this.valid(tenant)) {
         throw new Error(
           this.state?.activations[tenant]?.source === "tenant"
@@ -687,6 +822,8 @@ export class LicenseService {
         )
       }
     } catch (caught) {
+      this.assertCurrent(current)
+      if (caught instanceof StaleLicenseRequest) throw caught
       // Without a key and an organization license there is nothing to fix but adding a
       // key, which the License page already asks for.
       const error =
@@ -716,61 +853,80 @@ export class LicenseService {
   async releaseTenant(tenantId: string): Promise<void> {
     this.load()
     const tenant = tenantId.toLowerCase()
-    this.messages.delete(tenant)
-    this.failures.delete(tenant)
-    this.community.delete(tenant)
-    // Removing the Community tenant frees the free plan for another tenant.
-    if (this.options.store.get(COMMUNITY_KEY) === tenant) {
-      this.options.store.delete(COMMUNITY_KEY)
-      this.options.onChange?.()
+    // An idempotent release of an unknown activation must not block first use. Only
+    // existing coverage or outstanding checks need to be cancelled for this tenant.
+    if (this.tenantMutations.has(tenant) || this.state?.activations[tenant] ||
+      this.options.store.get(COMMUNITY_KEY) === tenant || this.community.has(tenant)) {
+      this.removedTenants.set(tenant, {})
     }
-    const entry = this.state?.activations[tenant]
-    if (!this.state || !entry) return
-    try {
-      if (entry.source === "tenant") await this.tenantCall(tenant, "deactivate", entry)
-      else if (this.state.key) await this.call("deactivate", { key: this.state.key, activationId: entry.activationId })
-    } catch (error) {
-      if (!(error instanceof LicenseDenied) && entry.source !== "tenant") {
+    return this.mutate([tenant], false, async () => {
+      this.messages.delete(tenant)
+      this.failures.delete(tenant)
+      this.community.delete(tenant)
+      // Removing the Community tenant frees the free plan for another tenant.
+      if (this.options.store.get(COMMUNITY_KEY) === tenant) {
+        this.options.store.delete(COMMUNITY_KEY)
         this.options.onChange?.()
-        throw error
       }
-      if (!(error instanceof LicenseDenied)) {
-        console.warn(`[license] Organization license activation for ${tenant} not released: ${errorText(error)}`)
+      const entry = this.state?.activations[tenant]
+      if (!this.state || !entry) return
+      const current = this.requestGuard(tenant, false)
+      const key = this.state.key
+      try {
+        if (entry.source === "tenant") await this.tenantCall(tenant, "deactivate", current, entry)
+        else if (key) await this.call("deactivate", { key, activationId: entry.activationId }, current)
+      } catch (error) {
+        this.assertCurrent(current)
+        if (!(error instanceof LicenseDenied) && entry.source !== "tenant") {
+          this.options.onChange?.()
+          throw error
+        }
+        if (!(error instanceof LicenseDenied)) {
+          console.warn(`[license] Organization license activation for ${tenant} not released: ${errorText(error)}`)
+        }
       }
-    }
-    delete this.state.activations[tenant]
-    this.save()
+      this.assertCurrent(current)
+      delete this.state.activations[tenant]
+      this.save()
+    })
   }
 
   /** Releases every activation of this machine and forgets the key. */
   async deactivate(): Promise<void> {
     this.load()
-    if (!this.state) return
-    let failure: unknown = null
-    for (const [tenantId, entry] of Object.entries(this.state.activations)) {
-      try {
-        if (entry.source === "tenant") await this.tenantCall(tenantId, "deactivate", entry)
-        else if (this.state.key) await this.call("deactivate", { key: this.state.key, activationId: entry.activationId })
-        delete this.state.activations[tenantId]
-      } catch (error) {
-        // An organization license activation needs a sign-in to release, so, as in
-        // releaseTenant, it is forgotten rather than blocking the key's deactivation.
-        if (error instanceof LicenseDenied) delete this.state.activations[tenantId]
-        else if (entry.source === "tenant") {
-          console.warn(`[license] Organization license activation for ${tenantId} not released: ${errorText(error)}`)
+    return this.mutate([...this.tenantMutations.keys(), ...Object.keys(this.state?.activations ?? {})], true, async () => {
+      if (!this.state) return
+      let failure: unknown = null
+      const key = this.state.key
+      for (const [tenantId, entry] of Object.entries(this.state.activations)) {
+        const current = this.requestGuard(tenantId, false)
+        try {
+          if (entry.source === "tenant") await this.tenantCall(tenantId, "deactivate", current, entry)
+          else if (key) await this.call("deactivate", { key, activationId: entry.activationId }, current)
+          this.assertCurrent(current)
           delete this.state.activations[tenantId]
-        } else failure = error
+        } catch (error) {
+          this.assertCurrent(current)
+          // An organization license activation needs a sign-in to release, so, as in
+          // releaseTenant, it is forgotten rather than blocking the key's deactivation.
+          if (error instanceof LicenseDenied) delete this.state.activations[tenantId]
+          else if (entry.source === "tenant") {
+            console.warn(`[license] Organization license activation for ${tenantId} not released: ${errorText(error)}`)
+            delete this.state.activations[tenantId]
+          } else failure = error
+        }
       }
-    }
-    if (failure) {
+      this.assertCurrent(() => key === this.state?.key)
+      if (failure) {
+        this.save()
+        throw failure
+      }
+      this.state = null
+      this.message = null
+      this.messages.clear()
+      this.failures.clear()
       this.save()
-      throw failure
-    }
-    this.state = null
-    this.message = null
-    this.messages.clear()
-    this.failures.clear()
-    this.save()
+    })
   }
 
   /** The license state for the signed-in tenants plus every tenant with a stored activation. */
@@ -811,8 +967,16 @@ export class LicenseService {
     this.keepSeen()
     const key = this.state?.key
     const latest = keyToken as Entitlement | null
+    const keyMessage = !key || latest ? null
+      : this.state?.keyFailure ? (REASONS[this.state.keyFailure] ?? null)
+        : Object.values(this.state?.activations ?? {}).some((entry) => entry.source !== "tenant")
+          ? "The saved license could not be verified. Retry activation on the License page."
+          : null
+    const keyState: LicenseStatus["keyState"] = !key ? "none" : latest ? "active" : keyMessage ? "failed" : "pending"
     return {
       hasKey: Boolean(key),
+      keyState,
+      keyMessage,
       keyHint: key ? `****${key.slice(-4)}` : null,
       persisted: this.options.persist,
       offline: this.offline,
