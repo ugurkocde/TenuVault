@@ -40,7 +40,9 @@ export interface KeyValueStore {
   get: (key: string) => string | null
   set: (key: string, value: string) => void
   delete: (key: string) => void
+  /** Atomically persists every value or throws without changing any persisted value. */
   setMany?: (values: Record<string, string>) => void
+  keys?: () => string[]
 }
 
 /** The store file exists but cannot be decrypted or parsed. */

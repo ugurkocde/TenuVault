@@ -182,7 +182,7 @@ Stable installs follow stable by default. Enable **Get nightly builds** to recei
 
 ## Local review record retention
 
-Workflow hubs keep a bounded set of review records per tenant and domain. New writes retain the most recently updated records and prune the oldest ones automatically, including open records when the limit is reached. Record limits do not remove backups or audit events. Shared standards use their own shared scope. A plan downgrade alone does not prune records.
+Workflow hubs keep a bounded set of review records per tenant and domain. Writes remove only the oldest closed records that no surviving record references. Active workflows, saved decisions, and rollback and undo evidence are kept. If protected records fill a domain, a new write is refused with a clear error asking you to close or export older records first. Record limits do not remove backups or audit events. Shared standards use their own shared scope. A plan downgrade alone does not prune records.
 
 | Record domain | Records kept |
 |---|---:|
@@ -203,4 +203,4 @@ Workflow hubs keep a bounded set of review records per tenant and domain. New wr
 | Custom baseline deployments | 500 |
 | Custom baseline comparisons | 365 |
 
-Each record keeps up to 200 revisions. When a domain exceeds its limit, its next write prunes it; reading existing history does not delete anything. References to records that have aged out no longer provide that older evidence or rollback content. Save evidence you need for long-term review before it reaches these limits, and create a fresh review if its referenced evidence has expired. Scan findings are saved together before the scan returns, reducing repeated encryption and disk writes.
+Each record keeps up to 200 revisions. Reading existing history does not delete anything. Existing data above a new limit stays intact when read after an upgrade. The next write can remove only closed, unreferenced records and is refused if it cannot meet the limit safely. Change sets in review or with outstanding writes keep their frozen proposals, pre-change captures and retained revisions. Completed rollback links stay available while their originals survive. Custom baselines keep their versions and rebases; installs and upgrades keep their source and comparison evidence. Adoptions keep their shared standard versions, including pending and previous versions. Promotions in review or applied and hygiene findings with a saved acknowledgement or false positive decision stay available. Active configuration and open or unknown health findings are also kept. Scan findings are saved together before the scan returns, reducing repeated encryption and disk writes.

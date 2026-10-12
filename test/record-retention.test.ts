@@ -40,11 +40,11 @@ it('defines retention for every domain and prunes only the oldest records of the
 it('prunes existing over-limit domains on update and uses insertion order for tied timestamps', () => {
   const store = memoryStore()
   const records = new TenantRecords(store, () => new Date('2026-01-01'))
-  const first = records.create(DOMAINS.notificationEndpoints, TENANT_A, { number: 0 }, meta)
-  const raw = Array.from({ length: 55 }, (_, number) => ({ ...first, id: String(number), number }))
-  store.set(`records.v1.${DOMAINS.notificationEndpoints}.${TENANT_A}`, JSON.stringify(raw))
-  records.update<{ number: number }>(DOMAINS.notificationEndpoints, TENANT_A, '54', value => value, meta)
-  expect(records.list<{ number: number }>(DOMAINS.notificationEndpoints, TENANT_A).map(record => record.number)).toEqual(Array.from({ length: 50 }, (_, number) => number + 5))
+  const first = records.create(DOMAINS.scoreSnapshots, TENANT_A, { number: 0 }, meta)
+  const raw = Array.from({ length: 370 }, (_, number) => ({ ...first, id: String(number), number }))
+  store.set(`records.v1.${DOMAINS.scoreSnapshots}.${TENANT_A}`, JSON.stringify(raw))
+  records.update<{ number: number }>(DOMAINS.scoreSnapshots, TENANT_A, '369', value => value, meta)
+  expect(records.list<{ number: number }>(DOMAINS.scoreSnapshots, TENANT_A).map(record => record.number)).toEqual(Array.from({ length: 365 }, (_, number) => number + 5))
 })
 
 it('persists a 300-finding batch across domains with one encryption and no delayed writes', () => {
