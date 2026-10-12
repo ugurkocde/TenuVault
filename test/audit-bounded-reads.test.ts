@@ -99,3 +99,16 @@ it('preserves valid event IDs that themselves contain the event path delimiter',
   }))
   expect(await service().queryLogs({ ...dates, limit: 1 })).toEqual([event])
 })
+
+
+it.each([false, true])('shares six reads across concurrent logs and complete export queries (indexed=%s)', async indexed => {
+  const world = fixture(indexed)
+  const range = { startDate: new Date('2026-09-25'), endDate: dates.endDate }
+  const [page, complete] = await Promise.all([
+    service().queryLogs({ ...range, tenantId, limit: 20 }),
+    service().queryAllLogs({ ...range, tenantId }),
+  ])
+  expect(page).toHaveLength(20)
+  expect(complete).toHaveLength(100)
+  expect(world.stats().maximum).toBe(AUDIT_READ_CONCURRENCY)
+})

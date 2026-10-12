@@ -21,6 +21,23 @@ export class AuditRangeError extends Error {}
 interface AuditBlob { name: string; dayPath: string; timestamp: number | null; version: string }
 const readCaches = new WeakMap<typeof fetch, Map<string, AuditLogEntry[]>>()
 
+/** Listings, stats and exports share one budget for each storage account. */
+const readLimiters = new Map<string, { active: number; waiting: Array<() => void> }>()
+async function limitRead<T>(account: string, run: () => Promise<T>): Promise<T> {
+  const key = account.toLowerCase()
+  let limiter = readLimiters.get(key)
+  if (!limiter) { limiter = { active: 0, waiting: [] }; readLimiters.set(key, limiter) }
+  if (limiter.active >= AUDIT_READ_CONCURRENCY) await new Promise<void>(resolve => limiter.waiting.push(resolve))
+  else limiter.active++
+  try {
+    return await run()
+  } finally {
+    const next = limiter.waiting.shift()
+    if (next) next()
+    else if (--limiter.active === 0) readLimiters.delete(key)
+  }
+}
+
 interface StorageCredentials {
   storageAccountName: string
   accessToken: string
@@ -210,7 +227,7 @@ export class AuditStorageService {
       throw new AuditRangeError(`Choose a valid audit date range of at most ${MAX_AUDIT_RANGE_DAYS} days. Export longer history in separate ranges.`)
     }
     const dates = this.getDateRange(startDate, endDate)
-    const listings = await mapLimit(dates, AUDIT_READ_CONCURRENCY, async (date): Promise<AuditBlob[]> => {
+    const listings = await mapLimit(dates, AUDIT_READ_CONCURRENCY, async (date): Promise<AuditBlob[]> => limitRead(this.credentials.storageAccountName, async () => {
       const dayPath = this.getLogFilePath(date)
       const listUrl = `${this.getBaseUrl()}/${AUDIT_CONTAINER}?restype=container&comp=list&include=metadata&prefix=${dayPath.replace('.json', '')}`
       try {
@@ -228,7 +245,7 @@ export class AuditStorageService {
         if (error instanceof BlobListError && error.status === 404 && error.completedPages === 0) return []
         throw error
       }
-    })
+    }))
     const blobs = [...new Map(listings.flat().map((blob) => [blob.name, blob])).values()]
     const allEntries = new Map<string, AuditLogEntry>()
     const add = (blob: AuditBlob, entries: AuditLogEntry[]) => {
@@ -270,17 +287,19 @@ export class AuditStorageService {
     const key = JSON.stringify([this.credentials.storageAccountName, blob.name, blob.version])
     const cached = blob.version ? cache.get(key) : undefined
     if (cached) return cached
-    const response = await fetch(this.blobUrl(blob.name), { headers: this.getHeaders() })
-    if (!response.ok) throw new Error(`Audit history is unavailable: an event file could not be read (${response.status})`)
-    const file: AuditLogFile = await response.json()
-    if (!Array.isArray(file.entries) || (blob.timestamp !== null && (file.entries.length !== 1 || Date.parse(file.entries[0]!.timestamp) !== blob.timestamp || file.entries[0]!.id !== this.eventId(blob)))) {
-      throw new Error('Audit history is unavailable: an event file does not match its listing metadata')
-    }
-    if (blob.version) {
-      cache.set(key, file.entries)
-      while (cache.size > 5000) cache.delete(cache.keys().next().value!)
-    }
-    return file.entries
+    return limitRead(this.credentials.storageAccountName, async () => {
+      const response = await fetch(this.blobUrl(blob.name), { headers: this.getHeaders() })
+      if (!response.ok) throw new Error(`Audit history is unavailable: an event file could not be read (${response.status})`)
+      const file: AuditLogFile = await response.json()
+      if (!Array.isArray(file.entries) || (blob.timestamp !== null && (file.entries.length !== 1 || Date.parse(file.entries[0]!.timestamp) !== blob.timestamp || file.entries[0]!.id !== this.eventId(blob)))) {
+        throw new Error('Audit history is unavailable: an event file does not match its listing metadata')
+      }
+      if (blob.version) {
+        cache.set(key, file.entries)
+        while (cache.size > 5000) cache.delete(cache.keys().next().value!)
+      }
+      return file.entries
+    })
   }
 
   private filterEntries(entries: AuditLogEntry[], filter: AuditLogFilter, startTime: number, endTime: number): AuditLogEntry[] {
