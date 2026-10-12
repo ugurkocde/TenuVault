@@ -83,7 +83,6 @@ export const JOB_DEADLINE_MS = 30 * 60_000
 export const MANIFEST_COMMIT_GRACE_MS = 2 * 60_000
 const REQUEST_ATTEMPTS = 3
 const MAX_RETRY_DELAY_MS = 5 * 60_000
-const ORPHAN_AGE_MS = 6 * 60 * 60_000
 
 /**
  * The storage provider refused a delete because the blob is protected by an immutability
@@ -171,7 +170,6 @@ export class BackupEngine {
   private readonly jobs = new Map<string, BackupJob>()
   private readonly running = new Map<string, BackupJob>()
   private readonly executions = new Map<string, { controller: AbortController; done: Promise<BackupJob> }>()
-  private readonly cleanups = new Map<string, AbortController>()
 
   constructor(private readonly deps: BackupEngineDeps) {}
 
@@ -195,7 +193,6 @@ export class BackupEngine {
     const tenantKey = request.tenantId.toLowerCase()
     const active = this.running.get(tenantKey)
     if (active) return active
-    this.cleanups.get(tenantKey)?.abort(new Error("A new backup started"))
 
     const controller = new AbortController()
     const deadline = Date.now() + JOB_DEADLINE_MS
@@ -215,9 +212,7 @@ export class BackupEngine {
 
     const timer = setTimeout(() => controller.abort(jobDeadlineError()), JOB_DEADLINE_MS)
     timer.unref?.()
-    let abandoned: string[] = []
     const done = this.run(job, request, controller.signal, deadline)
-      .then(prefixes => { abandoned = prefixes })
       .catch((error: unknown) => {
         job.status = error instanceof BackupCancelledError ? "Cancelled" : "Failed"
         job.exception = error instanceof Error ? error.message : String(error)
@@ -225,21 +220,19 @@ export class BackupEngine {
         this.write(job, `${job.progressMessage}: ${job.exception}`)
       })
       .finally(() => {
-        const interrupted = controller.signal.aborted || Date.now() >= deadline
         clearTimeout(timer)
         controller.abort(new Error("Backup finished"))
         job.progress = 100
         job.endTime = this.now().toISOString()
         this.running.delete(tenantKey)
         this.executions.delete(job.id)
-        if (!interrupted && abandoned.length) this.sweepAbandoned(job, request, abandoned, deadline)
       })
       .then(() => job)
     this.executions.set(job.id, { controller, done })
     return job
   }
 
-  private async run(job: BackupJob, request: BackupRequest, signal: AbortSignal, deadline: number): Promise<string[]> {
+  private async run(job: BackupJob, request: BackupRequest, signal: AbortSignal, deadline: number): Promise<void> {
     const started = this.now()
     const local = isLocalAccount(request.storageAccountName)
     const backupFolder = `backup-${folderTimestamp(started)}`
@@ -390,14 +383,12 @@ export class BackupEngine {
     // Only a complete backup may replace older ones: if policies could not be read (for
     // example after a permission change), keep every existing backup.
     let retentionWarnings = 0
-    let abandoned: string[] = []
     if (failures === 0 && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
       const retentionNetwork = new NetworkCircuit(3 * concurrency, signal, deadline)
       const retentionStorage = new BlobWriter(this.deps.fetch, request.storageAccountName, storageToken, retentionNetwork)
       try {
         const result = await this.applyRetention(job, retentionStorage, backupFolder, coveredFolders(metadata), retentionNetwork.signal)
-        abandoned = result.abandoned
-        if (result.unreadable > 0) retentionWarnings++
+        if (result > 0) retentionWarnings++
       } catch (error) {
         retentionWarnings++
         if (signal.aborted || Date.now() >= deadline) {
@@ -417,7 +408,6 @@ export class BackupEngine {
     job.progressMessage =
       job.status === "Failed" ? "Backup failed: no policies could be saved" : warnings > 0 ? `Backup completed with ${warnings} warning${warnings === 1 ? "" : "s"}` : "Backup completed successfully"
     this.write(job, `Backup completed: ${totalPolicies} policies in ${metadata.Duration}.`)
-    return abandoned
   }
 
   /**
@@ -428,9 +418,9 @@ export class BackupEngine {
    * versions that did not record the tenant count as this tenant's unless the container also
    * holds a backup recorded as another tenant's.
    */
-  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, covered: Set<string>, signal: AbortSignal): Promise<{ unreadable: number; abandoned: string[] }> {
+  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, covered: Set<string>, signal: AbortSignal): Promise<number> {
     const days = this.deps.retentionDays?.(job.tenantId) ?? 0
-    if (days <= 0) return { unreadable: 0, abandoned: [] }
+    if (days <= 0) return 0
     const cutoff = this.now().getTime() - days * 24 * 60 * 60 * 1000
     const { prefixes } = await storage.list("backup-", "/")
     const backups = prefixes
@@ -523,56 +513,7 @@ export class BackupEngine {
     }
     if (unowned > 0) this.write(job, `Kept ${unowned} older backup${unowned === 1 ? "" : "s"} not recorded as this tenant's (another tenant's, without readable metadata, or from an earlier version in a container another tenant also uses).`)
     if (unreadable.size > 0) this.write(job, `Could not read the metadata of ${unreadable.size} older backup${unreadable.size === 1 ? "" : "s"}: ${unreadableReason.replace(/\.$/, "")}. ${unreadable.size === 1 ? "It was" : "They were"} left in place.`)
-    return {
-      unreadable: unreadable.size,
-      abandoned: backups.filter((backup, index) => !owners[index] && !unreadable.has(index) && backup.time < this.now().getTime() - ORPHAN_AGE_MS).map(backup => backup.prefix),
-    }
-  }
-
-  /** Once the tenant is idle, remove only authenticated, explicitly owned folders without a manifest. */
-  private sweepAbandoned(job: BackupJob, request: BackupRequest, prefixes: string[], deadline: number): void {
-    if (Date.now() >= deadline) return
-    const tenant = job.tenantId.toLowerCase()
-    const controller = new AbortController()
-    this.cleanups.set(tenant, controller)
-    const timer = setTimeout(() => controller.abort(jobDeadlineError()), deadline - Date.now())
-    timer.unref?.()
-    const token = isLocalAccount(request.storageAccountName) ? async () => ""
-      : () => tokenOrStop(() => this.deps.getToken(request.tenantId, request.clientId, "https://storage.azure.com/.default"))
-    const storage = new BlobWriter(this.deps.fetch, request.storageAccountName, token, new NetworkCircuit(3 * CONCURRENCY, controller.signal, deadline))
-    void (async () => {
-      for (const prefix of prefixes) {
-        if (this.running.has(tenant)) return
-        const marker = `${prefix}${BACKUP_OWNER_FILE}`
-        let owner: Record<string, unknown> | null
-        try { owner = await storage.readJson(marker, true) }
-        catch (error) {
-          if (!(error instanceof FetchApplicationError)) throw error
-          continue
-        }
-        if (owner?.Source !== "TenuVault Desktop" || typeof owner.TenantId !== "string" || owner.TenantId.toLowerCase() !== tenant) continue
-        // Invalid or unreadable metadata is preserved, only a confirmed 404 permits cleanup.
-        if (await storage.exists(`${prefix}metadata.json`)) continue
-        const { blobs } = await storage.list(prefix)
-        try {
-          for (const blob of [...blobs.filter(name => name !== marker), ...blobs.filter(name => name === marker)]) {
-            if (this.running.has(tenant)) return
-            controller.signal.throwIfAborted()
-            if (!blob.startsWith(prefix) || blob.split("/").some(part => part === "." || part === "..")) throw new Error("Storage returned a file outside the abandoned folder")
-            await storage.delete(blob)
-          }
-          this.write(job, `Removed abandoned backup ${prefix.slice(0, -1)}, older than six hours and without metadata.`)
-        } catch (error) {
-          if (!(error instanceof ProtectedBlobError)) throw error
-          this.write(job, `Kept abandoned backup ${prefix.slice(0, -1)} protected by the storage account's immutability policy or legal hold.`)
-        }
-      }
-    })().catch((error: unknown) => {
-      if (!controller.signal.aborted) this.write(job, `Could not remove abandoned backups: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, "")}.`)
-    }).finally(() => {
-      clearTimeout(timer)
-      if (this.cleanups.get(tenant) === controller) this.cleanups.delete(tenant)
-    })
+    return unreadable.size
   }
 
   private write(job: BackupJob, line: string): void {
@@ -820,14 +761,6 @@ class BlobWriter {
         if (isImmutabilityRefusal(response.status, bodyCode)) throw new ProtectedBlobError(bodyCode)
         throw new StorageError(await storageError(response, this.account))
       }
-    })
-  }
-
-  async exists(name: string): Promise<boolean> {
-    return this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, { method: "HEAD" }, async response => {
-      if (response.status === 404) return false
-      if (!response.ok) throw new StorageError(await storageError(response, this.account))
-      return true
     })
   }
 
