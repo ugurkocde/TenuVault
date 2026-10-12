@@ -192,7 +192,7 @@ Workflow hubs keep a bounded set of review records per tenant and domain. New wr
 | Baseline installs and comparisons | 500 |
 | Baseline upgrades | 500 |
 | Promotions | 500 |
-| Health review schedules and runs | 200, with the existing 100-run limit still applied |
+| Health review schedules and runs | 200 in total, including the schedule record |
 | Health findings | 2,000 |
 | Notification endpoints | 50 |
 | Customizations | 1,000 |

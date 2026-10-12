@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto"
+import type { BigIntStats } from "node:fs"
 import { link, mkdir, open, readdir, readFile, rename, rm, stat } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { mapLimit } from "../../portal/lib/map-limit"
@@ -233,7 +234,7 @@ export class LocalBlobStore {
     // A selective read checks its own file. Listings still verify every cached header,
     // and directory changes or our own writes still validate the complete manifest.
     let unchanged = false
-    try { unchanged = fileStamp(await stat(join(dir, entry.file))) === entry.stamp } catch { /* Rebuild missing or replaced files. */ }
+    try { unchanged = fileStamp(await stat(join(dir, entry.file), { bigint: true })) === entry.stamp } catch { /* Rebuild missing or replaced files. */ }
     if (!unchanged) {
       this.index.delete(dir)
       entries = await this.checkedEntries(account, container)
@@ -288,7 +289,7 @@ export class LocalBlobStore {
       await rm(tmp, { force: true })
     }
 
-    const info = await stat(path)
+    const info = await stat(path, { bigint: true })
     const stamp = fileStamp(info)
     const blob: StoredBlob = { name, size: data.byteLength, contentType, created, lastModified: info.mtime, etag: `"${stamp}"`, ...(metadata ? { metadata } : {}) }
     entries.set(name, { ...blob, file, version, stamp })
@@ -313,7 +314,7 @@ export class LocalBlobStore {
 
   private async directoryStamp(dir: string): Promise<string> {
     try {
-      const info = await stat(dir)
+      const info = await stat(dir, { bigint: true })
       return fileStamp(info)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing"
@@ -329,7 +330,7 @@ export class LocalBlobStore {
     const check = (async () => {
       let entries = await this.entries(account, container)
       const unchanged = !this.dirty.has(dir) && (await mapLimit([...entries.values()], HEADER_CONCURRENCY, async (entry) => {
-        try { return fileStamp(await stat(join(dir, entry.file))) === entry.stamp } catch { return false }
+        try { return fileStamp(await stat(join(dir, entry.file), { bigint: true })) === entry.stamp } catch { return false }
       })).every(Boolean)
       if (!unchanged) {
         this.index.delete(dir)
@@ -391,8 +392,8 @@ export class LocalBlobStore {
         if (!header || typeof header.name !== "string" || !header.name || typeof header.contentType !== "string" || !Number.isFinite(Date.parse(header.created))) {
           throw new Error("Invalid backup header")
         }
-        const info = await handle.stat()
-        if (info.size < prefix.length + headerLength + IV + TAG) throw new Error("Truncated backup body")
+        const info = await handle.stat({ bigint: true })
+        if (Number(info.size) < prefix.length + headerLength + IV + TAG) throw new Error("Truncated backup body")
         return {
           file,
           version,
@@ -400,7 +401,7 @@ export class LocalBlobStore {
           contentType: header.contentType,
           created: new Date(header.created),
           lastModified: info.mtime,
-          size: info.size - prefix.length - headerLength - IV - TAG,
+          size: Number(info.size) - prefix.length - headerLength - IV - TAG,
           stamp: fileStamp(info),
           etag: `"${fileStamp(info)}"`,
           ...(header.metadata ? { metadata: header.metadata } : {}),
@@ -460,6 +461,7 @@ function safeSegment(value: string): string {
 }
 
 /** Includes change time and inode so atomic replacements and in-place edits invalidate the cache. */
-function fileStamp(info: NonNullable<Awaited<ReturnType<typeof stat>>>): string {
-  return `${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`
+/** BigInt stats keep the full inode and nanosecond times, so a replaced file never shares a stamp with the old one. */
+function fileStamp(info: BigIntStats): string {
+  return `${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
 }

@@ -183,6 +183,7 @@ export class TenantRecords {
       if (!parent) {
         const changes = Object.fromEntries([...this.staged].map(([key, records]) => [key, JSON.stringify(records)]))
         if (this.store.setMany) this.store.setMany(changes)
+        else if (Object.keys(changes).length > 1) throw new Error("This store cannot write several records at once, so the batch was not saved.")
         else for (const [key, value] of Object.entries(changes)) this.store.set(key, value)
       } else {
         for (const [key, records] of this.staged) parent.set(key, records)
