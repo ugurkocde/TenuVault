@@ -1,3 +1,4 @@
+import { showFeaturePlanError } from "../../lib/plan-dialog"
 import { useState } from "react"
 import { CheckCircle2, ChevronDown, ChevronRight, Eye, History, RotateCcw, ShieldCheck, XCircle } from "lucide-react"
 import { Button } from "~/components/ui/button"
@@ -39,6 +40,7 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
       if (success) toast(success, "success")
       onChanged()
     } catch (error) {
+      showFeaturePlanError(error)
       toast(error instanceof Error ? error.message : "The request failed.", "error")
       onChanged()
     } finally {

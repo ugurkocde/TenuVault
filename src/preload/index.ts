@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron"
-import type { BackupSchedule, LicenseStatus, SignInRequiredEvent, TenuVaultBridge, UpdateStatus } from "../shared/ipc"
+import type { BackupSchedule, LicenseStatus, SignInRequiredEvent, TenuVaultPreloadBridge, UpdateStatus } from "../shared/ipc"
 
 /** Strips Electron's "Error invoking remote method 'x': Error: " prefix from IPC errors. */
 async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -18,7 +18,7 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
   return () => ipcRenderer.removeListener(channel, handler)
 }
 
-const bridge: TenuVaultBridge = {
+const bridge: TenuVaultPreloadBridge = {
   api: (request) => invoke("api", request),
   auth: {
     signIn: (tenant, clientId) => invoke("auth:signIn", tenant, clientId),
@@ -51,7 +51,7 @@ const bridge: TenuVaultBridge = {
     deactivate: () => invoke("license:deactivate"),
     checkNewTenant: (tenantId) => invoke("license:checkNewTenant", tenantId),
     releaseTenant: (tenantId) => invoke("license:releaseTenant", tenantId),
-    open: (target) => invoke("license:open", target),
+    open: (target, options) => invoke("license:open", target, options),
     onChanged: (listener) => subscribe<LicenseStatus>("license:changed", listener),
   },
   schedules: {

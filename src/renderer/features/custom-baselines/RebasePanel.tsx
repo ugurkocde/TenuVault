@@ -1,3 +1,4 @@
+import { showFeaturePlanError } from "../../lib/plan-dialog"
 import { useState } from "react"
 import { ChevronDown, ChevronRight } from "lucide-react"
 import type { Tenant } from "~/contexts/TenantContext"
@@ -34,6 +35,7 @@ export function RebasePanel({ tenant, baseline, rebases, allowed, onChanged }: {
       setPolicies({})
       onChanged()
     } catch (error) {
+      showFeaturePlanError(error)
       toast(error instanceof Error ? error.message : "The request failed.", "error")
     } finally {
       setBusy(false)

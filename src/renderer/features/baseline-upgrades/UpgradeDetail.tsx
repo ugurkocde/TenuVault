@@ -1,3 +1,4 @@
+import { showFeaturePlanError } from "../../lib/plan-dialog"
 import { useState } from "react"
 import { ChevronDown, ChevronRight } from "lucide-react"
 import type { Tenant } from "~/contexts/TenantContext"
@@ -33,6 +34,7 @@ export function UpgradeDetail({ tenant, upgrade, comparison, changeSets, allowed
       setSettings({})
       setPolicyChoices({})
     } catch (error) {
+      showFeaturePlanError(error)
       toast(error instanceof Error ? error.message : "The request failed.", "error")
     } finally {
       setBusy(false)

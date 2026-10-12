@@ -270,7 +270,7 @@ export default function BackupRestorePage() {
             {retentionMessage && (
               <p className="mb-4 text-sm text-gray-500">
                 {retentionMessage}{" "}
-                <button type="button" className="font-medium underline" onClick={() => void bridge.license.open("buy")}>See plans</button>
+                <button type="button" className="font-medium underline" onClick={() => void bridge.license.open("buy", { source: "note-retention" })}>See plans</button>
               </p>
             )}
 

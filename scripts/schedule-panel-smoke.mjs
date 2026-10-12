@@ -10,7 +10,7 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
   async function open(current = null, installed = false) {
     await evaluate(`(async () => {
       const status = await window.tenuvault.license.status()
-      window.__scheduleFixture = { calls: [], runnerChecks: 0, status: { ...status, tenants: [] } }
+      window.__scheduleFixture = { calls: [], links: [], runnerChecks: 0, status: { ...status, tenants: [] } }
       const frame = document.createElement("iframe")
       frame.style.cssText = "position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 9999;"
       document.body.appendChild(frame)
@@ -24,10 +24,15 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
         license: {
           ...window.tenuvault.license,
           status: () => Promise.resolve(window.__scheduleFixture.status),
+          open: (target, options) => { window.__scheduleFixture.links.push({ target, ...options }); return Promise.resolve() },
           onChanged: listener => {
             window.__scheduleFixture.planChanged = listener
             return () => { window.__scheduleFixture.planChanged = null }
           },
+        },
+        auth: {
+          ...window.tenuvault.auth,
+          signIn: () => window.tenuvault.license.checkNewTenant("44444444-4444-4444-4444-444444444444"),
         },
         schedules: {
           ...window.tenuvault.schedules,
@@ -39,7 +44,7 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
           set: async input => {
             window.__scheduleFixture.calls.push(input)
             const schedules = await window.tenuvault.schedules.set(input)
-            window.__scheduleFixture.scheduleChanged(schedules)
+            if (!schedules.planError) window.__scheduleFixture.scheduleChanged(schedules)
             return schedules
           },
         },
@@ -52,6 +57,9 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
         },
       }
       document.querySelectorAll('link[rel="stylesheet"]').forEach(link => frame.contentDocument.head.appendChild(link.cloneNode()))
+      const style = frame.contentDocument.createElement("style")
+      style.textContent = "*, *::before, *::after { animation: none !important; transition: none !important; }"
+      frame.contentDocument.head.appendChild(style)
       const script = frame.contentDocument.createElement("script")
       script.type = "module"
       script.src = document.querySelector('script[type="module"]').src
@@ -175,14 +183,39 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
       assert(await waitForCondition(`${body}.innerText.includes('Automatic backups paused')`), "pause success message missing")
       const saved = await evaluate(`window.tenuvault.schedules.list()`)
       assert(saved.some(schedule => schedule.tenantId === tenantId && !schedule.enabled && schedule.frequency === 'daily' && schedule.time === '07:45'), "pausing changed the stored daily schedule")
-      const refusal = await evaluate(`window.tenuvault.schedules.set({ tenantId: ${JSON.stringify(tenantId)}, enabled: true, frequency: 'daily', time: '07:45' }).then(() => null, error => error.message)`)
-      assert(refusal === "PlanRequired: Daily scheduled backups: included in TenuVault Pro and MSP. Upgrade on the License page.", `Community daily re-enable did not return the PlanRequired message: ${JSON.stringify(refusal)}`)
+      const refusal = await evaluate(`window.tenuvault.schedules.set({ tenantId: ${JSON.stringify(tenantId)}, enabled: true, frequency: 'daily', time: '07:45' })`)
+      assert(refusal.planError?.code === "plan_required" && refusal.planError.upgrade === "dailySchedule" && refusal.planError.message === "Daily scheduled backups: included in TenuVault Pro and MSP. Upgrade on the License page.", `Community daily re-enable did not return its typed plan error: ${JSON.stringify(refusal)}`)
       assert((await evaluate(`window.tenuvault.schedules.list()`)).some(schedule => schedule.tenantId === tenantId && !schedule.enabled), "refused daily re-enable changed the paused schedule")
       assert(await evaluate(`${body}.innerText.includes('Daily at 07:45')`), "paused recurrence summary missing")
       assert(await evaluate(`${body}.innerText.includes('Daily scheduled backups: included in TenuVault Pro and MSP.') && !${body}.innerText.includes(${JSON.stringify(weeklyNote)})`), "paused daily schedule changed its plan notes")
       assert(await evaluate(`!${body}.innerText.includes('Background restart is not installed.')`), "installed runner shows the missing runner note")
       assert(await evaluate(`window.__scheduleFixture.runnerChecks === 1`), "runner status was polled")
       await screenshot("09b-schedule-daily-paused")
+      await evaluate(`${automatic}.click()`)
+      await evaluate(`${save}.click()`)
+      assert(await waitForCondition(`${body}.innerText.includes('Daily scheduled backups: included in TenuVault Pro and MSP.')`), "daily plan explanation missing")
+      assert(await evaluate(`!${body}.querySelector('[role="dialog"]')`), "inline plan note opened a second dialog")
+      await evaluate(`window.__scheduleFixture.planChanged({ ...window.__scheduleFixture.status, tenants: [{ tenantId: ${JSON.stringify(tenantId)}, plan: 'pro', entitled: true }] })`)
+      assert(await waitForCondition(`!${doc}.querySelector('#schedule-frequency option[value="daily"]').disabled`), "Pro fixture was not applied")
+      await evaluate(`${save}.click()`)
+      assert(await waitForCondition(`${body}.querySelector('[role="dialog"]')?.innerText.includes('Included in TenuVault Pro and MSP')`), "schedule refusal did not open the plan dialog")
+      await evaluate(`[...${body}.querySelectorAll('[role="dialog"] button')].find(button => button.textContent.trim() === 'See plans').click()`)
+      assert(await evaluate(`window.__scheduleFixture.links.at(-1).source === 'plan-dialog-dailyschedule'`), "plan dialog buy source missing")
+      await screenshot("09c-schedule-plan-dialog")
+      await evaluate(`[...${body}.querySelectorAll('[role="dialog"] button')].find(button => button.textContent.trim() === 'Close').click()`)
+      await evaluate(`window.__scheduleFrame.contentWindow.location.hash = '#/portal/onboarding'`)
+      assert(await waitForCondition(`${body}.innerText.includes('I have the client id')`), "onboarding fixture did not open")
+      await evaluate(`[...${body}.querySelectorAll('button')].find(button => button.textContent.trim() === 'I have the client id').click()`)
+      await setValue("tenant", "44444444-4444-4444-4444-444444444444")
+      await setValue("clientId", "22222222-2222-2222-2222-222222222222")
+      await evaluate(`[...${body}.querySelectorAll('button')].find(button => button.textContent.trim() === 'Sign in with Microsoft').click()`)
+      assert(await waitForCondition(`${body}.querySelector('[role="dialog"]')?.innerText.includes('Community covers one tenant, and it is used for Contoso 1.')`), "Community dialog did not resolve the existing tenant name")
+      await evaluate(`[...${body}.querySelectorAll('[role="dialog"] button')].find(button => button.textContent.trim() === 'Start 30 day free trial').click()`)
+      assert(await evaluate(`window.__scheduleFixture.links.at(-1).source === 'second-tenant'`), "second tenant buy source missing")
+      await screenshot("09d-community-tenant-dialog")
+      await evaluate(`[...${body}.querySelectorAll('[role="dialog"] button')].find(button => button.textContent.trim() === 'Add a license key').click()`)
+      assert(await waitForCondition(`${body}.innerText.includes('License key') && !${body}.querySelector('[role="dialog"]')`), "Add a license key did not open the License page")
+
     } finally {
       await close()
       await evaluate(`window.tenuvault.license.releaseTenant(${JSON.stringify(tenantId)})`)
