@@ -269,7 +269,7 @@ export default function LicensePage() {
                           ? signedIn === 0
                             ? "Your key is saved. It activates for a tenant when you sign in to it."
                             : "Your key is saved but not active for your signed-in tenants. Check the tenants below."
-                          : "A tenant admin shared their TenuVault license with your tenant."}
+                          : "Your organization license is not currently active. Sign in again and retry the license check below."}
               </CardDescription>
             </div>
             {status.plan && <Badge variant="secondary">{planName(status.plan)}</Badge>}

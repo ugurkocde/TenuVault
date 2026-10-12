@@ -110,7 +110,7 @@ export function licensePageTitle(status: LicenseStatus): string {
   if (isUnlicensed(status)) return "Add your license"
   if (status.keyState === "failed") return "License key inactive"
   if (status.keyState === "pending") return "License key saved"
-  return "Licensed through your organization"
+  return "Organization license inactive"
 }
 
 /** A Community notice returns 30 days after it was dismissed on this machine. */

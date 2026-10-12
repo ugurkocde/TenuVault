@@ -571,7 +571,7 @@ async function bootstrap(): Promise<void> {
   // fails, the new sign-in is removed so no tenant stays connected without a license.
   const requireForNewTenant = async (tenantId: string) => {
     try {
-      await license.requireEntitlement(tenantId, { retry: true })
+      await license.checkNewTenant(tenantId)
     } catch (error) {
       // A tenant that is already connected keeps its sign-in; only a new one is rolled back.
       const connected = connectedTenantIds().some((id) => id.toLowerCase() === tenantId.toLowerCase())
@@ -668,7 +668,7 @@ async function bootstrap(): Promise<void> {
       if (selected.canceled || !selected.filePaths[0]) return { imported: false }
       if ((await stat(selected.filePaths[0])).size > 32 * 1024 * 1024) throw new Error("Choose an archive smaller than 32 MiB")
       const archive = await reviewArchive(await readFile(selected.filePaths[0]))
-      await license.requireEntitlement(archive.tenantId)
+      await license.checkNewTenant(archive.tenantId, { retry: false })
       const review = await dialog.showMessageBox(mainWindow!, { type: "warning", title: "Review backup archive", message: `Import ${archive.count} policy snapshots?`, detail: `Source tenant: ${archive.tenantId}\nBackup: ${archive.backupId}\nSHA-256: ${archive.digest}\n\nThe archive declares its source identity; it is not signed. Use files supplied by a source you trust. Snapshots will be encrypted on this device. Import does not change Intune. Use the tenant's local backup storage and the existing restore preview to restore later.`, buttons: ["Cancel", "Import locally"], defaultId: 0, cancelId: 0 })
       if (review.response !== 1) return { imported: false }
       await importArchive(getLocalStore(), archive)

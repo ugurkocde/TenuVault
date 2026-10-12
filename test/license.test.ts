@@ -535,74 +535,224 @@ describe("LicenseService key activations", () => {
   })
 })
 
-describe("LicenseService stale responses", () => {
-  it.each(["replacement", "deactivation"] as const)("ignores a delayed refresh refusal after %s", async (change) => {
+describe("LicenseService mutation ordering", () => {
+  it("serializes overlapping refreshes with the same activation ID", async () => {
     const license = service()
     answer = () => granted("act-a")
     await license.setKey("TEST-LICENSE-KEY", [TENANT])
+    const older = deferred<Response>()
+    const newer = deferred<Response>()
+    const started = deferred<void>()
+    answer = () => {
+      started.resolve()
+      return older.promise
+    }
+    const first = license.refreshAll()
+    await started.promise
+    const second = license.refreshAll()
+    answer = () => newer.promise
+    newer.resolve(granted("act-a"))
+    expect(calls.filter(({ action }) => action === "refresh")).toHaveLength(1)
+    older.resolve(denied("revoked"))
+    await Promise.all([first, second])
+
+    for (const current of [license, service()]) {
+      expect(current.status([TENANT])).toMatchObject({ keyState: "active", keyMessage: null, tenants: [{ entitled: true, activated: true }] })
+    }
+    expect(JSON.parse(store.get("license.state")!).activations[TENANT].activationId).toBe("act-a")
+  })
+
+  it("keeps a queued organization refresh on the key chain if its activation becomes a key activation", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    try {
+      vi.setSystemTime(T0)
+      const license = service()
+      await license.setKey("TEST-LICENSE-KEY", [])
+      answer = ({ action }) => action === "activate" ? denied("tenant_limit") : granted("act-org", { source: "tenant" })
+      await license.requireEntitlement(TENANT)
+      vi.setSystemTime(T0 + 15 * DAY)
+      const organization = deferred<Response>()
+      const key = deferred<Response>()
+      const organizationStarted = deferred<void>()
+      const keyStarted = deferred<void>()
+      answer = ({ action, body }) => {
+        if (action === "tenant") {
+          organizationStarted.resolve()
+          return organization.promise
+        }
+        if (action === "refresh" && body.tenantId === TENANT) {
+          keyStarted.resolve()
+          return key.promise
+        }
+        return granted(body.tenantId === TENANT ? "act-key" : "act-b", {}, { tenantId: body.tenantId })
+      }
+      const first = license.refreshAll()
+      await organizationStarted.promise
+      const saving = license.setKey("TEST-LICENSE-KEY", [TENANT])
+      const queued = license.refreshAll()
+      const other = license.requireEntitlement(TENANT_B)
+      organization.resolve(granted("act-org", { source: "tenant" }, { exp: T0 / 1000 + 14 * 86400 }))
+      await keyStarted.promise
+      await Promise.resolve()
+      expect(calls.some(({ body }) => body.tenantId === TENANT_B)).toBe(false)
+      key.resolve(granted("act-key"))
+      await Promise.all([first, saving, queued, other])
+      for (const current of [license, service()]) {
+        expect(current.status([TENANT, TENANT_B])).toMatchObject({ keyState: "active", keyMessage: null, tenants: [{ entitled: true, source: "key" }, { entitled: true, source: "key" }] })
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("applies a later legitimate refusal even when a prior refresh kept the activation ID", async () => {
+    const license = service()
+    answer = () => granted("act-a")
+    await license.setKey("TEST-LICENSE-KEY", [TENANT])
+    const older = deferred<Response>()
+    const started = deferred<void>()
+    answer = () => {
+      started.resolve()
+      return older.promise
+    }
+    const first = license.refreshAll()
+    await started.promise
+    const second = license.refreshAll()
+    answer = () => denied("revoked")
+    older.resolve(granted("act-a"))
+    await Promise.all([first, second])
+    for (const current of [license, service()]) {
+      expect(current.status([TENANT])).toMatchObject({ keyState: "failed", keyMessage: expect.stringContaining("revoked"), tenants: [{ activated: false, entitled: false }] })
+    }
+    expect(calls.filter(({ action }) => action === "refresh")).toHaveLength(2)
+  })
+
+  it("applies tenant A's pending key refusal when tenant B is removed", async () => {
+    const license = service()
+    answer = ({ body }) => granted(body.tenantId === TENANT ? "act-a" : "act-b", {}, { tenantId: body.tenantId })
+    await license.setKey("TEST-LICENSE-KEY", [TENANT, TENANT_B])
     const response = deferred<Response>()
     const started = deferred<void>()
     answer = ({ action, body }) => {
-      if (action === "refresh" && body.key === "TEST-LICENSE-KEY") {
+      if (action === "refresh" && body.tenantId === TENANT) {
         started.resolve()
         return response.promise
       }
-      return action === "deactivate" ? Response.json({ success: true }) : granted("act-b")
+      return Response.json({ success: true })
     }
     const refreshing = license.refreshAll()
     await started.promise
-    await license.deactivate()
-    if (change === "replacement") await license.setKey("OTHER-LICENSE-KEY", [TENANT])
+    await license.releaseTenant(TENANT_B)
+    expect(license.status([]).tenants.map(({ tenantId }) => tenantId)).toEqual([TENANT])
     response.resolve(denied("revoked"))
     await refreshing
-
     for (const current of [license, service()]) {
-      expect(current.status([TENANT])).toMatchObject({
-        hasKey: change === "replacement", keyState: change === "replacement" ? "active" : "none",
-        keyMessage: null, offline: false,
-        tenants: [{ activated: change === "replacement", entitled: change === "replacement", message: null }],
-      })
+      expect(current.status([TENANT])).toMatchObject({ keyState: "failed", keyMessage: expect.stringContaining("revoked"), tenants: [{ tenantId: TENANT, activated: false, entitled: false }] })
+      expect(current.status([]).tenants).toEqual([])
     }
-    if (change === "replacement") {
-      expect(JSON.parse(store.get("license.state")!).activations[TENANT].activationId).toBe("act-b")
-      await expect(license.requireEntitlement(TENANT)).resolves.toBe("pro")
-    } else expect(store.get("license.state")).toBeNull()
-    expect(calls.filter(({ action }) => action === "tenant")).toHaveLength(0)
   })
 
-  it.each(["replacement", "deactivation"] as const)("ignores a delayed first activation refusal after %s", async (change) => {
+  it("does not block an unrelated organization tenant's removal on tenant A's refresh", async () => {
     const license = service()
-    await license.setKey("TEST-LICENSE-KEY", [])
+    answer = ({ body }) => granted(body.idToken === TENANT ? "act-a" : "act-b", { source: "tenant" }, { tenantId: body.idToken })
+    const organization = service({ idToken: async (tenant) => tenant })
+    await organization.requireEntitlement(TENANT)
+    await organization.requireEntitlement(TENANT_B)
     const response = deferred<Response>()
     const started = deferred<void>()
-    answer = ({ action, body }) => {
-      if (action === "activate" && body.key === "TEST-LICENSE-KEY") {
+    answer = ({ body }) => {
+      if (body.action === "refresh" && body.idToken === TENANT) {
         started.resolve()
         return response.promise
       }
-      return action === "deactivate" ? Response.json({ success: true }) : granted("act-b")
+      return Response.json({ success: true })
     }
-    const activating = license.requireEntitlement(TENANT)
+    const refreshing = organization.refreshAll()
     await started.promise
-    if (change === "replacement") await license.setKey("OTHER-LICENSE-KEY", [TENANT])
-    else await license.deactivate()
+    await organization.releaseTenant(TENANT_B)
+    expect(organization.status([]).tenants.map(({ tenantId }) => tenantId)).toEqual([TENANT])
     response.resolve(denied("revoked"))
-    await expect(activating).resolves.toBe(change === "replacement" ? "pro" : "community")
-
-    for (const current of [license, service()]) {
-      expect(current.status([TENANT])).toMatchObject({
-        hasKey: change === "replacement", keyState: change === "replacement" ? "active" : "none",
-        keyMessage: null, offline: false,
-        tenants: [{ activated: change === "replacement", entitled: change === "replacement", message: null }],
-      })
-    }
-    if (change === "replacement") {
-      expect(JSON.parse(store.get("license.state")!).activations[TENANT].activationId).toBe("act-b")
-    } else expect(store.get("license.state")).toBeNull()
-    expect(calls.filter(({ action }) => action === "tenant")).toHaveLength(0)
+    await refreshing
+    for (const current of [organization, license, service()]) expect(current.status([]).tenants).toEqual([])
   })
 
-  it.each(["replacement", "deactivation"] as const)("does not roll back a newer state for a delayed setKey refusal after %s", async (change) => {
+  it.each([true, false])("completes deactivation concurrent with removal, success %s", async (success) => {
+    const license = service()
+    answer = ({ body }) => granted(body.tenantId === TENANT ? "act-a" : "act-b", {}, { tenantId: body.tenantId })
+    await license.setKey("TEST-LICENSE-KEY", [TENANT, TENANT_B])
+    const response = deferred<Response>()
+    const started = deferred<void>()
+    answer = ({ body }) => {
+      if (body.activationId === "act-a") {
+        started.resolve()
+        return response.promise
+      }
+      return Response.json({ success: true })
+    }
+    const deactivating = license.deactivate()
+    const outcome = success ? expect(deactivating).resolves.toBeUndefined() : expect(deactivating).rejects.toThrow("unavailable")
+    await started.promise
+    const removing = license.releaseTenant(TENANT_B)
+    response.resolve(success ? Response.json({ success: true }) : Response.json({ reason: "upstream" }, { status: 502 }))
+    await outcome
+    await removing
+    for (const current of [license, service()]) {
+      expect(current.status([TENANT])).toMatchObject({ hasKey: !success, keyState: success ? "none" : "active", tenants: [{ activated: !success, entitled: !success }] })
+    }
+    if (success) expect(store.get("license.state")).toBeNull()
+  })
+
+  it.each(["success", "refusal"] as const)("does not claim Community for a removed tenant's stale organization activation %s", async (result) => {
+    const license = service()
+    const response = deferred<Response>()
+    const started = deferred<void>()
+    answer = () => {
+      started.resolve()
+      return response.promise
+    }
+    const requesting = license.requireEntitlement(TENANT)
+    const outcome = expect(requesting).rejects.toThrow("license state changed")
+    await started.promise
+    const removing = license.releaseTenant(TENANT)
+    response.resolve(result === "success" ? granted("act-org", { source: "tenant" }) : denied("tenant_not_licensed"))
+    await outcome
+    await removing
+    expect(store.get("license.communityTenant")).toBeNull()
+    expect(store.get("license.state")).toBeNull()
+    for (const current of [license, service()]) expect(current.status([])).toMatchObject({ communityTenantId: null, tenants: [] })
+    answer = () => denied("tenant_not_licensed")
+    await expect(license.requireEntitlement(TENANT_B)).resolves.toBe("community")
+    expect(service().status([TENANT_B])).toMatchObject({ communityTenantId: TENANT_B })
+  })
+
+  it.each(["refresh", "activate", "organization"] as const)("waits for a pending %s success before deactivating and never resurrects it", async (action) => {
+    const license = service()
+    answer = () => granted("act-a")
+    if (action !== "organization") await license.setKey("TEST-LICENSE-KEY", action === "refresh" ? [TENANT] : [])
+    const response = deferred<Response>()
+    const started = deferred<void>()
+    answer = ({ action: request, body }) => {
+      if (request === "deactivate" || body.action === "deactivate") return Response.json({ success: true })
+      started.resolve()
+      return response.promise
+    }
+    const requesting = action === "refresh" ? license.refreshAll() : license.requireEntitlement(TENANT)
+    await started.promise
+    let deactivated = false
+    const deactivating = license.deactivate().then(() => { deactivated = true })
+    await Promise.resolve()
+    expect(deactivated).toBe(false)
+    expect(calls.some(({ action: request, body }) => request === "deactivate" || body.action === "deactivate")).toBe(false)
+    response.resolve(granted("act-late", action === "organization" ? { source: "tenant" } : {}))
+    await requesting
+    await deactivating
+    for (const current of [license, service()]) {
+      expect(current.status([TENANT])).toMatchObject({ hasKey: false, keyState: "none", keyMessage: null, tenants: [{ activated: false, entitled: false, message: null }] })
+    }
+    expect(store.get("license.state")).toBeNull()
+  })
+
+  it("does not carry a refused setKey result into a queued replacement", async () => {
     const license = service()
     const response = deferred<Response>()
     const started = deferred<void>()
@@ -613,70 +763,89 @@ describe("LicenseService stale responses", () => {
       }
       return granted("act-b")
     }
-    const activating = license.setKey("TEST-LICENSE-KEY", [TENANT])
+    const saving = license.setKey("TEST-LICENSE-KEY", [TENANT])
+    const outcome = expect(saving).rejects.toThrow("revoked")
     await started.promise
-    if (change === "replacement") await license.setKey("OTHER-LICENSE-KEY", [TENANT])
-    else await license.deactivate()
+    const replacing = license.setKey("OTHER-LICENSE-KEY", [TENANT])
     response.resolve(denied("revoked"))
-    await activating
-    expect(license.status([TENANT])).toMatchObject({ keyState: change === "replacement" ? "active" : "none", keyMessage: null })
-    expect(service().status([TENANT])).toMatchObject({ keyState: change === "replacement" ? "active" : "none", keyMessage: null })
+    await outcome
+    await replacing
+    for (const current of [license, service()]) expect(current.status([TENANT])).toMatchObject({ keyState: "active", keyMessage: null })
+    expect(JSON.parse(store.get("license.state")!).activations[TENANT].activationId).toBe("act-b")
   })
 
-  it("ignores a first activation refusal from an earlier generation of the same saved key", async () => {
+  it("orders starting over with the same key after a pending activation", async () => {
     const license = service()
     await license.setKey("TEST-LICENSE-KEY", [])
+    const response = deferred<Response>()
+    const started = deferred<void>()
+    answer = ({ action }) => {
+      if (action === "tenant") return denied("tenant_not_licensed")
+      started.resolve()
+      return response.promise
+    }
+    const activating = license.requireEntitlement(TENANT)
+    await started.promise
+    const deactivating = license.deactivate()
+    const saving = license.setKey("TEST-LICENSE-KEY", [])
+    response.resolve(denied("revoked"))
+    await expect(activating).resolves.toBe("community")
+    await Promise.all([deactivating, saving])
+    for (const current of [license, service()]) expect(current.status([])).toMatchObject({ keyState: "pending", keyMessage: null })
+    answer = () => granted("act-new")
+    await expect(license.requireEntitlement(TENANT, { retry: true })).resolves.toBe("pro")
+  })
+
+  it("allows a new sign-in after removal without reviving the old tenant request", async () => {
+    const license = service()
     const response = deferred<Response>()
     const started = deferred<void>()
     answer = () => {
       started.resolve()
       return response.promise
     }
-    const activating = license.requireEntitlement(TENANT)
-    const outcome = expect(activating).rejects.toThrow("license state changed")
+    const old = license.requireEntitlement(TENANT)
+    const outcome = expect(old).rejects.toThrow("license state changed")
     await started.promise
-    await license.deactivate()
-    await license.setKey("TEST-LICENSE-KEY", [])
-    response.resolve(denied("revoked"))
+    const removing = license.releaseTenant(TENANT)
+    const adding = license.checkNewTenant(TENANT)
+    answer = () => granted("act-new", { source: "tenant" })
+    response.resolve(granted("act-old", { source: "tenant" }))
     await outcome
-    expect(license.status([TENANT])).toMatchObject({ keyState: "pending", keyMessage: null, tenants: [{ message: null }] })
-    expect(service().status([TENANT])).toMatchObject({ keyState: "pending", keyMessage: null })
-    expect(calls).toHaveLength(1)
-    answer = () => granted("act-new")
-    await expect(license.requireEntitlement(TENANT)).resolves.toBe("pro")
+    await removing
+    await expect(adding).resolves.toBe("pro")
+    expect(JSON.parse(store.get("license.state")!).activations[TENANT].activationId).toBe("act-new")
+    expect(service().status([TENANT]).tenants[0]).toMatchObject({ entitled: true, source: "tenant" })
+    expect(store.get("license.communityTenant")).toBeNull()
   })
 
-  it("keeps the replacement activation pending when an earlier request finishes", async () => {
+  it("keeps a later removal in force when a new sign-in check is queued", async () => {
     const license = service()
     await license.setKey("TEST-LICENSE-KEY", [])
-    const first = deferred<Response>()
-    const replacement = deferred<Response>()
-    const firstStarted = deferred<void>()
-    const replacementStarted = deferred<void>()
+    const response = deferred<Response>()
+    const started = deferred<void>()
     answer = ({ body }) => {
-      if (body.key === "TEST-LICENSE-KEY") {
-        firstStarted.resolve()
-        return first.promise
+      if (body.tenantId === TENANT) {
+        started.resolve()
+        return response.promise
       }
-      replacementStarted.resolve()
-      return replacement.promise
+      return granted("act-b", {}, { tenantId: TENANT_B })
     }
-    const earlier = license.requireEntitlement(TENANT)
-    const outcome = expect(earlier).rejects.toThrow("license state changed")
-    await firstStarted.promise
-    await license.setKey("OTHER-LICENSE-KEY", [])
-    const current = license.requireEntitlement(TENANT)
-    await replacementStarted.promise
-    first.resolve(denied("revoked"))
+    const activating = license.requireEntitlement(TENANT)
+    await started.promise
+    const adding = license.checkNewTenant(TENANT_B)
+    const outcome = expect(adding).rejects.toThrow("license state changed")
+    const removing = license.releaseTenant(TENANT_B)
+    response.resolve(granted("act-a"))
+    await activating
     await outcome
-    const concurrent = license.requireEntitlement(TENANT)
-    replacement.resolve(granted("act-b"))
-    await expect(Promise.all([current, concurrent])).resolves.toEqual(["pro", "pro"])
-    expect(calls.map(({ body }) => body.key)).toEqual(["TEST-LICENSE-KEY", "OTHER-LICENSE-KEY"])
-    expect(service().status([TENANT])).toMatchObject({ keyState: "active", keyMessage: null })
+    await removing
+    expect(calls.filter(({ body }) => body.tenantId === TENANT_B)).toHaveLength(0)
+    expect(service().status([TENANT_B]).tenants.find(({ tenantId }) => tenantId === TENANT_B)).toMatchObject({ activated: false, entitled: false })
+    expect(store.get("license.communityTenant")).toBeNull()
   })
 
-  it("ignores a refresh refusal for an activation replaced without changing the key", async () => {
+  it("keeps a retry queued during release cancelled until a later explicit retry", async () => {
     const license = service()
     answer = () => granted("act-a")
     await license.setKey("TEST-LICENSE-KEY", [TENANT])
@@ -686,37 +855,53 @@ describe("LicenseService stale responses", () => {
       started.resolve()
       return response.promise
     }
-    const refreshing = license.refreshAll()
+    const releasing = license.releaseTenant(TENANT)
     await started.promise
+    const retrying = license.requireEntitlement(TENANT, { retry: true })
+    const outcome = expect(retrying).rejects.toThrow("license state changed")
+    response.resolve(Response.json({ success: true }))
+    await releasing
+    await outcome
+    for (const current of [license, service()]) {
+      expect(current.status([TENANT])).toMatchObject({ keyState: "pending", keyMessage: null, communityTenantId: null, tenants: [{ activated: false, entitled: false }] })
+    }
     answer = () => granted("act-new")
-    await license.refreshAll()
-    response.resolve(denied("revoked"))
-    await refreshing
-    expect(license.status([TENANT])).toMatchObject({ keyState: "active", keyMessage: null })
-    expect(JSON.parse(store.get("license.state")!).activations[TENANT].activationId).toBe("act-new")
-    expect(service().status([TENANT])).toMatchObject({ keyState: "active", keyMessage: null })
+    await expect(license.requireEntitlement(TENANT, { retry: true })).resolves.toBe("pro")
+    expect(service().status([TENANT])).toMatchObject({ keyState: "active", communityTenantId: null, tenants: [{ entitled: true }] })
   })
 
-  it.each(["refresh", "activate"] as const)("ignores a delayed successful %s response after deactivation", async (action) => {
-    const license = service()
-    answer = () => granted("act-a")
-    await license.setKey("TEST-LICENSE-KEY", action === "refresh" ? [TENANT] : [])
-    const response = deferred<Response>()
+  it("checks current tenant presence after ID token and response body awaits", async () => {
+    const present = new Set([TENANT])
+    const idToken = deferred<string | null>()
+    const license = service({ tenantPresent: (tenant) => present.has(tenant), idToken: () => idToken.promise })
+    const requesting = license.requireEntitlement(TENANT)
+    const outcome = expect(requesting).rejects.toThrow("license state changed")
+    await Promise.resolve()
+    present.delete(TENANT)
+    idToken.resolve("id.token.value")
+    await outcome
+    expect(calls).toHaveLength(0)
+    expect(store.get("license.communityTenant")).toBeNull()
+
+    present.add(TENANT)
+    const body = deferred<unknown>()
     const started = deferred<void>()
-    answer = ({ action: request }) => {
-      if (request === action) {
+    answer = () => {
+      const response = granted("act-org", { source: "tenant" })
+      vi.spyOn(response, "json").mockImplementation(() => {
         started.resolve()
-        return response.promise
-      }
-      return Response.json({ success: true })
+        return body.promise
+      })
+      return response
     }
-    const requesting = action === "refresh" ? license.refreshAll() : license.requireEntitlement(TENANT)
+    const retrying = license.requireEntitlement(TENANT)
+    const retryOutcome = expect(retrying).rejects.toThrow("license state changed")
     await started.promise
-    await license.deactivate()
-    response.resolve(granted("act-late"))
-    await requesting
-    expect(license.status([TENANT])).toMatchObject({ hasKey: false, keyState: "none", tenants: [{ activated: false, entitled: false, message: null }] })
+    present.delete(TENANT)
+    body.resolve({ token: fresh("act-org"), activationId: "act-org" })
+    await retryOutcome
     expect(store.get("license.state")).toBeNull()
+    expect(service().status([])).toMatchObject({ communityTenantId: null, tenants: [] })
   })
 })
 
@@ -971,6 +1156,31 @@ describe("LicenseService organization licenses", () => {
     expect(markup).toContain(status.keyMessage)
   })
 
+  it.each(["expired", "unverifiable"] as const)("shows an inactive organization title and description for an %s activation", async (state) => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    try {
+      vi.setSystemTime(T0)
+      answer = () => granted("act-org", { source: "tenant" })
+      const license = service()
+      await license.requireEntitlement(TENANT)
+      expect(licenseUi.licensePageTitle(license.status([TENANT]))).toBe("Licensed through your organization")
+      if (state === "expired") vi.setSystemTime(T0 + 15 * DAY)
+      const wrongKey = generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "pem" }).toString()
+      const current = state === "expired" ? license : service({ publicKey: wrongKey })
+      for (const status of [current.status([TENANT]), service(state === "unverifiable" ? { publicKey: wrongKey } : {}).status([TENANT])]) {
+        expect(status).toMatchObject({ hasKey: false, tenants: [{ activated: true, entitled: false }] })
+        expect(licenseChipState(status)).toEqual({ label: "Inactive", tone: "inactive" })
+        expect(licenseUi.licensePageTitle(status)).toBe("Organization license inactive")
+        const markup = renderLicensePage(status)
+        expect(markup).toContain("Organization license inactive")
+        expect(markup).toContain("Your organization license is not currently active.")
+        expect(markup).not.toContain("Licensed through your organization</")
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("keeps the key's refusal when the tenant has no organization license", async () => {
     answer = ({ action }) => (action === "activate" ? denied("tenant_limit") : denied("tenant_not_licensed"))
     const license = service()
@@ -1011,6 +1221,37 @@ describe("LicenseService Community plan", () => {
     await license.requireEntitlement(TENANT)
     await license.releaseTenant(TENANT)
     await expect(license.requireEntitlement(TENANT_B)).resolves.toBe("community")
+  })
+
+  it("keeps an idempotent release of an unknown tenant from blocking first Community use", async () => {
+    const license = service({ idTokenValue: null })
+    await license.releaseTenant(TENANT)
+    await expect(license.requireEntitlement(TENANT)).resolves.toBe("community")
+    expect(calls).toHaveLength(0)
+    expect(service().status([TENANT])).toMatchObject({ communityTenantId: TENANT, tenants: [{ plan: "community" }] })
+  })
+
+  it("allows a fresh Community check without a sign-in after a tenant was removed", async () => {
+    const license = service({ idTokenValue: null })
+    await expect(license.checkNewTenant(TENANT)).resolves.toBe("community")
+    await license.releaseTenant(TENANT)
+    await expect(license.requireEntitlement(TENANT)).rejects.toThrow("license state changed")
+    expect(store.get("license.communityTenant")).toBeNull()
+    await expect(license.requireEntitlement(TENANT, { retry: true })).resolves.toBe("community")
+    expect(calls).toHaveLength(0)
+    expect(service({ idTokenValue: null }).status([TENANT])).toMatchObject({ communityTenantId: TENANT, tenants: [{ plan: "community" }] })
+  })
+
+  it("retains cached Community access during explicit use without forcing a key retry", async () => {
+    const license = service()
+    await license.setKey("TEST-LICENSE-KEY", [])
+    answer = ({ action }) => denied(action === "tenant" ? "tenant_not_licensed" : "expired")
+    await expect(license.requireEntitlement(TENANT)).resolves.toBe("community")
+    const checks = calls.length
+    answer = () => { throw new TypeError("fetch failed") }
+    await expect(license.checkNewTenant(TENANT, { retry: false })).resolves.toBe("community")
+    expect(calls).toHaveLength(checks)
+    expect(service().status([TENANT])).toMatchObject({ keyState: "failed", communityTenantId: TENANT, tenants: [{ plan: "community" }] })
   })
 
   it("works offline without a key", async () => {
