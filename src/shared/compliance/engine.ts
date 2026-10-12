@@ -169,6 +169,8 @@ function normalizeGroupNames(value: unknown): Map<string, string> {
   );
 }
 
+const NO_COMPLIANCE_BLOCK_ACTION = "The assigned compliance policy has no action that blocks non-compliant devices.";
+
 function complianceBlockActions(
   config: Record<string, unknown>,
 ): Record<string, unknown>[] {
@@ -185,6 +187,7 @@ function complianceBlockActions(
 }
 
 function complianceActionsKnown(config: Record<string, unknown>): boolean {
+  // Omitted configurations mean the nested expand was not returned. An explicit empty array is known.
   return (
     Array.isArray(config.scheduledActionsForRule) &&
     config.scheduledActionsForRule.every((rule: any) =>
@@ -302,7 +305,7 @@ function evaluateConfiguration(
   const actionsKnown = complianceActionsKnown(config);
   const requirementIssue = blockAction === false
     ? actionsKnown
-      ? "This compliance requirement has no block action, so it does not mark devices noncompliant."
+      ? NO_COMPLIANCE_BLOCK_ACTION
       : "Scheduled compliance actions are unavailable; a block action could not be verified."
     : undefined;
   if (kind === "accessPolicy") {
@@ -707,7 +710,9 @@ export function assessCapabilities(
           : []),
         ...(status === "partialConfiguration"
           ? [
-              "Not all required settings are present together on an assigned policy.",
+              checks.some((check) => check.assignment?.state === "assigned" && check.assessmentStatus === "checked" && check.reason === NO_COMPLIANCE_BLOCK_ACTION)
+                ? NO_COMPLIANCE_BLOCK_ACTION
+                : "Not all required settings are present together on an assigned policy.",
             ]
           : []),
         ...(capability.caveat ? [capability.caveat.en] : []),

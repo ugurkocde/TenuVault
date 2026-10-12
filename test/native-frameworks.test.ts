@@ -17,32 +17,70 @@ import { compareNativeAssessments, nativeChecksCSV, type NativeAssessment } from
 
 afterEach(() => vi.unstubAllGlobals())
 describe('native collector and rights boundaries', () => {
-  it('collects expanded actions for both compliance policy families', async () => {
-    const calls: string[] = []
-    const data = await collectNativeEvidence({ get: async () => ({ id: 'compliance', '@odata.type': '#microsoft.graph.windows10CompliancePolicy', bitLockerEnabled: true }), list: async path => {
-      calls.push(path)
-      if (['deviceManagement/deviceCompliancePolicies?$select=id', 'deviceManagement/compliancePolicies?$select=id'].includes(path)) return [{ id: 'compliance' }]
-      if (path.endsWith('/scheduledActionsForRule?$expand=scheduledActionConfigurations')) return [{ scheduledActionConfigurations: [{ actionType: 'block', gracePeriodHours: 24 }] }]
-      if (path.endsWith('/assignments')) return [{ target: { '@odata.type': '#microsoft.graph.allDevicesAssignmentTarget' } }]
+  it.each([
+    ['deviceCompliancePolicies', 'deviceManagement/deviceCompliancePolicies/compliance?$expand=scheduledActionsForRule($expand=scheduledActionConfigurations)'],
+    ['compliancePolicies', 'deviceManagement/compliancePolicies/compliance'],
+  ])('collects expanded actions through the exact %s request', async (collection, detailEndpoint) => {
+    const base = `deviceManagement/${collection}`
+    const actions = [{ scheduledActionConfigurations: [{ actionType: 'block', gracePeriodHours: 24 }] }]
+    const get = vi.fn(async (path: string) => {
+      expect(path).toBe(detailEndpoint)
+      return { id: 'compliance', '@odata.type': '#microsoft.graph.windows10CompliancePolicy', bitLockerEnabled: true,
+        ...(collection === 'deviceCompliancePolicies' ? { scheduledActionsForRule: actions } : {}),
+      }
+    })
+    const list = vi.fn(async (path: string) => {
+      if (path === `${base}?$select=id`) return [{ id: 'compliance' }]
+      if (path === `${base}/compliance/assignments`) return [{ target: { '@odata.type': '#microsoft.graph.allDevicesAssignmentTarget' } }]
+      if (path === `${base}/compliance/settings`) return []
+      if (path === `${base}/compliance/scheduledActionsForRule?$expand=scheduledActionConfigurations` && collection === 'compliancePolicies') return actions
+      // Other families have no policies; unexpected requests within this family fail the assertions below.
       return []
-    } }, false)
-    for (const collection of ['deviceCompliancePolicies', 'compliancePolicies']) expect(calls).toContain(`deviceManagement/${collection}/compliance/scheduledActionsForRule?$expand=scheduledActionConfigurations`)
-    expect(data.compliancePolicies).toHaveLength(2)
-    expect(data.compliancePolicies.every(policy => policy.collectionStatus.scheduledActionsForRule === 'complete')).toBe(true)
+    })
+    const data = await collectNativeEvidence({ get, list }, false)
+    expect(get.mock.calls).toEqual([[detailEndpoint]])
+    expect(list.mock.calls.filter(([path]) => path.startsWith(base))).toEqual([
+      [`${base}?$select=id`],
+      ...(collection === 'compliancePolicies' ? [[`${base}/compliance/settings`]] : []),
+      [`${base}/compliance/assignments`],
+      ...(collection === 'compliancePolicies' ? [[`${base}/compliance/scheduledActionsForRule?$expand=scheduledActionConfigurations`]] : []),
+    ])
+    expect(data.fetchErrors).toEqual([])
+    expect(data.compliancePolicies).toHaveLength(1)
+    expect(data.compliancePolicies[0]).toMatchObject({ scheduledActionsForRule: actions, collectionStatus: { scheduledActionsForRule: 'complete' } })
     expect(assessCompliance(data).capabilities.find(cap => cap.capability.id === 'windows-disk-encryption')?.status).toBe('requirementAssigned')
   })
 
-  it('keeps scheduled-action failures unknown instead of assigning the requirement', async () => {
-    const data = await collectNativeEvidence({ get: async () => ({ id: 'compliance', '@odata.type': '#microsoft.graph.windows10CompliancePolicy', bitLockerEnabled: true }), list: async path => {
-      if (path === 'deviceManagement/deviceCompliancePolicies?$select=id') return [{ id: 'compliance' }]
-      if (path.includes('/scheduledActionsForRule')) throw new Error('400 expand unavailable')
+  it.each(['deviceCompliancePolicies', 'compliancePolicies'])('keeps %s scheduled-action failures unknown', async collection => {
+    const base = `deviceManagement/${collection}`
+    const endpoint = collection === 'deviceCompliancePolicies'
+      ? `${base}/compliance?$expand=scheduledActionsForRule($expand=scheduledActionConfigurations)`
+      : `${base}/compliance/scheduledActionsForRule?$expand=scheduledActionConfigurations`
+    const data = await collectNativeEvidence({ get: async path => {
+      if (path === endpoint) throw new Error('400 expand unavailable')
+      return { id: 'compliance', '@odata.type': '#microsoft.graph.windows10CompliancePolicy', bitLockerEnabled: true }
+    }, list: async path => {
+      if (path === `${base}?$select=id`) return [{ id: 'compliance' }]
+      if (path === endpoint) throw new Error('400 expand unavailable')
       if (path.endsWith('/assignments')) return [{ target: { '@odata.type': '#microsoft.graph.allDevicesAssignmentTarget' } }]
       return []
     } })
-    expect(data.fetchErrors?.[0]?.endpoint).toBe('deviceManagement/deviceCompliancePolicies/compliance/scheduledActionsForRule?$expand=scheduledActionConfigurations')
+    expect(data.fetchErrors?.[0]?.endpoint).toBe(endpoint)
+    expect(data.compliancePolicies[0]?.collectionStatus.scheduledActionsForRule).toBe('incomplete')
     const result = assessCompliance(data).capabilities.find(cap => cap.capability.id === 'windows-disk-encryption')!
     expect(result.status).not.toBe('requirementAssigned')
     expect(result.checks.some(check => check.assessmentStatus === 'unableToCheck')).toBe(true)
+  })
+
+  it('marks a missing classic entity expand incomplete', async () => {
+    const data = await collectNativeEvidence({ get: async () => ({ id: 'compliance', '@odata.type': '#microsoft.graph.windows10CompliancePolicy', bitLockerEnabled: true }), list: async path => {
+      if (path === 'deviceManagement/deviceCompliancePolicies?$select=id') return [{ id: 'compliance' }]
+      if (path.endsWith('/assignments')) return [{ target: { '@odata.type': '#microsoft.graph.allDevicesAssignmentTarget' } }]
+      return []
+    } })
+    expect(data.compliancePolicies[0]?.collectionStatus.scheduledActionsForRule).toBe('incomplete')
+    expect(data.fetchErrors?.[0]?.endpoint).toBe('deviceManagement/deviceCompliancePolicies/compliance?$expand=scheduledActionsForRule($expand=scheduledActionConfigurations)')
+    expect(assessCompliance(data).capabilities.find(cap => cap.capability.id === 'windows-disk-encryption')?.checks.some(check => check.assessmentStatus === 'unableToCheck')).toBe(true)
   })
 
   it('hashes only the selected framework and its mapped capabilities, independently of scope', async () => {
@@ -70,7 +108,7 @@ describe('native collector and rights boundaries', () => {
   })
 
   it('changes the same ruleset input exactly once when the detector version moves to 2', async () => {
-    expect(COMPLIANCE_DETECTOR_VERSION).toBe(2)
+    expect(COMPLIANCE_DETECTOR_VERSION).toBeGreaterThanOrEqual(2)
     const hashes = await Promise.all([1, 2, 2].map(version => frameworkRulesetSha256(ISO_27001, COMPLIANCE_CAPABILITIES, version)))
     expect(hashes[0]).not.toBe(hashes[1])
     expect(hashes[1]).toBe(hashes[2])

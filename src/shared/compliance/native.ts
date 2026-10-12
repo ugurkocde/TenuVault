@@ -38,6 +38,7 @@ export function capabilityComparison(result: CapabilityResult): 'matches' | 'dif
 export function comparisonCounts(run: NativeAssessment) {
   const counts = { matches: 0, different: 0, missing: 0, unableToCheck: 0, outsideScope: 0 }
   for (const result of run.assessment.capabilities) counts[capabilityComparison(result)]++
+  for (const control of run.assessment.frameworks[0]?.controls ?? []) if (control.unavailableCheck) counts[control.unavailableCheck.assessmentStatus === 'outsideScope' ? 'outsideScope' : 'unableToCheck']++
   return counts
 }
 

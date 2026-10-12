@@ -35,6 +35,18 @@ describe("score formula", () => {
     expect(scoreRun(run).score).toBe(50)
   })
 
+  it("counts unavailable control rows as unknown or outside scope", () => {
+    const run = makeRun({ runId: "r", tenantId: TENANT_A, caps: {} })
+    run.assessment.frameworks[0]!.controls = ["unableToCheck", "outsideScope"].map((status, index) => ({
+      control: { id: `unavailable-${index}`, title: "Unavailable control", summary: "", evidenceStrength: "direct" },
+      capabilityIds: [], enforcedCapabilityIds: [], excludedCapabilityIds: [], status: "notAssessed", unassessedAspects: [],
+      unavailableCheck: { assessmentStatus: status as "unableToCheck" | "outsideScope", result: null, settingId: `unavailable-${index}`, expectedValue: "", actualValue: null },
+    }))
+    expect(comparisonCounts(run)).toEqual({ matches: 0, different: 0, missing: 0, unableToCheck: 1, outsideScope: 1 })
+    expect(scoreRun(run).counts).toMatchObject({ unknown: 1, outsideScope: 1 })
+    expect(scoreRun(run).score).toBeNull()
+  })
+
   it("ignores negative or non-finite counts instead of inflating the score", () => {
     expect(scoreFromCounts({ matching: 3, different: -5, missing: Number.NaN, unknown: 0, outsideScope: 0 }).score).toBe(100)
     expect(scoreFromCounts({ matching: -1, different: 0, missing: 0, unknown: 0, outsideScope: 0 }).score).toBeNull()

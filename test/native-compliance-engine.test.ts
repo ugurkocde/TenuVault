@@ -131,6 +131,10 @@ describe("compliance engine", () => {
     expect(result.status).toBe(status);
     expect(capabilityComparison(result)).toBe(comparison);
     expect(result.evidence[0]?.note).toContain(actionType === "block" ? "24 hours" : "No block action");
+    if (actionType === "notification") {
+      expect(result.limitations).toContain("The assigned compliance policy has no action that blocks non-compliant devices.");
+      expect(result.limitations).not.toContain("Not all required settings are present together on an assigned policy.");
+    }
   });
 
   it("leaves compliance action evidence unknown when actions were not collected", () => {
@@ -138,6 +142,24 @@ describe("compliance engine", () => {
     data.compliancePolicies = [{ id: "compliance", "@odata.type": "#microsoft.graph.windows10CompliancePolicy", bitLockerEnabled: true, assignments: allDevicesAssignment }];
     expect(capabilityResult(data, "windows-disk-encryption").status).not.toBe("requirementAssigned");
     expect(capabilityComparison(capabilityResult(data, "windows-disk-encryption"))).toBe("unableToCheck");
+  });
+
+  it.each([
+    ["omitted nested expand", [{ ruleName: "PasswordRequired" }], "unableToCheck"],
+    ["explicit empty configurations", [{ scheduledActionConfigurations: [] }], "different"],
+  ] as const)("distinguishes %s from missing block actions", (_label, actions, comparison) => {
+    const data = emptyExportData();
+    data.compliancePolicies = [{ id: "compliance", "@odata.type": "#microsoft.graph.windows10CompliancePolicy", bitLockerEnabled: true, assignments: allDevicesAssignment, scheduledActionsForRule: actions }];
+    const result = capabilityResult(data, "windows-disk-encryption");
+    expect(result.status).not.toBe("requirementAssigned");
+    expect(capabilityComparison(result)).toBe(comparison);
+    if (comparison === "unableToCheck") {
+      expect(result.checks[0]).toMatchObject({ assessmentStatus: "unableToCheck", result: null });
+      expect(result.evidence[0]?.note).toContain("Noncompliance action timing is unavailable");
+    } else {
+      expect(result.checks[0]).toMatchObject({ assessmentStatus: "checked", result: "different" });
+      expect(result.evidence[0]?.note).toContain("No block action is configured");
+    }
   });
 
   it("guards malformed legacy settings arrays", () => {
