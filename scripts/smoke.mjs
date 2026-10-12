@@ -390,6 +390,92 @@ await check("license page asks for a license and offers the free trial", async (
   await screenshot("02-license-none")
 })
 
+await check("license key expiry stays separate from offline verification and warns with the right priority", async () => {
+  try {
+    await evaluate(`(async () => {
+      const status = await window.tenuvault.license.status()
+      const tenant = {
+        tenantId: "11111111-2222-3333-4444-555555555555",
+        signedIn: true, activated: true, entitled: true, source: "key", plan: "pro", tenants: 1,
+        expiresAt: new Date(Date.now() + 86400000).toISOString(), validUntil: null,
+        shared: false, shareNeedsSignIn: false, displayKey: null, message: null,
+      }
+      window.__licenseExpiry = {
+        status: { ...status, hasKey: true, plan: "pro", tenantLimit: 1, validUntil: null, tenants: [tenant] },
+      }
+      const frame = document.createElement("iframe")
+      frame.style.cssText = "position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 9999;"
+      document.body.appendChild(frame)
+      window.__licenseExpiryFrame = frame
+      frame.contentDocument.open()
+      frame.contentDocument.write('<html><head></head><body><div id="root"></div></body></html>')
+      frame.contentDocument.close()
+      frame.contentWindow.location.hash = "#/license"
+      frame.contentWindow.tenuvault = {
+        ...window.tenuvault,
+        license: {
+          ...window.tenuvault.license,
+          status: () => Promise.resolve(window.__licenseExpiry.status),
+          onChanged: listener => {
+            window.__licenseExpiry.onChanged = listener
+            return () => { window.__licenseExpiry.onChanged = null }
+          },
+        },
+      }
+      document.querySelectorAll('link[rel="stylesheet"]').forEach(link => frame.contentDocument.head.appendChild(link.cloneNode()))
+      const script = frame.contentDocument.createElement("script")
+      script.type = "module"
+      script.src = document.querySelector('script[type="module"]').src
+      frame.contentDocument.head.appendChild(script)
+    })()`)
+    const body = "window.__licenseExpiryFrame.contentDocument.body"
+    const banner = `${body}.querySelector('a[href="#/license"].bg-amber-50')`
+    assert(await waitForCondition(`${body}.innerText.includes("Pro plan active") && ${body}.innerText.includes("Works offline until")`), "offline verification label missing")
+    assert(await evaluate(`!${body}.innerText.includes("License valid until") && !${banner}`), "legacy token displayed a key expiry or warning")
+
+    const setExpiry = async days => {
+      const validUntil = days === null ? null : new Date(Date.now() + days * 86400000).toISOString()
+      await evaluate(`(() => {
+        const fixture = window.__licenseExpiry
+        fixture.status = {
+          ...fixture.status, validUntil: ${JSON.stringify(validUntil)},
+          tenants: fixture.status.tenants.map(tenant => ({ ...tenant, validUntil: ${JSON.stringify(validUntil)} })),
+        }
+        fixture.onChanged(fixture.status)
+      })()`)
+      return validUntil
+    }
+    const dateText = iso => evaluate(`new Date(${JSON.stringify(iso)}).toLocaleDateString(undefined, { dateStyle: "medium" })`)
+    const later = await setExpiry(45)
+    const laterDate = await dateText(later)
+    assert(await waitForCondition(`${body}.innerText.includes(${JSON.stringify(`License valid until ${laterDate}`)})`), "key expiry missing near the plan")
+    assert(await evaluate(`!${banner}`), "key expiry warning appeared before 30 days")
+
+    const soon = await setExpiry(20)
+    const soonDate = await dateText(soon)
+    const warning = `Your license expires on ${soonDate}. Renew it to keep Pro features.`
+    assert(await waitForCondition(`${banner}?.textContent.includes(${JSON.stringify(warning)})`), "30 day renewal warning missing")
+    await evaluate(`(() => {
+      const fixture = window.__licenseExpiry
+      fixture.status = { ...fixture.status, offline: true }
+      fixture.onChanged(fixture.status)
+    })()`)
+    assert(await waitForCondition(`${body}.innerText.includes("The licensing service could not be reached.")`), "offline fixture did not render")
+    assert(await evaluate(`${banner}?.textContent.includes(${JSON.stringify(warning)})`), "offline warning took priority over key expiry")
+    const expired = await setExpiry(-1)
+    const expiredDate = await dateText(expired)
+    assert(await waitForCondition(`${banner}?.textContent.includes(${JSON.stringify(`Your license expired on ${expiredDate}. Renew it to keep Pro features.`)})`), "expired key wording missing")
+    await evaluate(`(() => {
+      const fixture = window.__licenseExpiry
+      fixture.status = { ...fixture.status, tenants: fixture.status.tenants.map(tenant => ({ ...tenant, entitled: false, plan: null })) }
+      fixture.onChanged(fixture.status)
+    })()`)
+    assert(await waitForCondition(`${banner}?.textContent.includes("not covered by your")`), "uncovered tenant warning did not take priority")
+  } finally {
+    await evaluate("window.__licenseExpiryFrame?.remove(); delete window.__licenseExpiryFrame; delete window.__licenseExpiry")
+  }
+})
+
 await check("the first tenant without a license works as Community", async () => {
   const tenant = "11111111-2222-3333-4444-555555555555"
   const body = JSON.stringify({

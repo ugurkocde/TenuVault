@@ -23,7 +23,7 @@ import { Label } from "~/components/ui/label"
 import type { LicenseStatus, TenantLicenseStatus } from "../../shared/ipc"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
 import { bridge } from "../lib/bridge"
-import { formatDateTime, isUnlicensed, planName, useLicense } from "../lib/license"
+import { formatDate, formatDateTime, isUnlicensed, planName, useLicense } from "../lib/license"
 
 type Busy = "activate" | "deactivate" | `retry:${string}` | `share:${string}` | null
 
@@ -115,7 +115,7 @@ function TenantRow({
       </div>
       {tenant.entitled && tenant.expiresAt && (
         <p className="text-xs text-gray-500">
-          Verified until {formatDateTime(tenant.expiresAt)}
+          Works offline until {formatDateTime(tenant.expiresAt)}
           {organization && tenant.displayKey ? ` · Organization license ${tenant.displayKey}` : ""}
         </p>
       )}
@@ -170,7 +170,7 @@ export default function LicensePage() {
     if (id && !tenantRows.some(row => row.tenantId.toLowerCase() === id)) {
       tenantRows.push({
         tenantId: id, signedIn: false, activated: false, entitled: false,
-        source: null, plan: null, tenants: null, expiresAt: null, shared: null,
+        source: null, plan: null, tenants: null, expiresAt: null, validUntil: null, shared: null,
         shareNeedsSignIn: false, displayKey: null, message: 'Sign in to check this tenant’s license.',
       })
     }
@@ -242,6 +242,9 @@ export default function LicensePage() {
                 </span>
                 {title}
               </CardTitle>
+              {status.validUntil && (
+                <p className="mt-2 text-base font-medium text-gray-900">License valid until {formatDate(status.validUntil)}</p>
+              )}
               <CardDescription className="mt-2">
                 {isUnlicensed(status)
                   ? "Paste the license key from your purchase email, or start a free trial."

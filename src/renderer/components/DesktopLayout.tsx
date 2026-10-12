@@ -24,7 +24,7 @@ import { useTenants } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { BrandMark } from "./BrandMark"
 import { ErrorBoundary } from "./ErrorBoundary"
-import { formatDateTime, isUnlicensed, planName, unlicensedTenants, useLicense } from "../lib/license"
+import { formatDate, formatDateTime, isUnlicensed, licenseExpiryWarning, planName, unlicensedTenants, useLicense } from "../lib/license"
 import { Toaster } from "../lib/toast"
 import { FrameworkJobNotifier } from "../lib/framework-jobs"
 import { DriftScanIndicator, DriftScanNotifier } from "../lib/drift-jobs"
@@ -103,6 +103,14 @@ function LicenseBanner() {
       <BannerLink tone="amber" icon={<AlertTriangle className="h-4 w-4" />}>
         {inactive.length === 1 ? "A signed-in tenant is" : `${inactive.length} signed-in tenants are`} not covered by your
         license. Open License for details.
+      </BannerLink>
+    )
+  }
+  const keyExpiry = licenseExpiryWarning(status)
+  if (keyExpiry && status.validUntil) {
+    return (
+      <BannerLink tone="amber" icon={<AlertTriangle className="h-4 w-4" />}>
+        Your license {keyExpiry === "expired" ? "expired on" : "expires on"} {formatDate(status.validUntil)}. Renew it to keep Pro features.
       </BannerLink>
     )
   }
