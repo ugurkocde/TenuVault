@@ -312,7 +312,10 @@ export class LocalBlobStore {
       const blob: StoredBlob = { name, size: data.byteLength, contentType, created, lastModified: info.mtime, etag: `"${stamp}"`, ...(metadata ? { metadata } : {}) }
       if (sameFile) this.updateEntry(dir, entries, name, { ...blob, file, version, stamp })
       else {
-        this.updateEntry(dir, entries, name)
+        // Keep the replacement's authenticated filename and metadata for the next mutation.
+        const replacement = await this.readEntry(dir, account, container, file)
+        if (replacement?.name === name) this.updateEntry(dir, entries, name, replacement)
+        else this.index.delete(dir)
         this.changed(dir)
       }
       return blob
@@ -458,6 +461,49 @@ export class LocalBlobStore {
     }
   }
 
+  private async readEntry(dir: string, account: string, container: string, file: string): Promise<Entry | null> {
+    const path = join(dir, file)
+    let handle: Awaited<ReturnType<typeof open>> | undefined
+    try {
+      handle = await open(path, "r")
+      const prefix = Buffer.alloc(MAGIC_LENGTH + 2)
+      const prefixRead = await handle.read(prefix, 0, prefix.length, 0)
+      const version = prefixRead.bytesRead === prefix.length ? versionOf(prefix.subarray(0, MAGIC_LENGTH)) : null
+      if (!version) throw new Error("Invalid backup header")
+      const headerLength = prefix.readUInt16BE(MAGIC_LENGTH)
+      const sealed = Buffer.alloc(headerLength)
+      const headerRead = await handle.read(sealed, 0, headerLength, prefix.length)
+      if (headerLength < IV + TAG || headerRead.bytesRead !== headerLength) throw new Error("Truncated backup header")
+      const header = JSON.parse(this.decrypt(sealed, headerAad(version, account, container, file)).toString()) as {
+        name: string
+        contentType: string
+        created: string
+        metadata?: Record<string, string>
+      }
+      if (!header || typeof header.name !== "string" || !header.name || typeof header.contentType !== "string" || !Number.isFinite(Date.parse(header.created))) {
+        throw new Error("Invalid backup header")
+      }
+      const info = await handle.stat({ bigint: true })
+      if (Number(info.size) < prefix.length + headerLength + IV + TAG) throw new Error("Truncated backup body")
+      return {
+        file,
+        version,
+        name: header.name,
+        contentType: header.contentType,
+        created: new Date(header.created),
+        lastModified: info.mtime,
+        size: Number(info.size) - prefix.length - headerLength - IV - TAG,
+        stamp: fileStamp(info),
+        etag: `"${fileStamp(info)}"`,
+        ...(header.metadata ? { metadata: header.metadata } : {}),
+      }
+    } catch {
+      return null
+    } finally {
+      await handle?.close()
+    }
+  }
+
   private async readIndex(dir: string, account: string, container: string, previous?: Map<string, Entry> | Promise<Map<string, Entry>>): Promise<Map<string, Entry>> {
     const entries = new Map<string, Entry>()
     const files = await this.files(dir)
@@ -465,47 +511,12 @@ export class LocalBlobStore {
     const byFile = new Map([...(cached?.values() ?? [])].map(entry => [entry.file, entry]))
     // Headers are read a few at a time and added in directory order, so duplicates are found as before.
     const read = await mapLimit(files, HEADER_CONCURRENCY, async (file): Promise<Entry | null> => {
-      const path = join(dir, file)
-      let handle: Awaited<ReturnType<typeof open>> | undefined
       try {
         const cached = byFile.get(file)
-        if (cached && fileStamp(await stat(path, { bigint: true })) === cached.stamp) return cached
-        handle = await open(path, "r")
-        const prefix = Buffer.alloc(MAGIC_LENGTH + 2)
-        const prefixRead = await handle.read(prefix, 0, prefix.length, 0)
-        const version = prefixRead.bytesRead === prefix.length ? versionOf(prefix.subarray(0, MAGIC_LENGTH)) : null
-        if (!version) throw new Error("Invalid backup header")
-        const headerLength = prefix.readUInt16BE(MAGIC_LENGTH)
-        const sealed = Buffer.alloc(headerLength)
-        const headerRead = await handle.read(sealed, 0, headerLength, prefix.length)
-        if (headerLength < IV + TAG || headerRead.bytesRead !== headerLength) throw new Error("Truncated backup header")
-        const header = JSON.parse(this.decrypt(sealed, headerAad(version, account, container, file)).toString()) as {
-          name: string
-          contentType: string
-          created: string
-          metadata?: Record<string, string>
-        }
-        if (!header || typeof header.name !== "string" || !header.name || typeof header.contentType !== "string" || !Number.isFinite(Date.parse(header.created))) {
-          throw new Error("Invalid backup header")
-        }
-        const info = await handle.stat({ bigint: true })
-        if (Number(info.size) < prefix.length + headerLength + IV + TAG) throw new Error("Truncated backup body")
-        return {
-          file,
-          version,
-          name: header.name,
-          contentType: header.contentType,
-          created: new Date(header.created),
-          lastModified: info.mtime,
-          size: Number(info.size) - prefix.length - headerLength - IV - TAG,
-          stamp: fileStamp(info),
-          etag: `"${fileStamp(info)}"`,
-          ...(header.metadata ? { metadata: header.metadata } : {}),
-        }
+        if (cached && fileStamp(await stat(join(dir, file), { bigint: true })) === cached.stamp) return cached
+        return this.readEntry(dir, account, container, file)
       } catch {
         return null
-      } finally {
-        await handle?.close()
       }
     })
     let unreadable = 0
