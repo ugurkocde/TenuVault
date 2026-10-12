@@ -13,7 +13,7 @@ export function UpgradeNote({ feature, message, className }: { feature: Feature;
     <div className={cn("flex flex-wrap items-center gap-3 rounded-3xl bg-blue-50/60 px-5 py-4 text-sm text-gray-700", className)}>
       <Sparkles className="h-4 w-4 flex-shrink-0 text-coral-600" aria-hidden="true" />
       <p className="min-w-0 flex-1">{message ?? upgradeMessage(feature)}</p>
-      <Button type="button" variant="outline" size="sm" onClick={() => void bridge.license.open("buy")}>
+      <Button type="button" variant="outline" size="sm" onClick={() => void bridge.license.open("buy", { source: `note-${feature.toLowerCase()}` })}>
         <ExternalLink className="mr-2 h-4 w-4" />
         See plans
       </Button>

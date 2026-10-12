@@ -29,6 +29,8 @@ import {
 import { cn } from "~/lib/utils"
 import { useTenantPlan } from "@desktop/lib/license"
 import { bridge } from "@desktop/lib/bridge"
+import { FeatureApiError } from "@desktop/lib/feature-api"
+import { showFeaturePlanError } from "@desktop/lib/plan-dialog"
 import { revertibleDriftCount, shouldShowDriftNote } from "@desktop/lib/plan-notes"
 import { GatedButton } from "@desktop/components/PlanGate"
 import { cancelDriftScan, startDriftScan, useDriftJob, useDriftResult } from "@desktop/lib/drift-jobs"
@@ -304,7 +306,7 @@ export default function DriftDetectionPage() {
 
       if (!response.ok) {
         const error = await response.json()
-        throw new Error(error.error || "Failed to revert policy")
+        throw new FeatureApiError(error.error || "Failed to revert policy", response.status, error.upgrade)
       }
 
       const result = await response.json()
@@ -331,6 +333,7 @@ export default function DriftDetectionPage() {
       }))
 
     } catch (err) {
+      showFeaturePlanError(err)
       console.error("Revert error:", err)
       const errorMessage = err instanceof Error ? err.message : "Failed to revert policy"
 
@@ -555,7 +558,7 @@ export default function DriftDetectionPage() {
           {!running && shouldShowDriftNote(plan, revertibleCount) && (
             <p className="text-sm text-gray-500">
               Pro reverts these {revertibleCount} changed or deleted policies with one click and records the change in the audit log.{" "}
-              <button type="button" className="font-medium underline" onClick={() => void bridge.license.open("buy")}>See plans</button>
+              <button type="button" className="font-medium underline" onClick={() => void bridge.license.open("buy", { source: "note-drift" })}>See plans</button>
             </p>
           )}
 

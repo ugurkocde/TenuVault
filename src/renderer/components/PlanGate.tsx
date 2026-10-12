@@ -24,22 +24,23 @@ export function canUse(plan: Plan | null, feature: Feature): boolean {
 }
 
 /** A short dialog that says which plan includes a feature, with a link to the plans. */
-export function UpgradeDialog({ feature, open, onOpenChange }: { feature: Feature; open: boolean; onOpenChange: (open: boolean) => void }) {
+export function UpgradeDialog({ feature, message, open, onOpenChange }: { feature: Feature; message?: string; open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
-        <DialogHeader>
+        <DialogHeader className="pr-10">
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-coral-600" aria-hidden="true" />
             Included in {FEATURE_PLAN[feature] === "msp" ? "TenuVault MSP" : "TenuVault Pro and MSP"}
           </DialogTitle>
           <DialogDescription>{upgradeMessage(feature)}</DialogDescription>
+          {message && message !== upgradeMessage(feature) && <p className="text-sm text-muted-foreground">{message}</p>}
         </DialogHeader>
         <div className="flex justify-end gap-2">
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Close
           </Button>
-          <Button type="button" onClick={() => void bridge.license.open("buy")}>
+          <Button type="button" onClick={() => void bridge.license.open("buy", { source: `plan-dialog-${feature.toLowerCase()}` })}>
             <ExternalLink className="h-4 w-4" />
             See plans
           </Button>
@@ -107,7 +108,7 @@ export function LockedPreview({ feature, summary, points, className, children }:
       </ul>
       {children}
       <div className="mt-6 flex flex-wrap items-center gap-3">
-        <Button type="button" onClick={() => void bridge.license.open("buy")}>
+        <Button type="button" onClick={() => void bridge.license.open("buy", { source: `locked-${feature.toLowerCase()}` })}>
           <ExternalLink className="h-4 w-4" />
           See plans
         </Button>

@@ -1,6 +1,9 @@
-import { QueryClient } from "@tanstack/react-query"
+import { showFeaturePlanError } from "@desktop/lib/plan-dialog"
+import { MutationCache, QueryCache, QueryClient } from "@tanstack/react-query"
 
 export const queryClient = new QueryClient({
+  queryCache: new QueryCache({ onError: (error) => { showFeaturePlanError(error) } }),
+  mutationCache: new MutationCache({ onError: (error) => { showFeaturePlanError(error) } }),
   defaultOptions: {
     queries: {
       // Stale time of 30 seconds

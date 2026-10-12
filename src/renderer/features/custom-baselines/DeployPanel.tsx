@@ -1,3 +1,4 @@
+import { showFeaturePlanError } from "../../lib/plan-dialog"
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useTenants, type Tenant } from "~/contexts/TenantContext"
@@ -40,6 +41,7 @@ export function DeployPanel({ tenant, baseline, version, allowed, plan, deployme
       setSelected(JSON.stringify({ tenantId: target.credentials!.tenantId, id: result.deployment.id }))
       onChanged()
     } catch (error) {
+      showFeaturePlanError(error)
       toast(error instanceof Error ? error.message : "The deployment could not be planned.", "error")
     } finally {
       setBusy(false)

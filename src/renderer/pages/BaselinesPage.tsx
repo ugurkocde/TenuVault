@@ -7,6 +7,7 @@ import { Button } from "~/components/ui/button"
 import { Chip } from "~/components/dashboard/tiles"
 import { useLicense, useTenantPlan } from "../lib/license"
 import { canUse, GatedButton, LockedPreview } from "../components/PlanGate"
+import { showFeaturePlanError } from "../lib/plan-dialog"
 import { toast } from "../lib/toast"
 import { createFromSnapshot, listCustomBaselines, listSnapshots, type SnapshotOption } from "../features/custom-baselines/api"
 
@@ -105,6 +106,7 @@ function SnapshotCreator({ tenant, allowed, plan, onCreated }: { tenant: NonNull
     try {
       await action()
     } catch (error) {
+      showFeaturePlanError(error)
       toast(error instanceof Error ? error.message : "The request failed.", "error")
     } finally {
       setBusy(false)

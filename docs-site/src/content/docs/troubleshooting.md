@@ -181,6 +181,10 @@ See [Schedule backups](/backups/schedules/).
 
 ## Baselines and frameworks
 
+| Message | Cause | Fix |
+| --- | --- | --- |
+| Another change is being applied to this tenant: *label*. Try again when it finishes. | An OpenIntuneBaseline deployment, drift fix or undo, a promotion, baseline upgrade, custom baseline change or rollback, or framework policy creation is already running for this tenant. TenuVault refuses overlapping writes to the same tenant. | Wait for the named change to finish, review its results, then retry your change. Changes to other tenants can run at the same time. |
+
 Messages from the OpenIntuneBaseline section and framework comparisons are covered on their own pages:
 
 * [OpenIntuneBaseline](/baselines/quick-start/#troubleshooting)

@@ -1,6 +1,7 @@
 import { FrameworkError, handleFramework } from "../../../../main/frameworks/service"
 import { record } from "../../../../shared/frameworks/policies"
 import { handleNativeFramework } from "../../../../main/frameworks/native"
+import { TenantWriteConflict } from "../../../../main/features/write-lock"
 
 export async function POST(request: Request): Promise<Response> {
   try {
@@ -11,6 +12,6 @@ export async function POST(request: Request): Promise<Response> {
     if (typeof body.action === "string" && body.action.startsWith("native-")) return await handleNativeFramework(body)
     return Response.json(await handleFramework(body))
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Framework request failed." }, { status: error instanceof FrameworkError ? error.status : 400 })
+    return Response.json({ error: error instanceof Error ? error.message : "Framework request failed." }, { status: error instanceof FrameworkError || error instanceof TenantWriteConflict ? error.status : 400 })
   }
 }

@@ -1419,8 +1419,9 @@ await check("scheduled backups of a second tenant without a license fail with th
 })
 
 await check("a second tenant without a license cannot be added on Community", async () => {
-  let message = ""
-  await evaluate(`window.tenuvault.license.checkNewTenant("44444444-4444-4444-4444-444444444444")`).catch((error) => (message = error.message))
+  const refusal = await evaluate(`window.tenuvault.license.checkNewTenant("44444444-4444-4444-4444-444444444444")`)
+  const message = refusal.planError?.message ?? ""
+  assert(refusal.planError?.code === "community_tenant_limit", "Community tenant refusal lost its stable code")
   assert(/tenant was not added/i.test(message) && /Community covers one tenant/i.test(message), `unexpected result ${JSON.stringify(message)}`)
 })
 

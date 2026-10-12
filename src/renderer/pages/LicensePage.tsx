@@ -295,7 +295,7 @@ export default function LicensePage() {
           )}
 
           {isUnlicensed(status) && <TrialCallToAction onStartTrial={() => {
-            void bridge.license.open("buy")
+            void bridge.license.open("buy", { source: "license-page" })
             setTrialKeyHint(true)
             keyInput.current?.scrollIntoView({ block: "center" })
             keyInput.current?.focus({ preventScroll: true })

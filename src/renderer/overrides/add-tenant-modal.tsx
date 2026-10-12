@@ -1,3 +1,4 @@
+import { showCommunityLimitError } from "../lib/plan-dialog"
 import { useEffect, useState } from "react"
 import { AlertCircle, CheckCircle2, Loader2 } from "lucide-react"
 import { Alert, AlertDescription } from "~/components/ui/alert"
@@ -92,7 +93,7 @@ export function AddTenantModal({ open, onOpenChange, onTenantAdded }: AddTenantM
       // The sign-in was removed: start over from the sign-in step.
       setAccount(null)
       setChoice(null)
-      setError(caught instanceof Error ? caught.message : String(caught))
+      if (!showCommunityLimitError(caught)) setError(caught instanceof Error ? caught.message : String(caught))
     } finally {
       setAdding(false)
     }

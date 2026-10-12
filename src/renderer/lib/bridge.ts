@@ -1,10 +1,11 @@
-import type { TenuVaultBridge } from "../../shared/ipc"
+import { createRendererBridge } from "./plan-bridge"
+import type { TenuVaultBridge, TenuVaultPreloadBridge } from "../../shared/ipc"
 
 declare global {
   interface Window {
-    tenuvault: TenuVaultBridge
+    tenuvault: TenuVaultPreloadBridge
   }
 }
 
 /** Main-process API exposed by the preload script. */
-export const bridge: TenuVaultBridge = window.tenuvault
+export const bridge: TenuVaultBridge = createRendererBridge(window.tenuvault)

@@ -12,6 +12,8 @@ import { replaceTenantVariables } from "../../shared/oib/variables"
 import { OIB_BACKUP_REUSE_MINUTES, OIB_PLATFORMS, type DeployItem, type OibBackupChoice, type OibBackupOptions, type OibComparison, type OibPlatform, type OibProgress, type OibRecentBackup, type OibRun, type PolicyValidation, type TenantPolicy, type UndoResult, type ValidationRun } from "../../shared/oib/types"
 import { backupGaps, describeMissing, describeStatus, folderLabel } from "../backup/completeness"
 import { apiBody } from "../features/deps"
+import { withTenantWrite } from "../features/write-lock"
+import { backupBeforeWrite } from "../backup/before-write"
 import type { KeyValueStore } from "../storage/secure-store"
 import { FrameworkError, tokenFor } from "../frameworks/service"
 import { loadPack, oibDownloads, oibVersions, resolveMain, type LoadedPack } from "./source"
@@ -44,7 +46,6 @@ const failure = (folder: string, error: string) =>
   folder === "DriverUpdateProfiles" && /^An error has occurred|forbidden/i.test(error) ? `${error.replace(/\.?\s*$/, ".")} ${DRIVER_LICENSE_NOTE}` : error
 
 let store: KeyValueStore | null = null
-const locks = new Set<string>()
 const progress = new Map<string, OibProgress>()
 
 /** The encrypted app store that keeps runs and validation history; set once at startup. */
@@ -293,35 +294,16 @@ async function requireReusable(body: RecordJson, tenant: string, folder: string,
  */
 async function backUp(body: RecordJson, tenant: string, folders: string[], report: (update: Partial<OibProgress> & { stage: string }) => void): Promise<string> {
   const scope = normalizeScope({ excluded: INTUNE_TYPES.map((type) => type.folder).filter((folder) => !folders.includes(folder)) })
-  const started = await post("/api/backup/start", { tenantId: body.tenantId!, appId: body.appId!, storageAccountName: body.storageAccountName!, scope })
-  if (!started.ok || typeof started.json.jobId !== "string") {
-    throw new FrameworkError(`The backup could not start, so nothing was changed. ${typeof started.json.error === "string" ? started.json.error : ""}`.trim(), started.status === 402 ? 402 : 502)
-  }
-  const jobId = started.json.jobId
-  const types = `${folders.length} policy type${folders.length === 1 ? "" : "s"}`
-  report({ stage: `Backing up ${types}`, percent: 0, backupJobId: jobId })
-  const deadline = Date.now() + 60 * 60_000
-  for (;;) {
-    const status = await post("/api/backup/status", { jobId })
-    if (!status.ok) throw new FrameworkError("The backup status could not be read, so nothing was changed.", 502)
-    if (status.json.isComplete === true) {
-      if (status.json.isSuccessful !== true || typeof status.json.backupFolder !== "string" || !status.json.backupFolder) {
-        throw new FrameworkError(`The backup failed, so nothing was changed. ${typeof status.json.exception === "string" ? status.json.exception : ""}`.trim(), 502)
-      }
-      const backupFolder = status.json.backupFolder
-      report({ stage: "Checking the backup", percent: 100, backupJobId: jobId })
-      const contents = await post("/api/list-backup-contents", storageBody(body, tenant, { backupId: backupFolder }))
-      const gaps = backupGaps(record(contents.json.content) ? contents.json.content.metadata : undefined, folders)
-      if (!gaps) throw new FrameworkError(`The result of the backup ${backupFolder} could not be read, so nothing was changed.`, 502)
-      if (!gaps.succeeded) throw new FrameworkError(`The backup ${backupFolder} is not complete (${describeStatus(gaps)}), so nothing was changed. Check the backup log, fix the cause and try again.`, 502)
-      if (gaps.missing.length) throw new FrameworkError(`The backup ${backupFolder} did not collect every policy type this run changes (${describeMissing(gaps)}), so nothing was changed. Grant the missing permissions and try again.`, 502)
-      return backupFolder
-    }
-    if (Date.now() > deadline) throw new FrameworkError("The backup did not finish within an hour, so nothing was changed.", 504)
-    const percent = typeof status.json.progress === "number" && Number.isFinite(status.json.progress) ? Math.min(100, Math.max(0, Math.round(status.json.progress))) : undefined
-    report({ stage: `Backing up ${types}: ${typeof status.json.progressMessage === "string" ? status.json.progressMessage : "in progress"}`, ...(percent !== undefined ? { percent } : {}), backupJobId: jobId })
-    await new Promise((resolve) => setTimeout(resolve, OIB_BACKUP_POLLING.intervalMs))
-  }
+  return backupBeforeWrite({
+    workflow: "oib",
+    post: (path, extra) => post(path, path === "/api/list-backup-contents" ? storageBody(body, tenant, extra) : extra),
+    startBody: { tenantId: body.tenantId!, appId: body.appId!, storageAccountName: body.storageAccountName!, scope },
+    folders,
+    now: Date.now,
+    polling: { intervalMs: OIB_BACKUP_POLLING.intervalMs, timeoutMs: 60 * 60_000, sleep: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)) },
+    error: (message, status) => new FrameworkError(message, status),
+    report,
+  })
 }
 
 /** Progress of one running job under its key; every update keeps the job's kind and start time. */
@@ -360,152 +342,150 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
   const backup = backupChoice(body.backup)
   if (backup.mode !== "none" && !hasStorage(body)) throw new FrameworkError("Choose where backups for this tenant are stored in Settings first, or skip the backup.")
   requireStore()
-  if (locks.has(tenant)) throw new FrameworkError("An OpenIntuneBaseline deployment or undo is already running for this tenant.", 409)
-  locks.add(tenant)
-  const report = tracker(tenant, kind)
-  try {
-    report({ stage: "Loading the OIB pack" })
-    const pack = await loadPack(platform, body.commit, body.tag)
-    const chosen = items.map((item) => {
-      const policy = pack.items.get(item.source)
-      if (!policy) throw new FrameworkError(`${item.source} is not part of this OIB pack.`)
-      return { ...item, policy, meta: pack.catalog.policies.find((entry) => entry.source === item.source) }
-    })
-    const { token } = await tokenFor(body)
-    const graph = graphCaller(token, fetch, { tenant, refreshToken: async () => (await tokenFor(body, true)).token })
-    const written = [...new Set(chosen.map((item) => item.policy.folder))]
-    let backupFolder: string | undefined
-    if (backup.mode === "new") {
-      report({ stage: "Backing up the tenant" })
-      backupFolder = await backUp(body, tenant, written, report)
-    } else if (backup.mode === "reuse") {
-      report({ stage: "Checking the chosen backup" })
-      await requireReusable(body, tenant, backup.folder, written)
-      backupFolder = backup.folder
-    }
-    const run: OibRun = {
-      runId: randomUUID(), tenantId: tenant, createdAt: new Date().toISOString(), kind, platform, reference: pack.catalog.reference, commit: pack.catalog.commit,
-      ...(backupFolder ? { backupFolder } : {}), backupMode: backup.mode, ...(pilot ? { pilotGroupId: pilot.toLowerCase() } : {}), created: [], updated: [], failed: [], skipped: [],
-    }
-    report({ stage: "Checking existing policies" })
-    const creates = chosen.filter((item) => item.mode === "create")
-    const existing = creates.length ? await inventory(graphCaller(token), creates.map((item) => item.policy.folder)) : []
-    const creator = new Restorer(graph, { mode: "copy", prefix: "", assignments: !!pilot })
-    const replacer = new Restorer(graph, { mode: "replace", assignments: false })
-    const assignments = pilot ? [{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: pilot } }] : []
-    for (const [index, item] of chosen.entries()) {
-      const { policy } = item
-      report({ stage: `${item.mode === "create" ? "Creating" : "Updating"} ${policy.name}`, done: index, total: chosen.length })
-      const snapshot = replaceTenantVariables(policy.snapshot, tenant)
-      const path = `oib/${policy.folder}/${policy.source.split("/").pop()}`
-      if (item.mode === "create") {
-        // A policy the tenant already has (same OIBID, or same type and name) is left alone rather than duplicated.
-        const clash = existing.find((entry) => entry.folder === policy.folder && ((item.meta?.oibId && entry.oibId === item.meta.oibId) || entry.name.toLowerCase() === policy.name.toLowerCase()))
-        if (clash) {
-          run.skipped!.push({ name: policy.name, reason: `Already in the tenant as ${clash.name}.` })
-          continue
-        }
-        const outcome = await creator.restore(path, { ...snapshot, assignments })
-        if (outcome.policyId) {
-          run.created.push({ folder: policy.folder, id: outcome.policyId, name: policy.name, ...(outcome.partial ? { partial: true } : {}), ...(outcome.warnings ? { warnings: outcome.warnings } : {}) })
-          // Saved after every object, so an interrupted run can still be undone.
-          saveRun(run)
-        }
-        if (!outcome.success) run.failed.push({ name: policy.name, error: failure(policy.folder, outcome.error ?? "Creation failed; check Intune before retrying.") })
-      } else {
-        const type = typeForFolder(policy.folder)!
-        let before: Item | undefined
-        try {
-          before = await readLive(graph, type, item.targetId!)
-        } catch (error) {
-          run.failed.push({ name: policy.name, error: `The current policy could not be read, so it was not changed: ${message(error)}` })
-          continue
-        }
-        if (!before) {
-          run.failed.push({ name: policy.name, error: "The tenant policy no longer exists. Compare again." })
-          continue
-        }
-        const previous = before[type.nameKey] ?? before.displayName ?? before.name
-        // The pack's Default scope tag is for new policies; an update keeps the tenant's own tags.
-        const { roleScopeTagIds: _packTags, ...content } = snapshot
-        const outcome = await replacer.restore(path, { ...content, ...(Array.isArray(before.roleScopeTagIds) ? { roleScopeTagIds: before.roleScopeTagIds } : {}), id: item.targetId! })
-        if (outcome.action === "unchanged") {
-          run.skipped!.push({ name: policy.name, reason: "Already matches the baseline." })
-          continue
-        }
-        if (outcome.success || outcome.partial) {
-          run.updated.push({ folder: policy.folder, id: item.targetId!, name: policy.name, previousName: typeof previous === "string" ? previous : item.targetId!, before,
-            ...(outcome.partial ? { partial: true } : {}), ...(outcome.warnings ? { warnings: outcome.warnings } : {}) })
-          saveRun(run)
-        }
-        if (!outcome.success) run.failed.push({ name: policy.name, error: outcome.error ?? "The update failed; check Intune before retrying." })
+  return withTenantWrite(tenant, kind === "fix" ? "OpenIntuneBaseline drift fix" : "OpenIntuneBaseline deployment", async () => {
+    const report = tracker(tenant, kind)
+    try {
+      report({ stage: "Loading the OIB pack" })
+      const pack = await loadPack(platform, body.commit, body.tag)
+      const chosen = items.map((item) => {
+        const policy = pack.items.get(item.source)
+        if (!policy) throw new FrameworkError(`${item.source} is not part of this OIB pack.`)
+        return { ...item, policy, meta: pack.catalog.policies.find((entry) => entry.source === item.source) }
+      })
+      const { token } = await tokenFor(body)
+      const graph = graphCaller(token, fetch, { tenant, refreshToken: async () => (await tokenFor(body, true)).token })
+      const written = [...new Set(chosen.map((item) => item.policy.folder))]
+      let backupFolder: string | undefined
+      if (backup.mode === "new") {
+        report({ stage: "Backing up the tenant" })
+        backupFolder = await backUp(body, tenant, written, report)
+      } else if (backup.mode === "reuse") {
+        report({ stage: "Checking the chosen backup" })
+        await requireReusable(body, tenant, backup.folder, written)
+        backupFolder = backup.folder
       }
+      const run: OibRun = {
+        runId: randomUUID(), tenantId: tenant, createdAt: new Date().toISOString(), kind, platform, reference: pack.catalog.reference, commit: pack.catalog.commit,
+        ...(backupFolder ? { backupFolder } : {}), backupMode: backup.mode, ...(pilot ? { pilotGroupId: pilot.toLowerCase() } : {}), created: [], updated: [], failed: [], skipped: [],
+      }
+      report({ stage: "Checking existing policies" })
+      const creates = chosen.filter((item) => item.mode === "create")
+      const existing = creates.length ? await inventory(graphCaller(token), creates.map((item) => item.policy.folder)) : []
+      const creator = new Restorer(graph, { mode: "copy", prefix: "", assignments: !!pilot })
+      const replacer = new Restorer(graph, { mode: "replace", assignments: false })
+      const assignments = pilot ? [{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: pilot } }] : []
+      for (const [index, item] of chosen.entries()) {
+        const { policy } = item
+        report({ stage: `${item.mode === "create" ? "Creating" : "Updating"} ${policy.name}`, done: index, total: chosen.length })
+        const snapshot = replaceTenantVariables(policy.snapshot, tenant)
+        const path = `oib/${policy.folder}/${policy.source.split("/").pop()}`
+        if (item.mode === "create") {
+          // A policy the tenant already has (same OIBID, or same type and name) is left alone rather than duplicated.
+          const clash = existing.find((entry) => entry.folder === policy.folder && ((item.meta?.oibId && entry.oibId === item.meta.oibId) || entry.name.toLowerCase() === policy.name.toLowerCase()))
+          if (clash) {
+            run.skipped!.push({ name: policy.name, reason: `Already in the tenant as ${clash.name}.` })
+            continue
+          }
+          const outcome = await creator.restore(path, { ...snapshot, assignments })
+          if (outcome.policyId) {
+            run.created.push({ folder: policy.folder, id: outcome.policyId, name: policy.name, ...(outcome.partial ? { partial: true } : {}), ...(outcome.warnings ? { warnings: outcome.warnings } : {}) })
+            // Saved after every object, so an interrupted run can still be undone.
+            saveRun(run)
+          }
+          if (!outcome.success) run.failed.push({ name: policy.name, error: failure(policy.folder, outcome.error ?? "Creation failed; check Intune before retrying.") })
+        } else {
+          const type = typeForFolder(policy.folder)!
+          let before: Item | undefined
+          try {
+            before = await readLive(graph, type, item.targetId!)
+          } catch (error) {
+            run.failed.push({ name: policy.name, error: `The current policy could not be read, so it was not changed: ${message(error)}` })
+            continue
+          }
+          if (!before) {
+            run.failed.push({ name: policy.name, error: "The tenant policy no longer exists. Compare again." })
+            continue
+          }
+          const previous = before[type.nameKey] ?? before.displayName ?? before.name
+          // The pack's Default scope tag is for new policies; an update keeps the tenant's own tags.
+          const { roleScopeTagIds: _packTags, ...content } = snapshot
+          const outcome = await replacer.restore(path, { ...content, ...(Array.isArray(before.roleScopeTagIds) ? { roleScopeTagIds: before.roleScopeTagIds } : {}), id: item.targetId! })
+          if (outcome.action === "unchanged") {
+            run.skipped!.push({ name: policy.name, reason: "Already matches the baseline." })
+            continue
+          }
+          if (outcome.success || outcome.partial) {
+            run.updated.push({ folder: policy.folder, id: item.targetId!, name: policy.name, previousName: typeof previous === "string" ? previous : item.targetId!, before,
+              ...(outcome.partial ? { partial: true } : {}), ...(outcome.warnings ? { warnings: outcome.warnings } : {}) })
+            saveRun(run)
+          }
+          if (!outcome.success) run.failed.push({ name: policy.name, error: outcome.error ?? "The update failed; check Intune before retrying." })
+        }
+      }
+      saveRun(run)
+      return publicRun(run)
+    } finally {
+      progress.delete(tenant)
     }
-    saveRun(run)
-    return publicRun(run)
-  } finally {
-    locks.delete(tenant)
-    progress.delete(tenant)
-  }
+  })
 }
 
 /** Deletes the objects a run created and puts back the previous version of what it updated. */
 async function undo(body: RecordJson): Promise<UndoResult> {
   const tenant = tenantOf(body.tenantId)
-  const run = readRuns(tenant).find((r) => r.runId === body.runId)
-  if (!run) throw new FrameworkError("This run was already undone or is not recorded on this device.", 404)
-  if (locks.has(tenant)) throw new FrameworkError("An OpenIntuneBaseline deployment or undo is already running for this tenant.", 409)
-  locks.add(tenant)
-  const report = tracker(tenant, "undo")
-  const total = run.created.length + run.updated.length
-  try {
-    // No count yet: "1 of 6" would read as if something were being undone.
-    report({ stage: "Signing in" })
-    const { token } = await tokenFor(body)
-    const graph = graphCaller(token, fetch, { tenant, refreshToken: async () => (await tokenFor(body, true)).token })
-    const results: UndoResult["results"] = []
-    const created: OibRun["created"] = []
-    const updated: OibRun["updated"] = []
-    for (const item of run.created) {
-      report({ stage: `Deleting ${item.name}`, done: results.length, total })
-      const type = typeForFolder(item.folder)
-      if (!type || !OBJECT_ID.test(item.id)) {
-        results.push({ name: item.name, id: item.id, action: "removed", done: false, error: "The recorded object cannot be removed automatically. Delete it in Intune." })
-        created.push(item)
-        continue
+  return withTenantWrite(tenant, "OpenIntuneBaseline undo", async () => {
+    const run = readRuns(tenant).find((r) => r.runId === body.runId)
+    if (!run) throw new FrameworkError("This run was already undone or is not recorded on this device.", 404)
+    const report = tracker(tenant, "undo")
+    const total = run.created.length + run.updated.length
+    try {
+      // No count yet: "1 of 6" would read as if something were being undone.
+      report({ stage: "Signing in" })
+      const { token } = await tokenFor(body)
+      const graph = graphCaller(token, fetch, { tenant, refreshToken: async () => (await tokenFor(body, true)).token })
+      const results: UndoResult["results"] = []
+      const created: OibRun["created"] = []
+      const updated: OibRun["updated"] = []
+      for (const item of run.created) {
+        report({ stage: `Deleting ${item.name}`, done: results.length, total })
+        const type = typeForFolder(item.folder)
+        if (!type || !OBJECT_ID.test(item.id)) {
+          results.push({ name: item.name, id: item.id, action: "removed", done: false, error: "The recorded object cannot be removed automatically. Delete it in Intune." })
+          created.push(item)
+          continue
+        }
+        const response = await graph("DELETE", `${type.path}/${item.id}`)
+        // Settings Catalog answers 400 ResourceNotFound for deleted policies instead of 404.
+        const gone = response.status < 300 || response.status === 404 || (response.status === 400 && /ResourceNotFound/i.test(JSON.stringify(response.body)))
+        if (gone) results.push({ name: item.name, id: item.id, action: "removed", done: true })
+        else {
+          const error = (response.body.error as Item | undefined)?.message
+          results.push({ name: item.name, id: item.id, action: "removed", done: false, error: typeof error === "string" && error ? error : `Microsoft Graph returned ${response.status}` })
+          created.push(item)
+        }
       }
-      const response = await graph("DELETE", `${type.path}/${item.id}`)
-      // Settings Catalog answers 400 ResourceNotFound for deleted policies instead of 404.
-      const gone = response.status < 300 || response.status === 404 || (response.status === 400 && /ResourceNotFound/i.test(JSON.stringify(response.body)))
-      if (gone) results.push({ name: item.name, id: item.id, action: "removed", done: true })
-      else {
-        const error = (response.body.error as Item | undefined)?.message
-        results.push({ name: item.name, id: item.id, action: "removed", done: false, error: typeof error === "string" && error ? error : `Microsoft Graph returned ${response.status}` })
-        created.push(item)
+      const restorer = new Restorer(graph, { mode: "replace", assignments: false })
+      for (const item of run.updated) {
+        report({ stage: `Restoring ${item.previousName}`, done: results.length, total })
+        if (!item.before) {
+          results.push({ name: item.previousName, id: item.id, action: "restored", done: false, error: "No previous version was saved for this policy. Restore it from a backup." })
+          updated.push(item)
+          continue
+        }
+        const outcome = await restorer.restore(`oib/${item.folder}/${item.id}.json`, item.before)
+        if (outcome.success) results.push({ name: item.previousName, id: item.id, action: "restored", done: true })
+        else {
+          results.push({ name: item.previousName, id: item.id, action: "restored", done: false, error: outcome.error ?? "The previous version could not be put back." })
+          updated.push(item)
+        }
       }
+      const remaining = { ...run, created, updated }
+      saveRun(remaining)
+      return { run: created.length || updated.length ? publicRun(remaining) : null, results }
+    } finally {
+      progress.delete(tenant)
     }
-    const restorer = new Restorer(graph, { mode: "replace", assignments: false })
-    for (const item of run.updated) {
-      report({ stage: `Restoring ${item.previousName}`, done: results.length, total })
-      if (!item.before) {
-        results.push({ name: item.previousName, id: item.id, action: "restored", done: false, error: "No previous version was saved for this policy. Restore it from a backup." })
-        updated.push(item)
-        continue
-      }
-      const outcome = await restorer.restore(`oib/${item.folder}/${item.id}.json`, item.before)
-      if (outcome.success) results.push({ name: item.previousName, id: item.id, action: "restored", done: true })
-      else {
-        results.push({ name: item.previousName, id: item.id, action: "restored", done: false, error: outcome.error ?? "The previous version could not be put back." })
-        updated.push(item)
-      }
-    }
-    const remaining = { ...run, created, updated }
-    saveRun(remaining)
-    return { run: created.length || updated.length ? publicRun(remaining) : null, results }
-  } finally {
-    locks.delete(tenant)
-    progress.delete(tenant)
-  }
+  })
 }
 
 // Validation
