@@ -8,7 +8,7 @@ const MAX_ATTEMPTS = 3
 const VALID_TIME = /^([01]\d|2[0-3]):[0-5]\d$/
 
 export interface ScheduledRunResult {
-  status: "Completed" | "Failed"
+  status: "Completed" | "Failed" | "Cancelled"
   message: string
 }
 
@@ -110,6 +110,19 @@ export class BackupScheduler {
         if (!schedule || !this.isDue(schedule)) continue
         const slot = this.lastSlot(schedule)
         const attempts = this.slotAttempts(schedule, slot) + 1
+        // Reserve the attempt before starting work, so quitting during a request cannot reset the budget.
+        this.write({
+          ...this.read(),
+          [tenantId]: {
+            ...schedule,
+            lastAttemptAt: this.now().toISOString(),
+            attemptSlot: slot.toISOString(),
+            attempts,
+            // A cancellation belongs to its finished slot, not the new unfinished attempt.
+            lastStatus: schedule.lastStatus === "Cancelled" ? undefined : schedule.lastStatus,
+            lastMessage: schedule.lastStatus === "Cancelled" ? undefined : schedule.lastMessage,
+          },
+        })
         const result = await this.run(schedule.tenantId).catch((error: unknown) => ({
           status: "Failed" as const,
           message: error instanceof Error ? error.message : String(error),
@@ -124,7 +137,7 @@ export class BackupScheduler {
             lastAttemptAt: at,
             attemptSlot: current.since === schedule.since ? slot.toISOString() : current.attemptSlot,
             // Edits made during a backup start a new schedule with a fresh attempt budget.
-            attempts: result.status === "Completed" || current.since !== schedule.since ? 0 : attempts,
+            attempts: result.status === "Completed" || current.since !== schedule.since ? 0 : result.status === "Cancelled" ? attempts - 1 : attempts,
             lastStatus: result.status,
             lastMessage: result.message,
           }
@@ -143,6 +156,7 @@ export class BackupScheduler {
     const since = Date.parse(schedule.since)
     const lastRun = schedule.lastRunAt ? Date.parse(schedule.lastRunAt) : 0
     if (slot.getTime() <= since || slot.getTime() <= lastRun) return false
+    if (schedule.lastStatus === "Cancelled" && schedule.attemptSlot === slot.toISOString()) return false
     const attempts = this.slotAttempts(schedule)
     return attempts < MAX_ATTEMPTS && (attempts === 0 || this.now().getTime() >= Date.parse(schedule.lastAttemptAt!) + RETRY_MS)
   }
@@ -158,7 +172,7 @@ export class BackupScheduler {
       next = this.slotOn(schedule, reference)
     }
     const attempts = this.slotAttempts(schedule)
-    if (attempts > 0 && attempts < MAX_ATTEMPTS) {
+    if (schedule.lastStatus !== "Cancelled" && attempts > 0 && attempts < MAX_ATTEMPTS) {
       const retry = new Date(Date.parse(schedule.lastAttemptAt!) + RETRY_MS)
       if (retry < next) return retry
     }
@@ -229,7 +243,7 @@ function parseSchedule(id: string, value: unknown): BackupSchedule | null {
     || (entry.lastRunAt !== undefined && !validDate(entry.lastRunAt))
     || (entry.lastAttemptAt !== undefined && !validDate(entry.lastAttemptAt))
     || (entry.attemptSlot !== undefined && !validDate(entry.attemptSlot))
-    || (entry.lastStatus !== undefined && entry.lastStatus !== "Completed" && entry.lastStatus !== "Failed")
+    || (entry.lastStatus !== undefined && entry.lastStatus !== "Completed" && entry.lastStatus !== "Failed" && entry.lastStatus !== "Cancelled")
     || (entry.lastMessage !== undefined && typeof entry.lastMessage !== "string")
     || (entry.attempts !== undefined && (typeof entry.attempts !== "number" || !Number.isInteger(entry.attempts) || entry.attempts < 0 || entry.attempts > MAX_ATTEMPTS))) return null
 

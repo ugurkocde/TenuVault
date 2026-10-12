@@ -17,6 +17,7 @@ import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { checkSchedulePanel } from "./schedule-panel-smoke.mjs"
+import { checkBackupCancel } from "./backup-cancel-smoke.mjs"
 
 const require = createRequire(import.meta.url)
 const electronPath = require("electron")
@@ -25,11 +26,13 @@ const shotsDir = resolve(process.argv[2] ?? join(desktopDir, "out", "smoke"))
 
 const licenseKey = process.argv[3] ? readFileSync(process.argv[3], "utf8").trim() : null
 const port = 9300 + Math.floor(Math.random() * 500)
+const inspectorPort = port + 500
 const profile = mkdtempSync(join(tmpdir(), "tenuvault-smoke-"))
 mkdirSync(shotsDir, { recursive: true })
 
 const packagedApp = process.env.TENUVAULT_SMOKE_APP
 const args = [...(packagedApp ? [] : [desktopDir]), `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`]
+if (!packagedApp) args.push(`--inspect=127.0.0.1:${inspectorPort}`)
 if (process.platform === "linux") args.push("--no-sandbox")
 // Development smoke profiles use a mock keychain; packaged runs exercise the real Keychain by default.
 if (process.platform === "darwin" && (!packagedApp || process.env.TENUVAULT_SMOKE_MOCK_KEYCHAIN === "1")) args.push("--use-mock-keychain")
@@ -724,6 +727,8 @@ await check("restarting clears interrupted tenant backup and refresh flags", asy
   assert(await waitForCondition(`JSON.parse(window.tenuvault.storage.getItemSync('tenuvault_tenants')).every(t => !Object.hasOwn(t, 'isLoading') && t.syncStatus !== 'pending')`), "in-flight flags were saved again")
 })
 
+await checkBackupCancel({ check, evaluate, waitForCondition, screenshot, assert, desktopDir, inspectorPort: packagedApp ? undefined : inspectorPort })
+
 await check("Community is a neutral plan state and its Overview notice remembers dismissal for 30 days", async () => {
   const banner = `document.querySelector('a[href="#/license"].bg-gray-100')`
   const chip = `document.querySelector('aside a[href="#/license"] span.ml-auto')`
@@ -1402,7 +1407,7 @@ await check("scheduled backups of a second tenant without a license fail with th
   const time = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`
   await evaluate(`window.tenuvault.schedules.set({ tenantId: "${tenantId}", enabled: true, frequency: "daily", time: "${time}" })`)
   let schedule = null
-  for (let i = 0; i < 90 && !schedule?.lastRunAt; i++) {
+  for (let i = 0; i < 90 && !schedule?.lastAttemptAt; i++) {
     await sleep(2000)
     schedule = (await evaluate(`window.tenuvault.schedules.list()`)).find((s) => s.tenantId === tenantId)
   }

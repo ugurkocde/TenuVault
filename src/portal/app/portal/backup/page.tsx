@@ -134,8 +134,11 @@ export default function BackupRestorePage() {
   }
 
   const backupFinished = (success: boolean) => {
-    setShowProgress(false)
-    setJobId(null)
+    // Keep failures and cancellations open so their reason can be read.
+    if (success) {
+      setShowProgress(false)
+      setJobId(null)
+    }
     if (success && selectedTenant) {
       if (jobId && selectedTenant.credentials) setCompletedBackup({ jobId, tenantId: selectedTenant.credentials.tenantId.toLowerCase() })
       updateTenant(selectedTenant.id, { lastBackup: new Date().toISOString(), lastSync: new Date().toISOString() })

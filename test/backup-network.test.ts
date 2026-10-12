@@ -4,7 +4,7 @@ import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { encryptedAzureFetch, openAzure, registerStorageToken, sealAzure } from "../src/main/storage/azure-seal"
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
 import { withNetworkErrors } from "../src/main/api/network-error"
-import { localStorageAccountName } from "../src/shared/constants"
+import { BACKUP_OWNER_FILE, localStorageAccountName } from "../src/shared/constants"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const request = {
@@ -16,12 +16,6 @@ const request = {
 
 function requestTimers() {
   vi.useFakeTimers()
-  // Node's native AbortSignal timer does not use the timers replaced by Vitest.
-  return vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
-    const controller = new AbortController()
-    setTimeout(() => controller.abort(new DOMException("The request timed out", "TimeoutError")), ms)
-    return controller.signal
-  })
 }
 
 function setup(override: (url: URL, init?: RequestInit) => Response | Promise<Response> | undefined, concurrency?: number) {
@@ -49,6 +43,79 @@ afterEach(() => {
 })
 
 describe("backup request recovery", () => {
+  it.each(["PUT", "DELETE"])("honours a storage Retry-After in seconds before retrying %s", async method => {
+    requestTimers()
+    const attempts: number[] = []
+    const fetchImpl: typeof fetch = async (input, init) => {
+      if (!new URL(String(input)).search && init?.method === method) {
+        attempts.push(Date.now())
+        if (attempts.length === 1) return new Response(null, { status: 429, headers: { "Retry-After": "3" } })
+      }
+      return new Response(null, { status: init?.method === "DELETE" ? 202 : 201 })
+    }
+    const pending = verifyStorageAccess(fetchImpl, "contoso", async () => "token")
+    await vi.advanceTimersByTimeAsync(2999)
+    expect(attempts).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    await expect(pending).resolves.toBeUndefined()
+    expect(attempts).toHaveLength(2)
+    expect(attempts[1]! - attempts[0]!).toBe(3000)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each([
+    ["Retry-After", `1${"0".repeat(307)}`],
+    ["Retry-After", `1${"0".repeat(400)}`],
+    ["x-ms-retry-after-ms", `1${"0".repeat(307)}`],
+    ["x-ms-retry-after-ms", `1${"0".repeat(400)}`],
+  ])("rejects oversized storage %s values without retrying: %s", async (header, value) => {
+    requestTimers()
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 503, headers: { [header!]: value! } }))
+    const pending = expect(verifyStorageAccess(fetchImpl, "contoso", async () => "token")).rejects.toThrow("longer than 5 minutes")
+    await vi.advanceTimersByTimeAsync(0)
+    await pending
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each(["PUT", "DELETE"])("retries a %s with Azure ServerBusy and its millisecond retry delay", async method => {
+    requestTimers()
+    const attempts: number[] = []
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(String(input))
+      if (!url.search && init?.method === method) {
+        attempts.push(Date.now())
+        if (attempts.length === 1) return new Response("<Error><Code>ServerBusy</Code></Error>", { status: 503, headers: { "Retry-After": "1", "x-ms-retry-after-ms": "2000" } })
+      }
+      return new Response(null, { status: init?.method === "DELETE" ? 202 : 201 })
+    }
+    const pending = verifyStorageAccess(fetchImpl, "contoso", async () => "token")
+    await vi.advanceTimersByTimeAsync(1999)
+    expect(attempts).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    await expect(pending).resolves.toBeUndefined()
+    expect(attempts).toHaveLength(2)
+    expect(attempts[1]! - attempts[0]!).toBe(2000)
+  })
+
+  it.each(["PUT", "DELETE"])("retries thrown %s transport failures at one and two seconds", async method => {
+    requestTimers()
+    const attempts: number[] = []
+    const started = Date.now()
+    const fetchImpl: typeof fetch = async (input, init) => {
+      if (!new URL(String(input)).search && init?.method === method) {
+        attempts.push(Date.now() - started)
+        if (attempts.length < 3) throw new TypeError("fetch failed", { cause: { code: attempts.length === 1 ? "ECONNRESET" : "ETIMEDOUT" } })
+      }
+      return new Response(null, { status: init?.method === "DELETE" ? 202 : 201 })
+    }
+    const pending = verifyStorageAccess(fetchImpl, "contoso", async () => "token")
+    await vi.advanceTimersByTimeAsync(3000)
+    await expect(pending).resolves.toBeUndefined()
+    expect(attempts).toEqual([0, 1000, 3000])
+  })
+
   it("keeps recovery-key preconditions out of the storage circuit without retrying uploads", async () => {
     requestTimers()
     const message = "Save your current backup recovery key in Settings before the first encrypted Azure backup."
@@ -66,16 +133,16 @@ describe("backup request recovery", () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(job).toMatchObject({ status: "Failed", progress: 100, progressMessage: "Backup failed", exception: message })
     expect(job.endTime).toBeDefined()
-    for (const item of items) expect(job.log.some(line => line.endsWith(`Could not back up "${item.displayName}": ${message}`))).toBe(true)
+    expect(job.log.some(line => line.includes("Could not back up"))).toBe(false)
     expect(job.log.some(line => line.endsWith(`Backup failed: ${message}`))).toBe(true)
     expect(job.log.some(line => line.includes("did not respond"))).toBe(false)
-    // One precondition check per policy and for the manifest. Only container creation reaches Azure.
-    expect(requireRecovery).toHaveBeenCalledTimes(33)
-    expect(networkFetch).toHaveBeenCalledTimes(34)
+    // Ownership fails before policy reads or uploads. Only container creation reaches Azure.
+    expect(requireRecovery).toHaveBeenCalledTimes(1)
+    expect(networkFetch).toHaveBeenCalledTimes(2)
     expect(networkFetch.mock.calls.filter(([input]) => new URL((input as Request).url).hostname !== "graph.microsoft.com")).toHaveLength(1)
     await vi.advanceTimersByTimeAsync(300_000)
-    expect(requireRecovery).toHaveBeenCalledTimes(33)
-    expect(networkFetch).toHaveBeenCalledTimes(34)
+    expect(requireRecovery).toHaveBeenCalledTimes(1)
+    expect(networkFetch).toHaveBeenCalledTimes(2)
   })
 
   it("does not retry application failures from the local fetch bridge", async () => {
@@ -101,14 +168,14 @@ describe("backup request recovery", () => {
     const job = engine.start({ ...request, storageAccountName: localStorageAccountName(TENANT) })
     await vi.advanceTimersByTimeAsync(0)
     expect(job).toMatchObject({ status: "Failed", progress: 100, exception: message })
-    expect(job.log.filter(line => line.includes("Could not back up") && line.endsWith(message))).toHaveLength(32)
+    expect(job.log.some(line => line.includes("Could not back up"))).toBe(false)
     expect(job.log.some(line => line.includes("did not respond"))).toBe(false)
-    // Container creation, one attempt per policy, and the manifest.
-    expect(handleLocalBlob).toHaveBeenCalledTimes(34)
-    expect(networkFetch).toHaveBeenCalledTimes(33)
+    // Container creation and the failed ownership write precede all policy reads.
+    expect(handleLocalBlob).toHaveBeenCalledTimes(2)
+    expect(networkFetch).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(300_000)
-    expect(handleLocalBlob).toHaveBeenCalledTimes(34)
-    expect(networkFetch).toHaveBeenCalledTimes(33)
+    expect(handleLocalBlob).toHaveBeenCalledTimes(2)
+    expect(networkFetch).toHaveBeenCalledTimes(1)
   })
 
   it.each(["after listing", "before listing"])("stops an outage %s within five minutes and releases the tenant", async scenario => {
@@ -120,7 +187,7 @@ describe("backup request recovery", () => {
     let listed = false
     const { engine, fetchImpl } = setup((url, init) => {
       if (!hanging) return
-      if (scenario === "before listing" && url.hostname !== "graph.microsoft.com") return
+      if (url.hostname !== "graph.microsoft.com") return
       if (scenario === "after listing" && !listed) {
         if (url.hostname !== "graph.microsoft.com") return
         listed = true
@@ -144,11 +211,11 @@ describe("backup request recovery", () => {
     expect(job.exception).toBe("Backup stopped: Microsoft Graph did not respond for 24 consecutive requests. Earlier policies in this run were saved; the backup is incomplete.")
     expect(job.log.some(line => line.includes(job.exception!))).toBe(true)
     expect(signals.every(signal => signal.aborted)).toBe(true)
-    expect(signals.some(signal => signal.reason.message === job.exception)).toBe(true)
+    expect(signals.every(signal => signal.reason.message.includes("timed out after 90 seconds") || signal.reason.message === job.exception)).toBe(true)
     // 24 failed attempts plus at most seven already in flight. Include container and optional list.
     expect(signals.length).toBeGreaterThanOrEqual(24)
     expect(signals.length).toBeLessThanOrEqual(31)
-    expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(scenario === "after listing" ? 33 : 32)
+    expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(scenario === "after listing" ? 34 : 32)
     expect(fetchImpl.mock.calls.some(([input]) => String(input).endsWith("/metadata.json"))).toBe(false)
 
     hanging = false
@@ -170,7 +237,7 @@ describe("backup request recovery", () => {
         if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: items })
         return Response.json({ id: url.pathname.split("/").at(-1) })
       }
-      if (url.search) return
+      if (url.search || url.pathname.endsWith(BACKUP_OWNER_FILE)) return
       signals.push(init!.signal!)
       // Ignore aborts to prove the job does not depend on the bridge settling.
       return failure === "hung fetch" ? new Promise(() => {}) : new Response(new ReadableStream(), { status: 503 })
@@ -187,9 +254,9 @@ describe("backup request recovery", () => {
     expect(signals.length).toBeGreaterThanOrEqual(24)
     expect(signals.length).toBeLessThanOrEqual(31)
     expect(signals.every(signal => signal.aborted)).toBe(true)
-    expect(signals.some(signal => signal.reason.message === job.exception)).toBe(true)
-    // 31 uploads, 15 healthy policy reads, container creation and the initial Graph list.
-    expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(48)
+    expect(signals.every(signal => signal.reason.message.includes("timed out after 90 seconds") || signal.reason.message === job.exception)).toBe(true)
+    // 31 uploads, 15 policy reads, container creation, ownership and the initial Graph list.
+    expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(49)
     expect(fetchImpl.mock.calls.some(([input]) => String(input).endsWith("/metadata.json"))).toBe(false)
     const calls = fetchImpl.mock.calls.length
     await vi.advanceTimersByTimeAsync(300_000)
@@ -211,7 +278,7 @@ describe("backup request recovery", () => {
       if (url.hostname === "graph.microsoft.com") {
         if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: items })
         if (service === "blob") return Response.json({ id: url.pathname.split("/").at(-1) })
-      } else if (service === "Graph" || url.search) return
+      } else if (service === "Graph" || url.search || url.pathname.endsWith(BACKUP_OWNER_FILE)) return
       signals.push(init!.signal!)
       return new Response(new ReadableStream(), { status: 503 })
     })
@@ -224,7 +291,7 @@ describe("backup request recovery", () => {
     expect(signals.length).toBeGreaterThanOrEqual(24)
     expect(signals.length).toBeLessThanOrEqual(31)
     expect(signals.every(signal => signal.aborted)).toBe(true)
-    expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(service === "Graph" ? 33 : 41)
+    expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(service === "Graph" ? 34 : 42)
     expect(fetchImpl.mock.calls.some(([input]) => String(input).endsWith("/metadata.json"))).toBe(false)
   })
 
@@ -235,7 +302,7 @@ describe("backup request recovery", () => {
       if (url.hostname === "graph.microsoft.com") {
         if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: Array.from({ length: 8 }, (_, index) => ({ id: `policy-${index}`, displayName: `Policy ${index}` })) })
         if (service === "blob") return Response.json({ id: url.pathname.split("/").at(-1) })
-      } else if (service === "Graph" || url.search) return
+      } else if (service === "Graph" || url.search || url.pathname.endsWith(BACKUP_OWNER_FILE)) return
       failures++
       return new Response(new ReadableStream({ start(controller) { controller.error(new TypeError("Connection reset while reading body")) } }), { status: 503 })
     })
@@ -294,7 +361,7 @@ describe("backup request recovery", () => {
     const manifestUrl = new URL(`https://contoso.blob.core.windows.net/intune-backups/${job.backupFolder}/metadata.json`)
     const committed = saved.get(manifestUrl.pathname)!
     expect(JSON.parse(openAzure(Buffer.from(committed), [master], TENANT, manifestUrl).data.toString())).toMatchObject({ Status: "Success", Failures: 0 })
-    expect(saved.size).toBe(9)
+    expect(saved.size).toBe(10)
     for (const [path, body] of original) expect(saved.get(path)).toBe(body)
     const calls = networkFetch.mock.calls.length
     await vi.advanceTimersByTimeAsync(300_000)
@@ -402,7 +469,7 @@ describe("backup request recovery", () => {
     expect(log).not.toContain("Removed")
   })
 
-  it("keeps a committed backup completed when eight retention reads hang", async () => {
+  it("commits the complete backup before eight retention reads hang", async () => {
     requestTimers()
     const started = Date.now()
     const saved = new Map<string, string>()
@@ -416,7 +483,7 @@ describe("backup request recovery", () => {
       }
       if (init?.method !== "GET") return
       if (url.search) return new Response(`<EnumerationResults><Blobs>${prefixes.map(prefix => `<BlobPrefix><Name>${prefix}</Name></BlobPrefix>`).join("")}</Blobs></EnumerationResults>`)
-      expect(saved.size).toBe(1)
+      expect(saved.size).toBe(2)
       signals.push(init.signal!)
       return new Promise(() => {})
     })
@@ -424,9 +491,10 @@ describe("backup request recovery", () => {
     const job = engine.start(request)
     await vi.advanceTimersByTimeAsync(0)
     const manifest = `/intune-backups/${job.backupFolder}/metadata.json`
+    expect(JSON.parse(saved.get(manifest)!)).toMatchObject({ Status: "Success", Failures: 0 })
+    await vi.advanceTimersByTimeAsync(273_000)
     const committed = saved.get(manifest)
     expect(JSON.parse(committed!)).toMatchObject({ Status: "Success", Failures: 0 })
-    await vi.advanceTimersByTimeAsync(273_000)
     expect(job).toMatchObject({ status: "Completed", progress: 100, progressMessage: "Backup completed with 1 warning" })
     expect(job.endTime).toBeDefined()
     expect(new Date(job.endTime!).getTime() - started).toBeLessThan(5 * 60_000)
@@ -436,7 +504,7 @@ describe("backup request recovery", () => {
     expect(new Set(fetchImpl.mock.calls.filter(([input, init]) => init?.method === "GET" && !new URL(String(input)).search).map(([input]) => String(input))).size).toBe(8)
     expect(signals.every(signal => signal.aborted)).toBe(true)
     expect(saved.get(manifest)).toBe(committed)
-    expect(saved.size).toBe(1)
+    expect(saved.size).toBe(2)
     expect(fetchImpl.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false)
     const calls = fetchImpl.mock.calls.length
     await vi.advanceTimersByTimeAsync(300_000)
@@ -480,18 +548,18 @@ describe("backup request recovery", () => {
     const job = engine.start(request)
     await vi.advanceTimersByTimeAsync(0)
     const manifest = `/intune-backups/${job.backupFolder}/metadata.json`
+    await vi.advanceTimersByTimeAsync(273_000)
     const committed = saved.get(manifest)
     expect(JSON.parse(committed!)).toMatchObject({ Status: "Success", Failures: 0 })
-    await vi.advanceTimersByTimeAsync(273_000)
     expect(job).toMatchObject({ status: "Completed", progress: 100, progressMessage: "Backup completed with 1 warning" })
     expect(job.endTime).toBeDefined()
     expect(job.exception).toBeUndefined()
     expect(job.log.filter(line => line.includes("Could not remove old backups:"))).toHaveLength(1)
-    expect(job.log.join("\n")).toContain("timed out. They will be reconsidered on the next run.")
+    expect(job.log.join("\n")).toContain("Backup request timed out after 90 seconds. Check your connection and retry. They will be reconsidered on the next run.")
     expect(signals).toHaveLength(3)
     expect(signals.every(signal => signal.aborted)).toBe(true)
     expect(saved.get(manifest)).toBe(committed)
-    expect(saved.size).toBe(original.size + 1)
+    expect(saved.size).toBe(original.size + 2)
     for (const [path, body] of original) expect(saved.get(path)).toBe(body)
     const deletes = fetchImpl.mock.calls.filter(([, init]) => init?.method === "DELETE")
     expect(deletes).toHaveLength(failure === "delete" ? 3 : 0)
@@ -587,7 +655,7 @@ describe("backup request recovery", () => {
         ] })
         return Response.json({ id: url.pathname.split("/").at(-1) })
       }
-      if (url.search) return
+      if (url.search || url.pathname.endsWith(BACKUP_OWNER_FILE)) return
       if (url.pathname.endsWith("/Saved.json")) {
         saved.set(url.pathname, init!.body as string)
         return
@@ -890,6 +958,25 @@ describe("backup request recovery", () => {
     expect(signals.every(signal => signal.aborted)).toBe(true)
   })
 
+  it.each(["Graph", "storage"])("honours an HTTP-date Retry-After for %s", async service => {
+    requestTimers()
+    vi.setSystemTime(new Date("2026-10-12T12:00:00Z"))
+    const attempts: number[] = []
+    const { engine } = setup((url, init) => {
+      if (service === "Graph" ? url.hostname !== "graph.microsoft.com" : init?.method !== "PUT" || !url.pathname.endsWith("/metadata.json")) return
+      attempts.push(Date.now())
+      if (attempts.length === 1) return new Response(null, { status: 503, headers: { "Retry-After": "Mon, 12 Oct 2026 12:02:00 GMT" } })
+      return service === "Graph" ? Response.json({ value: [] }) : new Response(null, { status: 201 })
+    })
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(119_999)
+    expect(attempts).toHaveLength(1)
+    expect(job.status).toBe("Running")
+    await vi.advanceTimersByTimeAsync(1)
+    expect(attempts[1]! - attempts[0]!).toBe(120_000)
+    expect(job.status).toBe("Completed")
+  })
+
   it.each([120, 300])("honours a Graph Retry-After of %s seconds", async seconds => {
     requestTimers()
     const calls: number[] = []
@@ -952,6 +1039,27 @@ describe("backup request recovery", () => {
     expect(calls).toBe(1)
   })
 
+  it.each([`1${"0".repeat(307)}`, `1${"0".repeat(400)}`])("shares an oversized Graph Retry-After failure with later readers: %s", async value => {
+    requestTimers()
+    let reads = 0
+    const { engine } = setup(url => {
+      if (url.hostname !== "graph.microsoft.com") return
+      if (url.pathname.endsWith("/deviceConfigurations")) {
+        return Response.json({ value: [{ id: "first", displayName: "First" }, { id: "second", displayName: "Second" }] })
+      }
+      reads++
+      return new Response(null, { status: 429, headers: { "Retry-After": value } })
+    }, 1)
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(0)
+    await engine.waitForJob(job)
+    expect(job.status).toBe("Failed")
+    expect(job.log.filter(line => line.includes("longer than 5 minutes"))).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(reads).toBe(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it("holds all concurrent readers until the extended shared Graph resume time", async () => {
     requestTimers()
     const items = Array.from({ length: 8 }, (_, index) => ({ id: `policy-${index}`, displayName: `Policy ${index}` }))
@@ -979,7 +1087,7 @@ describe("backup request recovery", () => {
   })
 
   it.each(["Graph", "blob"])("finishes a hung %s fetch after bounded attempts and accepts another backup", async (service) => {
-    const timeout = requestTimers()
+    requestTimers()
     const signals: AbortSignal[] = []
     let hanging = true
     const { engine } = setup((url, init) => {
@@ -1002,7 +1110,7 @@ describe("backup request recovery", () => {
     expect(job.endTime).toBeDefined()
     expect(signals).toHaveLength(3)
     expect(signals.every((signal) => signal.aborted)).toBe(true)
-    expect(timeout.mock.calls.every(([ms]) => ms === 90_000)).toBe(true)
+    expect(vi.getTimerCount()).toBe(0)
 
     hanging = false
     const next = engine.start(request)

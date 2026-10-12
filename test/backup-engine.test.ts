@@ -98,6 +98,7 @@ describe("BackupEngine", () => {
     expect(job.status).toBe("Completed")
     const names = (await store.list(account, "intune-backups")).map((b) => b.name.replace(/^backup-[\d-]+\//, ""))
     expect(names.sort()).toEqual([
+      ".tenuvault-owner.json",
       "CompliancePolicies/Compliance.json",
       "ConfigurationPolicies/Settings catalog.json",
       "DeviceConfigurations/Win_ BitLocker_Encryption (dc2).json",

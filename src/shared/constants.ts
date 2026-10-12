@@ -38,3 +38,6 @@ export function localStorageAccountName(tenantId: string): string {
 
 /** Blob container that holds backups and that all backup routes read. */
 export const BACKUP_CONTAINER = "intune-backups"
+
+/** Encrypted ownership evidence for abandoned folders, excluded from exported archives. */
+export const BACKUP_OWNER_FILE = ".tenuvault-owner.json"

@@ -12,7 +12,8 @@ The audit log records the actions TenuVault performs for a tenant: backups, down
 | Action | Event type | Recorded when |
 | --- | --- | --- |
 | Start backup | BACKUP STARTED | You start a backup from the app, including **Backup Selected** |
-| Scheduled backup | BACKUP COMPLETED or BACKUP FAILED | An automatic backup, or a backup started with **Back up all tenants now**, ends |
+| Scheduled backup | BACKUP COMPLETED, BACKUP FAILED or BACKUP CANCELLED | An automatic backup, or a backup started with **Back up all tenants now**, ends |
+| Cancel backup | BACKUP_CANCELLED | You cancel an automatic backup, or one started with **Back up all tenants now**, before its manifest PUT starts |
 | Download backup | BACKUP DOWNLOADED | You download a backup as a ZIP file |
 | Restore backup as policy copies | RESTORE COMPLETED or RESTORE FAILED | A restore with **Create copies** ends |
 | Restore backup in place | RESTORE COMPLETED or RESTORE FAILED | A restore with **Replace in place** ends |
@@ -23,7 +24,7 @@ The audit log records the actions TenuVault performs for a tenant: backups, down
 | Reset OpenIntuneBaseline policy drift | POLICY RESTORED | **Fix drift** in OpenIntuneBaseline Policy Validation ends |
 | Undo OpenIntuneBaseline run | POLICY REVERTED | An OpenIntuneBaseline deployment or drift fix is undone |
 
-Each entry has a result: **SUCCESS**, **FAILURE**, or **PARTIAL** when a restore or deployment worked for some items and not for others. It also has a severity: **INFO** for success, **WARNING** for partial results and **ERROR** for failures.
+Each entry has a result: **SUCCESS**, **FAILURE**, or **PARTIAL** for a cancelled backup or when a restore or deployment worked for some items and not for others. It also has a severity: **INFO** for success and cancellation, **WARNING** for partial restores and deployments, and **ERROR** for failures. A **BACKUP_CANCELLED** event records **PARTIAL** with **INFO**.
 
 The user is the admin signed in to the tenant when the action ran. Read-only drift scans, including opening Drift Detection and **Check all**, no longer add audit events. Earlier drift check events remain readable.
 

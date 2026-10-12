@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react"
 import { Button } from "~/components/ui/button"
 import { useBackupProgress } from "~/contexts/BackupProgressContext"
+import { bridge } from "@desktop/lib/bridge"
 import { useTenantPlan } from "@desktop/lib/license"
 import { FirstBackupNote } from "@desktop/components/FirstBackupNote"
 import {
@@ -67,6 +68,8 @@ export function BackupProgressModal({
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null)
   const [error, setError] = useState("")
   const [showOutput, setShowOutput] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
+  const [cancelError, setCancelError] = useState("")
   const { addJob } = useBackupProgress()
   const plan = useTenantPlan(credentials?.tenantId)
 
@@ -75,8 +78,13 @@ export function BackupProgressModal({
   latest.current = { credentials, resources, onComplete }
   const ready = Boolean(credentials && resources)
 
+  useEffect(() => { setCancelling(false) }, [jobId])
+
   useEffect(() => {
     if (open && jobId && ready) {
+      setJobStatus(null)
+      setError("")
+      setCancelError("")
       const { credentials, resources } = latest.current
       let stopped = false
       // Poll now and then every 2 seconds.
@@ -120,6 +128,8 @@ export function BackupProgressModal({
 
           // Stop polling if job is complete
           if (data.isComplete) {
+            setCancelling(false)
+            setCancelError("")
             clearInterval(pollInterval)
             latest.current.onComplete?.(data.isSuccessful)
           }
@@ -179,6 +189,18 @@ export function BackupProgressModal({
     }
   }
 
+  const cancelBackup = async () => {
+    if (!jobId) return
+    setCancelling(true)
+    setCancelError("")
+    try {
+      await bridge.backups.cancel(jobId)
+    } catch (error) {
+      setCancelError(error instanceof Error ? error.message : "Could not cancel the backup. Try again.")
+      setCancelling(false)
+    }
+  }
+
   const handleDialogChange = (newOpen: boolean) => {
     // If the dialog is being closed and the job is still running
     if (!newOpen && jobId && !jobStatus?.isComplete) {
@@ -201,6 +223,12 @@ export function BackupProgressModal({
         </DialogHeader>
 
         <div className="space-y-4 py-4">
+          {cancelError && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{cancelError}</AlertDescription>
+            </Alert>
+          )}
           {error ? (
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
@@ -321,9 +349,16 @@ export function BackupProgressModal({
               </Button>
             </>
           ) : (
-            <Button variant="outline" onClick={handleRunInBackground}>
-              Run in Background
-            </Button>
+            <>
+              {jobId?.startsWith("desktop-") && (
+                <Button variant="outline" disabled={cancelling} onClick={() => void cancelBackup()}>
+                  {cancelling ? "Cancelling…" : "Cancel backup"}
+                </Button>
+              )}
+              <Button variant="outline" onClick={handleRunInBackground}>
+                Run in Background
+              </Button>
+            </>
           )}
         </DialogFooter>
       </DialogContent>

@@ -132,7 +132,7 @@ describe("BackupEngine with a scope", () => {
     expect(requested.some((path) => path.includes("mobileApps"))).toBe(false)
     const names = (await store.list(account, "intune-backups")).map((blob) => blob.name.replace(/^backup-[\d-]+\//, "")).sort()
     // Names are chosen in list order, so parallel reads never swap which duplicate gets the suffix.
-    expect(names).toEqual(["DeviceConfigurations/Other.json", "DeviceConfigurations/Same (dc2).json", "DeviceConfigurations/Same.json", "metadata.json"])
+    expect(names).toEqual([".tenuvault-owner.json", "DeviceConfigurations/Other.json", "DeviceConfigurations/Same (dc2).json", "DeviceConfigurations/Same.json", "metadata.json"])
     const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
     expect(metadata).toMatchObject({ Trigger: "scheduled", Scope: { Excluded: ["Apps"] }, FailedTypes: [] })
     expect(metadata.ItemCounts.Apps).toBeUndefined()

@@ -123,7 +123,7 @@ export interface BackupSchedule extends ScheduleInput {
   attemptSlot?: string
   /** Failed attempts in the most recent attempted slot; reset on success. */
   attempts: number
-  lastStatus?: "Completed" | "Failed"
+  lastStatus?: "Completed" | "Failed" | "Cancelled"
   lastMessage?: string
   nextRunAt: string | null
 }
@@ -182,6 +182,7 @@ export interface TenuVaultBridge {
     onSignInRequired: (listener: (event: SignInRequiredEvent) => void) => () => void
   }
   backups: {
+    cancel: (jobId: string) => Promise<void>
     importArchive: () => Promise<{ imported: boolean; tenantId?: string; backupId?: string }>
     settings: () => Promise<BackupSettings>
     /** Lets the admin pick a new folder. Existing backups stay where they are. */
