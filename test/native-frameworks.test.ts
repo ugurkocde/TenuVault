@@ -300,3 +300,14 @@ describe('background native comparisons', () => {
     expect((await (await handleNativeFramework({ ...body, frameworkId: 'iso-27001', action: 'native-history' })).json()).notice).toBeUndefined()
   })
 })
+
+describe('ruleset hash inputs', () => {
+  it('ignores source verification metadata and reacts to mapping changes', async () => {
+    const base = await frameworkRulesetSha256(ISO_27001)
+    const reverified = { ...ISO_27001, source: { url: ISO_27001.source?.url ?? 'https://example.invalid', verifiedAt: '2099-01-01T00:00:00Z' } }
+    expect(await frameworkRulesetSha256(reverified)).toBe(base)
+    const [firstId, firstControls] = Object.entries(ISO_27001.mappings).find(([, controls]) => controls.length)!
+    const remapped = { ...ISO_27001, mappings: { ...ISO_27001.mappings, [firstId]: firstControls.slice(1) } }
+    expect(await frameworkRulesetSha256(remapped)).not.toBe(base)
+  })
+})

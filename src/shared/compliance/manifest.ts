@@ -39,10 +39,12 @@ export function frameworkRulesetSha256(
   detectorVersion = COMPLIANCE_DETECTOR_VERSION,
 ): Promise<string> {
   const ids = new Set(Object.entries(framework.mappings).filter(([, controls]) => controls.length).map(([id]) => id));
+  // Source verification metadata (URL, verified date) does not change what is scored, so it stays out of the hash.
+  const { source: _source, ...scoring } = framework;
   return sha256({
     version: COMPLIANCE_RULESET_VERSION,
     detectorVersion,
-    framework: { ...framework, mappings: Object.fromEntries(Object.entries(framework.mappings).filter(([id]) => ids.has(id))) },
+    framework: { ...scoring, mappings: Object.fromEntries(Object.entries(framework.mappings).filter(([id]) => ids.has(id))) },
     capabilities: capabilities.filter((capability) => ids.has(capability.id)),
   });
 }
