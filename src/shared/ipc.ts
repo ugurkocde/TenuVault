@@ -137,6 +137,8 @@ export interface AppPreferences {
   keepRunningInTray: boolean
   /** Delete backups older than this many days after each backup. 0 keeps everything. */
   retentionDays: number
+  /** Whether the one-time successful backup note has been shown on this machine. */
+  firstBackupNoteSeen: boolean
   autoUpdate: boolean
   /** Follow nightly prereleases instead of stable releases. Defaults to on for nightly builds. */
   nightlyUpdates: boolean

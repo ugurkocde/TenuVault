@@ -28,6 +28,8 @@ import {
 } from "lucide-react"
 import { cn } from "~/lib/utils"
 import { useTenantPlan } from "@desktop/lib/license"
+import { bridge } from "@desktop/lib/bridge"
+import { shouldShowDriftNote } from "@desktop/lib/plan-notes"
 import { GatedButton } from "@desktop/components/PlanGate"
 import { cancelDriftScan, startDriftScan, useDriftJob, useDriftResult } from "@desktop/lib/drift-jobs"
 import { useBackupList } from "@desktop/lib/backup-list"
@@ -548,6 +550,13 @@ export default function DriftDetectionPage() {
               </span>
             </div>
           </div>
+
+          {!running && shouldShowDriftNote(plan, drifts.length) && (
+            <p className="text-sm text-gray-500">
+              Pro reverts these {drifts.length} policies with one click and records the change in the audit log.{" "}
+              <button type="button" className="font-medium underline" onClick={() => void bridge.license.open("buy")}>See plans</button>
+            </p>
+          )}
 
           {result.warnings.length > 0 && (
             <Alert className="rounded-3xl border-transparent bg-amber-50 p-5 [&>svg]:left-5 [&>svg]:top-5">

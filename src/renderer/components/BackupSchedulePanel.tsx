@@ -9,6 +9,7 @@ import { bridge } from "../lib/bridge"
 import { tenantLicense, tenantPlan, useLicense } from "../lib/license"
 import { describeSchedule, formatWhen, useRefusals, useSchedules, WEEKDAYS } from "../lib/schedules"
 import { toast } from "../lib/toast"
+import { weeklyScheduleNote } from "../lib/plan-notes"
 import { PlanBadge, UpgradeNote } from "./UpgradeNote"
 import { BackupScopePicker } from "./BackupScopePicker"
 import { describeScope, includedTypes, normalizeScope, type BackupScope } from "../../shared/intune/scope"
@@ -141,7 +142,12 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
           {current && runner?.installed === false && <p className="text-xs text-gray-500">Background restart is not installed. Backups run while TenuVault is running.</p>}
         </div>
 
-        {community && (current?.frequency === "daily" || (enabled && frequency === "daily")) && <UpgradeNote feature="dailySchedule" />}
+        {community && (current?.frequency === "daily" || enabled) && (
+          <div className="space-y-2">
+            <UpgradeNote feature="dailySchedule" />
+            <p className="text-sm text-gray-500">{weeklyScheduleNote(plan)}</p>
+          </div>
+        )}
 
         {license && !license.entitled && (
           <div className="flex gap-3 rounded-3xl bg-amber-50 px-5 py-4 text-sm text-amber-900">

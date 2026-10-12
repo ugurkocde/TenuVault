@@ -40,6 +40,8 @@ For more on manual backups, see [Run a backup](/backups/).
 
 The log ends with a summary such as **Backup completed: 214 policies in 1m 12s.** Each type also gets a line such as **Found 12 &lt;type&gt;** and **Backed up 12 &lt;type&gt;**.
 
+After a successful manual backup on Community, a line beside the completion result appears once per machine and describes encrypted copies in your own Azure storage account and longer retention, included in TenuVault Pro and MSP.
+
 ## Common problems on the first backup
 
 | Log or error message | Fix |

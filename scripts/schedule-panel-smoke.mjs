@@ -114,6 +114,7 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
       await community()
       assert(await evaluate(`${doc}.querySelector('#schedule-frequency option[value="daily"]').disabled`), "Community offers Daily")
       assert(await evaluate(`${body}.innerText.includes('Every day (Pro)')`), "Community daily explanation missing")
+      assert(await waitForCondition(`${body}.innerText.includes("A weekly schedule can leave up to six days of changes unprotected.")`), "Community schedule consequence missing")
       await setValue("schedule-time", "07:45")
       assert(await waitForCondition(`!${doc}.getElementById('schedule-time-error') && !${doc}.getElementById('schedule-time').hasAttribute('aria-invalid') && !${doc}.getElementById('schedule-time').hasAttribute('aria-describedby')`), "corrected time kept its error")
       await evaluate(`${save}.click()`)

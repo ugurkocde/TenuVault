@@ -28,6 +28,8 @@ import { Checkbox } from "~/components/ui/checkbox"
 import { cn } from "~/lib/utils"
 import { mergeOutcomes, retryBatches } from "~/lib/policies/restore-retry"
 import { PlanBadge, UpgradeNote } from "@desktop/components/UpgradeNote"
+import { useTenantPlan } from "@desktop/lib/license"
+import { restoreCountNote } from "@desktop/lib/plan-notes"
 import { formatDate, formatSize, STATUS_LABEL, statusKind, type BackupSummary, type BackupTenant } from "./types"
 
 interface CopyTarget {
@@ -164,6 +166,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const [items, setItems] = useState<BackupItem[] | null>(null)
   const [itemsError, setItemsError] = useState("")
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const tenantPlan = useTenantPlan(tenant.credentials.tenantId)
+  const countNote = restoreCountNote(tenantPlan, selected.size)
   const [query, setQuery] = useState("")
   const [openTypes, setOpenTypes] = useState<Set<string>>(new Set())
 
@@ -489,7 +493,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div>
               <h2 className="text-xl font-medium tracking-tight text-gray-900">Choose what to restore</h2>
-              <p className="mt-1 text-sm text-gray-500">From the backup of {formatDate(backup.timestamp)}.{community && " Community restores one item at a time."}</p>
+              <p className="mt-1 text-sm text-gray-500">From the backup of {formatDate(backup.timestamp)}.{community && ` ${countNote ?? "Community restores one item at a time."}`}</p>
             </div>
             <label className="relative block md:w-72">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
@@ -707,7 +711,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           {community ? (
             <UpgradeNote
               feature="fullRestore"
-              message="Community restores one item at a time as an unassigned copy. Restoring many items at once, replace in place and restoring assignments are included in TenuVault Pro and MSP; copying to other tenants is included in MSP."
+              message={`${countNote ?? "Community restores one item at a time as an unassigned copy."} Restoring many items at once, replace in place and restoring assignments are included in TenuVault Pro and MSP; copying to other tenants is included in MSP.`}
               className="mt-6"
             />
           ) : !canCopyToTenants && (

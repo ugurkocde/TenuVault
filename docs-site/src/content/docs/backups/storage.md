@@ -100,6 +100,8 @@ Retention applies to every backup in the tenant's storage location, including ba
 
 On Community, backups are kept for 30 days at most. A longer setting, or **Forever**, counts as 30 days for Community tenants. Pro and MSP tenants keep what you choose.
 
+On Community, when the oldest listed backup is at least 23 days old, a line above **Backup Timeline** shows its date, explains removal after the next complete backup and describes longer retention included in TenuVault Pro and MSP.
+
 ## Export a backup as a ZIP file
 
 1. Open **Backup & Restore**, select a backup in the **Backup Timeline**.

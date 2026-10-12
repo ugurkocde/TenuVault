@@ -94,6 +94,8 @@ Every change also has a severity. It appears in the exported report and in **Che
 | Warning | Any other deleted item, or a changed compliance policy or device configuration profile |
 | Info | Everything else |
 
+On Community, a completed comparison with drift shows the policy count beside a note about reverts and audit logging included in TenuVault Pro and MSP, with a **See plans** link.
+
 ## Act on a change
 
 For **modified** and **deleted** items that were not reverted yet, the expanded card offers two actions:
