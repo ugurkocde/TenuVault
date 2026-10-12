@@ -517,7 +517,7 @@ function DashboardContent() {
         )}
 
         {/* License */}
-        <Link to="/license" aria-label="License" className="flex min-w-0 rounded-3xl transition-shadow hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
+        <Link to="/license" className="flex min-w-0 rounded-3xl transition-shadow hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
           <Tile className="flex-1">
             <div className="flex items-start justify-between gap-3">
               <TileIcon icon={BadgeCheck} />

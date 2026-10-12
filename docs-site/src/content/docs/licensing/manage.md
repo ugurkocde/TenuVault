@@ -42,7 +42,7 @@ If the key cannot be activated for any of your signed-in tenants, it is not save
 
 ## Read the License page
 
-The sidebar shows **Community** for a machine using the Community plan, or **Key saved** when a saved key is waiting for its first activation. The neutral Community notice appears only on the **All tenants** overview. Click **Dismiss** to hide it on this machine for 30 days. License coverage, key expiry and offline verification warnings still appear on every page. The dashboard's **License** tile also opens the **License** page.
+The sidebar shows **Community** for a machine using the Community plan, or **Key saved** when a saved key is waiting for its first activation. The neutral Community notice appears only on the start page: the **Dashboard** for one tenant, or the **All tenants** overview when several are connected. Click **Dismiss** to hide it on this machine for 30 days. License coverage, key expiry and offline verification warnings still appear on every page. The dashboard's **License** tile also opens the **License** page.
 
 The top card shows your plan, for example **Pro plan active**, and how many tenants your license covers and how many are active on this machine. Your key is shown masked, with only its last four characters visible.
 

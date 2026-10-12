@@ -121,7 +121,9 @@ function LicenseBanner() {
   }
   if (!status) return null
   if (isUnlicensed(status) && unlicensedTenants(status).length === 0) {
-    if (pathname !== "/portal/overview" || !preferencesLoaded || !communityBannerVisible(dismissedAt)) return null
+    // The start pages only: the all-tenants overview, or the dashboard for a single tenant.
+    const startPage = pathname === "/portal/overview" || pathname === "/portal/dashboard"
+    if (!startPage || !preferencesLoaded || !communityBannerVisible(dismissedAt)) return null
     return (
       <BannerLink tone="neutral" icon={<Sparkles className="h-4 w-4" />} onDismiss={() => void dismiss()} dismissing={dismissing}>
         You are on Community, the free plan. Try Pro or MSP free for 30 days, or add your license key.
