@@ -336,7 +336,7 @@ function privateHost(hostname: string): boolean {
   const part = (text: string) => (text ? text.split(":").map((group) => parseInt(group, 16)) : [])
   const start = part(head)
   const end = part(tail)
-  const groups = [...start, ...new Array(8 - start.length - end.length).fill(0), ...end]
+  const groups = [...start, ...Array.from({ length: 8 - start.length - end.length }, () => 0), ...end]
   if (groups.slice(0, 7).every((group) => group === 0) && groups[7]! <= 1) return true
   // IPv4-mapped addresses (::ffff:a.b.c.d) are checked as IPv4.
   if (groups.slice(0, 5).every((group) => group === 0) && groups[5] === 0xffff) return privateIpv4(`${groups[6]! >> 8}.${groups[6]! & 255}.${groups[7]! >> 8}.${groups[7]! & 255}`)
