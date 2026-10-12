@@ -1,3 +1,4 @@
+import { showFeaturePlanError } from "../../lib/plan-dialog"
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Chip } from "~/components/dashboard/tiles"
@@ -73,7 +74,7 @@ export default function StandardsTab({ tenant, plan, allowed }: FeatureTabProps)
         <section aria-label="Adoption portfolio" className={card}>
           <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Adoption across customers</h3>
           <p className="max-w-3xl text-sm text-gray-500">Adopted version, pending upgrade, deviation and assessment freshness for {targets.included.length + 1} tenant(s). {targets.excluded.length ? `${targets.excluded.length} connected tenant(s) without MSP are not included.` : ""}</p>
-          <GatedButton feature="portfolio" plan={plan} type="button" variant="outline" onClick={() => void portfolioAdoptions(tenant, targets.ids).then(setPortfolio).catch((error: unknown) => toast(error instanceof Error ? error.message : "The portfolio could not be loaded.", "error"))}>Load portfolio</GatedButton>
+          <GatedButton feature="portfolio" plan={plan} type="button" variant="outline" onClick={() => void portfolioAdoptions(tenant, targets.ids).then(setPortfolio).catch((error: unknown) => { showFeaturePlanError(error); toast(error instanceof Error ? error.message : "The portfolio could not be loaded.", "error") })}>Load portfolio</GatedButton>
           {portfolio && (
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">

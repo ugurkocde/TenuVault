@@ -9,14 +9,23 @@ const DEFAULTS: StoredPreferences = {
   startAtLogin: false,
   keepRunningInTray: true,
   retentionDays: 30,
+  firstBackupNoteSeen: false,
   autoUpdate: true,
   nightlyUpdates: false,
 }
 
-// Changes come from the renderer: only known preferences with the type of their default are accepted.
+function validDismissalTimestamp(value: unknown): value is string {
+  return typeof value === "string" && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value
+}
+
+// Changes come from the renderer: accept known preferences and validate the optional timestamp.
 function checkChanges(changes: unknown): asserts changes is Partial<StoredPreferences> {
   if (typeof changes !== "object" || changes === null || Array.isArray(changes)) throw new Error("Invalid preferences.")
   for (const [key, value] of Object.entries(changes)) {
+    if (key === "communityBannerDismissedAt") {
+      if (!validDismissalTimestamp(value)) throw new Error(`Invalid value for ${key}.`)
+      continue
+    }
     if (!Object.hasOwn(DEFAULTS, key)) throw new Error(`Unknown preference: ${key}.`)
     if (typeof value !== typeof DEFAULTS[key as keyof StoredPreferences]) throw new Error(`Invalid value for ${key}.`)
   }
@@ -49,7 +58,10 @@ export class Preferences {
 
   private stored(): Partial<StoredPreferences> {
     try {
-      return JSON.parse(this.store.get(KEY) ?? "{}") as Partial<StoredPreferences>
+      const stored: Partial<StoredPreferences> = JSON.parse(this.store.get(KEY) ?? "{}")
+      if (typeof stored !== "object" || stored === null || Array.isArray(stored)) return {}
+      if (!validDismissalTimestamp(stored.communityBannerDismissedAt)) delete stored.communityBannerDismissedAt
+      return stored
     } catch {
       return {}
     }

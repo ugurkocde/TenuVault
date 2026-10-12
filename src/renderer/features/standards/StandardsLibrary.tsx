@@ -1,3 +1,4 @@
+import { showFeaturePlanError } from "../../lib/plan-dialog"
 import { useEffect, useState } from "react"
 import type { Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
@@ -47,6 +48,7 @@ export function StandardsLibrary({ tenant, standards, adoptedKeys, canWrite, onC
       await action()
       toast(success, "success")
     } catch (error) {
+      showFeaturePlanError(error)
       toast(error instanceof Error ? error.message : "The request failed.", "error")
     } finally {
       setBusy(false)

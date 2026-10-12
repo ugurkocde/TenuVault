@@ -1,3 +1,4 @@
+import type { PlanIpcError } from "./plan-errors"
 import type { BackupScope } from "./intune/scope"
 
 /** Serialized request forwarded from the renderer `fetch` bridge to the main-process API host. */
@@ -54,6 +55,10 @@ export interface TenantLicenseStatus {
 
 export interface LicenseStatus {
   hasKey: boolean
+  /** Saved key outcome, separate from tenant coverage and sign-in guidance. */
+  keyState: "none" | "pending" | "active" | "failed"
+  /** Refusal or verification reason when the saved key has no valid activation. */
+  keyMessage: string | null
   /** The last four characters of the key, such as ****ABCD. */
   keyHint: string | null
   /** False when OS encryption is unavailable: the license is kept in memory only. */
@@ -141,9 +146,13 @@ export interface AppPreferences {
   keepRunningInTray: boolean
   /** Delete backups older than this many days after each backup. 0 keeps everything. */
   retentionDays: number
+  /** Whether the one-time successful backup note has been shown on this machine. */
+  firstBackupNoteSeen: boolean
   autoUpdate: boolean
   /** Follow nightly prereleases instead of stable releases. Defaults to on for nightly builds. */
   nightlyUpdates: boolean
+  /** ISO timestamp of the last dismissal of the Community notice on this machine. */
+  communityBannerDismissedAt?: string
   /** Set when an administrator turned automatic updates off by policy. */
   autoUpdateManaged: boolean
 }
@@ -206,7 +215,7 @@ export interface TenuVaultBridge {
     /** Releases the tenant's activation and signs out of it, when the tenant is removed from the app. */
     releaseTenant: (tenantId: string) => Promise<LicenseStatus>
     /** Opens the checkout page (buy) or the customer portal (portal) in the browser. */
-    open: (target: "buy" | "portal") => Promise<void>
+    open: (target: "buy" | "portal", options?: { source: string }) => Promise<void>
     /** Called whenever the license state changes in the main process. Returns an unsubscribe function. */
     onChanged: (listener: (status: LicenseStatus) => void) => () => void
   }
@@ -254,5 +263,18 @@ export interface TenuVaultBridge {
   disclaimer: {
     /** Records that the admin accepted the current disclaimer for these tenants. */
     accept: (tenantIds: string[]) => Promise<void>
+  }
+}
+
+/** Plan failures cross the preload boundary as data, then become renderer errors. */
+export type TenuVaultPreloadBridge = Omit<TenuVaultBridge, "auth" | "license" | "schedules"> & {
+  auth: Omit<TenuVaultBridge["auth"], "signIn"> & {
+    signIn: (tenant: string, clientId: string) => Promise<SignedInAccount | PlanIpcError>
+  }
+  license: Omit<TenuVaultBridge["license"], "checkNewTenant"> & {
+    checkNewTenant: (tenantId: string) => Promise<LicenseStatus | PlanIpcError>
+  }
+  schedules: Omit<TenuVaultBridge["schedules"], "set"> & {
+    set: (schedule: ScheduleInput) => Promise<BackupSchedule[] | PlanIpcError>
   }
 }

@@ -1,4 +1,4 @@
-import { useState, type ComponentType, type ReactNode } from "react"
+import { useEffect, useState, type ComponentType, type ReactNode } from "react"
 import { Link, Outlet, useLocation } from "react-router-dom"
 import {
   Activity,
@@ -24,8 +24,9 @@ import { useTenants } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { BrandMark } from "./BrandMark"
 import { ErrorBoundary } from "./ErrorBoundary"
-import { earliestExpiringTenant, formatDate, formatDateTime, isUnlicensed, licenseExpiryWarning, offlineDeadline, planName, unlicensedTenants, useLicense } from "../lib/license"
-import { Toaster } from "../lib/toast"
+import { communityBannerVisible, earliestExpiringTenant, formatDate, formatDateTime, isUnlicensed, licenseChipState, licenseExpiryWarning, offlineDeadline, unlicensedTenants, useLicense } from "../lib/license"
+import { toast, Toaster } from "../lib/toast"
+import { bridge } from "../lib/bridge"
 import { FrameworkJobNotifier } from "../lib/framework-jobs"
 import { DriftScanIndicator, DriftScanNotifier } from "../lib/drift-jobs"
 import { SignInBanner } from "./SignInBanner"
@@ -56,43 +57,75 @@ const allNavigation: NavItem[] = [
 ]
 
 /** A calm pill inside the content padding: tinted surface, round icon, round arrow action. */
-function BannerLink({ tone, icon, children }: { tone: "coral" | "amber"; icon: ReactNode; children: ReactNode }) {
+function BannerLink({ tone, icon, children, onDismiss, dismissing }: { tone: "coral" | "amber" | "neutral"; icon: ReactNode; children: ReactNode; onDismiss?: () => void; dismissing?: boolean }) {
   return (
     <div className="px-6 pt-5 lg:px-8">
-      <Link
-        to="/license"
-        className={cn(
-          "group flex items-center gap-3 rounded-3xl py-2 pl-2 pr-2 text-sm font-medium transition-shadow hover:shadow-[0_6px_20px_-8px_rgba(22,21,20,0.25)]",
-          tone === "coral" ? "bg-blue-50 text-gray-900" : "bg-amber-50 text-amber-900",
-        )}
-      >
-        <span
+      <div className={cn("flex items-center rounded-3xl", tone === "neutral" && "bg-gray-100 text-gray-700")}>
+        <Link
+          to="/license"
           className={cn(
-            "flex size-9 flex-shrink-0 items-center justify-center rounded-full",
-            tone === "coral" ? "bg-coral-500 text-white" : "bg-card text-amber-700",
+            "group flex min-w-0 flex-1 items-center gap-3 rounded-3xl py-2 pl-2 pr-2 text-sm font-medium transition-shadow hover:shadow-[0_6px_20px_-8px_rgba(22,21,20,0.25)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring",
+            tone === "neutral" ? "bg-gray-100 text-gray-700" : tone === "coral" ? "bg-blue-50 text-gray-900" : "bg-amber-50 text-amber-900",
           )}
-          aria-hidden="true"
         >
-          {icon}
-        </span>
-        <span className="min-w-0 flex-1">{children}</span>
-        <span
-          className="flex size-9 flex-shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition-transform motion-safe:group-hover:translate-x-0.5"
-          aria-hidden="true"
-        >
-          <ArrowRight className="h-4 w-4" />
-        </span>
-      </Link>
+          <span
+            className={cn(
+              "flex size-9 flex-shrink-0 items-center justify-center rounded-full",
+              tone === "neutral" ? "bg-white text-gray-600" : tone === "coral" ? "bg-coral-500 text-white" : "bg-card text-amber-700",
+            )}
+            aria-hidden="true"
+          >
+            {icon}
+          </span>
+          <span className="min-w-0 flex-1">{children}</span>
+          <span
+            className={cn("flex size-9 flex-shrink-0 items-center justify-center rounded-full transition-transform motion-safe:group-hover:translate-x-0.5", tone === "neutral" ? "bg-white text-gray-600" : "bg-primary text-primary-foreground")}
+            aria-hidden="true"
+          >
+            <ArrowRight className="h-4 w-4" />
+          </span>
+        </Link>
+        {onDismiss && <button type="button" onClick={onDismiss} disabled={dismissing} className="mr-2 shrink-0 rounded-full px-3 py-2 text-sm font-medium hover:bg-gray-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50">Dismiss</button>}
+      </div>
     </div>
   )
 }
 
 function LicenseBanner() {
   const { status } = useLicense()
+  const { pathname } = useLocation()
+  const [dismissedAt, setDismissedAt] = useState<string>()
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false)
+  const [dismissing, setDismissing] = useState(false)
+  useEffect(() => {
+    let active = true
+    void bridge.preferences.get().then((preferences) => {
+      if (active) setDismissedAt(preferences.communityBannerDismissedAt)
+    }).catch((error: unknown) => {
+      if (active) toast(error instanceof Error ? error.message : "Could not load preferences.", "error")
+    }).finally(() => {
+      if (active) setPreferencesLoaded(true)
+    })
+    return () => { active = false }
+  }, [])
+  const dismiss = async () => {
+    setDismissing(true)
+    try {
+      const preferences = await bridge.preferences.set({ communityBannerDismissedAt: new Date().toISOString() })
+      setDismissedAt(preferences.communityBannerDismissedAt)
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Could not dismiss the Community notice.", "error")
+    } finally {
+      setDismissing(false)
+    }
+  }
   if (!status) return null
-  if (isUnlicensed(status)) {
+  if (isUnlicensed(status) && unlicensedTenants(status).length === 0) {
+    // The start pages only: the all-tenants overview, or the dashboard for a single tenant.
+    const startPage = pathname === "/portal/overview" || pathname === "/portal/dashboard"
+    if (!startPage || !preferencesLoaded || !communityBannerVisible(dismissedAt)) return null
     return (
-      <BannerLink tone="coral" icon={<Sparkles className="h-4 w-4" />}>
+      <BannerLink tone="neutral" icon={<Sparkles className="h-4 w-4" />} onDismiss={() => void dismiss()} dismissing={dismissing}>
         You are on Community, the free plan. Try Pro or MSP free for 30 days, or add your license key.
       </BannerLink>
     )
@@ -133,9 +166,8 @@ function LicenseNavBadge() {
   const { status } = useLicense()
   if (!status) return null
   const chip = "ml-auto rounded-full px-2 py-0.5 text-[11px] font-medium"
-  if (status.plan) return <span className={cn(chip, "bg-green-50 text-green-700")}>{planName(status.plan)}</span>
-  if (status.tenants.some((t) => t.entitled)) return <span className={cn(chip, "bg-green-50 text-green-700")}>Organization</span>
-  return <span className={cn(chip, "bg-red-50 text-red-700")}>Inactive</span>
+  const state = licenseChipState(status)
+  return <span className={cn(chip, state.tone === "inactive" ? "bg-red-50 text-red-700" : "bg-gray-100 text-gray-700")}>{state.label}</span>
 }
 
 export function DesktopLayout() {

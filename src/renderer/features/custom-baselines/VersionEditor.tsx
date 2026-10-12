@@ -1,3 +1,4 @@
+import { showFeaturePlanError } from "../../lib/plan-dialog"
 import { useState } from "react"
 import { ChevronDown, ChevronRight, Trash2, Undo2 } from "lucide-react"
 import type { Tenant } from "~/contexts/TenantContext"
@@ -51,6 +52,7 @@ export function VersionEditor({ tenant, baseline, version, allowed, onViewVersio
       setNote("")
       onSaved()
     } catch (error) {
+      showFeaturePlanError(error)
       toast(error instanceof Error ? error.message : "The version could not be saved.", "error")
     } finally {
       setBusy(false)

@@ -1,3 +1,4 @@
+import { showFeaturePlanError } from "../../lib/plan-dialog"
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import type { Tenant } from "~/contexts/TenantContext"
@@ -30,6 +31,7 @@ export function CustomizationsPanel({ tenant, allowed }: { tenant: Tenant; allow
       await action()
       toast(success, "success")
     } catch (error) {
+      showFeaturePlanError(error)
       toast(error instanceof Error ? error.message : "The request failed.", "error")
     } finally {
       setBusy(false)

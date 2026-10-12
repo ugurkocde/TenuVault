@@ -16,6 +16,9 @@ import { BackupSchedulePanel } from "@desktop/components/BackupSchedulePanel"
 import { RunBackupDialog } from "@desktop/components/RunBackupDialog"
 import { useTenantPlan } from "@desktop/lib/license"
 import { useBackupList } from "@desktop/lib/backup-list"
+import { bridge } from "@desktop/lib/bridge"
+import { retentionNote } from "@desktop/lib/plan-notes"
+import { FirstBackupNote } from "@desktop/components/FirstBackupNote"
 import { allows } from "../../../../shared/plans"
 import { AREAS } from "../../../../shared/intune/scope"
 import { typeForFolder } from "../../../../shared/intune/registry"
@@ -75,6 +78,7 @@ export default function BackupRestorePage() {
   // Shared with the drift page and kept between visits: shown at once, refreshed in the background.
   const backupList = useBackupList(selectedTenant)
   const backups = backupList.backups ?? NO_BACKUPS
+  const retentionMessage = retentionNote(plan, backups, new Date())
   const isLoading = backupList.loading && backupList.backups === null
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [restoreFrom, setRestoreFrom] = useState<string | null>(null)
@@ -85,6 +89,7 @@ export default function BackupRestorePage() {
   const [runOpen, setRunOpen] = useState(false)
   const [jobId, setJobId] = useState<string | null>(null)
   const [showProgress, setShowProgress] = useState(false)
+  const [completedBackup, setCompletedBackup] = useState<{ jobId: string; tenantId: string } | null>(null)
   const [changesOpen, setChangesOpen] = useState(false)
   const [isDownloading, setIsDownloading] = useState(false)
   const detailRef = useRef<HTMLDivElement | null>(null)
@@ -123,6 +128,7 @@ export default function BackupRestorePage() {
   }, [selectedTenant?.id, !!selectedTenant?.credentials, selectedTenant?.resources?.storageAccountName])
 
   const backupStarted = (id: string) => {
+    setCompletedBackup(null)
     setJobId(id)
     setShowProgress(true)
   }
@@ -131,6 +137,7 @@ export default function BackupRestorePage() {
     setShowProgress(false)
     setJobId(null)
     if (success && selectedTenant) {
+      if (jobId && selectedTenant.credentials) setCompletedBackup({ jobId, tenantId: selectedTenant.credentials.tenantId.toLowerCase() })
       updateTenant(selectedTenant.id, { lastBackup: new Date().toISOString(), lastSync: new Date().toISOString() })
       // Show the new backup, the newest in the list.
       setSelectedId(null)
@@ -256,6 +263,16 @@ export default function BackupRestorePage() {
                 Refresh
               </Button>
             </div>
+
+            {completedBackup && completedBackup.tenantId === selectedTenant?.credentials?.tenantId.toLowerCase() && (
+              <div className="mb-4"><FirstBackupNote key={completedBackup.jobId} plan={plan} /></div>
+            )}
+            {retentionMessage && (
+              <p className="mb-4 text-sm text-gray-500">
+                {retentionMessage}{" "}
+                <button type="button" className="font-medium underline" onClick={() => void bridge.license.open("buy", { source: "note-retention" })}>See plans</button>
+              </p>
+            )}
 
             {backups.length === 0 ? (
               <div className="flex flex-col items-center py-12 text-center">

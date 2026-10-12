@@ -9,7 +9,7 @@ export const API_AUDIT_MAP: Record<string, { eventType: AuditEventType; action: 
 }
 
 interface AuditBody {
-  tenantId?: string
+  tenantId?: unknown
   appId?: string
   clientSecret?: string
   storageAccountName?: string
@@ -61,7 +61,7 @@ export function createAuditRecorder(
     } catch {
       return
     }
-    if (!body.tenantId || !body.appId || !body.clientSecret || !body.storageAccountName) return
+    if (typeof body?.tenantId !== "string" || !body.tenantId || !body.appId || !body.clientSecret || !body.storageAccountName) return
 
     const account = accountFor(body.tenantId)
     const ok = response.status >= 200 && response.status < 300
@@ -102,7 +102,7 @@ export function createAuditRecorder(
 /** Restore runs synchronously and can partially fail despite returning HTTP 200. */
 async function recordRestore(bodyText: string, response: Response, dispatch: (request: Request) => Promise<Response>, accountFor: (id: string) => SignedInAccount | null, policyCopy = false) {
   const body = JSON.parse(bodyText) as AuditBody & { backupId?: string; originalName?: string; action?: string; mode?: string }
-  if (!body.tenantId || !body.appId || !body.clientSecret || !body.storageAccountName) return
+  if (typeof body?.tenantId !== "string" || !body.tenantId || !body.appId || !body.clientSecret || !body.storageAccountName) return
   const data = await response.json().catch(() => ({})) as {
     success?: boolean; jobId?: string; policyId?: string; status?: string; error?: string; partial?: boolean
     details?: { restoredCount: number; partialCount?: number; failedCount: number; duration: number; results: { path: string; success: boolean; policyId?: string; error?: string }[] }
@@ -133,7 +133,7 @@ async function recordRestore(bodyText: string, response: Response, dispatch: (re
 
 async function recordFrameworkCreation(bodyText: string, response: Response, dispatch: (request: Request) => Promise<Response>, accountFor: (id: string) => SignedInAccount | null) {
   const body = JSON.parse(bodyText) as { action?: string; tenantId?: string; appId?: string; runId?: string; storageAccountName?: string }
-  if (body.action !== "create" || !body.tenantId || !body.appId) return
+  if (typeof body?.tenantId !== "string" || !body.tenantId || body.action !== "create" || !body.appId) return
   const data = await response.json() as { success?: boolean; results?: { id?: string; name: string; error?: string }[]; error?: string }
   const account = accountFor(body.tenantId)
   const entries = data.results?.length ? data.results : [{ name: "Baseline creation", error: data.error || "No creation result returned." }]
@@ -164,7 +164,7 @@ async function recordOib(
   accountFor: (id: string) => SignedInAccount | null,
 ) {
   const body = JSON.parse(bodyText) as { action?: string; tenantId?: string; appId?: string; runId?: string; storageAccountName?: string }
-  if (!["oib-deploy", "oib-fix", "oib-undo"].includes(body.action ?? "") || !body.tenantId || !body.appId) return
+  if (typeof body?.tenantId !== "string" || !body.tenantId || !["oib-deploy", "oib-fix", "oib-undo"].includes(body.action ?? "") || !body.appId) return
   const data = await response.json().catch(() => ({})) as {
     runId?: string; reference?: string; backupFolder?: string; pilotGroupId?: string; error?: string
     created?: unknown[]; updated?: unknown[]; failed?: unknown[]; skipped?: unknown[]; results?: { done: boolean }[]

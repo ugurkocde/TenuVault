@@ -10,6 +10,7 @@ import { Button } from "~/components/ui/button"
 import { DesktopLayout } from "./components/DesktopLayout"
 import { ErrorBoundary, ErrorPanel } from "./components/ErrorBoundary"
 import { ActivationScreen } from "./components/ActivationScreen"
+import { PlanDialogs } from "./components/PlanDialogs"
 import { DisclaimerHost } from "./components/DisclaimerHost"
 import { isUnlicensed, LicenseProvider, useLicense } from "./lib/license"
 import LicensePage from "./pages/LicensePage"
@@ -115,6 +116,7 @@ export function App() {
                   <Route path="*" element={<Home />} />
                 </Routes>
               </Suspense>
+              <PlanDialogs />
             </HashRouter>
             </LicenseGate>
             </ErrorBoundary>

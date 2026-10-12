@@ -28,6 +28,10 @@ import {
 } from "lucide-react"
 import { cn } from "~/lib/utils"
 import { useTenantPlan } from "@desktop/lib/license"
+import { bridge } from "@desktop/lib/bridge"
+import { FeatureApiError } from "@desktop/lib/feature-api"
+import { showFeaturePlanError } from "@desktop/lib/plan-dialog"
+import { revertibleDriftCount, shouldShowDriftNote } from "@desktop/lib/plan-notes"
 import { GatedButton } from "@desktop/components/PlanGate"
 import { cancelDriftScan, startDriftScan, useDriftJob, useDriftResult } from "@desktop/lib/drift-jobs"
 import { useBackupList } from "@desktop/lib/backup-list"
@@ -202,6 +206,7 @@ export default function DriftDetectionPage() {
     () => (result?.drifts ?? []).map(drift => ({ ...drift, tenant: selectedTenant?.name ?? drift.tenant })),
     [result, selectedTenant?.name],
   )
+  const revertibleCount = revertibleDriftCount(drifts)
   // A failed or refused scan newer than the shown result.
   const failedJob = job && job.status === "failed" && (!result || (job.finishedAt ?? "") > result.lastScan) ? job : null
   const insufficient = !running && !result && (failedJob?.code === "INSUFFICIENT_BACKUPS" || (backupsLoaded && completeBackups.length < 2))
@@ -301,7 +306,7 @@ export default function DriftDetectionPage() {
 
       if (!response.ok) {
         const error = await response.json()
-        throw new Error(error.error || "Failed to revert policy")
+        throw new FeatureApiError(error.error || "Failed to revert policy", response.status, error.upgrade)
       }
 
       const result = await response.json()
@@ -328,6 +333,7 @@ export default function DriftDetectionPage() {
       }))
 
     } catch (err) {
+      showFeaturePlanError(err)
       console.error("Revert error:", err)
       const errorMessage = err instanceof Error ? err.message : "Failed to revert policy"
 
@@ -548,6 +554,13 @@ export default function DriftDetectionPage() {
               </span>
             </div>
           </div>
+
+          {!running && shouldShowDriftNote(plan, revertibleCount) && (
+            <p className="text-sm text-gray-500">
+              Pro reverts these {revertibleCount} changed or deleted policies with one click and records the change in the audit log.{" "}
+              <button type="button" className="font-medium underline" onClick={() => void bridge.license.open("buy", { source: "note-drift" })}>See plans</button>
+            </p>
+          )}
 
           {result.warnings.length > 0 && (
             <Alert className="rounded-3xl border-transparent bg-amber-50 p-5 [&>svg]:left-5 [&>svg]:top-5">

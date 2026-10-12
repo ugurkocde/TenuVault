@@ -724,6 +724,85 @@ await check("restarting clears interrupted tenant backup and refresh flags", asy
   assert(await waitForCondition(`JSON.parse(window.tenuvault.storage.getItemSync('tenuvault_tenants')).every(t => !Object.hasOwn(t, 'isLoading') && t.syncStatus !== 'pending')`), "in-flight flags were saved again")
 })
 
+await check("Community is a neutral plan state and its Overview notice remembers dismissal for 30 days", async () => {
+  const banner = `document.querySelector('a[href="#/license"].bg-gray-100')`
+  const chip = `document.querySelector('aside a[href="#/license"] span.ml-auto')`
+  assert(await waitForCondition(`${chip}?.textContent === "Community" && ${chip}.classList.contains("bg-gray-100")`), "healthy Community sidebar chip missing")
+  assert(await evaluate(`!${banner}`), "Community notice appeared on the tenants page")
+  await go("#/portal/overview", "All tenants")
+  assert(await waitForCondition(`Boolean(${banner})`), "neutral Community notice missing from Overview")
+  assert(await evaluate(`!${banner}.querySelector('.bg-coral-500')`), "Community notice still has a coral icon")
+  await screenshot("08-community-notice")
+  await go("#/license", "Add your license")
+  assert(await evaluate(`!${banner}`), "Community notice appeared on the License page")
+  await go("#/portal/overview", "All tenants")
+  await evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent === 'Dismiss').click()`)
+  assert(await waitForCondition(`!${banner}`), "dismissed Community notice stayed visible")
+  const preferences = await evaluate(`window.tenuvault.preferences.get()`)
+  assert(Number.isFinite(Date.parse(preferences.communityBannerDismissedAt)), "dismissal timestamp was not stored")
+  await send("Page.reload")
+  assert(await waitForText("All tenants"), "Overview did not reload")
+  await disableAnimations()
+  assert(await waitForCondition(`${chip}?.textContent === "Community"`), "Community chip did not reload")
+  assert(await evaluate(`!${banner}`), "Community notice returned after reload within 30 days")
+  await evaluate(`window.tenuvault.preferences.set({ communityBannerDismissedAt: new Date(Date.now() - 31 * 86400000).toISOString() })`)
+  await send("Page.reload")
+  assert(await waitForCondition(`Boolean(${banner})`), "Community notice did not return after 30 days")
+  await disableAnimations()
+  await evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent === 'Dismiss').click()`)
+  assert(await waitForCondition(`!${banner}`), "Community notice could not be dismissed again")
+})
+
+await check("Community trial focuses the key input and procurement links use the external bridge", async () => {
+  try {
+    await evaluate(`(() => {
+      window.__communityTrial = { opened: [], docs: [] }
+      const frame = document.createElement("iframe")
+      frame.style.cssText = "position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 9999;"
+      document.body.appendChild(frame)
+      window.__communityTrialFrame = frame
+      frame.contentDocument.open()
+      frame.contentDocument.write('<html><head></head><body><div id="root"></div></body></html>')
+      frame.contentDocument.close()
+      frame.contentWindow.location.hash = "#/license"
+      frame.contentWindow.tenuvault = {
+        ...window.tenuvault,
+        license: { ...window.tenuvault.license, open: (destination, context) => { window.__communityTrial.opened.push({ destination, context }); return Promise.resolve() } },
+        app: { ...window.tenuvault.app, openExternal: url => { window.__communityTrial.docs.push(url); return Promise.resolve() } },
+      }
+      document.querySelectorAll('link[rel="stylesheet"]').forEach(link => frame.contentDocument.head.appendChild(link.cloneNode()))
+      const script = frame.contentDocument.createElement("script")
+      script.type = "module"
+      script.src = document.querySelector('script[type="module"]').src
+      frame.contentDocument.head.appendChild(script)
+    })()`)
+    const body = "window.__communityTrialFrame.contentDocument.body"
+    assert(await waitForCondition(`${body}.innerText.includes("Start 30 day free trial")`), "Community trial button missing")
+    await evaluate(`[...${body}.querySelectorAll('button')].find(button => button.textContent.includes('Start 30 day free trial')).click()`)
+    assert(await waitForCondition(`${body}.innerText.includes("Paste the key from your email to activate the trial.")`), "trial key hint missing")
+    assert(await evaluate(`window.__communityTrial.opened.length === 1 && window.__communityTrial.opened[0].destination === "buy" && window.__communityTrial.opened[0].context?.source === "license-page"`), "trial did not open pricing with the license-page source")
+    assert(await evaluate(`window.__communityTrialFrame.contentDocument.activeElement.id === "license-key"`), "trial did not focus the key input")
+    assert(await evaluate(`(() => { const input = ${body}.querySelector('#license-key'); const rect = input.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= window.__communityTrialFrame.contentWindow.innerHeight })()`), "trial key input was not scrolled into view")
+    assert(await evaluate(`${body}.innerText.includes("Buying for a company? Yearly plans are available by quote, purchase order and invoice, and a 30 day trial key without a card on request.") && ${body}.innerText.includes("Eligible nonprofits can use Pro at no cost.")`), "company or nonprofit copy missing")
+    await evaluate(`${body}.querySelectorAll('a[href="https://docs.tenuvault.com/licensing/"]').forEach(link => link.click())`)
+    assert(await evaluate(`window.__communityTrial.docs.length === 2 && window.__communityTrial.docs.every(url => url === "https://docs.tenuvault.com/licensing/")`), "docs links did not use the external bridge")
+    await screenshot("08-community-trial-key")
+  } finally {
+    await evaluate("window.__communityTrialFrame?.remove(); delete window.__communityTrialFrame; delete window.__communityTrial")
+  }
+})
+
+await check("the whole dashboard License tile opens License with the keyboard", async () => {
+  await go("#/portal/dashboard", "Contoso 1")
+  const tile = `document.querySelector('main a[href="#/license"]')`
+  assert(await waitForCondition(`Boolean(${tile})`), "linked License tile missing")
+  assert(await evaluate(`${tile}.getAttribute('href') === '#/license' && !${tile}.querySelector('button, a')`), "License tile has the wrong route or nested interactive elements")
+  await evaluate(`${tile}.focus()`)
+  await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 })
+  await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 })
+  assert(await waitForText("Add your license"), "keyboard did not open License from the tile")
+})
+
 await check("tenant renames show Saved in both views and clear confirmation timers", async () => {
   await go("#/portal/tenants", "Tenant Management")
   const editor = `document.querySelector('main input[type="text"]:not([aria-label="Search tenants"])')`
@@ -1340,8 +1419,9 @@ await check("scheduled backups of a second tenant without a license fail with th
 })
 
 await check("a second tenant without a license cannot be added on Community", async () => {
-  let message = ""
-  await evaluate(`window.tenuvault.license.checkNewTenant("44444444-4444-4444-4444-444444444444")`).catch((error) => (message = error.message))
+  const refusal = await evaluate(`window.tenuvault.license.checkNewTenant("44444444-4444-4444-4444-444444444444")`)
+  const message = refusal.planError?.message ?? ""
+  assert(refusal.planError?.code === "community_tenant_limit", "Community tenant refusal lost its stable code")
   assert(/tenant was not added/i.test(message) && /Community covers one tenant/i.test(message), `unexpected result ${JSON.stringify(message)}`)
 })
 
@@ -1420,6 +1500,23 @@ await check("tenant changes wait for the disclaimer, once per tenant", async () 
 })
 
 await checkSchedulePanel({ check, evaluate, waitForCondition, screenshot, assert })
+
+await check("a saved key before tenant sign-in stays neutral with activation guidance", async () => {
+  const chip = `document.querySelector('aside a[href="#/license"] span.ml-auto')`
+  try {
+    const status = await evaluate(`window.tenuvault.license.setKey("SMOKE-LICENSE-KEY")`)
+    assert(status.keyState === "pending" && status.keyMessage === null && status.message.includes("Sign in to a tenant"), "saving a key without tenants did not produce pending guidance")
+    await go("#/license", "License key saved")
+    assert(await waitForCondition(`${chip}?.textContent === "Key saved" && ${chip}.classList.contains("bg-gray-100")`), "saved key chip is not neutral")
+    await send("Page.reload")
+    assert(await waitForText("License key saved"), "saved key title changed after reload")
+    await disableAnimations()
+    assert(await waitForCondition(`${chip}?.textContent === "Key saved"`), "saved key chip changed after reload")
+  } finally {
+    await evaluate(`window.tenuvault.license.deactivate()`)
+    assert(await waitForCondition(`${chip}?.textContent === "Community"`), "deactivation did not restore Community")
+  }
+})
 
 if (licenseKey) {
   // No tenant is signed in, so the key is only saved; it activates when a tenant is used.

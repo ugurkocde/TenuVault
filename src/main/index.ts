@@ -1,3 +1,5 @@
+import { CommunityLimitError, withPlanError } from "../shared/plan-errors"
+import { licenseBuyUrl } from "./license/buy-url"
 import { reviewArchive, importArchive } from "./backup/archive"
 import { readFile, stat } from "node:fs/promises"
 import { pathToFileURL } from "node:url"
@@ -533,11 +535,11 @@ async function bootstrap(): Promise<void> {
   handleTrusted("backgroundLaunch:remove", () => updateBackgroundLaunch(() => backgroundLaunch.remove()))
 
   handleTrusted("schedules:list", () => scheduler.list())
-  handleTrusted("schedules:set", (_event, schedule: ScheduleInput) => {
+  handleTrusted("schedules:set", (_event, schedule: ScheduleInput) => withPlanError(() => {
     const current = scheduler.list().find((saved) => saved.tenantId === schedule.tenantId.toLowerCase())
     scheduler.set(prepareScheduleInput(schedule, license.plan(schedule.tenantId), current))
     return scheduler.list()
-  })
+  }))
   handleTrusted("schedules:remove", (_event, tenantId: string) => {
     scheduler.remove(tenantId)
     return scheduler.list()
@@ -569,21 +571,23 @@ async function bootstrap(): Promise<void> {
   // fails, the new sign-in is removed so no tenant stays connected without a license.
   const requireForNewTenant = async (tenantId: string) => {
     try {
-      await license.requireEntitlement(tenantId, { retry: true })
+      await license.checkNewTenant(tenantId)
     } catch (error) {
       // A tenant that is already connected keeps its sign-in; only a new one is rolled back.
       const connected = connectedTenantIds().some((id) => id.toLowerCase() === tenantId.toLowerCase())
       if (!connected) await auth.signOut(tenantId)
-      throw new Error(`The tenant was not added. ${error instanceof Error ? error.message : String(error)}`)
+      const message = `The tenant was not added. ${error instanceof Error ? error.message : String(error)}`
+      if (error instanceof CommunityLimitError) throw new CommunityLimitError(error.tenantId, message)
+      throw new Error(message)
     } finally {
       pushLicense()
     }
   }
-  handleTrusted("auth:signIn", async (_event, tenant: string, clientId: string) => {
+  handleTrusted("auth:signIn", (_event, tenant: string, clientId: string) => withPlanError(async () => {
     const account = await auth.signIn(tenant, clientId)
     await requireForNewTenant(account.tenantId)
     return account
-  })
+  }))
   // Signing in again also renews the ID token an organization license is checked with.
   handleTrusted("auth:reauthenticate", async (_event, tenantId: string, clientId: string, scope?: unknown) => {
     const account = await auth.reauthenticate(tenantId, clientId, scope === undefined ? undefined : String(scope))
@@ -627,7 +631,7 @@ async function bootstrap(): Promise<void> {
   handleTrusted("license:deactivate", () => withStatus(() => license.deactivate()))
   handleTrusted("license:checkNewTenant", (_event, tenantId: unknown) => {
     if (!isTenantId(tenantId)) throw new Error("Unknown tenant.")
-    return withStatus(() => requireForNewTenant(tenantId))
+    return withPlanError(() => withStatus(() => requireForNewTenant(tenantId)))
   })
   // Releasing needs the sign-in for organization licenses, so it runs before the sign-out.
   // A key activation the service could not release is kept and released at the next start.
@@ -642,8 +646,8 @@ async function bootstrap(): Promise<void> {
       await auth.signOut(tenantId)
     })
   })
-  handleTrusted("license:open", async (_event, target: unknown) => {
-    const url = target === "buy" ? LICENSE_BUY_URL : target === "portal" ? LICENSE_PORTAL_URL : null
+  handleTrusted("license:open", async (_event, target: unknown, options?: { source?: unknown }) => {
+    const url = target === "buy" ? licenseBuyUrl(LICENSE_BUY_URL, options?.source) : target === "portal" ? LICENSE_PORTAL_URL : null
     if (!url || new URL(url).protocol !== "https:") throw new Error("Refused to open an unexpected link.")
     await shell.openExternal(url)
   })
@@ -664,7 +668,7 @@ async function bootstrap(): Promise<void> {
       if (selected.canceled || !selected.filePaths[0]) return { imported: false }
       if ((await stat(selected.filePaths[0])).size > 32 * 1024 * 1024) throw new Error("Choose an archive smaller than 32 MiB")
       const archive = await reviewArchive(await readFile(selected.filePaths[0]))
-      await license.requireEntitlement(archive.tenantId)
+      await license.checkNewTenant(archive.tenantId, { retry: false })
       const review = await dialog.showMessageBox(mainWindow!, { type: "warning", title: "Review backup archive", message: `Import ${archive.count} policy snapshots?`, detail: `Source tenant: ${archive.tenantId}\nBackup: ${archive.backupId}\nSHA-256: ${archive.digest}\n\nThe archive declares its source identity; it is not signed. Use files supplied by a source you trust. Snapshots will be encrypted on this device. Import does not change Intune. Use the tenant's local backup storage and the existing restore preview to restore later.`, buttons: ["Cancel", "Import locally"], defaultId: 0, cancelId: 0 })
       if (review.response !== 1) return { imported: false }
       await importArchive(getLocalStore(), archive)

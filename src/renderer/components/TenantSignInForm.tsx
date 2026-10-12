@@ -1,3 +1,4 @@
+import { showCommunityLimitError } from "../lib/plan-dialog"
 import { useEffect, useState } from "react"
 import { AlertCircle, Check, Copy, ExternalLink, KeyRound, Loader2, ShieldCheck } from "lucide-react"
 import { Alert, AlertDescription } from "~/components/ui/alert"
@@ -79,7 +80,7 @@ export function TenantSignInForm({ onSignedIn, submitLabel = "Sign in with Micro
       Object.assign(draft, { tenant: "", clientId: "", displayName: "" })
       onSignedIn(account, displayName.trim())
     } catch (error) {
-      setErrors({ form: error instanceof Error ? error.message : "Sign-in failed." })
+      if (!showCommunityLimitError(error)) setErrors({ form: error instanceof Error ? error.message : "Sign-in failed." })
     } finally {
       setBusy(false)
     }

@@ -27,6 +27,7 @@ vi.mock("~/contexts/TenantContext", () => ({
   useTenantOperations: () => ({ updateTenant: vi.fn() }),
 }))
 vi.mock("@desktop/lib/license", () => ({ useTenantPlan: () => null }))
+vi.mock("@desktop/lib/bridge", () => ({ bridge: { license: { open: vi.fn() } } }))
 vi.mock("@desktop/lib/backup-list", () => ({ useBackupList: () => ({ backups: [], loading: false, error: "", refresh: vi.fn() }) }))
 vi.mock("@desktop/components/BackupSchedulePanel", () => ({ BackupSchedulePanel: "schedule-panel" }))
 vi.mock("@desktop/components/RunBackupDialog", () => ({ RunBackupDialog: () => null }))

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import {
   AlertCircle,
@@ -23,7 +23,7 @@ import { Label } from "~/components/ui/label"
 import type { LicenseStatus, TenantLicenseStatus } from "../../shared/ipc"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
 import { bridge } from "../lib/bridge"
-import { formatDate, formatDateTime, isUnlicensed, planName, useLicense } from "../lib/license"
+import { formatDate, formatDateTime, hasPaidLicense, isUnlicensed, licensePageTitle, planName, useLicense } from "../lib/license"
 
 type Busy = "activate" | "deactivate" | `retry:${string}` | `share:${string}` | null
 
@@ -50,7 +50,7 @@ function useAction() {
   return { busy, error, notice, run }
 }
 
-function TrialCallToAction() {
+function TrialCallToAction({ onStartTrial }: { onStartTrial: () => void }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-4 rounded-3xl bg-blue-50/60 p-5">
       <div className="min-w-0 flex-1">
@@ -67,10 +67,22 @@ function TrialCallToAction() {
           you are not charged until the trial ends.
         </p>
       </div>
-      <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void bridge.license.open("buy")}>
-        <ExternalLink className="mr-2 h-4 w-4" />
-        Start 30 day free trial
-      </Button>
+      <div className="w-full space-y-2">
+        <Button className="bg-blue-600 hover:bg-blue-700" onClick={onStartTrial}>
+          <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
+          Start 30 day free trial
+        </Button>
+        <p className="text-sm text-gray-600">
+          <a href="https://docs.tenuvault.com/licensing/" className="text-blue-600 underline underline-offset-4 hover:text-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600" onClick={(event) => { event.preventDefault(); void bridge.app.openExternal("https://docs.tenuvault.com/licensing/") }}>
+            Buying for a company? Yearly plans are available by quote, purchase order and invoice, and a 30 day trial key without a card on request.
+          </a>
+        </p>
+        <p className="text-sm text-gray-600">
+          <a href="https://docs.tenuvault.com/licensing/" className="text-blue-600 underline underline-offset-4 hover:text-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600" onClick={(event) => { event.preventDefault(); void bridge.app.openExternal("https://docs.tenuvault.com/licensing/") }}>
+            Eligible nonprofits can use Pro at no cost.
+          </a>
+        </p>
+      </div>
     </div>
   )
 }
@@ -149,6 +161,8 @@ export default function LicensePage() {
   const { status, refresh } = useLicense()
   const tenants = useTenants()
   const [key, setKey] = useState("")
+  const keyInput = useRef<HTMLInputElement>(null)
+  const [trialKeyHint, setTrialKeyHint] = useState(false)
   const { busy, error, notice, run } = useAction()
 
   useEffect(() => {
@@ -211,13 +225,7 @@ export default function LicensePage() {
         : "Other admins in this tenant can no longer use this license.",
     )
 
-  const title = isUnlicensed(status)
-    ? "Add your license"
-    : status.plan
-      ? `${planName(status.plan)} plan active`
-      : status.hasKey
-        ? "License key saved"
-        : "Licensed through your organization"
+  const title = licensePageTitle(status)
 
   return (
     <div className="max-w-5xl space-y-6 p-6 lg:p-8">
@@ -253,11 +261,15 @@ export default function LicensePage() {
                   ? "Paste the license key from your purchase email, or start a free trial."
                   : status.plan
                     ? `Your license covers ${status.tenantLimit ?? 1} tenant${status.tenantLimit === 1 ? "" : "s"}. ${activeKeyTenants} ${activeKeyTenants === 1 ? "is" : "are"} active on this machine.`
-                    : status.hasKey
-                      ? signedIn === 0
-                        ? "Your key is saved. It activates for a tenant when you sign in to it."
-                        : "Your key is saved but not active for your signed-in tenants. Check the tenants below."
-                      : "A tenant admin shared their TenuVault license with your tenant."}
+                    : hasPaidLicense(status)
+                      ? "A tenant admin shared their TenuVault license with your tenant."
+                      : status.keyState === "failed"
+                        ? "Your saved key is not active. Check the license message and the tenants below."
+                        : status.keyState === "pending"
+                          ? signedIn === 0
+                            ? "Your key is saved. It activates for a tenant when you sign in to it."
+                            : "Your key is saved but not active for your signed-in tenants. Check the tenants below."
+                          : "Your organization license is not currently active. Sign in again and retry the license check below."}
               </CardDescription>
             </div>
             {status.plan && <Badge variant="secondary">{planName(status.plan)}</Badge>}
@@ -273,14 +285,19 @@ export default function LicensePage() {
               </AlertDescription>
             </Alert>
           )}
-          {status.message && signedIn > 0 && (
+          {(status.keyMessage || (status.message && signedIn > 0)) && (
             <Alert>
               <AlertTriangle className="h-4 w-4 text-amber-600" />
-              <AlertDescription>{status.message}</AlertDescription>
+              <AlertDescription>{status.keyMessage ?? status.message}</AlertDescription>
             </Alert>
           )}
 
-          {isUnlicensed(status) && <TrialCallToAction />}
+          {isUnlicensed(status) && <TrialCallToAction onStartTrial={() => {
+            void bridge.license.open("buy", { source: "license-page" })
+            setTrialKeyHint(true)
+            keyInput.current?.scrollIntoView({ block: "center" })
+            keyInput.current?.focus({ preventScroll: true })
+          }} />}
 
           {status.hasKey ? (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-gray-50 px-5 py-4">
@@ -301,6 +318,10 @@ export default function LicensePage() {
               <div className="flex gap-2">
                 <Input
                   id="license-key"
+                  ref={keyInput}
+                  name="license-key"
+                  autoComplete="off"
+                  aria-describedby={trialKeyHint ? "trial-key-hint" : undefined}
                   className="font-mono"
                   placeholder="Paste the key from your purchase email"
                   value={key}
@@ -313,6 +334,7 @@ export default function LicensePage() {
                   Activate
                 </Button>
               </div>
+              {trialKeyHint && <p id="trial-key-hint" className="text-sm text-gray-600" role="status">Paste the key from your email to activate the trial.</p>}
               <p className="text-xs text-gray-500">
                 Licensed through your organization? <Link to="/portal/onboarding" className="text-blue-600 hover:underline">Sign in to your tenant</Link>{" "}
                 and TenuVault uses the license a tenant admin shared with it.
