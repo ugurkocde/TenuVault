@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { Plan } from "../../shared/plans"
 import { bridge } from "../lib/bridge"
 import { firstBackupNote } from "../lib/plan-notes"
@@ -12,25 +12,29 @@ let reserved = false
 /** Mounted only beside a successful manual backup's completion summary. */
 export function FirstBackupNote({ plan }: { plan: Plan | null }) {
   const [shown, setShown] = useState(false)
+  // A ref rather than a per-run flag, so the development double mount does not consume the note unseen.
+  const mounted = useRef(false)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
 
   useEffect(() => {
     if (plan !== "community" || claimed || reserved) return
     reserved = true
-    let active = true
     void (async () => {
       try {
         const preferences = await bridge.preferences.get()
         if (claimed || !firstBackupNote(plan, preferences.firstBackupNoteSeen)) return
         await bridge.preferences.set({ firstBackupNoteSeen: true })
         claimed = true
-        if (active) setShown(true)
+        if (mounted.current) setShown(true)
       } catch (error: unknown) {
         console.error("Could not record the backup completion note:", error)
       } finally {
         reserved = false
       }
     })()
-    return () => { active = false }
   }, [plan])
 
   const message = shown ? firstBackupNote(plan, false) : null
