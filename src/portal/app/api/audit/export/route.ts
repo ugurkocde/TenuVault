@@ -1,6 +1,6 @@
 import { isGuid } from "../../../../../shared/security"
 import { type NextRequest, NextResponse } from "next/server"
-import { AuditStorageService } from "~/lib/audit/storage"
+import { AuditStorageService, AuditRangeError } from "~/lib/audit/storage"
 import { AuditLogFilter, AuditEventType, AuditSeverity, AuditResult, type AuditLogEntry } from "~/lib/audit/types"
 import { actorLabel, auditExportCSV, auditExportJSON, outcomeLabel, OWN_OPERATION_NOTICE, redactAuditEntry } from "~/lib/audit/export"
 import { pendingEvents } from "~/lib/audit/outbox"
@@ -195,6 +195,7 @@ export async function POST(request: NextRequest) {
     })
 
   } catch (error) {
+    if (error instanceof AuditRangeError) return NextResponse.json({ error: error.message }, { status: 400 })
     console.error("Export audit logs error:", error)
     return NextResponse.json(
       { error: "Internal server error while exporting audit logs" },

@@ -179,3 +179,7 @@ Stable installs follow stable by default. Enable **Get nightly builds** to recei
 | Network summary | Which services TenuVault talks to: Microsoft for sign-in, Graph and Azure; GitHub for the Open Intune Baseline catalog and updates; tenuvault.com for license checks. No tenant configuration or backup is ever sent to TenuVault. |
 | **License** | Opens the License page. See [Activate and manage your license](/licensing/manage/). |
 | **Website and support** | Opens [tenuvault.com/desktop](https://tenuvault.com/desktop) in your browser. |
+
+## Review scan persistence
+
+Hygiene scan findings and health review finding reconciliation are saved together before returning, reducing repeated encryption and disk writes. A failed batch leaves the previous records intact.

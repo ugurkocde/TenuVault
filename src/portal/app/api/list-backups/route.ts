@@ -4,6 +4,7 @@ import { describeScope } from "../../../../shared/intune/scope"
 import { comparable, compareBackups, summarize, type BackupFingerprint, type ChangeSummary } from "../../../../shared/intune/backup-changes"
 import { blobPath } from "../../../../shared/security"
 import { mapLimit } from "~/lib/map-limit"
+import { MetadataCache } from "~/lib/storage/metadata-cache"
 import { backupFoldersIn, parseBackupName } from "../../../../shared/intune/backup-names"
 import { type NextRequest, NextResponse } from "next/server"
 
@@ -18,13 +19,15 @@ function formatBytes(bytes: number): string {
 
 const storageHeaders = (token: string) => ({ 'x-ms-version': '2021-12-02', 'x-ms-date': new Date().toUTCString(), Authorization: `Bearer ${token}` })
 
-/** One backup-yyyy-MM-dd-HHmmss folder, from its metadata.json and its file listing. */
-async function describeBackup(storageAccountName: string, name: string, accessToken: string) {
+interface MetadataRead { metadata: any; metadataError?: string }
+const metadataCache = new MetadataCache<MetadataRead>(result => !!result.metadata && !result.metadataError)
+
+/** One backup folder, described from metadata and either a folder listing or the summary inventory. */
+async function describeBackup(storageAccountName: string, name: string, accessToken: string, inventory?: { text: string; cacheKey: string; version: string }) {
   const parsed = parseBackupName(name)!
   const legacy = parsed.precision === "day"
   const date = parsed.timestamp.slice(0, 10)
-  // metadata.json and the file listing are read at the same time.
-  const metadataRead = (async (): Promise<{ metadata: any; metadataError?: string }> => {
+  const readMetadata = async (): Promise<MetadataRead> => {
     try {
       const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}/metadata.json`, { headers: storageHeaders(accessToken) })
       if (response.ok) {
@@ -36,8 +39,11 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     } catch {
       return { metadata: null, metadataError: 'Backup metadata could not be read or parsed.' }
     }
-  })()
-  const filesRead = listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${name}/`)}`, accessToken).catch(() => { throw new Error(`Backup ${name} inventory is unavailable. Check storage access and retry.`) })
+  }
+  const metadataRead: Promise<MetadataRead> = inventory?.version
+    ? metadataCache.read(inventory.cacheKey, inventory.version, readMetadata)
+    : inventory ? Promise.resolve({ metadata: null }) : readMetadata()
+  const filesRead = inventory ? Promise.resolve(inventory.text) : listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${name}/`)}`, accessToken).catch(() => { throw new Error(`Backup ${name} inventory is unavailable. Check storage access and retry.`) })
   const [{ metadata, metadataError }, filesText] = await Promise.all([metadataRead, filesRead])
   const recordedTimestamp = metadata?.timestamp ?? metadata?.Timestamp ?? metadata?.BackupDate
   const timestamp = legacy
@@ -153,7 +159,8 @@ export async function POST(request: NextRequest) {
     // This avoids needing account-level permissions
 
     // List blobs in the intune-backups container
-    const blobsUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=&delimiter=/`
+    const summary = body.summary === true
+    const blobsUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${summary ? "" : "&delimiter=/"}`
 
     let blobsText: string
     try {
@@ -189,14 +196,30 @@ export async function POST(request: NextRequest) {
     }
     
     // Parse XML response to extract backup folders
-    const backupFolders = backupFoldersIn(blobsText).map((folder) => folder.name)
+    // Summary mode groups one flat inventory in process, including older backups without manifests.
+    const inventories = new Map<string, { text: string; cacheKey: string; version: string }>()
+    if (summary) {
+      for (const match of blobsText.matchAll(/<Blob>[\s\S]*?<\/Blob>/g)) {
+        const name = decodeXml(match[0].match(/<Name>(.*?)<\/Name>/)?.[1] ?? '')
+        const folder = name.split('/')[0]!
+        if (!parseBackupName(folder)) continue
+        let inventory = inventories.get(folder)
+        if (!inventory) {
+          inventory = { text: '', cacheKey: JSON.stringify([String(tenantId).toLowerCase(), storageAccountName, appId, folder]), version: '' }
+          inventories.set(folder, inventory)
+        }
+        inventory.text += match[0]
+        if (name === `${folder}/metadata.json`) inventory.version = match[0]
+      }
+    }
+    const backupFolders = summary ? [...inventories.keys()] : backupFoldersIn(blobsText).map((folder) => folder.name)
     
     // Get details for each backup folder
     const backups: any[] = []
     
     // A container can be shared by several tenants. Backups recorded as another tenant's are left
     // out; older backups that do not record a tenant are still listed.
-    const described = await mapLimit(backupFolders, 6, (name) => describeBackup(storageAccountName, name, accessToken))
+    const described = await mapLimit(backupFolders, 6, (name) => describeBackup(storageAccountName, name, accessToken, inventories.get(name)))
     backups.push(...described.filter((backup) => {
       const owner = (backup.fingerprint as { TenantId?: unknown } | null | undefined)?.TenantId
       return typeof owner !== 'string' || owner.toLowerCase() === String(tenantId).toLowerCase()

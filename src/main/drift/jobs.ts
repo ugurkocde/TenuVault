@@ -85,8 +85,7 @@ function percentOf(progress: DriftScanProgress): number {
 /**
  * Drift scans run in the main process, independent of the page that started them, so the admin can
  * keep working while backups are compared. Each tenant has at most one running scan. The scan runs
- * /api/detect-drifts through the API host (so it gets the tenant's storage access and its audit log
- * entry), follows its progress and cancels it through scan hooks, and saves the result as the
+ * /api/detect-drifts through the API host with the tenant's storage access, follows its progress and cancels it through scan hooks, and saves the result as the
  * tenant's last result. Finished jobs stay listed for a while so the renderer picks up the outcome
  * after navigating back.
  */

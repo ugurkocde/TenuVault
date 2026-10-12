@@ -5,7 +5,7 @@ description: See what TenuVault did for a tenant, who did it and whether it work
 
 The audit log is TenuVault's own operation history. It is not a complete Microsoft tenant audit: it does not show changes made in the Intune admin center, by other tools or by other administrators. Use the Microsoft Entra and Intune audit logs for those.
 
-The audit log records the actions TenuVault performs for a tenant: backups, downloads, drift checks, restores, reverts and baseline deployments. Each entry names the admin who was signed in, what was done, and whether it worked. The log is stored with the tenant's backups, in your own storage.
+The audit log records the actions TenuVault performs for a tenant: backups, downloads, restores, reverts and baseline deployments. Each entry names the admin who was signed in, what was done, and whether it worked. The log is stored with the tenant's backups, in your own storage.
 
 ## What is recorded
 
@@ -15,7 +15,6 @@ The audit log records the actions TenuVault performs for a tenant: backups, down
 | Scheduled backup | BACKUP COMPLETED, BACKUP FAILED or BACKUP CANCELLED | An automatic backup, or a backup started with **Back up all tenants now**, ends |
 | Cancel backup | BACKUP_CANCELLED | You cancel an automatic backup, or one started with **Back up all tenants now**, before its manifest PUT starts |
 | Download backup | BACKUP DOWNLOADED | You download a backup as a ZIP file |
-| Detect drifts | POLICY DRIFT DETECTED | Drift detection runs, including **Check all** on the Tenants page |
 | Restore backup as policy copies | RESTORE COMPLETED or RESTORE FAILED | A restore with **Create copies** ends |
 | Restore backup in place | RESTORE COMPLETED or RESTORE FAILED | A restore with **Replace in place** ends |
 | Revert policy to the backed-up version in place | POLICY REVERTED | **Revert** or **Recreate** on the Drift Detection page |
@@ -27,7 +26,7 @@ The audit log records the actions TenuVault performs for a tenant: backups, down
 
 Each entry has a result: **SUCCESS**, **FAILURE**, or **PARTIAL** for a cancelled backup or when a restore or deployment worked for some items and not for others. It also has a severity: **INFO** for success and cancellation, **WARNING** for partial restores and deployments, and **ERROR** for failures. A **BACKUP_CANCELLED** event records **PARTIAL** with **INFO**.
 
-The user is the admin signed in to the tenant when the action ran.
+The user is the admin signed in to the tenant when the action ran. Read-only drift scans, including opening Drift Detection and **Check all**, no longer add audit events. Earlier drift check events remain readable.
 
 :::note
 Automatic backups that TenuVault refused to run because of the license are not in the audit log, because the tenant's storage is not opened without a license. They are listed on the **Schedule** tab. See [Schedule backups](/backups/schedules/#license-and-plan-checks).
@@ -35,7 +34,7 @@ Automatic backups that TenuVault refused to run because of the license are not i
 
 ## Where the log is stored
 
-The audit log lives in the tenant's backup storage, in a container named `audit-logs`, with one file per event grouped by day:
+The audit log lives in the tenant's backup storage, in a container named `audit-logs`, with one file per event grouped by UTC day:
 
 * **This device:** encrypted like the backups.
 * **Your Azure storage account:** stored as plain JSON. Anyone with read access to the container can read it.
@@ -74,10 +73,12 @@ Below the cards, the table lists the events, newest first, with **Timestamp**, *
 ## Find events
 
 * **Search**: type in **Search by user, action, or resource...** and click **Search**. The search also looks in each event's details.
-* **From:** and **To:**: the date range. The default is the last 7 calendar days, including today. Dates use your local time zone and include the full first and last days, so today's events appear throughout the day.
+* **From:** and **To:**: the date range. The default is the last 7 calendar days, including today. Dates use your local time zone and include the full first and last days, so today's events appear throughout the day. Each request can cover at most 90 days. To export a longer history, use separate ranges of up to 90 days.
 * **Filters**: choose one or more values in **Event Type**, **Severity** and **Result**. Event types are limited to the backup, restore and policy actions listed above. Severity offers **INFO**, **WARNING** and **ERROR**.
 
-The cards, table and exports all follow the date range and filters.
+The cards, table and exports all follow the date range and filters. Picker dates are converted once from your local day to UTC instants. Stored paths and day listings use UTC, and entries are filtered by their event timestamp, so events near midnight are included correctly in every time zone. Older files grouped by local day remain readable.
+
+Audit listings and event reads share a limit of six at a time per storage account, across log searches, totals and exports. The dashboard requests only its latest 20 matching events on Pro or MSP and skips audit history on Community. New event files carry their timestamp in the storage listing so the app can stop reading once the requested page is complete. Older files need an initial bounded read to establish event order; unchanged files are cached for subsequent refreshes. The event read cache keeps only the latest observed ETag for each file, counts serialized content and cache key bytes against a 32 MiB budget, and evicts the least recently used files. Search filters can require additional reads to find matching events. Exports and totals still include every match in the selected range.
 
 ## Export the audit log
 

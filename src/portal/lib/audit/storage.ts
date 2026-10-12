@@ -1,5 +1,7 @@
 import { acknowledgeEvent, acknowledgeEvents, pendingEvents, queueEvent } from './outbox'
 import { BlobListError, decodeXml, listBlobPages } from '../storage/list'
+import { mapLimit } from '../map-limit'
+import { MetadataCache } from '../storage/metadata-cache'
 import { blobPath } from '../../../shared/security'
 import { entriesForTenant } from './export'
 import { auditDateFilter, defaultAuditDateRange } from './date-range'
@@ -14,6 +16,28 @@ import {
 
 const AUDIT_CONTAINER = 'audit-logs'
 const RETENTION_DAYS = 90 // Keep logs for 90 days
+export const MAX_AUDIT_RANGE_DAYS = 90
+export const AUDIT_READ_CONCURRENCY = 6
+export class AuditRangeError extends Error {}
+interface AuditBlob { name: string; dayPath: string; timestamp: number | null; version: string }
+const readCaches = new WeakMap<typeof fetch, MetadataCache<AuditLogEntry[]>>()
+
+/** Listings, stats and exports share one budget for each storage account. */
+const readLimiters = new Map<string, { active: number; waiting: Array<() => void> }>()
+async function limitRead<T>(account: string, run: () => Promise<T>): Promise<T> {
+  const key = account.toLowerCase()
+  let limiter = readLimiters.get(key)
+  if (!limiter) { limiter = { active: 0, waiting: [] }; readLimiters.set(key, limiter) }
+  if (limiter.active >= AUDIT_READ_CONCURRENCY) await new Promise<void>(resolve => limiter.waiting.push(resolve))
+  else limiter.active++
+  try {
+    return await run()
+  } finally {
+    const next = limiter.waiting.shift()
+    if (next) next()
+    else if (--limiter.active === 0) readLimiters.delete(key)
+  }
+}
 
 interface StorageCredentials {
   storageAccountName: string
@@ -149,7 +173,7 @@ export class AuditStorageService {
     const url = `${this.getBaseUrl()}/${AUDIT_CONTAINER}/${path}`
     const file: AuditLogFile = { date: date.toISOString().slice(0, 10), entries: [entry], version: '2.0',
       metadata: { createdAt: entry.timestamp, lastModified: entry.timestamp, entryCount: 1 } }
-    const response = await fetch(url, { method: 'PUT', headers: { ...this.getHeaders(), 'x-ms-blob-type': 'BlockBlob', 'If-None-Match': '*' }, body: JSON.stringify(file) })
+    const response = await fetch(url, { method: 'PUT', headers: { ...this.getHeaders(), 'x-ms-blob-type': 'BlockBlob', 'If-None-Match': '*', 'x-ms-meta-audit_timestamp': entry.timestamp, 'x-ms-meta-audit_entries': '1' }, body: JSON.stringify(file) })
     if (response.status === 412) {
       // A retry after a lost response must not duplicate the event or replace a
       // different event that accidentally reused its ID.
@@ -179,78 +203,104 @@ export class AuditStorageService {
   }
 
   async queryLogs(filter: AuditLogFilter): Promise<AuditLogEntry[]> {
-    const entries = await this.queryAllLogs(filter)
     const offset = filter.offset ?? 0
-    return entries.slice(offset, offset + (filter.limit ?? 100))
+    const limit = filter.limit ?? 100
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 1000) {
+      throw new AuditRangeError('Choose a limit from 1 to 1000 and a non-negative offset.')
+    }
+    const entries = await this.query(filter, offset + limit)
+    return entries.slice(offset, offset + limit)
   }
 
   /** Complete matching history for exports and aggregates, independent of UI pagination. */
   async queryAllLogs(filter: AuditLogFilter): Promise<AuditLogEntry[]> {
+    return this.query(filter)
+  }
+
+  private async query(filter: AuditLogFilter, needed?: number): Promise<AuditLogEntry[]> {
     const defaultDates = auditDateFilter(defaultAuditDateRange())
     const startDate = filter.startDate || new Date(defaultDates.startDate!)
     const endDate = filter.endDate || new Date(defaultDates.endDate!)
     const startTime = startDate.getTime()
     const endTime = endDate.getTime()
+    // Two hours allow full picker days across daylight saving transitions.
+    if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || startTime > endTime || endTime - startTime > MAX_AUDIT_RANGE_DAYS * 86400_000 + 2 * 3600_000) {
+      throw new AuditRangeError(`Choose a valid audit date range of at most ${MAX_AUDIT_RANGE_DAYS} days. Export longer history in separate ranges.`)
+    }
     const dates = this.getDateRange(startDate, endDate)
-    const allEntries = new Map<string, AuditLogEntry>()
-    
-    // Fetch logs from each date in parallel
-    const promises = dates.map(async (date) => {
-      const filePath = this.getLogFilePath(date)
-      
-      // Also check for archived files
-      const listUrl = `${this.getBaseUrl()}/${AUDIT_CONTAINER}?restype=container&comp=list&prefix=${filePath.replace('.json', '')}`
-      
+    const listings = await mapLimit(dates, AUDIT_READ_CONCURRENCY, async (date): Promise<AuditBlob[]> => limitRead(this.credentials.storageAccountName, async () => {
+      const dayPath = this.getLogFilePath(date)
+      const listUrl = `${this.getBaseUrl()}/${AUDIT_CONTAINER}?restype=container&comp=list&include=metadata&prefix=${dayPath.replace('.json', '')}`
       try {
-        const listText = await listBlobPages(listUrl, this.credentials.accessToken)
-
-        // Parse XML without DOMParser (not available in Node.js)
-        const blobNames: string[] = []
-        const nameMatches = listText.matchAll(/<Name>([^<]+)<\/Name>/g)
-        for (const match of nameMatches) {
-          if (match[1]) {
-            blobNames.push(decodeXml(match[1]))
-          }
-        }
-        
-        const filePromises = blobNames.map(async (blobName) => {
-          if (!blobName) return []
-          
-          let fileUrl: string
-          try { fileUrl = this.blobUrl(blobName) } catch { return [] }
-          const response = await fetch(fileUrl, {
-            headers: this.getHeaders(),
-          })
-          
-          if (response.ok) {
-            const logFile: AuditLogFile = await response.json()
-            return logFile.entries
-          }
-          throw new Error(`Audit history is unavailable: an event file could not be read (${response.status})`)
+        const text = await listBlobPages(listUrl, this.credentials.accessToken)
+        return [...text.matchAll(/<Blob>[\s\S]*?<\/Blob>/g)].flatMap((match) => {
+          const name = decodeXml(match[0].match(/<Name>([^<]+)<\/Name>/)?.[1] ?? '')
+          if (!name) return []
+          try { this.blobUrl(name) } catch { return [] }
+          const timestamp = Date.parse(decodeXml(match[0].match(/<audit_timestamp>([^<]+)<\/audit_timestamp>/)?.[1] ?? ''))
+          const single = /<audit_entries>1<\/audit_entries>/.test(match[0]) && name.includes('-event-')
+          return [{ name, dayPath, timestamp: single && Number.isFinite(timestamp) ? timestamp : null,
+            version: match[0].match(/<Etag>([^<]+)<\/Etag>/)?.[1] ?? '' }]
         })
-        
-        const fileResults = await Promise.all(filePromises)
-        return fileResults.flat()
       } catch (error) {
-        console.error(`Error fetching logs for ${date}:`, error)
         if (error instanceof BlobListError && error.status === 404 && error.completedPages === 0) return []
         throw error
       }
-    })
-    
-    const results = await Promise.all(promises)
-    // An upgrade retry can save the same ID under both local and UTC days. Prefer the UTC copy.
-    results.forEach((entries, index) => {
-      const dayPath = this.getLogFilePath(dates[index]!)
+    }))
+    const blobs = [...new Map(listings.flat().map((blob) => [blob.name, blob])).values()]
+    const allEntries = new Map<string, AuditLogEntry>()
+    const add = (blob: AuditBlob, entries: AuditLogEntry[]) => {
       for (const entry of entries) {
-        if (!allEntries.has(entry.id) || this.getLogFilePath(new Date(entry.timestamp)) === dayPath) {
-          allEntries.set(entry.id, entry)
-        }
+        // An upgrade retry under both local and UTC days still counts once.
+        if (!allEntries.has(entry.id) || this.getLogFilePath(new Date(entry.timestamp)) === blob.dayPath) allEntries.set(entry.id, entry)
       }
+    }
+    const read = async (blob: AuditBlob) => add(blob, await this.readLogBlob(blob))
+    // Older daily files do not expose event timestamps. Read them with a cap and cache
+    // their contents by ETag rather than guessing order from upload time or random IDs.
+    await mapLimit(blobs.filter((blob) => blob.timestamp === null), AUDIT_READ_CONCURRENCY, read)
+    const ordered = blobs.filter((blob) => blob.timestamp !== null && blob.timestamp >= startTime && blob.timestamp <= endTime)
+      .sort((a, b) => b.timestamp! - a.timestamp! || this.eventId(a).localeCompare(this.eventId(b)))
+    const paginated = needed !== undefined && (!filter.sortBy || filter.sortBy === 'timestamp') && (!filter.sortOrder || filter.sortOrder === 'desc')
+    if (!paginated) {
+      await mapLimit(ordered, AUDIT_READ_CONCURRENCY, read)
+      return this.filterEntries([...allEntries.values()], filter, startTime, endTime)
+    }
+    let filtered = this.filterEntries([...allEntries.values()], filter, startTime, endTime)
+    for (let index = 0; index < ordered.length;) {
+      const cutoff = filtered[needed! - 1]
+      if (paginated && cutoff && (ordered[index]!.timestamp! < Date.parse(cutoff.timestamp) || (ordered[index]!.timestamp === Date.parse(cutoff.timestamp) && this.eventId(ordered[index]!).localeCompare(cutoff.id) > 0))) break
+      const count = Math.max(1, Math.min(AUDIT_READ_CONCURRENCY, needed! - filtered.length))
+      await mapLimit(ordered.slice(index, index + count), AUDIT_READ_CONCURRENCY, read)
+      index += count
+      filtered = this.filterEntries([...allEntries.values()], filter, startTime, endTime)
+    }
+    return filtered
+  }
+
+  private eventId(blob: AuditBlob): string {
+    return blob.name.slice(blob.name.indexOf('-event-') + '-event-'.length, -'.json'.length)
+  }
+
+  private async readLogBlob(blob: AuditBlob): Promise<AuditLogEntry[]> {
+    let cache = readCaches.get(fetch)
+    if (!cache) { cache = new MetadataCache(() => true); readCaches.set(fetch, cache) }
+    const key = JSON.stringify([this.credentials.storageAccountName.toLowerCase(), blob.name])
+    const load = () => limitRead(this.credentials.storageAccountName, async () => {
+      const response = await fetch(this.blobUrl(blob.name), { headers: this.getHeaders() })
+      if (!response.ok) throw new Error(`Audit history is unavailable: an event file could not be read (${response.status})`)
+      const file: AuditLogFile = await response.json()
+      if (!Array.isArray(file.entries) || (blob.timestamp !== null && (file.entries.length !== 1 || Date.parse(file.entries[0]!.timestamp) !== blob.timestamp || file.entries[0]!.id !== this.eventId(blob)))) {
+        throw new Error('Audit history is unavailable: an event file does not match its listing metadata')
+      }
+      return file.entries
     })
-    
+    return blob.version ? cache.read(key, blob.version, load) : load()
+  }
+
+  private filterEntries(entries: AuditLogEntry[], filter: AuditLogFilter, startTime: number, endTime: number): AuditLogEntry[] {
     // Apply filters
-    let filteredEntries = Array.from(allEntries.values()).filter(entry => {
+    let filteredEntries = entries.filter(entry => {
       const timestamp = new Date(entry.timestamp).getTime()
       return timestamp >= startTime && timestamp <= endTime
     })
@@ -339,9 +389,9 @@ export class AuditStorageService {
       }
       
       if (sortOrder === 'asc') {
-        return aVal > bVal ? 1 : -1
+        return aVal > bVal ? 1 : aVal < bVal ? -1 : a.id.localeCompare(b.id)
       } else {
-        return aVal < bVal ? 1 : -1
+        return aVal < bVal ? 1 : aVal > bVal ? -1 : a.id.localeCompare(b.id)
       }
     })
     

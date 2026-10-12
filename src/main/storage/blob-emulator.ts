@@ -54,9 +54,9 @@ function error(status: number, code: string, message: string): Response {
   )
 }
 
-const etag = (blob: StoredBlob) => `"0x${blob.lastModified.getTime().toString(16).toUpperCase()}"`
+const etag = (blob: StoredBlob) => blob.etag ?? `"0x${blob.lastModified.getTime().toString(16).toUpperCase()}"`
 
-function blobXml(blob: StoredBlob): string {
+function blobXml(blob: StoredBlob, includeMetadata = false): string {
   return (
     `<Blob><Name>${xml(blob.name)}</Name><Properties>` +
     `<Creation-Time>${blob.created.toUTCString()}</Creation-Time>` +
@@ -65,7 +65,9 @@ function blobXml(blob: StoredBlob): string {
     `<Content-Length>${blob.size}</Content-Length>` +
     `<Content-Type>${xml(blob.contentType)}</Content-Type>` +
     `<BlobType>BlockBlob</BlobType><LeaseStatus>unlocked</LeaseStatus><LeaseState>available</LeaseState>` +
-    `</Properties></Blob>`
+    `</Properties>` +
+    (includeMetadata && blob.metadata ? `<Metadata>${Object.entries(blob.metadata).filter(([key]) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)).map(([key, value]) => `<${key}>${xml(value)}</${key}>`).join("")}</Metadata>` : "") +
+    `</Blob>`
   )
 }
 
@@ -78,7 +80,7 @@ async function listBlobs(store: LocalBlobStore, account: string, container: stri
   // Blobs and virtual folders in one lexicographic stream, like Azure.
   const items: Array<{ key: string; xml: string }> = []
   const prefixes = new Set<string>()
-  for (const blob of await store.list(account, container)) {
+  for (const blob of await store.list(account, container, prefix)) {
     if (!blob.name.startsWith(prefix)) continue
     const rest = blob.name.slice(prefix.length)
     const cut = delimiter ? rest.indexOf(delimiter) : -1
@@ -89,7 +91,7 @@ async function listBlobs(store: LocalBlobStore, account: string, container: stri
         items.push({ key: folder, xml: `<BlobPrefix><Name>${xml(folder)}</Name></BlobPrefix>` })
       }
     } else {
-      items.push({ key: blob.name, xml: blobXml(blob) })
+      items.push({ key: blob.name, xml: blobXml(blob, query.get("include")?.split(",").includes("metadata")) })
     }
   }
   items.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
@@ -161,7 +163,8 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
     // Blob level.
     if (method === "PUT") {
       const data = new Uint8Array(await request.arrayBuffer())
-      const blob = await store.put(account, container, blobName, data, request.headers.get("content-type") ?? "application/octet-stream", request.headers.get("if-none-match") === "*")
+      const metadata = Object.fromEntries([...request.headers].filter(([key]) => key.startsWith("x-ms-meta-")).map(([key, value]) => [key.slice("x-ms-meta-".length), value]))
+      const blob = await store.put(account, container, blobName, data, request.headers.get("content-type") ?? "application/octet-stream", request.headers.get("if-none-match") === "*", Object.keys(metadata).length ? metadata : undefined)
       return new Response(null, { status: 201, headers: { etag: etag(blob), "last-modified": blob.lastModified.toUTCString() } })
     }
     if (method === "GET" || method === "HEAD") {
@@ -172,6 +175,8 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
         "last-modified": blob.lastModified.toUTCString(),
         etag: etag(blob),
         "x-ms-blob-type": "BlockBlob",
+        // Stored metadata comes back the way Azure returns it, with the x-ms-meta- prefix.
+        ...Object.fromEntries(Object.entries(blob.metadata ?? {}).map(([key, value]) => [`x-ms-meta-${key}`, value])),
       }
       return new Response(method === "HEAD" ? null : new Uint8Array(data), { status: 200, headers })
     }
