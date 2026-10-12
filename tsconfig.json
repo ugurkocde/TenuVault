@@ -14,7 +14,6 @@
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "types": ["node", "vite/client"],
-    "baseUrl": ".",
     "paths": {
       "~/components/tenants/add-tenant-modal": ["./src/renderer/overrides/add-tenant-modal.tsx"],
       "~/components/tenants/add-tenant-modal-redesigned": ["./src/renderer/overrides/add-tenant-modal.tsx"],
