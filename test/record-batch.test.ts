@@ -6,6 +6,7 @@ import { TenantRecords } from '../src/main/features/records'
 import { DOMAINS } from '../src/main/features/domains'
 import { SecureStore, type Cipher } from '../src/main/storage/secure-store'
 import { TENANT_A } from './feature-helpers'
+import { memoryStore } from './helpers'
 const meta = { actor: null, reason: 'Test record' }
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
@@ -46,4 +47,62 @@ it('refuses a multi-key batch before writing when the store has no atomic setMan
   expect(values.size).toBe(0)
   records.batch(() => records.create(DOMAINS.healthFindings, TENANT_A, { number: 2 }, meta))
   expect(store.set).toHaveBeenCalledTimes(1)
+})
+
+it.each(['callback', 'list', 'get'])('keeps evidence and history unchanged when an outer batch catches a failed inner %s mutation', (source) => {
+  const store = memoryStore()
+  const records = new TenantRecords(store, () => new Date('2026-10-12T12:00:00Z'))
+  const domain = DOMAINS.healthFindings
+  type Finding = { evidence: { details: { count: number } } }
+  let id!: string
+  let expected: unknown
+  records.batch(() => {
+    id = records.create<Finding>(domain, TENANT_A, { evidence: { details: { count: 1 } } }, meta).id
+    records.update<Finding>(domain, TENANT_A, id, current => ({ ...current, evidence: { details: { count: 2 } } }), meta)
+    expected = structuredClone(records.get<Finding>(domain, TENANT_A, id))
+    expect(() => records.batch(() => {
+      if (source === 'callback') {
+        records.update<Finding>(domain, TENANT_A, id, current => {
+          current.evidence.details.count = 99
+          throw new Error('failed nested update')
+        }, meta)
+      } else {
+        const current = source === 'list' ? records.list<Finding>(domain, TENANT_A)[0]! : records.get<Finding>(domain, TENANT_A, id)!
+        current.evidence.details.count = 99
+        current.history[0]!.snapshot.evidence!.details.count = 99
+        throw new Error('failed nested update')
+      }
+    })).toThrow('failed nested update')
+    expect(records.get(domain, TENANT_A, id)).toEqual(expected)
+    records.create(DOMAINS.healthReviews, TENANT_A, { kind: 'committed outer batch' }, meta)
+  })
+  expect(new TenantRecords(store).get(domain, TENANT_A, id)).toEqual(expected)
+  expect(records.list(DOMAINS.healthReviews, TENANT_A)).toHaveLength(1)
+})
+
+it('snapshots mutable callback inputs and detaches returned records from staged evidence and history', () => {
+  const records = new TenantRecords(memoryStore(), () => new Date('2026-10-12T12:00:00Z'))
+  const domain = DOMAINS.healthFindings
+  type Finding = { evidence: { details: { count: number } } }
+  let id!: string
+  records.batch(() => {
+    const input = { evidence: { details: { count: 1 } } }
+    const created = records.create<Finding>(domain, TENANT_A, input, meta)
+    id = created.id
+    input.evidence.details.count = 90
+    created.evidence.details.count = 91
+    created.history[0]!.snapshot.evidence!.details.count = 92
+    let callbackInput!: Finding
+    const updated = records.update<Finding>(domain, TENANT_A, id, current => {
+      callbackInput = current
+      current.evidence.details.count = 2
+      return current
+    }, meta)!
+    callbackInput.evidence.details.count = 93
+    updated.evidence.details.count = 94
+    updated.history[0]!.snapshot.evidence!.details.count = 95
+  })
+  const stored = records.get<Finding>(domain, TENANT_A, id)!
+  expect(stored.evidence.details.count).toBe(2)
+  expect(stored.history.map(revision => revision.snapshot.evidence?.details.count)).toEqual([1, 2])
 })

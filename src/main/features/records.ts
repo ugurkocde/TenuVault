@@ -84,6 +84,10 @@ export class TenantRecords {
   ) {}
 
   list<T>(domain: string, tenantId: string): Stored<T>[] {
+    return structuredClone(this.readRecords<T>(domain, tenantId))
+  }
+
+  private readRecords<T>(domain: string, tenantId: string): Stored<T>[] {
     const key = this.key(domain, tenantId)
     const staged = this.staged?.get(key)
     if (staged) return [...staged] as Stored<T>[]
@@ -103,13 +107,13 @@ export class TenantRecords {
 
   /** Stores a new record with a fresh ID and its first revision. */
   create<T extends object>(domain: string, tenantId: string, value: T, meta: { actor: string | null; reason: string }): Stored<T> {
-    const records = this.list<T>(domain, tenantId)
+    const records = this.readRecords<T>(domain, tenantId)
     if (records.length >= MAX_RECORDS) throw new Error("This tenant has too many stored records of this kind. Close or export older ones first.")
     const at = this.now().toISOString()
-    const base = { ...value, id: randomUUID(), tenantId: tenantId.toLowerCase(), createdAt: at, updatedAt: at } as T & StoredRecord
-    const record: Stored<T> = { ...base, history: [{ at, actor: meta.actor, reason: meta.reason, snapshot: base }] }
+    const base = { ...structuredClone(value), id: randomUUID(), tenantId: tenantId.toLowerCase(), createdAt: at, updatedAt: at } as T & StoredRecord
+    const record: Stored<T> = { ...base, history: [{ at, actor: meta.actor, reason: meta.reason, snapshot: structuredClone(base) }] }
     this.save(domain, tenantId, [...records, record])
-    return record
+    return structuredClone(record)
   }
 
   /**
@@ -123,17 +127,17 @@ export class TenantRecords {
     change: (current: T & StoredRecord) => T,
     meta: { actor: string | null; reason: string },
   ): Stored<T> | null {
-    const records = this.list<T>(domain, tenantId)
+    const records = this.readRecords<T>(domain, tenantId)
     const index = records.findIndex((record) => record.id === id)
     const current = records[index]
     if (!current) return null
     const { history, ...plain } = current
     const at = this.now().toISOString()
     // A caller that spreads a stored record back in must not nest its history in the snapshot.
-    const { history: _nested, ...changed } = change(plain as T & StoredRecord) as T & { history?: unknown }
-    const next = { ...changed, id: current.id, tenantId: current.tenantId, createdAt: current.createdAt, updatedAt: at } as T & StoredRecord
+    const { history: _nested, ...changed } = change(structuredClone(plain) as T & StoredRecord) as T & { history?: unknown }
+    const next = { ...structuredClone(changed), id: current.id, tenantId: current.tenantId, createdAt: current.createdAt, updatedAt: at } as T & StoredRecord
     const { changes, removed } = delta(plain as Record<string, unknown>, next as Record<string, unknown>)
-    let revisions: RecordRevision<T & StoredRecord>[] = [...history, { at, actor: meta.actor, reason: meta.reason, snapshot: changes as Partial<T & StoredRecord>, partial: true, ...(removed.length ? { removed } : {}) }]
+    let revisions: RecordRevision<T & StoredRecord>[] = [...history, { at, actor: meta.actor, reason: meta.reason, snapshot: structuredClone(changes) as Partial<T & StoredRecord>, partial: true, ...(removed.length ? { removed } : {}) }]
     if (revisions.length > MAX_REVISIONS) {
       // The oldest kept revision becomes complete again, so the kept history still resolves.
       const first = resolveHistory(revisions)[revisions.length - MAX_REVISIONS]!
@@ -142,12 +146,12 @@ export class TenantRecords {
     const updated: Stored<T> = { ...next, history: revisions }
     records[index] = updated
     this.save(domain, tenantId, records)
-    return updated
+    return structuredClone(updated)
   }
 
   /** Deletes one record. Only for records the admin explicitly discards. */
   remove(domain: string, tenantId: string, id: string): boolean {
-    const records = this.list(domain, tenantId)
+    const records = this.readRecords(domain, tenantId)
     const kept = records.filter((record) => record.id !== id)
     if (kept.length === records.length) return false
     this.save(domain, tenantId, kept)
@@ -157,7 +161,7 @@ export class TenantRecords {
   /** Synchronous scan writes share one durable flush. Failed batches leave no staged changes. */
   batch<T>(run: () => T): T {
     const parent = this.staged
-    this.staged = new Map(parent)
+    this.staged = parent ? structuredClone(parent) : new Map()
     try {
       const result = run()
       if (result && typeof (result as { then?: unknown }).then === "function") throw new Error("Record batches must finish synchronously")

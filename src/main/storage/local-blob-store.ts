@@ -181,8 +181,8 @@ export class LocalBlobStore {
   private readonly directoryStamps = new Map<string, string>()
   private readonly dirty = new Set<string>()
   private readonly generations = new Map<string, number>()
-  private readonly rebuilding = new Set<string>()
-  private readonly checks = new Map<string, Promise<Map<string, Entry>>>()
+  private readonly rebuilding = new Map<string, Promise<Map<string, Entry>>>()
+  private readonly checks = new Map<string, { generation: number; started: boolean; entries: Promise<Map<string, Entry>> }>()
 
   /**
    * @param root   Folder that holds the encrypted backups.
@@ -238,6 +238,7 @@ export class LocalBlobStore {
     let unchanged = false
     try { unchanged = fileStamp(await stat(join(dir, entry.file), { bigint: true })) === entry.stamp } catch { /* Rebuild missing or replaced files. */ }
     if (!unchanged) {
+      this.changed(dir)
       this.index.delete(dir)
       entries = await this.checkedEntries(account, container)
       entry = entries.get(name)
@@ -283,6 +284,7 @@ export class LocalBlobStore {
       this.changed(this.dir(account, container))
       if (process.platform !== "win32") await syncDirectory(this.dir(account, container))
     } catch (error) {
+      this.changed(this.dir(account, container))
       this.index.delete(this.dir(account, container))
       if (createOnly && (error as NodeJS.ErrnoException).code === "EEXIST") {
         throw new BlobAlreadyExistsError(name)
@@ -322,43 +324,63 @@ export class LocalBlobStore {
     }
   }
 
-  /** Coalesces inventory checks and rebuilds. File stats also detect in-place corruption. */
+  /** Coalesces checks requested together; later listings wait for a fresh membership and file check. */
   private checkedEntries(account: string, container: string): Promise<Map<string, Entry>> {
     const dir = this.dir(account, container)
+    const generation = this.generations.get(dir) ?? 0
     const pending = this.checks.get(dir)
-    if (pending) return pending
-    const check = (async () => {
-      let entries = await this.entries(account, container)
-      const unchanged = !this.dirty.has(dir) && (await mapLimit([...entries.values()], HEADER_CONCURRENCY, async (entry) => {
-        try { return fileStamp(await stat(join(dir, entry.file), { bigint: true })) === entry.stamp } catch { return false }
-      })).every(Boolean)
-      if (!unchanged) {
-        this.index.delete(dir)
-        entries = await this.entries(account, container)
+    if (pending?.generation === generation && !pending.started) return pending.entries
+    // An invalidated check must not delay or supply a read from the new generation.
+    const running = pending?.generation === generation ? pending.entries.catch(() => undefined) : undefined
+    const check = { generation, started: false, entries: Promise.resolve(new Map<string, Entry>()) }
+    check.entries = (async () => {
+      await running
+      if ((this.generations.get(dir) ?? 0) !== generation) return this.checkedEntries(account, container)
+      check.started = true
+      try {
+        let entries = await this.entries(account, container)
+        const files = new Set(await this.files(dir))
+        // Directory stamps can be coarse on a shared folder, so always reconcile names.
+        const sameFiles = files.size === entries.size && [...entries.values()].every(entry => files.has(entry.file))
+        const unchanged = !this.dirty.has(dir) && sameFiles && (await mapLimit([...entries.values()], HEADER_CONCURRENCY, async (entry) => {
+          try { return fileStamp(await stat(join(dir, entry.file), { bigint: true })) === entry.stamp } catch { return false }
+        })).every(Boolean)
+        if ((this.generations.get(dir) ?? 0) !== generation) return this.checkedEntries(account, container)
+        if (!unchanged) {
+          this.index.delete(dir)
+          entries = await this.entries(account, container, entries)
+        }
+        return (this.generations.get(dir) ?? 0) === generation ? entries : this.checkedEntries(account, container)
+      } catch (error) {
+        if ((this.generations.get(dir) ?? 0) !== generation) return this.checkedEntries(account, container)
+        throw error
       }
-      return entries
     })()
     this.checks.set(dir, check)
-    void check.finally(() => { if (this.checks.get(dir) === check) this.checks.delete(dir) }).catch(() => undefined)
-    return check
+    void check.entries.finally(() => { if (this.checks.get(dir) === check) this.checks.delete(dir) }).catch(() => undefined)
+    return check.entries
   }
 
   /** Keeps decrypted headers until a write or a change to the directory inventory. */
-  private async entries(account: string, container: string): Promise<Map<string, Entry>> {
+  private async entries(account: string, container: string, reuse?: Map<string, Entry>): Promise<Map<string, Entry>> {
     const dir = this.dir(account, container)
     const generation = this.generations.get(dir) ?? 0
     const stamp = await this.directoryStamp(dir)
+    if ((this.generations.get(dir) ?? 0) !== generation) return this.entries(account, container, reuse)
+    const previous = reuse ?? this.index.get(dir)
     if (!this.rebuilding.has(dir) && this.directoryStamps.get(dir) !== stamp) this.index.delete(dir)
     let cached = this.index.get(dir)
     if (!cached) {
-      this.rebuilding.add(dir)
-      cached = this.readIndex(dir, account, container).then(entries => {
-        if ((this.generations.get(dir) ?? 0) === generation) {
-          this.directoryStamps.set(dir, stamp)
-          this.dirty.delete(dir)
-        } else this.dirty.add(dir)
+      cached = this.readIndex(dir, account, container, previous).then(entries => {
+        if (this.index.get(dir) === cached) {
+          if ((this.generations.get(dir) ?? 0) === generation) {
+            this.directoryStamps.set(dir, stamp)
+            this.dirty.delete(dir)
+          } else this.dirty.add(dir)
+        }
         return entries
-      }).finally(() => { this.rebuilding.delete(dir) })
+      }).finally(() => { if (this.rebuilding.get(dir) === cached) this.rebuilding.delete(dir) })
+      this.rebuilding.set(dir, cached)
       this.index.set(dir, cached)
       const current = cached
       void cached.catch(() => { if (this.index.get(dir) === current) this.index.delete(dir) })
@@ -371,20 +393,27 @@ export class LocalBlobStore {
     this.dirty.add(dir)
   }
 
-  private async readIndex(dir: string, account: string, container: string): Promise<Map<string, Entry>> {
-    const entries = new Map<string, Entry>()
-    let files: string[]
+  private async files(dir: string): Promise<string[]> {
     try {
-      files = (await readdir(dir)).filter((f) => f.endsWith(EXT))
+      return (await readdir(dir)).filter((f) => f.endsWith(EXT))
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return entries
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return []
       throw error
     }
+  }
+
+  private async readIndex(dir: string, account: string, container: string, previous?: Map<string, Entry> | Promise<Map<string, Entry>>): Promise<Map<string, Entry>> {
+    const entries = new Map<string, Entry>()
+    const files = await this.files(dir)
+    const cached = await Promise.resolve(previous).catch(() => undefined)
+    const byFile = new Map([...(cached?.values() ?? [])].map(entry => [entry.file, entry]))
     // Headers are read a few at a time and added in directory order, so duplicates are found as before.
     const read = await mapLimit(files, HEADER_CONCURRENCY, async (file): Promise<Entry | null> => {
       const path = join(dir, file)
       let handle: Awaited<ReturnType<typeof open>> | undefined
       try {
+        const cached = byFile.get(file)
+        if (cached && fileStamp(await stat(path, { bigint: true })) === cached.stamp) return cached
         handle = await open(path, "r")
         const prefix = Buffer.alloc(MAGIC_LENGTH + 2)
         const prefixRead = await handle.read(prefix, 0, prefix.length, 0)

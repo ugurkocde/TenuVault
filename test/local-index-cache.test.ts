@@ -1,10 +1,10 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { copyFileSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import * as fileSystem from 'node:fs/promises'
 import { afterEach, expect, it, vi } from 'vitest'
-import { LocalBlobStore } from '../src/main/storage/local-blob-store'
+import { IncompleteInventoryError, LocalBlobStore } from '../src/main/storage/local-blob-store'
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>()
   return { ...actual, stat: vi.fn(actual.stat), rename: vi.fn(actual.rename) }
@@ -81,4 +81,115 @@ it('keeps a put visible when publication finishes during an inventory rebuild', 
   finishInventory.resolve()
   await pendingList
   expect((await store.list('account', 'intune-backups')).map(blob => blob.name)).toEqual(['backup-new/Policies/New.json'])
+})
+
+function deferred() {
+  let resolve!: () => void
+  const promise = new Promise<void>(done => { resolve = done })
+  return { promise, resolve }
+}
+
+function freezeDirectoryStamp(store: LocalBlobStore) {
+  vi.spyOn(store as unknown as { directoryStamp: (dir: string) => Promise<string> }, 'directoryStamp').mockResolvedValue('coarse-directory-stamp')
+}
+
+it('reconciles external additions and removals with an unchanged directory stamp while reusing unchanged headers', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'tv-coarse-index-')); roots.push(root)
+  const keys = [randomBytes(32)]
+  const store = new LocalBlobStore(root, keys)
+  const other = new LocalBlobStore(root, keys)
+  await store.createContainer('account', 'intune-backups')
+  await store.put('account', 'intune-backups', 'backup-one/Policies/A.json', Buffer.from('{}'), 'application/json')
+  freezeDirectoryStamp(store)
+  await store.list('account', 'intune-backups')
+  const decrypt = vi.spyOn(store as unknown as { decrypt: (...args: unknown[]) => Buffer }, 'decrypt')
+  await other.put('account', 'intune-backups', 'backup-two/Policies/B.json', Buffer.from('{"new":true}'), 'application/json')
+  expect((await store.list('account', 'intune-backups')).map(blob => blob.name)).toEqual(['backup-one/Policies/A.json', 'backup-two/Policies/B.json'])
+  expect(decrypt).toHaveBeenCalledTimes(1)
+  await other.delete('account', 'intune-backups', 'backup-one/Policies/A.json')
+  expect((await store.list('account', 'intune-backups')).map(blob => blob.name)).toEqual(['backup-two/Policies/B.json'])
+  expect(decrypt).toHaveBeenCalledTimes(1)
+})
+
+it('rejects an external duplicate with an unchanged directory stamp on the next listing', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'tv-coarse-duplicate-')); roots.push(root)
+  const store = new LocalBlobStore(root, [randomBytes(32)], 1)
+  await store.createContainer('account', 'intune-backups')
+  await store.put('account', 'intune-backups', 'backup-one/Policies/A.json', Buffer.from('{}'), 'application/json')
+  freezeDirectoryStamp(store)
+  await store.list('account', 'intune-backups')
+  const dir = join(root, 'account', 'intune-backups')
+  const file = readdirSync(dir)[0]!
+  // TVB1 permits another file name, so both headers authenticate as the same blob.
+  const duplicate = `${file === '0'.repeat(40) + '.tvb' ? '1'.repeat(40) : '0'.repeat(40)}.tvb`
+  copyFileSync(join(dir, file), join(dir, duplicate))
+  await expect(store.list('account', 'intune-backups')).rejects.toBeInstanceOf(IncompleteInventoryError)
+})
+
+async function pausedInventoryCheck() {
+  const root = mkdtempSync(join(tmpdir(), 'tv-paused-index-')); roots.push(root)
+  const keys = [randomBytes(32)]
+  const store = new LocalBlobStore(root, keys)
+  const other = new LocalBlobStore(root, keys)
+  const account = 'account', container = 'intune-backups'
+  const a = 'backup-one/Policies/A.json', b = 'backup-one/Policies/B.json'
+  await store.createContainer(account, container)
+  await store.put(account, container, a, Buffer.from('{}'), 'application/json')
+  await store.put(account, container, b, Buffer.from('{}'), 'application/json')
+  freezeDirectoryStamp(store)
+  await store.list(account, container)
+  await other.list(account, container)
+  const internal = store as unknown as { entries: (...args: string[]) => Promise<Map<string, { file: string }>> }
+  const entries = await internal.entries(account, container)
+  const aPath = join(root, account, container, entries.get(a)!.file)
+  const bPath = join(root, account, container, entries.get(b)!.file)
+  const aChecked = deferred(), ready = deferred(), release = deferred()
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  let pause = true
+  vi.mocked(fileSystem.stat).mockImplementation(async (...args) => {
+    const info = await actual.stat(...args)
+    if (String(args[0]) === aPath) aChecked.resolve()
+    if (String(args[0]) === bPath && pause) {
+      pause = false
+      ready.resolve()
+      await release.promise
+    }
+    return info
+  })
+  const pendingList = store.list(account, container)
+  await Promise.all([aChecked.promise, ready.promise])
+  return { store, other, account, container, a, pendingList, release }
+}
+
+it('refreshes size and ETag after get invalidates a paused check that already inspected the replaced file', async () => {
+  const { store, other, account, container, a, pendingList, release } = await pausedInventoryCheck()
+  const replacement = await other.put(account, container, a, Buffer.from('{"replacement":true}'), 'application/json')
+  const requested = deferred()
+  const internal = store as unknown as { checkedEntries: (...args: string[]) => Promise<unknown> }
+  const check = internal.checkedEntries.bind(store)
+  vi.spyOn(internal, 'checkedEntries').mockImplementation((...args) => {
+    const result = check(...args)
+    requested.resolve()
+    return result
+  })
+  const pendingGet = store.get(account, container, a)
+  await requested.promise
+  try {
+    const { blob, data } = await pendingGet
+    expect(data.toString()).toBe('{"replacement":true}')
+    expect(blob).toMatchObject({ size: replacement.size, etag: replacement.etag })
+  } finally {
+    release.resolve()
+    await pendingList
+  }
+})
+
+it.each(['addition', 'replacement'])('starts a fresh listing check after an external %s while an earlier check is paused', async (publication) => {
+  const { store, other, account, container, a, pendingList, release } = await pausedInventoryCheck()
+  const name = publication === 'addition' ? 'backup-two/Policies/C.json' : a
+  const published = await other.put(account, container, name, Buffer.from('{"published":true}'), 'application/json')
+  const pendingNextList = store.list(account, container)
+  release.resolve()
+  expect(await pendingNextList).toContainEqual(expect.objectContaining({ name, size: published.size, etag: published.etag }))
+  await pendingList
 })
