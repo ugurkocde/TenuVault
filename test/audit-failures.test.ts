@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { AuditStorageService } from '../src/portal/lib/audit/storage'
 import { setAuditOutboxStore, pendingEvents } from '../src/portal/lib/audit/outbox'
-import { AuditEventType, AuditSeverity, AuditResult, type AuditLogEntry } from '../src/portal/lib/audit/types'
+import { AuditEventType, AuditSeverity, AuditResult, type AuditLogEntry, DESKTOP_AUDIT_EVENT_TYPES } from '../src/portal/lib/audit/types'
 import { memoryStore } from './helpers'
 import { POST as logEvent } from '../src/portal/app/api/audit/log/route'
 import { NextRequest } from '../src/main/api/next-server-shim'
@@ -73,4 +73,12 @@ it.each(['{', '{"store":{}}', 'null', '{"store":[{"id":"partial"}]}', JSON.strin
   const response = await POST(new NextRequest('http://tenuvault.internal/api/audit/logs', { method: 'POST', body: JSON.stringify({ tenantId: '11111111-1111-1111-1111-111111111111', appId: 'app', clientSecret: 'test', storageAccountName: 'store' }) }))
   expect(response.status).toBe(500)
   expect(await response.json()).toMatchObject({ pendingCount: null, pendingDurable: true })
+})
+
+it.each(Object.values(AuditEventType).filter(type => !DESKTOP_AUDIT_EVENT_TYPES.includes(type)))('keeps queued legacy %s events readable even when hidden from filters', eventType => {
+  const legacy = { ...entry, eventType, severity: AuditSeverity.CRITICAL }
+  const store = memoryStore()
+  store.set('audit.pending-events', JSON.stringify({ store: [legacy] }))
+  setAuditOutboxStore(store)
+  expect(pendingEvents('store')).toEqual([legacy])
 })

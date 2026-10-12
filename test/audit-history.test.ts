@@ -90,6 +90,17 @@ describe('own-operation history routes', () => {
     expect(JSON.stringify(json)).not.toContain('storage-token')
   })
 
+  it('exports operation columns without the local IP placeholder', async () => {
+    storage([entry('mine', { context: { ipAddress: 'local', userAgent: 'desktop' }, duration: 125 })])
+    const response = await exportLogs(new NextRequest('http://tenuvault.internal/api/audit/export', { method: 'POST', body: body({ exportOptions: { format: 'pdf', filter } }) }))
+    expect(response.status).toBe(200)
+    const html = await response.text()
+    expect([...html.matchAll(/<th>(.*?)<\/th>/g)].map(match => match[1])).toEqual(['Timestamp', 'Event Type', 'Severity', 'User', 'Action', 'Resource', 'Result', 'Duration'])
+    expect(html).toContain('<td>Restore mine</td>')
+    expect(html).toContain('<td>125ms</td>')
+    expect(html).not.toContain('<td>local</td>')
+  })
+
   it('reports events still waiting to be saved, so an interrupted write is not silently missing', async () => {
     storage(history())
     queueEvent('store', entry('pending'))

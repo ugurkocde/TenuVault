@@ -73,7 +73,6 @@ function generatePDFContent(logs: AuditLogEntry[]): string {
             <th>Action</th>
             <th>Resource</th>
             <th>Result</th>
-            <th>IP Address</th>
             <th>Duration</th>
           </tr>
         </thead>
@@ -87,7 +86,6 @@ function generatePDFContent(logs: AuditLogEntry[]): string {
               <td>${escape(log.action)}</td>
               <td>${escape(log.resource.type)}: ${escape(log.resource.name)}</td>
               <td class="result-${escape(log.result)}">${escape(outcomeLabel(log.result))}</td>
-              <td>${escape(log.context.ipAddress)}</td>
               <td>${log.duration ? `${log.duration}ms` : '-'}</td>
             </tr>
           `).join('')}
