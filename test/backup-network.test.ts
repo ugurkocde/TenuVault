@@ -43,6 +43,26 @@ afterEach(() => {
 })
 
 describe("backup request recovery", () => {
+  it.each(["PUT", "DELETE"])("honours a storage Retry-After in seconds before retrying %s", async method => {
+    requestTimers()
+    const attempts: number[] = []
+    const fetchImpl: typeof fetch = async (input, init) => {
+      if (!new URL(String(input)).search && init?.method === method) {
+        attempts.push(Date.now())
+        if (attempts.length === 1) return new Response(null, { status: 429, headers: { "Retry-After": "3" } })
+      }
+      return new Response(null, { status: init?.method === "DELETE" ? 202 : 201 })
+    }
+    const pending = verifyStorageAccess(fetchImpl, "contoso", async () => "token")
+    await vi.advanceTimersByTimeAsync(2999)
+    expect(attempts).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    await expect(pending).resolves.toBeUndefined()
+    expect(attempts).toHaveLength(2)
+    expect(attempts[1]! - attempts[0]!).toBe(3000)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it.each([
     ["Retry-After", `1${"0".repeat(307)}`],
     ["Retry-After", `1${"0".repeat(400)}`],
@@ -234,7 +254,7 @@ describe("backup request recovery", () => {
     expect(signals.length).toBeGreaterThanOrEqual(24)
     expect(signals.length).toBeLessThanOrEqual(31)
     expect(signals.every(signal => signal.aborted)).toBe(true)
-    expect(signals.every(signal => signal.reason.message.includes("timed out after 90 seconds"))).toBe(true)
+    expect(signals.every(signal => signal.reason.message.includes("timed out after 90 seconds") || signal.reason.message === job.exception)).toBe(true)
     // 31 uploads, 15 healthy policy reads, container creation and the initial Graph list.
     expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(48)
     expect(fetchImpl.mock.calls.some(([input]) => String(input).endsWith("/metadata.json"))).toBe(false)
@@ -535,7 +555,7 @@ describe("backup request recovery", () => {
     expect(job.endTime).toBeDefined()
     expect(job.exception).toBeUndefined()
     expect(job.log.filter(line => line.includes("Could not remove old backups:"))).toHaveLength(1)
-    expect(job.log.join("\n")).toContain("Backup request timed out after 90 seconds")
+    expect(job.log.join("\n")).toContain("Backup request timed out after 90 seconds. Check your connection and retry. They will be reconsidered on the next run.")
     expect(signals).toHaveLength(3)
     expect(signals.every(signal => signal.aborted)).toBe(true)
     expect(saved.get(manifest)).toBe(committed)

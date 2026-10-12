@@ -20,7 +20,7 @@ import { coveredFolders, EVERYTHING, includedTypes, normalizeScope, type BackupS
  * encrypted store on this device (served through the fetch bridge).
  */
 
-export type BackupStatus = "Running" | "Completed" | "Failed"
+export type BackupStatus = "Running" | "Completed" | "Failed" | "Cancelled"
 
 export interface BackupJob {
   id: string
@@ -33,7 +33,6 @@ export interface BackupJob {
   endTime?: string
   exception?: string
   backupFolder?: string
-  deadlineAt?: string
   log: string[]
 }
 
@@ -81,6 +80,7 @@ const MAX_JOBS = 25
 const CONCURRENCY = 8
 const REQUEST_TIMEOUT_MS = 90_000
 export const JOB_DEADLINE_MS = 30 * 60_000
+export const MANIFEST_COMMIT_GRACE_MS = 2 * 60_000
 const REQUEST_ATTEMPTS = 3
 const MAX_RETRY_DELAY_MS = 5 * 60_000
 
@@ -118,6 +118,7 @@ class GraphPauseError extends Error {}
 class StorageError extends Error {}
 class RetryableStorageError extends Error {}
 class RequestTimeoutError extends Error {}
+class BackupCancelledError extends Error {}
 
 /** Only a fully read HTTP error is a status failure; failed body reads are network failures. */
 function requestFailure(error: unknown): "network" | "status" | "token" | "other" {
@@ -140,13 +141,8 @@ class NetworkCircuit {
   }
 
   get signal(): AbortSignal {
-    if (this.deadline !== undefined && Date.now() >= this.deadline) this.stop(jobDeadlineError())
+    if (this.deadline !== undefined && Date.now() >= this.deadline) this.controller.abort(jobDeadlineError())
     return this.combined
-  }
-
-  stop(reason: Error): never {
-    this.controller.abort(reason)
-    throw reason
   }
 
   succeeded(service: NetworkService): void {
@@ -188,7 +184,7 @@ export class BackupEngine {
 
   cancel(jobId: string): BackupJob | undefined {
     const job = this.jobs.get(jobId)
-    if (job?.status === "Running") this.executions.get(jobId)?.controller.abort(new Error("Backup cancelled by you. Earlier policies in this run were saved; the backup is incomplete."))
+    if (job?.status === "Running") this.executions.get(jobId)?.controller.abort(new BackupCancelledError("Backup cancelled by you. No manifest was written for this run."))
     return job
   }
 
@@ -208,7 +204,6 @@ export class BackupEngine {
       progress: 5,
       progressMessage: "Starting backup...",
       startTime: this.now().toISOString(),
-      deadlineAt: new Date(deadline).toISOString(),
       log: [],
     }
     this.jobs.set(job.id, job)
@@ -219,10 +214,10 @@ export class BackupEngine {
     timer.unref?.()
     const done = this.run(job, request, controller.signal, deadline)
       .catch((error: unknown) => {
-        job.status = "Failed"
+        job.status = error instanceof BackupCancelledError ? "Cancelled" : "Failed"
         job.exception = error instanceof Error ? error.message : String(error)
-        job.progressMessage = "Backup failed"
-        this.write(job, `Backup failed: ${job.exception}`)
+        job.progressMessage = job.status === "Cancelled" ? "Backup cancelled" : "Backup failed"
+        this.write(job, `${job.progressMessage}: ${job.exception}`)
       })
       .finally(() => {
         clearTimeout(timer)
@@ -313,10 +308,8 @@ export class BackupEngine {
 
     await pool(work, concurrency, async ({ type, item, displayName, fileName }) => {
       job.progressMessage = `Backing up ${type.label}`
-      let reading = true
       try {
         const detail = await readObject(type, item.id, reader)
-        reading = false
         const body = JSON.stringify(detail, null, 2)
         await storage.put(`${backupFolder}/${type.folder}/${fileName}.json`, body)
         items[`${type.folder}/${item.id}`] = {
@@ -328,7 +321,6 @@ export class BackupEngine {
         counts[type.folder]!++
       } catch (error) {
         network.signal.throwIfAborted()
-        if (error instanceof RequestTimeoutError && !reading) throw error
         // An expired sign-in fails every remaining item the same way, so it stops the backup once.
         if (error instanceof TokenError || (error instanceof GraphError && error.status === 401)) throw error
         failures++
@@ -373,8 +365,17 @@ export class BackupEngine {
     // Detach cancellation at the first manifest PUT, after cancellable token acquisition.
     // Retention reads cannot delay the manifest, and a saved backup must not burn a retry slot.
     network.signal.throwIfAborted()
-    const commitStorage = new BlobWriter(this.deps.fetch, request.storageAccountName, storageToken)
-    await commitStorage.put(`${backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), network)
+    const commitDeadline = deadline + MANIFEST_COMMIT_GRACE_MS
+    const commitController = new AbortController()
+    const commitTimer = setTimeout(() => commitController.abort(jobDeadlineError()), Math.max(0, commitDeadline - Date.now()))
+    commitTimer.unref?.()
+    const commitNetwork = new NetworkCircuit(3 * concurrency, commitController.signal, commitDeadline)
+    const commitStorage = new BlobWriter(this.deps.fetch, request.storageAccountName, storageToken, commitNetwork)
+    try {
+      await commitStorage.put(`${backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), network)
+    } finally {
+      clearTimeout(commitTimer)
+    }
 
     // Only a complete backup may replace older ones: if policies could not be read (for
     // example after a permission change), keep every existing backup.
@@ -751,14 +752,6 @@ class BlobWriter {
         if (isImmutabilityRefusal(response.status, bodyCode)) throw new ProtectedBlobError(bodyCode)
         throw new StorageError(await storageError(response, this.account))
       }
-    })
-  }
-
-  async exists(name: string): Promise<boolean> {
-    return this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, { method: "HEAD" }, async (response) => {
-      if (response.status === 404) return false
-      if (!response.ok) throw new StorageError(await storageError(response, this.account))
-      return true
     })
   }
 

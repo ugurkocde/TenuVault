@@ -145,7 +145,7 @@ export function FloatingProgress() {
                     <h4 className="font-medium tracking-tight text-sm">{job.tenantName}</h4>
                     <p className="text-xs text-gray-500">
                       {job.isComplete ? (
-                        job.isSuccessful ? "Backup completed" : "Backup failed"
+                        job.isSuccessful ? "Backup completed" : job.status === "Cancelled" ? "Backup cancelled" : "Backup failed"
                       ) : (
                         "Backup in progress"
                       )}

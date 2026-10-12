@@ -174,7 +174,7 @@ export async function checkBackupCancel({ check, evaluate, waitForCondition, scr
         await evaluate(`${button("Cancel backup")}.click()`)
         assert(await waitForCondition(`window.__backupCancel.cancelResolved && window.__backupCancel.heldPolls >= 2`), "real cancellation did not finish while terminal polls were held")
         assert(await evaluate(`${button("Cancelling…")}?.disabled === true && !${button("Cancel backup")}`), "cancel control re-enabled before the terminal status arrived")
-        assert(await evaluate(`window.__backupCancel.terminal?.status === 'Failed' && window.__backupCancel.terminal.exception.includes('Backup cancelled by you')`), "fixture did not reach the real cancelled state")
+        assert(await evaluate(`window.__backupCancel.terminal?.status === 'Cancelled' && window.__backupCancel.terminal.exception.includes('Backup cancelled by you')`), "fixture did not reach the real cancelled state")
         await evaluate(`window.__backupCancel.releaseStatus = true`)
         assert(await waitForCondition(`${doc}.body.textContent.includes('Backup cancelled by you') && !${button("Cancel backup")} && !${button("Cancelling…")}`), "terminal cancellation status did not replace the control")
         await screenshot(`backup-cancelled-${view}`)

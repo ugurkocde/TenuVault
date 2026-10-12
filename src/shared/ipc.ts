@@ -119,7 +119,7 @@ export interface BackupSchedule extends ScheduleInput {
   attemptSlot?: string
   /** Failed attempts in the most recent attempted slot; reset on success. */
   attempts: number
-  lastStatus?: "Completed" | "Failed"
+  lastStatus?: "Completed" | "Failed" | "Cancelled"
   lastMessage?: string
   nextRunAt: string | null
 }

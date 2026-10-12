@@ -42,7 +42,7 @@ it('offers only recorded desktop event types and severities in the visible filte
   const options = [...html.matchAll(/<select\b[^>]*>(.*?)<\/select>/gs)]
     .map(select => [...select[1]!.matchAll(/<option value="([^"]*)"/g)].map(option => option[1]))
   expect(options).toEqual([
-    ['', 'BACKUP_STARTED', 'BACKUP_COMPLETED', 'BACKUP_FAILED', 'BACKUP_DOWNLOADED', 'RESTORE_COMPLETED', 'RESTORE_FAILED', 'POLICY_CREATED', 'POLICY_REVERTED', 'POLICY_RESTORED', 'POLICY_DRIFT_DETECTED'],
+    ['', 'BACKUP_STARTED', 'BACKUP_COMPLETED', 'BACKUP_FAILED', 'BACKUP_CANCELLED', 'BACKUP_DOWNLOADED', 'RESTORE_COMPLETED', 'RESTORE_FAILED', 'POLICY_CREATED', 'POLICY_REVERTED', 'POLICY_RESTORED', 'POLICY_DRIFT_DETECTED'],
     ['', 'INFO', 'WARNING', 'ERROR'],
     ['', 'SUCCESS', 'FAILURE', 'PARTIAL'],
   ])

@@ -69,7 +69,7 @@ function unattendedFixture(getToken: () => Promise<string>) {
     engine,
     scopes: { get: () => ({ scope: { excluded: [] } }) },
     accounts: { get: () => undefined },
-    host: { dispatch: vi.fn(async () => new Response(null, { status: 200 })) },
+    host: { dispatch: vi.fn(async (_request: Request) => new Response(null, { status: 200 })) },
     INTERNAL_API_ORIGIN: "http://tenuvault.internal",
     DELEGATED_CLIENT_SECRET: "",
     notifyFailure: (tenantId: string, name: string, message: string, trigger: Trigger) => notifyBackupFailure({ tenantId, name }, message, trigger, () => null),
@@ -77,7 +77,7 @@ function unattendedFixture(getToken: () => Promise<string>) {
   const run = new Function(...Object.keys(dependencies), transformSync(source, { loader: "ts" }).code + "\nreturn runScheduledBackup;")(
     ...Object.values(dependencies),
   ) as (tenantId: string, trigger: Trigger) => Promise<{ status: string; message: string }>
-  return { run, start }
+  return { run, start, engine, dispatch: dependencies.host.dispatch }
 }
 
 function windowFixture(loading = false) {
@@ -164,6 +164,22 @@ describe("backup failure notifications", () => {
 })
 
 describe("unattended backup notifications", () => {
+  it.each(["scheduled", "tray"] as const)("records cancellation without a failure notification when the user joins a %s job", async trigger => {
+    const getToken = vi.fn(() => new Promise<string>(() => {}))
+    const { run, start, engine, dispatch } = unattendedFixture(getToken)
+    const automatic = run(tenant.tenantId, trigger)
+    await vi.waitFor(() => expect(getToken).toHaveBeenCalled())
+    const joined = engine.start({ tenantId: tenant.tenantId, clientId: "app", storageAccountName: localStorageAccountName(tenant.tenantId), trigger: "manual" })
+    expect(joined).toBe(start.mock.results[0]!.value)
+    engine.cancel(joined.id)
+    expect(await automatic).toEqual({ status: "Cancelled", message: "Backup cancelled by you. No manifest was written for this run." })
+    expect(joined.status).toBe("Cancelled")
+    expect(notifications.created).toEqual([])
+    expect(dispatch).toHaveBeenCalledOnce()
+    const request = dispatch.mock.calls[0]![0] as Request
+    expect((await request.json()).logEntry).toMatchObject({ eventType: "BACKUP_CANCELLED", result: "PARTIAL", severity: "INFO" })
+  })
+
   it.each([["tray", "scheduled"], ["scheduled", "tray"]] as const)("notifies once for the originating %s job when %s joins it", async (original, joining) => {
     let rejectToken!: (reason: Error) => void
     const token = new Promise<string>((_resolve, reject) => { rejectToken = reject })

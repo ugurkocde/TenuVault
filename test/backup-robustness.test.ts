@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { BackupEngine, JOB_DEADLINE_MS, type BackupJob } from "../src/main/backup/engine"
+import { BackupEngine, JOB_DEADLINE_MS, MANIFEST_COMMIT_GRACE_MS, type BackupJob } from "../src/main/backup/engine"
 import { BackupScheduler } from "../src/main/backup/scheduler"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { memoryStore } from "./helpers"
@@ -10,12 +10,12 @@ const scope = { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceCon
 const request = { tenantId: TENANT, clientId: "client", storageAccountName: "contoso", scope }
 const prefix = "/intune-backups/"
 
-function setup(options: { count?: number; retention?: number; now?: () => Date; getToken?: (tenant: string, client: string, scope: string) => Promise<string>; override?: (url: URL, init: RequestInit) => Response | Promise<Response> | undefined } = {}) {
+function setup(options: { count?: number; retention?: number; retentionDays?: () => number; now?: () => Date; getToken?: (tenant: string, client: string, scope: string) => Promise<string>; override?: (url: URL, init: RequestInit) => Response | Promise<Response> | undefined } = {}) {
   const saved = new Map<string, string>()
   const calls: Array<{ url: URL; init: RequestInit }> = []
   const engine = new BackupEngine({
     now: options.now,
-    retentionDays: () => options.retention ?? 0,
+    retentionDays: options.retentionDays ?? (() => options.retention ?? 0),
     getToken: options.getToken ?? (async () => "token"),
     fetch: async (input, init = {}) => {
       const url = new URL(String(input))
@@ -46,7 +46,7 @@ function setup(options: { count?: number; retention?: number; now?: () => Date; 
         return new Response(null, { status: 202 })
       }
       return saved.has(name)
-        ? new Response(init.method === "HEAD" ? null : saved.get(name))
+        ? new Response(saved.get(name))
         : new Response(null, { status: 404 })
     },
   })
@@ -65,7 +65,7 @@ describe("bounded backup jobs", () => {
     const signal = calls.find(call => call.url.hostname === "graph.microsoft.com")!.init.signal!
     engine.cancel(job.id)
     await engine.waitForJob(job)
-    expect(job).toMatchObject({ status: "Failed", progress: 100 })
+    expect(job).toMatchObject({ status: "Cancelled", progress: 100 })
     expect(job.exception).toContain("Backup cancelled by you")
     expect(job.endTime).toBeDefined()
     expect(signal.aborted).toBe(true)
@@ -108,9 +108,12 @@ describe("bounded backup jobs", () => {
     await engine.waitForJob(next)
   })
 
-  it("records one exhausted item read timeout as a warning when a different policy succeeds", async () => {
+  it.each(["read", "upload"])("records one exhausted item %s timeout as a warning when a different policy succeeds", async operation => {
     vi.useFakeTimers()
-    const { engine, saved } = setup({ count: 2, override: url => url.hostname === "graph.microsoft.com" && url.pathname.endsWith("/p0") ? new Promise(() => {}) : undefined })
+    const { engine, saved } = setup({ count: 2, override: (url, init) => {
+      if ((operation === "read" && url.hostname === "graph.microsoft.com" && url.pathname.endsWith("/p0"))
+        || (operation === "upload" && init.method === "PUT" && decodeURIComponent(url.pathname).endsWith("/Policy 0.json"))) return new Promise(() => {})
+    } })
     const job = engine.start(request)
     await vi.advanceTimersByTimeAsync(273_000)
     await engine.waitForJob(job)
@@ -152,7 +155,124 @@ function nearDeadlineListing(url: URL, page: number): Promise<Response> | undefi
   })), page < 30 ? 60_000 : 59_500) })
 }
 
+describe("storage read retries", () => {
+  it.each(["list", "readJson"])("retries transient %s service and transport failures before completing retention", async operation => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-10-12T12:00:00Z"))
+    const old = "backup-2026-08-01-020000/metadata.json"
+    const attempts: number[] = []
+    const started = Date.now()
+    const { engine, saved, calls } = setup({ retention: 30, override: (url, init) => {
+      if (init.method !== "GET" || url.hostname === "graph.microsoft.com") return
+      if ((operation === "list" && url.searchParams.get("delimiter") === "/")
+        || (operation === "readJson" && url.pathname.endsWith(old))) {
+        attempts.push(Date.now() - started)
+        if (attempts.length === 1) return new Response(null, { status: 503 })
+        if (attempts.length === 2) throw new TypeError("Connection reset")
+      }
+    } })
+    saved.set(old, JSON.stringify({ Status: "Success", TenantId: TENANT, Scope: { Excluded: scope.excluded } }))
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(999)
+    expect(attempts).toEqual([0])
+    expect(saved.has(`${job.backupFolder}/metadata.json`)).toBe(true)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(attempts).toEqual([0, 1000])
+    await vi.advanceTimersByTimeAsync(1999)
+    expect(attempts).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(1)
+    await engine.waitForJob(job)
+    expect(attempts).toEqual([0, 1000, 3000])
+    expect(job.status).toBe("Completed")
+    expect(job.progressMessage).toBe("Backup completed successfully")
+    expect(saved.has(old)).toBe(false)
+    expect(calls.some(call => call.init.method === "DELETE" && call.url.pathname.endsWith(old))).toBe(true)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
 describe("manifest commit and retention interruption", () => {
+  it.each(["retry wait", "retry request", "retry token"])("bounds the manifest %s to two minutes after the job deadline", async failure => {
+    vi.useFakeTimers()
+    let pages = 0
+    let puts = 0
+    let storageTokens = 0
+    const signals: AbortSignal[] = []
+    const { engine, saved, calls } = setup({
+      getToken: async (_tenant, _client, tokenScope) => {
+        if (tokenScope.includes("storage.azure.com") && ++storageTokens >= 3 && failure === "retry token") return new Promise(() => {})
+        return "token"
+      },
+      override: (url, init) => {
+        if (url.hostname === "graph.microsoft.com") return nearDeadlineListing(url, ++pages)
+        if (init.method !== "PUT" || !url.pathname.endsWith("/metadata.json")) return
+        signals.push(init.signal!)
+        if (++puts === 1) return new Promise(resolve => {
+          setTimeout(() => resolve(new Response(null, { status: 503, headers: { "Retry-After": failure === "retry wait" ? "300" : "1" } })), 500)
+        })
+        return new Promise(() => {})
+      },
+    })
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(JOB_DEADLINE_MS)
+    expect(puts).toBe(1)
+    expect(job.status).toBe("Running")
+    expect(signals[0]!.aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(MANIFEST_COMMIT_GRACE_MS - 1)
+    expect(job.status).toBe("Running")
+    await vi.advanceTimersByTimeAsync(1)
+    await engine.waitForJob(job)
+    expect(job.status).toBe("Failed")
+    expect(job.exception).toBe("Backup timed out after the 30 minute job deadline. Retry the backup.")
+    expect(saved.has(`${job.backupFolder}/metadata.json`)).toBe(false)
+    expect(puts).toBe(failure === "retry wait" || failure === "retry token" ? 1 : 3)
+    expect(signals.every(signal => signal.aborted)).toBe(true)
+    const count = calls.length
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(calls).toHaveLength(count)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each(["cancel", "deadline"])("keeps a committed backup completed when %s lands before the retention signal is read", async interrupt => {
+    vi.useFakeTimers()
+    let interrupted = false
+    const { engine, saved, calls } = setup({ retentionDays: () => {
+      // The retention gate is read only after the manifest PUT has returned successfully.
+      expect(saved.has(`${job.backupFolder}/metadata.json`)).toBe(true)
+      if (!interrupted) {
+        interrupted = true
+        if (interrupt === "cancel") engine.cancel(job.id)
+        else vi.setSystemTime(new Date(Date.now() + JOB_DEADLINE_MS))
+      }
+      return 30
+    } })
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(0)
+    await engine.waitForJob(job)
+    expect(interrupted).toBe(true)
+    expect(job.status).toBe("Completed")
+    expect(job.exception).toBeUndefined()
+    expect(job.progressMessage).toBe("Backup completed with 1 warning")
+    expect(job.log.join("\n")).toContain("Retention was interrupted; older backups are cleaned up on the next run")
+    expect(calls.some(call => call.url.searchParams.get("comp") === "list")).toBe(false)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it("does not report interrupted retention when retention is disabled", async () => {
+    vi.useFakeTimers()
+    const { engine, saved, calls } = setup({ override: (url, init) => {
+      if (init.method === "PUT" && url.pathname.endsWith("/metadata.json")) engine.cancel(job.id)
+    } })
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(0)
+    await engine.waitForJob(job)
+    expect(job.status).toBe("Completed")
+    expect(saved.has(`${job.backupFolder}/metadata.json`)).toBe(true)
+    expect(job.progressMessage).toBe("Backup completed successfully")
+    expect(job.log.join("\n")).not.toContain("Retention was interrupted")
+    expect(calls.some(call => call.url.searchParams.get("comp") === "list")).toBe(false)
+  })
+
   it.each(["cancel", "deadline"])("fails without dispatching a manifest when %s arrives during its token wait", async interrupt => {
     vi.useFakeTimers()
     let storageTokens = 0
@@ -175,7 +295,7 @@ describe("manifest commit and retention interruption", () => {
     if (interrupt === "cancel") engine.cancel(job.id)
     else await vi.advanceTimersByTimeAsync(500)
     await engine.waitForJob(job)
-    expect(job.status).toBe("Failed")
+    expect(job.status).toBe(interrupt === "cancel" ? "Cancelled" : "Failed")
     expect(job.exception).toContain(interrupt === "cancel" ? "Backup cancelled by you" : "30 minute job deadline")
     expect(saved.has(`${job.backupFolder}/metadata.json`)).toBe(false)
     expect(calls.some(call => call.init.method === "PUT" && call.url.pathname.endsWith("/metadata.json"))).toBe(false)
@@ -202,7 +322,7 @@ describe("manifest commit and retention interruption", () => {
     job = engine.start(request)
     await vi.advanceTimersByTimeAsync(0)
     await engine.waitForJob(job)
-    expect(job.status).toBe("Failed")
+    expect(job.status).toBe(interrupt === "cancel" ? "Cancelled" : "Failed")
     expect(job.exception).toContain(interrupt === "cancel" ? "Backup cancelled by you" : "30 minute job deadline")
     expect(interrupted).toBe(true)
     expect([...saved.keys()].filter(name => name.includes("/DeviceConfigurations/"))).toHaveLength(1)

@@ -439,6 +439,7 @@ async function bootstrap(): Promise<void> {
     unattendedBackupTriggers.set(job, origin)
     await waitForJob(job)
     const ok = job.status === "Completed"
+    const cancelled = job.status === "Cancelled"
     const account = accounts.get(tenantId)
     // Record scheduled backups in the tenant's audit log, attributed to the signed-in admin.
     void host
@@ -453,22 +454,22 @@ async function bootstrap(): Promise<void> {
             storageAccountName: profile.storageAccountName,
             user: { id: account?.username ?? "unknown", email: account?.username ?? "unknown", name: account?.name ?? "Scheduled backup" },
             logEntry: {
-              eventType: ok ? "BACKUP_COMPLETED" : "BACKUP_FAILED",
+              eventType: cancelled ? "BACKUP_CANCELLED" : ok ? "BACKUP_COMPLETED" : "BACKUP_FAILED",
               action: "Scheduled backup",
               resource: { type: "backup", id: job.backupFolder ?? job.id, name: profile.name },
-              result: ok ? "SUCCESS" : "FAILURE",
-              severity: ok ? "INFO" : "ERROR",
+              result: cancelled ? "PARTIAL" : ok ? "SUCCESS" : "FAILURE",
+              severity: ok || cancelled ? "INFO" : "ERROR",
               details: { source: "schedule", message: job.exception ?? job.progressMessage },
             },
           }),
         }),
       )
       .catch(() => undefined)
-    if (!ok && !origin.notified) {
+    if (!ok && !cancelled && !origin.notified) {
       origin.notified = true
       notifyFailure(tenantId, profile.name, job.exception ?? "Open TenuVault for details.", origin.trigger)
     }
-    return { status: ok ? ("Completed" as const) : ("Failed" as const), message: job.exception ?? job.progressMessage }
+    return { status: cancelled ? ("Cancelled" as const) : ok ? ("Completed" as const) : ("Failed" as const), message: job.exception ?? job.progressMessage }
   }
 
   const scheduler = new BackupScheduler(appStore, (tenantId) => runScheduledBackup(tenantId, "scheduled"), () => {
