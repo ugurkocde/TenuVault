@@ -55,6 +55,10 @@ export interface TenantLicenseStatus {
 
 export interface LicenseStatus {
   hasKey: boolean
+  /** Saved key outcome, separate from tenant coverage and sign-in guidance. */
+  keyState: "none" | "pending" | "active" | "failed"
+  /** Refusal or verification reason when the saved key has no valid activation. */
+  keyMessage: string | null
   /** The last four characters of the key, such as ****ABCD. */
   keyHint: string | null
   /** False when OS encryption is unavailable: the license is kept in memory only. */
@@ -147,6 +151,8 @@ export interface AppPreferences {
   autoUpdate: boolean
   /** Follow nightly prereleases instead of stable releases. Defaults to on for nightly builds. */
   nightlyUpdates: boolean
+  /** ISO timestamp of the last dismissal of the Community notice on this machine. */
+  communityBannerDismissedAt?: string
   /** Set when an administrator turned automatic updates off by policy. */
   autoUpdateManaged: boolean
 }

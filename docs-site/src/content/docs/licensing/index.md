@@ -16,7 +16,9 @@ TenuVault has three plans: Community, which is free, and the paid Pro and MSP pl
 
 To start a trial or buy a plan, go to [tenuvault.com/desktop#pricing](https://tenuvault.com/desktop#pricing), or click **Try Pro or MSP free for 30 days** on the welcome screen or **Start 30 day free trial** on the **License** page. Your license key arrives by email right after checkout, and you are not charged until the trial ends.
 
-If your organization buys through procurement, yearly Pro and MSP plans are also available by invoice. Email [support@ugurlabs.com](mailto:support@ugurlabs.com) for a PDF quote; after your order you receive an invoice from Ugurlabs UG, payable by bank transfer. A 30 day trial key without a credit card is available on request.
+If your organization buys through procurement, yearly Pro and MSP plans are also available by quote, purchase order and invoice. Email [support@ugurlabs.com](mailto:support@ugurlabs.com) for a PDF quote; after your order you receive an invoice from Ugurlabs UG, payable by bank transfer. A 30 day trial key without a credit card is available on request.
+
+Eligible nonprofits can use Pro at no cost. Email [support@ugurlabs.com](mailto:support@ugurlabs.com) to request it.
 
 ## Features by plan
 
@@ -43,6 +45,15 @@ If your organization buys through procurement, yearly Pro and MSP plans are also
 | Framework PDF reports and CSV or JSON exports (except CIS) | Yes | Yes | Yes |
 | Administrator-imported Microsoft, STIG and Custom comparisons | Yes | Yes | Yes |
 | CIS comparisons and their reports (coming soon) | No | Yes | Yes |
+| Dashboard baseline scores | | Yes | Yes |
+| Policy conflict and hygiene explorer | | Yes | Yes |
+| Baseline upgrades that keep your customizations | | Yes | Yes |
+| Dev to Prod settings promotion | | Yes | Yes |
+| Scheduled health review and notifications | | Yes | Yes |
+| Organization baseline customizations | | Yes | Yes |
+| Custom baselines from OpenIntuneBaseline or a tenant snapshot | | Yes | Yes |
+| Reusable golden standards for customers | | | Yes |
+| Portfolio views across customer tenants | | | Yes |
 | Share the license with other admins in your tenant | | Yes, on by default | Yes, off by default |
 | Cross tenant dashboard, including **Check all** for drift | | | Yes |
 | Actions across several tenants: **Backup Selected**, **Copy to other tenants instead** when restoring, **Also deploy to** in OpenIntuneBaseline | | | Yes |
@@ -54,6 +65,10 @@ Community includes New Deployment, Existing Deployment comparison, Policy Valida
 TenuVault enforces these limits in the app itself, not just in the interface. When you try a feature your plan does not include, the app shows which plan includes it, for example: "Replacing items in place: included in TenuVault Pro and MSP. Upgrade on the License page." Features that need a higher plan are marked with a plan badge in the app.
 
 Actions across several tenants need the MSP plan on every tenant they touch.
+
+## What Pro adds
+
+Pro covers two tenants and includes daily scheduled backups, custom backup history, your own Azure storage, restoring several items at once, replacing items in place, restoring assignments, reverting drifted policies and the audit log. It also includes dashboard baseline scores, the policy conflict and hygiene explorer, baseline upgrades that keep your customizations, Dev to Prod settings promotion, scheduled health reviews, organization customizations and custom baselines. CIS assessments and reports are included in Pro and MSP when they become available. Community keeps its existing backup, restore, drift, OpenIntuneBaseline and non-CIS framework features.
 
 ## How tenants are counted
 

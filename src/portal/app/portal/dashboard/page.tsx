@@ -2,6 +2,7 @@
 
 import { useState, useEffect, Suspense } from "react"
 import { useRouter } from "next/navigation"
+import { Link } from "react-router-dom"
 import {
   Activity,
   CheckCircle,
@@ -516,47 +517,49 @@ function DashboardContent() {
         )}
 
         {/* License */}
-        <Tile aria-label="License">
-          <div className="flex items-start justify-between gap-3">
-            <TileIcon icon={BadgeCheck} />
-            {license?.entitled ? <Chip tone="success">Licensed</Chip>
-              : license?.plan === "community" ? <Chip>Free plan</Chip>
-              : license ? <Chip tone="warning">Not licensed</Chip>
-              : <Chip>Not checked</Chip>}
-          </div>
-          <TileLabel className="mt-6">License</TileLabel>
-          {license?.entitled ? (
-            <>
-              <BigValue className="mt-1">{planName(license.plan)}</BigValue>
-              <p className="mt-1 text-sm text-gray-500">
-                {license.source === "tenant" ? "Licensed through your organization" : "Licensed with this device's key"}
-              </p>
-              {license.expiresAt && <p className="text-xs text-gray-500">Token valid until {formatDateTime(license.expiresAt)}</p>}
-            </>
-          ) : license?.plan === "community" ? (
-            <>
-              <BigValue className="mt-1">Community</BigValue>
-              <p className="mt-1 text-sm text-gray-500">Free for one tenant. Pro adds daily backups, full restore and more.</p>
-            </>
-          ) : license ? (
-            <>
-              <BigValue className="mt-1">Not licensed</BigValue>
-              <p className="mt-1 line-clamp-2 text-sm text-gray-500" title={license.message ?? undefined}>
-                Backups of this tenant need a license.
-              </p>
-            </>
-          ) : (
-            <>
-              <BigValue className="mt-1">Unchecked</BigValue>
-              <p className="mt-1 text-sm text-gray-500">License checked at first use</p>
-            </>
-          )}
-          <div className="mt-auto pt-5">
-            <Button variant="outline" size="sm" onClick={() => router.push("/license")}>
-              {license?.entitled ? "Manage license" : "Check license"}
-            </Button>
-          </div>
-        </Tile>
+        <Link to="/license" className="flex min-w-0 rounded-3xl transition-shadow hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
+          <Tile className="flex-1">
+            <div className="flex items-start justify-between gap-3">
+              <TileIcon icon={BadgeCheck} />
+              {license?.entitled ? <Chip tone="success">Licensed</Chip>
+                : license?.plan === "community" ? <Chip>Free plan</Chip>
+                : license ? <Chip tone="warning">Not licensed</Chip>
+                : <Chip>Not checked</Chip>}
+            </div>
+            <TileLabel className="mt-6">License</TileLabel>
+            {license?.entitled ? (
+              <>
+                <BigValue className="mt-1">{planName(license.plan)}</BigValue>
+                <p className="mt-1 text-sm text-gray-500">
+                  {license.source === "tenant" ? "Licensed through your organization" : "Licensed with this device's key"}
+                </p>
+                {license.expiresAt && <p className="text-xs text-gray-500">Token valid until {formatDateTime(license.expiresAt)}</p>}
+              </>
+            ) : license?.plan === "community" ? (
+              <>
+                <BigValue className="mt-1">Community</BigValue>
+                <p className="mt-1 text-sm text-gray-500">Free for one tenant. Pro adds daily backups, full restore and more.</p>
+              </>
+            ) : license ? (
+              <>
+                <BigValue className="mt-1">Not licensed</BigValue>
+                <p className="mt-1 line-clamp-2 text-sm text-gray-500" title={license.message ?? undefined}>
+                  Backups of this tenant need a license.
+                </p>
+              </>
+            ) : (
+              <>
+                <BigValue className="mt-1">Unchecked</BigValue>
+                <p className="mt-1 text-sm text-gray-500">License checked at first use</p>
+              </>
+            )}
+            <div className="mt-auto pt-5">
+              <span className="inline-flex h-9 items-center justify-center rounded-full border border-input bg-background px-3 text-sm font-medium">
+                {license?.entitled ? "Manage license" : "Check license"}
+              </span>
+            </div>
+          </Tile>
+        </Link>
 
         {/* Storage and sign-in */}
         <Tile aria-label="Storage">

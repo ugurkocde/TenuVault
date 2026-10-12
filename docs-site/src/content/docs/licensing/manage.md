@@ -32,11 +32,19 @@ If you have not connected a tenant yet, TenuVault opens on **Welcome to TenuVaul
 2. Paste your key into **License key**.
 3. Click **Activate**.
 
+For a trial, click **Start 30 day free trial** first. TenuVault opens the plans page in your browser, then scrolls to and focuses **License key** with the hint: "Paste the key from your email to activate the trial."
+
+Below the trial button, links to [Plans and features](/licensing/) explain that yearly company plans are available by quote, purchase order and invoice, a 30 day trial key without a card is available on request, and eligible nonprofits can use Pro at no cost.
+
 If you are already signed in to one or more tenants, TenuVault activates the key for them right away and shows **License activated.** If you are not signed in to a tenant yet, it shows **License key saved. It activates for a tenant when you sign in to it.**
 
 If the key cannot be activated for any of your signed-in tenants, it is not saved and the reason is shown. See [License messages](#license-messages).
 
 ## Read the License page
+
+The sidebar shows **Community** for a machine using the Community plan, or **Key saved** when a saved key is waiting for its first activation, including before you sign in to a tenant. If a saved key is refused or its cached activation can no longer be verified, the chip shows **Inactive** unless another paid license is active. The License page shows **License key inactive** with the reason. A refusal stays visible after a restart and when the tenant falls back to Community; Community remains available for one tenant. A successful key activation clears the refusal.
+
+The neutral Community notice appears only on the start page: the **Dashboard** for one tenant, or the **All tenants** overview when several are connected. Click **Dismiss** to hide it on this machine for 30 days. License coverage, key expiry and offline verification warnings still appear on every page. The dashboard's **License** tile also opens the **License** page.
 
 The top card shows your plan, for example **Pro plan active**, and how many tenants your license covers and how many are active on this machine. Your key is shown masked, with only its last four characters visible.
 
