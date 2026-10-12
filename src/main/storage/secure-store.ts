@@ -40,6 +40,7 @@ export interface KeyValueStore {
   get: (key: string) => string | null
   set: (key: string, value: string) => void
   delete: (key: string) => void
+  setMany?: (values: Record<string, string>) => void
 }
 
 /** The store file exists but cannot be decrypted or parsed. */
@@ -78,6 +79,14 @@ export class SecureStore {
 
   set(key: string, value: string): void {
     const values = { ...this.load(), [key]: value }
+    this.flush(values)
+    this.values = values
+  }
+
+  /** Publishes a group of values with one encryption, sync and atomic rename. */
+  setMany(changes: Record<string, string>): void {
+    if (!Object.keys(changes).length) return
+    const values = { ...this.load(), ...changes }
     this.flush(values)
     this.values = values
   }

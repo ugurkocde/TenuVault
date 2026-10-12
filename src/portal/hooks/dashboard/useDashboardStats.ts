@@ -1,4 +1,6 @@
 import { normalizeBackupStatus, backupHealth, backupCounts, latestComplete } from "~/lib/backup-health"
+import { useLicense, tenantLicense, tenantPlan } from "@desktop/lib/license"
+import { allows } from "../../../shared/plans"
 import { bridge } from "@desktop/lib/bridge"
 import { useQuery } from "@tanstack/react-query"
 import { useTenants } from "~/contexts/TenantContext"
@@ -53,6 +55,7 @@ async function fetchBackupHistory(tenant: any): Promise<BackupHistoryResult> {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        summary: true,
         tenantId: tenant.credentials.tenantId,
         appId: tenant.credentials.appId,
         clientSecret: tenant.credentials.clientSecret,
@@ -151,15 +154,20 @@ async function fetchSchedules(tenant: any): Promise<ScheduleInfo[]> {
  */
 export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: number) {
   const allTenants = useTenants()
+  const { status: license } = useLicense()
   const tenants = tenantId === undefined ? allTenants : allTenants.filter(t => t.id === tenantId)
   
+  const auditAllowed = tenants.map((tenant) => {
+    const plan = tenantPlan(tenantLicense(license, tenant.credentials?.tenantId))
+    return plan !== null && allows(plan, "auditLog")
+  })
   return useQuery({
-    queryKey: ["dashboard-stats", tenants.map(t => t.id), selectedPeriod],
+    queryKey: ["dashboard-stats", tenants.map(t => t.id), selectedPeriod, auditAllowed],
     queryFn: async (): Promise<TenantDashboardStats> => {
       // Fetch data for all tenants in parallel
       const backupPromises = tenants.map(tenant => fetchBackupHistory(tenant))
       const schedulePromises = tenants.map(tenant => fetchSchedules(tenant))
-      const auditPromises = tenants.map(tenant => fetchAuditLogs(tenant, 20))
+      const auditPromises = tenants.map((tenant, index) => auditAllowed[index] ? fetchAuditLogs(tenant, 20) : Promise.resolve([]))
       
       const [allBackups, allSchedules, allAuditLogs] = await Promise.all([
         Promise.all(backupPromises),

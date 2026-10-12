@@ -77,6 +77,8 @@ export interface StoredBlob {
   contentType: string
   created: Date
   lastModified: Date
+  metadata?: Record<string, string>
+  etag?: string
 }
 
 export type Version = 1 | 2
@@ -84,6 +86,7 @@ export type Version = 1 | 2
 interface Entry extends StoredBlob {
   file: string
   version: Version
+  stamp: string
 }
 
 interface Keys {
@@ -174,8 +177,9 @@ async function mkdirDurable(path: string): Promise<void> {
 export class LocalBlobStore {
   private readonly keyring: Keys[]
   private readonly index = new Map<string, Promise<Map<string, Entry>>>()
-  /** The inventory reread per container that list() calls share; `started` once it reads the disk. */
-  private readonly rereads = new Map<string, { started: boolean; entries: Promise<Map<string, Entry>> }>()
+  private readonly directoryStamps = new Map<string, string>()
+  private readonly dirty = new Set<string>()
+  private readonly checks = new Map<string, Promise<Map<string, Entry>>>()
 
   /**
    * @param root   Folder that holds the encrypted backups.
@@ -215,30 +219,25 @@ export class LocalBlobStore {
     }
   }
 
-  async list(account: string, container: string): Promise<StoredBlob[]> {
-    const entries = await this.reread(account, container)
-    return [...entries.values()].map(({ file: _file, version: _version, ...blob }) => blob).sort((a, b) => (a.name < b.name ? -1 : 1))
+  async list(account: string, container: string, prefix = ""): Promise<StoredBlob[]> {
+    const entries = await this.checkedEntries(account, container)
+    return [...entries.values()].filter((entry) => entry.name.startsWith(prefix))
+      .map(({ file: _file, version: _version, stamp: _stamp, ...blob }) => blob).sort((a, b) => (a.name < b.name ? -1 : 1))
   }
 
   async get(account: string, container: string, name: string): Promise<{ blob: StoredBlob; data: Buffer }> {
-    const dir = this.dir(account, container)
-    const cached = await this.entries(account, container)
-    // Reconcile file membership even on selective reads, without decrypting every
-    // header again when the container's inventory is unchanged.
-    const files = new Set((await readdir(dir)).filter((file) => file.endsWith(EXT)))
-    if (files.size !== cached.size || [...cached.values()].some((entry) => !files.has(entry.file))) this.index.delete(dir)
-    const entry = (await this.entries(account, container)).get(name)
+    const entry = (await this.checkedEntries(account, container)).get(name)
     if (!entry) throw new BlobNotFoundError(name)
     const raw = await readFile(join(this.dir(account, container), entry.file))
     const version = versionOf(raw.subarray(0, MAGIC_LENGTH))
     if (!version) throw new Error("Invalid backup header")
     const headerLength = raw.readUInt16BE(MAGIC_LENGTH)
     const body = raw.subarray(MAGIC_LENGTH + 2 + headerLength)
-    const { file: _file, version: _version, ...blob } = entry
+    const { file: _file, version: _version, stamp: _stamp, ...blob } = entry
     return { blob, data: this.decrypt(body, bodyAad(version, account, container, name)) }
   }
 
-  async put(account: string, container: string, name: string, data: Uint8Array, contentType: string, createOnly = false): Promise<StoredBlob> {
+  async put(account: string, container: string, name: string, data: Uint8Array, contentType: string, createOnly = false, metadata?: Record<string, string>): Promise<StoredBlob> {
     if (!(await this.containerExists(account, container))) throw new BlobNotFoundError(container)
     const entries = await this.entries(account, container)
     const current = this.keyring[0]!
@@ -249,7 +248,7 @@ export class LocalBlobStore {
     const file = existing?.file ?? fileName(version, current.naming, account, container, name)
     const created = existing?.created ?? new Date()
 
-    const header = seal(current.encryption, Buffer.from(JSON.stringify({ name, contentType, created })), headerAad(version, account, container, file))
+    const header = seal(current.encryption, Buffer.from(JSON.stringify({ name, contentType, created, ...(metadata ? { metadata } : {}) })), headerAad(version, account, container, file))
     const body = seal(current.encryption, Buffer.from(data), bodyAad(version, account, container, name))
     const length = Buffer.alloc(2)
     length.writeUInt16BE(header.length)
@@ -277,8 +276,12 @@ export class LocalBlobStore {
       await rm(tmp, { force: true })
     }
 
-    const blob: StoredBlob = { name, size: data.byteLength, contentType, created, lastModified: new Date() }
-    entries.set(name, { ...blob, file, version })
+    const info = await stat(path)
+    const stamp = fileStamp(info)
+    const blob: StoredBlob = { name, size: data.byteLength, contentType, created, lastModified: info.mtime, etag: `"${stamp}"`, ...(metadata ? { metadata } : {}) }
+    entries.set(name, { ...blob, file, version, stamp })
+    this.dirty.add(this.dir(account, container))
+    this.directoryStamps.set(this.dir(account, container), await this.directoryStamp(this.dir(account, container)))
     return blob
   }
 
@@ -288,45 +291,58 @@ export class LocalBlobStore {
     if (!entry) throw new BlobNotFoundError(name)
     await rm(join(this.dir(account, container), entry.file), { force: true })
     entries.delete(name)
+    this.dirty.add(this.dir(account, container))
+    this.directoryStamps.set(this.dir(account, container), await this.directoryStamp(this.dir(account, container)))
   }
 
   private dir(account: string, container: string): string {
     return join(this.root, safeSegment(account), safeSegment(container))
   }
 
-  /**
-   * Every listing rereads the container's inventory from disk, so it shows files changed by anything
-   * else. A listing made while a reread runs waits for it and shares the next reread with the other
-   * listings made meanwhile: each still sees the files as they were when it was made, but listings
-   * made together (the backup list makes one per backup) no longer each decrypt every header.
-   */
-  private reread(account: string, container: string): Promise<Map<string, Entry>> {
-    const dir = this.dir(account, container)
-    const pending = this.rereads.get(dir)
-    if (pending && !pending.started) return pending.entries
-    const running = pending?.entries.catch(() => undefined)
-    const reread = { started: false, entries: Promise.resolve(new Map<string, Entry>()) }
-    reread.entries = (async () => {
-      await running
-      reread.started = true
-      this.index.delete(dir)
-      return this.entries(account, container)
-    })()
-    this.rereads.set(dir, reread)
-    void reread.entries.catch(() => undefined).then(() => {
-      if (this.rereads.get(dir) === reread) this.rereads.delete(dir)
-    })
-    return reread.entries
+  private async directoryStamp(dir: string): Promise<string> {
+    try {
+      const info = await stat(dir)
+      return fileStamp(info)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing"
+      throw error
+    }
   }
 
-  /** Reads and decrypts every file header once per container; later calls use the cache. */
-  private entries(account: string, container: string): Promise<Map<string, Entry>> {
+  /** Coalesces inventory checks and rebuilds. File stats also detect in-place corruption. */
+  private checkedEntries(account: string, container: string): Promise<Map<string, Entry>> {
     const dir = this.dir(account, container)
+    const pending = this.checks.get(dir)
+    if (pending) return pending
+    const check = (async () => {
+      let entries = await this.entries(account, container)
+      const unchanged = !this.dirty.has(dir) && (await mapLimit([...entries.values()], HEADER_CONCURRENCY, async (entry) => {
+        try { return fileStamp(await stat(join(dir, entry.file))) === entry.stamp } catch { return false }
+      })).every(Boolean)
+      if (!unchanged) {
+        this.index.delete(dir)
+        entries = await this.entries(account, container)
+        this.dirty.delete(dir)
+      }
+      return entries
+    })()
+    this.checks.set(dir, check)
+    void check.finally(() => { if (this.checks.get(dir) === check) this.checks.delete(dir) }).catch(() => undefined)
+    return check
+  }
+
+  /** Keeps decrypted headers until a write or a change to the directory inventory. */
+  private async entries(account: string, container: string): Promise<Map<string, Entry>> {
+    const dir = this.dir(account, container)
+    const stamp = await this.directoryStamp(dir)
+    if (this.directoryStamps.get(dir) !== stamp) this.index.delete(dir)
     let cached = this.index.get(dir)
     if (!cached) {
+      this.directoryStamps.set(dir, stamp)
       cached = this.readIndex(dir, account, container)
       this.index.set(dir, cached)
-      cached.catch(() => this.index.delete(dir))
+      const current = cached
+      void cached.catch(() => { if (this.index.get(dir) === current) this.index.delete(dir) })
     }
     return cached
   }
@@ -358,6 +374,7 @@ export class LocalBlobStore {
           name: string
           contentType: string
           created: string
+          metadata?: Record<string, string>
         }
         if (!header || typeof header.name !== "string" || !header.name || typeof header.contentType !== "string" || !Number.isFinite(Date.parse(header.created))) {
           throw new Error("Invalid backup header")
@@ -372,6 +389,9 @@ export class LocalBlobStore {
           created: new Date(header.created),
           lastModified: info.mtime,
           size: info.size - prefix.length - headerLength - IV - TAG,
+          stamp: fileStamp(info),
+          etag: `"${fileStamp(info)}"`,
+          ...(header.metadata ? { metadata: header.metadata } : {}),
         }
       } catch {
         return null
@@ -425,4 +445,9 @@ function safeSegment(value: string): string {
   const safe = value.replace(/[^a-zA-Z0-9-]/g, "_")
   if (!safe || safe === "." || safe === "..") throw new Error(`Invalid storage name: ${value}`)
   return safe
+}
+
+/** Includes change time and inode so atomic replacements and in-place edits invalidate the cache. */
+function fileStamp(info: NonNullable<Awaited<ReturnType<typeof stat>>>): string {
+  return `${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`
 }

@@ -130,6 +130,8 @@ These requests download public files from the OpenIntuneBaseline repository. The
 
 If these hosts are blocked, packs that are not already loaded in the current session cannot load. Backups and restores are not affected.
 
+Health review records follow the [per-domain local record retention limits](/settings/#local-review-record-retention).
+
 ## Health review notifications (optional)
 
 Off by default. When you add a webhook under **Operations** > **Health review** > **Notifications**, TenuVault sends a JSON `POST` to that https URL after a scheduled or manual review finds something new, and when you click **Send test**. Only `https` URLs are accepted, redirects are refused and each request times out after 10 seconds.

@@ -424,7 +424,7 @@ describe('Drift scan jobs', () => {
     expect(jobs.result(TENANT_A)).toBeNull()
   })
 
-  it('does not audit a scan the admin cancelled', async () => {
+  it('does not audit read-only drift scans, including cancelled scans', async () => {
     const dispatch = vi.fn(async () => new Response('{}'))
     const record = createAuditRecorder(dispatch, () => null)
     const scan = new Request('http://tenuvault.internal/api/detect-drifts', { method: 'POST' })
@@ -432,7 +432,7 @@ describe('Drift scan jobs', () => {
     record(scan, body, Response.json({ code: 'CANCELLED' }, { status: 409, headers: { [CANCELLED_HEADER]: '1' } }))
     expect(dispatch).not.toHaveBeenCalled()
     record(scan, body, Response.json({ drifts: [] }))
-    expect(dispatch).toHaveBeenCalledTimes(1)
+    expect(dispatch).not.toHaveBeenCalled()
   })
 
   it('stops reading backup files once cancelled and keeps the previous result', async () => {

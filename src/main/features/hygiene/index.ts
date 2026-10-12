@@ -114,62 +114,64 @@ async function scan({ tenantId, body, deps, actor }: ActionContext) {
   const definite = result.findings.filter((finding) => finding.classification === "definite").length
   const meta = { actor, reason: `Hygiene scan of backup ${inventory.backupId}` }
 
-  const scanRecord = deps.records.create<ScanRecord>(DOMAIN, tenantId, {
-    kind: "scan",
-    title: `Hygiene scan of ${inventory.backupId}`,
-    status: inventory.completeness,
-    summary: `${result.findings.length} findings (${definite} definite) from the backup collected ${inventory.collectedAt}; ${inventory.notCollected.length} types not collected.`,
-    backupId: inventory.backupId,
-    collectedAt: inventory.collectedAt,
-    completeness: inventory.completeness,
-    partialReason: inventory.partialReason,
-    covered: inventory.covered,
-    notCollected: inventory.notCollected,
-    itemCount: inventory.items.length,
-    unreadableItems: inventory.unreadableItems,
-    unknowns: result.unknowns,
-    groupResolution: { state: groups.state, reason: groups.reason ?? null },
-    counts: { definite, possible: result.findings.length - definite },
-  }, meta)
-
-  const now = deps.now().toISOString()
-  const existing = new Map(findingsOf(all(deps, tenantId)).map((record) => [record.fingerprint, record]))
-  const seen = new Set<string>()
-  for (const detected of result.findings) {
-    seen.add(detected.fingerprint)
-    const evidence = {
-      title: detected.title,
-      summary: summaryOf(detected),
-      ruleId: detected.ruleId,
-      fingerprint: detected.fingerprint,
-      classification: detected.classification,
-      severity: detected.severity,
-      explanation: detected.explanation,
-      policies: detected.policies,
-      settings: detected.settings,
-      details: detected.details,
-      evidenceSha256: detected.evidenceSha256,
+  deps.records.batch(() => {
+    const scanRecord = deps.records.create<ScanRecord>(DOMAIN, tenantId, {
+      kind: "scan",
+      title: `Hygiene scan of ${inventory.backupId}`,
+      status: inventory.completeness,
+      summary: `${result.findings.length} findings (${definite} definite) from the backup collected ${inventory.collectedAt}; ${inventory.notCollected.length} types not collected.`,
       backupId: inventory.backupId,
       collectedAt: inventory.collectedAt,
-      scanId: scanRecord.id,
-      lastSeenAt: now,
+      completeness: inventory.completeness,
+      partialReason: inventory.partialReason,
+      covered: inventory.covered,
+      notCollected: inventory.notCollected,
+      itemCount: inventory.items.length,
+      unreadableItems: inventory.unreadableItems,
+      unknowns: result.unknowns,
+      groupResolution: { state: groups.state, reason: groups.reason ?? null },
+      counts: { definite, possible: result.findings.length - definite },
+    }, meta)
+
+    const now = deps.now().toISOString()
+    const existing = new Map(findingsOf(all(deps, tenantId)).map((record) => [record.fingerprint, record]))
+    const seen = new Set<string>()
+    for (const detected of result.findings) {
+      seen.add(detected.fingerprint)
+      const evidence = {
+        title: detected.title,
+        summary: summaryOf(detected),
+        ruleId: detected.ruleId,
+        fingerprint: detected.fingerprint,
+        classification: detected.classification,
+        severity: detected.severity,
+        explanation: detected.explanation,
+        policies: detected.policies,
+        settings: detected.settings,
+        details: detected.details,
+        evidenceSha256: detected.evidenceSha256,
+        backupId: inventory.backupId,
+        collectedAt: inventory.collectedAt,
+        scanId: scanRecord.id,
+        lastSeenAt: now,
+      }
+      const current = existing.get(detected.fingerprint)
+      if (!current) {
+        deps.records.create<FindingRecord>(DOMAIN, tenantId, { kind: "finding", ...evidence, status: "open", firstSeenAt: now, review: null }, meta)
+        continue
+      }
+      const changed = current.evidenceSha256 !== detected.evidenceSha256
+      const reviewed = current.status === "acknowledged" || current.status === "false-positive"
+      // A review applies to the evidence it was made on; changed evidence needs a new review.
+      const reopen = current.status === "resolved" || (reviewed && changed)
+      const reason = current.status === "resolved" ? "Detected again" : reopen ? "Evidence changed since it was reviewed; open for a new review" : changed ? "Evidence changed" : "Detected again with the same evidence"
+      deps.records.update<FindingRecord>(DOMAIN, tenantId, current.id, (value) => ({ ...value, ...evidence, status: reopen ? "open" : value.status, review: reopen ? null : value.review }), { actor, reason })
     }
-    const current = existing.get(detected.fingerprint)
-    if (!current) {
-      deps.records.create<FindingRecord>(DOMAIN, tenantId, { kind: "finding", ...evidence, status: "open", firstSeenAt: now, review: null }, meta)
-      continue
+    for (const [fingerprint, current] of existing) {
+      if (seen.has(fingerprint) || current.status === "resolved" || !couldDetect(scanRecord, current)) continue
+      deps.records.update<FindingRecord>(DOMAIN, tenantId, current.id, (value) => ({ ...value, status: "resolved", scanId: scanRecord.id }), { actor, reason: `Not detected in backup ${inventory.backupId}` })
     }
-    const changed = current.evidenceSha256 !== detected.evidenceSha256
-    const reviewed = current.status === "acknowledged" || current.status === "false-positive"
-    // A review applies to the evidence it was made on; changed evidence needs a new review.
-    const reopen = current.status === "resolved" || (reviewed && changed)
-    const reason = current.status === "resolved" ? "Detected again" : reopen ? "Evidence changed since it was reviewed; open for a new review" : changed ? "Evidence changed" : "Detected again with the same evidence"
-    deps.records.update<FindingRecord>(DOMAIN, tenantId, current.id, (value) => ({ ...value, ...evidence, status: reopen ? "open" : value.status, review: reopen ? null : value.review }), { actor, reason })
-  }
-  for (const [fingerprint, current] of existing) {
-    if (seen.has(fingerprint) || current.status === "resolved" || !couldDetect(scanRecord, current)) continue
-    deps.records.update<FindingRecord>(DOMAIN, tenantId, current.id, (value) => ({ ...value, status: "resolved", scanId: scanRecord.id }), { actor, reason: `Not detected in backup ${inventory.backupId}` })
-  }
+  })
   return list({ tenantId, body: {}, deps } as ActionContext)
 }
 

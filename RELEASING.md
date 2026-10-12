@@ -29,6 +29,9 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 Put these in the next stable release's notes, then remove them here.
 
+- Review records now retain the newest records by last update per tenant and domain, pruning older records on writes instead of refusing new records at 2,000. Limits range from 50 notification endpoints to 2,000 findings, with 365 score and custom baseline comparison snapshots. See the Settings documentation for every domain count. Pruned records and their older evidence or rollback references are no longer available. Backup and audit retention are unchanged.
+- Audit queries and exports accept date ranges of up to 90 days. Export longer history in separate ranges. Read-only drift scans no longer create audit events; existing drift events stay readable.
+
 - Local backup file format. New and overwritten local backup files are written in the TVB2
   format, which binds each file to its tenant folder. Every released version since 0.2.0 reads
   TVB2, and files written earlier stay readable. Reading the older TVB1 format is kept until at

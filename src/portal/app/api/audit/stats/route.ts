@@ -1,6 +1,6 @@
 import { isGuid } from "../../../../../shared/security"
 import { type NextRequest, NextResponse } from "next/server"
-import { AuditStorageService } from "~/lib/audit/storage"
+import { AuditStorageService, AuditRangeError } from "~/lib/audit/storage"
 import { redactAuditEntry } from "~/lib/audit/export"
 import { AuditLogFilter, AuditEventType, AuditSeverity, AuditResult } from "~/lib/audit/types"
 
@@ -115,6 +115,7 @@ export async function POST(request: NextRequest) {
     })
 
   } catch (error) {
+    if (error instanceof AuditRangeError) return NextResponse.json({ error: error.message }, { status: 400 })
     console.error("Audit stats error:", error)
     return NextResponse.json(
       { error: "Internal server error while fetching audit statistics" },

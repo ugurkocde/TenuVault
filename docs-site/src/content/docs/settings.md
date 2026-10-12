@@ -179,3 +179,28 @@ Stable installs follow stable by default. Enable **Get nightly builds** to recei
 | Network summary | Which services TenuVault talks to: Microsoft for sign-in, Graph and Azure; GitHub for the Open Intune Baseline catalog and updates; tenuvault.com for license checks. No tenant configuration or backup is ever sent to TenuVault. |
 | **License** | Opens the License page. See [Activate and manage your license](/licensing/manage/). |
 | **Website and support** | Opens [tenuvault.com/desktop](https://tenuvault.com/desktop) in your browser. |
+
+## Local review record retention
+
+Workflow hubs keep a bounded set of review records per tenant and domain. New writes retain the most recently updated records and prune the oldest ones automatically, including open records when the limit is reached. Record limits do not remove backups or audit events. Shared standards use their own shared scope. A plan downgrade alone does not prune records.
+
+| Record domain | Records kept |
+|---|---:|
+| Hygiene findings and scans | 2,000 |
+| Change sets | 500 |
+| Frozen change set content and pre-change captures | 1,000 |
+| Baseline installs and comparisons | 500 |
+| Baseline upgrades | 500 |
+| Promotions | 500 |
+| Health review schedules and runs | 200, with the existing 100-run limit still applied |
+| Health findings | 2,000 |
+| Notification endpoints | 50 |
+| Customizations | 1,000 |
+| Shared standard versions | 1,000 |
+| Standard adoptions | 1,000 |
+| Score snapshots | 365 |
+| Custom baselines, versions and rebases | 1,000 |
+| Custom baseline deployments | 500 |
+| Custom baseline comparisons | 365 |
+
+Each record keeps up to 200 revisions. When a domain exceeds its limit, its next write prunes it; reading existing history does not delete anything. References to records that have aged out no longer provide that older evidence or rollback content. Save evidence you need for long-term review before it reaches these limits, and create a fresh review if its referenced evidence has expired. Scan findings are saved together before the scan returns, reducing repeated encryption and disk writes.

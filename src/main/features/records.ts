@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { DOMAINS } from "./domains"
 import type { KeyValueStore } from "../storage/secure-store"
 
 /** One entry of a record's append-only history. */
@@ -60,8 +61,27 @@ export type Stored<T> = T & StoredRecord & { history: RecordRevision<T & StoredR
  */
 export const SHARED_SCOPE = "shared"
 
-/** Most records a tenant keeps per domain; the oldest closed records are dropped first by callers. */
+/** Fallback for domains introduced before a dedicated retention count is defined. */
 export const MAX_RECORDS = 2000
+/** Newest records by last update, per tenant and domain. See Settings documentation. */
+export const RECORD_RETENTION: Record<string, number> = {
+  [DOMAINS.hygieneFindings]: 2000,
+  [DOMAINS.changeSets]: 500,
+  [DOMAINS.changeSetContent]: 1000,
+  [DOMAINS.baselineInstalls]: 500,
+  [DOMAINS.baselineUpgrades]: 500,
+  [DOMAINS.promotions]: 500,
+  [DOMAINS.healthReviews]: 200,
+  [DOMAINS.healthFindings]: 2000,
+  [DOMAINS.notificationEndpoints]: 50,
+  [DOMAINS.customizations]: 1000,
+  [DOMAINS.standards]: 1000,
+  [DOMAINS.adoptions]: 1000,
+  [DOMAINS.scoreSnapshots]: 365,
+  [DOMAINS.customBaselines]: 1000,
+  [DOMAINS.customBaselineDeployments]: 500,
+  [DOMAINS.customBaselineComparisons]: 365,
+}
 /** History entries kept per record. */
 export const MAX_REVISIONS = 200
 
@@ -73,17 +93,21 @@ export const MAX_REVISIONS = 200
  * working on another: every call names its tenant and a record ID from another tenant is
  * simply not found. Updates never rewrite history, they append a revision with the actor
  * and reason. The first revision holds the whole record; later ones hold only the fields they
- * changed, so frequent progress updates of a large record do not copy it again each time. Nothing here is deleted by a plan change; only `remove` deletes, and callers
- * use it only for records the admin explicitly discards.
+ * changed, so frequent progress updates of a large record do not copy it again each time. A plan change never deletes records. Writes prune the oldest records above the domain
+ * retention count, and `remove` handles records the admin explicitly discards.
  */
 export class TenantRecords {
+  private staged: Map<string, Stored<unknown>[]> | null = null
   constructor(
     private readonly store: KeyValueStore,
     private readonly now: () => Date = () => new Date(),
   ) {}
 
   list<T>(domain: string, tenantId: string): Stored<T>[] {
-    const raw = this.store.get(this.key(domain, tenantId))
+    const key = this.key(domain, tenantId)
+    const staged = this.staged?.get(key)
+    if (staged) return [...staged] as Stored<T>[]
+    const raw = this.store.get(key)
     if (!raw) return []
     try {
       const parsed: unknown = JSON.parse(raw)
@@ -100,7 +124,6 @@ export class TenantRecords {
   /** Stores a new record with a fresh ID and its first revision. */
   create<T extends object>(domain: string, tenantId: string, value: T, meta: { actor: string | null; reason: string }): Stored<T> {
     const records = this.list<T>(domain, tenantId)
-    if (records.length >= MAX_RECORDS) throw new Error("This tenant has too many stored records of this kind. Close or export older ones first.")
     const at = this.now().toISOString()
     const base = { ...value, id: randomUUID(), tenantId: tenantId.toLowerCase(), createdAt: at, updatedAt: at } as T & StoredRecord
     const record: Stored<T> = { ...base, history: [{ at, actor: meta.actor, reason: meta.reason, snapshot: base }] }
@@ -150,8 +173,35 @@ export class TenantRecords {
     return true
   }
 
+  /** Synchronous scan writes share one durable flush. Failed batches leave no staged changes. */
+  batch<T>(run: () => T): T {
+    const parent = this.staged
+    this.staged = new Map(parent)
+    try {
+      const result = run()
+      if (result && typeof (result as { then?: unknown }).then === "function") throw new Error("Record batches must finish synchronously")
+      if (!parent) {
+        const changes = Object.fromEntries([...this.staged].map(([key, records]) => [key, JSON.stringify(records)]))
+        if (this.store.setMany) this.store.setMany(changes)
+        else for (const [key, value] of Object.entries(changes)) this.store.set(key, value)
+      } else {
+        for (const [key, records] of this.staged) parent.set(key, records)
+      }
+      return result
+    } finally {
+      this.staged = parent
+    }
+  }
+
   private save<T>(domain: string, tenantId: string, records: Stored<T>[]): void {
-    this.store.set(this.key(domain, tenantId), JSON.stringify(records))
+    const limit = Object.hasOwn(RECORD_RETENTION, domain) ? RECORD_RETENTION[domain]! : MAX_RECORDS
+    // Newer insertion wins when several scan findings share the same timestamp.
+    const kept = records.length <= limit ? records : records.map((record, index) => ({ record, index }))
+      .sort((a, b) => b.record.updatedAt.localeCompare(a.record.updatedAt) || b.index - a.index)
+      .slice(0, limit).sort((a, b) => a.index - b.index).map(({ record }) => record)
+    const key = this.key(domain, tenantId)
+    if (this.staged) this.staged.set(key, kept as Stored<unknown>[])
+    else this.store.set(key, JSON.stringify(kept))
   }
 
   private key(domain: string, tenantId: string): string {
