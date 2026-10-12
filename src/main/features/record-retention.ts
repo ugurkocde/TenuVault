@@ -73,6 +73,11 @@ export function retainRule(domain: string, context: RetentionContext): (record: 
         pin(record.installId); pin(record.from?.sourceId); pin(record.to?.sourceId); pin(record.comparisonId)
         for (const policy of record.policies ?? []) pin(policy.previous?.sourceId)
       }
+      for (const record of states(context.list<BaselineRecord | VersionRecord | RebaseRecord>(DOMAINS.customBaselines))) {
+        if (record.kind === "baseline") { pin(record.provenance?.sourceId); for (const version of record.versions ?? []) pin(version.base?.sourceId) }
+        if (record.kind === "version") pin(record.base?.sourceId)
+        if (record.kind === "rebase") pin(record.upstream?.sourceId)
+      }
       closed = (record: BaselineInstallRecord | BaselineSourceRecord | ComparisonRecord) => record.kind === "source" || record.kind === "comparison"
       break
     }
@@ -114,7 +119,8 @@ export function retainRule(domain: string, context: RetentionContext): (record: 
     case DOMAINS.notificationEndpoints:
       break // Disabling an endpoint does not discard its saved configuration.
     case DOMAINS.customizations:
-      for (const record of states(context.list<UpgradeRecord>(DOMAINS.baselineUpgrades))) for (const policy of record.policies ?? []) for (const id of policy.documented ?? []) pin(id)
+      // Upgrade policies store documented setting keys, not customization record IDs.
+      // Active customizations remain configuration; retired ones have no record references.
       closed = (record: CustomizationRecord) => record.status === "retired"
       break
     case DOMAINS.scoreSnapshots:

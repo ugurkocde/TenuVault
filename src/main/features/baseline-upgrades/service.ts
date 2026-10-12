@@ -447,26 +447,31 @@ export async function compareUpgrade(deps: FeatureDeps, sources: BaselineSources
     if (!release.supported) policies.push(blank(release, "unsupported", { blockers: [release.reason ?? "Not supported."] }))
     else policies.push(blank(release, "added", { choice: "include" }))
   }
-  const comparisonRecord = deps.records.create<ComparisonRecord>(INSTALLS, tenantId, { kind: "comparison", status: "frozen", title: `Comparison with ${upstream.reference}`, summary: `${comparisons.length} policies compared.`, upgradeId: null, policies: comparisons }, { actor, reason: "Froze a baseline comparison" })
   const unresolved = policies.reduce((sum, policy) => sum + policy.unresolved, 0)
-  return deps.records.create<UpgradeRecord>(UPGRADES, tenantId, {
-    title: `${install.reference} to ${upstream.reference}`,
-    status: unresolved ? "review" : "ready",
-    summary: summaryOf(policies, manual),
-    installId,
-    mode: manual ? "manual" : "three-way",
-    from: { commit: install.commit, reference: install.reference, sourceId: install.sourceId },
-    to: { platform: upstream.platform, commit: upstream.commit, reference: upstream.reference, sourceId: upstream.id },
-    comparisonId: comparisonRecord.id,
-    comparedAt: deps.now().toISOString(),
-    policies,
-    unresolved,
-    batches: [],
-    customizationVersionFrom: install.customizationVersion,
-    customizationVersionTo: null,
-    resultingCustomizationHash: null,
-    finalized: false,
-  }, { actor, reason: manual ? "Compared manually: the installed source is unknown" : `Compared with ${upstream.reference}` })
+  return deps.records.batch(() => {
+    // Pin reused source content before a comparison write can prune the source domain.
+    // The comparison ID is filled before this batch is durably published.
+    const upgrade = deps.records.create<UpgradeRecord>(UPGRADES, tenantId, {
+      title: `${install.reference} to ${upstream.reference}`,
+      status: unresolved ? "review" : "ready",
+      summary: summaryOf(policies, manual),
+      installId,
+      mode: manual ? "manual" : "three-way",
+      from: { commit: install.commit, reference: install.reference, sourceId: install.sourceId },
+      to: { platform: upstream.platform, commit: upstream.commit, reference: upstream.reference, sourceId: upstream.id },
+      comparisonId: "",
+      comparedAt: deps.now().toISOString(),
+      policies,
+      unresolved,
+      batches: [],
+      customizationVersionFrom: install.customizationVersion,
+      customizationVersionTo: null,
+      resultingCustomizationHash: null,
+      finalized: false,
+    }, { actor, reason: manual ? "Compared manually: the installed source is unknown" : `Compared with ${upstream.reference}` })
+    const comparison = deps.records.create<ComparisonRecord>(INSTALLS, tenantId, { kind: "comparison", status: "frozen", title: `Comparison with ${upstream.reference}`, summary: `${comparisons.length} policies compared.`, upgradeId: upgrade.id, policies: comparisons }, { actor, reason: "Froze a baseline comparison" })
+    return deps.records.update<UpgradeRecord>(UPGRADES, tenantId, upgrade.id, current => ({ ...current, comparisonId: comparison.id }), { actor, reason: "Linked the frozen baseline comparison" })!
+  })
 }
 
 function summaryOf(policies: UpgradePolicy[], manual: boolean): string {

@@ -1,10 +1,10 @@
 import { expect, it } from 'vitest'
 import { TenantRecords, RECORD_RETENTION, SHARED_SCOPE } from '../src/main/features/records'
 import { DOMAINS } from '../src/main/features/domains'
-import { getVersion, type BaselineRecord } from '../src/main/features/custom-baselines/service'
-import { getBaselineSource, getComparison } from '../src/main/features/baseline-upgrades/service'
+import { getVersion, type BaselineRecord, type VersionRecord, type RebaseRecord } from '../src/main/features/custom-baselines/service'
+import { compareUpgrade, getBaselineSource, getComparison, sourcePolicies, storeBaselineSource } from '../src/main/features/baseline-upgrades/service'
 import { memoryStore } from './helpers'
-import { fakeDeps, TENANT_A, TENANT_B } from './feature-helpers'
+import { fakeDeps, fakeOibSources, TENANT_A, TENANT_B } from './feature-helpers'
 
 const meta = { actor: null, reason: 'Retention regression' }
 const at = '2026-01-01T00:00:00Z'
@@ -74,6 +74,78 @@ it('keeps install sources, derived sources and upgrade comparisons while their p
   expect(getBaselineSource(deps, TENANT_A, 'source').id).toBe('source')
   expect(getBaselineSource(deps, TENANT_A, 'base').id).toBe('base')
   expect(getComparison(deps, TENANT_A, 'comparison').id).toBe('comparison')
+})
+
+it.each([false, true])('keeps custom baseline source content at a full cap, with references only in revisions: %s', revisionsOnly => {
+  const { records, fill, seed } = fixture()
+  const sources = ['snapshot-source', 'version-source', 'summary-source', 'rebase-source'].map(id => record(id, { kind: 'source', status: 'frozen', origin: 'snapshot', policies: [{ key: id, snapshot: { name: id, settings: [] } }] }))
+  fill(DOMAINS.baselineInstalls, sources, { kind: 'source', status: 'frozen' })
+  seed(DOMAINS.customBaselines, [
+    record('baseline', { kind: 'baseline', status: 'active', origin: 'snapshot', provenance: { sourceId: 'snapshot-source' }, versions: [{ base: { sourceId: 'summary-source' } }] }),
+    record('version', { kind: 'version', status: 'frozen', baselineId: 'baseline', base: { sourceId: 'version-source' } }),
+    record('rebase', { kind: 'rebase', status: 'ready', baselineId: 'baseline', upstream: { sourceId: 'rebase-source' } }),
+  ])
+  if (revisionsOnly) {
+    records.update<BaselineRecord>(DOMAINS.customBaselines, TENANT_A, 'baseline', current => ({ ...current, provenance: { ...current.provenance, sourceId: null }, versions: current.versions.map(version => ({ ...version, base: { ...version.base, sourceId: null } })) }), meta)
+    records.update<VersionRecord>(DOMAINS.customBaselines, TENANT_A, 'version', current => ({ ...current, base: { ...current.base, sourceId: null } }), meta)
+    records.update<RebaseRecord>(DOMAINS.customBaselines, TENANT_A, 'rebase', current => ({ ...current, upstream: { ...current.upstream, sourceId: null } }), meta)
+  }
+  expect(records.list(DOMAINS.baselineInstalls, TENANT_A)).toHaveLength(RECORD_RETENTION[DOMAINS.baselineInstalls]!)
+  records.create(DOMAINS.baselineInstalls, TENANT_A, { kind: 'source', status: 'frozen' }, meta)
+  const deps = fakeDeps({ records })
+  for (const source of sources) expect(getBaselineSource(deps, TENANT_A, source.id)).toEqual(source)
+  expect(records.get(DOMAINS.baselineInstalls, TENANT_A, 'closed-0')).toBeNull()
+})
+
+it.each([0, 5])('updates 600 protected change sets above the cap and trims %s closed records without refusing the update', closedCount => {
+  const { records, seed, store } = fixture()
+  const protectedRecords = Array.from({ length: 600 }, (_, i) => record(`applied-${i}`, { kind: 'change', status: 'applied', proposalId: `proposal-${i}`, preChange: { captureId: `capture-${i}` } }))
+  seed(DOMAINS.changeSets, [...protectedRecords, ...Array.from({ length: closedCount }, (_, i) => record(`closed-${i}`, { kind: 'change', status: 'rejected' }))])
+  const updated = records.update<{ status: string; summary?: string }>(DOMAINS.changeSets, TENANT_A, 'applied-0', current => ({ ...current, summary: 'Synced after upgrade' }), meta)
+  expect(updated?.summary).toBe('Synced after upgrade')
+  expect(updated?.history).toHaveLength(2)
+  expect(updated?.history[0]).toEqual(protectedRecords[0]!.history[0])
+  const kept = records.list(DOMAINS.changeSets, TENANT_A)
+  expect(kept).toHaveLength(600)
+  expect(kept.slice(1)).toEqual(protectedRecords.slice(1))
+  const beforeCreate = store.get(`records.v1.${DOMAINS.changeSets}.${TENANT_A}`)
+  expect(() => records.create(DOMAINS.changeSets, TENANT_A, { kind: 'change', status: 'in-review' }, meta)).toThrow('too many stored records')
+  expect(store.get(`records.v1.${DOMAINS.changeSets}.${TENANT_A}`)).toBe(beforeCreate)
+})
+
+it('treats documented upgrade values as setting keys rather than customization record IDs', () => {
+  const { records, fill, seed } = fixture()
+  fill(DOMAINS.customizations, [record('setting-key', { status: 'retired', settingKey: 'other-setting' }), record('active', { status: 'active', settingKey: 'setting-key' })], { status: 'retired', settingKey: 'unused' })
+  seed(DOMAINS.baselineUpgrades, [record('upgrade', { status: 'applied', policies: [{ documented: ['setting-key'] }] })])
+  records.create(DOMAINS.customizations, TENANT_A, { status: 'active', settingKey: 'new-setting' }, meta)
+  expect(records.get(DOMAINS.customizations, TENANT_A, 'setting-key')).toBeNull()
+  expect(records.get(DOMAINS.customizations, TENANT_A, 'active')).toBeTruthy()
+})
+
+it.each([false, true])('pins a reused old source and saves upgrade evidence atomically at a full cap, with no removable records: %s', async protectedOnly => {
+  const { records, fill, store } = fixture()
+  const deps = fakeDeps({ records })
+  const commit = 'b'.repeat(40)
+  const pack = { platform: 'windows' as const, commit, reference: 'Reused upstream', source: '', license: 'GPL-3.0', items: [] }
+  const upstream = storeBaselineSource(deps, TENANT_A, { origin: 'oib', platform: pack.platform, commit, reference: pack.reference, frameworkId: null, policies: sourcePolicies(pack.items) }, null)
+  fill(DOMAINS.baselineInstalls, [
+    { ...upstream, updatedAt: at },
+    record('install', { kind: 'install', status: 'tracked', origin: { type: 'quickstart', runId: 'run' }, platform: 'windows', commit: 'a'.repeat(40), reference: 'Installed release', sourceId: null, policies: [], customizationVersion: 1 }),
+    ...Array.from({ length: protectedOnly ? RECORD_RETENTION[DOMAINS.baselineInstalls]! - 2 : 0 }, (_, i) => record(`other-install-${i}`, { kind: 'install', status: 'tracked', sourceId: upstream.id, policies: [] })),
+  ], { kind: 'source', status: 'frozen' })
+  if (protectedOnly) {
+    const before = new Map(store.values)
+    await expect(compareUpgrade(deps, fakeOibSources([pack]), TENANT_A, 'install', commit, null)).rejects.toThrow('too many stored records')
+    expect(store.values).toEqual(before)
+    expect(records.list(DOMAINS.baselineUpgrades, TENANT_A)).toHaveLength(0)
+    return
+  }
+  const upgrade = await compareUpgrade(deps, fakeOibSources([pack]), TENANT_A, 'install', commit, null)
+  expect(upgrade.to.sourceId).toBe(upstream.id)
+  expect(getBaselineSource(deps, TENANT_A, upgrade.to.sourceId).policies).toEqual(upstream.policies)
+  expect(getComparison(deps, TENANT_A, upgrade.comparisonId).upgradeId).toBe(upgrade.id)
+  expect(records.list(DOMAINS.baselineInstalls, TENANT_A)).toHaveLength(RECORD_RETENTION[DOMAINS.baselineInstalls]!)
+  expect(records.get(DOMAINS.baselineInstalls, TENANT_A, 'closed-0')).toBeNull()
 })
 
 it('keeps shared versions referenced by any persisted adoption, pending state, previous state or revision', () => {

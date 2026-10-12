@@ -130,7 +130,7 @@ export class TenantRecords {
     const at = this.now().toISOString()
     const base = { ...value, id: randomUUID(), tenantId: tenantId.toLowerCase(), createdAt: at, updatedAt: at } as T & StoredRecord
     const record: Stored<T> = { ...base, history: [{ at, actor: meta.actor, reason: meta.reason, snapshot: base }] }
-    this.save(domain, tenantId, [...records, record], record.id)
+    this.save(domain, tenantId, [...records, record], record.id, true)
     return record
   }
 
@@ -163,7 +163,7 @@ export class TenantRecords {
     }
     const updated: Stored<T> = { ...next, history: revisions }
     records[index] = updated
-    this.save(domain, tenantId, records, updated.id)
+    this.save(domain, tenantId, records, updated.id, false)
     return updated
   }
 
@@ -199,7 +199,7 @@ export class TenantRecords {
     }
   }
 
-  private save<T>(domain: string, tenantId: string, records: Stored<T>[], writtenId: string): void {
+  private save<T>(domain: string, tenantId: string, records: Stored<T>[], writtenId: string, addsRecord: boolean): void {
     const limit = Object.hasOwn(RECORD_RETENTION, domain) ? RECORD_RETENTION[domain]! : MAX_RECORDS
     let kept = records
     if (records.length > limit) {
@@ -218,7 +218,8 @@ export class TenantRecords {
         .filter(({ record }) => record.id !== writtenId && !retain(record))
         .sort((a, b) => a.record.updatedAt.localeCompare(b.record.updatedAt) || a.index - b.index)
       const count = records.length - limit
-      if (removable.length < count) throw new Error("This tenant has too many stored records of this kind. Close or export older ones first. Referenced records and rollback or undo evidence are kept.")
+      // Existing workflows must still progress when protected upgrade data exceeds a new cap.
+      if (addsRecord && removable.length < count) throw new Error("This tenant has too many stored records of this kind. Close or export older ones first. Referenced records and rollback or undo evidence are kept.")
       const removed = new Set(removable.slice(0, count).map(({ record }) => record.id))
       kept = records.filter(record => !removed.has(record.id))
     }

@@ -147,7 +147,7 @@ describe("/api/hygiene", () => {
     const policies = Array.from({ length: 300 }, (_, number) => ({ id: `p${number}`, name: `Policy ${number}`, platforms: "windows10", settings: [choice(`setting_${number}`, "on")], assignments: [], roleScopeTagIds: ["0"] }))
     const { api } = backupApi({ policies })
     const deps = fakeDeps({ api })
-    const write = vi.spyOn(deps.store, "set")
+    const write = vi.spyOn(deps.store, "setMany")
     const result = await call(routes(deps), "/api/hygiene", { tenantId: TENANT_A, action: "scan" })
     expect(result.status).toBe(200)
     expect(result.body.findings).toHaveLength(300)
