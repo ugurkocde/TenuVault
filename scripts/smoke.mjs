@@ -31,8 +31,8 @@ mkdirSync(shotsDir, { recursive: true })
 const packagedApp = process.env.TENUVAULT_SMOKE_APP
 const args = [...(packagedApp ? [] : [desktopDir]), `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`]
 if (process.platform === "linux") args.push("--no-sandbox")
-// The throwaway smoke profile must not wait for access to the machine's login keychain.
-if (process.platform === "darwin") args.push("--use-mock-keychain")
+// Development smoke profiles use a mock keychain; packaged runs exercise the real Keychain by default.
+if (process.platform === "darwin" && (!packagedApp || process.env.TENUVAULT_SMOKE_MOCK_KEYCHAIN === "1")) args.push("--use-mock-keychain")
 // Tools that are themselves Electron apps may export ELECTRON_RUN_AS_NODE, which would start plain Node.
 const env = { ...process.env, ELECTRON_ENABLE_LOGGING: "1" }
 delete env.ELECTRON_RUN_AS_NODE
