@@ -4,7 +4,7 @@ import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { encryptedAzureFetch, openAzure, registerStorageToken, sealAzure } from "../src/main/storage/azure-seal"
 import { createBridgedFetch } from "../src/main/api/fetch-bridge"
 import { withNetworkErrors } from "../src/main/api/network-error"
-import { localStorageAccountName } from "../src/shared/constants"
+import { BACKUP_OWNER_FILE, localStorageAccountName } from "../src/shared/constants"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const request = {
@@ -133,16 +133,16 @@ describe("backup request recovery", () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(job).toMatchObject({ status: "Failed", progress: 100, progressMessage: "Backup failed", exception: message })
     expect(job.endTime).toBeDefined()
-    for (const item of items) expect(job.log.some(line => line.endsWith(`Could not back up "${item.displayName}": ${message}`))).toBe(true)
+    expect(job.log.some(line => line.includes("Could not back up"))).toBe(false)
     expect(job.log.some(line => line.endsWith(`Backup failed: ${message}`))).toBe(true)
     expect(job.log.some(line => line.includes("did not respond"))).toBe(false)
-    // One precondition check per policy and for the manifest. Only container creation reaches Azure.
-    expect(requireRecovery).toHaveBeenCalledTimes(33)
-    expect(networkFetch).toHaveBeenCalledTimes(34)
+    // Ownership fails before policy reads or uploads. Only container creation reaches Azure.
+    expect(requireRecovery).toHaveBeenCalledTimes(1)
+    expect(networkFetch).toHaveBeenCalledTimes(2)
     expect(networkFetch.mock.calls.filter(([input]) => new URL((input as Request).url).hostname !== "graph.microsoft.com")).toHaveLength(1)
     await vi.advanceTimersByTimeAsync(300_000)
-    expect(requireRecovery).toHaveBeenCalledTimes(33)
-    expect(networkFetch).toHaveBeenCalledTimes(34)
+    expect(requireRecovery).toHaveBeenCalledTimes(1)
+    expect(networkFetch).toHaveBeenCalledTimes(2)
   })
 
   it("does not retry application failures from the local fetch bridge", async () => {
@@ -168,14 +168,14 @@ describe("backup request recovery", () => {
     const job = engine.start({ ...request, storageAccountName: localStorageAccountName(TENANT) })
     await vi.advanceTimersByTimeAsync(0)
     expect(job).toMatchObject({ status: "Failed", progress: 100, exception: message })
-    expect(job.log.filter(line => line.includes("Could not back up") && line.endsWith(message))).toHaveLength(32)
+    expect(job.log.some(line => line.includes("Could not back up"))).toBe(false)
     expect(job.log.some(line => line.includes("did not respond"))).toBe(false)
-    // Container creation, one attempt per policy, and the manifest.
-    expect(handleLocalBlob).toHaveBeenCalledTimes(34)
-    expect(networkFetch).toHaveBeenCalledTimes(33)
+    // Container creation and the failed ownership write precede all policy reads.
+    expect(handleLocalBlob).toHaveBeenCalledTimes(2)
+    expect(networkFetch).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(300_000)
-    expect(handleLocalBlob).toHaveBeenCalledTimes(34)
-    expect(networkFetch).toHaveBeenCalledTimes(33)
+    expect(handleLocalBlob).toHaveBeenCalledTimes(2)
+    expect(networkFetch).toHaveBeenCalledTimes(1)
   })
 
   it.each(["after listing", "before listing"])("stops an outage %s within five minutes and releases the tenant", async scenario => {
@@ -187,7 +187,7 @@ describe("backup request recovery", () => {
     let listed = false
     const { engine, fetchImpl } = setup((url, init) => {
       if (!hanging) return
-      if (scenario === "before listing" && url.hostname !== "graph.microsoft.com") return
+      if (url.hostname !== "graph.microsoft.com") return
       if (scenario === "after listing" && !listed) {
         if (url.hostname !== "graph.microsoft.com") return
         listed = true
@@ -215,7 +215,7 @@ describe("backup request recovery", () => {
     // 24 failed attempts plus at most seven already in flight. Include container and optional list.
     expect(signals.length).toBeGreaterThanOrEqual(24)
     expect(signals.length).toBeLessThanOrEqual(31)
-    expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(scenario === "after listing" ? 33 : 32)
+    expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(scenario === "after listing" ? 34 : 32)
     expect(fetchImpl.mock.calls.some(([input]) => String(input).endsWith("/metadata.json"))).toBe(false)
 
     hanging = false
@@ -237,7 +237,7 @@ describe("backup request recovery", () => {
         if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: items })
         return Response.json({ id: url.pathname.split("/").at(-1) })
       }
-      if (url.search) return
+      if (url.search || url.pathname.endsWith(BACKUP_OWNER_FILE)) return
       signals.push(init!.signal!)
       // Ignore aborts to prove the job does not depend on the bridge settling.
       return failure === "hung fetch" ? new Promise(() => {}) : new Response(new ReadableStream(), { status: 503 })
@@ -255,8 +255,8 @@ describe("backup request recovery", () => {
     expect(signals.length).toBeLessThanOrEqual(31)
     expect(signals.every(signal => signal.aborted)).toBe(true)
     expect(signals.every(signal => signal.reason.message.includes("timed out after 90 seconds") || signal.reason.message === job.exception)).toBe(true)
-    // 31 uploads, 15 healthy policy reads, container creation and the initial Graph list.
-    expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(48)
+    // 31 uploads, 15 policy reads, container creation, ownership and the initial Graph list.
+    expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(49)
     expect(fetchImpl.mock.calls.some(([input]) => String(input).endsWith("/metadata.json"))).toBe(false)
     const calls = fetchImpl.mock.calls.length
     await vi.advanceTimersByTimeAsync(300_000)
@@ -278,7 +278,7 @@ describe("backup request recovery", () => {
       if (url.hostname === "graph.microsoft.com") {
         if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: items })
         if (service === "blob") return Response.json({ id: url.pathname.split("/").at(-1) })
-      } else if (service === "Graph" || url.search) return
+      } else if (service === "Graph" || url.search || url.pathname.endsWith(BACKUP_OWNER_FILE)) return
       signals.push(init!.signal!)
       return new Response(new ReadableStream(), { status: 503 })
     })
@@ -291,7 +291,7 @@ describe("backup request recovery", () => {
     expect(signals.length).toBeGreaterThanOrEqual(24)
     expect(signals.length).toBeLessThanOrEqual(31)
     expect(signals.every(signal => signal.aborted)).toBe(true)
-    expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(service === "Graph" ? 33 : 41)
+    expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(service === "Graph" ? 34 : 42)
     expect(fetchImpl.mock.calls.some(([input]) => String(input).endsWith("/metadata.json"))).toBe(false)
   })
 
@@ -302,7 +302,7 @@ describe("backup request recovery", () => {
       if (url.hostname === "graph.microsoft.com") {
         if (url.pathname.endsWith("/deviceConfigurations")) return Response.json({ value: Array.from({ length: 8 }, (_, index) => ({ id: `policy-${index}`, displayName: `Policy ${index}` })) })
         if (service === "blob") return Response.json({ id: url.pathname.split("/").at(-1) })
-      } else if (service === "Graph" || url.search) return
+      } else if (service === "Graph" || url.search || url.pathname.endsWith(BACKUP_OWNER_FILE)) return
       failures++
       return new Response(new ReadableStream({ start(controller) { controller.error(new TypeError("Connection reset while reading body")) } }), { status: 503 })
     })
@@ -361,7 +361,7 @@ describe("backup request recovery", () => {
     const manifestUrl = new URL(`https://contoso.blob.core.windows.net/intune-backups/${job.backupFolder}/metadata.json`)
     const committed = saved.get(manifestUrl.pathname)!
     expect(JSON.parse(openAzure(Buffer.from(committed), [master], TENANT, manifestUrl).data.toString())).toMatchObject({ Status: "Success", Failures: 0 })
-    expect(saved.size).toBe(9)
+    expect(saved.size).toBe(10)
     for (const [path, body] of original) expect(saved.get(path)).toBe(body)
     const calls = networkFetch.mock.calls.length
     await vi.advanceTimersByTimeAsync(300_000)
@@ -483,7 +483,7 @@ describe("backup request recovery", () => {
       }
       if (init?.method !== "GET") return
       if (url.search) return new Response(`<EnumerationResults><Blobs>${prefixes.map(prefix => `<BlobPrefix><Name>${prefix}</Name></BlobPrefix>`).join("")}</Blobs></EnumerationResults>`)
-      expect(saved.size).toBe(1)
+      expect(saved.size).toBe(2)
       signals.push(init.signal!)
       return new Promise(() => {})
     })
@@ -504,7 +504,7 @@ describe("backup request recovery", () => {
     expect(new Set(fetchImpl.mock.calls.filter(([input, init]) => init?.method === "GET" && !new URL(String(input)).search).map(([input]) => String(input))).size).toBe(8)
     expect(signals.every(signal => signal.aborted)).toBe(true)
     expect(saved.get(manifest)).toBe(committed)
-    expect(saved.size).toBe(1)
+    expect(saved.size).toBe(2)
     expect(fetchImpl.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false)
     const calls = fetchImpl.mock.calls.length
     await vi.advanceTimersByTimeAsync(300_000)
@@ -559,7 +559,7 @@ describe("backup request recovery", () => {
     expect(signals).toHaveLength(3)
     expect(signals.every(signal => signal.aborted)).toBe(true)
     expect(saved.get(manifest)).toBe(committed)
-    expect(saved.size).toBe(original.size + 1)
+    expect(saved.size).toBe(original.size + 2)
     for (const [path, body] of original) expect(saved.get(path)).toBe(body)
     const deletes = fetchImpl.mock.calls.filter(([, init]) => init?.method === "DELETE")
     expect(deletes).toHaveLength(failure === "delete" ? 3 : 0)
@@ -655,7 +655,7 @@ describe("backup request recovery", () => {
         ] })
         return Response.json({ id: url.pathname.split("/").at(-1) })
       }
-      if (url.search) return
+      if (url.search || url.pathname.endsWith(BACKUP_OWNER_FILE)) return
       if (url.pathname.endsWith("/Saved.json")) {
         saved.set(url.pathname, init!.body as string)
         return

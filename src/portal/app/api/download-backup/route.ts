@@ -1,5 +1,6 @@
 import { decodeXml } from "~/lib/storage/list"
 import { blobPath, isSafeArchivePath } from "../../../../shared/security"
+import { BACKUP_OWNER_FILE } from "../../../../shared/constants"
 import { type NextRequest, NextResponse } from "next/server"
 
 async function getAccessToken(tenantId: string, appId: string, clientSecret: string) {
@@ -86,7 +87,7 @@ export async function POST(request: NextRequest) {
           if (nameMatch && nameMatch[1]) {
             const blobName = decodeXml(nameMatch[1])
             // Include all files (skip directories which don't have content)
-            if (blobName && !blobName.endsWith('/')) {
+            if (blobName && !blobName.endsWith('/') && blobName !== `${backupId}/${BACKUP_OWNER_FILE}`) {
               allFiles.push(blobName)
             }
           }

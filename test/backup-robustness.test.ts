@@ -200,7 +200,7 @@ describe("manifest commit and retention interruption", () => {
     const signals: AbortSignal[] = []
     const { engine, saved, calls } = setup({
       getToken: async (_tenant, _client, tokenScope) => {
-        if (tokenScope.includes("storage.azure.com") && ++storageTokens >= 3 && failure === "retry token") return new Promise(() => {})
+        if (tokenScope.includes("storage.azure.com") && ++storageTokens >= 4 && failure === "retry token") return new Promise(() => {})
         return "token"
       },
       override: (url, init) => {
@@ -280,7 +280,7 @@ describe("manifest commit and retention interruption", () => {
     let pages = 0
     const { engine, saved, calls } = setup({
       getToken: async (_tenant, _client, tokenScope) => {
-        if (tokenScope.includes("storage.azure.com") && ++storageTokens === 2) {
+        if (tokenScope.includes("storage.azure.com") && ++storageTokens === 3) {
           return new Promise(resolve => { release = resolve })
         }
         return "token"
@@ -289,7 +289,7 @@ describe("manifest commit and retention interruption", () => {
     })
     const job = engine.start(request)
     await vi.advanceTimersByTimeAsync(interrupt === "deadline" ? JOB_DEADLINE_MS - 500 : 0)
-    expect(storageTokens).toBe(2)
+    expect(storageTokens).toBe(3)
     expect(release).toBeDefined()
     expect(job.status).toBe("Running")
     if (interrupt === "cancel") engine.cancel(job.id)
@@ -313,7 +313,7 @@ describe("manifest commit and retention interruption", () => {
     let pages = 0
     const { engine, saved, calls } = setup({
       getToken: async (_tenant, _client, tokenScope) => {
-        if (tokenScope.includes("storage.azure.com") && ++storageTokens === 2) {
+        if (tokenScope.includes("storage.azure.com") && ++storageTokens === 3) {
           return new Promise(resolve => { release = resolve })
         }
         return "token"
@@ -322,7 +322,7 @@ describe("manifest commit and retention interruption", () => {
     })
     const job = engine.start(request)
     await vi.advanceTimersByTimeAsync(interrupt === "deadline" ? JOB_DEADLINE_MS - 500 : 90_000)
-    expect(storageTokens).toBe(2)
+    expect(storageTokens).toBe(3)
     expect(release).toBeDefined()
     expect(job.status).toBe("Running")
     // The token request has timed out, but its one second retry sleep is still pending.
@@ -338,7 +338,7 @@ describe("manifest commit and retention interruption", () => {
     const count = calls.length
     release("token")
     await vi.advanceTimersByTimeAsync(300_000)
-    expect(storageTokens).toBe(2)
+    expect(storageTokens).toBe(3)
     expect(calls).toHaveLength(count)
     const next = engine.start(request)
     await engine.waitForJob(next)
