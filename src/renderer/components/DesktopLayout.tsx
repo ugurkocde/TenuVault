@@ -110,7 +110,7 @@ function LicenseBanner() {
   if (keyExpiry && status.validUntil) {
     return (
       <BannerLink tone="amber" icon={<AlertTriangle className="h-4 w-4" />}>
-        Your license {keyExpiry === "expired" ? "expired on" : "expires on"} {formatDate(status.validUntil)}. Renew it to keep Pro features.
+        Your license {keyExpiry === "expired" ? "expired on" : "expires on"} {formatDate(status.validUntil)}. Renew it to keep {status.plan === "msp" ? "MSP" : "Pro"} features.
       </BannerLink>
     )
   }

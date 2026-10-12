@@ -170,6 +170,8 @@ function decodeToken(token: string, publicKey: KeyObject): Entitlement | null {
     if (!verify(null, Buffer.from(body), publicKey, Buffer.from(signature, "base64url"))) return null
     const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as Entitlement
     if (payload.v !== 1 && payload.v !== 2) return null
+    // A renewing subscription has no key expiry: the server omits the field or sends null.
+    if (payload.v === 2 && payload.keyExp === null) delete payload.keyExp
     if (payload.v === 2 && payload.keyExp !== undefined && (
       !Number.isFinite(payload.keyExp) || !Number.isFinite(new Date(payload.keyExp * 1000).getTime())
     )) return null
@@ -783,7 +785,7 @@ export class LicenseService {
       const payload = this.valid(tenantId)
       const source = payload && entry ? (entry.source ?? "key") : null
       if (payload && source === "key" && (!keyToken || payload.iat > keyToken.iat)) keyToken = payload
-      const tenantValidUntil = payload?.v === 2 && payload.keyExp !== undefined
+      const tenantValidUntil = payload?.v === 2 && typeof payload.keyExp === "number"
         ? new Date(payload.keyExp * 1000).toISOString()
         : null
       if (tenantValidUntil && (!validUntil || Date.parse(tenantValidUntil) < Date.parse(validUntil))) {

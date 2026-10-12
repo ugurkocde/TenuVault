@@ -211,6 +211,13 @@ describe("LicenseService key expiry", () => {
     expect(licenseExpiryWarning(status)).toBeNull()
   })
 
+  it("treats a null key expiry on a version 2 token as no expiry", () => {
+    storeLicense(token({ v: 2, keyExp: null } as never))
+    const status = service().status([TENANT])
+    expect(status.tenants[0]).toMatchObject({ entitled: true, validUntil: null })
+    expect(status.validUntil).toBeNull()
+  })
+
   it("uses the earliest expiry across key and organization licenses", () => {
     const later = new Date(T0 + 45 * DAY).toISOString()
     const earlier = new Date(T0 + 20 * DAY).toISOString()
@@ -255,7 +262,7 @@ describe("LicenseService key expiry", () => {
     expect(entitled(service())).toBe(false)
   })
 
-  it.each([null, "1790000000", 1e20])("rejects malformed version 2 key expiry: %s", (keyExp) => {
+  it.each(["1790000000", 1e20, true])("rejects malformed version 2 key expiry: %s", (keyExp) => {
     storeLicense(token({ v: 2, keyExp }))
     expect(entitled(service())).toBe(false)
   })
