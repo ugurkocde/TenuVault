@@ -77,3 +77,25 @@ describe('dashboard summary inventory', () => {
     expect(upgraded.queryKey).not.toEqual(query.queryKey)
   })
 })
+
+
+it('uses saved drift timestamps through the bridge without an audit event, including Community and selected tenants', async () => {
+  const times: Record<string, string> = { first: '2026-10-10T12:00:00Z', second: '2026-10-11T14:00:00Z' }
+  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === '/api/drift-scan') {
+      const body = JSON.parse(String(init?.body))
+      expect(body.action).toBe('result')
+      return Response.json({ result: { lastScan: times[body.tenantId] } })
+    }
+    return String(input).includes('/audit/') ? Response.json({ data: [] }) : Response.json({ backups: [] })
+  })
+  vi.stubGlobal('fetch', fetcher)
+  const query = (id?: number) => useDashboardStats('7d', id) as unknown as { queryFn: () => Promise<{ lastDriftCheck: { time: Date; succeeded: boolean } | null }> }
+  expect((await query(1).queryFn()).lastDriftCheck).toEqual({ time: new Date(times.first!), succeeded: true })
+  expect(fetcher.mock.calls.some(([url]) => String(url).includes('/audit/'))).toBe(false)
+  expect((await query().queryFn()).lastDriftCheck).toEqual({ time: new Date(times.second!), succeeded: true })
+  times.first = 'invalid'
+  expect((await query(1).queryFn()).lastDriftCheck).toBeNull()
+  fetcher.mockImplementation(async input => String(input) === '/api/drift-scan' ? new Response(null, { status: 503 }) : Response.json({ backups: [] }))
+  expect((await query(1).queryFn()).lastDriftCheck).toBeNull()
+})
