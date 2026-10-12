@@ -9,6 +9,7 @@ import { bridge } from "../lib/bridge"
 import { tenantLicense, tenantPlan, useLicense } from "../lib/license"
 import { describeSchedule, formatWhen, useRefusals, useSchedules, WEEKDAYS } from "../lib/schedules"
 import { toast } from "../lib/toast"
+import { weeklyScheduleNote } from "../lib/plan-notes"
 import { PlanBadge, UpgradeNote } from "./UpgradeNote"
 import { BackupScopePicker } from "./BackupScopePicker"
 import { describeScope, includedTypes, normalizeScope, type BackupScope } from "../../shared/intune/scope"
@@ -83,6 +84,7 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
 
   const setPreference = async (changes: Partial<AppPreferences>) => setPrefs(await bridge.preferences.set(changes))
 
+  const weeklyMessage = weeklyScheduleNote(plan, !!(current?.enabled && current.frequency === "weekly") || (enabled && frequency === "weekly"))
   const select = "h-10 rounded-full border border-gray-300 bg-white px-4 text-sm"
 
   return (
@@ -142,6 +144,7 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
         </div>
 
         {community && (current?.frequency === "daily" || (enabled && frequency === "daily")) && <UpgradeNote feature="dailySchedule" />}
+        {weeklyMessage && <p className="text-sm text-gray-500">{weeklyMessage}</p>}
 
         {license && !license.entitled && (
           <div className="flex gap-3 rounded-3xl bg-amber-50 px-5 py-4 text-sm text-amber-900">

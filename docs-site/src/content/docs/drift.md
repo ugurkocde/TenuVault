@@ -94,6 +94,8 @@ Every change also has a severity. It appears in the exported report and in **Che
 | Warning | Any other deleted item, or a changed compliance policy or device configuration profile |
 | Info | Everything else |
 
+On Community, a completed comparison shows a note only when at least one changed or deleted policy still has a Revert or Recreate action. Added policies, policies already reverted and changes caused by a revert are excluded from the count. The note says: **Pro reverts these {N} changed or deleted policies with one click and records the change in the audit log.** A **See plans** link appears beside it.
+
 ## Act on a change
 
 For **modified** and **deleted** items that were not reverted yet, the expanded card offers two actions:
