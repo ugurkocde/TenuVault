@@ -1,8 +1,9 @@
 import type { FrameworkDefinition } from "../types";
+import { withCapabilitySummaries } from "../framework-summary";
 
 // ISO/IEC 27001 is referenced by control number only. Titles and summaries are
 // original descriptions written for this device-management evidence mapping.
-export const ISO_27001: FrameworkDefinition = {
+export const ISO_27001: FrameworkDefinition = withCapabilitySummaries({
   id: "iso-27001-2022",
   name: "ISO/IEC 27001:2022",
   version: "2022, Annex A",
@@ -17,56 +18,56 @@ export const ISO_27001: FrameworkDefinition = {
       evidenceStrength: "supporting",
       granularity: "requirement",
       title: "Endpoint evidence mapping 8.1",
-      summary: "TenuVault compares selected compliant device required, app data transfer, disk encryption, storage encryption settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "8.5": {
       id: "8.5",
       evidenceStrength: "supporting",
       granularity: "requirement",
       title: "Endpoint evidence mapping 8.5",
-      summary: "TenuVault compares selected lsa protection, remote credential guard, laps management, mfa all apps, phishing resistant mfa, credential guard settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "8.7": {
       id: "8.7",
       evidenceStrength: "supporting",
       granularity: "requirement",
       title: "Endpoint evidence mapping 8.7",
-      summary: "TenuVault compares selected office macro antivirus, antivirus required, periodic antimalware scan, behavior monitoring, network inspection, realtime antimalware settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "8.8": {
       id: "8.8",
       evidenceStrength: "supporting",
       granularity: "requirement",
       title: "Endpoint evidence mapping 8.8",
-      summary: "TenuVault compares selected quality update deadline, automatic updates, minimum os version settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "8.9": {
       id: "8.9",
       evidenceStrength: "supporting",
       granularity: "requirement",
       title: "Endpoint evidence mapping 8.9",
-      summary: "TenuVault compares selected office macros disabled, office internet macros blocked, office signed macros, office macro settings managed, ie disabled settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "8.19": {
       id: "8.19",
       evidenceStrength: "supporting",
       granularity: "requirement",
       title: "Endpoint evidence mapping 8.19",
-      summary: "TenuVault compares selected applocker rule collections, application control, gatekeeper, app source restriction settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "8.20": {
       id: "8.20",
       evidenceStrength: "supporting",
       granularity: "requirement",
       title: "Endpoint evidence mapping 8.20",
-      summary: "TenuVault compares selected firewall settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "8.24": {
       id: "8.24",
       evidenceStrength: "supporting",
       granularity: "requirement",
       title: "Endpoint evidence mapping 8.24",
-      summary: "TenuVault compares selected disk encryption, storage encryption settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
   },
   mappings: {
@@ -142,4 +143,4 @@ export const ISO_27001: FrameworkDefinition = {
     "macos-gatekeeper": ["8.19"],
     "android-app-source-restriction": ["8.19"],
   },
-};
+});

@@ -17,7 +17,7 @@ export const listPromotions = (tenant: Tenant) => featureCall<{ promotions: Prom
 export const getPromotion = (tenant: Tenant, id: string) => featureCall<{ promotion: Promotion; changeSet: ChangeSet | null; rollbackChangeSet: ChangeSet | null }>(PATH, tenant, "get", { id })
 export const promotionPolicies = (tenant: Tenant, sourceTenantId: string) => featureCall<{ source: PolicyOption[]; destination: PolicyOption[] }>(PATH, tenant, "policies", source(sourceTenantId))
 export const targetObjects = (tenant: Tenant, kind: Exclude<ReferenceKind, "group">) => featureCall<{ objects: Array<{ id: string; name: string }>; readable: boolean; reason?: string }>(PATH, tenant, "target-objects", { kind })
-export const planPromotion = (tenant: Tenant, input: { sourceTenantId: string; title: string; ticket: string; includeAssignments: boolean; items: Array<{ sourceId: string; destinationId: string | null }>; mappings: Mapping[] }) =>
+export const planPromotion = (tenant: Tenant, input: { sourceTenantId: string; title: string; ticket: string; includeAssignments: boolean; acknowledgeRedacted: boolean; items: Array<{ sourceId: string; destinationId: string | null }>; mappings: Mapping[] }) =>
   featureCall<{ promotion: Promotion }>(PATH, tenant, "plan", { ...input, ...source(input.sourceTenantId) })
 
 /** Change-set actions routed through /api/promotion, which re-checks the two-tenant rule. */

@@ -20,6 +20,7 @@ export function PromotionPlanner({ tenant, sources, blocked, onPlanned }: { tena
   const [sourceTenantId, setSourceTenantId] = useState(sources[0]?.credentials?.tenantId ?? "")
   const [selected, setSelected] = useState<Record<string, string | null>>({})
   const [includeAssignments, setIncludeAssignments] = useState(false)
+  const [acknowledgeRedacted, setAcknowledgeRedacted] = useState(false)
   const [mappings, setMappings] = useState<Mapping[]>([])
   const [title, setTitle] = useState("")
   const [ticket, setTicket] = useState("")
@@ -34,6 +35,7 @@ export function PromotionPlanner({ tenant, sources, blocked, onPlanned }: { tena
     setSourceTenantId(blocked.sourceTenantId)
     setSelected(Object.fromEntries(blocked.items.map((item) => [item.sourceId, item.destinationId])))
     setIncludeAssignments(blocked.includeAssignments)
+    setAcknowledgeRedacted(blocked.acknowledgeRedacted === true)
     setTitle(blocked.title)
     setTicket(blocked.ticket ?? "")
   }, [blocked])
@@ -49,8 +51,9 @@ export function PromotionPlanner({ tenant, sources, blocked, onPlanned }: { tena
   const plan = async () => {
     setBusy(true)
     try {
-      const { promotion } = await planPromotion(tenant, { sourceTenantId, title, ticket, includeAssignments, items: Object.entries(selected).map(([sourceId, destinationPolicy]) => ({ sourceId, destinationId: destinationPolicy })), mappings })
-      toast(promotion.status === "blocked" ? "Planned with blocking findings. Map the dependencies and plan again." : "Planned. Review the destination diff next; nothing was written.", promotion.status === "blocked" ? "info" : "success")
+      const { promotion } = await planPromotion(tenant, { sourceTenantId, title, ticket, includeAssignments, acknowledgeRedacted, items: Object.entries(selected).map(([sourceId, destinationPolicy]) => ({ sourceId, destinationId: destinationPolicy })), mappings })
+      setReferences(promotion.items.flatMap((item) => item.references ?? []))
+      toast(promotion.status === "blocked" ? "Planned with blocking findings. Resolve the findings and plan again." : "Planned. Review the destination diff next; nothing was written.", promotion.status === "blocked" ? "info" : "success")
       onPlanned(promotion)
     } catch (error) {
       toast(error instanceof Error ? error.message : "The promotion could not be planned.", "error")
@@ -66,7 +69,7 @@ export function PromotionPlanner({ tenant, sources, blocked, onPlanned }: { tena
       <div className="grid gap-3 md:grid-cols-2">
         <label className="flex flex-col gap-1 text-xs text-gray-500">
           Source (development) tenant
-          <select className={fieldClass} value={sourceTenantId} onChange={(event) => { setSourceTenantId(event.target.value); setSelected({}); setMappings([]); setReferences([]) }}>
+          <select className={fieldClass} value={sourceTenantId} onChange={(event) => { setSourceTenantId(event.target.value); setSelected({}); setMappings([]); setReferences([]); setAcknowledgeRedacted(false) }}>
             {sources.map((entry) => <option key={entry.credentials!.tenantId} value={entry.credentials!.tenantId}>{entry.name}</option>)}
           </select>
         </label>
@@ -107,6 +110,10 @@ export function PromotionPlanner({ tenant, sources, blocked, onPlanned }: { tena
         <input type="checkbox" className="h-4 w-4" checked={includeAssignments} onChange={(event) => setIncludeAssignments(event.target.checked)} />
         Promote assignments too, after reviewing their mapped groups and filters (default: created unassigned, existing assignments untouched)
       </label>
+      <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+        <input type="checkbox" className="h-4 w-4" checked={acknowledgeRedacted} onChange={(event) => setAcknowledgeRedacted(event.target.checked)} />
+        I understand that secrets in this policy are not promoted and must be set again in the destination
+      </label>
       {references.length > 0 && (
         <div className="space-y-2">
           <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Dependency mappings</p>
@@ -119,7 +126,7 @@ export function PromotionPlanner({ tenant, sources, blocked, onPlanned }: { tena
       </div>
       <Button type="button" size="sm" disabled={busy || !title.trim() || !Object.keys(selected).length} onClick={() => void plan()}>
         <ClipboardList className="h-4 w-4" />
-        {busy ? "Reading both tenants" : blocked ? "Plan again with these mappings" : "Plan promotion"}
+        {busy ? "Reading both tenants" : blocked ? "Plan again" : "Plan promotion"}
       </Button>
     </div>
   )

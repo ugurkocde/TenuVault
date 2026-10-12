@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef } from "react"
 import { Button } from "~/components/ui/button"
 import { useBackupProgress } from "~/contexts/BackupProgressContext"
+import { useTenantPlan } from "@desktop/lib/license"
+import { FirstBackupNote } from "@desktop/components/FirstBackupNote"
 import {
   Dialog,
   DialogContent,
@@ -66,6 +68,7 @@ export function BackupProgressModal({
   const [error, setError] = useState("")
   const [showOutput, setShowOutput] = useState(false)
   const { addJob } = useBackupProgress()
+  const plan = useTenantPlan(credentials?.tenantId)
 
   // The latest props, so a parent re-rendering with new objects does not restart polling.
   const latest = useRef({ credentials, resources, onComplete })
@@ -260,6 +263,8 @@ export function BackupProgressModal({
                   </>
                 )}
               </div>
+
+              {open && jobStatus.isComplete && jobStatus.isSuccessful && <FirstBackupNote key={jobId} plan={plan} />}
 
               {/* Exception Message */}
               {jobStatus.exception && (

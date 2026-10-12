@@ -31,6 +31,8 @@ mkdirSync(shotsDir, { recursive: true })
 const packagedApp = process.env.TENUVAULT_SMOKE_APP
 const args = [...(packagedApp ? [] : [desktopDir]), `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`]
 if (process.platform === "linux") args.push("--no-sandbox")
+// Development smoke profiles use a mock keychain; packaged runs exercise the real Keychain by default.
+if (process.platform === "darwin" && (!packagedApp || process.env.TENUVAULT_SMOKE_MOCK_KEYCHAIN === "1")) args.push("--use-mock-keychain")
 // Tools that are themselves Electron apps may export ELECTRON_RUN_AS_NODE, which would start plain Node.
 const env = { ...process.env, ELECTRON_ENABLE_LOGGING: "1" }
 delete env.ELECTRON_RUN_AS_NODE
@@ -1425,6 +1427,30 @@ await check("a second tenant without a license cannot be added on Community", as
 await check("tenants connected by an older version without a sign-in keep the first use label", async () => {
   await go("#/", "All tenants")
   assert(await waitForText("License checked at first use"), "label for unchecked tenants missing")
+})
+
+await check("compliance scoring notice dismisses once on this machine", async () => {
+  await evaluate(`(() => {
+    localStorage.removeItem('tenuvault-compliance-scoring-v2-dismissed');
+    window.__scoringNoticeFetch = window.fetch;
+    window.fetch = (input, init) => {
+      if (String(input) === '/api/frameworks' && JSON.parse(init.body ?? '{}').action === 'native-history') return Promise.resolve(Response.json({ history: [], persistent: true, scoringChanged: true }));
+      return window.__scoringNoticeFetch(input, init);
+    };
+  })()`)
+  try {
+    await go("#/portal/frameworks/iso-27001", "Compare your tenant")
+    assert(await waitForText("Compliance scoring changed in this version."), "scoring reset notice missing")
+    await evaluate(`document.querySelector('[aria-label="Dismiss compliance scoring notice"]').click()`)
+    assert(await waitForCondition(`!document.body.innerText.includes('Compliance scoring changed in this version.')`), "scoring notice did not dismiss")
+    assert(await evaluate(`localStorage.getItem('tenuvault-compliance-scoring-v2-dismissed') === 'true'`), "scoring dismissal was not saved")
+    await go("#/portal/overview", "All tenants")
+    await go("#/portal/frameworks/soc2", "Compare your tenant")
+    assert(await waitForCondition(`document.body.innerText.includes('No comparison yet')`), "second framework history did not load")
+    assert(!(await evaluate(`document.body.innerText.includes('Compliance scoring changed in this version.')`)), "scoring notice repeated on another framework")
+  } finally {
+    await evaluate(`window.fetch = window.__scoringNoticeFetch; delete window.__scoringNoticeFetch`)
+  }
 })
 
 await check("paid roadmap screens explain their plan and the server refuses Community", async () => {

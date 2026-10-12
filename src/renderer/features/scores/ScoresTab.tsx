@@ -7,6 +7,7 @@ import type { FeatureTabProps } from "../types"
 import { loadSummary } from "./api"
 import { FrameworkCard } from "./FrameworkCard"
 import { PortfolioScores } from "./PortfolioScores"
+import { ComplianceScoringNotice } from "../../components/ComplianceScoringNotice"
 import { ScoreDetail } from "./ScoreDetail"
 
 /**
@@ -26,6 +27,7 @@ export default function ScoresTab({ tenant, plan, allowed }: FeatureTabProps) {
 
   return (
     <div className="space-y-6">
+      <ComplianceScoringNotice key={tenant.credentials?.tenantId} changed={query.data?.scoringChanged === true} />
       <section aria-label="How scores work" className="flex flex-wrap items-start justify-between gap-4 rounded-3xl bg-card p-6 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
         <div className="max-w-3xl space-y-2 text-sm text-gray-600">
           <p>{query.data?.formula ?? "Scores come from saved native framework comparisons."}</p>

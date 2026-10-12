@@ -5,6 +5,8 @@ import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { Progress } from "~/components/ui/progress"
 import { Button } from "~/components/ui/button"
 import { cn } from "~/lib/utils"
+import { FirstBackupNote } from "@desktop/components/FirstBackupNote"
+import { tenantLicense, tenantPlan, useLicense } from "@desktop/lib/license"
 import { 
   X,
   ChevronUp,
@@ -20,6 +22,7 @@ import {
 
 export function FloatingProgress() {
   const { activeJobs: allJobs, removeJob } = useBackupProgress()
+  const { status: licenseStatus } = useLicense()
   const activeJobs = allJobs.filter(job => !job.isHidden)
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null)
   const [showOutput, setShowOutput] = useState<Record<string, boolean>>({})
@@ -157,6 +160,10 @@ export function FloatingProgress() {
                   </Button>
                 </div>
               </div>
+
+              {job.isComplete && job.isSuccessful && !job.quiet && (
+                <div className="mt-3"><FirstBackupNote plan={tenantPlan(tenantLicense(licenseStatus, job.tenantId))} /></div>
+              )}
 
               {/* Progress Bar */}
               {!job.isComplete && (

@@ -27,13 +27,18 @@ function frameworkIdOf(body: Body): string {
  */
 export function routes(deps: FeatureDeps): Record<string, RouteModule> {
   return featureRoute("/api/scores", deps, {
-    summary: async ({ tenantId, deps }) => ({
-      tenantId,
-      tenantName: deps.tenant(tenantId)?.name ?? null,
-      formula: SCORE_FORMULA,
-      staleAfterDays: STALE_AFTER_DAYS,
-      frameworks: await tenantScores(deps, tenantId),
-    }),
+    summary: async ({ tenantId, deps }) => {
+      const now = deps.now()
+      const [native, oib] = await Promise.all([readAllHistory(deps, tenantId), readOibHistory(deps, tenantId)])
+      return {
+        tenantId,
+        tenantName: deps.tenant(tenantId)?.name ?? null,
+        formula: SCORE_FORMULA,
+        staleAfterDays: STALE_AFTER_DAYS,
+        scoringChanged: native.some(read => read.scoringChanged),
+        frameworks: [...native.map(read => frameworkScore(read, now)), ...oib.map(read => oibFrameworkScore(read, now))],
+      }
+    },
 
     detail: async ({ tenantId, body, deps }) => {
       const frameworkId = frameworkIdOf(body)

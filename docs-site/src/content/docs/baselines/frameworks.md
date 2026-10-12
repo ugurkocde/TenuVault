@@ -8,7 +8,7 @@ description: Compare Intune configuration evidence with native framework mapping
 * **Native comparisons** check your tenant against ten built-in technical mappings: NIST CSF 2.0, NIST SP 800-53 Rev. 5, NIST SP 800-171 Rev. 3 and Rev. 2, ASD Essential Eight, Cyber Essentials, ISO/IEC 27001:2022, SOC 2, BSI IT-Grundschutz and UK MOD Def Stan 05-138. They are read-only: nothing is imported and nothing is created in your tenant.
 * **Policy-pack comparisons** check your Settings Catalog policies against a versioned pack: the UK NCSC Device Security Guidance Windows pack, or a pack you import for Microsoft Security Baselines, DISA STIG or Custom Baselines. Except for the NCSC pack, which is comparison only, this workflow can also create the missing settings as new, unassigned policies.
 
-The results are configuration findings, not an audit, a certification, an achieved maturity level or a compliance score.
+The results are configuration findings, not an audit, a certification, an achieved maturity level or proof of compliance with the full framework.
 
 OpenIntuneBaseline is not part of the framework catalog. It has its own **OpenIntuneBaseline** section in the sidebar, which deploys, compares and validates OIB policies. See [OpenIntuneBaseline](/baselines/quick-start/).
 
@@ -84,19 +84,19 @@ The comparison runs in the background, so you can keep using TenuVault:
 
 ### 3. Review the results
 
-Summary tiles count individual setting observations:
+From TenuVault 0.3.0, summary tiles count each capability once, using the best evidence from an assigned policy. Thirty policies that configure BitLocker still contribute one matching capability. Multiple properties for the same capability also contribute one vote. Unassigned policies remain visible in the evidence, but cannot count as matches:
 
 | Result | Meaning |
 | --- | --- |
-| **Matches** | The observed value matches the expected value. |
-| **Different** | The setting is configured with a different value. |
-| **Missing** | No collected policy configures the setting. |
+| **Matches** | Assigned policy evidence matches the capability. Required setting groups must be together on one policy. |
+| **Different** | Assigned policy evidence is different and no complete assigned match was found. |
+| **Missing** | No assigned policy provides the capability, or required setting groups are missing. |
 | **Unable to check** | TenuVault could not read the evidence, for example because a read failed or a value is masked. |
-| **Outside scope** | The check applies to a platform you did not select. |
+| **Outside scope** | The capability applies to a platform you did not select, including Conditional Access when it is deselected. |
 
 Compliance policies, device restriction profiles and endpoint protection profiles return every on/off setting, and one left at **Not configured** reads as off. TenuVault ignores those, so they never count as **Different** or as evidence against a requirement. For example, a compliance policy that only requires the firewall is not reported as a different value for BitLocker or antivirus. Administrative template and custom (OMA-URI) settings are compared as set, because **Disabled** there is an explicit choice.
 
-Click a tile to filter the evidence list. **Setting-by-setting evidence** lists each check with its expected and observed values, the source policy and its assignment evidence. Use the search box and the result filter to narrow the list.
+Click a tile to filter the capability list by its aggregate result. All observations for each capability remain visible, including different values and unassigned policies. **Setting-by-setting evidence** lists each check with its expected and observed values, the source policy and its assignment evidence. Use the search box and the result filter to narrow the list.
 
 Below the evidence, expand **Collection coverage and limitations**, **Framework references** and **Snapshot and ruleset provenance** for the read status of each policy type, the framework requirements each check maps to, and the hashes that identify the input and ruleset.
 
@@ -106,7 +106,19 @@ Export the result as a **PDF** report, **CSV** or **JSON**. JSON and CSV contain
 
 TenuVault reads twelve policy types: Settings Catalog, legacy device configuration, administrative templates, classic and Settings Catalog compliance, endpoint security intents, app protection policies (three types), feature and quality update profiles, and, when selected, Conditional Access. App configuration, scripts and enrollment settings are not collected. A read that fails or is denied stays visible as a collection gap and is never reported as a match.
 
+For both classic and Settings Catalog compliance policies, TenuVault collects scheduled actions and their grace periods. An assigned compliance requirement counts as matching only when a block action is present. An email-only action does not qualify; unavailable actions stay unknown. Marking a device noncompliant does not itself prove that Conditional Access blocks resource access.
+
 Expected values are TenuVault's interpretation unless a check identifies a publisher-prescribed value. A match does not prove that the setting is assigned to the right devices or enforced on them.
+
+### Per-capability score and the 0.3.0 reset
+
+The native configuration score is **matching capabilities / (matching + different + missing capabilities)**. Each capability contributes one vote using its best assigned evidence. Unknown capabilities stay out of the score and appear in **coverage = evaluated / (evaluated + unknown)**. Outside scope capabilities are excluded. With no evaluated capability, there is no score.
+
+This changes scores in 0.3.0. Earlier score and trend history is not comparable with the new results. Saved comparisons remain readable on the framework page, but current scores and trends start with comparisons collected under the new ruleset and detector version. Run **Compare again** to establish a new starting point.
+
+When older history is present, the framework or scores page shows: "Compliance scoring changed in this version. Scores are now per capability and only count assigned policies, so they are not comparable with earlier history." Dismissing it saves a preference on this machine, shared across tenants and both pages.
+
+The ruleset hash covers the selected framework, the capabilities it maps and an explicit detector version. Changes to unrelated frameworks do not reset this framework's history. The selected platforms and profile remain separate comparison boundaries.
 
 ### Comparison history
 

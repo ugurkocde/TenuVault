@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { assessCapabilities, assessCompliance } from "../src/shared/compliance/engine";
+import { COMPLIANCE_CAPABILITIES } from "../src/shared/compliance/capabilities";
+import { ISO_27001, SOC_2, BSI_IT_GRUNDSCHUTZ, DEF_STAN_05_138 } from "../src/shared/compliance";
+import { capabilityComparison } from "../src/shared/compliance/native";
 import { assignmentDetails } from "../src/shared/compliance/assignments";
 import type { DetailedExportData } from "../src/shared/compliance/input";
 import type { ComplianceCapability } from "../src/shared/compliance/types";
@@ -16,6 +19,8 @@ const policy = (
   displayName: id,
   "@odata.type": `#microsoft.graph.${type}`,
   assignments: assigned,
+  // Assigned compliance requirements now need their collected block action.
+  ...(type.toLowerCase().endsWith("compliancepolicy") ? { scheduledActionsForRule: [{ scheduledActionConfigurations: [{ actionType: "block", gracePeriodHours: 0 }] }] } : {}),
   ...settings,
 });
 function data(...policies: any[]): DetailedExportData {
@@ -35,6 +40,26 @@ function capability(exportData: DetailedExportData, id: string) {
 }
 
 describe("evidence integrity regressions", () => {
+  it("derives each summary capability list from the actual mapping and keeps the prose", () => {
+    for (const framework of [ISO_27001, SOC_2, BSI_IT_GRUNDSCHUTZ, DEF_STAN_05_138]) {
+      for (const control of Object.values(framework.controls)) {
+        const names = Object.entries(framework.mappings).filter(([, ids]) => ids.includes(control.id))
+          .map(([id]) => COMPLIANCE_CAPABILITIES.find(capability => capability.id === id)!.name);
+        expect(control.summary).toBe(`TenuVault compares selected capabilities: ${names.join(", ")}. Check selection and expected values are our interpretation.`);
+      }
+    }
+  });
+
+  it("scores required setting groups only when one assigned policy has every group", () => {
+    const domain = policy("windows10EndpointProtectionConfiguration", { firewallProfileDomain: { firewallEnabled: "allowed" } }, "domain");
+    const other = policy("windows10EndpointProtectionConfiguration", { firewallProfilePrivate: { firewallEnabled: "allowed" }, firewallProfilePublic: { firewallEnabled: "allowed" } }, "other");
+    const exportData = data(domain, other);
+    exportData.collectedAt = "2026-10-12T10:00:00Z";
+    expect(capabilityComparison(capability(exportData, "windows-firewall"))).toBe("missing");
+    exportData.deviceConfigurations = [{ ...domain, ...other, id: "complete", firewallProfileDomain: { firewallEnabled: "allowed" } }];
+    expect(capabilityComparison(capability(exportData, "windows-firewall"))).toBe("matches");
+  });
+
   it("evaluates technical checks in every framework and explains skipped Conditional Access", () => {
     const exportData = data();
     exportData.collectionSkippedFamilies = ["conditionalAccessPolicies"];
@@ -44,7 +69,7 @@ describe("evidence integrity regressions", () => {
     )!;
     expect(mfa.status).toBe("collectionIncomplete");
     expect(mfa.limitations.join(" ")).toContain(
-      "Enable Include Conditional Access in Settings",
+      "Select Conditional Access under Platforms in scope",
     );
     const evaluatedIds = new Set(
       result.capabilities.map((row) => row.capability.id),

@@ -79,6 +79,7 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
         ticket: optionalText(body, "ticket", 200),
         includeAssignments: body.includeAssignments === true,
         dropUnsupportedExclusions: body.dropUnsupportedExclusions === true,
+        acknowledgeRedacted: body.acknowledgeRedacted === true,
         items: items.map((item) => {
           const entry = (item ?? {}) as Record<string, unknown>
           if (typeof entry.sourceId !== "string") throw new FeatureError("Invalid policy selection")

@@ -18,6 +18,7 @@ export interface HistoryRead {
   runs: NativeAssessment[]
   error: string | null
   notice: string | null
+  scoringChanged?: boolean
 }
 
 function isRun(value: unknown, tenantId: string, frameworkId: string): value is NativeAssessment {
@@ -49,12 +50,12 @@ export async function readHistory(deps: FeatureDeps, tenantId: string, framework
   const base = { frameworkId, frameworkName }
   try {
     const response = await deps.api("/api/frameworks", tenant, { action: "native-history", frameworkId })
-    const body = (await response.json().catch(() => null)) as { history?: unknown; notice?: unknown; error?: unknown } | null
+    const body = (await response.json().catch(() => null)) as { history?: unknown; notice?: unknown; currentRunIds?: unknown; scoringChanged?: unknown; error?: unknown } | null
     if (!response.ok || !body || !Array.isArray(body.history)) {
       const error = typeof body?.error === "string" ? body.error : `Saved comparisons could not be read (${response.status}).`
       return { ...base, status: "unavailable", runs: [], error, notice: null }
     }
-    return { ...base, status: "ok", runs: body.history.filter((run) => isRun(run, tenant, frameworkId)), error: null, notice: typeof body.notice === "string" ? body.notice : null }
+    return { ...base, status: "ok", runs: body.history.filter((run) => isRun(run, tenant, frameworkId) && (!Array.isArray(body.currentRunIds) || body.currentRunIds.includes(run.runId))), error: null, notice: typeof body.notice === "string" ? body.notice : null, scoringChanged: body.scoringChanged === true }
   } catch (error) {
     return { ...base, status: "unavailable", runs: [], error: error instanceof Error ? error.message : "Saved comparisons could not be read.", notice: null }
   }
