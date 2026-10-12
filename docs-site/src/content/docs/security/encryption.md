@@ -34,6 +34,7 @@ When you choose **This device, encrypted** as storage:
 
 * Every backup file is encrypted with AES-256-GCM, which also detects any change to the file.
 * File names are derived from a keyed hash, so the folder reveals neither policy names nor content.
+* Each file is bound to its tenant folder. A file copied into another tenant's folder cannot be decrypted there. Backups written before this binding was introduced stay readable.
 * The default folder is `TenuVault Backups` in your Documents folder. You can change it under **Settings** > **Storage and recovery** with **Change folder**. Changing the folder does not move existing backups.
 * Because the files are encrypted, you can keep the folder on a network share.
 
