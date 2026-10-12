@@ -24,7 +24,7 @@ import { useTenants } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { BrandMark } from "./BrandMark"
 import { ErrorBoundary } from "./ErrorBoundary"
-import { formatDateTime, isUnlicensed, planName, unlicensedTenants, useLicense } from "../lib/license"
+import { earliestExpiringTenant, formatDate, formatDateTime, isUnlicensed, licenseExpiryWarning, offlineDeadline, planName, unlicensedTenants, useLicense } from "../lib/license"
 import { Toaster } from "../lib/toast"
 import { FrameworkJobNotifier } from "../lib/framework-jobs"
 import { DriftScanIndicator, DriftScanNotifier } from "../lib/drift-jobs"
@@ -106,14 +106,23 @@ function LicenseBanner() {
       </BannerLink>
     )
   }
+  const keyExpiry = licenseExpiryWarning(status)
   // Offline, tokens run out: warn two days ahead so the admin can reconnect in time.
-  const soon = Date.now() + 2 * 24 * 60 * 60 * 1000
-  const expiring = status.tenants.filter((t) => t.entitled && t.expiresAt && Date.parse(t.expiresAt) < soon)
-  if (status.offline && expiring.length > 0) {
+  // Whichever deadline comes first is shown when both apply.
+  const offline = offlineDeadline(status)
+  if (offline && (!keyExpiry || !status.validUntil || Date.parse(offline) < Date.parse(status.validUntil))) {
     return (
       <BannerLink tone="amber" icon={<AlertTriangle className="h-4 w-4" />}>
         TenuVault could not reach the licensing service. Connect to the internet before{" "}
-        {formatDateTime(expiring.map((t) => t.expiresAt!).sort()[0]!)} to keep using your tenants.
+        {formatDateTime(offline)} to keep using your tenants.
+      </BannerLink>
+    )
+  }
+  if (keyExpiry && status.validUntil) {
+    const owner = earliestExpiringTenant(status)?.source === "tenant" ? "The license shared by your organization" : "Your license key"
+    return (
+      <BannerLink tone="amber" icon={<AlertTriangle className="h-4 w-4" />}>
+        {owner} {keyExpiry === "expired" ? "expired on" : "expires on"} {formatDate(status.validUntil)}. {status.plan === "msp" ? "MSP" : "Pro"} features stop unless it is renewed.
       </BannerLink>
     )
   }

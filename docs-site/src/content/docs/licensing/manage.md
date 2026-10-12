@@ -40,11 +40,15 @@ If the key cannot be activated for any of your signed-in tenants, it is not save
 
 The top card shows your plan, for example **Pro plan active**, and how many tenants your license covers and how many are active on this machine. Your key is shown masked, with only its last four characters visible.
 
+When the licensing service supplies a key expiry date, the top card also shows **License valid until** with the date. With several tenants, this is the earliest key expiry. Each tenant's License fact on the overview also shows its own **Valid until** date. Automatically renewing subscription keys may have no expiry date, so these lines stay hidden.
+
+An amber warning appears 30 days before a license key expires and links to the **License** page. It names the key or, for a license shared by your organization, that license, and Pro or MSP features stop on that date unless the license is renewed. When the licensing service is unreachable and a cached verification runs out sooner, that warning is shown first. If the key has expired while a cached verification is still current, the warning says so. Once the service confirms the key has expired, the tenant falls back to Community under the existing free tenant limit.
+
 The **Tenants** card lists every tenant on this machine with its license state:
 
 | Badge | Meaning |
 | --- | --- |
-| **Active, Pro** or **Active, MSP** | The tenant is licensed with your key. **Verified until** shows when the current verification expires if TenuVault cannot refresh it. |
+| **Active, Pro** or **Active, MSP** | The tenant is licensed with your key. **Works offline until** shows when the cached verification expires if TenuVault cannot refresh it. This is separate from the license key's expiry. |
 | **Active through your organization (Pro)** or **(MSP)** | The tenant is licensed through a license another admin shared with it. |
 | **Community (free)** | The tenant uses the free plan. |
 | **Not active** | You are signed in, but the tenant is not licensed. The reason is shown below the tenant. Click **Retry** after fixing it. |

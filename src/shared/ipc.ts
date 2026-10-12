@@ -40,6 +40,8 @@ export interface TenantLicenseStatus {
   tenants: number | null
   /** When the cached token expires. The app refreshes it long before, and keeps working offline until then. */
   expiresAt: string | null
+  /** When the license key expires, if supplied by the service. Separate from the offline token expiry. */
+  validUntil: string | null
   /** Key licenses: whether other admins in the tenant may use it, as last confirmed by the licensing service. */
   shared: boolean | null
   /** Key licenses: sharing could not be confirmed without a fresh sign-in. */
@@ -62,6 +64,8 @@ export interface LicenseStatus {
   /** Plan and tenant allowance of this machine's key, from its latest valid token. */
   plan: "pro" | "msp" | null
   tenantLimit: number | null
+  /** Earliest license key expiry among the tenants, or null when none is supplied. */
+  validUntil: string | null
   /** The one tenant the free Community plan covers, once a tenant has used it. */
   communityTenantId: string | null
   /** Signed-in tenants and tenants with a stored activation. */

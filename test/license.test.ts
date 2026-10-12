@@ -8,6 +8,9 @@ import {
   type LicenseServiceOptions,
 } from "../src/main/license/service"
 import { memoryStore } from "./helpers"
+import { earliestExpiringTenant, licenseExpiryWarning, offlineDeadline } from "../src/renderer/lib/license"
+
+vi.mock("../src/renderer/lib/bridge", () => ({ bridge: {} }))
 
 const { publicKey, privateKey } = generateKeyPairSync("ed25519")
 const publicPem = publicKey.export({ type: "spki", format: "pem" }).toString()
@@ -123,8 +126,8 @@ describe("LicenseService offline verification", () => {
     return entitled(service())
   }
 
-  it("stays valid offline for the token lifetime", () => {
-    storeLicense(token())
+  it.each([1, 2])("stays valid offline for the version %s token lifetime", (v) => {
+    storeLicense(token({ v }))
     expect(entitledAt(T0 + DAY)).toBe(true)
     expect(entitledAt(T0 + 13 * DAY)).toBe(true)
     expect(entitledAt(T0 + 15 * DAY)).toBe(false)
@@ -149,10 +152,12 @@ describe("LicenseService offline verification", () => {
     expect(entitledAt(T0 + DAY)).toBe(false)
   })
 
-  it("refuses a token bound to another tenant or installation", () => {
-    storeLicense(token({ tenantId: TENANT_B }))
+  it.each([1, 2])("refuses a version %s token bound to another tenant, installation or activation", (v) => {
+    storeLicense(token({ v, tenantId: TENANT_B }))
     expect(entitledAt(T0 + DAY)).toBe(false)
-    storeLicense(token({ installId: "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee" }))
+    storeLicense(token({ v, installId: "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee" }))
+    expect(entitledAt(T0 + DAY)).toBe(false)
+    storeLicense(token({ v, act: "act-other" }))
     expect(entitledAt(T0 + DAY)).toBe(false)
   })
 
@@ -161,6 +166,124 @@ describe("LicenseService offline verification", () => {
     storeLicense(token())
     vi.setSystemTime(T0 + DAY)
     expect(entitled(service({ publicKey: placeholder }))).toBe(false)
+  })
+})
+
+describe("LicenseService key expiry", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(T0)
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it.each([undefined, (T0 + 20 * DAY) / 1000])("keeps version 1 expiry limited to the offline token (%s)", (keyExp) => {
+    storeLicense(token({ keyExp }))
+    const status = service().status([TENANT])
+    expect(status.validUntil).toBeNull()
+    expect(status.tenants[0]).toMatchObject({
+      entitled: true, validUntil: null, expiresAt: new Date(T0 + 14 * DAY).toISOString(),
+    })
+    expect(licenseExpiryWarning(status)).toBeNull()
+  })
+
+  it.each([45, 20, 30])("exposes a version 2 key expiry %s days away separately from token expiry", (days) => {
+    const validUntil = new Date(T0 + days * DAY).toISOString()
+    storeLicense(token({ v: 2, keyExp: (T0 + days * DAY) / 1000 }))
+    const status = service().status([TENANT])
+    expect(status.validUntil).toBe(validUntil)
+    expect(status.tenants[0]).toMatchObject({
+      entitled: true, validUntil, expiresAt: new Date(T0 + 14 * DAY).toISOString(),
+    })
+    expect(licenseExpiryWarning(status)).toBe(days > 30 ? null : "expiring")
+  })
+
+  it("reports the nearer offline deadline and the tenant whose license expires first", () => {
+    const tenants = [
+      { tenantId: "a", entitled: true, expiresAt: new Date(T0 + DAY).toISOString(), validUntil: new Date(T0 + 20 * DAY).toISOString(), source: "key" },
+      { tenantId: "b", entitled: true, expiresAt: new Date(T0 + 10 * DAY).toISOString(), validUntil: new Date(T0 + 5 * DAY).toISOString(), source: "tenant" },
+    ] as never[]
+    expect(offlineDeadline({ offline: false, tenants }, T0)).toBeNull()
+    expect(offlineDeadline({ offline: true, tenants }, T0)).toBe(new Date(T0 + DAY).toISOString())
+    expect(earliestExpiringTenant({ validUntil: new Date(T0 + 5 * DAY).toISOString(), tenants })).toMatchObject({ tenantId: "b", source: "tenant" })
+    expect(earliestExpiringTenant({ validUntil: null, tenants })).toBeNull()
+  })
+
+  it("does not warn more than 30 days ahead or when no date is supplied", () => {
+    expect(licenseExpiryWarning({ validUntil: new Date(T0 + 30 * DAY + 1).toISOString() })).toBeNull()
+    expect(licenseExpiryWarning({ validUntil: null })).toBeNull()
+    expect(licenseExpiryWarning({ validUntil: "invalid" })).toBeNull()
+  })
+
+  it("accepts a version 2 renewing subscription without key expiry", () => {
+    storeLicense(token({ v: 2 }))
+    const status = service().status([TENANT])
+    expect(status.validUntil).toBeNull()
+    expect(status.tenants[0]).toMatchObject({ entitled: true, validUntil: null })
+    expect(licenseExpiryWarning(status)).toBeNull()
+  })
+
+  it("treats a null key expiry on a version 2 token as no expiry", () => {
+    storeLicense(token({ v: 2, keyExp: null } as never))
+    const status = service().status([TENANT])
+    expect(status.tenants[0]).toMatchObject({ entitled: true, validUntil: null })
+    expect(status.validUntil).toBeNull()
+  })
+
+  it("uses the earliest expiry across key and organization licenses", () => {
+    const later = new Date(T0 + 45 * DAY).toISOString()
+    const earlier = new Date(T0 + 20 * DAY).toISOString()
+    store.set("license.state", JSON.stringify({
+      key: "TEST-LICENSE-KEY",
+      activations: {
+        [TENANT]: { activationId: "act-1", token: token({ v: 2, keyExp: Date.parse(later) / 1000 }) },
+        [TENANT_B]: {
+          activationId: "act-2", source: "tenant",
+          token: token({ v: 2, act: "act-2", tenantId: TENANT_B, keyExp: Date.parse(earlier) / 1000 }),
+        },
+      },
+    }))
+    const status = service().status([TENANT, TENANT_B])
+    expect(status.validUntil).toBe(earlier)
+    expect(status.tenants.map(tenant => tenant.validUntil)).toEqual([later, earlier])
+    expect(licenseExpiryWarning(status)).toBe("expiring")
+  })
+
+  it.each([-1, 0])("warns about an expired key while its offline token is still current (%s days)", (days) => {
+    const validUntil = new Date(T0 + days * DAY).toISOString()
+    storeLicense(token({ v: 2, keyExp: Date.parse(validUntil) / 1000 }))
+    const status = service().status([TENANT])
+    expect(status.tenants[0]).toMatchObject({ entitled: true, plan: "pro", validUntil })
+    expect(licenseExpiryWarning(status)).toBe("expired")
+  })
+
+  it("still falls back to Community when the server refuses an expired key", async () => {
+    storeLicense(token({ v: 2, keyExp: (T0 - DAY) / 1000 }))
+    const license = service()
+    answer = () => denied("expired")
+    await license.refreshAll()
+    await expect(license.requireEntitlement(TENANT)).resolves.toBe("community")
+    const status = license.status([TENANT])
+    expect(status.validUntil).toBeNull()
+    expect(status.tenants[0]).toMatchObject({ entitled: false, plan: "community", validUntil: null })
+    expect(licenseExpiryWarning(status)).toBeNull()
+  })
+
+  it.each([0, 3, "2"])("rejects an unsupported token version: %s", (v) => {
+    storeLicense(token({ v }))
+    expect(entitled(service())).toBe(false)
+  })
+
+  it.each(["1790000000", 1e20, true])("rejects malformed version 2 key expiry: %s", (keyExp) => {
+    storeLicense(token({ v: 2, keyExp }))
+    expect(entitled(service())).toBe(false)
+  })
+
+  it("verifies the signature over version 2 key expiry", () => {
+    const [body, signature] = token({ v: 2, keyExp: (T0 + 20 * DAY) / 1000 }).split(".")
+    const payload = JSON.parse(Buffer.from(body!, "base64url").toString("utf8"))
+    payload.keyExp += DAY / 1000
+    storeLicense(`${Buffer.from(JSON.stringify(payload)).toString("base64url")}.${signature}`)
+    expect(entitled(service())).toBe(false)
   })
 })
 

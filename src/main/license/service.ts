@@ -20,7 +20,7 @@ import type { KeyValueStore } from "../storage/secure-store"
  */
 
 interface Entitlement {
-  v: 1
+  v: 1 | 2
   sub: string
   act: string
   plan: "pro" | "msp"
@@ -30,6 +30,8 @@ interface Entitlement {
   status: "granted"
   iat: number
   exp: number
+  /** Version 2: license key expiry in Unix seconds, absent for renewing subscriptions. */
+  keyExp?: number
 }
 
 // An activation either comes from this machine's license key, or, with source "tenant",
@@ -167,7 +169,13 @@ function decodeToken(token: string, publicKey: KeyObject): Entitlement | null {
   try {
     if (!verify(null, Buffer.from(body), publicKey, Buffer.from(signature, "base64url"))) return null
     const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as Entitlement
-    return payload.v === 1 ? payload : null
+    if (payload.v !== 1 && payload.v !== 2) return null
+    // A renewing subscription has no key expiry: the server omits the field or sends null.
+    if (payload.v === 2 && payload.keyExp === null) delete payload.keyExp
+    if (payload.v === 2 && payload.keyExp !== undefined && (
+      !Number.isFinite(payload.keyExp) || !Number.isFinite(new Date(payload.keyExp * 1000).getTime())
+    )) return null
+    return payload
   } catch {
     return null
   }
@@ -771,11 +779,18 @@ export class LicenseService {
     const tenantIds = [...new Set([...signedIn, ...Object.keys(this.state?.activations ?? {})])]
     const communityTenant = this.options.store.get(COMMUNITY_KEY)
     let keyToken: Entitlement | null = null
+    let validUntil: string | null = null
     const tenants = tenantIds.map((tenantId): TenantLicenseStatus => {
       const entry = this.state?.activations[tenantId]
       const payload = this.valid(tenantId)
       const source = payload && entry ? (entry.source ?? "key") : null
       if (payload && source === "key" && (!keyToken || payload.iat > keyToken.iat)) keyToken = payload
+      const tenantValidUntil = payload?.v === 2 && typeof payload.keyExp === "number"
+        ? new Date(payload.keyExp * 1000).toISOString()
+        : null
+      if (tenantValidUntil && (!validUntil || Date.parse(tenantValidUntil) < Date.parse(validUntil))) {
+        validUntil = tenantValidUntil
+      }
       return {
         tenantId,
         signedIn: signedIn.has(tenantId),
@@ -785,6 +800,7 @@ export class LicenseService {
         plan: payload?.plan ?? (communityTenant === tenantId ? "community" : null),
         tenants: payload?.tenants ?? null,
         expiresAt: payload ? new Date(payload.exp * 1000).toISOString() : null,
+        validUntil: tenantValidUntil,
         shared: source === "key" ? (entry?.shared ?? null) : null,
         shareNeedsSignIn: source === "key" && Boolean(entry?.shareNeedsSignIn),
         displayKey: source === "tenant" ? (entry?.displayKey ?? null) : null,
@@ -802,6 +818,7 @@ export class LicenseService {
       message: this.message,
       plan: latest?.plan ?? null,
       tenantLimit: latest?.tenants ?? null,
+      validUntil,
       communityTenantId: communityTenant ?? null,
       tenants,
     }
