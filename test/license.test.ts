@@ -548,6 +548,7 @@ describe("LicenseService Community plan", () => {
     const license = service()
     await expect(license.requireEntitlement(TENANT)).resolves.toBe("community")
     await expect(license.requireEntitlement(TENANT_B)).rejects.toThrow(`Community covers one tenant, and it is used for tenant ${TENANT}`)
+    await expect(license.requireEntitlement(TENANT_B)).rejects.toMatchObject({ code: "community_tenant_limit", tenantId: TENANT })
     expect(license.plan(TENANT)).toBe("community")
     expect(license.plan(TENANT_B)).toBeNull()
     expect(license.status([TENANT, TENANT_B])).toMatchObject({ communityTenantId: TENANT })

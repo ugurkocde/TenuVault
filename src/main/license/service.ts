@@ -1,3 +1,4 @@
+import { CommunityLimitError } from "../../shared/plan-errors"
 import { createPublicKey, randomUUID, verify, type KeyObject } from "node:crypto"
 import type { LicenseStatus, TenantLicenseStatus } from "../../shared/ipc"
 import type { Plan } from "../../shared/plans"
@@ -639,7 +640,7 @@ export class LicenseService {
 
   private useCommunity(tenant: string): Plan {
     const owner = this.options.store.get(COMMUNITY_KEY)
-    if (owner && owner !== tenant) throw new Error(communityLimit(owner))
+    if (owner && owner !== tenant) throw new CommunityLimitError(owner, communityLimit(owner))
     if (owner !== tenant) this.options.store.set(COMMUNITY_KEY, tenant)
     const first = !this.community.has(tenant)
     this.community.set(tenant, Date.now() + COMMUNITY_RECHECK_MS)

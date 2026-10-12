@@ -27,6 +27,8 @@ import { Button } from "~/components/ui/button"
 import { Checkbox } from "~/components/ui/checkbox"
 import { cn } from "~/lib/utils"
 import { mergeOutcomes, retryBatches } from "~/lib/policies/restore-retry"
+import { FeatureApiError } from "@desktop/lib/feature-api"
+import { showFeaturePlanError } from "@desktop/lib/plan-dialog"
 import { PlanBadge, UpgradeNote } from "@desktop/components/UpgradeNote"
 import { formatDate, formatSize, STATUS_LABEL, statusKind, type BackupSummary, type BackupTenant } from "./types"
 
@@ -146,7 +148,7 @@ async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promi
   const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal })
   const data = await response.json().catch(() => ({}))
   if (response.status === ACKNOWLEDGEMENT_REQUIRED) throw new NotAccepted(data.error ?? "No changes were made.")
-  if (!response.ok) throw new Error(data.error ?? `Request failed (${response.status})`)
+  if (!response.ok) throw new FeatureApiError(data.error ?? `Request failed (${response.status})`, response.status, data.upgrade)
   return data as T
 }
 
@@ -155,6 +157,9 @@ async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promi
  * review what will happen to each item in the tenant as it is now, then watch the restore run.
  */
 export function RestoreWizard({ tenant, backups, initialBackupId, community, canCopyToTenants, copyCandidates }: RestoreWizardProps) {
+  const showPlanError = (error: unknown) => showFeaturePlanError(error, community
+    ? ["fullRestore", "replaceRestore", "restoreAssignments", "bulkActions"]
+    : !canCopyToTenants ? ["bulkActions"] : [])
   // A backup that stopped early still holds complete snapshots of the items it saved.
   const restorable = backups.filter((backup) => statusKind(backup.status) !== "running" && backup.totalPolicies > 0)
   const [step, setStep] = useState<Step>(initialBackupId ? "items" : "backup")
@@ -234,6 +239,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       setItems(listed.map((item) => ({ ...item, name: details[item.path]?.name ?? item.name, blocker: details[item.path]?.blocker ?? item.blocker, replaceBlocker: details[item.path]?.replaceBlocker, snapshot: details[item.path]?.snapshot, readiness: details[item.path]?.readiness })))
     })().catch((error: unknown) => {
       if (error instanceof DOMException && error.name === "AbortError") return
+      showPlanError(error)
       setItemsError(error instanceof Error ? error.message : String(error))
     })
     return () => controller.abort()
@@ -309,6 +315,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       })
       setReview(Object.fromEntries(preview.items.map((item) => [item.path, item])))
     } catch (error) {
+      showPlanError(error)
       setReviewError(error instanceof Error ? error.message : String(error))
     }
   }
@@ -378,6 +385,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       setResult({ outcome: failed === 0 && handled > 0 ? "success" : handled > 0 || outcomes.some((item) => item.partial) ? "partial" : "failed",
         message: `${handled} items completed; ${failed} failed.`, results: outcomes })
     } catch (error) {
+      showPlanError(error)
       const missing = (batch: (typeof batches)[number], outcome: Omit<Outcome, "path" | "targetTenantId">): Outcome[] => {
         const targets = copying ? (batch.targetTenantId ? [batch.targetTenantId] : copyTargets) : [undefined]
         return targets.flatMap((targetTenantId) => batch.paths.filter((path) => !completed.some((item) => item.path === path && item.targetTenantId?.toLowerCase() === targetTenantId?.toLowerCase()))

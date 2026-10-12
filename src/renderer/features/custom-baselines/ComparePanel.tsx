@@ -1,3 +1,4 @@
+import { showFeaturePlanError } from "../../lib/plan-dialog"
 import { useEffect, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import type { Tenant } from "~/contexts/TenantContext"
@@ -47,6 +48,7 @@ export function ComparePanel({ tenant, baseline, version, allowed, comparisons, 
       setSelected(comparison.id)
       onChanged()
     } catch (error) {
+      showFeaturePlanError(error)
       toast(error instanceof Error ? error.message : "The comparison failed.", "error")
     } finally {
       setBusy(false)

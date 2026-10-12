@@ -64,6 +64,8 @@ When backups are stored on **This device, encrypted**, TenuVault makes no storag
 
 The only TenuVault server the app talks to is the licensing service at `https://tenuvault.com/api/desktop-license/`. It is used to activate, refresh and release licenses. The app never contacts the payment provider directly.
 
+When you open the pricing page from the app, the link names the screen it was opened from (for example `src=app-license-page`) and carries no identifier.
+
 ### When the app connects
 
 * The first time you use a tenant, to activate it.

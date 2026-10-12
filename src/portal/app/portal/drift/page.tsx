@@ -28,6 +28,8 @@ import {
 } from "lucide-react"
 import { cn } from "~/lib/utils"
 import { useTenantPlan } from "@desktop/lib/license"
+import { FeatureApiError } from "@desktop/lib/feature-api"
+import { showFeaturePlanError } from "@desktop/lib/plan-dialog"
 import { GatedButton } from "@desktop/components/PlanGate"
 import { cancelDriftScan, startDriftScan, useDriftJob, useDriftResult } from "@desktop/lib/drift-jobs"
 import { useBackupList } from "@desktop/lib/backup-list"
@@ -301,7 +303,7 @@ export default function DriftDetectionPage() {
 
       if (!response.ok) {
         const error = await response.json()
-        throw new Error(error.error || "Failed to revert policy")
+        throw new FeatureApiError(error.error || "Failed to revert policy", response.status, error.upgrade)
       }
 
       const result = await response.json()
@@ -328,6 +330,7 @@ export default function DriftDetectionPage() {
       }))
 
     } catch (err) {
+      showFeaturePlanError(err)
       console.error("Revert error:", err)
       const errorMessage = err instanceof Error ? err.message : "Failed to revert policy"
 

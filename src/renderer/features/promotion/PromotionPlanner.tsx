@@ -1,3 +1,4 @@
+import { showFeaturePlanError } from "../../lib/plan-dialog"
 import { useEffect, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { ClipboardList } from "lucide-react"
@@ -53,6 +54,7 @@ export function PromotionPlanner({ tenant, sources, blocked, onPlanned }: { tena
       toast(promotion.status === "blocked" ? "Planned with blocking findings. Map the dependencies and plan again." : "Planned. Review the destination diff next; nothing was written.", promotion.status === "blocked" ? "info" : "success")
       onPlanned(promotion)
     } catch (error) {
+      showFeaturePlanError(error)
       toast(error instanceof Error ? error.message : "The promotion could not be planned.", "error")
     } finally {
       setBusy(false)

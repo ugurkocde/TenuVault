@@ -8,6 +8,7 @@ import { COMMUNITY_RETENTION_DAYS } from "../../shared/plans"
 import { bridge } from "../lib/bridge"
 import { tenantLicense, tenantPlan, useLicense } from "../lib/license"
 import { describeSchedule, formatWhen, useRefusals, useSchedules, WEEKDAYS } from "../lib/schedules"
+import { showFeaturePlanError } from "../lib/plan-dialog"
 import { toast } from "../lib/toast"
 import { PlanBadge, UpgradeNote } from "./UpgradeNote"
 import { BackupScopePicker } from "./BackupScopePicker"
@@ -62,6 +63,8 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
     enabled !== (current?.enabled ?? false) ||
     (enabled && (frequency !== current?.frequency || time !== current?.time || (frequency === "weekly" && weekday !== current?.weekday)))
 
+  const dailyExplained = community && (current?.frequency === "daily" || (enabled && frequency === "daily"))
+
   const save = async () => {
     if (enabled && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
       setTimeError(true)
@@ -75,6 +78,7 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
       drafts.delete(tenantId)
       toast(enabled ? "Schedule saved" : "Automatic backups paused", "success")
     } catch (error) {
+      showFeaturePlanError(error, dailyExplained ? ["dailySchedule"] : [])
       toast(error instanceof Error ? error.message : String(error), "error")
     } finally {
       setSaving(false)
@@ -141,7 +145,7 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
           {current && runner?.installed === false && <p className="text-xs text-gray-500">Background restart is not installed. Backups run while TenuVault is running.</p>}
         </div>
 
-        {community && (current?.frequency === "daily" || (enabled && frequency === "daily")) && <UpgradeNote feature="dailySchedule" />}
+        {dailyExplained && <UpgradeNote feature="dailySchedule" />}
 
         {license && !license.entitled && (
           <div className="flex gap-3 rounded-3xl bg-amber-50 px-5 py-4 text-sm text-amber-900">

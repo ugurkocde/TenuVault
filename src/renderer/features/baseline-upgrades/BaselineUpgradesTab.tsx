@@ -1,3 +1,4 @@
+import { showFeaturePlanError } from "../../lib/plan-dialog"
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Button } from "~/components/ui/button"
@@ -36,6 +37,7 @@ export default function BaselineUpgradesTab({ tenant, allowed }: FeatureTabProps
     try {
       await action()
     } catch (error) {
+      showFeaturePlanError(error)
       toast(error instanceof Error ? error.message : "The request failed.", "error")
     } finally {
       setBusy(null)

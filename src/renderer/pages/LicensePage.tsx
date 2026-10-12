@@ -67,7 +67,7 @@ function TrialCallToAction() {
           you are not charged until the trial ends.
         </p>
       </div>
-      <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void bridge.license.open("buy")}>
+      <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void bridge.license.open("buy", { source: "license-page" })}>
         <ExternalLink className="mr-2 h-4 w-4" />
         Start 30 day free trial
       </Button>

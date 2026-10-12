@@ -1,3 +1,4 @@
+import { showCommunityLimitError } from "../lib/plan-dialog"
 import { useEffect, useRef, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { ArrowLeft, CheckCircle2, Database, HardDriveDownload, KeyRound, Loader2, Play, ShieldCheck, XCircle } from "lucide-react"
@@ -64,7 +65,7 @@ export default function OnboardingPage() {
     try {
       await bridge.license.checkNewTenant(account.account.tenantId)
     } catch (error) {
-      setAddError(error instanceof Error ? error.message : String(error))
+      if (!showCommunityLimitError(error)) setAddError(error instanceof Error ? error.message : String(error))
       setAccount(null)
       setChoice(null)
       setCreating(false)
@@ -80,7 +81,7 @@ export default function OnboardingPage() {
       setTenantProfileId(tenant.id)
       setStep(3)
     } catch (error) {
-      setAddError(error instanceof Error ? error.message : String(error))
+      if (!showCommunityLimitError(error)) setAddError(error instanceof Error ? error.message : String(error))
     } finally {
       setCreating(false)
     }
