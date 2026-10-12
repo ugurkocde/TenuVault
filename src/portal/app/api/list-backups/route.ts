@@ -4,6 +4,7 @@ import { describeScope } from "../../../../shared/intune/scope"
 import { comparable, compareBackups, summarize, type BackupFingerprint, type ChangeSummary } from "../../../../shared/intune/backup-changes"
 import { blobPath } from "../../../../shared/security"
 import { mapLimit } from "~/lib/map-limit"
+import { MetadataCache } from "~/lib/storage/metadata-cache"
 import { backupFoldersIn, parseBackupName } from "../../../../shared/intune/backup-names"
 import { type NextRequest, NextResponse } from "next/server"
 
@@ -19,8 +20,7 @@ function formatBytes(bytes: number): string {
 const storageHeaders = (token: string) => ({ 'x-ms-version': '2021-12-02', 'x-ms-date': new Date().toUTCString(), Authorization: `Bearer ${token}` })
 
 interface MetadataRead { metadata: any; metadataError?: string }
-const metadataCache = new Map<string, { version: string; read: Promise<MetadataRead> }>()
-const MAX_CACHED_METADATA = 4000
+const metadataCache = new MetadataCache<MetadataRead>(result => !!result.metadata && !result.metadataError)
 
 /** One backup folder, described from metadata and either a folder listing or the summary inventory. */
 async function describeBackup(storageAccountName: string, name: string, accessToken: string, inventory?: { text: string; cacheKey: string; version: string }) {
@@ -40,21 +40,9 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
       return { metadata: null, metadataError: 'Backup metadata could not be read or parsed.' }
     }
   }
-  let metadataRead: Promise<MetadataRead>
-  const cached = inventory?.version ? metadataCache.get(inventory.cacheKey) : undefined
-  if (cached && cached.version === inventory!.version) metadataRead = cached.read
-  else {
-    metadataRead = inventory && !inventory.version ? Promise.resolve({ metadata: null }) : readMetadata()
-    if (inventory?.version) {
-      const entry = { version: inventory.version, read: metadataRead }
-      metadataCache.delete(inventory.cacheKey)
-      metadataCache.set(inventory.cacheKey, entry)
-      while (metadataCache.size > MAX_CACHED_METADATA) metadataCache.delete(metadataCache.keys().next().value!)
-      void metadataRead.then((result) => {
-        if ((!result.metadata || result.metadataError) && metadataCache.get(inventory.cacheKey) === entry) metadataCache.delete(inventory.cacheKey)
-      })
-    }
-  }
+  const metadataRead: Promise<MetadataRead> = inventory?.version
+    ? metadataCache.read(inventory.cacheKey, inventory.version, readMetadata)
+    : inventory ? Promise.resolve({ metadata: null }) : readMetadata()
   const filesRead = inventory ? Promise.resolve(inventory.text) : listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${name}/`)}`, accessToken).catch(() => { throw new Error(`Backup ${name} inventory is unavailable. Check storage access and retry.`) })
   const [{ metadata, metadataError }, filesText] = await Promise.all([metadataRead, filesRead])
   const recordedTimestamp = metadata?.timestamp ?? metadata?.Timestamp ?? metadata?.BackupDate
