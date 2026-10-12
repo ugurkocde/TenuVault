@@ -515,7 +515,7 @@ function AuditPageContent() {
                     multiple
                     className="w-full rounded-2xl border border-gray-200 p-2 text-sm"
                     onChange={(e) => {
-                      const selected = Array.from(e.target.selectedOptions).map(o => o.value as AuditEventType)
+                      const selected = Array.from(e.target.selectedOptions).map(o => o.value).filter(value => value !== "").map(value => value as AuditEventType)
                       setFilters(prev => ({ ...prev, eventTypes: selected }))
                     }}
                   >
@@ -531,7 +531,7 @@ function AuditPageContent() {
                     multiple
                     className="w-full rounded-2xl border border-gray-200 p-2 text-sm"
                     onChange={(e) => {
-                      const selected = Array.from(e.target.selectedOptions).map(o => o.value as AuditSeverity)
+                      const selected = Array.from(e.target.selectedOptions).map(o => o.value).filter(value => value !== "").map(value => value as AuditSeverity)
                       setFilters(prev => ({ ...prev, severities: selected }))
                     }}
                   >
@@ -547,7 +547,7 @@ function AuditPageContent() {
                     multiple
                     className="w-full rounded-2xl border border-gray-200 p-2 text-sm"
                     onChange={(e) => {
-                      const selected = Array.from(e.target.selectedOptions).map(o => o.value as AuditResult)
+                      const selected = Array.from(e.target.selectedOptions).map(o => o.value).filter(value => value !== "").map(value => value as AuditResult)
                       setFilters(prev => ({ ...prev, results: selected }))
                     }}
                   >
