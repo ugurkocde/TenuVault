@@ -180,6 +180,8 @@ export class LocalBlobStore {
   private readonly index = new Map<string, Promise<Map<string, Entry>>>()
   private readonly directoryStamps = new Map<string, string>()
   private readonly dirty = new Set<string>()
+  private readonly generations = new Map<string, number>()
+  private readonly rebuilding = new Set<string>()
   private readonly checks = new Map<string, Promise<Map<string, Entry>>>()
 
   /**
@@ -278,6 +280,7 @@ export class LocalBlobStore {
       }
       if (createOnly) await link(tmp, path) // Atomic creation across store/process instances.
       else await rename(tmp, path)
+      this.changed(this.dir(account, container))
       if (process.platform !== "win32") await syncDirectory(this.dir(account, container))
     } catch (error) {
       this.index.delete(this.dir(account, container))
@@ -293,8 +296,6 @@ export class LocalBlobStore {
     const stamp = fileStamp(info)
     const blob: StoredBlob = { name, size: data.byteLength, contentType, created, lastModified: info.mtime, etag: `"${stamp}"`, ...(metadata ? { metadata } : {}) }
     entries.set(name, { ...blob, file, version, stamp })
-    this.dirty.add(this.dir(account, container))
-    this.directoryStamps.set(this.dir(account, container), await this.directoryStamp(this.dir(account, container)))
     return blob
   }
 
@@ -303,9 +304,8 @@ export class LocalBlobStore {
     const entry = entries.get(name)
     if (!entry) throw new BlobNotFoundError(name)
     await rm(join(this.dir(account, container), entry.file), { force: true })
+    this.changed(this.dir(account, container))
     entries.delete(name)
-    this.dirty.add(this.dir(account, container))
-    this.directoryStamps.set(this.dir(account, container), await this.directoryStamp(this.dir(account, container)))
   }
 
   private dir(account: string, container: string): string {
@@ -335,7 +335,6 @@ export class LocalBlobStore {
       if (!unchanged) {
         this.index.delete(dir)
         entries = await this.entries(account, container)
-        this.dirty.delete(dir)
       }
       return entries
     })()
@@ -347,17 +346,29 @@ export class LocalBlobStore {
   /** Keeps decrypted headers until a write or a change to the directory inventory. */
   private async entries(account: string, container: string): Promise<Map<string, Entry>> {
     const dir = this.dir(account, container)
+    const generation = this.generations.get(dir) ?? 0
     const stamp = await this.directoryStamp(dir)
-    if (this.directoryStamps.get(dir) !== stamp) this.index.delete(dir)
+    if (!this.rebuilding.has(dir) && this.directoryStamps.get(dir) !== stamp) this.index.delete(dir)
     let cached = this.index.get(dir)
     if (!cached) {
-      this.directoryStamps.set(dir, stamp)
-      cached = this.readIndex(dir, account, container)
+      this.rebuilding.add(dir)
+      cached = this.readIndex(dir, account, container).then(entries => {
+        if ((this.generations.get(dir) ?? 0) === generation) {
+          this.directoryStamps.set(dir, stamp)
+          this.dirty.delete(dir)
+        } else this.dirty.add(dir)
+        return entries
+      }).finally(() => { this.rebuilding.delete(dir) })
       this.index.set(dir, cached)
       const current = cached
       void cached.catch(() => { if (this.index.get(dir) === current) this.index.delete(dir) })
     }
     return cached
+  }
+
+  private changed(dir: string): void {
+    this.generations.set(dir, (this.generations.get(dir) ?? 0) + 1)
+    this.dirty.add(dir)
   }
 
   private async readIndex(dir: string, account: string, container: string): Promise<Map<string, Entry>> {
@@ -460,7 +471,6 @@ function safeSegment(value: string): string {
   return safe
 }
 
-/** Includes change time and inode so atomic replacements and in-place edits invalidate the cache. */
 /** BigInt stats keep the full inode and nanosecond times, so a replaced file never shares a stamp with the old one. */
 function fileStamp(info: BigIntStats): string {
   return `${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`

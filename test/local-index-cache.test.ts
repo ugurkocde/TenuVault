@@ -7,7 +7,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { LocalBlobStore } from '../src/main/storage/local-blob-store'
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>()
-  return { ...actual, stat: vi.fn(actual.stat) }
+  return { ...actual, stat: vi.fn(actual.stat), rename: vi.fn(actual.rename) }
 })
 const roots: string[] = []
 afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
@@ -44,4 +44,41 @@ it('checks only the selected file after warming a large inventory', async () => 
   stat.mockClear()
   expect((await store.get('account', 'intune-backups', 'backup-one/Policies/0.json')).data.toString()).toBe('{}')
   expect(stat.mock.calls).toHaveLength(2)
+})
+
+
+it('keeps a put visible when publication finishes during an inventory rebuild', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'tv-index-race-')); roots.push(root)
+  const store = new LocalBlobStore(root, [randomBytes(32)])
+  await store.createContainer('account', 'intune-backups')
+  await store.list('account', 'intune-backups')
+  const deferred = () => {
+    let resolve!: () => void
+    const promise = new Promise<void>(done => { resolve = done })
+    return { promise, resolve }
+  }
+  const publicationReady = deferred(), publish = deferred(), inventoryReady = deferred(), finishInventory = deferred()
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  vi.mocked(fileSystem.rename).mockImplementationOnce(async (...args) => {
+    publicationReady.resolve()
+    await publish.promise
+    return actual.rename(...args)
+  })
+  const pendingPut = store.put('account', 'intune-backups', 'backup-new/Policies/New.json', Buffer.from('{}'), 'application/json')
+  await publicationReady.promise
+  const internal = store as unknown as { readIndex: (...args: string[]) => Promise<Map<string, unknown>> }
+  const read = internal.readIndex.bind(store)
+  vi.spyOn(internal, 'readIndex').mockImplementationOnce(async (...args) => {
+    const entries = await read(...args) // readdir has run while the new blob is still temporary.
+    inventoryReady.resolve()
+    await finishInventory.promise
+    return entries
+  })
+  const pendingList = store.list('account', 'intune-backups')
+  await inventoryReady.promise
+  publish.resolve()
+  await pendingPut
+  finishInventory.resolve()
+  await pendingList
+  expect((await store.list('account', 'intune-backups')).map(blob => blob.name)).toEqual(['backup-new/Policies/New.json'])
 })
