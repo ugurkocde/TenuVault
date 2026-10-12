@@ -26,9 +26,10 @@ describe.skipIf(!file)('Lokka lab Graph evidence replay', () => {
     const output = process.env.TENUVAULT_FRAMEWORK_PDF_DIR
     if (output) mkdirSync(output, { recursive: true })
     for (const framework of frameworks.filter(f => f.nativeId)) {
+      const selectedManifest = await createEvidenceManifest(data, {}, framework.nativeId)
       const selected = manifest.assessment.frameworks.find(f => f.framework.id === framework.nativeId)!
       const ids = new Set(selected.controls.flatMap(c => [...c.capabilityIds, ...c.excludedCapabilityIds]))
-      const run: NativeAssessment = { schemaVersion: 1, runId: 'lab-verification', tenantId: 'ffc10f05-e837-4803-81b1-7c4dee678c2a', frameworkId: framework.id, sourceCommit: FRAMEWORK_SOURCE_COMMIT, snapshotSha256: manifest.snapshotSha256, rulesetSha256: manifest.rulesetSha256, licenseNotice: framework.licenseNotice ?? '', assessment: { ...manifest.assessment, frameworks: [selected], capabilities: manifest.assessment.capabilities.filter(c => ids.has(c.capability.id)) } }
+      const run: NativeAssessment = { schemaVersion: 1, runId: 'lab-verification', tenantId: 'ffc10f05-e837-4803-81b1-7c4dee678c2a', frameworkId: framework.id, sourceCommit: FRAMEWORK_SOURCE_COMMIT, snapshotSha256: manifest.snapshotSha256, rulesetSha256: selectedManifest.rulesetSha256, licenseNotice: framework.licenseNotice ?? '', assessment: { ...manifest.assessment, frameworks: [selected], capabilities: manifest.assessment.capabilities.filter(c => ids.has(c.capability.id)) } }
       const pdf = generateNativeFrameworkPDF(run)
       expect(Buffer.from(pdf).subarray(0, 8).toString()).toContain('%PDF-1.')
       expect(pdf.length).toBeGreaterThan(5000)

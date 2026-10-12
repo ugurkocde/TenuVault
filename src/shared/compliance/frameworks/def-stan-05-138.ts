@@ -1,4 +1,5 @@
 import type { FrameworkDefinition } from "../types";
+import { withCapabilitySummaries } from "../framework-summary";
 
 // Def Stan 05-138 Issue 4 (14 May 2024) is Crown copyright and marked
 // "Copying Only as Agreed with DStan". Controls are referenced by their
@@ -22,7 +23,7 @@ export const DEF_STAN_FAMILIES: Readonly<Record<string, string>> = {
   "32": "Finding threats proactively (32xx)",
 };
 
-export const DEF_STAN_05_138: FrameworkDefinition = {
+export const DEF_STAN_05_138: FrameworkDefinition = withCapabilitySummaries({
   id: "def-stan-05-138-i4",
   name: "UK MOD Def Stan 05-138",
   version: "Issue 4",
@@ -37,7 +38,7 @@ export const DEF_STAN_05_138: FrameworkDefinition = {
       evidenceStrength: "supporting",
       granularity: "requirement",
       title: "Endpoint evidence mapping 2202",
-      summary: "TenuVault compares selected compliant device required, memory integrity, secure boot, code integrity, system integrity, jailbreak block settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
       tier: "Level 2 to Level 3",
       riskLevels: [2, 3],
     },
@@ -46,7 +47,7 @@ export const DEF_STAN_05_138: FrameworkDefinition = {
       evidenceStrength: "supporting",
       granularity: "requirement",
       title: "Endpoint evidence mapping 2309",
-      summary: "TenuVault compares selected storage encryption, passcode required settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
       tier: "Level 2 to Level 3",
       riskLevels: [2, 3],
     },
@@ -55,7 +56,7 @@ export const DEF_STAN_05_138: FrameworkDefinition = {
       evidenceStrength: "supporting",
       granularity: "requirement",
       title: "Endpoint evidence mapping 2317",
-      summary: "TenuVault compares selected disk encryption, storage encryption settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
       tier: "Level 1 to Level 3",
       riskLevels: [1, 2, 3],
     },
@@ -64,7 +65,7 @@ export const DEF_STAN_05_138: FrameworkDefinition = {
       evidenceStrength: "supporting",
       granularity: "requirement",
       title: "Endpoint evidence mapping 2322",
-      summary: "TenuVault compares selected passcode required, password required, minimum os version, jailbreak block, device integrity settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
       tier: "Level 1 to Level 3",
       riskLevels: [1, 2, 3],
     },
@@ -73,7 +74,7 @@ export const DEF_STAN_05_138: FrameworkDefinition = {
       evidenceStrength: "supporting",
       granularity: "requirement",
       title: "Endpoint evidence mapping 2401",
-      summary: "TenuVault compares selected secure boot, code integrity, system integrity settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
       tier: "Level 1 to Level 3",
       riskLevels: [1, 2, 3],
     },
@@ -82,7 +83,7 @@ export const DEF_STAN_05_138: FrameworkDefinition = {
       evidenceStrength: "supporting",
       granularity: "requirement",
       title: "Endpoint evidence mapping 2405",
-      summary: "TenuVault compares selected automatic updates, minimum os version settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
       tier: "Level 1 to Level 3",
       riskLevels: [1, 2, 3],
     },
@@ -91,7 +92,7 @@ export const DEF_STAN_05_138: FrameworkDefinition = {
       evidenceStrength: "supporting",
       granularity: "requirement",
       title: "Endpoint evidence mapping 2418",
-      summary: "TenuVault compares selected office macros disabled, office internet macros blocked, office signed macros, office macro settings managed, ie disabled settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
       tier: "Level 1 to Level 3",
       riskLevels: [1, 2, 3],
     },
@@ -100,7 +101,7 @@ export const DEF_STAN_05_138: FrameworkDefinition = {
       evidenceStrength: "supporting",
       granularity: "requirement",
       title: "Endpoint evidence mapping 2426",
-      summary: "TenuVault compares selected office macro antivirus, realtime antimalware settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
       tier: "Level 1 to Level 3",
       riskLevels: [1, 2, 3],
     },
@@ -178,4 +179,4 @@ export const DEF_STAN_05_138: FrameworkDefinition = {
     "macos-gatekeeper": [],
     "android-app-source-restriction": ["2322"],
   },
-};
+});

@@ -6,18 +6,18 @@ import type { CapabilityStatus, CompliancePlatform, TechnicalCheck } from "../..
  * storage or network, so every rule here is unit tested directly.
  *
  * Counting follows comparisonCounts, the same numbers the Frameworks page shows:
- * - matching, different, missing: setting checks the comparison could evaluate.
- * - unknown: checks and requirements marked "unable to check" (collection failed, unreadable
+ * Matching, different, missing: capabilities the comparison could evaluate using assigned policies.
+ * Unknown: capabilities marked "unable to check" (collection failed, unreadable
  *   values, no detector). They are not evidence either way.
- * - outside scope: checks for platforms the admin left out of the comparison.
+ * Outside scope: capabilities for platforms the admin left out of the comparison.
  *
- * score    = matching / (matching + different + missing), over evaluated checks only
+ * score    = matching / (matching + different + missing), over evaluated capabilities only
  * coverage = evaluated / (evaluated + unknown)
  *
- * With no evaluated check there is no score at all ("not scored"), never 0 % or 100 %.
+ * With no evaluated capability there is no score at all ("not scored"), never 0 % or 100 %.
  */
 export const SCORE_FORMULA =
-  "Score = matching / (matching + different + missing) over evaluated settings. Unknown results are left out of the score and shown as coverage = evaluated / (evaluated + unknown). Outside scope results are not counted. No evaluated setting means no score."
+  "Score = matching / (matching + different + missing) over evaluated capabilities. Each capability counts once using its best assigned policy evidence. Unassigned policies cannot count as matches. Unknown results are left out of the score and shown as coverage = evaluated / (evaluated + unknown). Outside scope results are not counted. No evaluated capability means no score."
 
 /** Days after which a saved comparison is shown as stale. */
 export const STALE_AFTER_DAYS = 30
@@ -62,7 +62,7 @@ export function scoreFromCounts(raw: ScoreCounts): BaselineScore {
       score: null,
       coverage: assessed ? 0 : null,
       state: "not-scored",
-      reason: assessed ? "No setting could be evaluated; every result is unknown." : "The comparison contains no settings in scope.",
+      reason: assessed ? "No capability could be evaluated; every result is unknown." : "The comparison contains no capabilities in scope.",
     }
   }
   return { counts, evaluated, assessed, score: percent(counts.matching, evaluated), coverage: percent(evaluated, assessed), state: "scored", reason: null }
@@ -281,7 +281,7 @@ export function collectGaps(run: NativeAssessment): Gap[] {
  * - gap: an evaluated setting is different or missing and none matches.
  * - mixed: some evaluated settings match and others do not.
  * - resolved: every check was evaluated and matches.
- * - unknown: some checks could not be evaluated and none fails, so nothing is proven.
+ * Unknown: some checks could not be evaluated and none fails, so nothing is proven.
  * - absent: the capability is not in the comparison or is outside its scope.
  */
 export type GapObservation = "gap" | "mixed" | "resolved" | "unknown" | "absent"

@@ -1,4 +1,4 @@
-import type { ComplianceAssessment } from './types'
+import type { CapabilityResult, ComplianceAssessment } from './types'
 
 export const FRAMEWORK_SOURCE_COMMIT = '38998301541c06a6a4a2f6e099277a6c39eb84f6'
 export const FRAMEWORK_USAGE_NOTICE = 'Independent TenuVault configuration mapping. Framework names and identifiers are factual references. No publisher affiliation, endorsement, audit opinion, certification or complete compliance assessment is implied. Expected values are our technical interpretation. A configuration match does not prove effective access or device enforcement.'
@@ -15,13 +15,29 @@ export interface NativeAssessment {
   assessment: ComplianceAssessment
 }
 
+/** One vote per capability, using the best evidence on an assigned policy. */
+export function capabilityComparison(result: CapabilityResult): 'matches' | 'different' | 'missing' | 'unableToCheck' | 'outsideScope' {
+  const checks = result.checks.filter(check => check.assessmentStatus !== 'outsideScope')
+  if (result.status === 'notApplicable' || (!checks.length && result.checks.length)) return 'outsideScope'
+  const assigned = checks.filter(check => check.assignment?.state === 'assigned')
+  const matching = assigned.filter(check => check.assessmentStatus === 'checked' && check.result === 'matches')
+  const groups = result.capability.requiredGroups ?? []
+  const positive = result.evidence.filter(item => item.assignment.state === 'assigned' && item.verdict === 'enforced' && (item.kind !== 'complianceRequirement' || item.blockAction === true))
+  const complete = !groups.length || positive.some(candidate => groups.every(group =>
+    positive.some(item => item.policyId === candidate.policyId && item.policyType === candidate.policyType && item.requirementGroup === group),
+  ))
+  const requirement = result.evidence.some(item => item.assignment.state === 'assigned' && item.verdict === 'enforced' && item.kind === 'complianceRequirement' && item.blockAction === true && !item.requirementGroup)
+  if (matching.length && (complete || requirement)) return 'matches'
+  if (assigned.some(check => check.assessmentStatus === 'checked' && check.result === 'different')) return 'different'
+  if (checks.some(check => check.assessmentStatus === 'checked' && check.result === 'missing' && (!check.assignment || check.assignment.state === 'assigned'))) return 'missing'
+  if (checks.some(check => check.assessmentStatus === 'unableToCheck' && (!check.assignment || check.assignment.state !== 'notAssigned')) || checks.some(check => check.assignment?.state === 'unknown')) return 'unableToCheck'
+  if (matching.length || checks.some(check => check.assessmentStatus === 'checked' && (check.result === 'missing' || check.assignment?.state === 'notAssigned'))) return 'missing'
+  return 'unableToCheck'
+}
+
 export function comparisonCounts(run: NativeAssessment) {
   const counts = { matches: 0, different: 0, missing: 0, unableToCheck: 0, outsideScope: 0 }
-  for (const result of run.assessment.capabilities) for (const check of result.checks) {
-    if (check.assessmentStatus !== 'checked') counts[check.assessmentStatus]++
-    else if (check.result) counts[check.result]++
-  }
-  for (const control of run.assessment.frameworks[0]?.controls ?? []) if (control.unavailableCheck) counts[control.unavailableCheck.assessmentStatus === 'outsideScope' ? 'outsideScope' : 'unableToCheck']++
+  for (const result of run.assessment.capabilities) counts[capabilityComparison(result)]++
   return counts
 }
 

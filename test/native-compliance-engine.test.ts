@@ -15,6 +15,8 @@ import {
   NIST_800_171,
   NIST_800_171_R3,
 } from "../src/shared/compliance";
+import { comparisonCounts, capabilityComparison } from "../src/shared/compliance/native";
+import { makeRun } from "./feature-scores-fixtures";
 import { defenderForEndpointPolicyFixture } from "./fixtures/compliance-intune-beta";
 
 function emptyExportData(): DetailedExportData {
@@ -32,6 +34,8 @@ function emptyExportData(): DetailedExportData {
     conditionalAccessPolicies: [],
   };
 }
+
+const blockActions = [{ scheduledActionConfigurations: [{ actionType: "block", gracePeriodHours: 0 }] }];
 
 const allDevicesAssignment = [
   {
@@ -74,6 +78,74 @@ function capabilityResult(data: DetailedExportData, capabilityId: string) {
 }
 
 describe("compliance engine", () => {
+  it("counts thirty matching encryption policies and one missing capability as two votes", () => {
+    const data = emptyExportData();
+    data.collectedAt = "2026-10-12T10:00:00Z";
+    data.settingsCatalog = Array.from({ length: 30 }, (_, index) => ({
+      ...bitLockerCatalogPolicy("_1", allDevicesAssignment), id: `encryption-${index}`,
+    }));
+    const run = makeRun({ runId: "capabilities", tenantId: "tenant" });
+    run.assessment.capabilities = assessCapabilities(data).filter(result =>
+      ["windows-disk-encryption", "windows-automatic-updates"].includes(result.capability.id));
+    expect(run.assessment.capabilities[0]?.checks).toHaveLength(30);
+    expect(comparisonCounts(run)).toEqual({ matches: 1, different: 0, missing: 1, unableToCheck: 0, outsideScope: 0 });
+  });
+
+  it("counts multiple properties once and excludes unassigned policies from matches", () => {
+    const data = emptyExportData();
+    data.collectedAt = "2026-10-12T10:00:00Z";
+    data.compliancePolicies = [{ id: "encryption", "@odata.type": "#microsoft.graph.windows10CompliancePolicy", bitLockerEnabled: true, storageRequireEncryption: true, scheduledActionsForRule: blockActions, assignments: allDevicesAssignment }];
+    const encryption = capabilityResult(data, "windows-disk-encryption");
+    expect(encryption.checks.filter(check => check.result === "matches")).toHaveLength(2);
+    expect(capabilityComparison(encryption)).toBe("matches");
+    data.compliancePolicies = [];
+    data.settingsCatalog = [bitLockerCatalogPolicy("_1", [])];
+    expect(capabilityComparison(capabilityResult(data, "windows-disk-encryption"))).toBe("missing");
+    data.settingsCatalog = [bitLockerCatalogPolicy("_0", allDevicesAssignment), bitLockerCatalogPolicy("_1", [])];
+    expect(capabilityResult(data, "windows-disk-encryption").status).toBe("disabledByPolicy");
+    expect(capabilityComparison(capabilityResult(data, "windows-disk-encryption"))).toBe("different");
+  });
+
+  it("excludes tenant and other platform capabilities from windows-only scope", () => {
+    const data = emptyExportData();
+    data.collectedAt = "2026-10-12T10:00:00Z";
+    data.collectionSkippedFamilies = ["conditionalAccessPolicies"];
+    const results = assessCapabilities(data, undefined, { platforms: ["windows"] });
+    for (const result of results.filter(result => result.capability.platform !== "windows")) {
+      expect(result.status).toBe("notApplicable");
+      expect(capabilityComparison(result)).toBe("outsideScope");
+      expect(result.limitations.join(" ")).not.toContain("Conditional Access policies were not collected");
+    }
+    expect(results.filter(result => result.capability.platform === "windows").every(result => result.status !== "notApplicable")).toBe(true);
+  });
+
+  it.each([
+    ["notification", "partialConfiguration", "different"],
+    ["block", "requirementAssigned", "matches"],
+  ])("requires a block action for an assigned compliance policy with %s", (actionType, status, comparison) => {
+    const data = emptyExportData();
+    data.compliancePolicies = [{ id: "compliance", "@odata.type": "#microsoft.graph.windows10CompliancePolicy", bitLockerEnabled: true, assignments: allDevicesAssignment,
+      scheduledActionsForRule: [{ scheduledActionConfigurations: [{ actionType, gracePeriodHours: 24 }] }],
+    }];
+    const result = capabilityResult(data, "windows-disk-encryption");
+    expect(result.status).toBe(status);
+    expect(capabilityComparison(result)).toBe(comparison);
+    expect(result.evidence[0]?.note).toContain(actionType === "block" ? "24 hours" : "No block action");
+  });
+
+  it("leaves compliance action evidence unknown when actions were not collected", () => {
+    const data = emptyExportData();
+    data.compliancePolicies = [{ id: "compliance", "@odata.type": "#microsoft.graph.windows10CompliancePolicy", bitLockerEnabled: true, assignments: allDevicesAssignment }];
+    expect(capabilityResult(data, "windows-disk-encryption").status).not.toBe("requirementAssigned");
+    expect(capabilityComparison(capabilityResult(data, "windows-disk-encryption"))).toBe("unableToCheck");
+  });
+
+  it("guards malformed legacy settings arrays", () => {
+    const data = emptyExportData();
+    data.deviceConfigurations = [{ id: "malformed", omaSettings: {}, categories: {}, assignments: allDevicesAssignment }];
+    expect(() => assessCapabilities(data)).not.toThrow();
+  });
+
   it("reports enforced when a settings catalog value enforces and the policy is assigned", () => {
     const data = emptyExportData();
     data.settingsCatalog = [bitLockerCatalogPolicy("_1", allDevicesAssignment)];
@@ -302,6 +374,7 @@ describe("compliance engine", () => {
         id: "win-integrity",
         displayName: "Windows integrity",
         "@odata.type": "#microsoft.graph.windows10CompliancePolicy",
+        scheduledActionsForRule: blockActions,
         secureBootEnabled: true,
         codeIntegrityEnabled: true,
         assignments: allDevicesAssignment,
@@ -447,6 +520,7 @@ describe("framework assessment", () => {
         id: "win",
         displayName: "Win",
         "@odata.type": "#microsoft.graph.windows10CompliancePolicy",
+        scheduledActionsForRule: blockActions,
         osMinimumVersion: "10.0",
         assignments: allDevicesAssignment,
       },
@@ -454,6 +528,7 @@ describe("framework assessment", () => {
         id: "mac",
         displayName: "Mac",
         "@odata.type": "#microsoft.graph.macOSCompliancePolicy",
+        scheduledActionsForRule: blockActions,
         osMinimumVersion: "14.0",
         assignments: allDevicesAssignment,
       },
@@ -461,6 +536,7 @@ describe("framework assessment", () => {
         id: "ios",
         displayName: "iOS",
         "@odata.type": "#microsoft.graph.iosCompliancePolicy",
+        scheduledActionsForRule: blockActions,
         osMinimumVersion: "17.0",
         assignments: allDevicesAssignment,
       },
@@ -468,6 +544,7 @@ describe("framework assessment", () => {
         id: "android",
         displayName: "Android",
         "@odata.type": "#microsoft.graph.androidCompliancePolicy",
+        scheduledActionsForRule: blockActions,
         osMinimumVersion: "13.0",
         assignments: allDevicesAssignment,
       },
@@ -496,6 +573,7 @@ describe("framework assessment", () => {
         id: "ios-compliance",
         displayName: "iOS compliance",
         "@odata.type": "#microsoft.graph.iosCompliancePolicy",
+        scheduledActionsForRule: blockActions,
         securityBlockJailbrokenDevices: true,
         assignments: allDevicesAssignment,
       },

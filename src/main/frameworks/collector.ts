@@ -7,8 +7,8 @@ export const EVIDENCE_FAMILIES = [
   { family: 'settingsCatalog', label: 'Settings catalog policies', path: 'deviceManagement/configurationPolicies', children: ['settings', 'assignments'] },
   { family: 'deviceConfigurations', label: 'Device configuration profiles', path: 'deviceManagement/deviceConfigurations', children: ['assignments'] },
   { family: 'administrativeTemplates', label: 'Administrative templates', path: 'deviceManagement/groupPolicyConfigurations', children: ['definitionValues', 'assignments'] },
-  { family: 'compliancePolicies', label: 'Compliance policies', path: 'deviceManagement/deviceCompliancePolicies', children: ['assignments'] },
-  { family: 'compliancePolicies', label: 'Settings catalog compliance policies', path: 'deviceManagement/compliancePolicies', children: ['settings', 'assignments'] },
+  { family: 'compliancePolicies', label: 'Compliance policies', path: 'deviceManagement/deviceCompliancePolicies', children: ['assignments', 'scheduledActionsForRule'] },
+  { family: 'compliancePolicies', label: 'Settings catalog compliance policies', path: 'deviceManagement/compliancePolicies', children: ['settings', 'assignments', 'scheduledActionsForRule'] },
   { family: 'securityBaselines', label: 'Security baselines', path: 'deviceManagement/intents', children: ['settings', 'assignments'] },
   { family: 'appProtectionPolicies', label: 'iOS app protection policies', path: 'deviceAppManagement/iosManagedAppProtections', children: ['assignments'] },
   { family: 'appProtectionPolicies', label: 'Android app protection policies', path: 'deviceAppManagement/androidManagedAppProtections', children: ['assignments'] },
@@ -135,7 +135,7 @@ export async function collectNativeEvidence(reader: EvidenceReader, includeAcces
         const name = String(detail.name ?? detail.displayName ?? item.id)
         detail.collectionStatus = {}
         for (const child of spec.children) {
-          const endpoint = `${path}/${child}${child === 'definitionValues' ? '?$expand=definition' : ''}`
+          const endpoint = `${path}/${child}${child === 'definitionValues' ? '?$expand=definition' : child === 'scheduledActionsForRule' ? '?$expand=scheduledActionConfigurations' : ''}`
           try {
             const values = await reader.list(endpoint)
             if (child === 'definitionValues') for (const value of values) {

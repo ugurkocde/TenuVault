@@ -1,4 +1,5 @@
 import type { FrameworkDefinition } from "../types";
+import { withCapabilitySummaries } from "../framework-summary";
 
 // References to the BSI framework do not grant republication rights. The German Federal
 // Office for Information Security. The client Bausteine SYS.2.2.3, SYS.2.4,
@@ -8,7 +9,7 @@ import type { FrameworkDefinition } from "../types";
 // out of scope for a tenant export). The remaining Bausteine are mapped at
 // Baustein level until their requirement-level mappings are verified the same
 // way.
-export const BSI_IT_GRUNDSCHUTZ: FrameworkDefinition = {
+export const BSI_IT_GRUNDSCHUTZ: FrameworkDefinition = withCapabilitySummaries({
   id: "bsi-it-grundschutz",
   name: "BSI IT-Grundschutz",
   version: "Kompendium Edition 2023",
@@ -23,42 +24,42 @@ export const BSI_IT_GRUNDSCHUTZ: FrameworkDefinition = {
       evidenceStrength: "supporting",
       granularity: "buildingBlock",
       title: "Endpoint evidence mapping CON.1",
-      summary: "TenuVault compares selected disk encryption, storage encryption settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "OPS.1.1.3": {
       id: "OPS.1.1.3",
       evidenceStrength: "supporting",
       granularity: "buildingBlock",
       title: "Endpoint evidence mapping OPS.1.1.3",
-      summary: "TenuVault compares selected quality update deadline, automatic updates, minimum os version settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "OPS.1.1.4": {
       id: "OPS.1.1.4",
       evidenceStrength: "supporting",
       granularity: "buildingBlock",
       title: "Endpoint evidence mapping OPS.1.1.4",
-      summary: "TenuVault compares selected office macro antivirus, antivirus required, periodic antimalware scan, behavior monitoring, realtime antimalware settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "ORP.4": {
       id: "ORP.4",
       evidenceStrength: "supporting",
       granularity: "buildingBlock",
       title: "Endpoint evidence mapping ORP.4",
-      summary: "TenuVault compares selected laps management, password required, passcode required settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "NET.3.2": {
       id: "NET.3.2",
       evidenceStrength: "supporting",
       granularity: "buildingBlock",
       title: "Endpoint evidence mapping NET.3.2",
-      summary: "TenuVault compares selected firewall settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "SYS.2.1": {
       id: "SYS.2.1",
       evidenceStrength: "supporting",
       granularity: "buildingBlock",
       title: "Endpoint evidence mapping SYS.2.1",
-      summary: "TenuVault compares selected laps management, applocker rule collections, office macros disabled, office internet macros blocked, office signed macros settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "SYS.2.2.3.A4": {
       id: "SYS.2.2.3.A4",
@@ -67,7 +68,7 @@ export const BSI_IT_GRUNDSCHUTZ: FrameworkDefinition = {
       platforms: ["windows"],
       title: "Endpoint evidence mapping SYS.2.2.3.A4",
       tier: "Basis-Anforderung",
-      summary: "TenuVault compares selected telemetry minimized settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "SYS.2.2.3.A5": {
       id: "SYS.2.2.3.A5",
@@ -76,7 +77,7 @@ export const BSI_IT_GRUNDSCHUTZ: FrameworkDefinition = {
       platforms: ["windows"],
       title: "Endpoint evidence mapping SYS.2.2.3.A5",
       tier: "Basis-Anforderung",
-      summary: "TenuVault compares selected office macro antivirus, antivirus required, realtime antimalware settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "SYS.2.2.3.A6": {
       id: "SYS.2.2.3.A6",
@@ -85,7 +86,7 @@ export const BSI_IT_GRUNDSCHUTZ: FrameworkDefinition = {
       platforms: ["windows"],
       title: "Endpoint evidence mapping SYS.2.2.3.A6",
       tier: "Basis-Anforderung",
-      summary: "TenuVault compares selected microsoft account blocked settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "SYS.2.2.3.A14": {
       id: "SYS.2.2.3.A14",
@@ -94,7 +95,7 @@ export const BSI_IT_GRUNDSCHUTZ: FrameworkDefinition = {
       platforms: ["windows"],
       title: "Endpoint evidence mapping SYS.2.2.3.A14",
       tier: "Standard-Anforderung",
-      summary: "TenuVault compares selected cortana disabled settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "SYS.2.2.3.A23": {
       id: "SYS.2.2.3.A23",
@@ -106,7 +107,7 @@ export const BSI_IT_GRUNDSCHUTZ: FrameworkDefinition = {
       platforms: ["windows"],
       title: "Endpoint evidence mapping SYS.2.2.3.A23",
       tier: "Anforderung bei erhöhtem Schutzbedarf",
-      summary: "TenuVault compares selected lsa protection, remote credential guard, credential guard, secure boot, code integrity settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "SYS.2.4.A2": {
       id: "SYS.2.4.A2",
@@ -118,7 +119,7 @@ export const BSI_IT_GRUNDSCHUTZ: FrameworkDefinition = {
       platforms: ["macos"],
       title: "Endpoint evidence mapping SYS.2.4.A2",
       tier: "Basis-Anforderung",
-      summary: "TenuVault compares selected system integrity, gatekeeper settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "SYS.2.4.A4": {
       id: "SYS.2.4.A4",
@@ -130,7 +131,7 @@ export const BSI_IT_GRUNDSCHUTZ: FrameworkDefinition = {
       platforms: ["macos"],
       title: "Endpoint evidence mapping SYS.2.4.A4",
       tier: "Standard-Anforderung",
-      summary: "TenuVault compares selected disk encryption settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "SYS.2.4.A6": {
       id: "SYS.2.4.A6",
@@ -142,7 +143,7 @@ export const BSI_IT_GRUNDSCHUTZ: FrameworkDefinition = {
       platforms: ["macos"],
       title: "Endpoint evidence mapping SYS.2.4.A6",
       tier: "Standard-Anforderung",
-      summary: "TenuVault compares selected minimum os version settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "SYS.2.4.A10": {
       id: "SYS.2.4.A10",
@@ -151,7 +152,7 @@ export const BSI_IT_GRUNDSCHUTZ: FrameworkDefinition = {
       platforms: ["macos"],
       title: "Endpoint evidence mapping SYS.2.4.A10",
       tier: "Standard-Anforderung",
-      summary: "TenuVault compares selected firewall settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "SYS.3.2.1.A4": {
       id: "SYS.3.2.1.A4",
@@ -163,7 +164,7 @@ export const BSI_IT_GRUNDSCHUTZ: FrameworkDefinition = {
       platforms: ["ios", "android"],
       title: "Endpoint evidence mapping SYS.3.2.1.A4",
       tier: "Basis-Anforderung",
-      summary: "TenuVault compares selected passcode required, password required settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "SYS.3.2.1.A5": {
       id: "SYS.3.2.1.A5",
@@ -175,7 +176,7 @@ export const BSI_IT_GRUNDSCHUTZ: FrameworkDefinition = {
       platforms: ["ios", "android"],
       title: "Endpoint evidence mapping SYS.3.2.1.A5",
       tier: "Basis-Anforderung",
-      summary: "TenuVault compares selected minimum os version settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "SYS.3.2.1.A8": {
       id: "SYS.3.2.1.A8",
@@ -184,7 +185,7 @@ export const BSI_IT_GRUNDSCHUTZ: FrameworkDefinition = {
       platforms: ["ios", "android"],
       title: "Endpoint evidence mapping SYS.3.2.1.A8",
       tier: "Basis-Anforderung",
-      summary: "TenuVault compares selected app source restriction settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "SYS.3.2.1.A11": {
       id: "SYS.3.2.1.A11",
@@ -193,7 +194,7 @@ export const BSI_IT_GRUNDSCHUTZ: FrameworkDefinition = {
       platforms: ["ios", "android"],
       title: "Endpoint evidence mapping SYS.3.2.1.A11",
       tier: "Standard-Anforderung",
-      summary: "TenuVault compares selected storage encryption settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "SYS.3.2.2.A2": {
       id: "SYS.3.2.2.A2",
@@ -205,7 +206,7 @@ export const BSI_IT_GRUNDSCHUTZ: FrameworkDefinition = {
       platforms: ["ios", "android"],
       title: "Endpoint evidence mapping SYS.3.2.2.A2",
       tier: "Basis-Anforderung",
-      summary: "TenuVault compares selected minimum os version settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "SYS.3.2.2.A17": {
       id: "SYS.3.2.2.A17",
@@ -214,7 +215,7 @@ export const BSI_IT_GRUNDSCHUTZ: FrameworkDefinition = {
       platforms: ["ios", "android"],
       title: "Endpoint evidence mapping SYS.3.2.2.A17",
       tier: "Anforderung bei erhöhtem Schutzbedarf",
-      summary: "TenuVault compares selected jailbreak block, device integrity settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "SYS.3.2.2.A23": {
       id: "SYS.3.2.2.A23",
@@ -226,7 +227,7 @@ export const BSI_IT_GRUNDSCHUTZ: FrameworkDefinition = {
       platforms: ["ios", "android"],
       title: "Endpoint evidence mapping SYS.3.2.2.A23",
       tier: "Anforderung bei erhöhtem Schutzbedarf",
-      summary: "TenuVault compares selected compliant device required, jailbreak block, device integrity settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
   },
   mappings: {
@@ -302,4 +303,4 @@ export const BSI_IT_GRUNDSCHUTZ: FrameworkDefinition = {
     "ios-jailbreak-block": ["SYS.3.2.2.A17", "SYS.3.2.2.A23"],
     "android-device-integrity": ["SYS.3.2.2.A17", "SYS.3.2.2.A23"],
   },
-};
+});
