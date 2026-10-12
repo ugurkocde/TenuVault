@@ -792,7 +792,7 @@ await check("Community trial focuses the key input and procurement links use the
 
 await check("the whole dashboard License tile opens License with the keyboard", async () => {
   await go("#/portal/dashboard", "Contoso 1")
-  const tile = `document.querySelector('main a[aria-label="License"]')`
+  const tile = `document.querySelector('main a[href="#/license"]')`
   assert(await waitForCondition(`Boolean(${tile})`), "linked License tile missing")
   assert(await evaluate(`${tile}.getAttribute('href') === '#/license' && !${tile}.querySelector('button, a')`), "License tile has the wrong route or nested interactive elements")
   await evaluate(`${tile}.focus()`)
