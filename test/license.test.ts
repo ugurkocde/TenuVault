@@ -8,7 +8,7 @@ import {
   type LicenseServiceOptions,
 } from "../src/main/license/service"
 import { memoryStore } from "./helpers"
-import { licenseExpiryWarning } from "../src/renderer/lib/license"
+import { earliestExpiringTenant, licenseExpiryWarning, offlineDeadline } from "../src/renderer/lib/license"
 
 vi.mock("../src/renderer/lib/bridge", () => ({ bridge: {} }))
 
@@ -195,6 +195,17 @@ describe("LicenseService key expiry", () => {
       entitled: true, validUntil, expiresAt: new Date(T0 + 14 * DAY).toISOString(),
     })
     expect(licenseExpiryWarning(status)).toBe(days > 30 ? null : "expiring")
+  })
+
+  it("reports the nearer offline deadline and the tenant whose license expires first", () => {
+    const tenants = [
+      { tenantId: "a", entitled: true, expiresAt: new Date(T0 + DAY).toISOString(), validUntil: new Date(T0 + 20 * DAY).toISOString(), source: "key" },
+      { tenantId: "b", entitled: true, expiresAt: new Date(T0 + 10 * DAY).toISOString(), validUntil: new Date(T0 + 5 * DAY).toISOString(), source: "tenant" },
+    ] as never[]
+    expect(offlineDeadline({ offline: false, tenants }, T0)).toBeNull()
+    expect(offlineDeadline({ offline: true, tenants }, T0)).toBe(new Date(T0 + DAY).toISOString())
+    expect(earliestExpiringTenant({ validUntil: new Date(T0 + 5 * DAY).toISOString(), tenants })).toMatchObject({ tenantId: "b", source: "tenant" })
+    expect(earliestExpiringTenant({ validUntil: null, tenants })).toBeNull()
   })
 
   it("does not warn more than 30 days ahead or when no date is supplied", () => {

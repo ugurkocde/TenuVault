@@ -115,6 +115,7 @@ function TenantRow({
       </div>
       {tenant.entitled && tenant.expiresAt && (
         <p className="text-xs text-gray-500">
+          {tenant.validUntil ? `Valid until ${formatDate(tenant.validUntil)} · ` : ""}
           Works offline until {formatDateTime(tenant.expiresAt)}
           {organization && tenant.displayKey ? ` · Organization license ${tenant.displayKey}` : ""}
         </p>
@@ -243,7 +244,9 @@ export default function LicensePage() {
                 {title}
               </CardTitle>
               {status.validUntil && (
-                <p className="mt-2 text-base font-medium text-gray-900">License valid until {formatDate(status.validUntil)}</p>
+                <p className="mt-2 text-base font-medium text-gray-900">
+                  {new Set(status.tenants.map((t) => t.validUntil).filter(Boolean)).size > 1 ? "Earliest license expiry" : "License valid until"} {formatDate(status.validUntil)}
+                </p>
               )}
               <CardDescription className="mt-2">
                 {isUnlicensed(status)

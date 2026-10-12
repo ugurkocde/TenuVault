@@ -42,7 +42,7 @@ The top card shows your plan, for example **Pro plan active**, and how many tena
 
 When the licensing service supplies a key expiry date, the top card also shows **License valid until** with the date. With several tenants, this is the earliest key expiry. Each tenant's License fact on the overview also shows its own **Valid until** date. Automatically renewing subscription keys may have no expiry date, so these lines stay hidden.
 
-An amber warning appears 30 days before a license key expires and links to the **License** page. Renew the key to keep Pro features. If the key has expired while its cached verification still works, the warning says **expired on**. Once the service confirms the key has expired, the tenant falls back to Community under the existing free tenant limit.
+An amber warning appears 30 days before a license key expires and links to the **License** page. It names the key or, for a license shared by your organization, that license, and Pro or MSP features stop on that date unless the license is renewed. When the licensing service is unreachable and a cached verification runs out sooner, that warning is shown first. If the key has expired while a cached verification is still current, the warning says so. Once the service confirms the key has expired, the tenant falls back to Community under the existing free tenant limit.
 
 The **Tenants** card lists every tenant on this machine with its license state:
 

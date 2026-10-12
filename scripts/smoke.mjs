@@ -453,7 +453,7 @@ await check("license key expiry stays separate from offline verification and war
 
     const soon = await setExpiry(20)
     const soonDate = await dateText(soon)
-    const warning = `Your license expires on ${soonDate}. Renew it to keep Pro features.`
+    const warning = `Your license key expires on ${soonDate}. Pro features stop unless it is renewed.`
     assert(await waitForCondition(`${banner}?.textContent.includes(${JSON.stringify(warning)})`), "30 day renewal warning missing")
     await evaluate(`(() => {
       const fixture = window.__licenseExpiry
@@ -461,10 +461,10 @@ await check("license key expiry stays separate from offline verification and war
       fixture.onChanged(fixture.status)
     })()`)
     assert(await waitForCondition(`${body}.innerText.includes("The licensing service could not be reached.")`), "offline fixture did not render")
-    assert(await evaluate(`${banner}?.textContent.includes(${JSON.stringify(warning)})`), "offline warning took priority over key expiry")
+    assert(await waitForCondition(`${banner}?.textContent.includes("Connect to the internet before")`), "the nearer offline deadline did not take priority over a later key expiry")
     const expired = await setExpiry(-1)
     const expiredDate = await dateText(expired)
-    assert(await waitForCondition(`${banner}?.textContent.includes(${JSON.stringify(`Your license expired on ${expiredDate}. Renew it to keep Pro features.`)})`), "expired key wording missing")
+    assert(await waitForCondition(`${banner}?.textContent.includes(${JSON.stringify(`Your license key expired on ${expiredDate}. Pro features stop unless it is renewed.`)})`), "expired key wording missing")
     await evaluate(`(() => {
       const fixture = window.__licenseExpiry
       fixture.status = { ...fixture.status, tenants: fixture.status.tenants.map(tenant => ({ ...tenant, entitled: false, plan: null })) }
