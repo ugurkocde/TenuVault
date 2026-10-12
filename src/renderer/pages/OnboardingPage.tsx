@@ -106,6 +106,7 @@ export default function OnboardingPage() {
 
   const runBackup = async () => {
     if (!credentials) return
+    setCancelling(false)
     setJobError("")
     setJob({ status: "Running", progress: 5, progressMessage: "Starting backup...", isComplete: false, isSuccessful: false })
     let jobId: string
@@ -124,6 +125,7 @@ export default function OnboardingPage() {
       try {
         const status = await post<JobStatus>("/api/backup/status", { jobId })
         setJob(status)
+        if (status.isComplete) setCancelling(false)
         if (!status.isComplete) {
           setTimeout(() => void poll(), 1000)
         } else if (status.isSuccessful && tenantProfileId) {
@@ -145,7 +147,6 @@ export default function OnboardingPage() {
       await bridge.backups.cancel(runningJobId)
     } catch (error) {
       setJobError(error instanceof Error ? error.message : "Could not cancel the backup. Try again.")
-    } finally {
       setCancelling(false)
     }
   }

@@ -43,6 +43,22 @@ afterEach(() => {
 })
 
 describe("backup request recovery", () => {
+  it.each([
+    ["Retry-After", `1${"0".repeat(307)}`],
+    ["Retry-After", `1${"0".repeat(400)}`],
+    ["x-ms-retry-after-ms", `1${"0".repeat(307)}`],
+    ["x-ms-retry-after-ms", `1${"0".repeat(400)}`],
+  ])("rejects oversized storage %s values without retrying: %s", async (header, value) => {
+    requestTimers()
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 503, headers: { [header!]: value! } }))
+    const pending = expect(verifyStorageAccess(fetchImpl, "contoso", async () => "token")).rejects.toThrow("longer than 5 minutes")
+    await vi.advanceTimersByTimeAsync(0)
+    await pending
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it.each(["PUT", "DELETE"])("retries a %s with Azure ServerBusy and its millisecond retry delay", async method => {
     requestTimers()
     const attempts: number[] = []
@@ -1001,6 +1017,27 @@ describe("backup request recovery", () => {
     expect(job.log.some(line => line.includes("longer than 5 minutes"))).toBe(true)
     await vi.advanceTimersByTimeAsync(300_000)
     expect(calls).toBe(1)
+  })
+
+  it.each([`1${"0".repeat(307)}`, `1${"0".repeat(400)}`])("shares an oversized Graph Retry-After failure with later readers: %s", async value => {
+    requestTimers()
+    let reads = 0
+    const { engine } = setup(url => {
+      if (url.hostname !== "graph.microsoft.com") return
+      if (url.pathname.endsWith("/deviceConfigurations")) {
+        return Response.json({ value: [{ id: "first", displayName: "First" }, { id: "second", displayName: "Second" }] })
+      }
+      reads++
+      return new Response(null, { status: 429, headers: { "Retry-After": value } })
+    }, 1)
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(0)
+    await engine.waitForJob(job)
+    expect(job.status).toBe("Failed")
+    expect(job.log.filter(line => line.includes("longer than 5 minutes"))).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(reads).toBe(1)
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it("holds all concurrent readers until the extended shared Graph resume time", async () => {

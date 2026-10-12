@@ -10,13 +10,13 @@ const scope = { excluded: INTUNE_TYPES.filter(type => type.folder !== "DeviceCon
 const request = { tenantId: TENANT, clientId: "client", storageAccountName: "contoso", scope }
 const prefix = "/intune-backups/"
 
-function setup(options: { count?: number; retention?: number; now?: () => Date; override?: (url: URL, init: RequestInit) => Response | Promise<Response> | undefined } = {}) {
+function setup(options: { count?: number; retention?: number; now?: () => Date; getToken?: (tenant: string, client: string, scope: string) => Promise<string>; override?: (url: URL, init: RequestInit) => Response | Promise<Response> | undefined } = {}) {
   const saved = new Map<string, string>()
   const calls: Array<{ url: URL; init: RequestInit }> = []
   const engine = new BackupEngine({
     now: options.now,
     retentionDays: () => options.retention ?? 0,
-    getToken: async () => "token",
+    getToken: options.getToken ?? (async () => "token"),
     fetch: async (input, init = {}) => {
       const url = new URL(String(input))
       calls.push({ url, init })
@@ -153,6 +153,39 @@ function nearDeadlineListing(url: URL, page: number): Promise<Response> | undefi
 }
 
 describe("manifest commit and retention interruption", () => {
+  it.each(["cancel", "deadline"])("fails without dispatching a manifest when %s arrives during its token wait", async interrupt => {
+    vi.useFakeTimers()
+    let storageTokens = 0
+    let release!: (token: string) => void
+    let pages = 0
+    const { engine, saved, calls } = setup({
+      getToken: async (_tenant, _client, tokenScope) => {
+        if (tokenScope.includes("storage.azure.com") && ++storageTokens === 2) {
+          return new Promise(resolve => { release = resolve })
+        }
+        return "token"
+      },
+      override: url => interrupt === "deadline" && url.hostname === "graph.microsoft.com" ? nearDeadlineListing(url, ++pages) : undefined,
+    })
+    const job = engine.start(request)
+    await vi.advanceTimersByTimeAsync(interrupt === "deadline" ? JOB_DEADLINE_MS - 500 : 0)
+    expect(storageTokens).toBe(2)
+    expect(release).toBeDefined()
+    expect(job.status).toBe("Running")
+    if (interrupt === "cancel") engine.cancel(job.id)
+    else await vi.advanceTimersByTimeAsync(500)
+    await engine.waitForJob(job)
+    expect(job.status).toBe("Failed")
+    expect(job.exception).toContain(interrupt === "cancel" ? "Backup cancelled by you" : "30 minute job deadline")
+    expect(saved.has(`${job.backupFolder}/metadata.json`)).toBe(false)
+    expect(calls.some(call => call.init.method === "PUT" && call.url.pathname.endsWith("/metadata.json"))).toBe(false)
+    const count = calls.length
+    release("token")
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(calls).toHaveLength(count)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it.each(["cancel", "deadline"])("fails without a manifest when %s arrives after the last item read and before commit", async interrupt => {
     vi.useFakeTimers()
     let job: BackupJob | undefined

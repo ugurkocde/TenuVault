@@ -32,6 +32,13 @@ export function FloatingProgress() {
   const [cancelErrors, setCancelErrors] = useState<Record<string, string>>({})
   const panel = useRef<HTMLDivElement>(null)
 
+  useEffect(() => {
+    setCancelling(prev => {
+      const pending = Object.entries(prev).filter(([jobId]) => allJobs.some(job => job.jobId === jobId && !job.isComplete))
+      return pending.length === Object.keys(prev).length ? prev : Object.fromEntries(pending)
+    })
+  }, [allJobs])
+
   // Auto-expand if only one job (unless user manually collapsed it or it is quiet)
   useEffect(() => {
     if (activeJobs.length === 1 && !expandedJobId) {
@@ -103,7 +110,6 @@ export function FloatingProgress() {
       await bridge.backups.cancel(jobId)
     } catch (error) {
       setCancelErrors(prev => ({ ...prev, [jobId]: error instanceof Error ? error.message : "Could not cancel the backup. Try again." }))
-    } finally {
       setCancelling(prev => ({ ...prev, [jobId]: false }))
     }
   }

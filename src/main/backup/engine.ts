@@ -370,11 +370,11 @@ export class BackupEngine {
       ...(itemTimeoutWarnings.length ? { Warnings: itemTimeoutWarnings } : {}),
     }
 
-    // Once the commit starts, let its bounded requests settle even if the job is cancelled.
+    // Detach cancellation at the first manifest PUT, after cancellable token acquisition.
     // Retention reads cannot delay the manifest, and a saved backup must not burn a retry slot.
     network.signal.throwIfAborted()
     const commitStorage = new BlobWriter(this.deps.fetch, request.storageAccountName, storageToken)
-    await commitStorage.put(`${backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2))
+    await commitStorage.put(`${backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), network)
 
     // Only a complete backup may replace older ones: if policies could not be read (for
     // example after a permission change), keep every existing backup.
@@ -676,7 +676,7 @@ class BlobWriter {
     })
   }
 
-  async put(name: string, body: string): Promise<void> {
+  async put(name: string, body: string, beforeCommit?: NetworkCircuit): Promise<void> {
     const path = `${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`
     await this.request(path, {
       method: "PUT",
@@ -697,7 +697,7 @@ class BlobWriter {
         }
       }
       throw new StorageError(await storageError(response, this.account))
-    })
+    }, beforeCommit)
   }
 
   /** Lists blob names and, with a delimiter, virtual folders under a prefix. */
@@ -762,16 +762,21 @@ class BlobWriter {
     })
   }
 
-  private async request<T>(path: string, init: RequestInit, read: (response: Response, signal: AbortSignal, ambiguous: boolean) => Promise<T>): Promise<T> {
+  private async request<T>(path: string, init: RequestInit, read: (response: Response, signal: AbortSignal, ambiguous: boolean) => Promise<T>, beforeCommit?: NetworkCircuit): Promise<T> {
     let ambiguous = false
     for (let attempt = 0; ; attempt++) {
       this.network?.signal.throwIfAborted()
+      beforeCommit?.signal.throwIfAborted()
       let response: Response | undefined
       let attempted = false
       try {
         return await withRequestTimeout(async (signal) => {
-          const token = await this.token()
+          const token = beforeCommit
+            ? await withAbort(this.token, AbortSignal.any([signal, beforeCommit.signal]))
+            : await this.token()
           signal.throwIfAborted()
+          beforeCommit?.signal.throwIfAborted()
+          beforeCommit = undefined
           attempted = true
           response = await this.fetchImpl(`https://${this.account}.blob.core.windows.net/${path}`, {
             ...init,
@@ -793,11 +798,12 @@ class BlobWriter {
         }, this.network?.signal, init.signal ?? undefined)
       } catch (error) {
         this.network?.signal.throwIfAborted()
+        beforeCommit?.signal.throwIfAborted()
         if ((attempted || error instanceof RequestTimeoutError) && requestFailure(error) === "network" && !init.signal?.aborted) this.network?.failed("backup storage")
         if (!attempted && error instanceof RequestTimeoutError && attempt >= REQUEST_ATTEMPTS - 1) throw new TokenError(error.message)
         if (error instanceof FetchApplicationError || error instanceof TokenError || error instanceof StorageError || error instanceof ProtectedBlobError || init.signal?.aborted || attempt >= REQUEST_ATTEMPTS - 1) throw error
         ambiguous = true
-        await sleep(retryDelay(response, attempt), this.network?.signal)
+        await sleep(retryDelay(response, attempt), this.network?.signal ?? beforeCommit?.signal)
       }
     }
   }
@@ -839,8 +845,12 @@ const retryableStatus = (status: number) => status === 429 || status >= 500
 function retryDelay(response: Response | undefined, attempt: number): number {
   const header = response?.headers.get("retry-after")
   const seconds = Number(header)
-  const retryAfter = Number.isFinite(seconds) ? seconds * 1000 : header ? Date.parse(header) - Date.now() : 0
   const azureDelay = Number(response?.headers.get("x-ms-retry-after-ms"))
+  // Check units before conversion, including positive values that overflow to Infinity.
+  if (seconds > MAX_RETRY_DELAY_MS / 1000 || azureDelay > MAX_RETRY_DELAY_MS) {
+    throw new Error("The service requested a retry delay longer than 5 minutes. Retry this backup later.")
+  }
+  const retryAfter = Number.isFinite(seconds) ? seconds * 1000 : header ? Date.parse(header) - Date.now() : 0
   const delay = Math.max(Number.isFinite(retryAfter) ? retryAfter : 0, Number.isFinite(azureDelay) ? azureDelay : 0)
   // Never shorten a server's pause. A longer interval fails this bounded request instead.
   if (delay > MAX_RETRY_DELAY_MS) throw new Error("The service requested a retry delay longer than 5 minutes. Retry this backup later.")

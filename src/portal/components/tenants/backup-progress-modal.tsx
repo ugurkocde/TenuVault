@@ -78,6 +78,8 @@ export function BackupProgressModal({
   latest.current = { credentials, resources, onComplete }
   const ready = Boolean(credentials && resources)
 
+  useEffect(() => { setCancelling(false) }, [jobId])
+
   useEffect(() => {
     if (open && jobId && ready) {
       setJobStatus(null)
@@ -126,6 +128,7 @@ export function BackupProgressModal({
 
           // Stop polling if job is complete
           if (data.isComplete) {
+            setCancelling(false)
             setCancelError("")
             clearInterval(pollInterval)
             latest.current.onComplete?.(data.isSuccessful)
@@ -194,7 +197,6 @@ export function BackupProgressModal({
       await bridge.backups.cancel(jobId)
     } catch (error) {
       setCancelError(error instanceof Error ? error.message : "Could not cancel the backup. Try again.")
-    } finally {
       setCancelling(false)
     }
   }

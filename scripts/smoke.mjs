@@ -26,11 +26,13 @@ const shotsDir = resolve(process.argv[2] ?? join(desktopDir, "out", "smoke"))
 
 const licenseKey = process.argv[3] ? readFileSync(process.argv[3], "utf8").trim() : null
 const port = 9300 + Math.floor(Math.random() * 500)
+const inspectorPort = port + 500
 const profile = mkdtempSync(join(tmpdir(), "tenuvault-smoke-"))
 mkdirSync(shotsDir, { recursive: true })
 
 const packagedApp = process.env.TENUVAULT_SMOKE_APP
 const args = [...(packagedApp ? [] : [desktopDir]), `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`]
+if (!packagedApp) args.push(`--inspect=127.0.0.1:${inspectorPort}`)
 if (process.platform === "linux") args.push("--no-sandbox")
 // Development smoke profiles use a mock keychain; packaged runs exercise the real Keychain by default.
 if (process.platform === "darwin" && (!packagedApp || process.env.TENUVAULT_SMOKE_MOCK_KEYCHAIN === "1")) args.push("--use-mock-keychain")
@@ -725,7 +727,7 @@ await check("restarting clears interrupted tenant backup and refresh flags", asy
   assert(await waitForCondition(`JSON.parse(window.tenuvault.storage.getItemSync('tenuvault_tenants')).every(t => !Object.hasOwn(t, 'isLoading') && t.syncStatus !== 'pending')`), "in-flight flags were saved again")
 })
 
-await checkBackupCancel({ check, evaluate, waitForCondition, screenshot, assert, go })
+await checkBackupCancel({ check, evaluate, waitForCondition, screenshot, assert, desktopDir, inspectorPort: packagedApp ? undefined : inspectorPort })
 
 await check("tenant renames show Saved in both views and clear confirmation timers", async () => {
   await go("#/portal/tenants", "Tenant Management")
