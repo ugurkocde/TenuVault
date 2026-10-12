@@ -29,6 +29,11 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 Put these in the next stable release's notes, then remove them here.
 
+- Local backup file format. New and overwritten local backup files are written in the TVB2
+  format, which binds each file to its tenant folder. Every released version since 0.2.0 reads
+  TVB2, and files written earlier stay readable. Reading the older TVB1 format is kept until at
+  least 0.5.0.
+
 - Compliance scores are now per capability and only count assigned policies. Scheduled actions are evaluated, so scores change and trend history before this version is not comparable. Older comparisons remain readable; collect a new comparison to start current scores and trends.
 
 ## Cutting a stable release

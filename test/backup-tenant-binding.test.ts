@@ -76,12 +76,28 @@ describe("local store format compatibility", () => {
     expect(JSON.parse(await text(store, ACCOUNT, "backup-2026-09-01-020000/metadata.json"))).toMatchObject({ Status: "Success" })
   })
 
-  it("writes new files and overwrites in the released version 1 format, readable by earlier versions", async () => {
-    expect(WRITE_FORMAT).toBe(1)
-    const root = mkdtempSync(join(tmpdir(), "tv-v1-"))
+  it("writes new files and overwrites in version 2 by default, keeping an overwritten version 1 file's name", async () => {
+    expect(WRITE_FORMAT).toBe(2)
+    const root = mkdtempSync(join(tmpdir(), "tv-v2-default-"))
     const master = randomBytes(32)
     const legacy = writeV1(root, master, ACCOUNT, CONTAINER, "backup-2026-09-01-020000/metadata.json", '{"v":1}')
     const store = new LocalBlobStore(root, [master])
+    await store.put(ACCOUNT, CONTAINER, "backup-2026-09-30-020000/metadata.json", Buffer.from('{"new":true}'), "application/json")
+    await store.put(ACCOUNT, CONTAINER, "backup-2026-09-01-020000/metadata.json", Buffer.from('{"v":"overwritten"}'), "application/json")
+
+    const dir = join(root, ACCOUNT, CONTAINER)
+    expect(readdirSync(dir).map((file) => readFileSync(join(dir, file)).subarray(0, 4).toString())).toEqual(["TVB2", "TVB2"])
+    expect(readdirSync(dir)).toContain(legacy)
+    const fresh = new LocalBlobStore(root, [master])
+    expect(await text(fresh, ACCOUNT, "backup-2026-09-30-020000/metadata.json")).toBe('{"new":true}')
+    expect(await text(fresh, ACCOUNT, "backup-2026-09-01-020000/metadata.json")).toBe('{"v":"overwritten"}')
+  })
+
+  it("still writes version 1 when asked, byte-compatible with the released version 1 format", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tv-v1-"))
+    const master = randomBytes(32)
+    const legacy = writeV1(root, master, ACCOUNT, CONTAINER, "backup-2026-09-01-020000/metadata.json", '{"v":1}')
+    const store = new LocalBlobStore(root, [master], 1)
     await store.put(ACCOUNT, CONTAINER, "backup-2026-09-30-020000/metadata.json", Buffer.from('{"new":true}'), "application/json")
     await store.put(ACCOUNT, CONTAINER, "backup-2026-09-01-020000/metadata.json", Buffer.from('{"v":"overwritten"}'), "application/json")
 
@@ -99,8 +115,8 @@ describe("local store format compatibility", () => {
     const old = randomBytes(32)
     writeV1(root, old, ACCOUNT, CONTAINER, "backup-2026-09-01-020000/metadata.json", '{"old":true}')
     const current = randomBytes(32)
-    await new LocalBlobStore(root, [current, old]).put(ACCOUNT, CONTAINER, "backup-2026-09-15-020000/metadata.json", Buffer.from('{"v1":true}'), "application/json")
-    await new LocalBlobStore(root, [current, old], 2).put(ACCOUNT, CONTAINER, "backup-2026-09-30-020000/metadata.json", Buffer.from('{"new":true}'), "application/json")
+    await new LocalBlobStore(root, [current, old], 1).put(ACCOUNT, CONTAINER, "backup-2026-09-15-020000/metadata.json", Buffer.from('{"v1":true}'), "application/json")
+    await new LocalBlobStore(root, [current, old]).put(ACCOUNT, CONTAINER, "backup-2026-09-30-020000/metadata.json", Buffer.from('{"new":true}'), "application/json")
 
     const files = readdirSync(join(root, ACCOUNT, CONTAINER)).map((file) => readFileSync(join(root, ACCOUNT, CONTAINER, file)).subarray(0, 4).toString())
     expect(files.sort()).toEqual(["TVB1", "TVB1", "TVB2"])
@@ -141,8 +157,7 @@ describe("version 2 binds files to their tenant", () => {
   const setup = async () => {
     const root = mkdtempSync(join(tmpdir(), "tv-v2-"))
     const master = randomBytes(32)
-    // Written in format 2 directly; the app switches to it in a later release.
-    const store = new LocalBlobStore(root, [master], 2)
+    const store = new LocalBlobStore(root, [master])
     for (const account of [ACCOUNT, localStorageAccountName(OTHER)]) {
       await store.createContainer(account, CONTAINER)
       await store.put(account, CONTAINER, "backup-2026-09-30-020000/metadata.json", Buffer.from(`{"tenant":"${account}"}`), "application/json")
