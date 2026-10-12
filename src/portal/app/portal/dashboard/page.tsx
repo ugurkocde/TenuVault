@@ -215,6 +215,7 @@ function DashboardContent() {
   const latest = stats?.latestBackup ?? null
   const protectedBackup = stats?.latestCompleteBackup ?? null
   const backupsError = stats?.backupsError ?? null
+  const failedBeforeFirstBackup = schedule?.lastStatus === "Failed" && !!stats && !backupsError && stats.totalBackups === 0
   const health =
     stats && stats.tenants.total > 0
       ? stats.tenants.critical > 0 ? "critical" : stats.tenants.warning > 0 ? "warning" : "healthy"
@@ -405,10 +406,13 @@ function DashboardContent() {
               <p className="mt-1 text-sm text-gray-500">Configure backup schedules</p>
             </>
           )}
-          {schedule?.lastRunAt && (
+          {schedule?.lastAttemptAt && (
             <p className={cn("mt-2 text-xs", schedule.lastStatus === "Failed" ? "text-red-700" : "text-gray-500")}>
-              {schedule.lastStatus === "Failed" ? "Last automatic backup failed" : "Last automatic backup"} {formatWhen(schedule.lastRunAt)}
+              {schedule.lastStatus === "Failed" ? "Last automatic backup attempt failed" : "Last automatic backup"} {formatWhen(schedule.lastAttemptAt)}
             </p>
+          )}
+          {failedBeforeFirstBackup && (
+            <p className="mt-2 text-xs text-red-700">Automatic backup failed before a backup was saved.</p>
           )}
           <div className="mt-auto pt-5">
             <Button variant="outline" size="sm" onClick={() => router.push("/portal/backup?tab=schedule")}>
@@ -460,10 +464,11 @@ function DashboardContent() {
 
         {/* Backup status in the period */}
         {statsLoading ? <TileSkeleton /> : (
-          <Tile aria-label="Backup Status">
-            <TileLabel>Backup Status</TileLabel>
+          <Tile aria-label="Stored backups">
+            <TileLabel>Stored backups</TileLabel>
             <BigValue className="mt-1 text-4xl">{backupStats?.successful || 0}</BigValue>
             <p className="text-sm text-gray-500">Successful backups, {periodLabels[selectedPeriod]?.toLowerCase()}</p>
+            <p className="mt-1 text-xs text-gray-500">Successful and failed counts use stored backup history.</p>
             <div className="mt-auto grid grid-cols-3 gap-2 pt-5 text-center">
               {[
                 ["Failed", backupStats?.failed || 0],

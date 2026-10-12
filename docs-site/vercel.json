@@ -10,6 +10,16 @@
       "headers": [{ "key": "Content-Disposition", "value": "attachment" }]
     }
   ],
+  "rewrites": [
+    {
+      "source": "/vault/js/script.js",
+      "destination": "https://plausible.io/js/pa-2wxAC1Si8v2B_3p8P97WK.js"
+    },
+    {
+      "source": "/vault/api/event",
+      "destination": "https://plausible.io/api/event"
+    }
+  ],
   "redirects": [
     {
       "source": "/",

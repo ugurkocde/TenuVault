@@ -1,8 +1,34 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 
 export const APP_STATE_START_OVER_DETAIL = "Your saved data is kept as an unreadable backup copy. Starting over deletes the backup encryption key from TenuVault, along with your sign-ins and license. Existing local and Azure backups become unreadable unless you exported their recovery key. To export it first, choose Quit, restore access to the saved data, then open Settings > Storage and recovery > Save recovery key. If you already exported it, use Import a recovery key in the same Settings section after starting over. Sign in to your tenants and activate your license again."
 export const APP_STATE_START_OVER_BUTTON = "Delete backup key and start over"
+
+/** Syncs a directory so its entries survive a crash; a failure is logged, since the data itself is already written. */
+function syncDirectorySync(dir: string): void {
+  try {
+    const directory = openSync(dir, "r")
+    try {
+      fsyncSync(directory)
+    } finally {
+      closeSync(directory)
+    }
+  } catch (error) {
+    console.warn(`Failed to sync directory ${dir}: ${(error as NodeJS.ErrnoException).code ?? "UNKNOWN"}`)
+  }
+}
+
+/** Creates a directory and syncs the parent of every directory it had to create, so the new entries survive a crash. */
+function mkdirDurableSync(path: string): void {
+  const created: string[] = []
+  for (let probe = path; !existsSync(probe); probe = dirname(probe)) {
+    created.unshift(probe)
+    if (dirname(probe) === probe) break
+  }
+  mkdirSync(path, { recursive: true })
+  if (process.platform === "win32") return
+  for (const dir of created) syncDirectorySync(dirname(dir))
+}
 
 export interface Cipher {
   encrypt: (plainText: string) => Buffer
@@ -51,16 +77,17 @@ export class SecureStore {
   }
 
   set(key: string, value: string): void {
-    this.load()[key] = value
-    this.flush()
+    const values = { ...this.load(), [key]: value }
+    this.flush(values)
+    this.values = values
   }
 
   delete(key: string): void {
-    const values = this.load()
-    if (key in values) {
-      delete values[key]
-      this.flush()
-    }
+    const current = this.load()
+    if (!(key in current)) return
+    const { [key]: _removed, ...values } = current
+    this.flush(values)
+    this.values = values
   }
 
   keys(): string[] {
@@ -100,10 +127,21 @@ export class SecureStore {
     return this.values
   }
 
-  private flush(): void {
-    mkdirSync(dirname(this.filePath), { recursive: true })
+  private flush(values: Record<string, string> = this.values ?? {}): void {
+    mkdirDurableSync(dirname(this.filePath))
     const tmp = `${this.filePath}.tmp`
-    writeFileSync(tmp, this.cipher.encrypt(JSON.stringify(this.values ?? {})), { mode: 0o600 })
-    renameSync(tmp, this.filePath)
+    try {
+      const handle = openSync(tmp, "w", 0o600)
+      try {
+        writeFileSync(handle, this.cipher.encrypt(JSON.stringify(values)))
+        fsyncSync(handle)
+      } finally {
+        closeSync(handle)
+      }
+      renameSync(tmp, this.filePath)
+      if (process.platform !== "win32") syncDirectorySync(dirname(this.filePath))
+    } finally {
+      rmSync(tmp, { force: true })
+    }
   }
 }

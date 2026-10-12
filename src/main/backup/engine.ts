@@ -3,6 +3,7 @@ export { assertStorageAccountName } from "../../shared/storage-account"
 import { createHash, randomUUID } from "node:crypto"
 import { BACKUP_CONTAINER } from "../../shared/constants"
 import { isLocalAccount } from "../storage/blob-emulator"
+import { FetchApplicationError } from "../api/network-error"
 import { INTUNE_TYPES, itemName, type IntuneType, type Item } from "../../shared/intune/registry"
 import { readObject } from "../../shared/intune/read"
 import { comparableSnapshot } from "../../shared/intune/compare"
@@ -77,6 +78,9 @@ const listUrl = (type: IntuneType) => `${GRAPH}/beta/${type.path}${type.listQuer
 
 const MAX_JOBS = 25
 const CONCURRENCY = 8
+const REQUEST_TIMEOUT_MS = 90_000
+const REQUEST_ATTEMPTS = 3
+const MAX_RETRY_DELAY_MS = 5 * 60_000
 
 /**
  * The storage provider refused a delete because the blob is protected by an immutability
@@ -103,6 +107,47 @@ class TokenError extends Error {}
 class GraphError extends Error {
   constructor(message: string, readonly status: number) {
     super(message)
+  }
+}
+
+/** Another reader extended the shared pause while this reader acquired its token. */
+class GraphPauseError extends Error {}
+
+class StorageError extends Error {}
+class RetryableStorageError extends Error {}
+class RequestTimeoutError extends Error {}
+
+/** Only a fully read HTTP error is a status failure; failed body reads are network failures. */
+function requestFailure(error: unknown): "network" | "status" | "token" | "other" {
+  if (error instanceof TokenError) return "token"
+  if (error instanceof GraphError || error instanceof StorageError || error instanceof RetryableStorageError || error instanceof ProtectedBlobError) return "status"
+  if (error instanceof SyntaxError || error instanceof GraphPauseError || error instanceof FetchApplicationError) return "other"
+  return "network"
+}
+
+type NetworkService = "Microsoft Graph" | "backup storage"
+
+/** One service outage must stop the job before readers drain every policy or type. */
+class NetworkCircuit {
+  private readonly controller = new AbortController()
+  private readonly consecutiveFailures: Record<NetworkService, number> = { "Microsoft Graph": 0, "backup storage": 0 }
+
+  constructor(private readonly threshold: number) {}
+
+  get signal(): AbortSignal {
+    return this.controller.signal
+  }
+
+  succeeded(service: NetworkService): void {
+    this.signal.throwIfAborted()
+    this.consecutiveFailures[service] = 0
+  }
+
+  failed(service: NetworkService): void {
+    this.signal.throwIfAborted()
+    if (++this.consecutiveFailures[service] < this.threshold) return
+    this.controller.abort(new Error(`Backup stopped: ${service} did not respond for ${this.consecutiveFailures[service]} consecutive requests. Earlier policies in this run were saved; the backup is incomplete.`))
+    this.signal.throwIfAborted()
   }
 }
 
@@ -172,18 +217,19 @@ export class BackupEngine {
       ? async () => ""
       : () => tokenOrStop(() => this.deps.getToken(request.tenantId, request.clientId, "https://storage.azure.com/.default"))
 
-    const storage = new BlobWriter(this.deps.fetch, request.storageAccountName, storageToken)
+    const concurrency = this.deps.concurrency ?? CONCURRENCY
+    const network = new NetworkCircuit(3 * concurrency)
+    const storage = new BlobWriter(this.deps.fetch, request.storageAccountName, storageToken, network)
     await storage.ensureContainer()
 
     const scope = normalizeScope(request.scope ?? EVERYTHING)
     const types = includedTypes(scope)
     if (scope.excluded.length) this.write(job, `Leaving out ${scope.excluded.length} of ${INTUNE_TYPES.length} types: ${scope.excluded.join(", ")}.`)
-    const graph = new GraphSession(this.deps.fetch, graphToken)
+    const graph = new GraphSession(this.deps.fetch, graphToken, network)
     const reader = {
       get: (path: string) => graph.get<Item>(`${GRAPH}/beta/${path}`),
       list: (path: string) => graph.list(graphUrl(path)) as Promise<Item[]>,
     }
-    const concurrency = this.deps.concurrency ?? CONCURRENCY
 
     // List everything first so progress reflects the real amount of work.
     job.progressMessage = "Reading Intune configuration..."
@@ -200,6 +246,7 @@ export class BackupEngine {
         this.write(job, `Found ${items.length} ${type.label}${skipped ? ` (${skipped} built-in skipped)` : ""}.`)
         lists[index] = { type, items }
       } catch (error) {
+        network.signal.throwIfAborted()
         if (error instanceof TokenError || (error instanceof GraphError && error.status === 401)) throw error
         // Access denied: the app registration lacks the permission or its admin consent (for example
         // one created before the type was supported), or the admin's Intune role does not cover the
@@ -213,7 +260,7 @@ export class BackupEngine {
         failedTypes.push(type.folder)
         this.write(job, `Could not read ${type.label}: ${error instanceof Error ? error.message : String(error)}`)
       }
-    })
+    }, network.signal)
 
     // File names are chosen in list order, before the parallel reads, so they do not depend on timing.
     const work: Array<{ type: IntuneType; item: GraphItem; displayName: string; fileName: string }> = []
@@ -243,6 +290,7 @@ export class BackupEngine {
         }
         counts[type.folder]!++
       } catch (error) {
+        network.signal.throwIfAborted()
         // An expired sign-in fails every remaining item the same way, so it stops the backup once.
         if (error instanceof TokenError || (error instanceof GraphError && error.status === 401)) throw error
         failures++
@@ -253,7 +301,7 @@ export class BackupEngine {
       const left = remaining.get(type.folder)! - 1
       remaining.set(type.folder, left)
       if (left === 0) this.write(job, `Backed up ${counts[type.folder]} ${type.label}.`)
-    })
+    }, network.signal)
 
     const ended = this.now()
     const seconds = Math.round((ended.getTime() - started.getTime()) / 1000)
@@ -284,17 +332,29 @@ export class BackupEngine {
 
     // Only a complete backup may replace older ones: if policies could not be read (for
     // example after a permission change), keep every existing backup.
+    let retentionWarnings = 0
     if (failures === 0) {
-      await this.applyRetention(job, storage, backupFolder, coveredFolders(metadata)).catch((error: unknown) => {
-        this.write(job, `Could not remove old backups: ${error instanceof Error ? error.message : String(error)}`)
+      // Cleanup cannot invalidate the backup whose manifest has already been committed.
+      const retentionNetwork = new NetworkCircuit(3 * concurrency)
+      const retentionStorage = new BlobWriter(this.deps.fetch, request.storageAccountName, storageToken, retentionNetwork)
+      const unreadable = await this.applyRetention(job, retentionStorage, backupFolder, coveredFolders(metadata), retentionNetwork.signal).catch((error: unknown) => {
+        retentionWarnings++
+        if (retentionNetwork.signal.aborted) {
+          this.write(job, "Old backups were not removed because the network stopped responding. They will be reconsidered on the next run.")
+        } else {
+          this.write(job, `Could not remove old backups: ${error instanceof Error ? error.message : String(error)}. They will be reconsidered on the next run.`)
+        }
+        return 0
       })
+      if (unreadable > 0) retentionWarnings++
     } else {
       this.write(job, "Older backups were kept because this backup is incomplete.")
     }
 
     job.status = failures > 0 && totalPolicies === 0 ? "Failed" : "Completed"
+    const warnings = failures + retentionWarnings
     job.progressMessage =
-      job.status === "Failed" ? "Backup failed: no policies could be saved" : failures > 0 ? `Backup completed with ${failures} warning${failures === 1 ? "" : "s"}` : "Backup completed successfully"
+      job.status === "Failed" ? "Backup failed: no policies could be saved" : warnings > 0 ? `Backup completed with ${warnings} warning${warnings === 1 ? "" : "s"}` : "Backup completed successfully"
     this.write(job, `Backup completed: ${totalPolicies} policies in ${metadata.Duration}.`)
   }
 
@@ -306,9 +366,9 @@ export class BackupEngine {
    * versions that did not record the tenant count as this tenant's unless the container also
    * holds a backup recorded as another tenant's.
    */
-  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, covered: Set<string>): Promise<void> {
+  private async applyRetention(job: BackupJob, storage: BlobWriter, current: string, covered: Set<string>, signal: AbortSignal): Promise<number> {
     const days = this.deps.retentionDays?.(job.tenantId) ?? 0
-    if (days <= 0) return
+    if (days <= 0) return 0
     const cutoff = this.now().getTime() - days * 24 * 60 * 60 * 1000
     const { prefixes } = await storage.list("backup-", "/")
     const backups = prefixes
@@ -325,13 +385,27 @@ export class BackupEngine {
     // that did not record the tenant count as this tenant's only while no backup names another one.
     const tenant = job.tenantId.toLowerCase()
     const owners = new Array<{ metadata: Record<string, unknown>; owner: "this" | "other" | "untagged" } | null>(backups.length).fill(null)
+    const unreadable = new Set<number>()
+    let unreadableReason = ""
     await pool(backups.map((backup, index) => ({ backup, index })), CONCURRENCY, async ({ backup, index }) => {
-      const metadata = await storage.readJson(`${backup.prefix}metadata.json`)
+      let metadata: Record<string, unknown> | null
+      try {
+        metadata = await storage.readJson(`${backup.prefix}metadata.json`)
+      } catch (error) {
+        // Metadata that cannot be decrypted (a wrong or rotated key, damaged ciphertext) is
+        // unreadable: never ours, and it must not stop the cleanup of the other backups.
+        if (!(error instanceof FetchApplicationError)) throw error
+        unreadable.add(index)
+        unreadableReason ||= error.message
+        return
+      }
       if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return // Missing or unreadable: never ours.
       const owner = typeof metadata.TenantId !== "string" ? "untagged" : metadata.TenantId.toLowerCase() === tenant ? "this" : "other"
       owners[index] = { metadata, owner }
-    })
-    const shared = owners.some((entry) => entry?.owner === "other")
+    }, signal)
+    // An unreadable backup may be another tenant's, so while one exists the container counts as
+    // shared and untagged backups from earlier versions stay, as they did before.
+    const shared = owners.some((entry) => entry?.owner === "other") || unreadable.size > 0
 
     // Types no newer backup holds yet, walking from the newest backup to the oldest.
     const uncovered = new Set(INTUNE_TYPES.map((type) => type.folder).filter((folder) => !covered.has(folder)))
@@ -343,7 +417,7 @@ export class BackupEngine {
     for (const [index, backup] of backups.entries()) {
       const entry = owners[index]
       if (!entry || entry.owner === "other" || (entry.owner === "untagged" && shared)) {
-        if (backup.time < cutoff) unowned++
+        if (backup.time < cutoff && !unreadable.has(index)) unowned++
         continue
       }
       const metadata = entry.metadata
@@ -384,6 +458,8 @@ export class BackupEngine {
       this.write(job, `Kept ${protectedKept} older backup${protectedKept === 1 ? "" : "s"} protected by the storage account's immutability policy or legal hold.${partlyRemoved > 0 ? ` ${partlyRemoved} of them lost some files before the protected ones were reached, including ${partlyRemoved === 1 ? "its" : "their"} metadata, so ${partlyRemoved === 1 ? "it is" : "they are"} no longer offered as complete.` : ""}`)
     }
     if (unowned > 0) this.write(job, `Kept ${unowned} older backup${unowned === 1 ? "" : "s"} not recorded as this tenant's (another tenant's, without readable metadata, or from an earlier version in a container another tenant also uses).`)
+    if (unreadable.size > 0) this.write(job, `Could not read the metadata of ${unreadable.size} older backup${unreadable.size === 1 ? "" : "s"}: ${unreadableReason.replace(/\.$/, "")}. ${unreadable.size === 1 ? "It was" : "They were"} left in place.`)
+    return unreadable.size
   }
 
   private write(job: BackupJob, line: string): void {
@@ -406,10 +482,12 @@ export class BackupEngine {
 /** Graph reads for one backup. A throttled request (429) pauses every reader until Graph allows requests again. */
 class GraphSession {
   private resumeAt = 0
+  private throttleError: Error | undefined
 
   constructor(
     private readonly fetchImpl: typeof fetch,
     private readonly token: () => Promise<string>,
+    private readonly network: NetworkCircuit,
   ) {}
 
   async list(url: string): Promise<GraphItem[]> {
@@ -417,6 +495,7 @@ class GraphSession {
     let next: string | undefined = url
     const seen = new Set<string>()
     while (next) {
+      if (seen.size >= MAX_LIST_PAGES) throw new Error(`Graph listing did not finish after ${MAX_LIST_PAGES} pages`)
       const parsed = new URL(next)
       if (parsed.origin !== GRAPH || !parsed.pathname.startsWith("/beta/") || seen.has(next)) throw new Error("Invalid Graph continuation link")
       seen.add(next)
@@ -428,21 +507,51 @@ class GraphSession {
     return items
   }
 
-  /** GET with retries for Graph throttling (429) and transient errors (5xx). */
+  /** GET with bounded retries for throttling, transient status codes and network failures. */
   async get<T = Record<string, unknown>>(url: string): Promise<T> {
     for (let attempt = 0; ; attempt++) {
-      const wait = this.resumeAt - Date.now()
-      if (wait > 0) await sleep(wait)
-      const response = await this.fetchImpl(url, { headers: { Authorization: `Bearer ${await this.token()}` } })
-      if (response.ok) return (await response.json()) as T
-      const retryable = response.status === 429 || response.status >= 500
-      if (!retryable || attempt >= 4) {
-        throw new GraphError(await graphError(response), response.status)
+      this.network.signal.throwIfAborted()
+      while (this.resumeAt > Date.now() && !this.throttleError) await sleep(this.resumeAt - Date.now(), this.network.signal)
+      if (this.throttleError) throw this.throttleError
+      let response: Response | undefined
+      let attempted = false
+      try {
+        return await withRequestTimeout(async (signal) => {
+          const token = await this.token()
+          signal.throwIfAborted()
+          if (this.throttleError) throw this.throttleError
+          if (this.resumeAt > Date.now()) throw new GraphPauseError()
+          attempted = true
+          response = await this.fetchImpl(url, { signal, headers: { Authorization: `Bearer ${token}` } })
+          if (response.ok) {
+            const result = (await response.json()) as T
+            signal.throwIfAborted()
+            this.network.succeeded("Microsoft Graph")
+            return result
+          }
+          throw new GraphError(await graphError(response), response.status)
+        }, this.network.signal)
+      } catch (error) {
+        this.network.signal.throwIfAborted()
+        if ((attempted || error instanceof RequestTimeoutError) && requestFailure(error) === "network") this.network.failed("Microsoft Graph")
+        if (error instanceof GraphPauseError) {
+          attempt--
+          continue
+        }
+        if (this.throttleError && error === this.throttleError) throw error
+        if (error instanceof FetchApplicationError || error instanceof TokenError || (error instanceof GraphError && !retryableStatus(error.status))) throw error
+        let delay: number
+        try {
+          delay = retryDelay(response, attempt)
+        } catch (delayError) {
+          // A pause beyond our bound stops readers instead of sending requests before Graph permits them.
+          if (response?.status === 429 && delayError instanceof Error) this.throttleError = delayError
+          throw delayError
+        }
+        if (response?.status === 429) this.resumeAt = Math.max(this.resumeAt, Date.now() + delay)
+        if (attempt >= REQUEST_ATTEMPTS - 1) throw error
+        await sleep(delay, this.network.signal)
       }
-      const retryAfter = Number(response.headers.get("retry-after"))
-      const delay = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1000 * 2 ** attempt
-      if (response.status === 429) this.resumeAt = Math.max(this.resumeAt, Date.now() + delay)
-      await sleep(delay)
     }
   }
 }
@@ -451,11 +560,11 @@ class GraphSession {
  * Runs `task` for every entry with at most `limit` running at once. The first error stops new
  * tasks from starting and is thrown once the running ones have settled.
  */
-async function pool<T>(entries: T[], limit: number, task: (entry: T) => Promise<void>): Promise<void> {
+async function pool<T>(entries: T[], limit: number, task: (entry: T) => Promise<void>, signal?: AbortSignal): Promise<void> {
   let next = 0
   let failure: { error: unknown } | null = null
   const worker = async () => {
-    while (!failure && next < entries.length) {
+    while (!failure && !signal?.aborted && next < entries.length) {
       const entry = entries[next++]!
       try {
         await task(entry)
@@ -465,6 +574,7 @@ async function pool<T>(entries: T[], limit: number, task: (entry: T) => Promise<
     }
   }
   await Promise.all(Array.from({ length: Math.min(limit, entries.length) }, worker))
+  signal?.throwIfAborted()
   if (failure) throw (failure as { error: unknown }).error
 }
 
@@ -503,24 +613,40 @@ class BlobWriter {
     private readonly fetchImpl: typeof fetch,
     private readonly account: string,
     private readonly token: () => Promise<string>,
+    private readonly network?: NetworkCircuit,
   ) {
     assertStorageAccountName(account)
   }
 
   async ensureContainer(): Promise<void> {
-    const response = await this.request(`${BACKUP_CONTAINER}?restype=container`, { method: "PUT" })
-    if (response.ok || response.status === 409) return
-    throw new Error(await storageError(response, this.account))
+    await this.request(`${BACKUP_CONTAINER}?restype=container`, { method: "PUT" }, async (response) => {
+      if (response.ok || response.status === 409) return
+      throw new StorageError(await storageError(response, this.account))
+    })
   }
 
   async put(name: string, body: string): Promise<void> {
     const path = `${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`
-    const response = await this.request(path, {
+    await this.request(path, {
       method: "PUT",
       headers: { "x-ms-blob-type": "BlockBlob", "content-type": "application/json" },
       body,
+    }, async (response, signal, ambiguous) => {
+      if (response.ok) return
+      if (ambiguous && (response.status === 409 || response.status === 412
+        || isImmutabilityRefusal(response.status, response.headers.get("x-ms-error-code") ?? ""))) {
+        // The earlier PUT may have landed. Read through the same decrypting wrapper and compare plaintext.
+        const stored = await this.request(path, { method: "GET", signal }, async (readBack) => {
+          if (!readBack.ok) throw new StorageError(await storageError(readBack, this.account))
+          return readBack.text()
+        })
+        if (stored === body) {
+          void response.body?.cancel().catch(() => undefined)
+          return
+        }
+      }
+      throw new StorageError(await storageError(response, this.account))
     })
-    if (!response.ok) throw new Error(await storageError(response, this.account))
   }
 
   /** Lists blob names and, with a delimiter, virtual folders under a prefix. */
@@ -532,10 +658,12 @@ class BlobWriter {
     do {
       if (seen.size >= MAX_LIST_PAGES) throw new Error(`Storage listing did not finish after ${MAX_LIST_PAGES} pages`)
       const query = new URLSearchParams({ restype: "container", comp: "list", prefix, ...(delimiter ? { delimiter } : {}), ...(marker ? { marker } : {}) })
-      const response = await this.request(`${BACKUP_CONTAINER}?${query.toString()}`, { method: "GET" })
-      if (response.status === 404) break
-      if (!response.ok) throw new Error(await storageError(response, this.account))
-      const xml = await response.text()
+      const xml = await this.request(`${BACKUP_CONTAINER}?${query.toString()}`, { method: "GET" }, async (response) => {
+        if (response.status === 404) return null
+        if (!response.ok) throw new StorageError(await storageError(response, this.account))
+        return response.text()
+      })
+      if (xml === null) break
       const decode = (value: string) => value.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
       for (const m of xml.matchAll(/<BlobPrefix><Name>([^<]*)<\/Name><\/BlobPrefix>/g)) prefixes.push(decode(m[1]!))
       for (const m of xml.matchAll(/<Blob><Name>([^<]*)<\/Name>/g)) blobs.push(decode(m[1]!))
@@ -548,38 +676,104 @@ class BlobWriter {
 
   /** A JSON blob, or null when it does not exist or is not valid JSON. */
   async readJson(name: string): Promise<Record<string, unknown> | null> {
-    const response = await this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, { method: "GET" })
-    if (response.status === 404) return null
-    if (!response.ok) throw new Error(await storageError(response, this.account))
-    return (await response.json().catch(() => null)) as Record<string, unknown> | null
+    return this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, { method: "GET" }, async (response) => {
+      if (response.status === 404) return null
+      if (!response.ok) throw new StorageError(await storageError(response, this.account))
+      try {
+        return (await response.json()) as Record<string, unknown>
+      } catch (error) {
+        if (error instanceof SyntaxError) return null
+        throw error
+      }
+    })
   }
 
   async delete(name: string): Promise<void> {
-    const response = await this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, {
+    await this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, {
       method: "DELETE",
+    }, async (response) => {
+      if (!response.ok && response.status !== 404) {
+        const code = response.headers.get("x-ms-error-code") ?? ""
+        if (isImmutabilityRefusal(response.status, code)) throw new ProtectedBlobError(code)
+        const text = await response.clone().text()
+        const bodyCode = /<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? ""
+        if (isImmutabilityRefusal(response.status, bodyCode)) throw new ProtectedBlobError(bodyCode)
+        throw new StorageError(await storageError(response, this.account))
+      }
     })
-    if (!response.ok && response.status !== 404) {
-      const code = response.headers.get("x-ms-error-code") ?? ""
-      if (isImmutabilityRefusal(response.status, code)) throw new ProtectedBlobError(code)
-      const text = await response.clone().text().catch(() => "")
-      const bodyCode = /<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? ""
-      if (isImmutabilityRefusal(response.status, bodyCode)) throw new ProtectedBlobError(bodyCode)
-      throw new Error(await storageError(response, this.account))
-    }
   }
 
-  private async request(path: string, init: RequestInit): Promise<Response> {
-    const token = await this.token()
-    return this.fetchImpl(`https://${this.account}.blob.core.windows.net/${path}`, {
-      ...init,
-      headers: {
-        ...(init.headers as Record<string, string> | undefined),
-        "x-ms-version": "2021-12-02",
-        "x-ms-date": new Date().toUTCString(),
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-    })
+  private async request<T>(path: string, init: RequestInit, read: (response: Response, signal: AbortSignal, ambiguous: boolean) => Promise<T>): Promise<T> {
+    let ambiguous = false
+    for (let attempt = 0; ; attempt++) {
+      this.network?.signal.throwIfAborted()
+      let response: Response | undefined
+      let attempted = false
+      try {
+        return await withRequestTimeout(async (signal) => {
+          const token = await this.token()
+          signal.throwIfAborted()
+          attempted = true
+          response = await this.fetchImpl(`https://${this.account}.blob.core.windows.net/${path}`, {
+            ...init,
+            signal,
+            headers: {
+              ...(init.headers as Record<string, string> | undefined),
+              "x-ms-version": "2021-12-02",
+              "x-ms-date": new Date().toUTCString(),
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+          })
+          if (retryableStatus(response.status) && attempt < REQUEST_ATTEMPTS - 1) {
+            throw new RetryableStorageError(await storageError(response, this.account))
+          }
+          const result = await read(response, signal, ambiguous)
+          signal.throwIfAborted()
+          if (response.ok) this.network?.succeeded("backup storage")
+          return result
+        }, this.network?.signal, init.signal ?? undefined)
+      } catch (error) {
+        this.network?.signal.throwIfAborted()
+        if ((attempted || error instanceof RequestTimeoutError) && requestFailure(error) === "network" && !init.signal?.aborted) this.network?.failed("backup storage")
+        if (error instanceof FetchApplicationError || error instanceof TokenError || error instanceof StorageError || error instanceof ProtectedBlobError || init.signal?.aborted || attempt >= REQUEST_ATTEMPTS - 1) throw error
+        ambiguous = true
+        await sleep(retryDelay(response, attempt), this.network?.signal)
+      }
+    }
   }
+}
+
+/** Bound the whole request, including token acquisition and response reads, even for a fetch bridge that ignores aborts. */
+async function withRequestTimeout<T>(request: (signal: AbortSignal) => Promise<T>, ...signals: Array<AbortSignal | undefined>): Promise<T> {
+  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+  const signal = AbortSignal.any([timeout, ...signals.filter((value): value is AbortSignal => value !== undefined)])
+  signal.throwIfAborted()
+  let onAbort: () => void = () => undefined
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(signal.reason)
+    signal.addEventListener("abort", onAbort, { once: true })
+  })
+  try {
+    return await Promise.race([request(signal), aborted])
+  } catch (error) {
+    if (timeout.aborted && signal.reason === timeout.reason) {
+      throw new RequestTimeoutError(timeout.reason instanceof Error ? timeout.reason.message : String(timeout.reason))
+    }
+    throw error
+  } finally {
+    signal.removeEventListener("abort", onAbort)
+  }
+}
+
+const retryableStatus = (status: number) => status === 429 || status >= 500
+
+function retryDelay(response: Response | undefined, attempt: number): number {
+  const header = response?.headers.get("retry-after")
+  const seconds = Number(header)
+  const retryAfter = Number.isFinite(seconds) ? seconds * 1000 : header ? Date.parse(header) - Date.now() : NaN
+  // Never shorten a server's pause. A longer interval fails this bounded request instead.
+  if (retryAfter > MAX_RETRY_DELAY_MS) throw new Error("The service requested a retry delay longer than 5 minutes. Retry this backup later.")
+  return Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 1000 * 2 ** attempt
 }
 
 async function graphError(response: Response): Promise<string> {
@@ -651,4 +845,17 @@ function uniqueName(name: string, id: string, used: Set<string>): string {
   return unique
 }
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted()
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(signal!.reason)
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener("abort", onAbort, { once: true })
+  })
+}

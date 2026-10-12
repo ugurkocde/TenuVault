@@ -82,14 +82,14 @@ TenuVault deletes old backups automatically so storage does not grow without lim
 
 To choose how long backups are kept:
 
-1. Open **Settings** and go to **Background and retention**.
+1. Open **Settings** and go to **Background runner**.
 2. In **Keep backups for**, choose **7 days**, **14 days**, **30 days**, **60 days**, **90 days**, **180 days**, **365 days** or **Forever**.
 
 The default is 30 days. The setting applies to every tenant on this computer. The **Kept for** field on the **Schedule** tab shows the value that applies to the selected tenant.
 
 How retention works:
 
-* Old backups are deleted at the end of each backup that finished without warnings. A backup that completed with warnings, failed or was incomplete deletes nothing: "Older backups were kept because this backup is incomplete."
+* Old backups are deleted at the end of each backup that saved every selected policy. A backup that failed or left policies unsaved deletes nothing: "Older backups were kept because this backup is incomplete." Cleanup itself can add a warning: if the metadata of an older backup cannot be decrypted, that backup and any backup without a recorded tenant are kept, while other eligible backups are still removed.
 * The backup that just finished is never deleted, so at least the newest backup is always kept.
 * A backup that left out some types never removes the newest copy of those types. For example, if your daily backups leave out apps, the newest backup that includes apps is kept even after it ages out. The log says "Kept N older backup(s) because they hold the newest copy of types this backup leaves out."
 * Retention deletes backup folders only. It does not delete audit log events.

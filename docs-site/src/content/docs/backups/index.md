@@ -38,7 +38,7 @@ You can also start a backup from other places:
 | **All tenants** | **Back up now** on a tenant card | Opens the **Back up** dialog; progress appears in the lower right corner |
 | **Tenants** | **Backup Now** on a card, or the backup button in the list view | Opens the **Back up** dialog, then **Backup Progress** |
 | **Tenants** | **Backup Selected** (MSP) | Backs up every selected tenant with its saved choice, after you confirm |
-| Tray or menu bar icon | **Back up all tenants now** | Backs up every connected tenant with its saved choice. See [Schedule backups](/backups/schedules/#the-tray-icon). |
+| Menu bar icon on macOS or tray icon on Windows | **Back up all tenants now** | Backs up every connected tenant with its saved choice. See [Schedule backups](/backups/schedules/#the-menu-bar-or-tray-icon). |
 
 TenuVault runs one backup per tenant at a time. If you start a backup while one is already running for the same tenant, you follow the running one.
 
@@ -80,7 +80,7 @@ The **Backup Progress** dialog shows:
 Click **Run in Background**, or close the dialog, to keep working. The backup continues and a panel in the lower right corner of the window shows its progress. Expand the panel for details and **Show Output**, or dismiss it with the close button. The panel shows **Backup in progress**, **Backup completed** or **Backup failed**.
 
 :::caution
-Backups run inside TenuVault. If you quit TenuVault while a backup runs, the backup stops and is shown as **Incomplete**. Closing the window is fine when TenuVault keeps running in the tray. See [Schedule backups](/backups/schedules/#keep-tenuvault-running).
+Backups run inside TenuVault. If you quit TenuVault while a backup runs, the backup stops and is shown as **Incomplete**. Closing the window is fine when TenuVault keeps running in the menu bar on macOS or the tray on Windows. See [Schedule backups](/backups/schedules/#keep-tenuvault-running).
 :::
 
 ### The backup log
@@ -114,6 +114,8 @@ A backup ends with one of these results:
 | **Running** | The backup has not written its summary yet. A backup without a summary that started less than six hours ago is shown as running; after that it is shown as incomplete. |
 
 The **Backup Progress** dialog shows **Failed** with the error for every backup that stopped, including the ones the timeline later lists as incomplete.
+
+An automatic attempt can fail before any backup is saved. Its failure appears in the [Schedule status](/backups/schedules/#when-a-scheduled-backup-fails), but it does not increase Dashboard's **Stored backups** counts. Click a scheduled or tray failure notification to open the affected tenant's **Schedule** tab.
 
 Types skipped because access was denied do not make the backup incomplete. **Backup Details** lists them: "Left out because access was denied". Open the app registration in Microsoft Entra, go to **API permissions** and select **Grant admin consent for &lt;your tenant&gt;**, or run the setup script again. Then sign out of the tenant in TenuVault and sign in again. If every permission already shows **Granted**, check that your Intune role covers these items. See [Create the app registration](/getting-started/app-registration/#3-add-the-delegated-permissions).
 

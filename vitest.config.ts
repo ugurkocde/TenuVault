@@ -10,6 +10,8 @@ export default defineConfig(({ mode }) => {
         { find: /^next\/server$/, replacement: resolve(import.meta.dirname, "src/main/api/next-server-shim.ts") },
         { find: /^next\/cache$/, replacement: resolve(import.meta.dirname, "src/main/api/next-cache-shim.ts") },
         { find: /^next\/headers$/, replacement: resolve(import.meta.dirname, "src/main/api/next-headers-shim.ts") },
+        { find: /^next\/navigation$/, replacement: resolve(import.meta.dirname, "src/renderer/shims/next-navigation.ts") },
+        { find: /^@desktop\//, replacement: `${resolve(import.meta.dirname, "src/renderer")}/` },
         { find: /^~\//, replacement: `${resolve(import.meta.dirname, "src/portal")}/` },
       ],
     },

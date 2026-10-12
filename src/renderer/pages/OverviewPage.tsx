@@ -5,7 +5,6 @@ import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { useSelectedTenant, useTenants, type Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
 import { Chip, Fact, RoundIconButton, Tile, TileLabel } from "~/components/dashboard/tiles"
-import { cn } from "~/lib/utils"
 import { storageLabel } from "~/lib/storage-label"
 import type { BackupSettings, SignedInAccount } from "../../shared/ipc"
 import { backupTarget, trackBackup } from "../lib/backups"
@@ -151,26 +150,43 @@ export default function OverviewPage() {
                     <span className="truncate">{storageLabel(tenant.resources?.storageAccountName)}</span>
                   </span>
                 </Fact>
-                <Fact label="Automatic backups">
-                  <span className="flex items-center gap-2">
+                <Fact label="Automatic backups" wrap>
+                  <span className="flex items-start gap-2">
                     <CalendarClock className="h-4 w-4 shrink-0 text-gray-400" />
-                    <span className="truncate" title={schedule?.enabled ? formatWhen(schedule.nextRunAt) : undefined}>
-                      {schedule?.enabled ? `${describeSchedule(schedule)}, next ${formatWhen(schedule.nextRunAt)}` : "No automatic backups"}
+                    <span className="min-w-0">
+                      {schedule?.enabled ? (
+                        <>
+                          <span className="block break-words">{describeSchedule(schedule)}</span>
+                          <span className="mt-1 block break-words text-gray-500">Next {formatWhen(schedule.nextRunAt)}</span>
+                        </>
+                      ) : "No automatic backups"}
                     </span>
                   </span>
                 </Fact>
                 <div className="sm:col-span-2">
-                  <Fact label="Last backup">
-                    <span className={cn("flex items-center gap-2", failed && "text-red-700")}>
-                      {failed ? <AlertCircle className="h-4 w-4 shrink-0 text-red-600" /> : <CheckCircle2 className="h-4 w-4 shrink-0 text-gray-400" />}
-                      <span className="truncate">
-                        {schedule?.lastRunAt
-                          ? `${failed ? "Last automatic backup failed" : "Last automatic backup"} ${formatWhen(schedule.lastRunAt)}`
-                          : tenant.lastBackup
-                            ? `Last backup ${formatWhen(tenant.lastBackup)}`
-                            : "No backups yet"}
+                  <Fact label="Last backup" wrap>
+                    {failed ? (
+                      <div className="space-y-2">
+                        <button type="button" className="flex w-full items-start gap-2 text-left text-red-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2" onClick={() => open(tenant, "/portal/backup?tab=schedule")}>
+                          <AlertCircle className="h-4 w-4 shrink-0 text-red-600" />
+                          <span className="min-w-0 break-words">
+                            Last automatic backup attempt failed{schedule.lastAttemptAt ? ` ${formatWhen(schedule.lastAttemptAt)}` : ""}
+                          </span>
+                        </button>
+                        <Chip tone="danger">Action required</Chip>
+                      </div>
+                    ) : (
+                      <span className="flex items-start gap-2">
+                        <CheckCircle2 className="h-4 w-4 shrink-0 text-gray-400" />
+                        <span className="min-w-0 break-words">
+                          {schedule?.lastAttemptAt
+                            ? `Last automatic backup ${formatWhen(schedule.lastAttemptAt)}`
+                            : tenant.lastBackup
+                              ? `Last backup ${formatWhen(tenant.lastBackup)}`
+                              : "No backups yet"}
+                        </span>
                       </span>
-                    </span>
+                    )}
                   </Fact>
                 </div>
               </dl>
