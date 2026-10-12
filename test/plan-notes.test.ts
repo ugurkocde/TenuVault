@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { Preferences } from "../src/main/preferences"
-import { firstBackupNote, retentionNote, restoreCountNote, shouldShowDriftNote, weeklyScheduleNote } from "../src/renderer/lib/plan-notes"
+import { firstBackupNote, retentionNote, revertibleDriftCount, shouldShowDriftNote, weeklyScheduleNote } from "../src/renderer/lib/plan-notes"
 import type { Plan } from "../src/shared/plans"
 
 const now = new Date("2026-10-12T12:00:00Z")
@@ -10,17 +10,39 @@ for (const plan of ["pro", "msp", null] as const) {
   it(`shows no new notes for ${plan ?? "unknown"} plans`, () => {
     expect(shouldShowDriftNote(plan, 1)).toBe(false)
     expect(retentionNote(plan, [backup(24)], now)).toBeNull()
-    expect(restoreCountNote(plan, 2)).toBeNull()
-    expect(weeklyScheduleNote(plan)).toBeNull()
+    expect(weeklyScheduleNote(plan, true)).toBeNull()
+    expect(weeklyScheduleNote(plan, false)).toBeNull()
     expect(firstBackupNote(plan, false)).toBeNull()
   })
 }
 
 describe("Community plan notes", () => {
-  it("shows the drift note only when a comparison found policies", () => {
-    expect(shouldShowDriftNote("community", 0)).toBe(false)
+  it("shows the drift note only when a comparison has policies with a Revert or Recreate action", () => {
+    for (const drifts of [[], [{ changeType: "added" as const }], [
+      { changeType: "modified" as const, lastRevertedAt: "2026-10-12T12:00:00Z" },
+      { changeType: "deleted" as const, isRevertDrift: true },
+    ]]) {
+      expect(revertibleDriftCount(drifts)).toBe(0)
+      expect(shouldShowDriftNote("community", revertibleDriftCount(drifts))).toBe(false)
+    }
     expect(shouldShowDriftNote("community", 1)).toBe(true)
     expect(shouldShowDriftNote("community", 5)).toBe(true)
+  })
+
+  it("counts only changed or deleted policies that are not already reverted or caused by a revert", () => {
+    const drifts = [
+      { changeType: "added" as const },
+      { changeType: "modified" as const },
+      { changeType: "deleted" as const, isRevertDrift: false },
+      { changeType: "modified" as const, lastRevertedAt: "2026-10-12T12:00:00Z" },
+      { changeType: "deleted" as const, lastRevertedAt: "2026-10-12T12:00:00Z" },
+      { changeType: "modified" as const, isRevertDrift: true },
+      { changeType: "deleted" as const, isRevertDrift: true },
+    ]
+    const original = drifts.slice()
+    expect(revertibleDriftCount(drifts)).toBe(2)
+    expect(shouldShowDriftNote("community", revertibleDriftCount(drifts))).toBe(true)
+    expect(drifts).toEqual(original)
   })
 
   it("starts the retention note exactly seven days before the cap", () => {
@@ -43,14 +65,9 @@ describe("Community plan notes", () => {
     expect(retentionNote("community", [backup(24)], new Date("invalid"))).toBeNull()
   })
 
-  it("counts selections starting at two items", () => {
-    for (const count of [0, 1]) expect(restoreCountNote("community", count)).toBeNull()
-    expect(restoreCountNote("community", 2)).toBe("Restore all 2 at once with Pro. Community restores one item at a time as an unassigned copy.")
-    expect(restoreCountNote("community", 12)).toContain("Restore all 12 at once with Pro.")
-  })
-
-  it("explains the weekly schedule's consequence", () => {
-    expect(weeklyScheduleNote("community")).toBe("A weekly schedule can leave up to six days of changes unprotected.")
+  it("explains the weekly schedule's consequence only when a weekly schedule is enabled", () => {
+    expect(weeklyScheduleNote("community", false)).toBeNull()
+    expect(weeklyScheduleNote("community", true)).toBe("A weekly schedule can leave up to six days of changes unprotected. Daily backups are included in Pro.")
   })
 
   it("shows the first backup note only after the machine flag is known and unseen", () => {

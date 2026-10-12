@@ -5,8 +5,6 @@ description: Choose between creating copies and replacing in place, and decide w
 
 Every restore uses one of two methods: **Create copies** or **Replace in place**. You can also choose to bring back the assignments recorded in the backup. This page explains what each choice does to your tenant.
 
-On Community, if two or more items are already selected, the restore wizard shows their count in the note about restoring them together, included in TenuVault Pro and MSP, while keeping the explanations of unassigned copies, replacement, assignments and copies to other tenants.
-
 ## Compare the methods
 
 | | **Create copies** | **Replace in place** |

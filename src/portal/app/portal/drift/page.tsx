@@ -29,7 +29,7 @@ import {
 import { cn } from "~/lib/utils"
 import { useTenantPlan } from "@desktop/lib/license"
 import { bridge } from "@desktop/lib/bridge"
-import { shouldShowDriftNote } from "@desktop/lib/plan-notes"
+import { revertibleDriftCount, shouldShowDriftNote } from "@desktop/lib/plan-notes"
 import { GatedButton } from "@desktop/components/PlanGate"
 import { cancelDriftScan, startDriftScan, useDriftJob, useDriftResult } from "@desktop/lib/drift-jobs"
 import { useBackupList } from "@desktop/lib/backup-list"
@@ -204,6 +204,7 @@ export default function DriftDetectionPage() {
     () => (result?.drifts ?? []).map(drift => ({ ...drift, tenant: selectedTenant?.name ?? drift.tenant })),
     [result, selectedTenant?.name],
   )
+  const revertibleCount = revertibleDriftCount(drifts)
   // A failed or refused scan newer than the shown result.
   const failedJob = job && job.status === "failed" && (!result || (job.finishedAt ?? "") > result.lastScan) ? job : null
   const insufficient = !running && !result && (failedJob?.code === "INSUFFICIENT_BACKUPS" || (backupsLoaded && completeBackups.length < 2))
@@ -551,9 +552,9 @@ export default function DriftDetectionPage() {
             </div>
           </div>
 
-          {!running && shouldShowDriftNote(plan, drifts.length) && (
+          {!running && shouldShowDriftNote(plan, revertibleCount) && (
             <p className="text-sm text-gray-500">
-              Pro reverts these {drifts.length} policies with one click and records the change in the audit log.{" "}
+              Pro reverts these {revertibleCount} changed or deleted policies with one click and records the change in the audit log.{" "}
               <button type="button" className="font-medium underline" onClick={() => void bridge.license.open("buy")}>See plans</button>
             </p>
           )}

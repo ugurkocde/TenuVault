@@ -1,4 +1,9 @@
 import { COMMUNITY_RETENTION_DAYS, type Plan } from "../../shared/plans"
+import type { Drift } from "../../shared/intune/drift"
+
+export function revertibleDriftCount(drifts: readonly Pick<Drift, "changeType" | "lastRevertedAt" | "isRevertDrift">[]): number {
+  return drifts.filter((drift) => !drift.lastRevertedAt && !drift.isRevertDrift && (drift.changeType === "modified" || drift.changeType === "deleted")).length
+}
 
 export function shouldShowDriftNote(plan: Plan | null, count: number): boolean {
   return plan === "community" && count > 0
@@ -15,14 +20,8 @@ export function retentionNote(plan: Plan | null, backups: readonly { timestamp: 
   return `Backups older than 30 days are removed on Community after the next complete backup. The oldest here is from ${date}. Pro keeps 7 to 365 days, or forever.`
 }
 
-export function restoreCountNote(plan: Plan | null, count: number): string | null {
-  return plan === "community" && count >= 2
-    ? `Restore all ${count} at once with Pro. Community restores one item at a time as an unassigned copy.`
-    : null
-}
-
-export function weeklyScheduleNote(plan: Plan | null): string | null {
-  return plan === "community" ? "A weekly schedule can leave up to six days of changes unprotected." : null
+export function weeklyScheduleNote(plan: Plan | null, weeklyEnabled: boolean): string | null {
+  return plan === "community" && weeklyEnabled ? "A weekly schedule can leave up to six days of changes unprotected. Daily backups are included in Pro." : null
 }
 
 export function firstBackupNote(plan: Plan | null, firstBackupNoteSeen: boolean | null): string | null {

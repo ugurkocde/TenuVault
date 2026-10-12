@@ -84,6 +84,7 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
 
   const setPreference = async (changes: Partial<AppPreferences>) => setPrefs(await bridge.preferences.set(changes))
 
+  const weeklyMessage = weeklyScheduleNote(plan, !!(current?.enabled && current.frequency === "weekly") || (enabled && frequency === "weekly"))
   const select = "h-10 rounded-full border border-gray-300 bg-white px-4 text-sm"
 
   return (
@@ -142,12 +143,8 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
           {current && runner?.installed === false && <p className="text-xs text-gray-500">Background restart is not installed. Backups run while TenuVault is running.</p>}
         </div>
 
-        {community && (current?.frequency === "daily" || enabled) && (
-          <div className="space-y-2">
-            <UpgradeNote feature="dailySchedule" />
-            <p className="text-sm text-gray-500">{weeklyScheduleNote(plan)}</p>
-          </div>
-        )}
+        {community && (current?.frequency === "daily" || (enabled && frequency === "daily")) && <UpgradeNote feature="dailySchedule" />}
+        {weeklyMessage && <p className="text-sm text-gray-500">{weeklyMessage}</p>}
 
         {license && !license.entitled && (
           <div className="flex gap-3 rounded-3xl bg-amber-50 px-5 py-4 text-sm text-amber-900">
