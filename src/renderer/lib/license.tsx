@@ -88,6 +88,26 @@ export function unlicensedTenants(status: LicenseStatus): TenantLicenseStatus[] 
   return status.tenants.filter((tenant) => tenant.signedIn && !tenantPlan(tenant))
 }
 
+/** Community is a plan state; only a failed key or uncovered signed-in tenant is inactive. */
+export function licenseChipState(status: LicenseStatus): { label: string; tone: "neutral" | "inactive" } {
+  if (status.plan) return { label: planName(status.plan), tone: "neutral" }
+  if (status.tenants.some((tenant) => tenant.entitled && tenant.plan !== "community")) {
+    return { label: "Organization", tone: "neutral" }
+  }
+  if ((status.hasKey && (status.message || status.tenants.some((tenant) => tenant.activated && !tenant.entitled))) || unlicensedTenants(status).length > 0) {
+    return { label: "Inactive", tone: "inactive" }
+  }
+  if (status.hasKey) return { label: "Key saved", tone: "neutral" }
+  return { label: "Community", tone: "neutral" }
+}
+
+/** A Community notice returns 30 days after it was dismissed on this machine. */
+export function communityBannerVisible(dismissedAt: string | undefined, now = Date.now()): boolean {
+  if (!dismissedAt) return true
+  const dismissed = Date.parse(dismissedAt)
+  return !Number.isFinite(dismissed) || dismissed > now || now - dismissed >= 30 * 24 * 60 * 60 * 1000
+}
+
 export function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
 }

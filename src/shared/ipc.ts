@@ -144,6 +144,8 @@ export interface AppPreferences {
   autoUpdate: boolean
   /** Follow nightly prereleases instead of stable releases. Defaults to on for nightly builds. */
   nightlyUpdates: boolean
+  /** ISO timestamp of the last dismissal of the Community notice on this machine. */
+  communityBannerDismissedAt?: string
   /** Set when an administrator turned automatic updates off by policy. */
   autoUpdateManaged: boolean
 }

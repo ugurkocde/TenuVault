@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import {
   AlertCircle,
@@ -50,7 +50,7 @@ function useAction() {
   return { busy, error, notice, run }
 }
 
-function TrialCallToAction() {
+function TrialCallToAction({ onStartTrial }: { onStartTrial: () => void }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-4 rounded-3xl bg-blue-50/60 p-5">
       <div className="min-w-0 flex-1">
@@ -67,10 +67,22 @@ function TrialCallToAction() {
           you are not charged until the trial ends.
         </p>
       </div>
-      <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void bridge.license.open("buy")}>
-        <ExternalLink className="mr-2 h-4 w-4" />
-        Start 30 day free trial
-      </Button>
+      <div className="w-full space-y-2">
+        <Button className="bg-blue-600 hover:bg-blue-700" onClick={onStartTrial}>
+          <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
+          Start 30 day free trial
+        </Button>
+        <p className="text-sm text-gray-600">
+          <a href="https://docs.tenuvault.com/licensing/" className="text-blue-600 underline underline-offset-4 hover:text-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600" onClick={(event) => { event.preventDefault(); void bridge.app.openExternal("https://docs.tenuvault.com/licensing/") }}>
+            Buying for a company? Yearly plans are available by quote, purchase order and invoice, and a 30 day trial key without a card on request.
+          </a>
+        </p>
+        <p className="text-sm text-gray-600">
+          <a href="https://docs.tenuvault.com/licensing/" className="text-blue-600 underline underline-offset-4 hover:text-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600" onClick={(event) => { event.preventDefault(); void bridge.app.openExternal("https://docs.tenuvault.com/licensing/") }}>
+            Eligible nonprofits can use Pro at no cost.
+          </a>
+        </p>
+      </div>
     </div>
   )
 }
@@ -149,6 +161,8 @@ export default function LicensePage() {
   const { status, refresh } = useLicense()
   const tenants = useTenants()
   const [key, setKey] = useState("")
+  const keyInput = useRef<HTMLInputElement>(null)
+  const [trialKeyHint, setTrialKeyHint] = useState(false)
   const { busy, error, notice, run } = useAction()
 
   useEffect(() => {
@@ -280,7 +294,12 @@ export default function LicensePage() {
             </Alert>
           )}
 
-          {isUnlicensed(status) && <TrialCallToAction />}
+          {isUnlicensed(status) && <TrialCallToAction onStartTrial={() => {
+            void bridge.license.open("buy")
+            setTrialKeyHint(true)
+            keyInput.current?.scrollIntoView({ block: "center" })
+            keyInput.current?.focus({ preventScroll: true })
+          }} />}
 
           {status.hasKey ? (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-gray-50 px-5 py-4">
@@ -301,6 +320,10 @@ export default function LicensePage() {
               <div className="flex gap-2">
                 <Input
                   id="license-key"
+                  ref={keyInput}
+                  name="license-key"
+                  autoComplete="off"
+                  aria-describedby={trialKeyHint ? "trial-key-hint" : undefined}
                   className="font-mono"
                   placeholder="Paste the key from your purchase email"
                   value={key}
@@ -313,6 +336,7 @@ export default function LicensePage() {
                   Activate
                 </Button>
               </div>
+              {trialKeyHint && <p id="trial-key-hint" className="text-sm text-gray-600" role="status">Paste the key from your email to activate the trial.</p>}
               <p className="text-xs text-gray-500">
                 Licensed through your organization? <Link to="/portal/onboarding" className="text-blue-600 hover:underline">Sign in to your tenant</Link>{" "}
                 and TenuVault uses the license a tenant admin shared with it.
