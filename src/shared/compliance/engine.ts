@@ -187,9 +187,12 @@ function complianceBlockActions(
 }
 
 function complianceActionsKnown(config: Record<string, unknown>): boolean {
-  // Omitted configurations mean the nested expand was not returned. An explicit empty array is known.
+  // Omitted configurations mean the nested expand was not returned, and a policy without any rule
+  // is not something Intune produces, so both read as unknown. An explicit empty configurations array
+  // on a rule is known: that rule has no action.
   return (
     Array.isArray(config.scheduledActionsForRule) &&
+    config.scheduledActionsForRule.length > 0 &&
     config.scheduledActionsForRule.every((rule: any) =>
       Array.isArray(rule?.scheduledActionConfigurations),
     )

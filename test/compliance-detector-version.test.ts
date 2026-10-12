@@ -7,6 +7,7 @@ import { COMPLIANCE_DETECTOR_VERSION } from "../src/shared/compliance/detector-v
 const fingerprints: Record<number, string> = {
   2: "f22c2916e8549627242224115b3bb5f810a52c3d70a7632813beda89c416ac27",
   3: "43d185f62238cafbe477637cf408ad5864adc56227f3141737be6162a6e99a29",
+  4: "05cdbc32a1d40eed6fa8e8427cd0479ad6cebddcb0fdcca8fa313d00262c6c36",
 };
 const detectorFiles = [
   "src/main/features/scores/formula.ts",
@@ -25,7 +26,7 @@ const detectorFiles = [
 
 describe("detector version contract", () => {
   it("preserves every known previous fingerprint", () => {
-    const previousFingerprints: Record<number, string> = { 2: "f22c2916e8549627242224115b3bb5f810a52c3d70a7632813beda89c416ac27" };
+    const previousFingerprints: Record<number, string> = { 2: "f22c2916e8549627242224115b3bb5f810a52c3d70a7632813beda89c416ac27", 3: "43d185f62238cafbe477637cf408ad5864adc56227f3141737be6162a6e99a29" };
     for (const [version, fingerprint] of Object.entries(previousFingerprints))
       expect(fingerprints[Number(version)], `Detector version ${version} fingerprint is immutable.`).toBe(fingerprint);
   });

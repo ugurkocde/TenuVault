@@ -107,7 +107,7 @@ describe('native collector and rights boundaries', () => {
     } finally { SOC_2.version = previousVersion }
   })
 
-  it('changes the same ruleset input exactly once when the detector version moves to 2', async () => {
+  it('changes the same ruleset input exactly once when the detector version moves', async () => {
     expect(COMPLIANCE_DETECTOR_VERSION).toBeGreaterThanOrEqual(2)
     const hashes = await Promise.all([1, 2, 2].map(version => frameworkRulesetSha256(ISO_27001, COMPLIANCE_CAPABILITIES, version)))
     expect(hashes[0]).not.toBe(hashes[1])

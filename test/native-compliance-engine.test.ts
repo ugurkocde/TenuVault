@@ -146,6 +146,7 @@ describe("compliance engine", () => {
 
   it.each([
     ["omitted nested expand", [{ ruleName: "PasswordRequired" }], "unableToCheck"],
+    ["a policy without any rule", [], "unableToCheck"],
     ["explicit empty configurations", [{ scheduledActionConfigurations: [] }], "different"],
   ] as const)("distinguishes %s from missing block actions", (_label, actions, comparison) => {
     const data = emptyExportData();
