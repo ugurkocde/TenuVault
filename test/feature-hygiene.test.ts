@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { detectHygiene, overlap, type GroupState, type InventoryItem } from "../src/main/features/hygiene/rules"
 import { routes } from "../src/main/features/hygiene"
 import type { Item } from "../src/shared/intune/registry"
@@ -143,6 +143,18 @@ function backupApi(options: { listStatus?: number; policies?: Item[]; metadata?:
 }
 
 describe("/api/hygiene", () => {
+  it("saves a 300-finding scan with one store write before returning", async () => {
+    const policies = Array.from({ length: 300 }, (_, number) => ({ id: `p${number}`, name: `Policy ${number}`, platforms: "windows10", settings: [choice(`setting_${number}`, "on")], assignments: [], roleScopeTagIds: ["0"] }))
+    const { api } = backupApi({ policies })
+    const deps = fakeDeps({ api })
+    const write = vi.spyOn(deps.store, "setMany")
+    const result = await call(routes(deps), "/api/hygiene", { tenantId: TENANT_A, action: "scan" })
+    expect(result.status).toBe(200)
+    expect(result.body.findings).toHaveLength(300)
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(deps.records.list("hygiene-findings", TENANT_A)).toHaveLength(301)
+  })
+
   it("scans the latest complete backup, shows collection date and coverage, and marks uncovered types", async () => {
     const { api } = backupApi()
     const deps = fakeDeps({ api, graph: graphOf(async () => ({ status: 403, body: {} })) })

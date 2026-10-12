@@ -1,4 +1,6 @@
 import { normalizeBackupStatus, backupHealth, backupCounts, latestComplete } from "~/lib/backup-health"
+import { useLicense, tenantLicense, tenantPlan } from "@desktop/lib/license"
+import { allows } from "../../../shared/plans"
 import { bridge } from "@desktop/lib/bridge"
 import { useQuery } from "@tanstack/react-query"
 import { useTenants } from "~/contexts/TenantContext"
@@ -41,7 +43,7 @@ export interface TenantDashboardStats extends DashboardStats {
   totalBackups: number
   /** Set when the backup list could not be loaded, so an empty list is not shown as "no backups". */
   backupsError: string | null
-  /** The most recent drift comparison in the audit log, if it is among the latest entries. */
+  /** The most recent saved drift comparison, read through the desktop fetch bridge. */
   lastDriftCheck: { time: Date; succeeded: boolean } | null
 }
 
@@ -53,6 +55,7 @@ async function fetchBackupHistory(tenant: any): Promise<BackupHistoryResult> {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        summary: true,
         tenantId: tenant.credentials.tenantId,
         appId: tenant.credentials.appId,
         clientSecret: tenant.credentials.clientSecret,
@@ -92,6 +95,24 @@ async function fetchBackupHistory(tenant: any): Promise<BackupHistoryResult> {
   } catch (error) {
     console.error("Error fetching backup history for", tenant.name, ":", error)
     return { items: [], error: "Backups could not be loaded." }
+  }
+}
+
+/** Reads saved scan time independently of audit history and the current plan. */
+async function fetchDriftCheck(tenant: any): Promise<TenantDashboardStats["lastDriftCheck"]> {
+  if (!tenant.credentials?.tenantId) return null
+  try {
+    const response = await fetch("/api/drift-scan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "result", tenantId: tenant.credentials.tenantId }),
+    })
+    if (!response.ok) return null
+    const { result } = await response.json()
+    const time = typeof result?.lastScan === "string" ? new Date(result.lastScan) : null
+    return time && Number.isFinite(time.getTime()) ? { time, succeeded: true } : null
+  } catch {
+    return null
   }
 }
 
@@ -151,20 +172,26 @@ async function fetchSchedules(tenant: any): Promise<ScheduleInfo[]> {
  */
 export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: number) {
   const allTenants = useTenants()
+  const { status: license } = useLicense()
   const tenants = tenantId === undefined ? allTenants : allTenants.filter(t => t.id === tenantId)
   
+  const auditAllowed = tenants.map((tenant) => {
+    const plan = tenantPlan(tenantLicense(license, tenant.credentials?.tenantId))
+    return plan !== null && allows(plan, "auditLog")
+  })
   return useQuery({
-    queryKey: ["dashboard-stats", tenants.map(t => t.id), selectedPeriod],
+    queryKey: ["dashboard-stats", tenants.map(t => t.id), selectedPeriod, auditAllowed],
     queryFn: async (): Promise<TenantDashboardStats> => {
       // Fetch data for all tenants in parallel
       const backupPromises = tenants.map(tenant => fetchBackupHistory(tenant))
       const schedulePromises = tenants.map(tenant => fetchSchedules(tenant))
-      const auditPromises = tenants.map(tenant => fetchAuditLogs(tenant, 20))
+      const auditPromises = tenants.map((tenant, index) => auditAllowed[index] ? fetchAuditLogs(tenant, 20) : Promise.resolve([]))
       
-      const [allBackups, allSchedules, allAuditLogs] = await Promise.all([
+      const [allBackups, allSchedules, allAuditLogs, driftChecks] = await Promise.all([
         Promise.all(backupPromises),
         Promise.all(schedulePromises),
         Promise.all(auditPromises),
+        Promise.all(tenants.map(fetchDriftCheck)),
       ])
       
       // Flatten arrays
@@ -279,12 +306,8 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
         latestCompleteBackup: latestComplete(backupHistory),
         totalBackups: backupHistory.length,
         backupsError,
-        lastDriftCheck: (() => {
-          const drift = auditLogs
-            .filter((log: any) => log.eventType === "POLICY_DRIFT_DETECTED" && log.timestamp)
-            .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0]
-          return drift ? { time: new Date(drift.timestamp), succeeded: drift.result === "SUCCESS" } : null
-        })(),
+        lastDriftCheck: driftChecks.filter(check => check !== null)
+          .sort((a, b) => b.time.getTime() - a.time.getTime())[0] ?? null,
       }
     },
     enabled: tenants.length > 0,

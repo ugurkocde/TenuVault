@@ -189,13 +189,15 @@ export async function runReview(deps: FeatureDeps, tenantId: string, trigger: Ru
 
     // Without history: the reconciled values become new revisions and must not nest old ones.
     const existing = findingsOf(deps, tenant).map(({ history: _history, ...plain }) => plain)
-    for (const change of reconcileFindings(existing, results, now)) {
-      if (change.kind === "create") deps.records.create<HealthFinding>(DOMAINS.healthFindings, tenant, change.value, { actor: null, reason: change.reason })
-      else {
-        const current = existing.find((finding) => finding.key === change.key)
-        if (current) deps.records.update<HealthFinding>(DOMAINS.healthFindings, tenant, current.id, () => change.value, { actor: null, reason: change.reason })
+    deps.records.batch(() => {
+      for (const change of reconcileFindings(existing, results, now)) {
+        if (change.kind === "create") deps.records.create<HealthFinding>(DOMAINS.healthFindings, tenant, change.value, { actor: null, reason: change.reason })
+        else {
+          const current = existing.find((finding) => finding.key === change.key)
+          if (current) deps.records.update<HealthFinding>(DOMAINS.healthFindings, tenant, current.id, () => change.value, { actor: null, reason: change.reason })
+        }
       }
-    }
+    })
     const findings = findingsOf(deps, tenant)
     const open = findings.filter((finding) => finding.state !== "resolved")
     const counts = countFindings(open)

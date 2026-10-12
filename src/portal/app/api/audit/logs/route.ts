@@ -1,7 +1,7 @@
 import { isGuid } from "../../../../../shared/security"
 import { pendingEvents, auditOutboxIsDurable } from "~/lib/audit/outbox"
 import { type NextRequest, NextResponse } from "next/server"
-import { AuditStorageService } from "~/lib/audit/storage"
+import { AuditStorageService, AuditRangeError } from "~/lib/audit/storage"
 import { redactAuditEntry } from "~/lib/audit/export"
 import { AuditLogFilter, AuditEventType, AuditSeverity, AuditResult } from "~/lib/audit/types"
 
@@ -77,8 +77,8 @@ export async function POST(request: NextRequest) {
       searchQuery: filter?.searchQuery,
       ipAddress: filter?.ipAddress,
       tags: filter?.tags,
-      limit: filter?.limit || 100,
-      offset: filter?.offset || 0,
+      limit: filter?.limit ?? 100,
+      offset: filter?.offset ?? 0,
       sortBy: filter?.sortBy,
       sortOrder: filter?.sortOrder,
     }
@@ -97,6 +97,7 @@ export async function POST(request: NextRequest) {
     })
 
   } catch (error) {
+    if (error instanceof AuditRangeError) return NextResponse.json({ error: error.message }, { status: 400 })
     console.error("Query audit logs error:", error)
     let pendingCount: number | null = null
     try { if (account) pendingCount = pendingEvents(account).length } catch { /* Preserve unknown pending state. */ }

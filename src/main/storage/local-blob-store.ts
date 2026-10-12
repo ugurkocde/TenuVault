@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto"
+import type { BigIntStats } from "node:fs"
 import { link, mkdir, open, readdir, readFile, rename, rm, stat } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { mapLimit } from "../../portal/lib/map-limit"
@@ -77,6 +78,8 @@ export interface StoredBlob {
   contentType: string
   created: Date
   lastModified: Date
+  metadata?: Record<string, string>
+  etag?: string
 }
 
 export type Version = 1 | 2
@@ -84,6 +87,7 @@ export type Version = 1 | 2
 interface Entry extends StoredBlob {
   file: string
   version: Version
+  stamp: string
 }
 
 interface Keys {
@@ -174,8 +178,12 @@ async function mkdirDurable(path: string): Promise<void> {
 export class LocalBlobStore {
   private readonly keyring: Keys[]
   private readonly index = new Map<string, Promise<Map<string, Entry>>>()
-  /** The inventory reread per container that list() calls share; `started` once it reads the disk. */
-  private readonly rereads = new Map<string, { started: boolean; entries: Promise<Map<string, Entry>> }>()
+  private readonly directoryStamps = new Map<string, string>()
+  private readonly dirty = new Set<string>()
+  private readonly generations = new Map<string, number>()
+  private readonly writes = new Map<string, number>()
+  private readonly rebuilding = new Map<string, Promise<Map<string, Entry>>>()
+  private readonly checks = new Map<string, { generation: number; started: boolean; entries: Promise<Map<string, Entry>> }>()
 
   /**
    * @param root   Folder that holds the encrypted backups.
@@ -202,7 +210,14 @@ export class LocalBlobStore {
   /** Returns false when the container already existed. */
   async createContainer(account: string, container: string): Promise<boolean> {
     const existed = await this.containerExists(account, container)
-    await mkdirDurable(this.dir(account, container))
+    const dir = this.dir(account, container)
+    await mkdirDurable(dir)
+    if (!existed && !this.index.has(dir)) {
+      // A container we just created starts with a known empty inventory.
+      this.directoryStamps.set(dir, await this.directoryStamp(dir))
+      this.index.set(dir, Promise.resolve(new Map()))
+      this.changed(dir)
+    }
     return !existed
   }
 
@@ -215,30 +230,38 @@ export class LocalBlobStore {
     }
   }
 
-  async list(account: string, container: string): Promise<StoredBlob[]> {
-    const entries = await this.reread(account, container)
-    return [...entries.values()].map(({ file: _file, version: _version, ...blob }) => blob).sort((a, b) => (a.name < b.name ? -1 : 1))
+  async list(account: string, container: string, prefix = ""): Promise<StoredBlob[]> {
+    const entries = await this.checkedEntries(account, container)
+    return [...entries.values()].filter((entry) => entry.name.startsWith(prefix))
+      .map(({ file: _file, version: _version, stamp: _stamp, ...blob }) => blob).sort((a, b) => (a.name < b.name ? -1 : 1))
   }
 
   async get(account: string, container: string, name: string): Promise<{ blob: StoredBlob; data: Buffer }> {
     const dir = this.dir(account, container)
-    const cached = await this.entries(account, container)
-    // Reconcile file membership even on selective reads, without decrypting every
-    // header again when the container's inventory is unchanged.
-    const files = new Set((await readdir(dir)).filter((file) => file.endsWith(EXT)))
-    if (files.size !== cached.size || [...cached.values()].some((entry) => !files.has(entry.file))) this.index.delete(dir)
-    const entry = (await this.entries(account, container)).get(name)
+    let entries = this.dirty.has(dir) ? await this.checkedEntries(account, container) : await this.entries(account, container)
+    let entry = entries.get(name)
     if (!entry) throw new BlobNotFoundError(name)
+    // A selective read checks its own file. Listings still verify every cached header,
+    // and directory changes or our own writes still validate the complete manifest.
+    let unchanged = false
+    try { unchanged = fileStamp(await stat(join(dir, entry.file), { bigint: true })) === entry.stamp } catch { /* Rebuild missing or replaced files. */ }
+    if (!unchanged) {
+      this.changed(dir)
+      this.index.delete(dir)
+      entries = await this.checkedEntries(account, container)
+      entry = entries.get(name)
+      if (!entry) throw new BlobNotFoundError(name)
+    }
     const raw = await readFile(join(this.dir(account, container), entry.file))
     const version = versionOf(raw.subarray(0, MAGIC_LENGTH))
     if (!version) throw new Error("Invalid backup header")
     const headerLength = raw.readUInt16BE(MAGIC_LENGTH)
     const body = raw.subarray(MAGIC_LENGTH + 2 + headerLength)
-    const { file: _file, version: _version, ...blob } = entry
+    const { file: _file, version: _version, stamp: _stamp, ...blob } = entry
     return { blob, data: this.decrypt(body, bodyAad(version, account, container, name)) }
   }
 
-  async put(account: string, container: string, name: string, data: Uint8Array, contentType: string, createOnly = false): Promise<StoredBlob> {
+  async put(account: string, container: string, name: string, data: Uint8Array, contentType: string, createOnly = false, metadata?: Record<string, string>): Promise<StoredBlob> {
     if (!(await this.containerExists(account, container))) throw new BlobNotFoundError(container)
     const entries = await this.entries(account, container)
     const current = this.keyring[0]!
@@ -249,134 +272,251 @@ export class LocalBlobStore {
     const file = existing?.file ?? fileName(version, current.naming, account, container, name)
     const created = existing?.created ?? new Date()
 
-    const header = seal(current.encryption, Buffer.from(JSON.stringify({ name, contentType, created })), headerAad(version, account, container, file))
+    const header = seal(current.encryption, Buffer.from(JSON.stringify({ name, contentType, created, ...(metadata ? { metadata } : {}) })), headerAad(version, account, container, file))
     const body = seal(current.encryption, Buffer.from(data), bodyAad(version, account, container, name))
     const length = Buffer.alloc(2)
     length.writeUInt16BE(header.length)
 
-    const path = join(this.dir(account, container), file)
-    const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`
-    try {
-      const handle = await open(tmp, "wx", 0o600)
+    const dir = this.dir(account, container)
+    return this.write(dir, async () => {
+      const path = join(dir, file)
+      const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`
+      let written: BigIntStats
       try {
-        await handle.writeFile(Buffer.concat([version === 1 ? MAGIC_V1 : MAGIC_V2, length, header, body]))
-        await handle.sync()
+        const handle = await open(tmp, "wx", 0o600)
+        try {
+          await handle.writeFile(Buffer.concat([version === 1 ? MAGIC_V1 : MAGIC_V2, length, header, body]))
+          await handle.sync()
+          written = await handle.stat({ bigint: true })
+        } finally {
+          await handle.close()
+        }
+        if (createOnly) await link(tmp, path) // Atomic creation across store/process instances.
+        else await rename(tmp, path)
+        this.changed(dir)
+        if (process.platform !== "win32") await syncDirectory(dir)
+      } catch (error) {
+        if (createOnly && (error as NodeJS.ErrnoException).code === "EEXIST") {
+          throw new BlobAlreadyExistsError(name)
+        }
+        throw error
       } finally {
-        await handle.close()
+        await rm(tmp, { force: true })
       }
-      if (createOnly) await link(tmp, path) // Atomic creation across store/process instances.
-      else await rename(tmp, path)
-      if (process.platform !== "win32") await syncDirectory(this.dir(account, container))
-    } catch (error) {
-      this.index.delete(this.dir(account, container))
-      if (createOnly && (error as NodeJS.ErrnoException).code === "EEXIST") {
-        throw new BlobAlreadyExistsError(name)
-      }
-      throw error
-    } finally {
-      await rm(tmp, { force: true })
-    }
 
-    const blob: StoredBlob = { name, size: data.byteLength, contentType, created, lastModified: new Date() }
-    entries.set(name, { ...blob, file, version })
-    return blob
+      const published = await stat(path, { bigint: true })
+      const sameFile = published.dev === written.dev && published.ino === written.ino && published.size === written.size && published.mtimeNs === written.mtimeNs
+      // Rename can change ctime. Use its final stamp only after verifying the written file's identity.
+      const info = sameFile ? published : written
+      const stamp = fileStamp(info)
+      const blob: StoredBlob = { name, size: data.byteLength, contentType, created, lastModified: info.mtime, etag: `"${stamp}"`, ...(metadata ? { metadata } : {}) }
+      if (sameFile) this.updateEntry(dir, entries, name, { ...blob, file, version, stamp })
+      else {
+        // Keep the replacement's authenticated filename and metadata for the next mutation.
+        const replacement = await this.readEntry(dir, account, container, file)
+        if (replacement?.name === name) this.updateEntry(dir, entries, name, replacement)
+        else this.index.delete(dir)
+        this.changed(dir)
+      }
+      return blob
+    })
   }
 
   async delete(account: string, container: string, name: string): Promise<void> {
     const entries = await this.entries(account, container)
     const entry = entries.get(name)
     if (!entry) throw new BlobNotFoundError(name)
-    await rm(join(this.dir(account, container), entry.file), { force: true })
-    entries.delete(name)
+    const dir = this.dir(account, container)
+    await this.write(dir, async () => {
+      await rm(join(dir, entry.file), { force: true })
+      this.changed(dir)
+      this.updateEntry(dir, entries, name)
+    })
+  }
+
+  /** Own directory mutations update the cache without making the next put rebuild it. */
+  private async write<T>(dir: string, run: () => Promise<T>): Promise<T> {
+    this.writes.set(dir, (this.writes.get(dir) ?? 0) + 1)
+    this.changed(dir)
+    try {
+      const result = await run()
+      let generation: number, stamp: string
+      do {
+        generation = this.generations.get(dir) ?? 0
+        stamp = await this.directoryStamp(dir)
+      } while ((this.generations.get(dir) ?? 0) !== generation)
+      this.directoryStamps.set(dir, stamp)
+      // Keep the inventory dirty: this stamp may include an external mutation, so
+      // the next read/list must still reconcile membership and validate manifests.
+      this.changed(dir)
+      return result
+    } catch (error) {
+      this.changed(dir)
+      this.index.delete(dir)
+      throw error
+    } finally {
+      const remaining = this.writes.get(dir)! - 1
+      if (remaining) this.writes.set(dir, remaining)
+      else this.writes.delete(dir)
+    }
+  }
+
+  private updateEntry(dir: string, entries: Map<string, Entry>, name: string, entry?: Entry): void {
+    const update = (current: Map<string, Entry>) => { if (entry) current.set(name, entry); else current.delete(name) }
+    update(entries)
+    // A listing may have started another index while the write was publishing.
+    // Update it when ready without making publication wait for that listing.
+    void this.index.get(dir)?.then(update).catch(() => undefined)
   }
 
   private dir(account: string, container: string): string {
     return join(this.root, safeSegment(account), safeSegment(container))
   }
 
-  /**
-   * Every listing rereads the container's inventory from disk, so it shows files changed by anything
-   * else. A listing made while a reread runs waits for it and shares the next reread with the other
-   * listings made meanwhile: each still sees the files as they were when it was made, but listings
-   * made together (the backup list makes one per backup) no longer each decrypt every header.
-   */
-  private reread(account: string, container: string): Promise<Map<string, Entry>> {
-    const dir = this.dir(account, container)
-    const pending = this.rereads.get(dir)
-    if (pending && !pending.started) return pending.entries
-    const running = pending?.entries.catch(() => undefined)
-    const reread = { started: false, entries: Promise.resolve(new Map<string, Entry>()) }
-    reread.entries = (async () => {
-      await running
-      reread.started = true
-      this.index.delete(dir)
-      return this.entries(account, container)
-    })()
-    this.rereads.set(dir, reread)
-    void reread.entries.catch(() => undefined).then(() => {
-      if (this.rereads.get(dir) === reread) this.rereads.delete(dir)
-    })
-    return reread.entries
+  private async directoryStamp(dir: string): Promise<string> {
+    try {
+      const info = await stat(dir, { bigint: true })
+      return fileStamp(info)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing"
+      throw error
+    }
   }
 
-  /** Reads and decrypts every file header once per container; later calls use the cache. */
-  private entries(account: string, container: string): Promise<Map<string, Entry>> {
+  /** Coalesces checks requested together; later listings wait for a fresh membership and file check. */
+  private checkedEntries(account: string, container: string): Promise<Map<string, Entry>> {
     const dir = this.dir(account, container)
+    const generation = this.generations.get(dir) ?? 0
+    const pending = this.checks.get(dir)
+    if (pending?.generation === generation && !pending.started) return pending.entries
+    // An invalidated check must not delay or supply a read from the new generation.
+    const running = pending?.generation === generation ? pending.entries.catch(() => undefined) : undefined
+    const check = { generation, started: false, entries: Promise.resolve(new Map<string, Entry>()) }
+    check.entries = (async () => {
+      await running
+      if ((this.generations.get(dir) ?? 0) !== generation) return this.checkedEntries(account, container)
+      check.started = true
+      try {
+        let entries = await this.entries(account, container)
+        const files = new Set(await this.files(dir))
+        // Directory stamps can be coarse on a shared folder, so always reconcile names.
+        const sameFiles = files.size === entries.size && [...entries.values()].every(entry => files.has(entry.file))
+        const unchanged = !this.dirty.has(dir) && sameFiles && (await mapLimit([...entries.values()], HEADER_CONCURRENCY, async (entry) => {
+          try { return fileStamp(await stat(join(dir, entry.file), { bigint: true })) === entry.stamp } catch { return false }
+        })).every(Boolean)
+        if ((this.generations.get(dir) ?? 0) !== generation) return this.checkedEntries(account, container)
+        if (!unchanged) {
+          this.index.delete(dir)
+          entries = await this.entries(account, container, entries)
+        }
+        return (this.generations.get(dir) ?? 0) === generation ? entries : this.checkedEntries(account, container)
+      } catch (error) {
+        if ((this.generations.get(dir) ?? 0) !== generation) return this.checkedEntries(account, container)
+        throw error
+      }
+    })()
+    this.checks.set(dir, check)
+    void check.entries.finally(() => { if (this.checks.get(dir) === check) this.checks.delete(dir) }).catch(() => undefined)
+    return check.entries
+  }
+
+  /** Reuses headers across own writes; external directory changes still rebuild the inventory. */
+  private async entries(account: string, container: string, reuse?: Map<string, Entry>): Promise<Map<string, Entry>> {
+    const dir = this.dir(account, container)
+    const generation = this.generations.get(dir) ?? 0
+    const stamp = await this.directoryStamp(dir)
+    if ((this.generations.get(dir) ?? 0) !== generation) return this.entries(account, container, reuse)
+    const previous = reuse ?? this.index.get(dir)
+    if (!this.writes.has(dir) && !this.rebuilding.has(dir) && this.directoryStamps.get(dir) !== stamp) this.index.delete(dir)
     let cached = this.index.get(dir)
     if (!cached) {
-      cached = this.readIndex(dir, account, container)
+      cached = this.readIndex(dir, account, container, previous).then(entries => {
+        if (this.index.get(dir) === cached) {
+          if ((this.generations.get(dir) ?? 0) === generation) {
+            this.directoryStamps.set(dir, stamp)
+            this.dirty.delete(dir)
+          } else this.dirty.add(dir)
+        }
+        return entries
+      }).finally(() => { if (this.rebuilding.get(dir) === cached) this.rebuilding.delete(dir) })
+      this.rebuilding.set(dir, cached)
       this.index.set(dir, cached)
-      cached.catch(() => this.index.delete(dir))
+      const current = cached
+      void cached.catch(() => { if (this.index.get(dir) === current) this.index.delete(dir) })
     }
     return cached
   }
 
-  private async readIndex(dir: string, account: string, container: string): Promise<Map<string, Entry>> {
-    const entries = new Map<string, Entry>()
-    let files: string[]
+  private changed(dir: string): void {
+    this.generations.set(dir, (this.generations.get(dir) ?? 0) + 1)
+    this.dirty.add(dir)
+  }
+
+  private async files(dir: string): Promise<string[]> {
     try {
-      files = (await readdir(dir)).filter((f) => f.endsWith(EXT))
+      return (await readdir(dir)).filter((f) => f.endsWith(EXT))
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return entries
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return []
       throw error
     }
+  }
+
+  private async readEntry(dir: string, account: string, container: string, file: string): Promise<Entry | null> {
+    const path = join(dir, file)
+    let handle: Awaited<ReturnType<typeof open>> | undefined
+    try {
+      handle = await open(path, "r")
+      const prefix = Buffer.alloc(MAGIC_LENGTH + 2)
+      const prefixRead = await handle.read(prefix, 0, prefix.length, 0)
+      const version = prefixRead.bytesRead === prefix.length ? versionOf(prefix.subarray(0, MAGIC_LENGTH)) : null
+      if (!version) throw new Error("Invalid backup header")
+      const headerLength = prefix.readUInt16BE(MAGIC_LENGTH)
+      const sealed = Buffer.alloc(headerLength)
+      const headerRead = await handle.read(sealed, 0, headerLength, prefix.length)
+      if (headerLength < IV + TAG || headerRead.bytesRead !== headerLength) throw new Error("Truncated backup header")
+      const header = JSON.parse(this.decrypt(sealed, headerAad(version, account, container, file)).toString()) as {
+        name: string
+        contentType: string
+        created: string
+        metadata?: Record<string, string>
+      }
+      if (!header || typeof header.name !== "string" || !header.name || typeof header.contentType !== "string" || !Number.isFinite(Date.parse(header.created))) {
+        throw new Error("Invalid backup header")
+      }
+      const info = await handle.stat({ bigint: true })
+      if (Number(info.size) < prefix.length + headerLength + IV + TAG) throw new Error("Truncated backup body")
+      return {
+        file,
+        version,
+        name: header.name,
+        contentType: header.contentType,
+        created: new Date(header.created),
+        lastModified: info.mtime,
+        size: Number(info.size) - prefix.length - headerLength - IV - TAG,
+        stamp: fileStamp(info),
+        etag: `"${fileStamp(info)}"`,
+        ...(header.metadata ? { metadata: header.metadata } : {}),
+      }
+    } catch {
+      return null
+    } finally {
+      await handle?.close()
+    }
+  }
+
+  private async readIndex(dir: string, account: string, container: string, previous?: Map<string, Entry> | Promise<Map<string, Entry>>): Promise<Map<string, Entry>> {
+    const entries = new Map<string, Entry>()
+    const files = await this.files(dir)
+    const cached = await Promise.resolve(previous).catch(() => undefined)
+    const byFile = new Map([...(cached?.values() ?? [])].map(entry => [entry.file, entry]))
     // Headers are read a few at a time and added in directory order, so duplicates are found as before.
     const read = await mapLimit(files, HEADER_CONCURRENCY, async (file): Promise<Entry | null> => {
-      const path = join(dir, file)
-      let handle: Awaited<ReturnType<typeof open>> | undefined
       try {
-        handle = await open(path, "r")
-        const prefix = Buffer.alloc(MAGIC_LENGTH + 2)
-        const prefixRead = await handle.read(prefix, 0, prefix.length, 0)
-        const version = prefixRead.bytesRead === prefix.length ? versionOf(prefix.subarray(0, MAGIC_LENGTH)) : null
-        if (!version) throw new Error("Invalid backup header")
-        const headerLength = prefix.readUInt16BE(MAGIC_LENGTH)
-        const sealed = Buffer.alloc(headerLength)
-        const headerRead = await handle.read(sealed, 0, headerLength, prefix.length)
-        if (headerLength < IV + TAG || headerRead.bytesRead !== headerLength) throw new Error("Truncated backup header")
-        const header = JSON.parse(this.decrypt(sealed, headerAad(version, account, container, file)).toString()) as {
-          name: string
-          contentType: string
-          created: string
-        }
-        if (!header || typeof header.name !== "string" || !header.name || typeof header.contentType !== "string" || !Number.isFinite(Date.parse(header.created))) {
-          throw new Error("Invalid backup header")
-        }
-        const info = await handle.stat()
-        if (info.size < prefix.length + headerLength + IV + TAG) throw new Error("Truncated backup body")
-        return {
-          file,
-          version,
-          name: header.name,
-          contentType: header.contentType,
-          created: new Date(header.created),
-          lastModified: info.mtime,
-          size: info.size - prefix.length - headerLength - IV - TAG,
-        }
+        const cached = byFile.get(file)
+        if (cached && fileStamp(await stat(join(dir, file), { bigint: true })) === cached.stamp) return cached
+        return this.readEntry(dir, account, container, file)
       } catch {
         return null
-      } finally {
-        await handle?.close()
       }
     })
     let unreadable = 0
@@ -425,4 +565,9 @@ function safeSegment(value: string): string {
   const safe = value.replace(/[^a-zA-Z0-9-]/g, "_")
   if (!safe || safe === "." || safe === "..") throw new Error(`Invalid storage name: ${value}`)
   return safe
+}
+
+/** BigInt stats keep the full inode and nanosecond times, so a replaced file never shares a stamp with the old one. */
+function fileStamp(info: BigIntStats): string {
+  return `${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
 }
