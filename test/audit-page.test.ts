@@ -1,0 +1,49 @@
+import { createElement, type ReactNode } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { beforeEach, expect, it, vi } from 'vitest'
+import AuditPage from '../src/portal/app/portal/audit/page'
+
+const state = vi.hoisted(() => ({ hook: 0 }))
+vi.mock('react', async original => ({
+  ...await original<typeof import('react')>(),
+  useEffect: () => undefined,
+  useState: (initial: unknown) => {
+    const hook = state.hook++
+    if (hook === 10) return [true, vi.fn()]
+    if (hook === 11) return [{ summary: { totalEvents: 8, successRate: '75%', criticalEvents: 0, securityAlerts: 0 } }, vi.fn()]
+    return [typeof initial === 'function' ? initial() : initial, vi.fn()]
+  },
+}))
+vi.mock('~/contexts/TenantContext', () => ({
+  useSelectedTenant: () => ({ selectedTenant: { credentials: { tenantId: 'tenant' } } }),
+}))
+vi.mock('@desktop/lib/license', () => ({ useTenantPlan: () => 'pro' }))
+vi.mock('@desktop/components/PlanGate', () => ({
+  canUse: () => true,
+  GatedButton: ({ children }: { children: ReactNode }) => createElement('button', null, children),
+  LockedPreview: () => null,
+}))
+
+beforeEach(() => { state.hook = 0 })
+
+it('shows the operation totals without permanently empty security cards', () => {
+  const html = renderToStaticMarkup(createElement(AuditPage))
+  expect(html).toContain('Total Events')
+  expect(html).toContain('>8</p>')
+  expect(html).toContain('Success Rate')
+  expect(html).toContain('>75%</p>')
+  expect(html).toContain('not a complete Microsoft tenant audit')
+  expect(html).not.toContain('Critical Events')
+  expect(html).not.toContain('Security Alerts')
+})
+
+it('offers only recorded desktop event types and severities in the visible filters', () => {
+  const html = renderToStaticMarkup(createElement(AuditPage))
+  const options = [...html.matchAll(/<select\b[^>]*>(.*?)<\/select>/gs)]
+    .map(select => [...select[1]!.matchAll(/<option value="([^"]*)"/g)].map(option => option[1]))
+  expect(options).toEqual([
+    ['', 'BACKUP_STARTED', 'BACKUP_COMPLETED', 'BACKUP_FAILED', 'BACKUP_DOWNLOADED', 'RESTORE_COMPLETED', 'RESTORE_FAILED', 'POLICY_CREATED', 'POLICY_REVERTED', 'POLICY_RESTORED', 'POLICY_DRIFT_DETECTED'],
+    ['', 'INFO', 'WARNING', 'ERROR'],
+    ['', 'SUCCESS', 'FAILURE', 'PARTIAL'],
+  ])
+})

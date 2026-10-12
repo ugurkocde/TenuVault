@@ -54,6 +54,26 @@ export enum AuditSeverity {
   CRITICAL = 'CRITICAL',
 }
 
+// Keep the full enums for stored entries and the retry queue. Filters list desktop emissions only.
+export const DESKTOP_AUDIT_EVENT_TYPES: readonly AuditEventType[] = [
+  AuditEventType.BACKUP_STARTED,
+  AuditEventType.BACKUP_COMPLETED,
+  AuditEventType.BACKUP_FAILED,
+  AuditEventType.BACKUP_DOWNLOADED,
+  AuditEventType.RESTORE_COMPLETED,
+  AuditEventType.RESTORE_FAILED,
+  AuditEventType.POLICY_CREATED,
+  AuditEventType.POLICY_REVERTED,
+  AuditEventType.POLICY_RESTORED,
+  AuditEventType.POLICY_DRIFT_DETECTED,
+]
+
+export const DESKTOP_AUDIT_SEVERITIES: readonly AuditSeverity[] = [
+  AuditSeverity.INFO,
+  AuditSeverity.WARNING,
+  AuditSeverity.ERROR,
+]
+
 export enum AuditResult {
   SUCCESS = 'SUCCESS',
   FAILURE = 'FAILURE',
