@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest"
 import { routes } from "../src/main/features/promotion"
-import type { ChangeSetRecord } from "../src/main/features/change-sets/model"
+import { containsRedaction, containsSecret, REDACTED, type ChangeSetContent, type ChangeSetRecord } from "../src/main/features/change-sets/model"
+import { CONTENT_DOMAIN } from "../src/main/features/change-sets/engine"
+import { readCurrent } from "../src/main/features/change-sets/graph"
+import { DOMAINS } from "../src/main/features/domains"
 import type { PromotionRecord } from "../src/main/features/promotion/engine"
-import { resolveReferences, translate } from "../src/main/features/promotion/mapping"
+import { resolveReferences, translate, type Mapping } from "../src/main/features/promotion/mapping"
+import { staleTargets } from "../src/main/features/promotion/targets"
+import { buildUpdatePlan } from "../src/shared/intune/restore-plan"
 import { typeForFolder, type IntuneType, type Item } from "../src/shared/intune/registry"
 import type { Plan } from "../src/shared/plans"
 import { call, fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
@@ -31,7 +36,7 @@ function setup(options: { plans?: Record<string, Plan>; sameLicense?: boolean; b
   return { deps, dev, prod, simple, withReference, post, ...wired }
 }
 
-const MAPPINGS = [
+const MAPPINGS: Mapping[] = [
   { kind: "scopeTag", sourceId: "4", targetId: "9", confirmed: true },
   { kind: "reusableSetting", sourceId: DEV_REUSABLE, targetId: PROD_REUSABLE, confirmed: true },
 ]
@@ -50,12 +55,20 @@ async function approved(context: ReturnType<typeof setup>, id: string) {
   return preview.body
 }
 
+function proposal(context: ReturnType<typeof setup>, promotion: PromotionRecord): ChangeSetContent {
+  const changeSet = context.deps.records.get<ChangeSetRecord>(DOMAINS.changeSets, TENANT_B, promotion.changeSetId!)!
+  return context.deps.records.get<ChangeSetContent>(CONTENT_DOMAIN, TENANT_B, changeSet.proposalId)!
+}
+
+const secretSetting = (): Item => ({ id: "1", settingInstance: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationSimpleSettingInstance", settingDefinitionId: "wifi_psk", simpleSettingValue: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationSecretSettingValue", value: "fixture-secret", valueState: "encryptedValueToken" } } })
+
 describe("/api/promotion", () => {
   it("promotes reviewed policies one way, unassigned, with mapped references and a production backup", async () => {
     const context = setup()
     const promotion = await planned(context)
     expect(promotion.status).toBe("in-review")
     expect(promotion.changeSetId).toBeTruthy()
+    expect(proposal(context, promotion).entries["op-1"]!.body!.roleScopeTagIds).toEqual(["0", "9"])
     const preview = await approved(context, promotion.id)
     expect(preview.changeSet.affectedObjects).toHaveLength(2)
     const applied = await context.post({ action: "apply", id: promotion.id, contentHash: preview.changeSet.contentHash, confirm: true })
@@ -112,6 +125,81 @@ describe("/api/promotion", () => {
     expect(context.prod.writeCount()).toBe(0)
   })
 
+  it("keeps the live destination tags explicitly in a PUT proposal and write", async () => {
+    const context = setup()
+    context.prod.scopeTags.push({ id: "12", displayName: "Production" })
+    const existing = context.prod.addPolicy({ name: "OIB Defender", roleScopeTagIds: ["12", "9"] })
+    const promotion = await planned(context, [{ sourceId: context.simple.id, destinationId: existing.id }])
+    expect(promotion.status).toBe("in-review")
+    expect(proposal(context, promotion).entries["op-1"]!.body!.roleScopeTagIds).toEqual(["12", "9"])
+    const finding = promotion.items[0]!.findings.find((entry) => entry.code === "scope-tags-kept")!
+    expect(finding.severity).toBe("info")
+    expect(finding.message).toContain("Scope tags of the destination are kept")
+    expect(finding.message).toContain('Source: "Default" (0), "Pilot" (4)')
+    expect(finding.message).toContain('Destination: "Production" (12), "Pilot" (9)')
+    expect(promotion.items[0]!.references.some((reference) => reference.kind === "scopeTag")).toBe(false)
+    const preview = await approved(context, promotion.id)
+    expect(preview.promotion.items[0].findings).toContainEqual(finding)
+    expect((await context.post({ action: "apply", id: promotion.id, contentHash: preview.changeSet.contentHash, confirm: true })).body.promotion.status).toBe("applied")
+    expect(context.prod.calls.find((entry) => entry.method === "PUT")!.body!.roleScopeTagIds).toEqual(["12", "9"])
+    expect(context.prod.policies.get(existing.id as string)!.roleScopeTagIds).toEqual(["12", "9"])
+  })
+
+  it.each([{ mappings: [] }, { mappings: [{ kind: "scopeTag", sourceId: "4", targetId: "999", confirmed: true }] }])("updates without relying on source scope tag mappings: %j", async ({ mappings }) => {
+    const context = setup()
+    const existing = context.prod.addPolicy({ name: "OIB Defender", roleScopeTagIds: ["9"] })
+    const response = await context.post({ action: "plan", title: "x", items: [{ sourceId: context.simple.id, destinationId: existing.id }], mappings })
+    expect(response.body.promotion.status).toBe("in-review")
+    expect(proposal(context, response.body.promotion).entries["op-1"]!.body!.roleScopeTagIds).toEqual(["9"])
+  })
+
+  it("requires a new plan when destination scope tags change before approval", async () => {
+    const context = setup()
+    const existing = context.prod.addPolicy({ name: "OIB Defender", roleScopeTagIds: ["9"] })
+    const promotion = await planned(context, [{ sourceId: context.simple.id, destinationId: existing.id }])
+    existing.roleScopeTagIds = ["0"]
+    const preview = await context.post({ action: "preview", id: promotion.id })
+    expect(preview.body.changeSet.blockers.join(" ")).toContain("relied on changed")
+    expect((await context.post({ action: "approve", id: promotion.id, contentHash: preview.body.changeSet.contentHash, targetFingerprint: preview.body.changeSet.targetFingerprint })).status).toBe(409)
+    expect(context.prod.writeCount()).toBe(0)
+  })
+
+  it.each([{ tags: undefined }, { tags: [] }])("keeps absent or empty destination tags instead of source tags: %j", async ({ tags }) => {
+    const context = setup()
+    const existing = context.prod.addPolicy({ name: "OIB Defender" })
+    if (tags === undefined) delete existing.roleScopeTagIds
+    else existing.roleScopeTagIds = tags
+    const promotion = await planned(context, [{ sourceId: context.simple.id, destinationId: existing.id }])
+    const body = proposal(context, promotion).entries["op-1"]!.body!
+    if (tags === undefined) expect(body).not.toHaveProperty("roleScopeTagIds")
+    else expect(body.roleScopeTagIds).toEqual([])
+  })
+
+  it.each([{ mappings: [] }, { mappings: [{ kind: "scopeTag", sourceId: "4", targetId: "999", confirmed: true }] }])("creates with Default for an unusable scope tag mapping: %j", async ({ mappings }) => {
+    const context = setup()
+    const response = await context.post({ action: "plan", title: "x", items: [{ sourceId: context.simple.id }], mappings })
+    const promotion = response.body.promotion as PromotionRecord & { id: string }
+    expect(promotion.status).toBe("in-review")
+    expect(proposal(context, promotion).entries["op-1"]!.body!.roleScopeTagIds).toEqual(["0"])
+    expect(promotion.items[0]!.findings).toContainEqual(expect.objectContaining({ code: "scope-tag-default", severity: "warning", message: expect.stringContaining('"Pilot"') }))
+    const preview = await approved(context, promotion.id)
+    expect((await context.post({ action: "apply", id: promotion.id, contentHash: preview.changeSet.contentHash, confirm: true })).body.promotion.status).toBe("applied")
+    expect([...context.prod.policies.values()][0]!.roleScopeTagIds).toEqual(["0"])
+  })
+
+  it("keeps the warning when a confirmed scope tag mapping cannot be verified", async () => {
+    const context = setup()
+    const graph = context.deps.graph
+    context.deps.graph = async (tenantId, options) => {
+      const reader = await graph(tenantId, options)
+      return (method, path, body) => tenantId === TENANT_B && path.startsWith("deviceManagement/roleScopeTags") ? Promise.resolve({ status: 403, body: {} }) : reader(method, path, body)
+    }
+    const promotion = await planned(context, [{ sourceId: context.simple.id }])
+    expect(promotion.status).toBe("in-review")
+    expect(proposal(context, promotion).entries["op-1"]!.body!.roleScopeTagIds).toEqual(["0", "9"])
+    expect(promotion.items[0]!.findings).toContainEqual(expect.objectContaining({ code: "unknown-membership", severity: "warning" }))
+  })
+
   it("aborts on a failed production backup before any write", async () => {
     const context = setup({ backup: "fail" })
     const promotion = await planned(context)
@@ -166,7 +254,73 @@ describe("/api/promotion", () => {
     const response = await context.post({ action: "plan", title: "x", items: [{ sourceId: secret.id }], mappings: MAPPINGS })
     expect(response.body.promotion.status).toBe("blocked")
     expect(response.body.promotion.changeSetId).toBeNull()
+    // Secrets used to be unconditionally blocked; acknowledgement now permits a proposal without them.
+    expect(response.body.promotion.items[0].findings).toContainEqual(expect.objectContaining({ code: "secret-values", severity: "blocking" }))
     expect(JSON.stringify(context.deps.store.values ? [...context.deps.store.values.values()] : [])).not.toContain("hunter2")
+  })
+
+  it.each([undefined, false, "true"])("blocks a redacted destination without explicit acknowledgement: %j", async (acknowledgeRedacted) => {
+    const context = setup()
+    const existing = context.prod.addPolicy({ name: "OIB Defender", settings: [setting("safe", "1"), secretSetting()] })
+    const response = await context.post({ action: "plan", title: "x", items: [{ sourceId: context.simple.id, destinationId: existing.id }], mappings: MAPPINGS, acknowledgeRedacted })
+    const promotion = response.body.promotion as PromotionRecord & { id: string }
+    expect(promotion.status).toBe("blocked")
+    expect(promotion.changeSetId).toBeNull()
+    expect(promotion.items[0]!.blocked).toBe(true)
+    expect(promotion.items[0]!.findings).toContainEqual(expect.objectContaining({ code: "secret-values", severity: "blocking", message: expect.stringContaining("destination policy") }))
+    const detail = await context.post({ action: "get", id: promotion.id })
+    expect(detail.body.promotion.items[0].findings).toContainEqual(expect.objectContaining({ severity: "blocking", message: expect.stringContaining("must be set again") }))
+    expect((await context.post({ action: "apply", id: promotion.id, contentHash: "0".repeat(64), confirm: true, acknowledgeRedacted: true })).status).toBe(409)
+    expect(context.prod.writeCount()).toBe(0)
+  })
+
+  it("allows an acknowledged redacted destination with a warning and preserved tags", async () => {
+    const context = setup()
+    const existing = context.prod.addPolicy({ name: "OIB Defender", roleScopeTagIds: ["9"], settings: [setting("safe", "1"), secretSetting()] })
+    const response = await context.post({ action: "plan", title: "x", items: [{ sourceId: context.simple.id, destinationId: existing.id }], mappings: [], acknowledgeRedacted: true })
+    const promotion = response.body.promotion as PromotionRecord & { id: string }
+    expect(promotion.status).toBe("in-review")
+    expect(promotion.acknowledgeRedacted).toBe(true)
+    expect(promotion.items[0]!.findings).toContainEqual(expect.objectContaining({ code: "secret-values", severity: "warning", message: expect.stringContaining("Automatic rollback") }))
+    const preview = await approved(context, promotion.id)
+    expect((await context.post({ action: "apply", id: promotion.id, contentHash: preview.changeSet.contentHash, confirm: true })).body.promotion.status).toBe("applied")
+    const sent = context.prod.calls.find((entry) => entry.method === "PUT")!.body!
+    expect(sent.roleScopeTagIds).toEqual(["9"])
+    expect(containsSecret(sent) || containsRedaction(sent)).toBe(false)
+  })
+
+  it("requires replanning if destination secrets appear before approval", async () => {
+    const context = setup()
+    const existing = context.prod.addPolicy({ name: "OIB Defender" })
+    const promotion = await planned(context, [{ sourceId: context.simple.id, destinationId: existing.id }])
+    ;(existing.settings as Item[]).push(secretSetting())
+    const preview = await context.post({ action: "preview", id: promotion.id })
+    expect(preview.body.changeSet.blockers.join(" ")).toContain("relied on changed")
+    expect((await context.post({ action: "approve", id: promotion.id, contentHash: preview.body.changeSet.contentHash, targetFingerprint: preview.body.changeSet.targetFingerprint })).status).toBe(409)
+    const replanned = await planned(context, [{ sourceId: context.simple.id, destinationId: existing.id }])
+    expect(replanned.status).toBe("blocked")
+    expect(replanned.items[0]!.findings).toContainEqual(expect.objectContaining({ code: "secret-values", severity: "blocking" }))
+    expect(context.prod.writeCount()).toBe(0)
+  })
+
+  it.each([true, false])("requires acknowledgement for source redaction and omits whole settings, secret type: %j", async (secretType) => {
+    const context = setup()
+    const secret = secretSetting()
+    ;((secret.settingInstance as Item).simpleSettingValue as Item).value = REDACTED
+    if (!secretType) ((secret.settingInstance as Item).simpleSettingValue as Item)["@odata.type"] = "#microsoft.graph.deviceManagementConfigurationStringSettingValue"
+    const source = context.dev.addPolicy({ name: "Wi-Fi", settings: [setting("safe", "1"), secret] })
+    const input = { action: "plan", title: "x", items: [{ sourceId: source.id }], mappings: [] }
+    const blocked = (await context.post(input)).body.promotion as PromotionRecord
+    expect(blocked.status).toBe("blocked")
+    expect(blocked.items[0]!.findings).toContainEqual(expect.objectContaining({ code: "secret-values", severity: "blocking" }))
+    const promotion = (await context.post({ ...input, acknowledgeRedacted: true })).body.promotion as PromotionRecord & { id: string }
+    expect(promotion.status).toBe("in-review")
+    const body = proposal(context, promotion).entries["op-1"]!.body!
+    expect(body.settings).toEqual([setting("safe", "1")])
+    expect(containsRedaction(body) || containsSecret(body)).toBe(false)
+    const preview = await approved(context, promotion.id)
+    expect((await context.post({ action: "apply", id: promotion.id, contentHash: preview.changeSet.contentHash, confirm: true })).body.promotion.status).toBe("applied")
+    expect(containsSecret([...context.prod.policies.values()][0])).toBe(false)
   })
 
   it("reconciles uncertain writes on retry and offers a reviewed rollback", async () => {
@@ -307,11 +461,12 @@ describe("promotion dependency mapping", () => {
     const promotion = (await context.post({ action: "plan", title: "x", items: [{ sourceId: context.policy.id }], mappings: [] })).body.promotion as PromotionRecord
     const findings = promotion.items[0]!.findings
     expect(promotion.status).toBe("blocked")
-    // Unmapped scope tag and reusable setting: same-name candidates exist, but only as suggestions.
-    expect(findings.filter((finding) => (finding.code === "missing-mapping" || finding.code === "display-name-only") && finding.severity === "blocking").length).toBeGreaterThanOrEqual(2)
+    // Only the reusable setting blocks now. Unmapped scope tags previously blocked too, and now warn and use Default.
+    expect(findings.filter((finding) => (finding.code === "missing-mapping" || finding.code === "display-name-only") && finding.severity === "blocking")).toHaveLength(1)
+    expect(findings.some((finding) => finding.code === "scope-tag-default" && finding.severity === "warning")).toBe(true)
     expect(findings.some((finding) => finding.code === "ordering")).toBe(true)
     expect(findings.some((finding) => finding.code === "assignments-excluded")).toBe(true)
-    // The built-in Default scope tag is portable; every other tag needs a confirmed mapping.
+    // Default stays portable; other tags retain mapping suggestions and use Default until confirmed.
     expect(promotion.items[0]!.references.filter((reference) => reference.kind === "scopeTag").map((reference) => [reference.sourceId, reference.state])).toEqual([["0", "portable"], ["4", "missing"]])
     expect(promotion.items[0]!.references.find((reference) => reference.sourceId === "4")!.suggestion).toEqual({ targetId: "9", targetName: "Pilot" })
   })
@@ -388,5 +543,39 @@ describe("promotion translation", () => {
     const kept = translate(policies, onlyExclusion, references, { includeAssignments: true, dropUnsupportedExclusions: false })
     expect((kept.assignments![0]!.target as Item)["@odata.type"]).toBe("#microsoft.graph.exclusionGroupAssignmentTarget")
     expect((kept.assignments![0]!.target as Item).groupId).toBe(TARGET_EXCLUDED)
+  })
+})
+
+describe("promotion destination scope tags", () => {
+  it.each([["DeviceConfigurations", "PATCH"], ["ConfigurationPolicies", "PUT"]])("sends the destination's explicit tags for %s updates", async (folder, method) => {
+    const context = setup()
+    const type = typeForFolder(folder)!
+    const existing = context.prod.addPolicy({ name: "Production policy", displayName: "Production policy", roleScopeTagIds: ["9"] })
+    const graph = context.deps.graph
+    context.deps.graph = async (tenantId, options) => {
+      const reader = await graph(tenantId, options)
+      return async (verb, path, body) => {
+        if (folder === "DeviceConfigurations" && tenantId === TENANT_B && verb === "GET" && path.startsWith(`${type.path}/${existing.id}`)) return { status: 200, body: structuredClone(existing) }
+        return reader(verb, path, body)
+      }
+    }
+    const source: Item = { id: context.simple.id!, [type.nameKey]: "Source policy", roleScopeTagIds: ["4"] }
+    // The shared translator covers PATCH types without expanding the Settings Catalog route.
+    const destinationSnapshot = await readCurrent(await context.deps.graph(TENANT_B), type, existing.id as string)
+    const proposed = translate(type, source, [], { includeAssignments: false, dropUnsupportedExclusions: false, destinationSnapshot })
+    expect(proposed.body!.roleScopeTagIds).toEqual(["9"])
+    const [step] = buildUpdatePlan(type, proposed.body!, existing.id as string, { includeAssignments: false, current: existing })
+    expect(step!.method).toBe(method)
+    expect(step!.body.roleScopeTagIds).toEqual(["9"])
+  })
+})
+
+describe("plans from earlier versions", () => {
+  it("asks for a new plan when an update item predates the destination policy checks", async () => {
+    const deps = fakeDeps()
+    const reasons = await staleTargets(deps, TENANT_B, [
+      { sourceName: "Legacy policy", targetReads: { policyId: "11111111-1111-1111-1111-111111111111", filterIds: [], scopeTagIds: [], reusableSettingIds: [], groupIds: [] } as never, targetStateHash: "stale" },
+    ])
+    expect(reasons).toEqual(['The destination objects "Legacy policy" relied on were planned before destination policy checks existed. Plan again.'])
   })
 })

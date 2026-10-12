@@ -73,7 +73,7 @@ export function MappingEditor({ tenant, references, mappings, onChange }: { tena
           })}
         </tbody>
       </table>
-      <p className="mt-2 text-xs text-gray-500">Only confirmed mappings are used. Unmapped references block the promotion; nothing falls back to the source ID or to a default.</p>
+      <p className="mt-2 text-xs text-gray-500">Only confirmed mappings are used. New policies use Default for source scope tags without a usable mapping. Updates keep the destination's scope tags. Other unmapped references block promotion.</p>
     </div>
   )
 }
