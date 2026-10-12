@@ -4,10 +4,11 @@ import { Check, ChevronDown, Download, ExternalLink, FileJson, FileSpreadsheet, 
 import { cn } from '~/lib/utils'
 import { useSelectedTenant } from '~/contexts/TenantContext'
 import type { Framework } from '../../shared/frameworks/catalog'
-import { FRAMEWORK_USAGE_NOTICE, comparisonCounts, compareNativeAssessments, type NativeAssessment } from '../../shared/compliance/native'
+import { FRAMEWORK_USAGE_NOTICE, capabilityComparison, comparisonCounts, compareNativeAssessments, type NativeAssessment } from '../../shared/compliance/native'
 import type { AssessmentScope, CapabilityResult, CapabilityStatus, CompliancePlatform, TechnicalCheck } from '../../shared/compliance/types'
 import { CAPABILITY_STATUS_LABELS, CHECK_RESULT_LABELS, COLLECTION_FAMILY_LABELS, COLLECTION_STATUS_LABELS, CONTROL_STATUS_LABELS, PLATFORM_LABELS, frameworkCoverageLabel } from '../../shared/compliance/presentation'
 import { displayCheckValue } from '../../shared/compliance/check-results'
+import { ComplianceScoringNotice } from '../components/ComplianceScoringNotice'
 import { cancelFrameworkJob, startFrameworkJob, useFrameworkJob } from '../lib/framework-jobs'
 
 const button = 'inline-flex h-10 items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50'
@@ -60,6 +61,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [persistent, setPersistent] = useState(false)
+  const [scoringChanged, setScoringChanged] = useState(false)
   const [provider, setProvider] = useState<{ edition: string; sourceContentLicense: string; contentMode: string; strategies: string[] } | null>(null)
   const [changes, setChanges] = useState<{ base: NativeAssessment; rows: ReturnType<typeof compareNativeAssessments> } | null>(null)
   const [query, setQuery] = useState('')
@@ -83,7 +85,8 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
   }, [framework.id])
 
   async function loadHistory(select?: string) {
-    const value = await request<{ history: NativeAssessment[]; persistent: boolean; notice?: string }>({ ...body, action: 'native-history' })
+    const value = await request<{ history: NativeAssessment[]; persistent: boolean; notice?: string; scoringChanged?: boolean }>({ ...body, action: 'native-history' })
+    setScoringChanged(value.scoringChanged === true)
     setHistory(value.history); setPersistent(value.persistent); setLoaded(true)
     if (value.notice) setError(value.notice)
     setRun(current => value.history.find(item => item.runId === (select ?? current?.runId)) ?? value.history[0] ?? null)
@@ -132,7 +135,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
   const term = query.trim().toLowerCase()
   const matches = run?.assessment.capabilities.filter(cap =>
     (!term || `${cap.capability.name} ${cap.capability.id} ${cap.checks.map(c => `${c.settingId} ${c.policyName ?? ''}`).join(' ')}`.toLowerCase().includes(term)) &&
-    (status === 'all' || cap.checks.some(c => checkKey(c) === status))) ?? []
+    (status === 'all' || capabilityComparison(cap) === status)) ?? []
   const failedJob = job && (job.status === 'failed' || job.status === 'cancelled') && !dismissedJobs.has(job.jobId) ? job : null
   const disabledReason = !credentials ? 'Select a signed-in tenant in the sidebar to compare its settings.' : !scope.platforms?.length ? 'Select at least one platform.' : ''
 
@@ -160,6 +163,8 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
         <p>Selected Intune configuration and optional Conditional Access policies only. Expected values, control selection and supported platforms are shown with the results. A failed or unavailable read stays visible as a collection gap.</p>
       </div>
     </details>
+
+    <ComplianceScoringNotice key={credentials?.tenantId} changed={scoringChanged} />
 
     {error && <p role="alert" className="flex items-start justify-between gap-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800"><span>{error}</span><button type="button" aria-label="Dismiss error" onClick={() => setError('')}><X className="size-4" aria-hidden="true" /></button></p>}
 
@@ -224,7 +229,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
           </button>)}
         </div>
         <p className="mt-5 text-sm leading-6 text-gray-600">{frameworkCoverageLabel(result) ?? `${result.controls.length} selected technical references. This is a subset of the framework.`} {result.framework.note}</p>
-        <p className="mt-2 text-xs text-gray-500">Counts cover individual setting observations. Multiple policies may differ. Configuration and assignment evidence do not establish actual device enforcement.</p>
+        <p className="mt-2 text-xs text-gray-500">Counts cover capabilities once, using the best assigned policy evidence. Unassigned policies cannot count as matches. Individual observations remain available below. Configuration and assignment evidence do not establish actual device enforcement.</p>
       </section>
 
 
@@ -237,7 +242,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
           <input aria-label="Search native settings and policies" placeholder="Search setting, policy, or capability" value={query} onChange={e => setQuery(e.target.value)} className="h-10 min-w-56 flex-1 rounded-full border border-gray-200 bg-white px-4 text-sm" />
           <select aria-label="Filter comparison status" value={status} onChange={e => setStatus(e.target.value as typeof status)} className="h-10 rounded-full border border-gray-200 bg-white px-3 text-sm"><option value="all">All results</option>{(Object.keys(labels) as ResultKey[]).map(key => <option key={key} value={key}>{labels[key]}</option>)}</select>
         </div>
-        <div className="divide-y divide-gray-100">{matches.map(cap => <CapabilityEvidence key={`${cap.capability.id}:${status}:${!!term}`} result={cap} filter={status} open={status !== 'all' || !!term} />)}</div>
+        <div className="divide-y divide-gray-100">{matches.map(cap => <CapabilityEvidence key={`${cap.capability.id}:${status}:${!!term}`} result={cap} open={status !== 'all' || !!term} />)}</div>
         {(status === 'unableToCheck' || status === 'outsideScope') && result.controls.filter(c => c.unavailableCheck && (c.unavailableCheck.assessmentStatus === 'outsideScope') === (status === 'outsideScope')).map(c => <div key={c.control.id} className="mt-3 rounded-2xl bg-gray-50 p-4 text-sm"><p className="font-medium text-gray-900">{c.control.id} · {c.control.title}</p><p className="mt-1 text-gray-600">{c.unavailableCheck?.reason ?? 'No supported detector.'}</p></div>)}
         {!matches.length && !(status === 'unableToCheck' || status === 'outsideScope') && <p role="status" className="p-4 text-sm text-gray-500">No checks match this filter.</p>}
       </section>
@@ -306,8 +311,8 @@ function Disclosure({ title, hint, children }: { title: string; hint: string; ch
   </details>
 }
 
-function CapabilityEvidence({ result, filter, open }: { result: CapabilityResult; filter: 'all' | ResultKey; open: boolean }) {
-  const checks = filter === 'all' ? result.checks : result.checks.filter(check => checkKey(check) === filter)
+function CapabilityEvidence({ result, open }: { result: CapabilityResult; open: boolean }) {
+  const checks = result.checks
   const tone = capabilityTone[result.status]
   return <details className="group py-3" open={open || undefined}>
     <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-xl px-2 py-1.5 text-sm hover:bg-gray-50 [&::-webkit-details-marker]:hidden">

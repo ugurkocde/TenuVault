@@ -9,6 +9,7 @@ export interface ScoreSummary {
   tenantName: string | null
   formula: string
   staleAfterDays: number
+  scoringChanged: boolean
   frameworks: FrameworkScore[]
 }
 

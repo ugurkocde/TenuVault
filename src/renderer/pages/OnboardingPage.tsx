@@ -8,6 +8,8 @@ import { Progress } from "~/components/ui/progress"
 import { cn } from "~/lib/utils"
 import type { SignedInAccount } from "../../shared/ipc"
 import { StorageChooser } from "../components/StorageChooser"
+import { FirstBackupNote } from "../components/FirstBackupNote"
+import { useTenantPlan } from "../lib/license"
 import { SetupScriptCard, TenantSignInForm } from "../components/TenantSignInForm"
 import { bridge } from "../lib/bridge"
 import { buildTenantProfile } from "../lib/desktop-tenant"
@@ -44,6 +46,7 @@ export default function OnboardingPage() {
   const [step, setStep] = useState(onboardingDraft.step)
   const [account, setAccount] = useState<{ account: SignedInAccount; displayName: string } | null>(onboardingDraft.account)
   const [choice, setChoice] = useState<StorageChoice | null>(onboardingDraft.choice)
+  const plan = useTenantPlan(account?.account.tenantId)
   const [credentials, setCredentials] = useState<TenantCredentials | null>(null)
   const [tenantProfileId, setTenantProfileId] = useState<number | null>(null)
   const [creating, setCreating] = useState(false)
@@ -244,6 +247,7 @@ export default function OnboardingPage() {
                   <span className="text-gray-500">{job.progress}%</span>
                 </div>
                 <Progress value={job.progress} />
+                {job.isComplete && job.isSuccessful && <FirstBackupNote plan={plan} />}
                 {job.output && (
                   <pre ref={logRef} className="max-h-48 overflow-auto rounded-2xl bg-slate-900 p-4 text-xs text-slate-100">
                     {job.output}

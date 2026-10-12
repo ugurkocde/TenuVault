@@ -92,6 +92,32 @@ export function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
 }
 
+export function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { dateStyle: "medium" })
+}
+
+/** Warn from 30 days before key expiry, including an expired key with a current offline token. */
+export function licenseExpiryWarning(status: Pick<LicenseStatus, "validUntil">, now = Date.now()): "expiring" | "expired" | null {
+  if (!status.validUntil) return null
+  const expiry = Date.parse(status.validUntil)
+  if (!Number.isFinite(expiry) || expiry > now + 30 * 24 * 60 * 60 * 1000) return null
+  return expiry <= now ? "expired" : "expiring"
+}
+
+/** The earliest cached verification that runs out within two days while the licensing service is unreachable, or null. */
+export function offlineDeadline(status: Pick<LicenseStatus, "offline" | "tenants">, now = Date.now()): string | null {
+  if (!status.offline) return null
+  const soon = now + 2 * 24 * 60 * 60 * 1000
+  const expiring = status.tenants.filter((t) => t.entitled && t.expiresAt && Date.parse(t.expiresAt) < soon).map((t) => t.expiresAt!).sort()
+  return expiring[0] ?? null
+}
+
+/** The tenant whose license expires first, so the warning can say whose license it is. */
+export function earliestExpiringTenant(status: Pick<LicenseStatus, "validUntil" | "tenants">): TenantLicenseStatus | null {
+  if (!status.validUntil) return null
+  return status.tenants.find((t) => t.validUntil === status.validUntil) ?? null
+}
+
 /**
  * The license state of a tenant profile. Undefined only for a tenant that is not signed in
  * and was never checked on this machine, such as one connected by an older version; it is

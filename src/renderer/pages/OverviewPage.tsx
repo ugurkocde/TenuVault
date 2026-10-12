@@ -11,7 +11,7 @@ import { backupTarget, trackBackup } from "../lib/backups"
 import { RunBackupDialog } from "../components/RunBackupDialog"
 import { RecoveryKeyNotice } from "../components/RecoveryKeyNotice"
 import { bridge } from "../lib/bridge"
-import { planName, tenantLicense, useLicense } from "../lib/license"
+import { formatDate, planName, tenantLicense, useLicense } from "../lib/license"
 import { describeSchedule, formatWhen, useSchedules } from "../lib/schedules"
 import { toast } from "../lib/toast"
 
@@ -143,6 +143,9 @@ export default function OverviewPage() {
                       </>
                     )}
                   </span>
+                  {license?.validUntil && (
+                    <p className="mt-1 text-xs text-gray-500">Valid until {formatDate(license.validUntil)}</p>
+                  )}
                 </Fact>
                 <Fact label="Storage">
                   <span className="flex items-center gap-2">

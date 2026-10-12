@@ -21,7 +21,7 @@ import {
   GitCompare,
   Loader2
 } from "lucide-react"
-import { AuditLogEntry, AuditEventType, AuditSeverity, AuditResult } from "~/lib/audit/types"
+import { AuditLogEntry, AuditEventType, AuditSeverity, AuditResult, DESKTOP_AUDIT_EVENT_TYPES, DESKTOP_AUDIT_SEVERITIES } from "~/lib/audit/types"
 import { canUse, GatedButton, LockedPreview } from "@desktop/components/PlanGate"
 import { useTenantPlan } from "@desktop/lib/license"
 import { toast } from "@desktop/lib/toast"
@@ -428,7 +428,7 @@ function AuditPageContent() {
 
           {/* Stats Summary */}
           {stats && (
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mt-8">
+            <div className="grid grid-cols-2 gap-4 mt-8">
               <div className="rounded-3xl bg-white p-6">
                 <div className="flex items-start justify-between">
                   <div>
@@ -448,28 +448,6 @@ function AuditPageContent() {
                   </div>
                   <span className="flex h-10 w-10 items-center justify-center rounded-full bg-green-50">
                     <CheckCircle2 className="w-4 h-4 text-green-700" />
-                  </span>
-                </div>
-              </div>
-              <div className="rounded-3xl bg-white p-6">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <p className="text-sm text-gray-500">Critical Events</p>
-                    <p className="mt-3 text-3xl font-medium tracking-tight text-gray-900">{stats.summary.criticalEvents}</p>
-                  </div>
-                  <span className="flex h-10 w-10 items-center justify-center rounded-full bg-gray-100">
-                    <AlertCircle className="w-4 h-4 text-gray-900" />
-                  </span>
-                </div>
-              </div>
-              <div className="rounded-3xl bg-white p-6">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <p className="text-sm text-gray-500">Security Alerts</p>
-                    <p className="mt-3 text-3xl font-medium tracking-tight text-red-600">{stats.summary.securityAlerts}</p>
-                  </div>
-                  <span className="flex h-10 w-10 items-center justify-center rounded-full bg-red-50">
-                    <Shield className="w-4 h-4 text-red-600" />
                   </span>
                 </div>
               </div>
@@ -537,12 +515,12 @@ function AuditPageContent() {
                     multiple
                     className="w-full rounded-2xl border border-gray-200 p-2 text-sm"
                     onChange={(e) => {
-                      const selected = Array.from(e.target.selectedOptions).map(o => o.value as AuditEventType)
+                      const selected = Array.from(e.target.selectedOptions).map(o => o.value).filter(value => value !== "").map(value => value as AuditEventType)
                       setFilters(prev => ({ ...prev, eventTypes: selected }))
                     }}
                   >
                     <option value="">All Types</option>
-                    {Object.values(AuditEventType).map(type => (
+                    {DESKTOP_AUDIT_EVENT_TYPES.map(type => (
                       <option key={type} value={type}>{type.replace(/_/g, ' ')}</option>
                     ))}
                   </select>
@@ -553,12 +531,12 @@ function AuditPageContent() {
                     multiple
                     className="w-full rounded-2xl border border-gray-200 p-2 text-sm"
                     onChange={(e) => {
-                      const selected = Array.from(e.target.selectedOptions).map(o => o.value as AuditSeverity)
+                      const selected = Array.from(e.target.selectedOptions).map(o => o.value).filter(value => value !== "").map(value => value as AuditSeverity)
                       setFilters(prev => ({ ...prev, severities: selected }))
                     }}
                   >
                     <option value="">All Severities</option>
-                    {Object.values(AuditSeverity).map(severity => (
+                    {DESKTOP_AUDIT_SEVERITIES.map(severity => (
                       <option key={severity} value={severity}>{severity}</option>
                     ))}
                   </select>
@@ -569,7 +547,7 @@ function AuditPageContent() {
                     multiple
                     className="w-full rounded-2xl border border-gray-200 p-2 text-sm"
                     onChange={(e) => {
-                      const selected = Array.from(e.target.selectedOptions).map(o => o.value as AuditResult)
+                      const selected = Array.from(e.target.selectedOptions).map(o => o.value).filter(value => value !== "").map(value => value as AuditResult)
                       setFilters(prev => ({ ...prev, results: selected }))
                     }}
                   >

@@ -9,6 +9,7 @@ const DEFAULTS: StoredPreferences = {
   startAtLogin: false,
   keepRunningInTray: true,
   retentionDays: 30,
+  firstBackupNoteSeen: false,
   autoUpdate: true,
   nightlyUpdates: false,
 }

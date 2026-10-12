@@ -7,8 +7,8 @@ export const EVIDENCE_FAMILIES = [
   { family: 'settingsCatalog', label: 'Settings catalog policies', path: 'deviceManagement/configurationPolicies', children: ['settings', 'assignments'] },
   { family: 'deviceConfigurations', label: 'Device configuration profiles', path: 'deviceManagement/deviceConfigurations', children: ['assignments'] },
   { family: 'administrativeTemplates', label: 'Administrative templates', path: 'deviceManagement/groupPolicyConfigurations', children: ['definitionValues', 'assignments'] },
-  { family: 'compliancePolicies', label: 'Compliance policies', path: 'deviceManagement/deviceCompliancePolicies', children: ['assignments'] },
-  { family: 'compliancePolicies', label: 'Settings catalog compliance policies', path: 'deviceManagement/compliancePolicies', children: ['settings', 'assignments'] },
+  { family: 'compliancePolicies', label: 'Compliance policies', path: 'deviceManagement/deviceCompliancePolicies', children: ['assignments', 'scheduledActionsForRule'] },
+  { family: 'compliancePolicies', label: 'Settings catalog compliance policies', path: 'deviceManagement/compliancePolicies', children: ['settings', 'assignments', 'scheduledActionsForRule'] },
   { family: 'securityBaselines', label: 'Security baselines', path: 'deviceManagement/intents', children: ['settings', 'assignments'] },
   { family: 'appProtectionPolicies', label: 'iOS app protection policies', path: 'deviceAppManagement/iosManagedAppProtections', children: ['assignments'] },
   { family: 'appProtectionPolicies', label: 'Android app protection policies', path: 'deviceAppManagement/androidManagedAppProtections', children: ['assignments'] },
@@ -129,15 +129,28 @@ export async function collectNativeEvidence(reader: EvidenceReader, includeAcces
       const rows = await Promise.all(list.slice(i, i + 4).map(async item => {
         if (typeof item.id !== 'string' || !/^[a-z0-9_-]{1,200}$/i.test(item.id)) { fail('', 'Unknown policy', spec.path, new Error('Invalid policy ID.')); return null }
         const path = `${spec.path}/${encodeURIComponent(item.id)}`
+        // Classic compliance actions are only routable through the policy entity expand.
+        const classicCompliance = spec.path === 'deviceManagement/deviceCompliancePolicies'
+        const detailEndpoint = classicCompliance ? `${path}?$expand=scheduledActionsForRule($expand=scheduledActionConfigurations)` : path
         let detail: RecordJson
-        try { detail = await reader.get(path) }
-        catch (error) { fail(item.id, item.id, path, error); return null }
+        let actionsExpandError: { error: unknown } | undefined
+        try { detail = await reader.get(detailEndpoint) }
+        catch (error) {
+          if (!classicCompliance) { fail(item.id, item.id, detailEndpoint, error); return null }
+          // Preserve policy settings and assignments when only the actions expand fails.
+          actionsExpandError = { error }
+          try { detail = await reader.get(path); delete detail.scheduledActionsForRule }
+          catch (error) { fail(item.id, item.id, path, error); return null }
+        }
         const name = String(detail.name ?? detail.displayName ?? item.id)
         detail.collectionStatus = {}
         for (const child of spec.children) {
-          const endpoint = `${path}/${child}${child === 'definitionValues' ? '?$expand=definition' : ''}`
+          const expandedActions = classicCompliance && child === 'scheduledActionsForRule'
+          const endpoint = expandedActions ? detailEndpoint : `${path}/${child}${child === 'definitionValues' ? '?$expand=definition' : child === 'scheduledActionsForRule' ? '?$expand=scheduledActionConfigurations' : ''}`
           try {
-            const values = await reader.list(endpoint)
+            if (expandedActions && actionsExpandError) throw actionsExpandError.error
+            const values = expandedActions ? detail[child] : await reader.list(endpoint)
+            if (!Array.isArray(values) || !values.every(record)) throw new Error('Graph returned an incomplete evidence collection.')
             if (child === 'definitionValues') for (const value of values) {
               if (typeof value.id !== 'string' || !/^[a-z0-9_-]{1,200}$/i.test(value.id)) throw new Error('Invalid definition value ID.')
               value.presentationValues = await reader.list(`${path}/definitionValues/${value.id}/presentationValues?$expand=presentation`)

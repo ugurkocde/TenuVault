@@ -1,8 +1,9 @@
 import type { FrameworkDefinition } from "../types";
+import { withCapabilitySummaries } from "../framework-summary";
 
 // The AICPA Trust Services Criteria are referenced by criterion ID only.
 // Titles and summaries are original descriptions written for this mapping.
-export const SOC_2: FrameworkDefinition = {
+export const SOC_2: FrameworkDefinition = withCapabilitySummaries({
   id: "soc2-tsc",
   name: "SOC 2",
   version: "Trust Services Criteria",
@@ -17,14 +18,14 @@ export const SOC_2: FrameworkDefinition = {
       evidenceStrength: "supporting",
       granularity: "requirement",
       title: "Endpoint evidence mapping CC6.1",
-      summary: "TenuVault compares selected laps management, mfa all apps, phishing resistant mfa, mfa required, compliant device required, disk encryption settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "CC6.6": {
       id: "CC6.6",
       evidenceStrength: "supporting",
       granularity: "requirement",
       title: "Endpoint evidence mapping CC6.6",
-      summary: "TenuVault compares selected firewall settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "CC6.7": {
       id: "CC6.7",
@@ -34,14 +35,14 @@ export const SOC_2: FrameworkDefinition = {
       ],
       granularity: "requirement",
       title: "Endpoint evidence mapping CC6.7",
-      summary: "TenuVault compares selected app data transfer, telemetry minimized settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "CC6.8": {
       id: "CC6.8",
       evidenceStrength: "supporting",
       granularity: "requirement",
       title: "Endpoint evidence mapping CC6.8",
-      summary: "TenuVault compares selected applocker rule collections, office macros disabled, office internet macros blocked, office macro antivirus, office signed macros settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
     "CC7.1": {
       id: "CC7.1",
@@ -51,7 +52,7 @@ export const SOC_2: FrameworkDefinition = {
       ],
       granularity: "requirement",
       title: "Endpoint evidence mapping CC7.1",
-      summary: "TenuVault compares selected quality update deadline, behavior monitoring, network inspection, automatic updates, minimum os version settings for this reference. Check selection and expected values are our interpretation.",
+      summary: "Check selection and expected values are our interpretation.",
     },
   },
   mappings: {
@@ -127,4 +128,4 @@ export const SOC_2: FrameworkDefinition = {
     "ios-minimum-os-version": ["CC7.1"],
     "android-minimum-os-version": ["CC7.1"],
   },
-};
+});

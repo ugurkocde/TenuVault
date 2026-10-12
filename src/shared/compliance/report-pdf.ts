@@ -89,7 +89,7 @@ export function generateNativeFrameworkPDF(run: NativeAssessment, context: Expor
   summaryTiles()
   if (framework.framework.note) text(framework.framework.note)
   text(frameworkCoverageLabel(framework) ?? `${framework.controls.length} selected technical references. This subset is not the complete framework.`)
-  text('Checks count individual recognized setting observations, not unique requirements. Multiple policies may produce different values. Assignment scope, group membership, exclusions, filters, actual device state and effective access must be reviewed separately.')
+  text('Counts cover capabilities once, using the best assigned policy evidence. Unassigned policies cannot count as matches. Individual setting observations follow. Assignment scope, group membership, exclusions, filters, actual device state and effective access must be reviewed separately.')
   section('Collection completeness')
   for (const family of run.assessment.collectionCoverage) {
     text(`${COLLECTION_FAMILY_LABELS[family.family] ?? family.family}: ${COLLECTION_STATUS_LABELS[family.status] ?? family.status}, ${family.collectedPolicies} policies, ${family.recognizedPolicies} recognized`, 10, true)

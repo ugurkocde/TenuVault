@@ -115,6 +115,8 @@ export interface CapabilityEvidence {
   assignment: AssignmentSummary;
   note?: string;
   kind: EvidenceKind;
+  /** Compliance requirements count only when a block action was collected. */
+  blockAction?: boolean;
   requirementGroup?: string;
   policyVersion?: string;
   policyModifiedAt?: string;
@@ -235,6 +237,8 @@ export interface ComplianceAssessment {
   collectionCoverage: CollectionCoverage[];
   provenance: {
     rulesetVersion: string;
+    /** Absent on comparisons saved before capability scoring. */
+    detectorVersion?: number;
     collectedAt?: string;
     collectionStartedAt?: string;
     deviceState: "notCollected";
