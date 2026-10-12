@@ -175,6 +175,8 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
         "last-modified": blob.lastModified.toUTCString(),
         etag: etag(blob),
         "x-ms-blob-type": "BlockBlob",
+        // Stored metadata comes back the way Azure returns it, with the x-ms-meta- prefix.
+        ...Object.fromEntries(Object.entries(blob.metadata ?? {}).map(([key, value]) => [`x-ms-meta-${key}`, value])),
       }
       return new Response(method === "HEAD" ? null : new Uint8Array(data), { status: 200, headers })
     }
