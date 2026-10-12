@@ -17,6 +17,7 @@ import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { checkSchedulePanel } from "./schedule-panel-smoke.mjs"
+import { checkBackupCancel } from "./backup-cancel-smoke.mjs"
 
 const require = createRequire(import.meta.url)
 const electronPath = require("electron")
@@ -724,6 +725,8 @@ await check("restarting clears interrupted tenant backup and refresh flags", asy
   assert(await waitForCondition(`JSON.parse(window.tenuvault.storage.getItemSync('tenuvault_tenants')).every(t => !Object.hasOwn(t, 'isLoading') && t.syncStatus !== 'pending')`), "in-flight flags were saved again")
 })
 
+await checkBackupCancel({ check, evaluate, waitForCondition, screenshot, assert, go })
+
 await check("tenant renames show Saved in both views and clear confirmation timers", async () => {
   await go("#/portal/tenants", "Tenant Management")
   const editor = `document.querySelector('main input[type="text"]:not([aria-label="Search tenants"])')`
@@ -1323,7 +1326,7 @@ await check("scheduled backups of a second tenant without a license fail with th
   const time = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`
   await evaluate(`window.tenuvault.schedules.set({ tenantId: "${tenantId}", enabled: true, frequency: "daily", time: "${time}" })`)
   let schedule = null
-  for (let i = 0; i < 90 && !schedule?.lastRunAt; i++) {
+  for (let i = 0; i < 90 && !schedule?.lastAttemptAt; i++) {
     await sleep(2000)
     schedule = (await evaluate(`window.tenuvault.schedules.list()`)).find((s) => s.tenantId === tenantId)
   }

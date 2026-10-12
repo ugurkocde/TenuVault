@@ -21,6 +21,53 @@ afterEach(() => {
 const local = (y: number, m: number, d: number, h: number, min = 0) => new Date(y, m - 1, d, h, min).toISOString()
 
 describe("BackupScheduler", () => {
+  it("keeps the back-off and three-attempt budget across restarts with real clock timers", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 9, 10, 1))
+    const store = memoryStore()
+    const run = vi.fn(async (): Promise<ScheduledRunResult> => ({ status: "Failed", message: "Network unavailable" }))
+    let scheduler = new BackupScheduler(store, run)
+    scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+    vi.setSystemTime(new Date(2026, 9, 10, 2))
+    scheduler.start()
+    await vi.advanceTimersByTimeAsync(30_000)
+    scheduler.stop()
+    expect(run).toHaveBeenCalledTimes(1)
+    scheduler = new BackupScheduler(store, run)
+    scheduler.start()
+    await vi.advanceTimersByTimeAsync(14 * 60_000)
+    expect(run).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(run).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(15 * 60_000)
+    expect(run).toHaveBeenCalledTimes(3)
+    scheduler.stop()
+    const restarted = new BackupScheduler(store, run)
+    await vi.advanceTimersByTimeAsync(60 * 60_000)
+    await restarted.tick()
+    expect(run).toHaveBeenCalledTimes(3)
+    expect(restarted.list()[0]!.lastRunAt).toBeUndefined()
+    expect(restarted.list()[0]!.attempts).toBe(3)
+  })
+
+  it("reserves an in-flight attempt before work starts so a process restart cannot reset it", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 9, 10, 1))
+    const store = memoryStore()
+    let finish!: (result: ScheduledRunResult) => void
+    const scheduler = new BackupScheduler(store, () => new Promise(resolve => { finish = resolve }))
+    scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+    vi.setSystemTime(new Date(2026, 9, 10, 2))
+    const pending = scheduler.tick()
+    const restarted = new BackupScheduler(store, async () => ({ status: "Completed", message: "Done" }))
+    expect(restarted.list()[0]).toMatchObject({ attempts: 1, attemptSlot: new Date(2026, 9, 10, 2).toISOString() })
+    expect(restarted.isDue(restarted.list()[0]!)).toBe(false)
+    await vi.advanceTimersByTimeAsync(15 * 60_000)
+    expect(restarted.isDue(restarted.list()[0]!)).toBe(true)
+    finish({ status: "Failed", message: "Interrupted" })
+    await pending
+  })
+
   it("runs a daily backup once per day at the chosen time", async () => {
     const { scheduler, run, setNow } = setup(local(2026, 9, 24, 10))
     scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })

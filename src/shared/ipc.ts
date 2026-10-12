@@ -176,6 +176,7 @@ export interface TenuVaultBridge {
     onSignInRequired: (listener: (event: SignInRequiredEvent) => void) => () => void
   }
   backups: {
+    cancel: (jobId: string) => Promise<void>
     importArchive: () => Promise<{ imported: boolean; tenantId?: string; backupId?: string }>
     settings: () => Promise<BackupSettings>
     /** Lets the admin pick a new folder. Existing backups stay where they are. */

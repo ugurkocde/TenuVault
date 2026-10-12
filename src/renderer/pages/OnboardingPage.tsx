@@ -52,6 +52,8 @@ export default function OnboardingPage() {
   const [creating, setCreating] = useState(false)
   const [job, setJob] = useState<JobStatus | null>(null)
   const [jobError, setJobError] = useState("")
+  const [runningJobId, setRunningJobId] = useState<string | null>(null)
+  const [cancelling, setCancelling] = useState(false)
   const [addError, setAddError] = useState("")
   const logRef = useRef<HTMLPreElement>(null)
 
@@ -111,6 +113,7 @@ export default function OnboardingPage() {
       const started = await post<{ jobId?: string }>("/api/backup/start", credentials)
       if (!started.jobId) throw new Error("The backup could not start.")
       jobId = started.jobId
+      setRunningJobId(jobId)
     } catch (error) {
       setJob(null)
       setJobError(error instanceof Error ? error.message : String(error))
@@ -133,6 +136,18 @@ export default function OnboardingPage() {
       }
     }
     void poll()
+  }
+
+  const cancelBackup = async () => {
+    if (!runningJobId) return
+    setCancelling(true)
+    try {
+      await bridge.backups.cancel(runningJobId)
+    } catch (error) {
+      setJobError(error instanceof Error ? error.message : "Could not cancel the backup. Try again.")
+    } finally {
+      setCancelling(false)
+    }
   }
 
   useEffect(() => {
@@ -247,6 +262,11 @@ export default function OnboardingPage() {
                   <span className="text-gray-500">{job.progress}%</span>
                 </div>
                 <Progress value={job.progress} />
+                {!job.isComplete && runningJobId && (
+                  <Button variant="outline" disabled={cancelling} onClick={() => void cancelBackup()}>
+                    {cancelling ? "Cancelling…" : "Cancel backup"}
+                  </Button>
+                )}
                 {job.isComplete && job.isSuccessful && <FirstBackupNote plan={plan} />}
                 {job.output && (
                   <pre ref={logRef} className="max-h-48 overflow-auto rounded-2xl bg-slate-900 p-4 text-xs text-slate-100">

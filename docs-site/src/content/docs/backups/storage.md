@@ -92,6 +92,7 @@ How retention works:
 * Old backups are deleted at the end of each backup that saved every selected policy. A backup that failed or left policies unsaved deletes nothing: "Older backups were kept because this backup is incomplete." Cleanup itself can add a warning: if the metadata of an older backup cannot be decrypted, that backup and any backup without a recorded tenant are kept, while other eligible backups are still removed.
 * The backup that just finished is never deleted, so at least the newest backup is always kept.
 * A backup that left out some types never removes the newest copy of those types. For example, if your daily backups leave out apps, the newest backup that includes apps is kept even after it ages out. The log says "Kept N older backup(s) because they hold the newest copy of types this backup leaves out."
+* If cancellation or the job deadline arrives after the manifest PUT starts, TenuVault lets that bounded commit finish. A successful commit remains completed. When cancellation or expiry interrupts retention for a complete backup, the warning is "Retention was interrupted; older backups are cleaned up on the next run". Incomplete runs that never attempted retention do not report that warning. The scheduler records completion instead of spending another retry attempt on a duplicate backup. A failed manifest commit still fails the job.
 * Retention deletes backup folders only. It does not delete audit log events.
 
 :::caution

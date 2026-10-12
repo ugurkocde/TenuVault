@@ -110,6 +110,11 @@ export class BackupScheduler {
         if (!schedule || !this.isDue(schedule)) continue
         const slot = this.lastSlot(schedule)
         const attempts = this.slotAttempts(schedule, slot) + 1
+        // Reserve the attempt before starting work, so quitting during a request cannot reset the budget.
+        this.write({
+          ...this.read(),
+          [tenantId]: { ...schedule, lastAttemptAt: this.now().toISOString(), attemptSlot: slot.toISOString(), attempts },
+        })
         const result = await this.run(schedule.tenantId).catch((error: unknown) => ({
           status: "Failed" as const,
           message: error instanceof Error ? error.message : String(error),

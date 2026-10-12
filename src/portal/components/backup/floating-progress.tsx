@@ -5,6 +5,7 @@ import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { Progress } from "~/components/ui/progress"
 import { Button } from "~/components/ui/button"
 import { cn } from "~/lib/utils"
+import { bridge } from "@desktop/lib/bridge"
 import { FirstBackupNote } from "@desktop/components/FirstBackupNote"
 import { tenantLicense, tenantPlan, useLicense } from "@desktop/lib/license"
 import { 
@@ -27,6 +28,8 @@ export function FloatingProgress() {
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null)
   const [showOutput, setShowOutput] = useState<Record<string, boolean>>({})
   const [userCollapsed, setUserCollapsed] = useState<Set<string>>(new Set())
+  const [cancelling, setCancelling] = useState<Record<string, boolean>>({})
+  const [cancelErrors, setCancelErrors] = useState<Record<string, string>>({})
   const panel = useRef<HTMLDivElement>(null)
 
   // Auto-expand if only one job (unless user manually collapsed it or it is quiet)
@@ -91,6 +94,18 @@ export function FloatingProgress() {
 
   const toggleOutput = (jobId: string) => {
     setShowOutput(prev => ({ ...prev, [jobId]: !prev[jobId] }))
+  }
+
+  const cancelJob = async (jobId: string) => {
+    setCancelling(prev => ({ ...prev, [jobId]: true }))
+    setCancelErrors(prev => ({ ...prev, [jobId]: "" }))
+    try {
+      await bridge.backups.cancel(jobId)
+    } catch (error) {
+      setCancelErrors(prev => ({ ...prev, [jobId]: error instanceof Error ? error.message : "Could not cancel the backup. Try again." }))
+    } finally {
+      setCancelling(prev => ({ ...prev, [jobId]: false }))
+    }
   }
 
   return (
@@ -173,6 +188,12 @@ export function FloatingProgress() {
                     <span className="font-medium">{job.progress}%</span>
                   </div>
                   <Progress value={job.progress} className="h-1.5 bg-gray-100 [&>div]:bg-coral-500" />
+                  {job.jobId.startsWith("desktop-") && (
+                    <Button variant="outline" size="sm" disabled={cancelling[job.jobId]} onClick={() => void cancelJob(job.jobId)}>
+                      {cancelling[job.jobId] ? "Cancelling…" : "Cancel backup"}
+                    </Button>
+                  )}
+                  {cancelErrors[job.jobId] && <p role="alert" className="break-words text-xs text-destructive">{cancelErrors[job.jobId]}</p>}
                 </div>
               )}
             </div>

@@ -385,10 +385,7 @@ async function bootstrap(): Promise<void> {
   }
   void refreshLicenses().then(checkUncheckedTenants)
 
-  const waitForJob = async (job: BackupJob) => {
-    while (job.status === "Running") await new Promise((resolve) => setTimeout(resolve, 2000))
-    return job
-  }
+  const waitForJob = (job: BackupJob) => engine.waitForJob(job)
 
   // A framework comparison runs in the background. When the window is not in front, a system
   // notification says it finished; the app itself shows a toast. Clicking opens the result.
@@ -676,6 +673,12 @@ async function bootstrap(): Promise<void> {
     } finally { importingArchive = false }
   })
   handleTrusted("backups:settings", () => backupSettings())
+  handleTrusted("backups:cancel", async (_event, jobId: unknown) => {
+    if (typeof jobId !== "string") throw new Error("Choose a running backup.")
+    const job = engine.cancel(jobId)
+    if (!job) throw new Error("This backup job is no longer available.")
+    await engine.waitForJob(job)
+  })
   handleTrusted("backups:scope", (_event, tenantId: unknown) => {
     if (typeof tenantId !== "string") throw new Error("Choose a tenant.")
     return scopes.get(tenantId)
