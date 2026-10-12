@@ -226,8 +226,20 @@ export class LocalBlobStore {
   }
 
   async get(account: string, container: string, name: string): Promise<{ blob: StoredBlob; data: Buffer }> {
-    const entry = (await this.checkedEntries(account, container)).get(name)
+    const dir = this.dir(account, container)
+    let entries = this.dirty.has(dir) ? await this.checkedEntries(account, container) : await this.entries(account, container)
+    let entry = entries.get(name)
     if (!entry) throw new BlobNotFoundError(name)
+    // A selective read checks its own file. Listings still verify every cached header,
+    // and directory changes or our own writes still validate the complete manifest.
+    let unchanged = false
+    try { unchanged = fileStamp(await stat(join(dir, entry.file))) === entry.stamp } catch { /* Rebuild missing or replaced files. */ }
+    if (!unchanged) {
+      this.index.delete(dir)
+      entries = await this.checkedEntries(account, container)
+      entry = entries.get(name)
+      if (!entry) throw new BlobNotFoundError(name)
+    }
     const raw = await readFile(join(this.dir(account, container), entry.file))
     const version = versionOf(raw.subarray(0, MAGIC_LENGTH))
     if (!version) throw new Error("Invalid backup header")
