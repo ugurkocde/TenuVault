@@ -44,6 +44,22 @@ function historyEntry(runId: string, tenantId: string, assessedAt: string, statu
   return { assessment, policies: pack }
 }
 
+function historyEntryFor(runId: string, tenantId: string, assessedAt: string, statuses: Finding["status"][], benchmark: string, version: string): CisPortfolioHistoryEntry {
+  const converted = convertKit(kitFiles.map(file => ({ ...file, path: file.path.replaceAll("9.9.9", version) })), { id: benchmark, version })
+  const pack = converted.packs.flatMap(item => item.policies)
+  const findings: Finding[] = statuses.map((status, index) => ({
+    key: `${index}:0`,
+    policyIndex: index,
+    settingIndex: 0,
+    policyName: pack[index]!.name,
+    settingId: String((pack[index]!.settings[0]!.settingInstance as { settingDefinitionId: string }).settingDefinitionId),
+    status,
+    recommended: null,
+    observed: [],
+  }))
+  return { assessment: { runId, tenantId, frameworkId: "cis-benchmarks", reference: `${benchmark} ${version}`, assessedAt, policyCount: pack.length, findings }, policies: pack }
+}
+
 function entry(tenantId: string, tenantName: string, history: CisPortfolioHistoryEntry[], extra: Partial<CisPortfolioEntry> = {}): CisPortfolioEntry {
   return { tenantId, tenantName, workspace: { history }, ...extra }
 }
@@ -168,6 +184,51 @@ describe("cisPortfolioRows", () => {
       entry(tenantA, "Alpha Tenant", [historyEntry("run-a", tenantA, "2026-02-01T00:00:00.000Z", ["Present", "Present", "Present"])]),
     ])
     expect(rows.map(row => row.tenantId)).toEqual([tenantA, tenantB, tenantC])
+  })
+
+  it("ignores an exception created after the assessment date", () => {
+    const late: CisException = {
+      id: "exc-late", benchmark: "fakebook-os", version: "9.9.9", level: 1,
+      policyName: "Fakebook Beta", settingId: "fakebook_setting_beta",
+      owner: "Ada Lovelace", reason: "Accepted later", expiresOn: "2027-01-01", createdAt: "2026-02-01T00:00:00.000Z",
+    }
+    const hist = historyEntry("run-b", tenantB, "2026-01-01T00:00:00.000Z", ["Present", "Missing", "Missing"])
+    const rows = cisPortfolioRows([{ tenantId: tenantB, tenantName: "Bravo Tenant", workspace: { history: [hist], exceptions: [late] } }])
+    const level1 = rows[0]?.levels.find(level => level.level === 1)
+    expect(level1?.excepted).toBe(0)
+    expect(level1?.passRate).toBe(0.5)
+    expect(level1?.adjustedPassRate).toBe(0.5)
+  })
+
+  it("groups assessed rows by benchmark and version before ranking", () => {
+    const rows = cisPortfolioRows([
+      entry(tenantB, "Bravo Tenant", [historyEntryFor("run-b", tenantB, "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"], "otherbook-os", "1.0.0")]),
+      entry(tenantA, "Alpha Tenant", [historyEntryFor("run-a", tenantA, "2026-01-01T00:00:00.000Z", ["Missing", "Missing", "Missing"], "fakebook-os", "9.9.9")]),
+      entry(tenantC, "Charlie Tenant", [historyEntryFor("run-c", tenantC, "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"], "fakebook-os", "9.9.9")]),
+      entry(tenantD, "Delta Tenant", [historyEntryFor("run-d", tenantD, "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"], "fakebook-os", "8.0.0")]),
+    ])
+    expect(rows.map(row => row.tenantId)).toEqual([tenantD, tenantC, tenantA, tenantB])
+    expect(rows.map(row => `${row.benchmark}@${row.version}`)).toEqual(["fakebook-os@8.0.0", "fakebook-os@9.9.9", "fakebook-os@9.9.9", "otherbook-os@1.0.0"])
+  })
+
+  it("deduplicates tenants by lowercased tenant id, keeping the first occurrence", () => {
+    const rows = cisPortfolioRows([
+      entry(tenantA, "Alpha Tenant", [historyEntry("run-a", tenantA, "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"])]),
+      entry(tenantA.toUpperCase(), "Duplicate Tenant", [historyEntry("run-dup", tenantA, "2026-01-01T00:00:00.000Z", ["Missing", "Missing", "Missing"])]),
+    ])
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.tenantName).toBe("Alpha Tenant")
+    expect(rows[0]?.levels.find(level => level.level === 1)?.passRate).toBe(1)
+  })
+
+  it("returns an error row when the newest assessment belongs to a different tenant", () => {
+    const rows = cisPortfolioRows([
+      entry(tenantA, "Alpha Tenant", [historyEntry("run-a", tenantB, "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"])]),
+    ])
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.error).toBe("The saved assessment belongs to a different tenant.")
+    expect(rows[0]?.assessedAt).toBeNull()
+    expect(rows[0]?.levels).toEqual([])
   })
 
   it("does not mutate the input entries", () => {

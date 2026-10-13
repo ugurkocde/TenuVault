@@ -20,7 +20,7 @@ import { parsePolicies, remediationPayload, type Assessment, type BaselinePolicy
 import { CIS_FRAMEWORKS, type Plan } from "../../shared/plans"
 import type { ExportFile } from "../../main/frameworks/service"
 import type { NcscPack } from "../../main/frameworks/ncsc"
-import { useTenantPlan } from "../lib/license"
+import { tenantLicense, tenantPlan, useLicense, useTenantPlan } from "../lib/license"
 import { CisRemediationPanel } from "../features/cis-remediation/CisRemediationPanel"
 import { GatedButton } from "../components/PlanGate"
 import { useConfirm } from "~/components/ConfirmDialog"
@@ -164,15 +164,38 @@ function FrameworkCatalogItem({ framework: f }: { framework: Framework }) {
 
 function CisPortfolio({ plan }: { plan: Plan | null }) {
   const tenants = useTenants()
+  const { status } = useLicense()
   const [rows, setRows] = useState<ReturnType<typeof cisPortfolioRows> | null>(null)
   const [busy, setBusy] = useState(false)
-  const signedIn = tenants.filter(candidate => candidate.credentials?.tenantId)
+  const [loadError, setLoadError] = useState("")
+  const generation = useRef(0)
+  const seenTenantIds = new Set<string>()
+  const signedIn = tenants.filter(candidate => {
+    const tenantId = candidate.credentials?.tenantId
+    if (!tenantId) return false
+    const key = tenantId.toLowerCase()
+    if (seenTenantIds.has(key)) return false
+    seenTenantIds.add(key)
+    return true
+  })
   const notSignedIn = tenants.filter(candidate => !candidate.credentials?.tenantId)
+  const licensed = (candidate: (typeof signedIn)[number]) => tenantPlan(tenantLicense(status, candidate.credentials?.tenantId)) === "msp"
+  const included = signedIn.filter(licensed)
+  const notIncluded = signedIn.filter(candidate => !licensed(candidate))
+  const tenantSignature = tenants.map(candidate => `${candidate.credentials?.tenantId?.toLowerCase() ?? ""}:${candidate.name}`).join("|")
+  useEffect(() => {
+    generation.current += 1
+    setRows(null)
+    setLoadError("")
+    setBusy(false)
+  }, [tenantSignature])
   async function load() {
+    const current = ++generation.current
     setBusy(true)
+    setLoadError("")
     try {
       const entries: CisPortfolioEntry[] = []
-      for (const candidate of signedIn) {
+      for (const candidate of included) {
         const tenantId = candidate.credentials!.tenantId!
         try {
           const workspace = await request<FrameworkWorkspace>({ action: "workspace-load", tenantId, frameworkId: CIS_BENCHMARKS_ID })
@@ -181,8 +204,14 @@ function CisPortfolio({ plan }: { plan: Plan | null }) {
           entries.push({ tenantId, tenantName: candidate.name, error: e instanceof Error ? e.message : "The saved workspace could not be loaded." })
         }
       }
+      if (generation.current !== current) return
       setRows(cisPortfolioRows(entries))
-    } finally { setBusy(false) }
+    } catch (e) {
+      if (generation.current !== current) return
+      setLoadError(e instanceof Error ? e.message : "The portfolio could not be loaded.")
+    } finally {
+      if (generation.current === current) setBusy(false)
+    }
   }
   return <section aria-label="CIS portfolio" className="mb-5 rounded-3xl bg-white p-6 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -190,12 +219,14 @@ function CisPortfolio({ plan }: { plan: Plan | null }) {
         <h2 className="text-lg font-medium text-gray-900">Portfolio</h2>
         <p className="mt-1 text-sm text-gray-500">Customer tenants ranked by CIS readiness from each tenant latest saved assessment. Tenants with no saved assessment are shown as not assessed.</p>
       </div>
-      <GatedButton feature="portfolio" plan={plan} variant="outline" size="sm" disabled={busy || !signedIn.length} onClick={() => void load()}>{busy ? "Loading" : rows ? "Refresh portfolio" : "Load portfolio"}</GatedButton>
+      <GatedButton feature="portfolio" plan={plan} variant="outline" size="sm" disabled={busy || !included.length} onClick={() => void load()}>{busy ? "Loading" : rows ? "Refresh portfolio" : "Load portfolio"}</GatedButton>
     </div>
+    {notIncluded.length > 0 && <p className="mt-3 text-xs text-gray-500">Not included (no MSP license): {notIncluded.map(candidate => candidate.name).join(", ")}. These tenants are not loaded.</p>}
     {notSignedIn.length > 0 && <p className="mt-3 text-xs text-gray-500">Not signed in: {notSignedIn.map(candidate => candidate.name).join(", ")}. These tenants are not loaded.</p>}
     {!signedIn.length && <p className="mt-3 text-sm text-gray-500">No connected tenant is signed in.</p>}
+    {loadError && <p role="alert" className="mt-3 text-sm text-red-700">{loadError}</p>}
     {rows && <div className="mt-4 overflow-x-auto"><table className="w-full text-left text-sm">
-      <thead className="text-xs text-gray-500"><tr><th scope="col" className="py-2 pr-4 font-medium">Tenant</th><th scope="col" className="py-2 pr-4 font-medium">Benchmark</th><th scope="col" className="py-2 pr-4 font-medium">Assessed</th><th scope="col" className="py-2 pr-4 font-medium">Level 1</th><th scope="col" className="py-2 pr-4 font-medium">Level 2</th><th scope="col" className="py-2 font-medium">Excepted</th></tr></thead>
+      <thead className="text-xs text-gray-500"><tr><th scope="col" className="py-2 pr-4 font-medium">Tenant</th><th scope="col" className="py-2 pr-4 font-medium">Benchmark</th><th scope="col" className="py-2 pr-4 font-medium">Assessed</th><th scope="col" className="py-2 pr-4 font-medium">Level 1</th><th scope="col" className="py-2 pr-4 font-medium">Level 2</th><th scope="col" className="py-2 pr-4 font-medium">Assessed settings (Level 1 / Level 2)</th><th scope="col" className="py-2 font-medium">Excepted</th></tr></thead>
       <tbody className="divide-y divide-gray-100">{rows.map(row => {
         const level1 = row.levels.find(level => level.level === 1)
         const level2 = row.levels.find(level => level.level === 2)
@@ -203,11 +234,12 @@ function CisPortfolio({ plan }: { plan: Plan | null }) {
         const excepted = row.levels.reduce((sum, level) => sum + level.excepted, 0)
         return <tr key={row.tenantId}>
           <td className="py-2 pr-4 text-gray-800">{row.tenantName ?? row.tenantId}</td>
-          {row.error ? <td colSpan={5} className="py-2 text-gray-500">{row.error}</td> : row.assessedAt === null ? <td colSpan={5} className="py-2 text-gray-500">Not assessed</td> : <>
+          {row.error ? <td colSpan={6} className="py-2 text-gray-500">{row.error}</td> : row.assessedAt === null ? <td colSpan={6} className="py-2 text-gray-500">Not assessed</td> : <>
             <td className="py-2 pr-4 text-gray-700">{row.benchmark}{row.version ? <span className="block text-xs text-gray-500">{row.version}</span> : null}</td>
             <td className="py-2 pr-4 text-gray-700">{new Date(row.assessedAt).toLocaleDateString(undefined, { dateStyle: "medium" })}</td>
             <td className="py-2 pr-4 tabular-nums text-gray-900">{rate(level1)}</td>
             <td className="py-2 pr-4 tabular-nums text-gray-900">{rate(level2)}</td>
+            <td className="py-2 pr-4 tabular-nums text-gray-700">{level1?.assessedSettings ?? 0} / {level2?.assessedSettings ?? 0}</td>
             <td className="py-2 tabular-nums text-gray-700">{excepted}</td>
           </>}
         </tr>

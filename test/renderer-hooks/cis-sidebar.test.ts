@@ -22,6 +22,9 @@ vi.mock("../../src/portal/contexts/TenantContext", () => ({
 
 vi.mock("../../src/renderer/lib/license", () => ({
   useTenantPlan: () => null,
+  useLicense: () => ({ status: null, error: null, refresh: async () => undefined }),
+  tenantLicense: () => undefined,
+  tenantPlan: () => null,
 }))
 
 vi.mock("../../src/portal/components/ConfirmDialog", () => ({

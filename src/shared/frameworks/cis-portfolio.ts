@@ -61,7 +61,14 @@ function nameOf(row: CisPortfolioRow): string {
 }
 
 export function cisPortfolioRows(entries: CisPortfolioEntry[]): CisPortfolioRow[] {
-  const rows: CisPortfolioRow[] = entries.map(entry => {
+  const seenTenants = new Set<string>()
+  const deduped = entries.filter(entry => {
+    const key = entry.tenantId.toLowerCase()
+    if (seenTenants.has(key)) return false
+    seenTenants.add(key)
+    return true
+  })
+  const rows: CisPortfolioRow[] = deduped.map(entry => {
     const tenantName = entry.tenantName ?? null
     if (entry.error) {
       return { tenantId: entry.tenantId, tenantName, benchmark: null, version: null, assessedAt: null, levels: [], error: entry.error }
@@ -82,7 +89,12 @@ export function cisPortfolioRows(entries: CisPortfolioEntry[]): CisPortfolioRow[
         newestTime = value
       }
     }
-    const summary = cisReadiness(newest.assessment, newest.policies, undefined, entry.workspace?.recommendationList, entry.workspace?.exceptions, newest.assessment.assessedAt)
+    if (newest.assessment.tenantId.toLowerCase() !== entry.tenantId.toLowerCase()) {
+      return { tenantId: entry.tenantId, tenantName, benchmark: null, version: null, assessedAt: null, levels: [], error: "The saved assessment belongs to a different tenant." }
+    }
+    const assessedDate = newest.assessment.assessedAt.slice(0, 10)
+    const applicableExceptions = (entry.workspace?.exceptions ?? []).filter(exception => exception.createdAt.slice(0, 10) <= assessedDate)
+    const summary = cisReadiness(newest.assessment, newest.policies, undefined, entry.workspace?.recommendationList, applicableExceptions, newest.assessment.assessedAt)
     return {
       tenantId: entry.tenantId,
       tenantName,
@@ -97,6 +109,10 @@ export function cisPortfolioRows(entries: CisPortfolioEntry[]): CisPortfolioRow[
     const bAssessed = b.assessedAt !== null
     if (aAssessed !== bAssessed) return aAssessed ? -1 : 1
     if (aAssessed && bAssessed) {
+      const byBenchmark = (a.benchmark ?? "").localeCompare(b.benchmark ?? "")
+      if (byBenchmark !== 0) return byBenchmark
+      const byVersion = (a.version ?? "").localeCompare(b.version ?? "")
+      if (byVersion !== 0) return byVersion
       const level1 = compareRate(rateFor(a, 1), rateFor(b, 1))
       if (level1 !== 0) return level1
       const level2 = compareRate(rateFor(a, 2), rateFor(b, 2))
