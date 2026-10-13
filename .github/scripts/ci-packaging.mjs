@@ -20,7 +20,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       throw new Error("Missing or invalid pull request commit IDs")
     }
     // The complete PR diff, including both sides of renames and deleted files.
-    const paths = execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", `${base}...${head}`], { encoding: "utf8" })
+    // Two-dot diff compares the two tips directly, so it works with the shallow
+    // single-commit fetches in CI. It can over-report when the base moved, which
+    // only builds installers more often, never less.
+    const paths = execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", `${base}..${head}`], { encoding: "utf8" })
       .split("\0").filter(Boolean)
     required = requiresPackaging(paths)
   }

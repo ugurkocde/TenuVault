@@ -10,7 +10,7 @@ import {
 } from './types'
 import { AuditStorageService } from './storage'
 import { headers } from 'next/headers'
-import { v4 as uuidv4 } from 'uuid'
+import { randomUUID } from 'node:crypto'
 
 interface AuditLoggerConfig {
   storageAccountName: string
@@ -64,8 +64,8 @@ class AuditLogger {
       ipAddress: ipAddress.split(',')[0]?.trim() || 'unknown', // Handle multiple IPs
       userAgent,
       sessionId: this.sessionInfo?.sessionId,
-      correlationId: this.sessionInfo?.correlationId || uuidv4(),
-      requestId: uuidv4(),
+      correlationId: this.sessionInfo?.correlationId || randomUUID(),
+      requestId: randomUUID(),
     }
   }
 
@@ -78,7 +78,7 @@ class AuditLogger {
     }
 
     return {
-      id: uuidv4(),
+      id: randomUUID(),
       timestamp: new Date().toISOString(),
       eventType: input.eventType,
       severity: input.severity || getDefaultSeverity(input.eventType),
@@ -283,7 +283,7 @@ export async function createAuditLogger(
   if (user) {
     logger.setSession({
       user,
-      sessionId: uuidv4(),
+      sessionId: randomUUID(),
     })
   }
 

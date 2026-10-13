@@ -14,9 +14,7 @@ import {
   CheckCircle,
   AlertCircle,
   Loader2,
-  RefreshCw,
-  Download,
-  ExternalLink
+  RefreshCw
 } from "lucide-react"
 import { cn } from "~/lib/utils"
 
@@ -50,10 +48,7 @@ export function RestoreProgressModal({
   open,
   onOpenChange,
   tenantName,
-  credentials,
-  resources,
   jobId,
-  onComplete
 }: RestoreProgressModalProps) {
   const [status, setStatus] = useState<JobStatus>("Running")
   const [progress, setProgress] = useState(0)

@@ -1,22 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
 
-interface RevertMetadata {
-  timestamp: string
-  action: "revert" | "restore"
-  fromBackup: string
-  toBackup?: string
-  policyName: string
-  policyType: string
-  changesReverted?: Array<{
-    field: string
-    oldValue: any
-    revertedTo: any
-  }>
-  newPolicyId?: string
-  status: "success" | "failed"
-  errorMessage?: string
-}
-
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()

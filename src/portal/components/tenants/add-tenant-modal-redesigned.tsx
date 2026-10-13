@@ -15,7 +15,7 @@ import {
 import { Alert, AlertDescription } from "~/components/ui/alert"
 import { 
   Loader2, AlertCircle, Shield, Upload, FileJson, Plus, 
-  Zap, Clock, CheckCircle, Info, AlertTriangle, Eye, EyeOff,
+  Zap, Clock, CheckCircle, Info, Eye, EyeOff,
   Settings, X
 } from "lucide-react"
 import { cn } from "~/lib/utils"
@@ -166,7 +166,7 @@ export function AddTenantModal({ open, onOpenChange, onTenantAdded }: AddTenantM
       })
       
       // The parent will close this modal and open the resource selection modal
-    } catch (err) {
+    } catch {
       setError("Failed to add tenant. Please try again.")
     } finally {
       setIsSubmitting(false)

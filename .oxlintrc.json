@@ -13,7 +13,7 @@
     {
       "files": ["src/portal/**"],
       "rules": {
-        "eslint/no-unused-vars": "warn",
+        "eslint/no-unused-vars": "error",
         "eslint/no-unused-expressions": "warn",
         "unicorn/no-new-array": "warn",
         "eslint/no-control-regex": "warn",

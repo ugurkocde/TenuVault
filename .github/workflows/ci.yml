@@ -19,12 +19,20 @@ jobs:
   checks:
     name: Typecheck, test and smoke test
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     outputs:
       package_required: ${{ steps.changes.outputs.package_required }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+
+      - name: Fetch pull request tips for change detection
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git fetch --no-tags --depth=1 origin "$BASE_SHA" "$HEAD_SHA"
 
       - name: Detect installer changes
         id: changes
@@ -46,8 +54,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
 
       - name: Typecheck
         run: npm run typecheck
@@ -56,10 +64,15 @@ jobs:
         run: npm run lint
 
       - name: Unit tests
+        if: github.event_name == 'pull_request'
+        run: npm test
+
+      - name: Unit tests with coverage
+        if: github.event_name != 'pull_request'
         run: npm run test:coverage
 
       - name: Upload coverage
-        if: always()
+        if: always() && github.event_name != 'pull_request'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unit-test-coverage

@@ -12,25 +12,18 @@ import {
   Database,
   Download,
   RefreshCw,
-  Eye,
   Tag,
-  MapPin,
   Globe,
-  ChevronUp,
-  ChevronDown,
-  BarChart3,
   Grid3X3,
   List,
   Cloud,
   Pencil,
   Check,
   X,
-  Loader2,
-  Rocket
+  Loader2
 } from "lucide-react"
 import { cn } from "~/lib/utils"
 import { Button } from "~/components/ui/button"
-import { Input } from "~/components/ui/input"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -42,7 +35,6 @@ import { storageLabel } from "~/lib/storage-label"
 import { BackupProgressModal } from "~/components/tenants/backup-progress-modal"
 import { TagManagementModal } from "~/components/tenants/tag-management-modal"
 import { useTenants, useTenantOperations, useTenantAzureSync, type Tenant } from "~/contexts/TenantContext"
-import { useRouter } from "next/navigation"
 import { useSchedules, formatWhen } from "@desktop/lib/schedules"
 import { planName, tenantLicense, tenantPlan, useLicense } from "@desktop/lib/license"
 import { GatedButton } from "@desktop/components/PlanGate"
@@ -52,7 +44,6 @@ import { Badge } from "~/components/ui/badge"
 
 // Inner component that uses useSearchParams
 function TenantsPageContent() {
-  const router = useRouter()
   const schedules = useSchedules()
   const { status: licenseStatus } = useLicense()
   // Cross tenant views and bulk actions are part of MSP.
@@ -74,7 +65,7 @@ function TenantsPageContent() {
   const tenants = useTenants()
   const { addJob } = useBackupProgress()
   const { addTenant, updateTenant, deleteTenant: deleteTenantFromContext, getTenant } = useTenantOperations()
-  const { loadTenantFromAzure, checkTenantMetadata, deleteTenantMetadata, syncTenantToAzure, syncTenantToAzureDirect } = useTenantAzureSync()
+  const { loadTenantFromAzure, syncTenantToAzureDirect } = useTenantAzureSync()
   const [editingTenantId, setEditingTenantId] = useState<number | null>(null)
   const [editingTenantName, setEditingTenantName] = useState("")
   const [showProgressModal, setShowProgressModal] = useState(false)
