@@ -34,8 +34,34 @@ export function graphMessage(body: Item, status: number): string {
   return message || `Microsoft Graph returned ${status}`
 }
 
+/**
+ * Listings reused within one read-only pass, keyed by request path. A caller creates one
+ * memo for a single pass and drops it afterwards, so a later pass always lists again and
+ * another tenant never shares an entry. A rejected listing is evicted, so a later call in
+ * the same pass retries instead of replaying the failure.
+ */
+export type ListingMemo = Map<string, Promise<Item[]>>
+
+/** A fresh, empty listing memo for one pass. */
+export function createListingMemo(): ListingMemo {
+  return new Map()
+}
+
 /** Every entry of a collection, following @odata.nextLink inside the Graph origin only. */
-export async function listAll(graph: GraphCall, path: string): Promise<Item[]> {
+export function listAll(graph: GraphCall, path: string, memo?: ListingMemo): Promise<Item[]> {
+  const cached = memo?.get(path)
+  if (cached) return cached
+  const listing = listAllFresh(graph, path)
+  if (memo) {
+    memo.set(path, listing)
+    listing.catch(() => {
+      if (memo.get(path) === listing) memo.delete(path)
+    })
+  }
+  return listing
+}
+
+async function listAllFresh(graph: GraphCall, path: string): Promise<Item[]> {
   const items: Item[] = []
   const seen = new Set<string>()
   let next: string | undefined = path
@@ -79,8 +105,8 @@ export async function readCurrent(graph: GraphCall, type: IntuneType, id: string
 }
 
 /** IDs of objects of a type whose name equals `name` (case-insensitive). */
-export async function sameNameIds(graph: GraphCall, type: IntuneType, name: string): Promise<string[]> {
-  const items = await listAll(graph, `${type.path}?$select=id,${type.nameKey}`)
+export async function sameNameIds(graph: GraphCall, type: IntuneType, name: string, memo?: ListingMemo): Promise<string[]> {
+  const items = await listAll(graph, `${type.path}?$select=id,${type.nameKey}`, memo)
   const wanted = name.trim().toLowerCase()
   return items.filter((item) => typeof item[type.nameKey] === "string" && (item[type.nameKey] as string).trim().toLowerCase() === wanted && typeof item.id === "string").map((item) => item.id as string)
 }
@@ -94,9 +120,9 @@ export interface Observation {
 }
 
 /** Reads what one operation would change in the target and fingerprints it. */
-export async function observe(graph: GraphCall, type: IntuneType, operation: { action: OperationAction; targetId: string | null; name: string }): Promise<Observation> {
+export async function observe(graph: GraphCall, type: IntuneType, operation: { action: OperationAction; targetId: string | null; name: string }, memo?: ListingMemo): Promise<Observation> {
   if (operation.action === "create") {
-    const ids = await sameNameIds(graph, type, operation.name)
+    const ids = await sameNameIds(graph, type, operation.name, memo)
     return { snapshot: null, redacted: false, sameNameIds: ids, fingerprint: operationFingerprint("create", { snapshot: null, sameNameIds: ids }) }
   }
   const live = await readCurrent(graph, type, operation.targetId!)
