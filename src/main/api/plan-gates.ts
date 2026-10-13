@@ -5,14 +5,25 @@ import { featureRouteFeatures, isFeatureRoute } from "../../shared/feature-route
 // Framework report exports: native comparisons and saved policy pack assessments.
 const FRAMEWORK_EXPORTS = new Set(["native-pdf", "native-csv", "native-json", "workspace-pdf", "workspace-csv", "workspace-json"])
 
+/** A bulk run names every tenant it touches in targetTenants, like a restore copy, or marks itself bulk, like an OIB deploy to a further tenant. Single tenant calls carry neither. */
+function isBulk(body: Record<string, unknown>): boolean {
+  return body.bulk === true || body.targetTenants !== undefined
+}
+
 /**
  * The paid features an API request uses, from its path and JSON body; empty when every plan
  * may make it. The renderer shows the same limits; this is where they hold.
  */
 export function requiredFeatures(pathname: string, body: Record<string, unknown>): Feature[] {
   switch (pathname) {
-    case "/api/backup/start":
-      return typeof body.storageAccountName === "string" && !isLocalAccount(body.storageAccountName) ? ["azureStorage"] : []
+    case "/api/backup/start": {
+      const features: Feature[] = []
+      if (typeof body.storageAccountName === "string" && !isLocalAccount(body.storageAccountName)) features.push("azureStorage")
+      if (isBulk(body)) features.push("bulkActions")
+      return features
+    }
+    case "/api/detect-drifts":
+      return isBulk(body) ? ["bulkActions"] : []
     case "/api/restore-backup": {
       const features: Feature[] = []
       const selected = Array.isArray(body.selectedPolicies) ? body.selectedPolicies.length : 0
@@ -80,6 +91,11 @@ export function planGuard(planOf: (tenantId: string) => Promise<Plan | null>) {
     }
     const features = requiredFeatures(pathname, body ?? {})
     if (!features.length) return null
+    // A malformed bulk target must not be quietly dropped from the plan check.
+    if ((pathname === "/api/backup/start" || pathname === "/api/detect-drifts") && body.targetTenants !== undefined) {
+      const malformed = !Array.isArray(body.targetTenants) || body.targetTenants.some((target: { tenantId?: unknown }) => typeof target?.tenantId !== "string")
+      if (malformed) return Response.json({ error: "targetTenants must name every tenant in the bulk action" }, { status: 400 })
+    }
     // A tenantId of another type must not skip the plan check.
     if (typeof body.tenantId !== "string") {
       return body.tenantId === undefined ? null : Response.json({ error: "tenantId must be a string" }, { status: 400 })
@@ -90,7 +106,9 @@ export function planGuard(planOf: (tenantId: string) => Promise<Plan | null>) {
       : []
     for (const tenantId of [body.tenantId, ...targets]) {
       const plan = await planOf(tenantId)
-      if (tenantId === body.tenantId && !plan) return null
+      // Single tenant calls leave an unusable tenant to the request itself. A bulk run must be
+      // refused as a whole before any work starts, so an unusable tenant refuses it here.
+      if (tenantId === body.tenantId && !plan && !((pathname === "/api/backup/start" || pathname === "/api/detect-drifts") && isBulk(body))) return null
       const missing = features.find((feature) => !plan || !allows(plan, feature))
       if (missing) return Response.json({ error: upgradeMessage(missing), upgrade: missing }, { status: 402 })
     }

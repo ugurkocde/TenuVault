@@ -1,9 +1,14 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { planGuard, requiredFeature, requiredFeatures } from "../src/main/api/plan-gates"
-import { allows, upgradeMessage } from "../src/shared/plans"
+import { backupRoutes } from "../src/main/api/desktop-routes"
+import { ApiHost } from "../src/main/api/host"
+import type { BackupEngine } from "../src/main/backup/engine"
+import { allows, upgradeMessage, type Plan } from "../src/shared/plans"
 import { localStorageAccountName } from "../src/shared/constants"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
+const OTHER = "22222222-2222-2222-2222-222222222222"
+const CLIENT = "33333333-3333-3333-3333-333333333333"
 
 describe("Plan features", () => {
   it("gives Pro every Pro feature and keeps MSP features for MSP", () => {
@@ -171,5 +176,98 @@ describe("planGuard", () => {
 
   it("leaves unlicensed tenants to the request itself", async () => {
     expect(await planGuard(async () => null)(request({ tenantId: TENANT, restoreType: "full" }))).toBeNull()
+  })
+})
+
+describe("bulk backup and drift plan gates", () => {
+  const plans = (map: Record<string, Plan | null>) => async (id: string) => map[id] ?? null
+  const post = (path: string, body: object) => new Request(`http://tenuvault.internal${path}`, { method: "POST", body: JSON.stringify(body) })
+  const bulkBackup = (tenantId = TENANT) => post("/api/backup/start", {
+    tenantId, appId: CLIENT, storageAccountName: localStorageAccountName(tenantId),
+    bulk: true, targetTenants: [{ tenantId: tenantId === TENANT ? OTHER : TENANT }],
+  })
+  const bulkDrift = (tenantId = TENANT) => post("/api/detect-drifts", {
+    tenantId, appId: CLIENT, storageAccountName: localStorageAccountName(tenantId),
+    bulk: true, targetTenants: [{ tenantId: tenantId === TENANT ? OTHER : TENANT }],
+  })
+
+  it("needs bulkActions for bulk backup and drift, and nothing extra for single tenant calls", () => {
+    expect(requiredFeatures("/api/backup/start", { storageAccountName: localStorageAccountName(TENANT) })).toEqual([])
+    expect(requiredFeatures("/api/backup/start", { storageAccountName: localStorageAccountName(TENANT), bulk: true })).toContain("bulkActions")
+    expect(requiredFeatures("/api/backup/start", { storageAccountName: localStorageAccountName(TENANT), targetTenants: [{ tenantId: OTHER }] })).toContain("bulkActions")
+    expect(requiredFeatures("/api/backup/start", { storageAccountName: "contosobackups", bulk: true })).toEqual(expect.arrayContaining(["azureStorage", "bulkActions"]))
+    expect(requiredFeature("/api/detect-drifts", { tenantId: TENANT })).toBeNull()
+    expect(requiredFeature("/api/detect-drifts", { tenantId: TENANT, bulk: true })).toBe("bulkActions")
+    expect(requiredFeature("/api/detect-drifts", { tenantId: TENANT, targetTenants: [{ tenantId: OTHER }] })).toBe("bulkActions")
+  })
+
+  it("refuses a bulk backup over a mixed MSP and Pro estate with 402, whichever tenant it starts from", async () => {
+    const mixed = planGuard(plans({ [TENANT]: "msp", [OTHER]: "pro" }))
+    const refused = await mixed(bulkBackup())
+    expect(refused?.status).toBe(402)
+    expect(await refused?.json()).toMatchObject({ upgrade: "bulkActions", error: upgradeMessage("bulkActions") })
+    expect((await mixed(bulkBackup(OTHER)))?.status).toBe(402)
+    expect((await planGuard(plans({ [TENANT]: "msp", [OTHER]: null }))(bulkBackup()))?.status).toBe(402)
+    expect((await planGuard(plans({ [TENANT]: null, [OTHER]: "msp" }))(bulkBackup()))?.status).toBe(402)
+    expect((await planGuard(plans({ [TENANT]: null, [OTHER]: "msp" }))(bulkDrift()))?.status).toBe(402)
+  })
+
+  it("lets a bulk backup over all MSP tenants through", async () => {
+    const allMsp = planGuard(plans({ [TENANT]: "msp", [OTHER]: "msp" }))
+    expect(await allMsp(bulkBackup())).toBeNull()
+    expect(await allMsp(bulkBackup(OTHER))).toBeNull()
+  })
+
+  it("gives drift Check all the same per tenant enforcement", async () => {
+    const mixed = planGuard(plans({ [TENANT]: "msp", [OTHER]: "pro" }))
+    const refused = await mixed(bulkDrift())
+    expect(refused?.status).toBe(402)
+    expect(await refused?.json()).toMatchObject({ upgrade: "bulkActions" })
+    expect((await mixed(bulkDrift(OTHER)))?.status).toBe(402)
+    expect(await planGuard(plans({ [TENANT]: "msp", [OTHER]: "msp" }))(bulkDrift())).toBeNull()
+  })
+
+  it("leaves single tenant backup and drift calls exactly as before", async () => {
+    const community = planGuard(plans({ [TENANT]: "community" }))
+    expect(await community(post("/api/backup/start", { tenantId: TENANT, appId: CLIENT, storageAccountName: localStorageAccountName(TENANT) }))).toBeNull()
+    expect(await community(post("/api/detect-drifts", { tenantId: TENANT, appId: CLIENT, storageAccountName: localStorageAccountName(TENANT) }))).toBeNull()
+    const azure = await community(post("/api/backup/start", { tenantId: TENANT, appId: CLIENT, storageAccountName: "contosobackups" }))
+    expect(azure?.status).toBe(402)
+    expect(await azure?.json()).toMatchObject({ upgrade: "azureStorage" })
+    // A single call for an unusable tenant is still left to the request itself, as before.
+    expect(await planGuard(plans({ [TENANT]: null }))(post("/api/backup/start", { tenantId: TENANT, appId: CLIENT, storageAccountName: "contosobackups" }))).toBeNull()
+  })
+
+  it("answers 400 to malformed bulk target tenants instead of skipping them", async () => {
+    const msp = planGuard(plans({ [TENANT]: "msp", [OTHER]: "msp" }))
+    for (const targetTenants of ["nope", [{ tenantId: 1 }], [{}], [null]]) {
+      const body = { tenantId: TENANT, appId: CLIENT, storageAccountName: localStorageAccountName(TENANT), bulk: true, targetTenants }
+      expect((await msp(post("/api/backup/start", body)))?.status).toBe(400)
+      expect((await msp(post("/api/detect-drifts", body)))?.status).toBe(400)
+    }
+  })
+
+  it("refuses a mixed bulk backup before any job starts and starts jobs for an all MSP estate", async () => {
+    const start = vi.fn(() => ({ id: "job-1", status: "Running" }))
+    const drift = vi.fn(async () => Response.json({ drifts: [], summary: { total: 0, critical: 0 } }))
+    const routes = { ...backupRoutes({ start, get: () => undefined } as unknown as BackupEngine), "/api/detect-drifts": { POST: drift } }
+    const mixedHost = new ApiHost({ routes, guard: planGuard(plans({ [TENANT]: "msp", [OTHER]: "pro" })) })
+    expect((await mixedHost.dispatch(bulkBackup())).status).toBe(402)
+    expect((await mixedHost.dispatch(bulkDrift())).status).toBe(402)
+    expect(start).not.toHaveBeenCalled()
+    expect(drift).not.toHaveBeenCalled()
+
+    const mspHost = new ApiHost({ routes, guard: planGuard(plans({ [TENANT]: "msp", [OTHER]: "msp" })) })
+    expect((await mspHost.dispatch(bulkBackup())).status).toBe(200)
+    expect(start).toHaveBeenCalledTimes(1)
+    expect((await mspHost.dispatch(bulkDrift())).status).toBe(200)
+    expect(drift).toHaveBeenCalledTimes(1)
+
+    const communityHost = new ApiHost({ routes, guard: planGuard(plans({ [TENANT]: "community" })) })
+    const single = post("/api/backup/start", { tenantId: TENANT, appId: CLIENT, storageAccountName: localStorageAccountName(TENANT) })
+    expect((await communityHost.dispatch(single)).status).toBe(200)
+    expect(start).toHaveBeenCalledTimes(2)
+    expect((await communityHost.dispatch(post("/api/detect-drifts", { tenantId: TENANT, appId: CLIENT, storageAccountName: localStorageAccountName(TENANT) }))).status).toBe(200)
+    expect(drift).toHaveBeenCalledTimes(2)
   })
 })

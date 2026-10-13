@@ -9,6 +9,9 @@ interface BackupBody {
   storageAccountName?: string
   jobId?: string
   scope?: BackupScope
+  /** Bulk runs name every other tenant they touch; the plan guard checks each one. This route still starts one job. */
+  bulk?: boolean
+  targetTenants?: Array<{ tenantId?: string }>
 }
 
 /**
