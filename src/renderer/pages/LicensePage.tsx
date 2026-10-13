@@ -23,6 +23,7 @@ import { Label } from "~/components/ui/label"
 import type { LicenseStatus, TenantLicenseStatus } from "../../shared/ipc"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
 import { bridge } from "../lib/bridge"
+import { useConfirm } from "~/components/ConfirmDialog"
 import { formatDate, formatDateTime, hasPaidLicense, isUnlicensed, licensePageTitle, planName, useLicense } from "../lib/license"
 
 type Busy = "activate" | "deactivate" | `retry:${string}` | `share:${string}` | null
@@ -158,6 +159,7 @@ function TenantRow({
 }
 
 export default function LicensePage() {
+  const { confirm, confirmDialog } = useConfirm()
   const { status, refresh } = useLicense()
   const tenants = useTenants()
   const [key, setKey] = useState("")
@@ -206,8 +208,8 @@ export default function LicensePage() {
           ? "License activated."
           : "License key saved. It activates for a tenant when you sign in to it.",
     )
-  const deactivate = () => {
-    if (!window.confirm("Deactivate this machine? Backups that require this license will stop. Your existing backups remain available. Save your license key so you can activate again.")) return
+  const deactivate = async () => {
+    if (!(await confirm({ title: "Deactivate this machine?", description: "Backups that require this license will stop. Your existing backups remain available. Save your license key so you can activate again.", confirmLabel: "Deactivate", destructive: true }))) return
     void run("deactivate", () => bridge.license.deactivate(), () =>
       status.hasKey
         ? "This machine was deactivated. You can use the key on another machine."
@@ -229,6 +231,7 @@ export default function LicensePage() {
 
   return (
     <div className="max-w-5xl space-y-6 p-6 lg:p-8">
+      {confirmDialog}
       <div>
         <h1 className="text-4xl font-medium tracking-tight text-gray-900">License</h1>
         <p className="mt-2 max-w-3xl text-base text-gray-500">

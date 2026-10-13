@@ -23,6 +23,7 @@ import {
   Loader2
 } from "lucide-react"
 import { cn } from "~/lib/utils"
+import { useConfirm } from "~/components/ConfirmDialog"
 import { Button } from "~/components/ui/button"
 import {
   DropdownMenu,
@@ -44,6 +45,7 @@ import { Badge } from "~/components/ui/badge"
 
 // Inner component that uses useSearchParams
 function TenantsPageContent() {
+  const { confirm, confirmDialog } = useConfirm()
   const schedules = useSchedules()
   const { status: licenseStatus } = useLicense()
   // Cross tenant views and bulk actions are part of MSP.
@@ -144,7 +146,7 @@ function TenantsPageContent() {
 
   const deleteTenant = async (tenantId: number) => {
     const name = getTenant(tenantId)?.name ?? "this tenant"
-    const shouldDelete = confirm(`Remove ${name} from TenuVault?\n\nThis signs you out of the tenant, stops its scheduled backups and frees its license slot. Existing backups are kept, and nothing in the tenant itself is changed.`)
+    const shouldDelete = await confirm({ title: `Remove ${name} from TenuVault?`, description: "This signs you out of the tenant, stops its scheduled backups and frees its license slot. Existing backups are kept, and nothing in the tenant itself is changed.", confirmLabel: "Remove tenant", destructive: true })
 
     if (shouldDelete) {
       // The desktop tenant store releases the license, sign-in and schedule; backups are kept
@@ -197,7 +199,7 @@ function TenantsPageContent() {
     const selectedTenantObjects = tenants.filter(t => selectedTenants.includes(t.id))
 
     // Confirm with user
-    const shouldBackup = confirm(`Are you sure you want to trigger a backup for ${selectedTenants.length} tenant${selectedTenants.length > 1 ? 's' : ''}?`)
+    const shouldBackup = await confirm({ title: "Start backups?", description: `Are you sure you want to trigger a backup for ${selectedTenants.length} tenant${selectedTenants.length > 1 ? 's' : ''}?`, confirmLabel: "Start backup" })
 
     if (!shouldBackup) return
 
@@ -595,6 +597,7 @@ function TenantsPageContent() {
 
   return (
     <div className="p-8 space-y-8">
+      {confirmDialog}
       {/* Header */}
       <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
         <div>

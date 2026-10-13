@@ -9,6 +9,7 @@ import type { AssessmentScope, CapabilityResult, CapabilityStatus, CompliancePla
 import { CAPABILITY_STATUS_LABELS, CHECK_RESULT_LABELS, COLLECTION_FAMILY_LABELS, COLLECTION_STATUS_LABELS, CONTROL_STATUS_LABELS, PLATFORM_LABELS, frameworkCoverageLabel } from '../../shared/compliance/presentation'
 import { displayCheckValue } from '../../shared/compliance/check-results'
 import { ComplianceScoringNotice } from '../components/ComplianceScoringNotice'
+import { useConfirm } from "~/components/ConfirmDialog"
 import { cancelFrameworkJob, startFrameworkJob, useFrameworkJob } from '../lib/framework-jobs'
 
 const button = 'inline-flex h-10 items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50'
@@ -52,6 +53,7 @@ function elapsed(since: string, now: number) {
 const dismissedJobs = new Set<string>()
 
 export default function NativeFrameworkPage({ framework }: { framework: Framework }) {
+  const { confirm, confirmDialog } = useConfirm()
   const { selectedTenant } = useSelectedTenant()
   const credentials = selectedTenant?.credentials
   const [scope, setScope] = useState<AssessmentScope>({ platforms, essentialEightMaturityLevel: 1, defStanRiskLevel: 1 })
@@ -140,6 +142,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
   const disabledReason = !credentials ? 'Select a signed-in tenant in the sidebar to compare its settings.' : !scope.platforms?.length ? 'Select at least one platform.' : ''
 
   return <div className="mx-auto max-w-6xl space-y-5 p-6 lg:p-8">
+    {confirmDialog}
     <nav aria-label="Breadcrumb" className="text-sm text-gray-500"><Link className="text-blue-700 hover:underline" to="/portal/frameworks">Frameworks</Link><span className="mx-2" aria-hidden="true">/</span><span aria-current="page">{framework.name}</span></nav>
     <header className="flex flex-wrap items-start justify-between gap-4">
       <div className="min-w-0 max-w-3xl">
@@ -270,7 +273,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
           <span className="min-w-0 flex-1"><span className="font-medium text-gray-900">{when}</span>{viewing && <span className="ml-2 rounded-full bg-secondary px-2 py-0.5 text-xs text-foreground">Viewing</span>}<span className="block text-xs text-gray-500">{itemCounts.matches} matches · {itemCounts.different} different · {itemCounts.missing} missing · {(item.assessment.scope.platforms ?? []).map(p => platformLabels[p]).join(', ')}</span></span>
           {!viewing && <button type="button" className={small} disabled={!!busy || running} aria-label={`View comparison from ${when}`} onClick={() => { setRun(item); applyScopeOf(item); setChanges(null); window.scrollTo({ top: 0, behavior: 'smooth' }) }}>View</button>}
           {run && !viewing && <button type="button" className={small} disabled={!!busy} aria-label={`Show changes since ${when}`} onClick={() => { setError(''); try { setChanges({ base: item, rows: compareNativeAssessments(item, run) }); requestAnimationFrame(() => document.getElementById('native-changes')?.scrollIntoView({ behavior: 'smooth', block: 'start' })) } catch (e) { setChanges(null); setError(e instanceof Error ? e.message : 'Cannot compare these runs.'); window.scrollTo({ top: 0, behavior: 'smooth' }) } }}>Show changes since</button>}
-          <button type="button" className={cn(small, 'text-red-700')} disabled={!!busy} aria-label={`Delete comparison from ${when}`} onClick={() => { if (window.confirm(`Delete the comparison from ${when}? This cannot be undone.`)) void perform('Deleting comparison', async () => { await request({ ...body, action: 'native-delete', runId: item.runId }); const rest = history.filter(x => x.runId !== item.runId); setHistory(rest); if (run?.runId === item.runId) setRun(rest[0] ?? null); if (changes?.base.runId === item.runId || run?.runId === item.runId) setChanges(null) }) }}>Delete</button>
+          <button type="button" className={cn(small, 'text-red-700')} disabled={!!busy} aria-label={`Delete comparison from ${when}`} onClick={async () => { if (await confirm({ title: "Delete comparison?", description: `Delete the comparison from ${when}? This cannot be undone.`, confirmLabel: "Delete", destructive: true })) void perform('Deleting comparison', async () => { await request({ ...body, action: 'native-delete', runId: item.runId }); const rest = history.filter(x => x.runId !== item.runId); setHistory(rest); if (run?.runId === item.runId) setRun(rest[0] ?? null); if (changes?.base.runId === item.runId || run?.runId === item.runId) setChanges(null) }) }}>Delete</button>
         </li>
       })}</ul>
     </section>}

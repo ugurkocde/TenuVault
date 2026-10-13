@@ -48,7 +48,7 @@ import { migrateLegacyOibRuns, setOibStore } from "./oib/service"
 import { setOibCacheDir } from "./oib/source"
 import { setFrameworkStore } from "./frameworks/workspaces"
 import { setNativeFrameworkStore, setNativeFrameworkAuthorization, setNativeFrameworkNotifier } from "./frameworks/native"
-import { allows, COMMUNITY_RETENTION_DAYS, PlanRequired } from "../shared/plans"
+import { allows, effectiveRetentionDays, PlanRequired } from "../shared/plans"
 import { APP_STATE_START_OVER_BUTTON, APP_STATE_START_OVER_DETAIL, SecureStore, UnreadableStoreError, type Cipher } from "./storage/secure-store"
 import { Preferences } from "./preferences"
 import { AppTray } from "./tray"
@@ -256,11 +256,7 @@ async function bootstrap(): Promise<void> {
       return (await tokenFor(tenantId, clientId, scope)).accessToken
     },
     // Community keeps 30 days of history; Pro and MSP keep what the admin chooses (0 keeps everything).
-    retentionDays: (tenantId) => {
-      const days = preferences.get().retentionDays
-      if (license.plan(tenantId) !== "community") return days
-      return days === 0 ? COMMUNITY_RETENTION_DAYS : Math.min(days, COMMUNITY_RETENTION_DAYS)
-    },
+    retentionDays: (tenantId) => effectiveRetentionDays(preferences.get().retentionDays, license.plan(tenantId)),
   })
 
   const scopes = new BackupScopes(appStore)

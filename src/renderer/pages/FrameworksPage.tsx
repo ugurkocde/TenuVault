@@ -12,6 +12,7 @@ import type { ExportFile } from "../../main/frameworks/service"
 import type { NcscPack } from "../../main/frameworks/ncsc"
 import { useTenantPlan } from "../lib/license"
 import { GatedButton } from "../components/PlanGate"
+import { useConfirm } from "~/components/ConfirmDialog"
 
 const button = "inline-flex h-10 items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
 const primary = cn(button, "border-transparent bg-primary text-primary-foreground hover:bg-primary/90")
@@ -139,6 +140,7 @@ function FrameworkDetail({ framework }: { framework: Framework }) {
   const credentials = selectedTenant?.credentials
   // Reports of licensed CIS content are Pro and MSP; the main process checks the same plan.
   const plan = useTenantPlan(credentials?.tenantId)
+  const { confirm, confirmDialog } = useConfirm()
   const exportSaved = (format: "pdf" | "csv" | "json", runId?: string) => void perform(`Exporting ${format.toUpperCase()}…`, async () => {
     const { file } = await request<{ file: ExportFile }>({ action: `workspace-${format}`, tenantId: credentials?.tenantId, tenantName: selectedTenant?.name, frameworkId: framework.id, ...(runId ? { runId } : {}) })
     saveExport(file)
@@ -175,6 +177,7 @@ function FrameworkDetail({ framework }: { framework: Framework }) {
   }
   const findings = assessment?.findings.filter(f => filter === "All" || f.status === filter) ?? []
   return <div className="mx-auto max-w-6xl p-6 lg:p-8">
+    {confirmDialog}
     <Link to="/portal/frameworks" className="text-sm text-blue-700 hover:underline">Frameworks</Link>
     <div className="mt-4 flex flex-wrap items-start justify-between gap-4">
       <div><p className="text-xs uppercase tracking-widest text-gray-500">{framework.publisher} · {framework.kind}</p><h1 className="mt-2 text-3xl font-semibold tracking-tight text-gray-950">{framework.name}</h1><p className="mt-2 text-gray-600">{framework.description}</p></div>
@@ -192,13 +195,13 @@ function FrameworkDetail({ framework }: { framework: Framework }) {
       <p className="mt-2 text-sm text-gray-600">Packs, source versions and results are saved in encrypted storage on this device. Historical assessments are read-only. Run a fresh comparison before remediation.</p>
       <div className="mt-3 flex gap-3">
         <ExportButton framework={framework} plan={plan} disabled={!!busy || !workspace.history.length} onClick={() => exportSaved("json")}>Export saved assessments</ExportButton>
-        <button className={button} disabled={!!busy} onClick={() => { if (window.confirm("Delete this saved workspace and all assessment history?")) void perform("Deleting workspace…", async () => { suppressedDraft.current = JSON.stringify({ policies, reference }); const saved = await workspaceRequest("workspace-delete"); suppressedDraft.current = JSON.stringify({ policies: [], reference: "" }); setWorkspace(saved); setPolicies([]); setReference(""); reset() }) }}>Delete workspace</button>
+        <button className={button} disabled={!!busy} onClick={async () => { if (await confirm({ title: "Delete saved workspace?", description: "Delete this saved workspace and all assessment history?", confirmLabel: "Delete workspace", destructive: true })) void perform("Deleting workspace…", async () => { suppressedDraft.current = JSON.stringify({ policies, reference }); const saved = await workspaceRequest("workspace-delete"); suppressedDraft.current = JSON.stringify({ policies: [], reference: "" }); setWorkspace(saved); setPolicies([]); setReference(""); reset() }) }}>Delete workspace</button>
       </div>
       {workspace.history.map(entry => <div key={entry.assessment.runId} className="mt-3 flex flex-wrap items-center gap-3 border-t pt-3 text-sm">
         <span>{entry.assessment.assessedAt} · {entry.assessment.reference} · {entry.assessment.findings.length} findings{entry.creation ? ` · ${entry.creation.results.length} creation outcomes` : ""}</span>
         <button className={button} disabled={!!busy} onClick={() => { reset(); setPolicies(entry.policies); setReference(entry.assessment.reference); setAssessment(entry.assessment); setCreation(entry.creation ?? null); setHistorical(true) }}>View read-only</button>
         <ExportButton framework={framework} plan={plan} disabled={!!busy} onClick={() => exportSaved("json", entry.assessment.runId)}>Export JSON</ExportButton>
-        <button className={button} disabled={!!busy} onClick={() => { if (window.confirm("Delete this saved assessment?")) void perform("Deleting assessment…", async () => { const saved = await workspaceRequest("workspace-delete-assessment", { runId: entry.assessment.runId }); setWorkspace(saved); setPolicies(saved.policies); setReference(saved.reference); reset() }) }}>Delete</button>
+        <button className={button} disabled={!!busy} onClick={async () => { if (await confirm({ title: "Delete saved assessment?", description: "Delete this saved assessment?", confirmLabel: "Delete", destructive: true })) void perform("Deleting assessment…", async () => { const saved = await workspaceRequest("workspace-delete-assessment", { runId: entry.assessment.runId }); setWorkspace(saved); setPolicies(saved.policies); setReference(saved.reference); reset() }) }}>Delete</button>
       </div>)}
       {historical && <p role="status" className="mt-3 text-sm text-amber-800">Viewing a saved assessment. Compare again to obtain current evidence and enable remediation.</p>}
     </section>}

@@ -26,7 +26,24 @@ import { canUse, GatedButton, LockedPreview } from "@desktop/components/PlanGate
 import { useTenantPlan } from "@desktop/lib/license"
 import { toast } from "@desktop/lib/toast"
 import { OWN_OPERATION_NOTICE } from "~/lib/audit/export"
+import { useConfirm } from "~/components/ConfirmDialog"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "~/components/ui/dropdown-menu"
 import { auditDateFilter, defaultAuditDateRange } from "~/lib/audit/date-range"
+
+function CleanupButton({ plan, cleaning, loading, onCleanup }: { plan: ReturnType<typeof useTenantPlan>; cleaning: boolean; loading: boolean; onCleanup: () => void }) {
+  const { confirm, confirmDialog } = useConfirm()
+  return (
+    <>
+      {confirmDialog}
+      <GatedButton feature="auditLog" plan={plan} variant="outline" size="lg" disabled={cleaning || loading} onClick={async () => {
+        if (await confirm({ title: "Remove old operation history?", description: "Remove operation history entries older than 90 days from this tenant's storage? This cannot be undone.", confirmLabel: "Remove entries", destructive: true })) onCleanup()
+      }}>
+        {cleaning ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+        Remove entries older than 90 days
+      </GatedButton>
+    </>
+  )
+}
 
 function AuditPageContent() {
   const { selectedTenant } = useSelectedTenant()
@@ -242,7 +259,6 @@ function AuditPageContent() {
   // Removes entries older than 90 days from this tenant's storage. Pro and MSP; the main process checks the plan.
   const handleCleanup = async () => {
     if (!selectedTenant?.credentials || !selectedTenant.resources?.storageAccountName) return
-    if (!window.confirm("Remove operation history entries older than 90 days from this tenant's storage? This cannot be undone.")) return
     setCleaning(true)
     try {
       const response = await fetch("/api/audit/cleanup", {
@@ -358,10 +374,7 @@ function AuditPageContent() {
               <p className="mt-2 max-w-3xl text-base text-gray-500">{OWN_OPERATION_NOTICE}</p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              <GatedButton feature="auditLog" plan={plan} variant="outline" size="lg" disabled={cleaning || loading} onClick={() => void handleCleanup()}>
-                {cleaning ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
-                Remove entries older than 90 days
-              </GatedButton>
+              <CleanupButton plan={plan} cleaning={cleaning} loading={loading} onCleanup={() => void handleCleanup()} />
               {/* Auto-refresh toggle */}
               <div className="flex h-11 items-center gap-2 rounded-full border border-gray-200 bg-white px-4">
                 <input
@@ -393,36 +406,19 @@ function AuditPageContent() {
                 <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
                 Refresh
               </Button>
-              <div className="relative">
-                <Button
-                  size="lg"
-                  onClick={() => document.getElementById('export-menu')?.classList.toggle('hidden')}
-                >
-                  <Download className="w-4 h-4 mr-2" />
-                  Export
-                  <ChevronDown className="w-3 h-3 ml-1" />
-                </Button>
-                <div id="export-menu" className="hidden absolute right-0 z-20 mt-2 w-48 rounded-2xl border border-gray-100 bg-white p-1 shadow-lg">
-                  <button
-                    className="block w-full rounded-xl text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                    onClick={() => {
-                      handleExport('json')
-                      document.getElementById('export-menu')?.classList.add('hidden')
-                    }}
-                  >
-                    Export as JSON
-                  </button>
-                  <button
-                    className="block w-full rounded-xl text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                    onClick={() => {
-                      handleExport('csv')
-                      document.getElementById('export-menu')?.classList.add('hidden')
-                    }}
-                  >
-                    Export as CSV
-                  </button>
-                </div>
-              </div>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="lg">
+                    <Download className="w-4 h-4 mr-2" />
+                    Export
+                    <ChevronDown className="w-3 h-3 ml-1" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuItem onSelect={() => void handleExport('json')}>Export as JSON</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => void handleExport('csv')}>Export as CSV</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
 

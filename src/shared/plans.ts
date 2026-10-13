@@ -104,6 +104,12 @@ export function upgradeMessage(feature: Feature): string {
   return `${FEATURE_NAMES[feature]}: included in TenuVault ${plan === "msp" ? "MSP" : "Pro and MSP"}. Upgrade on the License page.`
 }
 
+/** The retention that pruning applies: plans without customRetention keep the Community limit. */
+export function effectiveRetentionDays(days: number, plan: Plan | null): number {
+  if (plan !== null && allows(plan, "customRetention")) return days
+  return days === 0 ? COMMUNITY_RETENTION_DAYS : Math.min(days, COMMUNITY_RETENTION_DAYS)
+}
+
 /** Thrown when an action needs a higher plan; the API host answers 402 with its message. */
 export class PlanRequired extends Error {
   constructor(readonly feature: Feature) {

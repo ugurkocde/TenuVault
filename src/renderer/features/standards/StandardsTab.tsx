@@ -10,6 +10,8 @@ import { listAdoptions, listStandards, portfolioAdoptions, type AdoptionState } 
 import { AdoptionPanel } from "./AdoptionPanel"
 import { CustomizationsPanel } from "./CustomizationsPanel"
 import { StandardsLibrary } from "./StandardsLibrary"
+import { standardsViewState } from "./state"
+import { Button } from "~/components/ui/button"
 
 const card = "space-y-4 rounded-3xl bg-card p-6 shadow-[0_1px_2px_rgba(22,21,20,0.04)]"
 
@@ -35,10 +37,40 @@ export default function StandardsTab({ tenant, plan, allowed }: FeatureTabProps)
     void standards.refetch()
     void adoptions.refetch()
   }
+  const view = standardsViewState({ isLoading: standards.isLoading || adoptions.isLoading, hasError: !!(standards.error ?? adoptions.error), standardsCount: versions.length, adoptionsCount: records.length })
+  const loadError = standards.error ?? adoptions.error
 
   return (
     <div className="space-y-6">
       <CustomizationsPanel tenant={tenant} allowed={allowed} />
+
+      {view === "loading" && (
+        <div aria-label="Loading standards" className="space-y-4">
+          <div className="h-24 animate-pulse rounded-3xl bg-gray-100 dark:bg-gray-800" />
+          <div className="h-24 animate-pulse rounded-3xl bg-gray-100 dark:bg-gray-800" />
+        </div>
+      )}
+      {view === "error" && (
+        <section role="alert" aria-label="Standards could not be loaded" className={card}>
+          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Standards could not be loaded</h3>
+          <p className="text-sm text-red-700 dark:text-red-400">{loadError instanceof Error ? loadError.message : "Standards could not be loaded."}</p>
+          <div>
+            <Button type="button" variant="outline" onClick={refresh}>Retry</Button>
+          </div>
+        </section>
+      )}
+      {view === "empty" && !msp && (
+        <section aria-label="No standards yet" className={card}>
+          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">No standards yet</h3>
+          <p className="max-w-3xl text-sm text-gray-500">No standards have been published and none have been adopted for this tenant yet. Published standards and stored adoptions appear here.</p>
+        </section>
+      )}
+      {view === "empty" && msp && records.length === 0 && (
+        <section aria-label="No adoptions yet" className={card}>
+          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">No adoptions yet</h3>
+          <p className="max-w-3xl text-sm text-gray-500">No standard has been adopted for this tenant yet. Adopt a published standard to track its version, deviations and upgrades here.</p>
+        </section>
+      )}
 
       {(msp || versions.length > 0) && <StandardsLibrary tenant={tenant} standards={versions} adoptedKeys={records.map((record) => record.standardKey)} canWrite={msp} onChanged={refresh} />}
       {!msp && allowed && (
