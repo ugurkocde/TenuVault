@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it, vi } from "vitest"
-import { BackupEngine, safeFileName, verifyStorageAccess } from "../src/main/backup/engine"
+import { BackupEngine, CONSECUTIVE_AUTH_FAILURE_LIMIT, NetworkCircuit, safeFileName, verifyStorageAccess } from "../src/main/backup/engine"
 import { backupRoutes, jobStatus, surfaceTokenErrors } from "../src/main/api/desktop-routes"
 import { NextRequest } from "../src/main/api/next-server-shim"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
@@ -36,7 +36,7 @@ function fakeGraph(overrides: Record<string, Response | (() => Response)> = {}) 
   }
 }
 
-function setup(graph = fakeGraph()) {
+function setup(graph = fakeGraph(), concurrency?: number) {
   const store = new LocalBlobStore(mkdtempSync(join(tmpdir(), "tv-engine-")), [randomBytes(32)])
   const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init)
@@ -46,7 +46,7 @@ function setup(graph = fakeGraph()) {
     throw new Error(`unexpected ${url}`)
   }) as unknown as typeof fetch
   const getToken = vi.fn(async () => "token")
-  const engine = new BackupEngine({ fetch: fetchImpl, getToken })
+  const engine = new BackupEngine({ fetch: fetchImpl, getToken, ...(concurrency === undefined ? {} : { concurrency }) })
   return { engine, store, getToken, account: localStorageAccountName(TENANT) }
 }
 
@@ -389,6 +389,102 @@ describe("retention after incomplete backups", () => {
     })
     expect(job.log.join("\n")).toContain("Older backups were kept because this backup is incomplete.")
     expect((await store.list(account, "intune-backups")).some((blob) => blob.name.includes("/GroupPolicyConfigurations/"))).toBe(false)
+  })
+})
+
+describe("consecutive authorization failures", () => {
+  const GUIDANCE = "Check that your account has an Intune role and the app registration has the Intune permissions."
+
+  it("aborts after the limit of identical status failures and resets on success or a different status", () => {
+    const circuit = new NetworkCircuit(100)
+    for (let i = 0; i < CONSECUTIVE_AUTH_FAILURE_LIMIT - 1; i++) circuit.authFailed("Microsoft Graph", 403, GUIDANCE)
+    circuit.succeeded("Microsoft Graph")
+    for (let i = 0; i < CONSECUTIVE_AUTH_FAILURE_LIMIT - 1; i++) circuit.authFailed("Microsoft Graph", 403, GUIDANCE)
+    expect(circuit.signal.aborted).toBe(false)
+    circuit.authFailed("Microsoft Graph", 401, GUIDANCE)
+    for (let i = 0; i < CONSECUTIVE_AUTH_FAILURE_LIMIT - 1; i++) circuit.authFailed("Microsoft Graph", 403, GUIDANCE)
+    expect(circuit.signal.aborted).toBe(false)
+    expect(() => circuit.authFailed("Microsoft Graph", 403, GUIDANCE)).toThrow(GUIDANCE)
+    expect(circuit.signal.aborted).toBe(true)
+  })
+
+  it("stops reading further policies after repeated Graph 403 responses", async () => {
+    let attempts = 0
+    const denied = () => {
+      attempts++
+      return Response.json({ error: { message: "Forbidden" } }, { status: 403 })
+    }
+    const overrides: Record<string, () => Response> = {
+      "/beta/deviceManagement/deviceConfigurations": () =>
+        Response.json({ value: Array.from({ length: 8 }, (_, i) => ({ id: `dc${i + 1}`, displayName: `Policy ${i + 1}` })) }),
+    }
+    for (let i = 1; i <= 8; i++) overrides[`/beta/deviceManagement/deviceConfigurations/dc${i}?$expand=assignments`] = denied
+    const { engine, account } = setup(fakeGraph(overrides), 1)
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    expect(job.status).toBe("Failed")
+    expect(job.exception).toContain(GUIDANCE)
+    expect(attempts).toBe(CONSECUTIVE_AUTH_FAILURE_LIMIT)
+  })
+
+  it("does not abort when successes are interleaved with Graph 403 responses", async () => {
+    let attempts = 0
+    const overrides: Record<string, () => Response> = {
+      "/beta/deviceManagement/deviceConfigurations": () =>
+        Response.json({ value: Array.from({ length: 8 }, (_, i) => ({ id: `dc${i + 1}`, displayName: `Policy ${i + 1}` })) }),
+    }
+    for (let i = 1; i <= 8; i++) {
+      const index = i
+      overrides[`/beta/deviceManagement/deviceConfigurations/dc${index}?$expand=assignments`] = () => {
+        attempts++
+        return index % 2 === 1 ? Response.json({ error: { message: "Forbidden" } }, { status: 403 }) : Response.json({ id: `dc${index}`, detail: true })
+      }
+    }
+    const { engine, account } = setup(fakeGraph(overrides), 1)
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    expect(job.status).toBe("Completed")
+    expect(job.exception).toBeUndefined()
+    expect(attempts).toBe(8)
+  })
+
+  it("still skips types the app registration has no permission for instead of aborting", async () => {
+    const denied = () => Response.json({ error: { message: "Forbidden" } }, { status: 403 })
+    const { engine, store, account } = setup(fakeGraph({
+      "/beta/deviceManagement/reusablePolicySettings": denied,
+      "/beta/deviceManagement/hardwareConfigurations": denied,
+      "/beta/deviceManagement/deviceComplianceScripts": denied,
+      "/beta/deviceManagement/intents": denied,
+      "/beta/deviceManagement/deviceManagementScripts": denied,
+      "/beta/deviceManagement/deviceShellScripts": denied,
+    }))
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    expect(job.status).toBe("Completed")
+    expect(job.progressMessage).toBe("Backup completed successfully")
+    const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
+    expect(metadata.SkippedTypes).toHaveLength(6)
+    expect(metadata).toMatchObject({ Status: "Success", Failures: 0 })
+  })
+
+  it("stops writing further policies after repeated storage 403 responses", async () => {
+    let attempts = 0
+    const graph = fakeGraph({
+      "/beta/deviceManagement/deviceConfigurations": Response.json({
+        value: Array.from({ length: 8 }, (_, i) => ({ id: `dc${i + 1}`, displayName: `Policy ${i + 1}` })),
+      }),
+    })
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      const url = new URL(request.url)
+      if (url.hostname === "graph.microsoft.com") return graph(url)
+      if (url.searchParams.get("restype") === "container") return new Response(null, { status: 201 })
+      if (url.pathname.endsWith(".tenuvault-owner.json")) return new Response(null, { status: 201 })
+      attempts++
+      return new Response("<Error><Code>AuthorizationPermissionMismatch</Code><Message>denied</Message></Error>", { status: 403 })
+    }) as typeof fetch
+    const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", concurrency: 1 })
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: "example" }).id)
+    expect(job.status).toBe("Failed")
+    expect(job.exception).toContain("Storage Blob Data Contributor")
+    expect(attempts).toBe(CONSECUTIVE_AUTH_FAILURE_LIMIT)
   })
 })
 

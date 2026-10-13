@@ -638,6 +638,12 @@ export default function DriftDetectionPage() {
                                   Result of Revert
                                 </span>
                               )}
+                              {drift.likelyRestoredCopy && (
+                                <span className="flex items-center gap-1 rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-gray-600">
+                                  <Info className="h-3 w-3" />
+                                  Likely restored copy
+                                </span>
+                              )}
                             </span>
                             {drift.previousName && <span className="mb-1 block text-xs text-gray-500">Renamed from "{drift.previousName}"</span>}
                             {drift.changeType === "modified" && drift.changes && drift.changes.length > 0 && (
@@ -728,7 +734,7 @@ export default function DriftDetectionPage() {
                   })}
                 </section>
               ))}
-              <p className="px-1 text-xs text-gray-500">Copies made with Restore as copy (named "[Restored] ...") are not listed as added.</p>
+              <p className="px-1 text-xs text-gray-500">Added items named "[Restored] ..." are marked as likely restored copies, because a policy created in Intune can carry the same prefix.</p>
             </div>
           )}
         </>

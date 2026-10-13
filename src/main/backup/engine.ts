@@ -132,11 +132,15 @@ function requestFailure(error: unknown): "network" | "status" | "token" | "other
 
 type NetworkService = "Microsoft Graph" | "backup storage"
 
+/** Repeated 401 or 403 responses mean the role behind them is gone, so the job stops instead of grinding the whole work list. */
+export const CONSECUTIVE_AUTH_FAILURE_LIMIT = 5
+
 /** One service outage must stop the job before readers drain every policy or type. */
-class NetworkCircuit {
+export class NetworkCircuit {
   private readonly controller = new AbortController()
   private readonly combined: AbortSignal
   private readonly consecutiveFailures: Record<NetworkService, number> = { "Microsoft Graph": 0, "backup storage": 0 }
+  private readonly consecutiveAuthFailures: Record<NetworkService, { status: number; count: number } | null> = { "Microsoft Graph": null, "backup storage": null }
 
   constructor(private readonly threshold: number, signal?: AbortSignal, private readonly deadline?: number) {
     this.combined = signal ? AbortSignal.any([signal, this.controller.signal]) : this.controller.signal
@@ -150,12 +154,25 @@ class NetworkCircuit {
   succeeded(service: NetworkService): void {
     this.signal.throwIfAborted()
     this.consecutiveFailures[service] = 0
+    this.consecutiveAuthFailures[service] = null
   }
 
   failed(service: NetworkService): void {
     this.signal.throwIfAborted()
     if (++this.consecutiveFailures[service] < this.threshold) return
     this.controller.abort(new Error(`Backup stopped: ${service} did not respond for ${this.consecutiveFailures[service]} consecutive requests. Earlier policies in this run were saved; the backup is incomplete.`))
+    this.signal.throwIfAborted()
+  }
+
+  /** Counts consecutive responses with the same 401 or 403 status; a success or a different status starts over. */
+  authFailed(service: NetworkService, status: number, message: string): void {
+    this.signal.throwIfAborted()
+    if (status !== 401 && status !== 403) return
+    const previous = this.consecutiveAuthFailures[service]
+    const count = previous?.status === status ? previous.count + 1 : 1
+    this.consecutiveAuthFailures[service] = { status, count }
+    if (count < CONSECUTIVE_AUTH_FAILURE_LIMIT) return
+    this.controller.abort(new Error(message))
     this.signal.throwIfAborted()
   }
 }
@@ -291,6 +308,11 @@ export class BackupEngine {
     const skippedTypes: string[] = []
     const failedTypes: string[] = []
     let failures = 0
+    // A type the app registration has no permission for is skipped below and does not count:
+    // only failures that point at a removed role across the work list stop the backup.
+    const countAuthFailure = (error: unknown) => {
+      if (error instanceof GraphError && (error.status === 401 || error.status === 403)) network.authFailed("Microsoft Graph", error.status, error.message)
+    }
     await pool(types.map((type, index) => ({ type, index })), concurrency, async ({ type, index }) => {
       try {
         const all = await graph.list(listUrl(type))
@@ -310,6 +332,7 @@ export class BackupEngine {
           this.write(job, `Skipped ${type.label}: access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it.`)
           return
         }
+        countAuthFailure(error)
         failures++
         failedTypes.push(type.folder)
         this.write(job, `Could not read ${type.label}: ${error instanceof Error ? error.message : String(error)}`)
@@ -349,6 +372,7 @@ export class BackupEngine {
         counts[type.folder]!++
       } catch (error) {
         network.signal.throwIfAborted()
+        countAuthFailure(error)
         // An expired sign-in fails every remaining item the same way, so it stops the backup once.
         if (error instanceof TokenError || (error instanceof GraphError && error.status === 401)) throw error
         failures++
@@ -831,6 +855,9 @@ class BlobWriter {
       } catch (error) {
         this.network?.signal.throwIfAborted()
         beforeCommit?.signal.throwIfAborted()
+        if (response && (response.status === 401 || response.status === 403) && !(error instanceof ProtectedBlobError)) {
+          this.network?.authFailed("backup storage", response.status, error instanceof Error ? error.message : String(error))
+        }
         if ((attempted || error instanceof RequestTimeoutError) && requestFailure(error) === "network" && !init.signal?.aborted) this.network?.failed("backup storage")
         if (!attempted && error instanceof RequestTimeoutError && attempt >= REQUEST_ATTEMPTS - 1) throw new TokenError(error.message)
         if (error instanceof FetchApplicationError || error instanceof TokenError || error instanceof StorageError || error instanceof ProtectedBlobError || init.signal?.aborted || attempt >= REQUEST_ATTEMPTS - 1) throw error

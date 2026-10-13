@@ -55,7 +55,7 @@ The changes are grouped by type, with the number of changes per type. Each chang
 
 When the two backups hold the same configuration, the page says "No drift between" followed by the dates of the two backups.
 
-Copies TenuVault made with **Restore as copy** are not listed as added; see below.
+Copies TenuVault made with **Restore as copy** are listed as added and marked **Likely restored copy**; see below.
 
 ### Look at one change
 
@@ -82,7 +82,7 @@ A change marked **Reverted** was already reverted with TenuVault. A change marke
 * Items whose fingerprint (recorded in each backup) is the same in both backups are unchanged and are not read again, so comparisons of large tenants finish faster. Backups made by earlier versions without fingerprints are compared file by file.
 * Lists of settings are matched by the setting itself, so an added, removed or reordered setting is reported as that setting, not as a change to every setting after it.
 * Earlier TenuVault versions saved Settings Catalog policies (including endpoint security and Settings Catalog compliance policies) without their assignments. When the older backup comes from such a version, the assignments of these policies are not compared, so the first backup that includes them does not show every assigned policy as changed. Their settings are still compared.
-* New items whose name starts with **[Restored]** are not reported as drift. These are the copies TenuVault creates when you restore.
+* New items whose name starts with **[Restored]** are reported as added and marked **Likely restored copy**. TenuVault creates copies with this prefix when you restore, and a policy created in Intune can carry the same prefix, so the item is shown rather than hidden.
 
 ### Severity
 
