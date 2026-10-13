@@ -56,7 +56,7 @@ function TenantsPageContent() {
   const schedules = useSchedules()
   const { status: licenseStatus } = useLicense()
   // Cross tenant views and bulk actions are part of MSP.
-  // The highest plan among licensed tenants decides whether these buttons act or explain.
+  // The highest plan among licensed tenants decides whether these buttons act or explain here; the main process then checks MSP on every tenant a bulk run touches.
   const portfolioPlan: Plan | null = !licenseStatus ? null
     : licenseStatus.tenants.some((t) => t.entitled && t.plan === "msp") ? "msp"
     : licenseStatus.tenants.some((t) => t.entitled && t.plan === "pro") ? "pro" : "community"
@@ -213,60 +213,84 @@ function TenantsPageContent() {
     // Set bulk backup flag to prevent modal from showing
     setIsBulkBackup(true)
 
-    // Track which tenants are being backed up
-    const backupPromises: Promise<void>[] = []
-
-    for (const tenant of selectedTenantObjects) {
-      // Skip if tenant doesn't have credentials or resources
-      if (!tenant.credentials || !tenant.resources) {
+    // Only tenants that can start a backup take part, and every call names all of them so the
+    // main process checks MSP on each one before the first job starts.
+    const eligible = selectedTenantObjects.filter((tenant) => {
+      if (!tenant.credentials?.tenantId || !tenant.resources?.storageAccountName) {
         console.warn(`Skipping tenant ${tenant.name}: missing credentials or resources`)
-        continue
+        return false
       }
+      return true
+    })
+    const bulkTenantIds = eligible.map((tenant) => tenant.credentials!.tenantId)
 
-      // Create a promise for each backup operation
-      const backupPromise = triggerBackup(tenant).catch(error => {
+    let refused = false
+    for (const tenant of eligible) {
+      try {
+        await triggerBackup(tenant, bulkTenantIds)
+      } catch (error) {
         console.error(`Failed to backup tenant ${tenant.name}:`, error)
-      })
-
-      backupPromises.push(backupPromise)
+        // A plan refusal applies to the whole bulk run, so nothing further starts.
+        if (typeof (error as { upgrade?: unknown })?.upgrade === "string") {
+          refused = true
+          alert(error instanceof Error ? error.message : "This bulk backup needs the MSP plan on every selected tenant.")
+          break
+        }
+      }
 
       // Add small delay between requests to avoid overwhelming the API
       await new Promise(resolve => setTimeout(resolve, 500))
     }
 
-    // Wait for all backups to be initiated
-    await Promise.allSettled(backupPromises)
-
-    // Clear selection and reset bulk backup flag
-    setSelectedTenants([])
+    // Keep the selection after a plan refusal so it can be retried once the plans cover it.
+    if (!refused) setSelectedTenants([])
     setIsBulkBackup(false)
   }
 
-  // Compares each tenant's two newest complete backups, one tenant at a time.
+  // Compares each tenant's two newest complete backups, one tenant at a time. Every call names
+  // all checked tenants so the main process checks MSP on each one before the first check runs.
   const checkAllDrift = async () => {
     setCheckingDrift(true)
-    for (const tenant of tenants) {
-      const tenantId = tenant.credentials?.tenantId?.toLowerCase()
-      if (!tenantId || !tenant.resources?.storageAccountName) continue
-      try {
-        const response = await fetch("/api/detect-drifts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.resources.storageAccountName }),
-        })
-        const data = await response.json()
-        setDriftByTenant((current) => ({
-          ...current,
-          [tenantId]: response.ok ? { total: data.summary?.total ?? 0, critical: data.summary?.critical ?? 0 } : { error: data.error ?? "Drift check failed" },
-        }))
-      } catch (error) {
-        setDriftByTenant((current) => ({ ...current, [tenantId]: { error: error instanceof Error ? error.message : "Drift check failed" } }))
+    try {
+      const eligible = tenants.flatMap((tenant) => {
+        const tenantId = tenant.credentials?.tenantId?.toLowerCase()
+        return tenantId && tenant.resources?.storageAccountName ? [{ tenant, tenantId }] : []
+      })
+      const bulkTenantIds = eligible.map(({ tenant }) => tenant.credentials!.tenantId)
+      for (const { tenant, tenantId } of eligible) {
+        try {
+          const response = await fetch("/api/detect-drifts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ...tenant.credentials,
+              storageAccountName: tenant.resources!.storageAccountName,
+              bulk: true,
+              targetTenants: bulkTenantIds.filter((id) => id.toLowerCase() !== tenantId).map((id) => ({ tenantId: id })),
+            }),
+          })
+          const data = await response.json()
+          // A plan refusal applies to the whole run, so no further tenant is checked.
+          if (response.status === 402 && typeof data.upgrade === "string") {
+            setDriftByTenant((current) => ({ ...current, [tenantId]: { error: data.error ?? "Drift check failed" } }))
+            alert(data.error ?? "Checking drift across tenants needs the MSP plan on every tenant.")
+            break
+          }
+          setDriftByTenant((current) => ({
+            ...current,
+            [tenantId]: response.ok ? { total: data.summary?.total ?? 0, critical: data.summary?.critical ?? 0 } : { error: data.error ?? "Drift check failed" },
+          }))
+        } catch (error) {
+          setDriftByTenant((current) => ({ ...current, [tenantId]: { error: error instanceof Error ? error.message : "Drift check failed" } }))
+        }
       }
+    } finally {
+      setCheckingDrift(false)
     }
-    setCheckingDrift(false)
   }
 
-  const triggerBackup = async (tenant: Tenant): Promise<void> => {
+  // A bulk run passes every tenant it touches, so each call names the others in targetTenants.
+  const triggerBackup = async (tenant: Tenant, bulkTenantIds?: string[]): Promise<void> => {
     if (!tenant.credentials || !tenant.resources?.storageAccountName) {
 
       return Promise.reject(new Error("Backup storage is not configured"))
@@ -282,10 +306,18 @@ function TenantsPageContent() {
           appId: tenant.credentials.appId,
           clientSecret: tenant.credentials.clientSecret,
           storageAccountName: tenant.resources.storageAccountName,
+          ...(bulkTenantIds ? {
+            bulk: true,
+            targetTenants: bulkTenantIds.filter((id) => id.toLowerCase() !== tenant.credentials!.tenantId.toLowerCase()).map((tenantId) => ({ tenantId })),
+          } : {}),
         }),
       })
       const data = await response.json()
-      if (!response.ok || typeof data.jobId !== "string" || !data.jobId) throw new Error(data.error || "Failed to start the backup")
+      if (!response.ok || typeof data.jobId !== "string" || !data.jobId) {
+        const failure = new Error(data.error || "Failed to start the backup") as Error & { upgrade?: unknown }
+        failure.upgrade = data.upgrade
+        throw failure
+      }
 
       trackBackup(tenant, data.jobId, addJob)
     } catch (error) {
