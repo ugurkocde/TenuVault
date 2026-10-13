@@ -63,6 +63,12 @@ describe("requiredFeature", () => {
     expect(requiredFeatures("/api/restore-backup", { restoreType: "selective", selectedPolicies: [{}], mode: "replace", assignments: true })).toEqual(["replaceRestore", "restoreAssignments"])
   })
 
+  it("gates whole backup validation behind fullRestore, like a full restore", () => {
+    expect(requiredFeatures("/api/restore-validate", { tenantId: TENANT, backupId: "backup-1" })).toEqual(["fullRestore"])
+    expect(requiredFeature("/api/restore-validate", { tenantId: TENANT, backupId: "backup-1" })).toBe("fullRestore")
+    expect(requiredFeature("/api/restore-validate", {})).toBe("fullRestore")
+  })
+
   it("keeps every OIBDeployer flow in Community and gates in-place updates, drift fixes and other tenants", () => {
     for (const action of ["oib-source", "oib-versions", "oib-downloads", "oib-load", "oib-compare", "oib-validate", "oib-validations", "oib-runs", "oib-undo", "oib-progress", "oib-backup-options"]) {
       expect(requiredFeature("/api/oib", { action, platform: "macos" })).toBeNull()
@@ -176,6 +182,30 @@ describe("planGuard", () => {
 
   it("leaves unlicensed tenants to the request itself", async () => {
     expect(await planGuard(async () => null)(request({ tenantId: TENANT, restoreType: "full" }))).toBeNull()
+  })
+})
+
+describe("planGuard for restore validation", () => {
+  const validate = (body: object = { tenantId: TENANT, backupId: "backup-1" }) =>
+    new Request("http://tenuvault.internal/api/restore-validate", { method: "POST", body: JSON.stringify(body) })
+
+  it("answers 402 to a tenant without fullRestore and lets a tenant with it through", async () => {
+    const refused = await planGuard(async () => "community")(validate())
+    expect(refused?.status).toBe(402)
+    expect(await refused?.json()).toMatchObject({ upgrade: "fullRestore", error: upgradeMessage("fullRestore") })
+    expect(await planGuard(async () => "pro")(validate())).toBeNull()
+    expect(await planGuard(async () => "msp")(validate())).toBeNull()
+  })
+
+  it("refuses validation before the handler runs and runs it for a licensed tenant", async () => {
+    const handler = vi.fn(async () => Response.json({ ok: true }))
+    const routes = { "/api/restore-validate": { POST: handler } }
+    const communityHost = new ApiHost({ routes, guard: planGuard(async () => "community") })
+    expect((await communityHost.dispatch(validate())).status).toBe(402)
+    expect(handler).not.toHaveBeenCalled()
+    const proHost = new ApiHost({ routes, guard: planGuard(async () => "pro") })
+    expect((await proHost.dispatch(validate())).status).toBe(200)
+    expect(handler).toHaveBeenCalledTimes(1)
   })
 })
 

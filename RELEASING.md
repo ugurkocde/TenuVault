@@ -37,6 +37,8 @@ Put these in the next stable release's notes, then remove them here.
   least 0.5.0.
 - Restores now check backup completeness and recorded item fingerprints before writing, and unverified legacy snapshots can no longer restore assignments. Restores from an incomplete backup, or of a file that no longer matches its recorded fingerprint, are refused. Restore an unassigned copy from a legacy backup, or restore from a complete backup instead.
 
+- The restore wizard can validate a backup without restoring it. Validate backup (no changes) checks manifest completeness, decryptability, recorded fingerprints, policy payloads and assignment references for every item, and reports pass and fail counts per policy type. Nothing is written to the tenant.
+
 - Promotion keeps the destination policy's scope tags on update and blocks promotion of redacted policies without acknowledgement. Acknowledged promotions omit secrets, which must be set again in the destination.
 
 - Compliance scores are now per capability and only count assigned policies. Scheduled actions are evaluated, so scores change and trend history before this version is not comparable. Older comparisons remain readable; collect a new comparison to start current scores and trends.
