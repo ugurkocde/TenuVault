@@ -3,7 +3,7 @@ title: "Operations"
 description: Run the scheduled health review of stale backups, work through its findings, and set up opt-in notifications.
 ---
 
-The **Operations** hub holds one screen for the tenant selected in the tenant switcher: **Health review**. A health review checks whether the tenant's backups are fresh enough and records findings when they are stale, missing, or cannot be read. Reviews can run on a schedule and can notify endpoints you configure.
+The **Operations** hub holds one screen for the tenant selected in the tenant switcher: **Health review**. A health review checks whether the tenant's backups are fresh enough and records findings when they are stale, missing, or cannot be read. It also turns work signals stored by the other hubs into findings, as described below. Reviews can run on a schedule and can notify endpoints you configure.
 
 Open **Operations** in the sidebar. Without a connected tenant the page says "Connect or select a tenant to use operations." and the review does not run.
 
@@ -24,6 +24,15 @@ A review reads the tenant's stored backup listing and checks the age of the late
 * A tenant with no complete backup gets a finding, and recent failed or incomplete backups are named in its reason.
 * When backups cannot be read, for example while you are signed out, the finding is marked **Unknown evidence** with the reason. Unknown is never shown as passing.
 
+A review also checks work signals stored by the other hubs. Each signal becomes a finding with its own severity:
+
+* Pending baseline upgrades, including an upgrade that is available, an upgrade with unresolved conflicts, an unfinished upgrade, and an install whose source is unknown.
+* Deviations from adopted golden standards, a pending standard upgrade, a stale or missing deviation assessment, and an unfinished adoption.
+* Open conflicts and hygiene findings.
+* Baseline scores whose saved comparison is older than 30 days.
+
+Work signals come from records already stored on this computer, and a signal family appears only when the tenant plan includes that screen. The review does not read policy content live to build them. A signal that is stale or was never collected stays **Unknown**, never passing, and when a stored record cannot be read the review records **Work signals unknown** and leaves earlier signal findings unchanged.
+
 Each review records its outcome and summary. Findings stay stored between reviews: a finding resolves when a later review reads fresh evidence, and reopens when the problem returns.
 
 ## Run a review now
@@ -43,7 +52,7 @@ The readiness tile shows whether scheduling is **Ready**, **Off**, **Sign-in req
 
 ## Work through findings
 
-The **Findings** list shows each open finding with its severity, title, reason, and when it was first seen, last checked, and when its evidence was read.
+The **Findings** list shows each open finding with its severity, title, reason, and when it was first seen, last checked, and when its evidence was read. Click **Export CSV** or **Export JSON** above the list to save the findings currently shown, including resolved findings only while they are shown.
 
 1. To hand a finding to someone, type their name in **Owner** and click **Save owner**.
 2. To record that a finding is being handled, click **Acknowledge**. Acknowledged findings carry the admin who acknowledged them.
@@ -82,6 +91,6 @@ A tenant that was never reviewed is shown as unknown. Tenants without an MSP lic
 
 ## Limits
 
-* The review checks backup freshness only. It does not check policy content.
+* The review checks backup freshness and stored work signals. It does not check policy content live.
 * Scheduled reviews run only while TenuVault runs. Missed windows run as one catch-up review and are marked as such.
 * Notifications go only to endpoints you configure, and only for new findings. Nothing is sent to a TenuVault server.

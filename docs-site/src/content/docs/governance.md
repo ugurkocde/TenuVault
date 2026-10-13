@@ -16,7 +16,7 @@ Open **Governance** in the sidebar, then choose a screen at the top of the page.
 | Standards and customizations: organization customizations | No | Yes | Yes |
 | Standards and customizations: golden standards, adoption and portfolio | No | No | Yes |
 
-On a plan that does not include a screen, the tab shows a plan badge and a locked preview that describes what the screen does, with **See plans**. Records that were already created and stored on an earlier plan stay readable after a downgrade; only creating new records needs the plan. See [Plans and features](/licensing/).
+On a plan that does not include a screen, the tab shows a plan badge and a locked preview that describes what the screen does, with **See plans**. Records that were already created and stored on an earlier plan stay readable after a downgrade; only creating new records needs the plan. Baseline scores are the exception: scores are computed on request and never stored, so after a downgrade there is no stored score to read and the tab shows only its locked preview. See [Plans and features](/licensing/).
 
 ## Baseline scores
 
@@ -33,7 +33,7 @@ Baseline scores turn the framework comparisons you already saved into one score 
 2. Open **Governance** in the sidebar and choose **Baseline scores**.
 3. Click **Refresh** to recompute the scores from the saved comparisons.
 
-Each framework card shows the framework name, version, profile and mapping version, the **Technical score**, **Coverage**, the number of **Unknown** results and **Gaps**, and when it was assessed. Under the score, the card lists how many capabilities are matching, different, missing, unknown and outside scope, and the **Top actionable gaps** with their priority.
+Each framework card shows the framework name, version, profile and mapping version, the **Technical score**, **Coverage**, the number of **Unknown** results and **Gaps**, and when it was assessed. Under the score, the card lists how many capabilities are matching, different, missing, unknown and outside scope, and the **Top actionable gaps** with their priority. Click **Export CSV** or **Export JSON** at the top of the screen to save the scores currently shown.
 
 The score compares Intune and Conditional Access configuration with a technical mapping. It does not prove enforcement on devices or compliance with the full framework.
 
@@ -86,6 +86,8 @@ Use the filters above the findings to narrow the list:
 * **Rule**: all rules or one rule.
 * **Search**: type a finding or policy name in "Finding or policy name".
 
+Click **Export CSV** or **Export JSON** to save the findings currently shown with the filters applied.
+
 ### Review a finding
 
 1. Click a finding to expand it. The detail shows the rule and its limits, the evidence backup and collection date, the affected objects, and the setting values per policy.
@@ -134,7 +136,7 @@ Versions are immutable and stored without tenant evidence. Tenant specific value
 5. Click **Assess deviation** at any time to record how the tenant differs from the adopted version.
 6. When the preview is ready, click **Create change set**, then work through the change set below it: review the diff, approve it, apply it, and use its rollback when needed. See [Changes](/changes/) for how change sets are reviewed and applied.
 
-Customers keep their adopted version until you adopt a newer one for them. When a newer version exists, **Configure for** the new version starts the same reviewed flow.
+Customers keep their adopted version until you adopt a newer one for them. When a newer version exists, **Configure for** the new version starts the same reviewed flow. In **Standards adopted by** the tenant, click **Export CSV** or **Export JSON** to save the adoption states currently shown.
 
 ### Adoption across customers (MSP)
 
