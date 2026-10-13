@@ -6,7 +6,7 @@ import { ArrowRight, ChevronDown, Download, ExternalLink, Info, Search } from "l
 import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { NCSC_COMMIT, NCSC_REPOSITORY, type Framework } from "../../shared/frameworks/catalog"
-import { effectiveFrameworks, searchEffectiveFrameworks } from "../../shared/frameworks/cis-internal"
+import { CIS_BENCHMARKS_ID, effectiveFrameworks, searchEffectiveFrameworks } from "../../shared/frameworks/cis-internal"
 import { convertKit, type KitConversion, type KitFile } from "../../shared/frameworks/cis-kit"
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
 import { cisReadiness } from "../../shared/frameworks/cis-readiness"
@@ -78,7 +78,7 @@ export default function FrameworksPage() {
     <p role="status" className="mt-5 rounded-3xl bg-secondary px-6 py-5 text-sm text-foreground"><strong className="block">Coming soon</strong>{framework.disabledReason}</p>
   </div>
   if (framework?.nativeId) return <Suspense fallback={<p role="status" className="p-8">Loading framework…</p>}><NativeFrameworkPage key={`${framework.id}:${selectedTenant?.credentials?.tenantId ?? "none"}`} framework={framework} /></Suspense>
-  if (framework) return <FrameworkDetail key={`${framework.id}:${selectedTenant?.credentials?.tenantId ?? "none"}`} framework={framework} />
+  if (framework) return <FrameworkDetail key={`${framework.id}:${selectedTenant?.credentials?.tenantId ?? "none"}`} framework={framework} standalone={framework.id === CIS_BENCHMARKS_ID} />
   const matches = searchEffectiveFrameworks(catalog, query)
   return <div className="mx-auto max-w-6xl p-6 lg:p-8">
     <div className="mb-8">
@@ -131,7 +131,7 @@ function FrameworkCatalogItem({ framework: f }: { framework: Framework }) {
     : <Link to={`/portal/frameworks/${f.id}`} className={cn(shell, "group border border-transparent transition-[border-color,box-shadow] hover:border-gray-200 hover:shadow-[0_6px_20px_-8px_rgba(22,21,20,0.25)]")}>{content}</Link>
 }
 
-function FrameworkDetail({ framework }: { framework: Framework }) {
+function FrameworkDetail({ framework, standalone = false }: { framework: Framework; standalone?: boolean }) {
   const { selectedTenant } = useSelectedTenant()
   const [policies, setPolicies] = useState<BaselinePolicy[]>([])
   const [reference, setReference] = useState("")
@@ -197,11 +197,11 @@ function FrameworkDetail({ framework }: { framework: Framework }) {
   }, [recommendationList])
   const findings = assessment?.findings.filter(f => filter === "All" || f.status === filter) ?? []
   const readiness = assessment && framework.id === "cis-benchmarks" ? cisReadiness(assessment, policies, denominator, recommendationList) : null
-  return <div className="mx-auto max-w-6xl p-6 lg:p-8">
+  return <div className={standalone ? "mx-auto max-w-[1600px] space-y-6 p-6 lg:p-8" : "mx-auto max-w-6xl p-6 lg:p-8"}>
     {confirmDialog}
-    <Link to="/portal/frameworks" className="text-sm text-blue-700 hover:underline">Frameworks</Link>
-    <div className="mt-4 flex flex-wrap items-start justify-between gap-4">
-      <div><p className="text-xs uppercase tracking-widest text-gray-500">{framework.publisher} · {framework.kind}</p><h1 className="mt-2 text-3xl font-semibold tracking-tight text-gray-950">{framework.name}</h1><p className="mt-2 text-gray-600">{framework.description}</p></div>
+    {!standalone && <Link to="/portal/frameworks" className="text-sm text-blue-700 hover:underline">Frameworks</Link>}
+    <div className={`${standalone ? "" : "mt-4 "}flex flex-wrap items-start justify-between gap-4`}>
+      <div><p className="text-xs uppercase tracking-widest text-gray-500">{framework.publisher} · {framework.kind}</p><h1 className={standalone ? "mt-2 text-4xl font-light tracking-tight text-gray-900" : "mt-2 text-3xl font-semibold tracking-tight text-gray-950"}>{framework.name}</h1><p className="mt-2 text-gray-600">{framework.description}</p></div>
       {framework.source && <a href={framework.source} target="_blank" rel="noreferrer" className={button}>Source <ExternalLink className="h-4 w-4" aria-hidden="true" /></a>}
     </div>
     <details className="group my-6 rounded-3xl bg-blue-50/60 px-6 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)] lg:px-7 [&[open]_.chevron]:rotate-180">
