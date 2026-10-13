@@ -11,6 +11,7 @@ import { convertKit, type KitConversion, type KitFile, type KitLevel } from "../
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
 import { cisReadiness } from "../../shared/frameworks/cis-readiness"
 import { cisReadinessTrend, sparklineSegments, type CisTrendPoint } from "../../shared/frameworks/cis-trend"
+import { cisPortfolioRows, type CisPortfolioEntry } from "../../shared/frameworks/cis-portfolio"
 import { parseRecommendationList, type RecommendationList } from "../../shared/frameworks/cis-manual"
 import { cisReadinessCsv, cisReadinessJson } from "../features/shared/governance-export"
 import { GovernanceExportButtons } from "../features/shared/GovernanceExportButtons"
@@ -161,6 +162,60 @@ function FrameworkCatalogItem({ framework: f }: { framework: Framework }) {
     : <Link to={`/portal/frameworks/${f.id}`} className={cn(shell, "group border border-transparent transition-[border-color,box-shadow] hover:border-gray-200 hover:shadow-[0_6px_20px_-8px_rgba(22,21,20,0.25)]")}>{content}</Link>
 }
 
+function CisPortfolio({ plan }: { plan: Plan | null }) {
+  const tenants = useTenants()
+  const [rows, setRows] = useState<ReturnType<typeof cisPortfolioRows> | null>(null)
+  const [busy, setBusy] = useState(false)
+  const signedIn = tenants.filter(candidate => candidate.credentials?.tenantId)
+  const notSignedIn = tenants.filter(candidate => !candidate.credentials?.tenantId)
+  async function load() {
+    setBusy(true)
+    try {
+      const entries: CisPortfolioEntry[] = []
+      for (const candidate of signedIn) {
+        const tenantId = candidate.credentials!.tenantId!
+        try {
+          const workspace = await request<FrameworkWorkspace>({ action: "workspace-load", tenantId, frameworkId: CIS_BENCHMARKS_ID })
+          entries.push({ tenantId, tenantName: candidate.name, workspace })
+        } catch (e) {
+          entries.push({ tenantId, tenantName: candidate.name, error: e instanceof Error ? e.message : "The saved workspace could not be loaded." })
+        }
+      }
+      setRows(cisPortfolioRows(entries))
+    } finally { setBusy(false) }
+  }
+  return <section aria-label="CIS portfolio" className="mb-5 rounded-3xl bg-white p-6 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <h2 className="text-lg font-medium text-gray-900">Portfolio</h2>
+        <p className="mt-1 text-sm text-gray-500">Customer tenants ranked by CIS readiness from each tenant latest saved assessment. Tenants with no saved assessment are shown as not assessed.</p>
+      </div>
+      <GatedButton feature="portfolio" plan={plan} variant="outline" size="sm" disabled={busy || !signedIn.length} onClick={() => void load()}>{busy ? "Loading" : rows ? "Refresh portfolio" : "Load portfolio"}</GatedButton>
+    </div>
+    {notSignedIn.length > 0 && <p className="mt-3 text-xs text-gray-500">Not signed in: {notSignedIn.map(candidate => candidate.name).join(", ")}. These tenants are not loaded.</p>}
+    {!signedIn.length && <p className="mt-3 text-sm text-gray-500">No connected tenant is signed in.</p>}
+    {rows && <div className="mt-4 overflow-x-auto"><table className="w-full text-left text-sm">
+      <thead className="text-xs text-gray-500"><tr><th scope="col" className="py-2 pr-4 font-medium">Tenant</th><th scope="col" className="py-2 pr-4 font-medium">Benchmark</th><th scope="col" className="py-2 pr-4 font-medium">Assessed</th><th scope="col" className="py-2 pr-4 font-medium">Level 1</th><th scope="col" className="py-2 pr-4 font-medium">Level 2</th><th scope="col" className="py-2 font-medium">Excepted</th></tr></thead>
+      <tbody className="divide-y divide-gray-100">{rows.map(row => {
+        const level1 = row.levels.find(level => level.level === 1)
+        const level2 = row.levels.find(level => level.level === 2)
+        const rate = (level: typeof level1) => level ? formatTrendPercent(level.adjustedPassRate ?? level.passRate) : "Not available"
+        const excepted = row.levels.reduce((sum, level) => sum + level.excepted, 0)
+        return <tr key={row.tenantId}>
+          <td className="py-2 pr-4 text-gray-800">{row.tenantName ?? row.tenantId}</td>
+          {row.error ? <td colSpan={5} className="py-2 text-gray-500">{row.error}</td> : row.assessedAt === null ? <td colSpan={5} className="py-2 text-gray-500">Not assessed</td> : <>
+            <td className="py-2 pr-4 text-gray-700">{row.benchmark}{row.version ? <span className="block text-xs text-gray-500">{row.version}</span> : null}</td>
+            <td className="py-2 pr-4 text-gray-700">{new Date(row.assessedAt).toLocaleDateString(undefined, { dateStyle: "medium" })}</td>
+            <td className="py-2 pr-4 tabular-nums text-gray-900">{rate(level1)}</td>
+            <td className="py-2 pr-4 tabular-nums text-gray-900">{rate(level2)}</td>
+            <td className="py-2 tabular-nums text-gray-700">{excepted}</td>
+          </>}
+        </tr>
+      })}</tbody>
+    </table></div>}
+  </section>
+}
+
 function FrameworkDetail({ framework, standalone = false }: { framework: Framework; standalone?: boolean }) {
   const { selectedTenant } = useSelectedTenant()
   const [policies, setPolicies] = useState<BaselinePolicy[]>([])
@@ -259,6 +314,7 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
       </div>)}
       {historical && <p role="status" className="mt-3 text-sm text-amber-800">Viewing a saved assessment. Compare again to obtain current evidence and enable remediation.</p>}
     </section>}
+    {framework.id === CIS_BENCHMARKS_ID && <CisPortfolio plan={plan} />}
     <section aria-labelledby="pack-title" className="rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
       <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="pack-title" className="text-xl font-medium tracking-tight">1. Choose your policy pack</h2><span className="text-sm text-gray-500">{policies.length ? `${policies.length} policies loaded` : "No pack loaded"}</span></div>
       <p className="mt-2 text-sm text-gray-600">Import one or more Settings Catalog JSON exports. Review the source, version and intended profile before comparison. Loading a pack does not change your tenant.</p>
