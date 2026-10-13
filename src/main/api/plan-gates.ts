@@ -3,7 +3,7 @@ import { allows, CIS_FRAMEWORKS, upgradeMessage, type Feature, type Plan } from 
 import { featureRouteFeatures, isFeatureRoute } from "../../shared/feature-routes"
 
 // Framework report exports: native comparisons and saved policy pack assessments.
-const FRAMEWORK_EXPORTS = new Set(["native-pdf", "native-csv", "native-json", "workspace-pdf", "workspace-csv", "workspace-json"])
+const FRAMEWORK_EXPORTS = new Set(["native-pdf", "native-csv", "native-json", "workspace-pdf", "workspace-csv", "workspace-json", "workspace-cis-pdf"])
 
 /** A bulk run names every tenant it touches in targetTenants, like a restore copy, or marks itself bulk, like an OIB deploy to a further tenant. Single tenant calls carry neither. */
 function isBulk(body: Record<string, unknown>): boolean {
