@@ -223,12 +223,20 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
   for (const level of summary.levels) {
     section(`Level ${level.level} readiness`)
     levelTiles(level)
-    text(`Assessed settings: ${level.assessedSettings}\nConforming: ${level.present}\nDeviating: ${level.different + level.missing + level.review} (different ${level.different}, missing ${level.missing}, review ${level.review})\nPass rate: ${percent(level.passRate)}`)
+    text(`Assessed settings: ${level.assessedSettings}\nConforming: ${level.present}\nDeviating: ${level.different + level.missing + level.review} (different ${level.different}, missing ${level.missing}, review ${level.review})\nExcepted: ${level.excepted ?? 0}\nPass rate: ${percent(level.passRate)}\nAdjusted pass rate: ${percent(level.adjustedPassRate ?? null)}`)
     text(level.coverage === null
       ? `Coverage: ${coverageSourceLabel(level.coverageSource)}`
       : `Coverage: ${percent(level.coverage)} (${level.assessedAutomated} of ${level.denominator}), source: ${coverageSourceLabel(level.coverageSource)}`)
     text(`Assessed automated: ${level.assessedAutomated}\nEnumerated: ${level.enumerated}\nNot assessed identifiers: ${level.notAssessed.length}`)
     if (level.notAssessed.length) text(level.notAssessed.join(', '))
+    if (level.exceptions?.length) {
+      heading(`Accepted exceptions, Level ${level.level}`)
+      for (const exception of level.exceptions) {
+        text(`${exception.policyName} | ${exception.settingId}`, 9, true)
+        const reason = exception.reason.length > 300 ? `${exception.reason.slice(0, 300)}...` : exception.reason
+        text(`Owner: ${exception.owner}\nExpires: ${exception.expiresOn}\nReason: ${reason}`)
+      }
+    }
     if (level.manual.length) {
       heading(`Manual recommendations, Level ${level.level}`)
       for (const item of level.manual) {

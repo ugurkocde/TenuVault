@@ -155,11 +155,14 @@ describe("CIS readiness", () => {
     expect(governanceExportName("cis-readiness", "Contoso", "2026-10-13T10:00:00Z")).toBe("cis-readiness-contoso-2026-10-13")
     const csv = cisReadinessCsv(summary)
     expect(csv.split("\r\n")[0]).toContain("Benchmark,Version,Level")
+    expect(csv.split("\r\n")[0]).toContain("Excepted")
+    expect(csv.split("\r\n")[0]).toContain("Adjusted pass rate")
+    expect(csv.split("\r\n")[0]).toContain("Exceptions")
     expect(csv).toContain("fakebook-os,9.9.9,1,2,1,0,1,0,0.5,2,2,3,0.6666666666666666,7.1.3")
     expect(csv).toContain(MANUAL_NOT_ASSESSED_NOTE)
-    const json = JSON.parse(cisReadinessJson(summary, "Contoso", "2026-10-13T10:00:00Z")) as { benchmark: string; version: string; levels: Array<{ level: number; notAssessed: string[] }> }
+    const json = JSON.parse(cisReadinessJson(summary, "Contoso", "2026-10-13T10:00:00Z")) as { benchmark: string; version: string; levels: Array<{ level: number; notAssessed: string[]; excepted: number; adjustedPassRate: number | null; exceptions: unknown[] }> }
     expect(json.benchmark).toBe("fakebook-os")
     expect(json.version).toBe("9.9.9")
-    expect(json.levels[0]).toMatchObject({ level: 1, notAssessed: ["7.1.3"] })
+    expect(json.levels[0]).toMatchObject({ level: 1, notAssessed: ["7.1.3"], excepted: 0, adjustedPassRate: 0.5, exceptions: [] })
   })
 })

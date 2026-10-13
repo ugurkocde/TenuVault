@@ -211,6 +211,11 @@ function cisReadinessRow(summary: CisReadinessSummary, level: CisReadinessSummar
     missing: level.missing,
     review: level.review,
     passRate: level.passRate,
+    excepted: level.excepted,
+    adjustedPassRate: level.adjustedPassRate,
+    exceptions: (level.exceptions ?? []).map(item => ({
+      policyName: item.policyName, settingId: item.settingId, owner: item.owner, expiresOn: item.expiresOn, reason: item.reason,
+    })),
     assessedAutomated: level.assessedAutomated,
     enumerated: level.enumerated,
     denominator: level.denominator,
@@ -234,17 +239,18 @@ function cisManualRow(summary: CisReadinessSummary, level: CisReadinessSummary["
   }
 }
 
-const CIS_READINESS_HEADERS = ["Benchmark", "Version", "Level", "Assessed settings", "Present", "Different", "Missing", "Review", "Pass rate", "Assessed automated", "Enumerated", "Denominator", "Coverage", "Not assessed", "Note", "State", "Identifier", "Title"]
+const CIS_READINESS_HEADERS = ["Benchmark", "Version", "Level", "Assessed settings", "Present", "Different", "Missing", "Review", "Pass rate", "Assessed automated", "Enumerated", "Denominator", "Coverage", "Not assessed", "Note", "State", "Identifier", "Title", "Excepted", "Adjusted pass rate", "Exceptions"]
 
 export function cisReadinessCsv(summary: CisReadinessSummary): string {
   const rows: unknown[][] = summary.levels.map((level) => {
     const row = cisReadinessRow(summary, level)
-    return [row.benchmark, row.version, row.level, row.assessedSettings, row.present, row.different, row.missing, row.review, row.passRate ?? "", row.assessedAutomated, row.enumerated, row.denominator ?? "", row.coverage ?? "", row.notAssessed.join("; "), row.manualNote, row.state, "", ""]
+    const exceptionsText = row.exceptions.map(item => `${item.policyName} | ${item.settingId} | ${item.owner} | ${item.expiresOn} | ${item.reason}`).join("; ")
+    return [row.benchmark, row.version, row.level, row.assessedSettings, row.present, row.different, row.missing, row.review, row.passRate ?? "", row.assessedAutomated, row.enumerated, row.denominator ?? "", row.coverage ?? "", row.notAssessed.join("; "), row.manualNote, row.state, "", "", row.excepted, row.adjustedPassRate ?? "", exceptionsText]
   })
   for (const level of summary.levels) {
     for (const item of level.manual ?? []) {
       const row = cisManualRow(summary, level, item)
-      rows.push([row.benchmark, row.version, row.level, "", "", "", "", "", "", "", "", "", "", "", row.fallback, row.state, row.identifier, row.title])
+      rows.push([row.benchmark, row.version, row.level, "", "", "", "", "", "", "", "", "", "", "", row.fallback, row.state, row.identifier, row.title, "", "", ""])
     }
   }
   return toCsv([CIS_READINESS_HEADERS, ...rows])

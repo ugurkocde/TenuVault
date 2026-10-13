@@ -152,6 +152,7 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
   const [kitConversion, setKitConversion] = useState<KitConversion | null>(null)
   const [denominator, setDenominator] = useState<DenominatorEntry[] | undefined>(undefined)
   const [recommendationList, setRecommendationList] = useState<RecommendationList | undefined>(undefined)
+  const [exceptionForms, setExceptionForms] = useState<Record<number, { policyName: string; settingId: string; owner: string; reason: string; expiresOn: string }>>({})
   const credentials = selectedTenant?.credentials
   // Reports of licensed CIS content are Pro and MSP; the main process checks the same plan.
   const plan = useTenantPlan(credentials?.tenantId)
@@ -197,7 +198,7 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
     return () => { active = false }
   }, [recommendationList])
   const findings = assessment?.findings.filter(f => filter === "All" || f.status === filter) ?? []
-  const readiness = assessment && framework.id === "cis-benchmarks" ? cisReadiness(assessment, policies, denominator, recommendationList) : null
+  const readiness = assessment && framework.id === "cis-benchmarks" ? cisReadiness(assessment, policies, denominator, recommendationList, workspace?.exceptions) : null
   return <div className={standalone ? "mx-auto max-w-[1600px] space-y-6 p-6 lg:p-8" : "mx-auto max-w-6xl p-6 lg:p-8"}>
     {confirmDialog}
     {!standalone && <Link to="/portal/frameworks" className="text-sm text-blue-700 hover:underline">Frameworks</Link>}
@@ -329,6 +330,26 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
               </div>
             </details>)}</div>
           </div>)}
+          {readiness.levels.map(level => {
+            const form = exceptionForms[level.level] ?? { policyName: "", settingId: "", owner: "", reason: "", expiresOn: "" }
+            const updateForm = (patch: Partial<typeof form>) => setExceptionForms(old => ({ ...old, [level.level]: { ...(old[level.level] ?? form), ...patch } }))
+            return <div key={`exceptions-${level.level}`} className="mt-4 border-t border-gray-200 pt-4">
+              <h4 className="font-medium text-gray-900">Exceptions, Level {level.level} ({level.excepted} excepted)</h4>
+              <p className="mt-1 text-xs text-gray-500">Adjusted pass rate: {level.adjustedPassRate === null ? "Not available" : `${Math.round(level.adjustedPassRate * 1000) / 10}%`}. Raw counts above are unchanged.</p>
+              {level.exceptions.length ? <ul className="mt-2 space-y-2">{level.exceptions.map(exception => <li key={exception.id} className="flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-white p-3">
+                <span><span className="font-medium text-gray-800">{exception.policyName}</span><span className="block break-all font-mono text-xs text-gray-500">{exception.settingId}</span><span className="block text-xs text-gray-600">Owner: {exception.owner} · Expires: {exception.expiresOn}</span><span className="block text-xs text-gray-600">{exception.reason}</span></span>
+                <button type="button" className={button} disabled={!!busy} onClick={() => void perform("Removing exception...", async () => { const saved = await workspaceRequest("workspace-cis-exception-remove", { exceptionId: exception.id }); setWorkspace(saved) })}>Remove</button>
+              </li>)}</ul> : <p className="mt-2 text-xs text-gray-500">No active exceptions for this level.</p>}
+              <form className="mt-3 grid gap-2 sm:grid-cols-2" onSubmit={e => { e.preventDefault(); void perform("Saving exception...", async () => { const saved = await workspaceRequest("workspace-cis-exception-add", { benchmark: readiness.benchmark, version: readiness.version, level: level.level, policyName: form.policyName, settingId: form.settingId, owner: form.owner, reason: form.reason, expiresOn: form.expiresOn }); setWorkspace(saved); updateForm({ policyName: "", settingId: "", owner: "", reason: "", expiresOn: "" }) }) }}>
+                <label className="block text-xs font-medium text-gray-700">Policy name<input value={form.policyName} disabled={!!busy} onChange={e => updateForm({ policyName: e.target.value })} className="mt-1 w-full rounded-full border border-gray-300 px-3 py-1.5 text-sm font-normal" /></label>
+                <label className="block text-xs font-medium text-gray-700">Setting id<input value={form.settingId} disabled={!!busy} onChange={e => updateForm({ settingId: e.target.value })} className="mt-1 w-full rounded-full border border-gray-300 px-3 py-1.5 text-sm font-normal" /></label>
+                <label className="block text-xs font-medium text-gray-700">Owner<input value={form.owner} disabled={!!busy} onChange={e => updateForm({ owner: e.target.value })} className="mt-1 w-full rounded-full border border-gray-300 px-3 py-1.5 text-sm font-normal" /></label>
+                <label className="block text-xs font-medium text-gray-700">Expiry date<input type="date" value={form.expiresOn} disabled={!!busy} onChange={e => updateForm({ expiresOn: e.target.value })} className="mt-1 w-full rounded-full border border-gray-300 px-3 py-1.5 text-sm font-normal" /></label>
+                <label className="block text-xs font-medium text-gray-700 sm:col-span-2">Reason<input value={form.reason} disabled={!!busy} onChange={e => updateForm({ reason: e.target.value })} className="mt-1 w-full rounded-full border border-gray-300 px-3 py-1.5 text-sm font-normal" /></label>
+                <div className="sm:col-span-2"><button type="submit" className={button} disabled={!!busy}>Accept as exception</button></div>
+              </form>
+            </div>
+          })}
           <div className="mt-3 flex flex-wrap items-start gap-2"><GovernanceExportButtons kind="cis-readiness" tenantName={selectedTenant?.name ?? null} disabled={!!busy} buildCsv={() => cisReadinessCsv(readiness)} buildJson={exportedAt => cisReadinessJson(readiness, selectedTenant?.name ?? null, exportedAt)} /><ExportButton framework={framework} plan={plan} disabled={!!busy} onClick={() => void perform("Exporting PDF…", async () => { const { file } = await request<{ file: ExportFile }>({ action: "workspace-cis-pdf", tenantId: credentials?.tenantId, tenantName: selectedTenant?.name, frameworkId: framework.id, runId: assessment.runId, ...(denominator ? { denominator } : {}) }); saveExport(file) })}><Download className="h-4 w-4" aria-hidden="true" />Export PDF</ExportButton></div>
         </section>}
         <div className="my-4 flex flex-wrap gap-2" aria-label="Filter assessment findings">{["All", "Present", "Missing", "Different", "Review"].map(status => <button key={status} aria-pressed={filter === status} onClick={() => { setFilter(status); setPage(0) }} className={`rounded-full border px-4 py-2 text-sm transition-colors ${filter === status ? "border-transparent bg-primary text-primary-foreground" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>{status} <span className="ml-1 font-semibold">{assessment.findings.filter(f => status === "All" || f.status === status).length}</span></button>)}</div>
