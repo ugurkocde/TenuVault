@@ -14,7 +14,9 @@ import { resolveTarget, staleTargets } from "./targets"
 
 /**
  * Dev to Prod promotion (#145): a deliberate, one-way, administrator-started copy of selected
- * Settings Catalog policies from a source tenant into a destination tenant.
+ * policies from a source tenant into a destination tenant. Supported types are Settings
+ * Catalog policies, compliance policies, endpoint security policies and device
+ * configuration profiles (see PROMOTION_FOLDERS).
  *
  * Planning resolves every tenant-specific reference of each policy against the destination
  * through confirmed mappings and, when nothing blocks, freezes one change set in the
@@ -25,9 +27,12 @@ import { resolveTarget, staleTargets } from "./targets"
  */
 
 export const PROMOTION_FOLDER = "ConfigurationPolicies"
+export const PROMOTION_FOLDERS = ["ConfigurationPolicies", "CompliancePolicies", "DeviceConfigurations", "EndpointSecurityIntents"] as const
+export type PromotionFolder = (typeof PROMOTION_FOLDERS)[number]
 export const MAX_PROMOTION_ITEMS = 25
 
 export interface PromotionItem {
+  folder: string
   sourceId: string
   sourceName: string
   sourceVersion: string | null
@@ -64,7 +69,7 @@ export interface PlanInput {
   includeAssignments: boolean
   dropUnsupportedExclusions: boolean
   acknowledgeRedacted?: boolean
-  items: Array<{ sourceId: string; destinationId: string | null }>
+  items: Array<{ sourceId: string; destinationId: string | null; folder?: string }>
   mappings: Mapping[]
 }
 
@@ -96,14 +101,19 @@ export async function planPromotion(deps: FeatureDeps, destinationTenantId: stri
   const seen = new Set<string>()
   for (const item of input.items) {
     if (!isGraphId(item.sourceId) || (item.destinationId !== null && !isGraphId(item.destinationId))) throw new FeatureError("Invalid policy ID")
-    if (seen.has(item.sourceId.toLowerCase())) throw new FeatureError("A policy is selected twice.")
-    seen.add(item.sourceId.toLowerCase())
+    const folder = item.folder ?? PROMOTION_FOLDER
+    if (typeof folder !== "string" || !folder) throw new FeatureError("Invalid policy type")
+    const key = `${folder.toLowerCase()}:${item.sourceId.toLowerCase()}`
+    if (seen.has(key)) throw new FeatureError("A policy is selected twice.")
+    seen.add(key)
   }
-  const type = typeForFolder(PROMOTION_FOLDER)!
   const sourceGraph = await deps.graph(source)
   const items: PromotionItem[] = []
   const operations: OperationInput[] = []
   for (const item of input.items) {
+    const folder = item.folder ?? PROMOTION_FOLDER
+    const type = typeForFolder(folder)
+    if (!type) throw new FeatureError(`${folder} is not an Intune type TenuVault knows.`)
     let raw
     try {
       raw = await readCurrent(sourceGraph, type, item.sourceId)
@@ -115,7 +125,7 @@ export async function planPromotion(deps: FeatureDeps, destinationTenantId: stri
     const snapshot = sanitizeSnapshot(type, raw).snapshot
     const resolved = await resolveTarget(deps, destination, {
       sourceTenantId: source,
-      folder: PROMOTION_FOLDER,
+      folder: type.folder,
       sourceObjectId: item.sourceId,
       targetObjectId: item.destinationId,
       includeAssignments: input.includeAssignments,
@@ -124,9 +134,12 @@ export async function planPromotion(deps: FeatureDeps, destinationTenantId: stri
       mappings: input.mappings,
       sourceSnapshot: snapshot,
     })
-    const { blocked, proposed } = resolved
-    items.push({ sourceId: item.sourceId, sourceName: resolved.sourceName, sourceVersion, sourceHash: hashOf(comparableSnapshot(snapshot)), destinationId: item.destinationId, action: item.destinationId ? "update" : "create", blocked, findings: resolved.findings, references: resolved.references, targetReads: resolved.targetReads, targetStateHash: resolved.targetStateHash })
-    if (!blocked) operations.push({ folder: PROMOTION_FOLDER, action: item.destinationId ? "update" : "create", targetId: item.destinationId, proposed: proposed.body, assignments: input.includeAssignments ? proposed.assignments : null, source: { tenantId: source, objectId: item.sourceId, version: sourceVersion, label: resolved.sourceName } })
+    const promotable = (PROMOTION_FOLDERS as readonly string[]).includes(type.folder)
+    const findings = promotable ? resolved.findings : [...resolved.findings, { code: "unsupported-type" as const, severity: "blocking" as const, message: `Promotion does not support ${type.label} yet. Supported: Settings Catalog policies, compliance policies, endpoint security policies and device configuration profiles.` }]
+    const blocked = resolved.blocked || !promotable
+    const proposed = blocked ? { body: null, assignments: null } : resolved.proposed
+    items.push({ folder: type.folder, sourceId: item.sourceId, sourceName: resolved.sourceName, sourceVersion, sourceHash: hashOf(comparableSnapshot(snapshot)), destinationId: item.destinationId, action: item.destinationId ? "update" : "create", blocked, findings, references: resolved.references, targetReads: resolved.targetReads, targetStateHash: resolved.targetStateHash })
+    if (!blocked) operations.push({ folder: type.folder, action: item.destinationId ? "update" : "create", targetId: item.destinationId, proposed: proposed.body, assignments: input.includeAssignments ? proposed.assignments : null, source: { tenantId: source, objectId: item.sourceId, version: sourceVersion, label: resolved.sourceName } })
   }
   const blockedCount = items.filter((item) => item.blocked).length
   const promotion = deps.records.create<PromotionRecord>(DOMAINS.promotions, destination, {
@@ -185,11 +198,11 @@ export async function previewPromotion(deps: FeatureDeps, tenantId: string, id: 
   if (!promotion.changeSetId) throw new FeatureError("This promotion is blocked. Resolve its findings and plan again.", 409)
   const preview = await previewChangeSet(deps, tenantId, promotion.changeSetId)
   const changeSet = { ...preview, blockers: [...(await staleDependencies(deps, tenantId, promotion)), ...preview.blockers] }
-  const type = typeForFolder(PROMOTION_FOLDER)!
   const sourceChanges: string[] = []
   try {
     const graph = await deps.graph(promotion.sourceTenantId)
     for (const item of promotion.items) {
+      const type = typeForFolder(item.folder ?? PROMOTION_FOLDER)!
       const live = await readCurrent(graph, type, item.sourceId)
       if (!live) sourceChanges.push(`"${item.sourceName}" was deleted in the source after planning. The reviewed version is still promoted.`)
       else if (hashOf(comparableSnapshot(sanitizeSnapshot(type, live).snapshot)) !== item.sourceHash) sourceChanges.push(`"${item.sourceName}" changed in the source after planning. Only the reviewed version is promoted; plan again to include later edits.`)

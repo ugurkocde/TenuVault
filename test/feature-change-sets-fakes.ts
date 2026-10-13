@@ -11,6 +11,10 @@ import type { FeatureDeps } from "../src/main/features/deps"
  */
 export class FakeTenant {
   policies = new Map<string, Item>()
+  compliance = new Map<string, Item>()
+  deviceConfigs = new Map<string, Item>()
+  intents = new Map<string, Item>()
+  groupPolicies = new Map<string, Item>()
   filters: Item[] = []
   scopeTags: Item[] = [{ id: "0", displayName: "Default", isBuiltIn: true }]
   reusable: Item[] = []
@@ -44,6 +48,72 @@ export class FakeTenant {
     }
     this.policies.set(id, full)
     return full
+  }
+
+  addCompliance(policy: Partial<Item> & { displayName: string }): Item {
+    const id = (policy.id as string | undefined) ?? randomUUID()
+    const full: Item = {
+      id,
+      "@odata.type": "#microsoft.graph.windows10CompliancePolicy",
+      description: "",
+      roleScopeTagIds: ["0"],
+      scheduledActionsForRule: [{ id: "rule-1", ruleName: "PasswordRequired", scheduledActionConfigurations: [{ id: "act-1", actionType: "block", gracePeriodHours: 0, notificationTemplateId: "", notificationMessageCCList: [] }] }],
+      assignments: [],
+      lastModifiedDateTime: "2026-09-01T10:00:00Z",
+      createdDateTime: "2026-09-01T10:00:00Z",
+      ...policy,
+    }
+    this.compliance.set(id, full)
+    return full
+  }
+
+  addDeviceConfig(policy: Partial<Item> & { displayName: string }): Item {
+    const id = (policy.id as string | undefined) ?? randomUUID()
+    const full: Item = {
+      id,
+      "@odata.type": "#microsoft.graph.windows10GeneralConfiguration",
+      description: "",
+      roleScopeTagIds: ["0"],
+      assignments: [],
+      lastModifiedDateTime: "2026-09-01T10:00:00Z",
+      createdDateTime: "2026-09-01T10:00:00Z",
+      ...policy,
+    }
+    this.deviceConfigs.set(id, full)
+    return full
+  }
+
+  addIntent(policy: Partial<Item> & { displayName: string }): Item {
+    const id = (policy.id as string | undefined) ?? randomUUID()
+    const full: Item = {
+      id,
+      description: "",
+      roleScopeTagIds: ["0"],
+      templateId: "12345678-1234-1234-1234-1234567890ab",
+      settings: [{ id: "s1", definitionId: "def-1", valueJson: "{\"value\":true}" }],
+      assignments: [],
+      lastModifiedDateTime: "2026-09-01T10:00:00Z",
+      createdDateTime: "2026-09-01T10:00:00Z",
+      ...policy,
+    }
+    this.intents.set(id, full)
+    return full
+  }
+
+  addGroupPolicy(policy: Partial<Item> & { displayName: string }): Item {
+    const id = (policy.id as string | undefined) ?? randomUUID()
+    const full: Item = { id, description: "", roleScopeTagIds: ["0"], definitionValues: [], assignments: [], lastModifiedDateTime: "2026-09-01T10:00:00Z", createdDateTime: "2026-09-01T10:00:00Z", ...policy }
+    this.groupPolicies.set(id, full)
+    return full
+  }
+
+  collectionForPath(path: string): Map<string, Item> | null {
+    if (path.startsWith("deviceManagement/deviceCompliancePolicies")) return this.compliance
+    if (path.startsWith("deviceManagement/deviceConfigurations")) return this.deviceConfigs
+    if (path.startsWith("deviceManagement/intents")) return this.intents
+    if (path.startsWith("deviceManagement/groupPolicyConfigurations")) return this.groupPolicies
+    if (path.startsWith("deviceManagement/configurationPolicies")) return this.policies
+    return null
   }
 
   writeCount(filter?: (call: { method: string; path: string }) => boolean): number {
@@ -87,6 +157,24 @@ export class FakeTenant {
       if (!policy) return { status: 404, body: { error: { code: "ResourceNotFound", message: "Not found" } } }
       return { status: 200, body: { value: structuredClone((policy.assignments as Item[] | undefined) ?? []) } }
     }
+    const genericCollection = this.collectionForPath(route!)
+    if (genericCollection && route !== "deviceManagement/configurationPolicies") {
+      const collSegments = route!.split("/")
+      if (collSegments.length === 2) return { status: 200, body: { value: [...genericCollection.values()].map((entry) => structuredClone(entry)) } }
+      if (collSegments.length === 3) {
+        const entry = genericCollection.get(decodeURIComponent(collSegments[2]!))
+        if (!entry) return { status: 404, body: { error: { code: "ResourceNotFound", message: "Not found" } } }
+        const clone = structuredClone(entry)
+        if (route!.startsWith("deviceManagement/intents")) delete clone.settings
+        if (route!.startsWith("deviceManagement/intents")) delete clone.assignments
+        return { status: 200, body: clone }
+      }
+      if (collSegments.length === 4) {
+        const entry = genericCollection.get(decodeURIComponent(collSegments[2]!))
+        if (!entry) return { status: 404, body: { error: { code: "ResourceNotFound", message: "Not found" } } }
+        return { status: 200, body: { value: structuredClone((entry[collSegments[3]!] as Item[] | undefined) ?? []) } }
+      }
+    }
     if (route === "deviceManagement/assignmentFilters") return { status: 200, body: { value: structuredClone(this.filters) } }
     if (route === "deviceManagement/roleScopeTags") return { status: 200, body: { value: structuredClone(this.scopeTags) } }
     if (route === "deviceManagement/reusablePolicySettings") return { status: 200, body: { value: structuredClone(this.reusable) } }
@@ -101,27 +189,52 @@ export class FakeTenant {
   private write(method: string, path: string, body?: Item): { status: number; body: Item } {
     const segments = path.split("?")[0]!.split("/")
     const id = segments[2] ? decodeURIComponent(segments[2]) : undefined
-    if (method === "POST" && segments.length === 2) {
-      const created: Item = { ...structuredClone(body ?? {}), id: randomUUID(), assignments: [], lastModifiedDateTime: "2026-09-30T12:00:00Z", createdDateTime: "2026-09-30T12:00:00Z" }
-      created.settings = ((created.settings as Item[] | undefined) ?? []).map((entry, index) => ({ ...entry, id: String(index) }))
-      this.policies.set(created.id as string, created)
+    const collection = this.collectionForPath(path)
+    if (method === "POST" && segments[0] === "deviceManagement" && segments[1] === "templates" && segments[3] === "createInstance") {
+      const created: Item = { id: randomUUID(), displayName: body?.displayName ?? null, description: body?.description ?? null, roleScopeTagIds: body?.roleScopeTagIds ?? ["0"], templateId: segments[2]!, settings: structuredClone((body?.settingsDelta as Item[] | undefined) ?? []), assignments: [], lastModifiedDateTime: "2026-09-30T12:00:00Z", createdDateTime: "2026-09-30T12:00:00Z" }
+      this.intents.set(created.id as string, created)
       return { status: 201, body: created }
     }
-    if (method === "PUT" && id) {
-      const current = this.policies.get(id)
+    if (method === "POST" && segments.length === 2 && collection) {
+      const created: Item = { ...structuredClone(body ?? {}), id: randomUUID(), assignments: [], lastModifiedDateTime: "2026-09-30T12:00:00Z", createdDateTime: "2026-09-30T12:00:00Z" }
+      if (Array.isArray(created.settings)) created.settings = (created.settings as Item[]).map((entry, index) => ({ ...entry, id: String(index) }))
+      collection.set(created.id as string, created)
+      return { status: 201, body: created }
+    }
+    if ((method === "PUT" || method === "PATCH") && id && collection) {
+      const current = collection.get(id)
       if (!current) return { status: 404, body: { error: { code: "ResourceNotFound", message: "Not found" } } }
-      this.policies.set(id, { ...structuredClone(body ?? {}), id, assignments: current.assignments ?? [], lastModifiedDateTime: "2026-09-30T12:05:00Z" })
+      collection.set(id, { ...structuredClone(current), ...structuredClone(body ?? {}), id, assignments: current.assignments ?? [], lastModifiedDateTime: "2026-09-30T12:05:00Z" })
       return { status: 204, body: {} }
     }
-    if (method === "DELETE" && id) {
-      if (!this.policies.delete(id)) return { status: 404, body: { error: { code: "ResourceNotFound", message: "Not found" } } }
+    if (method === "DELETE" && id && collection) {
+      if (!collection.delete(id)) return { status: 404, body: { error: { code: "ResourceNotFound", message: "Not found" } } }
       return { status: 204, body: {} }
     }
-    if (method === "POST" && id && segments[3] === "assign") {
-      const current = this.policies.get(id)
+    if (method === "POST" && id && segments[3] === "assign" && collection) {
+      const current = collection.get(id)
       if (!current) return { status: 404, body: {} }
-      current.assignments = ((body?.assignments as Item[] | undefined) ?? []).map((assignment) => ({ ...assignment, id: `${id}_${randomUUID()}`, source: "direct", sourceId: id }))
+      const key = Object.keys(body ?? {}).find((entry) => Array.isArray(body?.[entry])) ?? "assignments"
+      current.assignments = ((body?.[key] as Item[] | undefined) ?? []).map((assignment) => ({ ...assignment, id: `${id}_${randomUUID()}`, source: "direct", sourceId: id }))
       return { status: 200, body: { value: current.assignments } }
+    }
+    if (method === "POST" && id && collection && segments[3] === "scheduleActionsForRules") {
+      const current = collection.get(id)
+      if (!current) return { status: 404, body: {} }
+      current.scheduledActionsForRule = structuredClone((body?.deviceComplianceScheduledActionForRules as Item[] | undefined) ?? [])
+      return { status: 200, body: {} }
+    }
+    if (method === "POST" && id && collection && segments[3] === "setScheduledActions") {
+      const current = collection.get(id)
+      if (!current) return { status: 404, body: {} }
+      current.scheduledActionsForRule = structuredClone((body?.scheduledActions as Item[] | undefined) ?? [])
+      return { status: 200, body: {} }
+    }
+    if (method === "POST" && id && collection && segments[3] === "updateSettings") {
+      const current = collection.get(id)
+      if (!current) return { status: 404, body: {} }
+      current.settings = structuredClone((body?.settings as Item[] | undefined) ?? [])
+      return { status: 200, body: {} }
     }
     return { status: 400, body: { error: { code: "BadRequest", message: `No fake for ${method} ${path}` } } }
   }

@@ -1,6 +1,6 @@
 ---
 title: "Changes"
-description: Promote Settings Catalog policies from a development tenant to production, and upgrade installed baselines while keeping your customizations.
+description: Promote policies from a development tenant to production, and upgrade installed baselines while keeping your customizations.
 ---
 
 The **Changes** hub groups two screens for the tenant selected in the tenant switcher: **Dev to Prod** and **Baseline upgrades**. Both write through a reviewed change set: you review the difference against the live tenant, approve it, apply it with a backup first, and can roll it back. Nothing is written while you plan.
@@ -30,23 +30,24 @@ Promotions, baseline upgrades and standard adoptions all end in a change set. Th
 
 ## Dev to Prod
 
-Dev to Prod promotes selected Settings Catalog policies from a development tenant to the production tenant you selected, one way and on demand. The selected tenant is always the destination. Promotion copies the reviewed version once; later edits in the source are never synchronized.
+Dev to Prod promotes selected policies from a development tenant to the production tenant you selected, one way and on demand. The selected tenant is always the destination. Promotion copies the reviewed version once; later edits in the source are never synchronized.
 
 ### Before you start
 
 * Connect both tenants and make sure your license covers both. On Pro the source must be the other tenant of the same license; the app enforces this. If no other tenant is connected, the screen says "Connect the development tenant covered by the same license to promote from it."
-* Only Settings Catalog policies can be promoted.
+* Supported types are Settings Catalog policies, compliance policies, endpoint security policies and device configuration profiles. Other policy types cannot be promoted and are blocked with an explicit finding when planned.
 
 ### Plan a promotion
 
 1. Select the production tenant in the tenant switcher.
 2. Open **Changes** in the sidebar and choose **Dev to Prod**.
 3. In **Promote settings into** the destination tenant, choose the **Source (development) tenant**. The **Destination (production) tenant** is the selected tenant and cannot be changed here; select another tenant in the switcher to promote into it instead.
-4. In the policy list, tick **Promote** for each source policy to include. For each one, choose **Create a new policy**, or **Update:** an existing destination policy. A destination policy with the same name is only marked as "same name, confirm it is the same policy"; a matching name never selects the target for you.
-5. Leave **Promote assignments too, after reviewing their mapped groups and filters (default: created unassigned, existing assignments untouched)** unticked to keep assignments out, or tick it to include assignments after review. By default new policies are created unassigned and existing assignments stay untouched.
-6. Tick **I understand that secrets in this policy are not promoted and must be set again in the destination** when the policies carry secret values. Secrets are never promoted.
-7. Enter a **Title**, for example "Promote OIB Windows 3.6", and a **Ticket or reference** if you use one.
-8. Click **Plan promotion**. Planning reads both tenants and writes nothing. While it reads, the button shows "Reading both tenants".
+4. Choose the **Policy type**: Settings Catalog policies, compliance policies, endpoint security policies or device configuration profiles.
+5. In the policy list, tick **Promote** for each source policy to include. For each one, choose **Create a new policy**, or **Update:** an existing destination policy. A destination policy with the same name is only marked as "same name, confirm it is the same policy"; a matching name never selects the target for you.
+6. Leave **Promote assignments too, after reviewing their mapped groups and filters (default: created unassigned, existing assignments untouched)** unticked to keep assignments out, or tick it to include assignments after review. By default new policies are created unassigned and existing assignments stay untouched.
+7. Tick **I understand that secrets in this policy are not promoted and must be set again in the destination** when the policies carry secret values. Secrets are never promoted.
+8. Enter a **Title**, for example "Promote OIB Windows 3.6", and a **Ticket or reference** if you use one.
+9. Click **Plan promotion**. Planning reads both tenants and writes nothing. While it reads, the button shows "Reading both tenants".
 
 You can plan at most 25 policies at once.
 
@@ -61,7 +62,7 @@ Stored promotions stay listed under **Promotions** with their status, and open r
 
 ### Limits
 
-* Only Settings Catalog policies are supported. Other policy types cannot be promoted.
+* Only Settings Catalog policies, compliance policies, endpoint security policies and device configuration profiles are supported. Other policy types cannot be promoted.
 * Promotion is one way and runs only when you start it. It never synchronizes later source edits.
 * Secret values are not promoted and must be set again in the destination.
 * Assignments stay out unless you include them and review their mapped groups and filters.

@@ -7,7 +7,13 @@ import type { ChangeSet, ChangeSetActions, ChangeSetPreview, RollbackPreview } f
 export type { Mapping, ReferenceKind, ReferenceResolution }
 
 export type Promotion = PromotionRecord & { id: string; createdAt: string; updatedAt: string }
-export interface PolicyOption { id: string; name: string; platforms: string | null; lastModifiedDateTime: string | null }
+export interface PolicyOption { id: string; name: string; folder: string; platforms: string | null; lastModifiedDateTime: string | null }
+export const PROMOTION_TYPE_OPTIONS = [
+  { folder: "ConfigurationPolicies", label: "Settings Catalog policies" },
+  { folder: "CompliancePolicies", label: "Compliance policies" },
+  { folder: "DeviceConfigurations", label: "Device configuration profiles" },
+  { folder: "EndpointSecurityIntents", label: "Endpoint security policies" },
+] as const
 
 const PATH = "/api/promotion"
 /** The source is named in targetTenants on every paid call, so its license is checked each time. */
@@ -15,9 +21,9 @@ const source = (sourceTenantId: string) => ({ sourceTenantId, targetTenants: [{ 
 
 export const listPromotions = (tenant: Tenant) => featureCall<{ promotions: Promotion[] }>(PATH, tenant, "list")
 export const getPromotion = (tenant: Tenant, id: string) => featureCall<{ promotion: Promotion; changeSet: ChangeSet | null; rollbackChangeSet: ChangeSet | null }>(PATH, tenant, "get", { id })
-export const promotionPolicies = (tenant: Tenant, sourceTenantId: string) => featureCall<{ source: PolicyOption[]; destination: PolicyOption[] }>(PATH, tenant, "policies", source(sourceTenantId))
+export const promotionPolicies = (tenant: Tenant, sourceTenantId: string, folder: string) => featureCall<{ source: PolicyOption[]; destination: PolicyOption[] }>(PATH, tenant, "policies", { ...source(sourceTenantId), folder })
 export const targetObjects = (tenant: Tenant, kind: Exclude<ReferenceKind, "group">) => featureCall<{ objects: Array<{ id: string; name: string }>; readable: boolean; reason?: string }>(PATH, tenant, "target-objects", { kind })
-export const planPromotion = (tenant: Tenant, input: { sourceTenantId: string; title: string; ticket: string; includeAssignments: boolean; acknowledgeRedacted: boolean; items: Array<{ sourceId: string; destinationId: string | null }>; mappings: Mapping[] }) =>
+export const planPromotion = (tenant: Tenant, input: { sourceTenantId: string; title: string; ticket: string; includeAssignments: boolean; acknowledgeRedacted: boolean; items: Array<{ sourceId: string; destinationId: string | null; folder: string }>; mappings: Mapping[] }) =>
   featureCall<{ promotion: Promotion }>(PATH, tenant, "plan", { ...input, ...source(input.sourceTenantId) })
 
 /** Change-set actions routed through /api/promotion, which re-checks the two-tenant rule. */

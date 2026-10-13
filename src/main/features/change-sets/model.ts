@@ -19,6 +19,9 @@ export type OperationAction = "create" | "update" | "delete"
  */
 export const SUPPORTED_OPERATIONS: Readonly<Record<string, readonly OperationAction[]>> = {
   ConfigurationPolicies: ["create", "update", "delete"],
+  CompliancePolicies: ["create", "update", "delete"],
+  DeviceConfigurations: ["create", "update", "delete"],
+  EndpointSecurityIntents: ["create", "update", "delete"],
 }
 
 /** Most operations in one change set; keeps review, capture and storage bounded. */
@@ -376,7 +379,7 @@ export function unsupportedReason(folder: string, action: OperationAction): stri
   const type = typeForFolder(folder)
   if (!type) return `${folder} is not an Intune type TenuVault knows.`
   const actions = SUPPORTED_OPERATIONS[type.folder]
-  if (!actions) return `Change sets do not support ${type.label} yet. Supported: Settings Catalog policies.`
+  if (!actions) return `Change sets do not support ${type.label} yet. Supported: ${Object.keys(SUPPORTED_OPERATIONS).map((folder) => typeForFolder(folder)?.label ?? folder).join(", ")}.`
   if (!actions.includes(action)) return `Change sets do not support ${action} for ${type.label}.`
   return undefined
 }
