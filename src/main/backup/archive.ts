@@ -5,8 +5,9 @@ import { typeForFolder } from '../../shared/intune/registry'
 import { comparableSnapshot } from '../../shared/intune/compare'
 const snapshotHash = (value: Record<string, any>) => createHash('sha256').update(JSON.stringify(comparableSnapshot(value))).digest('base64').slice(0, 22)
 import { LocalBlobStore } from '../storage/local-blob-store'
+import { MAX_BACKUP_ARCHIVE_BYTES, MAX_BACKUP_ARCHIVE_FILES } from '../../shared/constants'
 
-const MAX = 32 * 1024 * 1024
+const MAX = MAX_BACKUP_ARCHIVE_BYTES
 const guid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
 const object = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v)
 export interface ReviewedArchive { tenantId: string; backupId: string; digest: string; files: Map<string, Buffer>; count: number }
@@ -16,7 +17,7 @@ function inspectDirectory(raw: Buffer): void {
   while (end >= Math.max(0, raw.length - 65557) && raw.readUInt32LE(end) !== 0x06054b50) end--
   if (end < 0 || raw.readUInt32LE(end) !== 0x06054b50 || end + 22 + raw.readUInt16LE(end + 20) !== raw.length) throw new Error('Invalid ZIP directory')
   const count = raw.readUInt16LE(end + 10)
-  if (raw.readUInt16LE(end + 4) || raw.readUInt16LE(end + 6) || count !== raw.readUInt16LE(end + 8) || count > 5000) throw new Error('Unsupported ZIP layout')
+  if (raw.readUInt16LE(end + 4) || raw.readUInt16LE(end + 6) || count !== raw.readUInt16LE(end + 8) || count > MAX_BACKUP_ARCHIVE_FILES) throw new Error('Unsupported ZIP layout')
   let offset = raw.readUInt32LE(end + 16), total = 0
   const names = new Set<string>()
   for (let i = 0; i < count; i++) {

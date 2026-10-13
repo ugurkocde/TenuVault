@@ -39,5 +39,15 @@ export function localStorageAccountName(tenantId: string): string {
 /** Blob container that holds backups and that all backup routes read. */
 export const BACKUP_CONTAINER = "intune-backups"
 
+/**
+ * Largest total size of the files in one backup archive, in bytes. Backup
+ * downloads are built in memory, and imports refuse larger archives, so both
+ * paths share this bound. Defined here so every caller uses the same value.
+ */
+export const MAX_BACKUP_ARCHIVE_BYTES = 32 * 1024 * 1024
+
+/** Most files in one backup archive, matching the import bound. */
+export const MAX_BACKUP_ARCHIVE_FILES = 5000
+
 /** Encrypted ownership evidence for abandoned folders, excluded from exported archives. */
 export const BACKUP_OWNER_FILE = ".tenuvault-owner.json"

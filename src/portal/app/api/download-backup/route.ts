@@ -1,7 +1,13 @@
 import { decodeXml } from "~/lib/storage/list"
 import { blobPath, isSafeArchivePath } from "../../../../shared/security"
-import { BACKUP_OWNER_FILE } from "../../../../shared/constants"
+import { BACKUP_OWNER_FILE, MAX_BACKUP_ARCHIVE_BYTES, MAX_BACKUP_ARCHIVE_FILES } from "../../../../shared/constants"
 import { type NextRequest, NextResponse } from "next/server"
+
+interface ListedFile {
+  path: string
+  /** Content length from the listing, or null when storage did not report one. */
+  size: number | null
+}
 
 async function getAccessToken(tenantId: string, appId: string, clientSecret: string) {
   const tokenResponse = await fetch(
@@ -53,8 +59,8 @@ export async function POST(request: NextRequest) {
     const accessToken = await getAccessToken(tenantId, appId, clientSecret)
 
     // Function to fetch all files with pagination support
-    const fetchAllFiles = async (): Promise<string[]> => {
-      const allFiles: string[] = []
+    const fetchAllFiles = async (): Promise<ListedFile[]> => {
+      const allFiles: ListedFile[] = []
       const seenMarkers = new Set<string>()
       let marker: string | null = null
       let hasMore = true
@@ -88,7 +94,9 @@ export async function POST(request: NextRequest) {
             const blobName = decodeXml(nameMatch[1])
             // Include all files (skip directories which don't have content)
             if (blobName && !blobName.endsWith('/') && blobName !== `${backupId}/${BACKUP_OWNER_FILE}`) {
-              allFiles.push(blobName)
+              const sizeMatch = blobXml.match(/<Content-Length>(\d+)<\/Content-Length>/)
+              const size = sizeMatch ? Number(sizeMatch[1]) : null
+              allFiles.push({ path: blobName, size: size !== null && Number.isSafeInteger(size) ? size : null })
             }
           }
         }
@@ -107,7 +115,8 @@ export async function POST(request: NextRequest) {
       return allFiles
     }
 
-    const filePaths = await fetchAllFiles()
+    const listedFiles = await fetchAllFiles()
+    const filePaths = listedFiles.map((file) => file.path)
     console.log(`Found ${filePaths.length} files to download from backup ${backupId}`)
 
     // Log file breakdown by folder for debugging
@@ -136,6 +145,24 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: "No files found in backup" },
         { status: 404 }
+      )
+    }
+
+    // Refuse oversized backups before fetching any file body. The archive is
+    // built in memory, so an unbounded backup could kill the app instead of
+    // returning an actionable error. Files without a listed length fall back
+    // to the file count cap below.
+    if (listedFiles.length > MAX_BACKUP_ARCHIVE_FILES) {
+      return NextResponse.json(
+        { error: `Download refused: this backup has ${listedFiles.length} files, more than the ${MAX_BACKUP_ARCHIVE_FILES} file limit for a backup download. Restore the backup from Backup Details instead of downloading it, or choose a smaller backup.` },
+        { status: 413 }
+      )
+    }
+    const totalBytes = listedFiles.reduce((sum, file) => sum + (file.size ?? 0), 0)
+    if (totalBytes > MAX_BACKUP_ARCHIVE_BYTES) {
+      return NextResponse.json(
+        { error: `Download refused: this backup totals ${totalBytes} bytes, more than the 32 MiB limit for a backup download. Restore the backup from Backup Details instead of downloading it, or choose a smaller backup.` },
+        { status: 413 }
       )
     }
 
