@@ -9,6 +9,8 @@ import { CLASSIFICATION_LABELS, formatDate, loadList, runScan, STATUS_LABELS, ty
 import { FindingDetail } from "./FindingDetail"
 import { FleetSummary } from "./FleetSummary"
 import { ScanSummary } from "./ScanSummary"
+import { GovernanceExportButtons } from "../shared/GovernanceExportButtons"
+import { hygieneCsv, hygieneJson } from "../shared/governance-export"
 
 const STATUS_TONE: Record<FindingStatus, "danger" | "neutral" | "warning" | "success"> = { open: "danger", acknowledged: "warning", "false-positive": "neutral", resolved: "success" }
 const SEVERITY_TONE = { high: "danger", medium: "warning", low: "neutral" } as const
@@ -104,7 +106,10 @@ export default function HygieneTab({ tenant, plan, allowed }: FeatureTabProps) {
               <input className={`${selectClass} rounded-full`} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Finding or policy name" />
             </label>
           </div>
-          <p className="text-xs text-gray-500" aria-live="polite">{shown.length} of {findings.length} findings shown.</p>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs text-gray-500" aria-live="polite">{shown.length} of {findings.length} findings shown.</p>
+            <GovernanceExportButtons kind="hygiene" tenantName={tenant.name} disabled={shown.length === 0} buildCsv={() => hygieneCsv(shown, ruleName)} buildJson={(exportedAt) => hygieneJson(shown, ruleName, tenant.name, exportedAt)} />
+          </div>
           {shown.length > 0 && (
             <ul className="divide-y divide-gray-100 dark:divide-gray-800">
               {shown.map((finding) => {

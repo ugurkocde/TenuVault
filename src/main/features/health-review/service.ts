@@ -1,10 +1,16 @@
-import { allows } from "../../../shared/plans"
+import { allows, type Feature } from "../../../shared/plans"
+import { baselineSignals } from "../baseline-upgrades/service"
+import type { SignalProvider, WorkSignal } from "../contracts"
 import type { FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
+import { signals as hygieneSignals } from "../hygiene"
 import type { Stored } from "../records"
+import { signals as scoreSignals } from "../scores"
+import { standardSignals } from "../standards/service"
 import {
   buildPayload,
   checkBackups,
+  checkSignals,
   clampInterval,
   DEFAULT_INTERVAL_HOURS,
   isDue,
@@ -161,6 +167,46 @@ function brief(message: string): string {
   return message.replace(/\s+/g, " ").trim().slice(0, 200)
 }
 
+/** Signal providers of the other workflows, each with the feature that licenses it. */
+const SIGNAL_PROVIDERS: Array<{ feature: Feature; provider: SignalProvider }> = [
+  { feature: "baselineUpgrades", provider: (deps, tenantId) => baselineSignals(deps, tenantId) },
+  { feature: "goldenStandards", provider: (deps, tenantId) => standardSignals(deps, tenantId) },
+  { feature: "hygieneExplorer", provider: hygieneSignals },
+  { feature: "baselineScores", provider: scoreSignals },
+]
+
+/**
+ * Reads the work signals of one tenant from stored records. A provider runs only when
+ * the tenant plan includes its feature, and providers only read records, so a review
+ * never writes to the tenant for a signal. A provider that fails marks the family as
+ * not evaluated; the signals that were read still count.
+ */
+export async function collectSignals(deps: FeatureDeps, tenantId: string): Promise<{ signals: WorkSignal[]; evaluated: boolean }> {
+  let plan: Awaited<ReturnType<FeatureDeps["plan"]>> | null = null
+  try {
+    plan = await deps.plan(tenantId)
+  } catch {
+    plan = null
+  }
+  if (!plan) return { signals: [], evaluated: false }
+  const signals: WorkSignal[] = []
+  const seen = new Set<string>()
+  let evaluated = true
+  for (const entry of SIGNAL_PROVIDERS) {
+    if (!allows(plan, entry.feature)) continue
+    try {
+      for (const signal of await entry.provider(deps, tenantId)) {
+        if (seen.has(signal.key)) continue
+        seen.add(signal.key)
+        signals.push(signal)
+      }
+    } catch {
+      evaluated = false
+    }
+  }
+  return { signals, evaluated }
+}
+
 export class ReviewInProgress extends Error {
   constructor() {
     super("A health review for this tenant is already running.")
@@ -184,8 +230,9 @@ export async function runReview(deps: FeatureDeps, tenantId: string, trigger: Ru
     const schedule = scheduleOf(deps, tenant)
     const missed = schedule ? missedWindows(schedule, startedAt) : 0
     const listing = await listBackups(deps, tenant)
+    const collected = await collectSignals(deps, tenant)
     const now = deps.now()
-    const results: CheckResult[] = [checkBackups(tenant, listing, now)]
+    const results: CheckResult[] = [checkBackups(tenant, listing, now), checkSignals(tenant, collected.signals, collected.evaluated)]
 
     // Without history: the reconciled values become new revisions and must not nest old ones.
     const existing = findingsOf(deps, tenant).map(({ history: _history, ...plain }) => plain)
