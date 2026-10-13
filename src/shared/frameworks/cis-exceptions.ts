@@ -30,7 +30,7 @@ export interface NewCisExceptionInput {
   expiresOn: string
 }
 
-const MAX_EXCEPTIONS = 500
+export const MAX_EXCEPTIONS = 500
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -39,7 +39,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function trimmed(value: unknown, field: string, max: number): string {
   if (typeof value !== "string") throw new Error(`Exception ${field} must be a string.`)
-  const text = value.trim()
+  const text = [...value.trim()].filter(char => { const code = char.codePointAt(0) ?? 0; return code > 31 && (code < 127 || code > 159) }).join("")
   if (!text) throw new Error(`Exception ${field} must not be empty.`)
   if (text.length > max) throw new Error(`Exception ${field} must be at most ${max} characters.`)
   return text

@@ -94,7 +94,7 @@ export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[],
     // Exceptions never change the raw status counts. The excepted count is the
     // number of non-Present findings covered by an active exception for this
     // level, and adjustedPassRate counts those findings as passed.
-    const findingKeys = new Set(findings.map(finding => exceptionKey(benchmark, version, level, finding.policyName, finding.settingId)))
+    const findingKeys = new Set(findings.filter(finding => finding.status !== "Present").map(finding => exceptionKey(benchmark, version, level, finding.policyName, finding.settingId)))
     const levelExceptions = (exceptions ?? []).filter(exception => isActive(exception, today) && exception.level === level && exception.benchmark === benchmark && exception.version === version && findingKeys.has(exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId)))
     const exceptedKeys = new Set(levelExceptions.map(exception => exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId)))
     const excepted = findings.filter(finding => finding.status !== "Present" && exceptedKeys.has(exceptionKey(benchmark, version, level, finding.policyName, finding.settingId))).length

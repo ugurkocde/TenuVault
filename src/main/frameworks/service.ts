@@ -10,7 +10,7 @@ import { loadNcsc } from "./ncsc"
 import { validateRecommendationList } from "../../shared/frameworks/cis-manual"
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
 import { cisReadiness } from "../../shared/frameworks/cis-readiness"
-import { isDateOnly, validateNewException, type CisException } from "../../shared/frameworks/cis-exceptions"
+import { exceptionKey, isActive, isDateOnly, MAX_EXCEPTIONS, validateNewException, type CisException } from "../../shared/frameworks/cis-exceptions"
 import { tenantWriteLabel, withTenantWrite } from "../features/write-lock"
 
 const GRAPH = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies"
@@ -209,8 +209,22 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       catch (error) { throw new FrameworkError(error instanceof Error ? error.message : "The exception is invalid.") }
       const today = new Date().toISOString().slice(0, 10)
       if (!isDateOnly(input.expiresOn) || input.expiresOn <= today) throw new FrameworkError("Provide an expiry date in the future.")
+      const existing = workspace.exceptions ?? []
+      if (existing.length >= MAX_EXCEPTIONS) throw new FrameworkError(`Exceptions must contain at most ${MAX_EXCEPTIONS} entries. Remove an exception before adding another.`)
+      const newKey = exceptionKey(input.benchmark, input.version, input.level, input.policyName, input.settingId)
+      if (existing.some(exception => isActive(exception, today) && exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId) === newKey)) throw new FrameworkError("An active exception already exists for this finding.", 409)
+      const matchesFinding = workspace.history.some(entry => entry.assessment.findings.some(finding => {
+        const policy = entry.policies[finding.policyIndex]
+        if (!policy) return false
+        const provenance = policy.provenance ?? {}
+        const bench = typeof provenance.benchmark === "string" ? provenance.benchmark : ""
+        const ver = typeof provenance.version === "string" ? provenance.version : ""
+        const lvl = typeof provenance.level === "string" && provenance.level.includes("2") ? 2 : 1
+        return bench === input.benchmark && ver === input.version && lvl === input.level && finding.policyName === input.policyName && finding.settingId === input.settingId
+      }))
+      if (!matchesFinding) throw new FrameworkError("No saved assessment finding matches this exception. Run an assessment for this benchmark first.")
       const exception: CisException = { ...input, id: randomUUID(), createdAt: new Date().toISOString() }
-      workspace.exceptions = [...(workspace.exceptions ?? []), exception]
+      workspace.exceptions = [...existing, exception]
       saveWorkspace(workspace)
     } else if (body.action === "workspace-cis-exception-remove") {
       if (body.frameworkId !== "cis-benchmarks") throw new FrameworkError("Exceptions are available for CIS Benchmarks only.")

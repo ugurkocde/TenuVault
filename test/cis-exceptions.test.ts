@@ -3,9 +3,10 @@ import { exceptionKey, isActive, validateExceptions, validateNewException, type 
 import { cisReadiness } from "../src/shared/frameworks/cis-readiness"
 import { convertKit, type KitFile } from "../src/shared/frameworks/cis-kit"
 import { handleFramework, setInternalCisBenchmarksEnabled, assessPolicySet } from "../src/main/frameworks/service"
-import { loadWorkspace, saveWorkspace, setFrameworkStore } from "../src/main/frameworks/workspaces"
+import { loadWorkspace, recordAssessment, saveWorkspace, setFrameworkStore } from "../src/main/frameworks/workspaces"
 import { parsePolicies } from "../src/shared/frameworks/policies"
 import { generateCisReadinessPDF } from "../src/shared/compliance/report-pdf"
+import { cisReadinessCsv, cisReadinessJson } from "../src/renderer/features/shared/governance-export"
 import { inflateSync } from "node:zlib"
 
 const type = "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance"
@@ -86,6 +87,17 @@ describe("CIS exception validation", () => {
     expect(() => validateNewException({ benchmark: "fakebook-os", version: "9.9.9", level: 2, policyName: "P", settingId: "fakebook_1", owner: "Ada", reason: "r", expiresOn: "2027-02-30" })).toThrow()
   })
 
+  it("strips control characters including newlines from text fields", () => {
+    const stored = validateExceptions([{ ...makeException(), owner: "Ada\nLovelace\r\nInjected: fake", reason: "Line one\nLine two\tEnd" }])
+    expect(stored[0]?.owner).not.toContain("\n")
+    expect(stored[0]?.owner).not.toContain("\r")
+    expect(stored[0]?.reason).not.toContain("\n")
+    expect(stored[0]?.reason).not.toContain("\t")
+    const fresh = validateNewException({ benchmark: "fakebook-os", version: "9.9.9", level: 1, policyName: "Fakebook Beta", settingId: "fakebook_1", owner: "Ada\nLovelace", reason: "Risk\naccepted", expiresOn: "2027-01-01" })
+    expect(fresh.owner).not.toContain("\n")
+    expect(fresh.reason).not.toContain("\n")
+  })
+
   it("builds a stable key and treats the expiry date as the last active day", () => {
     expect(exceptionKey("fakebook-os", "9.9.9", 1, "Fakebook Beta", "fakebook_1")).toBe(exceptionKey("fakebook-os", "9.9.9", 1, "Fakebook Beta", "fakebook_1"))
     expect(exceptionKey("fakebook-os", "9.9.9", 1, "Fakebook Beta", "fakebook_1")).not.toBe(exceptionKey("fakebook-os", "9.9.9", 2, "Fakebook Beta", "fakebook_1"))
@@ -132,7 +144,7 @@ describe("CIS readiness with exceptions", () => {
     const summary = cisReadiness(assessment, policies, undefined, undefined, [present], "2026-10-13")
     const level1 = summary.levels.find(level => level.level === 1)!
     expect(level1.excepted).toBe(0)
-    expect(level1.exceptions.map(item => item.id)).toEqual(["exc-present"])
+    expect(level1.exceptions).toEqual([])
     expect(level1.adjustedPassRate).toBe(0.5)
   })
 
@@ -160,6 +172,27 @@ describe("CIS exceptions in the PDF report", () => {
   })
 })
 
+describe("CIS exceptions in governance exports", () => {
+  it("includes excepted, adjusted pass rate and active exception details in CSV and JSON", () => {
+    const { policies, assessment } = assessed()
+    const summary = cisReadiness(assessment, policies, undefined, undefined, [makeException()], "2026-10-13")
+    const csv = cisReadinessCsv(summary)
+    expect(csv.split("\r\n")[0]).toContain("Excepted")
+    expect(csv.split("\r\n")[0]).toContain("Adjusted pass rate")
+    expect(csv.split("\r\n")[0]).toContain("Exceptions")
+    expect(csv).toContain("Fakebook Beta")
+    expect(csv).toContain("fakebook_setting_beta")
+    expect(csv).toContain("Ada Lovelace")
+    expect(csv).toContain("2027-01-01")
+    expect(csv).toContain("Accepted risk for lab devices")
+    const json = JSON.parse(cisReadinessJson(summary, "Contoso", "2026-10-13T10:00:00Z")) as { levels: Array<{ level: number; excepted: number; adjustedPassRate: number | null; exceptions: Array<{ policyName: string; settingId: string; owner: string; expiresOn: string; reason: string }> }> }
+    const level1 = json.levels.find(level => level.level === 1)!
+    expect(level1.excepted).toBe(1)
+    expect(level1.adjustedPassRate).toBe(1)
+    expect(level1.exceptions).toEqual([{ policyName: "Fakebook Beta", settingId: "fakebook_setting_beta", owner: "Ada Lovelace", expiresOn: "2027-01-01", reason: "Accepted risk for lab devices" }])
+  })
+})
+
 describe("CIS exception workspace persistence", () => {
   it("round trips exceptions through save and load", () => {
     memoryStore()
@@ -183,18 +216,62 @@ describe("CIS exception workspace persistence", () => {
 })
 
 describe("CIS exception service actions", () => {
-  it("adds and removes an exception, returning the updated workspace", async () => {
+  it("rejects an exception on an empty workspace and adds and removes one after seeding a saved assessment", async () => {
     setInternalCisBenchmarksEnabled(true)
     memoryStore()
-    const added = await handleFramework({ action: "workspace-cis-exception-add", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1, policyName: "Fakebook Beta", settingId: "fakebook_1", owner: "Ada Lovelace", reason: "Accepted risk", expiresOn: futureDate() }) as { exceptions?: CisException[] }
+    const input = { action: "workspace-cis-exception-add", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1, policyName: "Fakebook Beta", settingId: "fakebook_setting_beta", owner: "Ada Lovelace", reason: "Accepted risk", expiresOn: futureDate() }
+    await expect(handleFramework(input)).rejects.toMatchObject({ status: 400 })
+    expect(loadWorkspace(tenantId, "cis-benchmarks").exceptions ?? []).toEqual([])
+    const { policies, assessment } = assessed()
+    recordAssessment(assessment, policies)
+    const added = await handleFramework(input) as { exceptions?: CisException[] }
     expect(added.exceptions).toHaveLength(1)
-    expect(added.exceptions?.[0]).toMatchObject({ benchmark: "fakebook-os", version: "9.9.9", level: 1, policyName: "Fakebook Beta", settingId: "fakebook_1", owner: "Ada Lovelace" })
+    expect(added.exceptions?.[0]).toMatchObject({ benchmark: "fakebook-os", version: "9.9.9", level: 1, policyName: "Fakebook Beta", settingId: "fakebook_setting_beta", owner: "Ada Lovelace" })
     expect(added.exceptions?.[0]?.id).toBeTruthy()
     const id = added.exceptions![0]!.id
     expect(loadWorkspace(tenantId, "cis-benchmarks").exceptions).toHaveLength(1)
     const removed = await handleFramework({ action: "workspace-cis-exception-remove", tenantId, frameworkId: "cis-benchmarks", exceptionId: id }) as { exceptions?: CisException[] }
     expect(removed.exceptions).toEqual([])
     await expect(handleFramework({ action: "workspace-cis-exception-remove", tenantId, frameworkId: "cis-benchmarks", exceptionId: id })).rejects.toMatchObject({ status: 404 })
+  })
+
+  it("rejects an exception that does not match any saved assessment finding", async () => {
+    setInternalCisBenchmarksEnabled(true)
+    memoryStore()
+    const { policies, assessment } = assessed()
+    recordAssessment(assessment, policies)
+    await expect(handleFramework({ action: "workspace-cis-exception-add", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1, policyName: "Fakebook Beta", settingId: "fakebook_unknown", owner: "Ada", reason: "Risk", expiresOn: futureDate() })).rejects.toMatchObject({ status: 400 })
+    await expect(handleFramework({ action: "workspace-cis-exception-add", tenantId, frameworkId: "cis-benchmarks", benchmark: "other-os", version: "9.9.9", level: 1, policyName: "Fakebook Beta", settingId: "fakebook_setting_beta", owner: "Ada", reason: "Risk", expiresOn: futureDate() })).rejects.toMatchObject({ status: 400 })
+    await expect(handleFramework({ action: "workspace-cis-exception-add", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 2, policyName: "Fakebook Beta", settingId: "fakebook_setting_beta", owner: "Ada", reason: "Risk", expiresOn: futureDate() })).rejects.toMatchObject({ status: 400 })
+    expect(loadWorkspace(tenantId, "cis-benchmarks").exceptions ?? []).toEqual([])
+  })
+
+  it("rejects adding beyond the exception cap before saving so the workspace still loads", async () => {
+    setInternalCisBenchmarksEnabled(true)
+    memoryStore()
+    const { policies, assessment } = assessed()
+    recordAssessment(assessment, policies)
+    const workspace = loadWorkspace(tenantId, "cis-benchmarks")
+    workspace.exceptions = Array.from({ length: 500 }, (_, index) => makeException({ id: `exc-${index}` }))
+    saveWorkspace(workspace)
+    await expect(handleFramework({ action: "workspace-cis-exception-add", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1, policyName: "Fakebook Beta", settingId: "fakebook_setting_beta", owner: "Ada", reason: "Risk", expiresOn: futureDate() })).rejects.toMatchObject({ status: 400 })
+    expect(loadWorkspace(tenantId, "cis-benchmarks").exceptions).toHaveLength(500)
+  })
+
+  it("rejects a duplicate active exception with 409 and allows the same key after expiry", async () => {
+    setInternalCisBenchmarksEnabled(true)
+    memoryStore()
+    const { policies, assessment } = assessed()
+    recordAssessment(assessment, policies)
+    const input = { action: "workspace-cis-exception-add", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1, policyName: "Fakebook Beta", settingId: "fakebook_setting_beta", owner: "Ada", reason: "Risk", expiresOn: futureDate() }
+    await handleFramework(input)
+    await expect(handleFramework(input)).rejects.toMatchObject({ status: 409 })
+    expect(loadWorkspace(tenantId, "cis-benchmarks").exceptions).toHaveLength(1)
+    const workspace = loadWorkspace(tenantId, "cis-benchmarks")
+    workspace.exceptions = workspace.exceptions!.map(exception => ({ ...exception, expiresOn: "2020-01-01" }))
+    saveWorkspace(workspace)
+    const added = await handleFramework(input) as { exceptions?: CisException[] }
+    expect(added.exceptions).toHaveLength(2)
   })
 
   it("rejects invalid add input and a past expiry date", async () => {
