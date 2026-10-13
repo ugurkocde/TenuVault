@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { cisSignals, setInternalCisBenchmarksEnabledForSignals } from "../src/main/frameworks/cis-signals"
+import { cisSignals } from "../src/main/frameworks/cis-signals"
+import { setInternalCisBenchmarksEnabled } from "../src/main/frameworks/service"
 import { loadWorkspace, saveWorkspace, setFrameworkStore } from "../src/main/frameworks/workspaces"
 import { convertKit, type KitFile } from "../src/shared/frameworks/cis-kit"
 import type { Assessment, BaselinePolicy, Finding } from "../src/shared/frameworks/policies"
@@ -49,14 +50,14 @@ let data: Map<string, string>
 beforeEach(() => {
   data = new Map<string, string>()
   setFrameworkStore({ get: k => data.get(k) ?? null, set: (k, v) => { data.set(k, v) }, delete: k => { data.delete(k) } })
-  setInternalCisBenchmarksEnabledForSignals(true)
+  setInternalCisBenchmarksEnabled(true)
 })
-afterEach(() => { setInternalCisBenchmarksEnabledForSignals(null) })
+afterEach(() => { setInternalCisBenchmarksEnabled(null) })
 
 describe("cisSignals", () => {
   it("returns no signals when the internal flag is off", () => {
     seed([historyEntry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"]), historyEntry("run-2", "2026-02-01T00:00:00.000Z", ["Missing", "Missing", "Missing"])])
-    setInternalCisBenchmarksEnabledForSignals(false)
+    setInternalCisBenchmarksEnabled(false)
     expect(cisSignals(tenantId)).toEqual([])
   })
 
@@ -100,9 +101,31 @@ describe("cisSignals", () => {
     expect(cisSignals(tenantId)).toEqual([])
   })
 
+  it("emits nothing when a newer assessment recovers after a drop", () => {
+    seed([
+      historyEntry("run-3", "2026-03-01T00:00:00.000Z", ["Present", "Present", "Present"]),
+      historyEntry("run-2", "2026-02-01T00:00:00.000Z", ["Missing", "Missing", "Missing"]),
+      historyEntry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"]),
+    ])
+    expect(cisSignals(tenantId)).toEqual([])
+  })
+
+  it("produces a signal when CIS is enabled through the established flag with the env var unset", () => {
+    seed([historyEntry("run-2", "2026-02-01T00:00:00.000Z", ["Missing", "Missing", "Missing"]), historyEntry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"])])
+    const previous = process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS
+    delete process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS
+    try {
+      setInternalCisBenchmarksEnabled(true)
+      expect(cisSignals(tenantId).length).toBeGreaterThan(0)
+    } finally {
+      if (previous === undefined) delete process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS
+      else process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS = previous
+    }
+  })
+
   it("follows the environment flag when no override is set", () => {
     seed([historyEntry("run-2", "2026-02-01T00:00:00.000Z", ["Missing", "Missing", "Missing"]), historyEntry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"])])
-    setInternalCisBenchmarksEnabledForSignals(null)
+    setInternalCisBenchmarksEnabled(null)
     const previous = process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS
     delete process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS
     try {

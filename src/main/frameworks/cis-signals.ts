@@ -1,17 +1,7 @@
 import { cisDriftSignals, cisReadinessTrend } from "../../shared/frameworks/cis-trend"
 import type { WorkSignal } from "../features/contracts"
+import { internalCisBenchmarksEnabled } from "./service"
 import { loadWorkspace } from "./workspaces"
-
-let internalCisOverride: boolean | null = null
-
-/** Test override for the internal CIS Benchmarks flag used by the signal provider. Null follows the environment. */
-export function setInternalCisBenchmarksEnabledForSignals(value: boolean | null): void {
-  internalCisOverride = value
-}
-
-function internalCisBenchmarksEnabledForSignals(): boolean {
-  return internalCisOverride ?? process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS === "1"
-}
 
 function slug(value: string): string {
   const cleaned = value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
@@ -30,7 +20,7 @@ function percent(rate: number): string {
  * reading missing drift as healthy.
  */
 export function cisSignals(tenantId: string): WorkSignal[] {
-  if (!internalCisBenchmarksEnabledForSignals()) return []
+  if (!internalCisBenchmarksEnabled()) return []
   const tenant = tenantId.toLowerCase()
   const workspace = loadWorkspace(tenant, "cis-benchmarks")
   if (!workspace.history.length) return []
