@@ -1,3 +1,4 @@
+import JSZip from "jszip"
 import { comparable, parsePolicies, type BaselinePolicy, type RecordJson } from "./policies"
 
 /**
@@ -59,6 +60,52 @@ function scopeOf(path: string): "device" | "user" | undefined {
 /** Version marker such as 5.0.0 or v1.1.0 in a file name, when the name carries one. */
 export function kitFileVersion(path: string): string | undefined {
   return baseName(path).match(/(?:^|[^0-9])v?(\d+\.\d+\.\d+)(?![0-9])/)?.[1]
+}
+
+const MAX_KIT_ZIP_ENTRIES = 2000
+const MAX_KIT_ZIP_FILE_BYTES = 8 * 1024 * 1024
+const MAX_KIT_ZIP_TOTAL_BYTES = 32 * 1024 * 1024
+
+export async function readKitZip(data: Uint8Array | ArrayBuffer): Promise<KitFile[]> {
+  let zip: JSZip
+  try { zip = await JSZip.loadAsync(data) }
+  catch { throw new KitConversionError("The selected file is not a valid zip archive.") }
+  const entries = Object.values(zip.files).filter(entry => !entry.dir)
+  if (entries.length > MAX_KIT_ZIP_ENTRIES) throw new KitConversionError("The zip contains too many files. Split the kit or remove extra files before importing.")
+  const files: KitFile[] = []
+  let total = 0
+  for (const entry of entries) {
+    const declared = (entry as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize
+    if (typeof declared === "number" && declared > MAX_KIT_ZIP_FILE_BYTES) throw new KitConversionError("A file in the zip is larger than 8 MB. Remove it before importing.")
+    const content = await entry.async("string")
+    const size = new TextEncoder().encode(content).length
+    if (size > MAX_KIT_ZIP_FILE_BYTES) throw new KitConversionError("A file in the zip is larger than 8 MB. Remove it before importing.")
+    total += size
+    if (total > MAX_KIT_ZIP_TOTAL_BYTES) throw new KitConversionError("The zip expands to more than 32 MB. Split the kit before importing.")
+    files.push({ path: entry.name, content })
+  }
+  return files
+}
+
+export function suggestedKitBenchmark(paths: string[]): { id: string; version?: string } {
+  const cleaned = paths.map(path => normalized(path)).filter(path => path.length > 0)
+  if (!cleaned.length) return { id: "" }
+  const segments = cleaned.map(path => path.split("/")[0] ?? "")
+  const common = segments.every(segment => segment === segments[0]) ? segments[0]! : (segments.find(segment => /\.zip$/i.test(segment)) ?? segments[0]!)
+  if (!common) return { id: "" }
+  const withoutZip = common.replace(/\.zip$/i, "")
+  const segmentVersion = withoutZip.match(/(?:^|[^0-9])v?(\d+\.\d+\.\d+)$/)?.[1] ?? kitFileVersion(withoutZip)
+  const version = cleaned.map(path => kitFileVersion(path)).find(item => item !== undefined) ?? segmentVersion
+  const withoutVersion = withoutZip.replace(/[\s_-]*v?\d+\.\d+\.\d+$/i, "")
+  const slug = withoutVersion
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1-$2")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+  if (!slug) return { id: "" }
+  return { id: slug, ...(version ? { version } : {}) }
 }
 
 function provenanceFor(benchmark: KitBenchmark, version: string, level: KitLevel, path: string, extra?: { [key: string]: string }): RecordJson {

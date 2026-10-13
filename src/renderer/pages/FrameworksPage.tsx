@@ -7,7 +7,7 @@ import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { NCSC_COMMIT, NCSC_REPOSITORY, type Framework } from "../../shared/frameworks/catalog"
 import { CIS_BENCHMARKS_ID, effectiveFrameworks, searchEffectiveFrameworks } from "../../shared/frameworks/cis-internal"
-import { convertKit, type KitConversion, type KitFile, type KitLevel } from "../../shared/frameworks/cis-kit"
+import { convertKit, readKitZip, suggestedKitBenchmark, type KitConversion, type KitFile, type KitLevel } from "../../shared/frameworks/cis-kit"
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
 import { cisReadiness } from "../../shared/frameworks/cis-readiness"
 import { cisDriftSignals, cisReadinessTrend, sparklineSegments, type CisTrendPoint } from "../../shared/frameworks/cis-trend"
@@ -264,7 +264,8 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
   const [workspace, setWorkspace] = useState<FrameworkWorkspace | null>(null)
   const [historical, setHistorical] = useState(false)
   const [kitBenchmark, setKitBenchmark] = useState("")
-  const [kitVersion, setKitVersion] = useState("")
+  const [kitDetected, setKitDetected] = useState<{ id: string; version?: string }>({ id: "" })
+  const [kitFiles, setKitFiles] = useState<KitFile[]>([])
   const [kitConversion, setKitConversion] = useState<KitConversion | null>(null)
   const [denominator, setDenominator] = useState<DenominatorEntry[] | undefined>(undefined)
   const [recommendationList, setRecommendationList] = useState<RecommendationList | undefined>(undefined)
@@ -369,47 +370,64 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
       {framework.id === "ncsc-dsg" && <p className="mt-3 text-xs text-gray-500">Source content: UK National Cyber Security Centre, Crown Copyright, <a href={`${NCSC_REPOSITORY}/blob/${NCSC_COMMIT}/LICENSE`} target="_blank" rel="noreferrer" className="underline">Apache License 2.0</a>. Pinned commit {NCSC_COMMIT.slice(0, 7)}, each file checked against its reviewed SHA-256. Modified for comparison: decoded from UTF-16, export metadata, IDs and assignments removed. No endorsement by NCSC. Comparison and reports only; policies cannot be created from this pack.</p>}
       {framework.id === "cis-benchmarks" && <div className="mt-5 border-t border-gray-100 pt-5">
         <h3 className="text-base font-medium text-gray-900">Import a Build Kit</h3>
-        <p className="mt-2 text-sm text-gray-600">Pick Build Kit files or a folder for one benchmark. The converted pack is saved through the workspace below, with its provenance, and is compared with the tenant like any other pack. Nothing is created in the tenant from this import.</p>
-        <div className="mt-4 flex flex-wrap items-end gap-3">
-          <label className="block text-sm font-medium text-gray-700">Benchmark id<input value={kitBenchmark} disabled={!!busy} onChange={e => setKitBenchmark(e.target.value)} placeholder="For example: synthetic-os" className="mt-2 w-56 rounded-full border border-gray-300 px-4 py-2 font-normal" /></label>
-          <label className="block text-sm font-medium text-gray-700">Version (when file names carry none)<input value={kitVersion} disabled={!!busy} onChange={e => setKitVersion(e.target.value)} placeholder="For example: 1.0.0" className="mt-2 w-48 rounded-full border border-gray-300 px-4 py-2 font-normal" /></label>
-        </div>
+        <p className="mt-2 text-sm text-gray-600">The kit stays on this device, is converted locally, and nothing is created in the tenant from the import.</p>
         <div className="mt-4 flex flex-wrap items-center gap-3">
-          <label className="text-sm font-medium text-gray-700">Build Kit files<input type="file" multiple accept=".json,.pdf,.xlsx,.xls,.csv,.ods,.ps1,.sh,.bat,.cmd,.txt,.md,.rtf,.xml" disabled={!!busy || !kitBenchmark.trim()} className="ml-3 max-w-full text-sm" onChange={e => {
-            const files = Array.from(e.target.files ?? []); e.target.value = ""
-            if (!files.length) return
+          <label className={primary}>Select Build Kit zip<input type="file" accept=".zip,application/zip" disabled={!!busy} className="sr-only" onChange={e => {
+            const file = e.target.files?.[0]; e.target.value = ""
+            if (!file) return
             void perform("Converting Build Kit…", async () => {
-              const kitFiles: KitFile[] = []
-              for (const file of files) kitFiles.push({ path: file.name, content: await file.text() })
-              setKitConversion(convertKit(kitFiles, { id: kitBenchmark.trim(), ...(kitVersion.trim() ? { version: kitVersion.trim() } : {}) }))
+              const files = await readKitZip(await file.arrayBuffer())
+              setKitFiles(files)
+              const suggested = suggestedKitBenchmark([file.name, ...files.map(item => item.path)])
+              setKitDetected(suggested); setKitBenchmark(suggested.id); setKitConversion(null)
+              if (suggested.id) setKitConversion(convertKit(files, { id: suggested.id, ...(suggested.version ? { version: suggested.version } : {}) }))
             })
           }} /></label>
-          <label className="text-sm font-medium text-gray-700">Build Kit folder<input type="file" disabled={!!busy || !kitBenchmark.trim()} className="ml-3 max-w-full text-sm" {...{ webkitdirectory: "" }} onChange={e => {
+          <label className={button}>Select extracted kit folder<input type="file" disabled={!!busy} className="sr-only" {...{ webkitdirectory: "" }} onChange={e => {
             const files = Array.from(e.target.files ?? []); e.target.value = ""
             if (!files.length) return
             void perform("Converting Build Kit…", async () => {
               const kitFiles: KitFile[] = []
               for (const file of files) kitFiles.push({ path: (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name, content: await file.text() })
-              setKitConversion(convertKit(kitFiles, { id: kitBenchmark.trim(), ...(kitVersion.trim() ? { version: kitVersion.trim() } : {}) }))
+              setKitFiles(kitFiles)
+              const suggested = suggestedKitBenchmark(kitFiles.map(item => item.path))
+              setKitDetected(suggested); setKitBenchmark(suggested.id); setKitConversion(null)
+              if (suggested.id) setKitConversion(convertKit(kitFiles, { id: suggested.id, ...(suggested.version ? { version: suggested.version } : {}) }))
             })
           }} /></label>
-          <label className="text-sm font-medium text-gray-700">Denominator JSON (optional)<input type="file" accept=".json,application/json" disabled={!!busy} className="ml-3 max-w-full text-sm" onChange={e => {
-            const file = e.target.files?.[0]; e.target.value = ""
-            if (!file) return
-            void perform("Reading denominator list…", async () => { setDenominator(parseDenominatorList(await file.text())) })
-          }} /></label>
-          <label className="text-sm font-medium text-gray-700">Recommendation list JSON (optional)<input type="file" accept=".json,application/json" disabled={!!busy} className="ml-3 max-w-full text-sm" onChange={e => {
-            const file = e.target.files?.[0]; e.target.value = ""
-            if (!file) return
-            void perform("Reading recommendation list…", async () => { setRecommendationList(parseRecommendationList(await file.text())) })
-          }} /></label>
         </div>
-        <p className="mt-3 text-xs text-gray-500">Recommendation list shape: a JSON object with benchmark, version and items. Each item has identifier, level (1 or 2), automated (true or false), and optional title, description, impact, audit and remediation text. The file stays on this device and is saved with the imported pack in the workspace.</p>
-        {recommendationList && <p className="mt-3 text-sm text-gray-600">{recommendationList.benchmark} {recommendationList.version}: {recommendationList.items.length} recommendations loaded, {recommendationList.items.filter(item => !item.automated).length} manual. Manual items appear in the readiness Manual section after a comparison.</p>}
-        {denominator && <p className="mt-3 text-sm text-gray-600">{denominator.length} denominator entries loaded. Coverage uses the automated entries per Level.</p>}
+        <details className="mt-4">
+          <summary className="cursor-pointer text-sm font-medium text-gray-700">Optional coverage and manual files</summary>
+          <div className="mt-3 space-y-3">
+            <div className="flex flex-wrap items-center gap-3"><label className={button}>Select denominator JSON<input type="file" accept=".json,application/json" disabled={!!busy} className="sr-only" onChange={e => {
+              const file = e.target.files?.[0]; e.target.value = ""
+              if (!file) return
+              void perform("Reading denominator list…", async () => { setDenominator(parseDenominatorList(await file.text())) })
+            }} /></label><p className="text-sm text-gray-600">Adds the full count of automated recommendations so coverage can be shown.</p></div>
+            <div className="flex flex-wrap items-center gap-3"><label className={button}>Select recommendation list JSON<input type="file" accept=".json,application/json" disabled={!!busy} className="sr-only" onChange={e => {
+              const file = e.target.files?.[0]; e.target.value = ""
+              if (!file) return
+              void perform("Reading recommendation list…", async () => { setRecommendationList(parseRecommendationList(await file.text())) })
+            }} /></label><p className="text-sm text-gray-600">Adds manual recommendations that appear in the readiness Manual section.</p></div>
+            {recommendationList && <p className="text-sm text-gray-600">{recommendationList.benchmark} {recommendationList.version}: {recommendationList.items.length} recommendations loaded, {recommendationList.items.filter(item => !item.automated).length} manual. Manual items appear in the readiness Manual section after a comparison.</p>}
+            {denominator && <p className="text-sm text-gray-600">{denominator.length} denominator entries loaded. Coverage uses the automated entries per Level.</p>}
+          </div>
+        </details>
+        {kitFiles.length > 0 && !kitConversion && <div className="mt-4 text-sm text-gray-700">
+          <p>Enter a benchmark id to convert this kit.</p>
+          <div className="mt-3 flex flex-wrap items-end gap-3">
+            <label className="block text-sm font-medium text-gray-700">Benchmark id<input value={kitBenchmark} disabled={!!busy} onChange={e => setKitBenchmark(e.target.value)} placeholder="For example: synthetic-os" className="mt-2 w-56 rounded-full border border-gray-300 px-4 py-2 font-normal" /></label>
+            <button type="button" className={button} disabled={!!busy || !kitBenchmark.trim()} onClick={() => void perform("Converting Build Kit…", async () => { setKitConversion(convertKit(kitFiles, { id: kitBenchmark.trim(), ...(kitDetected.version ? { version: kitDetected.version } : {}) })) })}>Reconvert</button>
+          </div>
+        </div>}
         {kitConversion && <div className="mt-4 text-sm text-gray-700">
           <p>{kitConversion.summary.benchmark} {kitConversion.summary.version}: {kitConversion.summary.levels.map(level => `Level ${level.level}: ${level.policies} policies, ${level.settings} settings`).join("; ") || "no converted policies"}</p>
+          <p className="mt-2 text-gray-600">Detected benchmark: {kitDetected.id || kitConversion.summary.benchmark}{kitDetected.version ? `, version ${kitDetected.version}` : ""}</p>
           {kitConversion.skipped.length > 0 && <p className="mt-2 text-gray-600">Skipped for coverage only: {kitConversion.skipped.map(item => item.path).join("; ")}</p>}
+          <div className="mt-3 flex flex-wrap items-end gap-3">
+            <label className="block text-sm font-medium text-gray-700">Benchmark id<input value={kitBenchmark} disabled={!!busy} onChange={e => setKitBenchmark(e.target.value)} className="mt-2 w-56 rounded-full border border-gray-300 px-4 py-2 font-normal" /></label>
+            <button type="button" className={button} disabled={!!busy || !kitBenchmark.trim() || !kitFiles.length} onClick={() => void perform("Converting Build Kit…", async () => { setKitConversion(convertKit(kitFiles, { id: kitBenchmark.trim(), ...(kitDetected.version ? { version: kitDetected.version } : {}) })) })}>Reconvert</button>
+          </div>
           <div className="mt-3 flex flex-wrap gap-2">{kitConversion.packs.map(pack => <button key={pack.level} type="button" className={button} disabled={!!busy} onClick={() => { reset(); setPolicies(pack.policies); setReference(pack.reference) }}>Load Level {pack.level} pack ({pack.policies.length} policies)</button>)}</div>
           <p className="mt-2 text-xs text-gray-500">Loading a pack saves it in the workspace for the selected tenant. Compare it with the tenant in step 2.</p>
         </div>}
