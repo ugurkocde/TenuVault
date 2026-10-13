@@ -1157,14 +1157,10 @@ await check("restore journal applied IDs use validated inline inputs", async () 
     assert(await waitForCondition(`${form("Correct applied ID")}?.querySelector('input')?.disabled && typeof window.__restoreAppliedResponse === 'function'`), "correction save was not held pending")
     await evaluate(`(() => {
       const row = window.__restoreRecoveryButton.parentElement;
-      const confirm = window.confirm;
-      window.confirm = () => true;
-      try {
-        [...row.querySelectorAll('button')].find(b => b.textContent.trim() === 'Allow a new operation').click();
-      } finally {
-        window.confirm = confirm;
-      }
+      [...row.querySelectorAll('button')].find(b => b.textContent.trim() === 'Allow a new operation').click();
     })()`)
+    assert(await waitForText("Start a new operation?"), "new operation did not open the confirm dialog")
+    await evaluate(`[...document.querySelectorAll('[role="dialog"] button')].find(b => b.textContent.trim() === 'Allow a new operation').click()`)
     assert(await waitForCondition(`!document.body.innerText.includes('Reconciled smoke policy')`), "new operation did not remove the edited record")
     assert(await evaluate(`window.__restoreRequests.some(r => r.action === 'new-operation' && r.key === 'smoke-correct' && r.confirmed === true)`), "new operation did not send the confirmed request")
     assert(await evaluate(`!${form("Correct applied ID")} && !window.__restoreRecoveryButton.isConnected`), "removed record left its recovery form open")
