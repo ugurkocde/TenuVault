@@ -5,7 +5,14 @@ import { Link, useParams, useSearchParams } from "react-router-dom"
 import { ArrowRight, ChevronDown, Download, ExternalLink, Info, Search } from "lucide-react"
 import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
-import { frameworks, NCSC_COMMIT, NCSC_REPOSITORY, searchFrameworks, type Framework } from "../../shared/frameworks/catalog"
+import { NCSC_COMMIT, NCSC_REPOSITORY, type Framework } from "../../shared/frameworks/catalog"
+import { effectiveFrameworks, searchEffectiveFrameworks } from "../../shared/frameworks/cis-internal"
+import { convertKit, type KitConversion, type KitFile } from "../../shared/frameworks/cis-kit"
+import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
+import { cisReadiness } from "../../shared/frameworks/cis-readiness"
+import { cisReadinessCsv, cisReadinessJson } from "../features/shared/governance-export"
+import { GovernanceExportButtons } from "../features/shared/GovernanceExportButtons"
+import { useInternalCisBenchmarks } from "../lib/internal-cis"
 import { parsePolicies, remediationPayload, type Assessment, type BaselinePolicy, type Finding } from "../../shared/frameworks/policies"
 import { CIS_FRAMEWORKS, type Plan } from "../../shared/plans"
 import type { ExportFile } from "../../main/frameworks/service"
@@ -48,6 +55,7 @@ function saveExport(file: ExportFile) {
 }
 
 export default function FrameworksPage() {
+  const catalog = effectiveFrameworks(useInternalCisBenchmarks())
   const { frameworkId } = useParams()
   const { selectedTenant, setSelectedTenantId } = useSelectedTenant()
   const tenants = useTenants()
@@ -61,7 +69,7 @@ export default function FrameworksPage() {
     setParams({}, { replace: true })
   }, [requestedTenant, tenants])
   const [query, setQuery] = useState("")
-  const framework = frameworks.find(f => f.id === frameworkId)
+  const framework = catalog.find(f => f.id === frameworkId)
   if (frameworkId && !framework) return <div className="p-8"><h1 className="text-2xl font-semibold">Framework not found</h1><Link className="mt-4 inline-block text-blue-700" to="/portal/frameworks">Browse frameworks</Link></div>
   if (framework?.disabledReason) return <div className="mx-auto max-w-6xl p-6 lg:p-8">
     <Link to="/portal/frameworks" className="text-sm text-blue-700 hover:underline">Frameworks</Link>
@@ -70,7 +78,7 @@ export default function FrameworksPage() {
   </div>
   if (framework?.nativeId) return <Suspense fallback={<p role="status" className="p-8">Loading framework…</p>}><NativeFrameworkPage key={`${framework.id}:${selectedTenant?.credentials?.tenantId ?? "none"}`} framework={framework} /></Suspense>
   if (framework) return <FrameworkDetail key={`${framework.id}:${selectedTenant?.credentials?.tenantId ?? "none"}`} framework={framework} />
-  const matches = searchFrameworks(query)
+  const matches = searchEffectiveFrameworks(catalog, query)
   return <div className="mx-auto max-w-6xl p-6 lg:p-8">
     <div className="mb-8">
       <p className="mb-3 text-xs font-medium text-gray-500">Baselines & gap analysis</p>
@@ -78,7 +86,7 @@ export default function FrameworksPage() {
       <p className="mt-3 max-w-2xl text-lg text-gray-500">Compare selected Intune settings with versioned framework mappings. Inspect configuration evidence and export independent comparison reports.</p>
     </div>
     <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-      <p className="text-sm text-gray-500">{frameworks.length} frameworks · One assessment workspace</p>
+      <p className="text-sm text-gray-500">{catalog.length} frameworks · One assessment workspace</p>
       <div className="relative w-full sm:w-80"><Search className="absolute left-4 top-3 h-4 w-4 text-gray-400" aria-hidden="true" /><input aria-label="Search framework catalog" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search name, publisher, or type…" className="h-10 w-full rounded-full border border-gray-200 bg-white pl-10 pr-4 text-sm" /></div>
     </div>
     {([
@@ -137,6 +145,10 @@ function FrameworkDetail({ framework }: { framework: Framework }) {
   const [creation, setCreation] = useState<{ success: boolean; results: { name: string; id?: string; error?: string }[] } | null>(null)
   const [workspace, setWorkspace] = useState<FrameworkWorkspace | null>(null)
   const [historical, setHistorical] = useState(false)
+  const [kitBenchmark, setKitBenchmark] = useState("")
+  const [kitVersion, setKitVersion] = useState("")
+  const [kitConversion, setKitConversion] = useState<KitConversion | null>(null)
+  const [denominator, setDenominator] = useState<DenominatorEntry[] | undefined>(undefined)
   const credentials = selectedTenant?.credentials
   // Reports of licensed CIS content are Pro and MSP; the main process checks the same plan.
   const plan = useTenantPlan(credentials?.tenantId)
@@ -176,6 +188,7 @@ function FrameworkDetail({ framework }: { framework: Framework }) {
     try { await action() } catch (e) { setError(e instanceof Error ? e.message : "The request failed.") } finally { setBusy("") }
   }
   const findings = assessment?.findings.filter(f => filter === "All" || f.status === filter) ?? []
+  const readiness = assessment && framework.id === "cis-benchmarks" ? cisReadiness(assessment, policies, denominator) : null
   return <div className="mx-auto max-w-6xl p-6 lg:p-8">
     {confirmDialog}
     <Link to="/portal/frameworks" className="text-sm text-blue-700 hover:underline">Frameworks</Link>
@@ -224,6 +237,46 @@ function FrameworkDetail({ framework }: { framework: Framework }) {
         }} /></label>
       </div>
       {framework.id === "ncsc-dsg" && <p className="mt-3 text-xs text-gray-500">Source content: UK National Cyber Security Centre, Crown Copyright, <a href={`${NCSC_REPOSITORY}/blob/${NCSC_COMMIT}/LICENSE`} target="_blank" rel="noreferrer" className="underline">Apache License 2.0</a>. Pinned commit {NCSC_COMMIT.slice(0, 7)}, each file checked against its reviewed SHA-256. Modified for comparison: decoded from UTF-16, export metadata, IDs and assignments removed. No endorsement by NCSC. Comparison and reports only; policies cannot be created from this pack.</p>}
+      {framework.id === "cis-benchmarks" && <div className="mt-5 border-t border-gray-100 pt-5">
+        <h3 className="text-base font-medium text-gray-900">Import a Build Kit</h3>
+        <p className="mt-2 text-sm text-gray-600">Pick Build Kit files or a folder for one benchmark. The converted pack is saved through the workspace below, with its provenance, and is compared with the tenant like any other pack. Nothing is created in the tenant from this import.</p>
+        <div className="mt-4 flex flex-wrap items-end gap-3">
+          <label className="block text-sm font-medium text-gray-700">Benchmark id<input value={kitBenchmark} disabled={!!busy} onChange={e => setKitBenchmark(e.target.value)} placeholder="For example: synthetic-os" className="mt-2 w-56 rounded-full border border-gray-300 px-4 py-2 font-normal" /></label>
+          <label className="block text-sm font-medium text-gray-700">Version (when file names carry none)<input value={kitVersion} disabled={!!busy} onChange={e => setKitVersion(e.target.value)} placeholder="For example: 1.0.0" className="mt-2 w-48 rounded-full border border-gray-300 px-4 py-2 font-normal" /></label>
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <label className="text-sm font-medium text-gray-700">Build Kit files<input type="file" multiple accept=".json,.pdf,.xlsx,.xls,.csv,.ods,.ps1,.sh,.bat,.cmd,.txt,.md,.rtf,.xml" disabled={!!busy || !kitBenchmark.trim()} className="ml-3 max-w-full text-sm" onChange={e => {
+            const files = Array.from(e.target.files ?? []); e.target.value = ""
+            if (!files.length) return
+            void perform("Converting Build Kit…", async () => {
+              const kitFiles: KitFile[] = []
+              for (const file of files) kitFiles.push({ path: file.name, content: await file.text() })
+              setKitConversion(convertKit(kitFiles, { id: kitBenchmark.trim(), ...(kitVersion.trim() ? { version: kitVersion.trim() } : {}) }))
+            })
+          }} /></label>
+          <label className="text-sm font-medium text-gray-700">Build Kit folder<input type="file" disabled={!!busy || !kitBenchmark.trim()} className="ml-3 max-w-full text-sm" {...{ webkitdirectory: "" }} onChange={e => {
+            const files = Array.from(e.target.files ?? []); e.target.value = ""
+            if (!files.length) return
+            void perform("Converting Build Kit…", async () => {
+              const kitFiles: KitFile[] = []
+              for (const file of files) kitFiles.push({ path: (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name, content: await file.text() })
+              setKitConversion(convertKit(kitFiles, { id: kitBenchmark.trim(), ...(kitVersion.trim() ? { version: kitVersion.trim() } : {}) }))
+            })
+          }} /></label>
+          <label className="text-sm font-medium text-gray-700">Denominator JSON (optional)<input type="file" accept=".json,application/json" disabled={!!busy} className="ml-3 max-w-full text-sm" onChange={e => {
+            const file = e.target.files?.[0]; e.target.value = ""
+            if (!file) return
+            void perform("Reading denominator list…", async () => { setDenominator(parseDenominatorList(await file.text())) })
+          }} /></label>
+        </div>
+        {denominator && <p className="mt-3 text-sm text-gray-600">{denominator.length} denominator entries loaded. Coverage uses the automated entries per Level.</p>}
+        {kitConversion && <div className="mt-4 text-sm text-gray-700">
+          <p>{kitConversion.summary.benchmark} {kitConversion.summary.version}: {kitConversion.summary.levels.map(level => `Level ${level.level}: ${level.policies} policies, ${level.settings} settings`).join("; ") || "no converted policies"}</p>
+          {kitConversion.skipped.length > 0 && <p className="mt-2 text-gray-600">Skipped for coverage only: {kitConversion.skipped.map(item => item.path).join("; ")}</p>}
+          <div className="mt-3 flex flex-wrap gap-2">{kitConversion.packs.map(pack => <button key={pack.level} type="button" className={button} disabled={!!busy} onClick={() => { reset(); setPolicies(pack.policies); setReference(pack.reference) }}>Load Level {pack.level} pack ({pack.policies.length} policies)</button>)}</div>
+          <p className="mt-2 text-xs text-gray-500">Loading a pack saves it in the workspace for the selected tenant. Compare it with the tenant in step 2.</p>
+        </div>}
+      </div>}
       {policies.length > 0 && <>
         <button className={button} onClick={() => exportJson({ reference, ...packCoverage(policies) }, `${framework.id}-coverage.json`)}>Export coverage and source mappings</button>
         <p className="mt-3 text-xs text-gray-600">Unsupported: {UNSUPPORTED.join('; ')}. Retained source declarations are not signatures. Organizational evidence and profile approval remain manual.</p>
@@ -240,6 +293,13 @@ function FrameworkDetail({ framework }: { framework: Framework }) {
       {error && <p role="alert" className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}
       {assessment && <>
         <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500"><p>{assessment.policyCount} tenant policies read · {new Date(assessment.assessedAt).toLocaleString()}</p><div className="flex flex-wrap gap-2">{(["pdf", "csv", "json"] as const).map(format => <ExportButton key={format} framework={framework} plan={plan} disabled={!!busy} onClick={() => exportSaved(format, assessment.runId)}><Download className="h-4 w-4" aria-hidden="true" />{format === "pdf" ? "PDF report" : format.toUpperCase()}</ExportButton>)}</div></div>
+        {readiness && <section aria-label="CIS readiness" className="mb-5 rounded-2xl bg-gray-50 p-4 text-sm text-gray-700">
+          <h3 className="font-medium text-gray-900">CIS readiness</h3>
+          <p className="mt-2">{readiness.manualNote} This view covers the automated settings in the imported pack only.</p>
+          {denominator ? <p className="mt-1">Coverage uses the imported denominator list. Without it, coverage is not shown.</p> : <p className="mt-1">No denominator list was imported, so coverage is not shown.</p>}
+          <div className="mt-3 overflow-auto"><table className="w-full text-left text-sm"><thead><tr className="text-gray-500"><th className="py-1 pr-3 font-medium">Benchmark</th><th className="py-1 pr-3 font-medium">Version</th><th className="py-1 pr-3 font-medium">Level</th><th className="py-1 pr-3 font-medium">Assessed settings</th><th className="py-1 pr-3 font-medium">Assessed automated</th><th className="py-1 pr-3 font-medium">Pass rate</th><th className="py-1 pr-3 font-medium">Coverage</th><th className="py-1 font-medium">Not assessed</th></tr></thead><tbody>{readiness.levels.map(level => <tr key={level.level} className="border-t border-gray-200"><td className="py-2 pr-3">{level.benchmark}</td><td className="py-2 pr-3">{level.version}</td><td className="py-2 pr-3">Level {level.level}</td><td className="py-2 pr-3">{level.assessedSettings} ({level.present} present, {level.different} different, {level.missing} missing, {level.review} review)</td><td className="py-2 pr-3">{level.assessedAutomated}</td><td className="py-2 pr-3">{level.passRate === null ? "Not available" : `${Math.round(level.passRate * 1000) / 10}%`}</td><td className="py-2 pr-3">{level.coverage === null ? "Not available" : `${Math.round(level.coverage * 1000) / 10}% (${level.assessedAutomated} of ${level.denominator})`}</td><td className="py-2">{level.notAssessed.length ? level.notAssessed.join(", ") : "None listed"}</td></tr>)}</tbody></table></div>
+          <div className="mt-3"><GovernanceExportButtons kind="cis-readiness" tenantName={selectedTenant?.name ?? null} disabled={!!busy} buildCsv={() => cisReadinessCsv(readiness)} buildJson={exportedAt => cisReadinessJson(readiness, selectedTenant?.name ?? null, exportedAt)} /></div>
+        </section>}
         <div className="my-4 flex flex-wrap gap-2" aria-label="Filter assessment findings">{["All", "Present", "Missing", "Different", "Review"].map(status => <button key={status} aria-pressed={filter === status} onClick={() => { setFilter(status); setPage(0) }} className={`rounded-full border px-4 py-2 text-sm transition-colors ${filter === status ? "border-transparent bg-primary text-primary-foreground" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>{status} <span className="ml-1 font-semibold">{assessment.findings.filter(f => status === "All" || f.status === status).length}</span></button>)}</div>
         <p className="mb-4 text-xs leading-5 text-gray-500">Different: at least one existing configuration differs. Review: the pack contains alternative values for this setting. Select a single profile or resolve differences manually. Unassigned configurations can appear as Present. Expand a finding to inspect assignment evidence, including exclusions, filter references and unavailable reads.</p>
         <div className="space-y-2">{findings.slice(page * 50, (page + 1) * 50).map(f => <FindingRow key={f.key} finding={f} disabled={!!busy || !!creation || historical || !!framework.comparisonOnly} checked={selected.has(f.key)} onChange={() => { setSelected(old => { const next = new Set(old); next.has(f.key) ? next.delete(f.key) : next.add(f.key); return next }); setPreview(false); setConfirmed(false) }} />)}</div>

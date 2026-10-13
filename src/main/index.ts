@@ -47,6 +47,8 @@ import { DisclaimerAcknowledgements, disclaimerGuard } from "./disclaimer"
 import { migrateLegacyOibRuns, setOibStore } from "./oib/service"
 import { setOibCacheDir } from "./oib/source"
 import { setFrameworkStore } from "./frameworks/workspaces"
+import { setInternalCisBenchmarksEnabled } from "./frameworks/service"
+import { INTERNAL_CIS_BENCHMARKS_ENV, isInternalCisBenchmarksFlagValue } from "../shared/frameworks/cis-internal"
 import { setNativeFrameworkStore, setNativeFrameworkAuthorization, setNativeFrameworkNotifier } from "./frameworks/native"
 import { allows, effectiveRetentionDays, PlanRequired } from "../shared/plans"
 import { APP_STATE_START_OVER_BUTTON, APP_STATE_START_OVER_DETAIL, SecureStore, UnreadableStoreError, type Cipher } from "./storage/secure-store"
@@ -761,10 +763,13 @@ async function bootstrap(): Promise<void> {
     )
   })
 
+  const internalCisBenchmarks = isInternalCisBenchmarksFlagValue(process.env[INTERNAL_CIS_BENCHMARKS_ENV])
+  setInternalCisBenchmarksEnabled(internalCisBenchmarks)
   handleTrusted("app:info", () => ({
     version: app.getVersion(),
     platform: process.platform,
     trayIconLoaded: tray.iconLoaded,
+    internalCisBenchmarks,
   }))
   handleTrusted("app:openExternal", (_event, url: string) => openExternalSafely(url))
   handleTrusted("reports:savePdf", (_event, html: unknown, fileName: unknown) => savePdfReport(html, fileName))

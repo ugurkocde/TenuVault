@@ -1,14 +1,16 @@
 import { useEffect, useState } from "react"
 import { Link, NavLink, useLocation } from "react-router-dom"
 import { ChevronDown, LoaderCircle, ShieldCheck } from "lucide-react"
-import { frameworks } from "../../shared/frameworks/catalog"
+import { effectiveFrameworks } from "../../shared/frameworks/cis-internal"
 import { useFrameworkJobs } from "../lib/framework-jobs"
+import { useInternalCisBenchmarks } from "../lib/internal-cis"
 
 /**
  * Frameworks opens the catalog overview and lists every framework by name beneath it.
  * The chevron only folds the list away.
  */
 export function FrameworkNavigation() {
+  const catalog = effectiveFrameworks(useInternalCisBenchmarks())
   const { pathname } = useLocation()
   const active = pathname.startsWith("/portal/frameworks") || pathname.startsWith("/portal/baselines")
   const [open, setOpen] = useState(active)
@@ -27,7 +29,7 @@ export function FrameworkNavigation() {
     </div>
     {open && <div id="framework-navigation" className="ml-6 mt-2 space-y-0.5 border-l border-gray-200 pl-2" aria-label="Framework list">
       <NavLink to="/portal/baselines" className={({ isActive }) => `block rounded-2xl px-3 py-2 text-sm font-medium leading-5 transition-colors ${isActive || pathname.startsWith("/portal/baselines/") ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}>My baselines</NavLink>
-      {[...frameworks.filter(f => !f.disabledReason), ...frameworks.filter(f => f.disabledReason)].map(f => f.disabledReason
+      {[...catalog.filter(f => !f.disabledReason), ...catalog.filter(f => f.disabledReason)].map(f => f.disabledReason
         ? <span key={f.id} aria-disabled="true" title={f.disabledReason} className="block cursor-not-allowed rounded-2xl px-3 py-2 text-sm leading-5 text-muted-foreground opacity-70">{f.name}<span className="block text-xs">Coming soon</span></span>
         : <NavLink key={f.id} to={`/portal/frameworks/${f.id}`} className={({ isActive }) => `block rounded-2xl px-3 py-2 text-sm leading-5 transition-colors ${isActive ? "bg-secondary font-medium text-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}>
             {f.name}
