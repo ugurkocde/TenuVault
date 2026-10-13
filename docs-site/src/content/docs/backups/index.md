@@ -40,7 +40,7 @@ You can also start a backup from other places:
 | **Tenants** | **Backup Selected** (MSP) | Backs up every selected tenant with its saved choice, after you confirm |
 | Menu bar icon on macOS or tray icon on Windows | **Back up all tenants now** | Backs up every connected tenant with its saved choice. See [Schedule backups](/backups/schedules/#the-menu-bar-or-tray-icon). |
 
-TenuVault runs one backup per tenant at a time. If you start a backup while one is already running for the same tenant, you follow the running one.
+TenuVault runs one backup per tenant at a time. If you start a backup while one is already running for the same tenant, you follow the running one. Each backup also claims its folder before writing any policy, so a backup from another computer or an automation run that starts in the same second cannot write into the same folder. The second backup fails without writing anything, and its error names the folder that was already in use.
 
 ## Choose what to back up
 
