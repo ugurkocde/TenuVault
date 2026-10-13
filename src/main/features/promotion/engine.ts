@@ -7,7 +7,7 @@ import { DOMAINS } from "../domains"
 import type { Stored } from "../records"
 import { FeatureError } from "../route"
 import { applyChangeSet, approveChangeSet, createChangeSet, getChangeSet, previewChangeSet, type ChangeSetPreview, type OperationInput } from "../change-sets/engine"
-import { readCurrent } from "../change-sets/graph"
+import { createListingMemo, readCurrent } from "../change-sets/graph"
 import { hashOf, sanitizeSnapshot, type ChangeSetRecord } from "../change-sets/model"
 import type { DependencyFinding, Mapping, ReferenceResolution, TargetReads } from "./mapping"
 import { resolveTarget, staleTargets } from "./targets"
@@ -108,6 +108,7 @@ export async function planPromotion(deps: FeatureDeps, destinationTenantId: stri
     seen.add(key)
   }
   const sourceGraph = await deps.graph(source)
+  const listings = { source: createListingMemo(), target: createListingMemo() }
   const items: PromotionItem[] = []
   const operations: OperationInput[] = []
   for (const item of input.items) {
@@ -133,7 +134,7 @@ export async function planPromotion(deps: FeatureDeps, destinationTenantId: stri
       acknowledgeRedacted: input.acknowledgeRedacted,
       mappings: input.mappings,
       sourceSnapshot: snapshot,
-    })
+    }, listings)
     const promotable = (PROMOTION_FOLDERS as readonly string[]).includes(type.folder)
     const findings = promotable ? resolved.findings : [...resolved.findings, { code: "unsupported-type" as const, severity: "blocking" as const, message: `Promotion does not support ${type.label} yet. Supported: Settings Catalog policies, compliance policies, endpoint security policies and device configuration profiles.` }]
     const blocked = resolved.blocked || !promotable

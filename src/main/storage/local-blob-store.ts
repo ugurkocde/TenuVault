@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } f
 import type { BigIntStats } from "node:fs"
 import { link, mkdir, open, readdir, readFile, rename, rm, stat } from "node:fs/promises"
 import { dirname, join } from "node:path"
-import { mapLimit } from "../../portal/lib/map-limit"
+import { mapLimit } from "../../shared/map-limit"
 
 /**
  * Encrypted on-disk blob storage for backups kept on this device.

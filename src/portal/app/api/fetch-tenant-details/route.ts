@@ -53,6 +53,7 @@ export async function POST(request: NextRequest) {
         const response = await fetch(`https://graph.microsoft.com/${apiVersion}${endpoint}`, {
           headers: {
             Authorization: `Bearer ${accessToken}`,
+            ...(endpoint.includes("$count=true") ? { ConsistencyLevel: "eventual" } : {}),
           },
         });
         
@@ -90,58 +91,44 @@ export async function POST(request: NextRequest) {
       }
     };
 
-    // Fetch organization details
-    const orgData = await callGraphApi("/organization");
+    // Counts come from $count with $top=1, so they stay correct above one Graph page and
+    // no collection is enumerated just to be counted. All reads run in parallel.
+    const countOf = (data: GraphApiResponse | null): number => {
+      const count = data?.["@odata.count"];
+      return typeof count === "number" ? count : data?.value?.length || 0;
+    };
+    const countEndpoint = (endpoint: string, useBeta: boolean = false): Promise<number> =>
+      callGraphApi(`${endpoint}${endpoint.includes("?") ? "&" : "?"}$count=true&$top=1`, useBeta).then(countOf);
+
+    const [
+      orgData,
+      deviceConfigCount,
+      compliancePolicyCount,
+      configPolicyCount,
+      iosAppPolicyCount,
+      androidAppPolicyCount,
+      windowsInfoPolicyCount,
+      mdmWindowsInfoPolicyCount,
+      totalDevices,
+      compliantDevices,
+      userCount,
+    ] = await Promise.all([
+      callGraphApi("/organization"),
+      countEndpoint("/deviceManagement/deviceConfigurations"),
+      countEndpoint("/deviceManagement/deviceCompliancePolicies"),
+      // Settings Catalog policies need the beta API for full results.
+      countEndpoint("/deviceManagement/configurationPolicies", true),
+      countEndpoint("/deviceAppManagement/iosManagedAppProtections"),
+      countEndpoint("/deviceAppManagement/androidManagedAppProtections"),
+      countEndpoint("/deviceAppManagement/windowsInformationProtectionPolicies"),
+      countEndpoint("/deviceAppManagement/mdmWindowsInformationProtectionPolicies"),
+      countEndpoint("/deviceManagement/managedDevices"),
+      countEndpoint("/deviceManagement/managedDevices?$filter=complianceState%20eq%20'compliant'"),
+      countEndpoint("/users"),
+    ]);
     const organization = orgData?.value?.[0] || {};
-
-    // Fetch device configurations
-    const deviceConfigs = await callGraphApi("/deviceManagement/deviceConfigurations");
-    const deviceConfigCount = deviceConfigs?.value?.length || 0;
-
-    // Fetch compliance policies
-    const compliancePolicies = await callGraphApi("/deviceManagement/deviceCompliancePolicies");
-    const compliancePolicyCount = compliancePolicies?.value?.length || 0;
-
-    // Fetch configuration policies (Settings Catalog)
-    // Note: Settings Catalog policies might need beta API for full results
-    const configPolicies = await callGraphApi("/deviceManagement/configurationPolicies", true);
-    const configPolicyCount = configPolicies?.value?.length || 0;
-
-    // Fetch app protection policies (multiple endpoints needed)
-    let appPolicyCount = 0;
-    
-    // iOS app protection policies
-    const iosManagedAppPolicies = await callGraphApi("/deviceAppManagement/iosManagedAppProtections");
-    appPolicyCount += iosManagedAppPolicies?.value?.length || 0;
-    
-    // Android app protection policies
-    const androidManagedAppPolicies = await callGraphApi("/deviceAppManagement/androidManagedAppProtections");
-    appPolicyCount += androidManagedAppPolicies?.value?.length || 0;
-    
-    // Windows Information Protection policies
-    const windowsInfoProtectionPolicies = await callGraphApi("/deviceAppManagement/windowsInformationProtectionPolicies");
-    appPolicyCount += windowsInfoProtectionPolicies?.value?.length || 0;
-    
-    // MDM Windows Information Protection policies
-    const mdmWindowsInfoProtectionPolicies = await callGraphApi("/deviceAppManagement/mdmWindowsInformationProtectionPolicies");
-    appPolicyCount += mdmWindowsInfoProtectionPolicies?.value?.length || 0;
-
-    // Fetch managed devices
-    const managedDevices = await callGraphApi("/deviceManagement/managedDevices");
-    const totalDevices = managedDevices?.value?.length || 0;
-    
-    // Calculate compliance rate
-    let complianceRate = 0;
-    if (totalDevices > 0 && managedDevices?.value) {
-      const compliantDevices = managedDevices.value.filter(
-        (device: any) => device.complianceState === "compliant"
-      ).length;
-      complianceRate = Math.round((compliantDevices / totalDevices) * 100);
-    }
-
-    // Fetch users count
-    const users = await callGraphApi("/users?$count=true&$top=1");
-    const userCount = users?.["@odata.count"] || 0;
+    const appPolicyCount = iosAppPolicyCount + androidAppPolicyCount + windowsInfoPolicyCount + mdmWindowsInfoPolicyCount;
+    const complianceRate = totalDevices > 0 ? Math.round((compliantDevices / totalDevices) * 100) : 0;
 
     // Prepare tenant details
     const tenantDetails = {
@@ -165,8 +152,6 @@ export async function POST(request: NextRequest) {
           total: deviceConfigCount + compliancePolicyCount + configPolicyCount + appPolicyCount,
         },
       },
-      // Calculate storage used (mock for now, would need actual backup data)
-      storageUsed: totalDevices > 0 ? `${Math.round(totalDevices * 0.1)} MB` : "0 MB",
     };
 
     return NextResponse.json(tenantDetails);
