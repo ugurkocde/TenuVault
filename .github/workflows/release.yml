@@ -252,6 +252,9 @@ jobs:
           rm -f "$RUNNER_TEMP/apple-api-key.p8" "$RUNNER_TEMP/signing.p12"
           if [ "$RUNNER_OS" = "macOS" ]; then security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true; fi
 
+      - name: Verify packaged security fuses
+        run: node scripts/check-fuses.cjs "${{ matrix.app }}"
+
       - name: Smoke test the packaged app
         timeout-minutes: 5
         shell: bash
