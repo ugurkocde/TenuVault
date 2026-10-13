@@ -51,6 +51,7 @@
     "electron": "^44.7.0",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
+    "jsdom": "^30.1.2",
     "jszip": "^3.10.1",
     "lucide-react": "^0.514.0",
     "oxlint": "1.87.0",
