@@ -133,6 +133,8 @@ Each entry shows:
 * the result, when it is not **Complete**
 * **Items**, **Size**, **Duration** and **Changes** since the previous backup (see [Compare backups](/backups/compare/))
 
+Below the timeline, **Trends by policy type** shows one row per policy type found in the listed backups: how many backups held it, its latest item count, its latest and average stored size, the size change from the oldest to the newest backup that held it, and the latest, average and change of the whole backup duration for those backups. Each backup records one duration for the whole backup, so the duration columns are not a split by type. The trends use only the backup list already loaded for this tab. They need no extra reads and store nothing new. A type held by one backup shows **Only one backup** instead of a change, and a value a backup did not record shows **Not recorded**.
+
 Click an entry to open its **Backup Details**:
 
 | Part | What it shows |

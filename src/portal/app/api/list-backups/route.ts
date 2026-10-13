@@ -53,14 +53,19 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
   let size = 0
   let files = 0
   const counts: Record<string, number> = {}
+  const sizes: Record<string, number> = {}
   for (const match of filesText.matchAll(/<Blob>[\s\S]*?<Name>(.*?)<\/Name>[\s\S]*?<Content-Length>(\d+)<\/Content-Length>[\s\S]*?<\/Blob>/g)) {
     const parts = decodeXml(match[1] ?? '').split('/')
-    size += parseInt(match[2]!)
+    const bytes = parseInt(match[2]!)
+    size += bytes
     files++
     // Backups from older app versions stored compliance policies under this name.
     const type = parts.length === 3 ? typeForFolder(parts[1] === 'DeviceCompliancePolicies' ? 'CompliancePolicies' : parts[1]!) : undefined
     const folder = type?.folder ?? (parts.length === 3 && ['AppProtectionPolicies', 'ConditionalAccess'].includes(parts[1]!) ? parts[1] : undefined)
-    if (folder) counts[folder] = (counts[folder] ?? 0) + 1
+    if (folder) {
+      counts[folder] = (counts[folder] ?? 0) + 1
+      sizes[folder] = (sizes[folder] ?? 0) + bytes
+    }
   }
   const count = (...folders: string[]) => folders.reduce((sum, folder) => sum + (counts[folder] ?? 0), 0)
   const totalPolicies = Object.values(counts).reduce((sum, value) => sum + value, 0)
@@ -82,6 +87,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     policyCount: totalPolicies,
     totalPolicies,
     counts,
+    sizes,
     // Kept for the dashboard's breakdown.
     policies: {
       deviceConfigurations: count('DeviceConfigurations'),

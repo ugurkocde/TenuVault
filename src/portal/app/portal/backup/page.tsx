@@ -17,6 +17,7 @@ import { RunBackupDialog } from "@desktop/components/RunBackupDialog"
 import { useTenantPlan } from "@desktop/lib/license"
 import { useBackupList } from "@desktop/lib/backup-list"
 import { bridge } from "@desktop/lib/bridge"
+import { backupTypeTrends } from "~/lib/backup-trends"
 import { retentionNote } from "@desktop/lib/plan-notes"
 import { FirstBackupNote } from "@desktop/components/FirstBackupNote"
 import { allows } from "../../../../shared/plans"
@@ -104,6 +105,7 @@ export default function BackupRestorePage() {
   const copyCandidates = tenants
     .filter((entry) => entry.id !== selectedTenantId && entry.credentials?.tenantId && entry.credentials.appId)
     .map((entry) => ({ tenantId: entry.credentials!.tenantId, appId: entry.credentials!.appId, name: entry.name, domain: entry.domain }))
+  const trends = useMemo(() => backupTypeTrends(backups), [backups])
   const selected = backups.find((backup) => backup.id === selectedId) ?? null
   const latest = backups.find((backup) => backup.counts && statusKind(backup.status) === "success")
 
@@ -341,6 +343,8 @@ export default function BackupRestorePage() {
             )}
           </div>
 
+          {backups.length > 0 && <BackupTrends trends={trends} backupCount={backups.length} />}
+
           {selected && tenant && (
             <BackupDetails
               ref={detailRef}
@@ -396,6 +400,57 @@ export default function BackupRestorePage() {
           backup={selected}
           previous={backups.find((backup) => backup.id === selected.comparedWith)}
         />
+      )}
+    </div>
+  )
+}
+
+/** Duration and size per policy type, from the listed backups. No extra reads happen for this. */
+function BackupTrends({ trends, backupCount }: { trends: ReturnType<typeof backupTypeTrends>; backupCount: number }) {
+  const sizeChange = (value: number | null, points: number) => (value === null ? (points < 2 ? "Only one backup" : "Not recorded") : `${value > 0 ? "+" : value < 0 ? "-" : ""}${formatSize(Math.abs(value))}`)
+  const durationChange = (value: number | null, points: number) => (value === null ? (points < 2 ? "Only one backup" : "Not recorded") : `${value > 0 ? "+" : value < 0 ? "-" : ""}${formatDuration(Math.abs(value))}`)
+  return (
+    <div className="rounded-3xl bg-white p-6 sm:p-8">
+      <h2 className="text-xl font-medium tracking-tight text-gray-900">Trends by policy type</h2>
+      <p className="mt-1 text-sm text-gray-500">
+        Size is the stored size of each type. Duration is the whole backup that held the type, because each backup records one duration. Oldest to newest backups are compared for the change columns.
+      </p>
+      {backupCount < 2 && <p className="mt-3 text-sm text-gray-500">Only one backup is recorded, so every type below is a single point. Run another backup to see a trend.</p>}
+      {trends.length === 0 ? (
+        <p className="mt-4 text-sm text-gray-500">No policy counts were recorded for these backups, so there are no trends to show.</p>
+      ) : (
+        <div className="mt-5 overflow-x-auto">
+          <table className="w-full min-w-[760px] text-left text-sm">
+            <thead>
+              <tr className="border-b border-gray-100 text-xs text-gray-500">
+                <th className="py-2 pr-4 font-medium">Type</th>
+                <th className="py-2 pr-4 font-medium">Backups</th>
+                <th className="py-2 pr-4 font-medium">Items, latest</th>
+                <th className="py-2 pr-4 font-medium">Size, latest</th>
+                <th className="py-2 pr-4 font-medium">Size, average</th>
+                <th className="py-2 pr-4 font-medium">Size change</th>
+                <th className="py-2 pr-4 font-medium">Backup duration, latest</th>
+                <th className="py-2 pr-4 font-medium">Backup duration, average</th>
+                <th className="py-2 font-medium">Duration change</th>
+              </tr>
+            </thead>
+            <tbody>
+              {trends.map((trend) => (
+                <tr key={trend.folder} className="border-b border-gray-50">
+                  <td className="py-2.5 pr-4 text-gray-900">{capitalize(typeForFolder(trend.folder)?.label ?? trend.folder)}</td>
+                  <td className="py-2.5 pr-4 text-gray-600">{trend.points.length}</td>
+                  <td className="py-2.5 pr-4 text-gray-600">{trend.latestCount}</td>
+                  <td className="py-2.5 pr-4 text-gray-600">{trend.latestSizeBytes === null ? "Not recorded" : formatSize(trend.latestSizeBytes)}</td>
+                  <td className="py-2.5 pr-4 text-gray-600">{trend.averageSizeBytes === null ? "Not recorded" : formatSize(Math.round(trend.averageSizeBytes))}</td>
+                  <td className="py-2.5 pr-4 text-gray-600">{sizeChange(trend.sizeChangeBytes, trend.points.length)}</td>
+                  <td className="py-2.5 pr-4 text-gray-600">{formatDuration(trend.latestDurationSeconds)}</td>
+                  <td className="py-2.5 pr-4 text-gray-600">{trend.averageDurationSeconds === null ? "Not recorded" : formatDuration(Math.round(trend.averageDurationSeconds))}</td>
+                  <td className="py-2.5 text-gray-600">{durationChange(trend.durationChangeSeconds, trend.points.length)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )
