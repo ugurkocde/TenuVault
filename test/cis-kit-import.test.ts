@@ -12,6 +12,51 @@ async function lyingHeaderZip(): Promise<Uint8Array> {
   return data
 }
 
+function rawZip(entries: Array<{ name: string; content: string }>): Uint8Array {
+  const encoder = new TextEncoder()
+  const chunks: Uint8Array[] = []
+  const central: Uint8Array[] = []
+  let offset = 0
+  for (const entry of entries) {
+    const name = encoder.encode(entry.name)
+    const content = encoder.encode(entry.content)
+    const local = new Uint8Array(30 + name.length + content.length)
+    const localView = new DataView(local.buffer)
+    localView.setUint32(0, 0x04034b50, true)
+    localView.setUint16(4, 20, true)
+    localView.setUint32(18, content.length, true)
+    localView.setUint32(22, content.length, true)
+    localView.setUint16(26, name.length, true)
+    local.set(name, 30)
+    local.set(content, 30 + name.length)
+    const header = new Uint8Array(46 + name.length)
+    const centralView = new DataView(header.buffer)
+    centralView.setUint32(0, 0x02014b50, true)
+    centralView.setUint16(4, 20, true)
+    centralView.setUint16(6, 20, true)
+    centralView.setUint32(20, content.length, true)
+    centralView.setUint32(24, content.length, true)
+    centralView.setUint16(28, name.length, true)
+    centralView.setUint32(42, offset, true)
+    header.set(name, 46)
+    chunks.push(local)
+    central.push(header)
+    offset += local.length
+  }
+  const centralSize = central.reduce((total, item) => total + item.length, 0)
+  const end = new Uint8Array(22)
+  const endView = new DataView(end.buffer)
+  endView.setUint32(0, 0x06054b50, true)
+  endView.setUint16(8, entries.length, true)
+  endView.setUint16(10, entries.length, true)
+  endView.setUint32(12, centralSize, true)
+  endView.setUint32(16, offset, true)
+  const data = new Uint8Array(offset + centralSize + end.length)
+  let at = 0
+  for (const chunk of [...chunks, ...central, end]) { data.set(chunk, at); at += chunk.length }
+  return data
+}
+
 async function duplicateNameZip(): Promise<Uint8Array> {
   const zip = new JSZip()
   zip.file("dup1.json", "{\"name\":\"one\"}")
@@ -75,6 +120,29 @@ describe("readKitZip", () => {
   it("rejects duplicate entry names from the central directory", async () => {
     await expect(readKitZip(await duplicateNameZip())).rejects.toBeInstanceOf(KitConversionError)
     await expect(readKitZip(await duplicateNameZip())).rejects.toThrowError(/dup1\.json/)
+  })
+
+  it("rejects duplicates that differ only by a leading dot segment", async () => {
+    const data = rawZip([{ name: "same.json", content: "{}" }, { name: "./same.json", content: "{}" }])
+    await expect(readKitZip(data)).rejects.toBeInstanceOf(KitConversionError)
+    await expect(readKitZip(data)).rejects.toThrowError(/two entries named/)
+  })
+
+  it("rejects duplicates that differ only by a doubled separator", async () => {
+    const data = rawZip([{ name: "a/b.json", content: "{}" }, { name: "a//b.json", content: "{}" }])
+    await expect(readKitZip(data)).rejects.toBeInstanceOf(KitConversionError)
+    await expect(readKitZip(data)).rejects.toThrowError(/two entries named/)
+  })
+
+  it("rejects duplicates that differ only by a dot segment in the path", async () => {
+    const data = rawZip([{ name: "a/b.json", content: "{}" }, { name: "a/./b.json", content: "{}" }])
+    await expect(readKitZip(data)).rejects.toBeInstanceOf(KitConversionError)
+    await expect(readKitZip(data)).rejects.toThrowError(/two entries named/)
+  })
+
+  it("rejects duplicates that differ only by a dot dot segment in the path", async () => {
+    const data = rawZip([{ name: "b.json", content: "{}" }, { name: "a/../b.json", content: "{}" }])
+    await expect(readKitZip(data)).rejects.toThrowError(/two entries named/)
   })
 
   it("caps actual inflated bytes when the header understates the size", async () => {

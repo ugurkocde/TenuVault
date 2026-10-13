@@ -22,6 +22,15 @@ export class KitConversionError extends Error {
 }
 
 function normalized(path: string): string { return path.replace(/\\/g, "/") }
+function canonicalZipName(name: string): string {
+  const parts: string[] = []
+  for (const part of normalized(name).split("/")) {
+    if (part === "" || part === ".") continue
+    if (part === "..") { parts.pop(); continue }
+    parts.push(part)
+  }
+  return parts.join("/").toLowerCase()
+}
 function baseName(path: string): string { return normalized(path).split("/").pop() ?? path }
 function extension(path: string): string {
   const name = baseName(path).toLowerCase()
@@ -122,7 +131,7 @@ export async function readKitZip(data: Uint8Array | ArrayBuffer): Promise<KitFil
   const names = centralDirectoryNames(raw)
   const seen = new Set<string>()
   for (const name of names) {
-    const key = normalized(name).toLowerCase()
+    const key = canonicalZipName(name)
     if (seen.has(key)) throw new KitConversionError(`The zip contains two entries named "${name}". Remove the duplicate before importing.`)
     seen.add(key)
   }
@@ -226,7 +235,7 @@ export function convertKit(files: KitFile[], benchmark: KitBenchmark): KitConver
     }
     const mark = classifyKitFile(path)
     if (mark === "unknown") throw new KitConversionError(`${path}: the Level 1 or Level 2 profile cannot be determined from the file path or name. Rename the file or folder with an L1 or L2 marker, or remove the file from the kit before converting.`, path)
-    const fileVersion = kitFileVersion(path) ?? benchmark.version
+    const fileVersion = benchmark.version || kitFileVersion(path)
     if (!fileVersion) throw new KitConversionError(`${path}: the benchmark version cannot be determined from the file name and no version was supplied.`, path)
     if (!version) version = fileVersion
     const policies = parseKitFile({ path, content: file.content })
