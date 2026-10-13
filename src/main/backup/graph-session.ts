@@ -1,6 +1,7 @@
+import { retryDelay, retryableStatus, sleep } from "../graph-retry"
 import { FetchApplicationError } from "../api/network-error"
 import type { NetworkCircuit } from "./engine"
-import { GRAPH, MAX_LIST_PAGES, REQUEST_ATTEMPTS, GraphError, GraphPauseError, RequestTimeoutError, TokenError, graphError, requestFailure, retryDelay, retryableStatus, sleep, withRequestTimeout } from "./request"
+import { GRAPH, MAX_LIST_PAGES, REQUEST_ATTEMPTS, GraphError, GraphPauseError, RequestTimeoutError, TokenError, graphError, requestFailure, withRequestTimeout } from "./request"
 
 export type GraphItem = Record<string, unknown> & { id: string }
 

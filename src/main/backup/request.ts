@@ -5,7 +5,6 @@ export const GRAPH = "https://graph.microsoft.com"
 export const MAX_LIST_PAGES = 10_000
 export const REQUEST_TIMEOUT_MS = 90_000
 export const REQUEST_ATTEMPTS = 3
-export const MAX_RETRY_DELAY_MS = 5 * 60_000
 
 /**
  * The storage provider refused a delete because the blob is protected by an immutability
@@ -81,23 +80,6 @@ export async function withAbort<T>(request: () => Promise<T>, signal: AbortSigna
   }
 }
 
-export const retryableStatus = (status: number) => status === 429 || status >= 500
-
-export function retryDelay(response: Response | undefined, attempt: number): number {
-  const header = response?.headers.get("retry-after")
-  const seconds = Number(header)
-  const azureDelay = Number(response?.headers.get("x-ms-retry-after-ms"))
-  // Check units before conversion, including positive values that overflow to Infinity.
-  if (seconds > MAX_RETRY_DELAY_MS / 1000 || azureDelay > MAX_RETRY_DELAY_MS) {
-    throw new Error("The service requested a retry delay longer than 5 minutes. Retry this backup later.")
-  }
-  const retryAfter = Number.isFinite(seconds) ? seconds * 1000 : header ? Date.parse(header) - Date.now() : 0
-  const delay = Math.max(Number.isFinite(retryAfter) ? retryAfter : 0, Number.isFinite(azureDelay) ? azureDelay : 0)
-  // Never shorten a server's pause. A longer interval fails this bounded request instead.
-  if (delay > MAX_RETRY_DELAY_MS) throw new Error("The service requested a retry delay longer than 5 minutes. Retry this backup later.")
-  return delay > 0 ? delay : 1000 * 2 ** attempt
-}
-
 export async function graphError(response: Response): Promise<string> {
   const text = await response.text()
   try {
@@ -124,19 +106,4 @@ export async function storageError(response: Response, account: string): Promise
   }
   const message = /<Message>([^<]+)<\/Message>/.exec(text)?.[1]
   return `Storage account ${account} returned ${response.status}${code ? ` (${code})` : ""}${message ? `: ${message.split("\n")[0]}` : ""}`
-}
-
-export async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  signal?.throwIfAborted()
-  return new Promise((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timer)
-      reject(signal!.reason)
-    }
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort)
-      resolve()
-    }, ms)
-    signal?.addEventListener("abort", onAbort, { once: true })
-  })
 }

@@ -1,5 +1,6 @@
 import type { DetailedExportData } from '../../shared/compliance/input'
 import { record, type RecordJson } from '../../shared/frameworks/policies'
+import { retryDelay, sleep } from '../graph-retry'
 import { FrameworkError } from './service'
 
 /** Only evidence-bearing policy families. This collector has no mutation or secret-recovery path. */
@@ -53,9 +54,13 @@ export function graphEvidenceReader(token: string, signal?: AbortSignal): Eviden
       const timeout = AbortSignal.timeout(60_000)
       const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: signal ? AbortSignal.any([signal, timeout]) : timeout })
       if ([429, 503].includes(response.status) && attempt < 3) {
-        const seconds = Number(response.headers.get('retry-after') ?? 1)
-        if (!Number.isFinite(seconds) || seconds < 0 || seconds > 10) throw new FrameworkError(`Graph throttled the evidence read (${response.status}). Retry later.`, 502)
-        await new Promise(resolve => setTimeout(resolve, seconds * 1000))
+        let delay: number
+        try {
+          delay = retryDelay(response, attempt)
+        } catch {
+          throw new FrameworkError(`Graph throttled the evidence read (${response.status}). Retry later.`, 502)
+        }
+        await sleep(delay)
         continue
       }
       if (!response.ok) throw new FrameworkError(`Evidence read failed (${response.status}) at ${new URL(url).pathname}.`, response.status)
