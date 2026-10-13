@@ -10,6 +10,8 @@ import { listAdoptions, listStandards, portfolioAdoptions, type AdoptionState } 
 import { AdoptionPanel } from "./AdoptionPanel"
 import { CustomizationsPanel } from "./CustomizationsPanel"
 import { StandardsLibrary } from "./StandardsLibrary"
+import { GovernanceExportButtons } from "../shared/GovernanceExportButtons"
+import { standardsCsv, standardsJson } from "../shared/governance-export"
 import { standardsViewState } from "./state"
 import { Button } from "~/components/ui/button"
 
@@ -83,7 +85,10 @@ export default function StandardsTab({ tenant, plan, allowed }: FeatureTabProps)
 
       {records.length > 0 && (
         <section aria-label="Adoptions" className={card}>
-          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">{msp ? `Standards adopted by ${tenant.name}` : "Stored adoptions (read-only)"}</h3>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">{msp ? `Standards adopted by ${tenant.name}` : "Stored adoptions (read-only)"}</h3>
+            <GovernanceExportButtons kind="standards" tenantName={tenant.name} disabled={records.length === 0} buildCsv={() => standardsCsv(records.map((record) => record.state))} buildJson={(exportedAt) => standardsJson(records.map((record) => record.state), tenant.name, exportedAt)} />
+          </div>
           <ul className="divide-y divide-gray-100 dark:divide-gray-800">
             {records.map((record) => (
               <li key={record.id}>
