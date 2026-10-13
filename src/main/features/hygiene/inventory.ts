@@ -132,9 +132,10 @@ export interface GroupResolution {
 
 /**
  * Checks whether referenced groups exist with GET groups/{id}?$select=id (read only).
- * 200 means it exists, 404 that it does not. The TenuVault app does not request
- * Group.Read.All, so a 401 or 403 stops the checks and leaves every group unknown; any other
- * failure leaves that group unknown. Unknown is never reported as missing or as fine.
+ * 200 means it exists, 404 that it does not. The TenuVault app only requests
+ * Group.Read.All when the setup script ran with -IncludeGroupRead, so a 401 or 403 stops
+ * the checks and leaves every group unknown; any other failure leaves that group unknown.
+ * Unknown is never reported as missing or as fine.
  */
 export async function resolveGroups(deps: FeatureDeps, tenantId: string, items: InventoryItem[]): Promise<GroupResolution> {
   const ids = new Set<string>()
@@ -148,7 +149,7 @@ export async function resolveGroups(deps: FeatureDeps, tenantId: string, items: 
   }
   const groups = new Map<string, GroupState>()
   if (!ids.size) return { groups, state: "none" }
-  const unavailable = "Group existence cannot be read with this app's permissions (Group.Read.All is not granted), so group references are unknown."
+  const unavailable = "Group existence cannot be read with this app's permissions (Group.Read.All is not granted), so group references are unknown. To let this check run, add Group.Read.All to the app registration and grant admin consent (run New-TenuVaultDesktopApp.ps1 with -IncludeGroupRead), then sign in again and rescan."
   let graph: Awaited<ReturnType<FeatureDeps["graph"]>>
   try {
     graph = await deps.graph(tenantId)

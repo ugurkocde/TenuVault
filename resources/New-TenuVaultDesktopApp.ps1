@@ -30,14 +30,23 @@
     Assigning a group needs Entra ID P1 or P2, and only direct members get access (nested
     groups do not). Off by default so an admin who is not in the group is not locked out.
 
+.PARAMETER IncludeGroupRead
+    When set, also requests the delegated Group.Read.All permission. The hygiene
+    unresolved groups check needs it to tell whether a referenced group exists. Without
+    it that check stays unknown. Off by default, so the default permission set is unchanged.
+
 .EXAMPLE
     ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -AllowedGroupId 5f0c...
+
+.EXAMPLE
+    ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -IncludeGroupRead
 #>
 [CmdletBinding()]
 param(
     [string]$TenantId,
     [string]$DisplayName = "TenuVault Desktop",
-    [string]$AllowedGroupId
+    [string]$AllowedGroupId,
+    [switch]$IncludeGroupRead
 )
 
 $ErrorActionPreference = "Stop"
@@ -87,6 +96,11 @@ $resources = @(
         Scopes = @("user_impersonation")
     }
 )
+
+if ($IncludeGroupRead) {
+    # Opt-in only: lets the hygiene unresolved groups check read group existence.
+    $resources[0].Scopes += "Group.Read.All"
+}
 
 $requiredResourceAccess = @()
 foreach ($resource in $resources) {

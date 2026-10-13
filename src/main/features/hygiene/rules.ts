@@ -65,7 +65,7 @@ export const RULES: Record<RuleId, RuleInfo> = {
     id: "missing-group",
     name: "Unresolved groups",
     description: "An assignment targets or excludes a group that Microsoft Graph reports as not existing.",
-    limits: "Group reads need Group.Read.All, which the TenuVault app does not request. Without it every group is unknown, not missing.",
+    limits: "Group reads need Group.Read.All. The setup script does not request it by default: run New-TenuVaultDesktopApp.ps1 with -IncludeGroupRead to add it. Without it every group is unknown, not missing.",
   },
 }
 

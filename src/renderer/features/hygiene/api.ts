@@ -69,6 +69,7 @@ export interface FleetTenant {
   queue: Array<{ id: string; title: string; ruleId: string; severity: string; collectedAt: string }>
 }
 
+export const GROUP_READ_OPT_IN_HINT = "To let this check run, add Group.Read.All to the app registration and grant admin consent (run New-TenuVaultDesktopApp.ps1 with -IncludeGroupRead), then sign in again and rescan."
 export const STATUS_LABELS: Record<FindingStatus, string> = { open: "Open", acknowledged: "Acknowledged", "false-positive": "False positive", resolved: "Not detected" }
 export const CLASSIFICATION_LABELS: Record<Classification, string> = { definite: "Definite", possible: "Possible overlap" }
 

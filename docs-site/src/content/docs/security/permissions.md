@@ -59,6 +59,7 @@ Delegated permissions let an app act on behalf of a signed-in user. They never g
 | `DeviceManagementScripts.ReadWrite.All` | Backs up and restores Windows PowerShell scripts, macOS shell scripts, macOS custom attributes, remediations and compliance scripts. |
 | `DeviceManagementRBAC.ReadWrite.All` | Backs up and restores Intune roles, role assignments, scope tags and multi admin approval policies. |
 | `DeviceManagementManagedDevices.Read.All` | Reads device categories and device clean-up rules for backups, and the managed device count and compliance rate shown in the tenant overview. Read only: TenuVault cannot change or wipe devices. |
+| `Group.Read.All` (optional, only with `-IncludeGroupRead`) | Reads whether a group referenced by a policy assignment exists, so the hygiene unresolved groups check can report missing groups. Not requested by default. Without it that check stays unknown. TenuVault reads group existence only (`GET groups/{id}?$select=id`); it does not list groups or read membership. |
 
 :::note
 **About `Policy.Read.All`:** the setup script requests this permission, but no feature in the current version of TenuVault Desktop calls an API that requires it. TenuVault Desktop does not back up Conditional Access or other Entra policies. If your security review requires it, you can remove this permission from the app registration.
@@ -86,6 +87,18 @@ The app registration only defines what TenuVault may request. What each admin ca
 | --- | --- |
 | Back up, compare and restore Intune configuration | An Intune role such as Intune Administrator. A custom Intune role with fewer rights limits TenuVault in the same way. |
 | Store backups in Azure | Storage Blob Data Contributor on the storage account. |
+
+## Let the hygiene unresolved groups check run (optional)
+
+By default the app registration does not request `Group.Read.All`, so the hygiene unresolved groups check cannot tell whether a referenced group exists. It reports those references as unknown, never as missing and never as fine. No other hygiene rule uses this permission, and no other rule changes when you add it.
+
+To opt in, run the setup script with `-IncludeGroupRead` on a fresh registration and sign in with the new client ID, or add the delegated `Group.Read.All` permission to an existing registration in the Microsoft Entra admin center and grant admin consent:
+
+```powershell
+./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -IncludeGroupRead
+```
+
+The hygiene scan shows the same remediation next to the unresolved groups unknown until group reads succeed. After consent, sign in again and run a new hygiene scan.
 
 ## Restrict sign-in to a group
 
