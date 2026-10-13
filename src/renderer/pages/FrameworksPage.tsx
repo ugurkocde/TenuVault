@@ -7,10 +7,10 @@ import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { NCSC_COMMIT, NCSC_REPOSITORY, type Framework } from "../../shared/frameworks/catalog"
 import { CIS_BENCHMARKS_ID, effectiveFrameworks, searchEffectiveFrameworks } from "../../shared/frameworks/cis-internal"
-import { convertKit, type KitConversion, type KitFile } from "../../shared/frameworks/cis-kit"
+import { convertKit, type KitConversion, type KitFile, type KitLevel } from "../../shared/frameworks/cis-kit"
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
 import { cisReadiness } from "../../shared/frameworks/cis-readiness"
-import { cisReadinessTrend } from "../../shared/frameworks/cis-trend"
+import { cisReadinessTrend, sparklineSegments, type CisTrendPoint } from "../../shared/frameworks/cis-trend"
 import { parseRecommendationList, type RecommendationList } from "../../shared/frameworks/cis-manual"
 import { cisReadinessCsv, cisReadinessJson } from "../features/shared/governance-export"
 import { GovernanceExportButtons } from "../features/shared/GovernanceExportButtons"
@@ -53,21 +53,23 @@ function formatTrendChange(change: number | null, isFirst: boolean): string {
   const points = change * 100
   return `${points >= 0 ? "+" : ""}${points.toFixed(1)} pp`
 }
-function TrendSparkline({ values }: { values: (number | null)[] }) {
+function TrendSparkline({ points, level }: { points: CisTrendPoint[]; level: KitLevel }) {
   const width = 120
   const height = 28
   const pad = 3
-  const valid = values.map((value, index) => value === null ? null : { index, value }).filter((item): item is { index: number; value: number } => item !== null)
+  const segments = sparklineSegments(points, level)
+  const valid = segments.flat()
   if (!valid.length) return <span className="text-xs text-gray-500">Not available</span>
-  const maxIndex = Math.max(values.length - 1, 1)
-  const coords = valid.map(item => {
-    const x = pad + (item.index / maxIndex) * (width - pad * 2)
-    const y = pad + (1 - item.value) * (height - pad * 2)
+  const maxIndex = Math.max(points.length - 1, 1)
+  const coordFor = (index: number) => {
+    const value = points[index]!.levels.find(entry => entry.level === level)!.passRate!
+    const x = pad + (index / maxIndex) * (width - pad * 2)
+    const y = pad + (1 - value) * (height - pad * 2)
     return { x, y }
-  })
+  }
   return <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Pass rate trend sparkline" className="inline-block align-middle">
-    {coords.length > 1 && <polyline fill="none" stroke="currentColor" strokeWidth="1.5" points={coords.map(coord => `${coord.x},${coord.y}`).join(" ")} />}
-    {coords.map((coord, index) => <circle key={index} cx={coord.x} cy={coord.y} r="2" fill="currentColor" />)}
+    {segments.filter(segment => segment.length > 1).map((segment, segmentIndex) => <polyline key={segmentIndex} fill="none" stroke="currentColor" strokeWidth="1.5" points={segment.map(index => { const coord = coordFor(index); return `${coord.x},${coord.y}` }).join(" ")} />)}
+    {valid.map(index => { const coord = coordFor(index); return <circle key={index} cx={coord.x} cy={coord.y} r="2" fill="currentColor" /> })}
   </svg>
 }
 /** An export button: ordinary for every framework, gated for licensed CIS content. */
@@ -381,9 +383,9 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
           })}
           {trend.length >= 2 && <div className="mt-4 border-t border-gray-200 pt-4">
             <h4 className="font-medium text-gray-900">Trend</h4>
-            <p className="mt-1 text-xs text-gray-500">Pass rate across saved assessments for this tenant. Change is in percentage points from the previous saved assessment.</p>
+            <p className="mt-1 text-xs text-gray-500">Pass rate across saved assessments for this tenant. Change is in percentage points from the previous saved assessment. Adjusted rates use exceptions accepted by then.</p>
             <div className="mt-3 overflow-auto"><table className="w-full text-left text-sm"><thead><tr className="text-gray-500"><th className="py-1 pr-3 font-medium">Date</th><th className="py-1 pr-3 font-medium">Benchmark</th><th className="py-1 pr-3 font-medium">Version</th>{trendLevels.map(level => <th key={`trend-head-${level}`} className="py-1 pr-3 font-medium">Level {level} pass rate</th>)}{trendLevels.map(level => <th key={`trend-change-head-${level}`} className="py-1 pr-3 font-medium">Level {level} change</th>)}</tr></thead><tbody>{trend.map((point, pointIndex) => <tr key={point.runId} className="border-t border-gray-200"><td className="py-2 pr-3">{point.assessedAt}</td><td className="py-2 pr-3">{point.benchmark}</td><td className="py-2 pr-3">{point.version}</td>{trendLevels.map(level => { const item = point.levels.find(entry => entry.level === level); return <td key={`trend-rate-${point.runId}-${level}`} className="py-2 pr-3">{item ? formatTrendPercent(item.passRate) : "Not available"}{item && item.adjustedPassRate !== null && item.adjustedPassRate !== item.passRate ? ` (adjusted ${formatTrendPercent(item.adjustedPassRate)})` : ""}</td> })}{trendLevels.map(level => { const item = point.levels.find(entry => entry.level === level); return <td key={`trend-change-${point.runId}-${level}`} className="py-2 pr-3">{item ? formatTrendChange(item.changeFromPrevious, pointIndex === 0) : "Not available"}</td> })}</tr>)}</tbody></table></div>
-            <div className="mt-3 flex flex-wrap gap-4">{trendLevels.map(level => <div key={`trend-spark-${level}`} className="flex items-center gap-2 text-gray-700"><span className="text-xs font-medium text-gray-500">Level {level}</span><TrendSparkline values={trend.map(point => point.levels.find(entry => entry.level === level)?.passRate ?? null)} /></div>)}</div>
+            <div className="mt-3 flex flex-wrap gap-4">{trendLevels.map(level => <div key={`trend-spark-${level}`} className="flex items-center gap-2 text-gray-700"><span className="text-xs font-medium text-gray-500">Level {level}</span><TrendSparkline points={trend} level={level} /></div>)}</div>
           </div>}
           <div className="mt-3 flex flex-wrap items-start gap-2"><GovernanceExportButtons kind="cis-readiness" tenantName={selectedTenant?.name ?? null} disabled={!!busy} buildCsv={() => cisReadinessCsv(readiness)} buildJson={exportedAt => cisReadinessJson(readiness, selectedTenant?.name ?? null, exportedAt)} /><ExportButton framework={framework} plan={plan} disabled={!!busy} onClick={() => void perform("Exporting PDF…", async () => { const { file } = await request<{ file: ExportFile }>({ action: "workspace-cis-pdf", tenantId: credentials?.tenantId, tenantName: selectedTenant?.name, frameworkId: framework.id, runId: assessment.runId, ...(denominator ? { denominator } : {}) }); saveExport(file) })}><Download className="h-4 w-4" aria-hidden="true" />Export PDF</ExportButton></div>
         </section>}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { cisReadinessTrend, type CisTrendHistoryEntry } from "../src/shared/frameworks/cis-trend"
+import { cisReadinessTrend, sparklineSegments, type CisTrendHistoryEntry, type CisTrendPoint } from "../src/shared/frameworks/cis-trend"
 import { convertKit, type KitFile } from "../src/shared/frameworks/cis-kit"
 import type { Assessment, BaselinePolicy, Finding } from "../src/shared/frameworks/policies"
 import type { CisException } from "../src/shared/frameworks/cis-exceptions"
@@ -22,6 +22,33 @@ function policies(): BaselinePolicy[] {
 
 function entry(runId: string, assessedAt: string, statuses: Finding["status"][]): CisTrendHistoryEntry {
   const pack = policies()
+  const findings: Finding[] = statuses.map((status, index) => ({
+    key: `${index}:0`,
+    policyIndex: index,
+    settingIndex: 0,
+    policyName: pack[index]!.name,
+    settingId: String((pack[index]!.settings[0]!.settingInstance as { settingDefinitionId: string }).settingDefinitionId),
+    status,
+    recommended: null,
+    observed: [],
+  }))
+  const assessment: Assessment = {
+    runId,
+    tenantId: "11111111-1111-1111-1111-111111111111",
+    frameworkId: "cis-benchmarks",
+    reference: "fakebook-os 9.9.9",
+    assessedAt,
+    policyCount: pack.length,
+    findings,
+  }
+  return { assessment, policies: pack }
+}
+
+function policiesFor(benchmark: string, version: string): BaselinePolicy[] {
+  return policies().map(policy => ({ ...policy, provenance: { ...policy.provenance, benchmark, version } }))
+}
+
+function entryWithPack(runId: string, assessedAt: string, statuses: Finding["status"][], pack: BaselinePolicy[]): CisTrendHistoryEntry {
   const findings: Finding[] = statuses.map((status, index) => ({
     key: `${index}:0`,
     policyIndex: index,
@@ -122,14 +149,89 @@ describe("cisReadinessTrend", () => {
     expect(level1[2]?.changeFromPrevious).toBeNull()
   })
 
-  it("deduplicates the same runId keeping the first entry", () => {
-    const first = entry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"])
-    const duplicate = entry("run-1", "2026-01-02T00:00:00.000Z", ["Missing", "Missing", "Missing"])
+  it("deduplicates the same runId keeping the first entry in newest first storage order", () => {
+    const newer = entry("run-1", "2026-01-02T00:00:00.000Z", ["Missing", "Missing", "Missing"])
+    const older = entry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"])
     const other = entry("run-2", "2026-02-01T00:00:00.000Z", ["Present", "Missing", "Present"])
-    const points = cisReadinessTrend([first, duplicate, other])
+    const points = cisReadinessTrend([other, newer, older])
     expect(points).toHaveLength(2)
-    expect(points[0]?.assessedAt).toBe("2026-01-01T00:00:00.000Z")
-    expect(points[0]?.levels.find(level => level.level === 1)?.passRate).toBe(1)
+    expect(points[0]?.assessedAt).toBe("2026-01-02T00:00:00.000Z")
+    expect(points[0]?.levels.find(level => level.level === 1)?.passRate).toBe(0)
+  })
+
+  it("nulls the change when the previous point is a different benchmark", () => {
+    const points = cisReadinessTrend([
+      entryWithPack("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Missing", "Missing"], policiesFor("fakebook-os", "9.9.9")),
+      entryWithPack("run-2", "2026-02-01T00:00:00.000Z", ["Present", "Present", "Present"], policiesFor("otherbook-os", "9.9.9")),
+      entryWithPack("run-3", "2026-03-01T00:00:00.000Z", ["Missing", "Missing", "Missing"], policiesFor("otherbook-os", "9.9.9")),
+    ])
+    const level1 = points.map(point => point.levels.find(level => level.level === 1)!)
+    expect(points.map(point => point.benchmark)).toEqual(["fakebook-os", "otherbook-os", "otherbook-os"])
+    expect(level1[1]?.changeFromPrevious).toBeNull()
+    expect(level1[1]?.adjustedChangeFromPrevious).toBeNull()
+    expect(level1[2]?.changeFromPrevious).toBeCloseTo(-1)
+  })
+
+  it("nulls the change when the previous point is a different version", () => {
+    const points = cisReadinessTrend([
+      entryWithPack("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Missing", "Missing"], policiesFor("fakebook-os", "9.9.9")),
+      entryWithPack("run-2", "2026-02-01T00:00:00.000Z", ["Present", "Present", "Present"], policiesFor("fakebook-os", "10.0.0")),
+    ])
+    const level1 = points.map(point => point.levels.find(level => level.level === 1)!)
+    expect(points.map(point => point.version)).toEqual(["9.9.9", "10.0.0"])
+    expect(level1[1]?.changeFromPrevious).toBeNull()
+    expect(level1[1]?.adjustedChangeFromPrevious).toBeNull()
+  })
+
+  it("nulls the change when the immediately previous point does not contain the level", () => {
+    const full = policies()
+    const level1Only = full.slice(0, 2)
+    const points = cisReadinessTrend([
+      entryWithPack("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"], full),
+      entryWithPack("run-2", "2026-02-01T00:00:00.000Z", ["Present", "Missing"], level1Only),
+      entryWithPack("run-3", "2026-03-01T00:00:00.000Z", ["Missing", "Missing", "Missing"], full),
+    ])
+    expect(points[1]?.levels.map(level => level.level)).toEqual([1])
+    const level2 = points.map(point => point.levels.find(level => level.level === 2))
+    expect(level2[0]?.passRate).toBe(1)
+    expect(level2[1]).toBeUndefined()
+    expect(level2[2]?.passRate).toBe(0)
+    expect(level2[2]?.changeFromPrevious).toBeNull()
+    expect(level2[2]?.adjustedChangeFromPrevious).toBeNull()
+    const level1 = points.map(point => point.levels.find(level => level.level === 1)!)
+    expect(level1[2]?.changeFromPrevious).toBeCloseTo(-0.5)
+  })
+
+  it("only counts exceptions created on or before each historic assessment", () => {
+    const exception: CisException = {
+      id: "exc-late", benchmark: "fakebook-os", version: "9.9.9", level: 1,
+      policyName: "Fakebook Beta", settingId: "fakebook_setting_beta",
+      owner: "Ada Lovelace", reason: "Accepted risk for lab devices", expiresOn: "2027-01-01", createdAt: "2026-01-15T00:00:00.000Z",
+    }
+    const points = cisReadinessTrend([
+      entry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Missing", "Present"]),
+      entry("run-2", "2026-02-01T00:00:00.000Z", ["Present", "Missing", "Present"]),
+    ], undefined, [exception])
+    const level1 = points.map(point => point.levels.find(level => level.level === 1)!)
+    expect(level1[0]?.excepted).toBe(0)
+    expect(level1[0]?.adjustedPassRate).toBe(0.5)
+    expect(level1[1]?.excepted).toBe(1)
+    expect(level1[1]?.adjustedPassRate).toBe(1)
+    expect(level1[1]?.adjustedChangeFromPrevious).toBeCloseTo(0.5)
+  })
+
+  it("counts an exception created on the assessment date itself", () => {
+    const exception: CisException = {
+      id: "exc-same-day", benchmark: "fakebook-os", version: "9.9.9", level: 1,
+      policyName: "Fakebook Beta", settingId: "fakebook_setting_beta",
+      owner: "Ada Lovelace", reason: "Accepted risk for lab devices", expiresOn: "2027-01-01", createdAt: "2026-01-01T12:00:00.000Z",
+    }
+    const points = cisReadinessTrend([
+      entry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Missing", "Present"]),
+    ], undefined, [exception])
+    const level1 = points[0]?.levels.find(level => level.level === 1)
+    expect(level1?.excepted).toBe(1)
+    expect(level1?.adjustedPassRate).toBe(1)
   })
 
   it("includes the exceptions adjusted rate and its change", () => {
@@ -149,6 +251,24 @@ describe("cisReadinessTrend", () => {
     expect(level1[1]?.adjustedPassRate).toBe(1)
     expect(level1[1]?.adjustedChangeFromPrevious).toBeCloseTo(0)
     expect(level1[1]?.changeFromPrevious).toBeCloseTo(0)
+  })
+
+  it("breaks sparkline segments at null rates and benchmark or version changes", () => {
+    const point = (runId: string, benchmark: string, version: string, passRate: number | null): CisTrendPoint => ({
+      runId, assessedAt: "2026-01-01T00:00:00.000Z", benchmark, version,
+      levels: [{ level: 1, passRate, adjustedPassRate: passRate, assessedSettings: 1, present: 1, excepted: 0, changeFromPrevious: null, adjustedChangeFromPrevious: null }],
+    })
+    const contiguous = [point("a", "fakebook-os", "9.9.9", 0.5), point("b", "fakebook-os", "9.9.9", 0.75), point("c", "fakebook-os", "9.9.9", 1)]
+    expect(sparklineSegments(contiguous, 1)).toEqual([[0, 1, 2]])
+    const withNull = [point("a", "fakebook-os", "9.9.9", 0.5), point("b", "fakebook-os", "9.9.9", null), point("c", "fakebook-os", "9.9.9", 1), point("d", "fakebook-os", "9.9.9", 0.5)]
+    expect(sparklineSegments(withNull, 1)).toEqual([[0], [2, 3]])
+    const benchmarkChange = [point("a", "fakebook-os", "9.9.9", 0.5), point("b", "fakebook-os", "9.9.9", 0.75), point("c", "otherbook-os", "9.9.9", 1), point("d", "otherbook-os", "9.9.9", 0.5)]
+    expect(sparklineSegments(benchmarkChange, 1)).toEqual([[0, 1], [2, 3]])
+    const versionChange = [point("a", "fakebook-os", "9.9.9", 0.5), point("b", "fakebook-os", "10.0.0", 0.75)]
+    expect(sparklineSegments(versionChange, 1)).toEqual([[0], [1]])
+    const missingLevel: CisTrendPoint = { runId: "x", assessedAt: "2026-01-01T00:00:00.000Z", benchmark: "fakebook-os", version: "9.9.9", levels: [] }
+    expect(sparklineSegments([point("a", "fakebook-os", "9.9.9", 0.5), missingLevel, point("b", "fakebook-os", "9.9.9", 1)], 1)).toEqual([[0], [2]])
+    expect(sparklineSegments([], 1)).toEqual([])
   })
 
   it("passes the recommendation list through to readiness", () => {
