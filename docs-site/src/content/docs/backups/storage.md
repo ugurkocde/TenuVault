@@ -113,6 +113,8 @@ On Community, when the oldest listed backup is at least 23 days old, a line abov
 
 TenuVault saves `backup-...zip` with the backup's files, its `metadata.json` and a `tenuvault-manifest.json` that names the source tenant. If any file cannot be read, the download fails instead of producing a partial archive. The download is recorded in the [audit log](/audit-log/).
 
+A download is refused before it starts when the backup's files total more than 32 MiB or the backup has more than 5000 files, the same limits that apply to [importing a backup ZIP](#import-a-backup-from-a-zip-file). Restore such a backup from **Backup Details** instead of downloading it, or choose a smaller backup.
+
 :::danger
 The ZIP file is not encrypted. It holds your Intune configuration in plain JSON, including encrypted OMA-URI values in plain text. Protect it like the configuration itself.
 :::
