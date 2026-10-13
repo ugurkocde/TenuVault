@@ -34,6 +34,7 @@ import { SupportDialog } from "./SupportDialog"
 import { TenantSwitcher } from "./TenantSwitcher"
 import { UpdateBanner } from "./UpdateBanner"
 import { TenantAccessNotice } from "./TenantAccessNotice"
+import { CisBenchmarksNavigation } from "./CisBenchmarksNavigation"
 import { FrameworkNavigation } from "./FrameworkNavigation"
 import { OibJobIndicator } from "./oib/JobIndicator"
 
@@ -247,7 +248,7 @@ export function DesktopLayout() {
           <TenantSwitcher />
         </div>
 
-        <nav aria-label="Main navigation" className="flex-1 space-y-1 overflow-y-auto px-3 py-3">{navigation.map((item) => renderItem(item))}<FrameworkNavigation /></nav>
+        <nav aria-label="Main navigation" className="flex-1 space-y-1 overflow-y-auto px-3 py-3">{navigation.map((item) => renderItem(item))}<CisBenchmarksNavigation linkClass={(active) => linkClass(active)} /><FrameworkNavigation /></nav>
 
         <OibJobIndicator />
         <div className="space-y-1 p-3">

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { Link, NavLink, useLocation } from "react-router-dom"
 import { ChevronDown, LoaderCircle, ShieldCheck } from "lucide-react"
-import { effectiveFrameworks } from "../../shared/frameworks/cis-internal"
+import { isCisBenchmarksPath, navigationFrameworks } from "../../shared/frameworks/cis-internal"
 import { useFrameworkJobs } from "../lib/framework-jobs"
 import { useInternalCisBenchmarks } from "../lib/internal-cis"
 
@@ -10,9 +10,9 @@ import { useInternalCisBenchmarks } from "../lib/internal-cis"
  * The chevron only folds the list away.
  */
 export function FrameworkNavigation() {
-  const catalog = effectiveFrameworks(useInternalCisBenchmarks())
+  const catalog = navigationFrameworks(useInternalCisBenchmarks())
   const { pathname } = useLocation()
-  const active = pathname.startsWith("/portal/frameworks") || pathname.startsWith("/portal/baselines")
+  const active = !isCisBenchmarksPath(pathname) && (pathname.startsWith("/portal/frameworks") || pathname.startsWith("/portal/baselines"))
   const [open, setOpen] = useState(active)
   useEffect(() => { if (active) setOpen(true) }, [active])
   const running = new Map(useFrameworkJobs().filter(job => job.status === "running").map(job => [job.frameworkId, job]))

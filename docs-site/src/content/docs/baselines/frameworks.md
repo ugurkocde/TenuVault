@@ -14,7 +14,7 @@ OpenIntuneBaseline is not part of the framework catalog. It has its own **OpenIn
 
 ## The framework catalog
 
-Select **Frameworks** in the sidebar to open the catalog. It shows every framework as a card, grouped into framework comparisons, baselines and policy packs, and frameworks that are coming soon. The search box on the catalog filters by name, publisher or type. The sidebar lists each framework by name beneath **Frameworks**; use the arrow next to it to fold the list away. The catalog has sixteen entries:
+Select **Frameworks** in the sidebar to open the catalog. It shows every framework as a card, grouped into framework comparisons, baselines and policy packs, and frameworks that are coming soon. The search box on the catalog filters by name, publisher or type. The sidebar lists each framework by name beneath **Frameworks**, except CIS Benchmarks, which is not part of that list; use the arrow next to it to fold the list away. The catalog has sixteen entries:
 
 | Framework | Publisher | Type | Comparison source |
 | --- | --- | --- | --- |

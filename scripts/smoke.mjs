@@ -558,6 +558,8 @@ await check("framework catalog includes native providers and coming-soon CIS", a
   assert(await waitForText("UK MOD Def Stan 05-138"), "Def Stan reference missing")
   assert(await waitForText("Cyber Essentials"), "Cyber Essentials missing")
   assert(await evaluate(`document.querySelectorAll('a[href="#/portal/frameworks/cis-benchmarks"]').length === 0`), "CIS has active navigation")
+  assert(!(await evaluate(`[...document.querySelectorAll('nav[aria-label="Main navigation"] a')].some(a => a.textContent.includes("CIS Benchmarks"))`)), "CIS sidebar item visible without the internal flag")
+  assert(!(await evaluate(`[...document.querySelectorAll('[aria-label="Framework list"] a, [aria-label="Framework list"] span')].some(a => a.textContent.includes("CIS Benchmarks"))`)), "CIS still listed under Frameworks")
   await screenshot("14-framework-catalog")
   await go("#/portal/frameworks/cis-benchmarks", "CIS comparisons are coming soon.")
   assert(!(await evaluate(`document.body.innerText.includes("Choose your policy pack")`)), "CIS workflow mounted")
