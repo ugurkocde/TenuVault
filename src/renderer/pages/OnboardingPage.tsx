@@ -16,6 +16,7 @@ import { bridge } from "../lib/bridge"
 import { buildTenantProfile } from "../lib/desktop-tenant"
 import type { StorageChoice } from "../lib/storage"
 import { desktopTenantCredentials, type TenantCredentials } from "../overrides/add-tenant-modal"
+import { resolveBackupJobDisplay, toBackupJobDisplay, type BackupJobDisplay } from "~/lib/backup-job-display"
 
 const onboardingDraft: { step: number; account: { account: SignedInAccount; displayName: string } | null; choice: StorageChoice | null } = { step: 0, account: null, choice: null }
 
@@ -26,15 +27,7 @@ const STEPS = [
   { title: "First backup", icon: HardDriveDownload },
 ]
 
-interface JobStatus {
-  status: string
-  progress: number
-  progressMessage: string
-  output?: string
-  exception?: string
-  isComplete: boolean
-  isSuccessful: boolean
-}
+type JobStatus = BackupJobDisplay
 
 /**
  * First-run setup: connect a tenant with the admin's own app registration, choose where
@@ -57,25 +50,34 @@ export default function OnboardingPage() {
   const [cancelling, setCancelling] = useState(false)
   const [addError, setAddError] = useState("")
   const logRef = useRef<HTMLPreElement>(null)
-  const { addJob, activeJobs } = useBackupProgress()
+  const { addJob, removeJob, activeJobs } = useBackupProgress()
   const completedBackup = useRef<string | null>(null)
+  const handledPollError = useRef<string | null>(null)
+  const [snapshot, setSnapshot] = useState<JobStatus | null>(null)
   const tracked = runningJobId ? activeJobs.find((item) => item.jobId === runningJobId) : undefined
-  const displayJob: JobStatus | null = tracked ? {
-    status: tracked.status,
-    progress: tracked.progress,
-    progressMessage: tracked.progressMessage,
-    output: tracked.output,
-    exception: tracked.exception,
-    isComplete: tracked.isComplete,
-    isSuccessful: tracked.isSuccessful,
-  } : job
+  const trackedStatus: JobStatus | null = tracked ? toBackupJobDisplay(tracked) : null
+  // The snapshot keeps a finished backup finished after the store removes it.
+  const displayJob: JobStatus | null = resolveBackupJobDisplay(trackedStatus, snapshot, job)
 
   useEffect(() => {
     if (!tracked?.isComplete || !runningJobId || completedBackup.current === runningJobId) return
     completedBackup.current = runningJobId
+    setSnapshot(trackedStatus)
     setCancelling(false)
     if (tracked.isSuccessful && tenantProfileId) updateTenant(tenantProfileId, { lastBackup: new Date().toISOString(), syncStatus: "success" })
-  }, [tracked?.isComplete, tracked?.isSuccessful, runningJobId, tenantProfileId, updateTenant])
+  }, [tracked?.isComplete, tracked?.isSuccessful, trackedStatus, runningJobId, tenantProfileId, updateTenant])
+
+  // Status polling stopped on error: show the error, clear the job and let the admin retry or skip.
+  useEffect(() => {
+    if (!tracked?.pollError || !runningJobId || handledPollError.current === runningJobId) return
+    handledPollError.current = runningJobId
+    setJobError(tracked.pollError)
+    setJob(null)
+    setSnapshot(null)
+    setCancelling(false)
+    removeJob(runningJobId)
+    setRunningJobId(null)
+  }, [tracked?.pollError, runningJobId, removeJob])
 
   useEffect(() => {
     Object.assign(onboardingDraft, step < 3 ? { step, account, choice } : { step: 0, account: null, choice: null })
@@ -128,6 +130,9 @@ export default function OnboardingPage() {
     if (!credentials) return
     setCancelling(false)
     setJobError("")
+    setSnapshot(null)
+    completedBackup.current = null
+    handledPollError.current = null
     setJob({ status: "Running", progress: 5, progressMessage: "Starting backup...", isComplete: false, isSuccessful: false })
     let jobId: string
     try {

@@ -57,6 +57,19 @@ it("routes errors to onError and keeps polling", async () => {
   poller.stopAll()
 })
 
+it("stopOnError untracks the key after the first error and stops polling it", async () => {
+  const errors: unknown[] = []
+  const poll = vi.fn(async () => { throw new Error("down") })
+  const poller = createJobPoller({ intervalMs: 1000, poll, stopOnError: true, onError: (_key, error) => errors.push(error) })
+  poller.track("a")
+  await vi.advanceTimersByTimeAsync(3000)
+  expect(poll).toHaveBeenCalledTimes(1)
+  expect(errors).toHaveLength(1)
+  expect(poller.isTracked("a")).toBe(false)
+  expect(poller.size).toBe(0)
+  poller.stopAll()
+})
+
 it("stopAll clears the timer so nothing polls after unmount", async () => {
   const poll = vi.fn(async () => {})
   const poller = createJobPoller({ intervalMs: 1000, poll })

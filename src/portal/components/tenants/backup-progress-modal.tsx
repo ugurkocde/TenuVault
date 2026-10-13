@@ -6,6 +6,7 @@ import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { bridge } from "@desktop/lib/bridge"
 import { useTenantPlan } from "@desktop/lib/license"
 import { FirstBackupNote } from "@desktop/components/FirstBackupNote"
+import { resolveBackupJobDisplay, toBackupJobDisplay, type BackupJobDisplay } from "~/lib/backup-job-display"
 import {
   Dialog,
   DialogContent,
@@ -43,17 +44,7 @@ interface BackupProgressModalProps {
   onComplete?: (success: boolean) => void
 }
 
-type JobStatus = {
-  status: string
-  progress: number
-  progressMessage: string
-  startTime?: string
-  endTime?: string
-  exception?: string
-  output?: string
-  isComplete: boolean
-  isSuccessful: boolean
-}
+type JobStatus = BackupJobDisplay
 
 export function BackupProgressModal({
   open,
@@ -74,18 +65,9 @@ export function BackupProgressModal({
   // The snapshot keeps the finished state on screen after the store drops the job.
   const [snapshot, setSnapshot] = useState<JobStatus | null>(null)
   const tracked = jobId ? activeJobs.find((job) => job.jobId === jobId) : undefined
-  const trackedStatus: JobStatus | null = tracked ? {
-    status: tracked.status,
-    progress: tracked.progress,
-    progressMessage: tracked.progressMessage,
-    startTime: tracked.startTime,
-    endTime: tracked.endTime,
-    exception: tracked.exception,
-    output: tracked.output,
-    isComplete: tracked.isComplete,
-    isSuccessful: tracked.isSuccessful,
-  } : null
-  const jobStatus = trackedStatus ?? snapshot
+  const trackedStatus: JobStatus | null = tracked ? toBackupJobDisplay(tracked) : null
+  const jobStatus = resolveBackupJobDisplay(trackedStatus, snapshot, null)
+  const pollError = tracked?.pollError ?? ""
   const latest = useRef({ onComplete })
   latest.current = { onComplete }
   const completedFor = useRef<string | null>(null)
@@ -199,7 +181,12 @@ export function BackupProgressModal({
               <AlertDescription>{cancelError}</AlertDescription>
             </Alert>
           )}
-          {jobStatus ? (
+          {pollError ? (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{pollError}</AlertDescription>
+            </Alert>
+          ) : jobStatus ? (
             <>
               {/* Progress Bar */}
               <div className="space-y-2">

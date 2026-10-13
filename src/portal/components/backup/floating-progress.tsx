@@ -198,6 +198,7 @@ export function FloatingProgress() {
                     </Button>
                   )}
                   {cancelErrors[job.jobId] && <p role="alert" className="break-words text-xs text-destructive">{cancelErrors[job.jobId]}</p>}
+                  {job.pollError && <p role="alert" className="break-words text-xs text-destructive">{job.pollError}</p>}
                 </div>
               )}
             </div>

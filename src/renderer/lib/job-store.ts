@@ -20,6 +20,8 @@ export function createJobPoller<Key>(options: {
   intervalMs: number
   poll: (key: Key, isCurrent: () => boolean) => Promise<void>
   onError?: (key: Key, error: unknown) => void
+  /** When true, the first poll error untracks the key so polling stops instead of retrying. */
+  stopOnError?: boolean
 }): JobPoller<Key> {
   const tracked = new Set<Key>()
   const inFlight = new Set<Key>()
@@ -37,7 +39,15 @@ export function createJobPoller<Key>(options: {
     const generation = generations.get(key) ?? 0
     const isCurrent = () => tracked.has(key) && (generations.get(key) ?? 0) === generation
     void options.poll(key, isCurrent)
-      .catch((error: unknown) => { if (isCurrent()) options.onError?.(key, error) })
+      .catch((error: unknown) => {
+        if (!isCurrent()) return
+        if (options.stopOnError) {
+          tracked.delete(key)
+          generations.set(key, (generations.get(key) ?? 0) + 1)
+          syncTimer()
+        }
+        options.onError?.(key, error)
+      })
       .finally(() => { inFlight.delete(key) })
   }
 
