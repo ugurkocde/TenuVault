@@ -3,8 +3,8 @@ import { NextRequest } from "../src/main/api/next-server-shim"
 import { apiBody } from "../src/main/features/deps"
 import { routes } from "../src/main/features/health-review"
 import { POST as listBackupsRoute } from "../src/portal/app/api/list-backups/route"
-import { checkBackups, isDue, missedWindows, redactIdentifiers, validateWebhookUrl } from "../src/main/features/health-review/rules"
-import { notifyEndpoints, runReview, tick } from "../src/main/features/health-review/service"
+import { checkBackups, checkSignals, isDue, missedWindows, redactIdentifiers, validateWebhookUrl } from "../src/main/features/health-review/rules"
+import { collectSignals, notifyEndpoints, runReview, tick } from "../src/main/features/health-review/service"
 import { DOMAINS } from "../src/main/features/domains"
 import type { Plan } from "../src/shared/plans"
 import { call, fakeDeps, TENANT_A, TENANT_B } from "./feature-helpers"
@@ -320,6 +320,103 @@ describe("health review ownership and isolation", () => {
   it("keeps portfolio triage MSP only", async () => {
     const w = world({ plans: { [TENANT_A]: "pro", [TENANT_B]: "pro" } })
     expect((await call(w.routes, PATH, { tenantId: TENANT_A, action: "portfolio-status", targetTenants: [{ tenantId: TENANT_B }] })).status).toBe(402)
+  })
+})
+
+const META = { actor: null, reason: "Seeded for the health review test" }
+
+function seedSignals(deps: ReturnType<typeof world>["deps"]) {
+  const install: { id: string } = deps.records.create(DOMAINS.baselineInstalls, TENANT_A, {
+    kind: "install", title: "Windows baseline", status: "tracked", summary: "Installed.", origin: { type: "workspace", frameworkId: "cis" }, platform: "windows",
+    commit: "a".repeat(40), reference: "v1", sourceId: "source-1", policies: [], customizationVersion: 1, customizationHash: null,
+    latestKnownRelease: { commit: "b".repeat(40), reference: "v2", tag: "v2", checkedAt: NOW.toISOString() }, lastUpgradeId: null,
+  } as never, META)
+  const upgrade: { id: string } = deps.records.create(DOMAINS.baselineUpgrades, TENANT_A, {
+    title: "Upgrade to v2", status: "review", summary: "Waiting for resolutions.", installId: install.id, mode: "three-way",
+    from: { commit: "a".repeat(40), reference: "v1", sourceId: "source-1" }, to: { platform: "windows", commit: "b".repeat(40), reference: "v2", sourceId: "source-2" },
+    comparisonId: "comparison-1", comparedAt: NOW.toISOString(), policies: [], unresolved: 3, batches: [], customizationVersionFrom: 1, customizationVersionTo: null, resultingCustomizationHash: null, finalized: false,
+  } as never, META)
+  const adoption: { id: string } = deps.records.create(DOMAINS.adoptions, TENANT_A, {
+    title: "Customer standard", status: "adopted", summary: "Adopted.", standardKey: "standard-a", versionId: "version-1", version: 1,
+    adoptedVersionId: "version-1", adoptedVersion: 1, adoptedAt: NOW.toISOString(), parameters: {}, overlay: { settings: [], removals: [], exceptions: [] }, overlayVersion: 1,
+    mappings: [], migrationNotes: [], pending: null, adoptedParameters: {}, adoptedOverlay: { settings: [], removals: [] }, adoptedChangeSetId: null, previousAdopted: null,
+    lastAssessment: { at: NOW.toISOString(), versionId: "version-1", counts: {}, policies: [{ policyKey: "policy-1", state: "assessed", deviations: 2, message: null }] },
+  } as never, META)
+  const hygiene: { id: string } = deps.records.create(DOMAINS.hygieneFindings, TENANT_A, {
+    kind: "finding", title: "Policy A is not assigned", summary: "Unassigned.", status: "open", ruleId: "unassigned-policy", fingerprint: "unassigned-policy:ConfigurationPolicies/p1",
+    classification: "definite", severity: "low", explanation: "This policy has no assignments.", policies: [], settings: [], details: {}, evidenceSha256: "hash",
+    backupId: "backup-1", collectedAt: NOW.toISOString(), scanId: "scan-1", firstSeenAt: NOW.toISOString(), lastSeenAt: NOW.toISOString(), review: null,
+  } as never, META)
+  return { install, upgrade, adoption, hygiene }
+}
+
+describe("health review work signals", () => {
+  it("maps work signals to findings with the signal severity and state", () => {
+    const result = checkSignals(TENANT_A, [{ key: "standard-deviation:abc", tenantId: TENANT_A, source: "standard", severity: "medium", state: "open", title: "2 settings deviate", reason: "Live settings differ.", observedAt: NOW.toISOString(), link: "/portal/governance/standards", evidence: ["standard-adoptions:abc"] }], true)
+    expect(result).toMatchObject({ family: "signals", evaluated: true })
+    expect(result.findings[0]).toMatchObject({ family: "signals", check: "standard-deviation", severity: "medium", state: "open", evidenceAt: NOW.toISOString() })
+    const failed = checkSignals(TENANT_A, [], false)
+    expect(failed.evaluated).toBe(false)
+    expect(failed.findings[0]).toMatchObject({ check: "signals-unavailable", state: "unknown", observedAt: null })
+  })
+
+  it("surfaces pending upgrades, conflicts, deviations and hygiene findings, then resolves them from fresh evidence", async () => {
+    const w = world({ plans: { [TENANT_A]: "msp" } })
+    const seeded = seedSignals(w.deps)
+    const first = await call(w.routes, PATH, { tenantId: TENANT_A, action: "run-review" })
+    expect(first.body.run.checks).toContainEqual(expect.objectContaining({ family: "signals", evaluated: true }))
+    let findings = first.body.findings as Array<any>
+    expect(findings.find((finding) => finding.key === `baseline-upgrade-available:${seeded.install.id}`)).toMatchObject({ family: "signals", check: "baseline-upgrade-available", severity: "low", state: "open" })
+    expect(findings.find((finding) => finding.key === `baseline-conflicts:${seeded.upgrade.id}`)).toMatchObject({ family: "signals", severity: "medium", state: "open", title: expect.stringContaining("3 unresolved") })
+    expect(findings.find((finding) => finding.key === `standard-deviation:${seeded.adoption.id}`)).toMatchObject({ family: "signals", severity: "medium", state: "open" })
+    expect(findings.find((finding) => finding.key.startsWith("hygiene-finding:"))).toMatchObject({ family: "signals", severity: "low", state: "open" })
+    expect(first.body.run.counts).toMatchObject({ medium: 2, low: 2 })
+
+    w.deps.records.remove(DOMAINS.baselineInstalls, TENANT_A, seeded.install.id)
+    w.deps.records.remove(DOMAINS.baselineUpgrades, TENANT_A, seeded.upgrade.id)
+    w.deps.records.remove(DOMAINS.adoptions, TENANT_A, seeded.adoption.id)
+    w.deps.records.remove(DOMAINS.hygieneFindings, TENANT_A, seeded.hygiene.id)
+    const second = await call(w.routes, PATH, { tenantId: TENANT_A, action: "run-review" })
+    findings = second.body.findings as Array<any>
+    expect(findings.filter((finding) => finding.family === "signals").every((finding) => finding.state === "resolved")).toBe(true)
+  })
+
+  it("does not run the standards provider on Pro and runs no provider on Community", async () => {
+    const pro = world({ plans: { [TENANT_A]: "pro" } })
+    const seeded = seedSignals(pro.deps)
+    const collected = await collectSignals(pro.deps, TENANT_A)
+    expect(collected.signals.some((signal) => signal.key === `baseline-upgrade-available:${seeded.install.id}`)).toBe(true)
+    expect(collected.signals.some((signal) => signal.key.startsWith("standard-"))).toBe(false)
+    expect(collected.signals.some((signal) => signal.key.startsWith("hygiene-"))).toBe(true)
+
+    const community = world({ plans: { [TENANT_A]: "community" } })
+    seedSignals(community.deps)
+    expect(await collectSignals(community.deps, TENANT_A)).toEqual({ signals: [], evaluated: true })
+  })
+
+  it("sends new signal findings to webhooks with the existing payload shape", async () => {
+    const w = world({ plans: { [TENANT_A]: "msp" } })
+    seedSignals(w.deps)
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-endpoint", kind: "webhook", url: "https://hooks.example.com/tv", minSeverity: "low" })
+    await runReview(w.deps, TENANT_A, "manual", null, { sleep: noSleep })
+    expect(w.posts).toHaveLength(1)
+    const payload = JSON.parse(String(w.posts[0]!.init.body))
+    expect(payload.findings.map((finding: any) => finding.check)).toEqual(expect.arrayContaining(["baseline-upgrade-available", "baseline-conflicts", "standard-deviation", "hygiene-finding"]))
+    expect(Object.keys(payload.findings[0]).sort()).toEqual(["check", "evidenceAt", "firstSeenAt", "key", "lastSeenAt", "severity", "state"])
+  })
+
+  it("surfaces signals in a scheduled review without extra tenant writes", async () => {
+    const w = world({ plans: { [TENANT_A]: "msp" } })
+    const seeded = seedSignals(w.deps)
+    const apiCalls: string[] = []
+    const originalApi = w.deps.api
+    w.deps.api = async (path, tenantId, body) => { apiCalls.push(path); return originalApi(path, tenantId, body) }
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-schedule", enabled: true })
+    await tick(w.deps, { sleep: noSleep })
+    const findings = (await call(w.routes, PATH, { tenantId: TENANT_A, action: "list-findings" })).body.findings as Array<any>
+    expect(findings.some((finding) => finding.key === `baseline-conflicts:${seeded.upgrade.id}` && finding.state === "open")).toBe(true)
+    expect(apiCalls).toContain("/api/list-backups")
+    expect(apiCalls.every((path) => ["/api/list-backups", "/api/frameworks", "/api/oib"].includes(path))).toBe(true)
   })
 })
 

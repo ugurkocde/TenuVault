@@ -85,14 +85,14 @@ export const HUBS: Hub[] = [
   {
     id: "operations",
     title: "Operations",
-    description: "Scheduled health review of backups.",
+    description: "Scheduled health review of backups and work signals.",
     tabs: [
       {
         id: "health-review",
         label: "Health review",
         feature: "healthReview",
         path: "/api/health-review",
-        summary: "A scheduled review of stale backups, with opt-in notifications.",
+        summary: "A scheduled review of stale backups, pending upgrades, conflicts, deviations and stale scores, with opt-in notifications.",
         points: ["Notifications go only to an endpoint you configure, with a preview of what is sent.", "No tokens, credentials or policy content are sent.", "Runs only while TenuVault runs; the last review time is always shown."],
         Component: lazy(() => import("./health-review/HealthReviewTab")),
       },

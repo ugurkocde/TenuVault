@@ -1,5 +1,5 @@
 import type { RouteModule } from "../../api/host"
-import type { ListedRecord } from "../contracts"
+import type { ListedRecord, SignalProvider, WorkSignal } from "../contracts"
 import type { FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
 import { resolveHistory, type Stored } from "../records"
@@ -253,7 +253,29 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
   })
 }
 
+/** Open hygiene findings of the latest scans; acknowledged, false positive and resolved findings are handled and stay silent. */
+export function hygieneSignals(deps: FeatureDeps, tenantId: string): WorkSignal[] {
+  const tenant = tenantId.toLowerCase()
+  return findingsOf(all(deps, tenant))
+    .filter((finding) => finding.status === "open")
+    .map((finding) => ({
+      key: `hygiene-finding:${finding.fingerprint}`,
+      tenantId: tenant,
+      source: "hygiene" as const,
+      severity: finding.severity,
+      state: "open" as const,
+      title: finding.title,
+      reason: finding.explanation,
+      observedAt: finding.collectedAt,
+      link: "/portal/governance/hygiene",
+      evidence: [`${DOMAIN}:${finding.id}`],
+    }))
+}
+
 /** Background work while the app runs; returns a function that stops it. */
 export function start(_deps: FeatureDeps): () => void {
   return () => undefined
 }
+
+/** Open hygiene findings for one tenant. */
+export const signals: SignalProvider = (deps, tenantId) => hygieneSignals(deps, tenantId)

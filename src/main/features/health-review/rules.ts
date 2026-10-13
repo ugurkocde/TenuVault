@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 import { backupHealth, latestComplete, normalizeBackupStatus, type BackupState } from "../../../portal/lib/backup-health"
+import type { WorkSignal } from "../contracts"
 
 /**
  * Pure rules of the scheduled health review (#147): thresholds, checks, finding lifecycle,
@@ -26,7 +27,7 @@ export const MAX_DELIVERY_ATTEMPTS = 3
 export const RETRY_DELAYS_MS = [2_000, 8_000] as const
 
 export type Severity = "critical" | "high" | "medium" | "low"
-export type CheckFamily = "backup"
+export type CheckFamily = "backup" | "signals"
 export type FindingState = "open" | "unknown" | "resolved"
 
 /** What one check observed: a finding, or an explicit unknown when the evidence is missing. */
@@ -115,6 +116,42 @@ export function checkBackups(tenantId: string, listing: BackupListing, now: Date
     evidence: [],
   }
   return { family: "backup", evaluated: true, detail: reason, findings: [finding] }
+}
+
+/**
+ * Work signals of the other workflows (pending baseline upgrades and conflicts, standard
+ * deviations, open hygiene findings, stale scores) as health findings. The signal keeps its
+ * own severity and state; a stale or never collected signal stays unknown, never healthy.
+ * `evaluated` is false when a signal provider could not be read: the findings that were
+ * read still count, and older signal findings are left as they were.
+ */
+export function checkSignals(tenantId: string, signals: WorkSignal[], evaluated: boolean): CheckResult {
+  const findings: ObservedFinding[] = signals.map((signal) => ({
+    key: signal.key,
+    family: "signals",
+    check: signal.key.split(":")[0] ?? "work-signal",
+    severity: signal.severity,
+    state: signal.state,
+    title: signal.title,
+    reason: signal.reason,
+    observedAt: signal.observedAt,
+    evidenceAt: signal.observedAt,
+    link: signal.link,
+    evidence: signal.evidence,
+  }))
+  if (!evaluated) {
+    const reason = "Work signals could not be read completely. Pending upgrades, conflicts, deviations and stale scores are unknown."
+    if (!findings.some((finding) => finding.key === `signals-unavailable:${tenantId}`)) {
+      findings.push({ key: `signals-unavailable:${tenantId}`, family: "signals", check: "signals-unavailable", severity: "medium", state: "unknown", title: "Work signals unknown", reason, observedAt: null, evidenceAt: null, link: "/portal/governance/standards", evidence: [] })
+    }
+    return { family: "signals", evaluated: false, detail: reason, findings }
+  }
+  return {
+    family: "signals",
+    evaluated: true,
+    detail: findings.length ? `${findings.length} work signal${findings.length === 1 ? "" : "s"} need attention.` : "No pending upgrades, conflicts, deviations, hygiene findings or stale scores.",
+    findings,
+  }
 }
 
 function hoursAgo(time: Date, now: Date): string {
