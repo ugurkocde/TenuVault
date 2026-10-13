@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { BackupEngine, type BackupJob } from "../src/main/backup/engine"
 import { backupTenantLabel, notifyBackupFailure } from "../src/main/backup/notifications"
 import { RefusalLog, refuseUnlicensedBackup } from "../src/main/backup/refusals"
+import { scheduledResult } from "../src/main/backup/scheduler"
 import { isLocalAccount } from "../src/main/storage/blob-emulator"
 import { localStorageAccountName } from "../src/shared/constants"
 import type { BackupRefusal } from "../src/shared/ipc"
@@ -67,6 +68,7 @@ function unattendedFixture(getToken: () => Promise<string>) {
       return job
     },
     engine,
+    scheduledResult,
     scopes: { get: () => ({ scope: { excluded: [] } }) },
     accounts: { get: () => undefined },
     host: { dispatch: vi.fn(async (_request: Request) => new Response(null, { status: 200 })) },

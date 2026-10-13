@@ -1,5 +1,6 @@
 import type { BackupSchedule, ScheduleInput } from "../../shared/ipc"
 import type { KeyValueStore } from "../storage/secure-store"
+import type { BackupJob } from "./engine"
 
 const KEY = "backup.schedules"
 const TICK_MS = 60 * 1000
@@ -10,6 +11,17 @@ const VALID_TIME = /^([01]\d|2[0-3]):[0-5]\d$/
 export interface ScheduledRunResult {
   status: "Completed" | "Failed" | "Cancelled"
   message: string
+}
+
+/**
+ * The outcome a finished backup job counts as for its scheduled slot. A backup that saved some
+ * policies but could not read others stays on disk, yet it does not satisfy the slot: the slot
+ * keeps its attempt and is retried instead of being recorded as a success.
+ */
+export function scheduledResult(job: BackupJob): ScheduledRunResult {
+  const message = job.exception ?? job.progressMessage
+  if (job.status === "Cancelled") return { status: "Cancelled", message }
+  return { status: job.status === "Completed" && !job.failures ? "Completed" : "Failed", message }
 }
 
 /**

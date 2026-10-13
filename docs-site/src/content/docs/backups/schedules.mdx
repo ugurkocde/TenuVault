@@ -14,7 +14,7 @@ TenuVault can back up each tenant automatically, daily or weekly, at a time you 
 * TenuVault checks the schedules every minute. The first check runs 30 seconds after TenuVault starts.
 * If the computer was off or TenuVault was not running at the scheduled time, the missed backup runs once as soon as TenuVault starts again. Only the most recent missed slot runs, not every missed one.
 * When several backups are due, they run one after another.
-* A failed scheduled backup is retried after 15 minutes, with up to three attempts in the same slot. Each attempt belongs to the slot when it started. After the third failure, TenuVault waits until the next scheduled time. If that time passed during the failed run, it is due at the next check with a fresh attempt budget. A successful backup resets the attempt count.
+* A failed scheduled backup is retried after 15 minutes, with up to three attempts in the same slot. Each attempt belongs to the slot when it started. After the third failure, TenuVault waits until the next scheduled time. If that time passed during the failed run, it is due at the next check with a fresh attempt budget. A successful backup resets the attempt count. A backup that saved only some policies counts as a failed attempt: the partial backup stays in storage, and the slot is retried.
 * Saving a schedule never triggers a catch-up backup for slots before the change.
 * Each scheduled backup uses the tenant's saved backup choice. See [Choose what automatic backups cover](#choose-what-automatic-backups-cover).
 

@@ -33,6 +33,8 @@ export interface BackupJob {
   endTime?: string
   exception?: string
   backupFolder?: string
+  /** Policies and types that could not be read; above zero the backup on disk is partial. */
+  failures?: number
   log: string[]
 }
 
@@ -168,7 +170,7 @@ async function tokenOrStop(get: () => Promise<string>): Promise<string> {
 
 export class BackupEngine {
   private readonly jobs = new Map<string, BackupJob>()
-  private readonly running = new Map<string, BackupJob>()
+  private readonly running = new Map<string, { job: BackupJob; key: string }>()
   private readonly executions = new Map<string, { controller: AbortController; done: Promise<BackupJob> }>()
 
   constructor(private readonly deps: BackupEngineDeps) {}
@@ -188,11 +190,34 @@ export class BackupEngine {
     return job
   }
 
-  /** Starts a backup in the background. One backup per tenant runs at a time. */
+  /**
+   * Starts a backup in the background. One backup per tenant runs at a time. A request joins the
+   * running backup only when tenant, storage account and scope all match; any other request gets
+   * a failed job of its own, so a scheduled full backup can never ride on a narrower manual one.
+   */
   start(request: BackupRequest): BackupJob {
     const tenantKey = request.tenantId.toLowerCase()
+    const key = `${request.storageAccountName.toLowerCase()}\n${normalizeScope(request.scope ?? EVERYTHING).excluded.join(",")}`
     const active = this.running.get(tenantKey)
-    if (active) return active
+    if (active) {
+      if (active.key === key) return active.job
+      const conflict: BackupJob = {
+        id: `desktop-${randomUUID()}`,
+        tenantId: request.tenantId,
+        storageAccountName: request.storageAccountName,
+        status: "Failed",
+        progress: 100,
+        progressMessage: "Backup failed",
+        startTime: this.now().toISOString(),
+        endTime: this.now().toISOString(),
+        exception: "A different backup is already running for this tenant. Wait for it to finish, then try again.",
+        log: [],
+      }
+      this.write(conflict, `Backup failed: ${conflict.exception}`)
+      this.jobs.set(conflict.id, conflict)
+      this.prune()
+      return conflict
+    }
 
     const controller = new AbortController()
     const deadline = Date.now() + JOB_DEADLINE_MS
@@ -207,7 +232,7 @@ export class BackupEngine {
       log: [],
     }
     this.jobs.set(job.id, job)
-    this.running.set(tenantKey, job)
+    this.running.set(tenantKey, { job, key })
     this.prune()
 
     const timer = setTimeout(() => controller.abort(jobDeadlineError()), JOB_DEADLINE_MS)
@@ -403,6 +428,7 @@ export class BackupEngine {
       this.write(job, "Older backups were kept because this backup is incomplete.")
     }
 
+    job.failures = failures
     job.status = failures > 0 && totalPolicies === 0 ? "Failed" : "Completed"
     const warnings = failures + retentionWarnings
     job.progressMessage =
@@ -474,7 +500,11 @@ export class BackupEngine {
       }
       const metadata = entry.metadata
       let holdsUncovered = false
-      const complete = String(metadata.Status).toLowerCase() !== "failed"
+      // Only a backup that read everything may satisfy coverage: one that finished with
+      // warnings may miss items in any folder it appears to hold. Backups recorded before
+      // failures were counted carry no Failures value and count by their status alone.
+      const status = String(metadata.Status ?? "").toLowerCase()
+      const complete = (status === "success" || status === "succeeded") && (metadata.Failures === undefined || metadata.Failures === 0)
       for (const folder of complete ? coveredFolders(metadata) : []) {
         if (uncovered.delete(folder)) holdsUncovered = true
       }
