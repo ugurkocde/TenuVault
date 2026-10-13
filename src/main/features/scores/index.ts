@@ -1,4 +1,5 @@
 import type { RouteModule } from "../../api/host"
+import type { SignalProvider, WorkSignal } from "../contracts"
 import type { FeatureDeps } from "../deps"
 import { featureRoute, FeatureError, optionalText, type Body } from "../route"
 import { SCORE_FORMULA, STALE_AFTER_DAYS } from "./formula"
@@ -94,7 +95,41 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
   })
 }
 
+/**
+ * Stale saved scores: a framework whose latest saved comparison or validation is older
+ * than STALE_AFTER_DAYS. Frameworks that were never assessed stay silent here; the scores
+ * screen already reports them, and a missing score is not evidence of a stale one. A
+ * framework whose saved comparisons could not be read fails the provider instead, so the
+ * caller marks the signals family as not evaluated and older stale findings stay as they
+ * were: unreadable evidence must never read as "no stale scores".
+ */
+export async function scoreSignals(deps: FeatureDeps, tenantId: string): Promise<WorkSignal[]> {
+  const tenant = tenantId.toLowerCase()
+  const scores = await tenantScores(deps, tenant)
+  const unreadable = scores.find((entry) => entry.state === "unavailable")
+  if (unreadable) throw new Error(unreadable.message ?? "Saved scores could not be read.")
+  return scores.flatMap((entry): WorkSignal[] => {
+    if (!entry.latest || !entry.latest.freshness.stale) return []
+    const age = entry.latest.freshness.ageDays
+    return [{
+      key: `score-stale:${entry.frameworkId}`,
+      tenantId: tenant,
+      source: "score",
+      severity: "low",
+      state: "unknown",
+      title: `Baseline score for ${entry.frameworkName} is stale`,
+      reason: `Last assessed ${entry.latest.freshness.assessedAt}${age === null ? "" : `, ${age} days ago`}; scores older than ${STALE_AFTER_DAYS} days are stale. Run a new comparison on the Frameworks page.`,
+      observedAt: entry.latest.freshness.assessedAt,
+      link: "/portal/governance/scores",
+      evidence: [],
+    }]
+  })
+}
+
 /** Background work while the app runs; scores need none. */
 export function start(_deps: FeatureDeps): () => void {
   return () => undefined
 }
+
+/** Stale saved scores for one tenant. */
+export const signals: SignalProvider = (deps, tenantId) => scoreSignals(deps, tenantId)
