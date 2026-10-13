@@ -10,6 +10,7 @@ import { loadNcsc } from "./ncsc"
 import { validateRecommendationList } from "../../shared/frameworks/cis-manual"
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
 import { cisReadiness } from "../../shared/frameworks/cis-readiness"
+import { isDateOnly, validateNewException, type CisException } from "../../shared/frameworks/cis-exceptions"
 import { tenantWriteLabel, withTenantWrite } from "../features/write-lock"
 
 const GRAPH = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies"
@@ -146,7 +147,7 @@ async function exportWorkspace(body: RecordJson, workspace: FrameworkWorkspace):
       try { denominator = parseDenominatorList(JSON.stringify(body.denominator)) }
       catch (error) { throw new FrameworkError(error instanceof Error ? error.message : "The denominator list is invalid.") }
     }
-    const summary = cisReadiness(saved.assessment, saved.policies, denominator, workspace.recommendationList)
+    const summary = cisReadiness(saved.assessment, saved.policies, denominator, workspace.recommendationList, workspace.exceptions)
     const { generateCisReadinessPDF } = await import("../../shared/compliance/report-pdf")
     const pdf = generateCisReadinessPDF(summary, { exportedAt: context.exportedAt, tenantName: context.tenantName, tenantId: workspace.tenantId, assessedAt: saved.assessment.assessedAt, runId: saved.assessment.runId })
     return { file: { name: `${name}.pdf`, type: "application/pdf", encoding: "base64", data: Buffer.from(pdf).toString("base64") } }
@@ -200,6 +201,24 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       saveWorkspace(workspace)
     } else if (body.action === "workspace-delete-assessment") {
       workspace.history = workspace.history.filter(entry => entry.assessment.runId !== body.runId)
+      saveWorkspace(workspace)
+    } else if (body.action === "workspace-cis-exception-add") {
+      if (body.frameworkId !== "cis-benchmarks") throw new FrameworkError("Exceptions are available for CIS Benchmarks only.")
+      let input: ReturnType<typeof validateNewException>
+      try { input = validateNewException(body) }
+      catch (error) { throw new FrameworkError(error instanceof Error ? error.message : "The exception is invalid.") }
+      const today = new Date().toISOString().slice(0, 10)
+      if (!isDateOnly(input.expiresOn) || input.expiresOn <= today) throw new FrameworkError("Provide an expiry date in the future.")
+      const exception: CisException = { ...input, id: randomUUID(), createdAt: new Date().toISOString() }
+      workspace.exceptions = [...(workspace.exceptions ?? []), exception]
+      saveWorkspace(workspace)
+    } else if (body.action === "workspace-cis-exception-remove") {
+      if (body.frameworkId !== "cis-benchmarks") throw new FrameworkError("Exceptions are available for CIS Benchmarks only.")
+      const exceptionId = typeof body.exceptionId === "string" ? body.exceptionId : typeof body.id === "string" ? body.id : ""
+      if (!exceptionId) throw new FrameworkError("Select an exception to remove.")
+      const existing = workspace.exceptions ?? []
+      if (!existing.some(exception => exception.id === exceptionId)) throw new FrameworkError("Exception not found.", 404)
+      workspace.exceptions = existing.filter(exception => exception.id !== exceptionId)
       saveWorkspace(workspace)
     } else if (body.action !== "workspace-load") throw new FrameworkError("Unknown workspace action.")
     return loadWorkspace(body.tenantId, body.frameworkId)
