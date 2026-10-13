@@ -1,6 +1,6 @@
 import { acknowledgeEvent, acknowledgeEvents, pendingEvents, queueEvent } from './outbox'
 import { BlobListError, decodeXml, listBlobPages } from '../storage/list'
-import { mapLimit } from '../map-limit'
+import { mapLimit } from '../../../shared/map-limit'
 import { MetadataCache } from '../storage/metadata-cache'
 import { blobPath } from '../../../shared/security'
 import { entriesForTenant } from './export'

@@ -473,7 +473,6 @@ function TenantsPageContent() {
           devices: details.statistics.deviceCount,
           complianceRate: details.statistics.complianceRate,
           configCount: details.statistics.policies.total,
-          storageUsed: details.storageUsed,
           policies: {
             compliance: details.statistics.policies.compliancePolicies,
             configuration: details.statistics.policies.deviceConfigurations + details.statistics.policies.configurationPolicies,

@@ -5,7 +5,7 @@ import { coveredFolders, type ScopeMetadata } from "../../../../shared/intune/sc
 import { itemsOf, sameItem, type BackupFingerprint, type BackupItems } from "../../../../shared/intune/backup-changes"
 import { backupRef, DriftPairError, selectBackupPair, summarizeDrifts, type BackupMetadata, type Drift, type DriftResult, type DriftScanProgress, type DriftWarning, type SelectedBackup } from "../../../../shared/intune/drift"
 import { CANCELLED_HEADER, driftScanHooks, type DriftScanHooks } from "~/lib/drift/scan-hooks"
-import { mapLimit } from "~/lib/map-limit"
+import { mapLimit } from "../../../../shared/map-limit"
 import { backupFoldersIn } from "../../../../shared/intune/backup-names"
 import { definitionIdsIn } from "../../../../shared/intune/drift-format"
 import { graphCaller } from "~/lib/policies/graph-restore"

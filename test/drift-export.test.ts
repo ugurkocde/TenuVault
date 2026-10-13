@@ -4,6 +4,7 @@ import { definitionIdsIn, formatValue, settingLabel } from '../src/shared/intune
 import { driftCsv, driftExportName, driftJson } from '../src/shared/intune/drift-export'
 import { clearSettingNames, readSettingNames } from '../src/portal/lib/drift/setting-names'
 import type { GraphCall } from '../src/portal/lib/policies/graph-restore'
+import type { Item } from '../src/shared/intune/registry'
 
 const DEFENDER = 'device_vendor_msft_policy_config_defender_allowcloudprotection'
 const REVEAL = 'device_vendor_msft_policy_config_credentialsui_disablepasswordreveal'
@@ -50,15 +51,22 @@ describe('readSettingNames', () => {
 
   it('reads each definition once, skips unknown ones and keeps option labels', async () => {
     const calls: string[] = []
-    const graph: GraphCall = async (_method, path) => {
-      calls.push(path)
-      if (path.endsWith(encodeURIComponent('missing_setting'))) return { status: 404, body: {} as Record<string, never> }
-      return { status: 200, body: { displayName: 'Allow Cloud Protection', options: [{ itemId: `${DEFENDER}_1`, displayName: 'Allowed. Turns on Cloud Protection.' }] } }
+    const graph: GraphCall = async (method, path, body) => {
+      calls.push(`${method} ${path}`)
+      const requests = (body?.requests ?? []) as Array<{ id: string; url: string }>
+      return {
+        status: 200,
+        body: {
+          responses: requests.map((request) => request.url.endsWith(encodeURIComponent('missing_setting'))
+            ? { id: request.id, status: 404, body: {} }
+            : { id: request.id, status: 200, body: { displayName: 'Allow Cloud Protection', options: [{ itemId: `${DEFENDER}_1`, displayName: 'Allowed. Turns on Cloud Protection.' }] } }),
+        } as unknown as Item,
+      }
     }
     const names = await readSettingNames([DEFENDER, 'missing_setting'], graph)
     expect(names).toEqual({ settings: { [DEFENDER]: 'Allow Cloud Protection' }, options: { [`${DEFENDER}_1`]: 'Allowed. Turns on Cloud Protection.' } })
     await readSettingNames([DEFENDER, 'missing_setting'], graph)
-    expect(calls).toEqual([`deviceManagement/configurationSettings/${DEFENDER}`, 'deviceManagement/configurationSettings/missing_setting'])
+    expect(calls).toEqual(['POST $batch'])
   })
 
   it('returns no names when Graph refuses, without throwing', async () => {

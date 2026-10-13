@@ -1,3 +1,4 @@
+import { mapLimit } from "../../../shared/map-limit"
 import { INTUNE_TYPES, itemName, typeForFolder, type Item } from "../../../shared/intune/registry"
 import { normalizeBackupStatus } from "../../../portal/lib/backup-health"
 import { isGuid } from "../../../shared/security"
@@ -33,6 +34,8 @@ interface BackupSummary {
 
 const PREVIEW_CHUNK = 2000
 const GROUP_LIMIT = 300
+/** Group existence reads running at once. */
+const GROUP_CONCURRENCY = 6
 
 async function json(response: Response, what: string): Promise<Record<string, unknown>> {
   const body = (await response.json().catch(() => ({}))) as Record<string, unknown>
@@ -156,17 +159,27 @@ export async function resolveGroups(deps: FeatureDeps, tenantId: string, items: 
   } catch {
     return { groups, state: "unavailable", reason: "Microsoft Graph is unavailable (sign in to this tenant), so group references are unknown." }
   }
-  let checked = 0
-  let unknown = 0
-  for (const id of [...ids].slice(0, GROUP_LIMIT)) {
+  // A 401 or 403 stops the checks early: no new reads start and every group stays unknown.
+  let denied = false
+  const limited = [...ids].slice(0, GROUP_LIMIT)
+  const statuses = await mapLimit(limited, GROUP_CONCURRENCY, async (id): Promise<number | null> => {
+    if (denied) return null
     let status: number
     try {
       status = (await graph("GET", `groups/${encodeURIComponent(id)}?$select=id`)).status
     } catch {
       status = 0
     }
-    if (status === 401 || status === 403) return { groups: new Map(), state: "unavailable", reason: unavailable }
+    if (status === 401 || status === 403) denied = true
+    return status
+  })
+  if (denied) return { groups: new Map(), state: "unavailable", reason: unavailable }
+  let checked = 0
+  let unknown = 0
+  for (const [index, status] of statuses.entries()) {
+    if (status === null) continue
     checked++
+    const id = limited[index]!
     if (status >= 200 && status < 300) groups.set(id, "exists")
     else if (status === 404) groups.set(id, "missing")
     else unknown++
