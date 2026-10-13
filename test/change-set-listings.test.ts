@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { applyChangeSet, approveChangeSet, createChangeSet, previewChangeSet } from "../src/main/features/change-sets/engine"
+import { applyChangeSet, approveChangeSet, createChangeSet, getChangeSet, previewChangeSet } from "../src/main/features/change-sets/engine"
+import { createListingMemo, listAll } from "../src/main/features/change-sets/graph"
 import { targetStateHash, staleTargets } from "../src/main/features/promotion/targets"
 import type { TargetReads } from "../src/main/features/promotion/mapping"
 import { fakeDeps, TENANT_A, TENANT_B } from "./feature-helpers"
@@ -42,7 +43,7 @@ describe("change set listing reuse", () => {
     expect(listings(context.tenant)).toBe(2)
   })
 
-  it("lists a type once across the checks of one apply pass", async () => {
+  it("lists a type once in each check of one apply pass", async () => {
     const context = setup()
     const record = await threeCreates(context)
     const preview = await previewChangeSet(context.deps, TENANT_A, record.id)
@@ -50,8 +51,69 @@ describe("change set listing reuse", () => {
     context.tenant.calls = []
     const applied = await applyChangeSet(context.deps, TENANT_A, record.id, { contentHash: preview.contentHash, confirmed: true }, "Admin")
     expect(applied.status).toBe("applied")
-    expect(listings(context.tenant)).toBe(1)
+    expect(listings(context.tenant)).toBe(2)
     expect(context.tenant.policies.size).toBe(3)
+  })
+
+  it("marks the set stale when a same-named policy appears during the pre-change backup", async () => {
+    const context = setup()
+    const record = await createChangeSet(context.deps, TENANT_A, {
+      title: "Add one policy",
+      operations: [{
+        folder: "ConfigurationPolicies",
+        action: "create" as const,
+        proposed: { name: "Alpha", platforms: "windows10", technologies: "mdm", roleScopeTagIds: ["0"], settings: [setting("vendor_msft_firewall_enable", "vendor_msft_firewall_enable_true")] },
+      }],
+    }, "Admin")
+    const preview = await previewChangeSet(context.deps, TENANT_A, record.id)
+    await approveChangeSet(context.deps, TENANT_A, record.id, { contentHash: preview.contentHash, targetFingerprint: preview.targetFingerprint }, "Admin")
+    const api = context.deps.api
+    let injected = false
+    context.deps.api = async (path, tenantId, body = {}) => {
+      if (path === "/api/backup/status" && !injected) {
+        injected = true
+        context.tenant.addPolicy({ name: "Alpha" })
+      }
+      return api(path, tenantId, body)
+    }
+    await expect(applyChangeSet(context.deps, TENANT_A, record.id, { contentHash: preview.contentHash, confirmed: true }, "Admin")).rejects.toThrow(/changed in the target tenant after approval/)
+    expect(injected).toBe(true)
+    expect(context.tenant.writeCount()).toBe(0)
+    expect([...context.tenant.policies.values()].filter((policy) => policy.name === "Alpha")).toHaveLength(1)
+    expect(getChangeSet(context.deps, TENANT_A, record.id).status).toBe("stale")
+  })
+
+  it("does not cache a rejected listing, so a later call in the same pass succeeds", async () => {
+    const memo = createListingMemo()
+    let attempts = 0
+    const graph = async () => {
+      attempts += 1
+      if (attempts === 1) return { status: 500, body: { error: { message: "Transient failure" } } }
+      return { status: 200, body: { value: [{ id: "policy-1", name: "Alpha" }] } }
+    }
+    await expect(listAll(graph as never, LISTING, memo)).rejects.toThrow(/Transient failure/)
+    await expect(listAll(graph as never, LISTING, memo)).resolves.toEqual([{ id: "policy-1", name: "Alpha" }])
+    expect(attempts).toBe(2)
+    await expect(listAll(graph as never, LISTING, memo)).resolves.toEqual([{ id: "policy-1", name: "Alpha" }])
+    expect(attempts).toBe(2)
+  })
+
+  it("shares one in-flight listing between concurrent callers", async () => {
+    const memo = createListingMemo()
+    let attempts = 0
+    let release: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const graph = async () => {
+      attempts += 1
+      await gate
+      return { status: 200, body: { value: [{ id: "policy-1", name: "Alpha" }] } }
+    }
+    const first = listAll(graph as never, LISTING, memo)
+    const second = listAll(graph as never, LISTING, memo)
+    release!()
+    await expect(first).resolves.toEqual([{ id: "policy-1", name: "Alpha" }])
+    await expect(second).resolves.toEqual([{ id: "policy-1", name: "Alpha" }])
+    expect(attempts).toBe(1)
   })
 
 })

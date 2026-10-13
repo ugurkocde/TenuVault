@@ -35,9 +35,10 @@ export function graphMessage(body: Item, status: number): string {
 }
 
 /**
- * Listings reused within one pass, keyed by request path. A caller creates one memo for a
- * single pass (one preview, one apply, one stale check) and drops it afterwards, so a later
- * pass always lists again and another tenant never shares an entry.
+ * Listings reused within one read-only pass, keyed by request path. A caller creates one
+ * memo for a single pass and drops it afterwards, so a later pass always lists again and
+ * another tenant never shares an entry. A rejected listing is evicted, so a later call in
+ * the same pass retries instead of replaying the failure.
  */
 export type ListingMemo = Map<string, Promise<Item[]>>
 
@@ -51,7 +52,12 @@ export function listAll(graph: GraphCall, path: string, memo?: ListingMemo): Pro
   const cached = memo?.get(path)
   if (cached) return cached
   const listing = listAllFresh(graph, path)
-  memo?.set(path, listing)
+  if (memo) {
+    memo.set(path, listing)
+    listing.catch(() => {
+      if (memo.get(path) === listing) memo.delete(path)
+    })
+  }
   return listing
 }
 
