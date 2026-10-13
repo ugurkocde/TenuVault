@@ -18,7 +18,7 @@ import { ApiHost } from "./api/host"
 import { routes } from "./api/routes"
 import { AuthManager, SignInRequiredError } from "./auth/msal"
 import { BackupEngine, verifyStorageAccess, type BackupJob } from "./backup/engine"
-import { BackupScheduler } from "./backup/scheduler"
+import { BackupScheduler, scheduledResult } from "./backup/scheduler"
 import { prepareScheduleInput } from "./backup/schedule-input"
 import { BackgroundLaunch } from "./backup/background-launch"
 import { BackupScopes } from "./backup/scopes"
@@ -438,8 +438,9 @@ async function bootstrap(): Promise<void> {
     const origin = unattendedBackupTriggers.get(job) ?? { trigger, notified: false }
     unattendedBackupTriggers.set(job, origin)
     await waitForJob(job)
-    const ok = job.status === "Completed"
-    const cancelled = job.status === "Cancelled"
+    const result = scheduledResult(job)
+    const ok = result.status === "Completed"
+    const cancelled = result.status === "Cancelled"
     const account = accounts.get(tenantId)
     // Record scheduled backups in the tenant's audit log, attributed to the signed-in admin.
     void host
@@ -469,7 +470,7 @@ async function bootstrap(): Promise<void> {
       origin.notified = true
       notifyFailure(tenantId, profile.name, job.exception ?? "Open TenuVault for details.", origin.trigger)
     }
-    return { status: cancelled ? ("Cancelled" as const) : ok ? ("Completed" as const) : ("Failed" as const), message: job.exception ?? job.progressMessage }
+    return result
   }
 
   const scheduler = new BackupScheduler(appStore, (tenantId) => runScheduledBackup(tenantId, "scheduled"), () => {
