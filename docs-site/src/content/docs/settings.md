@@ -143,6 +143,7 @@ Sets how long backups are kept: **7 days**, **14 days**, **30 days**, **60 days*
 * If a backup is incomplete, no older backups are deleted.
 * A backup that is the newest copy of a type that later backups left out is kept.
 * Community tenants keep 30 days at most, even if you choose a longer period or **Forever**. Pro and MSP tenants keep what you choose.
+* When every connected tenant is on Community, periods longer than 30 days and **Forever** are marked Pro and cannot be chosen. If a longer period was saved earlier, Settings shows the saved choice and the 30 days that take effect on Community.
 
 See [Backup storage and retention](/backups/storage/) and [Schedule backups](/backups/schedules/).
 

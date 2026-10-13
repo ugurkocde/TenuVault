@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { storageLabel } from "~/lib/storage-label"
 import type { AppInfo, AppPreferences, BackupSettings, SignedInAccount, UpdateStatus } from "../../shared/ipc"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
-import { COMMUNITY_RETENTION_DAYS } from "../../shared/plans"
+import { COMMUNITY_RETENTION_DAYS, effectiveRetentionDays } from "../../shared/plans"
 import { isGuid } from "../../shared/security"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
 import { StorageChooser } from "../components/StorageChooser"
@@ -18,6 +18,9 @@ import { RecoveryKeyNotice } from "../components/RecoveryKeyNotice"
 import { bridge } from "../lib/bridge"
 import { storageResources, type StorageChoice } from "../lib/storage"
 import { toast } from "../lib/toast"
+import { tenantPlan, useLicense } from "../lib/license"
+import { PlanBadge } from "../components/UpgradeNote"
+import { useConfirm } from "~/components/ConfirmDialog"
 
 function RestoreWrites() {
   const tenants = useTenants().filter(tenant => tenant.credentials?.tenantId)
@@ -112,6 +115,7 @@ function RestoreAppliedInput({ record, request, onClose }: { record: WriteRecord
 }
 
 function TenantRestoreWrites({ tenantId }: { tenantId: string }) {
+  const { confirm, confirmDialog } = useConfirm()
   const [records, setRecords] = useState<WriteRecord[]>([])
   const [error, setError] = useState("")
   const [editing, setEditing] = useState<string | null>(null)
@@ -146,6 +150,7 @@ function TenantRestoreWrites({ tenantId }: { tenantId: string }) {
   useEffect(() => { void request({ action: "list" }).catch(e => setError(String(e))) }, [])
   return (
     <Card>
+      {confirmDialog}
       <CardHeader>
         <CardTitle>Restore write history</CardTitle>
         <Button ref={refreshButton} variant="outline" onClick={() => void request({ action: "list" }).catch(e => setError(String(e)))}>Refresh history</Button>
@@ -165,8 +170,8 @@ function TenantRestoreWrites({ tenantId }: { tenantId: string }) {
                   recoveryButton.current = { key: record.key, button: event.currentTarget }
                   setEditing(record.key)
                 }}>Correct applied ID</Button>
-                <Button className="mt-2" variant="outline" onClick={() => {
-                  if (window.confirm("Start a new operation with this request? Future attempts will send the write again and may create another object. Do not clear this while resuming a repair.")) {
+                <Button className="mt-2" variant="outline" onClick={async () => {
+                  if (await confirm({ title: "Start a new operation?", description: "Start a new operation with this request? Future attempts will send the write again and may create another object. Do not clear this while resuming a repair.", confirmLabel: "Allow a new operation" })) {
                     void request({ action: "new-operation", key: record.key, confirmed: true }).catch(e => setError(String(e)))
                   }
                 }}>Allow a new operation</Button>
@@ -178,8 +183,8 @@ function TenantRestoreWrites({ tenantId }: { tenantId: string }) {
                   recoveryButton.current = { key: record.key, button: event.currentTarget }
                   setEditing(record.key)
                 }}>Confirm applied</Button>
-                <Button variant="outline" onClick={() => {
-                  if (window.confirm("I checked the target tenant in Intune and confirmed this request was NOT applied. Allow another attempt?")) {
+                <Button variant="outline" onClick={async () => {
+                  if (await confirm({ title: "Allow another attempt?", description: "I checked the target tenant in Intune and confirmed this request was NOT applied. Allow another attempt?", confirmLabel: "Allow another attempt" })) {
                     void request({ action: "not-applied", key: record.key, confirmed: true }).catch(e => setError(String(e)))
                   }
                 }}>Confirm not applied</Button>
@@ -438,7 +443,13 @@ function TenantSettings() {
   )
 }
 
+function allowsCustomRetention(days: number): boolean {
+  return days !== 0 && days <= COMMUNITY_RETENTION_DAYS
+}
+
 function BackgroundAndRetention() {
+  const tenants = useTenants()
+  const { status: licenseStatus } = useLicense()
   const [prefs, setPrefs] = useState<AppPreferences | null>(null)
   const [info, setInfo] = useState<AppInfo | null>(null)
   const [launcher, setLauncher] = useState<{ supported: boolean; installed: boolean } | null>(null)
@@ -519,26 +530,41 @@ function BackgroundAndRetention() {
           <input type="checkbox" className="h-4 w-4" checked={prefs.keepRunningInTray} onChange={(e) => void set({ keepRunningInTray: e.target.checked })} />
           Keep running in the {iconLocation} when I close the window
         </label>
-        <div className="flex items-center gap-3 border-t border-gray-100 pt-4">
-          <label htmlFor="retention">Keep backups for</label>
-          <select
-            id="retention"
-            className="h-10 rounded-full border border-gray-300 bg-white px-4"
-            value={prefs.retentionDays}
-            onChange={(e) => void set({ retentionDays: Number(e.target.value) })}
-          >
-            {[7, 14, 30, 60, 90, 180, 365].map((days) => (
-              <option key={days} value={days}>
-                {days} days
-              </option>
-            ))}
-            <option value={0}>Forever</option>
-          </select>
-        </div>
-        <p className="text-xs text-gray-500">
-          Older backups are deleted after each successful backup. The newest backup is always kept. Community tenants
-          keep {COMMUNITY_RETENTION_DAYS} days at most; Pro and MSP tenants keep what you choose here.
-        </p>
+        {(() => {
+          const connected = tenants.filter((tenant) => tenant.credentials?.tenantId)
+          const plans = connected.map((tenant) => tenantPlan(licenseStatus?.tenants.find((entry) => entry.tenantId.toLowerCase() === tenant.credentials!.tenantId.toLowerCase())))
+          const allCommunity = connected.length > 0 && plans.every((plan) => plan === "community")
+          const gated = allCommunity && !allowsCustomRetention(prefs.retentionDays)
+          return (
+            <>
+              <div className="flex items-center gap-3 border-t border-gray-100 pt-4">
+                <label htmlFor="retention" className="flex items-center gap-2">Keep backups for{allCommunity && <PlanBadge feature="customRetention" />}</label>
+                <select
+                  id="retention"
+                  className="h-10 rounded-full border border-gray-300 bg-white px-4"
+                  value={prefs.retentionDays}
+                  onChange={(e) => void set({ retentionDays: Number(e.target.value) })}
+                >
+                  {[7, 14, 30, 60, 90, 180, 365].map((days) => (
+                    <option key={days} value={days} disabled={allCommunity && days > COMMUNITY_RETENTION_DAYS}>
+                      {days} days{allCommunity && days > COMMUNITY_RETENTION_DAYS ? " (Pro)" : ""}
+                    </option>
+                  ))}
+                  <option value={0} disabled={allCommunity}>Forever{allCommunity ? " (Pro)" : ""}</option>
+                </select>
+              </div>
+              <p className="text-xs text-gray-500">
+                Older backups are deleted after each successful backup. The newest backup is always kept. Community tenants
+                keep {COMMUNITY_RETENTION_DAYS} days at most; Pro and MSP tenants keep what you choose here.
+              </p>
+              {gated && (
+                <p role="note" className="text-xs text-gray-700">
+                  Your saved choice is {prefs.retentionDays === 0 ? "Forever" : `${prefs.retentionDays} days`}. On Community it takes effect as {effectiveRetentionDays(prefs.retentionDays, "community")} days until a tenant is on Pro or MSP.
+                </p>
+              )}
+            </>
+          )
+        })()}
       </CardContent>
     </Card>
   )

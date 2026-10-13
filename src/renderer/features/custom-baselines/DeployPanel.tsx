@@ -6,6 +6,7 @@ import { Button } from "~/components/ui/button"
 import { Chip } from "~/components/dashboard/tiles"
 import { allows, type Plan } from "../../../shared/plans"
 import { toast } from "../../lib/toast"
+import { useConfirm } from "~/components/ConfirmDialog"
 import { ChangeSetFlow } from "../shared/ChangeSetFlow"
 import { workflowChangeActions } from "../baseline-upgrades/api"
 import { deployBaseline, getDeployment, PATH, type Baseline, type Deployment, type VersionView } from "./api"
@@ -31,9 +32,10 @@ export function DeployPanel({ tenant, baseline, version, allowed, plan, deployme
   const openedTenant = opened ? targets.find((entry) => entry.credentials?.tenantId === opened.tenantId) ?? tenant : null
   const detail = useQuery({ queryKey: ["custom-baselines", "deployment", selected], queryFn: () => getDeployment(openedTenant!, opened!.id), enabled: !!opened && !!openedTenant })
   const other = target.credentials?.tenantId !== tenant.credentials?.tenantId
+  const { confirm, confirmDialog } = useConfirm()
 
   const deploy = async () => {
-    if (!window.confirm(`Plan a deployment of ${baseline.name} v${version.version} into ${target.name}? TenuVault reads its policies and creates a change set for review. Nothing is written until you approve and apply it.`)) return
+    if (!(await confirm({ title: "Plan this deployment?", description: `Plan a deployment of ${baseline.name} v${version.version} into ${target.name}? TenuVault reads its policies and creates a change set for review. Nothing is written until you approve and apply it.`, confirmLabel: "Plan deployment" }))) return
     setBusy(true)
     try {
       const result = await deployBaseline(target, owner, baseline.id, version.version, selection.size ? [...selection] : null)
@@ -55,6 +57,7 @@ export function DeployPanel({ tenant, baseline, version, allowed, plan, deployme
 
   return (
     <div className="space-y-6">
+      {confirmDialog}
       {allowed && (
         <section aria-label="Deploy" className={card}>
           <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Deploy version {version.version}</h3>
