@@ -5,6 +5,7 @@ import type { FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
 import { signals as hygieneSignals } from "../hygiene"
 import type { Stored } from "../records"
+import { cisSignals } from "../../frameworks/cis-signals"
 import { signals as scoreSignals } from "../scores"
 import { standardSignals } from "../standards/service"
 import {
@@ -173,6 +174,7 @@ const SIGNAL_PROVIDERS: Array<{ feature: Feature; provider: SignalProvider }> = 
   { feature: "goldenStandards", provider: (deps, tenantId) => standardSignals(deps, tenantId) },
   { feature: "hygieneExplorer", provider: hygieneSignals },
   { feature: "baselineScores", provider: scoreSignals },
+  { feature: "baselineScores", provider: (_deps, tenantId) => cisSignals(tenantId) },
 ]
 
 /**

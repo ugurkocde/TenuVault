@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { NextRequest } from "../src/main/api/next-server-shim"
 import { apiBody } from "../src/main/features/deps"
 import { routes } from "../src/main/features/health-review"
@@ -6,6 +6,10 @@ import { POST as listBackupsRoute } from "../src/portal/app/api/list-backups/rou
 import { checkBackups, checkSignals, isDue, missedWindows, redactIdentifiers, validateWebhookUrl } from "../src/main/features/health-review/rules"
 import { collectSignals, notifyEndpoints, runReview, tick } from "../src/main/features/health-review/service"
 import { DOMAINS } from "../src/main/features/domains"
+import { setInternalCisBenchmarksEnabled } from "../src/main/frameworks/service"
+import { loadWorkspace, saveWorkspace, setFrameworkStore } from "../src/main/frameworks/workspaces"
+import { convertKit, type KitFile } from "../src/shared/frameworks/cis-kit"
+import type { Assessment, BaselinePolicy, Finding } from "../src/shared/frameworks/policies"
 import type { Plan } from "../src/shared/plans"
 import { call, fakeDeps, TENANT_A, TENANT_B } from "./feature-helpers"
 
@@ -437,6 +441,91 @@ describe("health review work signals", () => {
     expect(findings.some((finding) => finding.key === `baseline-conflicts:${seeded.upgrade.id}` && finding.state === "open")).toBe(true)
     expect(apiCalls).toContain("/api/list-backups")
     expect(apiCalls.every((path) => ["/api/list-backups", "/api/frameworks", "/api/oib"].includes(path))).toBe(true)
+  })
+})
+
+const cisChoiceType = "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance"
+const cisPolicyFile = (name: string, description: string, settingId = "fakebook_setting_alpha") => JSON.stringify({
+  name, platforms: "windows10", technologies: "mdm", description,
+  settings: [{ settingInstance: { "@odata.type": cisChoiceType, settingDefinitionId: settingId, choiceSettingValue: { value: "fake-on" } } }],
+})
+const cisKitFiles: KitFile[] = [
+  { path: "Level 1/Fakebook Alpha 9.9.9.json", content: cisPolicyFile("Fakebook Alpha", "Covers 7.1.1 and 7.1.2") },
+  { path: "Level 1/Fakebook Beta 9.9.9.json", content: cisPolicyFile("Fakebook Beta", "Covers 7.1.2", "fakebook_setting_beta") },
+  { path: "Level 2/Fakebook Gamma 9.9.9.json", content: cisPolicyFile("Fakebook Gamma", "Covers 7.2.1", "fakebook_setting_gamma") },
+]
+function cisPolicies(): BaselinePolicy[] {
+  return convertKit(cisKitFiles, { id: "fakebook-os", version: "9.9.9" }).packs.flatMap((pack) => pack.policies)
+}
+function cisHistoryEntry(runId: string, assessedAt: string, statuses: Finding["status"][]) {
+  const pack = cisPolicies()
+  const findings: Finding[] = statuses.map((status, index) => ({
+    key: `${index}:0`,
+    policyIndex: index,
+    settingIndex: 0,
+    policyName: pack[index]!.name,
+    settingId: String((pack[index]!.settings[0]!.settingInstance as { settingDefinitionId: string }).settingDefinitionId),
+    status,
+    recommended: null,
+    observed: [],
+  }))
+  const assessment: Assessment = { runId, tenantId: TENANT_A, frameworkId: "cis-benchmarks", reference: "fakebook-os 9.9.9", assessedAt, policyCount: pack.length, findings }
+  return { assessment, policies: pack }
+}
+function seedCisWorkspace(history: ReturnType<typeof cisHistoryEntry>[]) {
+  const workspace = loadWorkspace(TENANT_A, "cis-benchmarks")
+  workspace.policies = cisPolicies()
+  workspace.reference = "fakebook-os 9.9.9"
+  workspace.history = history
+  saveWorkspace(workspace)
+}
+
+describe("health review CIS signals", () => {
+  beforeEach(() => {
+    const data = new Map<string, string>()
+    setFrameworkStore({ get: (key) => data.get(key) ?? null, set: (key, value) => { data.set(key, value) }, delete: (key) => { data.delete(key) } })
+    setInternalCisBenchmarksEnabled(true)
+  })
+  afterEach(() => { setInternalCisBenchmarksEnabled(null) })
+
+  it("creates a CIS finding on drift and resolves it when a newer assessment recovers", async () => {
+    const w = world({ plans: { [TENANT_A]: "pro" } })
+    seedCisWorkspace([
+      cisHistoryEntry("run-2", "2026-02-01T00:00:00.000Z", ["Missing", "Missing", "Missing"]),
+      cisHistoryEntry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"]),
+    ])
+    const collected = await collectSignals(w.deps, TENANT_A)
+    expect(collected.evaluated).toBe(true)
+    expect(collected.signals.some((signal) => signal.key === "cis-readiness:1:fakebook-os:9-9-9")).toBe(true)
+
+    const first = await runReview(w.deps, TENANT_A, "manual", null, { sleep: noSleep })
+    expect(first.run.checks).toContainEqual(expect.objectContaining({ family: "signals", evaluated: true }))
+    expect(first.findings.find((finding) => finding.key === "cis-readiness:1:fakebook-os:9-9-9")).toMatchObject({ family: "signals", check: "cis-readiness", severity: "high", state: "open" })
+
+    seedCisWorkspace([
+      cisHistoryEntry("run-3", "2026-03-01T00:00:00.000Z", ["Present", "Present", "Present"]),
+      cisHistoryEntry("run-2", "2026-02-01T00:00:00.000Z", ["Missing", "Missing", "Missing"]),
+      cisHistoryEntry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"]),
+    ])
+    const second = await runReview(w.deps, TENANT_A, "manual", null, { sleep: noSleep })
+    expect(second.findings.find((finding) => finding.key === "cis-readiness:1:fakebook-os:9-9-9")).toMatchObject({ state: "resolved" })
+  })
+
+  it("keeps a CIS finding open when the workspace cannot be read", async () => {
+    const w = world({ plans: { [TENANT_A]: "pro" } })
+    seedCisWorkspace([
+      cisHistoryEntry("run-2", "2026-02-01T00:00:00.000Z", ["Missing", "Missing", "Missing"]),
+      cisHistoryEntry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"]),
+    ])
+    const first = await runReview(w.deps, TENANT_A, "manual", null, { sleep: noSleep })
+    expect(first.findings.find((finding) => finding.key === "cis-readiness:1:fakebook-os:9-9-9")).toMatchObject({ state: "open" })
+
+    setFrameworkStore({ get: () => "{not json", set: () => undefined, delete: () => undefined })
+    expect(await collectSignals(w.deps, TENANT_A)).toMatchObject({ evaluated: false })
+    const second = await runReview(w.deps, TENANT_A, "manual", null, { sleep: noSleep })
+    expect(second.run.checks).toContainEqual(expect.objectContaining({ family: "signals", evaluated: false }))
+    expect(second.findings.find((finding) => finding.key === "cis-readiness:1:fakebook-os:9-9-9")).toMatchObject({ state: "open" })
+    expect(second.findings.find((finding) => finding.key === `signals-unavailable:${TENANT_A}`)).toMatchObject({ state: "unknown" })
   })
 })
 
