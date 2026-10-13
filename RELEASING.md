@@ -35,6 +35,8 @@ Put these in the next stable release's notes, then remove them here.
   format, which binds each file to its tenant folder. Every released version since 0.2.0 reads
   TVB2, and files written earlier stay readable. Reading the older TVB1 format is kept until at
   least 0.5.0.
+- Restores now check backup completeness and recorded item fingerprints before writing, and unverified legacy snapshots can no longer restore assignments. Restores from an incomplete backup, or of a file that no longer matches its recorded fingerprint, are refused. Restore an unassigned copy from a legacy backup, or restore from a complete backup instead.
+
 - Promotion keeps the destination policy's scope tags on update and blocks promotion of redacted policies without acknowledgement. Acknowledged promotions omit secrets, which must be set again in the destination.
 
 - Compliance scores are now per capability and only count assigned policies. Scheduled actions are evaluated, so scores change and trend history before this version is not comparable. Older comparisons remain readable; collect a new comparison to start current scores and trends.

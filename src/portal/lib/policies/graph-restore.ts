@@ -1,5 +1,5 @@
 import { parseDependencyMappings } from "../../../shared/intune/recovery"
-import { unresolvedDependencies } from "../../../shared/intune/dependencies"
+import { dependencyReferences, type DependencyReference } from "../../../shared/intune/dependencies"
 import { randomUUID } from "node:crypto"
 import { typeForFolder, type IntuneType, type Item, type Json, type Step } from "../../../shared/intune/registry"
 
@@ -177,6 +177,8 @@ export class Restorer {
   /** Old object ID to new object ID, for objects recreated during this restore. */
   private readonly remapped = new Map<string, string>()
   private readonly reviewed = new Map<string, string>()
+  /** Live dependency checks by Graph path, so a shared dependency is read once per restore. */
+  private readonly liveDependencies = new Map<string, boolean>()
   private readonly instanceScope = randomUUID()
   private readonly options: Readonly<RestoreOptions>
 
@@ -230,11 +232,11 @@ export class Restorer {
       prefix: this.options.mode === "copy" ? (this.options.prefix ?? "[Restored]") : undefined,
       includeAssignments: assignments,
     })
-    if (this.options.crossTenant) {
-      const targetIds = new Set([...this.remapped.values(), ...this.reviewed.values()])
-      const unresolved = [plan.create, ...plan.steps, ...plan.assignments].flatMap(step => unresolvedDependencies(step.body, targetIds))
-      if (unresolved.length) return { success: false, path, retryable: false, error: `Unresolved target dependencies (${[...new Set(unresolved)].join(", ")}). Copy the dependencies first or reconcile this object in the target tenant.` }
-    }
+    const bodies = [plan.create, ...plan.steps, ...(this.options.crossTenant ? plan.assignments : [])]
+    const unresolved = await this.unresolved(bodies.flatMap(step => dependencyReferences(step.body)))
+    if (unresolved.length) return { success: false, path, retryable: false, error: this.options.crossTenant
+      ? `Unresolved target dependencies (${unresolved.join(", ")}). Copy the dependencies first or reconcile this object in the target tenant.`
+      : `Unresolved dependencies (${unresolved.join(", ")}). Restore the dependencies first or reconcile this object in Intune.` }
     const created = await this.graph("POST", plan.create.path, plan.create.body)
     if (created.status >= 300) return { success: false, path, retryable: created.status < 500 && created.status !== 408, error: errorMessage(created.body, created.status) }
     const id = String(created.body.id ?? "")
@@ -243,6 +245,60 @@ export class Restorer {
     const outcome = await this.complete(type, path, id, created.body, "created", [...plan.steps, ...plan.assignments])
     if (plan.assignments.length && type.assignmentWarning) outcome.warnings = [...(outcome.warnings ?? []), type.assignmentWarning]
     return outcome
+  }
+
+  /**
+   * The payload references that cannot be resolved before a create. A reference is resolved when it
+   * points at an object recreated or reviewed in this run. In the same tenant it is also resolved
+   * when the referenced object still exists live. References that cannot be read back by ID, such
+   * as secret reference values and policy set payloads, and references whose live check could not
+   * be completed, keep relying on Graph to validate them on the write.
+   */
+  private async unresolved(references: DependencyReference[]): Promise<string[]> {
+    const resolvedIds = new Set([...this.remapped.values(), ...this.reviewed.values()].map(id => id.toLowerCase()))
+    const unresolved = new Set<string>()
+    for (const reference of references) {
+      if (!reference.id) { unresolved.add(reference.path); continue }
+      if (reference.id.includes("{id}") || reference.url?.includes("{id}")) continue
+      if (resolvedIds.has(reference.id.toLowerCase())) continue
+      if (this.options.crossTenant) { unresolved.add(reference.path); continue }
+      const path = this.dependencyPath(reference)
+      if (path && (await this.existsLive(path, reference.id)) === false) unresolved.add(reference.path)
+    }
+    return [...unresolved]
+  }
+
+  /** The Graph path that reads a referenced object back, or undefined when no single read can check it. */
+  private dependencyPath(reference: DependencyReference): string | undefined {
+    if (reference.url?.startsWith(GRAPH)) return reference.url.slice(GRAPH.length).replace(/\('([^']+)'\)/g, "/$1")
+    const collection = reference.key === "roleScopeTagIds" ? typeForFolder("ScopeTags")?.path
+      : reference.key === "targetId" && reference.path.includes(".relationships") ? typeForFolder("Apps")?.path
+      : reference.key === "notificationTemplateId" || reference.key === "notificationMessageTemplateId" ? typeForFolder("NotificationTemplates")?.path
+      : reference.key === "deviceAndAppManagementAssignmentFilterId" ? typeForFolder("AssignmentFilters")?.path
+      : reference.key === "groupId" ? "groups"
+      : undefined
+    return collection ? `${collection}/${encodeURIComponent(reference.id)}` : undefined
+  }
+
+  /**
+   * Whether the referenced object exists live: true or false only when the read answers that
+   * clearly, and undefined when it does not (for example a permission or server error), so a
+   * failed check never masquerades as a missing dependency.
+   */
+  private async existsLive(path: string, id: string): Promise<boolean | undefined> {
+    const cached = this.liveDependencies.get(path)
+    if (cached !== undefined) return cached
+    let exists: boolean | undefined
+    try {
+      const response = await this.graph("GET", path)
+      const readId = response.body?.id
+      if (response.status < 300) exists = readId === undefined ? undefined : String(readId).toLowerCase() === id.toLowerCase()
+      else if (response.status === 404 || (response.status === 400 && /ResourceNotFound/i.test(JSON.stringify(response.body)))) exists = false
+    } catch {
+      exists = undefined
+    }
+    if (exists !== undefined) this.liveDependencies.set(path, exists)
+    return exists
   }
 
   private async update(type: IntuneType, path: string, source: Item, id: string, current: Item, assignments: boolean): Promise<RestoreOutcome> {
