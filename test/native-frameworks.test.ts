@@ -173,6 +173,68 @@ describe('native collector and rights boundaries', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ value: [], '@odata.nextLink': 'https://graph.microsoft.com/beta/deviceManagement/configurationPolicies' })))
     await expect(graphEvidenceReader('token').list('deviceManagement/configurationPolicies')).rejects.toThrow('repeated')
   })
+  it.each([429, 503])('waits the server-provided Retry-After on a %s evidence read instead of failing', async status => {
+    vi.useFakeTimers()
+    try {
+      let calls = 0
+      vi.stubGlobal('fetch', vi.fn(async () => ++calls === 1
+        ? new Response('', { status, headers: { 'Retry-After': '30' } })
+        : Response.json({ id: 'policy' })))
+      const pending = graphEvidenceReader('token').get('deviceManagement/configurationPolicies/policy')
+      await vi.advanceTimersByTimeAsync(29_000)
+      expect(calls).toBe(1)
+      await vi.advanceTimersByTimeAsync(1_000)
+      await expect(pending).resolves.toMatchObject({ id: 'policy' })
+      expect(calls).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('waits an HTTP-date Retry-After on a throttled evidence read', async () => {
+    vi.useFakeTimers()
+    try {
+      let calls = 0
+      vi.stubGlobal('fetch', vi.fn(async () => ++calls === 1
+        ? new Response('', { status: 429, headers: { 'Retry-After': new Date(Date.now() + 30_000).toUTCString() } })
+        : Response.json({ id: 'policy' })))
+      const pending = graphEvidenceReader('token').get('deviceManagement/configurationPolicies/policy')
+      await vi.advanceTimersByTimeAsync(29_000)
+      expect(calls).toBe(1)
+      await vi.advanceTimersByTimeAsync(2_000)
+      await expect(pending).resolves.toMatchObject({ id: 'policy' })
+      expect(calls).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('aborts promptly during a throttled evidence read retry wait', async () => {
+    vi.useFakeTimers()
+    try {
+      let calls = 0
+      vi.stubGlobal('fetch', vi.fn(async () => ++calls === 1
+        ? new Response('', { status: 429, headers: { 'Retry-After': '30' } })
+        : Response.json({ id: 'policy' })))
+      const controller = new AbortController()
+      let caught: unknown
+      void graphEvidenceReader('token', controller.signal).get('deviceManagement/configurationPolicies/policy')
+        .catch((error: unknown) => { caught = error })
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(calls).toBe(1)
+      controller.abort()
+      await vi.advanceTimersByTimeAsync(0)
+      expect((caught as { name?: unknown } | undefined)?.name).toBe('AbortError')
+      expect(calls).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('still fails the evidence read when Retry-After exceeds the bounded delay', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 429, headers: { 'Retry-After': '301' } })))
+    const error: unknown = await graphEvidenceReader('token').get('deviceManagement/configurationPolicies/policy').catch((caught: unknown) => caught)
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toContain('Graph throttled the evidence read (429)')
+    expect((error as { status?: unknown }).status).toBe(502)
+  })
   it('retains settings when assignment reads fail and reports collection gaps', async () => {
     const data = await collectNativeEvidence({ get: async () => ({ id: 'policy', name: 'Policy', settingCount: 0 }), list: async path => {
       if (path === 'deviceManagement/configurationPolicies?$select=id') return [{ id: 'policy' }]
