@@ -62,6 +62,9 @@ describe("backup history", () => {
       changes: { added: 1, modified: 1, removed: 1 },
       comparedWith: older,
     })
+    const stored = (name: string) => JSON.stringify(blobs[name as keyof typeof blobs]).length
+    expect(backups[0].sizes).toEqual({ DeviceConfigurations: stored(`${newer}/DeviceConfigurations/A.json`) + stored(`${newer}/DeviceConfigurations/C & D.json`) })
+    expect(backups[1].sizes).toEqual({ DeviceConfigurations: stored(`${older}/DeviceConfigurations/A.json`) + stored(`${older}/DeviceConfigurations/B.json`), Apps: stored(`${older}/Apps/Reader.json`) })
     expect(backups[1]).toMatchObject({ type: "scheduled", counts: { DeviceConfigurations: 2, Apps: 1 }, changes: null, comparedWith: null })
     expect(backups[2]).toMatchObject({ status: "incomplete", type: null, scope: null })
     expect(backups[0]).not.toHaveProperty("fingerprint")
