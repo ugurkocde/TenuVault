@@ -1,5 +1,6 @@
 import { useEffect, useRef, useSyncExternalStore } from "react"
 import type { OibProgress } from "../../../shared/oib/types"
+import { createJobPoller } from "../../lib/job-store"
 import { errorText, oibRequest } from "./common"
 import type { Progress } from "./FlowShell"
 
@@ -47,7 +48,6 @@ let jobs: OibJob[] = []
 const listeners = new Set<() => void>()
 const finishListeners = new Set<(job: OibJob) => void>()
 const polls = new Map<string, { tenantId: string; scope?: "validate" }>()
-let timer: ReturnType<typeof setInterval> | undefined
 
 /** Deploy, fix and undo share the main process's per-tenant lock; validation has its own. */
 const lane = (kind: OibJobKind) => kind === "validate" ? "validate" : "change"
@@ -62,21 +62,20 @@ function patch(id: string, changes: Partial<OibJob>) {
   emit()
 }
 
-function poll() {
-  for (const [id, target] of polls) {
-    void oibRequest<OibProgress | null>({ action: "oib-progress", tenantId: target.tenantId, ...(target.scope ? { scope: target.scope } : {}) }).then(progress => {
-      const job = jobs.find(j => j.id === id)
-      // The main process forgets a job's progress when it ends; the last stage stays until the work returns.
-      if (!progress || !job || !running(job)) return
-      patch(id, { stage: progress.stage, done: progress.done, total: progress.total, percent: progress.percent, ...(progress.backupJobId ? { backupJobId: progress.backupJobId, backupTenantId: target.tenantId } : {}) })
-    }).catch(() => undefined)
-  }
-}
-
-function schedule() {
-  if (polls.size && !timer) timer = setInterval(poll, 1000)
-  if (!polls.size && timer) { clearInterval(timer); timer = undefined }
-}
+const poller = createJobPoller<string>({
+  intervalMs: 1000,
+  poll: async (id, isCurrent) => {
+    const target = polls.get(id)
+    if (!target) return
+    const progress = await oibRequest<OibProgress | null>({ action: "oib-progress", tenantId: target.tenantId, ...(target.scope ? { scope: target.scope } : {}) })
+    if (!isCurrent()) return
+    const job = jobs.find(j => j.id === id)
+    // The main process forgets a job's progress when it ends; the last stage stays until the work returns.
+    if (!progress || !job || !running(job)) return
+    patch(id, { stage: progress.stage, done: progress.done, total: progress.total, percent: progress.percent, ...(progress.backupJobId ? { backupJobId: progress.backupJobId, backupTenantId: target.tenantId } : {}) })
+  },
+  onError: () => undefined,
+})
 
 /** The running job that blocks starting `kind` for this tenant, if any. */
 export function blockingJob(tenantId: string, kind: OibJobKind): OibJob | undefined {
@@ -96,7 +95,7 @@ export function startJob<T>(spec: { tenantId: string; tenantName: string; kind: 
   // Only the finished job this one supersedes goes; an undo keeps a deploy result on screen and the other way round.
   jobs = [job, ...jobs.filter(j => !(j.tenantId === spec.tenantId && j.kind === spec.kind && (spec.kind === "undo" || spec.kind === "validate" || j.flow === spec.flow)))]
   polls.set(id, { tenantId: spec.tenantId, ...(spec.kind === "validate" ? { scope: "validate" as const } : {}) })
-  schedule()
+  poller.track(id, { immediate: false })
   emit()
   const context: JobContext<T> = {
     update: changes => patch(id, changes),
@@ -105,7 +104,7 @@ export function startJob<T>(spec: { tenantId: string; tenantName: string; kind: 
   }
   return work(context).then(result => ({ result }), (error: unknown) => ({ error: errorText(error) })).then(outcome => {
     polls.delete(id)
-    schedule()
+    poller.untrack(id)
     patch(id, { ...outcome, finishedAt: new Date().toISOString(), percent: undefined })
     const finished = jobs.find(j => j.id === id)!
     for (const listener of finishListeners) listener(finished)

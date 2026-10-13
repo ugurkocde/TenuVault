@@ -3,6 +3,7 @@ import { useLocation } from "react-router-dom"
 import type { NativeJobSummary } from "../../main/frameworks/native"
 import type { AssessmentScope } from "../../shared/compliance/types"
 import { useSelectedTenant } from "~/contexts/TenantContext"
+import { createJobPoller } from "./job-store"
 import { toast } from "./toast"
 
 export type FrameworkJob = NativeJobSummary
@@ -15,7 +16,6 @@ export type FrameworkJob = NativeJobSummary
 let jobs: FrameworkJob[] = []
 const listeners = new Set<() => void>()
 const finishListeners = new Set<(job: FrameworkJob) => void>()
-let timer: ReturnType<typeof setTimeout> | undefined
 let loaded = false
 // Responses to polls sent before a local change are stale and must not undo it.
 let revision = 0
@@ -41,9 +41,11 @@ function apply(next: FrameworkJob[]) {
   schedule()
 }
 
+const poller = createJobPoller<string>({ intervalMs: 1000, poll: async () => { await refreshFrameworkJobs() } })
+
 function schedule() {
-  clearTimeout(timer)
-  timer = jobs.some((job) => job.status === "running") ? setTimeout(() => void refreshFrameworkJobs(), 1000) : undefined
+  if (jobs.some((job) => job.status === "running")) poller.track("jobs", { immediate: false })
+  else poller.untrack("jobs")
 }
 
 export async function refreshFrameworkJobs(): Promise<void> {

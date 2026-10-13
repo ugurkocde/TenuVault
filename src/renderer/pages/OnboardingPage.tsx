@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { ArrowLeft, CheckCircle2, Database, HardDriveDownload, KeyRound, Loader2, Play, ShieldCheck, XCircle } from "lucide-react"
 import { useSelectedTenant, useTenantOperations } from "~/contexts/TenantContext"
+import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { Button } from "~/components/ui/button"
 import { Progress } from "~/components/ui/progress"
 import { cn } from "~/lib/utils"
@@ -56,6 +57,25 @@ export default function OnboardingPage() {
   const [cancelling, setCancelling] = useState(false)
   const [addError, setAddError] = useState("")
   const logRef = useRef<HTMLPreElement>(null)
+  const { addJob, activeJobs } = useBackupProgress()
+  const completedBackup = useRef<string | null>(null)
+  const tracked = runningJobId ? activeJobs.find((item) => item.jobId === runningJobId) : undefined
+  const displayJob: JobStatus | null = tracked ? {
+    status: tracked.status,
+    progress: tracked.progress,
+    progressMessage: tracked.progressMessage,
+    output: tracked.output,
+    exception: tracked.exception,
+    isComplete: tracked.isComplete,
+    isSuccessful: tracked.isSuccessful,
+  } : job
+
+  useEffect(() => {
+    if (!tracked?.isComplete || !runningJobId || completedBackup.current === runningJobId) return
+    completedBackup.current = runningJobId
+    setCancelling(false)
+    if (tracked.isSuccessful && tenantProfileId) updateTenant(tenantProfileId, { lastBackup: new Date().toISOString(), syncStatus: "success" })
+  }, [tracked?.isComplete, tracked?.isSuccessful, runningJobId, tenantProfileId, updateTenant])
 
   useEffect(() => {
     Object.assign(onboardingDraft, step < 3 ? { step, account, choice } : { step: 0, account: null, choice: null })
@@ -121,23 +141,22 @@ export default function OnboardingPage() {
       return
     }
 
-    const poll = async () => {
-      try {
-        const status = await post<JobStatus>("/api/backup/status", { jobId })
-        setJob(status)
-        if (status.isComplete) setCancelling(false)
-        if (!status.isComplete) {
-          setTimeout(() => void poll(), 1000)
-        } else if (status.isSuccessful && tenantProfileId) {
-          updateTenant(tenantProfileId, { lastBackup: new Date().toISOString(), syncStatus: "success" })
-        }
-      } catch (error) {
-        // Stop polling and let the admin retry or skip.
-        setJob(null)
-        setJobError(error instanceof Error ? error.message : String(error))
-      }
-    }
-    void poll()
+    // The shared backup job store polls this job; the effect above records a successful finish.
+    addJob({
+      jobId,
+      tenantName: "",
+      tenantId: credentials.tenantId,
+      status: "Running",
+      progress: 5,
+      progressMessage: "Starting backup...",
+      startTime: new Date().toISOString(),
+      isComplete: false,
+      isSuccessful: false,
+      isHidden: true,
+      quiet: true,
+      credentials: { tenantId: credentials.tenantId, appId: credentials.appId, clientSecret: credentials.clientSecret },
+      resources: { subscriptionId: "", resourceGroupName: "", automationAccountName: "" },
+    })
   }
 
   const cancelBackup = async () => {
@@ -153,7 +172,7 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight })
-  }, [job?.output])
+  }, [displayJob?.output])
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-6 lg:p-8">
@@ -251,42 +270,42 @@ export default function OnboardingPage() {
                 <XCircle className="h-4 w-4" /> {jobError}
               </p>
             )}
-            {job && (
+            {displayJob && (
               <div className="space-y-3">
                 <div className="flex items-center justify-between text-sm">
                   <span className="flex items-center gap-2 text-gray-800">
-                    {!job.isComplete && <Loader2 className="h-4 w-4 animate-spin text-blue-600" />}
-                    {job.isComplete && job.isSuccessful && <CheckCircle2 className="h-4 w-4 text-green-600" />}
-                    {job.isComplete && !job.isSuccessful && <XCircle className="h-4 w-4 text-red-600" />}
-                    {job.exception ?? job.progressMessage}
+                    {!displayJob.isComplete && <Loader2 className="h-4 w-4 animate-spin text-blue-600" />}
+                    {displayJob.isComplete && displayJob.isSuccessful && <CheckCircle2 className="h-4 w-4 text-green-600" />}
+                    {displayJob.isComplete && !displayJob.isSuccessful && <XCircle className="h-4 w-4 text-red-600" />}
+                    {displayJob.exception ?? displayJob.progressMessage}
                   </span>
-                  <span className="text-gray-500">{job.progress}%</span>
+                  <span className="text-gray-500">{displayJob.progress}%</span>
                 </div>
-                <Progress value={job.progress} />
-                {!job.isComplete && runningJobId && (
+                <Progress value={displayJob.progress} />
+                {!displayJob.isComplete && runningJobId && (
                   <Button variant="outline" disabled={cancelling} onClick={() => void cancelBackup()}>
                     {cancelling ? "Cancelling…" : "Cancel backup"}
                   </Button>
                 )}
-                {job.isComplete && job.isSuccessful && <FirstBackupNote plan={plan} />}
-                {job.output && (
+                {displayJob.isComplete && displayJob.isSuccessful && <FirstBackupNote plan={plan} />}
+                {displayJob.output && (
                   <pre ref={logRef} className="max-h-48 overflow-auto rounded-2xl bg-slate-900 p-4 text-xs text-slate-100">
-                    {job.output}
+                    {displayJob.output}
                   </pre>
                 )}
               </div>
             )}
             <div className="flex justify-end gap-2">
-              {job?.isComplete ? (
+              {displayJob?.isComplete ? (
                 <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void navigate("/portal/backup")}>
                   Go to Backup &amp; Restore
                 </Button>
               ) : (
                 <>
-                  <Button variant="outline" onClick={() => void navigate("/portal/tenants")} disabled={Boolean(job)}>
+                  <Button variant="outline" onClick={() => void navigate("/portal/tenants")} disabled={Boolean(displayJob)}>
                     Skip for now
                   </Button>
-                  <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void runBackup()} disabled={Boolean(job)}>
+                  <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => void runBackup()} disabled={Boolean(displayJob)}>
                     <Play className="mr-2 h-4 w-4" /> Run first backup
                   </Button>
                 </>

@@ -4,6 +4,7 @@ import { createContext, useContext, useState, useCallback, useEffect, useRef, Re
 
 import { useTenants, useTenantOperations } from "./TenantContext"
 import { backupCompletionUpdates } from "~/lib/backup-completion"
+import { createJobPoller } from "@desktop/lib/job-store"
 
 export interface BackupJob {
   jobId: string
@@ -103,70 +104,61 @@ export function BackupProgressProvider({ children }: { children: ReactNode }) {
     return activeJobs.find(job => job.jobId === jobId)
   }, [activeJobs])
 
-  // Poll for job updates
-  useEffect(() => {
-    const intervals: NodeJS.Timeout[] = []
-
-    activeJobs.forEach(job => {
-      if (!job.isComplete) {
-        const interval = setInterval(async () => {
-          try {
-            const response = await fetch("/api/backup/status", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                ...job.credentials,
-                ...job.resources,
-                jobId: job.jobId
-              }),
-            })
-
-            if (!response.ok) {
-              const errorData = await response.json()
-              throw new Error(errorData.error || "Failed to check job status")
-            }
-
-            const data = await response.json()
-            updateJob(job.jobId, {
-              status: data.status,
-              progress: data.progress,
-              progressMessage: data.progressMessage,
-              startTime: data.startTime,
-              endTime: data.endTime,
-              exception: data.exception,
-              output: data.output,
-              isComplete: data.isComplete,
-              isSuccessful: data.isSuccessful
-            })
-
-            // Stop polling if job is complete
-            if (data.isComplete) {
-              clearInterval(interval)
-              
-              // Auto-remove successful jobs after 30 seconds
-              if (data.isSuccessful) {
-                setTimeout(() => {
-                  removeJob(job.jobId)
-                }, 30000)
-              }
-            }
-          } catch (err) {
-            console.error("Error checking job status:", err)
-            // Don't remove the job on error, just log it
-          }
-        }, 2000) // Poll every 2 seconds
-
-        intervals.push(interval)
-      }
+  const jobsRef = useRef<BackupJob[]>([])
+  jobsRef.current = activeJobs
+  const callbacksRef = useRef({ updateJob, removeJob })
+  callbacksRef.current = { updateJob, removeJob }
+  const pollerRef = useRef<ReturnType<typeof createJobPoller<string>> | null>(null)
+  if (!pollerRef.current) {
+    pollerRef.current = createJobPoller<string>({
+      intervalMs: 2000,
+      poll: async (jobId, isCurrent) => {
+        const job = jobsRef.current.find((item) => item.jobId === jobId)
+        if (!job || job.isComplete) return
+        const response = await fetch("/api/backup/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...job.credentials, ...job.resources, jobId: job.jobId }),
+        })
+        if (!response.ok) {
+          const errorData = await response.json()
+          throw new Error(errorData.error || "Failed to check job status")
+        }
+        const data = await response.json()
+        if (!isCurrent()) return
+        callbacksRef.current.updateJob(job.jobId, {
+          status: data.status,
+          progress: data.progress,
+          progressMessage: data.progressMessage,
+          startTime: data.startTime,
+          endTime: data.endTime,
+          exception: data.exception,
+          output: data.output,
+          isComplete: data.isComplete,
+          isSuccessful: data.isSuccessful
+        })
+        if (data.isComplete) {
+          pollerRef.current?.untrack(jobId)
+          // Auto-remove successful jobs after 30 seconds
+          if (data.isSuccessful) setTimeout(() => callbacksRef.current.removeJob(job.jobId), 30000)
+        }
+      },
+      // Don't remove the job on error, just log it
+      onError: (_jobId, err) => console.error("Error checking job status:", err),
     })
+  }
 
-    // Cleanup intervals
-    return () => {
-      intervals.forEach(interval => clearInterval(interval))
-    }
-  }, [activeJobs, updateJob, removeJob])
+  const wantedRef = useRef(new Set<string>())
+  // Poll for job updates: one shared poller, one entry per incomplete job id.
+  useEffect(() => {
+    const poller = pollerRef.current!
+    const wanted = new Set(activeJobs.filter((job) => !job.isComplete).map((job) => job.jobId))
+    for (const jobId of wantedRef.current) if (!wanted.has(jobId)) poller.untrack(jobId)
+    for (const jobId of wanted) poller.track(jobId)
+    wantedRef.current = wanted
+  }, [activeJobs])
+
+  useEffect(() => () => pollerRef.current?.stopAll(), [])
 
   return (
     <BackupProgressContext.Provider 
