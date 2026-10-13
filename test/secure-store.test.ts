@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
@@ -41,6 +41,19 @@ describe("SecureStore", () => {
     expect(() => locked.open()).toThrow(UnreadableStoreError)
     expect(() => locked.set("license.trialStartedAt", "now")).toThrow(UnreadableStoreError)
     expect(readFileSync(file)).toEqual(original)
+  })
+
+  it("does not follow a pre-planted symlink at the temp path", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tv-store-"))
+    const file = join(dir, "state.bin")
+    const victim = join(dir, "victim.bin")
+    writeFileSync(victim, "original")
+    symlinkSync(victim, `${file}.tmp`)
+    new SecureStore(file, xor(7)).set("license.key", "TV1.abc")
+    expect(readFileSync(victim).toString()).toBe("original")
+    expect(new SecureStore(file, xor(7)).get("license.key")).toBe("TV1.abc")
+    expect(existsSync(`${file}.tmp`)).toBe(true)
+    expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toEqual(["state.bin.tmp"])
   })
 
   it("moves an unreadable file aside when the user starts over", () => {

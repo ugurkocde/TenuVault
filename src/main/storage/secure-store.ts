@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto"
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 
@@ -143,9 +144,11 @@ export class SecureStore {
 
   private flush(values: Record<string, string> = this.values ?? {}): void {
     mkdirDurableSync(dirname(this.filePath))
-    const tmp = `${this.filePath}.tmp`
+    // A random name opened exclusively, like the local blob store, so a pre-planted
+    // symlink or file at a predictable temp path is never followed or overwritten.
+    const tmp = `${this.filePath}.${randomBytes(4).toString("hex")}.tmp`
     try {
-      const handle = openSync(tmp, "w", 0o600)
+      const handle = openSync(tmp, "wx", 0o600)
       try {
         writeFileSync(handle, this.cipher.encrypt(JSON.stringify(values)))
         fsyncSync(handle)

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { sameRendererDocument, csvCell, assertArmPage } from '../src/shared/security'
+import { sameRendererDocument, csvCell, assertArmPage, isMicrosoftLoginUrl } from '../src/shared/security'
 import { ApiHost } from '../src/main/api/host'
 import { buildRestorePlan } from '../src/shared/intune/restore-plan'
 import { typeForFolder } from '../src/shared/intune/registry'
@@ -18,6 +18,17 @@ describe('credential and execution boundaries', () => {
   })
   it.each(['=SUM(1,2)', '+cmd', '-cmd', '@cmd', '\t=cmd', '\r+cmd', '\tplain', '\rplain'])('escapes spreadsheet formulas %s', value => {
     expect(csvCell(value).replace(/^"/, '')).toMatch(/^'/)
+  })
+  it('only opens Microsoft login URLs for sign-in', () => {
+    expect(isMicrosoftLoginUrl('https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/oauth2/v2.0/authorize?client_id=abc')).toBe(true)
+    for (const url of [
+      'http://login.microsoftonline.com/tenant/oauth2/v2.0/authorize',
+      'https://login.microsoftonline.com.evil.test/tenant/oauth2/v2.0/authorize',
+      'https://evil.test/?next=login.microsoftonline.com',
+      'https://user:pass@login.microsoftonline.com/tenant/oauth2/v2.0/authorize',
+      'javascript:alert(1)',
+      'not a URL',
+    ]) expect(isMicrosoftLoginUrl(url)).toBe(false)
   })
   it('pins ARM paging and rejects cycles and overlong page chains', () => {
     const seen = new Set<string>()

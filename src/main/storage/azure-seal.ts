@@ -42,7 +42,17 @@ export function encryptedAzureFetch(fetchImpl: typeof fetch, keys: () => Buffer[
     }
     try {
       const request = new Request(input, init), url = new URL(request.url)
-      if (!/^[a-z0-9]{3,24}\.blob\.core\.windows\.net$/.test(url.hostname) || !url.pathname.startsWith('/intune-backups/') || url.search || !['GET', 'PUT'].includes(request.method)) return send(request)
+      const isBackupContainer = /^[a-z0-9]{3,24}\.blob\.core\.windows\.net$/.test(url.hostname) && (url.pathname === '/intune-backups' || url.pathname.startsWith('/intune-backups/'))
+      if (!isBackupContainer) return send(request)
+      const isHandled = !url.search && ['GET', 'PUT'].includes(request.method)
+      if (!isHandled) {
+        // Fail closed: a body-bearing request the seal cannot encrypt (another method, or a
+        // query string such as a block upload) must never reach Azure in plaintext. Reads,
+        // listings, container creation and deletes carry no body and keep passing through.
+        const hasBody = request.body !== null || Number(request.headers.get('content-length') ?? 0) > 0
+        if (hasBody) throw new Error('Refused to send an unsealed request to backup storage. Reload the backup and try again.')
+        return send(request)
+      }
       const bearer = request.headers.get('authorization')?.replace(/^Bearer /i, '') ?? ''
       const context = tokens.get(digest(bearer))
       if (!context || context.expires < Date.now()) throw new Error('Backup tenant context is unavailable. Sign in again.')

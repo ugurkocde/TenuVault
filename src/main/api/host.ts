@@ -4,6 +4,9 @@ import { INTERNAL_API_ORIGIN } from "../../shared/constants"
 import { NextRequest } from "./next-server-shim"
 import { withRouteTenant } from "../storage/blob-emulator"
 
+/** Largest request body accepted over IPC, matching the 8 MB policies limit the routes enforce. */
+export const MAX_IPC_BODY_BYTES = 8 * 1024 * 1024
+
 type RouteHandler = (request: NextRequest) => Promise<Response> | Response
 export type RouteModule = Partial<Record<"GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS", RouteHandler>>
 
@@ -77,6 +80,17 @@ export class ApiHost {
   async handleIpc(input: ApiRequest): Promise<ApiResponse> {
     if (!input.path.startsWith("/api/")) {
       return { status: 400, statusText: "Bad Request", headers: {}, body: new Uint8Array() }
+    }
+    if (input.body !== undefined && !(input.body instanceof Uint8Array)) {
+      return { status: 400, statusText: "Bad Request", headers: {}, body: new Uint8Array() }
+    }
+    if ((input.body?.byteLength ?? 0) > MAX_IPC_BODY_BYTES) {
+      return {
+        status: 413,
+        statusText: "Payload Too Large",
+        headers: { "content-type": "application/json" },
+        body: new TextEncoder().encode(JSON.stringify({ error: "The request is too large." })),
+      }
     }
     const target = new URL(input.path, INTERNAL_API_ORIGIN)
     if (target.pathname.replace(/\/$/, "") === "/api/audit/log") {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { ApiHost, routesFromGlob, type RouteModule } from "../src/main/api/host"
+import { ApiHost, MAX_IPC_BODY_BYTES, routesFromGlob, type RouteModule } from "../src/main/api/host"
 import { NextResponse, type NextRequest } from "../src/main/api/next-server-shim"
 
 describe("routesFromGlob", () => {
@@ -68,6 +68,20 @@ describe("ApiHost", () => {
     const response = await host.dispatch(new Request("http://x/api/boom", { method: "POST" }))
     expect(response.status).toBe(500)
     expect(await response.json()).toEqual({ error: "kaboom" })
+  })
+
+  it("refuses IPC bodies over the size limit before handlers run", async () => {
+    const handler = vi.fn()
+    const host = new ApiHost({ routes: { "/api/echo": { POST: handler } } })
+    const response = await host.handleIpc({
+      method: "POST",
+      path: "/api/echo",
+      headers: { "content-type": "application/json" },
+      body: new Uint8Array(MAX_IPC_BODY_BYTES + 1),
+    })
+    expect(response.status).toBe(413)
+    expect(new TextDecoder().decode(response.body)).toContain("too large")
+    expect(handler).not.toHaveBeenCalled()
   })
 
   it("rejects IPC paths outside /api", async () => {

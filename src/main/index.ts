@@ -3,7 +3,8 @@ import { licenseBuyUrl } from "./license/buy-url"
 import { reviewArchive, importArchive } from "./backup/archive"
 import { readFile, stat } from "node:fs/promises"
 import { pathToFileURL } from "node:url"
-import { isGuid, sameRendererDocument } from "../shared/security"
+import { isGuid, isMicrosoftLoginUrl, sameRendererDocument } from "../shared/security"
+import { rendererStorageKey, rendererStorageValue } from "./renderer-storage"
 import { prepareSaveFile } from "./save-file"
 import { app, BrowserWindow, dialog, ipcMain, net, Notification, safeStorage, shell } from "electron"
 import { join } from "node:path"
@@ -147,7 +148,13 @@ async function bootstrap(): Promise<void> {
   const accounts = accountStore(appStore)
   const auth = new AuthManager({
     cachePlugin: (clientId) => secureCachePlugin(tokenStore, clientId),
-    openBrowser: (url) => shell.openExternal(url),
+    openBrowser: (url) => {
+      if (!isMicrosoftLoginUrl(url)) {
+        console.warn("[auth] Refused to open a sign-in URL that is not on the Microsoft login host.")
+        return Promise.resolve()
+      }
+      return shell.openExternal(url)
+    },
     accountStore: accounts,
   })
 
@@ -651,12 +658,16 @@ async function bootstrap(): Promise<void> {
     await shell.openExternal(url)
   })
 
-  ipcMain.on("storage:getSync", (event, key: string) => {
+  ipcMain.on("storage:getSync", (event, key: unknown) => {
     if (!trustedSender(event)) { event.returnValue = null; return }
-    event.returnValue = appStore.get(RENDERER_STORAGE_PREFIX + key)
+    try {
+      event.returnValue = appStore.get(RENDERER_STORAGE_PREFIX + rendererStorageKey(key))
+    } catch {
+      event.returnValue = null
+    }
   })
-  handleTrusted("storage:set", (_event, key: string, value: string) => appStore.set(RENDERER_STORAGE_PREFIX + key, value))
-  handleTrusted("storage:remove", (_event, key: string) => appStore.delete(RENDERER_STORAGE_PREFIX + key))
+  handleTrusted("storage:set", (_event, key: unknown, value: unknown) => appStore.set(RENDERER_STORAGE_PREFIX + rendererStorageKey(key), rendererStorageValue(value)))
+  handleTrusted("storage:remove", (_event, key: unknown) => appStore.delete(RENDERER_STORAGE_PREFIX + rendererStorageKey(key)))
 
   let importingArchive = false
   handleTrusted("backups:importArchive", async () => {
