@@ -1,3 +1,4 @@
+import { AuditEventType, AuditResult, AuditSeverity, type CreateAuditLogInput } from "../../../portal/lib/audit/types"
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
 import { typeForFolder, type IntuneType, type Item } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
@@ -32,6 +33,7 @@ import {
   type ChangeOperation,
   type ChangeSetContent,
   type ChangeSetRecord,
+  type ChangeSetStatus,
   type DependencyRef,
   type DiffEntry,
   type OperationAction,
@@ -439,6 +441,56 @@ function markStale(deps: FeatureDeps, tenantId: string, id: string, reason: stri
   throw new FeatureError(`${reason} A fresh review is required before anything is written.`, 409)
 }
 
+/**
+ * One audit entry per claimed apply attempt, with the origin workflow and the operation
+ * counts, like the OpenIntuneBaseline recorder. A rollback is a change set of its own, so
+ * its apply is recorded as a rollback. Recording never changes the apply outcome: a failed
+ * audit write is logged and the result stands (the audit route queues the event for retry).
+ */
+async function recordApplyAudit(deps: FeatureDeps, tenant: string, record: Stored_, status: ChangeSetStatus, actor: Actor, errorMessage?: string, attempt?: number): Promise<void> {
+  try {
+    const results = record.operations.map((operation) => ({ operation, result: record.results[operation.key] ?? emptyResult() }))
+    const count = (statuses: OperationResult["status"][]) => results.filter((entry) => statuses.includes(entry.result.status)).length
+    const verifiedBy = (action: OperationAction) => results.filter((entry) => entry.operation.action === action && entry.result.status === "verified").length
+    const rollback = record.kind === "rollback"
+    const account = deps.actor(tenant)
+    const logEntry: CreateAuditLogInput = {
+      eventType: rollback ? AuditEventType.CHANGE_SET_ROLLED_BACK : AuditEventType.CHANGE_SET_APPLIED,
+      action: rollback ? "Roll back change set" : "Apply change set",
+      resource: { type: "policy", id: record.id, name: record.title },
+      result: status === "applied" ? AuditResult.SUCCESS : status === "failed" ? AuditResult.FAILURE : AuditResult.PARTIAL,
+      severity: status === "applied" ? AuditSeverity.INFO : status === "failed" ? AuditSeverity.ERROR : AuditSeverity.WARNING,
+      details: {
+        source: "desktop-change-sets",
+        workflow: record.origin.workflow,
+        originRecordId: record.origin.recordId,
+        changeSetId: record.id,
+        kind: record.kind,
+        rollbackOf: record.rollbackOf,
+        status,
+        attempt,
+        operations: results.length,
+        verified: count(["verified"]),
+        failed: count(["failed"]),
+        uncertain: count(["uncertain", "writing"]),
+        pending: count(["pending"]),
+        created: verifiedBy("create"),
+        updated: verifiedBy("update"),
+        deleted: verifiedBy("delete"),
+        backupFolder: record.preChange?.backupFolder,
+        error: errorMessage ? { code: "CHANGE_SET_APPLY_FAILED", message: errorMessage } : undefined,
+      },
+    }
+    const logged = await deps.api("/api/audit/log", tenant, {
+      user: { id: account?.id ?? "unknown", email: account?.id ?? "unknown", name: account?.name ?? actor ?? "Unknown user" },
+      logEntry,
+    })
+    if (!logged.ok) throw new Error(`Audit write failed (${logged.status})`)
+  } catch (error) {
+    console.error("[audit] Failed to record change set apply:", error)
+  }
+}
+
 function saveResult(deps: FeatureDeps, tenantId: string, id: string, key: string, result: OperationResult, actor: Actor, reason: string): void {
   deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenantId, id, (current) => ({ ...current, results: { ...current.results, [key]: result } }), { actor, reason })
 }
@@ -494,7 +546,11 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
 export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: string, input: ApplyInput, actor: Actor): Promise<Stored_> {
   if (input.confirmed !== true) throw new FeatureError("Confirm the change, including its irreversible steps, before applying.")
   const tenant = tenantId.toLowerCase()
-  return withTenantWrite(tenant, "Change set apply", async () => {
+  // Set once the apply is claimed; from then on every exit records exactly one audit entry.
+  let claimed: Stored_ | null = null
+  let auditRecorded = false
+  try {
+    return await withTenantWrite(tenant, "Change set apply", async () => {
     const record = getChangeSet(deps, tenant, id)
     if (["in-review", "rejected", "stale"].includes(record.status)) throw new FeatureError("This change set needs an approval of its current content and target state.", 409)
     if (record.status === "applied") throw new FeatureError("This change set was already applied and verified.", 409)
@@ -513,6 +569,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       if (current.status !== claimedFrom || current.contentHash !== record.contentHash || current.review?.decidedAt !== review.decidedAt) throw new FeatureError("The change set changed while the apply started. Review it again.", 409)
       return { ...current, status: "applying", lastError: null, summary: record.preChange ? "Retrying." : "Backing up before applying." }
     }, { actor, reason: record.preChange ? "Retry started" : "Apply started; running the pre-change backup" })
+    claimed = record
 
     let preChange = record.preChange
     let captured: ChangeSetContent["entries"] = {}
@@ -568,6 +625,8 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       const message = error instanceof Error ? error.message : String(error)
       const previous: ChangeSetRecord["status"] = claimedFrom === "applying" ? (record.preChange ? "uncertain" : "approved") : claimedFrom
       deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenant, id, (current) => ({ ...current, status: current.status === "applying" ? previous : current.status, lastError: message, summary: current.status === "applying" ? `Not applied: ${message}` : current.summary }), { actor, reason: `Apply stopped before writing: ${message}` })
+      auditRecorded = true
+      await recordApplyAudit(deps, tenant, record, "failed", actor, message, record.attempts + 1)
       throw error
     }
     for (const object of preChange.objects) capturedNames[object.key] = object.sameNameIds
@@ -625,8 +684,21 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     const final = getChangeSet(deps, tenant, id)
     const results = final.operations.map((operation) => final.results[operation.key] ?? emptyResult())
     const status = statusFromResults(results)
-    return deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenant, id, (current) => ({ ...current, status, summary: resultSummary(results) }), { actor, reason: `Apply finished: ${status}` })!
-  })
+    const updated = deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenant, id, (current) => ({ ...current, status, summary: resultSummary(results) }), { actor, reason: `Apply finished: ${status}` })!
+    auditRecorded = true
+    await recordApplyAudit(deps, tenant, updated, status, actor, undefined, updated.attempts)
+    return updated
+    })
+  } catch (error) {
+    // A throw from the write loop or the final update: writes may have happened, so the
+    // claimed attempt still gets its failure entry, with the results recorded so far.
+    if (claimed && !auditRecorded) {
+      let latest: Stored_ = claimed
+      try { latest = getChangeSet(deps, tenant, id) } catch { /* keep the claimed snapshot */ }
+      await recordApplyAudit(deps, tenant, latest, "failed", actor, error instanceof Error ? error.message : String(error), latest.attempts)
+    }
+    throw error
+  }
 }
 
 // ---------------------------------------------------------------------------------------------

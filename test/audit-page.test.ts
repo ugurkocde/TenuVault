@@ -44,7 +44,7 @@ it('offers recorded desktop event types, including cancelled backups, and severi
   const options = [...html.matchAll(/<select\b[^>]*>(.*?)<\/select>/gs)]
     .map(select => [...select[1]!.matchAll(/<option value="([^"]*)"/g)].map(option => option[1]))
   expect(options).toEqual([
-    ['', 'BACKUP_STARTED', 'BACKUP_COMPLETED', 'BACKUP_FAILED', 'BACKUP_CANCELLED', 'BACKUP_DOWNLOADED', 'RESTORE_COMPLETED', 'RESTORE_FAILED', 'POLICY_CREATED', 'POLICY_REVERTED', 'POLICY_RESTORED', 'POLICY_DRIFT_DETECTED'],
+    ['', 'BACKUP_STARTED', 'BACKUP_COMPLETED', 'BACKUP_FAILED', 'BACKUP_CANCELLED', 'BACKUP_DOWNLOADED', 'RESTORE_COMPLETED', 'RESTORE_FAILED', 'POLICY_CREATED', 'POLICY_REVERTED', 'POLICY_RESTORED', 'POLICY_DRIFT_DETECTED', 'CHANGE_SET_APPLIED', 'CHANGE_SET_ROLLED_BACK'],
     ['', 'INFO', 'WARNING', 'ERROR'],
     ['', 'SUCCESS', 'FAILURE', 'PARTIAL'],
   ])

@@ -5,7 +5,7 @@ description: See what TenuVault did for a tenant, who did it and whether it work
 
 The audit log is TenuVault's own operation history. It is not a complete Microsoft tenant audit: it does not show changes made in the Intune admin center, by other tools or by other administrators. Use the Microsoft Entra and Intune audit logs for those.
 
-The audit log records the actions TenuVault performs for a tenant: backups, downloads, restores, reverts and baseline deployments. Each entry names the admin who was signed in, what was done, and whether it worked. The log is stored with the tenant's backups, in your own storage.
+The audit log records the actions TenuVault performs for a tenant: backups, downloads, restores, reverts, baseline deployments and change set applies and rollbacks. Each entry names the admin who was signed in, what was done, and whether it worked. The log is stored with the tenant's backups, in your own storage.
 
 ## What is recorded
 
@@ -23,8 +23,10 @@ The audit log records the actions TenuVault performs for a tenant: backups, down
 | Deploy OpenIntuneBaseline policies | POLICY CREATED | An [OpenIntuneBaseline](/baselines/quick-start/) deployment ends, with the counts of created, updated, skipped and failed policies |
 | Reset OpenIntuneBaseline policy drift | POLICY RESTORED | **Fix drift** in OpenIntuneBaseline Policy Validation ends |
 | Undo OpenIntuneBaseline run | POLICY REVERTED | An OpenIntuneBaseline deployment or drift fix is undone |
+| Apply change set | CHANGE_SET_APPLIED | An apply of a reviewed change set ends in promotion, a baseline upgrade, a custom baseline deployment or standard adoption, with the counts of verified, failed, uncertain and not attempted operations |
+| Roll back change set | CHANGE_SET_ROLLED_BACK | An apply of a rollback change set ends, with the same operation counts |
 
-Each entry has a result: **SUCCESS**, **FAILURE**, or **PARTIAL** for a cancelled backup or when a restore or deployment worked for some items and not for others. It also has a severity: **INFO** for success and cancellation, **WARNING** for partial restores and deployments, and **ERROR** for failures. A **BACKUP_CANCELLED** event records **PARTIAL** with **INFO**.
+Each entry has a result: **SUCCESS**, **FAILURE**, or **PARTIAL** for a cancelled backup or when a restore, deployment or change set apply worked for some items and not for others, or left an operation uncertain. It also has a severity: **INFO** for success and cancellation, **WARNING** for partial restores, deployments and change set applies, and **ERROR** for failures. A **BACKUP_CANCELLED** event records **PARTIAL** with **INFO**.
 
 The user is the admin signed in to the tenant when the action ran. Read-only drift scans, including opening Drift Detection and **Check all**, no longer add audit events. Earlier drift check events remain readable.
 
@@ -74,7 +76,7 @@ Below the cards, the table lists the events, newest first, with **Timestamp**, *
 
 * **Search**: type in **Search by user, action, or resource...** and click **Search**. The search also looks in each event's details.
 * **From:** and **To:**: the date range. The default is the last 7 calendar days, including today. Dates use your local time zone and include the full first and last days, so today's events appear throughout the day. Each request can cover at most 90 days. To export a longer history, use separate ranges of up to 90 days.
-* **Filters**: choose one or more values in **Event Type**, **Severity** and **Result**. Event types are limited to the backup, restore and policy actions listed above. Severity offers **INFO**, **WARNING** and **ERROR**.
+* **Filters**: choose one or more values in **Event Type**, **Severity** and **Result**. Event types are limited to the backup, restore, policy and change set actions listed above. Severity offers **INFO**, **WARNING** and **ERROR**.
 
 The cards, table and exports all follow the date range and filters. Picker dates are converted once from your local day to UTC instants. Stored paths and day listings use UTC, and entries are filtered by their event timestamp, so events near midnight are included correctly in every time zone. Older files grouped by local day remain readable.
 
