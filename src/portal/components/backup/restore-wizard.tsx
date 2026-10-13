@@ -19,6 +19,7 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
+  ShieldCheck,
   SkipForward,
   Upload,
   XCircle,
@@ -79,6 +80,33 @@ interface LiveState {
   replaceBlocker?: string
   readiness?: RecoveryReadiness
   snapshot?: unknown
+}
+
+interface ValidationCheck {
+  id: string
+  label: string
+  ok: boolean
+  detail?: string
+}
+
+interface ItemValidation {
+  path: string
+  folder: string
+  label: string
+  name: string
+  ok: boolean
+  checks: ValidationCheck[]
+}
+
+interface BackupValidation {
+  backupId: string
+  ok: boolean
+  manifest: { ok: boolean; detail: string }
+  total: number
+  passed: number
+  failed: number
+  byType: Array<{ folder: string; label: string; total: number; passed: number; failed: number }>
+  items: ItemValidation[]
 }
 
 type Plan = "create" | "copy" | "recreate" | "overwrite" | "skip" | "cannot" | "unchecked"
@@ -183,6 +211,10 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   const [reviewError, setReviewError] = useState("")
   const [confirmed, setConfirmed] = useState(false)
 
+  const [validating, setValidating] = useState(false)
+  const [validation, setValidation] = useState<BackupValidation | null>(null)
+  const [validationError, setValidationError] = useState("")
+
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState<{ total: number; done: number; current: string | null; results: Outcome[] } | null>(null)
   const [result, setResult] = useState<{ outcome: "success" | "partial" | "failed"; message: string; results: Outcome[] } | null>(null)
@@ -216,6 +248,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     setItemsError("")
     setSelected(new Set())
     setReview(null)
+    setValidation(null)
+    setValidationError("")
     const controller = new AbortController()
     const credentials = { ...tenant.credentials, storageAccountName: tenant.storageAccountName, subscriptionId: "local", resourceGroupName: "local", backupId }
     void (async () => {
@@ -317,6 +351,28 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     } catch (error) {
       showPlanError(error)
       setReviewError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  // A dry run reads the whole backup back and checks every item. It writes nothing:
+  // no tenant change, no Microsoft Graph write and no change set.
+  const runValidation = async () => {
+    if (!backupId) return
+    setValidating(true)
+    setValidation(null)
+    setValidationError("")
+    try {
+      const report = await post<BackupValidation>("/api/restore-validate", {
+        ...tenant.credentials,
+        storageAccountName: tenant.storageAccountName,
+        backupId,
+      })
+      setValidation(report)
+    } catch (error) {
+      showPlanError(error)
+      setValidationError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setValidating(false)
     }
   }
 
@@ -805,17 +861,64 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             </>
           )}
 
+          <div className="mt-5 rounded-2xl border border-gray-200 p-4">
+            <p className="flex items-center gap-2 text-sm font-medium text-gray-900">
+              <ShieldCheck className="h-4 w-4 text-gray-500" /> Validate this backup (no changes)
+            </p>
+            <p className="mt-1 text-sm text-gray-500">
+              Reads the whole backup back and checks every item: manifest completeness, decryptability, policy payloads and assignment references. Nothing is written to {tenant.name}, to Microsoft Graph or to a change set.
+            </p>
+            {validationError && <p className="mt-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{validationError}</p>}
+            {validation && (
+              <div className="mt-3 text-sm">
+                <p className={cn("flex items-center gap-2 font-medium", validation.ok ? "text-green-900" : "text-red-800")}>
+                  {validation.ok ? <CheckCircle className="h-4 w-4 flex-shrink-0" /> : <AlertCircle className="h-4 w-4 flex-shrink-0" />}
+                  {validation.passed} of {validation.total} items passed. No changes were made.
+                </p>
+                <p className="mt-1 text-gray-600">{validation.manifest.detail}</p>
+                <ul className="mt-3 divide-y divide-gray-100 rounded-2xl border border-gray-200">
+                  {validation.byType.map((entry) => (
+                    <li key={entry.folder} className="flex items-center justify-between gap-4 px-4 py-2">
+                      <span className="text-gray-900">{capitalize(entry.label)}</span>
+                      <span className={entry.failed ? "text-red-700" : "text-gray-500"}>
+                        {entry.passed} of {entry.total} passed{entry.failed ? `, ${entry.failed} failed` : ""}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                {validation.items.filter((item) => !item.ok).length > 0 && (
+                  <ul className="mt-3 space-y-2">
+                    {validation.items.filter((item) => !item.ok).map((item) => (
+                      <li key={item.path} className="rounded-2xl bg-red-50 px-4 py-3 text-red-800">
+                        <span className="block font-medium">{item.name}</span>
+                        <span className="block text-xs">{item.path}</span>
+                        {item.checks.filter((entry) => !entry.ok).map((entry) => (
+                          <span key={entry.id} className="block text-xs">{entry.label}: {entry.detail}</span>
+                        ))}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className="mt-6 flex justify-between gap-3">
             <Button variant="outline" onClick={() => setStep("options")}>
               <ArrowLeft className="h-4 w-4" /> Options
             </Button>
-            <Button
-              className="bg-coral-600 text-white hover:bg-coral-700"
-              disabled={!review || actionable.length === 0 || (changesTenant && !confirmed)}
-              onClick={() => void run(actionable)}
-            >
-              <RefreshCw className="h-4 w-4" /> Restore {actionable.length} item{actionable.length === 1 ? "" : "s"}
-            </Button>
+            <span className="flex gap-2">
+              <Button variant="outline" disabled={validating || running} onClick={() => void runValidation()}>
+                {validating ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />} Validate backup (no changes)
+              </Button>
+              <Button
+                className="bg-coral-600 text-white hover:bg-coral-700"
+                disabled={!review || actionable.length === 0 || (changesTenant && !confirmed)}
+                onClick={() => void run(actionable)}
+              >
+                <RefreshCw className="h-4 w-4" /> Restore {actionable.length} item{actionable.length === 1 ? "" : "s"}
+              </Button>
+            </span>
           </div>
         </div>
       )}

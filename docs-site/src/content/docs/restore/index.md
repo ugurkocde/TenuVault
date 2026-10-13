@@ -119,6 +119,18 @@ The restore button stays disabled until you tick it. If every selected item alre
 
 Click **Restore N items** to start. Only items that will actually change are sent; skipped and blocked items are left out of the count.
 
+### Validate the backup without restoring
+
+Next to the restore button, **Validate backup (no changes)** runs a dry run over the whole backup. It reads every file back from backup storage and checks each item:
+
+* **Manifest completeness**: the backup finished, and every file recorded in its manifest is present.
+* **Readable and decryptable**: the file can be read back and decrypted with the keys on this device.
+* **Recorded fingerprint**: the content still matches the fingerprint recorded when the backup ran.
+* **Policy payload**: the payload parses and a restore plan can be built from it.
+* **Assignment references**: recorded assignments point at valid targets.
+
+The result lists, per policy type, how many items passed and failed, and names every failing item with the check that failed. A valid backup reports that all items passed. Nothing is written to your tenant, to Microsoft Graph or to a change set, and no restore starts. Run it when you want to prove a backup is restorable before you need it, or to find the exact item that is missing or corrupt.
+
 ## Step 5: Restore
 
 The **Restoring...** screen shows the item being restored and a progress bar. TenuVault restores items that others depend on first (scope tags, assignment filters, Intune roles, app categories, device categories, notification templates and reusable settings) and policy sets last. When an item is recreated with a new ID, later items in the same restore that reference it are pointed to the new ID.
