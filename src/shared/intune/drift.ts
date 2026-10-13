@@ -39,6 +39,8 @@ export interface Drift {
   lastRevertedAt?: string
   /** True when this drift is the result of a revert made between the two backups. */
   isRevertDrift?: boolean
+  /** True for an added item whose name starts with the restored prefix, so it is likely a copy made by a restore. */
+  likelyRestoredCopy?: boolean
   revertTimestamp?: string
   /**
    * The item's path inside a backup folder, such as DeviceConfigurations/Name.json: in the baseline

@@ -58,6 +58,39 @@ describe('Drift comparison', () => {
     expect(drifts).toHaveLength(1)
     expect(drifts[0]).toMatchObject({ fromBackup: 'backup-2026-09-22-120000', toBackup: 'backup-2026-09-23-120000', fromBackupTimestamp: '2026-09-22T12:00:00.000Z', toBackupTimestamp: '2026-09-23T12:00:00.000Z' })
   })
+
+  it('reports an added policy with a restored prefix, flagged as a likely restored copy', async () => {
+    const older = 'backup-2026-09-22-120000'
+    const newer = 'backup-2026-09-23-120000'
+    const files: Record<string, string[]> = {
+      [older]: [`${older}/DeviceConfigurations/A.json`],
+      [newer]: [`${newer}/DeviceConfigurations/A.json`, `${newer}/DeviceConfigurations/B.json`, `${newer}/DeviceConfigurations/C.json`],
+    }
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input))
+      if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
+      if (url.pathname === '/api/revert-metadata') return Response.json({ reverts: {} })
+      if (url.searchParams.get('delimiter')) return new Response(prefixes([newer, older]))
+      const prefix = url.searchParams.get('prefix')
+      if (prefix) {
+        const folder = prefix.split('/')[0]!
+        return new Response((files[folder] ?? []).map(name => `<Blob><Name>${name}</Name></Blob>`).join(''))
+      }
+      if (url.pathname.endsWith('/metadata.json')) return Response.json({ Status: 'Success' })
+      if (url.pathname.endsWith('/B.json')) return Response.json({ id: 'b', displayName: '[Restored] Legit' })
+      if (url.pathname.endsWith('/C.json')) return Response.json({ id: 'c', displayName: 'Brand new' })
+      return Response.json({ id: 'a', displayName: 'A' })
+    }))
+    const response = await drift(request())
+    expect(response.status).toBe(200)
+    const result = await response.json()
+    expect(result.drifts).toHaveLength(2)
+    expect(result.drifts.find((entry: { configId: string }) => entry.configId === 'b')).toMatchObject({ changeType: 'added', configName: '[Restored] Legit', likelyRestoredCopy: true })
+    expect(result.drifts.find((entry: { configId: string }) => entry.configId === 'c')).toMatchObject({ changeType: 'added', configName: 'Brand new' })
+    expect(result.drifts.find((entry: { configId: string }) => entry.configId === 'c').likelyRestoredCopy).toBeUndefined()
+    expect(result.summary).toMatchObject({ total: 2, added: 2 })
+    expect(result.stats.compared).toBe(3)
+  })
 })
 
 describe('Backup list', () => {

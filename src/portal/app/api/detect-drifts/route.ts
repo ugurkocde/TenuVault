@@ -308,9 +308,10 @@ const READ_CONCURRENCY = 8
  * read is reported as a warning and left out, rather than failing the whole comparison.
  *
  * For backups with Items, the counts match the backup list's changes (compareBackups) for the same
- * pair, except where drift deliberately reports less: new "[Restored]" copies are left out, and an
- * item whose fingerprint changed only in properties compareObjects ignores (such as description or
- * @odata.type) is not reported as modified.
+ * pair, except where drift deliberately reports less: an item whose fingerprint changed only in
+ * properties compareObjects ignores (such as description or @odata.type) is not reported as
+ * modified. New items whose name starts with "[Restored]" are reported and flagged as likely
+ * restored copies, because a legitimately created policy can carry the same prefix.
  */
 async function detectDrifts(
   newerPolicies: PolicyFile[],
@@ -413,8 +414,7 @@ async function detectDrifts(
       const policyType = getPolicyType(task.name)
       if (task.change === 'added') {
         const policyContent = await read(task.newer!, newerBackup.name)
-        // Skip policies that were restored by the user (those with [Restored] prefix)
-        if ([policyContent?.displayName, policyContent?.name].some(name => typeof name === 'string' && name.startsWith('[Restored]'))) return null
+        const likelyRestoredCopy = [policyContent?.displayName, policyContent?.name].some(name => typeof name === 'string' && name.startsWith('[Restored]'))
         return {
           ...base,
           severity: determineSeverity(policyType, "added", policyContent),
@@ -425,6 +425,7 @@ async function detectDrifts(
           changeType: "added",
           description: `New ${policyType} policy added`,
           impact: determineImpact(policyType, "added", policyContent),
+          ...(likelyRestoredCopy ? { likelyRestoredCopy: true } : {}),
         }
       }
       if (task.change === 'deleted') {

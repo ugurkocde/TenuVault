@@ -20,6 +20,7 @@ import { routes } from "./api/routes"
 import { AuthManager, SignInRequiredError } from "./auth/msal"
 import { BackupEngine, verifyStorageAccess, type BackupJob } from "./backup/engine"
 import { BackupScheduler, scheduledResult } from "./backup/scheduler"
+import { runTrayBackups } from "./backup/tray-backup"
 import { prepareScheduleInput } from "./backup/schedule-input"
 import { BackgroundLaunch } from "./backup/background-launch"
 import { BackupScopes } from "./backup/scopes"
@@ -488,7 +489,7 @@ async function bootstrap(): Promise<void> {
   const tray = new AppTray({
     open: showWindow,
     backUpAll: () => {
-      for (const tenantId of connectedTenantIds()) void runScheduledBackup(tenantId, "tray")
+      void runTrayBackups(connectedTenantIds(), (tenantId) => runScheduledBackup(tenantId, "tray"))
     },
     nextBackup: () => {
       const next = scheduler.next()
