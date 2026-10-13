@@ -42,6 +42,14 @@ describe("build kit conversion", () => {
     expect(result.packs[0]?.reference).toContain("Level 2")
   })
 
+  it("prefers a supplied benchmark version over the path version everywhere", () => {
+    const result = kit([{ path: "Level 1/Fakebook Alpha 9.9.9.json", content: policy("Fakebook Alpha", ["fakebook_setting_alpha"]) }], "1.2.3")
+    expect(result.summary.version).toBe("1.2.3")
+    expect(result.packs[0]?.version).toBe("1.2.3")
+    expect(result.packs[0]?.reference).toContain("1.2.3")
+    expect(result.packs[0]?.policies[0]?.provenance).toMatchObject({ version: "1.2.3" })
+  })
+
   it("derives Level 2 only settings from an L1 and a combined L1+L2 pair", () => {
     const level1 = policy("Fakebook Combined", ["fakebook_setting_alpha", "fakebook_setting_beta"])
     const combined = JSON.stringify({ name: "Fakebook Combined", platforms: "windows10", technologies: "mdm", description: "Synthetic fixture policy",
@@ -59,6 +67,18 @@ describe("build kit conversion", () => {
     expect(derived?.name).toContain("derived")
     expect(derived?.provenance).toMatchObject({ level: "Level 2", sourceFile: "Fakebook Benchmark L1+L2 v9.9.9.json" })
     expect(String(derived?.provenance?.derivation)).toContain("combined")
+  })
+
+  it("uses the supplied version for derived Level 2 provenance", () => {
+    const level1 = policy("Fakebook Combined", ["fakebook_setting_alpha"])
+    const combined = policy("Fakebook Combined", ["fakebook_setting_alpha", "fakebook_setting_gamma"])
+    const result = kit([
+      { path: "Fakebook Benchmark L1 v9.9.9.json", content: level1 },
+      { path: "Fakebook Benchmark L1+L2 v9.9.9.json", content: combined },
+    ], "1.2.3")
+    const derived = result.packs.find(pack => pack.level === 2)?.policies[0]
+    expect(derived?.provenance).toMatchObject({ version: "1.2.3" })
+    expect(result.packs.find(pack => pack.level === 1)?.policies[0]?.provenance).toMatchObject({ version: "1.2.3" })
   })
 
   it("fails loudly when a combined file has no matching Level 1 file", () => {
