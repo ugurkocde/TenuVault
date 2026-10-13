@@ -548,6 +548,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
   const tenant = tenantId.toLowerCase()
   // Set once the apply is claimed; from then on every exit records exactly one audit entry.
   let claimed: Stored_ | null = null
+  let claimedAttempt: number | null = null
   let auditRecorded = false
   try {
     return await withTenantWrite(tenant, "Change set apply", async () => {
@@ -565,11 +566,12 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     // Claim the change set before anything slow, so approve, reject and revise refuse it
     // while the backup runs, and a change made in between is detected instead of overwritten.
     const claimedFrom = record.status
-    deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenant, id, (current) => {
+    const claimedRecord = deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenant, id, (current) => {
       if (current.status !== claimedFrom || current.contentHash !== record.contentHash || current.review?.decidedAt !== review.decidedAt) throw new FeatureError("The change set changed while the apply started. Review it again.", 409)
-      return { ...current, status: "applying", lastError: null, summary: record.preChange ? "Retrying." : "Backing up before applying." }
+      return { ...current, status: "applying", attempts: current.attempts + 1, lastError: null, summary: record.preChange ? "Retrying." : "Backing up before applying." }
     }, { actor, reason: record.preChange ? "Retry started" : "Apply started; running the pre-change backup" })
-    claimed = record
+    claimed = claimedRecord!
+    claimedAttempt = claimedRecord!.attempts
 
     let preChange = record.preChange
     let captured: ChangeSetContent["entries"] = {}
@@ -626,13 +628,13 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       const previous: ChangeSetRecord["status"] = claimedFrom === "applying" ? (record.preChange ? "uncertain" : "approved") : claimedFrom
       deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenant, id, (current) => ({ ...current, status: current.status === "applying" ? previous : current.status, lastError: message, summary: current.status === "applying" ? `Not applied: ${message}` : current.summary }), { actor, reason: `Apply stopped before writing: ${message}` })
       auditRecorded = true
-      await recordApplyAudit(deps, tenant, record, "failed", actor, message, record.attempts + 1)
+      await recordApplyAudit(deps, tenant, record, "failed", actor, message, claimedAttempt!)
       throw error
     }
     for (const object of preChange.objects) capturedNames[object.key] = object.sameNameIds
     const firstAttempt = !record.preChange
     const change = preChange
-    deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenant, id, (current) => ({ ...current, status: "applying", preChange: change, attempts: current.attempts + 1, lastError: null, summary: "Applying." }), { actor, reason: firstAttempt ? "Backup succeeded and pre-change state captured; applying" : "Retrying; reconciling earlier outcomes first" })
+    deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenant, id, (current) => ({ ...current, status: "applying", preChange: change, lastError: null, summary: "Applying." }), { actor, reason: firstAttempt ? "Backup succeeded and pre-change state captured; applying" : "Retrying; reconciling earlier outcomes first" })
 
     for (const operation of record.operations) {
       const type = typeOf(operation.folder)
@@ -686,7 +688,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     const status = statusFromResults(results)
     const updated = deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenant, id, (current) => ({ ...current, status, summary: resultSummary(results) }), { actor, reason: `Apply finished: ${status}` })!
     auditRecorded = true
-    await recordApplyAudit(deps, tenant, updated, status, actor, undefined, updated.attempts)
+    await recordApplyAudit(deps, tenant, updated, status, actor, undefined, claimedAttempt!)
     return updated
     })
   } catch (error) {
@@ -695,7 +697,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     if (claimed && !auditRecorded) {
       let latest: Stored_ = claimed
       try { latest = getChangeSet(deps, tenant, id) } catch { /* keep the claimed snapshot */ }
-      await recordApplyAudit(deps, tenant, latest, "failed", actor, error instanceof Error ? error.message : String(error), latest.attempts)
+      await recordApplyAudit(deps, tenant, latest, "failed", actor, error instanceof Error ? error.message : String(error), claimedAttempt!)
     }
     throw error
   }

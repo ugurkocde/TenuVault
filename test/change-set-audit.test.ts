@@ -137,6 +137,20 @@ describe("change set audit entries", () => {
     expect(context.audit[0]!.logEntry.details?.error?.message).toContain("nothing was written")
   })
 
+  it("numbers retry attempts distinctly across backup failures and the later success", async () => {
+    const backupOptions: { backup: "ok" | "fail" } = { backup: "fail" }
+    const context = setup(backupOptions)
+    const { record, preview } = await approvedCreate(context)
+    const apply = () => applyChangeSet(context.deps, TENANT_A, record.id, { contentHash: preview.contentHash, confirmed: true }, "Admin")
+    await expect(apply()).rejects.toThrow(/nothing was written/)
+    await expect(apply()).rejects.toThrow(/nothing was written/)
+    backupOptions.backup = "ok"
+    const applied = await apply()
+    expect(applied.status).toBe("applied")
+    expect(context.audit.map((call) => call.logEntry.details?.attempt)).toEqual([1, 2, 3])
+    expect(context.audit.map((call) => call.logEntry.result)).toEqual([AuditResult.FAILURE, AuditResult.FAILURE, AuditResult.SUCCESS])
+  })
+
   it("records an uncertain apply as partial with the uncertain count", async () => {
     const context = setup()
     const { record, preview } = await approvedCreate(context)
