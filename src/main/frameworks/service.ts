@@ -8,6 +8,8 @@ import { DELEGATED_CLIENT_SECRET } from "../../shared/constants"
 import { CIS_FRAMEWORKS } from "../../shared/plans"
 import { loadNcsc } from "./ncsc"
 import { validateRecommendationList } from "../../shared/frameworks/cis-manual"
+import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
+import { cisReadiness } from "../../shared/frameworks/cis-readiness"
 import { tenantWriteLabel, withTenantWrite } from "../features/write-lock"
 
 const GRAPH = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies"
@@ -136,6 +138,19 @@ async function exportWorkspace(body: RecordJson, workspace: FrameworkWorkspace):
   const saved = workspace.history.find(entry => entry.assessment.runId === body.runId)
   if (!saved) throw new FrameworkError("Saved assessment not found.", 404)
   const name = `${base}-${saved.assessment.runId}`
+  if (body.action === "workspace-cis-pdf") {
+    if (workspace.frameworkId !== "cis-benchmarks") throw new FrameworkError("CIS readiness reports are available for CIS Benchmarks assessments only.", 400)
+    let denominator: DenominatorEntry[] | undefined
+    if (body.denominator !== undefined) {
+      if (!Array.isArray(body.denominator)) throw new FrameworkError("The denominator list is invalid.")
+      try { denominator = parseDenominatorList(JSON.stringify(body.denominator)) }
+      catch (error) { throw new FrameworkError(error instanceof Error ? error.message : "The denominator list is invalid.") }
+    }
+    const summary = cisReadiness(saved.assessment, saved.policies, denominator, workspace.recommendationList)
+    const { generateCisReadinessPDF } = await import("../../shared/compliance/report-pdf")
+    const pdf = generateCisReadinessPDF(summary, { exportedAt: context.exportedAt, tenantName: context.tenantName, tenantId: workspace.tenantId, assessedAt: saved.assessment.assessedAt, runId: saved.assessment.runId })
+    return { file: { name: `${name}.pdf`, type: "application/pdf", encoding: "base64", data: Buffer.from(pdf).toString("base64") } }
+  }
   if (body.action === "workspace-csv") return { file: { name: `${name}.csv`, type: "text/csv;charset=utf-8", encoding: "utf8", data: `\uFEFF${workspaceExportCSV(saved, context)}` } }
   if (body.action === "workspace-json") return { file: { name: `${name}.json`, type: "application/json", encoding: "utf8", data: workspaceExportJSON(saved, context) } }
   const { generateWorkspaceAssessmentPDF } = await import("../../shared/compliance/report-pdf")
@@ -169,7 +184,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       for (const [id, run] of runs) if (run.assessment.tenantId === tenantKey && run.assessment.frameworkId === body.frameworkId && (body.action === "workspace-delete" || id === body.runId)) runs.delete(id)
     }
     const workspace = loadWorkspace(body.tenantId, body.frameworkId)
-    if (["workspace-pdf", "workspace-csv", "workspace-json"].includes(body.action)) return exportWorkspace(body, workspace)
+    if (["workspace-pdf", "workspace-csv", "workspace-json", "workspace-cis-pdf"].includes(body.action)) return exportWorkspace(body, workspace)
     if (body.action === "workspace-delete") { deleteWorkspace(body.tenantId, body.frameworkId); return loadWorkspace(body.tenantId, body.frameworkId) }
     if (body.action === "workspace-save") {
       if (typeof body.reference !== "string" || body.reference.length > 200) throw new FrameworkError("Provide a source version up to 200 characters.")

@@ -1,4 +1,4 @@
-import { computeCoverage, type DenominatorEntry } from "./cis-coverage"
+import { computeCoverage, type DenominatorEntry, type DenominatorSource } from "./cis-coverage"
 import { manualItemsForLevel, MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDATIONS_URL, type ManualItemView, type RecommendationList } from "./cis-manual"
 import type { KitLevel, KitPack } from "./cis-kit"
 import type { Assessment, BaselinePolicy } from "./policies"
@@ -21,8 +21,16 @@ export interface CisLevelReadiness {
   enumerated: number
   denominator: number | null
   coverage: number | null
+  coverageSource: DenominatorSource
   notAssessed: string[]
   manual: ManualItemView[]
+}
+
+/** The label printed wherever a coverage ratio appears, naming where its denominator came from. */
+export function coverageSourceLabel(source: DenominatorSource): string {
+  if (source === "authoritative") return "Authoritative denominator"
+  if (source === "breakout-proxy") return "Breakout proxy, illustrative"
+  return "Not computable"
 }
 
 export interface CisReadinessSummary {
@@ -87,6 +95,7 @@ export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[],
       enumerated: cov?.enumeratedIds.length ?? 0,
       denominator: cov?.denominator ?? null,
       coverage: cov?.coverage ?? null,
+      coverageSource: cov?.denominatorSource ?? "none",
       notAssessed,
       manual,
     }

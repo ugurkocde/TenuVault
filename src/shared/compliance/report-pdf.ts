@@ -1,7 +1,8 @@
 import { jsPDF } from 'jspdf'
 import { CAPABILITY_STATUS_LABELS, CHECK_RESULT_COLORS, CHECK_RESULT_LABELS, COLLECTION_FAMILY_LABELS, COLLECTION_STATUS_LABELS, CONTROL_STATUS_LABELS, PLATFORM_LABELS, formatReportDate, frameworkCoverageLabel } from './presentation'
 import { comparisonCounts, type NativeAssessment } from './native'
-import { nativeReportHeader, redactSecrets, redactText, workspaceReportHeader, type ExportContext, type ReportHeader, type SavedAssessment } from './export'
+import { EXPORT_LIMITATIONS, nativeReportHeader, redactSecrets, redactText, workspaceReportHeader, type ExportContext, type ReportHeader, type SavedAssessment } from './export'
+import { coverageSourceLabel, type CisLevelReadiness, type CisReadinessSummary } from '../frameworks/cis-readiness'
 import { displayCheckValue } from './check-results'
 import rights from './rights.json'
 
@@ -165,4 +166,84 @@ export function generateWorkspaceAssessmentPDF(saved: SavedAssessment, context: 
     for (const result of saved.creation.results) text(`${result.name}: ${result.error ?? 'Created, unassigned'}`)
   }
   return report.finish('Policy pack assessment')
+}
+
+/** Where a CIS readiness report came from; the tenant name is a label only. */
+export interface CisReportContext extends ExportContext {
+  tenantId: string
+  assessedAt: string
+  runId?: string
+}
+
+function percent(value: number | null): string {
+  return value === null ? 'Not available' : `${Math.round(value * 1000) / 10}%`
+}
+
+/**
+ * Local CIS readiness report from a saved assessment, in the same layout as the native
+ * framework reports: same header, summary tiles, sections and footer. Export never re-reads
+ * or re-evaluates the tenant. Manual items without imported text carry the same fallback
+ * line the readiness view shows.
+ */
+export function generateCisReadinessPDF(summary: CisReadinessSummary, context: CisReportContext): Uint8Array<ArrayBuffer> {
+  const report: Report = createReport()
+  const { doc, width, state, text, heading, section } = report
+  /** One tile per figure, styled like the native comparison summary tiles. */
+  function levelTiles(level: CisLevelReadiness) {
+    const deviating = level.different + level.missing + level.review
+    const tiles: { value: string; label: string; color: [number, number, number] }[] = [
+      { value: String(level.assessedSettings), label: 'Assessed settings', color: [100, 116, 139] },
+      { value: String(level.present), label: 'Conforming', color: CHECK_RESULT_COLORS.matches },
+      { value: String(deviating), label: 'Deviating', color: CHECK_RESULT_COLORS.different },
+      { value: percent(level.passRate), label: 'Pass rate', color: [37, 99, 235] },
+    ]
+    const gap = 3, tile = (width - gap * (tiles.length - 1)) / tiles.length
+    if (state.y + 22 > 273) { doc.addPage(); state.y = 24 }
+    const y = state.y
+    tiles.forEach((entry, i) => {
+      const x = 16 + i * (tile + gap)
+      doc.setFillColor(244, 243, 241); doc.roundedRect(x, y, tile, 18, 2, 2, 'F')
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(...entry.color)
+      doc.text(entry.value, x + 4, y + 8)
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(60)
+      doc.text(entry.label, x + 4, y + 14)
+    })
+    doc.setTextColor(0)
+    state.y += 24
+  }
+  doc.setProperties({ title: `${summary.benchmark} readiness report`, author: 'TenuVault', subject: 'CIS readiness summary from a saved assessment', keywords: 'Intune, configuration, readiness, comparison' })
+  text('TenuVault', 20, true)
+  text('CIS readiness report', 15, true)
+  text(`${summary.benchmark} | ${summary.version}`, 13)
+  text(`Tenant: ${context.tenantName ? `${context.tenantName} (${context.tenantId})` : context.tenantId}`)
+  text(`Benchmark: ${summary.benchmark}\nVersion: ${summary.version}\nAssessed: ${formatReportDate(context.assessedAt)}\nExported: ${formatReportDate(context.exportedAt)}${context.runId ? `\nReport: ${context.runId}` : ''}`)
+  text(summary.manualNote)
+  heading('Limitations')
+  for (const line of EXPORT_LIMITATIONS) text(line)
+  for (const level of summary.levels) {
+    section(`Level ${level.level} readiness`)
+    levelTiles(level)
+    text(`Assessed settings: ${level.assessedSettings}\nConforming: ${level.present}\nDeviating: ${level.different + level.missing + level.review} (different ${level.different}, missing ${level.missing}, review ${level.review})\nPass rate: ${percent(level.passRate)}`)
+    text(level.coverage === null
+      ? `Coverage: ${coverageSourceLabel(level.coverageSource)}`
+      : `Coverage: ${percent(level.coverage)} (${level.assessedAutomated} of ${level.denominator}), source: ${coverageSourceLabel(level.coverageSource)}`)
+    text(`Assessed automated: ${level.assessedAutomated}\nEnumerated: ${level.enumerated}\nNot assessed identifiers: ${level.notAssessed.length}`)
+    if (level.notAssessed.length) text(level.notAssessed.join(', '))
+    if (level.manual.length) {
+      heading(`Manual recommendations, Level ${level.level}`)
+      for (const item of level.manual) {
+        text(item.title ? `${item.identifier} | ${item.title}` : item.identifier, 9, true)
+        if (item.hasText) {
+          if (item.description) text(`Description: ${item.description}`)
+          if (item.impact) text(`Impact: ${item.impact}`)
+          if (item.audit) text(`Audit: ${item.audit}`)
+          if (item.remediation) text(`Remediation: ${item.remediation}`)
+        } else {
+          text(summary.manualFallback)
+          text(summary.manualFallbackUrl)
+        }
+      }
+    }
+  }
+  return report.finish('CIS readiness report')
 }
