@@ -19,6 +19,7 @@ You do this once per tenant. Every admin who uses TenuVault in that tenant signs
 | Admin consent | Granted tenant-wide for all of the permissions below |
 | Enterprise application | Hidden from users' My Apps portal |
 | Sign-in restriction | Optional: only members of one group can sign in (`-AllowedGroupId`) |
+| Group read | Optional: also request `Group.Read.All` (`-IncludeGroupRead`), off by default |
 
 Because the app is a public client with delegated permissions, every call runs as the signed-in admin. MFA, Conditional Access and your Intune role apply, and changes are attributed to that admin in the Entra and Intune audit logs.
 
@@ -39,6 +40,8 @@ Because the app is a public client with delegated permissions, every call runs a
 | Azure Storage | `user_impersonation` |
 
 The two Azure permissions are only used when backups go to your Azure storage account: Azure Service Management lists your subscriptions and storage accounts in the storage picker, and Azure Storage reads and writes the backup files. For what each permission is used for, see [App registration and delegated permissions](/security/permissions/).
+
+The table above is the default permission set. It does not change unless you opt in. With `-IncludeGroupRead` the script adds one more delegated Microsoft Graph permission, `Group.Read.All`. Only the hygiene unresolved groups check uses it, to tell whether a group referenced by a policy assignment exists. Without it that check stays unknown and no group is reported as missing.
 
 ## Before you start
 
@@ -72,6 +75,12 @@ The same script is also built into TenuVault:
    ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -DisplayName "TenuVault Desktop" -AllowedGroupId 00000000-0000-0000-0000-000000000000
    ```
 
+   To also let the hygiene unresolved groups check read whether referenced groups exist:
+
+   ```powershell
+   ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -IncludeGroupRead
+   ```
+
 3. Sign in with your admin account when Microsoft Graph PowerShell asks you to. If you are prompted to consent to the permissions Graph PowerShell requests, accept. The script connects with `Application.ReadWrite.All`, `DelegatedPermissionGrant.ReadWrite.All` and `AppRoleAssignment.ReadWrite.All` to create the app and grant consent.
 4. Wait for the script to finish. It prints:
 
@@ -94,6 +103,7 @@ In the app, the button is called **Connect tenant**, not **Add tenant**. The scr
 | `-TenantId` | No | Tenant ID or domain to create the app registration in. Defaults to the tenant of the account you sign in with. |
 | `-DisplayName` | No | Name of the app registration. Default: `TenuVault Desktop`. |
 | `-AllowedGroupId` | No | Object ID of a security group. When set, user assignment is required on the enterprise application and only members of this group can sign in to TenuVault. |
+| `-IncludeGroupRead` | No | Switch. When set, also requests the delegated `Group.Read.All` permission so the hygiene unresolved groups check can run. Off by default, so the default permission set is unchanged. Because each run creates a new app registration, use this on a fresh run and sign in with the new client ID, or add `Group.Read.All` to an existing registration manually and grant admin consent. |
 
 ### Execution policy
 
