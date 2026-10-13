@@ -207,6 +207,27 @@ describe('native collector and rights boundaries', () => {
       vi.useRealTimers()
     }
   })
+  it('aborts promptly during a throttled evidence read retry wait', async () => {
+    vi.useFakeTimers()
+    try {
+      let calls = 0
+      vi.stubGlobal('fetch', vi.fn(async () => ++calls === 1
+        ? new Response('', { status: 429, headers: { 'Retry-After': '30' } })
+        : Response.json({ id: 'policy' })))
+      const controller = new AbortController()
+      let caught: unknown
+      void graphEvidenceReader('token', controller.signal).get('deviceManagement/configurationPolicies/policy')
+        .catch((error: unknown) => { caught = error })
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(calls).toBe(1)
+      controller.abort()
+      await vi.advanceTimersByTimeAsync(0)
+      expect((caught as { name?: unknown } | undefined)?.name).toBe('AbortError')
+      expect(calls).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
   it('still fails the evidence read when Retry-After exceeds the bounded delay', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 429, headers: { 'Retry-After': '301' } })))
     const error: unknown = await graphEvidenceReader('token').get('deviceManagement/configurationPolicies/policy').catch((caught: unknown) => caught)

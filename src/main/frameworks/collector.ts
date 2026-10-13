@@ -60,7 +60,7 @@ export function graphEvidenceReader(token: string, signal?: AbortSignal): Eviden
         } catch {
           throw new FrameworkError(`Graph throttled the evidence read (${response.status}). Retry later.`, 502)
         }
-        await sleep(delay)
+        await sleep(delay, signal)
         continue
       }
       if (!response.ok) throw new FrameworkError(`Evidence read failed (${response.status}) at ${new URL(url).pathname}.`, response.status)
