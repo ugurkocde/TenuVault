@@ -4,6 +4,7 @@ import type { FrameworkScore } from "../scores/api"
 import { CLASSIFICATION_LABELS, STATUS_LABELS, type Finding as HygieneFinding } from "../hygiene/api"
 import type { Finding as HealthFinding } from "../health-review/api"
 import type { AdoptionState } from "../standards/api"
+import type { CisReadinessSummary } from "../../../shared/frameworks/cis-readiness"
 
 /**
  * CSV and JSON exports for the governance tabs (scores, hygiene, health review and
@@ -12,7 +13,7 @@ import type { AdoptionState } from "../standards/api"
  * an export, and every string passes the same redaction as the framework exports.
  */
 
-export type GovernanceExportKind = "scores" | "hygiene" | "health" | "standards"
+export type GovernanceExportKind = "scores" | "hygiene" | "health" | "standards" | "cis-readiness"
 
 /** "scores-contoso-2026-10-13", without an extension, following driftExportName. */
 export function governanceExportName(kind: GovernanceExportKind, tenantName: string | null | undefined, exportedAt: string): string {
@@ -194,4 +195,40 @@ export function standardsCsv(states: AdoptionState[]): string {
 
 export function standardsJson(states: AdoptionState[], tenantName: string | null, exportedAt: string): string {
   return toJson({ exportedAt, tenant: tenantName, adoptions: states.map(standardRow) })
+}
+
+// --------------------------------------------------------------------------- cis readiness
+
+function cisReadinessRow(summary: CisReadinessSummary, level: CisReadinessSummary["levels"][number]) {
+  return {
+    benchmark: summary.benchmark,
+    version: summary.version,
+    level: level.level,
+    assessedSettings: level.assessedSettings,
+    present: level.present,
+    different: level.different,
+    missing: level.missing,
+    review: level.review,
+    passRate: level.passRate,
+    assessedAutomated: level.assessedAutomated,
+    enumerated: level.enumerated,
+    denominator: level.denominator,
+    coverage: level.coverage,
+    notAssessed: level.notAssessed,
+    manualNote: summary.manualNote,
+  }
+}
+
+const CIS_READINESS_HEADERS = ["Benchmark", "Version", "Level", "Assessed settings", "Present", "Different", "Missing", "Review", "Pass rate", "Assessed automated", "Enumerated", "Denominator", "Coverage", "Not assessed", "Note"]
+
+export function cisReadinessCsv(summary: CisReadinessSummary): string {
+  const rows = summary.levels.map((level) => {
+    const row = cisReadinessRow(summary, level)
+    return [row.benchmark, row.version, row.level, row.assessedSettings, row.present, row.different, row.missing, row.review, row.passRate ?? "", row.assessedAutomated, row.enumerated, row.denominator ?? "", row.coverage ?? "", row.notAssessed.join("; "), row.manualNote]
+  })
+  return toCsv([CIS_READINESS_HEADERS, ...rows])
+}
+
+export function cisReadinessJson(summary: CisReadinessSummary, tenantName: string | null, exportedAt: string): string {
+  return toJson({ exportedAt, tenant: tenantName, benchmark: summary.benchmark, version: summary.version, manualNote: summary.manualNote, levels: summary.levels.map((level) => cisReadinessRow(summary, level)) })
 }

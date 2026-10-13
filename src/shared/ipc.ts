@@ -167,6 +167,8 @@ export interface AppInfo {
   version: string
   platform: NodeJS.Platform
   trayIconLoaded: boolean
+  /** Internal CIS Benchmarks proof of concept, enabled only by a local opt-in in the main process. Off when absent. */
+  internalCisBenchmarks?: boolean
 }
 
 /** API exposed to the renderer on `window.tenuvault` by the preload script. */

@@ -17,8 +17,16 @@ export class FrameworkError extends Error {
   constructor(message: string, public status = 400) { super(message) }
 }
 
+let internalCisOverride: boolean | null = null
+/** Test and bootstrap hook for the internal CIS Benchmarks flag. Null follows the environment. */
+export function setInternalCisBenchmarksEnabled(value: boolean | null): void { internalCisOverride = value }
+export function internalCisBenchmarksEnabled(): boolean {
+  return internalCisOverride ?? process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS === "1"
+}
+
 function requireEnabledFramework(frameworkId: string): void {
   const framework = frameworks.find(f => f.id === frameworkId)
+  if (frameworkId === "cis-benchmarks" && internalCisBenchmarksEnabled()) return
   if (framework?.disabledReason) throw new FrameworkError(framework.disabledReason, 403)
 }
 
