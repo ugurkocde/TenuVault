@@ -129,7 +129,7 @@ Next to the restore button, **Validate backup (no changes)** runs a dry run over
 * **Policy payload**: the payload parses and a restore plan can be built from it.
 * **Assignment references**: recorded assignments point at valid targets.
 
-The result lists, per policy type, how many items passed and failed, and names every failing item with the check that failed. A valid backup reports that all items passed. Nothing is written to your tenant, to Microsoft Graph or to a change set, and no restore starts. Run it when you want to prove a backup is restorable before you need it, or to find the exact item that is missing or corrupt.
+The result lists, per policy type, how many items passed and failed, and names every failing item with the check that failed. A valid backup reports that all items passed. Nothing is written to your tenant, to Microsoft Graph or to a change set, and no restore starts. Run it when you want to prove a backup is restorable before you need it, or to find the exact item that is missing or corrupt. Validating a whole backup is included in TenuVault Pro and MSP, like restoring several items at once.
 
 ## Step 5: Restore
 

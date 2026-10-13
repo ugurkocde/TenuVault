@@ -33,6 +33,8 @@ export function requiredFeatures(pathname: string, body: Record<string, unknown>
       if (body.assignments === true) features.push("restoreAssignments")
       return features
     }
+    case "/api/restore-validate":
+      return ["fullRestore"]
     case "/api/revert-policy":
       return body.action === "revert" ? ["driftRevert"] : []
     // The audit log is Pro and MSP; /api/audit/log stays open so the main process can write entries.

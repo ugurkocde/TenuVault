@@ -864,10 +864,14 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           <div className="mt-5 rounded-2xl border border-gray-200 p-4">
             <p className="flex items-center gap-2 text-sm font-medium text-gray-900">
               <ShieldCheck className="h-4 w-4 text-gray-500" /> Validate this backup (no changes)
+              {community && <PlanBadge feature="fullRestore" />}
             </p>
             <p className="mt-1 text-sm text-gray-500">
               Reads the whole backup back and checks every item: manifest completeness, decryptability, policy payloads and assignment references. Nothing is written to {tenant.name}, to Microsoft Graph or to a change set.
             </p>
+            {community && (
+              <UpgradeNote feature="fullRestore" message="Validating a whole backup is included in TenuVault Pro and MSP. Community restores one item at a time as an unassigned copy." className="mt-3" />
+            )}
             {validationError && <p className="mt-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{validationError}</p>}
             {validation && (
               <div className="mt-3 text-sm">
@@ -908,7 +912,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
               <ArrowLeft className="h-4 w-4" /> Options
             </Button>
             <span className="flex gap-2">
-              <Button variant="outline" disabled={validating || running} onClick={() => void runValidation()}>
+              <Button variant="outline" disabled={validating || running || community} onClick={() => void runValidation()}>
                 {validating ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />} Validate backup (no changes)
               </Button>
               <Button
