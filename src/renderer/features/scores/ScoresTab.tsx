@@ -9,6 +9,8 @@ import { FrameworkCard } from "./FrameworkCard"
 import { PortfolioScores } from "./PortfolioScores"
 import { ComplianceScoringNotice } from "../../components/ComplianceScoringNotice"
 import { ScoreDetail } from "./ScoreDetail"
+import { GovernanceExportButtons } from "../shared/GovernanceExportButtons"
+import { scoresCsv, scoresJson } from "../shared/governance-export"
 
 /**
  * Baseline scores (#137), projected from the comparisons saved on the Frameworks page. Scores
@@ -35,10 +37,13 @@ export default function ScoresTab({ tenant, plan, allowed }: FeatureTabProps) {
             A score compares Intune and Conditional Access configuration with a technical mapping. It does not prove enforcement on devices or compliance with the full framework. Comparisons older than {query.data?.staleAfterDays ?? 30} days are marked stale.
           </p>
         </div>
-        <Button type="button" variant="outline" size="sm" onClick={() => void query.refetch()} disabled={query.isFetching}>
-          <RefreshCw className={query.isFetching ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
-          Refresh
-        </Button>
+        <div className="flex flex-wrap items-start gap-2">
+          <GovernanceExportButtons kind="scores" tenantName={query.data?.tenantName ?? tenant.name} disabled={frameworks.length === 0} buildCsv={() => scoresCsv(frameworks)} buildJson={(exportedAt) => scoresJson(frameworks, query.data?.tenantName ?? tenant.name, exportedAt)} />
+          <Button type="button" variant="outline" size="sm" onClick={() => void query.refetch()} disabled={query.isFetching}>
+            <RefreshCw className={query.isFetching ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
+            Refresh
+          </Button>
+        </div>
       </section>
 
       {query.isLoading && <div className="h-40 animate-pulse rounded-3xl bg-card" />}
