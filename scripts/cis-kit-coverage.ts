@@ -18,12 +18,24 @@
  * --breakout) supplies an illustrative proxy whose manual bucket is reported
  * separately; with neither, the ratio is labelled not computable. Identifier
  * lists are printed only with --detail.
+ *
+ * With --export-recommendation-list <path> the breakout workbook is also
+ * converted into a recommendation list JSON file at the user chosen local
+ * path: an object with benchmark, version and items, where each item has
+ * identifier, level, automated and an optional title from the workbook. Rows
+ * in the manual bucket build kit become automated false, the rest true. The
+ * path must be outside the repository tree; repo-relative paths are refused.
+ * Example, for a Windows 11 kit folder and its breakout workbook:
+ *   npx jiti scripts/cis-kit-coverage.ts <kit folder> --breakout <workbook.xlsx> --export-recommendation-list /Users/you/Documents/win11-recommendations.json
+ * Then import that file in the CIS Benchmarks area of the app.
  */
-import { readFileSync, readdirSync, statSync } from "node:fs"
-import { basename, join, relative, resolve, sep } from "node:path"
+import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs"
+import { basename, dirname, join, relative, resolve, sep } from "node:path"
+import { fileURLToPath } from "node:url"
 import JSZip from "jszip"
 import { convertKit, KitConversionError, type KitFile } from "../src/shared/frameworks/cis-kit"
-import { computeCoverage, parseBreakoutWorkbook, parseDenominatorList, type BreakoutRow, type DenominatorEntry } from "../src/shared/frameworks/cis-coverage"
+import { computeCoverage, parseBreakoutWorkbook, parseDenominatorList, recommendationListFromWorkbook, type BreakoutRow, type DenominatorEntry } from "../src/shared/frameworks/cis-coverage"
+import { serializeRecommendationList } from "../src/shared/frameworks/cis-manual"
 
 const args = process.argv.slice(2)
 const target = args.find(arg => !arg.startsWith("--"))
@@ -32,8 +44,20 @@ function optionValue(name: string): string | undefined {
   return index >= 0 ? args[index + 1] : undefined
 }
 const detail = args.includes("--detail")
+const exportListPath = optionValue("--export-recommendation-list") ?? optionValue("--export-recommendations") ?? optionValue("--recommendations-out") ?? optionValue("--manual-list-out")
+export function repoRootForScript(): string {
+  try { return resolve(dirname(fileURLToPath(import.meta.url)), "..") } catch { return resolve(process.cwd()) }
+}
+export function assertOutsideRepository(outputPath: string, repoRoot = repoRootForScript()): string {
+  const resolved = resolve(outputPath)
+  const rel = relative(resolve(repoRoot), resolved)
+  if (rel === "" || (!rel.startsWith(`..${sep}`) && !rel.startsWith("../") && rel !== "..")) {
+    throw new Error(`Refusing to write the recommendation list inside the repository tree: ${outputPath}. Choose a local path outside the repository.`)
+  }
+  return resolved
+}
 if (!target) {
-  console.error("Usage: npx jiti scripts/cis-kit-coverage.ts <kit.zip | kit folder> [--breakout <workbook.xlsx>] [--denominator <list.json>] [--detail]")
+  console.error("Usage: npx jiti scripts/cis-kit-coverage.ts <kit.zip | kit folder> [--breakout <workbook.xlsx>] [--denominator <list.json>] [--export-recommendation-list <local path outside the repository>] [--detail]")
   process.exit(2)
 }
 const root = resolve(target)
@@ -93,22 +117,33 @@ for (const item of result.skipped) console.log(`Skipped: ${item.path} (${item.re
 for (const item of failed) console.log(`Failed: ${item.reason}`)
 
 let breakout: BreakoutRow[] | undefined
+let breakoutBytes: Uint8Array | undefined
 const breakoutPath = optionValue("--breakout")
 try {
   if (breakoutPath) {
-    breakout = await parseBreakoutWorkbook(readFileSync(resolve(breakoutPath)))
+    breakoutBytes = readFileSync(resolve(breakoutPath))
+    breakout = await parseBreakoutWorkbook(breakoutBytes)
   } else if (statSync(root).isDirectory()) {
     const names: string[] = []
     const collect = (dir: string): void => { for (const entry of readdirSync(dir, { withFileTypes: true })) { const full = join(dir, entry.name); if (entry.isDirectory()) collect(full); else if (entry.name.toLowerCase().endsWith(".xlsx")) names.push(full) } }
     collect(root)
-    if (names[0]) breakout = await parseBreakoutWorkbook(readFileSync(names[0]))
+    if (names[0]) { breakoutBytes = readFileSync(names[0]); breakout = await parseBreakoutWorkbook(breakoutBytes) }
   } else {
     const zip = await JSZip.loadAsync(readFileSync(root))
     const entry = Object.values(zip.files).find(item => !item.dir && item.name.toLowerCase().endsWith(".xlsx"))
-    if (entry) breakout = await parseBreakoutWorkbook(await entry.async("uint8array"))
+    if (entry) { breakoutBytes = await entry.async("uint8array"); breakout = await parseBreakoutWorkbook(breakoutBytes) }
   }
 } catch (error) {
   console.log(`Breakout: unavailable (${error instanceof Error ? error.message : "unreadable workbook"})`)
+}
+if (exportListPath) {
+  let output: string
+  try { output = assertOutsideRepository(exportListPath) }
+  catch (error) { console.error(error instanceof Error ? error.message : "Refusing to write inside the repository."); process.exit(2) }
+  if (!breakoutBytes) { console.error("No breakout workbook was found, so no recommendation list can be exported. Pass --breakout <workbook.xlsx>."); process.exit(2) }
+  const list = await recommendationListFromWorkbook(breakoutBytes, { id: result.summary.benchmark, version: result.summary.version })
+  writeFileSync(output, serializeRecommendationList(list), "utf8")
+  console.log(`Recommendation list: wrote ${list.items.length} items for ${list.benchmark} ${list.version} to ${output}`)
 }
 let denominator: DenominatorEntry[] | undefined
 const denominatorPath = optionValue("--denominator")

@@ -1,6 +1,7 @@
 import { DOMParser } from "@xmldom/xmldom"
 import JSZip from "jszip"
 import type { KitLevel, KitPack } from "./cis-kit"
+import { recommendationListFromBreakout, type RecommendationList } from "./cis-manual"
 
 /**
  * Computes recommendation coverage for converted build kits. A recommendation
@@ -29,7 +30,7 @@ export function extractRecommendationIds(text: string, options?: { kitVersion?: 
   return [...found].sort()
 }
 
-export interface BreakoutRow { identifier: string; level: KitLevel | null; buildKitName: string }
+export interface BreakoutRow { identifier: string; level: KitLevel | null; buildKitName: string; title?: string }
 
 function profileLevel(profile: string): KitLevel | null {
   if (/\blevel\s*1\b/i.test(profile) || /\(\s*l1\s*\)/i.test(profile)) return 1
@@ -82,7 +83,7 @@ function rowsOf(xml: string, shared: string[]): Map<string, string>[] {
  * identifier, profile and build kit name columns are extracted, located by
  * their header text. Every other column is ignored.
  */
-export async function parseBreakoutWorkbook(data: Uint8Array | ArrayBuffer): Promise<BreakoutRow[]> {
+export async function parseBreakoutWorkbook(data: Uint8Array | ArrayBuffer, options?: { includeTitle?: boolean }): Promise<BreakoutRow[]> {
   const zip = await JSZip.loadAsync(data)
   const shared = sharedStrings(await zip.file("xl/sharedStrings.xml")?.async("string"))
   const sheetNames = Object.keys(zip.files).filter(name => /^xl\/worksheets\/sheet\d+\.xml$/.test(name)).sort()
@@ -97,12 +98,14 @@ export async function parseBreakoutWorkbook(data: Uint8Array | ArrayBuffer): Pro
     const identifierColumn = [...columns.entries()].find(([text]) => text.includes("recommendation"))?.[1]
     const profileColumn = [...columns.entries()].find(([text]) => text === "profile")?.[1]
     const kitColumn = [...columns.entries()].find(([text]) => text.includes("build kit"))?.[1]
+    const titleColumn = [...columns.entries()].find(([text]) => text === "title")?.[1]
     if (!identifierColumn || !profileColumn || !kitColumn) continue
     const parsed: BreakoutRow[] = []
     for (const row of rows.slice(1)) {
       const identifier = (row.get(identifierColumn) ?? "").trim()
       if (!identifier) continue
-      parsed.push({ identifier, level: profileLevel(row.get(profileColumn) ?? ""), buildKitName: (row.get(kitColumn) ?? "").trim() })
+      const title = titleColumn ? (row.get(titleColumn) ?? "").trim() : ""
+      parsed.push({ identifier, level: profileLevel(row.get(profileColumn) ?? ""), buildKitName: (row.get(kitColumn) ?? "").trim(), ...(options?.includeTitle && title ? { title } : {}) })
     }
     return parsed
   }
@@ -125,6 +128,12 @@ export function parseDenominatorList(text: string): DenominatorEntry[] {
     }
     return { identifier: record.identifier, level: record.level, automated: record.automated }
   })
+}
+
+/** Builds a recommendation list file shape directly from one breakout workbook. */
+export async function recommendationListFromWorkbook(data: Uint8Array | ArrayBuffer, benchmark: { id: string; version: string }): Promise<RecommendationList> {
+  const rows = await parseBreakoutWorkbook(data, { includeTitle: true })
+  return recommendationListFromBreakout(rows, benchmark)
 }
 
 export type DenominatorSource = "authoritative" | "breakout-proxy" | "none"

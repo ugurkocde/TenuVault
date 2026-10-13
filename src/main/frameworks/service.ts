@@ -7,6 +7,7 @@ import { comparePolicies, parsePolicies, record, remediationPayload, type Assess
 import { DELEGATED_CLIENT_SECRET } from "../../shared/constants"
 import { CIS_FRAMEWORKS } from "../../shared/plans"
 import { loadNcsc } from "./ncsc"
+import { validateRecommendationList } from "../../shared/frameworks/cis-manual"
 import { tenantWriteLabel, withTenantWrite } from "../features/write-lock"
 
 const GRAPH = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies"
@@ -174,6 +175,13 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       if (typeof body.reference !== "string" || body.reference.length > 200) throw new FrameworkError("Provide a source version up to 200 characters.")
       workspace.policies = Array.isArray(body.policies) && !body.policies.length ? [] : parsePolicies(body.policies)
       workspace.reference = body.reference
+      if ("recommendationList" in body) {
+        if (body.recommendationList === null) delete workspace.recommendationList
+        else {
+          try { workspace.recommendationList = validateRecommendationList(body.recommendationList) }
+          catch (error) { throw new FrameworkError(error instanceof Error ? error.message : "The recommendation list is invalid.") }
+        }
+      }
       saveWorkspace(workspace)
     } else if (body.action === "workspace-delete-assessment") {
       workspace.history = workspace.history.filter(entry => entry.assessment.runId !== body.runId)

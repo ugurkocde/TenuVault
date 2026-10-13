@@ -10,6 +10,7 @@ import { effectiveFrameworks, searchEffectiveFrameworks } from "../../shared/fra
 import { convertKit, type KitConversion, type KitFile } from "../../shared/frameworks/cis-kit"
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
 import { cisReadiness } from "../../shared/frameworks/cis-readiness"
+import { parseRecommendationList, type RecommendationList } from "../../shared/frameworks/cis-manual"
 import { cisReadinessCsv, cisReadinessJson } from "../features/shared/governance-export"
 import { GovernanceExportButtons } from "../features/shared/GovernanceExportButtons"
 import { useInternalCisBenchmarks } from "../lib/internal-cis"
@@ -149,6 +150,7 @@ function FrameworkDetail({ framework }: { framework: Framework }) {
   const [kitVersion, setKitVersion] = useState("")
   const [kitConversion, setKitConversion] = useState<KitConversion | null>(null)
   const [denominator, setDenominator] = useState<DenominatorEntry[] | undefined>(undefined)
+  const [recommendationList, setRecommendationList] = useState<RecommendationList | undefined>(undefined)
   const credentials = selectedTenant?.credentials
   // Reports of licensed CIS content are Pro and MSP; the main process checks the same plan.
   const plan = useTenantPlan(credentials?.tenantId)
@@ -169,7 +171,7 @@ function FrameworkDetail({ framework }: { framework: Framework }) {
     let active = true
     void workspaceRequest("workspace-load").then(saved => {
       if (!active) return
-      setWorkspace(saved); setPolicies(saved.policies); setReference(saved.reference)
+      setWorkspace(saved); setPolicies(saved.policies); setReference(saved.reference); setRecommendationList(saved.recommendationList)
     }).catch(e => { if (active) setError(String(e)) })
     return () => { active = false }
   }, [credentials?.tenantId, framework.id])
@@ -187,8 +189,14 @@ function FrameworkDetail({ framework }: { framework: Framework }) {
     setBusy(label); setError("")
     try { await action() } catch (e) { setError(e instanceof Error ? e.message : "The request failed.") } finally { setBusy("") }
   }
+  useEffect(() => {
+    if (!workspace || !recommendationList) return
+    let active = true
+    void workspaceRequest("workspace-save", { policies, reference, recommendationList }).then(saved => { if (active) setWorkspace(saved) }).catch(e => { if (active) setError(`Workspace was not saved: ${String(e)}`) })
+    return () => { active = false }
+  }, [recommendationList])
   const findings = assessment?.findings.filter(f => filter === "All" || f.status === filter) ?? []
-  const readiness = assessment && framework.id === "cis-benchmarks" ? cisReadiness(assessment, policies, denominator) : null
+  const readiness = assessment && framework.id === "cis-benchmarks" ? cisReadiness(assessment, policies, denominator, recommendationList) : null
   return <div className="mx-auto max-w-6xl p-6 lg:p-8">
     {confirmDialog}
     <Link to="/portal/frameworks" className="text-sm text-blue-700 hover:underline">Frameworks</Link>
@@ -208,7 +216,7 @@ function FrameworkDetail({ framework }: { framework: Framework }) {
       <p className="mt-2 text-sm text-gray-600">Packs, source versions and results are saved in encrypted storage on this device. Historical assessments are read-only. Run a fresh comparison before remediation.</p>
       <div className="mt-3 flex gap-3">
         <ExportButton framework={framework} plan={plan} disabled={!!busy || !workspace.history.length} onClick={() => exportSaved("json")}>Export saved assessments</ExportButton>
-        <button className={button} disabled={!!busy} onClick={async () => { if (await confirm({ title: "Delete saved workspace?", description: "Delete this saved workspace and all assessment history?", confirmLabel: "Delete workspace", destructive: true })) void perform("Deleting workspace…", async () => { suppressedDraft.current = JSON.stringify({ policies, reference }); const saved = await workspaceRequest("workspace-delete"); suppressedDraft.current = JSON.stringify({ policies: [], reference: "" }); setWorkspace(saved); setPolicies([]); setReference(""); reset() }) }}>Delete workspace</button>
+        <button className={button} disabled={!!busy} onClick={async () => { if (await confirm({ title: "Delete saved workspace?", description: "Delete this saved workspace and all assessment history?", confirmLabel: "Delete workspace", destructive: true })) void perform("Deleting workspace…", async () => { suppressedDraft.current = JSON.stringify({ policies, reference }); const saved = await workspaceRequest("workspace-delete"); suppressedDraft.current = JSON.stringify({ policies: [], reference: "" }); setWorkspace(saved); setPolicies([]); setReference(""); setRecommendationList(undefined); reset() }) }}>Delete workspace</button>
       </div>
       {workspace.history.map(entry => <div key={entry.assessment.runId} className="mt-3 flex flex-wrap items-center gap-3 border-t pt-3 text-sm">
         <span>{entry.assessment.assessedAt} · {entry.assessment.reference} · {entry.assessment.findings.length} findings{entry.creation ? ` · ${entry.creation.results.length} creation outcomes` : ""}</span>
@@ -268,7 +276,14 @@ function FrameworkDetail({ framework }: { framework: Framework }) {
             if (!file) return
             void perform("Reading denominator list…", async () => { setDenominator(parseDenominatorList(await file.text())) })
           }} /></label>
+          <label className="text-sm font-medium text-gray-700">Recommendation list JSON (optional)<input type="file" accept=".json,application/json" disabled={!!busy} className="ml-3 max-w-full text-sm" onChange={e => {
+            const file = e.target.files?.[0]; e.target.value = ""
+            if (!file) return
+            void perform("Reading recommendation list…", async () => { setRecommendationList(parseRecommendationList(await file.text())) })
+          }} /></label>
         </div>
+        <p className="mt-3 text-xs text-gray-500">Recommendation list shape: a JSON object with benchmark, version and items. Each item has identifier, level (1 or 2), automated (true or false), and optional title, description, impact, audit and remediation text. The file stays on this device and is saved with the imported pack in the workspace.</p>
+        {recommendationList && <p className="mt-3 text-sm text-gray-600">{recommendationList.benchmark} {recommendationList.version}: {recommendationList.items.length} recommendations loaded, {recommendationList.items.filter(item => !item.automated).length} manual. Manual items appear in the readiness Manual section after a comparison.</p>}
         {denominator && <p className="mt-3 text-sm text-gray-600">{denominator.length} denominator entries loaded. Coverage uses the automated entries per Level.</p>}
         {kitConversion && <div className="mt-4 text-sm text-gray-700">
           <p>{kitConversion.summary.benchmark} {kitConversion.summary.version}: {kitConversion.summary.levels.map(level => `Level ${level.level}: ${level.policies} policies, ${level.settings} settings`).join("; ") || "no converted policies"}</p>
@@ -296,8 +311,23 @@ function FrameworkDetail({ framework }: { framework: Framework }) {
         {readiness && <section aria-label="CIS readiness" className="mb-5 rounded-2xl bg-gray-50 p-4 text-sm text-gray-700">
           <h3 className="font-medium text-gray-900">CIS readiness</h3>
           <p className="mt-2">{readiness.manualNote} This view covers the automated settings in the imported pack only.</p>
-          {denominator ? <p className="mt-1">Coverage uses the imported denominator list. Without it, coverage is not shown.</p> : <p className="mt-1">No denominator list was imported, so coverage is not shown.</p>}
+          {denominator || recommendationList ? <p className="mt-1">Coverage uses the imported denominator or recommendation list. Without it, coverage is not shown.</p> : <p className="mt-1">No denominator list was imported, so coverage is not shown.</p>}
           <div className="mt-3 overflow-auto"><table className="w-full text-left text-sm"><thead><tr className="text-gray-500"><th className="py-1 pr-3 font-medium">Benchmark</th><th className="py-1 pr-3 font-medium">Version</th><th className="py-1 pr-3 font-medium">Level</th><th className="py-1 pr-3 font-medium">Assessed settings</th><th className="py-1 pr-3 font-medium">Assessed automated</th><th className="py-1 pr-3 font-medium">Pass rate</th><th className="py-1 pr-3 font-medium">Coverage</th><th className="py-1 font-medium">Not assessed</th></tr></thead><tbody>{readiness.levels.map(level => <tr key={level.level} className="border-t border-gray-200"><td className="py-2 pr-3">{level.benchmark}</td><td className="py-2 pr-3">{level.version}</td><td className="py-2 pr-3">Level {level.level}</td><td className="py-2 pr-3">{level.assessedSettings} ({level.present} present, {level.different} different, {level.missing} missing, {level.review} review)</td><td className="py-2 pr-3">{level.assessedAutomated}</td><td className="py-2 pr-3">{level.passRate === null ? "Not available" : `${Math.round(level.passRate * 1000) / 10}%`}</td><td className="py-2 pr-3">{level.coverage === null ? "Not available" : `${Math.round(level.coverage * 1000) / 10}% (${level.assessedAutomated} of ${level.denominator})`}</td><td className="py-2">{level.notAssessed.length ? level.notAssessed.join(", ") : "None listed"}</td></tr>)}</tbody></table></div>
+          {readiness.levels.map(level => level.manual.length > 0 && <div key={`manual-${level.level}`} className="mt-4">
+            <h4 className="font-medium text-gray-900">Manual, Level {level.level}</h4>
+            <p className="mt-1 text-xs text-gray-500">{readiness.benchmark} {readiness.version}, Level {level.level}. These items are not assessed automatically.</p>
+            <div className="mt-2 space-y-2">{level.manual.map(item => <details key={item.identifier} className="rounded-2xl bg-white p-4">
+              <summary className="cursor-pointer text-sm"><span className="font-medium text-gray-800">{item.identifier}</span>{item.title && <span className="ml-2 text-gray-700">{item.title}</span>}<span className="ml-2 inline-block rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-700">Manual</span></summary>
+              <div className="mt-3 space-y-2 text-sm text-gray-700">
+                {item.hasText ? <>
+                  {item.description && <p><strong className="font-medium text-gray-900">Description:</strong> {item.description}</p>}
+                  {item.impact && <p><strong className="font-medium text-gray-900">Impact:</strong> {item.impact}</p>}
+                  {item.audit && <p><strong className="font-medium text-gray-900">Audit:</strong> {item.audit}</p>}
+                  {item.remediation && <p><strong className="font-medium text-gray-900">Remediation:</strong> {item.remediation}</p>}
+                </> : <p><a href={readiness.manualFallbackUrl} target="_blank" rel="noreferrer" className="text-blue-700 hover:underline">{readiness.manualFallback}</a></p>}
+              </div>
+            </details>)}</div>
+          </div>)}
           <div className="mt-3"><GovernanceExportButtons kind="cis-readiness" tenantName={selectedTenant?.name ?? null} disabled={!!busy} buildCsv={() => cisReadinessCsv(readiness)} buildJson={exportedAt => cisReadinessJson(readiness, selectedTenant?.name ?? null, exportedAt)} /></div>
         </section>}
         <div className="my-4 flex flex-wrap gap-2" aria-label="Filter assessment findings">{["All", "Present", "Missing", "Different", "Review"].map(status => <button key={status} aria-pressed={filter === status} onClick={() => { setFilter(status); setPage(0) }} className={`rounded-full border px-4 py-2 text-sm transition-colors ${filter === status ? "border-transparent bg-primary text-primary-foreground" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>{status} <span className="ml-1 font-semibold">{assessment.findings.filter(f => status === "All" || f.status === status).length}</span></button>)}</div>

@@ -1,5 +1,6 @@
 import type { KeyValueStore } from '../storage/secure-store'
 import { parsePolicies, record, type Assessment, type BaselinePolicy } from '../../shared/frameworks/policies'
+import { validateRecommendationList, type RecommendationList } from '../../shared/frameworks/cis-manual'
 
 export interface AssessmentRecord {
   assessment: Assessment
@@ -14,6 +15,7 @@ export interface FrameworkWorkspace {
   reference: string
   updatedAt: string
   history: AssessmentRecord[]
+  recommendationList?: RecommendationList
 }
 const memory = new Map<string, string>()
 let store: KeyValueStore = { get: key => memory.get(key) ?? null, set: (key, value) => { memory.set(key, value) }, delete: key => { memory.delete(key) } }
@@ -29,6 +31,7 @@ export function loadWorkspace(tenant: string, framework: string): FrameworkWorks
   try {
     const value: unknown = JSON.parse(data)
     if (!record(value) || value.version !== 1 || value.tenantId !== tenant.toLowerCase() || value.frameworkId !== framework || typeof value.reference !== "string" || typeof value.updatedAt !== "string" || !Array.isArray(value.policies) || !Array.isArray(value.history) || value.history.length > 50) throw new Error()
+    const storedList = value.recommendationList !== undefined ? validateRecommendationList(value.recommendationList) : undefined
     const policies = value.policies.length ? parsePolicies(value.policies) : []
     for (const entry of value.history) {
       if (!record(entry) || !Array.isArray(entry.policies) || !record(entry.assessment)) throw new Error()
@@ -40,7 +43,7 @@ export function loadWorkspace(tenant: string, framework: string): FrameworkWorks
       }
       if (entry.creation !== undefined && (!record(entry.creation) || typeof entry.creation.success !== "boolean" || !Array.isArray(entry.creation.results) || entry.creation.results.some(item => !record(item) || typeof item.name !== "string" || (item.id !== undefined && typeof item.id !== "string") || (item.error !== undefined && typeof item.error !== "string")))) throw new Error()
     }
-    workspace = { ...value, policies } as unknown as FrameworkWorkspace
+    workspace = { ...value, policies, ...(storedList ? { recommendationList: storedList } : {}) } as unknown as FrameworkWorkspace
   } catch { throw new Error('The saved workspace cannot be read') }
 
   return workspace

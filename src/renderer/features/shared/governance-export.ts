@@ -204,6 +204,7 @@ function cisReadinessRow(summary: CisReadinessSummary, level: CisReadinessSummar
     benchmark: summary.benchmark,
     version: summary.version,
     level: level.level,
+    state: "Assessed",
     assessedSettings: level.assessedSettings,
     present: level.present,
     different: level.different,
@@ -216,19 +217,40 @@ function cisReadinessRow(summary: CisReadinessSummary, level: CisReadinessSummar
     coverage: level.coverage,
     notAssessed: level.notAssessed,
     manualNote: summary.manualNote,
+    manual: (level.manual ?? []).map(item => ({
+      identifier: item.identifier, level: item.level, title: item.title ?? null, state: "Manual" as const,
+      description: item.description ?? null, impact: item.impact ?? null, audit: item.audit ?? null, remediation: item.remediation ?? null,
+      fallback: item.hasText ? null : summary.manualFallback, fallbackUrl: item.hasText ? null : summary.manualFallbackUrl,
+    })),
   }
 }
 
-const CIS_READINESS_HEADERS = ["Benchmark", "Version", "Level", "Assessed settings", "Present", "Different", "Missing", "Review", "Pass rate", "Assessed automated", "Enumerated", "Denominator", "Coverage", "Not assessed", "Note"]
+function cisManualRow(summary: CisReadinessSummary, level: CisReadinessSummary["levels"][number], item: NonNullable<CisReadinessSummary["levels"][number]["manual"]>[number]) {
+  return {
+    benchmark: summary.benchmark, version: summary.version, level: level.level, state: "Manual" as const,
+    identifier: item.identifier, title: item.title ?? "",
+    description: item.description ?? "", impact: item.impact ?? "", audit: item.audit ?? "", remediation: item.remediation ?? "",
+    fallback: item.hasText ? "" : summary.manualFallback,
+  }
+}
+
+const CIS_READINESS_HEADERS = ["Benchmark", "Version", "Level", "Assessed settings", "Present", "Different", "Missing", "Review", "Pass rate", "Assessed automated", "Enumerated", "Denominator", "Coverage", "Not assessed", "Note", "State", "Identifier", "Title"]
 
 export function cisReadinessCsv(summary: CisReadinessSummary): string {
-  const rows = summary.levels.map((level) => {
+  const rows: unknown[][] = summary.levels.map((level) => {
     const row = cisReadinessRow(summary, level)
-    return [row.benchmark, row.version, row.level, row.assessedSettings, row.present, row.different, row.missing, row.review, row.passRate ?? "", row.assessedAutomated, row.enumerated, row.denominator ?? "", row.coverage ?? "", row.notAssessed.join("; "), row.manualNote]
+    return [row.benchmark, row.version, row.level, row.assessedSettings, row.present, row.different, row.missing, row.review, row.passRate ?? "", row.assessedAutomated, row.enumerated, row.denominator ?? "", row.coverage ?? "", row.notAssessed.join("; "), row.manualNote, row.state, "", ""]
   })
+  for (const level of summary.levels) {
+    for (const item of level.manual ?? []) {
+      const row = cisManualRow(summary, level, item)
+      rows.push([row.benchmark, row.version, row.level, "", "", "", "", "", "", "", "", "", "", "", row.fallback, row.state, row.identifier, row.title])
+    }
+  }
   return toCsv([CIS_READINESS_HEADERS, ...rows])
 }
 
 export function cisReadinessJson(summary: CisReadinessSummary, tenantName: string | null, exportedAt: string): string {
-  return toJson({ exportedAt, tenant: tenantName, benchmark: summary.benchmark, version: summary.version, manualNote: summary.manualNote, levels: summary.levels.map((level) => cisReadinessRow(summary, level)) })
+  const manualItems = summary.levels.flatMap(level => (level.manual ?? []).map(item => cisManualRow(summary, level, item)))
+  return toJson({ exportedAt, tenant: tenantName, benchmark: summary.benchmark, version: summary.version, manualNote: summary.manualNote, manualFallback: summary.manualFallback, manualFallbackUrl: summary.manualFallbackUrl, levels: summary.levels.map((level) => cisReadinessRow(summary, level)), manualItems })
 }
