@@ -55,6 +55,43 @@ it.each([new TypeError('Connection reset while reading body'), new DOMException(
   const bridge = encryptedAzureFetch(async () => new Response(new ReadableStream({ start(controller) { controller.error(error) } })), () => [master], () => {})
   await expect(bridge(url, { headers: { Authorization: 'Bearer body-token' } })).rejects.toBe(error)
 })
+it('refuses body-bearing requests to the backup container that the seal does not handle', async () => {
+  registerStorageToken('seal-token', tenant)
+  const fetch = vi.fn(async () => new Response(null, { status: 201 }))
+  const bridge = encryptedAzureFetch(fetch, () => [master], () => {})
+  const headers = { Authorization: 'Bearer [REDACTED]' }
+  await expect(bridge('https://example.blob.core.windows.net/intune-backups/backup-1/policy.json?comp=block&blockid=AAAA', { method: 'PUT', headers, body: '{"omaSecret":"dummy-secret"}' })).rejects.toThrow('unsealed')
+  await expect(bridge(url, { method: 'POST', headers, body: '{}' })).rejects.toThrow('unsealed')
+  await expect(bridge('https://example.blob.core.windows.net/intune-backups?restype=container', { method: 'PUT', headers, body: '{}' })).rejects.toThrow('unsealed')
+  expect(fetch).not.toHaveBeenCalled()
+})
+it('keeps container, listing, delete and read operations on the backup container working', async () => {
+  registerStorageToken('ops-token', tenant)
+  const fetch = vi.fn(async (input: RequestInfo | URL) => {
+    const request = input as Request
+    if (request.method === 'DELETE') return new Response(null, { status: 202 })
+    if (request.method === 'PUT') return new Response(null, { status: 201 })
+    if (request.url.includes('comp=list')) return new Response('<EnumerationResults></EnumerationResults>', { headers: { 'content-type': 'application/xml' } })
+    return Response.json({ id: 'legacy' })
+  })
+  const bridge = encryptedAzureFetch(fetch, () => [master], () => {})
+  const headers = { Authorization: 'Bearer [REDACTED]' }
+  expect((await bridge('https://example.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=backup-1/', { headers })).status).toBe(200)
+  expect((await bridge('https://example.blob.core.windows.net/intune-backups?restype=container', { method: 'PUT', headers })).status).toBe(201)
+  expect((await bridge(url, { method: 'DELETE', headers })).status).toBe(202)
+  expect((await bridge(`${url.href}?sv=2021-06-08&sig=test`, { headers })).status).toBe(200)
+  expect(fetch).toHaveBeenCalledTimes(4)
+})
+it('still passes body-bearing requests to other containers through', async () => {
+  const fetch = vi.fn(async (input: RequestInfo | URL) => {
+    expect(await (input as Request).text()).toContain('plain-metadata')
+    return new Response(null, { status: 201 })
+  })
+  const bridge = encryptedAzureFetch(fetch, () => [master], () => {})
+  const response = await bridge('https://example.blob.core.windows.net/tenant-metadata/tenant/metadata.json', { method: 'PUT', body: '{"note":"plain-metadata"}' })
+  expect(response.status).toBe(201)
+  expect(fetch).toHaveBeenCalledTimes(1)
+})
 it.each(['GET', 'PUT'])('forwards %s aborts through the bridge, seal and network wrapper', async method => {
   registerStorageToken('abort-token', tenant)
   const controller = new AbortController()

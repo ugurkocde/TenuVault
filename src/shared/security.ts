@@ -23,6 +23,14 @@ export function assertArmPage(url: string, seen: Set<string>): void {
   seen.add(parsed.href)
 }
 
+/** Whether `url` is an https URL on the Microsoft login host, the only place sign-in may open. */
+export function isMicrosoftLoginUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'https:' && parsed.hostname === 'login.microsoftonline.com' && !parsed.username && !parsed.password
+  } catch { return false }
+}
+
 export function isGuid(value: unknown): value is string {
   return typeof value === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value)
 }
