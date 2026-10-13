@@ -89,14 +89,19 @@ describe('Backup pair selection', () => {
 interface FakeBackup { metadata: Record<string, unknown> | null; files: Record<string, unknown> }
 function fakeStorage(backups: Record<string, FakeBackup>, options: { unreadable?: string[]; beforeRead?: (path: string) => Promise<void> | void } = {}) {
   const reads: string[] = []
-  const stub = vi.fn(async (input: RequestInfo | URL) => {
+  const stub = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
     if (url.pathname === '/api/revert-metadata') return Response.json({ reverts: {} })
-    // Setting definitions, as GET beta deviceManagement/configurationSettings/{id} answers.
+    // Setting definitions, as Microsoft Graph $batch answers for deviceManagement/configurationSettings/{id}.
     if (url.hostname === 'graph.microsoft.com') {
-      const id = decodeURIComponent(url.pathname.split('/').pop()!)
-      return Response.json({ id, displayName: `Name of ${id}`, options: [0, 1].map(n => ({ itemId: `${id}_${n}`, displayName: n ? 'Enabled' : 'Disabled' })) })
+      const requests = (JSON.parse(String(init?.body ?? '{}')) as { requests?: Array<{ id: string; url: string }> }).requests ?? []
+      return Response.json({
+        responses: requests.map(request => {
+          const id = decodeURIComponent(request.url.split('/').pop()!)
+          return { id: request.id, status: 200, body: { id, displayName: `Name of ${id}`, options: [0, 1].map(n => ({ itemId: `${id}_${n}`, displayName: n ? 'Enabled' : 'Disabled' })) } }
+        }),
+      })
     }
     if (url.searchParams.get('delimiter')) return new Response(Object.keys(backups).map(name => `<BlobPrefix><Name>${name}/</Name></BlobPrefix>`).join(''))
     const prefix = url.searchParams.get('prefix')
