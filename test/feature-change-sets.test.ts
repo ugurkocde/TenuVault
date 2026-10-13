@@ -357,7 +357,7 @@ describe("change-set engine", () => {
 
   it("rejects unsupported operation types and redacted content", async () => {
     const context = setup()
-    await expect(createChangeSet(context.deps, TENANT_A, { title: "x", operations: [{ folder: "DeviceConfigurations", action: "create", proposed: { displayName: "x" } }] }, null)).rejects.toThrow(/do not support/)
+    await expect(createChangeSet(context.deps, TENANT_A, { title: "x", operations: [{ folder: "GroupPolicyConfigurations", action: "create", proposed: { displayName: "x" } }] }, null)).rejects.toThrow(/do not support/)
     await expect(createChangeSet(context.deps, TENANT_A, { title: "x", operations: [{ folder: "ConfigurationPolicies", action: "create", proposed: { name: "x", secret: REDACTED } }] }, null)).rejects.toThrow(/redacted/)
   })
 

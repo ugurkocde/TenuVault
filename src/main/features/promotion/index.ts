@@ -5,7 +5,7 @@ import { DOMAINS } from "../domains"
 import { featureRoute, FeatureError, optionalText, text, type ActionContext, type Body } from "../route"
 import { applyChangeSet, approveChangeSet, createRollbackChangeSet, previewChangeSet, previewRollback, rejectChangeSet } from "../change-sets/engine"
 import { listAll } from "../change-sets/graph"
-import { applyPromotion, approvePromotion, getPromotion, planPromotion, previewPromotion, promotionChangeSet, promotionRollback, PROMOTION_FOLDER, syncPromotion, type PromotionRecord } from "./engine"
+import { applyPromotion, approvePromotion, getPromotion, planPromotion, previewPromotion, promotionChangeSet, promotionRollback, PROMOTION_FOLDER, PROMOTION_FOLDERS, syncPromotion, type PromotionRecord } from "./engine"
 import { parseMappings } from "./mapping"
 import { mappableObjects, requireSourceTenant } from "./targets"
 
@@ -26,13 +26,16 @@ function checkTenants(context: ActionContext, promotion: PromotionRecord): void 
   requireSourceTenant(context, promotion.sourceTenantId, { distinct: true })
 }
 
-async function policies(deps: FeatureDeps, tenantId: string) {
-  const type = typeForFolder(PROMOTION_FOLDER)!
+async function policies(deps: FeatureDeps, tenantId: string, folder: string) {
+  const type = typeForFolder(folder)
+  if (!type || !(PROMOTION_FOLDERS as readonly string[]).includes(type.folder)) throw new FeatureError("Choose a policy type that promotion supports.")
   try {
-    const items = await listAll(await deps.graph(tenantId), `${type.path}?$select=id,name,platforms,technologies,lastModifiedDateTime`)
-    return items.map((item) => ({ id: String(item.id ?? ""), name: String(item.name ?? ""), platforms: item.platforms ?? null, lastModifiedDateTime: item.lastModifiedDateTime ?? null }))
+    const select = type.folder === "ConfigurationPolicies" ? `id,${type.nameKey},platforms,technologies,lastModifiedDateTime` : `id,${type.nameKey},lastModifiedDateTime`
+    const items = await listAll(await deps.graph(tenantId), `${type.path}?$select=${select}`)
+    return items.map((item) => ({ id: String(item.id ?? ""), name: String(item[type.nameKey] ?? ""), folder: type.folder, platforms: typeof item.platforms === "string" ? item.platforms : null, lastModifiedDateTime: item.lastModifiedDateTime ?? null }))
   } catch (error) {
-    throw new FeatureError(`Settings Catalog policies could not be read. ${error instanceof Error ? error.message : String(error)}`, 502)
+    if (error instanceof FeatureError) throw error
+    throw new FeatureError(`${type.label} could not be read. ${error instanceof Error ? error.message : String(error)}`, 502)
   }
 }
 
@@ -54,7 +57,8 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     /** Source policies to select and destination policies an update may target explicitly. */
     policies: async (context) => {
       const source = requireSourceTenant(context, context.body.sourceTenantId, { distinct: true })
-      const [sourcePolicies, destinationPolicies] = await Promise.all([policies(deps, source), policies(deps, context.tenantId)])
+      const folder = typeof context.body.folder === "string" && context.body.folder ? context.body.folder : PROMOTION_FOLDER
+      const [sourcePolicies, destinationPolicies] = await Promise.all([policies(deps, source, folder), policies(deps, context.tenantId, folder)])
       return { source: sourcePolicies, destination: destinationPolicies }
     },
     /**
@@ -84,8 +88,9 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
           const entry = (item ?? {}) as Record<string, unknown>
           if (typeof entry.sourceId !== "string") throw new FeatureError("Invalid policy selection")
           if (entry.destinationId !== null && entry.destinationId !== undefined && typeof entry.destinationId !== "string") throw new FeatureError("Invalid destination policy")
+          if (entry.folder !== undefined && entry.folder !== null && typeof entry.folder !== "string") throw new FeatureError("Invalid policy type")
           // An update target is only ever the one the admin chose; never matched by name here.
-          return { sourceId: entry.sourceId, destinationId: typeof entry.destinationId === "string" && entry.destinationId ? entry.destinationId : null }
+          return { sourceId: entry.sourceId, destinationId: typeof entry.destinationId === "string" && entry.destinationId ? entry.destinationId : null, folder: typeof entry.folder === "string" && entry.folder ? entry.folder : PROMOTION_FOLDER }
         }),
         mappings,
       }, actor)

@@ -42,7 +42,7 @@ export default function PromotionTab({ tenant, allowed }: FeatureTabProps) {
         <section aria-label="Plan a promotion" className={card}>
           <div>
             <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Promote settings into {tenant.name}</h3>
-            <p className="max-w-3xl text-sm text-gray-500">Supported: Settings Catalog policies. Promotion copies the reviewed version once; later edits in the source are never synchronized. Production is backed up and its current state captured before anything is written, and assignments stay out unless reviewed.</p>
+            <p className="max-w-3xl text-sm text-gray-500">Supported: Settings Catalog policies, compliance policies, endpoint security policies and device configuration profiles. Promotion copies the reviewed version once; later edits in the source are never synchronized. Production is backed up and its current state captured before anything is written, and assignments stay out unless reviewed.</p>
           </div>
           <PromotionPlanner tenant={tenant} sources={sources} blocked={promotion?.status === "blocked" ? promotion : null} onPlanned={(planned) => { setSelectedId(planned.id); refresh() }} />
         </section>
