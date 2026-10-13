@@ -57,46 +57,103 @@ function scopeOf(path: string): "device" | "user" | undefined {
   return undefined
 }
 
-/** Version marker such as 5.0.0 or v1.1.0 in a file name, when the name carries one. */
+/** Version marker such as 5.0.0 or v1.1.0 anywhere in a path, folder segments included. */
 export function kitFileVersion(path: string): string | undefined {
-  return baseName(path).match(/(?:^|[^0-9])v?(\d+\.\d+\.\d+)(?![0-9])/)?.[1]
+  return normalized(path).match(/(?:^|[^0-9])v?(\d+\.\d+\.\d+)(?![0-9])/)?.[1]
 }
 
 const MAX_KIT_ZIP_ENTRIES = 2000
 const MAX_KIT_ZIP_FILE_BYTES = 8 * 1024 * 1024
 const MAX_KIT_ZIP_TOTAL_BYTES = 32 * 1024 * 1024
 
+/** Entry names from the raw central directory, before JSZip can normalize names or collapse duplicates. */
+function centralDirectoryNames(data: Uint8Array): string[] {
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+  let end = -1
+  for (let i = data.length - 22; i >= Math.max(0, data.length - 65557); i--) {
+    if (view.getUint32(i, true) === 0x06054b50 && i + 22 + view.getUint16(i + 20, true) === data.length) { end = i; break }
+  }
+  if (end < 0) throw new KitConversionError("The selected file is not a valid zip archive.")
+  const count = view.getUint16(end + 10, true)
+  let offset = view.getUint32(end + 16, true)
+  const names: string[] = []
+  for (let i = 0; i < count; i++) {
+    if (offset + 46 > end || view.getUint32(offset, true) !== 0x02014b50) throw new KitConversionError("The selected file is not a valid zip archive.")
+    const length = view.getUint16(offset + 28, true), extra = view.getUint16(offset + 30, true), comment = view.getUint16(offset + 32, true)
+    if (offset + 46 + length > end) throw new KitConversionError("The selected file is not a valid zip archive.")
+    names.push(new TextDecoder().decode(data.subarray(offset + 46, offset + 46 + length)))
+    offset += 46 + length + extra + comment
+  }
+  if (offset !== end) throw new KitConversionError("The selected file is not a valid zip archive.")
+  return names
+}
+
+type StreamEntry = { internalStream(type: "uint8array"): JSZip.JSZipStreamHelper<Uint8Array> }
+
+/** Inflates one entry with chunk accumulation that aborts as soon as a cap is exceeded. */
+function readEntryBounded(entry: JSZip.JSZipObject, remaining: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Uint8Array[] = []
+    let size = 0, settled = false
+    const stream = (entry as unknown as StreamEntry).internalStream("uint8array")
+    const fail = (error: KitConversionError) => { if (!settled) { settled = true; stream.pause(); reject(error) } }
+    stream.on("data", chunk => {
+      if (settled) return
+      size += chunk.length
+      if (size > MAX_KIT_ZIP_FILE_BYTES) { fail(new KitConversionError("A file in the zip is larger than 8 MB. Remove it before importing.")); return }
+      if (size > remaining) { fail(new KitConversionError("The zip expands to more than 32 MB. Split the kit before importing.")); return }
+      chunks.push(chunk)
+    })
+    stream.on("error", () => fail(new KitConversionError("The selected file is not a valid zip archive.")))
+    stream.on("end", () => {
+      if (settled) return
+      settled = true
+      const bytes = new Uint8Array(size)
+      let at = 0
+      for (const chunk of chunks) { bytes.set(chunk, at); at += chunk.length }
+      resolve(new TextDecoder().decode(bytes))
+    })
+    stream.resume()
+  })
+}
+
 export async function readKitZip(data: Uint8Array | ArrayBuffer): Promise<KitFile[]> {
+  const raw = data instanceof Uint8Array ? data : new Uint8Array(data)
+  const names = centralDirectoryNames(raw)
+  const seen = new Set<string>()
+  for (const name of names) {
+    const key = normalized(name).toLowerCase()
+    if (seen.has(key)) throw new KitConversionError(`The zip contains two entries named "${name}". Remove the duplicate before importing.`)
+    seen.add(key)
+  }
+  if (names.filter(name => !name.endsWith("/")).length > MAX_KIT_ZIP_ENTRIES) throw new KitConversionError("The zip contains too many files. Split the kit or remove extra files before importing.")
   let zip: JSZip
-  try { zip = await JSZip.loadAsync(data) }
+  try { zip = await JSZip.loadAsync(raw) }
   catch { throw new KitConversionError("The selected file is not a valid zip archive.") }
   const entries = Object.values(zip.files).filter(entry => !entry.dir)
   if (entries.length > MAX_KIT_ZIP_ENTRIES) throw new KitConversionError("The zip contains too many files. Split the kit or remove extra files before importing.")
   const files: KitFile[] = []
   let total = 0
   for (const entry of entries) {
-    const declared = (entry as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize
-    if (typeof declared === "number" && declared > MAX_KIT_ZIP_FILE_BYTES) throw new KitConversionError("A file in the zip is larger than 8 MB. Remove it before importing.")
-    const content = await entry.async("string")
-    const size = new TextEncoder().encode(content).length
-    if (size > MAX_KIT_ZIP_FILE_BYTES) throw new KitConversionError("A file in the zip is larger than 8 MB. Remove it before importing.")
-    total += size
-    if (total > MAX_KIT_ZIP_TOTAL_BYTES) throw new KitConversionError("The zip expands to more than 32 MB. Split the kit before importing.")
+    if (extension(entry.name) !== ".json") { files.push({ path: entry.name, content: "" }); continue }
+    const content = await readEntryBounded(entry, MAX_KIT_ZIP_TOTAL_BYTES - total)
+    total += new TextEncoder().encode(content).length
     files.push({ path: entry.name, content })
   }
   return files
 }
 
-export function suggestedKitBenchmark(paths: string[]): { id: string; version?: string } {
+export function suggestedKitBenchmark(paths: string[], hint?: string): { id: string; version?: string } {
   const cleaned = paths.map(path => normalized(path)).filter(path => path.length > 0)
-  if (!cleaned.length) return { id: "" }
+  const hintPath = hint ? normalized(hint) : undefined
+  if (!cleaned.length && !hintPath) return { id: "" }
+  const zipPath = hintPath ?? cleaned.find(path => /\.zip$/i.test(baseName(path)))
   const segments = cleaned.map(path => path.split("/")[0] ?? "")
-  const common = segments.every(segment => segment === segments[0]) ? segments[0]! : (segments.find(segment => /\.zip$/i.test(segment)) ?? segments[0]!)
+  const common = zipPath ? baseName(zipPath) : segments.every(segment => segment === segments[0]) ? segments[0]! : segments[0]!
   if (!common) return { id: "" }
   const withoutZip = common.replace(/\.zip$/i, "")
-  const segmentVersion = withoutZip.match(/(?:^|[^0-9])v?(\d+\.\d+\.\d+)$/)?.[1] ?? kitFileVersion(withoutZip)
-  const version = cleaned.map(path => kitFileVersion(path)).find(item => item !== undefined) ?? segmentVersion
-  const withoutVersion = withoutZip.replace(/[\s_-]*v?\d+\.\d+\.\d+$/i, "")
+  const version = (hintPath ? kitFileVersion(hintPath) : undefined) ?? cleaned.map(path => kitFileVersion(path)).find(item => item !== undefined) ?? kitFileVersion(withoutZip)
+  const withoutVersion = withoutZip.replace(/v?\d+\.\d+\.\d+/gi, "")
   const slug = withoutVersion
     .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
     .replace(/([A-Z]+)([A-Z][a-z])/g, "$1-$2")
@@ -187,6 +244,7 @@ export function convertKit(files: KitFile[], benchmark: KitBenchmark): KitConver
   const packs: KitPack[] = [...byLevel.entries()].sort(([a], [b]) => a - b).map(([level, policies]) => ({
     benchmark: benchmark.id, version, level, reference: `${benchmark.id} ${version} Level ${level}`, policies,
   }))
+  if (!packs.length || packs.every(pack => !pack.policies.length)) throw new KitConversionError("The kit contains no convertible Settings Catalog policies. Check that the kit contains Settings Catalog JSON exports before importing.")
   const levels: KitLevelSummary[] = packs.map(pack => ({ level: pack.level, policies: pack.policies.length, settings: pack.policies.reduce((total, policy) => total + policy.settings.length, 0) }))
   return { packs, skipped, summary: { benchmark: benchmark.id, version, levels, skipped } }
 }

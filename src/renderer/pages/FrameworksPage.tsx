@@ -264,6 +264,7 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
   const [workspace, setWorkspace] = useState<FrameworkWorkspace | null>(null)
   const [historical, setHistorical] = useState(false)
   const [kitBenchmark, setKitBenchmark] = useState("")
+  const [kitVersion, setKitVersion] = useState("")
   const [kitDetected, setKitDetected] = useState<{ id: string; version?: string }>({ id: "" })
   const [kitFiles, setKitFiles] = useState<KitFile[]>([])
   const [kitConversion, setKitConversion] = useState<KitConversion | null>(null)
@@ -307,6 +308,11 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
   async function perform(label: string, action: () => Promise<void>) {
     setBusy(label); setError("")
     try { await action() } catch (e) { setError(e instanceof Error ? e.message : "The request failed.") } finally { setBusy("") }
+  }
+  function clearKit() { setKitConversion(null); setKitDetected({ id: "" }); setKitFiles([]); setKitBenchmark(""); setKitVersion(""); setPolicies([]); setReference(""); reset() }
+  function applyKitConversion(files: KitFile[], id: string, version?: string) {
+    const conversion = convertKit(files, { id, ...(version ? { version } : {}) })
+    setKitConversion(conversion); setKitDetected({ id: conversion.summary.benchmark, version: conversion.summary.version }); setKitBenchmark(conversion.summary.benchmark); setKitVersion(conversion.summary.version)
   }
   useEffect(() => {
     if (!workspace || !recommendationList) return
@@ -376,23 +382,34 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
             const file = e.target.files?.[0]; e.target.value = ""
             if (!file) return
             void perform("Converting Build Kit…", async () => {
+              clearKit()
               const files = await readKitZip(await file.arrayBuffer())
               setKitFiles(files)
-              const suggested = suggestedKitBenchmark([file.name, ...files.map(item => item.path)])
-              setKitDetected(suggested); setKitBenchmark(suggested.id); setKitConversion(null)
-              if (suggested.id) setKitConversion(convertKit(files, { id: suggested.id, ...(suggested.version ? { version: suggested.version } : {}) }))
+              const suggested = suggestedKitBenchmark(files.map(item => item.path), file.name)
+              setKitDetected(suggested); setKitBenchmark(suggested.id); setKitVersion(suggested.version ?? "")
+              if (suggested.id) applyKitConversion(files, suggested.id, suggested.version)
             })
           }} /></label>
           <label className={button}>Select extracted kit folder<input type="file" disabled={!!busy} className="sr-only" {...{ webkitdirectory: "" }} onChange={e => {
             const files = Array.from(e.target.files ?? []); e.target.value = ""
             if (!files.length) return
             void perform("Converting Build Kit…", async () => {
+              clearKit()
+              if (files.length > 2000) throw new Error("The kit contains too many files. Split the kit or remove extra files before importing.")
               const kitFiles: KitFile[] = []
-              for (const file of files) kitFiles.push({ path: (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name, content: await file.text() })
+              let total = 0
+              for (const file of files) {
+                const path = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+                if (!/\.json$/i.test(path)) { kitFiles.push({ path, content: "" }); continue }
+                if (file.size > 8 * 1024 * 1024) throw new Error("A file in the kit is larger than 8 MB. Remove it before importing.")
+                total += file.size
+                if (total > 32 * 1024 * 1024) throw new Error("The kit files total more than 32 MB. Split the kit before importing.")
+                kitFiles.push({ path, content: await file.text() })
+              }
               setKitFiles(kitFiles)
               const suggested = suggestedKitBenchmark(kitFiles.map(item => item.path))
-              setKitDetected(suggested); setKitBenchmark(suggested.id); setKitConversion(null)
-              if (suggested.id) setKitConversion(convertKit(kitFiles, { id: suggested.id, ...(suggested.version ? { version: suggested.version } : {}) }))
+              setKitDetected(suggested); setKitBenchmark(suggested.id); setKitVersion(suggested.version ?? "")
+              if (suggested.id) applyKitConversion(kitFiles, suggested.id, suggested.version)
             })
           }} /></label>
         </div>
@@ -415,18 +432,21 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
         </details>
         {kitFiles.length > 0 && !kitConversion && <div className="mt-4 text-sm text-gray-700">
           <p>Enter a benchmark id to convert this kit.</p>
+          {kitDetected.id && <p className="mt-2 text-gray-600">Detected benchmark: {kitDetected.id}{kitDetected.version ? `, version ${kitDetected.version}` : ""}</p>}
           <div className="mt-3 flex flex-wrap items-end gap-3">
             <label className="block text-sm font-medium text-gray-700">Benchmark id<input value={kitBenchmark} disabled={!!busy} onChange={e => setKitBenchmark(e.target.value)} placeholder="For example: synthetic-os" className="mt-2 w-56 rounded-full border border-gray-300 px-4 py-2 font-normal" /></label>
-            <button type="button" className={button} disabled={!!busy || !kitBenchmark.trim()} onClick={() => void perform("Converting Build Kit…", async () => { setKitConversion(convertKit(kitFiles, { id: kitBenchmark.trim(), ...(kitDetected.version ? { version: kitDetected.version } : {}) })) })}>Reconvert</button>
+            <label className="block text-sm font-medium text-gray-700">Version<input value={kitVersion} disabled={!!busy} onChange={e => setKitVersion(e.target.value)} placeholder="For example: 1.0.0" className="mt-2 w-48 rounded-full border border-gray-300 px-4 py-2 font-normal" /></label>
+            <button type="button" className={button} disabled={!!busy || !kitBenchmark.trim()} onClick={() => void perform("Converting Build Kit…", async () => { setKitConversion(null); applyKitConversion(kitFiles, kitBenchmark.trim(), kitVersion.trim() || undefined) })}>Reconvert</button>
           </div>
         </div>}
         {kitConversion && <div className="mt-4 text-sm text-gray-700">
           <p>{kitConversion.summary.benchmark} {kitConversion.summary.version}: {kitConversion.summary.levels.map(level => `Level ${level.level}: ${level.policies} policies, ${level.settings} settings`).join("; ") || "no converted policies"}</p>
-          <p className="mt-2 text-gray-600">Detected benchmark: {kitDetected.id || kitConversion.summary.benchmark}{kitDetected.version ? `, version ${kitDetected.version}` : ""}</p>
+          <p className="mt-2 text-gray-600">Detected benchmark: {kitConversion.summary.benchmark}, version {kitConversion.summary.version}</p>
           {kitConversion.skipped.length > 0 && <p className="mt-2 text-gray-600">Skipped for coverage only: {kitConversion.skipped.map(item => item.path).join("; ")}</p>}
           <div className="mt-3 flex flex-wrap items-end gap-3">
             <label className="block text-sm font-medium text-gray-700">Benchmark id<input value={kitBenchmark} disabled={!!busy} onChange={e => setKitBenchmark(e.target.value)} className="mt-2 w-56 rounded-full border border-gray-300 px-4 py-2 font-normal" /></label>
-            <button type="button" className={button} disabled={!!busy || !kitBenchmark.trim() || !kitFiles.length} onClick={() => void perform("Converting Build Kit…", async () => { setKitConversion(convertKit(kitFiles, { id: kitBenchmark.trim(), ...(kitDetected.version ? { version: kitDetected.version } : {}) })) })}>Reconvert</button>
+            <label className="block text-sm font-medium text-gray-700">Version<input value={kitVersion} disabled={!!busy} onChange={e => setKitVersion(e.target.value)} placeholder="For example: 1.0.0" className="mt-2 w-48 rounded-full border border-gray-300 px-4 py-2 font-normal" /></label>
+            <button type="button" className={button} disabled={!!busy || !kitBenchmark.trim() || !kitFiles.length} onClick={() => void perform("Converting Build Kit…", async () => { setKitConversion(null); applyKitConversion(kitFiles, kitBenchmark.trim(), kitVersion.trim() || undefined) })}>Reconvert</button>
           </div>
           <div className="mt-3 flex flex-wrap gap-2">{kitConversion.packs.map(pack => <button key={pack.level} type="button" className={button} disabled={!!busy} onClick={() => { reset(); setPolicies(pack.policies); setReference(pack.reference) }}>Load Level {pack.level} pack ({pack.policies.length} policies)</button>)}</div>
           <p className="mt-2 text-xs text-gray-500">Loading a pack saves it in the workspace for the selected tenant. Compare it with the tenant in step 2.</p>
