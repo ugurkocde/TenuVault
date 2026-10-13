@@ -29,6 +29,7 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 Put these in the next stable release's notes, then remove them here.
 
+- Internal benchmark deployments (local opt-in only, not in shipped customer builds) can deploy imported benchmark policies and remediate deviating findings through reviewed change sets. New policies are created unassigned, a pre-change backup runs before any write, and rollback is a separate reviewed change set.
 - Audit queries and exports accept date ranges of up to 90 days. Export longer history in separate ranges. Read-only drift scans no longer create audit events; existing drift events stay readable.
 
 - Local backup file format. New and overwritten local backup files are written in the TVB2

@@ -20,4 +20,5 @@ export const DOMAINS = {
   customBaselines: "custom-baselines",
   customBaselineDeployments: "custom-baseline-deployments",
   customBaselineComparisons: "custom-baseline-comparisons",
+  cisRemediations: "cis-remediations",
 } as const

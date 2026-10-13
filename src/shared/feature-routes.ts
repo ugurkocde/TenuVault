@@ -29,6 +29,7 @@ export const FEATURE_ROUTES = {
   "/api/health-review": { feature: "healthReview" },
   "/api/standards": { feature: "customizations", prefixes: { "standard-": "goldenStandards" } },
   "/api/custom-baselines": { feature: "customBaselines" },
+  "/api/cis-remediation": { feature: "baselineAllPlatforms" },
 } as const satisfies Record<string, FeatureRoute>
 
 export type FeatureRoutePath = keyof typeof FEATURE_ROUTES
