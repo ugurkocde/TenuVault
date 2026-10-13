@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it, vi } from "vitest"
 import { detectHygiene, overlap, RULES, type GroupState, type InventoryItem } from "../src/main/features/hygiene/rules"
-import { routes } from "../src/main/features/hygiene"
+import { routes, signals } from "../src/main/features/hygiene"
 import type { Item } from "../src/shared/intune/registry"
 import type { GraphCall } from "../src/portal/lib/policies/graph-restore"
 import { call, fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
@@ -346,5 +346,21 @@ describe("Group.Read.All opt-in", () => {
     expect(hygieneApi).toContain("-IncludeGroupRead")
     expect(scanSummary).toContain('unknown.ruleId === "missing-group"')
     expect(scanSummary).toContain("GROUP_READ_OPT_IN_HINT")
+  })
+})
+
+describe("hygiene work signals", () => {
+  it("reports only open findings, with their severity and scan time", async () => {
+    const deps = fakeDeps()
+    const meta = { actor: null, reason: "Seeded" }
+    const base = { kind: "finding", summary: "Finding.", ruleId: "unassigned-policy", classification: "definite", explanation: "This policy has no assignments.", policies: [], settings: [], details: {}, evidenceSha256: "hash", backupId: "backup-1", collectedAt: "2026-09-29T02:00:00Z", scanId: "scan-1", firstSeenAt: "2026-09-29T02:00:00Z", lastSeenAt: "2026-09-29T02:00:00Z", review: null }
+    deps.records.create("hygiene-findings", TENANT_A, { ...base, title: "Open policy", status: "open", fingerprint: "unassigned-policy:p1", severity: "high" } as never, meta)
+    deps.records.create("hygiene-findings", TENANT_A, { ...base, title: "Handled policy", status: "acknowledged", fingerprint: "unassigned-policy:p2", severity: "low" } as never, meta)
+    deps.records.create("hygiene-findings", TENANT_A, { ...base, title: "Done policy", status: "resolved", fingerprint: "unassigned-policy:p3", severity: "low" } as never, meta)
+    const found = await signals(deps, TENANT_A)
+    expect(found).toHaveLength(1)
+    expect(found[0]).toMatchObject({ source: "hygiene", severity: "high", state: "open", title: "Open policy", observedAt: "2026-09-29T02:00:00Z" })
+    expect(found[0]!.key).toBe("hygiene-finding:unassigned-policy:p1")
+    expect(await signals(deps, TENANT_B)).toEqual([])
   })
 })

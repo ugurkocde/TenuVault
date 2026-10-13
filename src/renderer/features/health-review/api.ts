@@ -13,7 +13,7 @@ export interface ChangeEntry {
 export interface Finding {
   id: string
   key: string
-  family: "backup"
+  family: "backup" | "signals"
   check: string
   severity: Severity
   state: "open" | "unknown" | "resolved"

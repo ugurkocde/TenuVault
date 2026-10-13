@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { ValidationRun, PolicyValidation } from "../src/shared/oib/types"
 import { compareSettings } from "../src/shared/oib/compare"
-import { routes } from "../src/main/features/scores"
+import { routes, signals } from "../src/main/features/scores"
 import { oibFrameworkDetail, oibFrameworkScore } from "../src/main/features/scores/oib"
 import { call, fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
 import { fakeFrameworksApi } from "./feature-scores-fixtures"
@@ -76,6 +76,19 @@ function api(saved: Record<string, unknown[]>, denied: string[] = []) {
     return denied.includes(tenant) ? Response.json({ error: "Denied" }, { status: 403 }) : Response.json({ runs: saved[tenant] ?? [] })
   } }
 }
+
+describe("score work signals", () => {
+  it("reports only stale saved scores as unknown, never fresh or missing ones", async () => {
+    const stale = fakeDeps({ plans: { [TENANT_A]: "pro" }, api: api({ [TENANT_A]: [run({ validatedAt: "2026-07-01T00:00:00Z" })] }).handler, now: () => NOW })
+    const found = await signals(stale, TENANT_A)
+    expect(found).toHaveLength(1)
+    expect(found[0]).toMatchObject({ key: "score-stale:oib-windows", source: "score", severity: "low", state: "unknown", observedAt: "2026-07-01T00:00:00Z" })
+    const fresh = fakeDeps({ plans: { [TENANT_A]: "pro" }, api: api({ [TENANT_A]: [run()] }).handler, now: () => NOW })
+    expect(await signals(fresh, TENANT_A)).toEqual([])
+    const missing = fakeDeps({ plans: { [TENANT_A]: "pro" }, api: api({}).handler, now: () => NOW })
+    expect(await signals(missing, TENANT_A)).toEqual([])
+  })
+})
 
 describe("OIB scores API and portfolio", () => {
   it("returns saved platform scores on Pro, serves detail and blocks Community", async () => {

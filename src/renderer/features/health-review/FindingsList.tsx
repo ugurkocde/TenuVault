@@ -6,6 +6,8 @@ import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { toast } from "../../lib/toast"
 import { formatTime, healthApi, SEVERITY_TONE, type Finding } from "./api"
+import { GovernanceExportButtons } from "../shared/GovernanceExportButtons"
+import { healthCsv, healthJson } from "../shared/governance-export"
 
 /**
  * Stored findings of the health review. Unknown findings are labelled as unknown evidence,
@@ -21,6 +23,7 @@ export function FindingsList({ tenant, findings, readOnly = false, onChanged }: 
     <Tile aria-labelledby="health-findings-heading" className="gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h3 id="health-findings-heading" className="text-lg font-medium text-gray-900">Findings</h3>
+        <GovernanceExportButtons kind="health" tenantName={tenant.name} disabled={shown.length === 0} buildCsv={() => healthCsv(shown)} buildJson={(exportedAt) => healthJson(shown, tenant.name, exportedAt)} />
         {resolved.length > 0 && (
           <Button type="button" variant="outline" size="sm" onClick={() => setShowResolved((value) => !value)} aria-pressed={showResolved}>
             {showResolved ? "Hide resolved" : `Show ${resolved.length} resolved`}
