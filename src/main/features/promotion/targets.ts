@@ -4,7 +4,7 @@ import { isGraphId, isGuid } from "../../../shared/security"
 import type { Plan } from "../../../shared/plans"
 import type { FeatureDeps } from "../deps"
 import { FeatureError } from "../route"
-import { getOne, GraphReadError, listAll, readCurrent, sameNameIds } from "../change-sets/graph"
+import { createListingMemo, getOne, GraphReadError, listAll, readCurrent, sameNameIds, type ListingMemo } from "../change-sets/graph"
 import { containsRedaction, hashOf, sanitizeSnapshot, unsupportedReason } from "../change-sets/model"
 import { extractReferences, referenceFindings, resolveReferences, translate, type DependencyFinding, type Mapping, type ReferenceKind, type ReferenceResolution, type TargetReads } from "./mapping"
 
@@ -76,10 +76,16 @@ export async function mappableObjects(deps: FeatureDeps, tenantId: string, kind:
   }
 }
 
+/** Listings of one pass, kept apart per tenant so source and destination never share. */
+export interface TargetListings {
+  source: ListingMemo
+  target: ListingMemo
+}
+
 /** id (lowercase) to display name of a list, or null when it cannot be read (for example 403). */
-async function names(graph: GraphCall, kind: Exclude<ReferenceKind, "group">): Promise<Map<string, string> | null> {
+async function names(graph: GraphCall, kind: Exclude<ReferenceKind, "group">, memo?: ListingMemo): Promise<Map<string, string> | null> {
   try {
-    const items = await listAll(graph, `${LISTS[kind].path}?$select=${LISTS[kind].select}`)
+    const items = await listAll(graph, `${LISTS[kind].path}?$select=${LISTS[kind].select}`, memo)
     return new Map(items.filter((item) => typeof item.id === "string").map((item) => [(item.id as string).toLowerCase(), String(item.displayName ?? "")]))
   } catch (error) {
     if (error instanceof GraphReadError && (error.status === 401 || error.status === 403)) return null
@@ -104,7 +110,7 @@ async function groupState(graph: GraphCall, id: string): Promise<{ state: "found
  * are checked here so changes require a new plan. The change set's target fingerprint owns
  * the remaining content, so a retry after a verified update still matches.
  */
-export async function targetStateHash(graph: GraphCall, reads: TargetReads, policySnapshot?: Item | null): Promise<string> {
+export async function targetStateHash(graph: GraphCall, reads: TargetReads, policySnapshot?: Item | null, memo?: ListingMemo): Promise<string> {
   const state: Record<string, unknown> = {}
   if (reads.policyId && reads.policyFolder) {
     const type = typeForFolder(reads.policyFolder)!
@@ -118,7 +124,7 @@ export async function targetStateHash(graph: GraphCall, reads: TargetReads, poli
   const subset = async (kind: Exclude<ReferenceKind, "group">, ids: string[]) => {
     if (!ids.length) return []
     try {
-      const items = await listAll(graph, `${LISTS[kind].path}?$select=${LISTS[kind].select}`)
+      const items = await listAll(graph, `${LISTS[kind].path}?$select=${LISTS[kind].select}`, memo)
       // Timestamps and versions are kept on purpose: any edit of a relied-on object invalidates the plan.
       const fields = LISTS[kind].select.split(",")
       return ids.map((id) => {
@@ -141,7 +147,7 @@ export async function targetStateHash(graph: GraphCall, reads: TargetReads, poli
  * Resolves one source policy against the destination: references through confirmed mappings,
  * blocking findings, the translated content and the destination state it relied on. Reads only.
  */
-export async function resolveTarget(deps: FeatureDeps, destinationTenantId: string, input: ResolveInput): Promise<ResolvedTarget> {
+export async function resolveTarget(deps: FeatureDeps, destinationTenantId: string, input: ResolveInput, listings?: TargetListings): Promise<ResolvedTarget> {
   const target = destinationTenantId.toLowerCase()
   const source = input.sourceTenantId.toLowerCase()
   const type = typeForFolder(input.folder)
@@ -177,10 +183,12 @@ export async function resolveTarget(deps: FeatureDeps, destinationTenantId: stri
   const kinds = new Set(references.map((reference) => reference.kind))
   const targetObjects: Partial<Record<ReferenceKind, Map<string, string> | null>> = {}
   const sourceNames: Partial<Record<ReferenceKind, Map<string, string>>> = {}
+  const targetListings = listings?.target ?? createListingMemo()
+  const sourceListings = sameTenant ? targetListings : listings?.source ?? createListingMemo()
   for (const kind of ["filter", "scopeTag", "reusableSetting"] as const) {
     if (!kinds.has(kind) && !(kind === "scopeTag" && input.targetObjectId && (sourceTags.length || destinationTags.length))) continue
-    targetObjects[kind] = await read("Destination objects", () => names(targetGraph, kind))
-    sourceNames[kind] = (sameTenant ? targetObjects[kind] : await read("Source objects", () => names(sourceGraph, kind))) ?? new Map()
+    targetObjects[kind] = await read("Destination objects", () => names(targetGraph, kind, targetListings))
+    sourceNames[kind] = (sameTenant ? targetObjects[kind] : await read("Source objects", () => names(sourceGraph, kind, sourceListings))) ?? new Map()
   }
   const groupStates = new Map<string, { state: "found" | "missing" | "unknown"; name: string | null }>()
   const sourceGroupNames = new Map<string, string>()
@@ -211,13 +219,13 @@ export async function resolveTarget(deps: FeatureDeps, destinationTenantId: stri
   }
   const sourceName = itemName(type, sourceSnapshot)
   if (!input.targetObjectId) {
-    const existing = await read("Destination objects", () => sameNameIds(targetGraph, type, sourceName))
+    const existing = await read("Destination objects", () => sameNameIds(targetGraph, type, sourceName, targetListings))
     if (existing.length) findings.push({ code: "display-name-only", severity: "warning", message: `${existing.length} object(s) named "${sourceName}" already exist in the destination. A name match is not a mapping: choose one explicitly to update it, or a new object is created next to it.` })
   }
 
   const confirmed = (kind: ReferenceKind) => resolutions.filter((entry) => entry.kind === kind && entry.targetId && entry.state !== "missing" && entry.state !== "rejected").map((entry) => entry.targetId!)
   const targetReads: TargetReads = { policyId: input.targetObjectId, policyFolder: type.folder, requireUnredacted: input.acknowledgeRedacted !== true, filterIds: confirmed("filter"), scopeTagIds: input.targetObjectId ? destinationTags : confirmed("scopeTag"), reusableSettingIds: confirmed("reusableSetting"), groupIds: confirmed("group") }
-  const stateHash = await read("The destination state", () => targetStateHash(targetGraph, targetReads, targetPolicy))
+  const stateHash = await read("The destination state", () => targetStateHash(targetGraph, targetReads, targetPolicy, targetListings))
   const blocked = findings.some((finding) => finding.severity === "blocking") || !translated.body
   return {
     sourceName,
@@ -243,6 +251,7 @@ export async function staleTargets(deps: FeatureDeps, tenantId: string, items: A
     return [`The destination could not be re-checked: ${error instanceof Error ? error.message : String(error)}`]
   }
   const reasons: string[] = []
+  const listings = createListingMemo()
   for (const item of items) {
     // Plans made before destination tags and redaction were part of the hash cannot be re-checked.
     if (item.targetReads.policyId && !item.targetReads.policyFolder) {
@@ -250,7 +259,7 @@ export async function staleTargets(deps: FeatureDeps, tenantId: string, items: A
       continue
     }
     try {
-      if (await targetStateHash(graph, item.targetReads) !== item.targetStateHash) reasons.push(`The destination objects "${item.sourceName}" relied on changed after planning. Plan again.`)
+      if (await targetStateHash(graph, item.targetReads, undefined, listings) !== item.targetStateHash) reasons.push(`The destination objects "${item.sourceName}" relied on changed after planning. Plan again.`)
     } catch (error) {
       reasons.push(`The destination objects of "${item.sourceName}" could not be re-checked: ${error instanceof Error ? error.message : String(error)}`)
     }

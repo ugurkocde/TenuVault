@@ -10,7 +10,7 @@ import type { Stored } from "../records"
 import { FeatureError } from "../route"
 import { withTenantWrite } from "../write-lock"
 import { requirePreChangeBackup } from "./backup"
-import { GraphReadError, observe, readBack, readCurrent, sameNameIds, writeOperation, type Observation } from "./graph"
+import { createListingMemo, GraphReadError, observe, readBack, readCurrent, sameNameIds, writeOperation, type ListingMemo, type Observation } from "./graph"
 import {
   assignmentTargets,
   combinedFingerprint,
@@ -211,6 +211,7 @@ export async function createChangeSet(deps: FeatureDeps, tenantId: string, input
   if (!Array.isArray(input.operations) || !input.operations.length) throw new FeatureError("Select at least one operation.")
   if (input.operations.length > MAX_OPERATIONS) throw new FeatureError(`A change set holds at most ${MAX_OPERATIONS} operations. Split the change.`)
   const graph = await reader(deps, tenant)
+  const listings = createListingMemo()
   const operations: ChangeOperation[] = []
   const entries: ChangeSetContent["entries"] = {}
   const seenTargets = new Set<string>()
@@ -236,7 +237,7 @@ export async function createChangeSet(deps: FeatureDeps, tenantId: string, input
     const body = proposed ? (() => { const { assignments: _a, ...rest } = structuredClone(proposed); return resolveVariables ? replaceTenantVariables(rest as Item, tenant) : rest as Item })() : null
     let observed: Observation
     try {
-      observed = await observe(graph, type, { action: operation.action, targetId, name: String(body?.[type.nameKey] ?? operation.name ?? "") })
+      observed = await observe(graph, type, { action: operation.action, targetId, name: String(body?.[type.nameKey] ?? operation.name ?? "") }, listings)
     } catch (error) {
       asFeatureError(error, "The target tenant could not be read.")
     }
@@ -332,6 +333,7 @@ export async function previewChangeSet(deps: FeatureDeps, tenantId: string, id: 
   const record = getChangeSet(deps, tenantId, id)
   const { entries, problem } = integrity(deps, tenantId, record)
   const graph = await reader(deps, tenantId)
+  const listings = createListingMemo()
   const operations: OperationPreview[] = []
   const fingerprints: Record<string, string> = {}
   for (const operation of record.operations) {
@@ -340,7 +342,7 @@ export async function previewChangeSet(deps: FeatureDeps, tenantId: string, id: 
     const warnings: string[] = []
     let observed: Observation
     try {
-      observed = await observe(graph, type, operation)
+      observed = await observe(graph, type, operation, listings)
     } catch (error) {
       asFeatureError(error, "The target tenant could not be read.")
     }
@@ -502,13 +504,13 @@ type Reconciled = { decision: "verified"; objectId: string; readBack: OperationR
  * state first. Verified results are recorded without writing again; only an operation whose
  * target still holds the captured pre-change state is written again.
  */
-async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOperation, result: OperationResult, entry: { body: Item | null; assignments: Item[] | null }, captured: { body: Item | null; sameNameIds: string[] }): Promise<Reconciled> {
+async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOperation, result: OperationResult, entry: { body: Item | null; assignments: Item[] | null }, captured: { body: Item | null; sameNameIds: string[] }, listings?: ListingMemo): Promise<Reconciled> {
   try {
     if (operation.action === "create") {
       let id = result.objectId
       if (!id) {
         const known = new Set(captured.sameNameIds.map((value) => value.toLowerCase()))
-        const fresh = (await sameNameIds(graph, type, operation.name)).filter((value) => !known.has(value.toLowerCase()))
+        const fresh = (await sameNameIds(graph, type, operation.name, listings)).filter((value) => !known.has(value.toLowerCase()))
         if (!fresh.length) return { decision: "write" }
         if (fresh.length > 1) return { decision: "stop", status: "uncertain", message: `Several new objects named "${operation.name}" exist. Check Intune and remove duplicates before retrying.`, objectId: null }
         id = fresh[0]!
@@ -578,6 +580,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     const capturedNames: Record<string, string[]> = {}
     let graph: GraphCall
     let writer: GraphCall
+    const listings = createListingMemo()
     try {
       graph = await reader(deps, tenant)
       // Acquired before anything is marked as applying: a sign-in or plan failure here hands
@@ -588,7 +591,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
           const observations: Record<string, Observation> = {}
           for (const operation of record.operations) {
             try {
-              observations[operation.key] = await observe(graph, typeOf(operation.folder), operation)
+              observations[operation.key] = await observe(graph, typeOf(operation.folder), operation, listings)
             } catch (error) {
               asFeatureError(error, "The target tenant could not be read, so nothing was written.")
             }
@@ -643,7 +646,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       const entry = entries[operation.key]!
       const at = () => deps.now().toISOString()
       if (current.status === "uncertain" || current.status === "writing") {
-        const settled = await reconcile(graph, type, operation, current, entry, { body: captured[operation.key]?.body ?? null, sameNameIds: capturedNames[operation.key] ?? [] })
+        const settled = await reconcile(graph, type, operation, current, entry, { body: captured[operation.key]?.body ?? null, sameNameIds: capturedNames[operation.key] ?? [] }, listings)
         if (settled.decision === "verified") {
           saveResult(deps, tenant, id, operation.key, { ...current, status: "verified", objectId: settled.objectId, readBack: settled.readBack, message: "Reconciled from live state; not written again.", at: at() }, actor, `Reconciled ${operation.name}: verified without a repeat write`)
           continue
@@ -655,7 +658,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       } else if (!firstAttempt) {
         let observed: Observation | null = null
         try {
-          observed = await observe(graph, type, operation)
+          observed = await observe(graph, type, operation, listings)
         } catch (error) {
           saveResult(deps, tenant, id, operation.key, { ...current, status: current.status, message: `The target could not be read before retrying: ${error instanceof Error ? error.message : String(error)}`, at: at() }, actor, `Could not re-check ${operation.name}`)
           continue

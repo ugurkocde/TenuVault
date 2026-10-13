@@ -7,7 +7,7 @@ import { DOMAINS } from "../domains"
 import type { Stored } from "../records"
 import { FeatureError } from "../route"
 import { applyChangeSet, approveChangeSet, createChangeSet, getChangeSet, previewChangeSet, type ChangeSetPreview, type OperationInput } from "../change-sets/engine"
-import { readCurrent } from "../change-sets/graph"
+import { createListingMemo, readCurrent } from "../change-sets/graph"
 import { hashOf, sanitizeSnapshot, type ChangeSetRecord } from "../change-sets/model"
 import type { DependencyFinding, Mapping, ReferenceResolution, TargetReads } from "./mapping"
 import { resolveTarget, staleTargets } from "./targets"
@@ -101,6 +101,7 @@ export async function planPromotion(deps: FeatureDeps, destinationTenantId: stri
   }
   const type = typeForFolder(PROMOTION_FOLDER)!
   const sourceGraph = await deps.graph(source)
+  const listings = { source: createListingMemo(), target: createListingMemo() }
   const items: PromotionItem[] = []
   const operations: OperationInput[] = []
   for (const item of input.items) {
@@ -123,7 +124,7 @@ export async function planPromotion(deps: FeatureDeps, destinationTenantId: stri
       acknowledgeRedacted: input.acknowledgeRedacted,
       mappings: input.mappings,
       sourceSnapshot: snapshot,
-    })
+    }, listings)
     const { blocked, proposed } = resolved
     items.push({ sourceId: item.sourceId, sourceName: resolved.sourceName, sourceVersion, sourceHash: hashOf(comparableSnapshot(snapshot)), destinationId: item.destinationId, action: item.destinationId ? "update" : "create", blocked, findings: resolved.findings, references: resolved.references, targetReads: resolved.targetReads, targetStateHash: resolved.targetStateHash })
     if (!blocked) operations.push({ folder: PROMOTION_FOLDER, action: item.destinationId ? "update" : "create", targetId: item.destinationId, proposed: proposed.body, assignments: input.includeAssignments ? proposed.assignments : null, source: { tenantId: source, objectId: item.sourceId, version: sourceVersion, label: resolved.sourceName } })
