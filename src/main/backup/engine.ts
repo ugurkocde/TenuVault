@@ -118,6 +118,16 @@ class GraphError extends Error {
 class GraphPauseError extends Error {}
 
 class StorageError extends Error {}
+/** The create-only claim for a backup folder found the marker already there. */
+class BlobClaimError extends StorageError {}
+
+/** Another writer already claimed this backup folder, so this backup wrote nothing. */
+export class BackupFolderTakenError extends StorageError {
+  constructor(readonly folder: string) {
+    super(`Backup folder ${folder} is already in use by another backup for this tenant and storage. Nothing from this backup was written. Wait for the other backup to finish, then try again.`)
+    this.name = "BackupFolderTakenError"
+  }
+}
 class RetryableStorageError extends Error {}
 class RequestTimeoutError extends Error {}
 class BackupCancelledError extends Error {}
@@ -316,8 +326,15 @@ export class BackupEngine {
       }
     }, network.signal)
 
-    // Establish ownership before writing any policy, even when retention currently keeps everything.
-    await storage.put(`${backupFolder}/${BACKUP_OWNER_FILE}`, JSON.stringify({ Source: "TenuVault Desktop", TenantId: request.tenantId.toLowerCase() }))
+    // Claim the folder before writing any policy, even when retention currently keeps everything.
+    // The create-only write is atomic, so two writers that start in the same second cannot share
+    // one folder: the loser fails here and writes nothing else.
+    try {
+      await storage.put(`${backupFolder}/${BACKUP_OWNER_FILE}`, JSON.stringify({ Source: "TenuVault Desktop", TenantId: request.tenantId.toLowerCase() }), undefined, true)
+    } catch (error) {
+      if (error instanceof BlobClaimError) throw new BackupFolderTakenError(backupFolder)
+      throw error
+    }
 
     // File names are chosen in list order, before the parallel reads, so they do not depend on timing.
     const work: Array<{ type: IntuneType; item: GraphItem; displayName: string; fileName: string }> = []
@@ -712,14 +729,20 @@ class BlobWriter {
     })
   }
 
-  async put(name: string, body: string, beforeCommit?: NetworkCircuit): Promise<void> {
+  async put(name: string, body: string, beforeCommit?: NetworkCircuit, createOnly = false): Promise<void> {
     const path = `${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`
     await this.request(path, {
       method: "PUT",
-      headers: { "x-ms-blob-type": "BlockBlob", "content-type": "application/json" },
+      headers: { "x-ms-blob-type": "BlockBlob", "content-type": "application/json", ...(createOnly ? { "if-none-match": "*" } : {}) },
       body,
     }, async (response, signal, ambiguous) => {
       if (response.ok) return
+      if (createOnly && (response.status === 412 || response.headers.get("x-ms-error-code") === "BlobAlreadyExists")) {
+        // The conditional create was refused because the blob already exists. This must not fall
+        // through to the readback comparison below: a rival claim can hold identical marker bytes.
+        void response.body?.cancel().catch(() => undefined)
+        throw new BlobClaimError(`Blob already exists: ${name}`)
+      }
       if (ambiguous && (response.status === 409 || response.status === 412
         || isImmutabilityRefusal(response.status, response.headers.get("x-ms-error-code") ?? ""))) {
         // The earlier PUT may have landed. Read through the same decrypting wrapper and compare plaintext.
