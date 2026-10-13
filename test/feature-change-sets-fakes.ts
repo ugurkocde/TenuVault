@@ -156,6 +156,7 @@ export function wire(deps: FeatureDeps, tenants: FakeTenant[], options: { backup
     return tenant.graph(graphOptions?.journal === true)
   }
   deps.api = async (path, tenantId, body = {}) => {
+    if (path === "/api/audit/log") return Response.json({ success: true })
     if (path === "/api/backup/start") {
       if (options.backup === "no-start") return Response.json({ error: "Storage unavailable" }, { status: 500 })
       backups.push(tenantId.toLowerCase())

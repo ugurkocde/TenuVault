@@ -36,6 +36,10 @@ export enum AuditEventType {
   POLICY_REVERTED = 'POLICY_REVERTED',
   POLICY_RESTORED = 'POLICY_RESTORED',
   POLICY_DRIFT_DETECTED = 'POLICY_DRIFT_DETECTED',
+
+  // Change Set Events
+  CHANGE_SET_APPLIED = 'CHANGE_SET_APPLIED',
+  CHANGE_SET_ROLLED_BACK = 'CHANGE_SET_ROLLED_BACK',
   
   // Configuration Events
   CONFIG_UPDATED = 'CONFIG_UPDATED',
@@ -68,6 +72,8 @@ export const DESKTOP_AUDIT_EVENT_TYPES: readonly AuditEventType[] = [
   AuditEventType.POLICY_REVERTED,
   AuditEventType.POLICY_RESTORED,
   AuditEventType.POLICY_DRIFT_DETECTED,
+  AuditEventType.CHANGE_SET_APPLIED,
+  AuditEventType.CHANGE_SET_ROLLED_BACK,
 ]
 
 export const DESKTOP_AUDIT_SEVERITIES: readonly AuditSeverity[] = [
