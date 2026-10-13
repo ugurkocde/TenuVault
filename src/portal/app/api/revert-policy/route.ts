@@ -250,7 +250,7 @@ async function writeRevertMetadata(
     if (getResponse.ok) {
       try {
         existingData = await getResponse.json()
-      } catch (e) {
+      } catch {
         console.log("No existing metadata or invalid JSON, creating new")
       }
     }
@@ -283,7 +283,7 @@ async function writeRevertMetadata(
     
     if (!putResponse.ok) {
       const errorBody = await putResponse.text()
-      console.error("Failed to write revert metadata:", putResponse.status, putResponse.statusText)
+      console.error("Failed to write revert metadata:", putResponse.status, putResponse.statusText, errorBody)
       
       // If it's a permission error, try to store locally or in a different way
       if (putResponse.status === 403) {

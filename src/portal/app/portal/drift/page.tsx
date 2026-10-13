@@ -808,7 +808,7 @@ export default function DriftDetectionPage() {
         isSuccess={progressModal.isSuccess}
         newPolicyId={progressModal.newPolicyId}
         policyType={progressModal.policyType}
-        onComplete={(success) => {
+        onComplete={() => {
           setProgressModal(prev => ({ ...prev, isOpen: false }))
           // Reset the progress modal state
           setTimeout(() => {

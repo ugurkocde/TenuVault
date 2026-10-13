@@ -22,7 +22,6 @@ import {
   AlertCircle,
   ExternalLink,
   FileText,
-  Clock,
   Activity
 } from "lucide-react"
 
@@ -119,7 +118,7 @@ export function BackupProgressModal({
           let data
           try {
             data = JSON.parse(responseText)
-          } catch (parseError) {
+          } catch {
             console.error("Failed to parse response:", responseText)
             throw new Error("Invalid JSON response from server")
           }

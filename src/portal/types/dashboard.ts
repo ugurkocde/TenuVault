@@ -1,6 +1,4 @@
 import type { BackupState } from "~/lib/backup-health"
-import type { Tenant } from "~/contexts/TenantContext"
-import type { AuditLogEntry } from "~/lib/audit/types"
 
 export interface DashboardStats {
   tenants: {

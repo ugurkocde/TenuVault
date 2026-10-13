@@ -1,6 +1,6 @@
 "use client"
 
-import { Cloud, Building2, Shield, Database, Settings, GitCompare } from "lucide-react"
+import { Cloud, Shield, Database, Settings, GitCompare } from "lucide-react"
 import { GradientOrb } from "./gradient-orbs"
 
 export function IllustrationArea() {

@@ -305,7 +305,7 @@ export function useRevertProgress() {
     setModalState(prev => ({ ...prev, isOpen: false }))
   }
 
-  const updateProgress = (step: number, error?: string) => {
+  const updateProgress = (_step: number, _error?: string) => {
     // This would be used to update the progress from the parent
     // For now, it's a placeholder
   }
