@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { cisReadinessTrend, sparklineSegments, type CisTrendHistoryEntry, type CisTrendPoint } from "../src/shared/frameworks/cis-trend"
+import { cisDriftSignals, cisReadinessTrend, sparklineSegments, type CisTrendHistoryEntry, type CisTrendPoint } from "../src/shared/frameworks/cis-trend"
 import { convertKit, type KitFile } from "../src/shared/frameworks/cis-kit"
 import type { Assessment, BaselinePolicy, Finding } from "../src/shared/frameworks/policies"
 import type { CisException } from "../src/shared/frameworks/cis-exceptions"
@@ -269,6 +269,49 @@ describe("cisReadinessTrend", () => {
     const missingLevel: CisTrendPoint = { runId: "x", assessedAt: "2026-01-01T00:00:00.000Z", benchmark: "fakebook-os", version: "9.9.9", levels: [] }
     expect(sparklineSegments([point("a", "fakebook-os", "9.9.9", 0.5), missingLevel, point("b", "fakebook-os", "9.9.9", 1)], 1)).toEqual([[0], [2]])
     expect(sparklineSegments([], 1)).toEqual([])
+  })
+
+  it("reports drift at exactly 5 points but not at 4.9", () => {
+    const point = (runId: string, assessedAt: string, passRate: number | null, change: number | null, adjusted: number | null = passRate): CisTrendPoint => ({
+      runId, assessedAt, benchmark: "fakebook-os", version: "9.9.9",
+      levels: [{ level: 1, passRate, adjustedPassRate: adjusted, assessedSettings: 10, present: 5, excepted: 0, changeFromPrevious: change, adjustedChangeFromPrevious: null }],
+    })
+    const exact = [point("a", "2026-01-01T00:00:00.000Z", 0.8, null), point("b", "2026-02-01T00:00:00.000Z", 0.75, -0.05)]
+    expect(cisDriftSignals(exact)).toEqual([{ level: 1, previousRate: 0.8, currentRate: 0.75, previousAssessedAt: "2026-01-01T00:00:00.000Z", assessedAt: "2026-02-01T00:00:00.000Z", benchmark: "fakebook-os", version: "9.9.9", kind: "decline" }])
+    const small = [point("a", "2026-01-01T00:00:00.000Z", 0.8, null), point("b", "2026-02-01T00:00:00.000Z", 0.751, -0.049)]
+    expect(cisDriftSignals(small)).toEqual([])
+  })
+
+  it("reports below-bar crossing, prefers below-bar, ignores rises, single points and null changes", () => {
+    const point = (runId: string, assessedAt: string, passRate: number | null, change: number | null): CisTrendPoint => ({
+      runId, assessedAt, benchmark: "fakebook-os", version: "9.9.9",
+      levels: [{ level: 1, passRate, adjustedPassRate: passRate, assessedSettings: 10, present: 5, excepted: 0, changeFromPrevious: change, adjustedChangeFromPrevious: null }],
+    })
+    expect(cisDriftSignals([point("a", "2026-01-01T00:00:00.000Z", 0.92, null), point("b", "2026-02-01T00:00:00.000Z", 0.89, -0.03)])[0]?.kind).toBe("below-bar")
+    expect(cisDriftSignals([point("a", "2026-01-01T00:00:00.000Z", 0.95, null), point("b", "2026-02-01T00:00:00.000Z", 0.8, -0.15)])[0]?.kind).toBe("below-bar")
+    expect(cisDriftSignals([point("a", "2026-01-01T00:00:00.000Z", 0.5, null), point("b", "2026-02-01T00:00:00.000Z", 0.9, 0.4)])).toEqual([])
+    expect(cisDriftSignals([point("a", "2026-01-01T00:00:00.000Z", 0.5, null)])).toEqual([])
+    expect(cisDriftSignals([point("a", "2026-01-01T00:00:00.000Z", 1, null), point("b", "2026-02-01T00:00:00.000Z", 0, null)])).toEqual([])
+    expect(cisDriftSignals([point("a", "2026-01-01T00:00:00.000Z", null, null), point("b", "2026-02-01T00:00:00.000Z", 0, null)])).toEqual([])
+    expect(cisDriftSignals([])).toEqual([])
+  })
+
+  it("uses raw pass rate for drift, never the adjusted rate", () => {
+    const prev: CisTrendPoint = { runId: "a", assessedAt: "2026-01-01T00:00:00.000Z", benchmark: "fakebook-os", version: "9.9.9", levels: [{ level: 1, passRate: 0.95, adjustedPassRate: 0.4, assessedSettings: 10, present: 9, excepted: 0, changeFromPrevious: null, adjustedChangeFromPrevious: null }] }
+    const curr: CisTrendPoint = { runId: "b", assessedAt: "2026-02-01T00:00:00.000Z", benchmark: "fakebook-os", version: "9.9.9", levels: [{ level: 1, passRate: 0.89, adjustedPassRate: 1, assessedSettings: 10, present: 8, excepted: 1, changeFromPrevious: -0.06, adjustedChangeFromPrevious: 0.6 }] }
+    expect(cisDriftSignals([prev, curr])[0]?.kind).toBe("below-bar")
+    const riseRaw: CisTrendPoint = { ...curr, levels: [{ ...curr.levels[0]!, passRate: 0.99, adjustedPassRate: 0.1, changeFromPrevious: 0.04, adjustedChangeFromPrevious: -0.3 }] }
+    expect(cisDriftSignals([prev, riseRaw])).toEqual([])
+  })
+
+  it("nulls drift when the benchmark or version changed, via cisReadinessTrend", () => {
+    const points = cisReadinessTrend([
+      entryWithPack("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"], policiesFor("fakebook-os", "9.9.9")),
+      entryWithPack("run-2", "2026-02-01T00:00:00.000Z", ["Missing", "Missing", "Missing"], policiesFor("fakebook-os", "10.0.0")),
+    ])
+    expect(cisDriftSignals(points)).toEqual([])
+    const single = cisReadinessTrend([entry("run-1", "2026-01-01T00:00:00.000Z", ["Missing", "Missing", "Missing"])])
+    expect(cisDriftSignals(single)).toEqual([])
   })
 
   it("passes the recommendation list through to readiness", () => {

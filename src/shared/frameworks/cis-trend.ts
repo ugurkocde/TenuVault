@@ -28,6 +28,17 @@ export interface CisTrendPoint {
   levels: CisTrendLevel[]
 }
 
+export interface CisDriftEntry {
+  level: KitLevel
+  previousRate: number
+  currentRate: number
+  previousAssessedAt: string
+  assessedAt: string
+  benchmark: string
+  version: string
+  kind: "decline" | "below-bar"
+}
+
 /**
  * Contiguous runs of point indexes that can be joined in a sparkline for one
  * level. A run breaks at a missing level or null pass rate, and at a benchmark
@@ -54,6 +65,42 @@ export function sparklineSegments(points: CisTrendPoint[], level: KitLevel): num
   })
   flush()
   return segments
+}
+
+/**
+ * Drift in the newest point of a trend, per level. Only the newest point is
+ * considered, and only when its changeFromPrevious is not null, which already
+ * means the benchmark and version are comparable and the immediate
+ * predecessor had the level. A level drifts when its raw pass rate dropped
+ * by at least 5 percentage points, or when it crossed from at least 0.90 to
+ * below 0.90. Below-bar wins when both apply. Adjusted rates are never used.
+ */
+export function cisDriftSignals(points: CisTrendPoint[]): CisDriftEntry[] {
+  if (points.length < 2) return []
+  const newest = points[points.length - 1]!
+  const previousPoint = points[points.length - 2]!
+  const entries: CisDriftEntry[] = []
+  for (const level of newest.levels) {
+    if (level.changeFromPrevious === null || level.passRate === null) continue
+    const previous = previousPoint.levels.find(entry => entry.level === level.level)
+    if (!previous || previous.passRate === null) continue
+    const previousRate = previous.passRate
+    const currentRate = level.passRate
+    const belowBar = previousRate >= 0.9 && currentRate < 0.9
+    const decline = previousRate - currentRate >= 0.05 - 1e-9
+    if (!belowBar && !decline) continue
+    entries.push({
+      level: level.level,
+      previousRate,
+      currentRate,
+      previousAssessedAt: previousPoint.assessedAt,
+      assessedAt: newest.assessedAt,
+      benchmark: newest.benchmark,
+      version: newest.version,
+      kind: belowBar ? "below-bar" : "decline",
+    })
+  }
+  return entries
 }
 
 export function cisReadinessTrend(history: CisTrendHistoryEntry[], recommendationList?: RecommendationList, exceptions?: CisException[]): CisTrendPoint[] {

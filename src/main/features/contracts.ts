@@ -26,7 +26,7 @@ export interface WorkSignal {
   /** Stable key for deduplication, such as `standard-deviation:<id>`. */
   key: string
   tenantId: string
-  source: "change" | "standard" | "hygiene" | "score"
+  source: "change" | "standard" | "hygiene" | "score" | "cis"
   severity: "critical" | "high" | "medium" | "low"
   /** "unknown" when the evidence is missing or could not be read. */
   state: "open" | "unknown"
