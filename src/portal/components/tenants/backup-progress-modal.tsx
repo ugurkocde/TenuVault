@@ -6,6 +6,7 @@ import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { bridge } from "@desktop/lib/bridge"
 import { useTenantPlan } from "@desktop/lib/license"
 import { FirstBackupNote } from "@desktop/components/FirstBackupNote"
+import { resolveBackupJobDisplay, toBackupJobDisplay, type BackupJobDisplay } from "~/lib/backup-job-display"
 import {
   Dialog,
   DialogContent,
@@ -43,17 +44,7 @@ interface BackupProgressModalProps {
   onComplete?: (success: boolean) => void
 }
 
-interface JobStatus {
-  status: string
-  progress: number
-  progressMessage: string
-  startTime?: string
-  endTime?: string
-  exception?: string
-  output?: string
-  isComplete: boolean
-  isSuccessful: boolean
-}
+type JobStatus = BackupJobDisplay
 
 export function BackupProgressModal({
   open,
@@ -64,89 +55,52 @@ export function BackupProgressModal({
   resources,
   onComplete
 }: BackupProgressModalProps) {
-  const [jobStatus, setJobStatus] = useState<JobStatus | null>(null)
-  const [error, setError] = useState("")
   const [showOutput, setShowOutput] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [cancelError, setCancelError] = useState("")
-  const { addJob } = useBackupProgress()
+  const { addJob, updateJob, activeJobs } = useBackupProgress()
   const plan = useTenantPlan(credentials?.tenantId)
 
-  // The latest props, so a parent re-rendering with new objects does not restart polling.
-  const latest = useRef({ credentials, resources, onComplete })
-  latest.current = { credentials, resources, onComplete }
-  const ready = Boolean(credentials && resources)
+  // The modal reads the shared backup job store instead of polling the same job again.
+  // The snapshot keeps the finished state on screen after the store drops the job.
+  const [snapshot, setSnapshot] = useState<JobStatus | null>(null)
+  const tracked = jobId ? activeJobs.find((job) => job.jobId === jobId) : undefined
+  const trackedStatus: JobStatus | null = tracked ? toBackupJobDisplay(tracked) : null
+  const jobStatus = resolveBackupJobDisplay(trackedStatus, snapshot, null)
+  const pollError = tracked?.pollError ?? ""
+  const latest = useRef({ onComplete })
+  latest.current = { onComplete }
+  const completedFor = useRef<string | null>(null)
 
-  useEffect(() => { setCancelling(false) }, [jobId])
+  useEffect(() => { setCancelling(false); setCancelError(""); completedFor.current = null; setSnapshot(null) }, [jobId])
+
+  // Register the job once with the shared store; addJob ignores a job id it already tracks.
+  // Hidden while the modal shows it, so the floating panel does not show the same job twice.
+  useEffect(() => {
+    if (!open || !jobId || !credentials || !resources) return
+    addJob({
+      jobId,
+      tenantName,
+      tenantId: credentials.tenantId,
+      status: "Activating",
+      progress: 0,
+      progressMessage: "Activating job...",
+      isComplete: false,
+      isSuccessful: false,
+      isHidden: true,
+      credentials,
+      resources,
+    })
+  }, [open, jobId, credentials, resources, tenantName, addJob])
 
   useEffect(() => {
-    if (open && jobId && ready) {
-      setJobStatus(null)
-      setError("")
-      setCancelError("")
-      const { credentials, resources } = latest.current
-      let stopped = false
-      // Poll now and then every 2 seconds.
-      const poll = async () => {
-        if (stopped) return
-        try {
-          const response = await fetch("/api/backup/status", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              ...credentials,
-              ...resources,
-              jobId
-            }),
-          })
-
-          if (!response.ok) {
-            let errorMessage = "Failed to check job status"
-            const responseText = await response.text()
-            try {
-              const errorData = JSON.parse(responseText)
-              errorMessage = errorData.error || errorMessage
-            } catch {
-              errorMessage = responseText || errorMessage
-            }
-            throw new Error(errorMessage)
-          }
-
-          const responseText = await response.text()
-          let data
-          try {
-            data = JSON.parse(responseText)
-          } catch {
-            console.error("Failed to parse response:", responseText)
-            throw new Error("Invalid JSON response from server")
-          }
-          if (stopped) return
-          setJobStatus(data)
-
-          // Stop polling if job is complete
-          if (data.isComplete) {
-            setCancelling(false)
-            setCancelError("")
-            clearInterval(pollInterval)
-            latest.current.onComplete?.(data.isSuccessful)
-          }
-        } catch (err) {
-          console.error("Error checking job status:", err)
-          setError(err instanceof Error ? err.message : "Failed to check job status")
-          clearInterval(pollInterval)
-        }
-      }
-      const pollInterval = setInterval(() => void poll(), 2000)
-      void poll()
-
-      return () => {
-        stopped = true
-        clearInterval(pollInterval)
-      }
-    }
-  }, [open, jobId, ready])
+    if (!tracked?.isComplete || !jobId || completedFor.current === jobId) return
+    completedFor.current = jobId
+    setSnapshot(trackedStatus)
+    setCancelling(false)
+    setCancelError("")
+    latest.current.onComplete?.(tracked.isSuccessful)
+  }, [tracked?.isComplete, tracked?.isSuccessful, jobId])
 
   const formatTime = (dateString?: string) => {
     if (!dateString) return "N/A"
@@ -165,8 +119,9 @@ export function BackupProgressModal({
 
   const handleRunInBackground = () => {
     if (jobId && credentials && resources) {
-      // Add job to global context
-      addJob({
+      // The job is already tracked by the shared store; show it in the floating panel.
+      if (tracked) updateJob(jobId, { isHidden: false })
+      else addJob({
         jobId,
         tenantName,
         tenantId: credentials.tenantId,
@@ -182,8 +137,6 @@ export function BackupProgressModal({
         credentials,
         resources
       })
-      
-      // Close modal
       onOpenChange(false)
     }
   }
@@ -228,10 +181,10 @@ export function BackupProgressModal({
               <AlertDescription>{cancelError}</AlertDescription>
             </Alert>
           )}
-          {error ? (
+          {pollError ? (
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
-              <AlertDescription>{error}</AlertDescription>
+              <AlertDescription>{pollError}</AlertDescription>
             </Alert>
           ) : jobStatus ? (
             <>

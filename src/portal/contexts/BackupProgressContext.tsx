@@ -4,6 +4,8 @@ import { createContext, useContext, useState, useCallback, useEffect, useRef, Re
 
 import { useTenants, useTenantOperations } from "./TenantContext"
 import { backupCompletionUpdates } from "~/lib/backup-completion"
+import { isBackupJobPollable } from "~/lib/backup-job-display"
+import { createJobPoller } from "@desktop/lib/job-store"
 
 export interface BackupJob {
   jobId: string
@@ -18,6 +20,8 @@ export interface BackupJob {
   output?: string
   isComplete: boolean
   isSuccessful: boolean
+  /** Set when status polling failed and stopped; progress views show it so the admin can retry or skip. */
+  pollError?: string
   isMinimized: boolean
   /** Not listed in the floating panel (its workflow shows the progress); still polled so completion is recorded. */
   isHidden?: boolean
@@ -69,9 +73,15 @@ export function BackupProgressProvider({ children }: { children: ReactNode }) {
     }
   }, [activeJobs, tenants, updateTenant])
 
-  // Add a new job to track
+  // Add a new job to track. Re-adding a job whose polling stopped on error clears
+  // the error so polling resumes, which is how a reopened view retries the same job.
   const addJob = useCallback((job: Omit<BackupJob, "isMinimized">) => {
-    setActiveJobs(prev => prev.some((existing) => existing.jobId === job.jobId) ? prev : [...prev, { ...job, isMinimized: true }])
+    setActiveJobs(prev => {
+      const existing = prev.find((item) => item.jobId === job.jobId)
+      if (!existing) return [...prev, { ...job, isMinimized: true }]
+      if (!existing.pollError) return prev
+      return prev.map((item) => item.jobId === job.jobId ? { ...item, pollError: undefined } : item)
+    })
   }, [])
 
   // Update an existing job
@@ -103,70 +113,67 @@ export function BackupProgressProvider({ children }: { children: ReactNode }) {
     return activeJobs.find(job => job.jobId === jobId)
   }, [activeJobs])
 
-  // Poll for job updates
-  useEffect(() => {
-    const intervals: NodeJS.Timeout[] = []
-
-    activeJobs.forEach(job => {
-      if (!job.isComplete) {
-        const interval = setInterval(async () => {
-          try {
-            const response = await fetch("/api/backup/status", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                ...job.credentials,
-                ...job.resources,
-                jobId: job.jobId
-              }),
-            })
-
-            if (!response.ok) {
-              const errorData = await response.json()
-              throw new Error(errorData.error || "Failed to check job status")
-            }
-
-            const data = await response.json()
-            updateJob(job.jobId, {
-              status: data.status,
-              progress: data.progress,
-              progressMessage: data.progressMessage,
-              startTime: data.startTime,
-              endTime: data.endTime,
-              exception: data.exception,
-              output: data.output,
-              isComplete: data.isComplete,
-              isSuccessful: data.isSuccessful
-            })
-
-            // Stop polling if job is complete
-            if (data.isComplete) {
-              clearInterval(interval)
-              
-              // Auto-remove successful jobs after 30 seconds
-              if (data.isSuccessful) {
-                setTimeout(() => {
-                  removeJob(job.jobId)
-                }, 30000)
-              }
-            }
-          } catch (err) {
-            console.error("Error checking job status:", err)
-            // Don't remove the job on error, just log it
-          }
-        }, 2000) // Poll every 2 seconds
-
-        intervals.push(interval)
-      }
+  const jobsRef = useRef<BackupJob[]>([])
+  jobsRef.current = activeJobs
+  const callbacksRef = useRef({ updateJob, removeJob })
+  callbacksRef.current = { updateJob, removeJob }
+  const pollerRef = useRef<ReturnType<typeof createJobPoller<string>> | null>(null)
+  if (!pollerRef.current) {
+    pollerRef.current = createJobPoller<string>({
+      intervalMs: 2000,
+      poll: async (jobId, isCurrent) => {
+        const job = jobsRef.current.find((item) => item.jobId === jobId)
+        if (!job || job.isComplete) return
+        const response = await fetch("/api/backup/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...job.credentials, ...job.resources, jobId: job.jobId }),
+        })
+        if (!response.ok) {
+          const errorData = await response.json()
+          throw new Error(errorData.error || "Failed to check job status")
+        }
+        const data = await response.json()
+        if (!isCurrent()) return
+        callbacksRef.current.updateJob(job.jobId, {
+          status: data.status,
+          progress: data.progress,
+          progressMessage: data.progressMessage,
+          startTime: data.startTime,
+          endTime: data.endTime,
+          exception: data.exception,
+          output: data.output,
+          isComplete: data.isComplete,
+          isSuccessful: data.isSuccessful,
+          pollError: undefined
+        })
+        if (data.isComplete) {
+          pollerRef.current?.untrack(jobId)
+          // Auto-remove successful jobs after 30 seconds
+          if (data.isSuccessful) setTimeout(() => callbacksRef.current.removeJob(job.jobId), 30000)
+        }
+      },
+      // A failed status check stops polling for this job and records the error on
+      // it, so the view showing the job can surface it and let the admin retry or skip.
+      stopOnError: true,
+      onError: (jobId, err) => {
+        console.error("Error checking job status:", err)
+        callbacksRef.current.updateJob(jobId, { pollError: err instanceof Error ? err.message : "Failed to check job status" })
+      },
     })
+  }
 
-    // Cleanup intervals
-    return () => {
-      intervals.forEach(interval => clearInterval(interval))
-    }
-  }, [activeJobs, updateJob, removeJob])
+  const wantedRef = useRef(new Set<string>())
+  // Poll for job updates: one shared poller, one entry per incomplete job id.
+  useEffect(() => {
+    const poller = pollerRef.current!
+    const wanted = new Set(activeJobs.filter((job) => isBackupJobPollable(job)).map((job) => job.jobId))
+    for (const jobId of wantedRef.current) if (!wanted.has(jobId)) poller.untrack(jobId)
+    for (const jobId of wanted) poller.track(jobId)
+    wantedRef.current = wanted
+  }, [activeJobs])
+
+  useEffect(() => () => pollerRef.current?.stopAll(), [])
 
   return (
     <BackupProgressContext.Provider 

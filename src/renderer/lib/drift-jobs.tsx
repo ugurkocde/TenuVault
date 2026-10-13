@@ -3,6 +3,7 @@ import { useLocation } from "react-router-dom"
 import { LoaderCircle } from "lucide-react"
 import type { DriftJobSummary, SavedDriftResult } from "../../main/drift/jobs"
 import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
+import { createJobPoller } from "./job-store"
 import { toast } from "./toast"
 
 export type DriftJob = DriftJobSummary
@@ -24,7 +25,6 @@ let state: State = { jobs: [], results: {} }
 const listeners = new Set<() => void>()
 const finishListeners = new Set<(job: DriftJob) => void>()
 const loadingResults = new Set<string>()
-let timer: ReturnType<typeof setTimeout> | undefined
 let loaded = false
 // Responses to polls sent before a local change are stale and must not undo it.
 let revision = 0
@@ -54,9 +54,11 @@ function apply(next: DriftJob[]) {
   schedule()
 }
 
+const poller = createJobPoller<string>({ intervalMs: 1000, poll: async () => { await refreshDriftJobs() } })
+
 function schedule() {
-  clearTimeout(timer)
-  timer = state.jobs.some((job) => job.status === "running") ? setTimeout(() => void refreshDriftJobs(), 1000) : undefined
+  if (state.jobs.some((job) => job.status === "running")) poller.track("jobs", { immediate: false })
+  else poller.untrack("jobs")
 }
 
 export async function refreshDriftJobs(): Promise<void> {
