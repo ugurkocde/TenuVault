@@ -97,13 +97,17 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
 
 /**
  * Stale saved scores: a framework whose latest saved comparison or validation is older
- * than STALE_AFTER_DAYS. Frameworks that were never assessed or could not be read stay
- * silent here; the scores screen already reports them, and a missing score is not
- * evidence of a stale one.
+ * than STALE_AFTER_DAYS. Frameworks that were never assessed stay silent here; the scores
+ * screen already reports them, and a missing score is not evidence of a stale one. A
+ * framework whose saved comparisons could not be read fails the provider instead, so the
+ * caller marks the signals family as not evaluated and older stale findings stay as they
+ * were: unreadable evidence must never read as "no stale scores".
  */
 export async function scoreSignals(deps: FeatureDeps, tenantId: string): Promise<WorkSignal[]> {
   const tenant = tenantId.toLowerCase()
   const scores = await tenantScores(deps, tenant)
+  const unreadable = scores.find((entry) => entry.state === "unavailable")
+  if (unreadable) throw new Error(unreadable.message ?? "Saved scores could not be read.")
   return scores.flatMap((entry): WorkSignal[] => {
     if (!entry.latest || !entry.latest.freshness.stale) return []
     const age = entry.latest.freshness.ageDays

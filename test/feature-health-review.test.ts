@@ -16,7 +16,7 @@ const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
 const noSleep = async () => undefined
 
 /** A test world with a movable clock, a fake backup list and a recording webhook. */
-function world(options: { plans?: Record<string, Plan>; signedIn?: boolean; webhookStatus?: number | "throw" } = {}) {
+function world(options: { plans?: Record<string, Plan>; signedIn?: boolean; webhookStatus?: number | "throw"; scoresUnreadable?: boolean } = {}) {
   let now = NOW
   let backupHours: number | null = 2
   let backupStatus = 200
@@ -27,6 +27,8 @@ function world(options: { plans?: Record<string, Plan>; signedIn?: boolean; webh
     now: () => now,
     actor: (tenantId) => (options.signedIn === false ? null : { id: `admin@${tenantId.slice(0, 4)}`, name: "Admin" }),
     api: async (path) => {
+      if (path === "/api/frameworks") return options.scoresUnreadable ? Response.json({ error: "denied" }, { status: 500 }) : Response.json({ history: [] })
+      if (path === "/api/oib") return options.scoresUnreadable ? Response.json({ error: "denied" }, { status: 500 }) : Response.json({ runs: [] })
       if (path !== "/api/list-backups") return Response.json({ error: "unexpected" }, { status: 500 })
       if (backupStatus !== 200) return Response.json({ error: "Failed to authenticate with Azure" }, { status: backupStatus })
       return Response.json({ backups: backupHours === null ? [] : [{ timestamp: hoursBefore(now, backupHours), status: "Success" }] })
@@ -379,6 +381,24 @@ describe("health review work signals", () => {
     const second = await call(w.routes, PATH, { tenantId: TENANT_A, action: "run-review" })
     findings = second.body.findings as Array<any>
     expect(findings.filter((finding) => finding.family === "signals").every((finding) => finding.state === "resolved")).toBe(true)
+  })
+
+  it("keeps a stale score finding when score reads fail instead of resolving it without evidence", async () => {
+    const w = world({ plans: { [TENANT_A]: "pro" }, scoresUnreadable: true })
+    // The world API refuses /api/frameworks and /api/oib, so every saved score is unreadable.
+    expect(await collectSignals(w.deps, TENANT_A)).toMatchObject({ evaluated: false })
+    w.deps.records.create(DOMAINS.healthFindings, TENANT_A, {
+      key: "score-stale:cis", family: "signals", check: "score-stale", severity: "low", state: "open", status: "open",
+      title: "Baseline score for CIS is stale", summary: "Last assessed long ago.", reason: "Last assessed long ago.",
+      observedAt: NOW.toISOString(), evidenceAt: NOW.toISOString(), firstSeenAt: NOW.toISOString(), lastSeenAt: NOW.toISOString(),
+      resolvedAt: null, occurrence: 1, owner: null, acknowledgedAt: null, acknowledgedBy: null,
+      link: "/portal/governance/scores", evidence: [],
+    } as never, META)
+    const result = await call(w.routes, PATH, { tenantId: TENANT_A, action: "run-review" })
+    expect(result.body.run.checks).toContainEqual(expect.objectContaining({ family: "signals", evaluated: false }))
+    const findings = result.body.findings as Array<any>
+    expect(findings.find((finding) => finding.key === "score-stale:cis")).toMatchObject({ state: "open" })
+    expect(findings.find((finding) => finding.key === `signals-unavailable:${TENANT_A}`)).toMatchObject({ state: "unknown" })
   })
 
   it("does not run the standards provider on Pro and runs no provider on Community", async () => {
