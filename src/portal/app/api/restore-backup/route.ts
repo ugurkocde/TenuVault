@@ -1,5 +1,6 @@
 import { parseDependencyMappings } from "../../../../shared/intune/recovery"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
+import { comparableSnapshot } from "../../../../shared/intune/compare"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { graphCaller, Restorer, DependencyMappingError, type RestoreOutcome } from "~/lib/policies/graph-restore"
 import { PROGRESS_ID, startProgress } from "~/lib/policies/restore-progress"
@@ -31,19 +32,84 @@ async function getAccessToken(tenantId: string, appId: string, clientSecret: str
   return tokenData.access_token
 }
 
-async function readSnapshot(policyPath: string, storageAccountName: string, storageToken: string, requireAuthenticated: boolean): Promise<Item> {
-  const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${policyPath.split("/").map(encodeURIComponent).join("/")}`, {
-    headers: { 'x-ms-version': '2021-12-02', Authorization: `Bearer ${storageToken}` },
-  })
+const blobUrl = (storageAccountName: string, name: string) => `https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`
+const storageHeaders = (storageToken: string) => ({ 'x-ms-version': '2021-12-02', Authorization: `Bearer ${storageToken}` })
+
+/** One recorded backup item: the Intune object ID and the fingerprint of its backed-up content. */
+interface ManifestEntry { id: string; hash: string }
+
+/** The fingerprint a backup records for a snapshot, without the fields Intune changes on every read or write. */
+const snapshotHash = (snapshot: Item) => createHash("sha256").update(JSON.stringify(comparableSnapshot(snapshot))).digest("base64").slice(0, 22)
+
+async function readSnapshot(policyPath: string, storageAccountName: string, storageToken: string, requireAuthenticated: boolean, expected?: ManifestEntry): Promise<Item> {
+  const response = await fetch(blobUrl(storageAccountName, policyPath), { headers: storageHeaders(storageToken) })
   if (!response.ok) throw new Error("Failed to fetch from backup")
-  if (requireAuthenticated && response.headers.get("x-tenuvault-authenticated") !== "true") throw new Error("Unverified legacy backups cannot replace live policies. Review the content and restore a copy instead.")
-  return await response.json() as Item
+  if (requireAuthenticated && response.headers.get("x-tenuvault-authenticated") !== "true") throw new Error("Unverified legacy backups cannot replace live policies or restore assignments. Review the content and restore an unassigned copy instead.")
+  const snapshot = await response.json() as Item
+  if (expected && (snapshot.id !== expected.id || snapshotHash(snapshot) !== expected.hash)) throw new Error("This backup file does not match its recorded fingerprint. It was not restored.")
+  return snapshot
 }
 
-async function restoreSinglePolicy(restorer: Restorer, policyPath: string, storageAccountName: string, storageToken: string, requireAuthenticated: boolean, repairToken?: string): Promise<RestoreOutcome> {
+async function readBackupMetadata(storageAccountName: string, storageToken: string, backupId: string): Promise<{ data: Record<string, any>; authenticated: boolean } | null> {
+  const response = await fetch(blobUrl(storageAccountName, `${backupId}/metadata.json`), { headers: storageHeaders(storageToken) })
+  if (response.status === 404) return null
+  if (!response.ok) throw new Error("Failed to read backup metadata")
+  return { data: await response.json() as Record<string, any>, authenticated: response.headers.get("x-tenuvault-authenticated") === "true" }
+}
+
+/** Recorded backup items by blob path, or null for legacy backups that hold no inventory. */
+function backupManifest(metadata: Record<string, any> | null, backupId: string): Map<string, ManifestEntry> | null {
+  const items = metadata?.Items
+  if (items === undefined) return null
+  if (!items || typeof items !== "object" || Array.isArray(items)) throw new Error("Invalid backup inventory manifest")
+  const entries = new Map<string, ManifestEntry>()
+  for (const [key, item] of Object.entries(items as Record<string, any>)) {
+    const split = key.indexOf("/")
+    const folder = split > 0 ? key.slice(0, split) : ""
+    const id = split > 0 ? key.slice(split + 1) : ""
+    const file = item?.file
+    const hash = item?.hash
+    if (!folder || !id || typeof file !== "string" || !file || file.includes("/") || file.includes("\\") || typeof hash !== "string" || !hash) throw new Error("Invalid backup inventory manifest")
+    const path = `${backupId}/${folder}/${file}`
+    if (entries.has(path)) throw new Error("Invalid backup inventory manifest")
+    entries.set(path, { id, hash })
+  }
+  return entries
+}
+
+const metadataStrings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [])
+
+/** Why this backup must not be restored for the requested files, or undefined when it may. */
+function incompleteReason(metadata: Record<string, any> | null, manifest: Map<string, ManifestEntry> | null, paths: string[], full: boolean): string | undefined {
+  const recordedStatus = metadata?.Status ?? metadata?.status
+  // Metadata is written when a backup finishes, so a full restore without a completion record
+  // would restore a stopped backup as if it were whole. Selected files that are present may
+  // still be restored on their own.
+  if (full && recordedStatus === undefined && !manifest) return "This backup is incomplete: it has no recorded completion status. Restore selected items from it, or restore from a complete backup instead."
+  if (!metadata || (recordedStatus === undefined && !manifest)) return undefined
+  const status = String(recordedStatus ?? "").toLowerCase()
+  if (status.includes("fail")) return "This backup is recorded as failed and is incomplete. Restore from a complete backup instead."
+  const folders = new Set(paths.map((path) => path.split("/")[1]))
+  const failedRequested = metadataStrings(metadata.FailedTypes).filter((folder) => folders.has(folder))
+  if (failedRequested.length) return `This backup is incomplete for ${failedRequested.join(", ")}: those types could not be read when the backup ran. Restore from a complete backup instead.`
+  const failures = typeof metadata.Failures === "number" ? metadata.Failures : 0
+  if (full && (failures > 0 || status === "completedwithwarnings")) return "This backup is incomplete: some items could not be read when the backup ran. Restore from a complete backup instead."
+  if (manifest) {
+    const unlisted = paths.filter((path) => !manifest.has(path))
+    if (unlisted.length) return "A backup file is not listed in the backup manifest. The backup was not restored."
+    if (full) {
+      const listed = new Set(paths)
+      const missing = [...manifest.keys()].filter((path) => !listed.has(path))
+      if (missing.length) return `This backup is incomplete: ${missing.length} file(s) listed in the backup manifest are missing. Restore from a complete backup instead.`
+    }
+  }
+  return undefined
+}
+
+async function restoreSinglePolicy(restorer: Restorer, policyPath: string, storageAccountName: string, storageToken: string, requireAuthenticated: boolean, expected?: ManifestEntry, repairToken?: string): Promise<RestoreOutcome> {
   try {
     if (repairToken) return await restorer.repair(policyPath, repairToken)
-    return await restorer.restore(policyPath, await readSnapshot(policyPath, storageAccountName, storageToken, requireAuthenticated))
+    return await restorer.restore(policyPath, await readSnapshot(policyPath, storageAccountName, storageToken, requireAuthenticated, expected))
   } catch (error) {
     return { success: false, path: policyPath, error: error instanceof Error ? error.message : "Unknown error" }
   }
@@ -161,12 +227,23 @@ export async function POST(request: NextRequest) {
       throw error
     }
 
+    const requireAuthenticated = mode === "replace" || assignments
+    const readMetadata = await readBackupMetadata(storageAccountName, storageToken, backupId)
+    // An unauthenticated metadata record cannot vouch for completeness or fingerprints in a
+    // restore that requires authenticated snapshots.
+    const metadata = readMetadata && (!requireAuthenticated || readMetadata.authenticated) ? readMetadata.data : null
+    let manifest: Map<string, ManifestEntry> | null
+    try { manifest = backupManifest(metadata, backupId) }
+    catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid backup inventory manifest" }, { status: 400 }) }
+    const incomplete = incompleteReason(metadata, manifest, paths, restoreType !== 'selective')
+    if (incomplete) return NextResponse.json({ error: incomplete }, { status: 400 })
+
     const progress = progressId ? startProgress(progressId, paths.length * targets.length) : null
     try {
       for (const { restorer, targetTenantId } of targets) {
         for (const path of restoreOrder(paths)) {
           if (progress) progress.current = path
-          const result = await restoreSinglePolicy(restorer, path, storageAccountName, storageToken, mode === "replace", repairSelections.find((p: any) => p.path === path)?.repairToken)
+          const result = await restoreSinglePolicy(restorer, path, storageAccountName, storageToken, requireAuthenticated, manifest?.get(path), repairSelections.find((p: any) => p.path === path)?.repairToken)
           const entry = targetTenantId ? { ...result, targetTenantId } : result
           results.push(entry)
           if (result.partial) partialCount++

@@ -26,7 +26,7 @@ The restore wizard marks these items as **Cannot be restored** (or greys them ou
 | The tenant default enrollment configuration | "This is the tenant default. Restore updates it in place." | Use **Replace in place**. The default cannot be copied. |
 | The default Company Portal branding | "This is the default branding. Restore updates it in place." | Use **Replace in place**. |
 | Compliance policies whose snapshot has no block action | "This compliance snapshot is missing its required block action. Create a new complete backup before restoring." | Run a new, complete backup and restore from it. |
-| Unverified legacy snapshots | "This snapshot is not authenticated. Review its content and restore a copy; replacement is blocked." | Review the snapshot content and restore a copy instead of replacing. |
+| Unverified legacy snapshots | "This snapshot is not authenticated. Review its content and restore a copy; replacement is blocked." | Review the snapshot content and restore an unassigned copy instead of replacing. Unverified snapshots cannot restore assignments. |
 | A file in the backup that is not a known Intune type | "This backup file is not an Intune type TenuVault can restore." | Recreate the object manually in Intune. |
 | A snapshot TenuVault cannot read | "The backup file could not be read." or "This snapshot could not be assessed." | See [Troubleshooting](/troubleshooting/#restore). |
 
@@ -63,6 +63,12 @@ Built-in scope tags and built-in Intune roles are not backed up, because they ex
 * **Exclusions.** Enrollment configurations and terms and conditions do not accept exclusion assignments, so exclusions are left out when their assignments are restored.
 * **Cross-tenant copies** are always unassigned and get the Default scope tag. See [Restore to another tenant](/restore/cross-tenant/).
 * **Password policies.** Restoring an assigned macOS or Windows policy with password settings can make users on targeted devices set a new local password. See [Password policies can force a password change](/restore/modes/#password-policies-can-force-a-password-change).
+
+## Backup completeness checks
+
+Before a restore writes anything, TenuVault reads the backup's recorded status and item manifest. A backup recorded as failed, a full restore of a backup that could not read some items or has no recorded completion status, and a backup whose files are missing from or not listed in its manifest are refused with a message that tells you to restore from a complete backup instead. Selected items from a backup that stopped early can still be restored on their own. Each restored file is also checked against the fingerprint the backup recorded for it. A file whose content no longer matches fails with "This backup file does not match its recorded fingerprint. It was not restored." Backups made before item fingerprints existed are restored without this check.
+
+Before an item is created, TenuVault also checks that the other items its content references, such as an app category, a scope tag or a notification template, still exist in the tenant or were recreated earlier in the same restore. If a referenced item is missing, the item fails before anything is written. Restore the referenced item first, or reconcile the item in Intune.
 
 ## Incomplete restores
 

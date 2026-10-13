@@ -48,7 +48,10 @@ describe('Restore results', () => {
         page++
         return new Response(`<EnumerationResults><Blobs><Blob><Name>${backupId}/DeviceConfigurations/${page}.json</Name></Blob></Blobs><NextMarker>${page === 1 ? 'next' : ''}</NextMarker></EnumerationResults>`)
       }
-      if (url.hostname.endsWith('.blob.core.windows.net')) return Response.json({ id: 'original', displayName: url.pathname.endsWith('1.json') ? 'One' : 'Two', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [] })
+      if (url.hostname.endsWith('.blob.core.windows.net')) {
+        if (url.pathname.endsWith('/metadata.json')) return Response.json({ Status: 'Success', Failures: 0 })
+        return Response.json({ id: 'original', displayName: url.pathname.endsWith('1.json') ? 'One' : 'Two', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [] })
+      }
       if (url.hostname === 'graph.microsoft.com') {
         expect(url.pathname).toBe('/beta/deviceManagement/deviceConfigurations')
         const policy = JSON.parse(String(init?.body))

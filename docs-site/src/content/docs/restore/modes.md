@@ -51,7 +51,7 @@ Overwritten versions are not kept anywhere by the restore itself. Run a backup f
 
 Some items cannot be replaced, and show **Cannot be restored** with a reason:
 
-* **Unverified legacy snapshots.** Backups written in Azure storage before client-side encryption are shown with an `[Unverified legacy]` prefix. They cannot replace live items: "This snapshot is not authenticated. Review its content and restore a copy; replacement is blocked."
+* **Unverified legacy snapshots.** Backups written in Azure storage before client-side encryption are shown with an `[Unverified legacy]` prefix. They cannot replace live items: "This snapshot is not authenticated. Review its content and restore a copy; replacement is blocked." They also cannot restore assignments, even as a copy. Review the content and restore an unassigned copy instead.
 * **Changed creation-only app properties.** For web apps and WinGet apps, some properties cannot be changed on an existing app, for example: "appUrl changed since the backup and Intune cannot change it on an existing app. Delete the app and restore it to recreate it."
 * **Administrative templates that cannot be read.** "The current administrative template could not be read, so it cannot be replaced in place."
 * **Reference-only types and masked secrets**, described in [What cannot be restored](/restore/limitations/).
