@@ -3,7 +3,7 @@ import { loadWorkspace, saveWorkspace, deleteWorkspace, recordAssessment, record
 import { tenantLabel, workspaceExportCSV, workspaceExportJSON, workspaceHistoryJSON } from "../../shared/compliance/export"
 import { createHash, randomUUID } from "node:crypto"
 import { frameworks } from "../../shared/frameworks/catalog"
-import { comparePolicies, parsePolicies, record, remediationPayload, type Assessment, type BaselinePolicy, type LandscapePolicy, type RecordJson } from "../../shared/frameworks/policies"
+import { comparePolicies, parsePolicies, record, remediationPayload, type Assessment, type BaselinePolicy, type Finding, type LandscapePolicy, type RecordJson } from "../../shared/frameworks/policies"
 import { DELEGATED_CLIENT_SECRET } from "../../shared/constants"
 import { CIS_FRAMEWORKS } from "../../shared/plans"
 import { loadNcsc } from "./ncsc"
@@ -73,15 +73,20 @@ export async function collectGraph(url: string, token: string): Promise<RecordJs
   return result
 }
 
-async function landscape(token: string): Promise<LandscapePolicy[]> {
+export interface LandscapeProgress { read: number; total: number; policyName: string }
+
+async function landscape(token: string, onProgress?: (progress: LandscapeProgress) => void): Promise<LandscapePolicy[]> {
   // Expanding settings severely reduces Graph's page size. Read the policy list first,
   // then each settings collection with bounded concurrency and its own continuation.
   const policies = await collectGraph(GRAPH, token)
   const result: LandscapePolicy[] = []
+  let read = 0
   for (let i = 0; i < policies.length; i += 4) {
     const chunk = await Promise.all(policies.slice(i, i + 4).map(async policy => {
       if (typeof policy.id !== "string" || !/^[a-f0-9-]{36}$/i.test(policy.id)) throw new FrameworkError("Policy ID missing from Graph response.", 502)
       const settings = await collectGraph(`${GRAPH}/${policy.id}/settings`, token)
+      read += 1
+      onProgress?.({ read, total: policies.length, policyName: typeof policy.name === "string" ? policy.name : "" })
       if (typeof policy.settingCount === "number" && settings.length !== policy.settingCount) throw new FrameworkError("Policy settings changed during the read. Compare again.", 409)
       if (!settings.length) return null
       let targeting: AssignmentEvidence
@@ -96,6 +101,119 @@ async function landscape(token: string): Promise<LandscapePolicy[]> {
 
 function fingerprint(policies: LandscapePolicy[]): string {
   return createHash("sha256").update(JSON.stringify(policies.slice().sort((a, b) => a.id.localeCompare(b.id)))).digest("hex")
+}
+
+export type AssessPhase = "connecting" | "reading" | "comparing" | "saving" | "done" | "failed"
+
+export interface AssessJobSnapshot {
+  jobId: string
+  phase: AssessPhase
+  status: "queued" | "running" | "done" | "failed"
+  state: "queued" | "running" | "done" | "failed"
+  tenantId: string
+  frameworkId: string
+  read: number
+  total: number
+  currentPolicy: string
+  comparedPolicies: number
+  packPolicies: number
+  currentPackPolicy: string
+  findings: Finding[]
+  nextSince: number
+  error: string | null
+  assessment: Assessment | null
+}
+
+interface AssessJob {
+  id: string
+  tenantId: string
+  frameworkId: string
+  reference: string
+  phase: AssessPhase
+  read: number
+  total: number
+  currentPolicy: string
+  comparedPolicies: number
+  packPolicies: number
+  currentPackPolicy: string
+  findings: Finding[]
+  error: string | null
+  assessment: Assessment | null
+  expiresAt: number | null
+}
+
+const jobs = new Map<string, AssessJob>()
+const JOB_TTL_MS = 10 * 60_000
+const MAX_JOBS = 10
+const COMPARE_PACE_MS = 50
+
+function isFinished(job: AssessJob): boolean {
+  return job.phase === "done" || job.phase === "failed"
+}
+
+function pruneJobs(): void {
+  const now = Date.now()
+  for (const [id, job] of jobs) if (job.expiresAt !== null && job.expiresAt <= now) jobs.delete(id)
+  while (jobs.size > MAX_JOBS) {
+    const oldestFinished = [...jobs].find(([, job]) => isFinished(job))
+    if (!oldestFinished) break
+    jobs.delete(oldestFinished[0])
+  }
+}
+
+function jobSnapshot(job: AssessJob, since: number): AssessJobSnapshot {
+  const status = job.phase === "done" ? "done" : job.phase === "failed" ? "failed" : "running"
+  return {
+    jobId: job.id, phase: job.phase, status, state: status,
+    tenantId: job.tenantId, frameworkId: job.frameworkId,
+    read: job.read, total: job.total, currentPolicy: job.currentPolicy,
+    comparedPolicies: job.comparedPolicies, packPolicies: job.packPolicies, currentPackPolicy: job.currentPackPolicy,
+    findings: job.findings.slice(since), nextSince: job.findings.length,
+    error: job.error, assessment: job.assessment,
+  }
+}
+
+async function runAssessJob(job: AssessJob, token: string, policies: BaselinePolicy[]): Promise<void> {
+  try {
+    job.phase = "reading"
+    const current = await landscape(token, progress => {
+      job.read = progress.read
+      job.total = progress.total
+      job.currentPolicy = progress.policyName
+    })
+    job.phase = "comparing"
+    job.packPolicies = policies.length
+    const allFindings = comparePolicies(policies, current)
+    let offset = 0
+    for (let index = 0; index < policies.length; index += 1) {
+      if (index > 0) await new Promise(resolve => setTimeout(resolve, COMPARE_PACE_MS))
+      const policy = policies[index]!
+      job.currentPackPolicy = policy.name
+      const count = policy.settings.length
+      job.findings.push(...allFindings.slice(offset, offset + count))
+      offset += count
+      job.comparedPolicies = index + 1
+    }
+    job.phase = "saving"
+    const assessment: Assessment = {
+      runId: randomUUID(), tenantId: job.tenantId, frameworkId: job.frameworkId, reference: job.reference,
+      assessedAt: new Date().toISOString(), policyCount: current.length, findings: allFindings,
+      organizationalEvidence: { state: "manual", note: "Organizational controls, policy approval and operational evidence require a separate assessment." },
+    }
+    recordAssessment(assessment, policies)
+    for (const [id, run] of runs) if (run.expires < Date.now()) runs.delete(id)
+    if (runs.size >= 30) runs.delete(runs.keys().next().value!)
+    runs.set(assessment.runId, { assessment, policies, fingerprint: fingerprint(current), expires: Date.now() + 15 * 60_000, consumed: false })
+    job.assessment = assessment
+    job.phase = "done"
+  } catch (error) {
+    job.phase = "failed"
+    job.error = error instanceof Error ? error.message : "Assessment failed."
+    job.assessment = null
+  } finally {
+    job.expiresAt = Date.now() + JOB_TTL_MS
+    pruneJobs()
+  }
 }
 
 /**
@@ -162,7 +280,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
   const legacy = typeof body.frameworkId === "string" && LEGACY_FRAMEWORKS.has(body.frameworkId)
   if (legacy && !LEGACY_ACTIONS.has(String(body.action))) throw new FrameworkError("Saved OpenIntuneBaseline pack comparisons are read-only. New comparisons use the Existing Deployment and Policy Validation workflows.", 403)
   if (typeof body.frameworkId === "string") requireEnabledFramework(body.frameworkId)
-  if (["assess", "create"].includes(String(body.action)) && frameworks.some(f => f.id === body.frameworkId && f.nativeId)) throw new FrameworkError("Use the native read-only comparison for this framework.", 403)
+  if (["assess", "assess-start", "create"].includes(String(body.action)) && frameworks.some(f => f.id === body.frameworkId && f.nativeId)) throw new FrameworkError("Use the native read-only comparison for this framework.", 403)
   // Creation requests normally omit frameworkId. Check the actual assessment,
   // not a renderer-provided ID, before acquiring tokens or making any writes.
   if (body.action === "create") requireRemediableFramework(body.frameworkId)
@@ -237,8 +355,36 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     } else if (body.action !== "workspace-load") throw new FrameworkError("Unknown workspace action.")
     return loadWorkspace(body.tenantId, body.frameworkId)
   }
+  if (body.action === "assess-status") {
+    pruneJobs()
+    const job = typeof body.jobId === "string" ? jobs.get(body.jobId) : undefined
+    if (!job) throw new FrameworkError("Assessment job not found.", 404)
+    if (typeof body.tenantId !== "string" || body.tenantId.toLowerCase() !== job.tenantId || typeof body.frameworkId !== "string" || body.frameworkId !== job.frameworkId) throw new FrameworkError("Assessment job not found.", 404)
+    const since = typeof body.since === "number" && Number.isFinite(body.since) && body.since > 0 ? Math.floor(body.since) : 0
+    return jobSnapshot(job, since)
+  }
   const { tenant, token } = await tokenFor(body)
   for (const [id, run] of runs) if (run.expires < Date.now()) runs.delete(id)
+  if (body.action === "assess-start") {
+    if (typeof body.frameworkId !== "string" || !frameworks.some(f => f.id === body.frameworkId)) throw new FrameworkError("Select a framework.")
+    if (typeof body.reference !== "string" || !body.reference.trim() || body.reference.length > 200) throw new FrameworkError("Provide a source version and profile (up to 200 characters).")
+    const policies = parsePolicies(body.policies)
+    pruneJobs()
+    const running = [...jobs.values()].filter(job => !isFinished(job))
+    const duplicate = running.find(job => job.tenantId === tenant && job.frameworkId === body.frameworkId)
+    if (duplicate) return { jobId: duplicate.id }
+    if (running.length >= MAX_JOBS) throw new FrameworkError("Too many assessments are running. Wait for a running assessment to finish before starting another.", 409)
+    const job: AssessJob = {
+      id: randomUUID(), tenantId: tenant, frameworkId: body.frameworkId, reference: body.reference,
+      phase: "connecting", read: 0, total: 0, currentPolicy: "",
+      comparedPolicies: 0, packPolicies: policies.length, currentPackPolicy: "",
+      findings: [], error: null, assessment: null, expiresAt: null,
+    }
+    jobs.set(job.id, job)
+    pruneJobs()
+    void runAssessJob(job, token, policies)
+    return { jobId: job.id }
+  }
   if (body.action === "assess") {
     if (typeof body.frameworkId !== "string" || !frameworks.some(f => f.id === body.frameworkId)) throw new FrameworkError("Select a framework.")
     if (typeof body.reference !== "string" || !body.reference.trim() || body.reference.length > 200) throw new FrameworkError("Provide a source version and profile (up to 200 characters).")
