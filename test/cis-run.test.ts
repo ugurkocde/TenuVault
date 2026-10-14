@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { accumulateCisFindings, cisRunSteps, cisRunTallies, emptyCisRunAccumulation } from "../src/shared/frameworks/cis-run"
-import type { Finding } from "../src/shared/frameworks/policies"
+import { accumulateCisFindings, cisRunReceivedLabel, cisRunSteps, cisRunTallies, emptyCisRunAccumulation, resolveCisRunCompletion, type CisRunPack } from "../src/shared/frameworks/cis-run"
+import type { BaselinePolicy, Finding } from "../src/shared/frameworks/policies"
 
 function finding(key: string, status: Finding["status"] = "Present"): Finding {
   return {
@@ -61,6 +61,33 @@ describe("cisRunTallies", () => {
 
   it("returns zero counts with no findings", () => {
     expect(cisRunTallies([])).toEqual({ Present: 0, Different: 0, Missing: 0, Review: 0 })
+  })
+})
+
+describe("resolveCisRunCompletion", () => {
+  const policy = (name: string) => ({ name, platforms: "windows10", technologies: "mdm", description: "", settings: [] }) as unknown as BaselinePolicy
+  const captured: CisRunPack = { policies: [policy("A"), policy("B")], reference: "Fakebook OS 9.9.9 Level 1" }
+
+  it("returns the captured pack when the completed job assessed it", () => {
+    expect(resolveCisRunCompletion(captured, { reference: captured.reference, packPolicies: 2 })).toBe(captured)
+  })
+
+  it("discards the completion when the job used a different reference", () => {
+    expect(resolveCisRunCompletion(captured, { reference: "Fakebook OS 9.9.9 Level 2", packPolicies: 2 })).toBeNull()
+  })
+
+  it("discards the completion when the job compared a different number of pack policies", () => {
+    expect(resolveCisRunCompletion(captured, { reference: captured.reference, packPolicies: 1 })).toBeNull()
+    expect(resolveCisRunCompletion(captured, { reference: captured.reference, packPolicies: 3 })).toBeNull()
+  })
+})
+
+describe("cisRunReceivedLabel", () => {
+  it("labels the received count as partial without a total", () => {
+    expect(cisRunReceivedLabel(0)).toBe("0 findings received so far (partial results)")
+    expect(cisRunReceivedLabel(1)).toBe("1 finding received so far (partial results)")
+    expect(cisRunReceivedLabel(7)).toBe("7 findings received so far (partial results)")
+    expect(cisRunReceivedLabel(7)).not.toContain(" of ")
   })
 })
 

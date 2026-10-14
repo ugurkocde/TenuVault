@@ -15,7 +15,7 @@ import { cisDriftSignals, cisReadinessTrend, sparklineSegments, type CisTrendPoi
 import { cisPortfolioRows, type CisPortfolioEntry } from "../../shared/frameworks/cis-portfolio"
 import { parseRecommendationList, type RecommendationList } from "../../shared/frameworks/cis-manual"
 import { cisReadinessCsv, cisReadinessJson, governanceExportName } from "../features/shared/governance-export"
-import { accumulateCisFindings, cisRunSteps, cisRunTallies, emptyCisRunAccumulation } from "../../shared/frameworks/cis-run"
+import { accumulateCisFindings, cisRunReceivedLabel, cisRunSteps, cisRunTallies, emptyCisRunAccumulation, resolveCisRunCompletion, type CisRunPack } from "../../shared/frameworks/cis-run"
 import { useInternalCisBenchmarks } from "../lib/internal-cis"
 import { comparable, parsePolicies, remediationPayload, type Assessment, type BaselinePolicy, type Finding, type Observation } from "../../shared/frameworks/policies"
 import { summarizeSetting } from "../../shared/frameworks/setting-summary"
@@ -254,10 +254,12 @@ function CisRunView({ run }: { run: AssessJobSnapshot }) {
   const steps = cisRunSteps(run.phase)
   const tallies = cisRunTallies(run.findings)
   const running = run.phase !== "done" && run.phase !== "failed"
-  return <div role="status" className="mt-5 rounded-3xl bg-gray-50 p-6">
-    <h3 className="text-lg font-medium text-gray-900">Assessment in progress</h3>
+  return <div className="mt-5 rounded-3xl bg-gray-50 p-6">
+    <div role="status">
+      <h3 className="text-lg font-medium text-gray-900">Assessment in progress</h3>
+    </div>
     <ol className="mt-4 space-y-3">
-      {steps.map((step, index) => <li key={step.label} className="flex items-start gap-3 text-sm">
+      {steps.map((step, index) => <li key={step.label} {...(step.state === "current" ? { "aria-current": "step" as const } : {})} className="flex items-start gap-3 text-sm">
         <span aria-hidden="true" className={cn("mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold", step.state === "done" ? "bg-green-100 text-green-800" : step.state === "current" ? "bg-primary text-primary-foreground" : "bg-gray-200 text-gray-500")}>{step.state === "done" ? <Check className="h-3.5 w-3.5" /> : index + 1}</span>
         <span className="min-w-0 flex-1">
           <span className={cn("font-medium", step.state === "waiting" ? "text-gray-500" : "text-gray-900")}>{step.label}</span>
@@ -273,10 +275,11 @@ function CisRunView({ run }: { run: AssessJobSnapshot }) {
         </span>
       </li>)}
     </ol>
-    <div className="mt-5 flex flex-wrap gap-2" aria-label="Findings so far">
+    <div className="mt-5 flex flex-wrap items-center gap-2">
+      <span className="text-xs font-medium text-gray-500">Partial tallies:</span>
       {(["Present", "Different", "Missing", "Review"] as const).map(status => <span key={status} className="rounded-full bg-white px-3 py-1 text-xs font-medium text-gray-700">{status} {tallies[status]}</span>)}
     </div>
-    {running && <p className="mt-3 text-xs text-gray-500">Showing {run.findings.length} of {run.nextSince} findings so far</p>}
+    {running && <p className="mt-3 text-xs text-gray-500">{cisRunReceivedLabel(run.findings.length)}</p>}
     {run.findings.length > 0 && <div className="mt-3 space-y-2">{run.findings.map(finding => <FindingRow key={finding.key} finding={finding} disabled checked={false} onChange={() => undefined} remediable />)}</div>}
   </div>
 }
@@ -378,10 +381,12 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
     const generation = ++cisRunGeneration.current
     const tenantId = credentials.tenantId
     const appId = credentials.appId
+    const capturedPack: CisRunPack = { policies, reference }
     setError("")
-    setCisRun({ jobId: "", phase: "connecting", status: "running", state: "running", tenantId, frameworkId: framework.id, read: 0, total: 0, currentPolicy: "", comparedPolicies: 0, packPolicies: policies.length, currentPackPolicy: "", findings: [], nextSince: 0, error: null, assessment: null })
+    setBusy("Reading tenant policies and comparing settings…")
+    setCisRun({ jobId: "", phase: "connecting", status: "running", state: "running", tenantId, frameworkId: framework.id, read: 0, total: 0, currentPolicy: "", comparedPolicies: 0, packPolicies: capturedPack.policies.length, currentPackPolicy: "", findings: [], nextSince: 0, error: null, assessment: null })
     try {
-      const { jobId } = await request<{ jobId: string }>({ action: "assess-start", tenantId, appId, frameworkId: framework.id, reference, policies })
+      const { jobId } = await request<{ jobId: string }>({ action: "assess-start", tenantId, appId, frameworkId: framework.id, reference: capturedPack.reference, policies: capturedPack.policies })
       if (cisRunGeneration.current !== generation) return
       let accumulation = emptyCisRunAccumulation()
       for (;;) {
@@ -401,7 +406,14 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
             setCisRun(null)
             return
           }
+          const installPack = resolveCisRunCompletion(capturedPack, { reference: completed.reference, packPolicies: snapshot.packPolicies })
+          if (!installPack) {
+            setError("Assessment finished for a different policy pack than the one loaded. Its results were not applied. Load the pack you want to assess and run the assessment again.")
+            setCisRun(null)
+            return
+          }
           setCisRun({ ...snapshot, findings: accumulation.findings })
+          setPolicies(installPack.policies); setReference(installPack.reference)
           setHistorical(false); setSelected(new Set()); setPreview(false); setConfirmed(false); setCreation(null); setPage(0); setFilter("All")
           setAssessment(completed)
           const saved = await workspaceRequest("workspace-load")
@@ -417,6 +429,8 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
       if (cisRunGeneration.current !== generation) return
       setError(e instanceof Error ? e.message : "The request failed.")
       setCisRun(null)
+    } finally {
+      if (cisRunGeneration.current === generation) setBusy("")
     }
   }
   function clearKit() { setKitConversion(null); setKitDetected({ id: "" }); setKitFiles([]); setKitBenchmark(""); setKitVersion(""); setLoadedKitLevel(null); setPolicies([]); setReference(""); reset() }

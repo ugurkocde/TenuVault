@@ -222,6 +222,24 @@ describe("streamed CIS assessment", () => {
     await pollDone(third)
   })
 
+  it("refuses a duplicate start for a different pack while a job is running", async () => {
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    vi.stubGlobal("fetch", graphFetch({ gate }))
+    const first = await startJob()
+    const item = pack()
+    await expect(handleFramework({ action: "assess-start", frameworkId: "cis-benchmarks", tenantId, appId, reference: "Fakebook OS 9.9.9 Level 2", policies: item.policies }))
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining("different policy pack") })
+    const altered = JSON.parse(JSON.stringify(item.policies)) as { name: string }[]
+    altered[0]!.name = "Fakebook Alpha Changed"
+    await expect(handleFramework({ action: "assess-start", frameworkId: "cis-benchmarks", tenantId, appId, reference: item.reference, policies: altered }))
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining("different policy pack") })
+    const same = await startJob()
+    expect(same).toBe(first)
+    release()
+    await pollDone(first)
+  })
+
   it("rejects a start when ten jobs are already running and never evicts a running job", async () => {
     let release!: () => void
     const gate = new Promise<void>(resolve => { release = resolve })

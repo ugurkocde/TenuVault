@@ -1,4 +1,4 @@
-import type { Finding } from "./policies"
+import type { BaselinePolicy, Finding } from "./policies"
 
 export type CisRunPhase = "connecting" | "reading" | "comparing" | "saving" | "done" | "failed"
 
@@ -55,6 +55,28 @@ const CURRENT_STEP: Record<CisRunPhase, number> = {
   saving: 3,
   done: STEP_LABELS.length,
   failed: 0,
+}
+
+export interface CisRunPack {
+  policies: BaselinePolicy[]
+  reference: string
+}
+
+/**
+ * Returns the captured pack when the completed job assessed that same pack,
+ * and null when it did not. The completed assessment carries the reference
+ * the job was started with, and the snapshot carries the number of pack
+ * policies the job compared. Both must match the captured pack before its
+ * assessment may be installed against the captured policies.
+ */
+export function resolveCisRunCompletion(captured: CisRunPack, completed: { reference: string; packPolicies: number }): CisRunPack | null {
+  if (completed.reference !== captured.reference) return null
+  if (completed.packPolicies !== captured.policies.length) return null
+  return captured
+}
+
+export function cisRunReceivedLabel(count: number): string {
+  return `${count} ${count === 1 ? "finding" : "findings"} received so far (partial results)`
 }
 
 export function cisRunSteps(phase: CisRunPhase): CisRunStep[] {
