@@ -48,6 +48,13 @@ describe("requiredFeature", () => {
     for (const frameworkId of ["cis-benchmarks", "cis-controls"]) expect(requiredFeature("/api/frameworks", { action: "assess", frameworkId, policies: windows })).toBe("baselineAllPlatforms")
   })
 
+  it("gates streamed CIS assessments like synchronous assess and leaves other frameworks free", () => {
+    for (const action of ["assess-start", "assess-status"]) {
+      for (const frameworkId of ["cis-benchmarks", "cis-controls"]) expect(requiredFeature("/api/frameworks", { action, frameworkId, tenantId: TENANT })).toBe("baselineAllPlatforms")
+      for (const frameworkId of ["microsoft", "custom", "stig", "ncsc-dsg"]) expect(requiredFeature("/api/frameworks", { action, frameworkId, tenantId: TENANT })).toBeNull()
+    }
+  })
+
   it("keeps framework reports free except for CIS content", () => {
     const exports = ["native-pdf", "native-csv", "native-json", "workspace-pdf", "workspace-csv", "workspace-json"]
     for (const action of exports) {
@@ -126,6 +133,15 @@ describe("planGuard for frameworks and OpenIntuneBaseline", () => {
       expect((await community(cis.clone()))?.status).toBe(402)
       expect(await pro(cis.clone())).toBeNull()
       expect(await msp(cis.clone())).toBeNull()
+    }
+  })
+
+  it("answers 402 to a Community streamed CIS assessment and lets Pro through", async () => {
+    for (const action of ["assess-start", "assess-status"]) {
+      const cis = post({ action, frameworkId: "cis-benchmarks", jobId: "job-1" })
+      expect((await community(cis.clone()))?.status).toBe(402)
+      expect(await pro(cis.clone())).toBeNull()
+      expect(await community(post({ action, frameworkId: "microsoft", jobId: "job-1" }))).toBeNull()
     }
   })
 

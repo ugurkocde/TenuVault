@@ -147,13 +147,17 @@ const JOB_TTL_MS = 10 * 60_000
 const MAX_JOBS = 10
 const COMPARE_PACE_MS = 50
 
+function isFinished(job: AssessJob): boolean {
+  return job.phase === "done" || job.phase === "failed"
+}
+
 function pruneJobs(): void {
   const now = Date.now()
   for (const [id, job] of jobs) if (job.expiresAt !== null && job.expiresAt <= now) jobs.delete(id)
   while (jobs.size > MAX_JOBS) {
-    const oldest = jobs.keys().next().value
-    if (oldest === undefined) break
-    jobs.delete(oldest)
+    const oldestFinished = [...jobs].find(([, job]) => isFinished(job))
+    if (!oldestFinished) break
+    jobs.delete(oldestFinished[0])
   }
 }
 
@@ -355,6 +359,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     pruneJobs()
     const job = typeof body.jobId === "string" ? jobs.get(body.jobId) : undefined
     if (!job) throw new FrameworkError("Assessment job not found.", 404)
+    if (typeof body.tenantId !== "string" || body.tenantId.toLowerCase() !== job.tenantId || typeof body.frameworkId !== "string" || body.frameworkId !== job.frameworkId) throw new FrameworkError("Assessment job not found.", 404)
     const since = typeof body.since === "number" && Number.isFinite(body.since) && body.since > 0 ? Math.floor(body.since) : 0
     return jobSnapshot(job, since)
   }
@@ -365,6 +370,10 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     if (typeof body.reference !== "string" || !body.reference.trim() || body.reference.length > 200) throw new FrameworkError("Provide a source version and profile (up to 200 characters).")
     const policies = parsePolicies(body.policies)
     pruneJobs()
+    const running = [...jobs.values()].filter(job => !isFinished(job))
+    const duplicate = running.find(job => job.tenantId === tenant && job.frameworkId === body.frameworkId)
+    if (duplicate) return { jobId: duplicate.id }
+    if (running.length >= MAX_JOBS) throw new FrameworkError("Too many assessments are running. Wait for a running assessment to finish before starting another.", 409)
     const job: AssessJob = {
       id: randomUUID(), tenantId: tenant, frameworkId: body.frameworkId, reference: body.reference,
       phase: "connecting", read: 0, total: 0, currentPolicy: "",

@@ -63,25 +63,29 @@ function graphFetch(options: { gate?: Promise<void>; failGraph?: boolean; settin
   })
 }
 
-async function status(jobId: string, since = 0): Promise<Snapshot> {
-  return handleFramework({ action: "assess-status", jobId, since }) as Promise<Snapshot>
+async function status(jobId: string, since = 0, tenant: string = tenantId, frameworkId = "cis-benchmarks"): Promise<Snapshot> {
+  return handleFramework({ action: "assess-status", jobId, since, tenantId: tenant, frameworkId }) as Promise<Snapshot>
 }
 
-async function pollDone(jobId: string): Promise<Snapshot> {
+async function pollDone(jobId: string, tenant: string = tenantId): Promise<Snapshot> {
   for (let attempt = 0; attempt < 200; attempt += 1) {
-    const snap = await status(jobId)
+    const snap = await status(jobId, 0, tenant)
     if (snap.phase === "done" || snap.phase === "failed") return snap
     await new Promise(resolve => setTimeout(resolve, 10))
   }
   throw new Error("Job did not finish in time.")
 }
 
-async function startJob(): Promise<string> {
+async function startJob(tenant: string = tenantId): Promise<string> {
   const item = pack()
-  const result = await handleFramework({ action: "assess-start", frameworkId: "cis-benchmarks", tenantId, appId, reference: item.reference, policies: item.policies }) as { jobId: string }
+  const result = await handleFramework({ action: "assess-start", frameworkId: "cis-benchmarks", tenantId: tenant, appId, reference: item.reference, policies: item.policies }) as { jobId: string }
   expect(typeof result.jobId).toBe("string")
   expect(result.jobId.length).toBeGreaterThan(0)
   return result.jobId
+}
+
+function tenantAt(index: number): string {
+  return `aaaaaaaa-aaaa-aaaa-aaaa-${String(index).padStart(12, "0")}`
 }
 
 beforeEach(() => {
@@ -180,5 +184,100 @@ describe("streamed CIS assessment", () => {
     vi.stubGlobal("fetch", graphFetch())
     await expect(handleFramework({ action: "assess-status", jobId: "no-such-job", since: 0 }))
       .rejects.toMatchObject({ status: 404 })
+  })
+
+  it("returns 404 when a poll names another tenant, another framework, or no identity", async () => {
+    vi.stubGlobal("fetch", graphFetch())
+    const jobId = await startJob()
+    await pollDone(jobId)
+    const otherTenant = "99999999-9999-9999-9999-999999999999"
+    await expect(handleFramework({ action: "assess-status", jobId, since: 0, tenantId: otherTenant, frameworkId: "cis-benchmarks" }))
+      .rejects.toMatchObject({ status: 404, message: "Assessment job not found." })
+    await expect(handleFramework({ action: "assess-status", jobId, since: 0, tenantId, frameworkId: "microsoft" }))
+      .rejects.toMatchObject({ status: 404, message: "Assessment job not found." })
+    await expect(handleFramework({ action: "assess-status", jobId, since: 0 }))
+      .rejects.toMatchObject({ status: 404, message: "Assessment job not found." })
+    await expect(handleFramework({ action: "assess-status", jobId, since: 0, tenantId }))
+      .rejects.toMatchObject({ status: 404, message: "Assessment job not found." })
+    const snap = await status(jobId)
+    expect(snap.jobId).toBe(jobId)
+  })
+
+  it("returns the running job for a duplicate start and a new job after it finishes", async () => {
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const fetchMock = graphFetch({ gate })
+    vi.stubGlobal("fetch", fetchMock)
+    const first = await startJob()
+    const graphCalls = () => fetchMock.mock.calls.filter(([url]) => String(url) === GRAPH).length
+    const callsBefore = graphCalls()
+    const second = await startJob()
+    expect(second).toBe(first)
+    expect(graphCalls()).toBe(callsBefore)
+    release()
+    await pollDone(first)
+    vi.stubGlobal("fetch", graphFetch())
+    const third = await startJob()
+    expect(third).not.toBe(first)
+    await pollDone(third)
+  })
+
+  it("rejects a start when ten jobs are already running and never evicts a running job", async () => {
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    vi.stubGlobal("fetch", graphFetch({ gate }))
+    const tenants: string[] = []
+    const jobIds: string[] = []
+    for (let index = 0; index < 10; index += 1) {
+      const tenant = tenantAt(index + 1)
+      tenants.push(tenant)
+      jobIds.push(await startJob(tenant))
+    }
+    const extraTenant = tenantAt(99)
+    const item = pack()
+    await expect(handleFramework({ action: "assess-start", frameworkId: "cis-benchmarks", tenantId: extraTenant, appId, reference: item.reference, policies: item.policies }))
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining("Wait for a running assessment to finish") })
+    for (let index = 0; index < jobIds.length; index += 1) {
+      const snap = await status(jobIds[index]!, 0, tenants[index]!)
+      expect(snap.phase).not.toBe("done")
+      expect(snap.phase).not.toBe("failed")
+    }
+    release()
+    for (let index = 0; index < jobIds.length; index += 1) await pollDone(jobIds[index]!, tenants[index]!)
+  })
+
+  it("evicts only finished jobs to enforce the cap, and an evicted job polls as unknown", async () => {
+    vi.stubGlobal("fetch", graphFetch())
+    const tenants: string[] = []
+    const jobIds: string[] = []
+    for (let index = 0; index < 12; index += 1) {
+      const tenant = tenantAt(100 + index)
+      tenants.push(tenant)
+      const jobId = await startJob(tenant)
+      jobIds.push(jobId)
+      await pollDone(jobId, tenant)
+    }
+    await expect(handleFramework({ action: "assess-status", jobId: jobIds[0]!, since: 0, tenantId: tenants[0]!, frameworkId: "cis-benchmarks" }))
+      .rejects.toMatchObject({ status: 404, message: "Assessment job not found." })
+    const latest = await status(jobIds[jobIds.length - 1]!, 0, tenants[tenants.length - 1]!)
+    expect(latest.phase).toBe("done")
+  })
+
+  it("refuses assess-start for a native framework and for a disabled framework like assess", async () => {
+    vi.stubGlobal("fetch", graphFetch())
+    const item = pack()
+    for (const action of ["assess", "assess-start"]) {
+      await expect(handleFramework({ action, frameworkId: "nist-csf", tenantId, appId, reference: item.reference, policies: item.policies }))
+        .rejects.toMatchObject({ status: 403 })
+    }
+    setInternalCisBenchmarksEnabled(false)
+    try {
+      for (const action of ["assess", "assess-start"]) {
+        await expect(handleFramework({ action, frameworkId: "cis-benchmarks", tenantId, appId, reference: item.reference, policies: item.policies }))
+          .rejects.toMatchObject({ status: 403 })
+      }
+    } finally {
+      setInternalCisBenchmarksEnabled(true)
+    }
   })
 })
