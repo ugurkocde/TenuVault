@@ -34,6 +34,20 @@ export function cisFlowSteps(hasKitConversion: boolean, hasAssessment: boolean):
   ]
 }
 
+export type CisStage = "setup" | "running" | "results"
+
+/**
+ * The staged view the CIS Benchmarks page shows. A live run owns the screen,
+ * a finished assessment shows its results, and setup is shown until an
+ * assessment exists or the user explicitly asks for it with New assessment.
+ * Starting or completing a run clears the setup request back to results.
+ */
+export function cisStage(input: { hasRun: boolean; hasAssessment: boolean; setupRequested: boolean }): CisStage {
+  if (input.hasRun) return "running"
+  if (input.hasAssessment && !input.setupRequested) return "results"
+  return "setup"
+}
+
 /** Total root settings across every policy in one converted pack. */
 export function packSettingCount(pack: Pick<KitPack, "policies">): number {
   return pack.policies.reduce((total, policy) => total + policy.settings.length, 0)

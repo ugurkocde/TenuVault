@@ -6,9 +6,10 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const appInfo = vi.hoisted(() => vi.fn())
+const licenseStatus = vi.hoisted(() => ({ current: null as unknown }))
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
-  bridge: { app: { info: appInfo } },
+  bridge: { app: { info: appInfo }, license: { open: async () => undefined } },
 }))
 
 vi.mock("../../src/renderer/lib/framework-jobs", () => ({
@@ -22,7 +23,7 @@ vi.mock("../../src/portal/contexts/TenantContext", () => ({
 
 vi.mock("../../src/renderer/lib/license", () => ({
   useTenantPlan: () => null,
-  useLicense: () => ({ status: null, error: null, refresh: async () => undefined }),
+  useLicense: () => ({ status: licenseStatus.current, error: null, refresh: async () => undefined }),
   tenantLicense: () => undefined,
   tenantPlan: () => null,
 }))
@@ -71,9 +72,18 @@ function sidebarHarness(route: string) {
   )
 }
 
+function entitledStatus(plan: "pro" | "msp") {
+  return { hasKey: true, keyState: "active" as const, keyMessage: null, keyHint: "****ABCD", persisted: true, offline: false, message: null, plan, tenantLimit: 2, validUntil: null, communityTenantId: null, tenants: [] }
+}
+
+function communityStatus() {
+  return { ...entitledStatus("pro"), plan: null, tenants: [{ tenantId: "t1", signedIn: true, activated: false, entitled: false, source: null, plan: "community" as const, tenants: null, expiresAt: null, validUntil: null, shared: null, shareNeedsSignIn: false, displayKey: null, message: null }] }
+}
+
 describe("CIS Benchmarks top-level sidebar entry", () => {
   it("renders the CIS item after Operations placement with the internal flag on", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    licenseStatus.current = entitledStatus("msp")
     const container = render(sidebarHarness("/portal/frameworks/cis-benchmarks"))
     await flush()
     const link = container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')
@@ -93,12 +103,53 @@ describe("CIS Benchmarks top-level sidebar entry", () => {
 
   it("does not mark the CIS item active on other pages", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    licenseStatus.current = entitledStatus("msp")
     const container = render(sidebarHarness("/portal/operations"))
     await flush()
     const link = container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')
     expect(link).not.toBeNull()
     expect(link?.className).not.toContain("active")
     expect(link?.getAttribute("aria-current")).toBeNull()
+  })
+
+  it("renders the normal link on Pro", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    licenseStatus.current = entitledStatus("pro")
+    const container = render(sidebarHarness("/portal/dashboard"))
+    await flush()
+    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).not.toBeNull()
+    expect(container.querySelector("button")).toBeNull()
+  })
+
+  it("renders a muted Pro entry that opens the upgrade dialog instead of navigating, on Community", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    licenseStatus.current = communityStatus()
+    const container = render(sidebarHarness("/portal/dashboard"))
+    await flush()
+    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).toBeNull()
+    const button = container.querySelector("button")
+    expect(button).not.toBeNull()
+    expect(button?.textContent).toContain("CIS Benchmarks")
+    expect(button?.textContent).toContain("Pro")
+    expect(button?.getAttribute("aria-disabled")).toBe("true")
+    expect(button?.getAttribute("title")).toContain("Pro and MSP")
+    expect(button?.hasAttribute("disabled")).toBe(false)
+    button?.focus()
+    expect(document.activeElement).toBe(button)
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+    await flush()
+    expect(document.body.textContent).toContain("Included in TenuVault Pro and MSP")
+  })
+
+  it("renders nothing while the license status is loading", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    licenseStatus.current = null
+    const container = render(sidebarHarness("/portal/dashboard"))
+    await flush()
+    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).toBeNull()
+    expect(container.textContent).not.toContain("CIS Benchmarks")
   })
 })
 
