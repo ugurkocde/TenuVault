@@ -45,7 +45,7 @@ export function CisBenchmarksNavigation({ linkClass }: { linkClass: (active: boo
         type="button"
         aria-disabled="true"
         title={upgradeMessage("baselineAllPlatforms")}
-        className={cn(linkClass(false), "w-full cursor-pointer opacity-70")}
+        className={cn(linkClass(false), "w-full cursor-not-allowed opacity-60")}
         onClick={() => setExplaining(true)}
       >
         <ListChecks className="h-[18px] w-[18px]" aria-hidden="true" />
