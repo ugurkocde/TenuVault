@@ -37,8 +37,8 @@ export const MAX_CIS_PACK_POLICIES = 64
 export const MAX_CIS_BENCHMARK_NAME_LENGTH = 200
 export const MAX_CIS_BENCHMARK_ID_LENGTH = 100
 
-const BENCHMARK_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
-const VERSION_PATTERN = /^\d+\.\d+\.\d+$/
+export const BENCHMARK_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+export const VERSION_PATTERN = /^\d+\.\d+\.\d+$/
 const CATALOG_FIELDS = new Set(["benchmarks"])
 const BENCHMARK_FIELDS = new Set(["id", "name", "version", "levels"])
 const PACK_FIELDS = new Set(["benchmark", "version", "level", "policies"])

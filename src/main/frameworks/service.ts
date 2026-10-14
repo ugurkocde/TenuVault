@@ -13,7 +13,7 @@ import { cisReadiness } from "../../shared/frameworks/cis-readiness"
 import { exceptionKey, isActive, isDateOnly, MAX_EXCEPTIONS, validateNewException, type CisException } from "../../shared/frameworks/cis-exceptions"
 import { tenantWriteLabel, withTenantWrite } from "../features/write-lock"
 import { CisContentError, fetchCisCatalog, fetchCisPack } from "./cis-content"
-import type { CisLevel } from "../../shared/frameworks/cis-content"
+import { BENCHMARK_ID_PATTERN, MAX_CIS_BENCHMARK_ID_LENGTH, VERSION_PATTERN, type CisLevel } from "../../shared/frameworks/cis-content"
 
 const GRAPH = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies"
 interface Run { assessment: Assessment; policies: BaselinePolicy[]; fingerprint: string; expires: number; consumed: boolean }
@@ -366,7 +366,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       const benchmark = typeof body.benchmark === "string" ? body.benchmark : ""
       const version = typeof body.version === "string" ? body.version : ""
       const level = body.level === 1 || body.level === 2 ? (body.level as CisLevel) : null
-      if (!benchmark || !version || level === null) throw new FrameworkError("Select a benchmark, version and level.")
+      if (!BENCHMARK_ID_PATTERN.test(benchmark) || benchmark.length > MAX_CIS_BENCHMARK_ID_LENGTH || !VERSION_PATTERN.test(version) || level === null) throw new FrameworkError("Select a benchmark, version and level.")
       const pack = await fetchCisPack({ benchmark, version, level })
       let policies: BaselinePolicy[]
       try { policies = parsePolicies(pack.policies) }

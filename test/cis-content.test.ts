@@ -132,4 +132,89 @@ describe("CIS content delivery service", () => {
     await expect(handleFramework({ action: "cis-catalog", tenantId, frameworkId: "cis-benchmarks" })).rejects.toThrow("invalid response")
     expect(loadWorkspace(tenantId, "cis-benchmarks").policies).toEqual([])
   })
+
+  it("rejects traversal benchmark, version and level inputs before any fetch", async () => {
+    const fetchMock = vi.fn(async () => Response.json(validPack))
+    vi.stubGlobal("fetch", fetchMock)
+    const badInputs: Record<string, unknown>[] = [
+      { benchmark: "..", version: "9.9.9", level: 1 },
+      { benchmark: ".", version: "9.9.9", level: 1 },
+      { benchmark: "../fakebook-os", version: "9.9.9", level: 1 },
+      { benchmark: "fakebook-os/../other", version: "9.9.9", level: 1 },
+      { benchmark: "fakebook/os", version: "9.9.9", level: 1 },
+      { benchmark: "fakebook-os", version: "..", level: 1 },
+      { benchmark: "fakebook-os", version: "../9.9.9", level: 1 },
+      { benchmark: "fakebook-os", version: "9.9.9/..", level: 1 },
+      { benchmark: "fakebook-os", version: "9.9", level: 1 },
+      { benchmark: "fakebook-os", version: "9.9.9", level: 3 },
+      { benchmark: "fakebook-os", version: "9.9.9", level: "1" },
+    ]
+    for (const input of badInputs) {
+      await expect(handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", ...input })).rejects.toThrow("Select a benchmark, version and level.")
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(loadWorkspace(tenantId, "cis-benchmarks").policies).toEqual([])
+  })
+
+  it("rejects a redirect response instead of following it", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(null, { status: 302, headers: { Location: "https://evil.example.test/cis/v1/catalog" } }))
+    vi.stubGlobal("fetch", fetchMock)
+    await expect(handleFramework({ action: "cis-catalog", tenantId, frameworkId: "cis-benchmarks" })).rejects.toThrow("302")
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ redirect: "error" })
+  })
+
+  it("rejects an oversized Content-Length before reading the body", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json(validCatalog, { headers: { "Content-Length": "1000001" } })))
+    await expect(handleFramework({ action: "cis-catalog", tenantId, frameworkId: "cis-benchmarks" })).rejects.toThrow("exceeds")
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json(validPack, { headers: { "Content-Length": "8000001" } })))
+    await expect(handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })).rejects.toThrow("exceeds")
+    expect(loadWorkspace(tenantId, "cis-benchmarks").policies).toEqual([])
+  })
+
+  it("rejects an oversized streamed body even without a large Content-Length", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("x".repeat(1_000_001), { status: 200, headers: { "Content-Type": "application/json", "Content-Length": "10" } })))
+    await expect(handleFramework({ action: "cis-catalog", tenantId, frameworkId: "cis-benchmarks" })).rejects.toThrow("exceeds")
+  })
+
+  it("reports a timeout as a reachability problem, not an invalid response", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw Object.assign(new Error("timed out"), { name: "TimeoutError" }) }))
+    await expect(handleFramework({ action: "cis-catalog", tenantId, frameworkId: "cis-benchmarks" })).rejects.toThrow("could not be reached")
+    const failingBody = new ReadableStream<Uint8Array>({ pull(controller) { controller.error(Object.assign(new Error("timed out"), { name: "TimeoutError" })) } })
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(failingBody, { status: 200, headers: { "Content-Type": "application/json" } })))
+    await expect(handleFramework({ action: "cis-catalog", tenantId, frameworkId: "cis-benchmarks" })).rejects.toThrow("could not be reached")
+  })
+
+  it("rejects malformed base URLs before any fetch", async () => {
+    const fetchMock = vi.fn(async () => Response.json(validCatalog))
+    vi.stubGlobal("fetch", fetchMock)
+    const badUrls = [
+      "https://user:secret@content.example.test/",
+      "https://content.example.test/?token=abc",
+      "https://content.example.test/#section",
+      "http://content.example.test/",
+      "not a url",
+    ]
+    for (const badUrl of badUrls) {
+      process.env.TENUVAULT_CIS_CONTENT_BASE_URL = badUrl
+      await expect(handleFramework({ action: "cis-catalog", tenantId, frameworkId: "cis-benchmarks" })).rejects.toThrow("base URL is invalid")
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("accepts plain http for localhost in local development", async () => {
+    process.env.TENUVAULT_CIS_CONTENT_BASE_URL = "http://localhost:4317/"
+    const fetchMock = vi.fn(async (url: string) => {
+      expect(url).toBe("http://localhost:4317/cis/v1/catalog")
+      return Response.json(validCatalog)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    await expect(handleFramework({ action: "cis-catalog", tenantId, frameworkId: "cis-benchmarks" })).resolves.toEqual(validCatalog)
+    process.env.TENUVAULT_CIS_CONTENT_BASE_URL = "http://127.0.0.1:4317"
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      expect(url).toBe("http://127.0.0.1:4317/cis/v1/catalog")
+      return Response.json(validCatalog)
+    }))
+    await expect(handleFramework({ action: "cis-catalog", tenantId, frameworkId: "cis-benchmarks" })).resolves.toEqual(validCatalog)
+  })
 })
