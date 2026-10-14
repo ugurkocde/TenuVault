@@ -24,9 +24,11 @@ describe("cisFlowSteps", () => {
     expect(cisFlowSteps(true, true).map((item) => item.state)).toEqual(["complete", "complete", "current"])
   })
 
-  it("shows a single current step when an assessment exists without conversion state", () => {
-    expect(cisFlowSteps(false, true).map((item) => item.state)).toEqual(["complete", "complete", "current"])
+  it("does not complete step 1 for an assessment without a kit, and makes step 3 current", () => {
+    expect(cisFlowSteps(false, true).map((item) => item.state)).toEqual(["upcoming", "complete", "current"])
     expect(cisFlowSteps(false, true).filter((item) => item.state === "current")).toHaveLength(1)
+    expect(cisFlowSteps(false, true)[0]?.state).not.toBe("complete")
+    expect(cisFlowSteps(false, true)[2]?.state).toBe("current")
   })
 })
 

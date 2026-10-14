@@ -269,6 +269,7 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
   const [kitDetected, setKitDetected] = useState<{ id: string; version?: string }>({ id: "" })
   const [kitFiles, setKitFiles] = useState<KitFile[]>([])
   const [kitConversion, setKitConversion] = useState<KitConversion | null>(null)
+  const [loadedKitLevel, setLoadedKitLevel] = useState<KitLevel | null>(null)
   const [denominator, setDenominator] = useState<DenominatorEntry[] | undefined>(undefined)
   const [recommendationList, setRecommendationList] = useState<RecommendationList | undefined>(undefined)
   const [exceptionForms, setExceptionForms] = useState<Record<number, { policyName: string; settingId: string; owner: string; reason: string; expiresOn: string }>>({})
@@ -313,9 +314,10 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
     setBusy(label); setError("")
     try { await action() } catch (e) { setError(e instanceof Error ? e.message : "The request failed.") } finally { setBusy("") }
   }
-  function clearKit() { setKitConversion(null); setKitDetected({ id: "" }); setKitFiles([]); setKitBenchmark(""); setKitVersion(""); setPolicies([]); setReference(""); reset() }
+  function clearKit() { setKitConversion(null); setKitDetected({ id: "" }); setKitFiles([]); setKitBenchmark(""); setKitVersion(""); setLoadedKitLevel(null); setPolicies([]); setReference(""); reset() }
   function applyKitConversion(files: KitFile[], id: string, version?: string) {
     const conversion = convertKit(files, { id, ...(version ? { version } : {}) })
+    setLoadedKitLevel(null)
     setKitConversion(conversion); setKitDetected({ id: conversion.summary.benchmark, version: conversion.summary.version }); setKitBenchmark(conversion.summary.benchmark); setKitVersion(conversion.summary.version)
   }
   useEffect(() => {
@@ -361,11 +363,11 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
       <p className="mt-2 text-sm text-gray-600">Packs, source versions and results are saved in encrypted storage on this device. Historical assessments are read-only. Run a fresh comparison before remediation.</p>
       <div className="mt-3 flex gap-3">
         <ExportButton framework={framework} plan={plan} disabled={!!busy || !workspace.history.length} onClick={() => exportSaved("json")}>Export saved assessments</ExportButton>
-        <button className={button} disabled={!!busy} onClick={async () => { if (await confirm({ title: "Delete saved workspace?", description: "Delete this saved workspace and all assessment history?", confirmLabel: "Delete workspace", destructive: true })) void perform("Deleting workspace…", async () => { suppressedDraft.current = JSON.stringify({ policies, reference }); const saved = await workspaceRequest("workspace-delete"); suppressedDraft.current = JSON.stringify({ policies: [], reference: "" }); setWorkspace(saved); setPolicies([]); setReference(""); setRecommendationList(undefined); reset() }) }}>Delete workspace</button>
+        <button className={button} disabled={!!busy} onClick={async () => { if (await confirm({ title: "Delete saved workspace?", description: "Delete this saved workspace and all assessment history?", confirmLabel: "Delete workspace", destructive: true })) void perform("Deleting workspace…", async () => { suppressedDraft.current = JSON.stringify({ policies, reference }); const saved = await workspaceRequest("workspace-delete"); suppressedDraft.current = JSON.stringify({ policies: [], reference: "" }); setWorkspace(saved); setKitConversion(null); setKitFiles([]); setKitDetected({ id: "" }); setKitBenchmark(""); setKitVersion(""); setLoadedKitLevel(null); setPolicies([]); setReference(""); setRecommendationList(undefined); reset() }) }}>Delete workspace</button>
       </div>
       {workspace.history.map(entry => <div key={entry.assessment.runId} className="mt-3 flex flex-wrap items-center gap-3 border-t pt-3 text-sm">
         <span>{entry.assessment.assessedAt} · {entry.assessment.reference} · {entry.assessment.findings.length} findings{entry.creation ? ` · ${entry.creation.results.length} creation outcomes` : ""}</span>
-        <button className={button} disabled={!!busy} onClick={() => { reset(); setPolicies(entry.policies); setReference(entry.assessment.reference); setAssessment(entry.assessment); setCreation(entry.creation ?? null); setHistorical(true) }}>View read-only</button>
+        <button className={button} disabled={!!busy} onClick={() => { reset(); setLoadedKitLevel(null); setPolicies(entry.policies); setReference(entry.assessment.reference); setAssessment(entry.assessment); setCreation(entry.creation ?? null); setHistorical(true) }}>View read-only</button>
         <ExportButton framework={framework} plan={plan} disabled={!!busy} onClick={() => exportSaved("json", entry.assessment.runId)}>Export JSON</ExportButton>
         <button className={button} disabled={!!busy} onClick={async () => { if (await confirm({ title: "Delete saved assessment?", description: "Delete this saved assessment?", confirmLabel: "Delete", destructive: true })) void perform("Deleting assessment…", async () => { const saved = await workspaceRequest("workspace-delete-assessment", { runId: entry.assessment.runId }); setWorkspace(saved); setPolicies(saved.policies); setReference(saved.reference); reset() }) }}>Delete</button>
       </div>)}
@@ -466,8 +468,8 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
           </div>
           <div className="mt-3 grid gap-3 sm:grid-cols-2" role="group" aria-label="Choose a level">
             {kitConversion.packs.map(pack => {
-              const selectedPack = reference === pack.reference
-              return <button key={pack.level} type="button" aria-pressed={selectedPack} disabled={!!busy} onClick={() => { reset(); setPolicies(pack.policies); setReference(pack.reference) }} className={cn("rounded-2xl border p-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50", selectedPack ? "border-primary bg-blue-50 ring-1 ring-primary" : "border-gray-200 bg-white hover:bg-gray-50")}>
+              const selectedPack = loadedKitLevel === pack.level
+              return <button key={pack.level} type="button" aria-pressed={selectedPack} disabled={!!busy} onClick={() => { reset(); setLoadedKitLevel(pack.level); setPolicies(pack.policies); setReference(pack.reference) }} className={cn("rounded-2xl border p-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50", selectedPack ? "border-primary bg-blue-50 ring-1 ring-primary" : "border-gray-200 bg-white hover:bg-gray-50")}>
                 <span className="flex items-center justify-between gap-3"><span className="text-sm font-medium text-gray-900">Level {pack.level}</span>{selectedPack && <span className="inline-flex items-center gap-1 text-xs font-medium text-blue-700"><Check className="h-4 w-4" aria-hidden="true" />Selected</span>}</span>
                 <span className="mt-2 block text-sm text-gray-600">{pack.policies.length} {pack.policies.length === 1 ? "policy" : "policies"}</span>
                 <span className="block text-sm text-gray-600">{packSettingCount(pack)} {packSettingCount(pack) === 1 ? "setting" : "settings"}</span>
@@ -484,7 +486,7 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
           <p className="mt-3 text-xs text-gray-600">Unsupported: {UNSUPPORTED.join('; ')}. Retained source declarations are not signatures. Organizational evidence and profile approval remain manual.</p>
           <label className="mt-5 block text-sm font-medium text-gray-700">Source version / profile<input value={reference} maxLength={200} disabled={!!busy} onChange={e => { setReference(e.target.value); reset() }} placeholder="For example: approved workstation baseline, revision 3, standard profile" className="mt-2 w-full rounded-full border border-gray-300 px-4 py-2 font-normal" /></label>
         </>}
-        <details className="mt-4 text-sm"><summary className="cursor-pointer text-gray-700">Review {policies.length} loaded policies and remove alternative profiles</summary><ul className="mt-3 max-h-64 divide-y divide-gray-100 overflow-auto rounded-2xl bg-gray-50">{policies.map((p, i) => <li key={`${p.name}:${i}`} className="flex items-center justify-between gap-3 p-3"><span>{p.name}<span className="ml-2 text-xs text-gray-500">{p.settings.length} root settings</span></span><button disabled={!!busy} className="text-blue-700 hover:underline disabled:opacity-50" aria-label={`Remove ${p.name}`} onClick={() => { setPolicies(policies.filter((_, index) => index !== i)); reset() }}>Remove</button></li>)}</ul></details>
+        <details className="mt-4 text-sm"><summary className="cursor-pointer text-gray-700">Review {policies.length} loaded policies and remove alternative profiles</summary><ul className="mt-3 max-h-64 divide-y divide-gray-100 overflow-auto rounded-2xl bg-gray-50">{policies.map((p, i) => <li key={`${p.name}:${i}`} className="flex items-center justify-between gap-3 p-3"><span>{p.name}<span className="ml-2 text-xs text-gray-500">{p.settings.length} root settings</span></span><button disabled={!!busy} className="text-blue-700 hover:underline disabled:opacity-50" aria-label={`Remove ${p.name}`} onClick={() => { setLoadedKitLevel(null); setPolicies(policies.filter((_, index) => index !== i)); reset() }}>Remove</button></li>)}</ul></details>
       </>}
     </section>
     <section aria-labelledby="compare-title" className="mt-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
@@ -496,7 +498,7 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
       {busy && isCis && <div role="progressbar" aria-label={busy} className="mt-2 h-2 overflow-hidden rounded-full bg-gray-100"><div className="h-full w-1/3 animate-pulse rounded-full bg-primary" /></div>}
       {error && <p role="alert" className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}
       {assessment && <>
-        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500"><p>{assessment.policyCount} tenant policies read · {new Date(assessment.assessedAt).toLocaleString()}</p>{!isCis && <div className="flex flex-wrap gap-2">{(["pdf", "csv", "json"] as const).map(format => <ExportButton key={format} framework={framework} plan={plan} disabled={!!busy} onClick={() => exportSaved(format, assessment.runId)}><Download className="h-4 w-4" aria-hidden="true" />{format === "pdf" ? "PDF report" : format.toUpperCase()}</ExportButton>)}</div>}</div>
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500"><p>{assessment.policyCount} tenant policies read · {new Date(assessment.assessedAt).toLocaleString()}</p><div className="flex flex-wrap gap-2">{((isCis ? ["csv", "json"] : ["pdf", "csv", "json"]) as ("pdf" | "csv" | "json")[]).map(format => <ExportButton key={format} framework={framework} plan={plan} disabled={!!busy} onClick={() => exportSaved(format, assessment.runId)}><Download className="h-4 w-4" aria-hidden="true" />{format === "pdf" ? "PDF report" : format.toUpperCase()}</ExportButton>)}</div></div>
         {readiness && <section aria-label="CIS readiness" className="mb-5 rounded-2xl bg-gray-50 p-4 text-sm text-gray-700">
           <h3 className="font-medium text-gray-900">CIS readiness</h3>
           <p className="mt-2">{readiness.manualNote} This view covers the automated settings in the imported pack only.</p>
@@ -511,7 +513,7 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
                 <div><dt className="text-xs text-gray-500">Different</dt><dd className="font-medium text-gray-900">{level.different}</dd></div>
                 <div><dt className="text-xs text-gray-500">Missing</dt><dd className="font-medium text-gray-900">{level.missing}</dd></div>
                 <div><dt className="text-xs text-gray-500">Review</dt><dd className="font-medium text-gray-900">{level.review}</dd></div>
-                <div><dt className="text-xs text-gray-500">Excepted</dt><dd className="font-medium text-gray-900">{level.excepted}</dd></div>
+                <div><dt className="text-xs text-gray-500">Excepted (within the counts above)</dt><dd className="font-medium text-gray-900">{level.excepted}</dd></div>
               </dl>
             </article>)}
           </div>

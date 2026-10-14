@@ -13,11 +13,24 @@ export const CIS_FLOW_LABELS = ["Import kit", "Choose level and compare", "Revie
 
 /** Stepper state for the CIS page, derived from whether a kit was converted and whether an assessment exists. */
 export function cisFlowSteps(hasKitConversion: boolean, hasAssessment: boolean): CisFlowStep[] {
-  const current: 1 | 2 | 3 = hasAssessment ? 3 : hasKitConversion ? 2 : 1
+  if (hasAssessment) {
+    return [
+      { step: 1, label: CIS_FLOW_LABELS[0], state: hasKitConversion ? "complete" : "upcoming" },
+      { step: 2, label: CIS_FLOW_LABELS[1], state: "complete" },
+      { step: 3, label: CIS_FLOW_LABELS[2], state: "current" },
+    ]
+  }
+  if (hasKitConversion) {
+    return [
+      { step: 1, label: CIS_FLOW_LABELS[0], state: "complete" },
+      { step: 2, label: CIS_FLOW_LABELS[1], state: "current" },
+      { step: 3, label: CIS_FLOW_LABELS[2], state: "upcoming" },
+    ]
+  }
   return [
-    { step: 1, label: CIS_FLOW_LABELS[0], state: hasKitConversion || hasAssessment ? "complete" : "current" },
-    { step: 2, label: CIS_FLOW_LABELS[1], state: hasAssessment ? "complete" : current === 2 ? "current" : "upcoming" },
-    { step: 3, label: CIS_FLOW_LABELS[2], state: current === 3 ? "current" : "upcoming" },
+    { step: 1, label: CIS_FLOW_LABELS[0], state: "current" },
+    { step: 2, label: CIS_FLOW_LABELS[1], state: "upcoming" },
+    { step: 3, label: CIS_FLOW_LABELS[2], state: "upcoming" },
   ]
 }
 
