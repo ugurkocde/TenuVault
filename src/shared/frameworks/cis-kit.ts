@@ -46,21 +46,24 @@ type LevelMark = KitLevel | "combined" | "bitlocker" | "unknown"
 /**
  * Level markers seen across kits: Level folders, L1 or L2 markers in file names,
  * Device and User split folders, and one combined L1+L2 file paired with an L1
- * file. A BitLocker profile file, marked (BL) or filed under a Bitlocker folder,
- * classifies as "bitlocker": it is reported for coverage only and never folded
- * into a Level. Returns "unknown" when no marker exists so callers fail loudly.
+ * file. Explicit Level markers always win over BitLocker markers. Only when no
+ * Level marker exists does a BitLocker profile file, marked (BL) or filed under
+ * a folder named exactly Bitlocker, classify as "bitlocker": it is reported for
+ * coverage only and never folded into a Level. Returns "unknown" when no marker
+ * exists so callers fail loudly.
  */
 export function classifyKitFile(path: string): LevelMark {
   const text = normalized(path)
-  if (/\(\s*bl\s*\)/i.test(text)) return "bitlocker"
-  const folders = text.split("/").slice(0, -1)
-  if (folders.some(segment => /bitlocker/i.test(segment))) return "bitlocker"
   if (/\bl1\s*\+\s*l2\b/i.test(text) || /\blevel\s*1\s*\+\s*level\s*2\b/i.test(text)) return "combined"
   const levels = new Set<KitLevel>()
   for (const match of text.matchAll(/\blevel\s*[- ]?([12])\b|\bl([12])\b/gi)) {
     levels.add(Number(match[1] ?? match[2]) as KitLevel)
   }
   if (levels.size === 1) return [...levels][0]!
+  if (levels.size > 1) return "unknown"
+  if (/\(\s*bl\s*\)/i.test(text)) return "bitlocker"
+  const folders = text.split("/").slice(0, -1)
+  if (folders.some(segment => segment.toLowerCase() === "bitlocker")) return "bitlocker"
   return "unknown"
 }
 

@@ -126,6 +126,23 @@ describe("build kit conversion", () => {
     expect(result.skipped).toEqual([{ path: "Settings Catalog/Bitlocker/Fakebook Drive 9.9.9.json", reason: "BitLocker profile. Reported for coverage; not part of the Level 1 or Level 2 packs." }])
   })
 
+  it("lets an explicit Level marker win over a BitLocker marker", () => {
+    expect(classifyKitFile("Level 1/Fakebook (BL) Drive.json")).toBe(1)
+    expect(classifyKitFile("Policies/Fakebook (L1) (BL) Drive.json")).toBe(1)
+    expect(classifyKitFile("Fakebook Benchmark L1+L2 (BL) v9.9.9.json")).toBe("combined")
+    expect(classifyKitFile("Level 1/Bitlocker/Fakebook Drive.json")).toBe(1)
+  })
+
+  it("still classifies a plain BitLocker file as bitlocker when no Level marker exists", () => {
+    expect(classifyKitFile("Policies/Fakebook (BL) Drive.json")).toBe("bitlocker")
+    expect(classifyKitFile("Settings Catalog/Bitlocker/Fakebook Drive.json")).toBe("bitlocker")
+  })
+
+  it("does not treat a folder that only contains bitlocker as a Bitlocker folder", () => {
+    expect(classifyKitFile("Settings Catalog/MyBitlockerStuff/Fakebook (L1) Drive.json")).toBe(1)
+    expect(classifyKitFile("Settings Catalog/MyBitlockerStuff/Fakebook Drive.json")).toBe("unknown")
+  })
+
   it("throws the no-convertible error for a BitLocker only kit", () => {
     expect(() => kit([{ path: "Settings Catalog/Bitlocker/Fakebook (BL) Drive 9.9.9.json", content: policy("Fakebook Drive", ["fakebook_setting_bitlocker"]) }]))
       .toThrowError(/no convertible Settings Catalog policies/)
