@@ -10,7 +10,7 @@ import { CIS_BENCHMARKS_ID, effectiveFrameworks, searchEffectiveFrameworks } fro
 import { convertKit, readKitZip, suggestedKitBenchmark, type KitConversion, type KitFile, type KitLevel } from "../../shared/frameworks/cis-kit"
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
 import { cisReadiness } from "../../shared/frameworks/cis-readiness"
-import { benchmarkDisplayName, groupFindingsByPolicy, groupObservationsByValue, humanSettingLabel, policyDisplayName, statusMixText } from "../../shared/frameworks/cis-display"
+import { benchmarkDisplayName, groupFindingsByPolicy, groupObservationsByValue, humanSettingLabel, policyDisplayName, statusMixText, trendSummaryText } from "../../shared/frameworks/cis-display"
 import { cisFlowSteps, cisStage, isKitPackReference, kitLevelForPolicy, packSettingCount } from "../../shared/frameworks/cis-flow"
 import { cisDriftSignals, cisReadinessTrend, sparklineSegments, type CisTrendPoint } from "../../shared/frameworks/cis-trend"
 import { cisPortfolioRows, type CisPortfolioEntry } from "../../shared/frameworks/cis-portfolio"
@@ -52,10 +52,6 @@ function exportJson(value: unknown, filename: string) {
 function formatLocaleDate(value: string): string {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString(undefined, { dateStyle: "medium" })
-}
-function formatLocaleDateShort(value: string): string {
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString(undefined, { month: "short", day: "numeric" })
 }
 function formatExpiryDate(value: string): string {
   const date = new Date(`${value}T00:00:00`)
@@ -797,7 +793,7 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
             </div>
           </details>
           <details className="mt-3 rounded-2xl bg-white">
-            <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-gray-800">{(() => { const latest = trend[trend.length - 1]; if (!latest) return "Trend: Not available yet"; const item = latest.levels.find(entry => entry.level === 1) ?? latest.levels[0]; const rateText = item ? formatTrendPercent(item.passRate) : "Not available"; const suffix = trend.length === 1 ? ", first assessment" : `, ${trend.length} assessments`; return `Trend: ${rateText} on ${formatLocaleDateShort(latest.assessedAt)}${suffix}` })()}</summary>
+            <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-gray-800">{trendSummaryText(trend[trend.length - 1], trend.length, formatLocaleDate)}</summary>
             <div className="border-t border-gray-100 px-4 pb-4 pt-2">
             {drift.map(entry => <p key={`drift-${entry.level}-${entry.benchmark}-${entry.version}`} role="alert" className="mt-2 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">Level {entry.level} readiness dropped {((entry.previousRate - entry.currentRate) * 100).toFixed(1)} percentage points to {formatTrendPercent(entry.currentRate)} for {benchmarkDisplayName(entry.benchmark)} {entry.version}.</p>)}
             <p className="mt-1 text-xs text-gray-500">Pass rate across saved assessments for this tenant. Change is in percentage points from the previous saved assessment. Adjusted rates use exceptions accepted by then.</p>
@@ -810,7 +806,7 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
         </section>}
         <div className="my-4 flex flex-wrap gap-2" aria-label="Filter assessment findings">{["All", "Present", "Missing", "Different", "Review"].map(status => <button key={status} aria-pressed={filter === status} onClick={() => { setFilter(status); setPage(0) }} className={`rounded-full border px-4 py-2 text-sm transition-colors ${filter === status ? "border-transparent bg-primary text-primary-foreground" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>{status} <span className="ml-1 font-semibold">{assessment.findings.filter(f => status === "All" || f.status === status).length}</span></button>)}</div>
         <p className="mb-4 text-xs leading-5 text-gray-500">Different: at least one existing configuration differs. Review: the pack contains alternative values for this setting. Select a single profile or resolve differences manually. Unassigned configurations can appear as Present. Expand a finding to inspect assignment evidence, including exclusions, filter references and unavailable reads.</p>
-        {isCis ? <div className="space-y-4">{groupFindingsByPolicy(findings).map(group => <section key={group.policyName} aria-label={group.policyName} className="rounded-2xl bg-gray-50 p-3">
+        {isCis ? <div className="space-y-4">{groupFindingsByPolicy(findings).map(group => <section key={group.policyIndex} aria-label={group.policyName} className="rounded-2xl bg-gray-50 p-3">
           <h4 title={group.policyName} className="flex flex-wrap items-baseline gap-x-2 px-1 text-sm font-medium text-gray-900"><span className="min-w-0 truncate">{policyDisplayName(group.policyName, reference)}</span><span className="text-xs font-normal text-gray-500">{group.total} {group.total === 1 ? "finding" : "findings"}</span><span className="text-xs font-normal text-gray-500">{statusMixText(group.counts)}</span></h4>
           <div className="mt-2 space-y-1">{group.findings.map(f => <CisFindingRow key={f.key} finding={f} disabled={!!busy || !!creation || historical} checked={selected.has(f.key)} onChange={() => { setSelected(old => { const next = new Set(old); next.has(f.key) ? next.delete(f.key) : next.add(f.key); return next }); setPreview(false); setConfirmed(false) }} onAcceptException={prefillException} />)}</div>
         </section>)}</div> : <>

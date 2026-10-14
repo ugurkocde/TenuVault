@@ -24,6 +24,7 @@ export function policyDisplayName(policyName: string, reference?: string | null)
 }
 
 export interface FindingPolicyGroup {
+  policyIndex: number
   policyName: string
   findings: Finding[]
   counts: { Present: number; Different: number; Missing: number; Review: number }
@@ -32,12 +33,12 @@ export interface FindingPolicyGroup {
 
 export function groupFindingsByPolicy(findings: readonly Finding[]): FindingPolicyGroup[] {
   const groups: FindingPolicyGroup[] = []
-  const byName = new Map<string, FindingPolicyGroup>()
+  const byIndex = new Map<number, FindingPolicyGroup>()
   for (const finding of findings) {
-    let group = byName.get(finding.policyName)
+    let group = byIndex.get(finding.policyIndex)
     if (!group) {
-      group = { policyName: finding.policyName, findings: [], counts: { Present: 0, Different: 0, Missing: 0, Review: 0 }, total: 0 }
-      byName.set(finding.policyName, group)
+      group = { policyIndex: finding.policyIndex, policyName: finding.policyName, findings: [], counts: { Present: 0, Different: 0, Missing: 0, Review: 0 }, total: 0 }
+      byIndex.set(finding.policyIndex, group)
       groups.push(group)
     }
     group.findings.push(finding)
@@ -64,15 +65,26 @@ export interface ObservationValueGroup {
   matchesRecommended: boolean
 }
 
+function targetingKey(observation: Observation): string {
+  const targeting = observation.targeting
+  if (!targeting) return "targeting:none"
+  const targets = targeting.targets
+    .map(target => JSON.stringify({ filterId: target.filterId ?? null, filterMode: target.filterMode ?? null, groupId: target.groupId ?? null, kind: target.kind }))
+    .sort()
+  const limitations = [...targeting.limitations].sort()
+  return JSON.stringify({ limitations, state: targeting.state, targets })
+}
+
 export function groupObservationsByValue(observations: readonly Observation[], recommended: Json): ObservationValueGroup[] {
   const recommendedKey = JSON.stringify(comparable(recommended))
   const groups: ObservationValueGroup[] = []
   const byKey = new Map<string, ObservationValueGroup>()
   for (const observation of observations) {
-    const key = JSON.stringify(comparable(observation.value))
+    const valueKey = JSON.stringify(comparable(observation.value))
+    const key = `${valueKey}|${targetingKey(observation)}`
     let group = byKey.get(key)
     if (!group) {
-      group = { key, value: observation.value, observations: [], policyNames: [], matchesRecommended: key === recommendedKey }
+      group = { key, value: observation.value, observations: [], policyNames: [], matchesRecommended: valueKey === recommendedKey }
       byKey.set(key, group)
       groups.push(group)
     }
@@ -80,4 +92,15 @@ export function groupObservationsByValue(observations: readonly Observation[], r
     if (!group.policyNames.includes(observation.policyName)) group.policyNames.push(observation.policyName)
   }
   return groups
+}
+
+export function trendSummaryText(
+  latest: { assessedAt: string; levels: readonly { level: number; passRate: number | null }[] } | undefined,
+  assessmentCount: number,
+  formatDate: (value: string) => string,
+): string {
+  if (!latest || !latest.levels.length) return "Trend: Not available yet"
+  const rates = latest.levels.map(entry => `Level ${entry.level} ${entry.passRate === null ? "Not available" : `${(entry.passRate * 100).toFixed(1)}%`}`).join(", ")
+  const suffix = assessmentCount === 1 ? ", first assessment" : `, ${assessmentCount} assessments`
+  return `Trend: ${rates} on ${formatDate(latest.assessedAt)}${suffix}`
 }
