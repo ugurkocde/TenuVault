@@ -12,6 +12,8 @@ import { parseDenominatorList, type DenominatorEntry } from "../../shared/framew
 import { cisReadiness } from "../../shared/frameworks/cis-readiness"
 import { exceptionKey, isActive, isDateOnly, MAX_EXCEPTIONS, validateNewException, type CisException } from "../../shared/frameworks/cis-exceptions"
 import { tenantWriteLabel, withTenantWrite } from "../features/write-lock"
+import { CisContentError, fetchCisCatalog, fetchCisPack } from "./cis-content"
+import { BENCHMARK_ID_PATTERN, MAX_CIS_BENCHMARK_ID_LENGTH, VERSION_PATTERN, type CisLevel } from "../../shared/frameworks/cis-content"
 
 const GRAPH = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies"
 interface Run { assessment: Assessment; policies: BaselinePolicy[]; fingerprint: string; expires: number; consumed: boolean }
@@ -355,6 +357,31 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       saveWorkspace(workspace)
     } else if (body.action !== "workspace-load") throw new FrameworkError("Unknown workspace action.")
     return loadWorkspace(body.tenantId, body.frameworkId)
+  }
+  if (body.action === "cis-catalog" || body.action === "cis-fetch-pack") {
+    if (body.frameworkId !== "cis-benchmarks") throw new FrameworkError("CIS content delivery is available for CIS Benchmarks only.")
+    if (typeof body.tenantId !== "string" || !body.tenantId) throw new FrameworkError("Select a tenant and framework.")
+    try {
+      if (body.action === "cis-catalog") return await fetchCisCatalog()
+      const benchmark = typeof body.benchmark === "string" ? body.benchmark : ""
+      const version = typeof body.version === "string" ? body.version : ""
+      const level = body.level === 1 || body.level === 2 ? (body.level as CisLevel) : null
+      if (!BENCHMARK_ID_PATTERN.test(benchmark) || benchmark.length > MAX_CIS_BENCHMARK_ID_LENGTH || !VERSION_PATTERN.test(version) || level === null) throw new FrameworkError("Select a benchmark, version and level.")
+      const pack = await fetchCisPack({ benchmark, version, level })
+      let policies: BaselinePolicy[]
+      try { policies = parsePolicies(pack.policies) }
+      catch (error) { throw new FrameworkError(error instanceof Error ? error.message : "The CIS pack is invalid.") }
+      const reference = `${pack.benchmark} ${pack.version} Level ${pack.level}`
+      const workspace = loadWorkspace(body.tenantId, body.frameworkId)
+      workspace.policies = policies
+      workspace.reference = reference
+      saveWorkspace(workspace)
+      return { benchmark: pack.benchmark, version: pack.version, level: pack.level, reference, policyCount: policies.length, settingCount: policies.reduce((total, policy) => total + policy.settings.length, 0) }
+    } catch (error) {
+      if (error instanceof FrameworkError) throw error
+      if (error instanceof CisContentError) throw new FrameworkError(error.message, error.status)
+      throw new FrameworkError(error instanceof Error ? error.message : "The CIS content delivery service returned an invalid response.", 502)
+    }
   }
   if (body.action === "assess-status") {
     pruneJobs()
