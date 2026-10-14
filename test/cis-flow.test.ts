@@ -30,6 +30,18 @@ describe("cisFlowSteps", () => {
     expect(cisFlowSteps(false, true)[0]?.state).not.toBe("complete")
     expect(cisFlowSteps(false, true)[2]?.state).toBe("current")
   })
+
+  it("makes step 2 current while a run is active, even over an older assessment", () => {
+    expect(cisFlowSteps(true, true, true).map((item) => item.state)).toEqual(["complete", "current", "upcoming"])
+    expect(cisFlowSteps(false, true, true).map((item) => item.state)).toEqual(["upcoming", "current", "upcoming"])
+    expect(cisFlowSteps(true, true, true).filter((item) => item.state === "current")).toHaveLength(1)
+    expect(cisFlowSteps(true, true, true)[1]?.step).toBe(2)
+  })
+
+  it("makes step 2 current while a first run is active", () => {
+    expect(cisFlowSteps(true, false, true).map((item) => item.state)).toEqual(["complete", "current", "upcoming"])
+    expect(cisFlowSteps(false, false, true).map((item) => item.state)).toEqual(["upcoming", "current", "upcoming"])
+  })
 })
 
 describe("cisStage", () => {
@@ -51,9 +63,14 @@ describe("cisStage", () => {
     expect(cisStage({ hasRun: false, hasAssessment: true, setupRequested: true })).toBe("setup")
   })
 
-  it("returns to results once a run starts or completes and clears the setup request", () => {
+  it("returns to results once a run completes and clears the setup request", () => {
     expect(cisStage({ hasRun: false, hasAssessment: true, setupRequested: false })).toBe("results")
     expect(cisStage({ hasRun: false, hasAssessment: false, setupRequested: true })).toBe("setup")
+  })
+
+  it("returns a failed run to the stage it started from", () => {
+    expect(cisStage({ hasRun: false, hasAssessment: true, setupRequested: true })).toBe("setup")
+    expect(cisStage({ hasRun: false, hasAssessment: true, setupRequested: false })).toBe("results")
   })
 })
 

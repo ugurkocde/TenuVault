@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 const appInfo = vi.hoisted(() => vi.fn())
 const licenseStatus = vi.hoisted(() => ({ current: null as unknown }))
+const selectedTenantState = vi.hoisted(() => ({ current: null as unknown }))
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
   bridge: { app: { info: appInfo }, license: { open: async () => undefined } },
@@ -17,16 +18,27 @@ vi.mock("../../src/renderer/lib/framework-jobs", () => ({
 }))
 
 vi.mock("../../src/portal/contexts/TenantContext", () => ({
-  useSelectedTenant: () => ({ selectedTenant: null, setSelectedTenantId: () => undefined }),
+  useSelectedTenant: () => ({ selectedTenant: selectedTenantState.current, selectedTenantId: null, setSelectedTenantId: () => undefined }),
   useTenants: () => [],
 }))
 
-vi.mock("../../src/renderer/lib/license", () => ({
-  useTenantPlan: () => null,
-  useLicense: () => ({ status: licenseStatus.current, error: null, refresh: async () => undefined }),
-  tenantLicense: () => undefined,
-  tenantPlan: () => null,
-}))
+vi.mock("../../src/renderer/lib/license", () => {
+  const tenantLicense = (status: { tenants: { tenantId: string }[] } | null, tenantId: string | undefined) => {
+    const id = tenantId?.toLowerCase()
+    return id ? status?.tenants.find((tenant) => tenant.tenantId === id) : undefined
+  }
+  const tenantPlan = (tenant: { entitled: boolean; plan: string | null } | undefined) => {
+    if (!tenant) return null
+    if (tenant.entitled) return tenant.plan
+    return tenant.plan === "community" ? "community" : null
+  }
+  return {
+    useTenantPlan: (tenantId: string | undefined) => tenantPlan(tenantLicense(licenseStatus.current as { tenants: { tenantId: string }[] } | null, tenantId) as { entitled: boolean; plan: string | null } | undefined),
+    useLicense: () => ({ status: licenseStatus.current, error: null, refresh: async () => undefined }),
+    tenantLicense,
+    tenantPlan,
+  }
+})
 
 vi.mock("../../src/portal/components/ConfirmDialog", () => ({
   useConfirm: () => ({ confirm: async () => false, confirmDialog: null }),
@@ -61,6 +73,8 @@ async function flush(): Promise<void> {
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount())
   for (const container of containers.splice(0)) container.remove()
+  licenseStatus.current = null
+  selectedTenantState.current = null
   vi.clearAllMocks()
 })
 
@@ -72,12 +86,31 @@ function sidebarHarness(route: string) {
   )
 }
 
+const LICENSE_EXPIRES_AT = "2030-01-01T00:00:00.000Z"
+
+function keyTenant(tenantId: string, plan: "pro" | "msp", tenantLimit: number) {
+  return { tenantId, signedIn: true, activated: true, entitled: true, source: "key" as const, plan, tenants: tenantLimit, expiresAt: LICENSE_EXPIRES_AT, validUntil: null, shared: null, shareNeedsSignIn: false, displayKey: null, message: null }
+}
+
+function communityTenant(tenantId: string) {
+  return { tenantId, signedIn: true, activated: false, entitled: false, source: null, plan: "community" as const, tenants: null, expiresAt: null, validUntil: null, shared: null, shareNeedsSignIn: false, displayKey: null, message: null }
+}
+
 function entitledStatus(plan: "pro" | "msp") {
-  return { hasKey: true, keyState: "active" as const, keyMessage: null, keyHint: "****ABCD", persisted: true, offline: false, message: null, plan, tenantLimit: 2, validUntil: null, communityTenantId: null, tenants: [] }
+  const tenantLimit = plan === "msp" ? 10 : 2
+  return { hasKey: true, keyState: "active" as const, keyMessage: null, keyHint: "****ABCD", persisted: true, offline: false, message: null, plan, tenantLimit, validUntil: null, communityTenantId: null, tenants: [keyTenant("t-entitled", plan, tenantLimit)] }
 }
 
 function communityStatus() {
-  return { ...entitledStatus("pro"), plan: null, tenants: [{ tenantId: "t1", signedIn: true, activated: false, entitled: false, source: null, plan: "community" as const, tenants: null, expiresAt: null, validUntil: null, shared: null, shareNeedsSignIn: false, displayKey: null, message: null }] }
+  return { hasKey: false, keyState: "none" as const, keyMessage: null, keyHint: null, persisted: true, offline: false, message: null, plan: null, tenantLimit: null, validUntil: null, communityTenantId: "t-community", tenants: [communityTenant("t-community")] }
+}
+
+function mixedStatus() {
+  return { hasKey: true, keyState: "active" as const, keyMessage: null, keyHint: "****ABCD", persisted: true, offline: false, message: null, plan: "pro" as const, tenantLimit: 2, validUntil: null, communityTenantId: "t-community", tenants: [keyTenant("t-entitled", "pro", 2), communityTenant("t-community")] }
+}
+
+function tenantRef(tenantId: string) {
+  return { id: tenantId === "t-community" ? 1 : 2, name: tenantId, credentials: { tenantId, appId: "app-1", clientSecret: "secret" } }
 }
 
 describe("CIS Benchmarks top-level sidebar entry", () => {
@@ -124,6 +157,7 @@ describe("CIS Benchmarks top-level sidebar entry", () => {
   it("renders a muted Pro entry that opens the upgrade dialog instead of navigating, on Community", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     licenseStatus.current = communityStatus()
+    selectedTenantState.current = tenantRef("t-community")
     const container = render(sidebarHarness("/portal/dashboard"))
     await flush()
     expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).toBeNull()
@@ -141,6 +175,57 @@ describe("CIS Benchmarks top-level sidebar entry", () => {
     })
     await flush()
     expect(document.body.textContent).toContain("Included in TenuVault Pro and MSP")
+  })
+
+  it("shows the locked Pro entry for a selected Community tenant even when the machine is entitled", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    licenseStatus.current = mixedStatus()
+    selectedTenantState.current = tenantRef("t-community")
+    const container = render(sidebarHarness("/portal/dashboard"))
+    await flush()
+    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).toBeNull()
+    const button = container.querySelector("button")
+    expect(button).not.toBeNull()
+    expect(button?.textContent).toContain("CIS Benchmarks")
+    expect(button?.textContent).toContain("Pro")
+  })
+
+  it("shows the enabled link after switching the selected tenant to the entitled one", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    licenseStatus.current = mixedStatus()
+    selectedTenantState.current = tenantRef("t-community")
+    const container = render(sidebarHarness("/portal/dashboard"))
+    await flush()
+    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).toBeNull()
+    expect(container.querySelector("button")).not.toBeNull()
+    selectedTenantState.current = tenantRef("t-entitled")
+    const root = roots[roots.length - 1]
+    await act(async () => {
+      root?.render(sidebarHarness("/portal/dashboard"))
+    })
+    await flush()
+    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).not.toBeNull()
+    expect(container.querySelector("button")).toBeNull()
+  })
+
+  it("falls back to the machine plan when no tenant is selected", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    licenseStatus.current = entitledStatus("pro")
+    selectedTenantState.current = null
+    const container = render(sidebarHarness("/portal/dashboard"))
+    await flush()
+    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).not.toBeNull()
+    expect(container.querySelector("button")).toBeNull()
+  })
+
+  it("shows the enabled link for a selected entitled tenant", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    licenseStatus.current = mixedStatus()
+    selectedTenantState.current = tenantRef("t-entitled")
+    const container = render(sidebarHarness("/portal/dashboard"))
+    await flush()
+    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).not.toBeNull()
+    expect(container.querySelector("button")).toBeNull()
   })
 
   it("renders nothing while the license status is loading", async () => {

@@ -380,7 +380,6 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
   useEffect(() => () => { cisRunGeneration.current += 1 }, [])
   async function startCisAssessment() {
     if (!isCis || cisRun || !credentials) return
-    setSetupRequested(false)
     const generation = ++cisRunGeneration.current
     const tenantId = credentials.tenantId
     const appId = credentials.appId
@@ -510,7 +509,7 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
     </div>
     {isCis && <nav aria-label="CIS Benchmarks progress" className="mt-6">
       <ol className="flex flex-wrap gap-2">
-        {cisFlowSteps(!!kitConversion, !!assessment).map(item => <li key={item.step} {...(item.state === "current" ? { "aria-current": "step" as const } : {})} className={cn("inline-flex h-10 items-center gap-2 rounded-full border px-4 text-sm font-medium", item.state === "complete" ? "border-transparent bg-green-50 text-green-800" : item.state === "current" ? "border-transparent bg-primary text-primary-foreground" : "border-gray-200 bg-white text-gray-500")}>
+        {cisFlowSteps(!!kitConversion, !!assessment, !!cisRun).map(item => <li key={item.step} {...(item.state === "current" ? { "aria-current": "step" as const } : {})} className={cn("inline-flex h-10 items-center gap-2 rounded-full border px-4 text-sm font-medium", item.state === "complete" ? "border-transparent bg-green-50 text-green-800" : item.state === "current" ? "border-transparent bg-primary text-primary-foreground" : "border-gray-200 bg-white text-gray-500")}>
           {item.state === "complete" ? <Check className="h-4 w-4" aria-hidden="true" /> : <span aria-hidden="true" className="flex h-5 w-5 items-center justify-center rounded-full bg-white/20 text-xs font-semibold">{item.step}</span>}
           <span>{item.step} {item.label}</span>
         </li>)}
@@ -529,6 +528,13 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
       </div>
     </div>}
     {isCis && stage === "running" && cisRun && <>{error && <p role="alert" className="mt-6 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}<CisRunView run={cisRun} /></>}
+    {isCis && stage === "setup" && assessment && <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-white p-5 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+      <div>
+        <p className="text-base font-medium text-gray-900">{assessment.reference}</p>
+        <p className="mt-1 text-sm text-gray-500">{assessment.policyCount} tenant policies read · {new Date(assessment.assessedAt).toLocaleString()}</p>
+      </div>
+      <button type="button" className={button} onClick={() => setSetupRequested(false)}>Back to results</button>
+    </div>}
     {(!isCis || stage === "setup") && <details className="group my-6 rounded-3xl bg-blue-50/60 px-6 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)] lg:px-7 [&[open]_.chevron]:rotate-180">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-4 [&::-webkit-details-marker]:hidden">
         <span className="flex items-center gap-3 text-sm"><Info className="size-4 shrink-0 text-blue-700" aria-hidden="true" /><span><strong className="font-medium text-gray-900">Assessment coverage</strong><span className="text-gray-600"> · What is compared, content sources and limits.</span></span></span>
