@@ -41,15 +41,20 @@ function extension(path: string): string {
 /** UTF-8 exports may start with a byte order mark, as text or as raw bytes decoded to text. */
 export function stripBom(text: string): string { return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text }
 
-type LevelMark = KitLevel | "combined" | "unknown"
+type LevelMark = KitLevel | "combined" | "bitlocker" | "unknown"
 
 /**
  * Level markers seen across kits: Level folders, L1 or L2 markers in file names,
  * Device and User split folders, and one combined L1+L2 file paired with an L1
- * file. Returns "unknown" when no marker exists so callers fail loudly.
+ * file. A BitLocker profile file, marked (BL) or filed under a Bitlocker folder,
+ * classifies as "bitlocker": it is reported for coverage only and never folded
+ * into a Level. Returns "unknown" when no marker exists so callers fail loudly.
  */
 export function classifyKitFile(path: string): LevelMark {
   const text = normalized(path)
+  if (/\(\s*bl\s*\)/i.test(text)) return "bitlocker"
+  const folders = text.split("/").slice(0, -1)
+  if (folders.some(segment => /bitlocker/i.test(segment))) return "bitlocker"
   if (/\bl1\s*\+\s*l2\b/i.test(text) || /\blevel\s*1\s*\+\s*level\s*2\b/i.test(text)) return "combined"
   const levels = new Set<KitLevel>()
   for (const match of text.matchAll(/\blevel\s*[- ]?([12])\b|\bl([12])\b/gi)) {
@@ -234,6 +239,12 @@ export function convertKit(files: KitFile[], benchmark: KitBenchmark): KitConver
       continue
     }
     const mark = classifyKitFile(path)
+    if (mark === "bitlocker") {
+      const fileVersion = benchmark.version || kitFileVersion(path)
+      if (fileVersion && !version) version = fileVersion
+      skipped.push({ path, reason: "BitLocker profile. Reported for coverage; not part of the Level 1 or Level 2 packs." })
+      continue
+    }
     if (mark === "unknown") throw new KitConversionError(`${path}: the Level 1 or Level 2 profile cannot be determined from the file path or name. Rename the file or folder with an L1 or L2 marker, or remove the file from the kit before converting.`, path)
     const fileVersion = benchmark.version || kitFileVersion(path)
     if (!fileVersion) throw new KitConversionError(`${path}: the benchmark version cannot be determined from the file name and no version was supplied.`, path)

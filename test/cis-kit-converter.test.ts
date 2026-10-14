@@ -91,6 +91,46 @@ describe("build kit conversion", () => {
       .toThrowError(/Fakebook General 9\.9\.9\.json.*cannot be determined/)
   })
 
+  it("reports a BitLocker profile file for coverage instead of failing the kit", () => {
+    const result = kit([
+      { path: "Level 1/Fakebook Alpha 9.9.9.json", content: policy("Fakebook Alpha", ["fakebook_setting_alpha"]) },
+      { path: "Level 2/Fakebook Beta 9.9.9.json", content: policy("Fakebook Beta", ["fakebook_setting_beta"]) },
+      { path: "Settings Catalog/Bitlocker/Fakebook (BL) Drive 9.9.9.json", content: policy("Fakebook Drive", ["fakebook_setting_bitlocker"]) },
+    ])
+    expect(result.packs.map(pack => pack.level)).toEqual([1, 2])
+    expect(result.summary.levels).toEqual([{ level: 1, policies: 1, settings: 1 }, { level: 2, policies: 1, settings: 1 }])
+    expect(result.skipped).toEqual([{ path: "Settings Catalog/Bitlocker/Fakebook (BL) Drive 9.9.9.json", reason: "BitLocker profile. Reported for coverage; not part of the Level 1 or Level 2 packs." }])
+    expect(result.summary.skipped).toEqual(result.skipped)
+    const settingIds = result.packs.flatMap(pack => pack.policies.flatMap(item => item.settings.map(setting => (setting.settingInstance as { settingDefinitionId: string }).settingDefinitionId)))
+    expect(settingIds).toEqual(["fakebook_setting_alpha", "fakebook_setting_beta"])
+    expect(settingIds).not.toContain("fakebook_setting_bitlocker")
+  })
+
+  it("does not parse a BitLocker profile file as a policy", () => {
+    const result = kit([
+      { path: "Level 1/Fakebook Alpha 9.9.9.json", content: policy("Fakebook Alpha", ["fakebook_setting_alpha"]) },
+      { path: "Fakebook (BL) Drive 9.9.9.json", content: "not json" },
+    ])
+    expect(result.packs).toHaveLength(1)
+    expect(result.skipped.map(item => item.path)).toEqual(["Fakebook (BL) Drive 9.9.9.json"])
+  })
+
+  it("classifies a Bitlocker folder file without a (BL) marker as bitlocker", () => {
+    expect(classifyKitFile("Settings Catalog/Bitlocker/Fakebook Drive.json")).toBe("bitlocker")
+    expect(classifyKitFile("Policies/Fakebook (BL) Drive.json")).toBe("bitlocker")
+    const result = kit([
+      { path: "Level 1/Fakebook Alpha 9.9.9.json", content: policy("Fakebook Alpha", ["fakebook_setting_alpha"]) },
+      { path: "Settings Catalog/Bitlocker/Fakebook Drive 9.9.9.json", content: policy("Fakebook Drive", ["fakebook_setting_bitlocker"]) },
+    ])
+    expect(result.packs).toHaveLength(1)
+    expect(result.skipped).toEqual([{ path: "Settings Catalog/Bitlocker/Fakebook Drive 9.9.9.json", reason: "BitLocker profile. Reported for coverage; not part of the Level 1 or Level 2 packs." }])
+  })
+
+  it("throws the no-convertible error for a BitLocker only kit", () => {
+    expect(() => kit([{ path: "Settings Catalog/Bitlocker/Fakebook (BL) Drive 9.9.9.json", content: policy("Fakebook Drive", ["fakebook_setting_bitlocker"]) }]))
+      .toThrowError(/no convertible Settings Catalog policies/)
+  })
+
   it("reports PDFs and spreadsheets as skipped instead of dropping them", () => {
     const result = kit([
       { path: "Level 1/Fakebook Alpha 9.9.9.json", content: policy("Fakebook Alpha", ["fakebook_setting_alpha"]) },
