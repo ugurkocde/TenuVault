@@ -11,8 +11,15 @@ export interface CisFlowStep {
 
 export const CIS_FLOW_LABELS = ["Import kit", "Choose level and compare", "Review results"] as const
 
-/** Stepper state for the CIS page, derived from whether a kit was converted and whether an assessment exists. */
-export function cisFlowSteps(hasKitConversion: boolean, hasAssessment: boolean): CisFlowStep[] {
+/** Stepper state for the CIS page, derived from whether a kit was converted, whether an assessment exists, and whether a run is active. While a run is active step 2 is current, even when an older assessment is still loaded for a re-run. */
+export function cisFlowSteps(hasKitConversion: boolean, hasAssessment: boolean, isRunning = false): CisFlowStep[] {
+  if (isRunning) {
+    return [
+      { step: 1, label: CIS_FLOW_LABELS[0], state: hasKitConversion ? "complete" : "upcoming" },
+      { step: 2, label: CIS_FLOW_LABELS[1], state: "current" },
+      { step: 3, label: CIS_FLOW_LABELS[2], state: "upcoming" },
+    ]
+  }
   if (hasAssessment) {
     return [
       { step: 1, label: CIS_FLOW_LABELS[0], state: hasKitConversion ? "complete" : "upcoming" },
@@ -32,6 +39,22 @@ export function cisFlowSteps(hasKitConversion: boolean, hasAssessment: boolean):
     { step: 2, label: CIS_FLOW_LABELS[1], state: "upcoming" },
     { step: 3, label: CIS_FLOW_LABELS[2], state: "upcoming" },
   ]
+}
+
+export type CisStage = "setup" | "running" | "results"
+
+/**
+ * The staged view the CIS Benchmarks page shows. A live run owns the screen,
+ * a finished assessment shows its results, and setup is shown until an
+ * assessment exists or the user explicitly asks for it with New assessment.
+ * The setup request is cleared only when a run completes successfully or a
+ * saved assessment is viewed, so a failed run returns to the stage it started
+ * from and Back to results can clear it without touching the assessment.
+ */
+export function cisStage(input: { hasRun: boolean; hasAssessment: boolean; setupRequested: boolean }): CisStage {
+  if (input.hasRun) return "running"
+  if (input.hasAssessment && !input.setupRequested) return "results"
+  return "setup"
 }
 
 /** Total root settings across every policy in one converted pack. */

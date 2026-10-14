@@ -10,7 +10,7 @@ import { CIS_BENCHMARKS_ID, effectiveFrameworks, searchEffectiveFrameworks } fro
 import { convertKit, readKitZip, suggestedKitBenchmark, type KitConversion, type KitFile, type KitLevel } from "../../shared/frameworks/cis-kit"
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
 import { cisReadiness } from "../../shared/frameworks/cis-readiness"
-import { cisFlowSteps, isKitPackReference, kitLevelForPolicy, packSettingCount } from "../../shared/frameworks/cis-flow"
+import { cisFlowSteps, cisStage, isKitPackReference, kitLevelForPolicy, packSettingCount } from "../../shared/frameworks/cis-flow"
 import { cisDriftSignals, cisReadinessTrend, sparklineSegments, type CisTrendPoint } from "../../shared/frameworks/cis-trend"
 import { cisPortfolioRows, type CisPortfolioEntry } from "../../shared/frameworks/cis-portfolio"
 import { parseRecommendationList, type RecommendationList } from "../../shared/frameworks/cis-manual"
@@ -334,8 +334,10 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
   const [exceptionForms, setExceptionForms] = useState<Record<number, { policyName: string; settingId: string; owner: string; reason: string; expiresOn: string }>>({})
   const [exceptionOpen, setExceptionOpen] = useState<Record<number, boolean>>({})
   const [cisRun, setCisRun] = useState<AssessJobSnapshot | null>(null)
+  const [setupRequested, setSetupRequested] = useState(false)
   const cisRunGeneration = useRef(0)
   const isCis = framework.id === CIS_BENCHMARKS_ID
+  const stage = isCis ? cisStage({ hasRun: !!cisRun, hasAssessment: !!assessment, setupRequested }) : null
   const fromKit = isCis && isKitPackReference(reference, (kitConversion?.packs ?? []).map(pack => pack.reference), policies)
   const credentials = selectedTenant?.credentials
   // Reports of licensed CIS content are Pro and MSP; the main process checks the same plan.
@@ -415,6 +417,7 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
           setCisRun({ ...snapshot, findings: accumulation.findings })
           setPolicies(installPack.policies); setReference(installPack.reference)
           setHistorical(false); setSelected(new Set()); setPreview(false); setConfirmed(false); setCreation(null); setPage(0); setFilter("All")
+          setSetupRequested(false)
           setAssessment(completed)
           const saved = await workspaceRequest("workspace-load")
           if (cisRunGeneration.current !== generation) return
@@ -461,10 +464,42 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
   </div>
   const savedHistoryRows = workspace?.history.map(entry => <div key={entry.assessment.runId} className="mt-3 flex flex-wrap items-center gap-3 border-t pt-3 text-sm">
     <span>{entry.assessment.assessedAt} · {entry.assessment.reference} · {entry.assessment.findings.length} findings{entry.creation ? ` · ${entry.creation.results.length} creation outcomes` : ""}</span>
-    <button className={button} disabled={!!busy} onClick={() => { reset(); setLoadedKitLevel(null); setPolicies(entry.policies); setReference(entry.assessment.reference); setAssessment(entry.assessment); setCreation(entry.creation ?? null); setHistorical(true) }}>View read-only</button>
+    <button className={button} disabled={!!busy} onClick={() => { reset(); setSetupRequested(false); setLoadedKitLevel(null); setPolicies(entry.policies); setReference(entry.assessment.reference); setAssessment(entry.assessment); setCreation(entry.creation ?? null); setHistorical(true) }}>View read-only</button>
     {!isCis && <ExportButton framework={framework} plan={plan} disabled={!!busy} onClick={() => exportSaved("json", entry.assessment.runId)}>Export JSON</ExportButton>}
     <button className={button} disabled={!!busy} onClick={async () => { if (await confirm({ title: "Delete saved assessment?", description: "Delete this saved assessment?", confirmLabel: "Delete", destructive: true })) void perform("Deleting assessment…", async () => { const saved = await workspaceRequest("workspace-delete-assessment", { runId: entry.assessment.runId }); setWorkspace(saved); setPolicies(saved.policies); setReference(saved.reference); reset() }) }}>Delete</button>
   </div>)
+  const exportCisPdf = () => {
+    if (!assessment) return
+    void perform("Exporting PDF…", async () => {
+      const { file } = await request<{ file: ExportFile }>({ action: "workspace-cis-pdf", tenantId: credentials?.tenantId, tenantName: selectedTenant?.name, frameworkId: framework.id, runId: assessment.runId, ...(denominator ? { denominator } : {}) })
+      saveExport(file)
+    })
+  }
+  const exportReadinessCsv = () => {
+    if (!readiness) return
+    const exportedAt = new Date().toISOString()
+    const name = governanceExportName("cis-readiness", selectedTenant?.name ?? null, exportedAt)
+    save(new Blob([`\uFEFF${cisReadinessCsv(readiness)}`], { type: "text/csv;charset=utf-8" }), `${name}.csv`)
+  }
+  const exportReadinessJson = () => {
+    if (!readiness) return
+    const exportedAt = new Date().toISOString()
+    const name = governanceExportName("cis-readiness", selectedTenant?.name ?? null, exportedAt)
+    save(new Blob([cisReadinessJson(readiness, selectedTenant?.name ?? null, exportedAt)], { type: "application/json" }), `${name}.json`)
+  }
+  const savedBlock = workspace ? (isCis ? <details className="mb-5 rounded-3xl bg-white p-6" aria-label="Saved assessment history">
+    <summary className="cursor-pointer text-lg font-medium">Saved assessments</summary>
+    <p className="mt-2 text-sm text-gray-600">Packs, source versions and results are saved in encrypted storage on this device. Historical assessments are read-only. Run a fresh comparison before remediation.</p>
+    {savedHistoryRows}
+    {historical && <p role="status" className="mt-3 text-sm text-amber-800">Viewing a saved assessment. Compare again to obtain current evidence and enable remediation.</p>}
+    {savedWorkspaceActions}
+  </details> : <section className="mb-5 rounded-3xl bg-white p-6" aria-label="Saved assessment history">
+    <h2 className="text-lg font-medium">Saved workspace and history</h2>
+    <p className="mt-2 text-sm text-gray-600">Packs, source versions and results are saved in encrypted storage on this device. Historical assessments are read-only. Run a fresh comparison before remediation.</p>
+    {savedWorkspaceActions}
+    {savedHistoryRows}
+    {historical && <p role="status" className="mt-3 text-sm text-amber-800">Viewing a saved assessment. Compare again to obtain current evidence and enable remediation.</p>}
+  </section>) : null
   return <div className={standalone ? "mx-auto max-w-[1600px] space-y-6 p-6 lg:p-8" : "mx-auto max-w-6xl p-6 lg:p-8"}>
     {confirmDialog}
     {!standalone && <Link to="/portal/frameworks" className="text-sm text-blue-700 hover:underline">Frameworks</Link>}
@@ -474,34 +509,42 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
     </div>
     {isCis && <nav aria-label="CIS Benchmarks progress" className="mt-6">
       <ol className="flex flex-wrap gap-2">
-        {cisFlowSteps(!!kitConversion, !!assessment).map(item => <li key={item.step} {...(item.state === "current" ? { "aria-current": "step" as const } : {})} className={cn("inline-flex h-10 items-center gap-2 rounded-full border px-4 text-sm font-medium", item.state === "complete" ? "border-transparent bg-green-50 text-green-800" : item.state === "current" ? "border-transparent bg-primary text-primary-foreground" : "border-gray-200 bg-white text-gray-500")}>
+        {cisFlowSteps(!!kitConversion, !!assessment, !!cisRun).map(item => <li key={item.step} {...(item.state === "current" ? { "aria-current": "step" as const } : {})} className={cn("inline-flex h-10 items-center gap-2 rounded-full border px-4 text-sm font-medium", item.state === "complete" ? "border-transparent bg-green-50 text-green-800" : item.state === "current" ? "border-transparent bg-primary text-primary-foreground" : "border-gray-200 bg-white text-gray-500")}>
           {item.state === "complete" ? <Check className="h-4 w-4" aria-hidden="true" /> : <span aria-hidden="true" className="flex h-5 w-5 items-center justify-center rounded-full bg-white/20 text-xs font-semibold">{item.step}</span>}
           <span>{item.step} {item.label}</span>
         </li>)}
       </ol>
     </nav>}
-    <details className="group my-6 rounded-3xl bg-blue-50/60 px-6 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)] lg:px-7 [&[open]_.chevron]:rotate-180">
+    {isCis && stage === "results" && assessment && <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-white p-5 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+      <div>
+        <p className="text-base font-medium text-gray-900">{assessment.reference}</p>
+        <p className="mt-1 text-sm text-gray-500">{assessment.policyCount} tenant policies read · {new Date(assessment.assessedAt).toLocaleString()}</p>
+        {historical && <p role="status" className="mt-1 text-sm text-amber-800">Viewing a saved assessment. Compare again to obtain current evidence and enable remediation.</p>}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className={primary} disabled={!!busy || !!cisRun || !credentials || !policies.length || !reference.trim()} onClick={() => void startCisAssessment()}>Run again</button>
+        <button type="button" className={button} onClick={() => setSetupRequested(true)}>New assessment</button>
+        <CisExportMenu plan={plan} disabled={!!busy} readinessDisabled={!readiness} onPdf={exportCisPdf} onFindingsCsv={() => exportSaved("csv", assessment.runId)} onFindingsJson={() => exportSaved("json", assessment.runId)} onReadinessCsv={exportReadinessCsv} onReadinessJson={exportReadinessJson} />
+      </div>
+    </div>}
+    {isCis && stage === "running" && cisRun && <>{error && <p role="alert" className="mt-6 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}<CisRunView run={cisRun} /></>}
+    {isCis && stage === "setup" && assessment && <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-white p-5 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+      <div>
+        <p className="text-base font-medium text-gray-900">{assessment.reference}</p>
+        <p className="mt-1 text-sm text-gray-500">{assessment.policyCount} tenant policies read · {new Date(assessment.assessedAt).toLocaleString()}</p>
+      </div>
+      <button type="button" className={button} onClick={() => setSetupRequested(false)}>Back to results</button>
+    </div>}
+    {(!isCis || stage === "setup") && <details className="group my-6 rounded-3xl bg-blue-50/60 px-6 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)] lg:px-7 [&[open]_.chevron]:rotate-180">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-4 [&::-webkit-details-marker]:hidden">
         <span className="flex items-center gap-3 text-sm"><Info className="size-4 shrink-0 text-blue-700" aria-hidden="true" /><span><strong className="font-medium text-gray-900">Assessment coverage</strong><span className="text-gray-600"> · What is compared, content sources and limits.</span></span></span>
         <ChevronDown className="chevron size-4 shrink-0 text-gray-500 transition-transform" aria-hidden="true" />
       </summary>
       <div className="mt-4 space-y-2 border-t border-blue-100 pt-4 text-sm leading-6 text-gray-700"><p>Mapping format v1. Automatic content: NCSC Device Security Guidance 2025 Windows Settings Catalog only. Other frameworks use administrator-supplied mappings. No certification or complete framework assessment is implied.</p><p>{framework.coverage}</p>{framework.licenseNotice && <p>{framework.licenseNotice}</p>}<p>Comparison covers Settings Catalog root settings and their nested values. Assignment targets, exclusions and filter references are reported separately from configuration. Group membership, device applicability, enforcement and other policy families remain unavailable. “Present” means a matching configuration exists; it does not mean the setting is assigned or enforced.</p></div>
-    </details>
-    {workspace && (isCis ? <details className="mb-5 rounded-3xl bg-white p-6" aria-label="Saved assessment history">
-      <summary className="cursor-pointer text-lg font-medium">Saved assessments</summary>
-      <p className="mt-2 text-sm text-gray-600">Packs, source versions and results are saved in encrypted storage on this device. Historical assessments are read-only. Run a fresh comparison before remediation.</p>
-      {savedHistoryRows}
-      {historical && <p role="status" className="mt-3 text-sm text-amber-800">Viewing a saved assessment. Compare again to obtain current evidence and enable remediation.</p>}
-      {savedWorkspaceActions}
-    </details> : <section className="mb-5 rounded-3xl bg-white p-6" aria-label="Saved assessment history">
-      <h2 className="text-lg font-medium">Saved workspace and history</h2>
-      <p className="mt-2 text-sm text-gray-600">Packs, source versions and results are saved in encrypted storage on this device. Historical assessments are read-only. Run a fresh comparison before remediation.</p>
-      {savedWorkspaceActions}
-      {savedHistoryRows}
-      {historical && <p role="status" className="mt-3 text-sm text-amber-800">Viewing a saved assessment. Compare again to obtain current evidence and enable remediation.</p>}
-    </section>)}
-    {framework.id === CIS_BENCHMARKS_ID && <details className="mb-5"><summary className="inline-flex h-10 cursor-pointer list-none items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 [&::-webkit-details-marker]:hidden">Portfolio</summary><div className="mt-3"><CisPortfolio plan={plan} /></div></details>}
-    <section aria-labelledby="pack-title" className="rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+    </details>}
+    {(!isCis || stage === "setup") && savedBlock}
+    {framework.id === CIS_BENCHMARKS_ID && stage === "setup" && <details className="mb-5"><summary className="inline-flex h-10 cursor-pointer list-none items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 [&::-webkit-details-marker]:hidden">Portfolio</summary><div className="mt-3"><CisPortfolio plan={plan} /></div></details>}
+    {(!isCis || stage === "setup") && <section aria-labelledby="pack-title" className="rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
       <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="pack-title" className="text-xl font-medium tracking-tight">{isCis ? "1. Import a CIS Build Kit" : "1. Choose your policy pack"}</h2><span className="text-sm text-gray-500">{policies.length ? `${policies.length} policies loaded` : "No pack loaded"}</span></div>
       {!isCis && <p className="mt-2 text-sm text-gray-600">Import one or more Settings Catalog JSON exports. Review the source, version and intended profile before comparison. Loading a pack does not change your tenant.</p>}
       <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -615,17 +658,17 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
         </>}
         <details className="mt-4 text-sm"><summary className="cursor-pointer text-gray-700">Review {policies.length} loaded policies and remove alternative profiles</summary><ul className="mt-3 max-h-64 divide-y divide-gray-100 overflow-auto rounded-2xl bg-gray-50">{policies.map((p, i) => <li key={`${p.name}:${i}`} className="flex items-center justify-between gap-3 p-3"><span>{p.name}<span className="ml-2 text-xs text-gray-500">{p.settings.length} root settings</span></span><button disabled={!!busy} className="text-blue-700 hover:underline disabled:opacity-50" aria-label={`Remove ${p.name}`} onClick={() => { setLoadedKitLevel(null); setPolicies(policies.filter((_, index) => index !== i)); reset() }}>Remove</button></li>)}</ul></details>
       </>}
-    </section>
-    <section aria-labelledby="compare-title" className="mt-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
-      <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 id="compare-title" className="text-xl font-medium tracking-tight">2. Compare with your tenant</h2><p className="mt-1 text-sm text-gray-600">{selectedTenant ? `Selected tenant: ${selectedTenant.name}` : "Choose a connected tenant using the sidebar."}</p></div>
+    </section>}
+    {(!isCis || stage !== "running") && <section {...(isCis && stage === "results" ? { "aria-label": "Assessment results" } : { "aria-labelledby": "compare-title" })} className="mt-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+      {(!isCis || stage !== "results") && <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 id="compare-title" className="text-xl font-medium tracking-tight">2. Compare with your tenant</h2><p className="mt-1 text-sm text-gray-600">{selectedTenant ? `Selected tenant: ${selectedTenant.name}` : "Choose a connected tenant using the sidebar."}</p></div>
         {isCis ? <button className={primary} disabled={!!busy || !!cisRun || !credentials || !policies.length || !reference.trim()} onClick={() => void startCisAssessment()}>{cisRun ? "Assessment running" : assessment ? "Run again" : "Start Assessment"}</button> : <button className={primary} disabled={!!busy || !credentials || !policies.length || !reference.trim()} onClick={() => void perform("Reading tenant policies and comparing settings…", async () => {
           reset(); const result = await request<Assessment>({ action: "assess", tenantId: credentials!.tenantId, appId: credentials!.appId, frameworkId: framework.id, reference, policies }); setAssessment(result); setWorkspace(await workspaceRequest("workspace-load"))
-        })}>{assessment ? "Compare again" : "Run comparison"}</button>}</div>
+        })}>{assessment ? "Compare again" : "Run comparison"}</button>}</div>}
       {busy && <p role="status" className="mt-4 text-sm text-blue-700">{busy}</p>}
       {busy && isCis && <div role="progressbar" aria-label={busy} className="mt-2 h-2 overflow-hidden rounded-full bg-gray-100"><div className="h-full w-1/3 animate-pulse rounded-full bg-primary" /></div>}
       {error && <p role="alert" className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}
-      {isCis && cisRun ? <CisRunView run={cisRun} /> : assessment && <>
-        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500"><p>{assessment.policyCount} tenant policies read · {new Date(assessment.assessedAt).toLocaleString()}</p>{isCis ? <CisExportMenu plan={plan} disabled={!!busy} readinessDisabled={!readiness} onPdf={() => void perform("Exporting PDF…", async () => { const { file } = await request<{ file: ExportFile }>({ action: "workspace-cis-pdf", tenantId: credentials?.tenantId, tenantName: selectedTenant?.name, frameworkId: framework.id, runId: assessment.runId, ...(denominator ? { denominator } : {}) }); saveExport(file) })} onFindingsCsv={() => exportSaved("csv", assessment.runId)} onFindingsJson={() => exportSaved("json", assessment.runId)} onReadinessCsv={() => { if (!readiness) return; const exportedAt = new Date().toISOString(); const name = governanceExportName("cis-readiness", selectedTenant?.name ?? null, exportedAt); save(new Blob([`\uFEFF${cisReadinessCsv(readiness)}`], { type: "text/csv;charset=utf-8" }), `${name}.csv`) }} onReadinessJson={() => { if (!readiness) return; const exportedAt = new Date().toISOString(); const name = governanceExportName("cis-readiness", selectedTenant?.name ?? null, exportedAt); save(new Blob([cisReadinessJson(readiness, selectedTenant?.name ?? null, exportedAt)], { type: "application/json" }), `${name}.json`) }} /> : <div className="flex flex-wrap gap-2">{(["pdf", "csv", "json"] as ("pdf" | "csv" | "json")[]).map(format => <ExportButton key={format} framework={framework} plan={plan} disabled={!!busy} onClick={() => exportSaved(format, assessment.runId)}><Download className="h-4 w-4" aria-hidden="true" />{format === "pdf" ? "PDF report" : format.toUpperCase()}</ExportButton>)}</div>}</div>
+      {assessment && (!isCis || stage === "results") && <>
+        {!isCis && <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500"><p>{assessment.policyCount} tenant policies read · {new Date(assessment.assessedAt).toLocaleString()}</p><div className="flex flex-wrap gap-2">{(["pdf", "csv", "json"] as ("pdf" | "csv" | "json")[]).map(format => <ExportButton key={format} framework={framework} plan={plan} disabled={!!busy} onClick={() => exportSaved(format, assessment.runId)}><Download className="h-4 w-4" aria-hidden="true" />{format === "pdf" ? "PDF report" : format.toUpperCase()}</ExportButton>)}</div></div>}
         {readiness && <section aria-label="CIS readiness" className="mb-5 rounded-2xl bg-gray-50 p-4 text-sm text-gray-700">
           <h3 className="font-medium text-gray-900">CIS readiness</h3>
           <p className="mt-2">{readiness.manualNote} This view covers the automated settings in the imported pack only.</p>
@@ -699,7 +742,9 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
         {framework.id === "cis-benchmarks" ? <CisRemediationPanel tenant={selectedTenant ?? undefined} assessment={assessment} policies={policies} reference={reference} selectedKeys={selected} onRecompare={() => void perform("Reading tenant policies and comparing settings...", async () => { reset(); const result = await request<Assessment>({ action: "assess", tenantId: credentials!.tenantId, appId: credentials!.appId, frameworkId: framework.id, reference, policies }); setAssessment(result); setWorkspace(await workspaceRequest("workspace-load")) })} /> : framework.comparisonOnly ? <p className="mt-5 border-t pt-4 text-sm text-gray-600">This pack is available for comparison and reports only. Review missing settings and configure them through your own change process.</p>
         : <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t pt-4"><p className="text-sm text-gray-600">{chosen.length} missing root settings selected · {payloads.length} new {payloads.length === 1 ? "policy" : "policies"}</p><button className={primary} disabled={!chosen.length || !!busy || !!creation || historical} onClick={() => { setPreview(true); setConfirmed(false) }}>Preview recommended policies</button></div>}
       </>}
-    </section>
+    </section>}
+    {isCis && stage === "results" && savedBlock}
+    {framework.id === CIS_BENCHMARKS_ID && stage === "results" && <details className="mb-5"><summary className="inline-flex h-10 cursor-pointer list-none items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 [&::-webkit-details-marker]:hidden">Portfolio</summary><div className="mt-3"><CisPortfolio plan={plan} /></div></details>}
     {preview && !framework.comparisonOnly && <section aria-labelledby="preview-title" className="mt-5 rounded-3xl border-2 border-blue-200 bg-white p-7"><h2 id="preview-title" className="text-xl font-medium tracking-tight">3. Review unassigned policies</h2><p className="mt-2 text-sm text-gray-600">Create {payloads.length} new {payloads.length === 1 ? "policy" : "policies"} in <strong>{selectedTenant?.name}</strong> using the selected missing settings and their nested dependencies. Existing policies stay unchanged. Review target groups and conflicts in Intune before assigning these policies.</p><details className="mt-4"><summary className="cursor-pointer text-sm font-medium">Inspect the exact policy payloads</summary><pre className="mt-3 max-h-96 overflow-auto rounded-lg bg-gray-950 p-4 text-xs text-gray-100">{JSON.stringify(payloads, null, 2)}</pre></details><label className="mt-5 flex items-start gap-3 text-sm"><input type="checkbox" checked={confirmed} disabled={!!busy || !!creation} onChange={e => setConfirmed(e.target.checked)} className="mt-1 h-4 min-h-0 w-4 shrink-0" /><span>I reviewed these recommendations and want to create unassigned policies in {selectedTenant?.name}.</span></label><button className={`${primary} mt-4`} disabled={!confirmed || !!busy || !!creation} onClick={() => void perform("Rechecking tenant policies and creating unassigned policies…", async () => {
       const result = await request<NonNullable<typeof creation>>({ action: "create", tenantId: credentials!.tenantId, appId: credentials!.appId, runId: assessment!.runId, keys: [...selected], confirmUnassigned: true }); setCreation(result); setWorkspace(await workspaceRequest("workspace-load"))
     })}>Create {payloads.length} unassigned {payloads.length === 1 ? "policy" : "policies"}</button>

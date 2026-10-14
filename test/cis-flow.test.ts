@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { cisFlowSteps, isKitPackReference, kitLevelForPolicy, packReferenceForPolicy, packSettingCount } from "../src/shared/frameworks/cis-flow"
+import { cisFlowSteps, cisStage, isKitPackReference, kitLevelForPolicy, packReferenceForPolicy, packSettingCount } from "../src/shared/frameworks/cis-flow"
 import type { BaselinePolicy } from "../src/shared/frameworks/policies"
 import type { KitPack } from "../src/shared/frameworks/cis-kit"
 
@@ -29,6 +29,48 @@ describe("cisFlowSteps", () => {
     expect(cisFlowSteps(false, true).filter((item) => item.state === "current")).toHaveLength(1)
     expect(cisFlowSteps(false, true)[0]?.state).not.toBe("complete")
     expect(cisFlowSteps(false, true)[2]?.state).toBe("current")
+  })
+
+  it("makes step 2 current while a run is active, even over an older assessment", () => {
+    expect(cisFlowSteps(true, true, true).map((item) => item.state)).toEqual(["complete", "current", "upcoming"])
+    expect(cisFlowSteps(false, true, true).map((item) => item.state)).toEqual(["upcoming", "current", "upcoming"])
+    expect(cisFlowSteps(true, true, true).filter((item) => item.state === "current")).toHaveLength(1)
+    expect(cisFlowSteps(true, true, true)[1]?.step).toBe(2)
+  })
+
+  it("makes step 2 current while a first run is active", () => {
+    expect(cisFlowSteps(true, false, true).map((item) => item.state)).toEqual(["complete", "current", "upcoming"])
+    expect(cisFlowSteps(false, false, true).map((item) => item.state)).toEqual(["upcoming", "current", "upcoming"])
+  })
+})
+
+describe("cisStage", () => {
+  it("shows setup before any run or assessment", () => {
+    expect(cisStage({ hasRun: false, hasAssessment: false, setupRequested: false })).toBe("setup")
+  })
+
+  it("shows running while a run is active, whatever else is true", () => {
+    expect(cisStage({ hasRun: true, hasAssessment: false, setupRequested: false })).toBe("running")
+    expect(cisStage({ hasRun: true, hasAssessment: true, setupRequested: false })).toBe("running")
+    expect(cisStage({ hasRun: true, hasAssessment: true, setupRequested: true })).toBe("running")
+  })
+
+  it("shows results when an assessment exists and setup was not requested", () => {
+    expect(cisStage({ hasRun: false, hasAssessment: true, setupRequested: false })).toBe("results")
+  })
+
+  it("shows setup when the user asked for it, keeping the assessment", () => {
+    expect(cisStage({ hasRun: false, hasAssessment: true, setupRequested: true })).toBe("setup")
+  })
+
+  it("returns to results once a run completes and clears the setup request", () => {
+    expect(cisStage({ hasRun: false, hasAssessment: true, setupRequested: false })).toBe("results")
+    expect(cisStage({ hasRun: false, hasAssessment: false, setupRequested: true })).toBe("setup")
+  })
+
+  it("returns a failed run to the stage it started from", () => {
+    expect(cisStage({ hasRun: false, hasAssessment: true, setupRequested: true })).toBe("setup")
+    expect(cisStage({ hasRun: false, hasAssessment: true, setupRequested: false })).toBe("results")
   })
 })
 
