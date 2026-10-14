@@ -129,6 +129,7 @@ interface AssessJob {
   tenantId: string
   frameworkId: string
   reference: string
+  policiesJson: string
   phase: AssessPhase
   read: number
   total: number
@@ -372,10 +373,13 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     pruneJobs()
     const running = [...jobs.values()].filter(job => !isFinished(job))
     const duplicate = running.find(job => job.tenantId === tenant && job.frameworkId === body.frameworkId)
-    if (duplicate) return { jobId: duplicate.id }
+    if (duplicate) {
+      if (duplicate.reference !== body.reference || duplicate.policiesJson !== JSON.stringify(policies)) throw new FrameworkError("An assessment is already running for a different policy pack. Wait for it to finish before starting another.", 409)
+      return { jobId: duplicate.id }
+    }
     if (running.length >= MAX_JOBS) throw new FrameworkError("Too many assessments are running. Wait for a running assessment to finish before starting another.", 409)
     const job: AssessJob = {
-      id: randomUUID(), tenantId: tenant, frameworkId: body.frameworkId, reference: body.reference,
+      id: randomUUID(), tenantId: tenant, frameworkId: body.frameworkId, reference: body.reference, policiesJson: JSON.stringify(policies),
       phase: "connecting", read: 0, total: 0, currentPolicy: "",
       comparedPolicies: 0, packPolicies: policies.length, currentPackPolicy: "",
       findings: [], error: null, assessment: null, expiresAt: null,

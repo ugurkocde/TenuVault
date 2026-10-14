@@ -14,13 +14,13 @@ import { cisFlowSteps, isKitPackReference, kitLevelForPolicy, packSettingCount }
 import { cisDriftSignals, cisReadinessTrend, sparklineSegments, type CisTrendPoint } from "../../shared/frameworks/cis-trend"
 import { cisPortfolioRows, type CisPortfolioEntry } from "../../shared/frameworks/cis-portfolio"
 import { parseRecommendationList, type RecommendationList } from "../../shared/frameworks/cis-manual"
-import { cisReadinessCsv, cisReadinessJson } from "../features/shared/governance-export"
-import { GovernanceExportButtons } from "../features/shared/GovernanceExportButtons"
+import { cisReadinessCsv, cisReadinessJson, governanceExportName } from "../features/shared/governance-export"
+import { accumulateCisFindings, cisRunReceivedLabel, cisRunSteps, cisRunTallies, emptyCisRunAccumulation, resolveCisRunCompletion, type CisRunPack } from "../../shared/frameworks/cis-run"
 import { useInternalCisBenchmarks } from "../lib/internal-cis"
 import { comparable, parsePolicies, remediationPayload, type Assessment, type BaselinePolicy, type Finding, type Observation } from "../../shared/frameworks/policies"
 import { summarizeSetting } from "../../shared/frameworks/setting-summary"
 import { CIS_FRAMEWORKS, type Plan } from "../../shared/plans"
-import type { ExportFile } from "../../main/frameworks/service"
+import type { AssessJobSnapshot, ExportFile } from "../../main/frameworks/service"
 import type { NcscPack } from "../../main/frameworks/ncsc"
 import { tenantLicense, tenantPlan, useLicense, useTenantPlan } from "../lib/license"
 import { CisRemediationPanel } from "../features/cis-remediation/CisRemediationPanel"
@@ -250,6 +250,64 @@ function CisPortfolio({ plan }: { plan: Plan | null }) {
   </section>
 }
 
+function CisRunView({ run }: { run: AssessJobSnapshot }) {
+  const steps = cisRunSteps(run.phase)
+  const tallies = cisRunTallies(run.findings)
+  const running = run.phase !== "done" && run.phase !== "failed"
+  return <div className="mt-5 rounded-3xl bg-gray-50 p-6">
+    <div role="status">
+      <h3 className="text-lg font-medium text-gray-900">Assessment in progress</h3>
+    </div>
+    <ol className="mt-4 space-y-3">
+      {steps.map((step, index) => <li key={step.label} {...(step.state === "current" ? { "aria-current": "step" as const } : {})} className="flex items-start gap-3 text-sm">
+        <span aria-hidden="true" className={cn("mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold", step.state === "done" ? "bg-green-100 text-green-800" : step.state === "current" ? "bg-primary text-primary-foreground" : "bg-gray-200 text-gray-500")}>{step.state === "done" ? <Check className="h-3.5 w-3.5" /> : index + 1}</span>
+        <span className="min-w-0 flex-1">
+          <span className={cn("font-medium", step.state === "waiting" ? "text-gray-500" : "text-gray-900")}>{step.label}</span>
+          <span className="ml-2 text-xs text-gray-500">{step.state === "done" ? "Done" : step.state === "current" ? "In progress" : "Waiting"}</span>
+          {index === 1 && step.state !== "waiting" && <>
+            <span className="mt-1 block text-xs text-gray-600">{run.read} of {run.total} policies read{run.currentPolicy ? `, current: ${run.currentPolicy}` : ""}</span>
+            <span role="progressbar" aria-label="Reading tenant policies" aria-valuemin={0} aria-valuemax={run.total} aria-valuenow={run.read} aria-valuetext={`${run.read} of ${run.total} policies read`} className="mt-2 block h-2 overflow-hidden rounded-full bg-gray-200"><span className="block h-full rounded-full bg-primary transition-all" style={{ width: run.total ? `${(run.read / run.total) * 100}%` : "0%" }} /></span>
+          </>}
+          {index === 2 && step.state !== "waiting" && <>
+            <span className="mt-1 block text-xs text-gray-600">{run.comparedPolicies} of {run.packPolicies} pack policies compared{run.currentPackPolicy ? `, current: ${run.currentPackPolicy}` : ""}</span>
+            <span role="progressbar" aria-label="Comparing with the benchmark" aria-valuemin={0} aria-valuemax={run.packPolicies} aria-valuenow={run.comparedPolicies} aria-valuetext={`${run.comparedPolicies} of ${run.packPolicies} pack policies compared`} className="mt-2 block h-2 overflow-hidden rounded-full bg-gray-200"><span className="block h-full rounded-full bg-primary transition-all" style={{ width: run.packPolicies ? `${(run.comparedPolicies / run.packPolicies) * 100}%` : "0%" }} /></span>
+          </>}
+        </span>
+      </li>)}
+    </ol>
+    <div className="mt-5 flex flex-wrap items-center gap-2">
+      <span className="text-xs font-medium text-gray-500">Partial tallies:</span>
+      {(["Present", "Different", "Missing", "Review"] as const).map(status => <span key={status} className="rounded-full bg-white px-3 py-1 text-xs font-medium text-gray-700">{status} {tallies[status]}</span>)}
+    </div>
+    {running && <p className="mt-3 text-xs text-gray-500">{cisRunReceivedLabel(run.findings.length)}</p>}
+    {run.findings.length > 0 && <div className="mt-3 space-y-2">{run.findings.map(finding => <FindingRow key={finding.key} finding={finding} disabled checked={false} onChange={() => undefined} remediable />)}</div>}
+  </div>
+}
+
+function CisExportMenu({ plan, disabled, readinessDisabled, onPdf, onFindingsCsv, onFindingsJson, onReadinessCsv, onReadinessJson }: {
+  plan: Plan | null
+  disabled: boolean
+  readinessDisabled: boolean
+  onPdf: () => void
+  onFindingsCsv: () => void
+  onFindingsJson: () => void
+  onReadinessCsv: () => void
+  onReadinessJson: () => void
+}) {
+  const close = (event: React.SyntheticEvent) => { event.currentTarget.closest("details")?.removeAttribute("open") }
+  const itemClass = "flex w-full items-center justify-start gap-2 rounded-xl px-3 py-2 text-left text-sm text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+  return <details className="relative">
+    <summary className={cn(button, "cursor-pointer list-none [&::-webkit-details-marker]:hidden")}>Export <ChevronDown className="h-4 w-4" aria-hidden="true" /></summary>
+    <div className="absolute right-0 z-10 mt-2 w-56 rounded-2xl border border-gray-200 bg-white p-2 shadow-lg">
+      <GatedButton feature="baselineAllPlatforms" plan={plan} variant="ghost" size="sm" disabled={disabled} className="w-full justify-start" onClick={event => { close(event); onPdf() }}>PDF report</GatedButton>
+      <GatedButton feature="baselineAllPlatforms" plan={plan} variant="ghost" size="sm" disabled={disabled} className="w-full justify-start" onClick={event => { close(event); onFindingsCsv() }}>Findings CSV</GatedButton>
+      <GatedButton feature="baselineAllPlatforms" plan={plan} variant="ghost" size="sm" disabled={disabled} className="w-full justify-start" onClick={event => { close(event); onFindingsJson() }}>Findings JSON</GatedButton>
+      <button type="button" className={itemClass} disabled={disabled || readinessDisabled} onClick={event => { close(event); onReadinessCsv() }}>Readiness CSV</button>
+      <button type="button" className={itemClass} disabled={disabled || readinessDisabled} onClick={event => { close(event); onReadinessJson() }}>Readiness JSON</button>
+    </div>
+  </details>
+}
+
 function FrameworkDetail({ framework, standalone = false }: { framework: Framework; standalone?: boolean }) {
   const { selectedTenant } = useSelectedTenant()
   const [policies, setPolicies] = useState<BaselinePolicy[]>([])
@@ -275,6 +333,8 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
   const [recommendationList, setRecommendationList] = useState<RecommendationList | undefined>(undefined)
   const [exceptionForms, setExceptionForms] = useState<Record<number, { policyName: string; settingId: string; owner: string; reason: string; expiresOn: string }>>({})
   const [exceptionOpen, setExceptionOpen] = useState<Record<number, boolean>>({})
+  const [cisRun, setCisRun] = useState<AssessJobSnapshot | null>(null)
+  const cisRunGeneration = useRef(0)
   const isCis = framework.id === CIS_BENCHMARKS_ID
   const fromKit = isCis && isKitPackReference(reference, (kitConversion?.packs ?? []).map(pack => pack.reference), policies)
   const credentials = selectedTenant?.credentials
@@ -315,6 +375,64 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
     setBusy(label); setError("")
     try { await action() } catch (e) { setError(e instanceof Error ? e.message : "The request failed.") } finally { setBusy("") }
   }
+  useEffect(() => () => { cisRunGeneration.current += 1 }, [])
+  async function startCisAssessment() {
+    if (!isCis || cisRun || !credentials) return
+    const generation = ++cisRunGeneration.current
+    const tenantId = credentials.tenantId
+    const appId = credentials.appId
+    const capturedPack: CisRunPack = { policies, reference }
+    setError("")
+    setBusy("Reading tenant policies and comparing settings…")
+    setCisRun({ jobId: "", phase: "connecting", status: "running", state: "running", tenantId, frameworkId: framework.id, read: 0, total: 0, currentPolicy: "", comparedPolicies: 0, packPolicies: capturedPack.policies.length, currentPackPolicy: "", findings: [], nextSince: 0, error: null, assessment: null })
+    try {
+      const { jobId } = await request<{ jobId: string }>({ action: "assess-start", tenantId, appId, frameworkId: framework.id, reference: capturedPack.reference, policies: capturedPack.policies })
+      if (cisRunGeneration.current !== generation) return
+      let accumulation = emptyCisRunAccumulation()
+      for (;;) {
+        if (cisRunGeneration.current !== generation) return
+        const snapshot = await request<AssessJobSnapshot>({ action: "assess-status", jobId, tenantId, frameworkId: framework.id, since: accumulation.since })
+        if (cisRunGeneration.current !== generation) return
+        accumulation = accumulateCisFindings(accumulation, snapshot.findings, snapshot.nextSince)
+        if (snapshot.phase === "failed") {
+          setError(snapshot.error || "Assessment failed.")
+          setCisRun(null)
+          return
+        }
+        if (snapshot.phase === "done") {
+          const completed = snapshot.assessment
+          if (!completed) {
+            setError("Assessment finished without results.")
+            setCisRun(null)
+            return
+          }
+          const installPack = resolveCisRunCompletion(capturedPack, { reference: completed.reference, packPolicies: snapshot.packPolicies })
+          if (!installPack) {
+            setError("Assessment finished for a different policy pack than the one loaded. Its results were not applied. Load the pack you want to assess and run the assessment again.")
+            setCisRun(null)
+            return
+          }
+          setCisRun({ ...snapshot, findings: accumulation.findings })
+          setPolicies(installPack.policies); setReference(installPack.reference)
+          setHistorical(false); setSelected(new Set()); setPreview(false); setConfirmed(false); setCreation(null); setPage(0); setFilter("All")
+          setAssessment(completed)
+          const saved = await workspaceRequest("workspace-load")
+          if (cisRunGeneration.current !== generation) return
+          setWorkspace(saved)
+          setCisRun(null)
+          return
+        }
+        setCisRun({ ...snapshot, findings: accumulation.findings })
+        await new Promise(resolve => setTimeout(resolve, 600))
+      }
+    } catch (e) {
+      if (cisRunGeneration.current !== generation) return
+      setError(e instanceof Error ? e.message : "The request failed.")
+      setCisRun(null)
+    } finally {
+      if (cisRunGeneration.current === generation) setBusy("")
+    }
+  }
   function clearKit() { setKitConversion(null); setKitDetected({ id: "" }); setKitFiles([]); setKitBenchmark(""); setKitVersion(""); setLoadedKitLevel(null); setPolicies([]); setReference(""); reset() }
   function applyKitConversion(files: KitFile[], id: string, version?: string) {
     const conversion = convertKit(files, { id, ...(version ? { version } : {}) })
@@ -337,6 +455,16 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
     setExceptionForms(old => ({ ...old, [level]: { ...(old[level] ?? { policyName: "", settingId: "", owner: "", reason: "", expiresOn: "" }), policyName: finding.policyName, settingId: finding.settingId } }))
     setExceptionOpen(old => ({ ...old, [level]: true }))
   }
+  const savedWorkspaceActions = <div className="mt-3 flex flex-wrap gap-3">
+    <ExportButton framework={framework} plan={plan} disabled={!!busy || !workspace?.history.length} onClick={() => exportSaved("json")}>{isCis ? "Export saved assessments JSON" : "Export saved assessments"}</ExportButton>
+    <button className={button} disabled={!!busy} onClick={async () => { if (await confirm({ title: "Delete saved workspace?", description: "Delete this saved workspace and all assessment history?", confirmLabel: "Delete workspace", destructive: true })) void perform("Deleting workspace…", async () => { suppressedDraft.current = JSON.stringify({ policies, reference }); const saved = await workspaceRequest("workspace-delete"); suppressedDraft.current = JSON.stringify({ policies: [], reference: "" }); setWorkspace(saved); setKitConversion(null); setKitFiles([]); setKitDetected({ id: "" }); setKitBenchmark(""); setKitVersion(""); setLoadedKitLevel(null); setPolicies([]); setReference(""); setRecommendationList(undefined); reset() }) }}>Delete workspace</button>
+  </div>
+  const savedHistoryRows = workspace?.history.map(entry => <div key={entry.assessment.runId} className="mt-3 flex flex-wrap items-center gap-3 border-t pt-3 text-sm">
+    <span>{entry.assessment.assessedAt} · {entry.assessment.reference} · {entry.assessment.findings.length} findings{entry.creation ? ` · ${entry.creation.results.length} creation outcomes` : ""}</span>
+    <button className={button} disabled={!!busy} onClick={() => { reset(); setLoadedKitLevel(null); setPolicies(entry.policies); setReference(entry.assessment.reference); setAssessment(entry.assessment); setCreation(entry.creation ?? null); setHistorical(true) }}>View read-only</button>
+    {!isCis && <ExportButton framework={framework} plan={plan} disabled={!!busy} onClick={() => exportSaved("json", entry.assessment.runId)}>Export JSON</ExportButton>}
+    <button className={button} disabled={!!busy} onClick={async () => { if (await confirm({ title: "Delete saved assessment?", description: "Delete this saved assessment?", confirmLabel: "Delete", destructive: true })) void perform("Deleting assessment…", async () => { const saved = await workspaceRequest("workspace-delete-assessment", { runId: entry.assessment.runId }); setWorkspace(saved); setPolicies(saved.policies); setReference(saved.reference); reset() }) }}>Delete</button>
+  </div>)
   return <div className={standalone ? "mx-auto max-w-[1600px] space-y-6 p-6 lg:p-8" : "mx-auto max-w-6xl p-6 lg:p-8"}>
     {confirmDialog}
     {!standalone && <Link to="/portal/frameworks" className="text-sm text-blue-700 hover:underline">Frameworks</Link>}
@@ -359,22 +487,20 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
       </summary>
       <div className="mt-4 space-y-2 border-t border-blue-100 pt-4 text-sm leading-6 text-gray-700"><p>Mapping format v1. Automatic content: NCSC Device Security Guidance 2025 Windows Settings Catalog only. Other frameworks use administrator-supplied mappings. No certification or complete framework assessment is implied.</p><p>{framework.coverage}</p>{framework.licenseNotice && <p>{framework.licenseNotice}</p>}<p>Comparison covers Settings Catalog root settings and their nested values. Assignment targets, exclusions and filter references are reported separately from configuration. Group membership, device applicability, enforcement and other policy families remain unavailable. “Present” means a matching configuration exists; it does not mean the setting is assigned or enforced.</p></div>
     </details>
-    {workspace && <section className="mb-5 rounded-3xl bg-white p-6" aria-label="Saved assessment history">
+    {workspace && (isCis ? <details className="mb-5 rounded-3xl bg-white p-6" aria-label="Saved assessment history">
+      <summary className="cursor-pointer text-lg font-medium">Saved assessments</summary>
+      <p className="mt-2 text-sm text-gray-600">Packs, source versions and results are saved in encrypted storage on this device. Historical assessments are read-only. Run a fresh comparison before remediation.</p>
+      {savedHistoryRows}
+      {historical && <p role="status" className="mt-3 text-sm text-amber-800">Viewing a saved assessment. Compare again to obtain current evidence and enable remediation.</p>}
+      {savedWorkspaceActions}
+    </details> : <section className="mb-5 rounded-3xl bg-white p-6" aria-label="Saved assessment history">
       <h2 className="text-lg font-medium">Saved workspace and history</h2>
       <p className="mt-2 text-sm text-gray-600">Packs, source versions and results are saved in encrypted storage on this device. Historical assessments are read-only. Run a fresh comparison before remediation.</p>
-      <div className="mt-3 flex gap-3">
-        <ExportButton framework={framework} plan={plan} disabled={!!busy || !workspace.history.length} onClick={() => exportSaved("json")}>Export saved assessments</ExportButton>
-        <button className={button} disabled={!!busy} onClick={async () => { if (await confirm({ title: "Delete saved workspace?", description: "Delete this saved workspace and all assessment history?", confirmLabel: "Delete workspace", destructive: true })) void perform("Deleting workspace…", async () => { suppressedDraft.current = JSON.stringify({ policies, reference }); const saved = await workspaceRequest("workspace-delete"); suppressedDraft.current = JSON.stringify({ policies: [], reference: "" }); setWorkspace(saved); setKitConversion(null); setKitFiles([]); setKitDetected({ id: "" }); setKitBenchmark(""); setKitVersion(""); setLoadedKitLevel(null); setPolicies([]); setReference(""); setRecommendationList(undefined); reset() }) }}>Delete workspace</button>
-      </div>
-      {workspace.history.map(entry => <div key={entry.assessment.runId} className="mt-3 flex flex-wrap items-center gap-3 border-t pt-3 text-sm">
-        <span>{entry.assessment.assessedAt} · {entry.assessment.reference} · {entry.assessment.findings.length} findings{entry.creation ? ` · ${entry.creation.results.length} creation outcomes` : ""}</span>
-        <button className={button} disabled={!!busy} onClick={() => { reset(); setLoadedKitLevel(null); setPolicies(entry.policies); setReference(entry.assessment.reference); setAssessment(entry.assessment); setCreation(entry.creation ?? null); setHistorical(true) }}>View read-only</button>
-        <ExportButton framework={framework} plan={plan} disabled={!!busy} onClick={() => exportSaved("json", entry.assessment.runId)}>Export JSON</ExportButton>
-        <button className={button} disabled={!!busy} onClick={async () => { if (await confirm({ title: "Delete saved assessment?", description: "Delete this saved assessment?", confirmLabel: "Delete", destructive: true })) void perform("Deleting assessment…", async () => { const saved = await workspaceRequest("workspace-delete-assessment", { runId: entry.assessment.runId }); setWorkspace(saved); setPolicies(saved.policies); setReference(saved.reference); reset() }) }}>Delete</button>
-      </div>)}
+      {savedWorkspaceActions}
+      {savedHistoryRows}
       {historical && <p role="status" className="mt-3 text-sm text-amber-800">Viewing a saved assessment. Compare again to obtain current evidence and enable remediation.</p>}
-    </section>}
-    {framework.id === CIS_BENCHMARKS_ID && <CisPortfolio plan={plan} />}
+    </section>)}
+    {framework.id === CIS_BENCHMARKS_ID && <details className="mb-5"><summary className="inline-flex h-10 cursor-pointer list-none items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 [&::-webkit-details-marker]:hidden">Portfolio</summary><div className="mt-3"><CisPortfolio plan={plan} /></div></details>}
     <section aria-labelledby="pack-title" className="rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
       <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="pack-title" className="text-xl font-medium tracking-tight">{isCis ? "1. Import a CIS Build Kit" : "1. Choose your policy pack"}</h2><span className="text-sm text-gray-500">{policies.length ? `${policies.length} policies loaded` : "No pack loaded"}</span></div>
       {!isCis && <p className="mt-2 text-sm text-gray-600">Import one or more Settings Catalog JSON exports. Review the source, version and intended profile before comparison. Loading a pack does not change your tenant.</p>}
@@ -492,14 +618,14 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
     </section>
     <section aria-labelledby="compare-title" className="mt-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
       <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 id="compare-title" className="text-xl font-medium tracking-tight">2. Compare with your tenant</h2><p className="mt-1 text-sm text-gray-600">{selectedTenant ? `Selected tenant: ${selectedTenant.name}` : "Choose a connected tenant using the sidebar."}</p></div>
-        <button className={primary} disabled={!!busy || !credentials || !policies.length || !reference.trim()} onClick={() => void perform("Reading tenant policies and comparing settings…", async () => {
+        {isCis ? <button className={primary} disabled={!!busy || !!cisRun || !credentials || !policies.length || !reference.trim()} onClick={() => void startCisAssessment()}>{cisRun ? "Assessment running" : assessment ? "Run again" : "Start Assessment"}</button> : <button className={primary} disabled={!!busy || !credentials || !policies.length || !reference.trim()} onClick={() => void perform("Reading tenant policies and comparing settings…", async () => {
           reset(); const result = await request<Assessment>({ action: "assess", tenantId: credentials!.tenantId, appId: credentials!.appId, frameworkId: framework.id, reference, policies }); setAssessment(result); setWorkspace(await workspaceRequest("workspace-load"))
-        })}>{assessment ? "Compare again" : "Run comparison"}</button></div>
+        })}>{assessment ? "Compare again" : "Run comparison"}</button>}</div>
       {busy && <p role="status" className="mt-4 text-sm text-blue-700">{busy}</p>}
       {busy && isCis && <div role="progressbar" aria-label={busy} className="mt-2 h-2 overflow-hidden rounded-full bg-gray-100"><div className="h-full w-1/3 animate-pulse rounded-full bg-primary" /></div>}
       {error && <p role="alert" className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}
-      {assessment && <>
-        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500"><p>{assessment.policyCount} tenant policies read · {new Date(assessment.assessedAt).toLocaleString()}</p><div className="flex flex-wrap gap-2">{((isCis ? ["csv", "json"] : ["pdf", "csv", "json"]) as ("pdf" | "csv" | "json")[]).map(format => <ExportButton key={format} framework={framework} plan={plan} disabled={!!busy} onClick={() => exportSaved(format, assessment.runId)}><Download className="h-4 w-4" aria-hidden="true" />{format === "pdf" ? "PDF report" : format.toUpperCase()}</ExportButton>)}</div></div>
+      {isCis && cisRun ? <CisRunView run={cisRun} /> : assessment && <>
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500"><p>{assessment.policyCount} tenant policies read · {new Date(assessment.assessedAt).toLocaleString()}</p>{isCis ? <CisExportMenu plan={plan} disabled={!!busy} readinessDisabled={!readiness} onPdf={() => void perform("Exporting PDF…", async () => { const { file } = await request<{ file: ExportFile }>({ action: "workspace-cis-pdf", tenantId: credentials?.tenantId, tenantName: selectedTenant?.name, frameworkId: framework.id, runId: assessment.runId, ...(denominator ? { denominator } : {}) }); saveExport(file) })} onFindingsCsv={() => exportSaved("csv", assessment.runId)} onFindingsJson={() => exportSaved("json", assessment.runId)} onReadinessCsv={() => { if (!readiness) return; const exportedAt = new Date().toISOString(); const name = governanceExportName("cis-readiness", selectedTenant?.name ?? null, exportedAt); save(new Blob([`\uFEFF${cisReadinessCsv(readiness)}`], { type: "text/csv;charset=utf-8" }), `${name}.csv`) }} onReadinessJson={() => { if (!readiness) return; const exportedAt = new Date().toISOString(); const name = governanceExportName("cis-readiness", selectedTenant?.name ?? null, exportedAt); save(new Blob([cisReadinessJson(readiness, selectedTenant?.name ?? null, exportedAt)], { type: "application/json" }), `${name}.json`) }} /> : <div className="flex flex-wrap gap-2">{(["pdf", "csv", "json"] as ("pdf" | "csv" | "json")[]).map(format => <ExportButton key={format} framework={framework} plan={plan} disabled={!!busy} onClick={() => exportSaved(format, assessment.runId)}><Download className="h-4 w-4" aria-hidden="true" />{format === "pdf" ? "PDF report" : format.toUpperCase()}</ExportButton>)}</div>}</div>
         {readiness && <section aria-label="CIS readiness" className="mb-5 rounded-2xl bg-gray-50 p-4 text-sm text-gray-700">
           <h3 className="font-medium text-gray-900">CIS readiness</h3>
           <p className="mt-2">{readiness.manualNote} This view covers the automated settings in the imported pack only.</p>
@@ -564,7 +690,6 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
             <div className="mt-3 overflow-auto"><table className="w-full text-left text-sm"><thead><tr className="text-gray-500"><th className="py-1 pr-3 font-medium">Date</th><th className="py-1 pr-3 font-medium">Benchmark</th><th className="py-1 pr-3 font-medium">Version</th>{trendLevels.map(level => <th key={`trend-head-${level}`} className="py-1 pr-3 font-medium">Level {level} pass rate</th>)}{trendLevels.map(level => <th key={`trend-change-head-${level}`} className="py-1 pr-3 font-medium">Level {level} change</th>)}</tr></thead><tbody>{trend.map((point, pointIndex) => <tr key={point.runId} className="border-t border-gray-200"><td className="py-2 pr-3">{point.assessedAt}</td><td className="py-2 pr-3">{point.benchmark}</td><td className="py-2 pr-3">{point.version}</td>{trendLevels.map(level => { const item = point.levels.find(entry => entry.level === level); return <td key={`trend-rate-${point.runId}-${level}`} className="py-2 pr-3">{item ? formatTrendPercent(item.passRate) : "Not available"}{item && item.adjustedPassRate !== null && item.adjustedPassRate !== item.passRate ? ` (adjusted ${formatTrendPercent(item.adjustedPassRate)})` : ""}</td> })}{trendLevels.map(level => { const item = point.levels.find(entry => entry.level === level); return <td key={`trend-change-${point.runId}-${level}`} className="py-2 pr-3">{item ? formatTrendChange(item.changeFromPrevious, pointIndex === 0) : "Not available"}</td> })}</tr>)}</tbody></table></div>
             <div className="mt-3 flex flex-wrap gap-4">{trendLevels.map(level => <div key={`trend-spark-${level}`} className="flex items-center gap-2 text-gray-700"><span className="text-xs font-medium text-gray-500">Level {level}</span><TrendSparkline points={trend} level={level} /></div>)}</div>
           </div>}
-          <div className="mt-3 flex flex-wrap items-start gap-2"><GovernanceExportButtons kind="cis-readiness" tenantName={selectedTenant?.name ?? null} disabled={!!busy} buildCsv={() => cisReadinessCsv(readiness)} buildJson={exportedAt => cisReadinessJson(readiness, selectedTenant?.name ?? null, exportedAt)} /><ExportButton framework={framework} plan={plan} disabled={!!busy} onClick={() => void perform("Exporting PDF…", async () => { const { file } = await request<{ file: ExportFile }>({ action: "workspace-cis-pdf", tenantId: credentials?.tenantId, tenantName: selectedTenant?.name, frameworkId: framework.id, runId: assessment.runId, ...(denominator ? { denominator } : {}) }); saveExport(file) })}><Download className="h-4 w-4" aria-hidden="true" />Export PDF</ExportButton></div>
         </section>}
         <div className="my-4 flex flex-wrap gap-2" aria-label="Filter assessment findings">{["All", "Present", "Missing", "Different", "Review"].map(status => <button key={status} aria-pressed={filter === status} onClick={() => { setFilter(status); setPage(0) }} className={`rounded-full border px-4 py-2 text-sm transition-colors ${filter === status ? "border-transparent bg-primary text-primary-foreground" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>{status} <span className="ml-1 font-semibold">{assessment.findings.filter(f => status === "All" || f.status === status).length}</span></button>)}</div>
         <p className="mb-4 text-xs leading-5 text-gray-500">Different: at least one existing configuration differs. Review: the pack contains alternative values for this setting. Select a single profile or resolve differences manually. Unassigned configurations can appear as Present. Expand a finding to inspect assignment evidence, including exclusions, filter references and unavailable reads.</p>
