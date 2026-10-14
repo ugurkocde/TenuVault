@@ -47,7 +47,7 @@ export function requiredFeatures(pathname: string, body: Record<string, unknown>
       // Community assesses and exports every framework; licensed CIS content (assessments and
       // reports) is paid.
       const action = typeof body.action === "string" ? body.action : ""
-      if ((action === "assess" || action === "assess-start" || action === "assess-status" || FRAMEWORK_EXPORTS.has(action)) && typeof body.frameworkId === "string" && CIS_FRAMEWORKS.has(body.frameworkId)) return ["baselineAllPlatforms"]
+      if ((action === "assess" || action === "assess-start" || action === "assess-status" || action === "cis-catalog" || action === "cis-fetch-pack" || FRAMEWORK_EXPORTS.has(action)) && typeof body.frameworkId === "string" && CIS_FRAMEWORKS.has(body.frameworkId)) return ["baselineAllPlatforms"]
       return []
     }
     case "/api/oib": {

@@ -26,6 +26,7 @@ import { tenantLicense, tenantPlan, useLicense, useTenantPlan } from "../lib/lic
 import { CisRemediationPanel } from "../features/cis-remediation/CisRemediationPanel"
 import { GatedButton } from "../components/PlanGate"
 import { useConfirm } from "~/components/ConfirmDialog"
+import type { CisBenchmark, CisCatalog } from "../../shared/frameworks/cis-content"
 
 const button = "inline-flex h-10 items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
 const primary = cn(button, "border-transparent bg-primary text-primary-foreground hover:bg-primary/90")
@@ -334,6 +335,8 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
   const [exceptionForms, setExceptionForms] = useState<Record<number, { policyName: string; settingId: string; owner: string; reason: string; expiresOn: string }>>({})
   const [exceptionOpen, setExceptionOpen] = useState<Record<number, boolean>>({})
   const [cisRun, setCisRun] = useState<AssessJobSnapshot | null>(null)
+  const [cisCatalog, setCisCatalog] = useState<CisBenchmark[] | null>(null)
+  const [cisCatalogMessage, setCisCatalogMessage] = useState("")
   const [setupRequested, setSetupRequested] = useState(false)
   const cisRunGeneration = useRef(0)
   const isCis = framework.id === CIS_BENCHMARKS_ID
@@ -435,6 +438,26 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
     } finally {
       if (cisRunGeneration.current === generation) setBusy("")
     }
+  }
+  async function loadCisCatalog() {
+    setBusy("Loading available benchmarks…"); setCisCatalogMessage(""); setError("")
+    try {
+      const catalog = await request<CisCatalog>({ action: "cis-catalog", tenantId: credentials?.tenantId, frameworkId: framework.id })
+      setCisCatalog(catalog.benchmarks)
+      if (!catalog.benchmarks.length) setCisCatalogMessage("No benchmarks are available from the delivery service.")
+    } catch (e) {
+      setCisCatalog(null)
+      setCisCatalogMessage(e instanceof Error ? e.message : "The available benchmarks could not be loaded.")
+    } finally { setBusy("") }
+  }
+  async function loadDeliveredPack(benchmark: CisBenchmark, level: 1 | 2) {
+    await perform("Loading benchmark pack…", async () => {
+      const result = await request<{ benchmark: string; version: string; level: number; reference: string; policyCount: number; settingCount: number }>({ action: "cis-fetch-pack", tenantId: credentials?.tenantId, frameworkId: framework.id, benchmark: benchmark.id, version: benchmark.version, level })
+      reset()
+      setLoadedKitLevel(null)
+      const saved = await workspaceRequest("workspace-load")
+      setWorkspace(saved); setPolicies(saved.policies); setReference(saved.reference || result.reference)
+    })
   }
   function clearKit() { setKitConversion(null); setKitDetected({ id: "" }); setKitFiles([]); setKitBenchmark(""); setKitVersion(""); setLoadedKitLevel(null); setPolicies([]); setReference(""); reset() }
   function applyKitConversion(files: KitFile[], id: string, version?: string) {
@@ -544,6 +567,19 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
     </details>}
     {(!isCis || stage === "setup") && savedBlock}
     {framework.id === CIS_BENCHMARKS_ID && stage === "setup" && <details className="mb-5"><summary className="inline-flex h-10 cursor-pointer list-none items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 [&::-webkit-details-marker]:hidden">Portfolio</summary><div className="mt-3"><CisPortfolio plan={plan} /></div></details>}
+    {isCis && stage === "setup" && <section aria-labelledby="cis-delivered-title" className="mb-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+      <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="cis-delivered-title" className="text-xl font-medium tracking-tight">Benchmarks from TenuVault</h2><span className="text-sm text-gray-500">{cisCatalog ? `${cisCatalog.length} benchmarks available` : "Delivery service"}</span></div>
+      <p className="mt-2 text-sm text-gray-600">Load a benchmark pack from the TenuVault delivery service. The pack is saved in encrypted storage on this device for the selected tenant.</p>
+      <div className="mt-4"><button type="button" className={primary} disabled={!!busy || !credentials} onClick={() => void loadCisCatalog()}>Load available benchmarks</button></div>
+      {busy && <p role="status" className="mt-4 text-sm text-blue-700">{busy}</p>}
+      {busy && <div role="progressbar" aria-label={busy} className="mt-2 h-2 overflow-hidden rounded-full bg-gray-100"><div className="h-full w-1/3 animate-pulse rounded-full bg-primary" /></div>}
+      {cisCatalogMessage && <p role="alert" className="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">{cisCatalogMessage}</p>}
+      {cisCatalog && cisCatalog.length > 0 && <div className="mt-4 grid gap-3 sm:grid-cols-2" role="group" aria-label="Available benchmarks">{cisCatalog.map(benchmark => <div key={`${benchmark.id}-${benchmark.version}`} className="rounded-2xl border border-gray-200 bg-white p-4">
+        <p className="text-sm font-medium text-gray-900">{benchmark.name}</p>
+        <p className="mt-1 text-sm text-gray-600">{benchmark.id} {benchmark.version}</p>
+        <div className="mt-3 flex flex-wrap gap-2">{benchmark.levels.map(level => <button key={level} type="button" className={button} disabled={!!busy || !credentials} onClick={() => void loadDeliveredPack(benchmark, level)}>Level {level}</button>)}</div>
+      </div>)}</div>}
+    </section>}
     {(!isCis || stage === "setup") && <section aria-labelledby="pack-title" className="rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
       <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="pack-title" className="text-xl font-medium tracking-tight">{isCis ? "1. Import a CIS Build Kit" : "1. Choose your policy pack"}</h2><span className="text-sm text-gray-500">{policies.length ? `${policies.length} policies loaded` : "No pack loaded"}</span></div>
       {!isCis && <p className="mt-2 text-sm text-gray-600">Import one or more Settings Catalog JSON exports. Review the source, version and intended profile before comparison. Loading a pack does not change your tenant.</p>}
@@ -563,7 +599,7 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
         }} /></label>}
       </div>
       {framework.id === "ncsc-dsg" && <p className="mt-3 text-xs text-gray-500">Source content: UK National Cyber Security Centre, Crown Copyright, <a href={`${NCSC_REPOSITORY}/blob/${NCSC_COMMIT}/LICENSE`} target="_blank" rel="noreferrer" className="underline">Apache License 2.0</a>. Pinned commit {NCSC_COMMIT.slice(0, 7)}, each file checked against its reviewed SHA-256. Modified for comparison: decoded from UTF-16, export metadata, IDs and assignments removed. No endorsement by NCSC. Comparison and reports only; policies cannot be created from this pack.</p>}
-      {framework.id === "cis-benchmarks" && <div className="mt-5">
+      {framework.id === "cis-benchmarks" && <details className="mt-5"><summary className="cursor-pointer text-sm font-medium text-gray-700">Internal kit import</summary><div className="mt-4">
         <p className="text-sm text-gray-600">The kit stays on this device, is converted locally, and nothing is created in the tenant from the import.</p>
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <label className={cn(primary, "focus-within:ring-2 focus-within:ring-primary focus-within:ring-offset-2")}>Select Build Kit zip<input type="file" accept=".zip,application/zip" disabled={!!busy} className="sr-only" onChange={e => {
@@ -649,7 +685,7 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
           </div>
           <p className="mt-2 text-xs text-gray-500">Loading a pack saves it in the workspace for the selected tenant. Compare it with the tenant in step 2.</p>
         </div>}
-      </div>}
+      </div></details>}
       {policies.length > 0 && <>
         {!fromKit && <>
           <button className={button} onClick={() => exportJson({ reference, ...packCoverage(policies) }, `${framework.id}-coverage.json`)}>Export coverage and source mappings</button>
