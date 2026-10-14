@@ -9,10 +9,10 @@
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
-    "predev": "install-electron",
+    "predev": "node scripts/install-electron.mjs",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "prepreview": "install-electron",
+    "prepreview": "node scripts/install-electron.mjs",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint",
