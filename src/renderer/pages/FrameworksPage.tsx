@@ -10,6 +10,7 @@ import { CIS_BENCHMARKS_ID, effectiveFrameworks, searchEffectiveFrameworks } fro
 import { convertKit, readKitZip, suggestedKitBenchmark, type KitConversion, type KitFile, type KitLevel } from "../../shared/frameworks/cis-kit"
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
 import { cisReadiness } from "../../shared/frameworks/cis-readiness"
+import { exceptionKey } from "../../shared/frameworks/cis-exceptions"
 import { benchmarkDisplayName, groupFindingsByPolicy, groupObservationsByValue, humanSettingLabel, policyDisplayName, statusMixText, trendSummaryText } from "../../shared/frameworks/cis-display"
 import { cisFlowSteps, cisStage, isKitPackReference, kitLevelForPolicy, packSettingCount } from "../../shared/frameworks/cis-flow"
 import { cisDriftSignals, cisReadinessTrend, sparklineSegments, type CisTrendPoint } from "../../shared/frameworks/cis-trend"
@@ -239,7 +240,7 @@ function CisPortfolio({ plan }: { plan: Plan | null }) {
     {!signedIn.length && <p className="mt-3 text-sm text-gray-500">No connected tenant is signed in.</p>}
     {loadError && <p role="alert" className="mt-3 text-sm text-red-700">{loadError}</p>}
     {rows && <div className="mt-4 overflow-x-auto"><table className="w-full text-left text-sm">
-      <thead className="text-xs text-gray-500"><tr><th scope="col" className="py-2 pr-4 font-medium">Tenant</th><th scope="col" className="py-2 pr-4 font-medium">Benchmark</th><th scope="col" className="py-2 pr-4 font-medium">Assessed</th><th scope="col" className="py-2 pr-4 font-medium">Level 1</th><th scope="col" className="py-2 pr-4 font-medium">Level 2</th><th scope="col" className="py-2 pr-4 font-medium">Assessed settings (Level 1 / Level 2)</th><th scope="col" className="py-2 font-medium">Excepted</th></tr></thead>
+      <thead className="text-xs text-gray-500"><tr><th scope="col" className="py-2 pr-4 font-medium">Tenant</th><th scope="col" className="py-2 pr-4 font-medium">Benchmark</th><th scope="col" className="py-2 pr-4 font-medium">Assessed</th><th scope="col" className="py-2 pr-4 font-medium">Level 1</th><th scope="col" className="py-2 pr-4 font-medium">Level 2</th><th scope="col" className="py-2 pr-4 font-medium">Assessed settings (Level 1 / Level 2)</th><th scope="col" className="py-2 font-medium">Excluded</th></tr></thead>
       <tbody className="divide-y divide-gray-100">{rows.map(row => {
         const level1 = row.levels.find(level => level.level === 1)
         const level2 = row.levels.find(level => level.level === 2)
@@ -342,7 +343,8 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
   const [loadedKitLevel, setLoadedKitLevel] = useState<KitLevel | null>(null)
   const [denominator, setDenominator] = useState<DenominatorEntry[] | undefined>(undefined)
   const [recommendationList, setRecommendationList] = useState<RecommendationList | undefined>(undefined)
-  const [exclusion, setExclusion] = useState<{ owner: string; reason: string; expiresOn: string } | null>(null)
+  const [exclusion, setExclusion] = useState<{ owner: string; reason: string; expiresOn: string; count: number; error: string } | null>(null)
+  const excludeButton = useRef<HTMLButtonElement>(null)
   const [cisExceptionsOpen, setCisExceptionsOpen] = useState(false)
   const [cisRun, setCisRun] = useState<AssessJobSnapshot | null>(null)
   const [cisCatalog, setCisCatalog] = useState<CisBenchmark[] | null>(null)
@@ -486,11 +488,16 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
   const trend = framework.id === "cis-benchmarks" && workspace ? cisReadinessTrend(workspace.history, recommendationList, workspace.exceptions) : []
   const drift = cisDriftSignals(trend)
   const trendLevels = [...new Set(trend.flatMap(point => point.levels.map(level => level.level)))].sort((a, b) => a - b)
-  // Selected findings that do not already have an active exception at their level.
-  const excludable = readiness ? chosen.filter(finding => finding.status !== "Present" && !readiness.levels.some(level =>
-    level.level === kitLevelForPolicy(policies[finding.policyIndex]) && level.exceptions.some(exception => exception.policyName === finding.policyName && exception.settingId === finding.settingId))) : []
-  const excludeSelected = (form: { owner: string; reason: string; expiresOn: string }) => void perform("Excluding findings from the score...", async () => {
-    if (!readiness) return
+  // Selected findings that do not already have an active exception at their level, one per exception identity:
+  // policies with the same name can repeat a setting, and the server accepts one active exception per identity.
+  const excludable = readiness ? [...new Map(chosen.filter(finding => finding.status !== "Present" && !readiness.levels.some(level =>
+    level.level === kitLevelForPolicy(policies[finding.policyIndex]) && level.exceptions.some(exception => exception.policyName === finding.policyName && exception.settingId === finding.settingId)))
+    .map(finding => [exceptionKey(readiness.benchmark, readiness.version, kitLevelForPolicy(policies[finding.policyIndex]), finding.policyName, finding.settingId), finding])).values()] : []
+  const excludeSelected = async ({ owner, reason, expiresOn }: { owner: string; reason: string; expiresOn: string }) => {
+    if (!readiness || busy) return
+    const form = { owner, reason, expiresOn }
+    setBusy("Excluding findings from the score...")
+    setExclusion(old => old && { ...old, error: "" })
     let saved: FrameworkWorkspace | null = null
     let added = 0
     try {
@@ -500,12 +507,14 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "The request failed."
-      throw new Error(added ? `Excluded ${added} of ${excludable.length} findings, then stopped: ${message}` : message)
+      setExclusion(old => old && { ...old, error: added ? `Excluded ${added} of ${excludable.length} findings, then stopped: ${message}` : message })
+      return
     } finally {
       if (saved) setWorkspace(saved)
+      setBusy("")
     }
     setExclusion(null); setSelected(new Set()); setPreview(false); setConfirmed(false); setCisExceptionsOpen(true)
-  })
+  }
   const savedWorkspaceActions = <div className="mt-3 flex flex-wrap gap-3">
     <ExportButton framework={framework} plan={plan} disabled={!!busy || !workspace?.history.length} onClick={() => exportSaved("json")}>{isCis ? "Export saved assessments JSON" : "Export saved assessments"}</ExportButton>
     <button className={button} disabled={!!busy} onClick={async () => { if (await confirm({ title: "Delete saved workspace?", description: "Delete this saved workspace and all assessment history?", confirmLabel: "Delete workspace", destructive: true })) void perform("Deleting workspace…", async () => { suppressedDraft.current = JSON.stringify({ policies, reference }); const saved = await workspaceRequest("workspace-delete"); suppressedDraft.current = JSON.stringify({ policies: [], reference: "" }); setWorkspace(saved); setKitConversion(null); setKitFiles([]); setKitDetected({ id: "" }); setKitBenchmark(""); setKitVersion(""); setLoadedKitLevel(null); setPolicies([]); setReference(""); setRecommendationList(undefined); reset() }) }}>Delete workspace</button>
@@ -795,7 +804,7 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
             </details>)}</div>
           </div>)}
           <details open={cisExceptionsOpen} onToggle={e => setCisExceptionsOpen((e.target as HTMLDetailsElement).open)} className="mt-2 border-t border-gray-100">
-            <summary className="cursor-pointer py-3 text-sm font-medium text-gray-800">Excluded from score: {readiness.levels.reduce((sum, level) => sum + level.exceptions.length, 0)} active</summary>
+            <summary id="cis-exclusions" className="cursor-pointer py-3 text-sm font-medium text-gray-800">Excluded from score: {readiness.levels.reduce((sum, level) => sum + level.exceptions.length, 0)} active</summary>
             <div className="border-t border-gray-100 pb-4">
           {readiness.levels.map(level => {
             return <div key={`exceptions-${level.level}`} className="mt-4">
@@ -842,20 +851,20 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
           <span className="text-xs text-gray-500">Remediate them in step 3 below, or exclude them from the score if you do not apply them on purpose.</span>
           <span className="ml-auto flex gap-2">
             <button type="button" className={button} disabled={!!busy || historical} onClick={() => { setSelected(new Set()); setPreview(false); setConfirmed(false) }}>Clear</button>
-            <button type="button" className={button} disabled={!!busy || historical || !excludable.length} title={excludable.length ? undefined : "The selected findings are already excluded."} onClick={() => setExclusion({ owner: "", reason: "", expiresOn: "" })}>Exclude from score ({excludable.length})</button>
+            <button ref={excludeButton} type="button" className={button} disabled={!!busy || historical || !excludable.length} title={excludable.length ? undefined : "The selected findings are already excluded."} onClick={() => setExclusion({ owner: "", reason: "", expiresOn: "", count: excludable.length, error: "" })}>Exclude from score ({excludable.length})</button>
           </span>
         </div>}
         <Dialog open={exclusion !== null} onOpenChange={open => { if (!open && !busy) setExclusion(null) }}>
-          <DialogContent>
+          <DialogContent onCloseAutoFocus={e => { e.preventDefault(); (excludeButton.current?.isConnected ? excludeButton.current : document.getElementById("cis-exclusions"))?.focus() }}>
             <DialogHeader>
-              <DialogTitle>Exclude {excludable.length} {excludable.length === 1 ? "finding" : "findings"} from the score</DialogTitle>
+              <DialogTitle>Exclude {exclusion?.count} {exclusion?.count === 1 ? "finding" : "findings"} from the score</DialogTitle>
               <DialogDescription>Use this for settings you do not apply on purpose. They stay listed but stop counting against the adjusted pass rate until the expiry date, when they count again and need a new decision. Raw counts do not change.</DialogDescription>
             </DialogHeader>
-            {exclusion && <form id="cis-exclusion" className="grid gap-3 sm:grid-cols-2" onSubmit={e => { e.preventDefault(); excludeSelected(exclusion) }}>
+            {exclusion && <form id="cis-exclusion" className="grid gap-3 sm:grid-cols-2" onSubmit={e => { e.preventDefault(); void excludeSelected(exclusion) }}>
               <label className="block text-xs font-medium text-gray-700">Owner<input required value={exclusion.owner} disabled={!!busy} onChange={e => setExclusion({ ...exclusion, owner: e.target.value })} className="mt-1 w-full rounded-full border border-gray-300 px-3 py-1.5 text-sm font-normal" /></label>
               <label className="block text-xs font-medium text-gray-700">Expiry date<input required type="date" value={exclusion.expiresOn} disabled={!!busy} onChange={e => setExclusion({ ...exclusion, expiresOn: e.target.value })} className="mt-1 w-full rounded-full border border-gray-300 px-3 py-1.5 text-sm font-normal" /></label>
               <label className="block text-xs font-medium text-gray-700 sm:col-span-2">Reason<input required value={exclusion.reason} disabled={!!busy} onChange={e => setExclusion({ ...exclusion, reason: e.target.value })} className="mt-1 w-full rounded-full border border-gray-300 px-3 py-1.5 text-sm font-normal" /></label>
-              {error && <p role="alert" className="text-sm text-red-700 sm:col-span-2">{error}</p>}
+              {exclusion.error && <p role="alert" className="text-sm text-red-700 sm:col-span-2">{exclusion.error}</p>}
             </form>}
             <DialogFooter>
               <button type="button" className={button} disabled={!!busy} onClick={() => setExclusion(null)}>Cancel</button>
