@@ -10,6 +10,7 @@ import { CIS_BENCHMARKS_ID, effectiveFrameworks, searchEffectiveFrameworks } fro
 import { convertKit, readKitZip, suggestedKitBenchmark, type KitConversion, type KitFile, type KitLevel } from "../../shared/frameworks/cis-kit"
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
 import { cisReadiness } from "../../shared/frameworks/cis-readiness"
+import { exceptionKey } from "../../shared/frameworks/cis-exceptions"
 import { benchmarkDisplayName, groupFindingsByPolicy, groupObservationsByValue, humanSettingLabel, policyDisplayName, statusMixText, trendSummaryText } from "../../shared/frameworks/cis-display"
 import { cisFlowSteps, cisStage, isKitPackReference, kitLevelForPolicy, packSettingCount } from "../../shared/frameworks/cis-flow"
 import { cisDriftSignals, cisReadinessTrend, sparklineSegments, type CisTrendPoint } from "../../shared/frameworks/cis-trend"
@@ -27,6 +28,7 @@ import { tenantLicense, tenantPlan, useLicense, useTenantPlan } from "../lib/lic
 import { CisRemediationPanel } from "../features/cis-remediation/CisRemediationPanel"
 import { GatedButton } from "../components/PlanGate"
 import { useConfirm } from "~/components/ConfirmDialog"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import type { CisBenchmark, CisCatalog } from "../../shared/frameworks/cis-content"
 
 const button = "inline-flex h-10 items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
@@ -238,7 +240,7 @@ function CisPortfolio({ plan }: { plan: Plan | null }) {
     {!signedIn.length && <p className="mt-3 text-sm text-gray-500">No connected tenant is signed in.</p>}
     {loadError && <p role="alert" className="mt-3 text-sm text-red-700">{loadError}</p>}
     {rows && <div className="mt-4 overflow-x-auto"><table className="w-full text-left text-sm">
-      <thead className="text-xs text-gray-500"><tr><th scope="col" className="py-2 pr-4 font-medium">Tenant</th><th scope="col" className="py-2 pr-4 font-medium">Benchmark</th><th scope="col" className="py-2 pr-4 font-medium">Assessed</th><th scope="col" className="py-2 pr-4 font-medium">Level 1</th><th scope="col" className="py-2 pr-4 font-medium">Level 2</th><th scope="col" className="py-2 pr-4 font-medium">Assessed settings (Level 1 / Level 2)</th><th scope="col" className="py-2 font-medium">Excepted</th></tr></thead>
+      <thead className="text-xs text-gray-500"><tr><th scope="col" className="py-2 pr-4 font-medium">Tenant</th><th scope="col" className="py-2 pr-4 font-medium">Benchmark</th><th scope="col" className="py-2 pr-4 font-medium">Assessed</th><th scope="col" className="py-2 pr-4 font-medium">Level 1</th><th scope="col" className="py-2 pr-4 font-medium">Level 2</th><th scope="col" className="py-2 pr-4 font-medium">Assessed settings (Level 1 / Level 2)</th><th scope="col" className="py-2 font-medium">Excluded</th></tr></thead>
       <tbody className="divide-y divide-gray-100">{rows.map(row => {
         const level1 = row.levels.find(level => level.level === 1)
         const level2 = row.levels.find(level => level.level === 2)
@@ -341,8 +343,8 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
   const [loadedKitLevel, setLoadedKitLevel] = useState<KitLevel | null>(null)
   const [denominator, setDenominator] = useState<DenominatorEntry[] | undefined>(undefined)
   const [recommendationList, setRecommendationList] = useState<RecommendationList | undefined>(undefined)
-  const [exceptionForms, setExceptionForms] = useState<Record<number, { policyName: string; settingId: string; owner: string; reason: string; expiresOn: string }>>({})
-  const [exceptionOpen, setExceptionOpen] = useState<Record<number, boolean>>({})
+  const [exclusion, setExclusion] = useState<{ owner: string; reason: string; expiresOn: string; count: number; error: string } | null>(null)
+  const excludeButton = useRef<HTMLButtonElement>(null)
   const [cisExceptionsOpen, setCisExceptionsOpen] = useState(false)
   const [cisRun, setCisRun] = useState<AssessJobSnapshot | null>(null)
   const [cisCatalog, setCisCatalog] = useState<CisBenchmark[] | null>(null)
@@ -486,11 +488,32 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
   const trend = framework.id === "cis-benchmarks" && workspace ? cisReadinessTrend(workspace.history, recommendationList, workspace.exceptions) : []
   const drift = cisDriftSignals(trend)
   const trendLevels = [...new Set(trend.flatMap(point => point.levels.map(level => level.level)))].sort((a, b) => a - b)
-  const prefillException = (finding: Finding) => {
-    const level = kitLevelForPolicy(policies[finding.policyIndex])
-    setExceptionForms(old => ({ ...old, [level]: { ...(old[level] ?? { policyName: "", settingId: "", owner: "", reason: "", expiresOn: "" }), policyName: finding.policyName, settingId: finding.settingId } }))
-    setExceptionOpen(old => ({ ...old, [level]: true }))
-    setCisExceptionsOpen(true)
+  // Selected findings that do not already have an active exception at their level, one per exception identity:
+  // policies with the same name can repeat a setting, and the server accepts one active exception per identity.
+  const excludable = readiness ? [...new Map(chosen.filter(finding => finding.status !== "Present" && !readiness.levels.some(level =>
+    level.level === kitLevelForPolicy(policies[finding.policyIndex]) && level.exceptions.some(exception => exception.policyName === finding.policyName && exception.settingId === finding.settingId)))
+    .map(finding => [exceptionKey(readiness.benchmark, readiness.version, kitLevelForPolicy(policies[finding.policyIndex]), finding.policyName, finding.settingId), finding])).values()] : []
+  const excludeSelected = async ({ owner, reason, expiresOn }: { owner: string; reason: string; expiresOn: string }) => {
+    if (!readiness || busy) return
+    const form = { owner, reason, expiresOn }
+    setBusy("Excluding findings from the score...")
+    setExclusion(old => old && { ...old, error: "" })
+    let saved: FrameworkWorkspace | null = null
+    let added = 0
+    try {
+      for (const finding of excludable) {
+        saved = await workspaceRequest("workspace-cis-exception-add", { benchmark: readiness.benchmark, version: readiness.version, level: kitLevelForPolicy(policies[finding.policyIndex]), policyName: finding.policyName, settingId: finding.settingId, ...form })
+        added++
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The request failed."
+      setExclusion(old => old && { ...old, error: added ? `Excluded ${added} of ${excludable.length} findings, then stopped: ${message}` : message })
+      return
+    } finally {
+      if (saved) setWorkspace(saved)
+      setBusy("")
+    }
+    setExclusion(null); setSelected(new Set()); setPreview(false); setConfirmed(false); setCisExceptionsOpen(true)
   }
   const savedWorkspaceActions = <div className="mt-3 flex flex-wrap gap-3">
     <ExportButton framework={framework} plan={plan} disabled={!!busy || !workspace?.history.length} onClick={() => exportSaved("json")}>{isCis ? "Export saved assessments JSON" : "Export saved assessments"}</ExportButton>
@@ -534,7 +557,7 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
     {savedHistoryRows}
     {historical && <p role="status" className="mt-3 text-sm text-amber-800">Viewing a saved assessment. Compare again to obtain current evidence and enable remediation.</p>}
   </section>) : null
-  return <div className={standalone ? "mx-auto max-w-[1600px] space-y-6 p-6 lg:p-8" : "mx-auto max-w-6xl p-6 lg:p-8"}>
+  return <div className="mx-auto max-w-6xl space-y-5 p-6 lg:p-8">
     {confirmDialog}
     {!standalone && <Link to="/portal/frameworks" className="text-sm text-blue-700 hover:underline">Frameworks</Link>}
     <div className={`${standalone ? "" : "mt-4 "}flex flex-wrap items-start justify-between gap-4`}>
@@ -549,11 +572,10 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
         </li>)}
       </ol>
     </nav>}
-    {isCis && stage === "results" && assessment && <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-white p-5 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
-      <div>
-        <p className="text-base font-medium text-gray-900">{benchmarkDisplayName(readiness?.benchmark ?? assessment.reference.split(/\s+/)[0] ?? "")}{(readiness?.benchmark ?? assessment.reference.split(/\s+/)[0]) && assessment.reference.startsWith(readiness?.benchmark ?? assessment.reference.split(/\s+/)[0]!) ? ` ${assessment.reference.slice((readiness?.benchmark ?? assessment.reference.split(/\s+/)[0]!).length).trim()}` : ""}</p>
-        <p className="mt-0.5 font-mono text-xs text-gray-500">{assessment.reference}</p>
-        <p className="mt-1 text-sm text-gray-500">{assessment.policyCount} tenant policies read · {new Date(assessment.assessedAt).toLocaleString()}</p>
+    {isCis && stage === "results" && assessment && <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-white px-5 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+      <div className="min-w-0">
+        <p title={assessment.reference} className="truncate text-base font-medium text-gray-900">{benchmarkDisplayName(readiness?.benchmark ?? assessment.reference.split(/\s+/)[0] ?? "")}{(readiness?.benchmark ?? assessment.reference.split(/\s+/)[0]) && assessment.reference.startsWith(readiness?.benchmark ?? assessment.reference.split(/\s+/)[0]!) ? ` ${assessment.reference.slice((readiness?.benchmark ?? assessment.reference.split(/\s+/)[0]!).length).trim()}` : ""}</p>
+        <p className="mt-0.5 text-sm text-gray-500">{assessment.policyCount} tenant policies read · {new Date(assessment.assessedAt).toLocaleString()}</p>
         {historical && <p role="status" className="mt-1 text-sm text-amber-800">Viewing a saved assessment. Compare again to obtain current evidence and enable remediation.</p>}
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -717,42 +739,59 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
       {error && <p role="alert" className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}
       {assessment && (!isCis || stage === "results") && <>
         {!isCis && <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500"><p>{assessment.policyCount} tenant policies read · {new Date(assessment.assessedAt).toLocaleString()}</p><div className="flex flex-wrap gap-2">{(["pdf", "csv", "json"] as ("pdf" | "csv" | "json")[]).map(format => <ExportButton key={format} framework={framework} plan={plan} disabled={!!busy} onClick={() => exportSaved(format, assessment.runId)}><Download className="h-4 w-4" aria-hidden="true" />{format === "pdf" ? "PDF report" : format.toUpperCase()}</ExportButton>)}</div></div>}
-        {readiness && <section aria-label="CIS readiness" className="mb-5 rounded-2xl bg-gray-50 p-4 text-sm text-gray-700">
-          <h3 className="font-medium text-gray-900">CIS readiness</h3>
-          <p className="mt-1 text-xs text-gray-500">{readiness.manualNote} This view covers the automated settings in the imported pack only.</p>
-          <div className="mt-4 space-y-3">
+        {readiness && <section aria-label="CIS readiness" className="mb-6 border-b border-gray-100 pb-6 text-sm text-gray-700">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h3 className="text-base font-medium text-gray-900">CIS readiness</h3>
+            <p className="text-xs text-gray-500">{readiness.manualNote} This view covers the automated settings in the imported pack only.</p>
+          </div>
+          <div className="mt-4 divide-y divide-gray-100">
             {readiness.levels.map(level => {
               const total = level.assessedSettings
               const segments = [
-                { label: "Present", count: level.present, className: "bg-green-500", dot: "bg-green-500" },
-                { label: "Different", count: level.different, className: "bg-red-500", dot: "bg-red-500" },
-                { label: "Missing", count: level.missing, className: "bg-amber-400", dot: "bg-amber-400" },
-                { label: "Review", count: level.review, className: "bg-gray-300", dot: "bg-gray-300" },
-              ].filter(segment => segment.count > 0)
-              const coverageText = level.coverage === null ? "Coverage not available" : `Coverage ${Math.round(level.coverage * 1000) / 10}% (${level.assessedAutomated} of ${level.denominator})`
-              const denominatorNote = level.coverage === null ? (denominator || recommendationList ? " Coverage uses the imported denominator or recommendation list." : " No denominator list was imported, so coverage is not shown.") : ""
-              const metaLine = `Assessed settings ${level.assessedSettings} · Assessed automated ${level.assessedAutomated} · ${coverageText} · Not assessed: ${level.notAssessed.length ? level.notAssessed.join(", ") : "None listed"} · Excepted ${level.excepted}.${denominatorNote}`
-              return <article key={`card-${level.level}`} aria-label={`Level ${level.level} summary`} className="w-full rounded-2xl bg-white p-5">
-                <div className="flex flex-wrap items-start gap-5">
-                  <div className="min-w-36">
-                    <p className="text-xs font-medium uppercase tracking-wide text-gray-500">{benchmarkDisplayName(level.benchmark)} · Level {level.level}</p>
-                    <p className="mt-1 text-4xl font-light tracking-tight text-gray-900">{level.passRate === null ? "Not available" : `${Math.round(level.passRate * 1000) / 10}%`}</p>
-                    <p className="text-xs text-gray-500">Pass rate{level.version ? ` · ${level.version}` : ""}</p>
-                    {level.adjustedPassRate !== null && level.adjustedPassRate !== level.passRate && <p className="mt-1 text-xs text-gray-600">Adjusted pass rate {Math.round(level.adjustedPassRate * 1000) / 10}%</p>}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div role="img" aria-label={`Level ${level.level} status proportions`} className="flex h-3 w-full overflow-hidden rounded-full bg-gray-100">{segments.map(segment => <span key={segment.label} className={segment.className} style={{ width: total ? `${(segment.count / total) * 100}%` : "0%" }} />)}</div>
-                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-600">{segments.map(segment => <span key={`legend-${segment.label}`} className="inline-flex items-center gap-1.5"><span aria-hidden="true" className={`h-2 w-2 rounded-full ${segment.dot}`} />{segment.label} {segment.count}</span>)}{!segments.length && <span>No assessed settings</span>}</div>
-                    <p className="mt-3 text-xs leading-5 text-gray-500">{metaLine}</p>
-                  </div>
+                { label: "Present", count: level.present, className: "bg-green-500", dot: "bg-green-500", text: "text-green-700" },
+                { label: "Different", count: level.different, className: "bg-red-500", dot: "bg-red-500", text: "text-red-700" },
+                { label: "Missing", count: level.missing, className: "bg-amber-400", dot: "bg-amber-400", text: "text-amber-800" },
+                { label: "Review", count: level.review, className: "bg-gray-300", dot: "bg-gray-300", text: "text-gray-600" },
+              ]
+              const visible = segments.filter(segment => segment.count > 0)
+              const stats: [string, string][] = [
+                ["Assessed settings", String(level.assessedSettings)],
+                ["Assessed automated", String(level.assessedAutomated)],
+                ["Coverage", level.coverage === null ? "Not available" : `${Math.round(level.coverage * 1000) / 10}% (${level.assessedAutomated} of ${level.denominator})`],
+                ["Not assessed", level.notAssessed.length ? level.notAssessed.join(", ") : "None listed"],
+                ["Excluded from score", String(level.excepted)],
+              ]
+              return <article key={`card-${level.level}`} aria-label={`Level ${level.level} summary`} className="grid gap-5 py-5 first:pt-1 sm:grid-cols-[11rem_minmax(0,1fr)] lg:grid-cols-[11rem_minmax(0,1fr)_16rem]">
+                <div>
+                  <p className="text-xs font-medium text-gray-500">{benchmarkDisplayName(level.benchmark)} · Level {level.level}{level.version ? ` · ${level.version}` : ""}</p>
+                  <p className={`mt-1 font-light tabular-nums tracking-tight text-gray-900 ${level.passRate === null ? "text-2xl" : "text-5xl"}`}>{level.passRate === null ? "Not available" : `${Math.round(level.passRate * 1000) / 10}%`}</p>
+                  <p className="mt-1 text-xs text-gray-500">Pass rate</p>
+                  {level.adjustedPassRate !== null && level.adjustedPassRate !== level.passRate && <p className="mt-1 text-xs font-medium text-gray-700">Adjusted pass rate {Math.round(level.adjustedPassRate * 1000) / 10}%</p>}
                 </div>
+                <div className="min-w-0 self-center">
+                  <div role="img" aria-label={`Level ${level.level} status proportions`} className="flex h-2.5 w-full overflow-hidden rounded-full bg-gray-100">{visible.map(segment => <span key={segment.label} className={segment.className} style={{ width: total ? `${(segment.count / total) * 100}%` : "0%" }} />)}</div>
+                  <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
+                    {segments.map(segment => <div key={`legend-${segment.label}`}>
+                      <dt className="flex items-center gap-1.5 text-xs text-gray-500"><span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${segment.dot}`} />{segment.label}</dt>
+                      <dd className={`mt-0.5 text-lg font-medium tabular-nums ${segment.count ? segment.text : "text-gray-400"}`}>{segment.count}</dd>
+                    </div>)}
+                  </dl>
+                  {!visible.length && <p className="mt-2 text-xs text-gray-500">No assessed settings</p>}
+                </div>
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-3 self-center lg:grid-cols-1 lg:gap-y-2">
+                  {stats.map(([label, value]) => <div key={label} className="flex items-baseline justify-between gap-3 lg:border-b lg:border-gray-100 lg:pb-1.5">
+                    <dt className="text-xs text-gray-500">{label}</dt>
+                    <dd className="text-right text-xs font-medium tabular-nums text-gray-800">{value}</dd>
+                  </div>)}
+                </dl>
               </article>
             })}
           </div>
+          {readiness.levels.some(level => level.coverage === null) && <p className="text-xs text-gray-500">{denominator || recommendationList ? "Coverage needs a denominator list: none was imported for every level, so coverage is not shown where it is missing." : "No denominator list was imported, so coverage is not shown."}</p>}
           {readiness.levels.map(level => level.manual.length > 0 && <div key={`manual-${level.level}`} className="mt-4">
             <h4 className="font-medium text-gray-900">Manual, Level {level.level}</h4>
             <p className="mt-1 text-xs text-gray-500">{benchmarkDisplayName(readiness.benchmark)} {readiness.version}, Level {level.level}. These items are not assessed automatically.</p>
-            <div className="mt-2 space-y-2">{level.manual.map(item => <details key={item.identifier} className="rounded-2xl bg-white p-4">
+            <div className="mt-2 divide-y divide-gray-100 border-y border-gray-100">{level.manual.map(item => <details key={item.identifier} className="py-3">
               <summary className="cursor-pointer text-sm"><span className="font-medium text-gray-800">{item.identifier}</span>{item.title && <span className="ml-2 text-gray-700">{item.title}</span>}<span className="ml-2 inline-block rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-700">Manual</span></summary>
               <div className="mt-3 space-y-2 text-sm text-gray-700">
                 {item.hasText ? <>
@@ -764,37 +803,24 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
               </div>
             </details>)}</div>
           </div>)}
-          <details open={cisExceptionsOpen} onToggle={e => setCisExceptionsOpen((e.target as HTMLDetailsElement).open)} className="mt-4 rounded-2xl bg-white">
-            <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-gray-800">Exceptions: {readiness.levels.reduce((sum, level) => sum + level.exceptions.length, 0)} active</summary>
-            <div className="border-t border-gray-100 px-4 pb-4">
+          <details open={cisExceptionsOpen} onToggle={e => setCisExceptionsOpen((e.target as HTMLDetailsElement).open)} className="mt-2 border-t border-gray-100">
+            <summary id="cis-exclusions" className="cursor-pointer py-3 text-sm font-medium text-gray-800">Excluded from score: {readiness.levels.reduce((sum, level) => sum + level.exceptions.length, 0)} active</summary>
+            <div className="border-t border-gray-100 pb-4">
           {readiness.levels.map(level => {
-            const form = exceptionForms[level.level] ?? { policyName: "", settingId: "", owner: "", reason: "", expiresOn: "" }
-            const updateForm = (patch: Partial<typeof form>) => setExceptionForms(old => ({ ...old, [level.level]: { ...(old[level.level] ?? form), ...patch } }))
             return <div key={`exceptions-${level.level}`} className="mt-4">
-              <h4 className="font-medium text-gray-900">Exceptions, Level {level.level} ({level.excepted} excepted)</h4>
+              <h4 className="font-medium text-gray-900">Level {level.level}: {level.excepted} excluded</h4>
               <p className="mt-1 text-xs text-gray-500">Adjusted pass rate: {level.adjustedPassRate === null ? "Not available" : `${Math.round(level.adjustedPassRate * 1000) / 10}%`}. Raw counts above are unchanged.</p>
               {level.exceptions.length ? <ul className="mt-2 space-y-2">{level.exceptions.map(exception => <li key={exception.id} className="flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-gray-50 p-3">
                 <span><span className="font-medium text-gray-800">{exception.policyName}</span><span className="block break-all font-mono text-xs text-gray-500">{exception.settingId}</span><span className="block text-xs text-gray-600">Owner: {exception.owner} · Expires: {formatExpiryDate(exception.expiresOn)}</span><span className="block text-xs text-gray-600">{exception.reason}</span></span>
                 <button type="button" className={button} disabled={!!busy} onClick={() => void perform("Removing exception...", async () => { const saved = await workspaceRequest("workspace-cis-exception-remove", { exceptionId: exception.id }); setWorkspace(saved) })}>Remove</button>
-              </li>)}</ul> : <p className="mt-2 text-xs text-gray-500">No active exceptions for this level.</p>}
-              <details open={!!exceptionOpen[level.level]} onToggle={e => setExceptionOpen(old => ({ ...old, [level.level]: (e.target as HTMLDetailsElement).open }))} className="mt-3 rounded-2xl bg-gray-50 p-4">
-                <summary className="cursor-pointer text-sm font-medium text-gray-800">Accept a finding as an exception</summary>
-              <form className="mt-3 grid gap-2 sm:grid-cols-2" onSubmit={e => { e.preventDefault(); void perform("Saving exception...", async () => { const saved = await workspaceRequest("workspace-cis-exception-add", { benchmark: readiness.benchmark, version: readiness.version, level: level.level, policyName: form.policyName, settingId: form.settingId, owner: form.owner, reason: form.reason, expiresOn: form.expiresOn }); setWorkspace(saved); updateForm({ policyName: "", settingId: "", owner: "", reason: "", expiresOn: "" }) }) }}>
-                <label className="block text-xs font-medium text-gray-700">Policy name<input value={form.policyName} disabled={!!busy} onChange={e => updateForm({ policyName: e.target.value })} className="mt-1 w-full rounded-full border border-gray-300 px-3 py-1.5 text-sm font-normal" /></label>
-                <label className="block text-xs font-medium text-gray-700">Setting id<input value={form.settingId} disabled={!!busy} onChange={e => updateForm({ settingId: e.target.value })} className="mt-1 w-full rounded-full border border-gray-300 px-3 py-1.5 text-sm font-normal" /></label>
-                <label className="block text-xs font-medium text-gray-700">Owner<input value={form.owner} disabled={!!busy} onChange={e => updateForm({ owner: e.target.value })} className="mt-1 w-full rounded-full border border-gray-300 px-3 py-1.5 text-sm font-normal" /></label>
-                <label className="block text-xs font-medium text-gray-700">Expiry date<input type="date" value={form.expiresOn} disabled={!!busy} onChange={e => updateForm({ expiresOn: e.target.value })} className="mt-1 w-full rounded-full border border-gray-300 px-3 py-1.5 text-sm font-normal" /></label>
-                <label className="block text-xs font-medium text-gray-700 sm:col-span-2">Reason<input value={form.reason} disabled={!!busy} onChange={e => updateForm({ reason: e.target.value })} className="mt-1 w-full rounded-full border border-gray-300 px-3 py-1.5 text-sm font-normal" /></label>
-                <div className="sm:col-span-2"><button type="submit" className={button} disabled={!!busy}>Accept as exception</button></div>
-              </form>
-              </details>
+              </li>)}</ul> : <p className="mt-2 text-xs text-gray-500">Nothing is excluded for this level. Select findings and choose Exclude from score.</p>}
             </div>
           })}
             </div>
           </details>
-          <details className="mt-3 rounded-2xl bg-white">
-            <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-gray-800">{trendSummaryText(trend[trend.length - 1], trend.length, formatLocaleDate)}</summary>
-            <div className="border-t border-gray-100 px-4 pb-4 pt-2">
+          <details className="border-t border-gray-100">
+            <summary className="cursor-pointer py-3 text-sm font-medium text-gray-800">{trendSummaryText(trend[trend.length - 1], trend.length, formatLocaleDate)}</summary>
+            <div className="border-t border-gray-100 pb-4 pt-2">
             {drift.map(entry => <p key={`drift-${entry.level}-${entry.benchmark}-${entry.version}`} role="alert" className="mt-2 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">Level {entry.level} readiness dropped {((entry.previousRate - entry.currentRate) * 100).toFixed(1)} percentage points to {formatTrendPercent(entry.currentRate)} for {benchmarkDisplayName(entry.benchmark)} {entry.version}.</p>)}
             <p className="mt-1 text-xs text-gray-500">Pass rate across saved assessments for this tenant. Change is in percentage points from the previous saved assessment. Adjusted rates use exceptions accepted by then.</p>
             {trend.length ? <>
@@ -804,16 +830,48 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
             </div>
           </details>
         </section>}
-        <div className="my-4 flex flex-wrap gap-2" aria-label="Filter assessment findings">{["All", "Present", "Missing", "Different", "Review"].map(status => <button key={status} aria-pressed={filter === status} onClick={() => { setFilter(status); setPage(0) }} className={`rounded-full border px-4 py-2 text-sm transition-colors ${filter === status ? "border-transparent bg-primary text-primary-foreground" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>{status} <span className="ml-1 font-semibold">{assessment.findings.filter(f => status === "All" || f.status === status).length}</span></button>)}</div>
+        <div className="mb-2 flex flex-wrap items-center gap-2" aria-label="Filter assessment findings">{["All", "Present", "Missing", "Different", "Review"].map(status => <button key={status} aria-pressed={filter === status} onClick={() => { setFilter(status); setPage(0) }} className={`rounded-full border px-3.5 py-1.5 text-sm transition-colors ${filter === status ? "border-transparent bg-primary text-primary-foreground" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>{status} <span className="ml-1 tabular-nums font-semibold">{assessment.findings.filter(f => status === "All" || f.status === status).length}</span></button>)}
+          {isCis && <span className="ml-auto text-sm text-gray-500">{findings.length} of {assessment.findings.length} findings</span>}
+        </div>
         <p className="mb-4 text-xs leading-5 text-gray-500">Different: at least one existing configuration differs. Review: the pack contains alternative values for this setting. Select a single profile or resolve differences manually. Unassigned configurations can appear as Present. Expand a finding to inspect assignment evidence, including exclusions, filter references and unavailable reads.</p>
-        {isCis ? <div className="space-y-4">{groupFindingsByPolicy(findings).map(group => <section key={group.policyIndex} aria-label={group.policyName} className="rounded-2xl bg-gray-50 p-3">
-          <h4 title={group.policyName} className="flex flex-wrap items-baseline gap-x-2 px-1 text-sm font-medium text-gray-900"><span className="min-w-0 truncate">{policyDisplayName(group.policyName, reference)}</span><span className="text-xs font-normal text-gray-500">{group.total} {group.total === 1 ? "finding" : "findings"}</span><span className="text-xs font-normal text-gray-500">{statusMixText(group.counts)}</span></h4>
-          <div className="mt-2 space-y-1">{group.findings.map(f => <CisFindingRow key={f.key} finding={f} disabled={!!busy || !!creation || historical} checked={selected.has(f.key)} onChange={() => { setSelected(old => { const next = new Set(old); next.has(f.key) ? next.delete(f.key) : next.add(f.key); return next }); setPreview(false); setConfirmed(false) }} onAcceptException={prefillException} />)}</div>
+        {isCis ? <div>{groupFindingsByPolicy(findings).map(group => <section key={group.policyIndex} aria-label={group.policyName} className="border-t border-gray-100 py-4 first:border-t-0 first:pt-1">
+          <h4 title={group.policyName} className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm">
+            <span className="min-w-0 truncate font-medium text-gray-900">{policyDisplayName(group.policyName, reference)}</span>
+            <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs tabular-nums text-gray-600">{group.total} {group.total === 1 ? "finding" : "findings"}</span>
+            <span className="text-xs text-gray-500">{statusMixText(group.counts)}</span>
+          </h4>
+          <div className="mt-1 divide-y divide-gray-100">{group.findings.map(f => <CisFindingRow key={f.key} finding={f} disabled={!!busy || !!creation || historical} checked={selected.has(f.key)} onChange={() => { setSelected(old => { const next = new Set(old); next.has(f.key) ? next.delete(f.key) : next.add(f.key); return next }); setPreview(false); setConfirmed(false) }} />)}</div>
         </section>)}</div> : <>
         <div className="space-y-2">{findings.slice(page * 50, (page + 1) * 50).map(f => <FindingRow key={f.key} finding={f} disabled={!!busy || !!creation || historical || (!!framework.comparisonOnly && framework.id !== "cis-benchmarks")} remediable={framework.id === "cis-benchmarks"} checked={selected.has(f.key)} onChange={() => { setSelected(old => { const next = new Set(old); next.has(f.key) ? next.delete(f.key) : next.add(f.key); return next }); setPreview(false); setConfirmed(false) }} />)}</div>
         {findings.length > 50 && <div className="mt-4 flex items-center justify-between gap-3"><button className={button} disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</button><span className="text-sm text-gray-500">Page {page + 1} of {Math.ceil(findings.length / 50)}</span><button className={button} disabled={(page + 1) * 50 >= findings.length} onClick={() => setPage(page + 1)}>Next</button></div>}
         </>}
         {!findings.length && <p role="status" className="py-6 text-center text-sm text-gray-500">No findings in this category.</p>}
+        {readiness && selected.size > 0 && <div role="region" aria-label="Selected findings" className="sticky bottom-4 z-10 mt-4 flex flex-wrap items-center gap-3 rounded-3xl border border-gray-200 bg-white px-5 py-3 shadow-lg">
+          <span className="text-sm font-medium text-gray-800">{selected.size} selected</span>
+          <span className="text-xs text-gray-500">Remediate them in step 3 below, or exclude them from the score if you do not apply them on purpose.</span>
+          <span className="ml-auto flex gap-2">
+            <button type="button" className={button} disabled={!!busy || historical} onClick={() => { setSelected(new Set()); setPreview(false); setConfirmed(false) }}>Clear</button>
+            <button ref={excludeButton} type="button" className={button} disabled={!!busy || historical || !excludable.length} title={excludable.length ? undefined : "The selected findings are already excluded."} onClick={() => setExclusion({ owner: "", reason: "", expiresOn: "", count: excludable.length, error: "" })}>Exclude from score ({excludable.length})</button>
+          </span>
+        </div>}
+        <Dialog open={exclusion !== null} onOpenChange={open => { if (!open && !busy) setExclusion(null) }}>
+          <DialogContent onCloseAutoFocus={e => { e.preventDefault(); (excludeButton.current?.isConnected ? excludeButton.current : document.getElementById("cis-exclusions"))?.focus() }}>
+            <DialogHeader>
+              <DialogTitle>Exclude {exclusion?.count} {exclusion?.count === 1 ? "finding" : "findings"} from the score</DialogTitle>
+              <DialogDescription>Use this for settings you do not apply on purpose. They stay listed but stop counting against the adjusted pass rate until the expiry date, when they count again and need a new decision. Raw counts do not change.</DialogDescription>
+            </DialogHeader>
+            {exclusion && <form id="cis-exclusion" className="grid gap-3 sm:grid-cols-2" onSubmit={e => { e.preventDefault(); void excludeSelected(exclusion) }}>
+              <label className="block text-xs font-medium text-gray-700">Owner<input required value={exclusion.owner} disabled={!!busy} onChange={e => setExclusion({ ...exclusion, owner: e.target.value })} className="mt-1 w-full rounded-full border border-gray-300 px-3 py-1.5 text-sm font-normal" /></label>
+              <label className="block text-xs font-medium text-gray-700">Expiry date<input required type="date" value={exclusion.expiresOn} disabled={!!busy} onChange={e => setExclusion({ ...exclusion, expiresOn: e.target.value })} className="mt-1 w-full rounded-full border border-gray-300 px-3 py-1.5 text-sm font-normal" /></label>
+              <label className="block text-xs font-medium text-gray-700 sm:col-span-2">Reason<input required value={exclusion.reason} disabled={!!busy} onChange={e => setExclusion({ ...exclusion, reason: e.target.value })} className="mt-1 w-full rounded-full border border-gray-300 px-3 py-1.5 text-sm font-normal" /></label>
+              {exclusion.error && <p role="alert" className="text-sm text-red-700 sm:col-span-2">{exclusion.error}</p>}
+            </form>}
+            <DialogFooter>
+              <button type="button" className={button} disabled={!!busy} onClick={() => setExclusion(null)}>Cancel</button>
+              <button type="submit" form="cis-exclusion" className={primary} disabled={!!busy || !excludable.length}>{busy ? busy : "Exclude from score"}</button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
         {framework.id === "cis-benchmarks" ? <CisRemediationPanel tenant={selectedTenant ?? undefined} assessment={assessment} policies={policies} reference={reference} selectedKeys={selected} onRecompare={() => void perform("Reading tenant policies and comparing settings...", async () => { reset(); const result = await request<Assessment>({ action: "assess", tenantId: credentials!.tenantId, appId: credentials!.appId, frameworkId: framework.id, reference, policies }); setAssessment(result); setWorkspace(await workspaceRequest("workspace-load")) })} /> : framework.comparisonOnly ? <p className="mt-5 border-t pt-4 text-sm text-gray-600">This pack is available for comparison and reports only. Review missing settings and configure them through your own change process.</p>
         : <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t pt-4"><p className="text-sm text-gray-600">{chosen.length} missing root settings selected · {payloads.length} new {payloads.length === 1 ? "policy" : "policies"}</p><button className={primary} disabled={!chosen.length || !!busy || !!creation || historical} onClick={() => { setPreview(true); setConfirmed(false) }}>Preview recommended policies</button></div>}
       </>}
@@ -835,28 +893,35 @@ function targetingText(observation: Observation): string {
   return "Targeting: Assigned"
 }
 
-function CisFindingRow({ finding, checked, disabled, onChange, onAcceptException }: { finding: Finding; checked: boolean; disabled: boolean; onChange: () => void; onAcceptException?: (finding: Finding) => void }) {
+function CisFindingRow({ finding, checked, disabled, onChange }: { finding: Finding; checked: boolean; disabled: boolean; onChange: () => void }) {
   const colors = { Present: "bg-green-50 text-green-800", Missing: "bg-amber-50 text-amber-900", Different: "bg-red-50 text-red-800", Review: "bg-gray-100 text-gray-700" }
   const recommendedLines = summarizeSetting(finding.recommended)
   const groups = groupObservationsByValue(finding.observed, finding.recommended)
-  return <div className="flex items-start gap-3 rounded-xl bg-white px-3 py-2">
-    <input type="checkbox" aria-label={`Select missing setting ${finding.settingId} from ${finding.policyName}`} checked={checked} disabled={disabled || (finding.status !== "Missing" && finding.status !== "Different")} onChange={onChange} className="mt-1 h-4 min-h-0 w-4 shrink-0" />
-    <details className="min-w-0 flex-1"><summary className="cursor-pointer text-sm"><span className={`inline-block rounded-full px-2.5 py-0.5 text-xs ${colors[finding.status]}`}>{finding.status}</span><span className="ml-2 font-medium text-gray-800">{humanSettingLabel(finding.settingId)}</span><span title={finding.settingId} className="mt-0.5 block truncate font-mono text-xs leading-5 text-gray-500">{finding.settingId}</span></summary>
-      <div className="mt-3 space-y-3">
-        <div><p className="mb-2 text-xs font-semibold text-gray-600">Recommended configuration</p><ul className="space-y-1 rounded-2xl bg-gray-50 p-3 text-xs leading-5 text-gray-700">{recommendedLines.map((line, index) => <li key={index} className="whitespace-pre-wrap break-words">{line}</li>)}</ul></div>
-        <div><p className="mb-2 text-xs font-semibold text-gray-600">Observed policies and configuration</p>{groups.length ? <div className="space-y-2">{groups.map(group => <div key={group.key} className="rounded-2xl bg-gray-50 p-3 text-xs"><div className="flex flex-wrap items-center gap-2"><span className="font-medium text-gray-800">{group.policyNames.join(", ")}</span>{group.policyNames.length > 1 && <span className="text-gray-500">{group.observations.length} policies</span>}<span className={`inline-block rounded-full px-2.5 py-0.5 text-xs ${group.matchesRecommended ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"}`}>{group.matchesRecommended ? "Matches recommended" : "Differs"}</span></div><ul className="mt-2 space-y-1 leading-5 text-gray-700">{summarizeSetting(group.value).map((line, index) => <li key={index} className="whitespace-pre-wrap break-words">{line}</li>)}</ul><p className="mt-2 text-gray-500">{targetingText(group.observations[0]!)}</p></div>)}</div> : <p className="rounded-2xl bg-gray-50 p-3 text-xs text-gray-700">No matching root setting found in the assessed policy family.</p>}</div>
+  return <div className="flex items-start gap-3 py-2.5">
+    <input type="checkbox" aria-label={`Select finding ${finding.settingId} from ${finding.policyName}`} checked={checked} disabled={disabled || finding.status === "Present"} onChange={onChange} className="mt-1 h-4 min-h-0 w-4 shrink-0" />
+    <details className="group min-w-0 flex-1"><summary className="flex cursor-pointer list-none items-center gap-2.5 text-sm [&::-webkit-details-marker]:hidden">
+        <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium ${colors[finding.status]}`}>{finding.status}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-medium text-gray-800">{humanSettingLabel(finding.settingId)}</span>
+          <span title={finding.settingId} className="block truncate font-mono text-[11px] leading-4 text-gray-400">{finding.settingId}</span>
+        </span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-gray-400 transition-transform group-open:rotate-180" aria-hidden="true" />
+      </summary>
+      <div className="mt-3 grid gap-x-6 gap-y-4 pb-2 lg:grid-cols-2">
+        <div><p className="mb-1.5 text-xs font-semibold text-gray-600">Recommended configuration</p><ul className="space-y-1 border-l-2 border-gray-200 pl-3 text-xs leading-5 text-gray-700">{recommendedLines.map((line, index) => <li key={index} className="whitespace-pre-wrap break-words">{line}</li>)}</ul></div>
+        <div><p className="mb-1.5 text-xs font-semibold text-gray-600">Observed policies and configuration</p>{groups.length ? <div className="divide-y divide-gray-100">{groups.map(group => <div key={group.key} className="py-2 text-xs first:pt-0 last:pb-0"><div className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className="min-w-0 truncate font-medium text-gray-800" title={group.policyNames.join(", ")}>{group.policyNames.join(", ")}</span>{group.observations.length > 1 && <span className="text-gray-500">{group.observations.length} policies with this value</span>}<span className={`ml-auto shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${group.matchesRecommended ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"}`}>{group.matchesRecommended ? "Matches recommended" : "Differs"}</span></div><ul className="mt-1.5 space-y-0.5 leading-5 text-gray-700">{summarizeSetting(group.value).map((line, index) => <li key={index} className="whitespace-pre-wrap break-words">{line}</li>)}</ul><p className="mt-1 text-gray-500">{targetingText(group.observations[0]!)}</p></div>)}</div> : <p className="text-xs leading-5 text-gray-600">No matching root setting found in the assessed policy family.</p>}</div>
       </div>
       <details className="mt-3"><summary className="cursor-pointer text-xs font-medium text-gray-600">Raw Graph values</summary><div className="mt-3 grid gap-3 xl:grid-cols-2"><div><p className="mb-2 text-xs font-semibold text-gray-600">Recommended configuration</p><pre className="max-h-72 overflow-auto rounded-2xl bg-gray-50 p-3 text-xs">{JSON.stringify(finding.recommended, null, 2)}</pre></div><div><p className="mb-2 text-xs font-semibold text-gray-600">Observed policies and configuration</p><pre className="max-h-72 overflow-auto rounded-2xl bg-gray-50 p-3 text-xs">{finding.observed.length ? JSON.stringify(finding.observed, null, 2) : "No matching root setting found in the assessed policy family."}</pre></div></div></details>
-      {onAcceptException && finding.status !== "Present" && <div className="mt-3"><button type="button" className={button} disabled={disabled} onClick={() => onAcceptException(finding)}>Accept as exception</button></div>}
+      
     </details>
   </div>
 }
 
-function FindingRow({ finding, checked, disabled, onChange, remediable = false, onAcceptException }: { finding: Finding; checked: boolean; disabled: boolean; onChange: () => void; remediable?: boolean; onAcceptException?: (finding: Finding) => void }) {
+function FindingRow({ finding, checked, disabled, onChange, remediable = false }: { finding: Finding; checked: boolean; disabled: boolean; onChange: () => void; remediable?: boolean }) {
   const colors = { Present: "bg-green-50 text-green-800", Missing: "bg-amber-50 text-amber-900", Different: "bg-red-50 text-red-800", Review: "bg-gray-100 text-gray-700" }
   const recommendedLines = summarizeSetting(finding.recommended)
   return <div className="flex items-start gap-3 rounded-2xl bg-gray-50 p-4">
     <input type="checkbox" aria-label={`Select missing setting ${finding.settingId} from ${finding.policyName}`} checked={checked} disabled={disabled || (finding.status !== "Missing" && !(remediable && finding.status === "Different"))} onChange={onChange} className="mt-1 h-4 min-h-0 w-4 shrink-0" />
-    <details className="min-w-0 flex-1"><summary className="cursor-pointer text-sm"><span className="font-medium text-gray-800">{finding.policyName}</span><span className={`ml-2 inline-block rounded-full px-2.5 py-0.5 text-xs ${colors[finding.status]}`}>Configuration: {finding.status}</span><span className="mt-1 block break-all font-mono text-xs leading-5 text-gray-500">{finding.settingId}</span></summary><div className="mt-3 grid gap-3 xl:grid-cols-2"><div><p className="mb-2 text-xs font-semibold text-gray-600">Recommended configuration</p><ul className="space-y-1 rounded-2xl bg-white p-3 text-xs leading-5 text-gray-700">{recommendedLines.map((line, index) => <li key={index} className="whitespace-pre-wrap break-words">{line}</li>)}</ul></div><div><p className="mb-2 text-xs font-semibold text-gray-600">Observed policies and configuration</p>{finding.observed.length ? <div className="space-y-3">{finding.observed.map((observation, observationIndex) => { const matches = JSON.stringify(comparable(observation.value)) === JSON.stringify(comparable(finding.recommended)); return <div key={`${observation.policyId}:${observationIndex}`} className="rounded-2xl bg-white p-3 text-xs"><div className="flex flex-wrap items-center gap-2"><span className="font-medium text-gray-800">{observation.policyName}</span><span className={`inline-block rounded-full px-2.5 py-0.5 text-xs ${matches ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"}`}>{matches ? "Matches recommended" : "Differs"}</span></div><ul className="mt-2 space-y-1 leading-5 text-gray-700">{summarizeSetting(observation.value).map((line, index) => <li key={index} className="whitespace-pre-wrap break-words">{line}</li>)}</ul><p className="mt-2 text-gray-500">{targetingText(observation)}</p></div> })}</div> : <p className="rounded-2xl bg-white p-3 text-xs text-gray-700">No matching root setting found in the assessed policy family.</p>}</div></div><details className="mt-3"><summary className="cursor-pointer text-xs font-medium text-gray-600">Raw Graph values</summary><div className="mt-3 grid gap-3 xl:grid-cols-2"><div><p className="mb-2 text-xs font-semibold text-gray-600">Recommended configuration</p><pre className="max-h-72 overflow-auto rounded-2xl bg-white p-3 text-xs">{JSON.stringify(finding.recommended, null, 2)}</pre></div><div><p className="mb-2 text-xs font-semibold text-gray-600">Observed policies and configuration</p><pre className="max-h-72 overflow-auto rounded-2xl bg-white p-3 text-xs">{finding.observed.length ? JSON.stringify(finding.observed, null, 2) : "No matching root setting found in the assessed policy family."}</pre></div></div></details>{onAcceptException && finding.status !== "Present" && <div className="mt-3"><button type="button" className={button} disabled={disabled} onClick={() => onAcceptException(finding)}>Accept as exception</button></div>}</details>
+    <details className="min-w-0 flex-1"><summary className="cursor-pointer text-sm"><span className="font-medium text-gray-800">{finding.policyName}</span><span className={`ml-2 inline-block rounded-full px-2.5 py-0.5 text-xs ${colors[finding.status]}`}>Configuration: {finding.status}</span><span className="mt-1 block break-all font-mono text-xs leading-5 text-gray-500">{finding.settingId}</span></summary><div className="mt-3 grid gap-3 xl:grid-cols-2"><div><p className="mb-2 text-xs font-semibold text-gray-600">Recommended configuration</p><ul className="space-y-1 rounded-2xl bg-white p-3 text-xs leading-5 text-gray-700">{recommendedLines.map((line, index) => <li key={index} className="whitespace-pre-wrap break-words">{line}</li>)}</ul></div><div><p className="mb-2 text-xs font-semibold text-gray-600">Observed policies and configuration</p>{finding.observed.length ? <div className="space-y-3">{finding.observed.map((observation, observationIndex) => { const matches = JSON.stringify(comparable(observation.value)) === JSON.stringify(comparable(finding.recommended)); return <div key={`${observation.policyId}:${observationIndex}`} className="rounded-2xl bg-white p-3 text-xs"><div className="flex flex-wrap items-center gap-2"><span className="font-medium text-gray-800">{observation.policyName}</span><span className={`inline-block rounded-full px-2.5 py-0.5 text-xs ${matches ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"}`}>{matches ? "Matches recommended" : "Differs"}</span></div><ul className="mt-2 space-y-1 leading-5 text-gray-700">{summarizeSetting(observation.value).map((line, index) => <li key={index} className="whitespace-pre-wrap break-words">{line}</li>)}</ul><p className="mt-2 text-gray-500">{targetingText(observation)}</p></div> })}</div> : <p className="rounded-2xl bg-white p-3 text-xs text-gray-700">No matching root setting found in the assessed policy family.</p>}</div></div><details className="mt-3"><summary className="cursor-pointer text-xs font-medium text-gray-600">Raw Graph values</summary><div className="mt-3 grid gap-3 xl:grid-cols-2"><div><p className="mb-2 text-xs font-semibold text-gray-600">Recommended configuration</p><pre className="max-h-72 overflow-auto rounded-2xl bg-white p-3 text-xs">{JSON.stringify(finding.recommended, null, 2)}</pre></div><div><p className="mb-2 text-xs font-semibold text-gray-600">Observed policies and configuration</p><pre className="max-h-72 overflow-auto rounded-2xl bg-white p-3 text-xs">{finding.observed.length ? JSON.stringify(finding.observed, null, 2) : "No matching root setting found in the assessed policy family."}</pre></div></div></details></details>
   </div>
 }
