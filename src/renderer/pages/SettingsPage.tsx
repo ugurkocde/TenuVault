@@ -8,14 +8,17 @@ import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import { storageLabel } from "~/lib/storage-label"
-import type { AppInfo, AppPreferences, BackupSettings, SignedInAccount, UpdateStatus } from "../../shared/ipc"
+import type { AppInfo, AppPreferences, SignedInAccount, UpdateStatus } from "../../shared/ipc"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import { COMMUNITY_RETENTION_DAYS, effectiveRetentionDays } from "../../shared/plans"
 import { isGuid } from "../../shared/security"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
 import { StorageChooser } from "../components/StorageChooser"
+import { UnreadableBackupsNotice } from "../components/UnreadableBackupsNotice"
+import { RecoveryKeyImport } from "../components/RecoveryKeyImport"
 import { RecoveryKeyNotice } from "../components/RecoveryKeyNotice"
 import { bridge } from "../lib/bridge"
+import { localTenantIds, useBackupSettings, useLocalInventoryProblems } from "../lib/local-inventory"
 import { storageResources, type StorageChoice } from "../lib/storage"
 import { toast } from "../lib/toast"
 import { tenantPlan, useLicense } from "../lib/license"
@@ -199,12 +202,14 @@ function TenantRestoreWrites({ tenantId }: { tenantId: string }) {
 }
 
 function BackupsOnDevice() {
-  const [settings, setSettings] = useState<BackupSettings | null>(null)
-  const [recoveryKey, setRecoveryKey] = useState("")
+  // The Change storage dialog can fix the folder too; its changes reach this card.
+  const [settings, setSettings] = useBackupSettings((error) => toast(String(error), "error"))
   const [importing, setImporting] = useState(false)
   const { hash } = useLocation()
+  const tenants = useTenants()
+  // A shared folder can hold tenants another device backs up with its own key; only this device's tenants matter.
+  const inventory = useLocalInventoryProblems(settings, localTenantIds(tenants))
 
-  useEffect(() => { void bridge.backups.settings().then(setSettings).catch((error) => toast(String(error), "error")) }, [])
   useEffect(() => {
     if (hash !== "#recovery-key") return
     const button = document.getElementById("save-recovery-key")
@@ -239,6 +244,7 @@ function BackupsOnDevice() {
             toast(`Imported ${result.backupId}. Select this device as storage for tenant ${result.tenantId} to preview and restore it.`, "success")
           }
         })}><Upload className="mr-2 h-4 w-4" /> Import backup ZIP</Button>
+        <UnreadableBackupsNotice settings={settings} affected={inventory.affected.length > 0} checking={inventory.checking} onChange={setSettings} />
         <div className="space-y-2">
           <p className="text-xs font-medium text-gray-500">Folder</p>
           <p className="break-all rounded-2xl bg-gray-50 px-4 py-3 font-mono text-xs text-gray-700">{settings?.localFolder ?? "..."}</p>
@@ -292,34 +298,14 @@ function BackupsOnDevice() {
             </Button>
           </div>
           {importing && (
-            <div className="space-y-2">
-              <textarea aria-label="Recovery key"
-                className="min-h-16 w-full rounded-2xl border border-gray-300 px-4 py-3 font-mono text-xs"
-                placeholder="TVK2.... (or a legacy TVK1 key)"
-                value={recoveryKey}
-                onChange={(e) => setRecoveryKey(e.target.value)}
-                spellCheck={false}
-              />
-              <p className="text-xs text-gray-500">
-                The imported key encrypts new backups. Backups made with the previous key stay readable.
-              </p>
-              <Button
-                size="sm"
-                disabled={!recoveryKey.trim()}
-                onClick={() =>
-                  void run(async () => {
-                    const imported = await bridge.backups.importRecoveryKey(recoveryKey)
-                    if (!imported) return
-                    setSettings(imported)
-                    setRecoveryKey("")
-                    setImporting(false)
-                    toast("Recovery key imported.", "success")
-                  })
-                }
-              >
-                Import
-              </Button>
-            </div>
+            <RecoveryKeyImport
+              onImported={(imported) => {
+                setSettings(imported)
+                setImporting(false)
+                toast("Recovery key imported.", "success")
+              }}
+              onError={(message) => toast(message, "error")}
+            />
           )}
         </div>
       </CardContent>

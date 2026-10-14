@@ -33,6 +33,8 @@ vi.mock("@desktop/lib/schedules", async (original) => ({ ...await original<typeo
 vi.mock("@desktop/lib/license", () => ({ useLicense: () => ({ status: null }), tenantLicense: () => null, tenantPlan: () => null, planName: () => "Community" }))
 vi.mock("@desktop/components/RunBackupDialog", () => ({ RunBackupDialog: () => null }))
 vi.mock("@desktop/components/RecoveryKeyNotice", () => ({ RecoveryKeyNotice: () => null }))
+vi.mock("@desktop/components/UnreadableBackupsNotice", () => ({ UnreadableBackupsNotice: () => null }))
+vi.mock("@desktop/lib/local-inventory", () => ({ useBackupSettings: () => [null, vi.fn()], useLocalInventoryProblems: () => ({ affected: [], checking: false }), localTenantIds: () => [] }))
 vi.mock("@desktop/components/UpgradeNote", () => ({ PlanBadge: () => null }))
 vi.mock("~/hooks/dashboard/useBaselineScore", () => ({ useBaselineScore: () => ({ enabled: false }) }))
 vi.mock("@tanstack/react-query", () => ({ useQuery: (options: { queryFn: () => Promise<TenantDashboardStats> }) => {

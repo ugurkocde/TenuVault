@@ -29,6 +29,7 @@ import { RefusalLog, refuseUnlicensedBackup } from "./backup/refusals"
 import { backupTenantLabel, notifyBackupFailure } from "./backup/notifications"
 import { BackupKeys } from "./backup/keys"
 import { readBackupSettings } from "./backup/settings"
+import { localInventoryProblem } from "./backup/local-inventory"
 import { encryptedAzureFetch, registerStorageToken } from "./storage/azure-seal"
 import { handleLocalBlobRequest, isLocalAccount } from "./storage/blob-emulator"
 import { LocalBlobStore } from "./storage/local-blob-store"
@@ -189,6 +190,10 @@ async function bootstrap(): Promise<void> {
   const localFolder = () => appStore.get(LOCAL_FOLDER_KEY) ?? join(app.getPath("documents"), "TenuVault Backups")
   let localStore: LocalBlobStore | null = null
   const getLocalStore = () => (localStore ??= new LocalBlobStore(localFolder(), backupKeys.keyring()))
+  // The unreadable-backups warning reads inventories through its own store, so a check never shares
+  // an index rebuild with a running backup or retention. Stores already coordinate through the folder.
+  let checkStore: LocalBlobStore | null = null
+  const getCheckStore = () => (checkStore ??= new LocalBlobStore(localFolder(), backupKeys.keyring()))
   const backupSettings = () => readBackupSettings(localFolder(), backupKeys, appStore)
 
   // Background requests never open a sign-in window; the renderer shows a prompt instead.
@@ -685,6 +690,10 @@ async function bootstrap(): Promise<void> {
     } finally { importingArchive = false }
   })
   handleTrusted("backups:settings", () => backupSettings())
+  handleTrusted("backups:inventoryProblem", (_event, tenantId: unknown) => {
+    if (!isGuid(tenantId)) throw new Error("Unknown tenant.")
+    return localInventoryProblem(getCheckStore(), localFolder(), tenantId)
+  })
   handleTrusted("backups:cancel", async (_event, jobId: unknown) => {
     if (typeof jobId !== "string") throw new Error("Choose a running backup.")
     const job = engine.cancel(jobId)
@@ -711,6 +720,7 @@ async function bootstrap(): Promise<void> {
     if (!result.canceled && folder) {
       appStore.set(LOCAL_FOLDER_KEY, folder)
       localStore = null
+      checkStore = null
     }
     return backupSettings()
   })
@@ -754,6 +764,7 @@ async function bootstrap(): Promise<void> {
     if (review.response !== 1) return null
     backupKeys.importRecoveryKey(recoveryKey)
     localStore = null
+    checkStore = null
     return backupSettings()
   })
   handleTrusted("backups:verifyAzureStorage", async (_event, tenantId: string, clientId: string, account: string) => {

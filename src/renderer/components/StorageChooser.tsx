@@ -4,10 +4,11 @@ import { Alert, AlertDescription } from "~/components/ui/alert"
 import { Button } from "~/components/ui/button"
 import { Label } from "~/components/ui/label"
 import { cn } from "~/lib/utils"
-import type { BackupSettings } from "../../shared/ipc"
 import { bridge } from "../lib/bridge"
 import { useTenantPlan } from "../lib/license"
+import { useBackupSettings, useLocalInventoryProblems } from "../lib/local-inventory"
 import { listStorageAccounts, type AzureStorageAccount, type StorageChoice } from "../lib/storage"
+import { UnreadableBackupsNotice } from "./UnreadableBackupsNotice"
 import { PlanBadge, UpgradeNote } from "./UpgradeNote"
 
 interface StorageChooserProps {
@@ -21,7 +22,7 @@ interface StorageChooserProps {
 /** Lets the admin keep backups encrypted on this device or in their own Azure storage account. */
 export function StorageChooser({ tenantId, clientId, initial, onChange }: StorageChooserProps) {
   const [kind, setKind] = useState<StorageChoice["kind"]>(initial?.kind ?? "local")
-  const [settings, setSettings] = useState<BackupSettings | null>(null)
+  const [settings, setSettings] = useBackupSettings()
   const [accounts, setAccounts] = useState<AzureStorageAccount[] | null>(null)
   const [loadError, setLoadError] = useState("")
   const [selected, setSelected] = useState(initial?.kind === "azure" ? initial.storageAccountName : "")
@@ -31,7 +32,9 @@ export function StorageChooser({ tenantId, clientId, initial, onChange }: Storag
   // Community keeps backups on this device; Azure storage is a paid feature.
   const community = useTenantPlan(tenantId) === "community"
 
-  useEffect(() => void bridge.backups.settings().then(setSettings), [])
+  // A warning only: the local choice is never held back, and the first backup reports what is wrong.
+  const inventory = useLocalInventoryProblems(settings, [tenantId])
+  const affected = inventory.affected.length > 0
 
   useEffect(() => {
     if (kind !== "azure" || accounts || community) return
@@ -101,6 +104,14 @@ export function StorageChooser({ tenantId, clientId, initial, onChange }: Storag
             Folder: <span className="font-mono text-gray-800">{settings.localFolder}</span>
           </div>
           <p>Change the folder or save the recovery key in Settings. Without the recovery key, backups can only be read on this device.</p>
+          {inventory.checking && !affected && (
+            <p className="flex items-center gap-2"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking this tenant's backups in the folder...</p>
+          )}
+        </div>
+      )}
+      {kind === "local" && affected && (
+        <div className="ml-14">
+          <UnreadableBackupsNotice settings={settings} affected={affected} checking={inventory.checking} onChange={setSettings} />
         </div>
       )}
 

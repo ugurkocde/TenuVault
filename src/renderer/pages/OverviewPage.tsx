@@ -6,12 +6,14 @@ import { useSelectedTenant, useTenants, type Tenant } from "~/contexts/TenantCon
 import { Button } from "~/components/ui/button"
 import { Chip, Fact, RoundIconButton, Tile, TileLabel } from "~/components/dashboard/tiles"
 import { storageLabel } from "~/lib/storage-label"
-import type { BackupSettings, SignedInAccount } from "../../shared/ipc"
+import type { SignedInAccount } from "../../shared/ipc"
 import { backupTarget, trackBackup } from "../lib/backups"
 import { RunBackupDialog } from "../components/RunBackupDialog"
+import { UnreadableBackupsNotice } from "../components/UnreadableBackupsNotice"
 import { RecoveryKeyNotice } from "../components/RecoveryKeyNotice"
 import { bridge } from "../lib/bridge"
 import { formatDate, planName, tenantLicense, useLicense } from "../lib/license"
+import { localTenantIds, useBackupSettings, useLocalInventoryProblems } from "../lib/local-inventory"
 import { describeSchedule, formatWhen, useSchedules } from "../lib/schedules"
 import { toast } from "../lib/toast"
 
@@ -25,10 +27,11 @@ export default function OverviewPage() {
   const navigate = useNavigate()
   const [accounts, setAccounts] = useState<SignedInAccount[]>([])
   const [backingUp, setBackingUp] = useState<Tenant | null>(null)
-  const [backupSettings, setBackupSettings] = useState<BackupSettings | null>(null)
+  const [backupSettings, setBackupSettings] = useBackupSettings((error) => toast(String(error), "error"))
 
   useEffect(() => void bridge.auth.accounts().then(setAccounts), [])
-  useEffect(() => { void bridge.backups.settings().then(setBackupSettings).catch((error) => toast(String(error), "error")) }, [])
+  // A shared folder can hold tenants another device backs up with its own key; only this device's tenants matter.
+  const inventory = useLocalInventoryProblems(backupSettings, localTenantIds(tenants))
 
   const open = (tenant: Tenant, path = "/portal/dashboard") => {
     setSelectedTenantId(tenant.id)
@@ -63,6 +66,7 @@ export default function OverviewPage() {
         </Button>
       </div>
 
+      <UnreadableBackupsNotice settings={backupSettings} affected={inventory.affected.length > 0} checking={inventory.checking} onChange={setBackupSettings} />
       <RecoveryKeyNotice settings={backupSettings} />
 
       {/* Summary row: counts from the tenant list, sign-ins, license state and schedules */}

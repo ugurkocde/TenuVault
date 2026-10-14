@@ -24,6 +24,8 @@ You can change the location later in **Settings** > **Sign-in** > **Change stora
 2. TenuVault shows the backup folder under the option.
 3. Select **Continue**.
 
+TenuVault also reads this tenant's backup inventory in the folder, exactly as a backup would. If the folder already holds this tenant's backups from another installation, or damaged backup files, TenuVault shows **This folder has backups this device cannot read**. You can still select **Continue**, but the first backup fails until you fix it. Select **Import recovery key** and paste the recovery key of that installation, or select **Choose another folder** to start with an empty folder. See [A folder with backups this device cannot read](/backups/storage/#a-folder-with-backups-this-device-cannot-read).
+
 Backups are encrypted with a key protected by your Windows account or macOS Keychain. Nothing leaves this computer. Each backup file is encrypted on its own, and file names reveal nothing about your policies.
 
 To use a different folder, such as a network share, change it in **Settings** > **Storage and recovery** > **Change folder**. See [Backup storage and retention](/backups/storage/).
