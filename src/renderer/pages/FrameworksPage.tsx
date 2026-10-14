@@ -586,6 +586,7 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
 function targetingText(observation: Observation): string {
   if (!observation.targeting || observation.targeting.state === "unavailable") return "Targeting unavailable"
   if (observation.targeting.state === "unassigned") return "Targeting: Unassigned"
+  if (observation.targeting.state === "review") return "Targeting: Assigned, needs review"
   return "Targeting: Assigned"
 }
 

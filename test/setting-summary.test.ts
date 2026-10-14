@@ -111,6 +111,44 @@ describe("summarizeSetting", () => {
     expect(long[0]).toContain("...")
   })
 
+  it("summarizes the screenshot shape with empty children and a suffixed choice value", () => {
+    expect(summarizeSetting({
+      settingDefinitionId: "device_vendor_msft_policy_config_fakebook_mode",
+      choiceSettingValue: { value: "device_vendor_msft_policy_config_fakebook_mode_1", children: [] },
+    })).toEqual(["fakebook_mode: Selected option: 1"])
+  })
+
+  it("does not strip a definition id prefix without a separator", () => {
+    expect(summarizeSetting({
+      settingDefinitionId: "device_vendor_msft_policy_config_fakebook_mode",
+      choiceSettingValue: { value: "device_vendor_msft_policy_config_fakebook_mode2_1" },
+    })).toEqual(["fakebook_mode: Selected option: device_vendor_msft_policy_config_fakebook_mode2_1"])
+  })
+
+  it("caps deep nesting without throwing", () => {
+    let value: unknown = { settingDefinitionId: "device_vendor_msft_policy_config_fakebook_leaf", simpleSettingValue: { value: "leaf" } }
+    for (let i = 0; i < 30; i++) {
+      value = {
+        settingDefinitionId: `device_vendor_msft_policy_config_fakebook_level${i}`,
+        choiceSettingValue: { value: `device_vendor_msft_policy_config_fakebook_level${i}_1`, children: [value] },
+      }
+    }
+    let lines: string[] = []
+    expect(() => { lines = summarizeSetting(value) }).not.toThrow()
+    expect(lines.length).toBeLessThanOrEqual(50)
+    expect(lines.join("\n")).toContain("Further nested values are in the raw Graph values below.")
+  })
+
+  it("truncates a huge scalar value", () => {
+    const lines = summarizeSetting({
+      settingDefinitionId: "device_vendor_msft_policy_config_fakebook_blob",
+      simpleSettingValue: { value: "x".repeat(500) },
+    })
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain("...")
+    expect(lines[0]!.length).toBeLessThanOrEqual(260)
+  })
+
   it("never throws on null, arrays, or primitives", () => {
     expect(summarizeSetting(null)).toEqual(["null"])
     expect(summarizeSetting([1, 2])).toEqual(["[1,2]"])
