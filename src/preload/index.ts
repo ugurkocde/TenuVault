@@ -35,6 +35,7 @@ const bridge: TenuVaultPreloadBridge = {
     cancel: (jobId) => invoke("backups:cancel", jobId),
     importArchive: () => invoke("backups:importArchive"),
     settings: () => invoke("backups:settings"),
+    inventoryProblem: (tenantId) => invoke("backups:inventoryProblem", tenantId),
     chooseFolder: () => invoke("backups:chooseFolder"),
     openFolder: () => invoke("backups:openFolder"),
     exportRecoveryKey: () => invoke("backups:exportRecoveryKey"),

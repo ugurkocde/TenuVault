@@ -33,6 +33,15 @@ Changing the folder does not move existing backups. Move the folder's contents y
 
 The encryption key is protected by your Windows account or macOS Keychain. Without the recovery key, backups can only be read on this device. Save it with **Save recovery key** on the same card. See [Encryption and recovery key](/security/encryption/).
 
+### A folder with backups this device cannot read
+
+If the folder already holds backups made with a different key, for example by TenuVault on another computer or before a reinstall, this device cannot read them, and backups to that tenant's folder fail. The same happens when backup files are damaged, or when files a backup lists are missing. To catch this before a backup fails, TenuVault reads the tenant's backup inventory in the folder, exactly as a backup would, and shows **This folder has backups this device cannot read** on the **Storage** step of tenant setup, on the **Backups on this device** card in **Settings**, and on **All tenants**. **Settings** and **All tenants** show it only for tenants connected on this device, so a shared folder that also holds another device's tenants does not trigger it. The notice offers two ways out:
+
+* **Import recovery key**: paste the recovery key of the installation that made the backups. They become readable, and new backups use that key.
+* **Choose another folder**: keep this device's backups in a different, empty folder. The existing backups stay where they are. Use this when the files are damaged and you have no copy to restore them from.
+
+TenuVault reads the inventory again after either action, and the notice disappears from every open page once the folder is readable. The notice is a warning: **Continue** during tenant setup and **Save** in **Settings** > **Change storage** stay available, but backups to the affected tenant fail until one of the two is done. While a backup or retention is writing to the folder, a check that sees the folder change does not warn; the folder is checked again when you open the page again or change the folder or key. If the check does not answer within 15 seconds, for example on an unresponsive network share, no warning is shown and the first backup reports any problem.
+
 ## Backups in your Azure storage account
 
 Use your own storage account when you want backups off the admin's computer, for example to share them between admins. This needs Pro or MSP.
