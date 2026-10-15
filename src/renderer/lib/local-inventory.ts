@@ -55,8 +55,10 @@ export function useBackupSettings(onError?: (error: unknown) => void): [BackupSe
 
   useEffect(() => {
     let active = true
+    // The initial read only hydrates this view with current state; it is not a newer
+    // update, so it must not invalidate another view's in-flight explicit read.
     bridge.backups.settings().then(
-      (read) => { if (active && !updated.current) { settingsRevision++; setSettings(read) } },
+      (read) => { if (active && !updated.current) setSettings(read) },
       (error: unknown) => { if (active) reportError.current?.(error) },
     )
     return () => { active = false }

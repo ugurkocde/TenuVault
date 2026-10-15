@@ -17,7 +17,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { backups, app: { open
 vi.mock("../../src/renderer/lib/license", () => ({ useTenantPlan: () => "pro" }))
 
 import { StorageChooser } from "../../src/renderer/components/StorageChooser"
-import { announceBackupSettings } from "../../src/renderer/lib/local-inventory"
+import { announceBackupSettings, useBackupSettings } from "../../src/renderer/lib/local-inventory"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const ACCOUNT = { name: "tvbkpabc123", subscriptionId: "sub-1", resourceGroup: "rg-tenuvault-backups", location: "westeurope" }
@@ -256,5 +256,41 @@ describe("storage chooser Azure path", () => {
     await selectAccount(container, ACCOUNT.name)
     await clickText(container, "Check access")
     expect(last()).toBeNull()
+  })
+
+  it("keeps a successful key save when another view hydrates its settings meanwhile", async () => {
+    let resolveSavedRead!: (value: BackupSettings) => void
+    const savedRead = new Promise<BackupSettings>((resolve) => { resolveSavedRead = resolve })
+    backups.settings
+      .mockResolvedValueOnce(unsaved)
+      .mockReturnValueOnce(savedRead)
+      .mockResolvedValue(unsaved)
+    backups.inventoryProblem.mockResolvedValue(null)
+    backups.verifyAzureStorage.mockResolvedValue(undefined)
+    backups.exportRecoveryKey.mockResolvedValue({ saved: true, path: "/tmp/key.txt" })
+    fetchMock.mockResolvedValue(accountResponse([ACCOUNT]))
+
+    const { container, last } = await renderChooser()
+    await chooseAzure(container)
+    await selectAccount(container, ACCOUNT.name)
+    await clickText(container, "Check access")
+    await clickText(container, "Save recovery key")
+
+    const probeContainer = document.createElement("div")
+    document.body.appendChild(probeContainer)
+    containers.push(probeContainer)
+    const probeRoot = createRoot(probeContainer)
+    roots.push(probeRoot)
+    const Probe = () => {
+      useBackupSettings()
+      return createElement("div", null, "probe")
+    }
+    act(() => probeRoot.render(createElement(Probe)))
+    await flush()
+
+    await act(async () => resolveSavedRead(saved))
+    await flush()
+    expect(container.textContent).not.toContain("Save your recovery key before you continue")
+    expect(last()).toMatchObject({ kind: "azure", storageAccountName: ACCOUNT.name })
   })
 })
