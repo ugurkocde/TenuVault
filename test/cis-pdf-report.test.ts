@@ -99,6 +99,10 @@ describe("CIS readiness PDF report", () => {
     expect(coverageSourceLabel("none")).toBe("Not computable")
     const without = pdfText(generateCisReadinessPDF(summary, context))
     expect(without).toContain("Coverage: Not computable")
+    // Without a manual recommendation list the CIS notice and its link still appear.
+    expect(summary.levels.every(level => !level.manual.length)).toBe(true)
+    expect(without).toContain(MANUAL_RECOMMENDATIONS_FALLBACK)
+    expect(without).toContain("https://www.cisecurity.org/cis-benchmarks")
     expect(without).not.toContain("Authoritative denominator")
     const proxy = { ...summary, levels: summary.levels.map(level => ({ ...level, coverage: 0.5, denominator: 4, coverageSource: "breakout-proxy" as const })) }
     expect(pdfText(generateCisReadinessPDF(proxy, context))).toContain("Breakout proxy, illustrative")

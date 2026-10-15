@@ -169,7 +169,11 @@ describe("CIS readiness", () => {
     const assessment = assessPolicySet({ tenantId, frameworkId: "cis-benchmarks", reference: "fakebook-os 9.9.9", policies, current: [], runId: "run-1", assessedAt: "2026-10-13T00:00:00.000Z" })
     const level1 = cisReadiness(assessment, policies).levels[0]!
     expect(level1).toMatchObject({ enumerated: 0, assessedAutomated: null, denominator: null, coverage: null, coverageSource: "none" })
-    expect(cisReadinessCsv(cisReadiness(assessment, policies)).split("\r\n")[1]).toContain("0,,0,,,")
+    const csv = cisReadinessCsv(cisReadiness(assessment, policies))
+    expect(csv.split("\r\n")[1]).toContain("0,,0,,,")
+    // The CIS notice is part of every readiness export, also without a manual recommendation list.
+    expect(csv).toContain("Not all recommendations from the CIS Benchmarks are included in this tool. Please refer to the CIS website to access the free CIS Benchmarks PDFs for manual assessment instructions. https://www.cisecurity.org/cis-benchmarks,Notice")
+    expect(JSON.parse(cisReadinessJson(cisReadiness(assessment, policies), null, "2026-10-13T10:00:00Z"))).toMatchObject({ manualFallback: expect.stringContaining("Not all recommendations"), manualFallbackUrl: "https://www.cisecurity.org/cis-benchmarks" })
   })
 
   it("exports benchmark, version, Level and counts as CSV and JSON through the governance export", () => {

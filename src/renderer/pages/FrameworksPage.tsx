@@ -19,6 +19,7 @@ import { parseRecommendationList, type RecommendationList } from "../../shared/f
 import { cisReadinessCsv, cisReadinessJson, governanceExportName } from "../features/shared/governance-export"
 import { accumulateCisFindings, cisRunReceivedLabel, cisRunSteps, cisRunTallies, emptyCisRunAccumulation, resolveCisRunCompletion, type CisRunPack } from "../../shared/frameworks/cis-run"
 import { refreshInternalCisBenchmarks, useInternalCisBenchmarks } from "../lib/internal-cis"
+import { bridge } from "../lib/bridge"
 import { cachedCisCatalog, forgetCisCatalog, rememberCisCatalog } from "../lib/cis-catalog-cache"
 import { parsePolicies, remediationPayload, rootMatches, type Assessment, type BaselinePolicy, type Finding, type Observation } from "../../shared/frameworks/policies"
 import { summarizeSetting } from "../../shared/frameworks/setting-summary"
@@ -783,6 +784,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
             <h3 className="text-base font-medium text-gray-900">CIS readiness</h3>
             <p className="text-xs text-gray-500">{readiness.manualNote} This view covers the automated settings in the imported pack only.</p>
           </div>
+          <p role="note" aria-label="Manual recommendations" className="mt-3 flex items-start gap-2 rounded-2xl bg-blue-50 px-4 py-3 text-sm text-gray-800"><Info className="mt-0.5 size-4 shrink-0 text-blue-700" aria-hidden="true" /><span>{readiness.manualFallback} <a href={readiness.manualFallbackUrl} className="font-medium text-blue-700 underline underline-offset-2" onClick={event => { event.preventDefault(); void bridge.app.openExternal(readiness.manualFallbackUrl) }}>{readiness.manualFallbackUrl}</a></span></p>
           <div className="mt-4 divide-y divide-gray-100">
             {readiness.levels.map(level => {
               const total = level.assessedSettings
@@ -841,7 +843,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
                   {item.impact && <p><strong className="font-medium text-gray-900">Impact:</strong> {item.impact}</p>}
                   {item.audit && <p><strong className="font-medium text-gray-900">Audit:</strong> {item.audit}</p>}
                   {item.remediation && <p><strong className="font-medium text-gray-900">Remediation:</strong> {item.remediation}</p>}
-                </> : <p><a href={readiness.manualFallbackUrl} target="_blank" rel="noreferrer" className="text-blue-700 hover:underline">{readiness.manualFallback}</a></p>}
+                </> : <p><a href={readiness.manualFallbackUrl} className="text-blue-700 hover:underline" onClick={event => { event.preventDefault(); void bridge.app.openExternal(readiness.manualFallbackUrl) }}>{readiness.manualFallback}</a></p>}
               </div>
             </details>)}</div>
           </div>)}

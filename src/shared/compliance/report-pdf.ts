@@ -218,6 +218,10 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
   text(`Tenant: ${context.tenantName ? `${context.tenantName} (${context.tenantId})` : context.tenantId}`)
   text(`Benchmark: ${summary.benchmark}\nVersion: ${summary.version}\nAssessed: ${formatReportDate(context.assessedAt)}\nExported: ${formatReportDate(context.exportedAt)}${context.runId ? `\nReport: ${context.runId}` : ''}`)
   text(summary.manualNote)
+  // The CIS notice for recommendations this tool does not include, printed on every report.
+  heading('Manual recommendations')
+  text(summary.manualFallback)
+  text(summary.manualFallbackUrl)
   heading('Limitations')
   for (const line of EXPORT_LIMITATIONS) text(line)
   for (const level of summary.levels) {

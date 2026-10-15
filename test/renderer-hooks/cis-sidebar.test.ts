@@ -297,4 +297,38 @@ describe("CIS Benchmarks route", () => {
     const frameworksLinks = [...container.querySelectorAll('a[href="/portal/frameworks"]')]
     expect(frameworksLinks.some((link) => link.textContent.trim() === "Frameworks")).toBe(false)
   })
+
+  it("shows the CIS manual notice with its link in the readiness view without a manual recommendation list", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    const tenantId = "11111111-1111-1111-1111-111111111111"
+    selectedTenantState.current = { id: "local", name: "Synthetic tenant", credentials: { tenantId, appId: "22222222-2222-2222-2222-222222222222" } }
+    const policy = { name: "Synthetic policy", platforms: "windows10", technologies: "mdm", description: "Synthetic", provenance: { schemaVersion: 1, benchmark: "synthetic-os", version: "9.9.9", level: "Level 1", sourceFile: "synthetic.json" },
+      settings: [{ settingInstance: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance", settingDefinitionId: "synthetic_setting", choiceSettingValue: { value: "synthetic_on", children: [] } } }] }
+    const assessment = { runId: "run-1", tenantId, frameworkId: "cis-benchmarks", reference: "synthetic-os 9.9.9 Level 1", assessedAt: "2026-10-15T10:00:00Z", policyCount: 1,
+      findings: [{ key: "0:0", policyIndex: 0, settingIndex: 0, policyName: "Synthetic policy", settingId: "synthetic_setting", status: "Missing", recommended: null, observed: [] }] }
+    const workspace = { version: 1, tenantId, frameworkId: "cis-benchmarks", policies: [policy], reference: assessment.reference, updatedAt: "2026-10-15T10:00:00Z", history: [{ assessment, policies: [policy] }] }
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(path === "/api/cis-remediation" ? { deployments: [] } : workspace), { status: 200, headers: { "Content-Type": "application/json" } })))
+    const openExternal = vi.fn(async () => undefined)
+    const { bridge } = await import("../../src/renderer/lib/bridge")
+    ;(bridge.app as unknown as { openExternal: typeof openExternal }).openExternal = openExternal
+    const container = render(
+      createElement(
+        MemoryRouter,
+        { initialEntries: ["/portal/frameworks/cis-benchmarks"] },
+        createElement(Routes, null, createElement(Route, { path: "/portal/frameworks/:frameworkId", element: createElement(FrameworksPage) })),
+      ),
+    )
+    await flush()
+    const view = [...container.querySelectorAll("button")].find((item) => item.textContent === "View read-only")
+    expect(view).toBeDefined()
+    await act(async () => { view!.click() })
+    await flush()
+    const notice = container.querySelector('[aria-label="CIS readiness"] [role="note"]')
+    expect(notice?.textContent).toContain("Not all recommendations from the CIS Benchmarks are included in this tool. Please refer to the CIS website to access the free CIS Benchmarks PDFs for manual assessment instructions.")
+    const link = notice?.querySelector("a")
+    expect(link?.textContent).toBe("https://www.cisecurity.org/cis-benchmarks")
+    await act(async () => { link!.click() })
+    expect(openExternal).toHaveBeenCalledWith("https://www.cisecurity.org/cis-benchmarks")
+    vi.unstubAllGlobals()
+  })
 })

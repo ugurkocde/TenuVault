@@ -253,6 +253,8 @@ export function cisReadinessCsv(summary: CisReadinessSummary): string {
       rows.push([row.benchmark, row.version, row.level, "", "", "", "", "", "", "", "", "", "", "", row.fallback, row.state, row.identifier, row.title, "", "", ""])
     }
   }
+  // The CIS notice for recommendations this tool does not include, on every export.
+  rows.push([summary.benchmark, summary.version, "", "", "", "", "", "", "", "", "", "", "", "", `${summary.manualFallback} ${summary.manualFallbackUrl}`, "Notice", "", "", "", "", ""])
   return toCsv([CIS_READINESS_HEADERS, ...rows])
 }
 
