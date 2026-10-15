@@ -3,26 +3,58 @@ import type { Item } from "../intune/registry"
 export const OIB_REPO = "SkipToTheEndpoint/OpenIntuneBaseline"
 export const OIB_LICENSE = "GPL-3.0 · SkipToTheEndpoint and contributors"
 
-export type OibPlatform = "windows" | "macos" | "win365" | "byod"
+export type OibPlatform = "windows" | "macos" | "win365" | "byod" | "ios" | "android"
 
-/** A stable platform release published by the official upstream repository, pinned to its tag's commit. */
+/** The release channels the releases.json manifest publishes: tested, early-access and unversioned. */
+export type OibChannel = "stable" | "beta" | "unstable"
+
+/** Whether a platform has a usable baseline or is still being built upstream. */
+export type OibPlatformStatus = "available" | "in-development"
+
+/**
+ * A platform release listed in the releases.json manifest, pinned to the commit its tag or branch
+ * pointed to when the manifest was read. Beta releases live on their own branch and have no tag.
+ */
 export interface OibPublishedRelease {
   platform: OibPlatform
+  /** Upstream version, e.g. "4.0". */
+  version: string
+  /** Optional edition name, e.g. "26H2 Edition". */
+  name?: string
+  channel: OibChannel
+  /** Beta and unstable releases are prereleases, only offered by default when prereleases are allowed. */
+  prerelease: boolean
+  releaseDate: string
+  /** The branch the release lives on ("main" for stable releases cut from main). */
+  branch: string
+  /** The published tag, or the branch name for beta releases without one. Loads are keyed by it. */
   tag: string
+  /** The commit the tag or branch pointed to when the manifest was read. */
   commit: string
-  publishedAt: string
+  /** The upstream page for the release. */
+  url?: string
 }
 
-/** The OpenIntuneBaseline versions a session can use: published releases and the current main commit. */
+/** A platform the manifest lists, with its development status and changelog path. */
+export interface OibPlatformInfo {
+  platform: OibPlatform
+  status: OibPlatformStatus
+  /** Repository path of the platform changelog, when published. */
+  changelog?: string
+}
+
+/** The OpenIntuneBaseline versions a session can use: manifest releases and the current main commit. */
 export interface OibVersions {
   main: { commit: string; committedAt?: string }
+  /** Every platform the manifest lists, with its status. */
+  platforms: OibPlatformInfo[]
   /** Newest first. */
   releases: OibPublishedRelease[]
   /** Set when GitHub could not be reached and the versions known from an earlier session are shown. */
   warning?: string
 }
 
-/** The version used for a platform: a published release tag at its commit, or main when `tag` is absent. */
+/** The version used for a platform: a manifest release (`tag` is its tag or beta branch), or main. */
 export interface OibSelection {
   commit: string
   tag?: string
@@ -33,13 +65,19 @@ export const OIB_PLATFORMS: Record<OibPlatform, { label: string; root: string; d
   macos: { label: "macOS", root: "MACOS/", description: "Apple macOS devices deployed by ABM" },
   win365: { label: "Windows 365", root: "WINDOWS365/", description: "Cloud PCs" },
   byod: { label: "BYOD", root: "BYOD/", description: "App protection policies" },
+  ios: { label: "iOS", root: "IOS/", description: "Fully managed iOS devices" },
+  android: { label: "Android", root: "ANDROID/", description: "Android Enterprise devices" },
 }
 
-/** Platforms OIBDeployer lists but TenuVault does not deploy yet. */
-export const OIB_COMING_SOON = [
-  { label: "iOS", description: "Fully managed iOS devices" },
-  { label: "Android", description: "Android Enterprise devices" },
-]
+/** Maps releases.json platform ids to TenuVault's internal platform ids (win365 is "windows365" upstream). */
+export const OIB_MANIFEST_IDS: Record<string, OibPlatform> = {
+  windows: "windows",
+  windows365: "win365",
+  macos: "macos",
+  ios: "ios",
+  android: "android",
+  byod: "byod",
+}
 
 export interface OibReplacement {
   oibId: string

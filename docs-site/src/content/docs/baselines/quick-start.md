@@ -32,9 +32,11 @@ A platform's policy files are downloaded the first time a version is used, with 
 | **Windows** | Windows 11 devices deployed by Autopilot |
 | **macOS** | Apple macOS devices deployed by Apple Business Manager |
 | **Windows 365** | Cloud PCs |
+| **iOS** | Fully managed iOS devices |
+| **Android** | Android Enterprise devices |
 | **BYOD** | App protection policies for iOS and Android |
 
-iOS and Android device platforms are listed as **Coming soon**.
+The available platforms, their versions and development status come from the upstream `releases.json` manifest. Platforms the manifest marks as **in development** appear but cannot be scanned yet. Beta and unstable releases are offered as a platform's latest version only when you enable prereleases.
 
 ## What your plan includes
 

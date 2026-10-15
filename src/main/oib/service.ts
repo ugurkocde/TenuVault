@@ -107,7 +107,7 @@ export function migrateLegacyOibRuns(target: { keys(): string[]; get(key: string
 }
 
 function platformOf(value: unknown): OibPlatform {
-  if (typeof value !== "string" || !(value in OIB_PLATFORMS)) throw new FrameworkError("Choose a platform: Windows, macOS, Windows 365 or BYOD.")
+  if (typeof value !== "string" || !(value in OIB_PLATFORMS)) throw new FrameworkError("Choose a supported OpenIntuneBaseline platform.")
   return value as OibPlatform
 }
 

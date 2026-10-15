@@ -26,12 +26,16 @@ type Flow = (typeof FLOWS)[number]["id"]
 
 // The versions chosen on this page, kept while the app runs so moving between workflows keeps them.
 let chosen: Partial<Selections> = {}
+// Whether beta and unstable prereleases are offered by default, kept across workflows like the choices.
+let chosenPrerelease = false
 
 export default function OibPage() {
   const { flow } = useParams()
   const { tenant } = useOibTenant()
   const [versions, setVersions] = useState<OibVersions | null>(null)
   const [overrides, setOverrides] = useState<Partial<Selections>>(chosen)
+  const [allowPrerelease, setAllowPrereleaseState] = useState(chosenPrerelease)
+  const setAllowPrerelease = (value: boolean) => { chosenPrerelease = value; setAllowPrereleaseState(value) }
   const [picking, setPicking] = useState(false)
   const [error, setError] = useState("")
   const [checking, setChecking] = useState(false)
@@ -45,12 +49,12 @@ export default function OibPage() {
   const resolve = (v: OibVersions, platform: OibPlatform, selection?: OibSelection): OibSelection => {
     if (selection && !selection.tag) return { commit: v.main.commit }
     if (selection && v.releases.some(r => r.platform === platform && r.tag === selection.tag && r.commit === selection.commit)) return selection
-    return defaultSelection(v, platform)
+    return defaultSelection(v, platform, allowPrerelease)
   }
   const selections = versions ? Object.fromEntries((Object.keys(OIB_PLATFORMS) as OibPlatform[]).map(p => [p, resolve(versions, p, overrides[p])])) as Selections : null
   // Only choices that differ from the default are kept, so a platform left alone follows new releases.
   const choose = (value: Partial<Selections>) => {
-    const next = Object.fromEntries(Object.entries(value).filter(([p, s]) => versions && JSON.stringify(s) !== JSON.stringify(defaultSelection(versions, p as OibPlatform)))) as Partial<Selections>
+    const next = Object.fromEntries(Object.entries(value).filter(([p, s]) => versions && JSON.stringify(s) !== JSON.stringify(defaultSelection(versions, p as OibPlatform, allowPrerelease)))) as Partial<Selections>
     chosen = next; setOverrides(next)
   }
   const notes = versions && selections ? mainNotes(versions, selections) : null
@@ -78,7 +82,7 @@ export default function OibPage() {
         {!active && notes?.warning && <p role="status" className="mt-2 text-amber-900">{notes.warning}</p>}
         <p className="mt-2">Content: SkipToTheEndpoint and contributors, <a href={`https://github.com/${OIB_REPO}/blob/main/LICENSE`} target="_blank" rel="noreferrer" className="underline">GPL-3.0</a>.</p>
       </div>
-      {picking && !active && versions && selections && <VersionsPanel className="mt-4 rounded-3xl border-0 p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]" versions={versions} selections={selections} onCancel={() => setPicking(false)} onDone={value => { choose(value); setPicking(false) }} />}
+      {picking && !active && versions && selections && <VersionsPanel className="mt-4 rounded-3xl border-0 p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]" versions={versions} selections={selections} allowPrerelease={allowPrerelease} onAllowPrereleaseChange={setAllowPrerelease} onCancel={() => setPicking(false)} onDone={value => { choose(value); setPicking(false) }} />}
     </div>
     {!tenant && <p role="status" className="rounded-3xl bg-amber-50 px-6 py-5 text-sm text-amber-950">Choose a connected tenant using the sidebar.</p>}
     {tenant && !active && <>
@@ -104,7 +108,7 @@ export default function OibPage() {
           <button type="button" className={`${button} mt-5`} disabled={checking} aria-busy={checking} onClick={() => loadVersions(true)}><RotateCcw className={checking ? "h-4 w-4 animate-spin" : "h-4 w-4"} aria-hidden="true" />{checking ? "Retrying…" : "Retry"}</button>
         </section>
         : <p role="status" className="text-sm text-gray-500">Checking the OpenIntuneBaseline releases…</p>
-        : <VersionsContext.Provider value={{ versions: versions!, selections, choose }}>
+        : <VersionsContext.Provider value={{ versions: versions!, selections, choose, allowPrerelease, setAllowPrerelease }}>
           <div key={`${tenant.tenantId}:${JSON.stringify(selections)}`}>
             {active === "new" && <NewDeployment selections={selections} />}
             {active === "existing" && <ExistingDeployment selections={selections} />}

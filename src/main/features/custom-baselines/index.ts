@@ -54,7 +54,7 @@ const commitOf = (body: Body): string => {
 }
 
 const platformOf = (value: unknown): OibPlatform => {
-  if (!PLATFORMS.includes(value as OibPlatform)) throw new FeatureError("Choose a platform: Windows, macOS, Windows 365 or BYOD.")
+  if (!PLATFORMS.includes(value as OibPlatform)) throw new FeatureError("Choose a supported OpenIntuneBaseline platform.")
   return value as OibPlatform
 }
 

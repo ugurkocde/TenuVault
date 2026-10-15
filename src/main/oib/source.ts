@@ -3,7 +3,7 @@ import { join } from "node:path"
 import { record } from "../../shared/frameworks/policies"
 import { typeForFolder, type Item } from "../../shared/intune/registry"
 import { catalogPolicies, parseManifest, type Manifest } from "../../shared/oib/manifest"
-import { OIB_LICENSE, OIB_PLATFORMS, OIB_REPO, type OibCatalog, type OibPlatform, type OibPublishedRelease, type OibVersions } from "../../shared/oib/types"
+import { OIB_LICENSE, OIB_MANIFEST_IDS, OIB_PLATFORMS, OIB_REPO, type OibCatalog, type OibChannel, type OibPlatform, type OibPlatformInfo, type OibPlatformStatus, type OibPublishedRelease, type OibVersions } from "../../shared/oib/types"
 import { defaultSelection, oibReference, selectionLabel, tagPlatform } from "../../shared/oib/versions"
 import { FrameworkError } from "../frameworks/service"
 
@@ -60,7 +60,8 @@ export interface LoadedPack {
   items: Map<string, PackItem>
 }
 
-let head: { commit: string; committedAt?: string; expires: number } | null = null
+/** Commit resolved for each ref (branch or tag), cached for ten minutes. */
+const refCommits = new Map<string, { commit: string; committedAt?: string; expires: number }>()
 let versions: { value: OibVersions; expires: number } | null = null
 /** Commits main pointed to, plus commits recorded by this app (runs, baseline provenance). */
 const resolved = new Set<string>()
@@ -80,7 +81,7 @@ export function setOibCacheDir(dir: string | null): void {
 
 /** Forgets resolved commits and cached packs held in memory. */
 export function resetOibSource(): void {
-  head = null
+  refCommits.clear()
   versions = null
   resolved.clear()
   tagged.clear()
@@ -116,54 +117,109 @@ async function github(url: string): Promise<unknown> {
   }
 }
 
-/** The commit the OIB main branch points to now (cached for ten minutes). */
-export async function resolveMain(): Promise<{ commit: string; committedAt?: string }> {
-  if (head && head.expires > Date.now()) return { commit: head.commit, committedAt: head.committedAt }
-  const json = await github(`${API}/commits/main`)
+/** The commit a branch or tag points to now (cached for ten minutes); accepts any ref GitHub resolves. */
+export async function resolveRef(ref: string): Promise<{ commit: string; committedAt?: string }> {
+  const cached = refCommits.get(ref)
+  if (cached && cached.expires > Date.now()) return { commit: cached.commit, committedAt: cached.committedAt }
+  const json = await github(`${API}/commits/${ref.split("/").map(encodeURIComponent).join("/")}`)
   if (!record(json) || typeof json.sha !== "string" || !SHA.test(json.sha)) throw new FrameworkError("GitHub returned an unexpected commit.", 502)
   const committedAt = record(json.commit) && record(json.commit.committer) && typeof json.commit.committer.date === "string" ? json.commit.committer.date : undefined
-  head = { commit: json.sha, committedAt, expires: Date.now() + HEAD_TTL }
+  refCommits.set(ref, { commit: json.sha, committedAt, expires: Date.now() + HEAD_TTL })
   resolved.add(json.sha)
   return { commit: json.sha, committedAt }
 }
 
+/** The commit the OIB main branch points to now (cached for ten minutes). */
+export async function resolveMain(): Promise<{ commit: string; committedAt?: string }> {
+  return resolveRef("main")
+}
+
+/** A release the releases.json manifest lists, before its ref is resolved to a commit. */
+interface ManifestRelease {
+  platform: OibPlatform
+  version: string
+  name?: string
+  channel: OibChannel
+  prerelease: boolean
+  releaseDate: string
+  branch: string
+  /** The published tag, or undefined for beta releases that only live on a branch. */
+  tag?: string
+  url?: string
+}
+
+interface ParsedManifest {
+  platforms: Array<{ platform: OibPlatform; status: OibPlatformStatus; changelog?: string; releases: ManifestRelease[] }>
+}
+
+const asText = (value: unknown): string => (typeof value === "string" ? value.trim() : "")
+const asChannel = (value: unknown): OibChannel => (value === "beta" || value === "unstable" ? value : "stable")
+
 /**
- * Stable platform releases, newest first: drafts, prereleases and tags without a platform prefix
- * are left out, and each tag is pinned to the commit the tag listing reports.
+ * The releases.json manifest: the platforms upstream publishes, each with its development status
+ * and releases. Malformed platforms or releases are left out rather than failing the whole read.
  */
-export function publishedReleases(releases: unknown, tags: unknown): OibPublishedRelease[] {
-  if (!Array.isArray(releases) || !Array.isArray(tags)) throw new FrameworkError("GitHub returned an unexpected release listing.", 502)
-  const commits = new Map<string, string>()
-  for (const tag of tags) {
-    if (record(tag) && typeof tag.name === "string" && record(tag.commit) && typeof tag.commit.sha === "string" && SHA.test(tag.commit.sha)) commits.set(tag.name, tag.commit.sha)
-  }
-  const result: OibPublishedRelease[] = []
-  for (const release of releases) {
-    if (!record(release) || release.draft !== false || release.prerelease !== false || typeof release.tag_name !== "string" || typeof release.published_at !== "string" || !Number.isFinite(Date.parse(release.published_at))) continue
-    const platform = tagPlatform(release.tag_name)
-    const commit = commits.get(release.tag_name)
-    if (!platform || !commit) continue
-    result.push({ platform, tag: release.tag_name, commit, publishedAt: release.published_at })
-  }
-  return result.sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt))
+export function parseReleaseManifest(value: unknown): ParsedManifest {
+  if (!record(value) || !Array.isArray(value.platforms)) throw new FrameworkError("GitHub returned an unexpected release manifest.", 502)
+  const platforms = value.platforms.filter(record).flatMap((entry): ParsedManifest["platforms"] => {
+    const platform = typeof entry.id === "string" ? OIB_MANIFEST_IDS[entry.id] : undefined
+    if (!platform) return []
+    const status: OibPlatformStatus = entry.status === "available" ? "available" : "in-development"
+    const changelog = asText(entry.changelog)
+    const releases = Array.isArray(entry.releases) ? entry.releases.filter(record).flatMap((release): ManifestRelease[] => {
+      const version = asText(release.version)
+      const releaseDate = asText(release.releaseDate)
+      if (!version || !releaseDate || !Number.isFinite(Date.parse(releaseDate))) return []
+      const branch = asText(release.branch) || "main"
+      const tag = asText(release.tag) || undefined
+      return [{
+        platform, version, channel: asChannel(release.channel), prerelease: release.prerelease === true,
+        releaseDate, branch, ...(tag ? { tag } : {}),
+        ...(asText(release.name) ? { name: asText(release.name) } : {}),
+        ...(asText(release.url) ? { url: asText(release.url) } : {}),
+      }]
+    }) : []
+    return [{ platform, status, ...(changelog ? { changelog } : {}), releases }]
+  })
+  return { platforms }
+}
+
+/** Reads releases.json from the repository's main branch. */
+async function getReleaseManifest(): Promise<ParsedManifest> {
+  return parseReleaseManifest(await github(`${RAW}/main/releases.json`))
 }
 
 function admit(value: OibVersions): void {
   resolved.add(value.main.commit)
-  for (const release of value.releases) tagged.add(`${release.platform}:${release.commit}:${release.tag}`)
+  for (const release of value.releases) {
+    resolved.add(release.commit)
+    tagged.add(`${release.platform}:${release.commit}:${release.tag}`)
+  }
 }
 
 /**
- * The versions this session can load: main and the published releases (cached for ten minutes).
- * Without GitHub, the versions known from the last successful read are offered with a warning,
- * so packs already on disk stay usable offline.
+ * The versions this session can load: main and the releases.json manifest releases, each pinned to
+ * the commit its tag or beta branch points to (cached for ten minutes). Without GitHub, the versions
+ * known from the last successful read are offered with a warning, so packs already on disk stay usable.
  */
 export async function oibVersions(retry = false): Promise<OibVersions> {
   // An explicit retry skips versions read from disk, so it really asks GitHub again.
   if (versions && versions.expires > Date.now() && !(retry && versions.value.warning)) return versions.value
   try {
-    const [main, releases, tags] = await Promise.all([resolveMain(), github(`${API}/releases?per_page=100`), github(`${API}/tags?per_page=100`)])
-    const value: OibVersions = { main, releases: publishedReleases(releases, tags) }
+    const [manifest, main] = await Promise.all([getReleaseManifest(), resolveMain()])
+    const platforms: OibPlatformInfo[] = manifest.platforms.map((entry) => ({ platform: entry.platform, status: entry.status, ...(entry.changelog ? { changelog: entry.changelog } : {}) }))
+    const resolvedReleases = await Promise.all(manifest.platforms.flatMap((entry) => entry.releases).map(async (release): Promise<OibPublishedRelease | null> => {
+      const ref = release.tag ?? release.branch
+      try {
+        const { commit } = await resolveRef(ref)
+        return { platform: release.platform, version: release.version, ...(release.name ? { name: release.name } : {}), channel: release.channel, prerelease: release.prerelease, releaseDate: release.releaseDate, branch: release.branch, tag: ref, commit, ...(release.url ? { url: release.url } : {}) }
+      } catch (error) {
+        console.warn(`[oib] ${release.platform} ${release.version} (${ref}) could not be resolved: ${error instanceof Error ? error.message : String(error)}`)
+        return null
+      }
+    }))
+    const releases = resolvedReleases.filter((release): release is OibPublishedRelease => release !== null).sort((a, b) => Date.parse(b.releaseDate) - Date.parse(a.releaseDate))
+    const value: OibVersions = { main, platforms, releases }
     admit(value)
     versions = { value, expires: Date.now() + HEAD_TTL }
     await writeCache("versions.json", { format: CACHE_FORMAT, savedAt: new Date().toISOString(), versions: value })
@@ -183,16 +239,22 @@ export async function oibVersions(retry = false): Promise<OibVersions> {
 async function readStoredVersions(): Promise<{ savedAt: string; versions: OibVersions } | null> {
   const json = await readCache("versions.json")
   if (!record(json) || json.format !== CACHE_FORMAT || typeof json.savedAt !== "string" || !record(json.versions)) return null
-  const { main, releases } = json.versions
-  if (!record(main) || typeof main.commit !== "string" || !SHA.test(main.commit) || !Array.isArray(releases)) return null
+  const { main, releases, platforms } = json.versions
+  if (!record(main) || typeof main.commit !== "string" || !SHA.test(main.commit) || !Array.isArray(releases) || !Array.isArray(platforms)) return null
+  const knownPlatforms: OibPlatformInfo[] = []
+  for (const entry of platforms) {
+    if (!record(entry) || typeof entry.platform !== "string" || !(entry.platform in OIB_PLATFORMS) || (entry.status !== "available" && entry.status !== "in-development")) return null
+    knownPlatforms.push({ platform: entry.platform as OibPlatform, status: entry.status, ...(typeof entry.changelog === "string" ? { changelog: entry.changelog } : {}) })
+  }
   const known: OibPublishedRelease[] = []
   for (const release of releases) {
-    if (!record(release) || typeof release.tag !== "string" || typeof release.commit !== "string" || !SHA.test(release.commit) || typeof release.publishedAt !== "string") return null
+    if (!record(release) || typeof release.tag !== "string" || typeof release.commit !== "string" || !SHA.test(release.commit) || typeof release.version !== "string" || typeof release.releaseDate !== "string" || typeof release.branch !== "string") return null
     const platform = tagPlatform(release.tag)
     if (!platform || platform !== release.platform) return null
-    known.push({ platform, tag: release.tag, commit: release.commit, publishedAt: release.publishedAt })
+    const channel: OibChannel = release.channel === "beta" || release.channel === "unstable" ? release.channel : "stable"
+    known.push({ platform, version: release.version, ...(typeof release.name === "string" ? { name: release.name } : {}), channel, prerelease: release.prerelease === true, releaseDate: release.releaseDate, branch: release.branch, tag: release.tag, commit: release.commit, ...(typeof release.url === "string" ? { url: release.url } : {}) })
   }
-  return { savedAt: json.savedAt, versions: { main: { commit: main.commit, ...(typeof main.committedAt === "string" ? { committedAt: main.committedAt } : {}) }, releases: known } }
+  return { savedAt: json.savedAt, versions: { main: { commit: main.commit, ...(typeof main.committedAt === "string" ? { committedAt: main.committedAt } : {}) }, platforms: knownPlatforms, releases: known } }
 }
 
 async function readCache(name: string): Promise<unknown> {
@@ -487,7 +549,7 @@ export async function oibReleases(): Promise<{ releases: OibRelease[]; warning?:
     return {
       releases: (Object.keys(OIB_PLATFORMS) as OibPlatform[]).map((platform) => {
         const { commit, tag } = defaultSelection(value, platform)
-        const publishedAt = tag ? value.releases.find((release) => release.tag === tag)?.publishedAt : value.main.committedAt
+        const publishedAt = tag ? value.releases.find((release) => release.tag === tag)?.releaseDate : value.main.committedAt
         return { platform, tag: tag ?? `main @ ${commit.slice(0, 7)}`, commit, reference: oibReference(platform, commit, tag), ...(publishedAt ? { publishedAt } : {}) }
       }),
       ...(value.warning ? { warning: value.warning } : {}),
