@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { benchmarkDisplayName, groupFindingsByPolicy, groupObservationsByValue, humanSettingLabel, policyDisplayName, statusMixText, trendSummaryText } from "../src/shared/frameworks/cis-display"
-import type { Finding, Observation } from "../src/shared/frameworks/policies"
+import { benchmarkDisplayName, deviatingFindingKeys, groupFindingsByPolicy, groupObservationsByValue, humanSettingLabel, policyDisplayName, statusMixText, trendSummaryText } from "../src/shared/frameworks/cis-display"
+import type { Finding, Json, Observation } from "../src/shared/frameworks/policies"
 import type { AssignmentEvidence } from "../src/shared/frameworks/evidence"
 
 function finding(policyIndex: number, policyName: string, settingId: string, status: Finding["status"]): Finding {
@@ -70,7 +70,22 @@ describe("groupFindingsByPolicy", () => {
   })
 })
 
+describe("deviatingFindingKeys", () => {
+  it("selects every Different and Missing finding and never Present or Review ones", () => {
+    const findings = [finding(0, "A", "one", "Present"), finding(0, "A", "two", "Different"), finding(1, "B", "three", "Missing"), finding(1, "B", "four", "Review")]
+    expect(deviatingFindingKeys(findings)).toEqual(["0:two", "1:three"])
+    expect(deviatingFindingKeys([])).toEqual([])
+  })
+})
+
 describe("groupObservationsByValue", () => {
+  it("marks a grouped observation with extra children as matching the recommendation", () => {
+    const child = (id: string): Json => ({ settingDefinitionId: id, choiceSettingValue: { value: `${id}_on`, children: [] } })
+    const root = (children: Json[]): Json => ({ settingDefinitionId: "fakebook_payload", groupSettingCollectionValue: [{ children }] })
+    const groups = groupObservationsByValue([{ policyId: "p1", policyName: "Tenant", value: root([child("one"), child("extra")]) }], root([child("one")]))
+    expect(groups[0]?.matchesRecommended).toBe(true)
+  })
+
   const assigned: AssignmentEvidence = { state: "configured", targets: [{ kind: "allDevices" }], limitations: [] }
   const unassigned: AssignmentEvidence = { state: "unassigned", targets: [], limitations: [] }
 

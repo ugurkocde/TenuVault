@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { bridge } from "./bridge"
+import { clearCisCatalogs } from "./cis-catalog-cache"
 
 /**
  * Shared internal CIS Benchmarks authorization for the renderer. The main process
@@ -20,6 +21,7 @@ let removeWindowListeners: (() => void) | null = null
 function setEnabled(next: boolean): void {
   if (enabled === next) return
   enabled = next
+  if (!next) clearCisCatalogs()
   for (const listener of listeners) listener()
 }
 

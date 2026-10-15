@@ -2,6 +2,7 @@ import { csvCell } from '../security'
 import { frameworks } from '../frameworks/catalog'
 import { UNSUPPORTED } from '../frameworks/coverage'
 import type { Assessment, BaselinePolicy } from '../frameworks/policies'
+import { recommendationsForFinding } from '../frameworks/cis-recommendations'
 import { comparisonCounts, FRAMEWORK_USAGE_NOTICE, type NativeAssessment } from './native'
 import { COLLECTION_FAMILY_LABELS, COLLECTION_STATUS_LABELS, PLATFORM_LABELS, frameworkCoverageLabel } from './presentation'
 
@@ -194,23 +195,33 @@ export function workspaceReportHeader(saved: SavedAssessment, context: ExportCon
   }
 }
 
+/** Each finding with the id and title of the pack recommendations it implements, when the pack lists them. */
+function withRecommendations(saved: SavedAssessment): SavedAssessment {
+  if (!saved.policies.some(policy => policy.recommendations?.length)) return saved
+  return { ...saved, assessment: { ...saved.assessment, findings: saved.assessment.findings.map(finding => ({ ...finding, recommendations: recommendationsForFinding(saved.policies, finding).map(({ id, title }) => ({ id, title })) })) } }
+}
+
 /** JSON export of a saved policy pack assessment, redacted. */
 export function workspaceExportJSON(saved: SavedAssessment, context: ExportContext): string {
-  return JSON.stringify({ report: workspaceReportHeader(saved, context), result: redactSecrets(saved) }, null, 2)
+  return JSON.stringify({ report: workspaceReportHeader(saved, context), result: redactSecrets(withRecommendations(saved)) }, null, 2)
 }
 
 /** JSON export of every saved assessment of a workspace, each with its own report header. */
 export function workspaceHistoryJSON(history: SavedAssessment[], context: ExportContext): string {
   return JSON.stringify({ exportedAt: context.exportedAt, limitations: EXPORT_LIMITATIONS,
-    assessments: history.map(saved => ({ report: workspaceReportHeader(saved, context), result: redactSecrets(saved) })) }, null, 2)
+    assessments: history.map(saved => ({ report: workspaceReportHeader(saved, context), result: redactSecrets(withRecommendations(saved)) })) }, null, 2)
 }
 
 /** CSV export of a saved policy pack assessment: header rows, then one row per finding. */
 export function workspaceExportCSV(saved: SavedAssessment, context: ExportContext): string {
+  // Recommendation columns appear only for packs that list their recommendations.
+  const identified = saved.policies.some(policy => policy.recommendations?.length)
   const rows: unknown[][] = [...headerRows(workspaceReportHeader(saved, context)),
-    ['Pack policy', 'Setting', 'Status', 'Recommended', 'Observed policies', 'Observed values', 'Assignment evidence']]
+    [...(identified ? ['Recommendation ID', 'Recommendation title'] : []), 'Pack policy', 'Setting', 'Status', 'Recommended', 'Observed policies', 'Observed values', 'Assignment evidence']]
   for (const finding of redactSecrets(saved.assessment.findings)) {
-    rows.push([finding.policyName, finding.settingId, finding.status, JSON.stringify(finding.recommended),
+    const recommendations = identified ? recommendationsForFinding(saved.policies, finding) : []
+    rows.push([...(identified ? [recommendations.map(item => item.id).join('; '), recommendations.map(item => item.title).join('; ')] : []),
+      finding.policyName, finding.settingId, finding.status, JSON.stringify(finding.recommended),
       finding.observed.map(o => `${o.policyName} (${o.policyId})`).join('; ') || 'None',
       finding.observed.map(o => JSON.stringify(o.value)).join('; '),
       finding.observed.map(o => o.targeting?.state ?? 'unknown').join('; ') || 'unknown'])

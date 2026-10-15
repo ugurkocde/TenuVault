@@ -1,9 +1,26 @@
-import { comparable, type Finding, type Json, type Observation } from "./policies"
+import { comparable, rootMatches, type BaselinePolicy, type Finding, type Json, type Observation } from "./policies"
 
 export function benchmarkDisplayName(id: string): string {
   const parts = id.split("-").filter(part => part.length > 0)
   const rest = parts.length > 1 && parts[0]!.toLowerCase() === "intune" ? parts.slice(1) : parts
   return rest.map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(" ")
+}
+
+/** The catalog display name stamped on the policies of a delivered pack, or null when none is known. */
+export function packBenchmarkName(policies: readonly BaselinePolicy[]): string | null {
+  for (const policy of policies) if (typeof policy.provenance?.benchmarkName === "string" && policy.provenance.benchmarkName) return policy.provenance.benchmarkName
+  return null
+}
+
+/** A benchmark named by its catalog display name, or by its prettified id when no name is known. */
+export function benchmarkTitle(id: string, name?: string | null): string {
+  return name || benchmarkDisplayName(id)
+}
+
+/** A pack reference such as "id 1.0.0 Level 1" with the id replaced by the display name; unchanged when no name is known. */
+export function referenceDisplayName(reference: string, name?: string | null): string {
+  const id = reference.split(/\s+/)[0] ?? ""
+  return name && id ? `${name}${reference.slice(id.length)}` : reference
 }
 
 export function humanSettingLabel(settingId: string): string {
@@ -29,6 +46,11 @@ export interface FindingPolicyGroup {
   findings: Finding[]
   counts: { Present: number; Different: number; Missing: number; Review: number }
   total: number
+}
+
+/** Keys of the findings that can be remediated: Different and Missing. Present and Review findings are never selected. */
+export function deviatingFindingKeys(findings: readonly Finding[]): string[] {
+  return findings.filter(finding => finding.status === "Different" || finding.status === "Missing").map(finding => finding.key)
 }
 
 export function groupFindingsByPolicy(findings: readonly Finding[]): FindingPolicyGroup[] {
@@ -76,7 +98,6 @@ function targetingKey(observation: Observation): string {
 }
 
 export function groupObservationsByValue(observations: readonly Observation[], recommended: Json): ObservationValueGroup[] {
-  const recommendedKey = JSON.stringify(comparable(recommended))
   const groups: ObservationValueGroup[] = []
   const byKey = new Map<string, ObservationValueGroup>()
   for (const observation of observations) {
@@ -84,7 +105,7 @@ export function groupObservationsByValue(observations: readonly Observation[], r
     const key = `${valueKey}|${targetingKey(observation)}`
     let group = byKey.get(key)
     if (!group) {
-      group = { key, value: observation.value, observations: [], policyNames: [], matchesRecommended: valueKey === recommendedKey }
+      group = { key, value: observation.value, observations: [], policyNames: [], matchesRecommended: rootMatches(recommended, observation.value) }
       byKey.set(key, group)
       groups.push(group)
     }

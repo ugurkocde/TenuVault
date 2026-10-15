@@ -3,8 +3,10 @@
  * service. Validators are pure and strict: unknown fields, wrong types,
  * oversized lists and identity mismatches are rejected with a plain
  * message naming the first problem. The pack policies are the existing
- * Settings Catalog pack format accepted by parsePolicies.
+ * Settings Catalog pack format accepted by parsePolicies. A pack may also list
+ * its recommendations with the setting definitions that implement them.
  */
+import { validatePackRecommendations, type PackRecommendation } from "./cis-recommendation-schema"
 
 export type CisLevel = 1 | 2
 
@@ -24,6 +26,7 @@ export interface CisPack {
   version: string
   level: CisLevel
   policies: unknown[]
+  recommendations?: PackRecommendation[]
 }
 
 export interface CisPackExpectation {
@@ -41,7 +44,7 @@ export const BENCHMARK_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 export const VERSION_PATTERN = /^\d+\.\d+\.\d+$/
 const CATALOG_FIELDS = new Set(["benchmarks"])
 const BENCHMARK_FIELDS = new Set(["id", "name", "version", "levels"])
-const PACK_FIELDS = new Set(["benchmark", "version", "level", "policies"])
+const PACK_FIELDS = new Set(["benchmark", "version", "level", "policies", "recommendations"])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -117,5 +120,6 @@ export function validateCisPack(input: unknown, expected: CisPackExpectation): C
   if (!Array.isArray(input.policies)) throw new Error("The CIS pack policies must be an array.")
   if (!input.policies.length) throw new Error("The CIS pack policies must contain at least one policy.")
   if (input.policies.length > MAX_CIS_PACK_POLICIES) throw new Error(`The CIS pack must contain at most ${MAX_CIS_PACK_POLICIES} policies.`)
-  return { benchmark, version, level, policies: input.policies }
+  const recommendations = input.recommendations === undefined ? undefined : validatePackRecommendations(input.recommendations, "CIS pack recommendations")
+  return { benchmark, version, level, policies: input.policies, ...(recommendations ? { recommendations } : {}) }
 }

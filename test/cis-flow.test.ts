@@ -8,15 +8,15 @@ function policy(overrides: Partial<BaselinePolicy> = {}): BaselinePolicy {
 }
 
 describe("cisFlowSteps", () => {
-  it("marks step 1 current before a kit is converted", () => {
+  it("marks step 1 current before a benchmark pack is loaded", () => {
     expect(cisFlowSteps(false, false)).toEqual([
-      { step: 1, label: "Import kit", state: "current" },
-      { step: 2, label: "Choose level and compare", state: "upcoming" },
+      { step: 1, label: "Load benchmark", state: "current" },
+      { step: 2, label: "Compare with tenant", state: "upcoming" },
       { step: 3, label: "Review results", state: "upcoming" },
     ])
   })
 
-  it("completes step 1 and makes step 2 current after conversion", () => {
+  it("completes step 1 and makes step 2 current once a pack is loaded", () => {
     expect(cisFlowSteps(true, false).map((item) => item.state)).toEqual(["complete", "current", "upcoming"])
   })
 
@@ -24,7 +24,7 @@ describe("cisFlowSteps", () => {
     expect(cisFlowSteps(true, true).map((item) => item.state)).toEqual(["complete", "complete", "current"])
   })
 
-  it("does not complete step 1 for an assessment without a kit, and makes step 3 current", () => {
+  it("does not complete step 1 for an assessment without a loaded pack, and makes step 3 current", () => {
     expect(cisFlowSteps(false, true).map((item) => item.state)).toEqual(["upcoming", "complete", "current"])
     expect(cisFlowSteps(false, true).filter((item) => item.state === "current")).toHaveLength(1)
     expect(cisFlowSteps(false, true)[0]?.state).not.toBe("complete")

@@ -1,4 +1,4 @@
-import { cisReadiness } from "./cis-readiness"
+import { cisReadiness, headlineRate } from "./cis-readiness"
 import type { RecommendationList } from "./cis-manual"
 import type { CisException } from "./cis-exceptions"
 import type { KitLevel } from "./cis-kit"
@@ -18,12 +18,26 @@ export interface CisTrendLevel {
   excepted: number
   changeFromPrevious: number | null
   adjustedChangeFromPrevious: number | null
+  /** Which rate the trend follows: recommendations when the pack lists them, settings otherwise. Absent means settings. */
+  basis?: "recommendations" | "settings"
+  recommendationPassRate?: number | null
+  adjustedRecommendationPassRate?: number | null
+}
+
+/** The rate a trend level follows: the recommendation pass rate when available, else the settings pass rate. */
+export function trendRate(level: CisTrendLevel): number | null {
+  return level.basis === "recommendations" ? level.recommendationPassRate ?? null : level.passRate
+}
+
+export function adjustedTrendRate(level: CisTrendLevel): number | null {
+  return level.basis === "recommendations" ? level.adjustedRecommendationPassRate ?? null : level.adjustedPassRate
 }
 
 export interface CisTrendPoint {
   runId: string
   assessedAt: string
   benchmark: string
+  benchmarkName?: string | null
   version: string
   levels: CisTrendLevel[]
 }
@@ -35,6 +49,7 @@ export interface CisDriftEntry {
   previousAssessedAt: string
   assessedAt: string
   benchmark: string
+  benchmarkName?: string | null
   version: string
   kind: "decline" | "below-bar"
 }
@@ -53,13 +68,14 @@ export function sparklineSegments(points: CisTrendPoint[], level: KitLevel): num
   }
   points.forEach((point, index) => {
     const item = point.levels.find(entry => entry.level === level)
-    if (!item || item.passRate === null) {
+    if (!item || trendRate(item) === null) {
       flush()
       return
     }
     if (current.length) {
       const previous = points[current[current.length - 1]!]!
-      if (previous.benchmark !== point.benchmark || previous.version !== point.version) flush()
+      const previousItem = previous.levels.find(entry => entry.level === level)
+      if (previous.benchmark !== point.benchmark || previous.version !== point.version || (previousItem?.basis ?? "settings") !== (item.basis ?? "settings")) flush()
     }
     current.push(index)
   })
@@ -81,11 +97,11 @@ export function cisDriftSignals(points: CisTrendPoint[]): CisDriftEntry[] {
   const previousPoint = points[points.length - 2]!
   const entries: CisDriftEntry[] = []
   for (const level of newest.levels) {
-    if (level.changeFromPrevious === null || level.passRate === null) continue
+    const currentRate = trendRate(level)
+    if (level.changeFromPrevious === null || currentRate === null) continue
     const previous = previousPoint.levels.find(entry => entry.level === level.level)
-    if (!previous || previous.passRate === null) continue
-    const previousRate = previous.passRate
-    const currentRate = level.passRate
+    const previousRate = previous ? trendRate(previous) : null
+    if (previousRate === null) continue
     const belowBar = previousRate >= 0.9 && currentRate < 0.9
     const decline = previousRate - currentRate >= 0.05 - 1e-9
     if (!belowBar && !decline) continue
@@ -96,6 +112,7 @@ export function cisDriftSignals(points: CisTrendPoint[]): CisDriftEntry[] {
       previousAssessedAt: previousPoint.assessedAt,
       assessedAt: newest.assessedAt,
       benchmark: newest.benchmark,
+      ...(newest.benchmarkName ? { benchmarkName: newest.benchmarkName } : {}),
       version: newest.version,
       kind: belowBar ? "below-bar" : "decline",
     })
@@ -130,8 +147,12 @@ export function cisReadinessTrend(history: CisTrendHistoryEntry[], recommendatio
     const comparable = previousSummary !== undefined && previousSummary.benchmark === summary.benchmark && previousSummary.version === summary.version
     const levels: CisTrendLevel[] = summary.levels.map(level => {
       const previous = comparable && previousSummary ? previousSummary.levels.find(item => item.level === level.level) : undefined
-      const changeFromPrevious = previous && previous.passRate !== null && level.passRate !== null ? level.passRate - previous.passRate : null
-      const adjustedChangeFromPrevious = previous && previous.adjustedPassRate !== null && level.adjustedPassRate !== null ? level.adjustedPassRate - previous.adjustedPassRate : null
+      // Change is measured on the headline rate, and only between points on the same basis.
+      const current = headlineRate(level)
+      const before = previous ? headlineRate(previous) : null
+      const sameBasis = before !== null && before.basis === current.basis
+      const changeFromPrevious = sameBasis && before.rate !== null && current.rate !== null ? current.rate - before.rate : null
+      const adjustedChangeFromPrevious = sameBasis && before.adjusted !== null && current.adjusted !== null ? current.adjusted - before.adjusted : null
       return {
         level: level.level,
         passRate: level.passRate,
@@ -141,8 +162,9 @@ export function cisReadinessTrend(history: CisTrendHistoryEntry[], recommendatio
         excepted: level.excepted,
         changeFromPrevious,
         adjustedChangeFromPrevious,
+        ...(current.basis === "recommendations" ? { basis: current.basis, recommendationPassRate: level.recommendationPassRate, adjustedRecommendationPassRate: level.adjustedRecommendationPassRate } : {}),
       }
     })
-    return { runId: entry.assessment.runId, assessedAt: entry.assessment.assessedAt, benchmark: summary.benchmark, version: summary.version, levels }
+    return { runId: entry.assessment.runId, assessedAt: entry.assessment.assessedAt, benchmark: summary.benchmark, benchmarkName: summary.benchmarkName, version: summary.version, levels }
   })
 }

@@ -10,6 +10,7 @@ import { loadNcsc } from "./ncsc"
 import { validateRecommendationList } from "../../shared/frameworks/cis-manual"
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
 import { cisReadiness } from "../../shared/frameworks/cis-readiness"
+import { attachRecommendations } from "../../shared/frameworks/cis-recommendations"
 import { exceptionKey, isActive, isDateOnly, MAX_EXCEPTIONS, validateNewException, type CisException } from "../../shared/frameworks/cis-exceptions"
 import { tenantWriteLabel, withTenantWrite } from "../features/write-lock"
 import { CisContentError, fetchCisCatalog, fetchCisPack } from "./cis-content"
@@ -63,6 +64,8 @@ function requireEnabledFramework(frameworkId: string): void {
  * Frameworks that left the catalog but may still have saved workspaces on the device. Their
  * saved assessments stay readable and exportable; nothing else is allowed for them.
  */
+/** Display names from the last delivered catalog, by benchmark id and version, stamped on packs loaded later. Memory only. */
+const cisBenchmarkNames = new Map<string, string>()
 const LEGACY_FRAMEWORKS = new Set(["oib"])
 const LEGACY_ACTIONS = new Set(["workspace-load", "workspace-pdf", "workspace-csv", "workspace-json"])
 
@@ -396,6 +399,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       if (body.action === "cis-catalog") {
         const catalog = await fetchCisCatalog(cisEntitlementToken(body.tenantId))
         requireEnabledFramework(body.frameworkId)
+        for (const benchmark of catalog.benchmarks) cisBenchmarkNames.set(`${benchmark.id}@${benchmark.version}`, benchmark.name)
         return catalog
       }
       const benchmark = typeof body.benchmark === "string" ? body.benchmark : ""
@@ -405,8 +409,11 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       const pack = await fetchCisPack({ benchmark, version, level }, cisEntitlementToken(body.tenantId))
       requireEnabledFramework(body.frameworkId)
       let policies: BaselinePolicy[]
-      try { policies = parsePolicies(pack.policies) }
+      try { policies = parsePolicies(pack.policies); if (pack.recommendations) policies = attachRecommendations(policies, pack.recommendations) }
       catch (error) { throw new FrameworkError(error instanceof Error ? error.message : "The CIS pack is invalid.") }
+      // The catalog display name travels in the provenance, so saved assessments keep it.
+      const benchmarkName = cisBenchmarkNames.get(`${pack.benchmark}@${pack.version}`)
+      if (benchmarkName) policies = policies.map(policy => ({ ...policy, provenance: { ...policy.provenance, benchmarkName } }))
       const reference = `${pack.benchmark} ${pack.version} Level ${pack.level}`
       const workspace = loadWorkspace(body.tenantId, body.frameworkId)
       workspace.policies = policies

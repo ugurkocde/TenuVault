@@ -28,6 +28,8 @@ export function cisSignals(tenantId: string): WorkSignal[] {
   const drifts = cisDriftSignals(points)
   return drifts.map((drift): WorkSignal => {
     const belowBar = drift.kind === "below-bar"
+    // The catalog display name of a delivered pack names the benchmark; Build Kit packs keep the id.
+    const benchmark = drift.benchmarkName || drift.benchmark
     const drop = drift.previousRate - drift.currentRate
     return {
       key: `cis-readiness:${drift.level}:${slug(drift.benchmark)}:${slug(drift.version)}`,
@@ -36,9 +38,9 @@ export function cisSignals(tenantId: string): WorkSignal[] {
       severity: belowBar ? "high" : "medium",
       state: "open",
       title: belowBar
-        ? `CIS Level ${drift.level} readiness fell below the benchmark bar (${drift.benchmark} ${drift.version})`
-        : `CIS Level ${drift.level} readiness declined (${drift.benchmark} ${drift.version})`,
-      reason: `Level ${drift.level} pass rate fell from ${percent(drift.previousRate)} on ${drift.previousAssessedAt} to ${percent(drift.currentRate)} on ${drift.assessedAt}, a drop of ${(drop * 100).toFixed(1)} percentage points for ${drift.benchmark} ${drift.version}. Run a new comparison on the CIS Benchmarks page.`,
+        ? `CIS Level ${drift.level} readiness fell below the benchmark bar (${benchmark} ${drift.version})`
+        : `CIS Level ${drift.level} readiness declined (${benchmark} ${drift.version})`,
+      reason: `Level ${drift.level} pass rate fell from ${percent(drift.previousRate)} on ${drift.previousAssessedAt} to ${percent(drift.currentRate)} on ${drift.assessedAt}, a drop of ${(drop * 100).toFixed(1)} percentage points for ${benchmark} ${drift.version}. Run a new comparison on the CIS Benchmarks page.`,
       observedAt: drift.assessedAt,
       link: "/portal/frameworks/cis-benchmarks",
       evidence: [],

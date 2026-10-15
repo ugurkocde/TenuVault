@@ -264,7 +264,7 @@ describe("FrameworkNavigation", () => {
 })
 
 describe("CIS Benchmarks route", () => {
-  it("still renders the import panel as a standalone page", async () => {
+  it("renders Load benchmark as step 1 with the Build Kit import as a secondary internal disclosure", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     const container = render(
       createElement(
@@ -275,21 +275,101 @@ describe("CIS Benchmarks route", () => {
     )
     await flush()
     expect(container.textContent).toContain("CIS Benchmarks")
-    expect(container.textContent).toContain("1. Import a CIS Build Kit")
+    expect(container.querySelector("#cis-delivered-title")?.textContent).toBe("1. Load benchmark")
+    expect(container.textContent).not.toContain("Import a CIS Build Kit")
     expect(container.textContent).not.toContain("Choose your policy pack")
     expect(container.textContent).not.toContain("Import policy JSON")
-    expect(container.textContent).toContain("Select Build Kit zip")
-    expect(container.textContent).toContain("Select recommendation list JSON")
+    const kit = [...container.querySelectorAll("details")].find((item) => item.querySelector("summary")?.textContent === "Build Kit import (internal use)")
+    expect(kit).toBeDefined()
+    expect(kit?.open).toBe(false)
+    expect(kit?.textContent).toContain("Select Build Kit zip")
+    expect(kit?.textContent).toContain("Select recommendation list JSON")
     const stepper = container.querySelector('nav[aria-label="CIS Benchmarks progress"] ol')
     expect(stepper).not.toBeNull()
-    expect(stepper?.textContent).toContain("1 Import kit")
-    expect(stepper?.textContent).toContain("2 Choose level and compare")
-    expect(stepper?.textContent).toContain("3 Review results")
-    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("1 Import kit")
+    // The number shows once: in the marker. The label carries it only for screen readers.
+    const visible = (item: Element) => [...item.querySelectorAll(":scope > span:not([aria-hidden])")].map((span) => [...span.childNodes].filter((node) => !(node instanceof Element && node.classList.contains("sr-only"))).map((node) => node.textContent).join("")).join("")
+    expect([...stepper!.querySelectorAll("li")].map(visible)).toEqual(["Load benchmark", "Compare with tenant", "Review results"])
+    expect([...stepper!.querySelectorAll("li")].map((item) => item.textContent)).toEqual(["1Step 1: Load benchmark", "2Step 2: Compare with tenant", "3Step 3: Review results"])
+    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Load benchmark")
     const heading = [...container.querySelectorAll("h1")].find((item) => item.textContent === "CIS Benchmarks")
     expect(heading?.className).toContain("text-4xl")
     expect(heading?.className).toContain("font-light")
     const frameworksLinks = [...container.querySelectorAll('a[href="/portal/frameworks"]')]
     expect(frameworksLinks.some((link) => link.textContent.trim() === "Frameworks")).toBe(false)
+  })
+
+  async function renderSavedAssessment(extra: object = {}, findingExtra: (policy: { settings: Array<{ settingInstance: object }> }) => object = () => ({})): Promise<HTMLDivElement> {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    const tenantId = "11111111-1111-1111-1111-111111111111"
+    selectedTenantState.current = { id: "local", name: "Synthetic tenant", credentials: { tenantId, appId: "22222222-2222-2222-2222-222222222222" } }
+    const policy = { name: "Synthetic policy", platforms: "windows10", technologies: "mdm", description: "Synthetic", provenance: { schemaVersion: 1, benchmark: "synthetic-os", version: "9.9.9", level: "Level 1", sourceFile: "synthetic.json" },
+      settings: [{ settingInstance: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance", settingDefinitionId: "synthetic_setting", choiceSettingValue: { value: "synthetic_on", children: [] } } }], ...extra }
+    const assessment = { runId: "run-1", tenantId, frameworkId: "cis-benchmarks", reference: "synthetic-os 9.9.9 Level 1", assessedAt: "2026-10-15T10:00:00Z", policyCount: 1,
+      findings: [{ key: "0:0", policyIndex: 0, settingIndex: 0, policyName: "Synthetic policy", settingId: "synthetic_setting", status: "Missing", recommended: policy.settings[0]!.settingInstance, observed: [], ...findingExtra(policy) }] }
+    const workspace = { version: 1, tenantId, frameworkId: "cis-benchmarks", policies: [policy], reference: assessment.reference, updatedAt: "2026-10-15T10:00:00Z", history: [{ assessment, policies: [policy] }] }
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(path === "/api/cis-remediation" ? { deployments: [] } : workspace), { status: 200, headers: { "Content-Type": "application/json" } })))
+    const container = render(
+      createElement(
+        MemoryRouter,
+        { initialEntries: ["/portal/frameworks/cis-benchmarks"] },
+        createElement(Routes, null, createElement(Route, { path: "/portal/frameworks/:frameworkId", element: createElement(FrameworksPage) })),
+      ),
+    )
+    await flush()
+    const view = [...container.querySelectorAll("button")].find((item) => item.textContent === "View read-only")
+    expect(view).toBeDefined()
+    await act(async () => { view!.click() })
+    await flush()
+    return container
+  }
+
+  it("shows the CIS manual notice with its link in the readiness view without a manual recommendation list", async () => {
+    const openExternal = vi.fn(async () => undefined)
+    const { bridge } = await import("../../src/renderer/lib/bridge")
+    ;(bridge.app as unknown as { openExternal: typeof openExternal }).openExternal = openExternal
+    const container = await renderSavedAssessment()
+    const notice = container.querySelector('[aria-label="CIS readiness"] [role="note"]')
+    expect(notice?.textContent).toContain("Not all recommendations from the CIS Benchmarks are included in this tool. Please refer to the CIS website to access the free CIS Benchmarks PDFs for manual assessment instructions.")
+    const link = notice?.querySelector("a")
+    expect(link?.textContent).toBe("https://www.cisecurity.org/cis-benchmarks")
+    await act(async () => { link!.click() })
+    expect(openExternal).toHaveBeenCalledWith("https://www.cisecurity.org/cis-benchmarks")
+    expect(container.textContent).not.toContain("Recommendation results")
+    // Without a recommendation list the settings pass rate leads and identifier coverage stays.
+    const summary = container.querySelector('[aria-label="Level 1 summary"]')
+    expect(summary?.textContent).toContain("Pass rate")
+    expect(summary?.textContent).not.toContain("Recommendation pass rate")
+    expect(summary?.textContent).toContain("Enumerated identifiers")
+    expect(container.textContent).toContain("Coverage and the assessed automated count need a denominator list")
+    vi.unstubAllGlobals()
+  })
+
+  it("shows the recommendation identity on findings and the recommendation results when the pack lists them", async () => {
+    const container = await renderSavedAssessment({ recommendations: [{ id: "7.1.1", title: "Synthetic recommendation", level: 1, settings: ["synthetic_setting"] }],
+      provenance: { schemaVersion: 1, benchmark: "synthetic-os", version: "9.9.9", level: "Level 1", sourceFile: "synthetic.json", benchmarkName: "Synthetic Display Benchmark" } })
+    const row = container.querySelector('[aria-label="Synthetic policy"]')
+    expect(row?.textContent).toContain("7.1.1 Synthetic recommendation")
+    expect(container.textContent).toContain("Recommendation results, Level 1: 0 passed, 1 failed, 0 not assessed")
+    const summary = container.querySelector('[aria-label="Level 1 summary"]')
+    expect(summary?.textContent).toContain("0%Recommendation pass rate")
+    expect(summary?.textContent).toContain("Settings: 0 of 1 present")
+    expect(summary?.textContent).toContain("Synthetic Display Benchmark · Level 1")
+    expect(summary?.textContent).toContain("Recommendations not assessed")
+    for (const hidden of ["Enumerated identifiers", "Assessed automated", "Coverage"]) expect(summary?.textContent).not.toContain(hidden)
+    expect(container.textContent).not.toContain("need a denominator list")
+    expect(container.textContent).toContain("Synthetic Display Benchmark 9.9.9 Level 1")
+    expect(container.textContent).not.toContain("Synthetic Os")
+    vi.unstubAllGlobals()
+  })
+
+  it("shows Not available with a reason, not the settings rate, when no recommendation could be assessed", async () => {
+    const container = await renderSavedAssessment({ recommendations: [{ id: "7.1.1", title: "Synthetic recommendation", level: 1, settings: ["synthetic_setting", "synthetic_unmapped"] }] },
+      policy => ({ status: "Present", observed: [{ policyId: "33333333-3333-3333-3333-333333333333", policyName: "Tenant policy", value: policy.settings[0]!.settingInstance }] }))
+    const summary = container.querySelector('[aria-label="Level 1 summary"]')
+    expect(summary?.textContent).toContain("Not availableRecommendation pass rate")
+    expect(summary?.textContent).toContain("No recommendation of this Level could be assessed")
+    expect(summary?.textContent).toContain("Settings: 1 of 1 present")
+    expect(summary?.textContent).not.toContain("100%")
+    vi.unstubAllGlobals()
   })
 })

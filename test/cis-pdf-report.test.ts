@@ -10,6 +10,7 @@ import { handleNativeFramework, setNativeFrameworkAuthorization, setNativeFramew
 import { recordAssessment, setFrameworkStore } from "../src/main/frameworks/workspaces"
 import { requiredFeatures } from "../src/main/api/plan-gates"
 import { parsePolicies } from "../src/shared/frameworks/policies"
+import { attachRecommendations } from "../src/shared/frameworks/cis-recommendations"
 
 const type = "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance"
 const policy = (name: string, description: string, settingId = "fakebook_setting_alpha") => JSON.stringify({
@@ -90,6 +91,27 @@ describe("CIS readiness PDF report", () => {
     ]) expect(text).toContain(expected)
   })
 
+  it("lists recommendation results per Level when the pack names its recommendations", () => {
+    const { policies, assessment } = assessed()
+    const identified = attachRecommendations(policies, [{ id: "7.1.2", title: "Synthetic beta recommendation", level: 1, settings: ["fakebook_setting_beta"] }])
+      .map(policy => ({ ...policy, provenance: { ...policy.provenance, benchmarkName: "Fakebook Display Name" } }))
+    const text = pdfText(generateCisReadinessPDF(cisReadiness(assessment, identified), context))
+    expect(text).toContain("Fakebook Display Name | 9.9.9")
+    expect(text).toContain("Recommendation pass rate: 0%")
+    expect(text).toContain("Recommendation results, Level 1")
+    expect(text).toContain("7.1.2 Synthetic beta recommendation: Fail (fakebook_setting_beta Missing)")
+    expect(text).toContain("Passed: 0")
+    expect(pdfText(generateCisReadinessPDF(cisReadiness(assessment, policies), context))).not.toContain("Recommendation results")
+  })
+
+  it("shows the recommendation pass rate as Not available when no recommendation of a Level could be assessed", () => {
+    const { policies, assessment } = assessed()
+    const unassessed = attachRecommendations(policies, [{ id: "7.9.1", title: "Synthetic partly in pack", level: 1, settings: ["fakebook_setting_alpha", "fakebook_setting_unmapped"] }])
+    const text = pdfText(generateCisReadinessPDF(cisReadiness(assessment, unassessed), context))
+    expect(text).toContain("Not available Recommendation pass rate")
+    expect(text).toContain("Recommendation pass rate: Not available")
+  })
+
   it("labels coverage as not computable without a denominator and names the breakout proxy as illustrative", () => {
     const { policies, assessment } = assessed()
     const summary = cisReadiness(assessment, policies)
@@ -99,6 +121,10 @@ describe("CIS readiness PDF report", () => {
     expect(coverageSourceLabel("none")).toBe("Not computable")
     const without = pdfText(generateCisReadinessPDF(summary, context))
     expect(without).toContain("Coverage: Not computable")
+    // Without a manual recommendation list the CIS notice and its link still appear.
+    expect(summary.levels.every(level => !level.manual.length)).toBe(true)
+    expect(without).toContain(MANUAL_RECOMMENDATIONS_FALLBACK)
+    expect(without).toContain("https://www.cisecurity.org/cis-benchmarks")
     expect(without).not.toContain("Authoritative denominator")
     const proxy = { ...summary, levels: summary.levels.map(level => ({ ...level, coverage: 0.5, denominator: 4, coverageSource: "breakout-proxy" as const })) }
     expect(pdfText(generateCisReadinessPDF(proxy, context))).toContain("Breakout proxy, illustrative")

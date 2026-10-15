@@ -12,7 +12,9 @@ import { recommendationListFromBreakout, type RecommendationList } from "./cis-m
  * callers decide whether to print counts only or the lists as well.
  */
 
-const IDENTIFIER_PATTERN = /\b\d+(?:\.\d+)+\b/g
+// A whole dotted-decimal token: never the tail of a word such as v1.0.0 (whose "0.0" is no
+// identifier) and never cut short before more letters or digits.
+const IDENTIFIER_PATTERN = /(?<![\w.])\d+(?:\.\d+)+(?!\.?\w)/g
 const DATE_LIKE = /^\d{4}\.\d{1,2}\.\d{1,2}(?:\.\d+)?$/
 
 /**

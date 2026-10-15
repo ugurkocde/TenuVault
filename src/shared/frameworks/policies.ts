@@ -1,4 +1,5 @@
 import type { AssignmentEvidence } from "./evidence"
+import { validatePackRecommendations, type PackRecommendation } from "./cis-recommendation-schema"
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 export type RecordJson = { [key: string]: Json }
 export interface BaselinePolicy {
@@ -9,6 +10,8 @@ export interface BaselinePolicy {
   settings: RecordJson[]
   provenance?: RecordJson
   templateReference?: { templateId: string }
+  /** Benchmark recommendations that name a setting of this policy, from a delivered pack. */
+  recommendations?: PackRecommendation[]
 }
 export interface Observation { policyId: string; policyName: string; value: Json; targeting?: AssignmentEvidence; applicability?: "unavailable"; enforcement?: "unavailable" }
 export interface Finding {
@@ -67,8 +70,9 @@ export function parsePolicies(input: unknown): BaselinePolicy[] {
     const template = record(value.templateReference) && typeof value.templateReference.templateId === "string" && value.templateReference.templateId
       ? { templateId: value.templateReference.templateId } : undefined
     if (value.provenance !== undefined && (!record(value.provenance) || Object.values(value.provenance).some(item => typeof item !== 'string' && typeof item !== 'number'))) throw new Error('Invalid pack provenance')
+    const recommendations = value.recommendations === undefined ? undefined : validatePackRecommendations(value.recommendations, `Policy ${index + 1} recommendations`)
     return { ...(record(value.provenance) ? { provenance: value.provenance } : {}), name: value.name.trim(), platforms: value.platforms, technologies: value.technologies,
-      description: typeof value.description === "string" ? value.description.slice(0, 1500) : "", settings, ...(template ? { templateReference: template } : {}) }
+      description: typeof value.description === "string" ? value.description.slice(0, 1500) : "", settings, ...(template ? { templateReference: template } : {}), ...(recommendations?.length ? { recommendations } : {}) }
   })
 }
 
@@ -79,6 +83,88 @@ export function comparable(value: Json): Json {
   return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
     .filter(([key, v]) => v !== null && key !== "id" && key !== "auditRuleInformation" && !key.includes("@odata.") && !key.endsWith("TemplateReference"))
     .map(([key, v]) => [key, comparable(v)]))
+}
+
+function isInstance(value: Json): value is RecordJson {
+  return record(value) && typeof value.settingDefinitionId === "string"
+}
+
+/** True when a setting instance nests child setting instances, as group setting collections do. */
+export function hasChildInstances(value: Json): boolean {
+  if (Array.isArray(value)) return value.some(hasChildInstances)
+  if (!record(value)) return false
+  return Object.entries(value).some(([key, v]) => (key === "children" && Array.isArray(v) && v.some(isInstance)) || hasChildInstances(v))
+}
+
+/**
+ * Leaf values of one comparable setting instance, keyed by the settingDefinitionId path from
+ * the root. Child instances are taken out of their parent's own value and keyed below it, so
+ * a root holding extra children still yields every other leaf unchanged. A repeated child
+ * definition in one children list is keyed by its occurrence. Entries of a group collection
+ * (array entries that hold children) are keyed by position below their parent too, so extra
+ * tenant entries after the recommended ones are ignored like extra children.
+ */
+function leafValues(instance: RecordJson, path: string, out: Map<string, string>): Map<string, string> {
+  const own = `${path}/${String(instance.settingDefinitionId)}`
+  const strip = (value: Json, at: string): Json => {
+    // Only group collection entries (objects holding children) are keyed by position; simple value
+    // collections and empty arrays stay exact values of their parent, as the remediation merge treats them.
+    if (Array.isArray(value) && value.length && value.every(entry => record(entry) && Array.isArray(entry.children))) {
+      value.forEach((entry, index) => out.set(`${own}${at}[${index}]`, JSON.stringify(strip(entry, `${at}[${index}]`))))
+      return null
+    }
+    if (Array.isArray(value)) return value.map((entry, index) => strip(entry, `${at}[${index}]`))
+    if (!record(value)) return value
+    return Object.fromEntries(Object.entries(value).map(([key, v]) => {
+      if (key !== "children" || !Array.isArray(v)) return [key, strip(v, `${at}.${key}`)]
+      const seen = new Map<string, number>()
+      for (const child of v.filter(isInstance)) {
+        const id = String(child.settingDefinitionId)
+        const occurrence = seen.get(id) ?? 0
+        seen.set(id, occurrence + 1)
+        leafValues(child, `${own}${at}${occurrence ? `#${occurrence}` : ""}`, out)
+      }
+      return [key, v.filter(child => !isInstance(child))]
+    }))
+  }
+  out.set(own, JSON.stringify(strip(instance, "")))
+  return out
+}
+
+/**
+ * Whether an observed root satisfies a recommended root. A root without child setting
+ * instances must match exactly. A grouped root, such as a group setting collection, matches
+ * when every recommended leaf exists at the same definition path with an equal value; extra
+ * tenant children are ignored, so a payload hardened beyond the recommendation still passes.
+ */
+export function rootMatches(recommended: Json, observed: Json): boolean {
+  const want = comparable(recommended)
+  const have = comparable(observed)
+  if (!isInstance(want) || !hasChildInstances(want)) return JSON.stringify(want) === JSON.stringify(have)
+  if (!isInstance(have) || have.settingDefinitionId !== want.settingDefinitionId) return false
+  const haveLeaves = leafValues(have, "", new Map())
+  return [...leafValues(want, "", new Map())].every(([path, value]) => haveLeaves.get(path) === value)
+}
+
+/**
+ * One setting definition inside a recommended root, judged across every observed tenant root of
+ * the same definition. For the root definition itself this is the root rule above. For a nested
+ * definition it is the same leaf rule: the leaf and everything below it must equal the
+ * recommendation in every tenant root that holds the leaf. Missing when no observed root holds
+ * it, null when the recommended root does not contain the definition.
+ */
+export function definitionStatus(recommended: Json, observed: Json[], definitionId: string): "Present" | "Missing" | "Different" | null {
+  const want = comparable(recommended)
+  if (!isInstance(want)) return null
+  if (want.settingDefinitionId === definitionId) return !observed.length ? "Missing" : observed.every(value => rootMatches(want, value)) ? "Present" : "Different"
+  const wanted = [...leafValues(want, "", new Map())]
+  const anchors = wanted.map(([path]) => path).filter(path => path.endsWith(`/${definitionId}`))
+  if (!anchors.length) return null
+  const subtree = wanted.filter(([path]) => anchors.some(anchor => path === anchor || [".", "/", "#", "["].some(next => path.startsWith(`${anchor}${next}`))))
+  const holders = observed.map(comparable).filter(isInstance).filter(have => have.settingDefinitionId === want.settingDefinitionId)
+    .map(have => leafValues(have, "", new Map())).filter(have => anchors.some(anchor => have.has(anchor)))
+  if (!holders.length) return "Missing"
+  return holders.every(have => subtree.every(([path, value]) => have.get(path) === value)) ? "Present" : "Different"
 }
 
 export interface LandscapePolicy extends BaselinePolicy { id: string; targeting?: AssignmentEvidence }
@@ -105,7 +191,7 @@ export function comparePolicies(baselines: BaselinePolicy[], landscape: Landscap
     const recommended = comparable(root)
     const key = `${policy.platforms}:${settingId}`
     const observed = observations.get(key) ?? []
-    const matched = observed.filter(o => JSON.stringify(o.value) === JSON.stringify(recommended)).length
+    const matched = observed.filter(o => rootMatches(recommended, o.value)).length
     // Multiple recommended values for the same definition require an admin to select a profile first.
     const ambiguous = (recommendations.get(key)?.size ?? 0) > 1
     return { key: `${policyIndex}:${settingIndex}`, policyIndex, settingIndex, policyName: policy.name, settingId,
@@ -114,6 +200,6 @@ export function comparePolicies(baselines: BaselinePolicy[], landscape: Landscap
 }
 
 export function remediationPayload(policy: BaselinePolicy, settings: RecordJson[], reference: string): BaselinePolicy {
-  const { provenance: _provenance, ...payload } = policy
+  const { provenance: _provenance, recommendations: _recommendations, ...payload } = policy
   return { ...payload, name: `[Baseline] ${policy.name}`.slice(0, 200), description: `TenuVault baseline: ${reference}. Created unassigned.\n${policy.description}`.slice(0, 1500), settings }
 }

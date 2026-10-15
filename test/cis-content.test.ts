@@ -52,6 +52,26 @@ describe("validateCisPack", () => {
     const policies = Array.from({ length: 65 }, () => policy())
     expect(() => validateCisPack({ ...validPack, policies }, { benchmark: "fakebook-os", version: "9.9.9", level: 1 })).toThrow("at most 64")
   })
+  it("accepts an optional recommendation list and validates it strictly", () => {
+    const expected = { benchmark: "fakebook-os", version: "9.9.9", level: 1 as const }
+    const recommendation = { id: "7.1.1", title: "Synthetic recommendation", level: 1, settings: ["minlength"] }
+    expect(validateCisPack(validPack, expected)).not.toHaveProperty("recommendations")
+    expect(validateCisPack({ ...validPack, recommendations: [recommendation] }, expected).recommendations).toEqual([recommendation])
+    const bad = (entry: unknown, message: string) => expect(() => validateCisPack({ ...validPack, recommendations: [entry] }, expected)).toThrow(message)
+    bad({ ...recommendation, id: "7" }, "dotted numeric")
+    bad({ ...recommendation, id: "7.1.a" }, "dotted numeric")
+    bad({ ...recommendation, title: "x".repeat(301) }, "at most 300")
+    bad({ ...recommendation, title: " " }, "non-empty")
+    bad({ ...recommendation, level: 3 }, "level must be 1 or 2")
+    bad({ ...recommendation, settings: [] }, "settings must list")
+    bad({ ...recommendation, settings: [7] }, "settings must list")
+    bad({ ...recommendation, extra: true }, "unknown field: extra")
+    bad({ ...recommendation, settings: ["minlength", "password", "minlength"] }, "setting minlength is listed twice")
+    expect(() => validateCisPack({ ...validPack, recommendations: [recommendation, recommendation] }, expected)).toThrow("duplicate recommendation 7.1.1")
+    expect(() => validateCisPack({ ...validPack, recommendations: {} }, expected)).toThrow("must be an array")
+    const many = Array.from({ length: 2001 }, (_, index) => ({ ...recommendation, id: `7.${index}.1` }))
+    expect(() => validateCisPack({ ...validPack, recommendations: many }, expected)).toThrow("at most 2000")
+  })
   it("rejects empty policies and bad level", () => {
     expect(() => validateCisPack({ ...validPack, policies: [] }, { benchmark: "fakebook-os", version: "9.9.9", level: 1 })).toThrow("at least one")
     expect(() => validateCisPack({ ...validPack, level: 3 }, { benchmark: "fakebook-os", version: "9.9.9", level: 1 })).toThrow("level must be 1 or 2")
@@ -107,6 +127,24 @@ describe("CIS content delivery service", () => {
     expect(workspace.reference).toBe("fakebook-os 9.9.9 Level 1")
     expect(workspace.policies).toHaveLength(1)
     expect(workspace.policies[0]?.name).toBe("Fakebook baseline")
+    expect(workspace.policies[0]).not.toHaveProperty("recommendations")
+  })
+
+  it("stamps the catalog display name on a pack loaded after the catalog", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => Response.json(url.endsWith("/catalog") ? validCatalog : validPack)))
+    await handleFramework({ action: "cis-catalog", tenantId, frameworkId: "cis-benchmarks" })
+    await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })
+    expect(loadWorkspace(tenantId, "cis-benchmarks").policies[0]?.provenance).toEqual({ benchmarkName: "Fakebook OS" })
+  })
+
+  it("keeps pack recommendations on the pack policies, unmatched ones on the first policy", async () => {
+    const recommendations = [
+      { id: "7.1.1", title: "Synthetic leaf recommendation", level: 1, settings: ["minlength"] },
+      { id: "7.1.2", title: "Synthetic unrelated recommendation", level: 1, settings: ["not_in_pack"] },
+    ]
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ...validPack, recommendations })))
+    await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })
+    expect(loadWorkspace(tenantId, "cis-benchmarks").policies[0]?.recommendations).toEqual(recommendations)
   })
 
   it("errors when the base URL is not configured and saves nothing", async () => {

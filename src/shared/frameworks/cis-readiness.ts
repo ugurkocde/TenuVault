@@ -3,6 +3,7 @@ import { manualItemsForLevel, MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDA
 import type { KitLevel, KitPack } from "./cis-kit"
 import type { Assessment, BaselinePolicy } from "./policies"
 import { exceptionKey, isActive, type CisException } from "./cis-exceptions"
+import { recommendationResults, type RecommendationResult } from "./cis-recommendations"
 
 export const MANUAL_NOT_ASSESSED_NOTE = "Manual recommendations are not assessed by this view."
 export { MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDATIONS_URL }
@@ -21,13 +22,33 @@ export interface CisLevelReadiness {
   excepted: number
   exceptions: CisException[]
   adjustedPassRate: number | null
-  assessedAutomated: number
+  /** Enumerated identifiers that the denominator list marks automated; null without a denominator list. */
+  assessedAutomated: number | null
+  /** Distinct recommendation identifiers named in the pack policy descriptions of this Level. */
   enumerated: number
   denominator: number | null
   coverage: number | null
   coverageSource: DenominatorSource
   notAssessed: string[]
   manual: ManualItemView[]
+  /** Per recommendation results when the pack lists its recommendations; empty otherwise. */
+  recommendations: RecommendationResult[]
+  /** Passed over assessed recommendations (review counts as not passed, not assessed is excluded); null without recommendations. */
+  recommendationPassRate: number | null
+  /** Recommendations that are not passed but whose every non-Present finding has an active exception. */
+  recommendationsExcepted: number
+  adjustedRecommendationPassRate: number | null
+}
+
+/**
+ * The headline rate of a Level. A Level with any recommendation of the pack is measured by
+ * recommendations, even when none could be assessed: its rate is then null (Not available)
+ * and never falls back to the settings rate. Other Levels use the settings pass rate.
+ */
+export function headlineRate(level: Pick<CisLevelReadiness, "passRate" | "adjustedPassRate" | "recommendations" | "recommendationPassRate" | "adjustedRecommendationPassRate">): { basis: "recommendations" | "settings"; rate: number | null; adjusted: number | null } {
+  return level.recommendations?.length
+    ? { basis: "recommendations", rate: level.recommendationPassRate ?? null, adjusted: level.adjustedRecommendationPassRate ?? null }
+    : { basis: "settings", rate: level.passRate, adjusted: level.adjustedPassRate }
 }
 
 /** The label printed wherever a coverage ratio appears, naming where its denominator came from. */
@@ -39,12 +60,27 @@ export function coverageSourceLabel(source: DenominatorSource): string {
 
 export interface CisReadinessSummary {
   benchmark: string
+  /** Catalog display name of a delivered pack; null when only the id is known. */
+  benchmarkName: string | null
   version: string
   levels: CisLevelReadiness[]
   manualNote: string
   manualFallback: string
   manualFallbackUrl: string
   recommendationList?: RecommendationList
+}
+
+/** Recommendation results of one Level with their pass rate and the rate adjusted by exceptions. */
+function recommendationRates(results: RecommendationResult[], excepted: (result: RecommendationResult) => boolean): Pick<CisLevelReadiness, "recommendations" | "recommendationPassRate" | "recommendationsExcepted" | "adjustedRecommendationPassRate"> {
+  const assessed = results.filter(result => result.result !== "Not assessed")
+  const passed = assessed.filter(result => result.result === "Pass").length
+  const exceptedCount = assessed.filter(result => result.result !== "Pass" && excepted(result)).length
+  return {
+    recommendations: results,
+    recommendationPassRate: assessed.length ? passed / assessed.length : null,
+    recommendationsExcepted: exceptedCount,
+    adjustedRecommendationPassRate: assessed.length ? (passed + exceptedCount) / assessed.length : null,
+  }
 }
 
 function levelOf(policy: BaselinePolicy): KitLevel {
@@ -59,9 +95,10 @@ function textOf(policy: BaselinePolicy, key: string): string {
 
 /**
  * Readiness per benchmark and Level from one assessment of an imported pack.
- * Pass rate is over assessed settings only. Coverage is present only when an
- * authoritative denominator list was supplied; identifiers in that list that
- * the pack does not enumerate are listed as not assessed.
+ * Pass rate is over assessed settings only. Coverage and the assessed automated
+ * count are present only when an authoritative denominator list was supplied;
+ * identifiers in that list that the pack does not enumerate are listed as not
+ * assessed.
  */
 export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[], denominator?: DenominatorEntry[], recommendationList?: RecommendationList, exceptions?: CisException[], todayISO?: string): CisReadinessSummary {
   const policyBenchmark = policies.map(policy => textOf(policy, "benchmark")).find(Boolean)
@@ -78,11 +115,18 @@ export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[],
     pack.policies.push(policy)
     packsByLevel.set(level, pack)
   }
-  const allLevels = new Set<KitLevel>([...packsByLevel.keys(), ...((effectiveList?.items ?? []).map(item => item.level))].sort((a, b) => a - b))
+  // A recommendation is reported under its own Level, even when only a policy of another Level carries its settings.
+  const recommendations = recommendationResults(assessment, policies)
+  const allLevels = new Set<KitLevel>([...packsByLevel.keys(), ...((effectiveList?.items ?? []).map(item => item.level)), ...recommendations.map(result => result.level)].sort((a, b) => a - b))
   if (!packsByLevel.size && effectiveList) for (const level of allLevels) packsByLevel.set(level, { benchmark, version, level, reference: `${benchmark} ${version} Level ${level}`.trim(), policies: [] })
   const coverage = computeCoverage({ benchmark, version, packs: [...packsByLevel.values()], ...(effectiveDenominator ? { denominator: effectiveDenominator } : {}) })
   const coverageByLevel = new Map(coverage.levels.map(level => [level.level, level]))
   const today = todayISO ?? new Date().toISOString().slice(0, 10)
+  // Active exceptions by identity, to judge recommendations whose findings sit at any Level.
+  const activeExceptionKeys = new Set((exceptions ?? []).filter(exception => isActive(exception, today) && exception.benchmark === benchmark && exception.version === version)
+    .map(exception => exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId)))
+  const findingByKey = new Map(assessment.findings.map(finding => [finding.key, finding]))
+  const findingExcepted = (finding: Assessment["findings"][number]) => activeExceptionKeys.has(exceptionKey(benchmark, version, policies[finding.policyIndex] ? levelOf(policies[finding.policyIndex]!) : 1, finding.policyName, finding.settingId))
   const levels: CisLevelReadiness[] = [...allLevels].sort((a, b) => a - b).map(level => {
     const indexes = new Set(policies.map((policy, index) => levelOf(policy) === level ? index : -1).filter(index => index >= 0))
     const findings = assessment.findings.filter(finding => indexes.has(finding.policyIndex))
@@ -106,14 +150,29 @@ export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[],
       excepted,
       exceptions: levelExceptions,
       adjustedPassRate: findings.length ? (count("Present") + excepted) / findings.length : null,
-      assessedAutomated: cov?.numerator ?? 0,
+      // Without a denominator list an enumerated identifier cannot be told apart from a manual
+      // recommendation or one of another profile, so no automated count is claimed.
+      assessedAutomated: cov && cov.denominatorSource !== "none" ? cov.numerator : null,
       enumerated: cov?.enumeratedIds.length ?? 0,
       denominator: cov?.denominator ?? null,
       coverage: cov?.coverage ?? null,
       coverageSource: cov?.denominatorSource ?? "none",
       notAssessed,
       manual,
+      // Credit by exception is judged on the recommendation's own failing settings: each one is
+      // covered when every non-Present finding whose root holds it has an active exception.
+      // Failures of unrelated sibling settings in the same root neither block nor grant credit.
+      ...recommendationRates(recommendations.filter(result => result.level === level), result => {
+        // A setting outside the pack can never be shown to pass, so it rules out credit by exception.
+        if (result.settings.some(setting => setting.status === "Unmapped")) return false
+        const failing = result.settings.filter(setting => setting.status === "Missing" || setting.status === "Different" || setting.status === "Review")
+        return failing.length > 0 && failing.every(setting => {
+          const open = setting.findingKeys.map(key => findingByKey.get(key)).filter(finding => finding && finding.status !== "Present")
+          return open.length > 0 && open.every(finding => findingExcepted(finding!))
+        })
+      }),
     }
   })
-  return { benchmark, version, levels, manualNote: MANUAL_NOT_ASSESSED_NOTE, manualFallback: MANUAL_RECOMMENDATIONS_FALLBACK, manualFallbackUrl: MANUAL_RECOMMENDATIONS_URL, ...(effectiveList ? { recommendationList: effectiveList } : {}) }
+  const benchmarkName = policies.map(policy => textOf(policy, "benchmarkName")).find(Boolean) ?? null
+  return { benchmark, benchmarkName, version, levels, manualNote: MANUAL_NOT_ASSESSED_NOTE, manualFallback: MANUAL_RECOMMENDATIONS_FALLBACK, manualFallbackUrl: MANUAL_RECOMMENDATIONS_URL, ...(effectiveList ? { recommendationList: effectiveList } : {}) }
 }

@@ -3,6 +3,7 @@ import { CAPABILITY_STATUS_LABELS, CHECK_RESULT_COLORS, CHECK_RESULT_LABELS, COL
 import { comparisonCounts, type NativeAssessment } from './native'
 import { EXPORT_LIMITATIONS, nativeReportHeader, redactSecrets, redactText, workspaceReportHeader, type ExportContext, type ReportHeader, type SavedAssessment } from './export'
 import { coverageSourceLabel, type CisLevelReadiness, type CisReadinessSummary } from '../frameworks/cis-readiness'
+import { recommendationTotals } from '../frameworks/cis-recommendations'
 import { displayCheckValue } from './check-results'
 import rights from './rights.json'
 
@@ -195,7 +196,9 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
       { value: String(level.assessedSettings), label: 'Assessed settings', color: [100, 116, 139] },
       { value: String(level.present), label: 'Conforming', color: CHECK_RESULT_COLORS.matches },
       { value: String(deviating), label: 'Deviating', color: CHECK_RESULT_COLORS.different },
-      { value: percent(level.passRate), label: 'Pass rate', color: [37, 99, 235] },
+      level.recommendations?.length
+        ? { value: percent(level.recommendationPassRate ?? null), label: 'Recommendation pass rate', color: [37, 99, 235] }
+        : { value: percent(level.passRate), label: 'Pass rate', color: [37, 99, 235] },
     ]
     const gap = 3, tile = (width - gap * (tiles.length - 1)) / tiles.length
     if (state.y + 22 > 273) { doc.addPage(); state.y = 24 }
@@ -214,10 +217,14 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
   doc.setProperties({ title: `${summary.benchmark} readiness report`, author: 'TenuVault', subject: 'CIS readiness summary from a saved assessment', keywords: 'Intune, configuration, readiness, comparison' })
   text('TenuVault', 20, true)
   text('CIS readiness report', 15, true)
-  text(`${summary.benchmark} | ${summary.version}`, 13)
+  text(`${summary.benchmarkName ?? summary.benchmark} | ${summary.version}`, 13)
   text(`Tenant: ${context.tenantName ? `${context.tenantName} (${context.tenantId})` : context.tenantId}`)
-  text(`Benchmark: ${summary.benchmark}\nVersion: ${summary.version}\nAssessed: ${formatReportDate(context.assessedAt)}\nExported: ${formatReportDate(context.exportedAt)}${context.runId ? `\nReport: ${context.runId}` : ''}`)
+  text(`Benchmark: ${summary.benchmarkName ? `${summary.benchmarkName} (${summary.benchmark})` : summary.benchmark}\nVersion: ${summary.version}\nAssessed: ${formatReportDate(context.assessedAt)}\nExported: ${formatReportDate(context.exportedAt)}${context.runId ? `\nReport: ${context.runId}` : ''}`)
   text(summary.manualNote)
+  // The CIS notice for recommendations this tool does not include, printed on every report.
+  heading('Manual recommendations')
+  text(summary.manualFallback)
+  text(summary.manualFallbackUrl)
   heading('Limitations')
   for (const line of EXPORT_LIMITATIONS) text(line)
   for (const level of summary.levels) {
@@ -227,7 +234,7 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
     text(level.coverage === null
       ? `Coverage: ${coverageSourceLabel(level.coverageSource)}`
       : `Coverage: ${percent(level.coverage)} (${level.assessedAutomated} of ${level.denominator}), source: ${coverageSourceLabel(level.coverageSource)}`)
-    text(`Assessed automated: ${level.assessedAutomated}\nEnumerated: ${level.enumerated}\nNot assessed identifiers: ${level.notAssessed.length}`)
+    text(`Assessed automated: ${level.assessedAutomated ?? 'not computable without a denominator list'}\nEnumerated: ${level.enumerated}\nNot assessed identifiers: ${level.notAssessed.length}`)
     if (level.notAssessed.length) text(level.notAssessed.join(', '))
     if (level.exceptions?.length) {
       heading(`Accepted exceptions, Level ${level.level}`)
@@ -236,6 +243,12 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
         const reason = exception.reason.length > 300 ? `${exception.reason.slice(0, 300)}...` : exception.reason
         text(`Owner: ${exception.owner}\nExpires: ${exception.expiresOn}\nReason: ${reason}`)
       }
+    }
+    if (level.recommendations?.length) {
+      heading(`Recommendation results, Level ${level.level}`)
+      const totals = recommendationTotals(level.recommendations)
+      text(`Recommendation pass rate: ${percent(level.recommendationPassRate ?? null)}\nAdjusted recommendation pass rate: ${percent(level.adjustedRecommendationPassRate ?? null)}\nPassed: ${totals.passed}\nFailed: ${totals.failed}\nTo review: ${totals.review}\nNot assessed: ${totals.notAssessed}`)
+      text(level.recommendations.map(item => `${item.id} ${item.title}: ${item.result} (${item.settings.map(setting => `${setting.id} ${setting.status}`).join(', ')})`).join('\n'))
     }
     if (level.manual.length) {
       heading(`Manual recommendations, Level ${level.level}`)
