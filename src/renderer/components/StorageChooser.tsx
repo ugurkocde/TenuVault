@@ -7,7 +7,7 @@ import { cn } from "~/lib/utils"
 import storageSetupScript from "../../../resources/New-TenuVaultStorage.ps1?raw"
 import { bridge } from "../lib/bridge"
 import { useTenantPlan } from "../lib/license"
-import { announceBackupSettings, useBackupSettings, useLocalInventoryProblems } from "../lib/local-inventory"
+import { announceBackupSettings, backupSettingsRevision, useBackupSettings, useLocalInventoryProblems } from "../lib/local-inventory"
 import { listStorageAccounts, type AzureStorageAccount, type StorageChoice } from "../lib/storage"
 import { UnreadableBackupsNotice } from "./UnreadableBackupsNotice"
 import { PlanBadge, UpgradeNote } from "./UpgradeNote"
@@ -37,10 +37,8 @@ export function StorageChooser({ tenantId, clientId, initial, onChange }: Storag
     mountedRef.current = true
     return () => { mountedRef.current = false }
   }, [])
-  const settingsRef = useRef(settings)
-  settingsRef.current = settings
-  const applySettingsRead = (startedWith: typeof settings, next: Parameters<typeof setSettings>[0]): boolean => {
-    if (!mountedRef.current || settingsRef.current !== startedWith) return false
+  const applySettingsRead = (startedRevision: number, next: Parameters<typeof setSettings>[0]): boolean => {
+    if (!mountedRef.current || backupSettingsRevision() !== startedRevision) return false
     setSettings(next)
     setSettingsError("")
     announceBackupSettings(next)
@@ -113,29 +111,29 @@ export function StorageChooser({ tenantId, clientId, initial, onChange }: Storag
   }
 
   const retrySettings = async () => {
-    const startedWith = settingsRef.current
+    const startedRevision = backupSettingsRevision()
     try {
       const next = await bridge.backups.settings()
-      applySettingsRead(startedWith, next)
+      applySettingsRead(startedRevision, next)
     } catch (error) {
-      if (mountedRef.current && settingsRef.current === startedWith) {
+      if (mountedRef.current && backupSettingsRevision() === startedRevision) {
         setSettingsError(error instanceof Error ? error.message : String(error))
       }
     }
   }
 
   const saveRecoveryKey = async () => {
-    const startedWith = settingsRef.current
     setSavingKey(true)
     setSaveKeyError("")
     try {
       const result = await bridge.backups.exportRecoveryKey()
       if (result.saved && mountedRef.current) {
+        const startedRevision = backupSettingsRevision()
         try {
           const next = await bridge.backups.settings()
-          applySettingsRead(startedWith, next)
+          applySettingsRead(startedRevision, next)
         } catch (error) {
-          if (mountedRef.current && settingsRef.current === startedWith) {
+          if (mountedRef.current && backupSettingsRevision() === startedRevision) {
             setSettingsError(error instanceof Error ? error.message : String(error))
           }
         }
