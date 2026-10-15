@@ -739,7 +739,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
         saveResult(deps, tenant, id, operation.key, { ...attempt, status: "uncertain", objectId: outcome.objectId, message: `${outcome.message} Retry reconciles from live state before writing again.`, at: at() }, actor, `${operation.name} has an uncertain outcome`)
         continue
       }
-      const check = await readBack(graph, type, { action: operation.action, objectId: outcome.objectId, proposed: entry.body, assignments: entry.assignments })
+      const check = await readBack(gated, type, { action: operation.action, objectId: outcome.objectId, proposed: entry.body, assignments: entry.assignments })
       const status: OperationResult["status"] = check.state === "match" ? "verified" : "uncertain"
       const message = check.state === "match" ? "Written and verified by read-back." : check.state === "denied" ? `Written, but the read-back was denied or failed (${check.message}). The outcome is unverified.` : check.state === "missing" ? "Written, but the object could not be found on read-back." : "Written, but the read-back differs from the proposed configuration."
       saveResult(deps, tenant, id, operation.key, { ...attempt, status, objectId: outcome.objectId, readBack: check.state, message, at: at() }, actor, `${operation.name}: ${status}`)

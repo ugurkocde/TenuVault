@@ -166,7 +166,7 @@ describe("CIS remediation deploy", () => {
     expect(context.tenant.writeCount()).toBe(0)
   })
 
-  it("stops before later writes and keeps the completed outcome when access is revoked during the write phase", async () => {
+  it("stops before later writes and read-back when access is revoked during the write phase", async () => {
     const context = setup()
     const existing = context.tenant.addPolicy({ name: "Tenant Alpha", settings: [setting(DEF_A, "fake-off")] })
     const findings = [
@@ -175,13 +175,28 @@ describe("CIS remediation deploy", () => {
     ]
     const deployment = await planCisRemediation(context.deps, TENANT_A, { title: "Deploy", reference: "synthetic 1.0", policies, findings, selectedFindingKeys: ["0:0", "1:0"] }, "Admin")
     const { preview } = await approveFlow(context, deployment.id)
+    const graphFor = context.deps.graph
+    let revoked = false
+    let readsAfterRevocation = 0
+    context.deps.graph = async (...args) => {
+      const graph = await graphFor(...args)
+      return async (method, path, body, options) => {
+        if (method === "GET" && revoked) readsAfterRevocation += 1
+        return graph(method, path, body, options)
+      }
+    }
     context.tenant.failWrite = (_method, _path, count) => {
-      if (count === 1) setInternalCisBenchmarksEnabled(false)
+      if (count === 1) {
+        revoked = true
+        setInternalCisBenchmarksEnabled(false)
+      }
       return undefined
     }
     const result = await applyCisRemediation(context.deps, TENANT_A, deployment.id, { contentHash: preview.changeSet.contentHash, confirmed: true }, "Admin")
-    expect(result.changeSet.status).toBe("partial")
-    expect(Object.values(result.changeSet.results).map((operation) => operation.status)).toContain("verified")
+    expect(result.changeSet.status).toBe("uncertain")
+    expect(Object.values(result.changeSet.results).map((operation) => operation.status)).toContain("uncertain")
+    expect(Object.values(result.changeSet.results).map((operation) => operation.status)).not.toContain("verified")
+    expect(readsAfterRevocation).toBe(0)
     expect(Object.values(result.changeSet.results).some((operation) => operation.message?.includes("CIS comparisons are coming soon"))).toBe(true)
     expect([...context.tenant.policies.values()].some((policy) => policy.name === "[Baseline] Fakebook Beta")).toBe(false)
     expect(JSON.stringify(context.tenant.policies.get(existing.id as string)?.settings)).toContain("fake-on")
