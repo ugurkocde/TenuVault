@@ -4,7 +4,7 @@ import { record } from "../../shared/frameworks/policies"
 import { typeForFolder, type Item } from "../../shared/intune/registry"
 import { catalogPolicies, parseManifest, type Manifest } from "../../shared/oib/manifest"
 import { OIB_LICENSE, OIB_MANIFEST_IDS, OIB_PLATFORMS, OIB_REPO, type OibCatalog, type OibChannel, type OibPlatform, type OibPlatformInfo, type OibPlatformStatus, type OibPublishedRelease, type OibVersions } from "../../shared/oib/types"
-import { defaultSelection, oibReference, platformStatus, RELEASE_TAG, selectionLabel, tagPlatform, tagVersion } from "../../shared/oib/versions"
+import { defaultSelection, isShippedPlatform, oibReference, platformStatus, RELEASE_TAG, selectionLabel, tagPlatform, tagVersion } from "../../shared/oib/versions"
 import { FrameworkError } from "../frameworks/service"
 
 /**
@@ -219,25 +219,41 @@ export async function oibVersions(retry = false): Promise<OibVersions> {
   try {
     const [manifest, main] = await Promise.all([getReleaseManifest(), resolveMain()])
     const platforms: OibPlatformInfo[] = manifest.platforms.map((entry) => ({ platform: entry.platform, status: entry.status, ...(entry.changelog ? { changelog: entry.changelog } : {}) }))
+    // Last known commit per release, so a transient failure to re-resolve one ref keeps its
+    // downloaded packs usable instead of dropping the release (and its cache entry) entirely.
+    const previous = new Map<string, OibPublishedRelease>()
+    for (const release of (await readStoredVersions())?.versions.releases ?? []) previous.set(`${release.platform}:${release.tag}`, release)
+    for (const release of versions?.value.releases ?? []) previous.set(`${release.platform}:${release.tag}`, release)
     const unresolved: string[] = [...manifest.dropped]
+    const stale: string[] = []
     const resolvedReleases = await Promise.all(manifest.platforms.flatMap((entry) => entry.releases).map(async (release): Promise<OibPublishedRelease | null> => {
       const ref = release.tag ?? release.branch
+      const published = (commit: string): OibPublishedRelease => ({ platform: release.platform, version: release.version, ...(release.name ? { name: release.name } : {}), channel: release.channel, prerelease: release.prerelease, releaseDate: release.releaseDate, branch: release.branch, tag: ref, commit, ...(release.url ? { url: release.url } : {}) })
       try {
         const { commit } = await resolveRef(ref)
-        return { platform: release.platform, version: release.version, ...(release.name ? { name: release.name } : {}), channel: release.channel, prerelease: release.prerelease, releaseDate: release.releaseDate, branch: release.branch, tag: ref, commit, ...(release.url ? { url: release.url } : {}) }
+        return published(commit)
       } catch (error) {
         console.warn(`[oib] ${release.platform} ${release.version} (${ref}) could not be resolved: ${error instanceof Error ? error.message : String(error)}`)
+        const known = previous.get(`${release.platform}:${ref}`)
+        if (known) {
+          stale.push(`${OIB_PLATFORMS[release.platform].label} v${release.version}`)
+          return published(known.commit)
+        }
         unresolved.push(`${OIB_PLATFORMS[release.platform].label} v${release.version}`)
         return null
       }
     }))
     const releases = resolvedReleases.filter((release): release is OibPublishedRelease => release !== null).sort((a, b) => Date.parse(b.releaseDate) - Date.parse(a.releaseDate))
     // A release that cannot be resolved must be visible: its platform would otherwise silently fall back to main or an older release.
-    const warning = unresolved.length ? `Some OpenIntuneBaseline releases could not be read (${unresolved.join(", ")}). Those platforms may show main or an older release until the versions are refreshed.` : undefined
+    const warnings: string[] = []
+    if (stale.length) warnings.push(`Some OpenIntuneBaseline releases could not be refreshed (${stale.join(", ")}). Showing their last known versions.`)
+    if (unresolved.length) warnings.push(`Some OpenIntuneBaseline releases could not be read (${unresolved.join(", ")}). Those platforms may show main or an older release until the versions are refreshed.`)
+    const warning = warnings.length ? warnings.join(" ") : undefined
     const value: OibVersions = { main, platforms, releases, ...(warning ? { warning } : {}) }
     admit(value)
     versions = { value, expires: Date.now() + HEAD_TTL }
-    await writeCache("versions.json", { format: CACHE_FORMAT, savedAt: new Date().toISOString(), versions: value })
+    // An incomplete listing must not replace the last complete one on disk.
+    if (!unresolved.length) await writeCache("versions.json", { format: CACHE_FORMAT, savedAt: new Date().toISOString(), versions: value })
     return value
   } catch (error) {
     const stored = await readStoredVersions()
@@ -258,7 +274,7 @@ async function readStoredVersions(): Promise<{ savedAt: string; versions: OibVer
   if (!record(main) || typeof main.commit !== "string" || !SHA.test(main.commit) || !Array.isArray(releases)) return null
   const known: OibPublishedRelease[] = []
   for (const release of releases) {
-    if (!record(release) || typeof release.tag !== "string" || typeof release.commit !== "string" || !SHA.test(release.commit)) return null
+    if (!record(release) || typeof release.tag !== "string" || typeof release.commit !== "string" || !SHA.test(release.commit)) continue
     const platform = tagPlatform(release.tag)
     // A stored release that is not a release of its platform is skipped, not allowed to discard the whole cache.
     if (!platform || platform !== release.platform) continue
@@ -273,7 +289,7 @@ async function readStoredVersions(): Promise<{ savedAt: string; versions: OibVer
   const knownPlatforms: OibPlatformInfo[] = []
   if (Array.isArray(platforms)) {
     for (const entry of platforms) {
-      if (!record(entry) || typeof entry.platform !== "string" || !Object.hasOwn(OIB_PLATFORMS, entry.platform) || (entry.status !== "available" && entry.status !== "in-development")) return null
+      if (!record(entry) || typeof entry.platform !== "string" || !Object.hasOwn(OIB_PLATFORMS, entry.platform) || (entry.status !== "available" && entry.status !== "in-development")) continue
       knownPlatforms.push({ platform: entry.platform as OibPlatform, status: entry.status, ...(typeof entry.changelog === "string" ? { changelog: entry.changelog } : {}) })
     }
   } else {
@@ -512,7 +528,12 @@ function labelOf(platform: OibPlatform, commit: string, tag: unknown): string | 
 export async function loadPack(platform: OibPlatform, commit: unknown, tag?: unknown): Promise<LoadedPack> {
   const label = typeof commit === "string" && SHA.test(commit) ? labelOf(platform, commit, tag) : null
   if (label === null) throw new FrameworkError("The OpenIntuneBaseline source changed or expired. Reload it and try again.", 409)
-  if (versions && platformStatus(versions.value, platform) === "in-development") throw new FrameworkError(`OpenIntuneBaseline has no published ${OIB_PLATFORMS[platform].label} baseline yet.`, 400)
+  // In-development platforms have nothing scannable on main; fail closed when the manifest is
+  // unknown too. A resolved release (label set) stays loadable so recorded packs remain readable.
+  if (!isShippedPlatform(platform) && label === undefined) {
+    if (!versions) await oibVersions().catch(() => undefined)
+    if (!versions || platformStatus(versions.value, platform) === "in-development") throw new FrameworkError(`OpenIntuneBaseline has no published ${OIB_PLATFORMS[platform].label} baseline yet.`, 400)
+  }
   const sha = commit as string
   const key = `${platform}:${sha}:${label ?? "main"}`
   const cached = packs.get(key)

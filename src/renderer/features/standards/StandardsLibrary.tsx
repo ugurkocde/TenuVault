@@ -5,7 +5,7 @@ import { Button } from "~/components/ui/button"
 import { Chip } from "~/components/dashboard/tiles"
 import { toast } from "../../lib/toast"
 import { OIB_PLATFORMS, type OibPlatform, type OibVersions } from "../../../shared/oib/types"
-import { defaultSelection, selectionLabel } from "../../../shared/oib/versions"
+import { defaultSelection, platformStatus, selectionLabel } from "../../../shared/oib/versions"
 import { adoptStandard, createStandard, diffStandards, publishStandardVersion, type Standard, type VersionDiffEntry } from "./api"
 
 const card = "space-y-4 rounded-3xl bg-card p-6 shadow-[0_1px_2px_rgba(22,21,20,0.04)]"
@@ -33,13 +33,15 @@ export function StandardsLibrary({ tenant, standards, adoptedKeys, canWrite, onC
   const [form, setForm] = useState({ standardKey: "", name: "", changeNotes: "", sourceType: "manual", reference: "", platform: "windows", policies: "", parameters: "", bindings: "" })
   // The OpenIntuneBaseline versions the main process resolved; the only ones it loads.
   const [oibVersions, setOibVersions] = useState<OibVersions | null>(null)
-  const oibSelection = oibVersions && form.platform in OIB_PLATFORMS ? defaultSelection(oibVersions, form.platform as OibPlatform) : null
+  const oibPlatform = Object.hasOwn(OIB_PLATFORMS, form.platform) ? form.platform as OibPlatform : null
+  const oibUnavailable = !!(oibVersions && oibPlatform && platformStatus(oibVersions, oibPlatform) === "in-development")
+  const oibSelection = oibVersions && oibPlatform && !oibUnavailable ? defaultSelection(oibVersions, oibPlatform) : null
   const oibCommit = oibSelection?.commit ?? null
   useEffect(() => {
     if (form.sourceType !== "oib" || oibVersions) return
     void fetch("/api/oib", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "oib-versions" }) })
       .then((response) => response.json())
-      .then((result: Partial<OibVersions>) => setOibVersions(result.main && Array.isArray(result.releases) ? result as OibVersions : null))
+      .then((result: Partial<OibVersions>) => setOibVersions(result.main && Array.isArray(result.releases) && Array.isArray(result.platforms) ? result as OibVersions : null))
       .catch(() => setOibVersions(null))
   }, [form.sourceType, oibVersions])
   const run = async (action: () => Promise<unknown>, success: string) => {
@@ -105,8 +107,8 @@ export function StandardsLibrary({ tenant, standards, adoptedKeys, canWrite, onC
           </div>
           {form.sourceType === "oib" ? (
             <div className="grid gap-3 md:grid-cols-2">
-              <label className="space-y-1 text-xs text-gray-600 dark:text-gray-400"><span>Platform</span><select className={input} value={form.platform} onChange={(event) => setForm({ ...form, platform: event.target.value })}>{(Object.keys(OIB_PLATFORMS) as OibPlatform[]).map((id) => <option key={id} value={id}>{OIB_PLATFORMS[id].label}</option>)}</select></label>
-              <p className="self-end text-xs text-gray-500">{oibSelection ? `Version: ${selectionLabel(oibSelection)}. The exact commit is recorded with the standard.` : "Reading the latest OpenIntuneBaseline version."}</p>
+              <label className="space-y-1 text-xs text-gray-600 dark:text-gray-400"><span>Platform</span><select className={input} value={form.platform} onChange={(event) => setForm({ ...form, platform: event.target.value })}>{(Object.keys(OIB_PLATFORMS) as OibPlatform[]).map((id) => <option key={id} value={id} disabled={oibVersions ? platformStatus(oibVersions, id) === "in-development" : false}>{OIB_PLATFORMS[id].label}{oibVersions && platformStatus(oibVersions, id) === "in-development" ? " (in development)" : ""}</option>)}</select></label>
+              <p className="self-end text-xs text-gray-500">{oibSelection ? `Version: ${selectionLabel(oibSelection)}. The exact commit is recorded with the standard.` : oibUnavailable ? "OpenIntuneBaseline has no published baseline for this platform yet." : "Reading the latest OpenIntuneBaseline version."}</p>
             </div>
           ) : (
             <>
@@ -118,7 +120,7 @@ export function StandardsLibrary({ tenant, standards, adoptedKeys, canWrite, onC
           <label className="block space-y-1 text-xs text-gray-600 dark:text-gray-400"><span>Bindings (JSON array: policyKey, settingDefinitionId, parameter)</span><textarea className={area} value={form.bindings} onChange={(event) => setForm({ ...form, bindings: event.target.value })} /></label>
           <label className="block space-y-1 text-xs text-gray-600 dark:text-gray-400"><span>Change notes</span><input className={input} value={form.changeNotes} onChange={(event) => setForm({ ...form, changeNotes: event.target.value })} /></label>
           <div className="flex gap-2">
-            <Button type="submit" disabled={busy || !form.name || !form.changeNotes}>{from ? "Publish version" : "Publish standard"}</Button>
+            <Button type="submit" disabled={busy || !form.name || !form.changeNotes || (form.sourceType === "oib" && oibUnavailable)}>{from ? "Publish version" : "Publish standard"}</Button>
             {from && <Button type="button" variant="outline" onClick={() => setFrom(null)}>Cancel</Button>}
           </div>
         </form>

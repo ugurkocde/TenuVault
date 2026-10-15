@@ -144,8 +144,9 @@ export function VersionPicker({ versions, value, onChange, allowPrerelease = tru
   return <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
     {(Object.keys(OIB_PLATFORMS) as OibPlatform[]).map(platform => {
       const releases = pickerReleases(versions, platform, allowPrerelease)
-      return <label key={platform} className="flex flex-col gap-1 text-xs font-medium text-gray-700">{OIB_PLATFORMS[platform].label}
-        <select value={selectValue(value[platform])} className="h-10 rounded-full border border-gray-300 bg-white px-4 text-sm font-normal"
+      const pending = platformStatus(versions, platform) === "in-development"
+      return <label key={platform} className="flex flex-col gap-1 text-xs font-medium text-gray-700">{OIB_PLATFORMS[platform].label}{pending ? " (in development)" : ""}
+        <select value={selectValue(value[platform])} disabled={pending} className="h-10 rounded-full border border-gray-300 bg-white px-4 text-sm font-normal disabled:cursor-not-allowed disabled:opacity-60"
           onChange={e => {
             const release = releases.find(r => r.tag === e.target.value)
             onChange({ ...value, [platform]: release ? { commit: release.commit, tag: release.tag } : { commit: versions.main.commit } })

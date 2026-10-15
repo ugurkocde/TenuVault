@@ -49,6 +49,9 @@ export function pickerReleases(versions: OibVersions, platform: OibPlatform, all
 /** Platforms TenuVault shipped from main before the manifest existed; the manifest must not withdraw them. */
 const SHIPPED_PLATFORMS: OibPlatform[] = ["windows", "macos", "win365", "byod"]
 
+/** Whether a platform shipped before the manifest, so it is usable even when the manifest is unknown. */
+export const isShippedPlatform = (platform: OibPlatform): boolean => SHIPPED_PLATFORMS.includes(platform)
+
 /**
  * Whether a platform can be used. The manifest status governs platforms it introduces (iOS,
  * Android); platforms shipped before the manifest stay available even when upstream lists them

@@ -54,7 +54,7 @@ const MANIFEST = {
 }
 
 /** GitHub serving the manifest, the main commit, each release ref and the pack files; `offline` fails every request. */
-function github(options: { main?: string; offline?: boolean; manifest?: unknown } = {}) {
+function github(options: { main?: string; offline?: boolean; manifest?: unknown; brokenRefs?: string[] } = {}) {
   const requested: string[] = []
   const fetcher = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
@@ -64,6 +64,7 @@ function github(options: { main?: string; offline?: boolean; manifest?: unknown 
     const ref = /\/commits\/([^?]+)$/.exec(url)?.[1]
     if (ref) {
       const name = decodeURIComponent(ref)
+      if (options.brokenRefs?.includes(name)) return new Response("rate limited", { status: 403 })
       const sha = name === "main" ? options.main ?? MAIN : COMMITS[name]
       if (!sha) return new Response("Not Found", { status: 404 })
       return Response.json({ sha, commit: { committer: { date: "2026-09-30T00:00:00Z" } } })
@@ -301,6 +302,35 @@ it("warns when a manifest release cannot be resolved instead of silently falling
   expect(defaultSelection(versions, "windows")).toEqual({ commit: V40, tag: "windows-v4.0" })
 })
 
+it("keeps the last known release when one ref cannot be refreshed, across an offline restart", async () => {
+  useCache()
+  github()
+  await oibVersions()
+  // The iOS beta ref now fails transiently while the manifest and main still load.
+  resetOibSource()
+  github({ brokenRefs: ["ios-v1.0-beta"] })
+  const refreshed = await oibVersions()
+  expect(refreshed.warning).toContain("could not be refreshed (iOS v1.0)")
+  expect(defaultSelection(refreshed, "ios")).toEqual({ commit: IOSBETA, tag: "ios-v1.0-beta" })
+  // The stored listing still contains the beta, so an offline restart keeps it loadable.
+  resetOibSource()
+  github({ offline: true })
+  const offline = await oibVersions()
+  expect(offline.releases.map(r => r.tag)).toContain("ios-v1.0-beta")
+  expect(defaultSelection(offline, "ios")).toEqual({ commit: IOSBETA, tag: "ios-v1.0-beta" })
+  const error = await loadPack("ios", IOSBETA, "ios-v1.0-beta").catch((caught: unknown) => caught)
+  expect(error).toBeInstanceOf(Error)
+  expect((error as Error).message).not.toContain("changed or expired")
+})
+
+it("refuses main as an in-development platform even before versions were loaded", async () => {
+  github()
+  await resolveMain()
+  await expect(loadPack("android", MAIN)).rejects.toThrow("no published Android baseline")
+  // Shipped platforms load from main without a manifest read, as before.
+  expect((await loadPack("windows", MAIN)).catalog.policies).toHaveLength(1)
+})
+
 it("reads versions stored before the manifest when offline", async () => {
   const cache = useCache()
   // The pre-manifest shape: publishedAt only, and no version, branch, channel or platform list.
@@ -310,6 +340,8 @@ it("reads versions stored before the manifest when offline", async () => {
       { platform: "windows", tag: "windows-v4.0", commit: V40, publishedAt: "2026-09-30T00:00:00Z" },
       // Not a release tag of its platform: skipped instead of discarding the whole cache.
       { platform: "win365", tag: "windows365-v1.0", commit: MAC, publishedAt: "2024-09-02T00:00:00Z" },
+      // Structurally malformed entries are skipped the same way.
+      { platform: "macos", tag: 42, commit: MAC },
     ],
   } }))
   github({ offline: true })
