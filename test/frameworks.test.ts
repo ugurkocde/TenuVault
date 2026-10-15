@@ -55,6 +55,46 @@ describe("framework catalog and policy comparison", () => {
   })
 })
 
+describe("grouped payload comparison", () => {
+  const group = "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance"
+  const simple = "#microsoft.graph.deviceManagementConfigurationSimpleSettingInstance"
+  const child = (id: string, value: string) => ({ "@odata.type": type, settingDefinitionId: `fakebook_payload_${id}`, choiceSettingValue: { value: `fakebook_payload_${id}_${value}`, children: [] } })
+  const text = (id: string, value: string) => ({ "@odata.type": simple, settingDefinitionId: `fakebook_payload_${id}`, simpleSettingValue: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationStringSettingValue", value } })
+  const payload = (name: string, children: object[]) => ({ name, platforms: "macOS", technologies: "mdm,appleRemoteManagement", description: "Synthetic payload",
+    settings: [{ settingInstance: { "@odata.type": group, settingDefinitionId: "fakebook_payload", groupSettingCollectionValue: [{ children }] } }] })
+  const recommended = parsePolicies(payload("Synthetic Level 1", [child("one", "true"), text("two", "fake")]))
+  const live = (children: object[], id = liveId) => ({ ...parsePolicies(payload("Tenant payload", children))[0]!, id })
+  const status = (...tenant: ReturnType<typeof live>[]) => comparePolicies(recommended, tenant)[0]?.status
+
+  it("is Present when the tenant root holds every recommended child plus extra children", () => {
+    expect(status(live([text("extra", "kept"), child("one", "true"), text("two", "fake"), child("more", "false")]))).toBe("Present")
+  })
+  it("is Different when a recommended child is missing from the tenant root", () => {
+    expect(status(live([child("one", "true"), text("extra", "kept")]))).toBe("Different")
+  })
+  it("is Different when a recommended child holds another value", () => {
+    expect(status(live([child("one", "false"), text("two", "fake"), text("extra", "kept")]))).toBe("Different")
+    expect(status(live([child("one", "true"), text("two", "changed")]))).toBe("Different")
+  })
+  it("is Different when a second tenant policy holding the root does not satisfy it", () => {
+    const satisfied = live([child("one", "true"), text("two", "fake"), text("extra", "kept")])
+    expect(status(satisfied, live([child("one", "true")], "44444444-4444-4444-4444-444444444444"))).toBe("Different")
+    expect(status(satisfied, live([child("one", "true"), text("two", "fake")], "44444444-4444-4444-4444-444444444444"))).toBe("Present")
+  })
+  it("keeps exact matching for roots without child setting instances", () => {
+    const flat = (value: string, extra?: object) => ({ name: "Flat", platforms: "windows10", technologies: "mdm", description: "",
+      settings: [{ settingInstance: { "@odata.type": type, settingDefinitionId: "fakebook_flat", choiceSettingValue: { value, children: [], ...extra } } }] })
+    const expected = parsePolicies(flat("fake-on"))
+    expect(comparePolicies(expected, [{ ...parsePolicies(flat("fake-on"))[0]!, id: liveId }])[0]?.status).toBe("Present")
+    expect(comparePolicies(expected, [{ ...parsePolicies(flat("fake-on", { extra: "value" }))[0]!, id: liveId }])[0]?.status).toBe("Different")
+    expect(comparePolicies(expected, [{ ...parsePolicies(flat("fake-off"))[0]!, id: liveId }])[0]?.status).toBe("Different")
+  })
+  it("still asks for review when the pack holds alternative grouped payloads", () => {
+    const both = parsePolicies([payload("Level 1", [child("one", "true")]), payload("Level 2", [child("one", "true"), text("two", "fake")])])
+    expect(comparePolicies(both, [live([child("one", "true"), text("two", "fake")])]).map(finding => finding.status)).toEqual(["Review", "Review"])
+  })
+})
+
 describe("Graph reads and tenant-bound remediation", () => {
   it.each(["cis-benchmarks", "cis-controls"])("blocks %s operations before network or workspace access", async frameworkId => {
     const fetch = vi.fn()

@@ -1,4 +1,4 @@
-import { comparable, type Finding, type Json, type Observation } from "./policies"
+import { comparable, rootMatches, type Finding, type Json, type Observation } from "./policies"
 
 export function benchmarkDisplayName(id: string): string {
   const parts = id.split("-").filter(part => part.length > 0)
@@ -76,7 +76,6 @@ function targetingKey(observation: Observation): string {
 }
 
 export function groupObservationsByValue(observations: readonly Observation[], recommended: Json): ObservationValueGroup[] {
-  const recommendedKey = JSON.stringify(comparable(recommended))
   const groups: ObservationValueGroup[] = []
   const byKey = new Map<string, ObservationValueGroup>()
   for (const observation of observations) {
@@ -84,7 +83,7 @@ export function groupObservationsByValue(observations: readonly Observation[], r
     const key = `${valueKey}|${targetingKey(observation)}`
     let group = byKey.get(key)
     if (!group) {
-      group = { key, value: observation.value, observations: [], policyNames: [], matchesRecommended: valueKey === recommendedKey }
+      group = { key, value: observation.value, observations: [], policyNames: [], matchesRecommended: rootMatches(recommended, observation.value) }
       byKey.set(key, group)
       groups.push(group)
     }

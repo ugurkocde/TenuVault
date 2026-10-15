@@ -81,6 +81,59 @@ export function comparable(value: Json): Json {
     .map(([key, v]) => [key, comparable(v)]))
 }
 
+function isInstance(value: Json): value is RecordJson {
+  return record(value) && typeof value.settingDefinitionId === "string"
+}
+
+/** True when a setting instance nests child setting instances, as group setting collections do. */
+export function hasChildInstances(value: Json): boolean {
+  if (Array.isArray(value)) return value.some(hasChildInstances)
+  if (!record(value)) return false
+  return Object.entries(value).some(([key, v]) => (key === "children" && Array.isArray(v) && v.some(isInstance)) || hasChildInstances(v))
+}
+
+/**
+ * Leaf values of one comparable setting instance, keyed by the settingDefinitionId path from
+ * the root. Child instances are taken out of their parent's own value and keyed below it, so
+ * a root holding extra children still yields every other leaf unchanged. A repeated child
+ * definition in one children list is keyed by its occurrence.
+ */
+function leafValues(instance: RecordJson, path: string, out: Map<string, string>): Map<string, string> {
+  const own = `${path}/${String(instance.settingDefinitionId)}`
+  const strip = (value: Json, at: string): Json => {
+    if (Array.isArray(value)) return value.map((entry, index) => strip(entry, `${at}[${index}]`))
+    if (!record(value)) return value
+    return Object.fromEntries(Object.entries(value).map(([key, v]) => {
+      if (key !== "children" || !Array.isArray(v)) return [key, strip(v, `${at}.${key}`)]
+      const seen = new Map<string, number>()
+      for (const child of v.filter(isInstance)) {
+        const id = String(child.settingDefinitionId)
+        const occurrence = seen.get(id) ?? 0
+        seen.set(id, occurrence + 1)
+        leafValues(child, `${own}${at}${occurrence ? `#${occurrence}` : ""}`, out)
+      }
+      return [key, v.filter(child => !isInstance(child))]
+    }))
+  }
+  out.set(own, JSON.stringify(strip(instance, "")))
+  return out
+}
+
+/**
+ * Whether an observed root satisfies a recommended root. A root without child setting
+ * instances must match exactly. A grouped root, such as a group setting collection, matches
+ * when every recommended leaf exists at the same definition path with an equal value; extra
+ * tenant children are ignored, so a payload hardened beyond the recommendation still passes.
+ */
+export function rootMatches(recommended: Json, observed: Json): boolean {
+  const want = comparable(recommended)
+  const have = comparable(observed)
+  if (!isInstance(want) || !hasChildInstances(want)) return JSON.stringify(want) === JSON.stringify(have)
+  if (!isInstance(have) || have.settingDefinitionId !== want.settingDefinitionId) return false
+  const haveLeaves = leafValues(have, "", new Map())
+  return [...leafValues(want, "", new Map())].every(([path, value]) => haveLeaves.get(path) === value)
+}
+
 export interface LandscapePolicy extends BaselinePolicy { id: string; targeting?: AssignmentEvidence }
 export function comparePolicies(baselines: BaselinePolicy[], landscape: LandscapePolicy[]): Finding[] {
   const observations = new Map<string, Observation[]>()
@@ -105,7 +158,7 @@ export function comparePolicies(baselines: BaselinePolicy[], landscape: Landscap
     const recommended = comparable(root)
     const key = `${policy.platforms}:${settingId}`
     const observed = observations.get(key) ?? []
-    const matched = observed.filter(o => JSON.stringify(o.value) === JSON.stringify(recommended)).length
+    const matched = observed.filter(o => rootMatches(recommended, o.value)).length
     // Multiple recommended values for the same definition require an admin to select a profile first.
     const ambiguous = (recommendations.get(key)?.size ?? 0) > 1
     return { key: `${policyIndex}:${settingIndex}`, policyIndex, settingIndex, policyName: policy.name, settingId,
