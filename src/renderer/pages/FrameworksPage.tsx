@@ -529,6 +529,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     }
     setExclusion(null); setSelected(new Set()); setPreview(false); setConfirmed(false); setCisExceptionsOpen(true)
   }
+  const reviewLoadedPolicies = <details className="mt-4 text-sm"><summary className="cursor-pointer text-gray-700">Review {policies.length} loaded policies and remove alternative profiles</summary><ul className="mt-3 max-h-64 divide-y divide-gray-100 overflow-auto rounded-2xl bg-gray-50">{policies.map((p, i) => <li key={`${p.name}:${i}`} className="flex items-center justify-between gap-3 p-3"><span>{p.name}<span className="ml-2 text-xs text-gray-500">{p.settings.length} root settings</span></span><button disabled={!!busy} className="text-blue-700 hover:underline disabled:opacity-50" aria-label={`Remove ${p.name}`} onClick={() => { setLoadedKitLevel(null); setPolicies(policies.filter((_, index) => index !== i)); reset() }}>Remove</button></li>)}</ul></details>
   const savedWorkspaceActions = <div className="mt-3 flex flex-wrap gap-3">
     <ExportButton framework={framework} plan={plan} disabled={!!busy || !workspace?.history.length} onClick={() => exportSaved("json")}>{isCis ? "Export saved assessments JSON" : "Export saved assessments"}</ExportButton>
     <button className={button} disabled={!!busy} onClick={async () => { if (await confirm({ title: "Delete saved workspace?", description: "Delete this saved workspace and all assessment history?", confirmLabel: "Delete workspace", destructive: true })) void perform("Deleting workspace…", async () => { suppressedDraft.current = JSON.stringify({ policies, reference }); const saved = await workspaceRequest("workspace-delete"); suppressedDraft.current = JSON.stringify({ policies: [], reference: "" }); setWorkspace(saved); setKitConversion(null); setKitFiles([]); setKitDetected({ id: "" }); setKitBenchmark(""); setKitVersion(""); setLoadedKitLevel(null); setPolicies([]); setReference(""); setRecommendationList(undefined); reset() }) }}>Delete workspace</button>
@@ -598,9 +599,9 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     </div>
     {isCis && <nav aria-label="CIS Benchmarks progress" className="mt-6">
       <ol className="flex flex-wrap gap-2">
-        {cisFlowSteps(!!kitConversion, !!assessment, !!cisRun).map(item => <li key={item.step} {...(item.state === "current" ? { "aria-current": "step" as const } : {})} className={cn("inline-flex h-10 items-center gap-2 rounded-full border px-4 text-sm font-medium", item.state === "complete" ? "border-transparent bg-green-50 text-green-800" : item.state === "current" ? "border-transparent bg-primary text-primary-foreground" : "border-gray-200 bg-white text-gray-500")}>
+        {cisFlowSteps(policies.length > 0, !!assessment, !!cisRun).map(item => <li key={item.step} {...(item.state === "current" ? { "aria-current": "step" as const } : {})} className={cn("inline-flex h-10 items-center gap-2 rounded-full border px-4 text-sm font-medium", item.state === "complete" ? "border-transparent bg-green-50 text-green-800" : item.state === "current" ? "border-transparent bg-primary text-primary-foreground" : "border-gray-200 bg-white text-gray-500")}>
           {item.state === "complete" ? <Check className="h-4 w-4" aria-hidden="true" /> : <span aria-hidden="true" className="flex h-5 w-5 items-center justify-center rounded-full bg-white/20 text-xs font-semibold">{item.step}</span>}
-          <span>{item.step} {item.label}</span>
+          <span><span className="sr-only">Step {item.step}: </span>{item.label}</span>
         </li>)}
       </ol>
     </nav>}
@@ -634,8 +635,9 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     {(!isCis || stage === "setup") && savedBlock}
     {framework.id === CIS_BENCHMARKS_ID && stage === "setup" && <details className="mb-5"><summary className="inline-flex h-10 cursor-pointer list-none items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 [&::-webkit-details-marker]:hidden">Portfolio</summary><div className="mt-3"><CisPortfolio plan={plan} /></div></details>}
     {isCis && stage === "setup" && <section aria-labelledby="cis-delivered-title" className="mb-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
-      <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="cis-delivered-title" className="text-xl font-medium tracking-tight">Benchmarks from TenuVault</h2><span className="text-sm text-gray-500">{cisCatalog ? `${cisCatalog.length} benchmarks available` : "Delivery service"}</span></div>
+      <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="cis-delivered-title" className="text-xl font-medium tracking-tight">1. Load benchmark</h2><span className="text-sm text-gray-500">{cisCatalog ? `${cisCatalog.length} benchmarks available` : "Delivery service"}</span></div>
       <p className="mt-2 text-sm text-gray-600">Load a benchmark pack from the TenuVault delivery service. The pack is saved in encrypted storage on this device for the selected tenant.</p>
+      {policies.length > 0 && reference && <p className="mt-2 text-sm text-gray-800">Loaded: {reference}, {policies.length} {policies.length === 1 ? "policy" : "policies"}. Compare it with the tenant in step 2.</p>}
       <div className="mt-4"><button type="button" className={primary} disabled={!!busy || !credentials} onClick={() => void loadCisCatalog()}>{cisCatalog ? "Refresh available benchmarks" : "Load available benchmarks"}</button></div>
       {busy && <p role="status" className="mt-4 text-sm text-blue-700">{busy}</p>}
       {busy && <div role="progressbar" aria-label={busy} className="mt-2 h-2 overflow-hidden rounded-full bg-gray-100"><div className="h-full w-1/3 animate-pulse rounded-full bg-primary" /></div>}
@@ -643,13 +645,13 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       {cisCatalog && cisCatalog.length > 0 && <div className="mt-4 grid gap-3 sm:grid-cols-2" role="group" aria-label="Available benchmarks">{cisCatalog.map(benchmark => <div key={`${benchmark.id}-${benchmark.version}`} className="rounded-2xl border border-gray-200 bg-white p-4">
         <p className="text-sm font-medium text-gray-900">{benchmark.name}</p>
         <p className="mt-1 text-sm text-gray-600">{benchmark.id} {benchmark.version}</p>
-        <div className="mt-3 flex flex-wrap gap-2">{benchmark.levels.map(level => <button key={level} type="button" className={button} disabled={!!busy || !credentials} onClick={() => void loadDeliveredPack(benchmark, level)}>Level {level}</button>)}</div>
+        <div className="mt-3 flex flex-wrap gap-2">{benchmark.levels.map(level => { const loaded = reference === `${benchmark.id} ${benchmark.version} Level ${level}`; return <button key={level} type="button" aria-pressed={loaded} className={loaded ? primary : button} disabled={!!busy || !credentials} onClick={() => void loadDeliveredPack(benchmark, level)}>{loaded && <Check className="h-4 w-4" aria-hidden="true" />}Level {level}</button> })}</div>
       </div>)}</div>}
     </section>}
-    {(!isCis || stage === "setup") && <section aria-labelledby="pack-title" className="rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
-      <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="pack-title" className="text-xl font-medium tracking-tight">{isCis && kitImport ? "1. Import a CIS Build Kit" : "1. Choose your policy pack"}</h2><span className="text-sm text-gray-500">{policies.length ? `${policies.length} policies loaded` : "No pack loaded"}</span></div>
+    {(!isCis || (stage === "setup" && (kitImport || (policies.length > 0 && !fromKit)))) && <section {...(isCis ? { "aria-label": "Other benchmark sources" } : { "aria-labelledby": "pack-title" })} className="rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+      {!isCis && <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="pack-title" className="text-xl font-medium tracking-tight">1. Choose your policy pack</h2><span className="text-sm text-gray-500">{policies.length ? `${policies.length} policies loaded` : "No pack loaded"}</span></div>}
       {!isCis && <p className="mt-2 text-sm text-gray-600">Import one or more Settings Catalog JSON exports. Review the source, version and intended profile before comparison. Loading a pack does not change your tenant.</p>}
-      <div className="mt-4 flex flex-wrap items-center gap-3">
+      {!isCis && <div className="mt-4 flex flex-wrap items-center gap-3">
         {framework.id === "ncsc-dsg" && <button className={button} disabled={!!busy} onClick={() => void perform("Loading NCSC pack…", async () => {
           const pack = await request<NcscPack>({ action: "load-ncsc" }); reset(); setPolicies(pack.policies); setReference(pack.reference)
         })}>Load NCSC Windows 2025</button>}
@@ -663,10 +665,10 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
             const parsed = parsePolicies(values); reset(); setPolicies(parsed); setReference("")
           })
         }} /></label>}
-      </div>
+      </div>}
       {framework.id === "ncsc-dsg" && <p className="mt-3 text-xs text-gray-500">Source content: UK National Cyber Security Centre, Crown Copyright, <a href={`${NCSC_REPOSITORY}/blob/${NCSC_COMMIT}/LICENSE`} target="_blank" rel="noreferrer" className="underline">Apache License 2.0</a>. Pinned commit {NCSC_COMMIT.slice(0, 7)}, each file checked against its reviewed SHA-256. Modified for comparison: decoded from UTF-16, export metadata, IDs and assignments removed. No endorsement by NCSC. Comparison and reports only; policies cannot be created from this pack.</p>}
-      {framework.id === "cis-benchmarks" && kitImport && <details className="mt-5"><summary className="cursor-pointer text-sm font-medium text-gray-700">Internal kit import</summary><div className="mt-4">
-        <p className="text-sm text-gray-600">The kit stays on this device, is converted locally, and nothing is created in the tenant from the import.</p>
+      {framework.id === "cis-benchmarks" && kitImport && <details><summary className="cursor-pointer text-sm font-medium text-gray-700">Build Kit import (internal use)</summary><div className="mt-4">
+        <p className="text-sm text-gray-600">For internal testing of benchmark content before it is delivered. The kit stays on this device, is converted locally, and nothing is created in the tenant from the import.</p>
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <label className={cn(primary, "focus-within:ring-2 focus-within:ring-primary focus-within:ring-offset-2")}>Select Build Kit zip<input type="file" accept=".zip,application/zip" disabled={!!busy} className="sr-only" onChange={e => {
             const file = e.target.files?.[0]; e.target.value = ""
@@ -753,14 +755,15 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
           </div>
           <p className="mt-2 text-xs text-gray-500">Loading a pack saves it in the workspace for the selected tenant. Compare it with the tenant in step 2.</p>
         </div>}
+        {policies.length > 0 && reviewLoadedPolicies}
       </div></details>}
       {policies.length > 0 && <>
         {!fromKit && <>
-          <button className={button} onClick={exportCoverage}>Export coverage and source mappings</button>
+          <button className={cn(button, isCis && kitImport && "mt-4")} onClick={exportCoverage}>Export coverage and source mappings</button>
           <p className="mt-3 text-xs text-gray-600">Unsupported: {UNSUPPORTED.join('; ')}. Retained source declarations are not signatures. Organizational evidence and profile approval remain manual.</p>
           <label className="mt-5 block text-sm font-medium text-gray-700">Source version / profile<input value={reference} maxLength={200} disabled={!!busy} onChange={e => { setReference(e.target.value); reset() }} placeholder="For example: approved workstation baseline, revision 3, standard profile" className="mt-2 w-full rounded-full border border-gray-300 px-4 py-2 font-normal" /></label>
         </>}
-        <details className="mt-4 text-sm"><summary className="cursor-pointer text-gray-700">Review {policies.length} loaded policies and remove alternative profiles</summary><ul className="mt-3 max-h-64 divide-y divide-gray-100 overflow-auto rounded-2xl bg-gray-50">{policies.map((p, i) => <li key={`${p.name}:${i}`} className="flex items-center justify-between gap-3 p-3"><span>{p.name}<span className="ml-2 text-xs text-gray-500">{p.settings.length} root settings</span></span><button disabled={!!busy} className="text-blue-700 hover:underline disabled:opacity-50" aria-label={`Remove ${p.name}`} onClick={() => { setLoadedKitLevel(null); setPolicies(policies.filter((_, index) => index !== i)); reset() }}>Remove</button></li>)}</ul></details>
+        {(!isCis || (!fromKit && !kitImport)) && reviewLoadedPolicies}
       </>}
     </section>}
     {(!isCis || stage !== "running") && <section {...(isCis && stage === "results" ? { "aria-label": "Assessment results" } : { "aria-labelledby": "compare-title" })} className="mt-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">

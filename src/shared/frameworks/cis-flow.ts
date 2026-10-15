@@ -9,25 +9,25 @@ export interface CisFlowStep {
   state: CisStepState
 }
 
-export const CIS_FLOW_LABELS = ["Import kit", "Choose level and compare", "Review results"] as const
+export const CIS_FLOW_LABELS = ["Load benchmark", "Compare with tenant", "Review results"] as const
 
-/** Stepper state for the CIS page, derived from whether a kit was converted, whether an assessment exists, and whether a run is active. While a run is active step 2 is current, even when an older assessment is still loaded for a re-run. */
-export function cisFlowSteps(hasKitConversion: boolean, hasAssessment: boolean, isRunning = false): CisFlowStep[] {
+/** Stepper state for the CIS page, derived from whether a benchmark pack is loaded, whether an assessment exists, and whether a run is active. While a run is active step 2 is current, even when an older assessment is still loaded for a re-run. */
+export function cisFlowSteps(hasPack: boolean, hasAssessment: boolean, isRunning = false): CisFlowStep[] {
   if (isRunning) {
     return [
-      { step: 1, label: CIS_FLOW_LABELS[0], state: hasKitConversion ? "complete" : "upcoming" },
+      { step: 1, label: CIS_FLOW_LABELS[0], state: hasPack ? "complete" : "upcoming" },
       { step: 2, label: CIS_FLOW_LABELS[1], state: "current" },
       { step: 3, label: CIS_FLOW_LABELS[2], state: "upcoming" },
     ]
   }
   if (hasAssessment) {
     return [
-      { step: 1, label: CIS_FLOW_LABELS[0], state: hasKitConversion ? "complete" : "upcoming" },
+      { step: 1, label: CIS_FLOW_LABELS[0], state: hasPack ? "complete" : "upcoming" },
       { step: 2, label: CIS_FLOW_LABELS[1], state: "complete" },
       { step: 3, label: CIS_FLOW_LABELS[2], state: "current" },
     ]
   }
-  if (hasKitConversion) {
+  if (hasPack) {
     return [
       { step: 1, label: CIS_FLOW_LABELS[0], state: "complete" },
       { step: 2, label: CIS_FLOW_LABELS[1], state: "current" },

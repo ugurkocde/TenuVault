@@ -264,7 +264,7 @@ describe("FrameworkNavigation", () => {
 })
 
 describe("CIS Benchmarks route", () => {
-  it("still renders the import panel as a standalone page", async () => {
+  it("renders Load benchmark as step 1 with the Build Kit import as a secondary internal disclosure", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     const container = render(
       createElement(
@@ -275,17 +275,22 @@ describe("CIS Benchmarks route", () => {
     )
     await flush()
     expect(container.textContent).toContain("CIS Benchmarks")
-    expect(container.textContent).toContain("1. Import a CIS Build Kit")
+    expect(container.querySelector("#cis-delivered-title")?.textContent).toBe("1. Load benchmark")
+    expect(container.textContent).not.toContain("Import a CIS Build Kit")
     expect(container.textContent).not.toContain("Choose your policy pack")
     expect(container.textContent).not.toContain("Import policy JSON")
-    expect(container.textContent).toContain("Select Build Kit zip")
-    expect(container.textContent).toContain("Select recommendation list JSON")
+    const kit = [...container.querySelectorAll("details")].find((item) => item.querySelector("summary")?.textContent === "Build Kit import (internal use)")
+    expect(kit).toBeDefined()
+    expect(kit?.open).toBe(false)
+    expect(kit?.textContent).toContain("Select Build Kit zip")
+    expect(kit?.textContent).toContain("Select recommendation list JSON")
     const stepper = container.querySelector('nav[aria-label="CIS Benchmarks progress"] ol')
     expect(stepper).not.toBeNull()
-    expect(stepper?.textContent).toContain("1 Import kit")
-    expect(stepper?.textContent).toContain("2 Choose level and compare")
-    expect(stepper?.textContent).toContain("3 Review results")
-    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("1 Import kit")
+    // The number shows once: in the marker. The label carries it only for screen readers.
+    const visible = (item: Element) => [...item.querySelectorAll(":scope > span:not([aria-hidden])")].map((span) => [...span.childNodes].filter((node) => !(node instanceof Element && node.classList.contains("sr-only"))).map((node) => node.textContent).join("")).join("")
+    expect([...stepper!.querySelectorAll("li")].map(visible)).toEqual(["Load benchmark", "Compare with tenant", "Review results"])
+    expect([...stepper!.querySelectorAll("li")].map((item) => item.textContent)).toEqual(["1Step 1: Load benchmark", "2Step 2: Compare with tenant", "3Step 3: Review results"])
+    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Load benchmark")
     const heading = [...container.querySelectorAll("h1")].find((item) => item.textContent === "CIS Benchmarks")
     expect(heading?.className).toContain("text-4xl")
     expect(heading?.className).toContain("font-light")
