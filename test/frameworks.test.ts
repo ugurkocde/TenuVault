@@ -81,6 +81,11 @@ describe("grouped payload comparison", () => {
     expect(status(satisfied, live([child("one", "true")], "44444444-4444-4444-4444-444444444444"))).toBe("Different")
     expect(status(satisfied, live([child("one", "true"), text("two", "fake")], "44444444-4444-4444-4444-444444444444"))).toBe("Present")
   })
+  it("ignores extra tenant collection entries after the recommended ones and compares entries by position", () => {
+    const entries = (...groups: object[][]) => ({ ...parsePolicies({ ...payload("Tenant payload", []), settings: [{ settingInstance: { "@odata.type": group, settingDefinitionId: "fakebook_payload", groupSettingCollectionValue: groups.map(children => ({ children })) } }] })[0]!, id: liveId })
+    expect(status(entries([child("one", "true"), text("two", "fake")], [text("other", "second entry")]))).toBe("Present")
+    expect(status(entries([text("other", "first entry")], [child("one", "true"), text("two", "fake")]))).toBe("Different")
+  })
   it("keeps exact matching for roots without child setting instances", () => {
     const flat = (value: string, extra?: object) => ({ name: "Flat", platforms: "windows10", technologies: "mdm", description: "",
       settings: [{ settingInstance: { "@odata.type": type, settingDefinitionId: "fakebook_flat", choiceSettingValue: { value, children: [], ...extra } } }] })

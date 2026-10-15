@@ -100,11 +100,17 @@ export function hasChildInstances(value: Json): boolean {
  * Leaf values of one comparable setting instance, keyed by the settingDefinitionId path from
  * the root. Child instances are taken out of their parent's own value and keyed below it, so
  * a root holding extra children still yields every other leaf unchanged. A repeated child
- * definition in one children list is keyed by its occurrence.
+ * definition in one children list is keyed by its occurrence. Entries of a group collection
+ * (array entries that hold children) are keyed by position below their parent too, so extra
+ * tenant entries after the recommended ones are ignored like extra children.
  */
 function leafValues(instance: RecordJson, path: string, out: Map<string, string>): Map<string, string> {
   const own = `${path}/${String(instance.settingDefinitionId)}`
   const strip = (value: Json, at: string): Json => {
+    if (Array.isArray(value) && value.length && value.every(entry => record(entry) && Array.isArray(entry.children))) {
+      value.forEach((entry, index) => out.set(`${own}${at}[${index}]`, JSON.stringify(strip(entry, `${at}[${index}]`))))
+      return null
+    }
     if (Array.isArray(value)) return value.map((entry, index) => strip(entry, `${at}[${index}]`))
     if (!record(value)) return value
     return Object.fromEntries(Object.entries(value).map(([key, v]) => {

@@ -396,6 +396,24 @@ describe("CIS remediation deploy", () => {
     expect(children.map((entry) => [entry.settingDefinitionId, (entry.choiceSettingValue as Item).value])).toEqual([["fakebook_payload_one", "fake-on"], ["fakebook_payload_two", "fake-on"], ["fakebook_payload_extra", "fake-extra"]])
   })
 
+  it("keeps tenant group collection entries beyond the pack entries, in order, and merges the matched entry", async () => {
+    const context = setup()
+    const group = "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance"
+    const child = (id: string, value: string): Item => ({ "@odata.type": choice, settingDefinitionId: id, choiceSettingValue: { value, children: [] } })
+    const root = (entries: Item[][]): Item => ({ "@odata.type": group, settingDefinitionId: "fakebook_payload", groupSettingCollectionValue: entries.map((children) => ({ children })) })
+    const pack = [{ name: "Fakebook Payload", platforms: "windows10", technologies: "mdm", description: "synthetic", settings: [{ settingInstance: root([[child("fakebook_payload_one", "fake-on")]]) }] }]
+    const existing = context.tenant.addPolicy({ name: "Tenant Payload", settings: [{ settingInstance: root([[child("fakebook_payload_one", "fake-off"), child("fakebook_payload_extra", "fake-extra")], [child("fakebook_payload_other", "fake-second")], [child("fakebook_payload_other", "fake-third")]]) }] })
+    const deployment = await planCisRemediation(context.deps, TENANT_A, { title: "Deploy", reference: "synthetic 1.0", policies: pack, findings: [finding({ key: "0:0", policyIndex: 0, settingIndex: 0, status: "Different", policyName: "Fakebook Payload", settingId: "fakebook_payload", observed: [{ policyId: existing.id as string, policyName: "Tenant Payload", value: null }] })], selectedFindingKeys: ["0:0"] }, "Admin")
+    const { preview } = await approveFlow(context, deployment.id)
+    await applyCisRemediation(context.deps, TENANT_A, deployment.id, { contentHash: preview.changeSet.contentHash, confirmed: true }, "Admin")
+    const entries = (((context.tenant.policies.get(existing.id as string)!.settings as Item[])[0]!.settingInstance as Item).groupSettingCollectionValue as Item[])
+    expect(entries.map((entry) => (entry.children as Item[]).map((item) => `${String(item.settingDefinitionId)}=${String((item.choiceSettingValue as Item).value)}`))).toEqual([
+      ["fakebook_payload_one=fake-on", "fakebook_payload_extra=fake-extra"],
+      ["fakebook_payload_other=fake-second"],
+      ["fakebook_payload_other=fake-third"],
+    ])
+  })
+
   it("counts operations against the change-set limit", async () => {
     const context = setup()
     const pack = Array.from({ length: 26 }, (_, index) => policyJson(`Fakebook ${index}`, `fakebook_setting_${index}`, "fake-on"))
