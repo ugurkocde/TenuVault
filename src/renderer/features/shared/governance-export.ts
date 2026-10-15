@@ -223,6 +223,9 @@ function cisReadinessRow(summary: CisReadinessSummary, level: CisReadinessSummar
     coverage: level.coverage,
     notAssessed: level.notAssessed,
     ...(level.recommendations?.length ? {
+      recommendationPassRate: level.recommendationPassRate,
+      adjustedRecommendationPassRate: level.adjustedRecommendationPassRate,
+      recommendationsExcepted: level.recommendationsExcepted,
       recommendationTotals: recommendationTotals(level.recommendations),
       recommendations: level.recommendations.map(({ id, title, level, result, settings }) => ({ id, title, level, result, settings })),
     } : {}),
@@ -247,27 +250,30 @@ function cisManualRow(summary: CisReadinessSummary, level: CisReadinessSummary["
 const CIS_READINESS_HEADERS = ["Benchmark", "Version", "Level", "Assessed settings", "Present", "Different", "Missing", "Review", "Pass rate", "Assessed automated", "Enumerated", "Denominator", "Coverage", "Not assessed", "Note", "State", "Identifier", "Title", "Excepted", "Adjusted pass rate", "Exceptions"]
 
 export function cisReadinessCsv(summary: CisReadinessSummary): string {
+  // The catalog display name of a delivered pack names the benchmark; Build Kit packs keep the id.
+  const benchmark = summary.benchmarkName ?? summary.benchmark
   const rows: unknown[][] = summary.levels.map((level) => {
     const row = cisReadinessRow(summary, level)
     const exceptionsText = row.exceptions.map(item => `${item.policyName} | ${item.settingId} | ${item.owner} | ${item.expiresOn} | ${item.reason}`).join("; ")
-    return [row.benchmark, row.version, row.level, row.assessedSettings, row.present, row.different, row.missing, row.review, row.passRate ?? "", row.assessedAutomated ?? "", row.enumerated, row.denominator ?? "", row.coverage ?? "", row.notAssessed.join("; "), row.manualNote, row.state, "", "", row.excepted, row.adjustedPassRate ?? "", exceptionsText]
+    return [benchmark, row.version, row.level, row.assessedSettings, row.present, row.different, row.missing, row.review, row.passRate ?? "", row.assessedAutomated ?? "", row.enumerated, row.denominator ?? "", row.coverage ?? "", row.notAssessed.join("; "), row.manualNote, row.state, "", "", row.excepted, row.adjustedPassRate ?? "", exceptionsText]
   })
   for (const level of summary.levels) {
     for (const item of level.manual ?? []) {
       const row = cisManualRow(summary, level, item)
-      rows.push([row.benchmark, row.version, row.level, "", "", "", "", "", "", "", "", "", "", "", row.fallback, row.state, row.identifier, row.title, "", "", ""])
+      rows.push([benchmark, row.version, row.level, "", "", "", "", "", "", "", "", "", "", "", row.fallback, row.state, row.identifier, row.title, "", "", ""])
     }
   }
   // The CIS notice for recommendations this tool does not include, on every export.
-  rows.push([summary.benchmark, summary.version, "", "", "", "", "", "", "", "", "", "", "", "", `${summary.manualFallback} ${summary.manualFallbackUrl}`, "Notice", "", "", "", "", ""])
+  rows.push([benchmark, summary.version, "", "", "", "", "", "", "", "", "", "", "", "", `${summary.manualFallback} ${summary.manualFallbackUrl}`, "Notice", "", "", "", "", ""])
   // Packs that list their recommendations add one row per recommendation and a Mapped settings column.
   const recommendations = summary.levels.flatMap(level => level.recommendations ?? [])
   if (!recommendations.length) return toCsv([CIS_READINESS_HEADERS, ...rows])
-  const recommendationRows = recommendations.map(item => [summary.benchmark, summary.version, item.level, "", "", "", "", "", "", "", "", "", "", "", item.result, "Recommendation", item.id, item.title, "", "", "", item.settings.map(setting => `${setting.id} ${setting.status}`).join("; ")])
-  return toCsv([[...CIS_READINESS_HEADERS, "Mapped settings"], ...rows.map(row => [...row, ""]), ...recommendationRows])
+  const recommendationRows = recommendations.map(item => [benchmark, summary.version, item.level, "", "", "", "", "", "", "", "", "", "", "", item.result, "Recommendation", item.id, item.title, "", "", "", item.settings.map(setting => `${setting.id} ${setting.status}`).join("; "), "", ""])
+  const levelRates = summary.levels.map(level => [level.recommendationPassRate ?? "", level.adjustedRecommendationPassRate ?? ""])
+  return toCsv([[...CIS_READINESS_HEADERS, "Mapped settings", "Recommendation pass rate", "Adjusted recommendation pass rate"], ...rows.map((row, index) => [...row, "", ...(levelRates[index] ?? ["", ""])]), ...recommendationRows])
 }
 
 export function cisReadinessJson(summary: CisReadinessSummary, tenantName: string | null, exportedAt: string): string {
   const manualItems = summary.levels.flatMap(level => (level.manual ?? []).map(item => cisManualRow(summary, level, item)))
-  return toJson({ exportedAt, tenant: tenantName, benchmark: summary.benchmark, version: summary.version, manualNote: summary.manualNote, manualFallback: summary.manualFallback, manualFallbackUrl: summary.manualFallbackUrl, levels: summary.levels.map((level) => cisReadinessRow(summary, level)), manualItems })
+  return toJson({ exportedAt, tenant: tenantName, benchmark: summary.benchmark, ...(summary.benchmarkName ? { benchmarkName: summary.benchmarkName } : {}), version: summary.version, manualNote: summary.manualNote, manualFallback: summary.manualFallback, manualFallbackUrl: summary.manualFallbackUrl, levels: summary.levels.map((level) => cisReadinessRow(summary, level)), manualItems })
 }

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest"
 import { attachRecommendations, definitionIds, packRecommendations, recommendationLabel, recommendationResults, recommendationsForFinding, recommendationTotals } from "../src/shared/frameworks/cis-recommendations"
-import { cisReadiness } from "../src/shared/frameworks/cis-readiness"
+import { cisReadiness, headlineRate } from "../src/shared/frameworks/cis-readiness"
+import { cisReadinessTrend, cisDriftSignals, sparklineSegments, trendRate } from "../src/shared/frameworks/cis-trend"
+import { cisPortfolioRows, portfolioRate } from "../src/shared/frameworks/cis-portfolio"
+import { benchmarkTitle, packBenchmarkName, referenceDisplayName } from "../src/shared/frameworks/cis-display"
+import type { CisException } from "../src/shared/frameworks/cis-exceptions"
 import { comparePolicies, definitionStatus, parsePolicies, remediationPayload, type Assessment, type LandscapePolicy } from "../src/shared/frameworks/policies"
 import { cisReadinessCsv, cisReadinessJson } from "../src/renderer/features/shared/governance-export"
 import { workspaceExportCSV, workspaceExportJSON } from "../src/shared/compliance/export"
@@ -86,7 +90,8 @@ describe("pack recommendations", () => {
     const summary = cisReadiness(run, policies)
     expect(recommendationTotals(summary.levels[0]!.recommendations)).toEqual({ passed: 2, failed: 2, review: 0, notAssessed: 1 })
     const csv = cisReadinessCsv(summary)
-    expect(csv.split("\r\n")[0]).toMatch(/Exceptions,Mapped settings$/)
+    expect(csv.split("\r\n")[0]).toMatch(/Exceptions,Mapped settings,Recommendation pass rate,Adjusted recommendation pass rate$/)
+    expect(csv.split("\r\n")[1]).toMatch(/,,0\.5,0\.5$/)
     expect(csv).toContain("synthetic-os,9.9.9,1,,,,,,,,,,,,Fail,Recommendation,1.1.2,Synthetic leaf two,,,,synthetic_payload_two Different")
     const json = JSON.parse(cisReadinessJson(summary, null, "2026-10-15T10:00:00Z")) as { levels: Array<{ recommendations?: Array<{ id: string }>; recommendationTotals?: unknown }> }
     expect(json.levels[0]!.recommendationTotals).toEqual({ passed: 2, failed: 2, review: 0, notAssessed: 1 })
@@ -112,5 +117,71 @@ describe("pack recommendations", () => {
     expect(plainCsv).toContain("Pack policy,Setting,Status")
     const plainFindings = (JSON.parse(workspaceExportJSON({ assessment: run, policies: pack }, context)) as { result: { assessment: { findings: object[] } } }).result.assessment.findings
     expect(plainFindings[0]).not.toHaveProperty("recommendations")
+  })
+
+  it("makes the recommendation pass rate the headline when the pack lists recommendations", () => {
+    const run = assess(tenant)
+    const level = cisReadiness(run, policies).levels[0]!
+    // 2 passed, 2 failed, 1 not assessed: not assessed is left out of the rate.
+    expect(level.recommendationPassRate).toBe(0.5)
+    expect(level.adjustedRecommendationPassRate).toBe(0.5)
+    expect(level.passRate).toBeCloseTo(1 / 3)
+    expect(headlineRate(level)).toEqual({ basis: "recommendations", rate: 0.5, adjusted: 0.5 })
+    const plain = cisReadiness(run, pack).levels[0]!
+    expect(plain).toMatchObject({ recommendationPassRate: null, adjustedRecommendationPassRate: null, recommendationsExcepted: 0 })
+    expect(headlineRate(plain)).toEqual({ basis: "settings", rate: plain.passRate, adjusted: plain.adjustedPassRate })
+  })
+
+  it("counts review as not passed and a recommendation as passed by exception when all its open findings are excepted", () => {
+    const run = assess(tenant)
+    const reviewed = { ...run, findings: run.findings.map(finding => finding.key === "1:0" ? { ...finding, status: "Review" as const } : finding) }
+    const level = cisReadiness(reviewed, policies).levels[0]!
+    expect(level.recommendations.filter(item => item.result === "Review").map(item => item.id)).toEqual(["1.1.1", "1.1.2", "1.1.10"])
+    expect(level.recommendationPassRate).toBe(0)
+    const exception = (policyName: string, settingId: string): CisException => ({ id: settingId, benchmark: "synthetic-os", version: "9.9.9", level: 1, policyName, settingId, owner: "Owner", reason: "Synthetic", expiresOn: "2099-01-01", createdAt: "2026-10-01T00:00:00Z" })
+    const excepted = cisReadiness(run, policies, undefined, undefined, [exception("Synthetic flat", "synthetic_beta")], "2026-10-15").levels[0]!
+    // 1.2.1 maps only the excepted beta finding; 1.1.2 still has an open payload finding.
+    expect(excepted.recommendationsExcepted).toBe(1)
+    expect(excepted.adjustedRecommendationPassRate).toBe(0.75)
+    expect(excepted.recommendationPassRate).toBe(0.5)
+    expect(excepted.adjustedPassRate).toBeCloseTo(2 / 3)
+  })
+
+  it("follows the recommendation rate in trend, drift and portfolio, and keeps the settings fields", () => {
+    const before = assess([tenant[2]!])
+    const after = { ...assess(tenant), runId: "run-2", assessedAt: "2026-10-16T10:00:00Z" }
+    const history = [{ assessment: after, policies }, { assessment: before, policies }]
+    const trend = cisReadinessTrend(history)
+    expect(trend.map(point => point.levels[0]!.basis)).toEqual(["recommendations", "recommendations"])
+    expect(trend.map(point => trendRate(point.levels[0]!))).toEqual([0, 0.5])
+    expect(trend[1]!.levels[0]!.changeFromPrevious).toBe(0.5)
+    expect(trend[1]!.levels[0]!.passRate).toBeCloseTo(1 / 3)
+    expect(sparklineSegments(trend, 1)).toEqual([[0, 1]])
+    const mixed = cisReadinessTrend([{ assessment: after, policies }, { assessment: before, policies: pack }])
+    expect(mixed[1]!.levels[0]!.changeFromPrevious).toBeNull()
+    expect(sparklineSegments(mixed, 1)).toEqual([[0], [1]])
+    const declined = cisReadinessTrend([{ assessment: { ...before, runId: "run-3", assessedAt: "2026-10-17T10:00:00Z" }, policies }, { assessment: after, policies }])
+    expect(cisDriftSignals(declined)).toMatchObject([{ level: 1, previousRate: 0.5, currentRate: 0, kind: "decline" }])
+    const rows = cisPortfolioRows([{ tenantId: "11111111-1111-1111-1111-111111111111", tenantName: "Synthetic", workspace: { history: [{ assessment: after, policies }] } }])
+    expect(rows[0]!.levels[0]).toMatchObject({ recommendationPassRate: 0.5, passRate: expect.closeTo(1 / 3) })
+    expect(portfolioRate(rows[0]!.levels[0])).toBe(0.5)
+    const plainRows = cisPortfolioRows([{ tenantId: "11111111-1111-1111-1111-111111111111", tenantName: "Synthetic", workspace: { history: [{ assessment: after, policies: pack }] } }])
+    expect(plainRows[0]!.levels[0]).not.toHaveProperty("recommendationPassRate")
+  })
+
+  it("names the benchmark by the catalog display name stamped on the pack, falling back to the id", () => {
+    const named = policies.map(policy => ({ ...policy, provenance: { ...policy.provenance, benchmarkName: "Synthetic Display Benchmark" } }))
+    expect(packBenchmarkName(named)).toBe("Synthetic Display Benchmark")
+    expect(packBenchmarkName(policies)).toBeNull()
+    expect(referenceDisplayName("synthetic-os 9.9.9 Level 1", "Synthetic Display Benchmark")).toBe("Synthetic Display Benchmark 9.9.9 Level 1")
+    expect(referenceDisplayName("synthetic-os 9.9.9 Level 1", null)).toBe("synthetic-os 9.9.9 Level 1")
+    expect(benchmarkTitle("synthetic-os", null)).toBe("Synthetic Os")
+    const summary = cisReadiness(assess(tenant), named)
+    expect(summary.benchmarkName).toBe("Synthetic Display Benchmark")
+    expect(cisReadiness(assess(tenant), policies).benchmarkName).toBeNull()
+    expect(cisReadinessCsv(summary).split("\r\n")[1]).toMatch(/^Synthetic Display Benchmark,9\.9\.9,1,/)
+    expect(JSON.parse(cisReadinessJson(summary, null, "2026-10-15T10:00:00Z"))).toMatchObject({ benchmark: "synthetic-os", benchmarkName: "Synthetic Display Benchmark" })
+    expect(JSON.parse(cisReadinessJson(cisReadiness(assess(tenant), pack), null, "2026-10-15T10:00:00Z"))).not.toHaveProperty("benchmarkName")
+    expect(cisReadinessTrend([{ assessment: assess(tenant), policies: named }])[0]!.benchmarkName).toBe("Synthetic Display Benchmark")
   })
 })

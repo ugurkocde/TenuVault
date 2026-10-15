@@ -26,6 +26,9 @@ export interface CisPortfolioLevel {
   level: KitLevel
   passRate: number | null
   adjustedPassRate: number | null
+  /** Present when the pack lists recommendations; ranking then follows these instead of the settings rates. */
+  recommendationPassRate?: number | null
+  adjustedRecommendationPassRate?: number | null
   excepted: number
   assessedSettings: number
 }
@@ -34,6 +37,7 @@ export interface CisPortfolioRow {
   tenantId: string
   tenantName: string | null
   benchmark: string | null
+  benchmarkName?: string | null
   version: string | null
   assessedAt: string | null
   levels: CisPortfolioLevel[]
@@ -42,7 +46,13 @@ export interface CisPortfolioRow {
 
 function effectiveRate(level: CisPortfolioLevel | undefined): number | null {
   if (!level) return null
+  if (level.recommendationPassRate !== undefined && level.recommendationPassRate !== null) return level.adjustedRecommendationPassRate ?? level.recommendationPassRate
   return level.adjustedPassRate ?? level.passRate
+}
+
+/** The rate a portfolio shows and ranks for one Level, adjusted when exceptions apply. */
+export function portfolioRate(level: CisPortfolioLevel | undefined): number | null {
+  return effectiveRate(level)
 }
 
 function rateFor(row: CisPortfolioRow, level: KitLevel): number | null {
@@ -99,9 +109,11 @@ export function cisPortfolioRows(entries: CisPortfolioEntry[]): CisPortfolioRow[
       tenantId: entry.tenantId,
       tenantName,
       benchmark: summary.benchmark,
+      benchmarkName: summary.benchmarkName,
       version: summary.version,
       assessedAt: newest.assessment.assessedAt,
-      levels: summary.levels.map(level => ({ level: level.level, passRate: level.passRate, adjustedPassRate: level.adjustedPassRate, excepted: level.excepted, assessedSettings: level.assessedSettings })),
+      levels: summary.levels.map(level => ({ level: level.level, passRate: level.passRate, adjustedPassRate: level.adjustedPassRate, excepted: level.excepted, assessedSettings: level.assessedSettings,
+        ...(level.recommendationPassRate !== null ? { recommendationPassRate: level.recommendationPassRate, adjustedRecommendationPassRate: level.adjustedRecommendationPassRate } : {}) })),
     }
   })
   return [...rows].sort((a, b) => {

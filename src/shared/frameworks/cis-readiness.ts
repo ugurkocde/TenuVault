@@ -33,6 +33,18 @@ export interface CisLevelReadiness {
   manual: ManualItemView[]
   /** Per recommendation results when the pack lists its recommendations; empty otherwise. */
   recommendations: RecommendationResult[]
+  /** Passed over assessed recommendations (review counts as not passed, not assessed is excluded); null without recommendations. */
+  recommendationPassRate: number | null
+  /** Recommendations that are not passed but whose every non-Present finding has an active exception. */
+  recommendationsExcepted: number
+  adjustedRecommendationPassRate: number | null
+}
+
+/** The headline rate of a Level: the recommendation pass rate when the pack lists recommendations, otherwise the settings pass rate. */
+export function headlineRate(level: Pick<CisLevelReadiness, "passRate" | "adjustedPassRate" | "recommendationPassRate" | "adjustedRecommendationPassRate">): { basis: "recommendations" | "settings"; rate: number | null; adjusted: number | null } {
+  return level.recommendationPassRate !== null && level.recommendationPassRate !== undefined
+    ? { basis: "recommendations", rate: level.recommendationPassRate, adjusted: level.adjustedRecommendationPassRate ?? null }
+    : { basis: "settings", rate: level.passRate, adjusted: level.adjustedPassRate }
 }
 
 /** The label printed wherever a coverage ratio appears, naming where its denominator came from. */
@@ -44,12 +56,27 @@ export function coverageSourceLabel(source: DenominatorSource): string {
 
 export interface CisReadinessSummary {
   benchmark: string
+  /** Catalog display name of a delivered pack; null when only the id is known. */
+  benchmarkName: string | null
   version: string
   levels: CisLevelReadiness[]
   manualNote: string
   manualFallback: string
   manualFallbackUrl: string
   recommendationList?: RecommendationList
+}
+
+/** Recommendation results of one Level with their pass rate and the rate adjusted by exceptions. */
+function recommendationRates(results: RecommendationResult[], excepted: (result: RecommendationResult) => boolean): Pick<CisLevelReadiness, "recommendations" | "recommendationPassRate" | "recommendationsExcepted" | "adjustedRecommendationPassRate"> {
+  const assessed = results.filter(result => result.result !== "Not assessed")
+  const passed = assessed.filter(result => result.result === "Pass").length
+  const exceptedCount = assessed.filter(result => result.result !== "Pass" && excepted(result)).length
+  return {
+    recommendations: results,
+    recommendationPassRate: assessed.length ? passed / assessed.length : null,
+    recommendationsExcepted: exceptedCount,
+    adjustedRecommendationPassRate: assessed.length ? (passed + exceptedCount) / assessed.length : null,
+  }
 }
 
 function levelOf(policy: BaselinePolicy): KitLevel {
@@ -90,6 +117,11 @@ export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[],
   const coverageByLevel = new Map(coverage.levels.map(level => [level.level, level]))
   const today = todayISO ?? new Date().toISOString().slice(0, 10)
   const recommendations = recommendationResults(assessment, policies)
+  // Active exceptions by identity, to judge recommendations whose findings sit at any Level.
+  const activeExceptionKeys = new Set((exceptions ?? []).filter(exception => isActive(exception, today) && exception.benchmark === benchmark && exception.version === version)
+    .map(exception => exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId)))
+  const findingByKey = new Map(assessment.findings.map(finding => [finding.key, finding]))
+  const findingExcepted = (finding: Assessment["findings"][number]) => activeExceptionKeys.has(exceptionKey(benchmark, version, policies[finding.policyIndex] ? levelOf(policies[finding.policyIndex]!) : 1, finding.policyName, finding.settingId))
   const levels: CisLevelReadiness[] = [...allLevels].sort((a, b) => a - b).map(level => {
     const indexes = new Set(policies.map((policy, index) => levelOf(policy) === level ? index : -1).filter(index => index >= 0))
     const findings = assessment.findings.filter(finding => indexes.has(finding.policyIndex))
@@ -122,8 +154,12 @@ export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[],
       coverageSource: cov?.denominatorSource ?? "none",
       notAssessed,
       manual,
-      recommendations: recommendations.filter(result => result.level === level),
+      ...recommendationRates(recommendations.filter(result => result.level === level), result => {
+        const open = result.findingKeys.map(key => findingByKey.get(key)).filter(finding => finding && finding.status !== "Present")
+        return open.length > 0 && open.every(finding => findingExcepted(finding!))
+      }),
     }
   })
-  return { benchmark, version, levels, manualNote: MANUAL_NOT_ASSESSED_NOTE, manualFallback: MANUAL_RECOMMENDATIONS_FALLBACK, manualFallbackUrl: MANUAL_RECOMMENDATIONS_URL, ...(effectiveList ? { recommendationList: effectiveList } : {}) }
+  const benchmarkName = policies.map(policy => textOf(policy, "benchmarkName")).find(Boolean) ?? null
+  return { benchmark, benchmarkName, version, levels, manualNote: MANUAL_NOT_ASSESSED_NOTE, manualFallback: MANUAL_RECOMMENDATIONS_FALLBACK, manualFallbackUrl: MANUAL_RECOMMENDATIONS_URL, ...(effectiveList ? { recommendationList: effectiveList } : {}) }
 }

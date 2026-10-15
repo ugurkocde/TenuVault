@@ -129,6 +129,13 @@ describe("CIS content delivery service", () => {
     expect(workspace.policies[0]).not.toHaveProperty("recommendations")
   })
 
+  it("stamps the catalog display name on a pack loaded after the catalog", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => Response.json(url.endsWith("/catalog") ? validCatalog : validPack)))
+    await handleFramework({ action: "cis-catalog", tenantId, frameworkId: "cis-benchmarks" })
+    await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })
+    expect(loadWorkspace(tenantId, "cis-benchmarks").policies[0]?.provenance).toEqual({ benchmarkName: "Fakebook OS" })
+  })
+
   it("keeps pack recommendations on the pack policies, unmatched ones on the first policy", async () => {
     const recommendations = [
       { id: "7.1.1", title: "Synthetic leaf recommendation", level: 1, settings: ["minlength"] },

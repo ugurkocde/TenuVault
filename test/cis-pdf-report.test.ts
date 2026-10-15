@@ -94,7 +94,10 @@ describe("CIS readiness PDF report", () => {
   it("lists recommendation results per Level when the pack names its recommendations", () => {
     const { policies, assessment } = assessed()
     const identified = attachRecommendations(policies, [{ id: "7.1.2", title: "Synthetic beta recommendation", level: 1, settings: ["fakebook_setting_beta"] }])
+      .map(policy => ({ ...policy, provenance: { ...policy.provenance, benchmarkName: "Fakebook Display Name" } }))
     const text = pdfText(generateCisReadinessPDF(cisReadiness(assessment, identified), context))
+    expect(text).toContain("Fakebook Display Name | 9.9.9")
+    expect(text).toContain("Recommendation pass rate: 0%")
     expect(text).toContain("Recommendation results, Level 1")
     expect(text).toContain("7.1.2 Synthetic beta recommendation: Fail (fakebook_setting_beta Missing)")
     expect(text).toContain("Passed: 0")
