@@ -121,6 +121,7 @@ export default defineConfig({
 						{ label: 'Choose a plan on first launch', slug: 'getting-started/first-launch' },
 						{ label: 'Sign in to your tenant', slug: 'getting-started/connect-tenant' },
 						{ label: 'Choose where backups are stored', slug: 'getting-started/choose-storage' },
+						{ label: 'Create a storage account', slug: 'getting-started/create-storage-account' },
 						{ label: 'Run your first backup', slug: 'getting-started/first-backup' },
 					],
 				},

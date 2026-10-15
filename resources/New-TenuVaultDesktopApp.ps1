@@ -84,7 +84,7 @@ $resources = @(
         )
     },
     @{
-        # Azure Automation (scheduled backups) and resource discovery.
+        # Lists subscriptions and storage accounts in the backup storage picker.
         Name   = "Azure Service Management"
         AppId  = "797f4846-ba00-4fd7-ba43-dac1f8f63013"
         Scopes = @("user_impersonation")
@@ -149,8 +149,8 @@ Write-Host "  Tenant id:                $($context.TenantId)"
 Write-Host "  Application (client) id:  $($app.AppId)"
 Write-Host ""
 Write-Host "The admins who use TenuVault also need an Intune role (for example Intune Administrator)."
-Write-Host "For backups, schedules and the audit log they need 'Storage Blob Data Contributor' on the"
-Write-Host "backup storage account and 'Automation Contributor' on the Automation account."
+Write-Host "For backups, schedules and the audit log in an Azure storage account they also need 'Storage"
+Write-Host "Blob Data Contributor' and read access on that account (see New-TenuVaultStorage.ps1)."
 if (-not $AllowedGroupId) {
     Write-Host ""
     Write-Host "Recommended: any user in the tenant can sign in to this app registration. To limit sign-in to" -ForegroundColor Yellow
