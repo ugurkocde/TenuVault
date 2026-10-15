@@ -5,6 +5,7 @@ import { CLASSIFICATION_LABELS, STATUS_LABELS, type Finding as HygieneFinding } 
 import type { Finding as HealthFinding } from "../health-review/api"
 import type { AdoptionState } from "../standards/api"
 import type { CisReadinessSummary } from "../../../shared/frameworks/cis-readiness"
+import { recommendationTotals } from "../../../shared/frameworks/cis-recommendations"
 
 /**
  * CSV and JSON exports for the governance tabs (scores, hygiene, health review and
@@ -221,7 +222,10 @@ function cisReadinessRow(summary: CisReadinessSummary, level: CisReadinessSummar
     denominator: level.denominator,
     coverage: level.coverage,
     notAssessed: level.notAssessed,
-    ...(level.recommendations?.length ? { recommendations: level.recommendations.map(({ id, title, result }) => ({ id, title, result })) } : {}),
+    ...(level.recommendations?.length ? {
+      recommendationTotals: recommendationTotals(level.recommendations),
+      recommendations: level.recommendations.map(({ id, title, level, result, settings }) => ({ id, title, level, result, settings })),
+    } : {}),
     manualNote: summary.manualNote,
     manual: (level.manual ?? []).map(item => ({
       identifier: item.identifier, level: item.level, title: item.title ?? null, state: "Manual" as const,
@@ -254,12 +258,13 @@ export function cisReadinessCsv(summary: CisReadinessSummary): string {
       rows.push([row.benchmark, row.version, row.level, "", "", "", "", "", "", "", "", "", "", "", row.fallback, row.state, row.identifier, row.title, "", "", ""])
     }
   }
-  for (const level of summary.levels) {
-    for (const item of level.recommendations ?? []) rows.push([summary.benchmark, summary.version, level.level, "", "", "", "", "", "", "", "", "", "", "", item.result, "Recommendation", item.id, item.title, "", "", ""])
-  }
   // The CIS notice for recommendations this tool does not include, on every export.
   rows.push([summary.benchmark, summary.version, "", "", "", "", "", "", "", "", "", "", "", "", `${summary.manualFallback} ${summary.manualFallbackUrl}`, "Notice", "", "", "", "", ""])
-  return toCsv([CIS_READINESS_HEADERS, ...rows])
+  // Packs that list their recommendations add one row per recommendation and a Mapped settings column.
+  const recommendations = summary.levels.flatMap(level => level.recommendations ?? [])
+  if (!recommendations.length) return toCsv([CIS_READINESS_HEADERS, ...rows])
+  const recommendationRows = recommendations.map(item => [summary.benchmark, summary.version, item.level, "", "", "", "", "", "", "", "", "", "", "", item.result, "Recommendation", item.id, item.title, "", "", "", item.settings.map(setting => `${setting.id} ${setting.status}`).join("; ")])
+  return toCsv([[...CIS_READINESS_HEADERS, "Mapped settings"], ...rows.map(row => [...row, ""]), ...recommendationRows])
 }
 
 export function cisReadinessJson(summary: CisReadinessSummary, tenantName: string | null, exportedAt: string): string {

@@ -138,6 +138,27 @@ export function rootMatches(recommended: Json, observed: Json): boolean {
   return [...leafValues(want, "", new Map())].every(([path, value]) => haveLeaves.get(path) === value)
 }
 
+/**
+ * One setting definition inside a recommended root, judged across every observed tenant root of
+ * the same definition. For the root definition itself this is the root rule above. For a nested
+ * definition it is the same leaf rule: the leaf and everything below it must equal the
+ * recommendation in every tenant root that holds the leaf. Missing when no observed root holds
+ * it, null when the recommended root does not contain the definition.
+ */
+export function definitionStatus(recommended: Json, observed: Json[], definitionId: string): "Present" | "Missing" | "Different" | null {
+  const want = comparable(recommended)
+  if (!isInstance(want)) return null
+  if (want.settingDefinitionId === definitionId) return !observed.length ? "Missing" : observed.every(value => rootMatches(want, value)) ? "Present" : "Different"
+  const wanted = [...leafValues(want, "", new Map())]
+  const anchors = wanted.map(([path]) => path).filter(path => path.endsWith(`/${definitionId}`))
+  if (!anchors.length) return null
+  const subtree = wanted.filter(([path]) => anchors.some(anchor => path === anchor || [".", "/", "#", "["].some(next => path.startsWith(`${anchor}${next}`))))
+  const holders = observed.map(comparable).filter(isInstance).filter(have => have.settingDefinitionId === want.settingDefinitionId)
+    .map(have => leafValues(have, "", new Map())).filter(have => anchors.some(anchor => have.has(anchor)))
+  if (!holders.length) return "Missing"
+  return holders.every(have => subtree.every(([path, value]) => have.get(path) === value)) ? "Present" : "Different"
+}
+
 export interface LandscapePolicy extends BaselinePolicy { id: string; targeting?: AssignmentEvidence }
 export function comparePolicies(baselines: BaselinePolicy[], landscape: LandscapePolicy[]): Finding[] {
   const observations = new Map<string, Observation[]>()

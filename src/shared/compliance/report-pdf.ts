@@ -3,6 +3,7 @@ import { CAPABILITY_STATUS_LABELS, CHECK_RESULT_COLORS, CHECK_RESULT_LABELS, COL
 import { comparisonCounts, type NativeAssessment } from './native'
 import { EXPORT_LIMITATIONS, nativeReportHeader, redactSecrets, redactText, workspaceReportHeader, type ExportContext, type ReportHeader, type SavedAssessment } from './export'
 import { coverageSourceLabel, type CisLevelReadiness, type CisReadinessSummary } from '../frameworks/cis-readiness'
+import { recommendationTotals } from '../frameworks/cis-recommendations'
 import { displayCheckValue } from './check-results'
 import rights from './rights.json'
 
@@ -243,7 +244,9 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
     }
     if (level.recommendations?.length) {
       heading(`Recommendation results, Level ${level.level}`)
-      text(level.recommendations.map(item => `${item.id} ${item.title}: ${item.result}`).join('\n'))
+      const totals = recommendationTotals(level.recommendations)
+      text(`Passed: ${totals.passed}\nFailed: ${totals.failed}\nTo review: ${totals.review}\nNot assessed: ${totals.notAssessed}`)
+      text(level.recommendations.map(item => `${item.id} ${item.title}: ${item.result} (${item.settings.map(setting => `${setting.id} ${setting.status}`).join(', ')})`).join('\n'))
     }
     if (level.manual.length) {
       heading(`Manual recommendations, Level ${level.level}`)

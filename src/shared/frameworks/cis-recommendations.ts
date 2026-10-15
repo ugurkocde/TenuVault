@@ -1,11 +1,16 @@
-import type { Assessment, BaselinePolicy, Finding, Json } from "./policies"
+import { definitionStatus, type Assessment, type BaselinePolicy, type Finding, type Json } from "./policies"
 
 /**
  * Recommendation identity for benchmark packs. A delivered pack may list its
- * recommendations, each with the setting definitions that implement it; for a
- * grouped payload those are the leaf child definitions. The list travels on the
- * pack policies that hold one of its settings, so saved assessments keep it.
- * Packs without the list keep working exactly as before.
+ * recommendations, each as { id, title, level, settings }. `settings` is a list
+ * of settingDefinitionId strings: the root ID for a simple setting, and the leaf
+ * child ID for a grouped root such as a group setting collection, so many
+ * recommendations can share one root. A leaf ID locates its root by itself,
+ * because the pack root that contains it is found by its nested definitions.
+ * The list travels on the pack policies that hold one of its settings, so saved
+ * assessments keep it; recommendations that name no setting of the pack travel
+ * on the first policy and count as not assessed. Packs without the list keep
+ * working exactly as before.
  */
 
 export interface PackRecommendation { id: string; title: string; level: 1 | 2; settings: string[] }
@@ -53,13 +58,22 @@ export function definitionIds(instance: Json | undefined): string[] {
   return [...ids]
 }
 
-/** Each pack policy with the recommendations that name one of its settings, root or leaf. */
+/** Each pack policy with the recommendations that name one of its settings, root or leaf. Unmatched ones go on the first policy. */
 export function attachRecommendations(policies: BaselinePolicy[], recommendations: PackRecommendation[]): BaselinePolicy[] {
-  return policies.map(policy => {
-    const held = new Set(policy.settings.flatMap(setting => definitionIds(setting.settingInstance)))
-    const matched = recommendations.filter(recommendation => recommendation.settings.some(id => held.has(id)))
-    return matched.length ? { ...policy, recommendations: matched } : policy
+  const held = policies.map(policy => new Set(policy.settings.flatMap(setting => definitionIds(setting.settingInstance))))
+  const unmatched = recommendations.filter(recommendation => !held.some(ids => recommendation.settings.some(id => ids.has(id))))
+  return policies.map((policy, index) => {
+    const matched = recommendations.filter(recommendation => recommendation.settings.some(id => held[index]!.has(id)))
+    const carried = index === 0 ? [...matched, ...unmatched] : matched
+    return carried.length ? { ...policy, recommendations: carried } : policy
   })
+}
+
+/** Every recommendation carried by the pack policies, once each. */
+export function packRecommendations(policies: BaselinePolicy[]): PackRecommendation[] {
+  const byId = new Map<string, PackRecommendation>()
+  for (const policy of policies) for (const recommendation of policy.recommendations ?? []) if (!byId.has(recommendation.id)) byId.set(recommendation.id, recommendation)
+  return [...byId.values()]
 }
 
 /** The recommendations a finding implements: its root definition or one of its leaf children is mapped. */
@@ -75,8 +89,17 @@ export function recommendationLabel(recommendations: PackRecommendation[]): stri
   return recommendations.map(recommendation => `${recommendation.id} ${recommendation.title}`).join("; ")
 }
 
-export type RecommendationResultState = "Pass" | "Fail" | "Review"
-export interface RecommendationResult { id: string; title: string; level: 1 | 2; result: RecommendationResultState; findingKeys: string[] }
+export type RecommendationResultState = "Pass" | "Fail" | "Review" | "Not assessed"
+export type RecommendationSettingStatus = "Present" | "Missing" | "Different" | "Review" | "Unmapped"
+export interface RecommendationResult {
+  id: string
+  title: string
+  level: 1 | 2
+  result: RecommendationResultState
+  /** One entry per mapped setting definition, judged leaf by leaf across the tenant. */
+  settings: Array<{ id: string; status: RecommendationSettingStatus }>
+  findingKeys: string[]
+}
 
 function compareIds(a: string, b: string): number {
   const left = a.split(".").map(Number)
@@ -89,22 +112,36 @@ function compareIds(a: string, b: string): number {
 }
 
 /**
- * One result per recommendation that maps to at least one finding. A recommendation
- * passes only when every mapped finding is Present and fails when any is Different
- * or Missing; otherwise a mapped Review finding leaves it to review.
+ * One result per pack recommendation. Each mapped setting is judged on its own leaf with the
+ * same leaf rule the comparison uses for grouped roots, across every tenant policy holding the
+ * root: Present when every tenant occurrence equals the recommended value, Missing when no
+ * tenant policy holds it, Different when any occurrence differs. A recommendation passes only
+ * when every mapped setting is Present and fails when any is Missing or Different. A setting
+ * whose pack root needs a profile choice (Review) leaves the recommendation to review, and a
+ * recommendation with no setting in the pack is not assessed.
  */
 export function recommendationResults(assessment: Pick<Assessment, "findings">, policies: BaselinePolicy[]): RecommendationResult[] {
-  const results = new Map<string, { recommendation: PackRecommendation; findings: Finding[] }>()
-  for (const finding of assessment.findings) {
-    for (const recommendation of recommendationsForFinding(policies, finding)) {
-      const entry = results.get(recommendation.id) ?? { recommendation, findings: [] }
-      entry.findings.push(finding)
-      results.set(recommendation.id, entry)
-    }
-  }
-  return [...results.values()].sort((a, b) => compareIds(a.recommendation.id, b.recommendation.id)).map(({ recommendation, findings }) => ({
-    id: recommendation.id, title: recommendation.title, level: recommendation.level,
-    result: findings.some(finding => finding.status === "Different" || finding.status === "Missing") ? "Fail" : findings.every(finding => finding.status === "Present") ? "Pass" : "Review",
-    findingKeys: findings.map(finding => finding.key),
-  }))
+  const findingIds = assessment.findings.map(finding => ({ finding, ids: new Set(definitionIds(finding.recommended)) }))
+  return packRecommendations(policies).sort((a, b) => compareIds(a.id, b.id)).map(recommendation => {
+    const keys = new Set<string>()
+    const settings = recommendation.settings.map(id => {
+      const mapped = findingIds.filter(entry => entry.ids.has(id)).map(entry => entry.finding)
+      for (const finding of mapped) keys.add(finding.key)
+      if (!mapped.length) return { id, status: "Unmapped" as const }
+      if (mapped.some(finding => finding.status === "Review")) return { id, status: "Review" as const }
+      const statuses = mapped.map(finding => definitionStatus(finding.recommended, finding.observed.map(observation => observation.value), id))
+      return { id, status: statuses.includes("Different") ? "Different" as const : statuses.includes("Missing") ? "Missing" as const : "Present" as const }
+    })
+    const statuses = settings.map(setting => setting.status)
+    const result: RecommendationResultState = statuses.every(status => status === "Unmapped") ? "Not assessed"
+      : statuses.some(status => status === "Missing" || status === "Different") ? "Fail"
+        : statuses.includes("Review") ? "Review" : "Pass"
+    return { id: recommendation.id, title: recommendation.title, level: recommendation.level, result, settings, findingKeys: [...keys] }
+  })
+}
+
+/** Recommendations per result: passed, failed, to review and not assessed. */
+export function recommendationTotals(results: readonly RecommendationResult[]): { passed: number; failed: number; review: number; notAssessed: number } {
+  const count = (result: RecommendationResult["result"]) => results.filter(item => item.result === result).length
+  return { passed: count("Pass"), failed: count("Fail"), review: count("Review"), notAssessed: count("Not assessed") }
 }

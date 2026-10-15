@@ -10,7 +10,7 @@ import { CIS_BENCHMARKS_ID, effectiveFrameworks, internalKitImportEnabled, searc
 import { convertKit, readKitZip, suggestedKitBenchmark, type KitConversion, type KitFile, type KitLevel } from "../../shared/frameworks/cis-kit"
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
 import { cisReadiness } from "../../shared/frameworks/cis-readiness"
-import { recommendationLabel, recommendationsForFinding } from "../../shared/frameworks/cis-recommendations"
+import { recommendationLabel, recommendationsForFinding, recommendationTotals, type PackRecommendation } from "../../shared/frameworks/cis-recommendations"
 import { exceptionKey } from "../../shared/frameworks/cis-exceptions"
 import { benchmarkDisplayName, deviatingFindingKeys, groupFindingsByPolicy, groupObservationsByValue, humanSettingLabel, policyDisplayName, statusMixText, trendSummaryText } from "../../shared/frameworks/cis-display"
 import { cisFlowSteps, cisStage, isKitPackReference, kitLevelForPolicy, packSettingCount } from "../../shared/frameworks/cis-flow"
@@ -804,6 +804,10 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
                 ["Not assessed", level.notAssessed.length ? level.notAssessed.join(", ") : "None listed"],
                 ["Excluded from score", String(level.excepted)],
               ]
+              if (level.recommendations.length) {
+                const totals = recommendationTotals(level.recommendations)
+                stats.unshift(["Recommendations passed", String(totals.passed)], ["Recommendations failed", String(totals.failed)], ...(totals.review ? [["Recommendations to review", String(totals.review)] as [string, string]] : []), ["Recommendations not assessed", String(totals.notAssessed)])
+              }
               return <article key={`card-${level.level}`} aria-label={`Level ${level.level} summary`} className="grid gap-5 py-5 first:pt-1 sm:grid-cols-[11rem_minmax(0,1fr)] lg:grid-cols-[11rem_minmax(0,1fr)_16rem]">
                 <div>
                   <p className="text-xs font-medium text-gray-500">{benchmarkDisplayName(level.benchmark)} · Level {level.level}{level.version ? ` · ${level.version}` : ""}</p>
@@ -834,11 +838,11 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
           {readiness.levels.some(level => level.enumerated === 0) && <p className="mt-1 text-xs text-gray-500">The policy descriptions of {readiness.levels.filter(level => level.enumerated === 0).map(level => `Level ${level.level}`).join(" and ")} name no recommendation identifiers, so coverage cannot be derived from this pack even with a denominator list.</p>}
           {readiness.levels.some(level => level.denominator !== null && level.coverage === null) && <p className="mt-1 text-xs text-gray-500">The denominator list marks no recommendation of {readiness.levels.filter(level => level.denominator !== null && level.coverage === null).map(level => `Level ${level.level}`).join(" and ")} as automated, so there is no coverage ratio to show.</p>}
           {readiness.levels.map(level => level.recommendations.length > 0 && <details key={`recommendations-${level.level}`} className="mt-2 border-t border-gray-100">
-            <summary className="cursor-pointer py-3 text-sm font-medium text-gray-800">Recommendation results, Level {level.level}: {(["Pass", "Fail", "Review"] as const).map(result => `${level.recommendations.filter(item => item.result === result).length} ${result === "Pass" ? "pass" : result === "Fail" ? "fail" : "to review"}`).join(", ")}</summary>
-            <p className="text-xs text-gray-500">A recommendation passes only when every setting mapped to it is Present, and fails when any is Different or Missing.</p>
+            <summary className="cursor-pointer py-3 text-sm font-medium text-gray-800">Recommendation results, Level {level.level}: {(({ passed, failed, review, notAssessed }) => `${passed} passed, ${failed} failed${review ? `, ${review} to review` : ""}, ${notAssessed} not assessed`)(recommendationTotals(level.recommendations))}</summary>
+            <p className="text-xs text-gray-500">Each mapped setting is judged on its own value across every tenant policy that holds it. A recommendation passes only when every mapped setting is Present, and fails when any is Different or Missing. Not assessed means the pack holds none of its settings.</p>
             <ul className="mt-2 max-h-80 divide-y divide-gray-100 overflow-auto border-y border-gray-100">{level.recommendations.map(item => <li key={item.id} className="flex items-start gap-3 py-2">
               <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium ${item.result === "Pass" ? "bg-green-50 text-green-800" : item.result === "Fail" ? "bg-red-50 text-red-800" : "bg-gray-100 text-gray-700"}`}>{item.result}</span>
-              <span className="min-w-0 flex-1 text-sm text-gray-800"><span className="font-medium">{item.id}</span> {item.title}<span className="ml-2 text-xs text-gray-500">{item.findingKeys.length} {item.findingKeys.length === 1 ? "setting" : "settings"}</span></span>
+              <span className="min-w-0 flex-1 text-sm text-gray-800"><span className="font-medium">{item.id}</span> {item.title}<span className="block break-all font-mono text-[11px] leading-4 text-gray-500">{item.settings.map(setting => `${setting.id} ${setting.status}`).join("; ")}</span></span>
             </li>)}</ul>
           </details>)}
           {readiness.levels.map(level => level.manual.length > 0 && <div key={`manual-${level.level}`} className="mt-4">
@@ -894,7 +898,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
             <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs tabular-nums text-gray-600">{group.total} {group.total === 1 ? "finding" : "findings"}</span>
             <span className="text-xs text-gray-500">{statusMixText(group.counts)}</span>
           </h4>
-          <div className="mt-1 divide-y divide-gray-100">{group.findings.map(f => <CisFindingRow key={f.key} finding={f} recommendation={recommendationLabel(recommendationsForFinding(policies, f))} disabled={!!busy || !!creation || historical} checked={selected.has(f.key)} onChange={() => { setSelected(old => { const next = new Set(old); next.has(f.key) ? next.delete(f.key) : next.add(f.key); return next }); setPreview(false); setConfirmed(false) }} />)}</div>
+          <div className="mt-1 divide-y divide-gray-100">{group.findings.map(f => <CisFindingRow key={f.key} finding={f} recommendations={recommendationsForFinding(policies, f)} disabled={!!busy || !!creation || historical} checked={selected.has(f.key)} onChange={() => { setSelected(old => { const next = new Set(old); next.has(f.key) ? next.delete(f.key) : next.add(f.key); return next }); setPreview(false); setConfirmed(false) }} />)}</div>
         </section>)}</div> : <>
         <div className="space-y-2">{findings.slice(page * 50, (page + 1) * 50).map(f => <FindingRow key={f.key} finding={f} disabled={!!busy || !!creation || historical || (!!framework.comparisonOnly && framework.id !== "cis-benchmarks")} remediable={framework.id === "cis-benchmarks"} checked={selected.has(f.key)} onChange={() => { setSelected(old => { const next = new Set(old); next.has(f.key) ? next.delete(f.key) : next.add(f.key); return next }); setPreview(false); setConfirmed(false) }} />)}</div>
         {findings.length > 50 && <div className="mt-4 flex items-center justify-between gap-3"><button className={button} disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</button><span className="text-sm text-gray-500">Page {page + 1} of {Math.ceil(findings.length / 50)}</span><button className={button} disabled={(page + 1) * 50 >= findings.length} onClick={() => setPage(page + 1)}>Next</button></div>}
@@ -949,7 +953,8 @@ function targetingText(observation: Observation): string {
   return "Targeting: Assigned"
 }
 
-function CisFindingRow({ finding, recommendation, checked, disabled, onChange }: { finding: Finding; recommendation: string; checked: boolean; disabled: boolean; onChange: () => void }) {
+function CisFindingRow({ finding, recommendations, checked, disabled, onChange }: { finding: Finding; recommendations: PackRecommendation[]; checked: boolean; disabled: boolean; onChange: () => void }) {
+  const recommendation = recommendations.length > 2 ? `${recommendationLabel(recommendations.slice(0, 1))} and ${recommendations.length - 1} more recommendations` : recommendationLabel(recommendations)
   const colors = { Present: "bg-green-50 text-green-800", Missing: "bg-amber-50 text-amber-900", Different: "bg-red-50 text-red-800", Review: "bg-gray-100 text-gray-700" }
   const recommendedLines = summarizeSetting(finding.recommended)
   const groups = groupObservationsByValue(finding.observed, finding.recommended)
@@ -964,6 +969,7 @@ function CisFindingRow({ finding, recommendation, checked, disabled, onChange }:
         </span>
         <ChevronDown className="h-4 w-4 shrink-0 text-gray-400 transition-transform group-open:rotate-180" aria-hidden="true" />
       </summary>
+      {recommendations.length > 0 && <div className="mt-3"><p className="mb-1.5 text-xs font-semibold text-gray-600">Recommendations</p><ul className="space-y-0.5 text-xs leading-5 text-gray-700">{recommendations.map(item => <li key={item.id}><span className="font-medium">{item.id}</span> {item.title}</li>)}</ul></div>}
       <div className="mt-3 grid gap-x-6 gap-y-4 pb-2 lg:grid-cols-2">
         <div><p className="mb-1.5 text-xs font-semibold text-gray-600">Recommended configuration</p><ul className="space-y-1 border-l-2 border-gray-200 pl-3 text-xs leading-5 text-gray-700">{recommendedLines.map((line, index) => <li key={index} className="whitespace-pre-wrap break-words">{line}</li>)}</ul></div>
         <div><p className="mb-1.5 text-xs font-semibold text-gray-600">Observed policies and configuration</p>{groups.length ? <div className="divide-y divide-gray-100">{groups.map(group => <div key={group.key} className="py-2 text-xs first:pt-0 last:pb-0"><div className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className="min-w-0 truncate font-medium text-gray-800" title={group.policyNames.join(", ")}>{group.policyNames.join(", ")}</span>{group.observations.length > 1 && <span className="text-gray-500">{group.observations.length} policies with this value</span>}<span className={`ml-auto shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${group.matchesRecommended ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"}`}>{group.matchesRecommended ? "Matches recommended" : "Differs"}</span></div><ul className="mt-1.5 space-y-0.5 leading-5 text-gray-700">{summarizeSetting(group.value).map((line, index) => <li key={index} className="whitespace-pre-wrap break-words">{line}</li>)}</ul><p className="mt-1 text-gray-500">{targetingText(group.observations[0]!)}</p></div>)}</div> : <p className="text-xs leading-5 text-gray-600">No matching root setting found in the assessed policy family.</p>}</div>

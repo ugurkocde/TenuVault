@@ -129,14 +129,14 @@ describe("CIS content delivery service", () => {
     expect(workspace.policies[0]).not.toHaveProperty("recommendations")
   })
 
-  it("keeps pack recommendations on the pack policies that hold their settings", async () => {
+  it("keeps pack recommendations on the pack policies, unmatched ones on the first policy", async () => {
     const recommendations = [
       { id: "7.1.1", title: "Synthetic leaf recommendation", level: 1, settings: ["minlength"] },
       { id: "7.1.2", title: "Synthetic unrelated recommendation", level: 1, settings: ["not_in_pack"] },
     ]
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ...validPack, recommendations })))
     await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })
-    expect(loadWorkspace(tenantId, "cis-benchmarks").policies[0]?.recommendations).toEqual([recommendations[0]])
+    expect(loadWorkspace(tenantId, "cis-benchmarks").policies[0]?.recommendations).toEqual(recommendations)
   })
 
   it("errors when the base URL is not configured and saves nothing", async () => {

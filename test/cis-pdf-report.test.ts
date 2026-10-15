@@ -96,7 +96,8 @@ describe("CIS readiness PDF report", () => {
     const identified = attachRecommendations(policies, [{ id: "7.1.2", title: "Synthetic beta recommendation", level: 1, settings: ["fakebook_setting_beta"] }])
     const text = pdfText(generateCisReadinessPDF(cisReadiness(assessment, identified), context))
     expect(text).toContain("Recommendation results, Level 1")
-    expect(text).toContain("7.1.2 Synthetic beta recommendation: Fail")
+    expect(text).toContain("7.1.2 Synthetic beta recommendation: Fail (fakebook_setting_beta Missing)")
+    expect(text).toContain("Passed: 0")
     expect(pdfText(generateCisReadinessPDF(cisReadiness(assessment, policies), context))).not.toContain("Recommendation results")
   })
 

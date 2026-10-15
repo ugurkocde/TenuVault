@@ -305,7 +305,7 @@ describe("CIS Benchmarks route", () => {
     const policy = { name: "Synthetic policy", platforms: "windows10", technologies: "mdm", description: "Synthetic", provenance: { schemaVersion: 1, benchmark: "synthetic-os", version: "9.9.9", level: "Level 1", sourceFile: "synthetic.json" },
       settings: [{ settingInstance: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance", settingDefinitionId: "synthetic_setting", choiceSettingValue: { value: "synthetic_on", children: [] } } }], ...extra }
     const assessment = { runId: "run-1", tenantId, frameworkId: "cis-benchmarks", reference: "synthetic-os 9.9.9 Level 1", assessedAt: "2026-10-15T10:00:00Z", policyCount: 1,
-      findings: [{ key: "0:0", policyIndex: 0, settingIndex: 0, policyName: "Synthetic policy", settingId: "synthetic_setting", status: "Missing", recommended: null, observed: [] }] }
+      findings: [{ key: "0:0", policyIndex: 0, settingIndex: 0, policyName: "Synthetic policy", settingId: "synthetic_setting", status: "Missing", recommended: policy.settings[0]!.settingInstance, observed: [] }] }
     const workspace = { version: 1, tenantId, frameworkId: "cis-benchmarks", policies: [policy], reference: assessment.reference, updatedAt: "2026-10-15T10:00:00Z", history: [{ assessment, policies: [policy] }] }
     vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(path === "/api/cis-remediation" ? { deployments: [] } : workspace), { status: 200, headers: { "Content-Type": "application/json" } })))
     const container = render(
@@ -342,7 +342,7 @@ describe("CIS Benchmarks route", () => {
     const container = await renderSavedAssessment({ recommendations: [{ id: "7.1.1", title: "Synthetic recommendation", level: 1, settings: ["synthetic_setting"] }] })
     const row = container.querySelector('[aria-label="Synthetic policy"]')
     expect(row?.textContent).toContain("7.1.1 Synthetic recommendation")
-    expect(container.textContent).toContain("Recommendation results, Level 1: 0 pass, 1 fail, 0 to review")
+    expect(container.textContent).toContain("Recommendation results, Level 1: 0 passed, 1 failed, 0 not assessed")
     vi.unstubAllGlobals()
   })
 })
