@@ -163,6 +163,8 @@ export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[],
       // covered when every non-Present finding whose root holds it has an active exception.
       // Failures of unrelated sibling settings in the same root neither block nor grant credit.
       ...recommendationRates(recommendations.filter(result => result.level === level), result => {
+        // A setting outside the pack can never be shown to pass, so it rules out credit by exception.
+        if (result.settings.some(setting => setting.status === "Unmapped")) return false
         const failing = result.settings.filter(setting => setting.status === "Missing" || setting.status === "Different" || setting.status === "Review")
         return failing.length > 0 && failing.every(setting => {
           const open = setting.findingKeys.map(key => findingByKey.get(key)).filter(finding => finding && finding.status !== "Present")

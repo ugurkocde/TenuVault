@@ -276,4 +276,15 @@ describe("pack recommendations", () => {
       ["Unassessed recommendations", "recommendations", null],
     ])
   })
+
+  it("never grants exception credit to a recommendation that names a setting outside the pack", () => {
+    const exception = (policyName: string, settingId: string): CisException => ({ id: settingId, benchmark: "synthetic-os", version: "9.9.9", level: 1, policyName, settingId, owner: "Owner", reason: "Synthetic", expiresOn: "2099-01-01", createdAt: "2026-10-01T00:00:00Z" })
+    const partial = attachRecommendations(pack, [{ id: "6.1.1", title: "Synthetic partly in pack", level: 1, settings: ["synthetic_alpha", "synthetic_unmapped"] }])
+    const run = assess([tenant[0]!])
+    const level = cisReadiness(run, partial, undefined, undefined, [exception("Synthetic flat", "synthetic_alpha")], "2026-10-15").levels[0]!
+    expect(level.recommendations.map(item => [item.id, item.result])).toEqual([["6.1.1", "Fail"]])
+    expect(level.recommendationsExcepted).toBe(0)
+    expect(level.recommendationPassRate).toBe(0)
+    expect(level.adjustedRecommendationPassRate).toBe(0)
+  })
 })
