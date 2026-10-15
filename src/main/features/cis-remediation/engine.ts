@@ -1,4 +1,4 @@
-import { parsePolicies, remediationPayload, type Assessment, type BaselinePolicy, type Finding } from "../../../shared/frameworks/policies"
+import { hasChildInstances, parsePolicies, remediationPayload, rootMatches, type Assessment, type BaselinePolicy, type Finding, type Json } from "../../../shared/frameworks/policies"
 import { typeForFolder, type Item } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
 import type { ListedRecord } from "../contracts"
@@ -8,7 +8,7 @@ import type { Stored } from "../records"
 import { FeatureError } from "../route"
 import { applyChangeSet, approveChangeSet, createChangeSet, getChangeSet, previewChangeSet, previewRollback, createRollbackChangeSet, type ChangeSetPreview, type OperationInput, type RollbackPreview } from "../change-sets/engine"
 import { readCurrent } from "../change-sets/graph"
-import type { ChangeSetRecord } from "../change-sets/model"
+import { MAX_OPERATIONS, type ChangeSetRecord } from "../change-sets/model"
 import { internalCisBenchmarksEnabled } from "../../frameworks/service"
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
 
@@ -99,16 +99,51 @@ function settingIdOf(setting: unknown): string | null {
   return typeof instance?.settingDefinitionId === "string" ? instance.settingDefinitionId : null
 }
 
-/** Benchmark settings of one policy replaced or inserted into a live policy body, by definition. */
-function mergedBody(live: Item, policy: BaselinePolicy, settings: BaselinePolicy["settings"]): Item {
+const isRecord = (value: unknown): value is Item => value !== null && typeof value === "object" && !Array.isArray(value)
+const definitionOf = (value: unknown): string | null => isRecord(value) && typeof value.settingDefinitionId === "string" ? value.settingDefinitionId : null
+
+/**
+ * A pack setting instance written over the live instance of the same definition. Template
+ * references of the live instance and its values are kept, because Graph rejects a
+ * template-based policy whose settings lose them. With `keepExtra`, used for grouped roots,
+ * live child instances the pack does not name are kept too, so a tenant hardened beyond the
+ * pack keeps its extra payload keys.
+ */
+function mergeInstance(pack: Json, live: Json | undefined, keepExtra: boolean): Json {
+  if (Array.isArray(pack)) return pack.map((entry, index) => mergeInstance(entry, Array.isArray(live) ? live[index] : undefined, keepExtra))
+  if (!isRecord(pack)) return structuredClone(pack)
+  const current = isRecord(live) ? live : {}
+  const merged: Item = {}
+  for (const [key, value] of Object.entries(pack)) {
+    merged[key] = key === "children" && Array.isArray(value) ? mergeChildren(value, current.children, keepExtra) : mergeInstance(value, current[key], keepExtra)
+  }
+  for (const [key, value] of Object.entries(current)) if (key.endsWith("TemplateReference") && value !== null) merged[key] = structuredClone(value)
+  return merged
+}
+
+function mergeChildren(pack: Json[], live: Json | undefined, keepExtra: boolean): Json[] {
+  const current = Array.isArray(live) ? live : []
+  const used = new Set<number>()
+  const merged = pack.map((child) => {
+    const id = definitionOf(child)
+    const index = id ? current.findIndex((entry, position) => !used.has(position) && definitionOf(entry) === id) : -1
+    if (index < 0) return structuredClone(child)
+    used.add(index)
+    return mergeInstance(child, current[index], keepExtra)
+  })
+  if (keepExtra) current.forEach((entry, position) => { if (!used.has(position) && definitionOf(entry)) merged.push(structuredClone(entry)) })
+  return merged
+}
+
+/** Benchmark settings replaced or inserted into a live policy body, by definition. */
+function mergedBody(live: Item, settings: BaselinePolicy["settings"]): Item {
   const body = structuredClone(live)
   const existing = Array.isArray(body.settings) ? [...(body.settings as Item[])] : []
   for (const setting of settings) {
     const id = settingIdOf(setting)
     const index = id ? existing.findIndex((entry) => settingIdOf(entry) === id) : -1
-    const replacement = structuredClone(setting) as Item
-    if (index >= 0) existing[index] = replacement
-    else existing.push(replacement)
+    if (index >= 0) existing[index] = { settingInstance: mergeInstance(setting.settingInstance as Json, existing[index]!.settingInstance as Json, hasChildInstances(setting.settingInstance as Json)) } as Item
+    else existing.push(structuredClone(setting) as Item)
   }
   body.settings = existing
   return body
@@ -132,13 +167,20 @@ export async function planCisRemediation(deps: FeatureDeps, tenantId: string, in
   if (!whole && !findingKeys.size) throw new FeatureError("Select deviating findings or whole benchmark policies.")
   const type = typeForFolder("ConfigurationPolicies")!
 
-  const groups = new Map<number, Finding[]>()
+  // The limit counts change-set operations, which is what MAX_OPERATIONS protects: one create
+  // per whole or Missing pack policy, and one in-place update per tenant policy that still
+  // differs. Updates are known only after reading the tenant, so the final count is checked
+  // again once they are planned.
+  const tooMany = (count: number) => new FeatureError(`This selection needs ${count} changes and one deployment holds at most ${MAX_OPERATIONS}. Select fewer findings or policies.`)
+  const creates = new Map<number, Finding[]>()
+  const updates = new Map<string, Finding[]>()
   const policyIndexes = new Set<number>()
   if (whole) {
     for (const index of input.selectedPolicyIndexes!) {
       if (!Number.isInteger(index) || !policies[index]) throw new FeatureError("A selected benchmark policy does not exist in the imported pack.")
       policyIndexes.add(index)
     }
+    if (policyIndexes.size > MAX_OPERATIONS) throw tooMany(policyIndexes.size)
   } else {
     const byKey = new Map(findings.map((finding) => [finding.key, finding]))
     for (const key of findingKeys) {
@@ -146,11 +188,16 @@ export async function planCisRemediation(deps: FeatureDeps, tenantId: string, in
       if (!finding) throw new FeatureError("A selected finding is not part of this assessment.")
       if (finding.status !== "Different" && finding.status !== "Missing") throw new FeatureError("Only deviating findings (Different or Missing) can be remediated. Present findings need no change and Review findings need a profile choice first.")
       if (!policies[finding.policyIndex]?.settings[finding.settingIndex]) throw new FeatureError("A selected finding does not match the imported pack.")
-      groups.set(finding.policyIndex, [...(groups.get(finding.policyIndex) ?? []), finding])
-      policyIndexes.add(finding.policyIndex)
+      const observed = finding.status === "Different" ? [...new Set(finding.observed.map((observation) => observation.policyId))] : []
+      // Missing settings, and a Different finding with no observation, go into the new policy of their pack policy.
+      if (!observed.length) creates.set(finding.policyIndex, [...(creates.get(finding.policyIndex) ?? []), finding])
+      for (const policyId of observed) {
+        if (!isGraphId(policyId)) throw new FeatureError("A selected finding names an invalid tenant policy.")
+        updates.set(policyId, [...(updates.get(policyId) ?? []), finding])
+      }
     }
+    if (creates.size > MAX_OPERATIONS) throw tooMany(creates.size)
   }
-  if (!policyIndexes.size || policyIndexes.size > 25) throw new FeatureError("Select between 1 and 25 benchmark policies.")
 
   const rawGraph = await deps.graph(tenant)
   requireCisBenchmarksEnabled()
@@ -164,35 +211,46 @@ export async function planCisRemediation(deps: FeatureDeps, tenantId: string, in
       },
     })
   }
-  const items: CisRemediationItem[] = []
-  const operations: OperationInput[] = []
-  for (const policyIndex of [...policyIndexes].sort((a, b) => a - b)) {
+  const planned: Array<{ item: CisRemediationItem; operation: OperationInput }> = []
+  const create = (policyIndex: number, selected: Finding[]) => {
     const policy = policies[policyIndex]!
-    if (whole) {
-      const body = createdBody(policy, policy.settings, input.reference)
-      items.push({ policyIndex, policyName: policy.name, action: "create", targetId: null, targetName: null, findingKeys: [], assignedExposure: false, assignmentCount: 0 })
-      operations.push({ folder: type.folder, action: "create", proposed: body, assignments: null, source: { tenantId: null, objectId: null, version: input.reference, label: policy.name } })
-      continue
-    }
-    const selected = groups.get(policyIndex)!
-    const settings = selected.map((finding) => policy.settings[finding.settingIndex]!)
-    const different = selected.find((finding) => finding.status === "Different" && finding.observed.length)
-    const targetId = different?.observed[0]?.policyId ?? null
-    if (targetId) {
-      if (!isGraphId(targetId)) throw new FeatureError("A selected finding names an invalid tenant policy.")
-      requireCisBenchmarksEnabled()
-      let live: Item | null
-      try { live = await readCurrent(graph, type, targetId) } catch (error) { requireCisBenchmarksEnabled(); throw new FeatureError(`A tenant policy could not be read. ${error instanceof Error ? error.message : String(error)}`, 502) }
-      if (!live) throw new FeatureError(`The tenant policy of a selected finding no longer exists. Compare again.`, 409)
-      const assignments = Array.isArray(live.assignments) ? (live.assignments as Item[]) : []
-      items.push({ policyIndex, policyName: policy.name, action: "update", targetId, targetName: String(live[type.nameKey] ?? different!.observed[0]!.policyName), findingKeys: selected.map((finding) => finding.key), assignedExposure: assignments.length > 0, assignmentCount: assignments.length })
-      operations.push({ folder: type.folder, action: "update", targetId, proposed: mergedBody(live, policy, settings), assignments: null, source: { tenantId: tenant, objectId: targetId, version: typeof live.lastModifiedDateTime === "string" ? live.lastModifiedDateTime : null, label: policy.name } })
-    } else {
-      const body = createdBody(policy, settings, input.reference)
-      items.push({ policyIndex, policyName: policy.name, action: "create", targetId: null, targetName: null, findingKeys: selected.map((finding) => finding.key), assignedExposure: false, assignmentCount: 0 })
-      operations.push({ folder: type.folder, action: "create", proposed: body, assignments: null, source: { tenantId: null, objectId: null, version: input.reference, label: policy.name } })
-    }
+    const body = createdBody(policy, whole ? policy.settings : selected.map((finding) => policy.settings[finding.settingIndex]!), input.reference)
+    planned.push({
+      item: { policyIndex, policyName: policy.name, action: "create", targetId: null, targetName: null, findingKeys: selected.map((finding) => finding.key), assignedExposure: false, assignmentCount: 0 },
+      operation: { folder: type.folder, action: "create", proposed: body, assignments: null, source: { tenantId: null, objectId: null, version: input.reference, label: policy.name } },
+    })
   }
+  if (whole) for (const policyIndex of policyIndexes) create(policyIndex, [])
+  for (const [policyIndex, selected] of creates) create(policyIndex, selected)
+  // Every tenant policy holding a selected Different setting with another value is updated,
+  // so conflicting policies converge. A policy already holding the recommended value is left alone.
+  for (const [targetId, candidates] of updates) {
+    requireCisBenchmarksEnabled()
+    let live: Item | null
+    try { live = await readCurrent(graph, type, targetId) } catch (error) { requireCisBenchmarksEnabled(); throw new FeatureError(`A tenant policy could not be read. ${error instanceof Error ? error.message : String(error)}`, 502) }
+    requireCisBenchmarksEnabled()
+    if (!live) throw new FeatureError(`The tenant policy of a selected finding no longer exists. Compare again.`, 409)
+    const liveSettings = Array.isArray(live.settings) ? (live.settings as Item[]) : []
+    const selected = candidates.filter((finding) => {
+      const recommended = policies[finding.policyIndex]!.settings[finding.settingIndex]!
+      const current = liveSettings.find((entry) => settingIdOf(entry) === settingIdOf(recommended))
+      if (!current) throw new FeatureError(`The tenant policy ${String(live![type.nameKey] ?? targetId)} no longer holds a selected setting. Compare again.`, 409)
+      return !rootMatches(recommended.settingInstance as Json, current.settingInstance as Json)
+    })
+    if (!selected.length) continue
+    const names = [...new Set(selected.map((finding) => policies[finding.policyIndex]!.name))]
+    const assignments = Array.isArray(live.assignments) ? (live.assignments as Item[]) : []
+    const observedName = selected[0]!.observed.find((observation) => observation.policyId === targetId)?.policyName ?? targetId
+    planned.push({
+      item: { policyIndex: Math.min(...selected.map((finding) => finding.policyIndex)), policyName: names.join(", "), action: "update", targetId, targetName: String(live[type.nameKey] ?? observedName), findingKeys: selected.map((finding) => finding.key), assignedExposure: assignments.length > 0, assignmentCount: assignments.length },
+      operation: { folder: type.folder, action: "update", targetId, proposed: mergedBody(live, selected.map((finding) => policies[finding.policyIndex]!.settings[finding.settingIndex]!)), assignments: null, source: { tenantId: tenant, objectId: targetId, version: typeof live.lastModifiedDateTime === "string" ? live.lastModifiedDateTime : null, label: names.join(", ").slice(0, 200) } },
+    })
+  }
+  if (!planned.length) throw new FeatureError("The selected findings already match the benchmark in the tenant. Compare again to refresh the results.", 409)
+  if (planned.length > MAX_OPERATIONS) throw tooMany(planned.length)
+  planned.sort((a, b) => a.item.policyIndex - b.item.policyIndex || (a.item.action === b.item.action ? 0 : a.item.action === "update" ? -1 : 1))
+  const items = planned.map((entry) => entry.item)
+  const operations = planned.map((entry) => entry.operation)
 
   const record = deps.records.create<CisRemediationRecord>(DOMAINS.cisRemediations, tenant, {
     title: input.title.trim(), status: "in-review",
