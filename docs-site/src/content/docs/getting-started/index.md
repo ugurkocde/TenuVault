@@ -12,7 +12,7 @@ Check the [Requirements](/getting-started/requirements/) first. In short, you ne
 * A Windows or macOS computer.
 * An admin account with an Intune role, such as Intune Administrator.
 * Someone who can create an app registration and grant admin consent in Microsoft Entra ID, once per tenant.
-* Outbound HTTPS access to Microsoft and to tenuvault.com.
+* Outbound HTTPS access to Microsoft and to www.tenuvault.com.
 
 ## Setup checklist
 
