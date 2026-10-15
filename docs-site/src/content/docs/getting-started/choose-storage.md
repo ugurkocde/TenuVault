@@ -38,10 +38,12 @@ On Community, this option is locked and marked **Pro**, with the note **Backups 
 
 You need an existing storage account in a subscription of the tenant you signed in to. TenuVault does not create Azure resources. If none exists yet, ask your Azure administrator to create one with [Create a storage account for TenuVault](/getting-started/create-storage-account/): the page has a script that creates the account and grants your admin group access in one run.
 
-1. Select **Your Azure storage account, encrypted**. TenuVault shows **Loading your storage accounts...** while it lists the storage accounts your account can see across your subscriptions.
-2. In **Storage account**, choose the account. Each entry shows its name, resource group and region.
+1. Select **Your Azure storage account, encrypted**. TenuVault shows **Checking your recovery key...** and **Loading your storage accounts...** while it checks your key and lists the storage accounts your account can see across your subscriptions. If your current recovery key is not saved yet, **Save your recovery key before you continue** appears with a **Save recovery key** button; **Continue** stays unavailable until you save it.
+2. In **Storage account**, choose the account. Each entry shows its name, resource group and region. If the account was created while this step is open, select **Refresh** to list the accounts again.
 3. Select **Check access**. TenuVault creates the `intune-backups` container if it does not exist, then writes and deletes a small test file to confirm you can store backups there.
-4. When the button shows **Access confirmed**, select **Continue**.
+4. When the button shows **Access confirmed** and your recovery key is saved, select **Continue**.
+
+If no storage account is listed, **No storage account yet?** offers **Copy setup instructions for your Azure administrator** (the guide link plus the script from [Create a storage account for TenuVault](/getting-started/create-storage-account/)) and **Storage setup guide**. After the account exists, select **Refresh**.
 
 ### Storage errors
 
@@ -57,10 +59,12 @@ You need an existing storage account in a subscription of the tenant you signed 
 TenuVault keeps one backup encryption key per computer, protected by your Windows account or macOS Keychain. The recovery key is an exported copy of it. You need it to read your backups on another computer, after reinstalling, or after a new Windows or macOS profile.
 
 :::caution
-For Azure storage, TenuVault blocks uploads until you have saved the current recovery key. If you skip this, the first backup fails with **Save your current backup recovery key in Settings before the first encrypted Azure backup.**
+For Azure storage, TenuVault blocks uploads until you have saved the current recovery key. The Storage step therefore keeps **Continue** unavailable until the key is saved, so a first backup cannot fail for a missing key. In **Settings** > **Change storage**, **Save** stays unavailable in the same way.
 :::
 
-1. Open **Settings** > **Storage and recovery**. You can do this during setup; TenuVault remembers your setup step.
+During setup, select **Save recovery key** in the Storage step itself. Later, or after importing a key, use **Settings**:
+
+1. Open **Settings** > **Storage and recovery**.
 2. Under **Encryption key**, select **Save recovery key**.
 3. Choose where to save the file. By default it is `Documents/TenuVault recovery key <fingerprint>.txt`.
 4. Move the key into your password manager or another safe place, then delete the file.
