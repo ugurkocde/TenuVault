@@ -104,6 +104,52 @@ describe("CIS remediation deploy", () => {
     expect(context.tenant.writeCount()).toBe(0)
   })
 
+  it("does not start the pre-change backup when access is revoked during the final observation", async () => {
+    const context = setup()
+    const deployment = await planCisRemediation(context.deps, TENANT_A, { title: "Deploy", reference: "synthetic 1.0", policies, findings: [finding({ key: "1:0", policyIndex: 1, settingIndex: 0, status: "Missing", policyName: "Fakebook Beta", settingId: DEF_B })], selectedFindingKeys: ["1:0"] }, "Admin")
+    const { preview } = await approveFlow(context, deployment.id)
+    const graphFor = context.deps.graph
+    let reads = 0
+    context.deps.graph = async (...args) => {
+      const graph = await graphFor(...args)
+      return async (method, path, body, options) => {
+        const response = await graph(method, path, body, options)
+        if (method === "GET") {
+          reads += 1
+          if (reads === 1) setInternalCisBenchmarksEnabled(false)
+        }
+        return response
+      }
+    }
+    await expect(applyCisRemediation(context.deps, TENANT_A, deployment.id, { contentHash: preview.changeSet.contentHash, confirmed: true }, "Admin"))
+      .rejects.toMatchObject({ status: 403, message: "CIS comparisons are coming soon." })
+    expect(context.backups).toEqual([])
+    expect(context.tenant.writeCount()).toBe(0)
+  })
+
+  it("does not make nested planning reads after access is revoked during the policy detail read", async () => {
+    const context = setup()
+    const existing = context.tenant.addPolicy({ name: "Tenant Alpha", settings: [setting(DEF_A, "fake-off")] })
+    const graphFor = context.deps.graph
+    const readPaths: string[] = []
+    context.deps.graph = async (...args) => {
+      const graph = await graphFor(...args)
+      return async (method, path, body, options) => {
+        if (method === "GET") {
+          readPaths.push(path)
+          if (readPaths.length === 1) setInternalCisBenchmarksEnabled(false)
+        }
+        return graph(method, path, body, options)
+      }
+    }
+    await expect(planCisRemediation(context.deps, TENANT_A, {
+      title: "Deploy", reference: "synthetic 1.0", policies,
+      findings: [finding({ key: "0:0", policyIndex: 0, settingIndex: 0, status: "Different", observed: [{ policyId: existing.id as string, policyName: "Tenant Alpha", value: null }] })],
+      selectedFindingKeys: ["0:0"],
+    }, "Admin")).rejects.toMatchObject({ status: 403, message: "CIS comparisons are coming soon." })
+    expect(readPaths).toHaveLength(1)
+  })
+
   it("writes nothing when access is revoked during the pre-change backup", async () => {
     const context = setup()
     const deployment = await planCisRemediation(context.deps, TENANT_A, { title: "Deploy", reference: "synthetic 1.0", policies, findings: [finding({ key: "1:0", policyIndex: 1, settingIndex: 0, status: "Missing", policyName: "Fakebook Beta", settingId: DEF_B })], selectedFindingKeys: ["1:0"] }, "Admin")

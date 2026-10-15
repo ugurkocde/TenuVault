@@ -10,6 +10,7 @@ import { applyChangeSet, approveChangeSet, createChangeSet, getChangeSet, previe
 import { readCurrent } from "../change-sets/graph"
 import type { ChangeSetRecord } from "../change-sets/model"
 import { internalCisBenchmarksEnabled } from "../../frameworks/service"
+import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
 
 /**
  * Deploy and remediation from an imported benchmark pack. Planning freezes one
@@ -151,8 +152,18 @@ export async function planCisRemediation(deps: FeatureDeps, tenantId: string, in
   }
   if (!policyIndexes.size || policyIndexes.size > 25) throw new FeatureError("Select between 1 and 25 benchmark policies.")
 
-  const graph = await deps.graph(tenant)
+  const rawGraph = await deps.graph(tenant)
   requireCisBenchmarksEnabled()
+  const graph: GraphCall = async (method, path, body, callOptions) => {
+    requireCisBenchmarksEnabled()
+    return rawGraph(method, path, body, {
+      ...callOptions,
+      beforeAttempt: () => {
+        callOptions?.beforeAttempt?.()
+        requireCisBenchmarksEnabled()
+      },
+    })
+  }
   const items: CisRemediationItem[] = []
   const operations: OperationInput[] = []
   for (const policyIndex of [...policyIndexes].sort((a, b) => a - b)) {
@@ -171,7 +182,7 @@ export async function planCisRemediation(deps: FeatureDeps, tenantId: string, in
       if (!isGraphId(targetId)) throw new FeatureError("A selected finding names an invalid tenant policy.")
       requireCisBenchmarksEnabled()
       let live: Item | null
-      try { live = await readCurrent(graph, type, targetId) } catch (error) { throw new FeatureError(`A tenant policy could not be read. ${error instanceof Error ? error.message : String(error)}`, 502) }
+      try { live = await readCurrent(graph, type, targetId) } catch (error) { requireCisBenchmarksEnabled(); throw new FeatureError(`A tenant policy could not be read. ${error instanceof Error ? error.message : String(error)}`, 502) }
       if (!live) throw new FeatureError(`The tenant policy of a selected finding no longer exists. Compare again.`, 409)
       const assignments = Array.isArray(live.assignments) ? (live.assignments as Item[]) : []
       items.push({ policyIndex, policyName: policy.name, action: "update", targetId, targetName: String(live[type.nameKey] ?? different!.observed[0]!.policyName), findingKeys: selected.map((finding) => finding.key), assignedExposure: assignments.length > 0, assignmentCount: assignments.length })

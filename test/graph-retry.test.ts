@@ -40,6 +40,22 @@ describe('bounded Graph retries', () => {
     expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1)
     expect(JSON.stringify(writeRecords())).not.toContain('new-token')
   })
+  it('checks authorization before retrying a throttled write', async () => {
+    let allowed = true
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response('', { status: 429, headers: { 'Retry-After': '0' } })).mockResolvedValueOnce(Response.json({ id: 'created' }, { status: 201 }))
+    const caller = graphCaller('token', fetcher, { tenant, sleep: async () => { allowed = false } })
+    await expect(caller('POST', 'deviceManagement/deviceCategories', { displayName: 'A' }, { beforeAttempt: () => { if (!allowed) throw new Error('CIS access ended') } })).rejects.toThrow('CIS access ended')
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+  it('checks authorization before refreshing an expired token', async () => {
+    let allowed = true
+    const fetcher = vi.fn<typeof fetch>(async () => { allowed = false; return new Response('', { status: 401 }) })
+    const refreshToken = vi.fn(async () => 'renewed')
+    const caller = graphCaller('expired', fetcher, { refreshToken })
+    await expect(caller('GET', 'deviceManagement/deviceCategories', undefined, { beforeAttempt: () => { if (!allowed) throw new Error('CIS access ended') } })).rejects.toThrow('CIS access ended')
+    expect(refreshToken).not.toHaveBeenCalled()
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
   it('does not retry an ambiguous 503 POST', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response('', { status: 503 }))
     await graphCaller('token', fetcher, { tenant })('POST', 'deviceManagement/deviceCategories', {})

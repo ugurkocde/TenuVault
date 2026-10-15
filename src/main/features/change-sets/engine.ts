@@ -189,12 +189,18 @@ function requireCisChangeSetEnabled(workflow: string): void {
   if (workflow === "cis-remediation" && !internalCisBenchmarksEnabled()) throw new FeatureError("CIS comparisons are coming soon.", 403)
 }
 
-/** Checks CIS authorization immediately before every Graph request made through this caller. */
+/** Checks CIS authorization immediately before every Graph attempt made through this caller. */
 function gatedGraph(graph: GraphCall, workflow: string): GraphCall {
   if (workflow !== "cis-remediation") return graph
-  return async (method, path, body) => {
+  return async (method, path, body, callOptions) => {
     requireCisChangeSetEnabled(workflow)
-    return graph(method, path, body)
+    return graph(method, path, body, {
+      ...callOptions,
+      beforeAttempt: () => {
+        callOptions?.beforeAttempt?.()
+        requireCisChangeSetEnabled(workflow)
+      },
+    })
   }
 }
 
@@ -633,6 +639,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
           return observations
         }
         await check()
+        requireCisChangeSetEnabled(record.origin.workflow)
         const backupFolder = await requirePreChangeBackup(deps, tenant, [...new Set(record.operations.map((operation) => operation.folder))])
         // The backup takes time: confirm the claim still holds, then re-check dependencies and
         // the target and read the capture that rollback relies on right before writing.
