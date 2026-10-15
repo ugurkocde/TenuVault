@@ -50,7 +50,7 @@ Before you choose it:
 
 1. Make sure your account has the **Storage Blob Data Contributor** role on the storage account. New role assignments can take a few minutes to apply.
 2. If the storage account's firewall restricts networks, allow your computer's public IP address or connect through an allowed network.
-3. Save your recovery key in **Settings**. TenuVault does not upload a backup to Azure until you have: "Save your current backup recovery key in Settings before the first encrypted Azure backup."
+3. Save your recovery key when the storage step asks for it, or in **Settings**. **Continue** in setup and **Save** in **Change storage** stay unavailable for Azure storage until the current key is saved, and TenuVault does not upload a backup to Azure until it is: "Save your current backup recovery key in Settings before the first encrypted Azure backup."
 
 To choose the storage account:
 

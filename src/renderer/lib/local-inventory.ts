@@ -21,8 +21,19 @@ export function localTenantIds(tenants: readonly Pick<Tenant, "resources">[]): s
 
 const SETTINGS_EVENT = "tenuvault:backup-settings"
 
+/**
+ * Bumped synchronously whenever any view receives newer backup settings, before React
+ * renders them. Async settings reads capture it and discard their result when it moved,
+ * so a slow read can never overwrite a newer update that has not rendered yet.
+ */
+let settingsRevision = 0
+export function backupSettingsRevision(): number {
+  return settingsRevision
+}
+
 /** Tells every open view that the backup folder or keys changed, with the settings the main process returned. */
 export function announceBackupSettings(settings: BackupSettings): void {
+  settingsRevision++
   window.dispatchEvent(new CustomEvent<BackupSettings>(SETTINGS_EVENT, { detail: settings }))
 }
 
@@ -36,6 +47,7 @@ export function useBackupSettings(onError?: (error: unknown) => void): [BackupSe
   const updated = useRef(false)
   const update = useCallback((next: BackupSettings) => {
     updated.current = true
+    settingsRevision++
     setSettings(next)
   }, [])
   const reportError = useRef(onError)
@@ -43,6 +55,8 @@ export function useBackupSettings(onError?: (error: unknown) => void): [BackupSe
 
   useEffect(() => {
     let active = true
+    // The initial read only hydrates this view with current state; it is not a newer
+    // update, so it must not invalidate another view's in-flight explicit read.
     bridge.backups.settings().then(
       (read) => { if (active && !updated.current) setSettings(read) },
       (error: unknown) => { if (active) reportError.current?.(error) },
