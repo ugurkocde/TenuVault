@@ -243,4 +243,37 @@ describe("pack recommendations", () => {
       ["Settings tenant", "settings", expect.closeTo(2 / 3)],
     ])
   })
+
+  it("keeps the recommendation basis with a null rate when no recommendation of a Level could be assessed", () => {
+    const unassessed = attachRecommendations(pack, [{ id: "5.1.1", title: "Synthetic partly in pack", level: 1, settings: ["synthetic_alpha", "synthetic_unmapped"] }])
+    const run = assess([tenant[2]!])
+    const level = cisReadiness(run, unassessed).levels[0]!
+    expect(level.recommendations.map(item => item.result)).toEqual(["Not assessed"])
+    expect(level.recommendationPassRate).toBeNull()
+    expect(level.passRate).not.toBeNull()
+    expect(headlineRate(level)).toEqual({ basis: "recommendations", rate: null, adjusted: null })
+    const json = JSON.parse(cisReadinessJson(cisReadiness(run, unassessed), null, "2026-10-15T10:00:00Z")) as { levels: Array<Record<string, unknown>> }
+    expect(json.levels[0]).toMatchObject({ recommendationPassRate: null, adjustedRecommendationPassRate: null })
+
+    // Trend: a recommendations point with a null rate, no change and a break in the sparkline.
+    const rated = { ...assess(tenant), runId: "run-0", assessedAt: "2026-10-14T10:00:00Z" }
+    const trend = cisReadinessTrend([{ assessment: run, policies: unassessed }, { assessment: rated, policies }])
+    expect(trend.map(point => [point.levels[0]!.basis, trendRate(point.levels[0]!)])).toEqual([["recommendations", 0.5], ["recommendations", null]])
+    expect(trend[1]!.levels[0]!.changeFromPrevious).toBeNull()
+    expect(sparklineSegments(trend, 1)).toEqual([[0]])
+    expect(cisDriftSignals(trend)).toEqual([])
+
+    // Portfolio: basis recommendations, no rate, ranked after rated rows of either basis.
+    const entry = (tenantId: string, tenantName: string, packPolicies: typeof policies, assessment: typeof run) => ({ tenantId, tenantName, workspace: { history: [{ assessment: { ...assessment, tenantId }, policies: packPolicies }] } })
+    const rows = cisPortfolioRows([
+      entry("11111111-1111-1111-1111-111111111111", "Unassessed recommendations", unassessed, run),
+      entry("22222222-2222-2222-2222-222222222222", "Settings tenant", pack, run),
+      entry("33333333-3333-3333-3333-333333333333", "Rated recommendations", policies, assess(tenant)),
+    ])
+    expect(rows.map(row => [row.tenantName, row.levels[0]!.basis, portfolioRate(row.levels[0])])).toEqual([
+      ["Rated recommendations", "recommendations", 0.5],
+      ["Settings tenant", "settings", expect.any(Number)],
+      ["Unassessed recommendations", "recommendations", null],
+    ])
+  })
 })

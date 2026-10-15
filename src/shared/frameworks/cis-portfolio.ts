@@ -127,7 +127,7 @@ export function cisPortfolioRows(entries: CisPortfolioEntry[]): CisPortfolioRow[
       version: summary.version,
       assessedAt: newest.assessment.assessedAt,
       levels: summary.levels.map(level => ({ level: level.level, passRate: level.passRate, adjustedPassRate: level.adjustedPassRate, excepted: level.excepted, assessedSettings: level.assessedSettings,
-        ...(level.recommendationPassRate !== null
+        ...(level.recommendations.length
           ? { basis: "recommendations" as const, recommendationPassRate: level.recommendationPassRate, adjustedRecommendationPassRate: level.adjustedRecommendationPassRate }
           : { basis: "settings" as const }) })),
     }

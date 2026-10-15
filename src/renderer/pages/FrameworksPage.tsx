@@ -824,6 +824,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
                   <p className="text-xs font-medium text-gray-500">{benchmarkTitle(level.benchmark, readiness.benchmarkName)} · Level {level.level}{level.version ? ` · ${level.version}` : ""}</p>
                   <p className={`mt-1 font-light tabular-nums tracking-tight text-gray-900 ${head.rate === null ? "text-2xl" : "text-5xl"}`}>{head.rate === null ? "Not available" : percentText(head.rate)}</p>
                   <p className="mt-1 text-xs text-gray-500">{head.basis === "recommendations" ? "Recommendation pass rate" : "Pass rate"}</p>
+                  {head.basis === "recommendations" && head.rate === null && <p className="mt-1 text-xs text-gray-600">No recommendation of this Level could be assessed: the pack does not hold every setting they name.</p>}
                   {head.adjusted !== null && head.adjusted !== head.rate && <p className="mt-1 text-xs font-medium text-gray-700">{head.basis === "recommendations" ? "Adjusted recommendation pass rate" : "Adjusted pass rate"} {percentText(head.adjusted)}</p>}
                   {head.basis === "recommendations" && <p className="mt-1 text-xs text-gray-600">Settings: {level.present} of {level.assessedSettings} present{level.adjustedPassRate !== null && level.adjustedPassRate !== level.passRate ? `, adjusted ${percentText(level.adjustedPassRate)}` : ""}</p>}
                 </div>

@@ -40,10 +40,14 @@ export interface CisLevelReadiness {
   adjustedRecommendationPassRate: number | null
 }
 
-/** The headline rate of a Level: the recommendation pass rate when the pack lists recommendations, otherwise the settings pass rate. */
-export function headlineRate(level: Pick<CisLevelReadiness, "passRate" | "adjustedPassRate" | "recommendationPassRate" | "adjustedRecommendationPassRate">): { basis: "recommendations" | "settings"; rate: number | null; adjusted: number | null } {
-  return level.recommendationPassRate !== null && level.recommendationPassRate !== undefined
-    ? { basis: "recommendations", rate: level.recommendationPassRate, adjusted: level.adjustedRecommendationPassRate ?? null }
+/**
+ * The headline rate of a Level. A Level with any recommendation of the pack is measured by
+ * recommendations, even when none could be assessed: its rate is then null (Not available)
+ * and never falls back to the settings rate. Other Levels use the settings pass rate.
+ */
+export function headlineRate(level: Pick<CisLevelReadiness, "passRate" | "adjustedPassRate" | "recommendations" | "recommendationPassRate" | "adjustedRecommendationPassRate">): { basis: "recommendations" | "settings"; rate: number | null; adjusted: number | null } {
+  return level.recommendations?.length
+    ? { basis: "recommendations", rate: level.recommendationPassRate ?? null, adjusted: level.adjustedRecommendationPassRate ?? null }
     : { basis: "settings", rate: level.passRate, adjusted: level.adjustedPassRate }
 }
 

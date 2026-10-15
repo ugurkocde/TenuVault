@@ -104,6 +104,14 @@ describe("CIS readiness PDF report", () => {
     expect(pdfText(generateCisReadinessPDF(cisReadiness(assessment, policies), context))).not.toContain("Recommendation results")
   })
 
+  it("shows the recommendation pass rate as Not available when no recommendation of a Level could be assessed", () => {
+    const { policies, assessment } = assessed()
+    const unassessed = attachRecommendations(policies, [{ id: "7.9.1", title: "Synthetic partly in pack", level: 1, settings: ["fakebook_setting_alpha", "fakebook_setting_unmapped"] }])
+    const text = pdfText(generateCisReadinessPDF(cisReadiness(assessment, unassessed), context))
+    expect(text).toContain("Not available Recommendation pass rate")
+    expect(text).toContain("Recommendation pass rate: Not available")
+  })
+
   it("labels coverage as not computable without a denominator and names the breakout proxy as illustrative", () => {
     const { policies, assessment } = assessed()
     const summary = cisReadiness(assessment, policies)

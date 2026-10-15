@@ -196,8 +196,8 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
       { value: String(level.assessedSettings), label: 'Assessed settings', color: [100, 116, 139] },
       { value: String(level.present), label: 'Conforming', color: CHECK_RESULT_COLORS.matches },
       { value: String(deviating), label: 'Deviating', color: CHECK_RESULT_COLORS.different },
-      level.recommendationPassRate !== null && level.recommendationPassRate !== undefined
-        ? { value: percent(level.recommendationPassRate), label: 'Recommendation pass rate', color: [37, 99, 235] }
+      level.recommendations?.length
+        ? { value: percent(level.recommendationPassRate ?? null), label: 'Recommendation pass rate', color: [37, 99, 235] }
         : { value: percent(level.passRate), label: 'Pass rate', color: [37, 99, 235] },
     ]
     const gap = 3, tile = (width - gap * (tiles.length - 1)) / tiles.length
