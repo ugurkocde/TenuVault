@@ -5,13 +5,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const appInfo = vi.hoisted(() => vi.fn())
-const licenseChanged = vi.hoisted(() => ({ current: null as (() => void) | null }))
+const licenseStatus = vi.hoisted(() => vi.fn(async () => ({ marker: "initial" })))
+const licenseChanged = vi.hoisted(() => ({ current: null as ((status: unknown) => void) | null }))
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
   bridge: {
     app: { info: appInfo },
     license: {
-      onChanged: (callback: () => void) => {
+      status: licenseStatus,
+      onChanged: (callback: (status: unknown) => void) => {
         licenseChanged.current = callback
         return () => { licenseChanged.current = null }
       },
@@ -20,24 +22,26 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
 }))
 
 import { refreshInternalCisBenchmarks, resetInternalCisBenchmarks, useInternalCisBenchmarks } from "../../src/renderer/lib/internal-cis"
+import { LicenseProvider, useLicense } from "../../src/renderer/lib/license"
 
 const roots: Root[] = []
 const containers: HTMLDivElement[] = []
 
-function renderHook(): { result: { current: boolean }; unmount: () => void } {
-  const result = { current: false }
+function renderHook(): { result: { current: boolean; licenseStatus: unknown }; unmount: () => void } {
+  const result: { current: boolean; licenseStatus: unknown } = { current: false, licenseStatus: null }
   const container = document.createElement("div")
   document.body.appendChild(container)
   containers.push(container)
   let root: Root
   function Probe() {
     result.current = useInternalCisBenchmarks()
+    result.licenseStatus = useLicense().status
     return null
   }
   act(() => {
     root = createRoot(container)
     roots.push(root)
-    root.render(createElement(Probe))
+    root.render(createElement(LicenseProvider, null, createElement(Probe)))
   })
   return { result, unmount: () => act(() => root.unmount()) }
 }
@@ -50,6 +54,7 @@ beforeEach(() => {
   resetInternalCisBenchmarks()
   licenseChanged.current = null
   appInfo.mockReset()
+  licenseStatus.mockClear()
 })
 
 afterEach(() => {
@@ -67,11 +72,13 @@ describe("useInternalCisBenchmarks", () => {
     expect(hook.result.current).toBe(false)
 
     internal = true
-    await act(async () => { licenseChanged.current?.(); await new Promise((resolve) => setTimeout(resolve, 0)) })
+    await act(async () => { licenseChanged.current?.({ marker: "granted" }); await new Promise((resolve) => setTimeout(resolve, 0)) })
     expect(hook.result.current).toBe(true)
+    expect(hook.result.licenseStatus).toEqual({ marker: "granted" })
 
     internal = false
-    await act(async () => { licenseChanged.current?.(); await new Promise((resolve) => setTimeout(resolve, 0)) })
+    await act(async () => { licenseChanged.current?.({ marker: "revoked" }); await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(hook.result.licenseStatus).toEqual({ marker: "revoked" })
     expect(hook.result.current).toBe(false)
     hook.unmount()
   })

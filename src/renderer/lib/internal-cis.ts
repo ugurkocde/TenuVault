@@ -4,9 +4,10 @@ import { bridge } from "./bridge"
 /**
  * Shared internal CIS Benchmarks authorization for the renderer. The main process
  * derives it from the server-issued claim in a verified license entitlement. This
- * store starts and fails closed, refreshes when the license changes, when the
- * window becomes visible or focused, and periodically, so a mounted screen follows
- * both a later grant and a later revocation without restarting the app.
+ * store starts and fails closed. LicenseProvider refreshes it whenever license
+ * status changes, and the store also refreshes when the window becomes visible
+ * or focused and periodically, so a mounted screen follows both a later grant
+ * and a later revocation without restarting the app.
  */
 const REFRESH_INTERVAL_MS = 30_000
 
@@ -14,7 +15,6 @@ let enabled = false
 let attempt = 0
 const listeners = new Set<() => void>()
 let interval: ReturnType<typeof setInterval> | null = null
-let unsubscribeLicense: (() => void) | null = null
 let removeWindowListeners: (() => void) | null = null
 
 function setEnabled(next: boolean): void {
@@ -52,13 +52,6 @@ export async function refreshInternalCisBenchmarks(): Promise<boolean> {
 function startWatchers(): void {
   if (interval !== null) return
   interval = setInterval(() => { void refreshInternalCisBenchmarks() }, REFRESH_INTERVAL_MS)
-  try {
-    if (typeof bridge.license?.onChanged === "function") {
-      unsubscribeLicense = bridge.license.onChanged(() => { void refreshInternalCisBenchmarks() })
-    }
-  } catch {
-    unsubscribeLicense = null
-  }
   if (typeof window !== "undefined" && typeof document !== "undefined") {
     const onFocus = () => { void refreshInternalCisBenchmarks() }
     const onVisible = () => { if (document.visibilityState === "visible") void refreshInternalCisBenchmarks() }
@@ -74,8 +67,6 @@ function startWatchers(): void {
 function stopWatchers(): void {
   if (interval !== null) clearInterval(interval)
   interval = null
-  unsubscribeLicense?.()
-  unsubscribeLicense = null
   removeWindowListeners?.()
   removeWindowListeners = null
 }

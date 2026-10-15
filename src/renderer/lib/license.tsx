@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import type { LicenseStatus, TenantLicenseStatus } from "../../shared/ipc"
 import { planLabel, type Plan } from "../../shared/plans"
 import { bridge } from "./bridge"
+import { refreshInternalCisBenchmarks } from "./internal-cis"
 
 interface LicenseContextValue {
   status: LicenseStatus | null
@@ -31,7 +32,10 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
           timer = setTimeout(() => reject(new Error("The license check did not respond. Try again.")), LICENSE_STATUS_TIMEOUT_MS)
         }),
       ])
-      if (attempt.current === currentAttempt) setStatus(nextStatus)
+      if (attempt.current === currentAttempt) {
+        setStatus(nextStatus)
+        void refreshInternalCisBenchmarks()
+      }
     } catch (error) {
       if (attempt.current === currentAttempt) setError(error instanceof Error ? error.message : String(error))
       console.error("Could not load license status:", error)
@@ -44,7 +48,10 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void refresh().catch(() => {})
-    const unsubscribe = bridge.license.onChanged(setStatus)
+    const unsubscribe = bridge.license.onChanged((nextStatus) => {
+      setStatus(nextStatus)
+      void refreshInternalCisBenchmarks()
+    })
     // Tokens expire offline; keep the view current while the app stays open.
     const timer = setInterval(() => void refresh().catch(() => {}), 5 * 60 * 1000)
     return () => {
