@@ -7,6 +7,11 @@ import { formatDate, STATUS_TONE } from "../shared/change-set"
 import { deploymentActions, getDeployment, listDeployments, rollbackActions, type Deployment, type DeploymentDetail } from "./api"
 
 const tone = (status: Deployment["status"]) => (status === "blocked" ? "danger" : STATUS_TONE[status])
+/** The chip of a deployment: rolled back once its rollback is applied, otherwise its own status. */
+export function deploymentState(deployment: Pick<Deployment, "status" | "rollbackChangeSetId" | "rollbackStatus">): { label: string; tone: ReturnType<typeof tone>; rollbackPending: boolean } {
+  if (deployment.rollbackChangeSetId && deployment.rollbackStatus === "applied") return { label: "rolled back", tone: "neutral", rollbackPending: false }
+  return { label: deployment.status, tone: tone(deployment.status), rollbackPending: !!deployment.rollbackChangeSetId }
+}
 
 /**
  * Every benchmark deployment of the selected tenant, newest first, read from the
@@ -64,15 +69,17 @@ export function CisRemediationHistory({ tenant, focus }: { tenant: Tenant; focus
     {deployments && deployments.length > 0 && <ul className="mt-4 divide-y divide-gray-100 rounded-2xl border border-gray-100">
       {deployments.map(deployment => {
         const expanded = open === deployment.id
+        const state = deploymentState(deployment)
         const shown = expanded && detail?.deployment.id === deployment.id ? detail : null
         return <li key={deployment.id} className="p-3">
           <button type="button" aria-expanded={expanded} onClick={() => setOpen(expanded ? null : deployment.id)} className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 text-left focus-visible:outline focus-visible:outline-2">
             {expanded ? <ChevronDown className="h-4 w-4 shrink-0" aria-hidden="true" /> : <ChevronRight className="h-4 w-4 shrink-0" aria-hidden="true" />}
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm font-medium text-gray-900">{deployment.title}</span>
-              <span className="block text-xs text-gray-500">{deployment.reference} · {formatDate(deployment.createdAt)} · {deployment.items.length} {deployment.items.length === 1 ? "operation" : "operations"}{deployment.rollbackChangeSetId ? " · rollback created" : ""}</span>
+              <span className="block text-xs text-gray-500">{deployment.reference} · {formatDate(deployment.createdAt)} · {deployment.items.length} {deployment.items.length === 1 ? "operation" : "operations"}</span>
             </span>
-            <Chip tone={tone(deployment.status)}>{deployment.status}</Chip>
+            {state.rollbackPending && <Chip tone="warning">rollback pending</Chip>}
+            <Chip tone={state.tone}>{state.label}</Chip>
           </button>
           {expanded && <div className="mt-4 space-y-5 pl-6">
             {deployment.status === "blocked" && <p className="text-sm text-gray-600">{deployment.summary}</p>}

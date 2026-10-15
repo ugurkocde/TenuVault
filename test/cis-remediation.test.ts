@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { applyCisRemediation, approveCisRemediation, createCisRollback, OFFLINE_PREVIEW_NOTICE, planCisRemediation, previewCisRemediation, previewCisRollback, RECOMPARE_NOTICE } from "../src/main/features/cis-remediation/engine"
+import { applyCisRemediation, approveCisRemediation, createCisRollback, listCisRemediations, OFFLINE_PREVIEW_NOTICE, planCisRemediation, previewCisRemediation, previewCisRollback, RECOMPARE_NOTICE } from "../src/main/features/cis-remediation/engine"
 import { applyChangeSet, approveChangeSet, previewChangeSet } from "../src/main/features/change-sets/engine"
 import { setInternalCisBenchmarksEnabled } from "../src/main/frameworks/service"
 import type { Finding } from "../src/shared/frameworks/policies"
@@ -310,10 +310,13 @@ describe("CIS remediation deploy", () => {
     const rollbackPreview = await previewCisRollback(context.deps, TENANT_A, deployment.id)
     expect(rollbackPreview.recompareNotice).toBe(RECOMPARE_NOTICE)
     const rollback = await createCisRollback(context.deps, TENANT_A, deployment.id, {}, "Admin")
+    expect(listCisRemediations(context.deps, TENANT_A)[0]).toMatchObject({ id: deployment.id, status: "applied", rollbackChangeSetId: rollback.id, rollbackStatus: "in-review" })
+    expect(listCisRemediations(context.deps, TENANT_A)[0]).not.toHaveProperty("history")
     const rollbackPreview2 = await previewChangeSet(context.deps, TENANT_A, rollback.id)
     await approveChangeSet(context.deps, TENANT_A, rollback.id, { contentHash: rollbackPreview2.contentHash, targetFingerprint: rollbackPreview2.targetFingerprint, reviewer: "Reviewer" }, "Admin")
     const applied = await applyChangeSet(context.deps, TENANT_A, rollback.id, { contentHash: rollbackPreview2.contentHash, confirmed: true }, "Admin")
     expect(applied.status).toBe("applied")
+    expect(listCisRemediations(context.deps, TENANT_A)[0]).toMatchObject({ id: deployment.id, rollbackStatus: "applied" })
     expect([...context.tenant.policies.values()].some((policy) => policy.name === "[Baseline] Fakebook Beta")).toBe(false)
     expect(context.tenant.policies.get(existing.id as string)?.description).toBe("before")
     expect(context.audits.length).toBeGreaterThanOrEqual(2)

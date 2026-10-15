@@ -3,7 +3,7 @@ import type { FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
 import { featureRoute, FeatureError, optionalText, text, type Body } from "../route"
 import { applyChangeSet, approveChangeSet, previewChangeSet, rejectChangeSet } from "../change-sets/engine"
-import { applyCisRemediation, approveCisRemediation, cisChangeSet, cisRollback, createCisRollback, getCisRemediation, planCisRemediation, previewCisRemediation, previewCisRollback, requireCisBenchmarksEnabled, syncCisRemediationOutcome, type CisRemediationRecord } from "./engine"
+import { applyCisRemediation, approveCisRemediation, cisChangeSet, cisRollback, createCisRollback, getCisRemediation, listCisRemediations, planCisRemediation, previewCisRemediation, previewCisRollback, syncCisRemediationOutcome } from "./engine"
 import type { Finding } from "../../../shared/frameworks/policies"
 
 const idOf = (body: Body): string => {
@@ -20,7 +20,7 @@ const hashField = (body: Body, key: string): string => {
 /** /api/cis-remediation. Every action refuses while the internal benchmark flag is off. */
 export function routes(deps: FeatureDeps): Record<string, RouteModule> {
   return featureRoute("/api/cis-remediation", deps, {
-    list: ({ tenantId }) => { requireCisBenchmarksEnabled(); return { deployments: deps.records.list<CisRemediationRecord>(DOMAINS.cisRemediations, tenantId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(({ history: _history, ...record }) => record) } },
+    list: ({ tenantId }) => ({ deployments: listCisRemediations(deps, tenantId) }),
     get: ({ tenantId, body }) => {
       const deployment = getCisRemediation(deps, tenantId, idOf(body))
       const changeSet = deployment.changeSetId ? deps.records.get(DOMAINS.changeSets, tenantId, deployment.changeSetId) : null

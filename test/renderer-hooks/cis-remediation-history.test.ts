@@ -59,7 +59,7 @@ function render(focus: { id: string; at: number } | null = null) {
 describe("CIS remediation history", () => {
   it("lists deployments newest first and opens the deployment and its rollback change sets", async () => {
     const calls = stubRoutes((action, body) => {
-      if (action === "list") return { deployments: [deployment(NEWER, "Remediate benchmark findings", "2026-10-15T11:00:00Z", { rollbackChangeSetId: "rb" }), deployment(OLDER, "Deploy benchmark policies", "2026-10-14T09:00:00Z")] }
+      if (action === "list") return { deployments: [deployment(NEWER, "Remediate benchmark findings", "2026-10-15T11:00:00Z", { rollbackChangeSetId: "rb", rollbackStatus: "in-review" }), deployment(OLDER, "Deploy benchmark policies", "2026-10-14T09:00:00Z", { rollbackChangeSetId: "rb-old", rollbackStatus: "applied" })] }
       if (action === "get") return { deployment: deployment(String(body.id), "Remediate benchmark findings", "2026-10-15T11:00:00Z", { rollbackChangeSetId: "rb" }), changeSet: changeSet("cs", "Remediate benchmark findings", "change"), rollbackChangeSet: changeSet("rb", "Rollback of Remediate benchmark findings", "rollback") }
       throw new Error(`unexpected ${action}`)
     })
@@ -71,8 +71,11 @@ describe("CIS remediation history", () => {
       expect.stringContaining("Deploy benchmark policies"),
     ])
     expect(rows[0]!.textContent).toContain("2 operations")
-    expect(rows[0]!.textContent).toContain("rollback created")
+    expect(rows[0]!.textContent).toContain("rollback pending")
     expect(rows[0]!.textContent).toContain("applied")
+    expect(rows[1]!.textContent).toContain("rolled back")
+    expect(rows[1]!.textContent).not.toContain("rollback pending")
+    expect(rows[1]!.textContent).not.toContain("applied")
     expect(rows[0]!.textContent).toContain("synthetic-os 9.9.9 Level 1")
 
     await act(async () => { (rows[0] as HTMLButtonElement).click() })

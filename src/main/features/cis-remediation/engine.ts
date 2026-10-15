@@ -70,6 +70,18 @@ function loadCisRemediation(deps: FeatureDeps, tenantId: string, id: string): St
   return record
 }
 
+/** A listed deployment with the status of its rollback change set, so a list can tell rolled back from pending. */
+export type ListedCisRemediation = Omit<Stored<CisRemediationRecord>, "history"> & { rollbackStatus: ChangeSetRecord["status"] | null }
+
+/** Every deployment of a tenant, newest first, without record history. */
+export function listCisRemediations(deps: FeatureDeps, tenantId: string): ListedCisRemediation[] {
+  requireCisBenchmarksEnabled()
+  return deps.records.list<CisRemediationRecord>(DOMAINS.cisRemediations, tenantId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(({ history: _history, ...record }) => ({
+    ...record,
+    rollbackStatus: record.rollbackChangeSetId ? deps.records.get<ChangeSetRecord>(DOMAINS.changeSets, tenantId, record.rollbackChangeSetId)?.status ?? null : null,
+  }))
+}
+
 export function getCisRemediation(deps: FeatureDeps, tenantId: string, id: string): Stored<CisRemediationRecord> {
   requireCisBenchmarksEnabled()
   return loadCisRemediation(deps, tenantId, id)

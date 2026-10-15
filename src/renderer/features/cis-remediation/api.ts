@@ -4,7 +4,7 @@ import type { CisRemediationRecord } from "../../../main/features/cis-remediatio
 import type { ChangeSet, ChangeSetActions, ChangeSetPreview, RollbackPreview } from "../shared/change-set"
 
 export const PATH = "/api/cis-remediation" as const
-export type Deployment = CisRemediationRecord & { id: string; createdAt: string; updatedAt: string }
+export type Deployment = CisRemediationRecord & { id: string; createdAt: string; updatedAt: string; rollbackStatus?: ChangeSet["status"] | null }
 export interface DeploymentDetail { deployment: Deployment; changeSet: ChangeSet | null; rollbackChangeSet: ChangeSet | null }
 
 export const listDeployments = (tenant: Tenant) => featureCall<{ deployments: Deployment[] }>(PATH, tenant, "list")
