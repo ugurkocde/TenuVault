@@ -19,6 +19,9 @@
     matches. The script needs Az.Accounts, Az.Resources and Az.Storage and an account
     that can create storage accounts and assign roles in the subscription (for example
     Owner, or Contributor plus User Access Administrator on the resource group).
+    Creating a new resource group additionally needs permission to create resource
+    groups in the subscription (Microsoft.Resources/subscriptions/resourceGroups/write,
+    which Contributor at subscription scope includes).
 
     Note on PIM: role assignments must be permanently active. An eligible assignment
     that nobody activated makes scheduled backups fail at night.
@@ -47,9 +50,12 @@
 
 .PARAMETER AllowIpAddresses
     Optional public IP addresses or CIDR ranges for the computers
-    that run TenuVault. When set, the storage firewall denies every other network
-    except trusted Azure services. When omitted, all networks can reach the account
-    and Entra sign-in plus the roles above are the only gate.
+    that run TenuVault. When set, the addresses are added to the firewall rules and
+    the firewall is set to deny by default with trusted Azure services allowed.
+    Addresses and virtual network rules that are already on the account are kept, so
+    remove rules you no longer want in the portal. When omitted, the network rules
+    are left unchanged: a new account then accepts all networks, with Entra sign-in
+    plus the roles above as the only gate.
 
 .EXAMPLE
     ./New-TenuVaultStorage.ps1 -AdminGroupId 5f0c... -Location westeurope
@@ -191,7 +197,7 @@ if (-not $containerSoftDeleteMatches -and $PSCmdlet.ShouldProcess($StorageAccoun
 
 $networkRules = Get-AzStorageAccountNetworkRuleSet -ResourceGroupName $ResourceGroupName -Name $StorageAccountName
 if ($AllowIpAddresses) {
-    Write-Host "Restricting the storage firewall to the named addresses plus trusted Azure services..."
+    Write-Host "Allowing the named addresses and setting the storage firewall to deny by default (existing allowed addresses are kept)..."
     if ($PSCmdlet.ShouldProcess($StorageAccountName, "Set storage firewall to deny by default with the named addresses allowed")) {
         # Add the addresses first and switch the default action last, so a rule Azure
         # rejects can never leave the account deny-all with nobody allowed in.

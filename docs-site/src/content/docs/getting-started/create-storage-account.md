@@ -11,7 +11,7 @@ TenuVault stores Azure backups in a storage account in your own subscription and
 
 You need:
 
-* An account that can create storage accounts and assign roles, for example **Owner**, or **Contributor** plus **User Access Administrator**, on the resource group.
+* An account that can create storage accounts and assign roles, for example **Owner**, or **Contributor** plus **User Access Administrator**, on the resource group. To provision into an existing resource group, pass its name with `-ResourceGroupName`. Creating a new resource group (the default creates `rg-tenuvault-backups` when it is missing) additionally needs permission to create resource groups in the subscription, which **Contributor** at subscription scope includes.
 * The object ID of the security group whose members administer Intune with TenuVault.
 * The Az modules `Az.Accounts`, `Az.Resources` and `Az.Storage`. If they are missing, the script installs them for the current user.
 
