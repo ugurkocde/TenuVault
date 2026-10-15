@@ -234,7 +234,12 @@ Loaded packs, source versions and assessment results are saved per tenant and fr
 * **View read-only** to open a saved assessment. Historical assessments cannot be used to create policies; run a fresh comparison first.
 * **Export** or **Delete** a single saved assessment. Deleting an assessment also cancels its pending creation.
 
-A workspace keeps up to 50 assessments and 32 MB. When it is full, TenuVault shows "Workspace history is full. Export and delete older assessments before continuing."
+A workspace keeps up to 50 assessments and 32 MB. When it is full, step 2 shows **Saved assessment history is full** with the number of saved assessments, and **Run comparison** stays unavailable until you make room. A comparison that cannot be saved at the end shows the same notice. To make room:
+
+* Click **Export saved assessments** first if you need the older results.
+* Click **Remove older assessments**. It keeps the newest 10 assessments and removes the rest after you confirm. The confirmation states how many are removed. Removed assessments cannot be restored.
+
+You can also delete single assessments under **Saved workspace and history**.
 
 ## What policy-pack comparisons do not assess
 
@@ -264,6 +269,7 @@ Conflicts with other policy families are not evaluated. Profile selection and ap
 | The selection repeats a setting across multiple policies. Select it from one policy only. | Deselect the duplicate setting in one of the policies. |
 | Provide a source version and profile (up to 200 characters). | Fill in **Source version / profile**. |
 | The policy pack exceeds 8 MB. | Import fewer or smaller files. |
+| Saved assessment history is full | The workspace holds 50 assessments or 32 MB. Export what you need, then click **Remove older assessments** or delete single assessments. See [Saved policy-pack workspace and history](#saved-policy-pack-workspace-and-history). |
 
 ## Related pages
 

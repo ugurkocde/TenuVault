@@ -1,6 +1,7 @@
 import { packCoverage, UNSUPPORTED } from "../../shared/frameworks/coverage"
-import type { FrameworkWorkspace } from "../../main/frameworks/workspaces"
-import { lazy, Suspense, useEffect, useRef, useState } from "react"
+import type { FrameworkWorkspace, WorkspaceView } from "../../main/frameworks/workspaces"
+import { isHistoryFullError, KEEP_NEWEST_ASSESSMENTS } from "../../shared/frameworks/workspace-history"
+import { lazy, Suspense, useEffect, useId, useRef, useState } from "react"
 import { Link, useParams, useSearchParams } from "react-router-dom"
 import { ArrowRight, Check, ChevronDown, Download, ExternalLink, Info, Search } from "lucide-react"
 import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
@@ -338,7 +339,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   const [preview, setPreview] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
   const [creation, setCreation] = useState<{ success: boolean; results: { name: string; id?: string; error?: string }[] } | null>(null)
-  const [workspace, setWorkspace] = useState<FrameworkWorkspace | null>(null)
+  const [workspace, setWorkspace] = useState<WorkspaceView | null>(null)
   const [historical, setHistorical] = useState(false)
   const [kitBenchmark, setKitBenchmark] = useState("")
   const [kitVersion, setKitVersion] = useState("")
@@ -371,7 +372,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   const workspaceQueue = useRef<Promise<unknown>>(Promise.resolve())
   const suppressedDraft = useRef<string | null>(null)
   const workspaceRequest = (action: string, extra: object = {}) => {
-    const task = workspaceQueue.current.catch(() => undefined).then(() => request<FrameworkWorkspace>({ action, tenantId: credentials?.tenantId, frameworkId: framework.id, ...extra }))
+    const task = workspaceQueue.current.catch(() => undefined).then(() => request<WorkspaceView>({ action, tenantId: credentials?.tenantId, frameworkId: framework.id, ...extra }))
     workspaceQueue.current = task
     return task
   }
@@ -399,6 +400,23 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     try { await action() } catch (e) { setError(e instanceof Error ? e.message : "The request failed.") } finally { setBusy("") }
   }
   useEffect(() => () => { cisRunGeneration.current += 1 }, [])
+  // A full history blocks new assessments: the main process reports it on load and refuses to save more.
+  const historyAlertId = useId()
+  const historyCount = workspace?.history.length ?? 0
+  const historyFull = !!workspace?.capacity?.full || isHistoryFullError(error)
+  const removableHistory = Math.max(historyCount - KEEP_NEWEST_ASSESSMENTS, 0)
+  const historyBlocked = historyFull ? { title: "Saved assessment history is full. Remove older assessments first.", "aria-describedby": historyAlertId } : {}
+  async function removeOlderAssessments() {
+    if (!workspace || removableHistory <= 0 || busy) return
+    const removing = removableHistory
+    const noun = removing === 1 ? "assessment" : "assessments"
+    if (!(await confirm({ title: "Remove older assessments?", description: `This keeps the newest ${KEEP_NEWEST_ASSESSMENTS} saved assessments and removes ${removing} older ${noun}. Removed assessments cannot be restored. Export saved assessments first if you need them.`, confirmLabel: `Remove ${removing} ${noun}`, destructive: true }))) return
+    void perform("Removing older assessments…", async () => {
+      const saved = await workspaceRequest("workspace-prune-history", { keep: KEEP_NEWEST_ASSESSMENTS })
+      setWorkspace(saved)
+      if (assessment && !saved.history.some(entry => entry.assessment.runId === assessment.runId)) { setPolicies(saved.policies); setReference(saved.reference); reset() }
+    })
+  }
   async function startCisAssessment() {
     if (!isCis || cisRun || !credentials) return
     const generation = ++cisRunGeneration.current
@@ -518,7 +536,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     const form = { owner, reason, expiresOn }
     setBusy("Excluding findings from the score...")
     setExclusion(old => old && { ...old, error: "" })
-    let saved: FrameworkWorkspace | null = null
+    let saved: WorkspaceView | null = null
     let added = 0
     try {
       for (const finding of excludable) {
@@ -622,7 +640,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
         {historical && <p role="status" className="mt-1 text-sm text-amber-800">Viewing a saved assessment. Compare again to obtain current evidence and enable remediation.</p>}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className={primary} disabled={!!busy || !!cisRun || !credentials || !policies.length || !reference.trim()} onClick={() => void startCisAssessment()}>Run again</button>
+        <button type="button" className={primary} disabled={!!busy || !!cisRun || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={() => void startCisAssessment()}>Run again</button>
         <button type="button" className={button} onClick={() => setSetupRequested(true)}>New assessment</button>
         <CisExportMenu plan={plan} disabled={!!busy} readinessDisabled={!readiness} onPdf={exportCisPdf} onFindingsCsv={() => exportSaved("csv", assessment.runId)} onFindingsJson={() => exportSaved("json", assessment.runId)} onReadinessCsv={exportReadinessCsv} onReadinessJson={exportReadinessJson} />
       </div>
@@ -778,12 +796,25 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     </section>}
     {(!isCis || stage !== "running") && <section {...(isCis && stage === "results" ? { "aria-label": "Assessment results" } : { "aria-labelledby": "compare-title" })} className="mt-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
       {(!isCis || stage !== "results") && <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 id="compare-title" className="text-xl font-medium tracking-tight">2. Compare with your tenant</h2><p className="mt-1 text-sm text-gray-600">{selectedTenant ? `Selected tenant: ${selectedTenant.name}` : "Choose a connected tenant using the sidebar."}</p></div>
-        {isCis ? <button className={primary} disabled={!!busy || !!cisRun || !credentials || !policies.length || !reference.trim()} onClick={() => void startCisAssessment()}>{cisRun ? "Assessment running" : assessment ? "Run again" : "Start Assessment"}</button> : <button className={primary} disabled={!!busy || !credentials || !policies.length || !reference.trim()} onClick={() => void perform("Reading tenant policies and comparing settings…", async () => {
+        {isCis ? <button className={primary} disabled={!!busy || !!cisRun || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={() => void startCisAssessment()}>{cisRun ? "Assessment running" : assessment ? "Run again" : "Start Assessment"}</button> : <button className={primary} disabled={!!busy || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={() => void perform("Reading tenant policies and comparing settings…", async () => {
           reset(); const result = await request<Assessment>({ action: "assess", tenantId: credentials!.tenantId, appId: credentials!.appId, frameworkId: framework.id, reference, policies }); setAssessment(result); setWorkspace(await workspaceRequest("workspace-load"))
         })}>{assessment ? "Compare again" : "Run comparison"}</button>}</div>}
       {busy && <p role="status" className="mt-4 text-sm text-blue-700">{busy}</p>}
       {busy && isCis && <div role="progressbar" aria-label={busy} className="mt-2 h-2 overflow-hidden rounded-full bg-gray-100"><div className="h-full w-1/3 animate-pulse rounded-full bg-primary" /></div>}
-      {error && <p role="alert" className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}
+      {historyFull && <div id={historyAlertId} role="alert" aria-label="Saved assessment history is full" className="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <p className="font-medium">Saved assessment history is full</p>
+        <p className="mt-1">{workspace?.capacity?.reason === "count" || historyCount >= (workspace?.capacity?.limit ?? Infinity)
+          ? `This workspace holds ${historyCount} saved assessments, the most it can keep.`
+          : `The ${historyCount} saved ${historyCount === 1 ? "assessment" : "assessments"} in this workspace have reached the storage limit on this device.`} New assessments cannot be run until older ones are removed.</p>
+        <p className="mt-1">{removableHistory > 0
+          ? `Remove older assessments keeps the newest ${KEEP_NEWEST_ASSESSMENTS} and permanently deletes the other ${removableHistory}. Export saved assessments first if you need them.`
+          : `Delete saved assessments under ${isCis ? "Saved assessments" : "Saved workspace and history"} to make room. Export them first if you need them.`}</p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <ExportButton framework={framework} plan={plan} disabled={!!busy || !historyCount} onClick={() => exportSaved("json")}>{isCis ? "Export saved assessments JSON" : "Export saved assessments"}</ExportButton>
+          {removableHistory > 0 && <button type="button" className={button} disabled={!!busy} onClick={() => void removeOlderAssessments()}>Remove older assessments</button>}
+        </div>
+      </div>}
+      {error && !isHistoryFullError(error) && <p role="alert" className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}
       {assessment && (!isCis || stage === "results") && <>
         {!isCis && <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500"><p>{assessment.policyCount} tenant policies read · {new Date(assessment.assessedAt).toLocaleString()}</p><div className="flex flex-wrap gap-2">{(["pdf", "csv", "json"] as ("pdf" | "csv" | "json")[]).map(format => <ExportButton key={format} framework={framework} plan={plan} disabled={!!busy} onClick={() => exportSaved(format, assessment.runId)}><Download className="h-4 w-4" aria-hidden="true" />{format === "pdf" ? "PDF report" : format.toUpperCase()}</ExportButton>)}</div></div>}
         {readiness && <section aria-label="CIS readiness" className="mb-6 border-b border-gray-100 pb-6 text-sm text-gray-700">

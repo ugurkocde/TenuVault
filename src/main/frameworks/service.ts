@@ -1,5 +1,6 @@
 import { assignmentEvidence, type AssignmentEvidence } from "../../shared/frameworks/evidence"
-import { loadWorkspace, saveWorkspace, deleteWorkspace, recordAssessment, recordCreation, type FrameworkWorkspace } from "./workspaces"
+import { loadWorkspace, saveWorkspace, deleteWorkspace, pruneHistory, recordAssessment, recordCreation, workspaceCapacity, workspaceView, type FrameworkWorkspace } from "./workspaces"
+import { HISTORY_FULL_MESSAGE, MAX_WORKSPACE_HISTORY } from "../../shared/frameworks/workspace-history"
 import { tenantLabel, workspaceExportCSV, workspaceExportJSON, workspaceHistoryJSON } from "../../shared/compliance/export"
 import { createHash, randomUUID } from "node:crypto"
 import { frameworks } from "../../shared/frameworks/catalog"
@@ -128,6 +129,11 @@ async function landscape(token: string, onProgress?: (progress: LandscapeProgres
     result.push(...chunk.filter((policy) => policy !== null))
   }
   return result
+}
+
+/** Refuses a new assessment before the tenant is read when its result could not be saved. */
+function requireHistoryRoom(tenantId: string, frameworkId: string): void {
+  if (workspaceCapacity(loadWorkspace(tenantId, frameworkId)).full) throw new FrameworkError(HISTORY_FULL_MESSAGE, 409)
 }
 
 function fingerprint(policies: LandscapePolicy[]): string {
@@ -335,13 +341,13 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
   if (typeof body.action === "string" && body.action.startsWith("workspace-")) {
     if (typeof body.tenantId !== "string" || typeof body.frameworkId !== "string" || (!legacy && !frameworks.some(f => f.id === body.frameworkId))) throw new FrameworkError("Select a tenant and framework.")
     const tenantKey = body.tenantId.toLowerCase()
-    if (["workspace-delete", "workspace-delete-assessment"].includes(body.action)) {
+    if (["workspace-delete", "workspace-delete-assessment", "workspace-prune-history"].includes(body.action)) {
       if (tenantWriteLabel(tenantKey) === WRITE_LABEL) throw new FrameworkError("Wait for policy creation to finish before deleting its assessment.", 409)
-      for (const [id, run] of runs) if (run.assessment.tenantId === tenantKey && run.assessment.frameworkId === body.frameworkId && (body.action === "workspace-delete" || id === body.runId)) runs.delete(id)
+      for (const [id, run] of runs) if (run.assessment.tenantId === tenantKey && run.assessment.frameworkId === body.frameworkId && (body.action === "workspace-delete" || (body.action === "workspace-delete-assessment" && id === body.runId))) runs.delete(id)
     }
     const workspace = loadWorkspace(body.tenantId, body.frameworkId)
     if (["workspace-pdf", "workspace-csv", "workspace-json", "workspace-cis-pdf"].includes(body.action)) return exportWorkspace(body, workspace)
-    if (body.action === "workspace-delete") { deleteWorkspace(body.tenantId, body.frameworkId); return loadWorkspace(body.tenantId, body.frameworkId) }
+    if (body.action === "workspace-delete") { deleteWorkspace(body.tenantId, body.frameworkId); return workspaceView(loadWorkspace(body.tenantId, body.frameworkId)) }
     if (body.action === "workspace-save") {
       if (typeof body.reference !== "string" || body.reference.length > 200) throw new FrameworkError("Provide a source version up to 200 characters.")
       workspace.policies = Array.isArray(body.policies) && !body.policies.length ? [] : parsePolicies(body.policies)
@@ -357,6 +363,10 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     } else if (body.action === "workspace-delete-assessment") {
       workspace.history = workspace.history.filter(entry => entry.assessment.runId !== body.runId)
       saveWorkspace(workspace)
+    } else if (body.action === "workspace-prune-history") {
+      if (typeof body.keep !== "number" || !Number.isInteger(body.keep) || body.keep < 1 || body.keep > MAX_WORKSPACE_HISTORY) throw new FrameworkError(`Choose how many saved assessments to keep, from 1 to ${MAX_WORKSPACE_HISTORY}.`)
+      const removed = new Set(pruneHistory(workspace, body.keep))
+      for (const [id, run] of runs) if (run.assessment.tenantId === tenantKey && run.assessment.frameworkId === body.frameworkId && removed.has(id)) runs.delete(id)
     } else if (body.action === "workspace-cis-exception-add") {
       if (body.frameworkId !== "cis-benchmarks") throw new FrameworkError("Exceptions are available for CIS Benchmarks only.")
       let input: ReturnType<typeof validateNewException>
@@ -390,7 +400,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       workspace.exceptions = existing.filter(exception => exception.id !== exceptionId)
       saveWorkspace(workspace)
     } else if (body.action !== "workspace-load") throw new FrameworkError("Unknown workspace action.")
-    return loadWorkspace(body.tenantId, body.frameworkId)
+    return workspaceView(loadWorkspace(body.tenantId, body.frameworkId))
   }
   if (body.action === "cis-catalog" || body.action === "cis-fetch-pack") {
     if (body.frameworkId !== "cis-benchmarks") throw new FrameworkError("CIS content delivery is available for CIS Benchmarks only.")
@@ -448,6 +458,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       if (duplicate.reference !== body.reference || duplicate.policiesJson !== JSON.stringify(policies)) throw new FrameworkError("An assessment is already running for a different policy pack. Wait for it to finish before starting another.", 409)
       return { jobId: duplicate.id }
     }
+    requireHistoryRoom(tenant, body.frameworkId)
     if (running.length >= MAX_JOBS) throw new FrameworkError("Too many assessments are running. Wait for a running assessment to finish before starting another.", 409)
     const job: AssessJob = {
       id: randomUUID(), tenantId: tenant, frameworkId: body.frameworkId, reference: body.reference, policiesJson: JSON.stringify(policies),
@@ -464,6 +475,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     if (typeof body.frameworkId !== "string" || !frameworks.some(f => f.id === body.frameworkId)) throw new FrameworkError("Select a framework.")
     if (typeof body.reference !== "string" || !body.reference.trim() || body.reference.length > 200) throw new FrameworkError("Provide a source version and profile (up to 200 characters).")
     const policies = parsePolicies(body.policies)
+    requireHistoryRoom(tenant, body.frameworkId)
     const current = await landscape(token, undefined, () => requireEnabledFramework(body.frameworkId as string))
     requireEnabledFramework(body.frameworkId)
     const assessment = assessPolicySet({ tenantId: tenant, frameworkId: body.frameworkId, reference: body.reference, policies, current })
