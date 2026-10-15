@@ -10,6 +10,7 @@ import { applyChangeSet, approveChangeSet, createChangeSet, getChangeSet, previe
 import { readCurrent } from "../change-sets/graph"
 import type { ChangeSetRecord } from "../change-sets/model"
 import { internalCisBenchmarksEnabled } from "../../frameworks/service"
+import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
 
 /**
  * Deploy and remediation from an imported benchmark pack. Planning freezes one
@@ -63,19 +64,34 @@ export function requireCisBenchmarksEnabled(): void {
   if (!internalCisBenchmarksEnabled()) throw new FeatureError("CIS comparisons are coming soon.", 403)
 }
 
-export function getCisRemediation(deps: FeatureDeps, tenantId: string, id: string): Stored<CisRemediationRecord> {
-  requireCisBenchmarksEnabled()
+function loadCisRemediation(deps: FeatureDeps, tenantId: string, id: string): Stored<CisRemediationRecord> {
   const record = deps.records.get<CisRemediationRecord>(DOMAINS.cisRemediations, tenantId, id)
   if (!record) throw new FeatureError("This benchmark deployment does not exist for this tenant.", 404)
   return record
 }
 
-export function syncCisRemediation(deps: FeatureDeps, tenantId: string, id: string): Stored<CisRemediationRecord> {
-  const record = getCisRemediation(deps, tenantId, id)
+export function getCisRemediation(deps: FeatureDeps, tenantId: string, id: string): Stored<CisRemediationRecord> {
+  requireCisBenchmarksEnabled()
+  return loadCisRemediation(deps, tenantId, id)
+}
+
+/**
+ * Local status bookkeeping after a completed approve, reject, or apply outcome.
+ * It performs no tenant or CIS content operation, so it deliberately does not
+ * recheck current authorization: revocation after the local outcome must not mask
+ * what was already recorded. Public reads use syncCisRemediation below, gated.
+ */
+export function syncCisRemediationOutcome(deps: FeatureDeps, tenantId: string, id: string): Stored<CisRemediationRecord> {
+  const record = loadCisRemediation(deps, tenantId, id)
   if (!record.changeSetId) return record
   const changeSet = deps.records.get<ChangeSetRecord>(DOMAINS.changeSets, tenantId, record.changeSetId)
   if (!changeSet || (changeSet.status === record.status && changeSet.summary === record.summary)) return record
   return deps.records.update<CisRemediationRecord>(DOMAINS.cisRemediations, tenantId, id, (current) => ({ ...current, status: changeSet.status, summary: changeSet.summary }), { actor: null, reason: `Change set is ${changeSet.status}` })!
+}
+
+export function syncCisRemediation(deps: FeatureDeps, tenantId: string, id: string): Stored<CisRemediationRecord> {
+  requireCisBenchmarksEnabled()
+  return syncCisRemediationOutcome(deps, tenantId, id)
 }
 
 function settingIdOf(setting: unknown): string | null {
@@ -136,7 +152,18 @@ export async function planCisRemediation(deps: FeatureDeps, tenantId: string, in
   }
   if (!policyIndexes.size || policyIndexes.size > 25) throw new FeatureError("Select between 1 and 25 benchmark policies.")
 
-  const graph = await deps.graph(tenant)
+  const rawGraph = await deps.graph(tenant)
+  requireCisBenchmarksEnabled()
+  const graph: GraphCall = async (method, path, body, callOptions) => {
+    requireCisBenchmarksEnabled()
+    return rawGraph(method, path, body, {
+      ...callOptions,
+      beforeAttempt: () => {
+        callOptions?.beforeAttempt?.()
+        requireCisBenchmarksEnabled()
+      },
+    })
+  }
   const items: CisRemediationItem[] = []
   const operations: OperationInput[] = []
   for (const policyIndex of [...policyIndexes].sort((a, b) => a - b)) {
@@ -153,8 +180,9 @@ export async function planCisRemediation(deps: FeatureDeps, tenantId: string, in
     const targetId = different?.observed[0]?.policyId ?? null
     if (targetId) {
       if (!isGraphId(targetId)) throw new FeatureError("A selected finding names an invalid tenant policy.")
+      requireCisBenchmarksEnabled()
       let live: Item | null
-      try { live = await readCurrent(graph, type, targetId) } catch (error) { throw new FeatureError(`A tenant policy could not be read. ${error instanceof Error ? error.message : String(error)}`, 502) }
+      try { live = await readCurrent(graph, type, targetId) } catch (error) { requireCisBenchmarksEnabled(); throw new FeatureError(`A tenant policy could not be read. ${error instanceof Error ? error.message : String(error)}`, 502) }
       if (!live) throw new FeatureError(`The tenant policy of a selected finding no longer exists. Compare again.`, 409)
       const assignments = Array.isArray(live.assignments) ? (live.assignments as Item[]) : []
       items.push({ policyIndex, policyName: policy.name, action: "update", targetId, targetName: String(live[type.nameKey] ?? different!.observed[0]!.policyName), findingKeys: selected.map((finding) => finding.key), assignedExposure: assignments.length > 0, assignmentCount: assignments.length })
@@ -173,6 +201,7 @@ export async function planCisRemediation(deps: FeatureDeps, tenantId: string, in
   }, { actor, reason: "Planned a benchmark deployment" })
   let changeSet: Stored<ChangeSetRecord>
   try {
+    requireCisBenchmarksEnabled()
     changeSet = await createChangeSet(deps, tenant, { title: input.title, origin: { workflow: "cis-remediation", recordId: record.id }, sourceVersion: input.reference.slice(0, 2000), operations }, actor)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -197,6 +226,7 @@ export async function previewCisRemediation(deps: FeatureDeps, tenantId: string,
   const deployment = syncCisRemediation(deps, tenantId, id)
   if (!deployment.changeSetId) throw new FeatureError("This benchmark deployment is blocked. Resolve its findings and plan again.", 409)
   const preview = await previewChangeSet(deps, tenantId, deployment.changeSetId)
+  requireCisBenchmarksEnabled()
   const policies = preview.operations.map((operation) => {
     const item = deployment.items.find((entry) => entry.policyName && operation.name && (entry.action === operation.action))
     const inPlace = operation.action === "update"
@@ -231,8 +261,8 @@ export async function applyCisRemediation(deps: FeatureDeps, tenantId: string, i
   if (changeSet.operations.some((operation) => operation.setsAssignments)) throw new FeatureError("This benchmark deployment would set assignments. Plan it again; assignments are never copied in this flow.", 409)
   try {
     const applied = await applyChangeSet(deps, tenantId, deployment.changeSetId, input, actor)
-    return { deployment: syncCisRemediation(deps, tenantId, id), changeSet: applied }
-  } catch (error) { syncCisRemediation(deps, tenantId, id); throw error }
+    return { deployment: syncCisRemediationOutcome(deps, tenantId, id), changeSet: applied }
+  } catch (error) { syncCisRemediationOutcome(deps, tenantId, id); throw error }
 }
 
 export function cisChangeSet(deps: FeatureDeps, tenantId: string, id: string): Stored<ChangeSetRecord> {

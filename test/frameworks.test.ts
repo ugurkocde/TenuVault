@@ -92,6 +92,18 @@ describe("Graph reads and tenant-bound remediation", () => {
     expect(await collectGraph("https://graph.microsoft.com/beta/deviceManagement/configurationPolicies", "test")).toEqual([{ id: liveId }])
     expect(fetch).toHaveBeenCalledTimes(2)
   })
+  it("checks authorization before following a continuation link", async () => {
+    let allowed = true
+    const fetch = vi.fn(async () => {
+      allowed = false
+      return Response.json({ value: [], "@odata.nextLink": "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?$skiptoken=next" })
+    })
+    vi.stubGlobal("fetch", fetch)
+    await expect(collectGraph("https://graph.microsoft.com/beta/deviceManagement/configurationPolicies", "test", () => {
+      if (!allowed) throw new Error("CIS access ended")
+    })).rejects.toThrow("CIS access ended")
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
   it("rejects continuation links that would send a token outside beta Graph", async () => {
     const fetch = vi.fn().mockResolvedValue(Response.json({ value: [], "@odata.nextLink": "https://example.com/leak" }))
     vi.stubGlobal("fetch", fetch)

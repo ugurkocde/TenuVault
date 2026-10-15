@@ -92,15 +92,16 @@ export async function getOne(graph: GraphCall, path: string): Promise<Item | nul
 /** The live object as a backup reads it, or null when it does not exist. */
 export async function readCurrent(graph: GraphCall, type: IntuneType, id: string): Promise<Item | null> {
   let failedStatus = 0
-  const tracking: GraphCall = async (method, path, body) => {
-    const response = await graph(method, path, body)
+  const tracking: GraphCall = async (method, path, body, options) => {
+    const response = await graph(method, path, body, options)
     if (response.status >= 300) failedStatus = response.status
     return response
   }
   try {
     return (await readLive(tracking, type, id)) ?? null
   } catch (error) {
-    throw new GraphReadError(error instanceof Error ? error.message : String(error), failedStatus || 502)
+    const status = error instanceof Error && "status" in error && typeof error.status === "number" ? error.status : failedStatus || 502
+    throw new GraphReadError(error instanceof Error ? error.message : String(error), status)
   }
 }
 

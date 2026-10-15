@@ -51,7 +51,12 @@ export interface RestoreOutcome {
   repairToken?: string
 }
 
-export type GraphCall = (method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE", path: string, body?: Item) => Promise<{ status: number; body: Item }>
+export interface GraphCallOptions {
+  /** Checked immediately before every network attempt, including retries and token refresh. */
+  beforeAttempt?: () => void
+}
+
+export type GraphCall = (method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE", path: string, body?: Item, options?: GraphCallOptions) => Promise<{ status: number; body: Item }>
 
 const GRAPH = "https://graph.microsoft.com/beta/"
 /** Far above any real collection; stops a listing whose continuation links never end. */
@@ -61,6 +66,8 @@ export interface GraphRetryOptions {
   refreshToken?: () => Promise<string>
   tenant?: string
   sleep?: (milliseconds: number) => Promise<void>
+  /** Default per-attempt check for calls made through this caller. */
+  beforeAttempt?: () => void
 }
 function matchesCreationFields(expected: Json, actual: Json | undefined): boolean {
   if (Array.isArray(expected)) return Array.isArray(actual) && expected.length === actual.length && expected.every((entry, index) => matchesCreationFields(entry, actual[index]))
@@ -69,7 +76,9 @@ function matchesCreationFields(expected: Json, actual: Json | undefined): boolea
 }
 export function graphCaller(token: string, fetchImpl: typeof fetch = fetch, options: GraphRetryOptions = {}): GraphCall {
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)))
-  return async (method, path, body) => {
+  return async (method, path, body, callOptions = {}) => {
+    const beforeAttempt = callOptions.beforeAttempt ?? options.beforeAttempt
+    beforeAttempt?.()
     const createsObject = method === "POST" && (path.split("/").length === 2 || path.endsWith("/createInstance"))
     const name = body?.displayName ?? body?.name
     const label = typeof name === "string" ? name.replace(/[\r\n\t]/g, " ").slice(0, 240) : undefined
@@ -80,7 +89,7 @@ export function graphCaller(token: string, fetchImpl: typeof fetch = fetch, opti
       if (previous?.state === "reconciled") {
         if (createsObject) {
           if (!previous.objectId || !label || !/^[a-zA-Z0-9_-]{1,200}$/.test(previous.objectId)) throw new Error("This reconciled creation has no verifiable identity. Complete recovery manually in Intune.")
-          const reader = graphCaller(token, fetchImpl, { ...options, tenant: undefined })
+          const reader = graphCaller(token, fetchImpl, { ...options, tenant: undefined, beforeAttempt })
           let current: { status: number; body: Item }
           if (path.endsWith("/createInstance")) {
             const intent = await readLive(reader, typeForFolder("EndpointSecurityIntents")!, previous.objectId)
@@ -98,6 +107,7 @@ export function graphCaller(token: string, fetchImpl: typeof fetch = fetch, opti
     }
     let refreshed = false
     for (let attempt = 0; attempt < 4; attempt++) {
+      beforeAttempt?.()
       if (key) saveWrite({ key, tenant: options.tenant!, method, path, at: new Date().toISOString(), state: "uncertain", label })
       let response: Response
       try {
@@ -117,6 +127,7 @@ export function graphCaller(token: string, fetchImpl: typeof fetch = fetch, opti
       const rejected = response.status >= 400 && response.status < 500 && response.status !== 408
       if (key && rejected) removeWrite(key)
       if (response.status === 401 && options.refreshToken && !refreshed && attempt < 3) {
+        beforeAttempt?.()
         refreshed = true; token = await options.refreshToken(); continue
       }
       const retry = response.status === 429 || (method === "GET" && [408, 500, 502, 503, 504].includes(response.status))

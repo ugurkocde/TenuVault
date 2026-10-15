@@ -24,10 +24,23 @@ export class FrameworkError extends Error {
 }
 
 let internalCisOverride: boolean | null = null
-/** Test and bootstrap hook for the internal CIS Benchmarks flag. Null follows the environment. */
+let internalCisProvider: (() => boolean) | null = null
+/** Test hook for the internal CIS Benchmarks gate. A set override wins over the provider. */
 export function setInternalCisBenchmarksEnabled(value: boolean | null): void { internalCisOverride = value }
+/**
+ * Bootstrap hook wiring the gate to the license service. The provider reports whether a
+ * verified entitlement on this machine carries the server-issued internal CIS claim.
+ * There is deliberately no environment or settings fallback: without a provider or a
+ * test override, CIS Benchmarks stays off in every shipped build.
+ */
+export function setInternalCisBenchmarksProvider(provider: (() => boolean) | null): void { internalCisProvider = provider }
 export function internalCisBenchmarksEnabled(): boolean {
-  return internalCisOverride ?? process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS === "1"
+  if (internalCisOverride !== null) return internalCisOverride
+  try {
+    return internalCisProvider?.() === true
+  } catch {
+    return false
+  }
 }
 
 function requireEnabledFramework(frameworkId: string): void {
@@ -56,7 +69,7 @@ async function jsonFetch(url: string, init: RequestInit = {}): Promise<RecordJso
   return json
 }
 
-export async function collectGraph(url: string, token: string): Promise<RecordJson[]> {
+export async function collectGraph(url: string, token: string, beforeNetwork?: () => void): Promise<RecordJson[]> {
   const result: RecordJson[] = []
   const visited = new Set<string>()
   while (url) {
@@ -65,6 +78,7 @@ export async function collectGraph(url: string, token: string): Promise<RecordJs
       throw new FrameworkError("Invalid or repeated Graph continuation link. Assessment stopped.", 502)
     }
     visited.add(url)
+    beforeNetwork?.()
     const page = await jsonFetch(url, { headers: { Authorization: `Bearer ${token}` } })
     if (!Array.isArray(page.value) || !page.value.every(record)) throw new FrameworkError("Graph returned an incomplete policy collection.", 502)
     result.push(...page.value)
@@ -77,23 +91,25 @@ export async function collectGraph(url: string, token: string): Promise<RecordJs
 
 export interface LandscapeProgress { read: number; total: number; policyName: string }
 
-async function landscape(token: string, onProgress?: (progress: LandscapeProgress) => void): Promise<LandscapePolicy[]> {
+async function landscape(token: string, onProgress?: (progress: LandscapeProgress) => void, beforeNetwork?: () => void): Promise<LandscapePolicy[]> {
   // Expanding settings severely reduces Graph's page size. Read the policy list first,
   // then each settings collection with bounded concurrency and its own continuation.
-  const policies = await collectGraph(GRAPH, token)
+  beforeNetwork?.()
+  const policies = await collectGraph(GRAPH, token, beforeNetwork)
   const result: LandscapePolicy[] = []
   let read = 0
   for (let i = 0; i < policies.length; i += 4) {
+    beforeNetwork?.()
     const chunk = await Promise.all(policies.slice(i, i + 4).map(async policy => {
       if (typeof policy.id !== "string" || !/^[a-f0-9-]{36}$/i.test(policy.id)) throw new FrameworkError("Policy ID missing from Graph response.", 502)
-      const settings = await collectGraph(`${GRAPH}/${policy.id}/settings`, token)
+      const settings = await collectGraph(`${GRAPH}/${policy.id}/settings`, token, beforeNetwork)
       read += 1
       onProgress?.({ read, total: policies.length, policyName: typeof policy.name === "string" ? policy.name : "" })
       if (typeof policy.settingCount === "number" && settings.length !== policy.settingCount) throw new FrameworkError("Policy settings changed during the read. Compare again.", 409)
       if (!settings.length) return null
       let targeting: AssignmentEvidence
-      try { targeting = assignmentEvidence(await collectGraph(`${GRAPH}/${policy.id}/assignments`, token)) }
-      catch { targeting = { state: "unavailable", targets: [], limitations: ["Assignment evidence could not be read completely. Check Intune access and compare again."] } }
+      try { targeting = assignmentEvidence(await collectGraph(`${GRAPH}/${policy.id}/assignments`, token, beforeNetwork)) }
+      catch { beforeNetwork?.(); targeting = { state: "unavailable", targets: [], limitations: ["Assignment evidence could not be read completely. Check Intune access and compare again."] } }
       return { ...parsePolicies({ ...policy, settings })[0]!, id: policy.id, targeting }
     }))
     result.push(...chunk.filter((policy) => policy !== null))
@@ -179,16 +195,19 @@ function jobSnapshot(job: AssessJob, since: number): AssessJobSnapshot {
 async function runAssessJob(job: AssessJob, token: string, policies: BaselinePolicy[]): Promise<void> {
   try {
     job.phase = "reading"
+    requireEnabledFramework(job.frameworkId)
     const current = await landscape(token, progress => {
       job.read = progress.read
       job.total = progress.total
       job.currentPolicy = progress.policyName
-    })
+    }, () => requireEnabledFramework(job.frameworkId))
+    requireEnabledFramework(job.frameworkId)
     job.phase = "comparing"
     job.packPolicies = policies.length
     const allFindings = comparePolicies(policies, current)
     let offset = 0
     for (let index = 0; index < policies.length; index += 1) {
+      requireEnabledFramework(job.frameworkId)
       if (index > 0) await new Promise(resolve => setTimeout(resolve, COMPARE_PACE_MS))
       const policy = policies[index]!
       job.currentPackPolicy = policy.name
@@ -197,6 +216,7 @@ async function runAssessJob(job: AssessJob, token: string, policies: BaselinePol
       offset += count
       job.comparedPolicies = index + 1
     }
+    requireEnabledFramework(job.frameworkId)
     job.phase = "saving"
     const assessment: Assessment = {
       runId: randomUUID(), tenantId: job.tenantId, frameworkId: job.frameworkId, reference: job.reference,
@@ -251,6 +271,7 @@ export interface ExportFile { name: string; type: string; encoding: "utf8" | "ba
 async function exportWorkspace(body: RecordJson, workspace: FrameworkWorkspace): Promise<{ file: ExportFile }> {
   const { authorizeFrameworkTenant } = await import("./native")
   await authorizeFrameworkTenant(workspace.tenantId, CIS_FRAMEWORKS.has(workspace.frameworkId))
+  requireEnabledFramework(workspace.frameworkId)
   const context = { exportedAt: new Date().toISOString(), tenantName: tenantLabel(body.tenantName) }
   const base = `framework-${workspace.frameworkId}`
   if (body.action === "workspace-json" && body.runId === undefined) {
@@ -362,12 +383,17 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     if (body.frameworkId !== "cis-benchmarks") throw new FrameworkError("CIS content delivery is available for CIS Benchmarks only.")
     if (typeof body.tenantId !== "string" || !body.tenantId) throw new FrameworkError("Select a tenant and framework.")
     try {
-      if (body.action === "cis-catalog") return await fetchCisCatalog()
+      if (body.action === "cis-catalog") {
+        const catalog = await fetchCisCatalog()
+        requireEnabledFramework(body.frameworkId)
+        return catalog
+      }
       const benchmark = typeof body.benchmark === "string" ? body.benchmark : ""
       const version = typeof body.version === "string" ? body.version : ""
       const level = body.level === 1 || body.level === 2 ? (body.level as CisLevel) : null
       if (!BENCHMARK_ID_PATTERN.test(benchmark) || benchmark.length > MAX_CIS_BENCHMARK_ID_LENGTH || !VERSION_PATTERN.test(version) || level === null) throw new FrameworkError("Select a benchmark, version and level.")
       const pack = await fetchCisPack({ benchmark, version, level })
+      requireEnabledFramework(body.frameworkId)
       let policies: BaselinePolicy[]
       try { policies = parsePolicies(pack.policies) }
       catch (error) { throw new FrameworkError(error instanceof Error ? error.message : "The CIS pack is invalid.") }
@@ -392,6 +418,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     return jobSnapshot(job, since)
   }
   const { tenant, token } = await tokenFor(body)
+  if (typeof body.frameworkId === "string") requireEnabledFramework(body.frameworkId)
   for (const [id, run] of runs) if (run.expires < Date.now()) runs.delete(id)
   if (body.action === "assess-start") {
     if (typeof body.frameworkId !== "string" || !frameworks.some(f => f.id === body.frameworkId)) throw new FrameworkError("Select a framework.")
@@ -420,7 +447,8 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     if (typeof body.frameworkId !== "string" || !frameworks.some(f => f.id === body.frameworkId)) throw new FrameworkError("Select a framework.")
     if (typeof body.reference !== "string" || !body.reference.trim() || body.reference.length > 200) throw new FrameworkError("Provide a source version and profile (up to 200 characters).")
     const policies = parsePolicies(body.policies)
-    const current = await landscape(token)
+    const current = await landscape(token, undefined, () => requireEnabledFramework(body.frameworkId as string))
+    requireEnabledFramework(body.frameworkId)
     const assessment = assessPolicySet({ tenantId: tenant, frameworkId: body.frameworkId, reference: body.reference, policies, current })
     recordAssessment(assessment, policies)
     if (runs.size >= 30) runs.delete(runs.keys().next().value!)
@@ -437,11 +465,13 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     if (keys.size !== selected.length || selected.some(f => f.status !== "Missing")) throw new FrameworkError("Only missing settings from this assessment can be created.")
     const definitions = selected.map(f => `${run.policies[f.policyIndex]!.platforms}:${f.settingId}`)
     if (new Set(definitions).size !== definitions.length) throw new FrameworkError("The selection repeats a setting across multiple policies. Select it from one policy only.")
-    const current = await landscape(token)
+    const current = await landscape(token, undefined, () => requireEnabledFramework(run.assessment.frameworkId))
+    requireEnabledFramework(run.assessment.frameworkId)
     if (fingerprint(current) !== run.fingerprint) throw new FrameworkError("The tenant policy landscape changed. Compare again before creating policies.", 409)
     run.consumed = true // A network failure may hide a successful write. Never blindly repeat it.
     const results: { name: string; id?: string; error?: string }[] = []
     for (const policyIndex of new Set(selected.map(f => f.policyIndex))) {
+      requireEnabledFramework(run.assessment.frameworkId)
       const policy = run.policies[policyIndex]!
       const payload = remediationPayload(policy, selected.filter(f => f.policyIndex === policyIndex).map(f => policy.settings[f.settingIndex]!), run.assessment.reference)
       try {

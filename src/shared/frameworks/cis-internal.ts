@@ -1,15 +1,21 @@
 import { frameworks, type Framework } from "./catalog"
 
 /**
- * Internal proof of concept gate for CIS Benchmarks assessment. The flag is
- * off by default in every build. It is enabled only by an explicit local
- * opt-in in the main process, which a shipped customer build does not set.
- * CIS Controls is never enabled by this flag.
+ * Internal gate for CIS Benchmarks assessment before certification. Access comes
+ * only from the server-issued CIS claim in a verified license entitlement for an
+ * allowlisted internal installation. There is no local switch in any shipped
+ * build, so a customer build cannot enable CIS Benchmarks before the award.
+ * CIS Controls is never enabled by this gate.
  */
-export const INTERNAL_CIS_BENCHMARKS_ENV = "TENUVAULT_INTERNAL_CIS_BENCHMARKS"
 
-export function isInternalCisBenchmarksFlagValue(value: string | undefined): boolean {
-  return value === "1"
+/**
+ * Local Build Kit import is development and certification tooling only. It stays
+ * bound to the internal claim and is never part of customer enablement: when CIS
+ * Benchmarks opens to licensed customers after certification, packs arrive from
+ * the delivery service and this returns false for them.
+ */
+export function internalKitImportEnabled(internalCisBenchmarks: boolean): boolean {
+  return internalCisBenchmarks
 }
 
 export const CIS_BENCHMARKS_ID = "cis-benchmarks"

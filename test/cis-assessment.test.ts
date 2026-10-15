@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { frameworks } from "../src/shared/frameworks/catalog"
-import { effectiveFrameworks, INTERNAL_CIS_BENCHMARKS_ENV, isInternalCisBenchmarksFlagValue } from "../src/shared/frameworks/cis-internal"
+import { effectiveFrameworks, internalKitImportEnabled } from "../src/shared/frameworks/cis-internal"
 import { convertKit, type KitFile } from "../src/shared/frameworks/cis-kit"
 import { parseDenominatorList } from "../src/shared/frameworks/cis-coverage"
 import { cisReadiness, MANUAL_NOT_ASSESSED_NOTE } from "../src/shared/frameworks/cis-readiness"
 import { cisReadinessCsv, cisReadinessJson, governanceExportName } from "../src/renderer/features/shared/governance-export"
-import { handleFramework, setInternalCisBenchmarksEnabled, assessPolicySet } from "../src/main/frameworks/service"
+import { handleFramework, setInternalCisBenchmarksEnabled, setInternalCisBenchmarksProvider, assessPolicySet } from "../src/main/frameworks/service"
 import { loadWorkspace, saveWorkspace, setFrameworkStore } from "../src/main/frameworks/workspaces"
 import { parsePolicies } from "../src/shared/frameworks/policies"
 
@@ -23,16 +23,29 @@ const kitFiles: KitFile[] = [
   { path: "Level 2/Fakebook Gamma 9.9.9.json", content: policy("Fakebook Gamma", "Covers 7.2.1", "fakebook_setting_gamma") },
 ]
 
-beforeEach(() => { setInternalCisBenchmarksEnabled(null) })
-afterEach(() => { setInternalCisBenchmarksEnabled(null); vi.unstubAllGlobals() })
+beforeEach(() => { setInternalCisBenchmarksEnabled(null); setInternalCisBenchmarksProvider(null) })
+afterEach(() => { setInternalCisBenchmarksEnabled(null); setInternalCisBenchmarksProvider(null); vi.unstubAllGlobals() })
 
 describe("internal CIS Benchmarks flag", () => {
-  it("is off by default and only on for the explicit local opt-in value", () => {
-    expect(INTERNAL_CIS_BENCHMARKS_ENV).toBe("TENUVAULT_INTERNAL_CIS_BENCHMARKS")
-    expect(isInternalCisBenchmarksFlagValue(undefined)).toBe(false)
-    expect(isInternalCisBenchmarksFlagValue("")).toBe(false)
-    expect(isInternalCisBenchmarksFlagValue("true")).toBe(false)
-    expect(isInternalCisBenchmarksFlagValue("1")).toBe(true)
+  it("is off by default, ignores the legacy environment variable, and follows the server-issued provider", async () => {
+    expect(internalKitImportEnabled(false)).toBe(false)
+    expect(internalKitImportEnabled(true)).toBe(true)
+    process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS = "1"
+    try {
+      await expect(handleFramework({ action: "workspace-load", frameworkId: "cis-benchmarks", tenantId }))
+        .rejects.toMatchObject({ status: 403, message: "CIS comparisons are coming soon." })
+      setInternalCisBenchmarksProvider(() => true)
+      const data = new Map<string, string>()
+      setFrameworkStore({ get: k => data.get(k) ?? null, set: (k, v) => { data.set(k, v) }, delete: k => { data.delete(k) } })
+      await expect(handleFramework({ action: "workspace-load", frameworkId: "cis-benchmarks", tenantId }))
+        .resolves.toMatchObject({ frameworkId: "cis-benchmarks" })
+      setInternalCisBenchmarksProvider(() => { throw new Error("license unavailable") })
+      await expect(handleFramework({ action: "workspace-load", frameworkId: "cis-benchmarks", tenantId }))
+        .rejects.toMatchObject({ status: 403, message: "CIS comparisons are coming soon." })
+    } finally {
+      delete process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS
+      setInternalCisBenchmarksProvider(null)
+    }
   })
 
   it("keeps the catalog disabled with the existing reason when off, and enables only CIS Benchmarks when on", () => {

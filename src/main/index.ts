@@ -44,12 +44,12 @@ import {
 } from "./license/config"
 import { LicenseService } from "./license/service"
 import { planGuard } from "./api/plan-gates"
+import { cisInternalGuard } from "./api/cis-gate"
 import { DisclaimerAcknowledgements, disclaimerGuard } from "./disclaimer"
 import { migrateLegacyOibRuns, setOibStore } from "./oib/service"
 import { setOibCacheDir } from "./oib/source"
 import { setFrameworkStore } from "./frameworks/workspaces"
-import { setInternalCisBenchmarksEnabled } from "./frameworks/service"
-import { INTERNAL_CIS_BENCHMARKS_ENV, isInternalCisBenchmarksFlagValue } from "../shared/frameworks/cis-internal"
+import { internalCisBenchmarksEnabled, setInternalCisBenchmarksProvider } from "./frameworks/service"
 import { setNativeFrameworkStore, setNativeFrameworkAuthorization, setNativeFrameworkNotifier } from "./frameworks/native"
 import { allows, effectiveRetentionDays, PlanRequired } from "../shared/plans"
 import { APP_STATE_START_OVER_BUTTON, APP_STATE_START_OVER_DETAIL, SecureStore, UnreadableStoreError, type Cipher } from "./storage/secure-store"
@@ -320,6 +320,8 @@ async function bootstrap(): Promise<void> {
   // Every change to a tenant waits until the admin accepted the disclaimer for that tenant.
   const disclaimer = new DisclaimerAcknowledgements(appStore)
   const checkDisclaimer = disclaimerGuard(disclaimer)
+  setInternalCisBenchmarksProvider(() => license.cisInternal())
+  const checkCis = cisInternalGuard(() => internalCisBenchmarksEnabled())
   const checkPlan = planGuard((tenantId) => license.requireEntitlement(tenantId).catch(() => null))
   // Drift scans run in the background; each tenant's last result is kept in its own store, or in
   // memory for the session without OS encryption.
@@ -349,8 +351,9 @@ async function bootstrap(): Promise<void> {
   const host: ApiHost = new ApiHost({
     routes: { ...routes, ...backupRoutes(engine, (tenantId) => scopes.get(tenantId).scope), ...featureRoutes(featureDeps), ...driftScanRoutes(driftJobs) },
     transform: surfaceTokenErrors,
-    // The plan comes first, so the disclaimer is never accepted for a change the plan refuses anyway.
-    guard: async (request) => (await checkPlan(request)) ?? checkDisclaimer(request),
+    // Disabled CIS routes refuse before any licensing work. The plan comes next, so the
+    // disclaimer is never accepted for a change the plan refuses anyway.
+    guard: async (request) => (await checkCis(request)) ?? (await checkPlan(request)) ?? checkDisclaimer(request),
     onHandled: createAuditRecorder((request) => host.dispatch(request), (tenantId) => accounts.get(tenantId)),
   })
 
@@ -774,13 +777,11 @@ async function bootstrap(): Promise<void> {
     )
   })
 
-  const internalCisBenchmarks = isInternalCisBenchmarksFlagValue(process.env[INTERNAL_CIS_BENCHMARKS_ENV])
-  setInternalCisBenchmarksEnabled(internalCisBenchmarks)
   handleTrusted("app:info", () => ({
     version: app.getVersion(),
     platform: process.platform,
     trayIconLoaded: tray.iconLoaded,
-    internalCisBenchmarks,
+    internalCisBenchmarks: internalCisBenchmarksEnabled(),
   }))
   handleTrusted("app:openExternal", (_event, url: string) => openExternalSafely(url))
   handleTrusted("reports:savePdf", (_event, html: unknown, fileName: unknown) => savePdfReport(html, fileName))

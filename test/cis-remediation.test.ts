@@ -104,6 +104,156 @@ describe("CIS remediation deploy", () => {
     expect(context.tenant.writeCount()).toBe(0)
   })
 
+  it("does not start the pre-change backup when access is revoked during the final observation", async () => {
+    const context = setup()
+    const deployment = await planCisRemediation(context.deps, TENANT_A, { title: "Deploy", reference: "synthetic 1.0", policies, findings: [finding({ key: "1:0", policyIndex: 1, settingIndex: 0, status: "Missing", policyName: "Fakebook Beta", settingId: DEF_B })], selectedFindingKeys: ["1:0"] }, "Admin")
+    const { preview } = await approveFlow(context, deployment.id)
+    const graphFor = context.deps.graph
+    let reads = 0
+    context.deps.graph = async (...args) => {
+      const graph = await graphFor(...args)
+      return async (method, path, body, options) => {
+        const response = await graph(method, path, body, options)
+        if (method === "GET") {
+          reads += 1
+          if (reads === 1) setInternalCisBenchmarksEnabled(false)
+        }
+        return response
+      }
+    }
+    await expect(applyCisRemediation(context.deps, TENANT_A, deployment.id, { contentHash: preview.changeSet.contentHash, confirmed: true }, "Admin"))
+      .rejects.toMatchObject({ status: 403, message: "CIS comparisons are coming soon." })
+    expect(context.backups).toEqual([])
+    expect(context.tenant.writeCount()).toBe(0)
+  })
+
+  it("does not make nested planning reads after access is revoked during the policy detail read", async () => {
+    const context = setup()
+    const existing = context.tenant.addPolicy({ name: "Tenant Alpha", settings: [setting(DEF_A, "fake-off")] })
+    const graphFor = context.deps.graph
+    const readPaths: string[] = []
+    context.deps.graph = async (...args) => {
+      const graph = await graphFor(...args)
+      return async (method, path, body, options) => {
+        if (method === "GET") {
+          readPaths.push(path)
+          if (readPaths.length === 1) setInternalCisBenchmarksEnabled(false)
+        }
+        return graph(method, path, body, options)
+      }
+    }
+    await expect(planCisRemediation(context.deps, TENANT_A, {
+      title: "Deploy", reference: "synthetic 1.0", policies,
+      findings: [finding({ key: "0:0", policyIndex: 0, settingIndex: 0, status: "Different", observed: [{ policyId: existing.id as string, policyName: "Tenant Alpha", value: null }] })],
+      selectedFindingKeys: ["0:0"],
+    }, "Admin")).rejects.toMatchObject({ status: 403, message: "CIS comparisons are coming soon." })
+    expect(readPaths).toHaveLength(1)
+  })
+
+  it("writes nothing when access is revoked during the pre-change backup", async () => {
+    const context = setup()
+    const deployment = await planCisRemediation(context.deps, TENANT_A, { title: "Deploy", reference: "synthetic 1.0", policies, findings: [finding({ key: "1:0", policyIndex: 1, settingIndex: 0, status: "Missing", policyName: "Fakebook Beta", settingId: DEF_B })], selectedFindingKeys: ["1:0"] }, "Admin")
+    const { preview } = await approveFlow(context, deployment.id)
+    const api = context.deps.api
+    context.deps.api = async (path, tenantId, body) => {
+      const response = await api(path, tenantId, body)
+      if (path === "/api/backup/status") setInternalCisBenchmarksEnabled(false)
+      return response
+    }
+    await expect(applyCisRemediation(context.deps, TENANT_A, deployment.id, { contentHash: preview.changeSet.contentHash, confirmed: true }, "Admin"))
+      .rejects.toMatchObject({ status: 403, message: "CIS comparisons are coming soon." })
+    expect(context.backups).toEqual([TENANT_A])
+    expect(context.tenant.writeCount()).toBe(0)
+  })
+
+  it("stops before later writes and read-back when access is revoked during the write phase", async () => {
+    const context = setup()
+    const existing = context.tenant.addPolicy({ name: "Tenant Alpha", settings: [setting(DEF_A, "fake-off")] })
+    const findings = [
+      finding({ key: "0:0", policyIndex: 0, settingIndex: 0, status: "Different", observed: [{ policyId: existing.id as string, policyName: "Tenant Alpha", value: null }] }),
+      finding({ key: "1:0", policyIndex: 1, settingIndex: 0, status: "Missing", policyName: "Fakebook Beta", settingId: DEF_B }),
+    ]
+    const deployment = await planCisRemediation(context.deps, TENANT_A, { title: "Deploy", reference: "synthetic 1.0", policies, findings, selectedFindingKeys: ["0:0", "1:0"] }, "Admin")
+    const { preview } = await approveFlow(context, deployment.id)
+    const graphFor = context.deps.graph
+    let revoked = false
+    let readsAfterRevocation = 0
+    context.deps.graph = async (...args) => {
+      const graph = await graphFor(...args)
+      return async (method, path, body, options) => {
+        if (method === "GET" && revoked) readsAfterRevocation += 1
+        return graph(method, path, body, options)
+      }
+    }
+    context.tenant.failWrite = (_method, _path, count) => {
+      if (count === 1) {
+        revoked = true
+        setInternalCisBenchmarksEnabled(false)
+      }
+      return undefined
+    }
+    const result = await applyCisRemediation(context.deps, TENANT_A, deployment.id, { contentHash: preview.changeSet.contentHash, confirmed: true }, "Admin")
+    expect(result.changeSet.status).toBe("uncertain")
+    expect(Object.values(result.changeSet.results).map((operation) => operation.status)).toContain("uncertain")
+    expect(Object.values(result.changeSet.results).map((operation) => operation.status)).not.toContain("verified")
+    expect(readsAfterRevocation).toBe(0)
+    expect(Object.values(result.changeSet.results).some((operation) => operation.message?.includes("CIS comparisons are coming soon"))).toBe(true)
+    expect([...context.tenant.policies.values()].some((policy) => policy.name === "[Baseline] Fakebook Beta")).toBe(false)
+    expect(JSON.stringify(context.tenant.policies.get(existing.id as string)?.settings)).toContain("fake-on")
+  })
+
+  it("does not persist approval when access is revoked during the approval preview", async () => {
+    const context = setup()
+    const deployment = await planCisRemediation(context.deps, TENANT_A, { title: "Deploy", reference: "synthetic 1.0", policies, findings: [finding({ key: "1:0", policyIndex: 1, settingIndex: 0, status: "Missing", policyName: "Fakebook Beta", settingId: DEF_B })], selectedFindingKeys: ["1:0"] }, "Admin")
+    const preview = await previewCisRemediation(context.deps, TENANT_A, deployment.id)
+    const graphFor = context.deps.graph
+    let reads = 0
+    context.deps.graph = async (...args) => {
+      const graph = await graphFor(...args)
+      return async (method, path, body) => {
+        if (method === "GET") {
+          reads += 1
+          if (reads === 1) setInternalCisBenchmarksEnabled(false)
+        }
+        return graph(method, path, body)
+      }
+    }
+    await expect(approveCisRemediation(context.deps, TENANT_A, deployment.id, { contentHash: preview.changeSet.contentHash, targetFingerprint: preview.changeSet.targetFingerprint, reviewer: "Reviewer" }, "Admin"))
+      .rejects.toMatchObject({ status: 403, message: "CIS comparisons are coming soon." })
+    setInternalCisBenchmarksEnabled(true)
+    const after = await previewCisRemediation(context.deps, TENANT_A, deployment.id)
+    expect(after.changeSet.status).toBe("in-review")
+    expect(after.changeSet.approval.valid).toBe(false)
+  })
+
+  it("does not write on retry when access is revoked during target observation", async () => {
+    const context = setup()
+    const deployment = await planCisRemediation(context.deps, TENANT_A, { title: "Deploy", reference: "synthetic 1.0", policies, findings: [finding({ key: "1:0", policyIndex: 1, settingIndex: 0, status: "Missing", policyName: "Fakebook Beta", settingId: DEF_B })], selectedFindingKeys: ["1:0"] }, "Admin")
+    const { preview } = await approveFlow(context, deployment.id)
+    context.tenant.failWrite = (_method, _path, count) => count === 1 ? 400 : undefined
+    const first = await applyCisRemediation(context.deps, TENANT_A, deployment.id, { contentHash: preview.changeSet.contentHash, confirmed: true }, "Admin")
+    expect(first.changeSet.status).toBe("failed")
+    expect([...context.tenant.policies.values()].some((policy) => policy.name === "[Baseline] Fakebook Beta")).toBe(false)
+
+    const graphFor = context.deps.graph
+    let reads = 0
+    context.deps.graph = async (...args) => {
+      const graph = await graphFor(...args)
+      return async (method, path, body) => {
+        if (method === "GET") {
+          reads += 1
+          if (reads === 1) setInternalCisBenchmarksEnabled(false)
+        }
+        return graph(method, path, body)
+      }
+    }
+    const retry = await applyCisRemediation(context.deps, TENANT_A, deployment.id, { contentHash: preview.changeSet.contentHash, confirmed: true }, "Admin")
+    expect(retry.changeSet.status).toBe("failed")
+    expect(Object.values(retry.changeSet.results).some((operation) => operation.message?.includes("CIS comparisons are coming soon"))).toBe(true)
+    expect([...context.tenant.policies.values()].some((policy) => policy.name === "[Baseline] Fakebook Beta")).toBe(false)
+    expect(context.tenant.writeCount()).toBe(1)
+  })
+
   it("aborts as stale when the tenant changed after approval", async () => {
     const context = setup()
     const existing = context.tenant.addPolicy({ name: "Tenant Alpha", settings: [setting(DEF_A, "fake-off")] })
@@ -112,6 +262,37 @@ describe("CIS remediation deploy", () => {
     context.tenant.policies.get(existing.id as string)!.description = "edited elsewhere"
     await expect(applyCisRemediation(context.deps, TENANT_A, deployment.id, { contentHash: preview.changeSet.contentHash, confirmed: true }, "Admin")).rejects.toMatchObject({ status: 409 })
     expect(context.tenant.writeCount()).toBe(0)
+  })
+
+  it("stops reading a rollback preview when access is revoked during the first operation read", async () => {
+    const context = setup()
+    const existing = context.tenant.addPolicy({ name: "Tenant Alpha", settings: [setting(DEF_A, "fake-off")] })
+    const findings = [
+      finding({ key: "0:0", policyIndex: 0, settingIndex: 0, status: "Different", observed: [{ policyId: existing.id as string, policyName: "Tenant Alpha", value: null }] }),
+      finding({ key: "1:0", policyIndex: 1, settingIndex: 0, status: "Missing", policyName: "Fakebook Beta", settingId: DEF_B }),
+    ]
+    const deployment = await planCisRemediation(context.deps, TENANT_A, { title: "Deploy", reference: "synthetic 1.0", policies, findings, selectedFindingKeys: ["0:0", "1:0"] }, "Admin")
+    const { preview } = await approveFlow(context, deployment.id)
+    await applyCisRemediation(context.deps, TENANT_A, deployment.id, { contentHash: preview.changeSet.contentHash, confirmed: true }, "Admin")
+
+    const createdId = [...context.tenant.policies.values()].find((policy) => policy.name === "[Baseline] Fakebook Beta")!.id as string
+    const graphFor = context.deps.graph
+    let reads = 0
+    const readPaths: string[] = []
+    context.deps.graph = async (...args) => {
+      const graph = await graphFor(...args)
+      return async (method, path, body) => {
+        if (method === "GET") {
+          reads += 1
+          readPaths.push(path)
+          if (reads === 1) setInternalCisBenchmarksEnabled(false)
+        }
+        return graph(method, path, body)
+      }
+    }
+    await expect(previewCisRollback(context.deps, TENANT_A, deployment.id))
+      .rejects.toMatchObject({ status: 403, message: "CIS comparisons are coming soon." })
+    expect(readPaths.some((path) => path.includes(createdId))).toBe(false)
   })
 
   it("rolls back exactly the recorded creates and setting changes, then offers re-comparison", async () => {
