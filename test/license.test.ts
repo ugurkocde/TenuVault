@@ -319,6 +319,16 @@ describe("LicenseService key expiry", () => {
     expect(service().entitlementToken(TENANT)).toBeNull()
   })
 
+  it("keeps a removed tenant's token unavailable across casing and restart after a failed release", async () => {
+    storeLicense(token({ cis: "internal" }))
+    answer = () => { throw new Error("network down") }
+    await expect(service().releaseTenant(TENANT)).rejects.toThrow()
+    expect(service().entitlementToken(TENANT.toUpperCase())).toBeNull()
+    // A fresh service over the same store simulates an app restart.
+    expect(service().entitlementToken(TENANT)).toBeNull()
+    expect(service().cisInternal()).toBe(false)
+  })
+
   it("rejects a token whose CIS claim has an unknown value", () => {
     storeLicense(token({ cis: "customer" }))
     const license = service()

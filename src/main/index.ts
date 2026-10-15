@@ -324,7 +324,7 @@ async function bootstrap(): Promise<void> {
   setInternalCisBenchmarksProvider(() => license.cisInternal())
   setCisEntitlementProvider((tenantId) => license.entitlementToken(tenantId))
   setCisContentFallbackBaseUrl(LICENSE_API_BASE)
-  const checkCis = cisInternalGuard(() => internalCisBenchmarksEnabled())
+  const checkCis = cisInternalGuard(() => internalCisBenchmarksEnabled(), (tenantId) => license.entitlementToken(tenantId))
   const checkPlan = planGuard((tenantId) => license.requireEntitlement(tenantId).catch(() => null))
   // Drift scans run in the background; each tenant's last result is kept in its own store, or in
   // memory for the session without OS encryption.
