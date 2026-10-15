@@ -7,6 +7,7 @@ import { bridge } from "@desktop/lib/bridge"
 import { useTenantPlan } from "@desktop/lib/license"
 import { FirstBackupNote } from "@desktop/components/FirstBackupNote"
 import { resolveBackupJobDisplay, toBackupJobDisplay, type BackupJobDisplay } from "~/lib/backup-job-display"
+import { azureStoragePortalUrl } from "~/lib/azure-portal"
 import {
   Dialog,
   DialogContent,
@@ -40,6 +41,7 @@ interface BackupProgressModalProps {
     subscriptionId: string
     resourceGroupName: string
     automationAccountName: string
+    storageAccountName?: string
   } | null
   onComplete?: (success: boolean) => void
 }
@@ -152,6 +154,13 @@ export function BackupProgressModal({
       setCancelling(false)
     }
   }
+
+  const portalUrl = azureStoragePortalUrl({
+    tenantId: credentials?.tenantId,
+    subscriptionId: resources?.subscriptionId,
+    resourceGroupName: resources?.resourceGroupName,
+    storageAccountName: resources?.storageAccountName,
+  })
 
   const handleDialogChange = (newOpen: boolean) => {
     // If the dialog is being closed and the job is still running
@@ -285,17 +294,12 @@ export function BackupProgressModal({
         <DialogFooter>
           {jobStatus?.isComplete ? (
             <>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  // Use the direct URL format for viewing automation jobs
-                  const url = `https://portal.azure.com/#@${credentials?.tenantId}/resource/subscriptions/${resources?.subscriptionId}/resourceGroups/${resources?.resourceGroupName}/providers/Microsoft.Automation/automationAccounts/${resources?.automationAccountName}/jobs/${jobId}/output`
-                  window.open(url, "_blank")
-                }}
-              >
-                <ExternalLink className="mr-2 h-4 w-4" />
-                View in Azure
-              </Button>
+              {portalUrl && (
+                <Button variant="outline" onClick={() => window.open(portalUrl, "_blank")}>
+                  <ExternalLink className="mr-2 h-4 w-4" />
+                  View in Azure
+                </Button>
+              )}
               <Button onClick={() => onOpenChange(false)} className="bg-coral-600 text-white hover:bg-coral-700">
                 Close
               </Button>

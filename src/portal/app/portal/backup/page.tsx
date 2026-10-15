@@ -384,7 +384,7 @@ export default function BackupRestorePage() {
           credentials={selectedTenant.credentials ? { tenantId: selectedTenant.credentials.tenantId, appId: selectedTenant.credentials.appId, clientSecret: selectedTenant.credentials.clientSecret } : null}
           resources={
             selectedTenant.resources
-              ? { subscriptionId: selectedTenant.resources.subscriptionId, resourceGroupName: selectedTenant.resources.resourceGroupName, automationAccountName: selectedTenant.resources.automationAccountName }
+              ? { subscriptionId: selectedTenant.resources.subscriptionId, resourceGroupName: selectedTenant.resources.resourceGroupName, automationAccountName: selectedTenant.resources.automationAccountName, storageAccountName: selectedTenant.resources.storageAccountName }
               : null
           }
           jobId={jobId}

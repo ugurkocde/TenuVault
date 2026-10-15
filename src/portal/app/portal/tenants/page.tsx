@@ -1301,6 +1301,7 @@ function TenantsPageContent() {
             subscriptionId: backupTenant.resources.subscriptionId,
             resourceGroupName: backupTenant.resources.resourceGroupName,
             automationAccountName: backupTenant.resources.automationAccountName,
+            storageAccountName: backupTenant.resources.storageAccountName,
           } : null}
         />
       )}

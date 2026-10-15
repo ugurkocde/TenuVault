@@ -160,7 +160,7 @@ export default function OnboardingPage() {
       isHidden: true,
       quiet: true,
       credentials: { tenantId: credentials.tenantId, appId: credentials.appId, clientSecret: credentials.clientSecret },
-      resources: { subscriptionId: "", resourceGroupName: "", automationAccountName: "" },
+      resources: { subscriptionId: credentials.subscriptionId ?? "", resourceGroupName: credentials.resourceGroupName ?? "", automationAccountName: "", storageAccountName: credentials.storageAccountName ?? "" },
     })
   }
 
