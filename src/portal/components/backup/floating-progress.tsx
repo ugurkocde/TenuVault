@@ -8,6 +8,7 @@ import { cn } from "~/lib/utils"
 import { bridge } from "@desktop/lib/bridge"
 import { FirstBackupNote } from "@desktop/components/FirstBackupNote"
 import { tenantLicense, tenantPlan, useLicense } from "@desktop/lib/license"
+import { azureStoragePortalUrl } from "~/lib/azure-portal"
 import { 
   X,
   ChevronUp,
@@ -117,6 +118,12 @@ export function FloatingProgress() {
       {activeJobs.map((job) => {
         const isExpanded = expandedJobId === job.jobId
         const showingOutput = showOutput[job.jobId] || false
+        const portalUrl = azureStoragePortalUrl({
+          tenantId: job.credentials.tenantId,
+          subscriptionId: job.resources.subscriptionId,
+          resourceGroupName: job.resources.resourceGroupName,
+          storageAccountName: job.resources.storageAccountName,
+        })
 
         return (
           <div
@@ -264,17 +271,9 @@ export function FloatingProgress() {
                 )}
 
                 {/* Actions */}
-                {job.isComplete && (
+                {job.isComplete && portalUrl && (
                   <div className="flex gap-2 pt-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="flex-1"
-                      onClick={() => {
-                        const url = `https://portal.azure.com/#@${job.credentials.tenantId}/resource/subscriptions/${job.resources.subscriptionId}/resourceGroups/${job.resources.resourceGroupName}/providers/Microsoft.Automation/automationAccounts/${job.resources.automationAccountName}/jobs/${job.jobId}/output`
-                        window.open(url, "_blank")
-                      }}
-                    >
+                    <Button variant="outline" size="sm" className="flex-1" onClick={() => window.open(portalUrl, "_blank")}>
                       <ExternalLink className="mr-2 h-3 w-3" />
                       View in Azure
                     </Button>

@@ -26,7 +26,12 @@ export function trackBackup(tenant: Tenant, jobId: string, addJob: AddJob, optio
     isComplete: false,
     isSuccessful: false,
     credentials: tenant.credentials,
-    resources: { subscriptionId: "", resourceGroupName: "", automationAccountName: "" },
+    resources: {
+      subscriptionId: tenant.resources?.subscriptionId ?? "",
+      resourceGroupName: tenant.resources?.resourceGroupName ?? "",
+      automationAccountName: tenant.resources?.automationAccountName ?? "",
+      storageAccountName: tenant.resources?.storageAccountName ?? "",
+    },
     ...options,
   })
 }

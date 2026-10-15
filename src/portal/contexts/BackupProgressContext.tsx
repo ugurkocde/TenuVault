@@ -36,6 +36,7 @@ export interface BackupJob {
     subscriptionId: string
     resourceGroupName: string
     automationAccountName: string
+    storageAccountName?: string
   }
 }
 
