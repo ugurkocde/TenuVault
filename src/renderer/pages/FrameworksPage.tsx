@@ -18,7 +18,7 @@ import { cisPortfolioRows, type CisPortfolioEntry } from "../../shared/framework
 import { parseRecommendationList, type RecommendationList } from "../../shared/frameworks/cis-manual"
 import { cisReadinessCsv, cisReadinessJson, governanceExportName } from "../features/shared/governance-export"
 import { accumulateCisFindings, cisRunReceivedLabel, cisRunSteps, cisRunTallies, emptyCisRunAccumulation, resolveCisRunCompletion, type CisRunPack } from "../../shared/frameworks/cis-run"
-import { useInternalCisBenchmarks } from "../lib/internal-cis"
+import { refreshInternalCisBenchmarks, useInternalCisBenchmarks } from "../lib/internal-cis"
 import { comparable, parsePolicies, remediationPayload, type Assessment, type BaselinePolicy, type Finding, type Observation } from "../../shared/frameworks/policies"
 import { summarizeSetting } from "../../shared/frameworks/setting-summary"
 import { CIS_FRAMEWORKS, type Plan } from "../../shared/plans"
@@ -472,6 +472,13 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       setWorkspace(saved); setPolicies(saved.policies); setReference(saved.reference || result.reference)
     })
   }
+  async function requireCurrentCisAccess(): Promise<void> {
+    if (!(await refreshInternalCisBenchmarks())) throw new Error("CIS comparisons are coming soon.")
+  }
+  async function requireCurrentKitImport(): Promise<void> {
+    if (!kitImport) throw new Error("CIS comparisons are coming soon.")
+    await requireCurrentCisAccess()
+  }
   function clearKit() { setKitConversion(null); setKitDetected({ id: "" }); setKitFiles([]); setKitBenchmark(""); setKitVersion(""); setLoadedKitLevel(null); setPolicies([]); setReference(""); reset() }
   function applyKitConversion(files: KitFile[], id: string, version?: string) {
     const conversion = convertKit(files, { id, ...(version ? { version } : {}) })
@@ -535,15 +542,33 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   }
   const exportReadinessCsv = () => {
     if (!readiness) return
-    const exportedAt = new Date().toISOString()
-    const name = governanceExportName("cis-readiness", selectedTenant?.name ?? null, exportedAt)
-    save(new Blob([`\uFEFF${cisReadinessCsv(readiness)}`], { type: "text/csv;charset=utf-8" }), `${name}.csv`)
+    const current = readiness
+    void perform("Checking CIS access…", async () => {
+      await requireCurrentCisAccess()
+      const exportedAt = new Date().toISOString()
+      const name = governanceExportName("cis-readiness", selectedTenant?.name ?? null, exportedAt)
+      save(new Blob([`\uFEFF${cisReadinessCsv(current)}`], { type: "text/csv;charset=utf-8" }), `${name}.csv`)
+    })
   }
   const exportReadinessJson = () => {
     if (!readiness) return
-    const exportedAt = new Date().toISOString()
-    const name = governanceExportName("cis-readiness", selectedTenant?.name ?? null, exportedAt)
-    save(new Blob([cisReadinessJson(readiness, selectedTenant?.name ?? null, exportedAt)], { type: "application/json" }), `${name}.json`)
+    const current = readiness
+    void perform("Checking CIS access…", async () => {
+      await requireCurrentCisAccess()
+      const exportedAt = new Date().toISOString()
+      const name = governanceExportName("cis-readiness", selectedTenant?.name ?? null, exportedAt)
+      save(new Blob([cisReadinessJson(current, selectedTenant?.name ?? null, exportedAt)], { type: "application/json" }), `${name}.json`)
+    })
+  }
+  const exportCoverage = () => {
+    if (!isCis) {
+      exportJson({ reference, ...packCoverage(policies) }, `${framework.id}-coverage.json`)
+      return
+    }
+    void perform("Checking CIS access…", async () => {
+      await requireCurrentCisAccess()
+      exportJson({ reference, ...packCoverage(policies) }, `${framework.id}-coverage.json`)
+    })
   }
   const savedBlock = workspace ? (isCis ? <details className="mb-5 rounded-3xl bg-white p-6" aria-label="Saved assessment history">
     <summary className="cursor-pointer text-lg font-medium">Saved assessments</summary>
@@ -641,6 +666,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
             const file = e.target.files?.[0]; e.target.value = ""
             if (!file) return
             void perform("Converting Build Kit…", async () => {
+              await requireCurrentKitImport()
               clearKit()
               const files = await readKitZip(await file.arrayBuffer())
               setKitFiles(files)
@@ -653,6 +679,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
             const files = Array.from(e.target.files ?? []); e.target.value = ""
             if (!files.length) return
             void perform("Converting Build Kit…", async () => {
+              await requireCurrentKitImport()
               clearKit()
               if (files.length > 2000) throw new Error("The kit contains too many files. Split the kit or remove extra files before importing.")
               const kitFiles: KitFile[] = []
@@ -678,12 +705,12 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
             <div className="flex flex-wrap items-center gap-3"><label className={cn(button, "focus-within:ring-2 focus-within:ring-primary focus-within:ring-offset-2")}>Select denominator JSON<input type="file" accept=".json,application/json" disabled={!!busy} className="sr-only" onChange={e => {
               const file = e.target.files?.[0]; e.target.value = ""
               if (!file) return
-              void perform("Reading denominator list…", async () => { setDenominator(parseDenominatorList(await file.text())) })
+              void perform("Reading denominator list…", async () => { await requireCurrentKitImport(); setDenominator(parseDenominatorList(await file.text())) })
             }} /></label><p className="text-sm text-gray-600">Adds the full count of automated recommendations so coverage can be shown.</p></div>
             <div className="flex flex-wrap items-center gap-3"><label className={cn(button, "focus-within:ring-2 focus-within:ring-primary focus-within:ring-offset-2")}>Select recommendation list JSON<input type="file" accept=".json,application/json" disabled={!!busy} className="sr-only" onChange={e => {
               const file = e.target.files?.[0]; e.target.value = ""
               if (!file) return
-              void perform("Reading recommendation list…", async () => { setRecommendationList(parseRecommendationList(await file.text())) })
+              void perform("Reading recommendation list…", async () => { await requireCurrentKitImport(); setRecommendationList(parseRecommendationList(await file.text())) })
             }} /></label><p className="text-sm text-gray-600">Adds manual recommendations that appear in the readiness Manual section.</p></div>
             {recommendationList && <p className="text-sm text-gray-600">{recommendationList.benchmark} {recommendationList.version}: {recommendationList.items.length} recommendations loaded, {recommendationList.items.filter(item => !item.automated).length} manual. Manual items appear in the readiness Manual section after a comparison.</p>}
             {denominator && <p className="text-sm text-gray-600">{denominator.length} denominator entries loaded. Coverage uses the automated entries per Level.</p>}
@@ -695,7 +722,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
           <div className="mt-3 flex flex-wrap items-end gap-3">
             <label className="block text-sm font-medium text-gray-700">Benchmark id<input value={kitBenchmark} disabled={!!busy} onChange={e => setKitBenchmark(e.target.value)} placeholder="For example: synthetic-os" className="mt-2 w-56 rounded-full border border-gray-300 px-4 py-2 font-normal" /></label>
             <label className="block text-sm font-medium text-gray-700">Version<input value={kitVersion} disabled={!!busy} onChange={e => setKitVersion(e.target.value)} placeholder="For example: 1.0.0" className="mt-2 w-48 rounded-full border border-gray-300 px-4 py-2 font-normal" /></label>
-            <button type="button" className={button} disabled={!!busy || !kitBenchmark.trim()} onClick={() => void perform("Converting Build Kit…", async () => { setKitConversion(null); applyKitConversion(kitFiles, kitBenchmark.trim(), kitVersion.trim() || undefined) })}>Reconvert</button>
+            <button type="button" className={button} disabled={!!busy || !kitBenchmark.trim()} onClick={() => void perform("Converting Build Kit…", async () => { await requireCurrentKitImport(); setKitConversion(null); applyKitConversion(kitFiles, kitBenchmark.trim(), kitVersion.trim() || undefined) })}>Reconvert</button>
           </div>
         </div>}
         {kitConversion && <div className="mt-4 text-sm text-gray-700">
@@ -705,12 +732,12 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
           <div className="mt-3 flex flex-wrap items-end gap-3">
             <label className="block text-sm font-medium text-gray-700">Benchmark id<input value={kitBenchmark} disabled={!!busy} onChange={e => setKitBenchmark(e.target.value)} className="mt-2 w-56 rounded-full border border-gray-300 px-4 py-2 font-normal" /></label>
             <label className="block text-sm font-medium text-gray-700">Version<input value={kitVersion} disabled={!!busy} onChange={e => setKitVersion(e.target.value)} placeholder="For example: 1.0.0" className="mt-2 w-48 rounded-full border border-gray-300 px-4 py-2 font-normal" /></label>
-            <button type="button" className={button} disabled={!!busy || !kitBenchmark.trim() || !kitFiles.length} onClick={() => void perform("Converting Build Kit…", async () => { setKitConversion(null); applyKitConversion(kitFiles, kitBenchmark.trim(), kitVersion.trim() || undefined) })}>Reconvert</button>
+            <button type="button" className={button} disabled={!!busy || !kitBenchmark.trim() || !kitFiles.length} onClick={() => void perform("Converting Build Kit…", async () => { await requireCurrentKitImport(); setKitConversion(null); applyKitConversion(kitFiles, kitBenchmark.trim(), kitVersion.trim() || undefined) })}>Reconvert</button>
           </div>
           <div className="mt-3 grid gap-3 sm:grid-cols-2" role="group" aria-label="Choose a level">
             {kitConversion.packs.map(pack => {
               const selectedPack = loadedKitLevel === pack.level
-              return <button key={pack.level} type="button" aria-pressed={selectedPack} disabled={!!busy} onClick={() => { reset(); setLoadedKitLevel(pack.level); setPolicies(pack.policies); setReference(pack.reference) }} className={cn("rounded-2xl border p-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50", selectedPack ? "border-primary bg-blue-50 ring-1 ring-primary" : "border-gray-200 bg-white hover:bg-gray-50")}>
+              return <button key={pack.level} type="button" aria-pressed={selectedPack} disabled={!!busy} onClick={() => void perform("Checking CIS access…", async () => { await requireCurrentKitImport(); reset(); setLoadedKitLevel(pack.level); setPolicies(pack.policies); setReference(pack.reference) })} className={cn("rounded-2xl border p-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50", selectedPack ? "border-primary bg-blue-50 ring-1 ring-primary" : "border-gray-200 bg-white hover:bg-gray-50")}>
                 <span className="flex items-center justify-between gap-3"><span className="text-sm font-medium text-gray-900">Level {pack.level}</span>{selectedPack && <span className="inline-flex items-center gap-1 text-xs font-medium text-blue-700"><Check className="h-4 w-4" aria-hidden="true" />Selected</span>}</span>
                 <span className="mt-2 block text-sm text-gray-600">{pack.policies.length} {pack.policies.length === 1 ? "policy" : "policies"}</span>
                 <span className="block text-sm text-gray-600">{packSettingCount(pack)} {packSettingCount(pack) === 1 ? "setting" : "settings"}</span>
@@ -723,7 +750,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       </div></details>}
       {policies.length > 0 && <>
         {!fromKit && <>
-          <button className={button} onClick={() => exportJson({ reference, ...packCoverage(policies) }, `${framework.id}-coverage.json`)}>Export coverage and source mappings</button>
+          <button className={button} onClick={exportCoverage}>Export coverage and source mappings</button>
           <p className="mt-3 text-xs text-gray-600">Unsupported: {UNSUPPORTED.join('; ')}. Retained source declarations are not signatures. Organizational evidence and profile approval remain manual.</p>
           <label className="mt-5 block text-sm font-medium text-gray-700">Source version / profile<input value={reference} maxLength={200} disabled={!!busy} onChange={e => { setReference(e.target.value); reset() }} placeholder="For example: approved workstation baseline, revision 3, standard profile" className="mt-2 w-full rounded-full border border-gray-300 px-4 py-2 font-normal" /></label>
         </>}

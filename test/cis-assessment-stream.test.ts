@@ -180,6 +180,29 @@ describe("streamed CIS assessment", () => {
     expect(loadWorkspace(tenantId, "cis-benchmarks").history.length).toBe(before)
   })
 
+  it("fails a running job and records no assessment when access is revoked while reading", async () => {
+    let release!: () => void
+    const settingsGate = new Promise<void>(resolve => { release = resolve })
+    vi.stubGlobal("fetch", graphFetch({ settingsGate }))
+    const before = loadWorkspace(tenantId, "cis-benchmarks").history.length
+    const jobId = await startJob()
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const snap = await status(jobId)
+      if (snap.read === 1) break
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+    setInternalCisBenchmarksEnabled(false)
+    await expect(status(jobId)).rejects.toMatchObject({ status: 403 })
+    release()
+    await new Promise(resolve => setTimeout(resolve, 30))
+    setInternalCisBenchmarksEnabled(true)
+    const failed = await pollDone(jobId)
+    expect(failed.phase).toBe("failed")
+    expect(failed.error).toContain("CIS comparisons are coming soon")
+    expect(failed.assessment).toBeNull()
+    expect(loadWorkspace(tenantId, "cis-benchmarks").history.length).toBe(before)
+  })
+
   it("returns 404 for an unknown jobId", async () => {
     vi.stubGlobal("fetch", graphFetch())
     await expect(handleFramework({ action: "assess-status", jobId: "no-such-job", since: 0 }))
