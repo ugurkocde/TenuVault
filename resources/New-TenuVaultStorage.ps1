@@ -76,16 +76,24 @@ $ErrorActionPreference = "Stop"
 if ($AdminGroupId -notmatch '^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$') {
     throw "'$AdminGroupId' is not a group object id. Pass the object (principal) id of the Intune admin security group."
 }
+# Storage firewall rules accept public IPv4 addresses only: no IPv6, no private
+# (RFC 1918) ranges, and no /31 or /32 CIDR (use the individual address instead).
 foreach ($entry in $AllowIpAddresses) {
-    $address = $entry.Split("/")[0]
+    $parts = $entry.Split("/")
     $parsed = $null
-    if (-not [Net.IPAddress]::TryParse($address, [ref]$parsed)) {
-        throw "'$entry' is not an IP address or CIDR range. Fix -AllowIpAddresses and run the script again."
+    if ($parts.Count -gt 2 -or -not [Net.IPAddress]::TryParse($parts[0], [ref]$parsed) -or
+        $parsed.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) {
+        throw "'$entry' is not an IPv4 address or CIDR range. Fix -AllowIpAddresses and run the script again."
     }
-    if ($entry.Contains("/")) {
+    $bytes = $parsed.GetAddressBytes()
+    if ($bytes[0] -eq 10 -or ($bytes[0] -eq 172 -and $bytes[1] -ge 16 -and $bytes[1] -le 31) -or
+        ($bytes[0] -eq 192 -and $bytes[1] -eq 168)) {
+        throw "'$entry' is a private address. Storage firewall rules only accept public internet addresses; use the public address of the network instead."
+    }
+    if ($parts.Count -eq 2) {
         $prefix = 0
-        if (-not [int]::TryParse($entry.Split("/")[1], [ref]$prefix) -or $prefix -lt 0 -or $prefix -gt 32) {
-            throw "'$entry' has an invalid CIDR prefix. Use a value between 0 and 32."
+        if (-not [int]::TryParse($parts[1], [ref]$prefix) -or $prefix -lt 0 -or $prefix -gt 30) {
+            throw "'$entry' has an unsupported CIDR prefix. Use 0 to 30, or pass the individual address without a prefix."
         }
     }
 }
@@ -172,28 +180,30 @@ if (-not $account) {
 }
 
 $blobService = Get-AzStorageBlobServiceProperty -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName
-$softDeleteMatches = $blobService.DeleteRetentionPolicy.Enabled -and $blobService.DeleteRetentionPolicy.Days -eq 7 -and `
-    $blobService.ContainerDeleteRetentionPolicy.Enabled -and $blobService.ContainerDeleteRetentionPolicy.Days -eq 7
-if (-not $softDeleteMatches -and $PSCmdlet.ShouldProcess($StorageAccountName, "Enable soft delete for 7 days")) {
-    Update-AzStorageBlobServiceProperty -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName `
-        -EnableDeleteRetentionPolicy $true -DeleteRetentionPolicyDay 7 `
-        -EnableContainerDeleteRetentionPolicy $true -ContainerDeleteRetentionPolicyDay 7 | Out-Null
+$blobSoftDeleteMatches = $blobService.DeleteRetentionPolicy.Enabled -and $blobService.DeleteRetentionPolicy.Days -eq 7
+$containerSoftDeleteMatches = $blobService.ContainerDeleteRetentionPolicy.Enabled -and $blobService.ContainerDeleteRetentionPolicy.Days -eq 7
+if (-not $blobSoftDeleteMatches -and $PSCmdlet.ShouldProcess($StorageAccountName, "Enable blob soft delete for 7 days")) {
+    Enable-AzStorageBlobDeleteRetentionPolicy -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -RetentionDays 7 | Out-Null
+}
+if (-not $containerSoftDeleteMatches -and $PSCmdlet.ShouldProcess($StorageAccountName, "Enable container soft delete for 7 days")) {
+    Enable-AzStorageContainerDeleteRetentionPolicy -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -RetentionDays 7 | Out-Null
 }
 
 $networkRules = Get-AzStorageAccountNetworkRuleSet -ResourceGroupName $ResourceGroupName -Name $StorageAccountName
 if ($AllowIpAddresses) {
     Write-Host "Restricting the storage firewall to the named addresses plus trusted Azure services..."
     if ($PSCmdlet.ShouldProcess($StorageAccountName, "Set storage firewall to deny by default with the named addresses allowed")) {
-        if ($networkRules.DefaultAction -ne "Deny" -or "$($networkRules.Bypass)" -notmatch "AzureServices") {
-            Update-AzStorageAccountNetworkRuleSet -ResourceGroupName $ResourceGroupName -Name $StorageAccountName `
-                -DefaultAction Deny -Bypass AzureServices | Out-Null
-            $networkRules = Get-AzStorageAccountNetworkRuleSet -ResourceGroupName $ResourceGroupName -Name $StorageAccountName
-        }
+        # Add the addresses first and switch the default action last, so a rule Azure
+        # rejects can never leave the account deny-all with nobody allowed in.
         $allowedNow = @($networkRules.IpRules | ForEach-Object { $_.IPAddressOrRange })
         foreach ($ip in $AllowIpAddresses) {
             if ($allowedNow -notcontains $ip) {
                 Add-AzStorageAccountNetworkRule -ResourceGroupName $ResourceGroupName -Name $StorageAccountName -IPAddressOrRange $ip | Out-Null
             }
+        }
+        if ($networkRules.DefaultAction -ne "Deny" -or "$($networkRules.Bypass)" -notmatch "AzureServices") {
+            Update-AzStorageAccountNetworkRuleSet -ResourceGroupName $ResourceGroupName -Name $StorageAccountName `
+                -DefaultAction Deny -Bypass AzureServices | Out-Null
         }
     }
 }
@@ -215,9 +225,13 @@ foreach ($role in "Reader", "Storage Blob Data Contributor") {
 # Read the final firewall state so a rerun without -AllowIpAddresses still reports a
 # restriction an earlier run put in place.
 $networkRules = Get-AzStorageAccountNetworkRuleSet -ResourceGroupName $ResourceGroupName -Name $StorageAccountName
-$firewallText = if ($networkRules.DefaultAction -eq "Deny") {
+$account = Get-AzStorageAccount -ResourceGroupName $ResourceGroupName -Name $StorageAccountName
+$firewallText = if ($account.PublicNetworkAccess -eq "Disabled") {
+    "public network access is disabled, so no public address can reach the account (this takes precedence over the firewall rules). TenuVault on an admin computer cannot use it until public access or a private endpoint route exists."
+} elseif ($networkRules.DefaultAction -eq "Deny") {
     $ips = @($networkRules.IpRules | ForEach-Object { $_.IPAddressOrRange })
-    "denies by default; allowed addresses: " + $(if ($ips) { $ips -join ", " } else { "none" }) + ", plus trusted Azure services"
+    $bypassText = if ("$($networkRules.Bypass)" -match "AzureServices") { ", plus trusted Azure services" } else { "" }
+    "denies by default; allowed addresses: " + $(if ($ips) { $ips -join ", " } else { "none" }) + $bypassText
 } else {
     "open to all networks. Entra sign-in and the roles above are the only gate. Confirm this is intended, or run the script again with -AllowIpAddresses."
 }

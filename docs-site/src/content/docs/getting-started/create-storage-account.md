@@ -79,7 +79,7 @@ Backups are Intune configuration as JSON files, so most tenants store a modest a
 
 * **Immutability policies and legal holds** on the `intune-backups` container block the deletes that retention performs. Older backups then stay in place and TenuVault reports that old backups could not be removed.
 * **Lifecycle management rules** that move backup blobs to Cool, Cold or Archive, or that delete them, fight with TenuVault retention and can remove files a backup still lists. Let TenuVault decide what to delete.
-* **A Delete resource lock** on the account or resource group blocks retention deletes in the same way.
+* A **CannotDelete** resource lock is compatible and recommended: it blocks deleting the storage account itself, while blob writes and deletes continue normally.
 * Blob names are not encrypted and include each object's display name, and audit log events are plain JSON. Everyone who can list the containers can see them, so keep the roles above limited to the admin group. Backup file contents are encrypted before upload.
 
 ## After the account exists

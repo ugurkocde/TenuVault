@@ -24,13 +24,26 @@ describe("New-TenuVaultStorage.ps1", () => {
       "AllowSharedKeyAccess  = $false",
       "EnableHttpsTrafficOnly = $true",
       "StorageV2",
-      "Update-AzStorageBlobServiceProperty",
-      "-EnableDeleteRetentionPolicy $true",
-      "-EnableContainerDeleteRetentionPolicy $true",
+      "Enable-AzStorageBlobDeleteRetentionPolicy",
+      "Enable-AzStorageContainerDeleteRetentionPolicy",
+      "-RetentionDays 7",
     ]) {
       expect(storageScript).toContain(setting)
     }
     expect(createStoragePage).toContain("New-TenuVaultStorage.ps1")
+    // Update-AzStorageBlobServiceProperty has no retention parameters; the Enable cmdlets are the supported call.
+    expect(storageScript).not.toContain("Update-AzStorageBlobServiceProperty")
+  })
+
+  it("adds firewall addresses before switching the default action to deny", () => {
+    const addAt = storageScript.indexOf("Add-AzStorageAccountNetworkRule")
+    const denyAt = storageScript.indexOf("-DefaultAction Deny -Bypass AzureServices")
+    expect(addAt).toBeGreaterThan(0)
+    expect(denyAt).toBeGreaterThan(addAt)
+    // Azure rejects private, IPv6 and /31 or /32 rules; the script refuses them up front.
+    expect(storageScript).toContain("AddressFamily")
+    expect(storageScript).toContain("$prefix -gt 30")
+    expect(storageScript).toContain("PublicNetworkAccess")
   })
 
   it("warns at runtime that PIM eligible assignments do not satisfy scheduled backups", () => {
