@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { loadPack, oibDownloads, oibPack, oibReleases, oibVersions, parseReleaseManifest, resetOibSource, resolveMain, setOibCacheDir } from "../src/main/oib/source"
-import { defaultSelection, isPrerelease, oibReference, platformStatus, selectionLabel } from "../src/shared/oib/versions"
+import { defaultSelection, isPrerelease, oibReference, pickerReleases, platformStatus, selectionLabel } from "../src/shared/oib/versions"
 
 const MAIN = "a".repeat(40)
 const V40 = "b".repeat(40)
@@ -105,6 +105,22 @@ it("maps manifest platform ids and keeps only well-formed releases", () => {
   expect(() => parseReleaseManifest({})).toThrow("unexpected release manifest")
 })
 
+it("drops manifest releases whose tag or branch is not a release of that platform and version", () => {
+  const { platforms, dropped } = parseReleaseManifest({
+    platforms: [{ id: "windows", status: "available", releases: [
+      { version: "4.0", channel: "stable", releaseDate: "2026-09-30", branch: "main", tag: "windows-v4.0", prerelease: false },
+      { version: "4.0", channel: "stable", releaseDate: "2026-09-30", branch: "main", tag: "macos-v4.0", prerelease: false },
+      { version: "9.9", channel: "stable", releaseDate: "2026-09-30", branch: "main", tag: "b".repeat(40), prerelease: false },
+      { version: "5.0", channel: "stable", releaseDate: "2026-09-30", branch: "main", tag: "windows-v4.0", prerelease: false },
+      { version: "2.0", channel: "beta", releaseDate: "2026-09-30", branch: "arbitrary-feature-branch", tag: null, prerelease: true },
+      { version: "6.0", channel: "beta", releaseDate: "2026-09-30", branch: "main", tag: "windows-v6.0-rc", prerelease: true },
+      { version: "7.0", channel: "beta", releaseDate: "2026-09-30", branch: "../../../other/repo", tag: null, prerelease: true },
+    ] }],
+  })
+  expect(platforms[0]!.releases.map(r => r.version)).toEqual(["4.0"])
+  expect(dropped).toHaveLength(6)
+})
+
 it("resolves main and every manifest release, pinning each to its tag or beta branch commit", async () => {
   const { fetcher } = github()
   const versions = await oibVersions()
@@ -141,6 +157,10 @@ it("defaults to the newest non-prerelease release, and to the newest release whe
   expect(platformStatus(versions, "ios")).toBe("available")
   expect(selectionLabel(defaultSelection(versions, "macos", true))).toBe("v2.0 beta")
   expect(selectionLabel(defaultSelection(versions, "byod"))).toBe(`main @ ${MAIN.slice(0, 7)}`)
+  // The picker follows the same toggle, keeping the beta-only platform's only release.
+  expect(pickerReleases(versions, "macos", false).map(r => r.tag)).toEqual(["macos-v1.0"])
+  expect(pickerReleases(versions, "macos", true).map(r => r.tag)).toEqual(["macos-v2.0-beta", "macos-v1.0"])
+  expect(pickerReleases(versions, "ios", false).map(r => r.tag)).toEqual(["ios-v1.0-beta"])
 })
 
 it("loads a release only for its own platform and tag, including a beta branch release", async () => {
@@ -150,7 +170,11 @@ it("loads a release only for its own platform and tag, including a beta branch r
   expect((await loadPack("windows", V40, "windows-v4.0")).catalog).toMatchObject({ commit: V40, tag: "windows-v4.0", reference: `OpenIntuneBaseline Windows v4.0 · windows-v4.0 @ ${V40.slice(0, 7)}` })
   expect((await loadPack("macos", MACBETA, "macos-v2.0-beta")).catalog).toMatchObject({ commit: MACBETA, tag: "macos-v2.0-beta", reference: `OpenIntuneBaseline macOS v2.0 beta · macos-v2.0-beta @ ${MACBETA.slice(0, 7)}` })
   await expect(loadPack("macos", V40, "windows-v4.0")).rejects.toThrow("Reload")
+  // A Windows release commit does not become another platform's main when loaded without a tag.
+  await expect(loadPack("macos", V40)).rejects.toThrow("Reload")
   await expect(loadPack("windows", V40, "windows-v3.8")).rejects.toThrow("Reload")
+  // Android is in development with nothing published, so even main cannot load as Android.
+  await expect(loadPack("android", MAIN)).rejects.toThrow("no published Android baseline")
   await expect(loadPack("windows", V40, 42)).rejects.toThrow("Reload")
   await expect(loadPack("windows", "f".repeat(40))).rejects.toThrow("Reload")
   // Without a tag, a release commit reads as its release; other resolved commits read as main.
@@ -244,6 +268,8 @@ it("offers each platform's newest non-prerelease release as its upgrade, and mai
   // iOS has only its beta release, so the beta is offered instead of an empty main.
   expect(releases.find(r => r.platform === "ios")).toMatchObject({ tag: "ios-v1.0-beta", commit: IOSBETA, publishedAt: "2026-10-15" })
   expect(releases.find(r => r.platform === "byod")).toMatchObject({ tag: `main @ ${MAIN.slice(0, 7)}`, commit: MAIN, reference: `OpenIntuneBaseline BYOD · main @ ${MAIN.slice(0, 7)}` })
+  // In-development platforms are not offered as upgrades.
+  expect(releases.map(r => r.platform)).toEqual(["windows", "macos", "win365", "byod", "ios"])
 })
 
 it("resolves releases on demand for the baseline features", async () => {
@@ -251,6 +277,17 @@ it("resolves releases on demand for the baseline features", async () => {
   expect((await oibPack("windows", V38)).reference).toContain("windows-v3.8 @")
   await expect(oibPack("windows", "f".repeat(40))).rejects.toThrow("Reload")
   await resolveMain()
+})
+
+it("never admits a manifest release whose ref belongs to another platform", async () => {
+  github({ manifest: { platforms: [{ id: "windows", status: "available", releases: [
+    { version: "4.0", channel: "stable", releaseDate: "2026-09-30", branch: "main", tag: "windows-v4.0", prerelease: false },
+    { version: "1.0", channel: "stable", releaseDate: "2026-10-01", branch: "main", tag: "macos-v1.0", prerelease: false },
+  ] }] } })
+  const versions = await oibVersions()
+  expect(versions.releases.map(r => r.tag)).toEqual(["windows-v4.0"])
+  expect(versions.warning).toContain("could not be read (Windows v1.0)")
+  await expect(loadPack("windows", MAC, "macos-v1.0")).rejects.toThrow("Reload")
 })
 
 it("warns when a manifest release cannot be resolved instead of silently falling back", async () => {
@@ -269,7 +306,11 @@ it("reads versions stored before the manifest when offline", async () => {
   // The pre-manifest shape: publishedAt only, and no version, branch, channel or platform list.
   writeFileSync(join(cache, "versions.json"), JSON.stringify({ format: 1, savedAt: "2026-10-01T00:00:00Z", versions: {
     main: { commit: MAIN },
-    releases: [{ platform: "windows", tag: "windows-v4.0", commit: V40, publishedAt: "2026-09-30T00:00:00Z" }],
+    releases: [
+      { platform: "windows", tag: "windows-v4.0", commit: V40, publishedAt: "2026-09-30T00:00:00Z" },
+      // Not a release tag of its platform: skipped instead of discarding the whole cache.
+      { platform: "win365", tag: "windows365-v1.0", commit: MAC, publishedAt: "2024-09-02T00:00:00Z" },
+    ],
   } }))
   github({ offline: true })
   const versions = await oibVersions()

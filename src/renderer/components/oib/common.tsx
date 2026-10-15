@@ -5,7 +5,7 @@ import { useSelectedTenant } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { allows, type Feature } from "../../../shared/plans"
 import { OIB_PLATFORMS, type OibCatalog, type OibComparison, type OibPlatform, type OibSelection, type OibVersions } from "../../../shared/oib/types"
-import { platformReleases, platformStatus, selectionLabel, tagChannel, tagVersion } from "../../../shared/oib/versions"
+import { isPrerelease, pickerReleases, platformStatus, selectionLabel, tagChannel, tagVersion } from "../../../shared/oib/versions"
 import { tenantLicense, tenantPlan, useLicense } from "../../lib/license"
 
 export const button = "inline-flex h-10 items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
@@ -137,20 +137,20 @@ export const loadCatalog = (tenant: OibTenant, platform: OibPlatform, selection:
 
 const selectValue = (selection: OibSelection) => selection.tag ?? "main"
 
-/** One version select per platform: published releases newest first, then main. */
-export function VersionPicker({ versions, value, onChange }: { versions: OibVersions; value: Selections; onChange: (value: Selections) => void }) {
+/** One version select per platform: published releases newest first, then main. Prereleases are offered per the toggle. */
+export function VersionPicker({ versions, value, onChange, allowPrerelease = true }: { versions: OibVersions; value: Selections; onChange: (value: Selections) => void; allowPrerelease?: boolean }) {
   // Manifest release dates are date-only (2026-09-30); parse them at local noon so the day does not shift by timezone.
   const date = (iso?: string) => iso ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso}T12:00:00` : iso).toLocaleDateString() : ""
   return <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
     {(Object.keys(OIB_PLATFORMS) as OibPlatform[]).map(platform => {
-      const releases = platformReleases(versions, platform)
+      const releases = pickerReleases(versions, platform, allowPrerelease)
       return <label key={platform} className="flex flex-col gap-1 text-xs font-medium text-gray-700">{OIB_PLATFORMS[platform].label}
         <select value={selectValue(value[platform])} className="h-10 rounded-full border border-gray-300 bg-white px-4 text-sm font-normal"
           onChange={e => {
             const release = releases.find(r => r.tag === e.target.value)
             onChange({ ...value, [platform]: release ? { commit: release.commit, tag: release.tag } : { commit: versions.main.commit } })
           }}>
-          {releases.map((release, index) => <option key={release.tag} value={release.tag}>{tagVersion(release.tag)}{tagChannel(release.tag) ? ` ${tagChannel(release.tag)}` : release.channel !== "stable" ? ` (${release.channel})` : ""}{index === 0 ? " (latest)" : ""}, {date(release.releaseDate)}</option>)}
+          {releases.map((release, index) => <option key={release.tag} value={release.tag}>{tagVersion(release.tag)}{tagChannel(release.tag) ? ` ${tagChannel(release.tag)}` : isPrerelease(release) ? " (prerelease)" : release.channel !== "stable" ? ` (${release.channel})` : ""}{index === 0 ? " (latest)" : ""}, {date(release.releaseDate)}</option>)}
           <option value="main">main @ {versions.main.commit.slice(0, 7)}{releases.length ? " (unreleased)" : " (no release yet)"}</option>
         </select>
       </label>

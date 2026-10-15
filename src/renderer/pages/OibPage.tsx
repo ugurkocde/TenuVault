@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom"
 import { ArrowLeft, ArrowRight, ExternalLink, Package, PencilRuler, RotateCcw, Search, ShieldCheck } from "lucide-react"
 import { useSelectedTenant } from "~/contexts/TenantContext"
 import { OIB_PLATFORMS, OIB_REPO, type OibPlatform, type OibSelection, type OibVersions } from "../../shared/oib/types"
-import { defaultSelection, selectionLabel } from "../../shared/oib/versions"
+import { defaultSelection, platformStatus, selectionLabel } from "../../shared/oib/versions"
 import { GatedButton } from "../components/PlanGate"
 import { customizeOib } from "../features/custom-baselines/api"
 import { RunsList } from "../components/oib/DeployPanel"
@@ -96,7 +96,7 @@ export default function OibPage() {
         <span className="mt-4 flex size-10 items-center justify-center self-end rounded-full bg-secondary text-muted-foreground transition-colors group-hover:bg-primary group-hover:text-primary-foreground" aria-hidden="true"><ArrowRight className="h-4 w-4" /></span>
       </Link>)}</div>
       <p className="mt-5 text-sm text-gray-500">Not sure which to choose? Use New Deployment the first time, Existing Deployment to compare and update previously deployed policies, and Policy Validation to check deployed policies for configuration drift. Always test in a pilot or test tenant first: these baselines can change the user experience and device behaviour.</p>
-      <CustomizeCard selections={selections} />
+      <CustomizeCard selections={selections} versions={versions} />
       <section className={`${card} mt-6`} aria-label="Deployment runs"><h2 className="text-lg font-medium">Deployment history</h2><p className="mt-1 text-sm text-gray-600">Each deployment or drift reset is recorded on this device so it can be undone.</p><RunsList tenant={tenant} empty="No deployments that can be undone are recorded for this tenant." /></section>
       <EarlierComparisons key={tenant.tenantId} tenant={tenant} />
     </>}
@@ -130,7 +130,7 @@ function TenantJobs({ tenantId }: { tenantId: string }) {
 }
 
 /** Customize an editable baseline from the version selected for a platform (Pro and MSP). */
-function CustomizeCard({ selections }: { selections: Selections | null }) {
+function CustomizeCard({ selections, versions }: { selections: Selections | null; versions: OibVersions | null }) {
   const { selectedTenant } = useSelectedTenant()
   const { plan } = useOibTenant()
   const navigate = useNavigate()
@@ -146,7 +146,7 @@ function CustomizeCard({ selections }: { selections: Selections | null }) {
     <div className="mt-4 flex flex-wrap items-center gap-3">
       <label className="text-sm text-gray-700">Platform
         <select value={platform} disabled={!!task.busy} onChange={e => setPlatform(e.target.value as OibPlatform)} className="ml-2 h-10 rounded-full border border-gray-300 bg-white px-4 text-sm">
-          {(Object.keys(OIB_PLATFORMS) as OibPlatform[]).map(p => <option key={p} value={p}>{OIB_PLATFORMS[p].label}</option>)}
+          {(Object.keys(OIB_PLATFORMS) as OibPlatform[]).map(p => <option key={p} value={p} disabled={versions ? platformStatus(versions, p) === "in-development" : false}>{OIB_PLATFORMS[p].label}{versions && platformStatus(versions, p) === "in-development" ? " (in development)" : ""}</option>)}
         </select>
       </label>
       {selection && <span className="text-sm text-gray-600">Version {selectionLabel(selection)}</span>}

@@ -37,6 +37,15 @@ export function platformReleases(versions: OibVersions, platform: OibPlatform, a
   return versions.releases.filter((release) => release.platform === platform && (allowPrerelease || !isPrerelease(release)))
 }
 
+/**
+ * The releases a version picker offers for a platform under the prerelease toggle. A platform
+ * whose releases are all prereleases still offers them, or it would have nothing loadable.
+ */
+export function pickerReleases(versions: OibVersions, platform: OibPlatform, allowPrerelease: boolean): OibPublishedRelease[] {
+  const allowed = platformReleases(versions, platform, allowPrerelease)
+  return allowed.length ? allowed : platformReleases(versions, platform)
+}
+
 /** Platforms TenuVault shipped from main before the manifest existed; the manifest must not withdraw them. */
 const SHIPPED_PLATFORMS: OibPlatform[] = ["windows", "macos", "win365", "byod"]
 

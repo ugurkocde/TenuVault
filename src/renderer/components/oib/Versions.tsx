@@ -44,7 +44,7 @@ export function VersionsPanel({ versions, selections, onDone, onCancel, classNam
   const applyLatest = (prerelease: boolean) => setDraft(Object.fromEntries(ALL.map(p => [p, defaultSelection(versions, p, prerelease)])) as Selections)
   return <div className={cn("rounded-2xl border border-gray-200 bg-white p-5", className)} role="group" aria-label="OpenIntuneBaseline versions">
     <p className="mb-4 text-sm text-gray-600">Each platform uses its latest published release unless you choose another. Older releases have fewer or older policies; main includes changes that are not released yet. Platforms without a published release use main, or their beta release where that is the only release.</p>
-    <VersionPicker versions={versions} value={draft} onChange={setDraft} />
+    <VersionPicker versions={versions} value={draft} onChange={setDraft} allowPrerelease={draftPrerelease} />
     <div className="mt-4">
       <Toggle checked={draftPrerelease} onChange={value => { setDraftPrerelease(value); applyLatest(value) }} label="Include beta prereleases">
         Offers beta baselines as each platform's latest version. These are not production-ready. Use them only to evaluate upcoming changes in a pilot tenant.
