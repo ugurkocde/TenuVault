@@ -227,7 +227,7 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
     text(level.coverage === null
       ? `Coverage: ${coverageSourceLabel(level.coverageSource)}`
       : `Coverage: ${percent(level.coverage)} (${level.assessedAutomated} of ${level.denominator}), source: ${coverageSourceLabel(level.coverageSource)}`)
-    text(`Assessed automated: ${level.assessedAutomated}\nEnumerated: ${level.enumerated}\nNot assessed identifiers: ${level.notAssessed.length}`)
+    text(`Assessed automated: ${level.assessedAutomated ?? 'not computable without a denominator list'}\nEnumerated: ${level.enumerated}\nNot assessed identifiers: ${level.notAssessed.length}`)
     if (level.notAssessed.length) text(level.notAssessed.join(', '))
     if (level.exceptions?.length) {
       heading(`Accepted exceptions, Level ${level.level}`)

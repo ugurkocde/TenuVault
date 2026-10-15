@@ -158,8 +158,18 @@ describe("CIS readiness", () => {
     expect(level1.coverage).toBeNull()
     expect(level1.denominator).toBeNull()
     expect(level1.notAssessed).toEqual([])
-    expect(level1.assessedAutomated).toBe(2)
+    expect(level1.enumerated).toBe(2)
+    expect(level1.assessedAutomated).toBeNull()
     expect(level1.passRate).toBe(0.5)
+  })
+
+  it("enumerates nothing for a pack whose descriptions only name its own prefixed version", () => {
+    const files: KitFile[] = [{ path: "Level 1/Fakebook Payload 9.9.9.json", content: policy("Fakebook Payload", "Converted from the synthetic benchmark v9.9.9.\n\nSettings only.") }]
+    const policies = convertKit(files, { id: "fakebook-os", version: "9.9.9" }).packs.flatMap(pack => pack.policies)
+    const assessment = assessPolicySet({ tenantId, frameworkId: "cis-benchmarks", reference: "fakebook-os 9.9.9", policies, current: [], runId: "run-1", assessedAt: "2026-10-13T00:00:00.000Z" })
+    const level1 = cisReadiness(assessment, policies).levels[0]!
+    expect(level1).toMatchObject({ enumerated: 0, assessedAutomated: null, denominator: null, coverage: null, coverageSource: "none" })
+    expect(cisReadinessCsv(cisReadiness(assessment, policies)).split("\r\n")[1]).toContain("0,,0,,,")
   })
 
   it("exports benchmark, version, Level and counts as CSV and JSON through the governance export", () => {

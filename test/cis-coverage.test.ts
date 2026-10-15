@@ -50,6 +50,12 @@ describe("recommendation identifier extraction", () => {
     expect(extractRecommendationIds("Kit 9.9.9 exported 2024.1.15, covers 7.1.1", { kitVersion: "9.9.9" })).toEqual(["7.1.1"])
     expect(extractRecommendationIds("Kit 9.9.9 covers 7.1.1")).toEqual(["7.1.1", "9.9.9"])
   })
+
+  it("never takes part of a prefixed version or a longer token as an identifier", () => {
+    expect(extractRecommendationIds("Converted from the synthetic benchmark v9.9.9.\n\nSettings only.", { kitVersion: "9.9.9" })).toEqual([])
+    expect(extractRecommendationIds("Build 7.1.1a and rule L2.3.4, covers 7.1.2.", { kitVersion: "9.9.9" })).toEqual(["7.1.2"])
+    expect(extractRecommendationIds("(7.1.1), 7.1.3: and 8.2.", { kitVersion: "9.9.9" })).toEqual(["7.1.1", "7.1.3", "8.2"])
+  })
 })
 
 describe("breakout workbook parsing", () => {

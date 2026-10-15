@@ -787,8 +787,9 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
               const visible = segments.filter(segment => segment.count > 0)
               const stats: [string, string][] = [
                 ["Assessed settings", String(level.assessedSettings)],
-                ["Assessed automated", String(level.assessedAutomated)],
-                ["Coverage", level.coverage === null ? "Not available" : `${Math.round(level.coverage * 1000) / 10}% (${level.assessedAutomated} of ${level.denominator})`],
+                ["Enumerated identifiers", String(level.enumerated)],
+                ["Assessed automated", level.assessedAutomated === null ? "Needs a denominator list" : String(level.assessedAutomated)],
+                ["Coverage", level.coverage !== null ? `${Math.round(level.coverage * 1000) / 10}% (${level.assessedAutomated} of ${level.denominator})` : level.denominator === null ? "Needs a denominator list" : "No automated entries listed"],
                 ["Not assessed", level.notAssessed.length ? level.notAssessed.join(", ") : "None listed"],
                 ["Excluded from score", String(level.excepted)],
               ]
@@ -818,7 +819,9 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
               </article>
             })}
           </div>
-          {readiness.levels.some(level => level.coverage === null) && <p className="text-xs text-gray-500">{denominator || recommendationList ? "Coverage needs a denominator list: none was imported for every level, so coverage is not shown where it is missing." : "No denominator list was imported, so coverage is not shown."}</p>}
+          {readiness.levels.some(level => level.denominator === null) && <p className="text-xs text-gray-500">Coverage and the assessed automated count need a denominator list: the benchmark list of automated recommendations for each Level. {denominator || recommendationList ? "None is loaded for every Level shown." : "None is loaded, and delivered benchmark packs do not include one."} Enumerated identifiers counts the recommendation identifiers named in the pack policy descriptions; without the list they cannot be checked against the automated recommendations. Pass rates do not depend on it.</p>}
+          {readiness.levels.some(level => level.enumerated === 0) && <p className="mt-1 text-xs text-gray-500">The policy descriptions of {readiness.levels.filter(level => level.enumerated === 0).map(level => `Level ${level.level}`).join(" and ")} name no recommendation identifiers, so coverage cannot be derived from this pack even with a denominator list.</p>}
+          {readiness.levels.some(level => level.denominator !== null && level.coverage === null) && <p className="mt-1 text-xs text-gray-500">The denominator list marks no recommendation of {readiness.levels.filter(level => level.denominator !== null && level.coverage === null).map(level => `Level ${level.level}`).join(" and ")} as automated, so there is no coverage ratio to show.</p>}
           {readiness.levels.map(level => level.manual.length > 0 && <div key={`manual-${level.level}`} className="mt-4">
             <h4 className="font-medium text-gray-900">Manual, Level {level.level}</h4>
             <p className="mt-1 text-xs text-gray-500">{benchmarkDisplayName(readiness.benchmark)} {readiness.version}, Level {level.level}. These items are not assessed automatically.</p>

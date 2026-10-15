@@ -245,7 +245,7 @@ export function cisReadinessCsv(summary: CisReadinessSummary): string {
   const rows: unknown[][] = summary.levels.map((level) => {
     const row = cisReadinessRow(summary, level)
     const exceptionsText = row.exceptions.map(item => `${item.policyName} | ${item.settingId} | ${item.owner} | ${item.expiresOn} | ${item.reason}`).join("; ")
-    return [row.benchmark, row.version, row.level, row.assessedSettings, row.present, row.different, row.missing, row.review, row.passRate ?? "", row.assessedAutomated, row.enumerated, row.denominator ?? "", row.coverage ?? "", row.notAssessed.join("; "), row.manualNote, row.state, "", "", row.excepted, row.adjustedPassRate ?? "", exceptionsText]
+    return [row.benchmark, row.version, row.level, row.assessedSettings, row.present, row.different, row.missing, row.review, row.passRate ?? "", row.assessedAutomated ?? "", row.enumerated, row.denominator ?? "", row.coverage ?? "", row.notAssessed.join("; "), row.manualNote, row.state, "", "", row.excepted, row.adjustedPassRate ?? "", exceptionsText]
   })
   for (const level of summary.levels) {
     for (const item of level.manual ?? []) {

@@ -21,7 +21,9 @@ export interface CisLevelReadiness {
   excepted: number
   exceptions: CisException[]
   adjustedPassRate: number | null
-  assessedAutomated: number
+  /** Enumerated identifiers that the denominator list marks automated; null without a denominator list. */
+  assessedAutomated: number | null
+  /** Distinct recommendation identifiers named in the pack policy descriptions of this Level. */
   enumerated: number
   denominator: number | null
   coverage: number | null
@@ -59,9 +61,10 @@ function textOf(policy: BaselinePolicy, key: string): string {
 
 /**
  * Readiness per benchmark and Level from one assessment of an imported pack.
- * Pass rate is over assessed settings only. Coverage is present only when an
- * authoritative denominator list was supplied; identifiers in that list that
- * the pack does not enumerate are listed as not assessed.
+ * Pass rate is over assessed settings only. Coverage and the assessed automated
+ * count are present only when an authoritative denominator list was supplied;
+ * identifiers in that list that the pack does not enumerate are listed as not
+ * assessed.
  */
 export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[], denominator?: DenominatorEntry[], recommendationList?: RecommendationList, exceptions?: CisException[], todayISO?: string): CisReadinessSummary {
   const policyBenchmark = policies.map(policy => textOf(policy, "benchmark")).find(Boolean)
@@ -106,7 +109,9 @@ export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[],
       excepted,
       exceptions: levelExceptions,
       adjustedPassRate: findings.length ? (count("Present") + excepted) / findings.length : null,
-      assessedAutomated: cov?.numerator ?? 0,
+      // Without a denominator list an enumerated identifier cannot be told apart from a manual
+      // recommendation or one of another profile, so no automated count is claimed.
+      assessedAutomated: cov && cov.denominatorSource !== "none" ? cov.numerator : null,
       enumerated: cov?.enumeratedIds.length ?? 0,
       denominator: cov?.denominator ?? null,
       coverage: cov?.coverage ?? null,
