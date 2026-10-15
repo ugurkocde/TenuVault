@@ -54,7 +54,12 @@ async function renderChooser() {
   roots.push(root)
   act(() => root.render(createElement(StorageChooser, { tenantId: TENANT, clientId: "client", onChange })))
   await flush()
-  return { container, onChange, last: () => onChange.mock.calls.at(-1)?.[0] }
+  const unmount = () => {
+    const index = roots.indexOf(root)
+    if (index >= 0) roots.splice(index, 1)
+    act(() => root.unmount())
+  }
+  return { container, onChange, unmount, last: () => onChange.mock.calls.at(-1)?.[0] }
 }
 
 function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
@@ -189,5 +194,37 @@ describe("storage chooser Azure path", () => {
     await clickText(container, "Try again")
     expect(container.textContent).not.toContain("Could not check whether your recovery key is saved")
     expect(container.textContent).toContain(ACCOUNT.name)
+  })
+
+  it("discards a settings read that finishes after the chooser closed", async () => {
+    const savedKeyA: BackupSettings = { ...unsaved, keyFingerprint: "AAAA", recoveryExported: true }
+    const unsavedKeyB: BackupSettings = { ...unsaved, keyFingerprint: "BBBB", recoveryExported: false }
+    let resolveStaleRead!: (value: BackupSettings) => void
+    const staleRead = new Promise<BackupSettings>((resolve) => { resolveStaleRead = resolve })
+    backups.settings
+      .mockResolvedValueOnce({ ...unsaved, keyFingerprint: "AAAA" })
+      .mockReturnValueOnce(staleRead)
+      .mockResolvedValue(unsavedKeyB)
+    backups.inventoryProblem.mockResolvedValue(null)
+    backups.verifyAzureStorage.mockResolvedValue(undefined)
+    backups.exportRecoveryKey.mockResolvedValue({ saved: true, path: "/tmp/key.txt" })
+    fetchMock.mockResolvedValue(accountResponse([ACCOUNT]))
+
+    const first = await renderChooser()
+    await chooseAzure(first.container)
+    await clickText(first.container, "Save recovery key")
+    first.unmount()
+
+    const second = await renderChooser()
+    await chooseAzure(second.container)
+    await selectAccount(second.container, ACCOUNT.name)
+    await clickText(second.container, "Check access")
+    expect(second.container.textContent).toContain("Save your recovery key before you continue")
+    expect(second.last()).toBeNull()
+
+    await act(async () => resolveStaleRead(savedKeyA))
+    await flush()
+    expect(second.container.textContent).toContain("Save your recovery key before you continue")
+    expect(second.last()).toBeNull()
   })
 })

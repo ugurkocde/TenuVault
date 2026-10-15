@@ -29,6 +29,23 @@ export function StorageChooser({ tenantId, clientId, initial, onChange }: Storag
   const [settings, setSettings] = useBackupSettings((error) =>
     setSettingsError(error instanceof Error ? error.message : String(error)),
   )
+  // Async settings reads below must never apply after this chooser is gone or after a
+  // newer settings update arrived: a stale "key saved" read would reopen another
+  // chooser's recovery key gate for a different, unsaved key.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
+  const settingsRef = useRef(settings)
+  settingsRef.current = settings
+  const applySettingsRead = (startedWith: typeof settings, next: Parameters<typeof setSettings>[0]): boolean => {
+    if (!mountedRef.current || settingsRef.current !== startedWith) return false
+    setSettings(next)
+    setSettingsError("")
+    announceBackupSettings(next)
+    return true
+  }
   const [accounts, setAccounts] = useState<AzureStorageAccount[] | null>(null)
   const [loadError, setLoadError] = useState("")
   const [selected, setSelected] = useState(initial?.kind === "azure" ? initial.storageAccountName : "")
@@ -96,34 +113,37 @@ export function StorageChooser({ tenantId, clientId, initial, onChange }: Storag
   }
 
   const retrySettings = async () => {
+    const startedWith = settingsRef.current
     try {
       const next = await bridge.backups.settings()
-      setSettings(next)
-      setSettingsError("")
-      announceBackupSettings(next)
+      applySettingsRead(startedWith, next)
     } catch (error) {
-      setSettingsError(error instanceof Error ? error.message : String(error))
+      if (mountedRef.current && settingsRef.current === startedWith) {
+        setSettingsError(error instanceof Error ? error.message : String(error))
+      }
     }
   }
 
   const saveRecoveryKey = async () => {
+    const startedWith = settingsRef.current
     setSavingKey(true)
     setSaveKeyError("")
     try {
       const result = await bridge.backups.exportRecoveryKey()
-      if (result.saved) {
+      if (result.saved && mountedRef.current) {
         try {
           const next = await bridge.backups.settings()
-          setSettings(next)
-          announceBackupSettings(next)
+          applySettingsRead(startedWith, next)
         } catch (error) {
-          setSettingsError(error instanceof Error ? error.message : String(error))
+          if (mountedRef.current && settingsRef.current === startedWith) {
+            setSettingsError(error instanceof Error ? error.message : String(error))
+          }
         }
       }
     } catch (error) {
-      setSaveKeyError(error instanceof Error ? error.message : String(error))
+      if (mountedRef.current) setSaveKeyError(error instanceof Error ? error.message : String(error))
     } finally {
-      setSavingKey(false)
+      if (mountedRef.current) setSavingKey(false)
     }
   }
 
