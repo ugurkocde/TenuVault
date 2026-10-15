@@ -32,7 +32,9 @@ const PLACEHOLDER_LICENSE_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAKxXrhBA4x3ybwuC7hkZm8pyRgkM/Zy51UwCGj8EzsF8=
 -----END PUBLIC KEY-----`
 const license = {
-  apiBase: process.env.TENUVAULT_LICENSE_API_BASE ?? "https://tenuvault.com",
+  // The canonical host. The apex redirects to it, and CIS content requests refuse redirects so the
+  // entitlement bearer never follows one, so the apex would break CIS delivery.
+  apiBase: process.env.TENUVAULT_LICENSE_API_BASE ?? "https://www.tenuvault.com",
   // CI secrets and env files often carry the PEM with escaped newlines.
   publicKey: (process.env.TENUVAULT_LICENSE_PUBLIC_KEY ?? PLACEHOLDER_LICENSE_PUBLIC_KEY).replace(/\\n/g, "\n"),
   buyUrl: process.env.TENUVAULT_LICENSE_BUY_URL ?? "https://tenuvault.com/desktop#pricing",

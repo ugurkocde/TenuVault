@@ -53,7 +53,7 @@ TenuVault connects to the global Microsoft cloud endpoints below over HTTPS (TCP
 | --- | --- | --- |
 | `login.microsoftonline.com` | Microsoft sign-in and tokens | Yes |
 | `graph.microsoft.com` | Reading and writing Intune configuration | Yes |
-| `tenuvault.com` | License checks | Yes |
+| `www.tenuvault.com` | License checks | Yes |
 | `management.azure.com` | Listing your subscriptions and storage accounts in the storage picker | Only for Azure storage |
 | `<account>.blob.core.windows.net` | Reading and writing backups in your storage account | Only for Azure storage |
 | `github.com`, `release-assets.githubusercontent.com`, `objects.githubusercontent.com` | Automatic updates | For updates |

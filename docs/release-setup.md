@@ -106,7 +106,7 @@ Settings > Secrets and variables > Actions. Release tags (`v*`) fail when either
 | Secret | `TENUVAULT_LICENSE_PUBLIC_KEY` | The public key printed by `npm run license:keypair`, matching the production `DESKTOP_LICENSE_SIGNING_KEY` |
 | Variable | `TENUVAULT_LICENSE_PORTAL_URL` | `https://polar.sh/<slug>/portal` |
 
-Release builds use `https://tenuvault.com` as the licensing service and
+Release builds use `https://www.tenuvault.com` as the licensing service and
 `https://tenuvault.com/desktop#pricing` as the checkout page. To test against a preview deployment,
 start a development build with `TENUVAULT_LICENSE_API_BASE=<preview origin>` and
 `TENUVAULT_LICENSE_PUBLIC_KEY=<preview public key>` set (`npm run dev` reads them at build time).

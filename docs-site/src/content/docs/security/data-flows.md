@@ -15,7 +15,7 @@ All connections use HTTPS on TCP port 443. TenuVault opens no inbound ports. Dur
 | `graph.microsoft.com` | Read and write your Intune configuration | Yes, between your machine and Microsoft |
 | `management.azure.com` | List subscriptions and storage accounts for the storage picker | No |
 | `<your account>.blob.core.windows.net` | Your own Azure storage account, when you store backups there | Yes, encrypted backups in your account |
-| `tenuvault.com` | License checks | No |
+| `www.tenuvault.com` | License checks | No |
 | `github.com`, `release-assets.githubusercontent.com`, `objects.githubusercontent.com` | App updates | No |
 | `api.github.com`, `raw.githubusercontent.com` | OpenIntuneBaseline content for the OpenIntuneBaseline section and My baselines | No |
 | A webhook URL you configure (optional) | Health review notifications | Counts, severities, finding keys and timestamps only |
@@ -62,7 +62,7 @@ When backups are stored on **This device, encrypted**, TenuVault makes no storag
 
 ## tenuvault.com: license checks
 
-The only TenuVault server the app talks to is the licensing service at `https://tenuvault.com/api/desktop-license/`. It is used to activate, refresh and release licenses. The app never contacts the payment provider directly.
+The only TenuVault server the app talks to is the licensing service at `https://www.tenuvault.com/api/desktop-license/`. It is used to activate, refresh and release licenses. The app never contacts the payment provider directly.
 
 When you open the pricing page from the app, the link names the screen it was opened from (for example `src=app-license-page`) and carries no identifier.
 
@@ -157,7 +157,7 @@ login.microsoftonline.com
 graph.microsoft.com
 management.azure.com
 <your storage account>.blob.core.windows.net
-tenuvault.com
+www.tenuvault.com
 github.com
 release-assets.githubusercontent.com
 objects.githubusercontent.com

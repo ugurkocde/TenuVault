@@ -231,7 +231,7 @@ subscribed quantity (new subscriptions include five tenants; existing subscripti
 it on the License page; other admins can use a shared organization license without receiving the key.
 
 - **Online activation, offline verification** (`src/main/license/service.ts`). The app never talks to
-  Polar. It calls `tenuvault.com/api/desktop-license/{activate,refresh,deactivate,tenant}`, which
+  Polar. It calls `www.tenuvault.com/api/desktop-license/{activate,refresh,deactivate,tenant}`, which
   checks the key with Polar and answers with an Ed25519 signed entitlement token bound to one tenant
   and this installation. The app verifies the token with the public key built into it, refreshes it
   every 6 hours and keeps working offline until it expires (14 days). A confirmed refusal (HTTP 403)
@@ -262,7 +262,7 @@ it on the License page; other admins can use a shared organization license witho
 - **Storage.** Key, activations and tokens live in the app's encrypted store (`safeStorage`: DPAPI or
   Keychain). Without OS encryption they are kept in memory only.
 - **Build configuration** (`electron.vite.config.ts`): `TENUVAULT_LICENSE_API_BASE` (default
-  `https://tenuvault.com`), `TENUVAULT_LICENSE_PUBLIC_KEY` (default: an inert placeholder, so an
+  `https://www.tenuvault.com`), `TENUVAULT_LICENSE_PUBLIC_KEY` (default: an inert placeholder, so an
   unconfigured build cannot verify paid entitlements), `TENUVAULT_LICENSE_BUY_URL` and
   `TENUVAULT_LICENSE_PORTAL_URL`. `npm run license:keypair` prints a new key pair: the private key goes
   into the website's `DESKTOP_LICENSE_SIGNING_KEY`, the public key into
