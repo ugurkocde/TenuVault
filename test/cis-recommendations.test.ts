@@ -81,7 +81,7 @@ describe("pack recommendations", () => {
     ])
     const conflicting = [...tenant, tenantPolicy("44444444-4444-4444-4444-444444444444", "macOS", [payload([leaf("one", "off")])])]
     expect(recommendationResults(assess(conflicting), policies).find(item => item.id === "1.1.1")?.result).toBe("Fail")
-    expect(recommendationResults(assess([]), policies).find(item => item.id === "1.1.1")?.settings).toEqual([{ id: "synthetic_payload_one", status: "Missing" }])
+    expect(recommendationResults(assess([]), policies).find(item => item.id === "1.1.1")?.settings).toEqual([{ id: "synthetic_payload_one", status: "Missing", findingKeys: ["1:0"] }])
     expect(recommendationResults(run, pack)).toEqual([])
   })
 
@@ -183,5 +183,47 @@ describe("pack recommendations", () => {
     expect(JSON.parse(cisReadinessJson(summary, null, "2026-10-15T10:00:00Z"))).toMatchObject({ benchmark: "synthetic-os", benchmarkName: "Synthetic Display Benchmark" })
     expect(JSON.parse(cisReadinessJson(cisReadiness(assess(tenant), pack), null, "2026-10-15T10:00:00Z"))).not.toHaveProperty("benchmarkName")
     expect(cisReadinessTrend([{ assessment: assess(tenant), policies: named }])[0]!.benchmarkName).toBe("Synthetic Display Benchmark")
+  })
+
+  it("never passes a recommendation that names a setting outside the pack, and leaves it out of the rate", () => {
+    const partial = attachRecommendations(pack, [
+      { id: "2.1.1", title: "Synthetic partly in pack", level: 1, settings: ["synthetic_alpha", "synthetic_not_in_pack"] },
+      { id: "2.1.2", title: "Synthetic fully in pack", level: 1, settings: ["synthetic_alpha"] },
+    ])
+    const level = cisReadiness(assess(tenant), partial).levels[0]!
+    expect(level.recommendations.map(item => [item.id, item.result])).toEqual([["2.1.1", "Not assessed"], ["2.1.2", "Pass"]])
+    expect(level.recommendationPassRate).toBe(1)
+    const failing = cisReadiness(assess([tenant[0]!]), partial).levels[0]!
+    expect(failing.recommendations.map(item => [item.id, item.result])).toEqual([["2.1.1", "Fail"], ["2.1.2", "Fail"]])
+  })
+
+  it("reports a recommendation under its own Level even when only a policy of another Level carries it", () => {
+    const level2 = pack.map(policy => ({ ...policy, provenance: { ...policy.provenance, level: "Level 2" } }))
+    const carried = attachRecommendations(level2, [{ id: "3.1.1", title: "Synthetic Level 1 recommendation", level: 1, settings: ["synthetic_alpha"] }, { id: "3.1.2", title: "Synthetic Level 2 recommendation", level: 2, settings: ["synthetic_beta"] }])
+    const summary = cisReadiness(assess(tenant), carried)
+    expect(summary.levels.map(level => level.level)).toEqual([1, 2])
+    expect(summary.levels[0]!).toMatchObject({ assessedSettings: 0, recommendationPassRate: 1 })
+    expect(summary.levels[0]!.recommendations.map(item => [item.id, item.result])).toEqual([["3.1.1", "Pass"]])
+    expect(summary.levels[1]!.recommendations.map(item => [item.id, item.result])).toEqual([["3.1.2", "Fail"]])
+  })
+
+  it("credits an exception against the recommendation's own failing settings, not unrelated failures in a shared root", () => {
+    const exception = (policyName: string, settingId: string): CisException => ({ id: settingId, benchmark: "synthetic-os", version: "9.9.9", level: 1, policyName, settingId, owner: "Owner", reason: "Synthetic", expiresOn: "2099-01-01", createdAt: "2026-10-01T00:00:00Z" })
+    const shared = attachRecommendations(pack, [
+      { id: "4.1.1", title: "Synthetic alpha with a passing payload leaf", level: 1, settings: ["synthetic_alpha", "synthetic_payload_one"] },
+      { id: "4.1.2", title: "Synthetic failing payload leaf", level: 1, settings: ["synthetic_payload_two"] },
+    ])
+    const alphaOff = [tenant[0]!, tenant[1]!, tenantPolicy("33333333-3333-3333-3333-333333333333", "windows10", [flat("synthetic_alpha", "off")])]
+    const run = assess(alphaOff)
+    // The payload root is Different only because of leaf two, which 4.1.1 does not name.
+    expect(run.findings.find(finding => finding.key === "1:0")?.status).toBe("Different")
+    const alphaExcepted = cisReadiness(run, shared, undefined, undefined, [exception("Synthetic flat", "synthetic_alpha")], "2026-10-15").levels[0]!
+    expect(alphaExcepted.recommendations.map(item => [item.id, item.result])).toEqual([["4.1.1", "Fail"], ["4.1.2", "Fail"]])
+    expect(alphaExcepted.recommendationsExcepted).toBe(1)
+    expect(alphaExcepted.adjustedRecommendationPassRate).toBe(0.5)
+    // An exception on the payload root covers 4.1.2, whose failing leaf it holds, but grants nothing to 4.1.1.
+    const payloadExcepted = cisReadiness(run, shared, undefined, undefined, [exception("Synthetic payload", "synthetic_payload")], "2026-10-15").levels[0]!
+    expect(payloadExcepted.recommendationsExcepted).toBe(1)
+    expect(payloadExcepted.adjustedRecommendationPassRate).toBe(0.5)
   })
 })

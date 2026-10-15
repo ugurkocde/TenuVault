@@ -227,7 +227,7 @@ function cisReadinessRow(summary: CisReadinessSummary, level: CisReadinessSummar
       adjustedRecommendationPassRate: level.adjustedRecommendationPassRate,
       recommendationsExcepted: level.recommendationsExcepted,
       recommendationTotals: recommendationTotals(level.recommendations),
-      recommendations: level.recommendations.map(({ id, title, level, result, settings }) => ({ id, title, level, result, settings })),
+      recommendations: level.recommendations.map(({ id, title, level, result, settings }) => ({ id, title, level, result, settings: settings.map(({ id, status }) => ({ id, status })) })),
     } : {}),
     manualNote: summary.manualNote,
     manual: (level.manual ?? []).map(item => ({

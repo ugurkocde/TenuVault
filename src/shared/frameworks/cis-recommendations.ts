@@ -41,7 +41,9 @@ export function validatePackRecommendations(input: unknown, label = "Recommendat
         entry.settings.some(setting => typeof setting !== "string" || !setting || setting.length > 500)) {
       throw new Error(`${at}: settings must list between 1 and ${MAX_RECOMMENDATION_SETTINGS} setting definition IDs.`)
     }
-    return { id: entry.id, title: entry.title.trim(), level: entry.level, settings: [...new Set(entry.settings as string[])] }
+    const repeated = (entry.settings as string[]).find((setting, position, all) => all.indexOf(setting) !== position)
+    if (repeated) throw new Error(`${at}: setting ${repeated} is listed twice. List each setting definition once.`)
+    return { id: entry.id, title: entry.title.trim(), level: entry.level, settings: [...(entry.settings as string[])] }
   })
 }
 
@@ -96,8 +98,8 @@ export interface RecommendationResult {
   title: string
   level: 1 | 2
   result: RecommendationResultState
-  /** One entry per mapped setting definition, judged leaf by leaf across the tenant. */
-  settings: Array<{ id: string; status: RecommendationSettingStatus }>
+  /** One entry per declared setting definition, judged leaf by leaf across the tenant, with the findings whose root holds it. */
+  settings: Array<{ id: string; status: RecommendationSettingStatus; findingKeys: string[] }>
   findingKeys: string[]
 }
 
@@ -115,10 +117,11 @@ function compareIds(a: string, b: string): number {
  * One result per pack recommendation. Each mapped setting is judged on its own leaf with the
  * same leaf rule the comparison uses for grouped roots, across every tenant policy holding the
  * root: Present when every tenant occurrence equals the recommended value, Missing when no
- * tenant policy holds it, Different when any occurrence differs. A recommendation passes only
- * when every mapped setting is Present and fails when any is Missing or Different. A setting
- * whose pack root needs a profile choice (Review) leaves the recommendation to review, and a
- * recommendation with no setting in the pack is not assessed.
+ * tenant policy holds it, Different when any occurrence differs. A recommendation fails when
+ * any declared setting is Missing or Different. Otherwise it is not assessed when any declared
+ * setting is absent from the pack, because it cannot be shown to pass; a setting whose pack root
+ * needs a profile choice (Review) leaves it to review; it passes only when every declared
+ * setting is in the pack and Present.
  */
 export function recommendationResults(assessment: Pick<Assessment, "findings">, policies: BaselinePolicy[]): RecommendationResult[] {
   const findingIds = assessment.findings.map(finding => ({ finding, ids: new Set(definitionIds(finding.recommended)) }))
@@ -127,14 +130,15 @@ export function recommendationResults(assessment: Pick<Assessment, "findings">, 
     const settings = recommendation.settings.map(id => {
       const mapped = findingIds.filter(entry => entry.ids.has(id)).map(entry => entry.finding)
       for (const finding of mapped) keys.add(finding.key)
-      if (!mapped.length) return { id, status: "Unmapped" as const }
-      if (mapped.some(finding => finding.status === "Review")) return { id, status: "Review" as const }
+      const findingKeys = mapped.map(finding => finding.key)
+      if (!mapped.length) return { id, status: "Unmapped" as const, findingKeys }
+      if (mapped.some(finding => finding.status === "Review")) return { id, status: "Review" as const, findingKeys }
       const statuses = mapped.map(finding => definitionStatus(finding.recommended, finding.observed.map(observation => observation.value), id))
-      return { id, status: statuses.includes("Different") ? "Different" as const : statuses.includes("Missing") ? "Missing" as const : "Present" as const }
+      return { id, status: statuses.includes("Different") ? "Different" as const : statuses.includes("Missing") ? "Missing" as const : "Present" as const, findingKeys }
     })
     const statuses = settings.map(setting => setting.status)
-    const result: RecommendationResultState = statuses.every(status => status === "Unmapped") ? "Not assessed"
-      : statuses.some(status => status === "Missing" || status === "Different") ? "Fail"
+    const result: RecommendationResultState = statuses.some(status => status === "Missing" || status === "Different") ? "Fail"
+      : statuses.includes("Unmapped") ? "Not assessed"
         : statuses.includes("Review") ? "Review" : "Pass"
     return { id: recommendation.id, title: recommendation.title, level: recommendation.level, result, settings, findingKeys: [...keys] }
   })

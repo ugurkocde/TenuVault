@@ -66,6 +66,7 @@ describe("validateCisPack", () => {
     bad({ ...recommendation, settings: [] }, "settings must list")
     bad({ ...recommendation, settings: [7] }, "settings must list")
     bad({ ...recommendation, extra: true }, "unknown field: extra")
+    bad({ ...recommendation, settings: ["minlength", "password", "minlength"] }, "setting minlength is listed twice")
     expect(() => validateCisPack({ ...validPack, recommendations: [recommendation, recommendation] }, expected)).toThrow("duplicate recommendation 7.1.1")
     expect(() => validateCisPack({ ...validPack, recommendations: {} }, expected)).toThrow("must be an array")
     const many = Array.from({ length: 2001 }, (_, index) => ({ ...recommendation, id: `7.${index}.1` }))

@@ -111,12 +111,13 @@ export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[],
     pack.policies.push(policy)
     packsByLevel.set(level, pack)
   }
-  const allLevels = new Set<KitLevel>([...packsByLevel.keys(), ...((effectiveList?.items ?? []).map(item => item.level))].sort((a, b) => a - b))
+  // A recommendation is reported under its own Level, even when only a policy of another Level carries its settings.
+  const recommendations = recommendationResults(assessment, policies)
+  const allLevels = new Set<KitLevel>([...packsByLevel.keys(), ...((effectiveList?.items ?? []).map(item => item.level)), ...recommendations.map(result => result.level)].sort((a, b) => a - b))
   if (!packsByLevel.size && effectiveList) for (const level of allLevels) packsByLevel.set(level, { benchmark, version, level, reference: `${benchmark} ${version} Level ${level}`.trim(), policies: [] })
   const coverage = computeCoverage({ benchmark, version, packs: [...packsByLevel.values()], ...(effectiveDenominator ? { denominator: effectiveDenominator } : {}) })
   const coverageByLevel = new Map(coverage.levels.map(level => [level.level, level]))
   const today = todayISO ?? new Date().toISOString().slice(0, 10)
-  const recommendations = recommendationResults(assessment, policies)
   // Active exceptions by identity, to judge recommendations whose findings sit at any Level.
   const activeExceptionKeys = new Set((exceptions ?? []).filter(exception => isActive(exception, today) && exception.benchmark === benchmark && exception.version === version)
     .map(exception => exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId)))
@@ -154,9 +155,15 @@ export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[],
       coverageSource: cov?.denominatorSource ?? "none",
       notAssessed,
       manual,
+      // Credit by exception is judged on the recommendation's own failing settings: each one is
+      // covered when every non-Present finding whose root holds it has an active exception.
+      // Failures of unrelated sibling settings in the same root neither block nor grant credit.
       ...recommendationRates(recommendations.filter(result => result.level === level), result => {
-        const open = result.findingKeys.map(key => findingByKey.get(key)).filter(finding => finding && finding.status !== "Present")
-        return open.length > 0 && open.every(finding => findingExcepted(finding!))
+        const failing = result.settings.filter(setting => setting.status === "Missing" || setting.status === "Different" || setting.status === "Review")
+        return failing.length > 0 && failing.every(setting => {
+          const open = setting.findingKeys.map(key => findingByKey.get(key)).filter(finding => finding && finding.status !== "Present")
+          return open.length > 0 && open.every(finding => findingExcepted(finding!))
+        })
       }),
     }
   })

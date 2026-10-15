@@ -7,10 +7,18 @@ import { formatDate, STATUS_TONE } from "../shared/change-set"
 import { deploymentActions, getDeployment, listDeployments, rollbackActions, type Deployment, type DeploymentDetail } from "./api"
 
 const tone = (status: Deployment["status"]) => (status === "blocked" ? "danger" : STATUS_TONE[status])
-/** The chip of a deployment: rolled back once its rollback is applied, otherwise its own status. */
-export function deploymentState(deployment: Pick<Deployment, "status" | "rollbackChangeSetId" | "rollbackStatus">): { label: string; tone: ReturnType<typeof tone>; rollbackPending: boolean } {
-  if (deployment.rollbackChangeSetId && deployment.rollbackStatus === "applied") return { label: "rolled back", tone: "neutral", rollbackPending: false }
-  return { label: deployment.status, tone: tone(deployment.status), rollbackPending: !!deployment.rollbackChangeSetId }
+/**
+ * The chips of a deployment: rolled back once its rollback is applied, otherwise its own
+ * status plus the state of an existing rollback (rejected, failed, or pending review or apply).
+ */
+export function deploymentState(deployment: Pick<Deployment, "status" | "rollbackChangeSetId" | "rollbackStatus">): { label: string; tone: ReturnType<typeof tone>; rollback: { label: string; tone: ReturnType<typeof tone> } | null } {
+  if (deployment.rollbackChangeSetId && deployment.rollbackStatus === "applied") return { label: "rolled back", tone: "neutral", rollback: null }
+  const status = deployment.rollbackStatus
+  const rollback = !deployment.rollbackChangeSetId ? null
+    : status === "rejected" ? { label: "rollback rejected", tone: "neutral" as const }
+      : status === "failed" || status === "partial" ? { label: "rollback failed", tone: "danger" as const }
+        : { label: "rollback pending", tone: "warning" as const }
+  return { label: deployment.status, tone: tone(deployment.status), rollback }
 }
 
 /**
@@ -78,7 +86,7 @@ export function CisRemediationHistory({ tenant, focus }: { tenant: Tenant; focus
               <span className="block truncate text-sm font-medium text-gray-900">{deployment.title}</span>
               <span className="block text-xs text-gray-500">{deployment.reference} · {formatDate(deployment.createdAt)} · {deployment.items.length} {deployment.items.length === 1 ? "operation" : "operations"}</span>
             </span>
-            {state.rollbackPending && <Chip tone="warning">rollback pending</Chip>}
+            {state.rollback && <Chip tone={state.rollback.tone}>{state.rollback.label}</Chip>}
             <Chip tone={state.tone}>{state.label}</Chip>
           </button>
           {expanded && <div className="mt-4 space-y-5 pl-6">

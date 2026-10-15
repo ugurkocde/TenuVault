@@ -1,7 +1,7 @@
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { CisRemediationHistory } from "../../src/renderer/features/cis-remediation/CisRemediationHistory"
+import { CisRemediationHistory, deploymentState } from "../../src/renderer/features/cis-remediation/CisRemediationHistory"
 import type { Tenant } from "../../src/portal/contexts/TenantContext"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -57,6 +57,16 @@ function render(focus: { id: string; at: number } | null = null) {
 }
 
 describe("CIS remediation history", () => {
+  it("labels the rollback of a deployment from its rollback status", () => {
+    const state = (rollbackStatus: string | null, rollbackChangeSetId: string | null = "rb") => deploymentState({ status: "applied", rollbackChangeSetId, rollbackStatus: rollbackStatus as never })
+    expect(state("applied")).toMatchObject({ label: "rolled back", rollback: null })
+    expect(state("rejected")).toMatchObject({ label: "applied", rollback: { label: "rollback rejected" } })
+    expect(state("failed")).toMatchObject({ label: "applied", rollback: { label: "rollback failed" } })
+    expect(state("partial")).toMatchObject({ label: "applied", rollback: { label: "rollback failed" } })
+    for (const pending of ["in-review", "approved", "stale", "applying", "uncertain", null]) expect(state(pending).rollback?.label).toBe("rollback pending")
+    expect(state(null, null)).toMatchObject({ label: "applied", rollback: null })
+  })
+
   it("lists deployments newest first and opens the deployment and its rollback change sets", async () => {
     const calls = stubRoutes((action, body) => {
       if (action === "list") return { deployments: [deployment(NEWER, "Remediate benchmark findings", "2026-10-15T11:00:00Z", { rollbackChangeSetId: "rb", rollbackStatus: "in-review" }), deployment(OLDER, "Deploy benchmark policies", "2026-10-14T09:00:00Z", { rollbackChangeSetId: "rb-old", rollbackStatus: "applied" })] }
