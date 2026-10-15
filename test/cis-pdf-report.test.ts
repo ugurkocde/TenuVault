@@ -10,6 +10,7 @@ import { handleNativeFramework, setNativeFrameworkAuthorization, setNativeFramew
 import { recordAssessment, setFrameworkStore } from "../src/main/frameworks/workspaces"
 import { requiredFeatures } from "../src/main/api/plan-gates"
 import { parsePolicies } from "../src/shared/frameworks/policies"
+import { attachRecommendations } from "../src/shared/frameworks/cis-recommendations"
 
 const type = "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance"
 const policy = (name: string, description: string, settingId = "fakebook_setting_alpha") => JSON.stringify({
@@ -88,6 +89,15 @@ describe("CIS readiness PDF report", () => {
       MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_NOT_ASSESSED_NOTE,
       "TenuVault | CIS readiness report",
     ]) expect(text).toContain(expected)
+  })
+
+  it("lists recommendation results per Level when the pack names its recommendations", () => {
+    const { policies, assessment } = assessed()
+    const identified = attachRecommendations(policies, [{ id: "7.1.2", title: "Synthetic beta recommendation", level: 1, settings: ["fakebook_setting_beta"] }])
+    const text = pdfText(generateCisReadinessPDF(cisReadiness(assessment, identified), context))
+    expect(text).toContain("Recommendation results, Level 1")
+    expect(text).toContain("7.1.2 Synthetic beta recommendation: Fail")
+    expect(pdfText(generateCisReadinessPDF(cisReadiness(assessment, policies), context))).not.toContain("Recommendation results")
   })
 
   it("labels coverage as not computable without a denominator and names the breakout proxy as illustrative", () => {

@@ -3,6 +3,7 @@ import { manualItemsForLevel, MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDA
 import type { KitLevel, KitPack } from "./cis-kit"
 import type { Assessment, BaselinePolicy } from "./policies"
 import { exceptionKey, isActive, type CisException } from "./cis-exceptions"
+import { recommendationResults, type RecommendationResult } from "./cis-recommendations"
 
 export const MANUAL_NOT_ASSESSED_NOTE = "Manual recommendations are not assessed by this view."
 export { MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDATIONS_URL }
@@ -30,6 +31,8 @@ export interface CisLevelReadiness {
   coverageSource: DenominatorSource
   notAssessed: string[]
   manual: ManualItemView[]
+  /** Per recommendation results when the pack lists its recommendations; empty otherwise. */
+  recommendations: RecommendationResult[]
 }
 
 /** The label printed wherever a coverage ratio appears, naming where its denominator came from. */
@@ -86,6 +89,7 @@ export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[],
   const coverage = computeCoverage({ benchmark, version, packs: [...packsByLevel.values()], ...(effectiveDenominator ? { denominator: effectiveDenominator } : {}) })
   const coverageByLevel = new Map(coverage.levels.map(level => [level.level, level]))
   const today = todayISO ?? new Date().toISOString().slice(0, 10)
+  const recommendations = recommendationResults(assessment, policies)
   const levels: CisLevelReadiness[] = [...allLevels].sort((a, b) => a - b).map(level => {
     const indexes = new Set(policies.map((policy, index) => levelOf(policy) === level ? index : -1).filter(index => index >= 0))
     const findings = assessment.findings.filter(finding => indexes.has(finding.policyIndex))
@@ -118,6 +122,7 @@ export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[],
       coverageSource: cov?.denominatorSource ?? "none",
       notAssessed,
       manual,
+      recommendations: recommendations.filter(result => result.level === level),
     }
   })
   return { benchmark, version, levels, manualNote: MANUAL_NOT_ASSESSED_NOTE, manualFallback: MANUAL_RECOMMENDATIONS_FALLBACK, manualFallbackUrl: MANUAL_RECOMMENDATIONS_URL, ...(effectiveList ? { recommendationList: effectiveList } : {}) }

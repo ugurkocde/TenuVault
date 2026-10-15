@@ -1,4 +1,5 @@
 import type { AssignmentEvidence } from "./evidence"
+import { validatePackRecommendations, type PackRecommendation } from "./cis-recommendations"
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 export type RecordJson = { [key: string]: Json }
 export interface BaselinePolicy {
@@ -9,6 +10,8 @@ export interface BaselinePolicy {
   settings: RecordJson[]
   provenance?: RecordJson
   templateReference?: { templateId: string }
+  /** Benchmark recommendations that name a setting of this policy, from a delivered pack. */
+  recommendations?: PackRecommendation[]
 }
 export interface Observation { policyId: string; policyName: string; value: Json; targeting?: AssignmentEvidence; applicability?: "unavailable"; enforcement?: "unavailable" }
 export interface Finding {
@@ -67,8 +70,9 @@ export function parsePolicies(input: unknown): BaselinePolicy[] {
     const template = record(value.templateReference) && typeof value.templateReference.templateId === "string" && value.templateReference.templateId
       ? { templateId: value.templateReference.templateId } : undefined
     if (value.provenance !== undefined && (!record(value.provenance) || Object.values(value.provenance).some(item => typeof item !== 'string' && typeof item !== 'number'))) throw new Error('Invalid pack provenance')
+    const recommendations = value.recommendations === undefined ? undefined : validatePackRecommendations(value.recommendations, `Policy ${index + 1} recommendations`)
     return { ...(record(value.provenance) ? { provenance: value.provenance } : {}), name: value.name.trim(), platforms: value.platforms, technologies: value.technologies,
-      description: typeof value.description === "string" ? value.description.slice(0, 1500) : "", settings, ...(template ? { templateReference: template } : {}) }
+      description: typeof value.description === "string" ? value.description.slice(0, 1500) : "", settings, ...(template ? { templateReference: template } : {}), ...(recommendations?.length ? { recommendations } : {}) }
   })
 }
 
@@ -167,6 +171,6 @@ export function comparePolicies(baselines: BaselinePolicy[], landscape: Landscap
 }
 
 export function remediationPayload(policy: BaselinePolicy, settings: RecordJson[], reference: string): BaselinePolicy {
-  const { provenance: _provenance, ...payload } = policy
+  const { provenance: _provenance, recommendations: _recommendations, ...payload } = policy
   return { ...payload, name: `[Baseline] ${policy.name}`.slice(0, 200), description: `TenuVault baseline: ${reference}. Created unassigned.\n${policy.description}`.slice(0, 1500), settings }
 }

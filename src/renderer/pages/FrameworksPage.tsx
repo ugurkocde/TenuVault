@@ -10,6 +10,7 @@ import { CIS_BENCHMARKS_ID, effectiveFrameworks, internalKitImportEnabled, searc
 import { convertKit, readKitZip, suggestedKitBenchmark, type KitConversion, type KitFile, type KitLevel } from "../../shared/frameworks/cis-kit"
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
 import { cisReadiness } from "../../shared/frameworks/cis-readiness"
+import { recommendationLabel, recommendationsForFinding } from "../../shared/frameworks/cis-recommendations"
 import { exceptionKey } from "../../shared/frameworks/cis-exceptions"
 import { benchmarkDisplayName, deviatingFindingKeys, groupFindingsByPolicy, groupObservationsByValue, humanSettingLabel, policyDisplayName, statusMixText, trendSummaryText } from "../../shared/frameworks/cis-display"
 import { cisFlowSteps, cisStage, isKitPackReference, kitLevelForPolicy, packSettingCount } from "../../shared/frameworks/cis-flow"
@@ -832,6 +833,14 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
           {readiness.levels.some(level => level.denominator === null) && <p className="text-xs text-gray-500">Coverage and the assessed automated count need a denominator list: the benchmark list of automated recommendations for each Level. {denominator || recommendationList ? "None is loaded for every Level shown." : "None is loaded, and delivered benchmark packs do not include one."} Enumerated identifiers counts the recommendation identifiers named in the pack policy descriptions; without the list they cannot be checked against the automated recommendations. Pass rates do not depend on it.</p>}
           {readiness.levels.some(level => level.enumerated === 0) && <p className="mt-1 text-xs text-gray-500">The policy descriptions of {readiness.levels.filter(level => level.enumerated === 0).map(level => `Level ${level.level}`).join(" and ")} name no recommendation identifiers, so coverage cannot be derived from this pack even with a denominator list.</p>}
           {readiness.levels.some(level => level.denominator !== null && level.coverage === null) && <p className="mt-1 text-xs text-gray-500">The denominator list marks no recommendation of {readiness.levels.filter(level => level.denominator !== null && level.coverage === null).map(level => `Level ${level.level}`).join(" and ")} as automated, so there is no coverage ratio to show.</p>}
+          {readiness.levels.map(level => level.recommendations.length > 0 && <details key={`recommendations-${level.level}`} className="mt-2 border-t border-gray-100">
+            <summary className="cursor-pointer py-3 text-sm font-medium text-gray-800">Recommendation results, Level {level.level}: {(["Pass", "Fail", "Review"] as const).map(result => `${level.recommendations.filter(item => item.result === result).length} ${result === "Pass" ? "pass" : result === "Fail" ? "fail" : "to review"}`).join(", ")}</summary>
+            <p className="text-xs text-gray-500">A recommendation passes only when every setting mapped to it is Present, and fails when any is Different or Missing.</p>
+            <ul className="mt-2 max-h-80 divide-y divide-gray-100 overflow-auto border-y border-gray-100">{level.recommendations.map(item => <li key={item.id} className="flex items-start gap-3 py-2">
+              <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium ${item.result === "Pass" ? "bg-green-50 text-green-800" : item.result === "Fail" ? "bg-red-50 text-red-800" : "bg-gray-100 text-gray-700"}`}>{item.result}</span>
+              <span className="min-w-0 flex-1 text-sm text-gray-800"><span className="font-medium">{item.id}</span> {item.title}<span className="ml-2 text-xs text-gray-500">{item.findingKeys.length} {item.findingKeys.length === 1 ? "setting" : "settings"}</span></span>
+            </li>)}</ul>
+          </details>)}
           {readiness.levels.map(level => level.manual.length > 0 && <div key={`manual-${level.level}`} className="mt-4">
             <h4 className="font-medium text-gray-900">Manual, Level {level.level}</h4>
             <p className="mt-1 text-xs text-gray-500">{benchmarkDisplayName(readiness.benchmark)} {readiness.version}, Level {level.level}. These items are not assessed automatically.</p>
@@ -885,7 +894,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
             <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs tabular-nums text-gray-600">{group.total} {group.total === 1 ? "finding" : "findings"}</span>
             <span className="text-xs text-gray-500">{statusMixText(group.counts)}</span>
           </h4>
-          <div className="mt-1 divide-y divide-gray-100">{group.findings.map(f => <CisFindingRow key={f.key} finding={f} disabled={!!busy || !!creation || historical} checked={selected.has(f.key)} onChange={() => { setSelected(old => { const next = new Set(old); next.has(f.key) ? next.delete(f.key) : next.add(f.key); return next }); setPreview(false); setConfirmed(false) }} />)}</div>
+          <div className="mt-1 divide-y divide-gray-100">{group.findings.map(f => <CisFindingRow key={f.key} finding={f} recommendation={recommendationLabel(recommendationsForFinding(policies, f))} disabled={!!busy || !!creation || historical} checked={selected.has(f.key)} onChange={() => { setSelected(old => { const next = new Set(old); next.has(f.key) ? next.delete(f.key) : next.add(f.key); return next }); setPreview(false); setConfirmed(false) }} />)}</div>
         </section>)}</div> : <>
         <div className="space-y-2">{findings.slice(page * 50, (page + 1) * 50).map(f => <FindingRow key={f.key} finding={f} disabled={!!busy || !!creation || historical || (!!framework.comparisonOnly && framework.id !== "cis-benchmarks")} remediable={framework.id === "cis-benchmarks"} checked={selected.has(f.key)} onChange={() => { setSelected(old => { const next = new Set(old); next.has(f.key) ? next.delete(f.key) : next.add(f.key); return next }); setPreview(false); setConfirmed(false) }} />)}</div>
         {findings.length > 50 && <div className="mt-4 flex items-center justify-between gap-3"><button className={button} disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</button><span className="text-sm text-gray-500">Page {page + 1} of {Math.ceil(findings.length / 50)}</span><button className={button} disabled={(page + 1) * 50 >= findings.length} onClick={() => setPage(page + 1)}>Next</button></div>}
@@ -940,7 +949,7 @@ function targetingText(observation: Observation): string {
   return "Targeting: Assigned"
 }
 
-function CisFindingRow({ finding, checked, disabled, onChange }: { finding: Finding; checked: boolean; disabled: boolean; onChange: () => void }) {
+function CisFindingRow({ finding, recommendation, checked, disabled, onChange }: { finding: Finding; recommendation: string; checked: boolean; disabled: boolean; onChange: () => void }) {
   const colors = { Present: "bg-green-50 text-green-800", Missing: "bg-amber-50 text-amber-900", Different: "bg-red-50 text-red-800", Review: "bg-gray-100 text-gray-700" }
   const recommendedLines = summarizeSetting(finding.recommended)
   const groups = groupObservationsByValue(finding.observed, finding.recommended)
@@ -949,7 +958,8 @@ function CisFindingRow({ finding, checked, disabled, onChange }: { finding: Find
     <details className="group min-w-0 flex-1"><summary className="flex cursor-pointer list-none items-center gap-2.5 text-sm [&::-webkit-details-marker]:hidden">
         <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium ${colors[finding.status]}`}>{finding.status}</span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate font-medium text-gray-800">{humanSettingLabel(finding.settingId)}</span>
+          {recommendation && <span title={recommendation} className="block truncate font-medium text-gray-900">{recommendation}</span>}
+          <span className={recommendation ? "block truncate text-xs text-gray-600" : "block truncate font-medium text-gray-800"}>{humanSettingLabel(finding.settingId)}</span>
           <span title={finding.settingId} className="block truncate font-mono text-[11px] leading-4 text-gray-400">{finding.settingId}</span>
         </span>
         <ChevronDown className="h-4 w-4 shrink-0 text-gray-400 transition-transform group-open:rotate-180" aria-hidden="true" />

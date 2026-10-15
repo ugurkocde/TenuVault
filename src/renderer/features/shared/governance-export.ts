@@ -221,6 +221,7 @@ function cisReadinessRow(summary: CisReadinessSummary, level: CisReadinessSummar
     denominator: level.denominator,
     coverage: level.coverage,
     notAssessed: level.notAssessed,
+    ...(level.recommendations?.length ? { recommendations: level.recommendations.map(({ id, title, result }) => ({ id, title, result })) } : {}),
     manualNote: summary.manualNote,
     manual: (level.manual ?? []).map(item => ({
       identifier: item.identifier, level: item.level, title: item.title ?? null, state: "Manual" as const,
@@ -252,6 +253,9 @@ export function cisReadinessCsv(summary: CisReadinessSummary): string {
       const row = cisManualRow(summary, level, item)
       rows.push([row.benchmark, row.version, row.level, "", "", "", "", "", "", "", "", "", "", "", row.fallback, row.state, row.identifier, row.title, "", "", ""])
     }
+  }
+  for (const level of summary.levels) {
+    for (const item of level.recommendations ?? []) rows.push([summary.benchmark, summary.version, level.level, "", "", "", "", "", "", "", "", "", "", "", item.result, "Recommendation", item.id, item.title, "", "", ""])
   }
   // The CIS notice for recommendations this tool does not include, on every export.
   rows.push([summary.benchmark, summary.version, "", "", "", "", "", "", "", "", "", "", "", "", `${summary.manualFallback} ${summary.manualFallbackUrl}`, "Notice", "", "", "", "", ""])

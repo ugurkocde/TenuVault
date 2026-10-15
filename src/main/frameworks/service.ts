@@ -10,6 +10,7 @@ import { loadNcsc } from "./ncsc"
 import { validateRecommendationList } from "../../shared/frameworks/cis-manual"
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
 import { cisReadiness } from "../../shared/frameworks/cis-readiness"
+import { attachRecommendations } from "../../shared/frameworks/cis-recommendations"
 import { exceptionKey, isActive, isDateOnly, MAX_EXCEPTIONS, validateNewException, type CisException } from "../../shared/frameworks/cis-exceptions"
 import { tenantWriteLabel, withTenantWrite } from "../features/write-lock"
 import { CisContentError, fetchCisCatalog, fetchCisPack } from "./cis-content"
@@ -405,7 +406,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       const pack = await fetchCisPack({ benchmark, version, level }, cisEntitlementToken(body.tenantId))
       requireEnabledFramework(body.frameworkId)
       let policies: BaselinePolicy[]
-      try { policies = parsePolicies(pack.policies) }
+      try { policies = parsePolicies(pack.policies); if (pack.recommendations) policies = attachRecommendations(policies, pack.recommendations) }
       catch (error) { throw new FrameworkError(error instanceof Error ? error.message : "The CIS pack is invalid.") }
       const reference = `${pack.benchmark} ${pack.version} Level ${pack.level}`
       const workspace = loadWorkspace(body.tenantId, body.frameworkId)

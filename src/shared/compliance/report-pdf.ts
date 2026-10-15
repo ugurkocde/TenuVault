@@ -241,6 +241,10 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
         text(`Owner: ${exception.owner}\nExpires: ${exception.expiresOn}\nReason: ${reason}`)
       }
     }
+    if (level.recommendations?.length) {
+      heading(`Recommendation results, Level ${level.level}`)
+      text(level.recommendations.map(item => `${item.id} ${item.title}: ${item.result}`).join('\n'))
+    }
     if (level.manual.length) {
       heading(`Manual recommendations, Level ${level.level}`)
       for (const item of level.manual) {
