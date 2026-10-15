@@ -22,7 +22,9 @@ export function azureStoragePortalUrl(target: AzureStoragePortalTarget | null | 
   const resourceGroupName = target?.resourceGroupName?.trim()
   const storageAccountName = target?.storageAccountName?.trim()
   if (!tenantId || !subscriptionId || !resourceGroupName || !storageAccountName) return null
-  if (subscriptionId.toLowerCase() === "local" || resourceGroupName.toLowerCase() === "local") return null
+  // Device storage uses the placeholder subscription "local". A resource group can
+  // legitimately be named "local" in Azure, so only the subscription is checked.
+  if (subscriptionId.toLowerCase() === "local") return null
   if (storageAccountName.toLowerCase().startsWith(LOCAL_STORAGE_PREFIX)) return null
   const segment = encodeURIComponent
   return `https://portal.azure.com/#@${segment(tenantId)}/resource/subscriptions/${segment(subscriptionId)}/resourceGroups/${segment(resourceGroupName)}/providers/Microsoft.Storage/storageAccounts/${segment(storageAccountName)}/storagebrowser`

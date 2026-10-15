@@ -33,6 +33,10 @@ describe("View in Azure portal link", () => {
     expect(azureStoragePortalUrl({ ...azure, storageAccountName: "TVLOCAL-11111111-1111-1111-1111-111111111111" })).toBeNull()
   })
 
+  it("links to a real Azure resource group that happens to be named local", () => {
+    expect(azureStoragePortalUrl({ ...azure, resourceGroupName: "local" })).toContain("/resourceGroups/local/providers/Microsoft.Storage/storageAccounts/tvdesktope2e/storagebrowser")
+  })
+
   it("encodes resource names that need it", () => {
     expect(azureStoragePortalUrl({ ...azure, resourceGroupName: "rg backups #1" })).toContain("/resourceGroups/rg%20backups%20%231/")
   })
