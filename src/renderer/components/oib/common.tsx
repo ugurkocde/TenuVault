@@ -1,11 +1,11 @@
 import { showFeaturePlanError } from "../../lib/plan-dialog"
-import { useState, type ReactNode } from "react"
-import { CheckCircle2, Cloud, Laptop, Monitor, Smartphone } from "lucide-react"
+import { createContext, useContext, useState, type ReactNode } from "react"
+import { CheckCircle2, Cloud, Laptop, Monitor, Smartphone, Tablet } from "lucide-react"
 import { useSelectedTenant } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { allows, type Feature } from "../../../shared/plans"
-import { OIB_COMING_SOON, OIB_PLATFORMS, type OibCatalog, type OibComparison, type OibPlatform, type OibSelection, type OibVersions } from "../../../shared/oib/types"
-import { platformReleases, selectionLabel, tagVersion } from "../../../shared/oib/versions"
+import { OIB_PLATFORMS, type OibCatalog, type OibComparison, type OibPlatform, type OibSelection, type OibVersions } from "../../../shared/oib/types"
+import { isPrerelease, pickerReleases, platformStatus, selectionLabel, tagChannel, tagVersion } from "../../../shared/oib/versions"
 import { tenantLicense, tenantPlan, useLicense } from "../../lib/license"
 
 export const button = "inline-flex h-10 items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
@@ -82,7 +82,7 @@ export function Status({ busy, error, progress }: { busy: string; error: string;
   </>
 }
 
-const ICONS: Record<OibPlatform, typeof Monitor> = { windows: Monitor, macos: Laptop, win365: Cloud, byod: Smartphone }
+const ICONS: Record<OibPlatform, typeof Monitor> = { windows: Monitor, macos: Laptop, win365: Cloud, byod: Smartphone, ios: Smartphone, android: Tablet }
 
 export function OptionCard({ selected, disabled, onClick, title, description, icon, badge }: { selected: boolean; disabled?: boolean; onClick: () => void; title: string; description: string; icon?: ReactNode; badge?: ReactNode }) {
   return <button type="button" aria-pressed={selected} disabled={disabled} onClick={onClick}
@@ -95,14 +95,19 @@ export function OptionCard({ selected, disabled, onClick, title, description, ic
 }
 
 export function PlatformPicker({ value, onChange, disabled }: { value: OibPlatform[]; onChange: (value: OibPlatform[]) => void; disabled?: boolean }) {
+  const choice = useContext(VersionsContext)
+  // In-development platforms (per releases.json) cannot be scanned; without the manifest, all are offered.
+  const inDevelopment = (platform: OibPlatform) => (choice ? platformStatus(choice.versions, platform) : "available") === "in-development"
   return <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" role="group" aria-label="Operating systems">
     {(Object.keys(OIB_PLATFORMS) as OibPlatform[]).map(platform => {
       const Icon = ICONS[platform]
-      return <OptionCard key={platform} selected={value.includes(platform)} disabled={disabled} title={OIB_PLATFORMS[platform].label} description={OIB_PLATFORMS[platform].description}
-        icon={<Icon className="h-6 w-6 text-gray-700" aria-hidden="true" />} onClick={() => onChange(value.includes(platform) ? value.filter(p => p !== platform) : [...value, platform])} />
+      const pending = inDevelopment(platform)
+      return <OptionCard key={platform} selected={value.includes(platform)} disabled={disabled || pending} title={OIB_PLATFORMS[platform].label}
+        description={pending ? `${OIB_PLATFORMS[platform].description}. OpenIntuneBaseline has no published ${OIB_PLATFORMS[platform].label} baseline yet, so TenuVault cannot deploy one.` : OIB_PLATFORMS[platform].description}
+        icon={<Icon className="h-6 w-6 text-gray-700" aria-hidden="true" />}
+        badge={pending ? <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">In development</span> : undefined}
+        onClick={() => onChange(value.includes(platform) ? value.filter(p => p !== platform) : [...value, platform])} />
     })}
-    {OIB_COMING_SOON.map(item => <OptionCard key={item.label} selected={false} disabled title={item.label} description={`${item.description}. OpenIntuneBaseline has no ${item.label} baseline yet, so TenuVault cannot deploy one.`} onClick={() => undefined}
-      badge={<span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">Coming soon</span>} />)}
   </div>
 }
 
@@ -114,25 +119,39 @@ export interface LoadedPlatform {
 /** The version chosen for each platform on the OpenIntuneBaseline page. */
 export type Selections = Record<OibPlatform, OibSelection>
 
+/** The versions chosen on the OpenIntuneBaseline page; `choose` applies new ones (the open workflow restarts). */
+export interface OibVersionChoice {
+  versions: OibVersions
+  selections: Selections
+  choose: (value: Selections) => void
+  /** Whether beta prereleases are offered as the latest version by default. */
+  allowPrerelease: boolean
+  setAllowPrerelease: (value: boolean) => void
+}
+
+export const VersionsContext = createContext<OibVersionChoice | null>(null)
+
 /** Loads one platform pack at its selected version; also used to start a download early. */
 export const loadCatalog = (tenant: OibTenant, platform: OibPlatform, selection: OibSelection) =>
   oibRequest<OibCatalog>({ action: "oib-load", tenantId: tenant.tenantId, platform, commit: selection.commit, ...(selection.tag ? { tag: selection.tag } : {}) })
 
 const selectValue = (selection: OibSelection) => selection.tag ?? "main"
 
-/** One version select per platform: published releases newest first, then main. */
-export function VersionPicker({ versions, value, onChange }: { versions: OibVersions; value: Selections; onChange: (value: Selections) => void }) {
-  const date = (iso?: string) => iso ? new Date(iso).toLocaleDateString() : ""
+/** One version select per platform: published releases newest first, then main. Prereleases are offered per the toggle. */
+export function VersionPicker({ versions, value, onChange, allowPrerelease = true }: { versions: OibVersions; value: Selections; onChange: (value: Selections) => void; allowPrerelease?: boolean }) {
+  // Manifest release dates are date-only (2026-09-30); parse them at local noon so the day does not shift by timezone.
+  const date = (iso?: string) => iso ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso}T12:00:00` : iso).toLocaleDateString() : ""
   return <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
     {(Object.keys(OIB_PLATFORMS) as OibPlatform[]).map(platform => {
-      const releases = platformReleases(versions, platform)
-      return <label key={platform} className="flex flex-col gap-1 text-xs font-medium text-gray-700">{OIB_PLATFORMS[platform].label}
-        <select value={selectValue(value[platform])} className="h-10 rounded-full border border-gray-300 bg-white px-4 text-sm font-normal"
+      const releases = pickerReleases(versions, platform, allowPrerelease)
+      const pending = platformStatus(versions, platform) === "in-development"
+      return <label key={platform} className="flex flex-col gap-1 text-xs font-medium text-gray-700">{OIB_PLATFORMS[platform].label}{pending ? " (in development)" : ""}
+        <select value={selectValue(value[platform])} disabled={pending} className="h-10 rounded-full border border-gray-300 bg-white px-4 text-sm font-normal disabled:cursor-not-allowed disabled:opacity-60"
           onChange={e => {
             const release = releases.find(r => r.tag === e.target.value)
             onChange({ ...value, [platform]: release ? { commit: release.commit, tag: release.tag } : { commit: versions.main.commit } })
           }}>
-          {releases.map((release, index) => <option key={release.tag} value={release.tag}>{tagVersion(release.tag)}{index === 0 ? " (latest)" : ""}, {date(release.publishedAt)}</option>)}
+          {releases.map((release, index) => <option key={release.tag} value={release.tag}>{tagVersion(release.tag)}{tagChannel(release.tag) ? ` ${tagChannel(release.tag)}` : isPrerelease(release) ? " (prerelease)" : release.channel !== "stable" ? ` (${release.channel})` : ""}{index === 0 ? " (latest)" : ""}, {date(release.releaseDate)}</option>)}
           <option value="main">main @ {versions.main.commit.slice(0, 7)}{releases.length ? " (unreleased)" : " (no release yet)"}</option>
         </select>
       </label>

@@ -2,31 +2,73 @@ import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import { loadPack, oibDownloads, oibPack, oibReleases, oibVersions, publishedReleases, resetOibSource, resolveMain, setOibCacheDir } from "../src/main/oib/source"
-import { defaultSelection, oibReference, selectionLabel } from "../src/shared/oib/versions"
+import { loadPack, oibDownloads, oibPack, oibReleases, oibVersions, parseReleaseManifest, resetOibSource, resolveMain, setOibCacheDir } from "../src/main/oib/source"
+import { defaultSelection, isPrerelease, oibReference, pickerReleases, platformStatus, selectionLabel } from "../src/shared/oib/versions"
 
 const MAIN = "a".repeat(40)
 const V40 = "b".repeat(40)
 const V38 = "c".repeat(40)
 const MAC = "d".repeat(40)
+const MACBETA = "e".repeat(40)
+const IOSBETA = "9".repeat(40)
 const WIN = "WINDOWS/IntuneManagement/SettingsCatalog/Win - OIB - SC - Test.json"
 const MACOS = "MACOS/IntuneManagement/SettingsCatalog/Mac - OIB - SC - Test.json"
-const release = (tag: string, extra = {}) => ({ tag_name: tag, draft: false, prerelease: false, published_at: "2026-09-01T00:00:00Z", ...extra })
-const tag = (name: string, sha: string) => ({ name, commit: { sha } })
 
-/** GitHub with main, two Windows releases and one macOS release; `offline` fails every request. */
-function github(options: { main?: string; offline?: boolean } = {}) {
+/** The commit each release ref (tag or beta branch) resolves to. */
+const COMMITS: Record<string, string> = {
+  "windows-v4.0": V40,
+  "windows-v3.8": V38,
+  "macos-v1.0": MAC,
+  "macos-v2.0-beta": MACBETA,
+  "ios-v1.0-beta": IOSBETA,
+}
+
+/** A releases.json manifest like the upstream one: stable Windows tags, an unstable + beta macOS pair, beta-only iOS, in-development Android and BYOD. */
+const MANIFEST = {
+  manifestVersion: "1.0",
+  repository: "https://github.com/SkipToTheEndpoint/OpenIntuneBaseline",
+  platforms: [
+    {
+      id: "windows", name: "Windows", folder: "WINDOWS", status: "available", defaultBranch: "main", changelog: "/WINDOWS/CHANGELOG.md",
+      releases: [
+        { version: "4.0", name: "26H2 Edition", channel: "stable", releaseDate: "2026-09-30", branch: "main", tag: "windows-v4.0", url: "https://example/windows-v4.0", prerelease: false },
+        { version: "3.8", channel: "stable", releaseDate: "2026-05-08", branch: "main", tag: "windows-v3.8", url: "https://example/windows-v3.8", prerelease: false },
+      ],
+    },
+    {
+      id: "macos", name: "MacOS", folder: "MACOS", status: "available", defaultBranch: "main",
+      releases: [
+        { version: "1.0", channel: "unstable", releaseDate: "2024-09-02", branch: "main", tag: "macos-v1.0", url: "https://example/macos-v1.0", prerelease: false },
+        { version: "2.0", channel: "beta", releaseDate: "2026-01-28", branch: "macos-v2.0-beta", tag: null, url: "https://example/macos-v2.0-beta", prerelease: true },
+      ],
+    },
+    {
+      id: "ios", name: "iOS", folder: "IOS", status: "available", defaultBranch: "main",
+      releases: [
+        { version: "1.0", channel: "beta", releaseDate: "2026-10-15", branch: "ios-v1.0-beta", tag: null, url: "https://example/ios-v1.0-beta", prerelease: true },
+      ],
+    },
+    { id: "android", name: "Android", folder: "ANDROID", status: "in-development", defaultBranch: "main", releases: [] },
+    { id: "byod", name: "BYOD", folder: "BYOD", status: "in-development", defaultBranch: "main", releases: [] },
+  ],
+}
+
+/** GitHub serving the manifest, the main commit, each release ref and the pack files; `offline` fails every request. */
+function github(options: { main?: string; offline?: boolean; manifest?: unknown; brokenRefs?: string[] } = {}) {
   const requested: string[] = []
   const fetcher = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
     requested.push(url)
     if (options.offline) throw new TypeError("fetch failed")
-    if (url.endsWith("/commits/main")) return Response.json({ sha: options.main ?? MAIN, commit: { committer: { date: "2026-09-30T00:00:00Z" } } })
-    if (url.includes("/releases?")) return Response.json([
-      release("windows-v3.8", { published_at: "2026-05-08T00:00:00Z" }), release("windows-v4.0", { published_at: "2026-09-30T00:00:00Z" }), release("macos-v1.0", { published_at: "2024-09-02T00:00:00Z" }),
-      release("windows-v5.0", { draft: true }), release("windows-v4.1", { prerelease: true }), release("v3.2"), release("win365-v1.0"),
-    ])
-    if (url.includes("/tags?")) return Response.json([tag("windows-v4.0", V40), tag("windows-v3.8", V38), tag("macos-v1.0", MAC), tag("v3.2", "e".repeat(40)), tag("windows-v5.0", "f".repeat(40))])
+    if (url.endsWith("/releases.json")) return Response.json(options.manifest ?? MANIFEST)
+    const ref = /\/commits\/([^?]+)$/.exec(url)?.[1]
+    if (ref) {
+      const name = decodeURIComponent(ref)
+      if (options.brokenRefs?.includes(name)) return new Response("rate limited", { status: 403 })
+      const sha = name === "main" ? options.main ?? MAIN : COMMITS[name]
+      if (!sha) return new Response("Not Found", { status: 404 })
+      return Response.json({ sha, commit: { committer: { date: "2026-09-30T00:00:00Z" } } })
+    }
     if (url.includes("/git/trees/")) return Response.json({ truncated: false, tree: [{ type: "blob", path: WIN }, { type: "blob", path: MACOS }, { type: "blob", path: "README.md" }] })
     if (url.startsWith("https://raw.githubusercontent.com/")) return Response.json({ name: url.includes("MACOS") ? "Mac - OIB - SC - Test" : "Win - OIB - SC - Test", settings: [] })
     throw new Error(`Unexpected source: ${url}`)
@@ -45,44 +87,98 @@ afterEach(() => {
 })
 const useCache = () => { dir = mkdtempSync(join(tmpdir(), "oib-cache-")); setOibCacheDir(dir); return dir }
 
-it("lists stable platform releases pinned to their tag commits, newest first", () => {
-  const releases = publishedReleases([
-    release("windows-v3.8", { published_at: "2026-05-08T00:00:00Z" }), release("windows-v4.0", { published_at: "2026-09-30T00:00:00Z" }),
-    release("windows-v5.0", { draft: true }), release("windows-v4.1", { prerelease: true }), release("v3.2"), release("../../main"),
-    release("windows-v3.9", { published_at: null }), release("byod-v1.0"),
-  ], [tag("windows-v4.0", V40), tag("windows-v3.8", V38), tag("windows-v5.0", V40), tag("v3.2", V38), tag("windows-v3.9", V38), tag("byod-v1.0", "not-a-sha")])
-  // byod-v1.0 has no valid commit and is left out, like drafts, prereleases and unprefixed tags.
-  expect(releases).toEqual([
-    { platform: "windows", tag: "windows-v4.0", commit: V40, publishedAt: "2026-09-30T00:00:00Z" },
-    { platform: "windows", tag: "windows-v3.8", commit: V38, publishedAt: "2026-05-08T00:00:00Z" },
-  ])
-  expect(() => publishedReleases({}, [])).toThrow("unexpected release listing")
+it("maps manifest platform ids and keeps only well-formed releases", () => {
+  const { platforms } = parseReleaseManifest({
+    platforms: [
+      { id: "windows365", status: "available", releases: [{ version: "1.0", channel: "unstable", releaseDate: "2024-09-02", branch: "main", tag: "win365-v1.0", prerelease: false }] },
+      { id: "macos", status: "available", releases: [{ version: "2.0", channel: "beta", releaseDate: "2026-01-28", branch: "macos-v2.0-beta", tag: null, prerelease: true }, { version: "bad", releaseDate: "not-a-date" }] },
+      { id: "android", status: "in-development", releases: [] },
+      { id: "unknown-platform", status: "available", releases: [] },
+      { id: "toString", status: "available", releases: [] },
+    ],
+  })
+  // windows365 maps to win365, the malformed macOS release drops, and unknown or prototype platform ids are ignored.
+  expect(platforms.map(p => p.platform)).toEqual(["win365", "macos", "android"])
+  expect(platforms[0]!.releases).toEqual([{ platform: "win365", version: "1.0", channel: "unstable", prerelease: false, releaseDate: "2024-09-02", branch: "main", tag: "win365-v1.0" }])
+  expect(platforms[1]!.releases.map(r => r.version)).toEqual(["2.0"])
+  expect(platforms[1]!.releases[0]).toMatchObject({ platform: "macos", branch: "macos-v2.0-beta", prerelease: true })
+  expect(platforms[1]!.releases[0]!.tag).toBeUndefined()
+  expect(() => parseReleaseManifest({})).toThrow("unexpected release manifest")
 })
 
-it("resolves main and every release in three GitHub calls and caches them", async () => {
+it("drops manifest releases whose tag or branch is not a release of that platform and version", () => {
+  const { platforms, dropped } = parseReleaseManifest({
+    platforms: [{ id: "windows", status: "available", releases: [
+      { version: "4.0", channel: "stable", releaseDate: "2026-09-30", branch: "main", tag: "windows-v4.0", prerelease: false },
+      { version: "4.0", channel: "stable", releaseDate: "2026-09-30", branch: "main", tag: "macos-v4.0", prerelease: false },
+      { version: "9.9", channel: "stable", releaseDate: "2026-09-30", branch: "main", tag: "b".repeat(40), prerelease: false },
+      { version: "5.0", channel: "stable", releaseDate: "2026-09-30", branch: "main", tag: "windows-v4.0", prerelease: false },
+      { version: "2.0", channel: "beta", releaseDate: "2026-09-30", branch: "arbitrary-feature-branch", tag: null, prerelease: true },
+      { version: "6.0", channel: "beta", releaseDate: "2026-09-30", branch: "main", tag: "windows-v6.0-rc", prerelease: true },
+      { version: "7.0", channel: "beta", releaseDate: "2026-09-30", branch: "../../../other/repo", tag: null, prerelease: true },
+    ] }],
+  })
+  expect(platforms[0]!.releases.map(r => r.version)).toEqual(["4.0"])
+  expect(dropped).toHaveLength(6)
+})
+
+it("resolves main and every manifest release, pinning each to its tag or beta branch commit", async () => {
   const { fetcher } = github()
   const versions = await oibVersions()
   expect(versions.main).toEqual({ commit: MAIN, committedAt: "2026-09-30T00:00:00Z" })
-  expect(versions.releases.map(r => r.tag)).toEqual(["windows-v4.0", "windows-v3.8", "macos-v1.0"])
+  expect(versions.platforms).toEqual([
+    { platform: "windows", status: "available", changelog: "/WINDOWS/CHANGELOG.md" },
+    { platform: "macos", status: "available" },
+    { platform: "ios", status: "available" },
+    { platform: "android", status: "in-development" },
+    { platform: "byod", status: "in-development" },
+  ])
+  // Newest first by release date: iOS v1.0 beta, Windows v4.0, Windows v3.8, macOS v2.0 beta, macOS v1.0.
+  expect(versions.releases.map(r => `${r.tag}@${r.commit}`)).toEqual([`ios-v1.0-beta@${IOSBETA}`, `windows-v4.0@${V40}`, `windows-v3.8@${V38}`, `macos-v2.0-beta@${MACBETA}`, `macos-v1.0@${MAC}`])
+  // Manifest, main and five distinct release refs; a second read is cached.
   await oibVersions()
-  expect(fetcher).toHaveBeenCalledTimes(3)
-  expect(defaultSelection(versions, "windows")).toEqual({ commit: V40, tag: "windows-v4.0" })
-  expect(defaultSelection(versions, "byod")).toEqual({ commit: MAIN })
-  expect(selectionLabel(defaultSelection(versions, "windows"))).toBe("v4.0")
-  expect(selectionLabel(defaultSelection(versions, "byod"))).toBe(`main @ ${MAIN.slice(0, 7)}`)
+  expect(fetcher).toHaveBeenCalledTimes(7)
 })
 
-it("loads a release only for its own platform and tag, and labels it with the tag", async () => {
+it("defaults to the newest non-prerelease release, and to the newest release when prereleases are allowed", async () => {
+  const versions = (github(), await oibVersions())
+  expect(defaultSelection(versions, "windows")).toEqual({ commit: V40, tag: "windows-v4.0" })
+  // macOS v2.0 is a beta prerelease, so the default is the older published v1.0 (unstable channel, not a prerelease).
+  expect(defaultSelection(versions, "macos")).toEqual({ commit: MAC, tag: "macos-v1.0" })
+  expect(isPrerelease(versions.releases.find(r => r.tag === "macos-v1.0")!)).toBe(false)
+  expect(isPrerelease(versions.releases.find(r => r.tag === "macos-v2.0-beta")!)).toBe(true)
+  expect(defaultSelection(versions, "macos", true)).toEqual({ commit: MACBETA, tag: "macos-v2.0-beta" })
+  // iOS only has a beta release and no iOS content on main, so the beta is the default even without the toggle.
+  expect(defaultSelection(versions, "ios")).toEqual({ commit: IOSBETA, tag: "ios-v1.0-beta" })
+  expect(selectionLabel(defaultSelection(versions, "ios"))).toBe("v1.0 beta")
+  // BYOD has no release, so it uses main; shipped platforms stay available even when the manifest lists them as in development.
+  expect(defaultSelection(versions, "byod")).toEqual({ commit: MAIN })
+  expect(platformStatus(versions, "byod")).toBe("available")
+  expect(platformStatus(versions, "android")).toBe("in-development")
+  expect(platformStatus(versions, "ios")).toBe("available")
+  expect(selectionLabel(defaultSelection(versions, "macos", true))).toBe("v2.0 beta")
+  expect(selectionLabel(defaultSelection(versions, "byod"))).toBe(`main @ ${MAIN.slice(0, 7)}`)
+  // The picker follows the same toggle, keeping the beta-only platform's only release.
+  expect(pickerReleases(versions, "macos", false).map(r => r.tag)).toEqual(["macos-v1.0"])
+  expect(pickerReleases(versions, "macos", true).map(r => r.tag)).toEqual(["macos-v2.0-beta", "macos-v1.0"])
+  expect(pickerReleases(versions, "ios", false).map(r => r.tag)).toEqual(["ios-v1.0-beta"])
+})
+
+it("loads a release only for its own platform and tag, including a beta branch release", async () => {
   github()
   await expect(loadPack("windows", V40, "windows-v4.0")).rejects.toThrow("Reload")
   await oibVersions()
-  const pack = await loadPack("windows", V40, "windows-v4.0")
-  expect(pack.catalog).toMatchObject({ commit: V40, tag: "windows-v4.0", reference: `OpenIntuneBaseline Windows v4.0 · windows-v4.0 @ ${V40.slice(0, 7)}` })
+  expect((await loadPack("windows", V40, "windows-v4.0")).catalog).toMatchObject({ commit: V40, tag: "windows-v4.0", reference: `OpenIntuneBaseline Windows v4.0 · windows-v4.0 @ ${V40.slice(0, 7)}` })
+  expect((await loadPack("macos", MACBETA, "macos-v2.0-beta")).catalog).toMatchObject({ commit: MACBETA, tag: "macos-v2.0-beta", reference: `OpenIntuneBaseline macOS v2.0 beta · macos-v2.0-beta @ ${MACBETA.slice(0, 7)}` })
   await expect(loadPack("macos", V40, "windows-v4.0")).rejects.toThrow("Reload")
+  // A Windows release commit does not become another platform's main when loaded without a tag.
+  await expect(loadPack("macos", V40)).rejects.toThrow("Reload")
   await expect(loadPack("windows", V40, "windows-v3.8")).rejects.toThrow("Reload")
+  // Android is in development with nothing published, so even main cannot load as Android.
+  await expect(loadPack("android", MAIN)).rejects.toThrow("no published Android baseline")
   await expect(loadPack("windows", V40, 42)).rejects.toThrow("Reload")
-  await expect(loadPack("windows", "e".repeat(40))).rejects.toThrow("Reload")
-  // Without a tag, a release commit reads as its release (the baseline features pass commits only).
+  await expect(loadPack("windows", "f".repeat(40))).rejects.toThrow("Reload")
+  // Without a tag, a release commit reads as its release; other resolved commits read as main.
   expect((await loadPack("windows", V38)).catalog.reference).toContain("windows-v3.8 @")
   expect((await loadPack("windows", MAIN)).catalog.reference).toBe(`OpenIntuneBaseline Windows · main @ ${MAIN.slice(0, 7)}`)
 })
@@ -95,7 +191,7 @@ it("names a release commit after its release, and downloads it once for every la
   expect(untagged.catalog.reference).toContain("· windows-v4.0 @")
   expect(tagged.catalog.reference).toContain("· windows-v4.0 @")
   expect((await oibPack("windows", V40, "windows-v4.0")).reference).toContain("· windows-v4.0 @")
-  expect(requested.filter(url => url.startsWith("https://raw.githubusercontent.com/"))).toHaveLength(1)
+  expect(requested.filter(url => url.includes(encodeURIComponent("Win - OIB - SC - Test.json")))).toHaveLength(1)
   expect((await loadPack("macos", V40)).catalog.reference).toContain("macOS · main @")
 })
 
@@ -119,7 +215,8 @@ it("reuses packs from disk after a restart and works offline with the last known
   const { requested } = github({ offline: true })
   const versions = await oibVersions()
   expect(versions.warning).toContain("Showing the versions known on")
-  expect(versions.releases.map(r => r.tag)).toEqual(["windows-v4.0", "windows-v3.8", "macos-v1.0"])
+  expect(versions.releases.map(r => r.tag)).toEqual(["ios-v1.0-beta", "windows-v4.0", "windows-v3.8", "macos-v2.0-beta", "macos-v1.0"])
+  expect(versions.platforms.map(p => p.platform)).toEqual(["windows", "macos", "ios", "android", "byod"])
   const requestsBefore = requested.length
   const pack = await loadPack("windows", V40, "windows-v4.0")
   expect(pack.catalog.policies).toHaveLength(1)
@@ -163,17 +260,94 @@ it("reuses the offline versions briefly instead of retrying GitHub on every requ
   expect((await oibVersions(true)).warning).toBeUndefined()
 })
 
-it("offers each platform's latest release as its upgrade, and main where none is published", async () => {
+it("offers each platform's newest non-prerelease release as its upgrade, and main where none is published", async () => {
   github()
   const { releases, warning } = await oibReleases()
   expect(warning).toBeUndefined()
-  expect(releases.find(r => r.platform === "windows")).toMatchObject({ tag: "windows-v4.0", commit: V40, reference: oibReference("windows", V40, "windows-v4.0"), publishedAt: "2026-09-30T00:00:00Z" })
+  expect(releases.find(r => r.platform === "windows")).toMatchObject({ tag: "windows-v4.0", commit: V40, reference: oibReference("windows", V40, "windows-v4.0"), publishedAt: "2026-09-30" })
+  expect(releases.find(r => r.platform === "macos")).toMatchObject({ tag: "macos-v1.0", commit: MAC, publishedAt: "2024-09-02" })
+  // iOS has only its beta release, so the beta is offered instead of an empty main.
+  expect(releases.find(r => r.platform === "ios")).toMatchObject({ tag: "ios-v1.0-beta", commit: IOSBETA, publishedAt: "2026-10-15" })
   expect(releases.find(r => r.platform === "byod")).toMatchObject({ tag: `main @ ${MAIN.slice(0, 7)}`, commit: MAIN, reference: `OpenIntuneBaseline BYOD · main @ ${MAIN.slice(0, 7)}` })
+  // In-development platforms are not offered as upgrades.
+  expect(releases.map(r => r.platform)).toEqual(["windows", "macos", "win365", "byod", "ios"])
 })
 
 it("resolves releases on demand for the baseline features", async () => {
   github()
   expect((await oibPack("windows", V38)).reference).toContain("windows-v3.8 @")
-  await expect(oibPack("windows", "e".repeat(40))).rejects.toThrow("Reload")
+  await expect(oibPack("windows", "f".repeat(40))).rejects.toThrow("Reload")
   await resolveMain()
+})
+
+it("never admits a manifest release whose ref belongs to another platform", async () => {
+  github({ manifest: { platforms: [{ id: "windows", status: "available", releases: [
+    { version: "4.0", channel: "stable", releaseDate: "2026-09-30", branch: "main", tag: "windows-v4.0", prerelease: false },
+    { version: "1.0", channel: "stable", releaseDate: "2026-10-01", branch: "main", tag: "macos-v1.0", prerelease: false },
+  ] }] } })
+  const versions = await oibVersions()
+  expect(versions.releases.map(r => r.tag)).toEqual(["windows-v4.0"])
+  expect(versions.warning).toContain("could not be read (Windows v1.0)")
+  await expect(loadPack("windows", MAC, "macos-v1.0")).rejects.toThrow("Reload")
+})
+
+it("warns when a manifest release cannot be resolved instead of silently falling back", async () => {
+  github({ manifest: { platforms: [{ id: "windows", status: "available", releases: [
+    { version: "9.9", channel: "stable", releaseDate: "2026-11-01", branch: "main", tag: "windows-v9.9", prerelease: false },
+    { version: "4.0", channel: "stable", releaseDate: "2026-09-30", branch: "main", tag: "windows-v4.0", prerelease: false },
+  ] }] } })
+  const versions = await oibVersions()
+  expect(versions.warning).toContain("could not be read (Windows v9.9)")
+  expect(versions.releases.map(r => r.tag)).toEqual(["windows-v4.0"])
+  expect(defaultSelection(versions, "windows")).toEqual({ commit: V40, tag: "windows-v4.0" })
+})
+
+it("keeps the last known release when one ref cannot be refreshed, across an offline restart", async () => {
+  useCache()
+  github()
+  await oibVersions()
+  // The iOS beta ref now fails transiently while the manifest and main still load.
+  resetOibSource()
+  github({ brokenRefs: ["ios-v1.0-beta"] })
+  const refreshed = await oibVersions()
+  expect(refreshed.warning).toContain("could not be refreshed (iOS v1.0)")
+  expect(defaultSelection(refreshed, "ios")).toEqual({ commit: IOSBETA, tag: "ios-v1.0-beta" })
+  // The stored listing still contains the beta, so an offline restart keeps it loadable.
+  resetOibSource()
+  github({ offline: true })
+  const offline = await oibVersions()
+  expect(offline.releases.map(r => r.tag)).toContain("ios-v1.0-beta")
+  expect(defaultSelection(offline, "ios")).toEqual({ commit: IOSBETA, tag: "ios-v1.0-beta" })
+  const error = await loadPack("ios", IOSBETA, "ios-v1.0-beta").catch((caught: unknown) => caught)
+  expect(error).toBeInstanceOf(Error)
+  expect((error as Error).message).not.toContain("changed or expired")
+})
+
+it("refuses main as an in-development platform even before versions were loaded", async () => {
+  github()
+  await resolveMain()
+  await expect(loadPack("android", MAIN)).rejects.toThrow("no published Android baseline")
+  // Shipped platforms load from main without a manifest read, as before.
+  expect((await loadPack("windows", MAIN)).catalog.policies).toHaveLength(1)
+})
+
+it("reads versions stored before the manifest when offline", async () => {
+  const cache = useCache()
+  // The pre-manifest shape: publishedAt only, and no version, branch, channel or platform list.
+  writeFileSync(join(cache, "versions.json"), JSON.stringify({ format: 1, savedAt: "2026-10-01T00:00:00Z", versions: {
+    main: { commit: MAIN },
+    releases: [
+      { platform: "windows", tag: "windows-v4.0", commit: V40, publishedAt: "2026-09-30T00:00:00Z" },
+      // Not a release tag of its platform: skipped instead of discarding the whole cache.
+      { platform: "win365", tag: "windows365-v1.0", commit: MAC, publishedAt: "2024-09-02T00:00:00Z" },
+      // Structurally malformed entries are skipped the same way.
+      { platform: "macos", tag: 42, commit: MAC },
+    ],
+  } }))
+  github({ offline: true })
+  const versions = await oibVersions()
+  expect(versions.warning).toContain("Showing the versions known on")
+  expect(versions.releases).toEqual([{ platform: "windows", version: "4.0", channel: "stable", prerelease: false, releaseDate: "2026-09-30T00:00:00Z", branch: "main", tag: "windows-v4.0", commit: V40 }])
+  expect(versions.platforms).toEqual([{ platform: "windows", status: "available" }])
+  expect(platformStatus(versions, "byod")).toBe("available")
 })

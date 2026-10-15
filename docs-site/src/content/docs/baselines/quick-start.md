@@ -32,9 +32,11 @@ A platform's policy files are downloaded the first time a version is used, with 
 | **Windows** | Windows 11 devices deployed by Autopilot |
 | **macOS** | Apple macOS devices deployed by Apple Business Manager |
 | **Windows 365** | Cloud PCs |
+| **iOS** | Fully managed iOS devices |
+| **Android** | Android Enterprise devices |
 | **BYOD** | App protection policies for iOS and Android |
 
-iOS and Android device platforms are listed as **Coming soon**.
+The platforms, their versions and development status come from the upstream `releases.json` manifest. New platforms the manifest marks as **in development** appear but cannot be scanned yet; platforms TenuVault already supports stay available. Beta releases are offered as a platform's latest version when you enable prereleases, and for platforms that only have a beta release (currently iOS) the beta is used by default with a warning. Published releases on the unstable channel are regular releases and are labelled in the version picker.
 
 ## What your plan includes
 

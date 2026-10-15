@@ -148,7 +148,7 @@ describe("OIB source", () => {
     expect(catalog).toMatchObject({ platform: "windows", version: "v3.8", manifest: true, reference: `OpenIntuneBaseline Windows v3.8 · main @ ${commit.slice(0, 7)}` })
     expect(catalog.policies.map(p => [p.policyType, p.oibId])).toEqual([["SettingsCatalog", OIB_A], ["CompliancePolicies", "BDE95674-F4F0-4E6E-A49A-D0197BE56560"]])
     expect(JSON.stringify(catalog)).not.toContain("settingDefinitionId")
-    await expect(handleOib({ action: "oib-load", platform: "linux", commit })).rejects.toThrow("Windows, macOS, Windows 365 or BYOD")
+    await expect(handleOib({ action: "oib-load", platform: "linux", commit })).rejects.toThrow("supported OpenIntuneBaseline platform")
   })
 })
 

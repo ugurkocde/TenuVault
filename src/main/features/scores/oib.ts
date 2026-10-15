@@ -12,7 +12,15 @@ const platforms = Object.keys(OIB_PLATFORMS) as OibPlatform[]
 export const oibScoreId = (platform: OibPlatform) => `oib-${platform}`
 export const oibScorePlatform = (id: string): OibPlatform | null => platforms.find((platform) => oibScoreId(platform) === id) ?? null
 const name = (platform: OibPlatform) => `OpenIntuneBaseline ${OIB_PLATFORMS[platform].label}`
-const scope = (platform: OibPlatform): CompliancePlatform[] => platform === "byod" ? ["android", "ios"] : [platform === "macos" ? "macos" : "windows"]
+const scope = (platform: OibPlatform): CompliancePlatform[] => {
+  switch (platform) {
+    case "byod": return ["android", "ios"]
+    case "ios": return ["ios"]
+    case "android": return ["android"]
+    case "macos": return ["macos"]
+    default: return ["windows"]
+  }
+}
 const NOTE = "Selected deployed policies only, not the whole baseline. Undeployed and unselected policies, targeting and device enforcement are not assessed. Tenant-only settings are shown by Policy Validation but do not count against the expected OIB settings score. Coverage is unavailable when a failed or unsupported policy has no saved expected-setting count; its unknown entry represents a policy, not a setting."
 
 function validPolicy(value: unknown): value is PolicyValidation {

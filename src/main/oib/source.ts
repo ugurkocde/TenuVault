@@ -3,8 +3,8 @@ import { join } from "node:path"
 import { record } from "../../shared/frameworks/policies"
 import { typeForFolder, type Item } from "../../shared/intune/registry"
 import { catalogPolicies, parseManifest, type Manifest } from "../../shared/oib/manifest"
-import { OIB_LICENSE, OIB_PLATFORMS, OIB_REPO, type OibCatalog, type OibPlatform, type OibPublishedRelease, type OibVersions } from "../../shared/oib/types"
-import { defaultSelection, oibReference, selectionLabel, tagPlatform } from "../../shared/oib/versions"
+import { OIB_LICENSE, OIB_MANIFEST_IDS, OIB_PLATFORMS, OIB_REPO, type OibCatalog, type OibChannel, type OibPlatform, type OibPlatformInfo, type OibPlatformStatus, type OibPublishedRelease, type OibVersions } from "../../shared/oib/types"
+import { defaultSelection, isShippedPlatform, oibReference, platformStatus, RELEASE_TAG, selectionLabel, tagPlatform, tagVersion } from "../../shared/oib/versions"
 import { FrameworkError } from "../frameworks/service"
 
 /**
@@ -60,7 +60,8 @@ export interface LoadedPack {
   items: Map<string, PackItem>
 }
 
-let head: { commit: string; committedAt?: string; expires: number } | null = null
+/** Commit resolved for each ref (branch or tag), cached for ten minutes. */
+const refCommits = new Map<string, { commit: string; committedAt?: string; expires: number }>()
 let versions: { value: OibVersions; expires: number } | null = null
 /** Commits main pointed to, plus commits recorded by this app (runs, baseline provenance). */
 const resolved = new Set<string>()
@@ -80,7 +81,7 @@ export function setOibCacheDir(dir: string | null): void {
 
 /** Forgets resolved commits and cached packs held in memory. */
 export function resetOibSource(): void {
-  head = null
+  refCommits.clear()
   versions = null
   resolved.clear()
   tagged.clear()
@@ -116,57 +117,143 @@ async function github(url: string): Promise<unknown> {
   }
 }
 
-/** The commit the OIB main branch points to now (cached for ten minutes). */
-export async function resolveMain(): Promise<{ commit: string; committedAt?: string }> {
-  if (head && head.expires > Date.now()) return { commit: head.commit, committedAt: head.committedAt }
-  const json = await github(`${API}/commits/main`)
+/** The commit a validated release ref points to now (cached for ten minutes). Dot segments never reach the URL. */
+export async function resolveRef(ref: string): Promise<{ commit: string; committedAt?: string }> {
+  if (ref.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) throw new FrameworkError("GitHub returned an unexpected commit.", 502)
+  const cached = refCommits.get(ref)
+  if (cached && cached.expires > Date.now()) return { commit: cached.commit, committedAt: cached.committedAt }
+  const json = await github(`${API}/commits/${ref.split("/").map(encodeURIComponent).join("/")}`)
   if (!record(json) || typeof json.sha !== "string" || !SHA.test(json.sha)) throw new FrameworkError("GitHub returned an unexpected commit.", 502)
   const committedAt = record(json.commit) && record(json.commit.committer) && typeof json.commit.committer.date === "string" ? json.commit.committer.date : undefined
-  head = { commit: json.sha, committedAt, expires: Date.now() + HEAD_TTL }
-  resolved.add(json.sha)
+  refCommits.set(ref, { commit: json.sha, committedAt, expires: Date.now() + HEAD_TTL })
   return { commit: json.sha, committedAt }
 }
 
+/** The commit the OIB main branch points to now (cached for ten minutes). Only main commits are loadable untagged. */
+export async function resolveMain(): Promise<{ commit: string; committedAt?: string }> {
+  const main = await resolveRef("main")
+  resolved.add(main.commit)
+  return main
+}
+
+/** A release the releases.json manifest lists, before its ref is resolved to a commit. */
+interface ManifestRelease {
+  platform: OibPlatform
+  version: string
+  name?: string
+  channel: OibChannel
+  prerelease: boolean
+  releaseDate: string
+  branch: string
+  /** The published tag, or undefined for beta releases that only live on a branch. */
+  tag?: string
+  url?: string
+}
+
+interface ParsedManifest {
+  platforms: Array<{ platform: OibPlatform; status: OibPlatformStatus; changelog?: string; releases: ManifestRelease[] }>
+  /** Readable labels of releases left out as malformed, so oibVersions can warn about them. */
+  dropped: string[]
+}
+
+const asText = (value: unknown): string => (typeof value === "string" ? value.trim() : "")
+const asChannel = (value: unknown): OibChannel => (value === "beta" || value === "unstable" ? value : "stable")
+
 /**
- * Stable platform releases, newest first: drafts, prereleases and tags without a platform prefix
- * are left out, and each tag is pinned to the commit the tag listing reports.
+ * The releases.json manifest: the platforms upstream publishes, each with its development status
+ * and releases. Malformed platforms or releases are left out rather than failing the whole read.
  */
-export function publishedReleases(releases: unknown, tags: unknown): OibPublishedRelease[] {
-  if (!Array.isArray(releases) || !Array.isArray(tags)) throw new FrameworkError("GitHub returned an unexpected release listing.", 502)
-  const commits = new Map<string, string>()
-  for (const tag of tags) {
-    if (record(tag) && typeof tag.name === "string" && record(tag.commit) && typeof tag.commit.sha === "string" && SHA.test(tag.commit.sha)) commits.set(tag.name, tag.commit.sha)
-  }
-  const result: OibPublishedRelease[] = []
-  for (const release of releases) {
-    if (!record(release) || release.draft !== false || release.prerelease !== false || typeof release.tag_name !== "string" || typeof release.published_at !== "string" || !Number.isFinite(Date.parse(release.published_at))) continue
-    const platform = tagPlatform(release.tag_name)
-    const commit = commits.get(release.tag_name)
-    if (!platform || !commit) continue
-    result.push({ platform, tag: release.tag_name, commit, publishedAt: release.published_at })
-  }
-  return result.sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt))
+export function parseReleaseManifest(value: unknown): ParsedManifest {
+  if (!record(value) || !Array.isArray(value.platforms)) throw new FrameworkError("GitHub returned an unexpected release manifest.", 502)
+  const dropped: string[] = []
+  const platforms = value.platforms.filter(record).flatMap((entry): ParsedManifest["platforms"] => {
+    const platform = typeof entry.id === "string" && Object.hasOwn(OIB_MANIFEST_IDS, entry.id) ? OIB_MANIFEST_IDS[entry.id] : undefined
+    if (!platform) return []
+    const status: OibPlatformStatus = entry.status === "available" ? "available" : "in-development"
+    const changelog = asText(entry.changelog)
+    const releases = Array.isArray(entry.releases) ? entry.releases.filter(record).flatMap((release): ManifestRelease[] => {
+      const version = asText(release.version)
+      const releaseDate = asText(release.releaseDate)
+      const branch = asText(release.branch) || "main"
+      const tag = asText(release.tag) || undefined
+      // A release only counts when its tag or beta branch names this platform and version
+      // (windows-v4.0, macos-v2.0-beta). Anything else, including raw commits, other branches
+      // and other platforms' tags, must never become a loadable release.
+      const ref = tag ?? branch
+      const suffix = RELEASE_TAG.exec(ref)?.[3]?.toLowerCase()
+      if (!version || !releaseDate || !Number.isFinite(Date.parse(releaseDate)) || tagPlatform(ref) !== platform || tagVersion(ref) !== `v${version}` || (suffix !== undefined && suffix !== "beta" && suffix !== "unstable")) {
+        dropped.push(version ? `${OIB_PLATFORMS[platform].label} v${version}` : `${OIB_PLATFORMS[platform].label} release`)
+        return []
+      }
+      return [{
+        platform, version, channel: asChannel(release.channel), prerelease: release.prerelease === true,
+        releaseDate, branch, ...(tag ? { tag } : {}),
+        ...(asText(release.name) ? { name: asText(release.name) } : {}),
+        ...(asText(release.url) ? { url: asText(release.url) } : {}),
+      }]
+    }) : []
+    return [{ platform, status, ...(changelog ? { changelog } : {}), releases }]
+  })
+  return { platforms, dropped }
+}
+
+/** Reads releases.json from the repository's main branch. */
+async function getReleaseManifest(): Promise<ParsedManifest> {
+  return parseReleaseManifest(await github(`${RAW}/main/releases.json`))
 }
 
 function admit(value: OibVersions): void {
   resolved.add(value.main.commit)
+  // Release commits are loadable only as their own platform's release, never as another platform's main.
   for (const release of value.releases) tagged.add(`${release.platform}:${release.commit}:${release.tag}`)
 }
 
 /**
- * The versions this session can load: main and the published releases (cached for ten minutes).
- * Without GitHub, the versions known from the last successful read are offered with a warning,
- * so packs already on disk stay usable offline.
+ * The versions this session can load: main and the releases.json manifest releases, each pinned to
+ * the commit its tag or beta branch points to (cached for ten minutes). Without GitHub, the versions
+ * known from the last successful read are offered with a warning, so packs already on disk stay usable.
  */
 export async function oibVersions(retry = false): Promise<OibVersions> {
   // An explicit retry skips versions read from disk, so it really asks GitHub again.
   if (versions && versions.expires > Date.now() && !(retry && versions.value.warning)) return versions.value
   try {
-    const [main, releases, tags] = await Promise.all([resolveMain(), github(`${API}/releases?per_page=100`), github(`${API}/tags?per_page=100`)])
-    const value: OibVersions = { main, releases: publishedReleases(releases, tags) }
+    const [manifest, main] = await Promise.all([getReleaseManifest(), resolveMain()])
+    const platforms: OibPlatformInfo[] = manifest.platforms.map((entry) => ({ platform: entry.platform, status: entry.status, ...(entry.changelog ? { changelog: entry.changelog } : {}) }))
+    // Last known commit per release, so a transient failure to re-resolve one ref keeps its
+    // downloaded packs usable instead of dropping the release (and its cache entry) entirely.
+    const previous = new Map<string, OibPublishedRelease>()
+    for (const release of (await readStoredVersions())?.versions.releases ?? []) previous.set(`${release.platform}:${release.tag}`, release)
+    for (const release of versions?.value.releases ?? []) previous.set(`${release.platform}:${release.tag}`, release)
+    const unresolved: string[] = [...manifest.dropped]
+    const stale: string[] = []
+    const resolvedReleases = await Promise.all(manifest.platforms.flatMap((entry) => entry.releases).map(async (release): Promise<OibPublishedRelease | null> => {
+      const ref = release.tag ?? release.branch
+      const published = (commit: string): OibPublishedRelease => ({ platform: release.platform, version: release.version, ...(release.name ? { name: release.name } : {}), channel: release.channel, prerelease: release.prerelease, releaseDate: release.releaseDate, branch: release.branch, tag: ref, commit, ...(release.url ? { url: release.url } : {}) })
+      try {
+        const { commit } = await resolveRef(ref)
+        return published(commit)
+      } catch (error) {
+        console.warn(`[oib] ${release.platform} ${release.version} (${ref}) could not be resolved: ${error instanceof Error ? error.message : String(error)}`)
+        const known = previous.get(`${release.platform}:${ref}`)
+        if (known) {
+          stale.push(`${OIB_PLATFORMS[release.platform].label} v${release.version}`)
+          return published(known.commit)
+        }
+        unresolved.push(`${OIB_PLATFORMS[release.platform].label} v${release.version}`)
+        return null
+      }
+    }))
+    const releases = resolvedReleases.filter((release): release is OibPublishedRelease => release !== null).sort((a, b) => Date.parse(b.releaseDate) - Date.parse(a.releaseDate))
+    // A release that cannot be resolved must be visible: its platform would otherwise silently fall back to main or an older release.
+    const warnings: string[] = []
+    if (stale.length) warnings.push(`Some OpenIntuneBaseline releases could not be refreshed (${stale.join(", ")}). Showing their last known versions.`)
+    if (unresolved.length) warnings.push(`Some OpenIntuneBaseline releases could not be read (${unresolved.join(", ")}). Those platforms may show main or an older release until the versions are refreshed.`)
+    const warning = warnings.length ? warnings.join(" ") : undefined
+    const value: OibVersions = { main, platforms, releases, ...(warning ? { warning } : {}) }
     admit(value)
     versions = { value, expires: Date.now() + HEAD_TTL }
-    await writeCache("versions.json", { format: CACHE_FORMAT, savedAt: new Date().toISOString(), versions: value })
+    // An incomplete listing must not replace the last complete one on disk.
+    if (!unresolved.length) await writeCache("versions.json", { format: CACHE_FORMAT, savedAt: new Date().toISOString(), versions: value })
     return value
   } catch (error) {
     const stored = await readStoredVersions()
@@ -183,16 +270,32 @@ export async function oibVersions(retry = false): Promise<OibVersions> {
 async function readStoredVersions(): Promise<{ savedAt: string; versions: OibVersions } | null> {
   const json = await readCache("versions.json")
   if (!record(json) || json.format !== CACHE_FORMAT || typeof json.savedAt !== "string" || !record(json.versions)) return null
-  const { main, releases } = json.versions
+  const { main, releases, platforms } = json.versions
   if (!record(main) || typeof main.commit !== "string" || !SHA.test(main.commit) || !Array.isArray(releases)) return null
   const known: OibPublishedRelease[] = []
   for (const release of releases) {
-    if (!record(release) || typeof release.tag !== "string" || typeof release.commit !== "string" || !SHA.test(release.commit) || typeof release.publishedAt !== "string") return null
+    if (!record(release) || typeof release.tag !== "string" || typeof release.commit !== "string" || !SHA.test(release.commit)) continue
     const platform = tagPlatform(release.tag)
-    if (!platform || platform !== release.platform) return null
-    known.push({ platform, tag: release.tag, commit: release.commit, publishedAt: release.publishedAt })
+    // A stored release that is not a release of its platform is skipped, not allowed to discard the whole cache.
+    if (!platform || platform !== release.platform) continue
+    // Versions stored before the manifest carry publishedAt and no version, branch or channel; derive them from the tag.
+    const releaseDate = typeof release.releaseDate === "string" ? release.releaseDate : typeof release.publishedAt === "string" ? release.publishedAt : null
+    const version = typeof release.version === "string" ? release.version : tagVersion(release.tag)?.slice(1)
+    if (!releaseDate || !version || tagVersion(release.tag) !== `v${version}`) continue
+    const channel: OibChannel = release.channel === "beta" || release.channel === "unstable" ? release.channel : "stable"
+    known.push({ platform, version, ...(typeof release.name === "string" ? { name: release.name } : {}), channel, prerelease: release.prerelease === true, releaseDate, branch: typeof release.branch === "string" ? release.branch : "main", tag: release.tag, commit: release.commit, ...(typeof release.url === "string" ? { url: release.url } : {}) })
   }
-  return { savedAt: json.savedAt, versions: { main: { commit: main.commit, ...(typeof main.committedAt === "string" ? { committedAt: main.committedAt } : {}) }, releases: known } }
+  // Versions stored before the manifest have no platform list; the platforms with known releases are available.
+  const knownPlatforms: OibPlatformInfo[] = []
+  if (Array.isArray(platforms)) {
+    for (const entry of platforms) {
+      if (!record(entry) || typeof entry.platform !== "string" || !Object.hasOwn(OIB_PLATFORMS, entry.platform) || (entry.status !== "available" && entry.status !== "in-development")) continue
+      knownPlatforms.push({ platform: entry.platform as OibPlatform, status: entry.status, ...(typeof entry.changelog === "string" ? { changelog: entry.changelog } : {}) })
+    }
+  } else {
+    for (const platform of new Set(known.map((release) => release.platform))) knownPlatforms.push({ platform, status: "available" })
+  }
+  return { savedAt: json.savedAt, versions: { main: { commit: main.commit, ...(typeof main.committedAt === "string" ? { committedAt: main.committedAt } : {}) }, platforms: knownPlatforms, releases: known } }
 }
 
 async function readCache(name: string): Promise<unknown> {
@@ -305,7 +408,8 @@ function treeOf(commit: string): Promise<string[]> {
 async function downloadPack(platform: OibPlatform, commit: string): Promise<PackContent> {
   const blobs = await treeOf(commit)
   const paths = blobs.filter((path) => packFolder(platform, path) !== undefined)
-  if (!paths.length || paths.length > MAX_FILES) throw new FrameworkError("Unexpected OIB pack size.", 502)
+  if (!paths.length) throw new FrameworkError("The selected version contains no policies for this platform.", 502)
+  if (paths.length > MAX_FILES) throw new FrameworkError("Unexpected OIB pack size.", 502)
   const raw = (path: string) => `${RAW}/${commit}/${path.split("/").map(encodeURIComponent).join("/")}`
   const manifestPath = `${OIB_PLATFORMS[platform].root}PolicyManifest.json`
   const hasManifest = blobs.includes(manifestPath)
@@ -424,6 +528,12 @@ function labelOf(platform: OibPlatform, commit: string, tag: unknown): string | 
 export async function loadPack(platform: OibPlatform, commit: unknown, tag?: unknown): Promise<LoadedPack> {
   const label = typeof commit === "string" && SHA.test(commit) ? labelOf(platform, commit, tag) : null
   if (label === null) throw new FrameworkError("The OpenIntuneBaseline source changed or expired. Reload it and try again.", 409)
+  // In-development platforms have nothing scannable on main; fail closed when the manifest is
+  // unknown too. A resolved release (label set) stays loadable so recorded packs remain readable.
+  if (!isShippedPlatform(platform) && label === undefined) {
+    if (!versions) await oibVersions().catch(() => undefined)
+    if (!versions || platformStatus(versions.value, platform) === "in-development") throw new FrameworkError(`OpenIntuneBaseline has no published ${OIB_PLATFORMS[platform].label} baseline yet.`, 400)
+  }
   const sha = commit as string
   const key = `${platform}:${sha}:${label ?? "main"}`
   const cached = packs.get(key)
@@ -485,9 +595,9 @@ export async function oibReleases(): Promise<{ releases: OibRelease[]; warning?:
   try {
     const value = await oibVersions()
     return {
-      releases: (Object.keys(OIB_PLATFORMS) as OibPlatform[]).map((platform) => {
+      releases: (Object.keys(OIB_PLATFORMS) as OibPlatform[]).filter((platform) => platformStatus(value, platform) === "available").map((platform) => {
         const { commit, tag } = defaultSelection(value, platform)
-        const publishedAt = tag ? value.releases.find((release) => release.tag === tag)?.publishedAt : value.main.committedAt
+        const publishedAt = tag ? value.releases.find((release) => release.tag === tag)?.releaseDate : value.main.committedAt
         return { platform, tag: tag ?? `main @ ${commit.slice(0, 7)}`, commit, reference: oibReference(platform, commit, tag), ...(publishedAt ? { publishedAt } : {}) }
       }),
       ...(value.warning ? { warning: value.warning } : {}),

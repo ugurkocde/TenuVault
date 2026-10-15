@@ -1,6 +1,7 @@
 import type { RouteModule } from "../../api/host"
 import type { Item } from "../../../shared/intune/registry"
 import { isGraphId } from "../../../shared/security"
+import { OIB_PLATFORMS, type OibPlatform } from "../../../shared/oib/types"
 import type { SignalProvider } from "../contracts"
 import type { FeatureDeps } from "../deps"
 import { featureRoute, FeatureError, optionalText, text, type Body } from "../route"
@@ -98,17 +99,17 @@ async function versionInput(body: Body, sources: BaselineSources): Promise<Versi
   const base = { name: text(body, "name", 200), changeNotes: text(body, "changeNotes", 4000), parameters: body.parameters, bindings }
   if (source.type === "oib") {
     const platform = source.platform
-    if (platform !== "windows" && platform !== "macos" && platform !== "win365" && platform !== "byod") throw new FeatureError("Choose an OIB platform.")
+    if (typeof platform !== "string" || !Object.hasOwn(OIB_PLATFORMS, platform)) throw new FeatureError("Choose an OIB platform.")
     if (typeof source.commit !== "string" || !/^[0-9a-f]{40}$/.test(source.commit)) throw new FeatureError("The OpenIntuneBaseline version is missing. Reload the latest version and try again.")
     const names = Array.isArray(source.policyNames) ? new Set(source.policyNames.slice(0, 200).map((name) => policyMatchKey(String(name)))) : null
     let pack
     try {
-      pack = await sources.pack(platform, source.commit)
+      pack = await sources.pack(platform as OibPlatform, source.commit)
     } catch (error) {
       throw new FeatureError(`The release could not be loaded. ${error instanceof Error ? error.message : String(error)}`, 502)
     }
     const items = pack.items.filter((item) => item.folder === "ConfigurationPolicies" && (!names || names.has(policyMatchKey(item.name))))
-    return { ...base, source: { type: "oib", reference: pack.reference, commit: pack.commit, platform }, policies: items.map((item) => item.snapshot) }
+    return { ...base, source: { type: "oib", reference: pack.reference, commit: pack.commit, platform: platform as OibPlatform }, policies: items.map((item) => item.snapshot) }
   }
   if (source.type === "manual") {
     if (JSON.stringify(body.policies ?? null).length > 8_000_000) throw new FeatureError("The policies exceed 8 MB.")

@@ -6,7 +6,7 @@ import { Button } from "~/components/ui/button"
 import { Chip } from "~/components/dashboard/tiles"
 import { frameworks } from "../../../shared/frameworks/catalog"
 import { OIB_PLATFORMS, type OibPlatform, type OibVersions } from "../../../shared/oib/types"
-import { defaultSelection, selectionLabel } from "../../../shared/oib/versions"
+import { defaultSelection, platformStatus, selectionLabel } from "../../../shared/oib/versions"
 import { toast } from "../../lib/toast"
 import { compareFramework, compareTenant, getComparison, type Baseline, type Comparison, type FrameworkInput, type VersionView } from "./api"
 
@@ -30,14 +30,15 @@ export function ComparePanel({ tenant, baseline, version, allowed, comparisons, 
   const [platform, setPlatform] = useState<OibPlatform>(baseline.provenance.platform ?? "windows")
   // The OpenIntuneBaseline versions the main process resolved; the only ones it loads.
   const [versions, setVersions] = useState<OibVersions | null>(null)
-  const selection = versions ? defaultSelection(versions, platform) : null
+  const unavailable = versions ? platformStatus(versions, platform) === "in-development" : false
+  const selection = versions && !unavailable ? defaultSelection(versions, platform) : null
   const commit = selection?.commit ?? null
   const detail = useQuery({ queryKey: ["custom-baselines", "comparison", selected], queryFn: () => getComparison(tenant, selected!), enabled: !!selected })
 
   useEffect(() => {
     void fetch("/api/oib", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "oib-versions" }) })
       .then((response) => response.json())
-      .then((result: Partial<OibVersions>) => setVersions(result.main && Array.isArray(result.releases) ? result as OibVersions : null))
+      .then((result: Partial<OibVersions>) => setVersions(result.main && Array.isArray(result.releases) && Array.isArray(result.platforms) ? result as OibVersions : null))
       .catch(() => setVersions(null))
   }, [])
 
@@ -84,9 +85,9 @@ export function ComparePanel({ tenant, baseline, version, allowed, comparisons, 
               {choice === "oib" && (
                 <>
                   <label className="flex flex-col gap-1 text-xs text-gray-500">Platform
-                    <select className={select} value={platform} onChange={(event) => setPlatform(event.target.value as OibPlatform)}>{(Object.keys(OIB_PLATFORMS) as OibPlatform[]).map((id) => <option key={id} value={id}>{OIB_PLATFORMS[id].label}</option>)}</select>
+                    <select className={select} value={platform} onChange={(event) => setPlatform(event.target.value as OibPlatform)}>{(Object.keys(OIB_PLATFORMS) as OibPlatform[]).map((id) => <option key={id} value={id} disabled={versions ? platformStatus(versions, id) === "in-development" : false}>{OIB_PLATFORMS[id].label}{versions && platformStatus(versions, id) === "in-development" ? " (in development)" : ""}</option>)}</select>
                   </label>
-                  <p className="text-xs text-gray-500">{selection ? `Latest release: ${selectionLabel(selection)}` : "The latest OpenIntuneBaseline version could not be read."}</p>
+                  <p className="text-xs text-gray-500">{selection ? `Latest release: ${selectionLabel(selection)}` : unavailable ? "OpenIntuneBaseline has no published baseline for this platform yet." : "The latest OpenIntuneBaseline version could not be read."}</p>
                 </>
               )}
               <Button type="button" disabled={busy || (choice === "oib" && !commit)} onClick={() => void run(() => compareFramework(tenant, baseline.id, version.version, target()))}>{busy ? "Comparing" : "Compare"}</Button>
