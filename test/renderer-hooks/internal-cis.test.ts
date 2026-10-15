@@ -95,6 +95,20 @@ describe("useInternalCisBenchmarks", () => {
     hook.unmount()
   })
 
+  it("does not let a superseded revocation response fail open", async () => {
+    appInfo.mockResolvedValue({ version: "0", platform: "darwin", trayIconLoaded: false, internalCisBenchmarks: true })
+    await expect(refreshInternalCisBenchmarks()).resolves.toBe(true)
+
+    const releases: Array<(value: unknown) => void> = []
+    appInfo.mockImplementation(() => new Promise((resolve) => { releases.push(resolve) }))
+    const first = refreshInternalCisBenchmarks()
+    const second = refreshInternalCisBenchmarks()
+    releases[0]!({ version: "0", platform: "darwin", trayIconLoaded: false, internalCisBenchmarks: false })
+    await expect(first).resolves.toBe(false)
+    releases[1]!({ version: "0", platform: "darwin", trayIconLoaded: false, internalCisBenchmarks: false })
+    await expect(second).resolves.toBe(false)
+  })
+
   it("does not let an older successful response replace a newer revocation", async () => {
     let releaseFirst!: (value: unknown) => void
     const first = new Promise((resolve) => { releaseFirst = resolve })

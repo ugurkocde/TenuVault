@@ -34,11 +34,16 @@ export async function refreshInternalCisBenchmarks(): Promise<boolean> {
   try {
     const info = await bridge.app.info()
     const next = info.internalCisBenchmarks === true
-    if (current !== attempt) return enabled
+    if (current !== attempt) {
+      // A revocation observed by any in-flight read closes the gate immediately.
+      // A stale grant never reopens it after a newer read has settled.
+      if (!next) setEnabled(false)
+      return enabled && next
+    }
     setEnabled(next)
     return next
   } catch {
-    if (current !== attempt) return enabled
+    if (current !== attempt) return false
     setEnabled(false)
     return false
   }

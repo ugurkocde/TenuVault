@@ -789,6 +789,7 @@ export async function previewRollback(deps: FeatureDeps, tenantId: string, id: s
   const graph = await reader(deps, tenantId)
   const operations: RollbackPreview["operations"] = []
   for (const input of inputs) {
+    requireCisChangeSetEnabled(record.origin.workflow)
     const type = typeOf(input.folder)
     let live: Item | null = null
     const warnings = [...input.warnings]

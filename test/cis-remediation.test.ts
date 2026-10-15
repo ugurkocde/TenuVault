@@ -151,6 +151,37 @@ describe("CIS remediation deploy", () => {
     expect(context.tenant.writeCount()).toBe(0)
   })
 
+  it("stops reading a rollback preview when access is revoked during the first operation read", async () => {
+    const context = setup()
+    const existing = context.tenant.addPolicy({ name: "Tenant Alpha", settings: [setting(DEF_A, "fake-off")] })
+    const findings = [
+      finding({ key: "0:0", policyIndex: 0, settingIndex: 0, status: "Different", observed: [{ policyId: existing.id as string, policyName: "Tenant Alpha", value: null }] }),
+      finding({ key: "1:0", policyIndex: 1, settingIndex: 0, status: "Missing", policyName: "Fakebook Beta", settingId: DEF_B }),
+    ]
+    const deployment = await planCisRemediation(context.deps, TENANT_A, { title: "Deploy", reference: "synthetic 1.0", policies, findings, selectedFindingKeys: ["0:0", "1:0"] }, "Admin")
+    const { preview } = await approveFlow(context, deployment.id)
+    await applyCisRemediation(context.deps, TENANT_A, deployment.id, { contentHash: preview.changeSet.contentHash, confirmed: true }, "Admin")
+
+    const createdId = [...context.tenant.policies.values()].find((policy) => policy.name === "[Baseline] Fakebook Beta")!.id as string
+    const graphFor = context.deps.graph
+    let reads = 0
+    const readPaths: string[] = []
+    context.deps.graph = async (...args) => {
+      const graph = await graphFor(...args)
+      return async (method, path, body) => {
+        if (method === "GET") {
+          reads += 1
+          readPaths.push(path)
+          if (reads === 1) setInternalCisBenchmarksEnabled(false)
+        }
+        return graph(method, path, body)
+      }
+    }
+    await expect(previewCisRollback(context.deps, TENANT_A, deployment.id))
+      .rejects.toMatchObject({ status: 403, message: "CIS comparisons are coming soon." })
+    expect(readPaths.some((path) => path.includes(createdId))).toBe(false)
+  })
+
   it("rolls back exactly the recorded creates and setting changes, then offers re-comparison", async () => {
     const context = setup()
     const existing = context.tenant.addPolicy({ name: "Tenant Alpha", settings: [setting(DEF_A, "fake-off")], description: "before" })
