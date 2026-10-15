@@ -24,10 +24,23 @@ export class FrameworkError extends Error {
 }
 
 let internalCisOverride: boolean | null = null
-/** Test and bootstrap hook for the internal CIS Benchmarks flag. Null follows the environment. */
+let internalCisProvider: (() => boolean) | null = null
+/** Test hook for the internal CIS Benchmarks gate. A set override wins over the provider. */
 export function setInternalCisBenchmarksEnabled(value: boolean | null): void { internalCisOverride = value }
+/**
+ * Bootstrap hook wiring the gate to the license service. The provider reports whether a
+ * verified entitlement on this machine carries the server-issued internal CIS claim.
+ * There is deliberately no environment or settings fallback: without a provider or a
+ * test override, CIS Benchmarks stays off in every shipped build.
+ */
+export function setInternalCisBenchmarksProvider(provider: (() => boolean) | null): void { internalCisProvider = provider }
 export function internalCisBenchmarksEnabled(): boolean {
-  return internalCisOverride ?? process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS === "1"
+  if (internalCisOverride !== null) return internalCisOverride
+  try {
+    return internalCisProvider?.() === true
+  } catch {
+    return false
+  }
 }
 
 function requireEnabledFramework(frameworkId: string): void {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { cisSignals } from "../src/main/frameworks/cis-signals"
-import { setInternalCisBenchmarksEnabled } from "../src/main/frameworks/service"
+import { setInternalCisBenchmarksEnabled, setInternalCisBenchmarksProvider } from "../src/main/frameworks/service"
 import { loadWorkspace, saveWorkspace, setFrameworkStore } from "../src/main/frameworks/workspaces"
 import { convertKit, type KitFile } from "../src/shared/frameworks/cis-kit"
 import type { Assessment, BaselinePolicy, Finding } from "../src/shared/frameworks/policies"
@@ -52,7 +52,7 @@ beforeEach(() => {
   setFrameworkStore({ get: k => data.get(k) ?? null, set: (k, v) => { data.set(k, v) }, delete: k => { data.delete(k) } })
   setInternalCisBenchmarksEnabled(true)
 })
-afterEach(() => { setInternalCisBenchmarksEnabled(null) })
+afterEach(() => { setInternalCisBenchmarksEnabled(null); setInternalCisBenchmarksProvider(null) })
 
 describe("cisSignals", () => {
   it("returns no signals when the internal flag is off", () => {
@@ -112,29 +112,21 @@ describe("cisSignals", () => {
 
   it("produces a signal when CIS is enabled through the established flag with the env var unset", () => {
     seed([historyEntry("run-2", "2026-02-01T00:00:00.000Z", ["Missing", "Missing", "Missing"]), historyEntry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"])])
-    const previous = process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS
-    delete process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS
-    try {
-      setInternalCisBenchmarksEnabled(true)
-      expect(cisSignals(tenantId).length).toBeGreaterThan(0)
-    } finally {
-      if (previous === undefined) delete process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS
-      else process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS = previous
-    }
+    setInternalCisBenchmarksEnabled(true)
+    expect(cisSignals(tenantId).length).toBeGreaterThan(0)
   })
 
-  it("follows the environment flag when no override is set", () => {
+  it("ignores the legacy environment variable and follows the server-issued provider", () => {
     seed([historyEntry("run-2", "2026-02-01T00:00:00.000Z", ["Missing", "Missing", "Missing"]), historyEntry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"])])
     setInternalCisBenchmarksEnabled(null)
-    const previous = process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS
-    delete process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS
+    process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS = "1"
     try {
       expect(cisSignals(tenantId)).toEqual([])
-      process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS = "1"
+      setInternalCisBenchmarksProvider(() => true)
       expect(cisSignals(tenantId).length).toBeGreaterThan(0)
     } finally {
-      if (previous === undefined) delete process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS
-      else process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS = previous
+      delete process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS
+      setInternalCisBenchmarksProvider(null)
     }
   })
 })

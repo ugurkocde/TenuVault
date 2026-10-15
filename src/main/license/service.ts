@@ -33,6 +33,8 @@ interface Entitlement {
   exp: number
   /** Version 2: license key expiry in Unix seconds, absent for renewing subscriptions. */
   keyExp?: number
+  /** Server-issued internal CIS Benchmarks access for allowlisted installations, pre-certification only. */
+  cis?: "internal"
 }
 
 // An activation either comes from this machine's license key, or, with source "tenant",
@@ -187,6 +189,7 @@ function decodeToken(token: string, publicKey: KeyObject): Entitlement | null {
     if (payload.v === 2 && payload.keyExp !== undefined && (
       !Number.isFinite(payload.keyExp) || !Number.isFinite(new Date(payload.keyExp * 1000).getTime())
     )) return null
+    if (payload.cis !== undefined && payload.cis !== "internal") return null
     return payload
   } catch {
     return null
@@ -927,6 +930,17 @@ export class LicenseService {
       this.failures.clear()
       this.save()
     })
+  }
+
+  /**
+   * Whether any currently valid entitlement on this machine carries the server-issued
+   * internal CIS claim. The licensing service issues the claim only to allowlisted
+   * internal installations, so this is the pre-certification CIS Benchmarks gate.
+   */
+  cisInternal(): boolean {
+    this.load()
+    if (!this.state) return false
+    return Object.keys(this.state.activations).some((tenantId) => this.valid(tenantId)?.cis === "internal")
   }
 
   /** The license state for the signed-in tenants plus every tenant with a stored activation. */

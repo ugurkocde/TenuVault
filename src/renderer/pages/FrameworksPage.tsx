@@ -6,7 +6,7 @@ import { ArrowRight, Check, ChevronDown, Download, ExternalLink, Info, Search } 
 import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { NCSC_COMMIT, NCSC_REPOSITORY, type Framework } from "../../shared/frameworks/catalog"
-import { CIS_BENCHMARKS_ID, effectiveFrameworks, searchEffectiveFrameworks } from "../../shared/frameworks/cis-internal"
+import { CIS_BENCHMARKS_ID, effectiveFrameworks, internalKitImportEnabled, searchEffectiveFrameworks } from "../../shared/frameworks/cis-internal"
 import { convertKit, readKitZip, suggestedKitBenchmark, type KitConversion, type KitFile, type KitLevel } from "../../shared/frameworks/cis-kit"
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
 import { cisReadiness } from "../../shared/frameworks/cis-readiness"
@@ -101,7 +101,8 @@ function saveExport(file: ExportFile) {
 }
 
 export default function FrameworksPage() {
-  const catalog = effectiveFrameworks(useInternalCisBenchmarks())
+  const internalCis = useInternalCisBenchmarks()
+  const catalog = effectiveFrameworks(internalCis)
   const { frameworkId } = useParams()
   const { selectedTenant, setSelectedTenantId } = useSelectedTenant()
   const tenants = useTenants()
@@ -123,7 +124,7 @@ export default function FrameworksPage() {
     <p role="status" className="mt-5 rounded-3xl bg-secondary px-6 py-5 text-sm text-foreground"><strong className="block">Coming soon</strong>{framework.disabledReason}</p>
   </div>
   if (framework?.nativeId) return <Suspense fallback={<p role="status" className="p-8">Loading framework…</p>}><NativeFrameworkPage key={`${framework.id}:${selectedTenant?.credentials?.tenantId ?? "none"}`} framework={framework} /></Suspense>
-  if (framework) return <FrameworkDetail key={`${framework.id}:${selectedTenant?.credentials?.tenantId ?? "none"}`} framework={framework} standalone={framework.id === CIS_BENCHMARKS_ID} />
+  if (framework) return <FrameworkDetail key={`${framework.id}:${selectedTenant?.credentials?.tenantId ?? "none"}`} framework={framework} standalone={framework.id === CIS_BENCHMARKS_ID} kitImport={internalKitImportEnabled(internalCis)} />
   const matches = searchEffectiveFrameworks(catalog, query)
   return <div className="mx-auto max-w-6xl p-6 lg:p-8">
     <div className="mb-8">
@@ -320,7 +321,7 @@ function CisExportMenu({ plan, disabled, readinessDisabled, onPdf, onFindingsCsv
   </details>
 }
 
-function FrameworkDetail({ framework, standalone = false }: { framework: Framework; standalone?: boolean }) {
+function FrameworkDetail({ framework, standalone = false, kitImport = false }: { framework: Framework; standalone?: boolean; kitImport?: boolean }) {
   const { selectedTenant } = useSelectedTenant()
   const [policies, setPolicies] = useState<BaselinePolicy[]>([])
   const [reference, setReference] = useState("")
@@ -615,7 +616,7 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
       </div>)}</div>}
     </section>}
     {(!isCis || stage === "setup") && <section aria-labelledby="pack-title" className="rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
-      <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="pack-title" className="text-xl font-medium tracking-tight">{isCis ? "1. Import a CIS Build Kit" : "1. Choose your policy pack"}</h2><span className="text-sm text-gray-500">{policies.length ? `${policies.length} policies loaded` : "No pack loaded"}</span></div>
+      <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="pack-title" className="text-xl font-medium tracking-tight">{isCis && kitImport ? "1. Import a CIS Build Kit" : "1. Choose your policy pack"}</h2><span className="text-sm text-gray-500">{policies.length ? `${policies.length} policies loaded` : "No pack loaded"}</span></div>
       {!isCis && <p className="mt-2 text-sm text-gray-600">Import one or more Settings Catalog JSON exports. Review the source, version and intended profile before comparison. Loading a pack does not change your tenant.</p>}
       <div className="mt-4 flex flex-wrap items-center gap-3">
         {framework.id === "ncsc-dsg" && <button className={button} disabled={!!busy} onClick={() => void perform("Loading NCSC pack…", async () => {
@@ -633,7 +634,7 @@ function FrameworkDetail({ framework, standalone = false }: { framework: Framewo
         }} /></label>}
       </div>
       {framework.id === "ncsc-dsg" && <p className="mt-3 text-xs text-gray-500">Source content: UK National Cyber Security Centre, Crown Copyright, <a href={`${NCSC_REPOSITORY}/blob/${NCSC_COMMIT}/LICENSE`} target="_blank" rel="noreferrer" className="underline">Apache License 2.0</a>. Pinned commit {NCSC_COMMIT.slice(0, 7)}, each file checked against its reviewed SHA-256. Modified for comparison: decoded from UTF-16, export metadata, IDs and assignments removed. No endorsement by NCSC. Comparison and reports only; policies cannot be created from this pack.</p>}
-      {framework.id === "cis-benchmarks" && <details className="mt-5"><summary className="cursor-pointer text-sm font-medium text-gray-700">Internal kit import</summary><div className="mt-4">
+      {framework.id === "cis-benchmarks" && kitImport && <details className="mt-5"><summary className="cursor-pointer text-sm font-medium text-gray-700">Internal kit import</summary><div className="mt-4">
         <p className="text-sm text-gray-600">The kit stays on this device, is converted locally, and nothing is created in the tenant from the import.</p>
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <label className={cn(primary, "focus-within:ring-2 focus-within:ring-primary focus-within:ring-offset-2")}>Select Build Kit zip<input type="file" accept=".zip,application/zip" disabled={!!busy} className="sr-only" onChange={e => {

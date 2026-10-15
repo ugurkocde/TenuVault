@@ -167,7 +167,7 @@ export interface AppInfo {
   version: string
   platform: NodeJS.Platform
   trayIconLoaded: boolean
-  /** Internal CIS Benchmarks proof of concept, enabled only by a local opt-in in the main process. Off when absent. */
+  /** Internal CIS Benchmarks access from the server-issued license claim, as derived by the main process. Off when absent. */
   internalCisBenchmarks?: boolean
 }
 

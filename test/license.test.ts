@@ -300,6 +300,20 @@ describe("LicenseService key expiry", () => {
     expect(entitled(service())).toBe(false)
   })
 
+  it("reports CIS internal access only for a valid token carrying the server-issued claim", () => {
+    storeLicense(token({ cis: "internal" }))
+    expect(service().cisInternal()).toBe(true)
+    storeLicense(token())
+    expect(service().cisInternal()).toBe(false)
+  })
+
+  it("rejects a token whose CIS claim has an unknown value", () => {
+    storeLicense(token({ cis: "customer" }))
+    const license = service()
+    expect(entitled(license)).toBe(false)
+    expect(license.cisInternal()).toBe(false)
+  })
+
   it("verifies the signature over version 2 key expiry", () => {
     const [body, signature] = token({ v: 2, keyExp: (T0 + 20 * DAY) / 1000 }).split(".")
     const payload = JSON.parse(Buffer.from(body!, "base64url").toString("utf8"))

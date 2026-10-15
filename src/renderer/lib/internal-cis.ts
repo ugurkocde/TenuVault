@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react"
 import { bridge } from "./bridge"
 
-/** Internal CIS Benchmarks flag as reported by the main process. Off until reported on. */
+/**
+ * Internal CIS Benchmarks access as reported by the main process, which derives it from
+ * the server-issued claim in a verified license entitlement. Off until reported on, and
+ * off in every build without that claim.
+ */
 export function useInternalCisBenchmarks(): boolean {
   const [enabled, setEnabled] = useState(false)
   useEffect(() => {
