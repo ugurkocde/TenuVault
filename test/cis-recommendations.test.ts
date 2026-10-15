@@ -226,4 +226,21 @@ describe("pack recommendations", () => {
     expect(payloadExcepted.recommendationsExcepted).toBe(1)
     expect(payloadExcepted.adjustedRecommendationPassRate).toBe(0.5)
   })
+
+  it("ranks portfolio rows by recommendation rates first and never compares rates of different bases", () => {
+    const run = assess(tenant)
+    const entry = (tenantId: string, tenantName: string, packPolicies: typeof policies, assessment = run) => ({ tenantId, tenantName, workspace: { history: [{ assessment: { ...assessment, tenantId }, policies: packPolicies }] } })
+    const strong = assess([...tenant, tenantPolicy("55555555-5555-5555-5555-555555555555", "windows10", [flat("synthetic_beta")])])
+    const rows = cisPortfolioRows([
+      entry("11111111-1111-1111-1111-111111111111", "Settings tenant", pack, strong),
+      entry("22222222-2222-2222-2222-222222222222", "Weaker recommendations", policies),
+      entry("33333333-3333-3333-3333-333333333333", "Stronger recommendations", policies, strong),
+    ])
+    expect(rows.map(row => [row.tenantName, row.levels[0]!.basis, portfolioRate(row.levels[0])])).toEqual([
+      ["Stronger recommendations", "recommendations", 0.75],
+      ["Weaker recommendations", "recommendations", 0.5],
+      // A settings rate of 2/3 is higher than 0.5 but measures something else, so it ranks after the recommendation rows.
+      ["Settings tenant", "settings", expect.closeTo(2 / 3)],
+    ])
+  })
 })

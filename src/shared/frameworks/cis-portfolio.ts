@@ -26,6 +26,8 @@ export interface CisPortfolioLevel {
   level: KitLevel
   passRate: number | null
   adjustedPassRate: number | null
+  /** Which rate the portfolio shows and ranks: recommendations when the pack lists them, settings otherwise. */
+  basis: "recommendations" | "settings"
   /** Present when the pack lists recommendations; ranking then follows these instead of the settings rates. */
   recommendationPassRate?: number | null
   adjustedRecommendationPassRate?: number | null
@@ -46,7 +48,7 @@ export interface CisPortfolioRow {
 
 function effectiveRate(level: CisPortfolioLevel | undefined): number | null {
   if (!level) return null
-  if (level.recommendationPassRate !== undefined && level.recommendationPassRate !== null) return level.adjustedRecommendationPassRate ?? level.recommendationPassRate
+  if (level.basis === "recommendations") return level.adjustedRecommendationPassRate ?? level.recommendationPassRate ?? null
   return level.adjustedPassRate ?? level.passRate
 }
 
@@ -55,8 +57,20 @@ export function portfolioRate(level: CisPortfolioLevel | undefined): number | nu
   return effectiveRate(level)
 }
 
-function rateFor(row: CisPortfolioRow, level: KitLevel): number | null {
-  return effectiveRate(row.levels.find(item => item.level === level))
+function rateFor(row: CisPortfolioRow, level: KitLevel): { basis: CisPortfolioLevel["basis"]; rate: number | null } {
+  const item = row.levels.find(entry => entry.level === level)
+  return { basis: item?.basis ?? "settings", rate: effectiveRate(item) }
+}
+
+/**
+ * Orders two rows on one Level. Rates are only compared on the same basis: a
+ * recommendation rate and a settings rate measure different things, so rows
+ * ranked by recommendations come first and settings rows follow. Rows without
+ * a rate stay last, as before.
+ */
+function compareLevel(a: ReturnType<typeof rateFor>, b: ReturnType<typeof rateFor>): number {
+  if (a.rate !== null && b.rate !== null && a.basis !== b.basis) return a.basis === "recommendations" ? -1 : 1
+  return compareRate(a.rate, b.rate)
 }
 
 function compareRate(a: number | null, b: number | null): number {
@@ -113,7 +127,9 @@ export function cisPortfolioRows(entries: CisPortfolioEntry[]): CisPortfolioRow[
       version: summary.version,
       assessedAt: newest.assessment.assessedAt,
       levels: summary.levels.map(level => ({ level: level.level, passRate: level.passRate, adjustedPassRate: level.adjustedPassRate, excepted: level.excepted, assessedSettings: level.assessedSettings,
-        ...(level.recommendationPassRate !== null ? { recommendationPassRate: level.recommendationPassRate, adjustedRecommendationPassRate: level.adjustedRecommendationPassRate } : {}) })),
+        ...(level.recommendationPassRate !== null
+          ? { basis: "recommendations" as const, recommendationPassRate: level.recommendationPassRate, adjustedRecommendationPassRate: level.adjustedRecommendationPassRate }
+          : { basis: "settings" as const }) })),
     }
   })
   return [...rows].sort((a, b) => {
@@ -125,9 +141,9 @@ export function cisPortfolioRows(entries: CisPortfolioEntry[]): CisPortfolioRow[
       if (byBenchmark !== 0) return byBenchmark
       const byVersion = (a.version ?? "").localeCompare(b.version ?? "")
       if (byVersion !== 0) return byVersion
-      const level1 = compareRate(rateFor(a, 1), rateFor(b, 1))
+      const level1 = compareLevel(rateFor(a, 1), rateFor(b, 1))
       if (level1 !== 0) return level1
-      const level2 = compareRate(rateFor(a, 2), rateFor(b, 2))
+      const level2 = compareLevel(rateFor(a, 2), rateFor(b, 2))
       if (level2 !== 0) return level2
       const aTime = Date.parse(a.assessedAt!)
       const bTime = Date.parse(b.assessedAt!)

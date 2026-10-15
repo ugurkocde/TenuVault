@@ -6,7 +6,7 @@
  * Settings Catalog pack format accepted by parsePolicies. A pack may also list
  * its recommendations with the setting definitions that implement them.
  */
-import { validatePackRecommendations, type PackRecommendation } from "./cis-recommendations"
+import { validatePackRecommendations, type PackRecommendation } from "./cis-recommendation-schema"
 
 export type CisLevel = 1 | 2
 

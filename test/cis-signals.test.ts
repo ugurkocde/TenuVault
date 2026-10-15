@@ -129,4 +129,18 @@ describe("cisSignals", () => {
       setInternalCisBenchmarksProvider(null)
     }
   })
+
+  it("names the benchmark by its catalog display name in titles and reasons, with the id as fallback", () => {
+    const named = (entry: ReturnType<typeof historyEntry>) => ({ ...entry, policies: entry.policies.map(item => ({ ...item, provenance: { ...item.provenance, benchmarkName: "Fakebook Display Benchmark" } })) })
+    seed([named(historyEntry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"])), named(historyEntry("run-2", "2026-02-01T00:00:00.000Z", ["Missing", "Missing", "Missing"]))])
+    const signals = cisSignals(tenantId)
+    expect(signals.length).toBeGreaterThan(0)
+    for (const signal of signals) {
+      expect(signal.title).toContain("(Fakebook Display Benchmark 9.9.9)")
+      expect(signal.reason).toContain("for Fakebook Display Benchmark 9.9.9.")
+      expect(signal.key).toContain(":fakebook-os:")
+    }
+    seed([historyEntry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"]), historyEntry("run-2", "2026-02-01T00:00:00.000Z", ["Missing", "Missing", "Missing"])])
+    expect(cisSignals(tenantId)[0]!.title).toContain("(fakebook-os 9.9.9)")
+  })
 })

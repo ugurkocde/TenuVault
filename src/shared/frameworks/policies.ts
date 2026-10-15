@@ -1,5 +1,5 @@
 import type { AssignmentEvidence } from "./evidence"
-import { validatePackRecommendations, type PackRecommendation } from "./cis-recommendations"
+import { validatePackRecommendations, type PackRecommendation } from "./cis-recommendation-schema"
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 export type RecordJson = { [key: string]: Json }
 export interface BaselinePolicy {

@@ -249,7 +249,7 @@ function CisPortfolio({ plan }: { plan: Plan | null }) {
       <tbody className="divide-y divide-gray-100">{rows.map(row => {
         const level1 = row.levels.find(level => level.level === 1)
         const level2 = row.levels.find(level => level.level === 2)
-        const rate = (level: typeof level1) => level ? formatTrendPercent(portfolioRate(level)) : "Not available"
+        const rate = (level: typeof level1) => level ? <>{formatTrendPercent(portfolioRate(level))}<span className="block text-xs font-normal text-gray-500">{level.basis === "recommendations" ? "Recommendations" : "Settings"}</span></> : "Not available"
         const excepted = row.levels.reduce((sum, level) => sum + level.excepted, 0)
         return <tr key={row.tenantId}>
           <td className="py-2 pr-4 text-gray-800">{row.tenantName ?? row.tenantId}</td>
