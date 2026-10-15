@@ -4,7 +4,7 @@ import { record } from "../../shared/frameworks/policies"
 import { typeForFolder, type Item } from "../../shared/intune/registry"
 import { catalogPolicies, parseManifest, type Manifest } from "../../shared/oib/manifest"
 import { OIB_LICENSE, OIB_MANIFEST_IDS, OIB_PLATFORMS, OIB_REPO, type OibCatalog, type OibChannel, type OibPlatform, type OibPlatformInfo, type OibPlatformStatus, type OibPublishedRelease, type OibVersions } from "../../shared/oib/types"
-import { defaultSelection, oibReference, selectionLabel, tagPlatform } from "../../shared/oib/versions"
+import { defaultSelection, oibReference, selectionLabel, tagPlatform, tagVersion } from "../../shared/oib/versions"
 import { FrameworkError } from "../frameworks/service"
 
 /**
@@ -162,7 +162,7 @@ const asChannel = (value: unknown): OibChannel => (value === "beta" || value ===
 export function parseReleaseManifest(value: unknown): ParsedManifest {
   if (!record(value) || !Array.isArray(value.platforms)) throw new FrameworkError("GitHub returned an unexpected release manifest.", 502)
   const platforms = value.platforms.filter(record).flatMap((entry): ParsedManifest["platforms"] => {
-    const platform = typeof entry.id === "string" ? OIB_MANIFEST_IDS[entry.id] : undefined
+    const platform = typeof entry.id === "string" && Object.hasOwn(OIB_MANIFEST_IDS, entry.id) ? OIB_MANIFEST_IDS[entry.id] : undefined
     if (!platform) return []
     const status: OibPlatformStatus = entry.status === "available" ? "available" : "in-development"
     const changelog = asText(entry.changelog)
@@ -208,6 +208,7 @@ export async function oibVersions(retry = false): Promise<OibVersions> {
   try {
     const [manifest, main] = await Promise.all([getReleaseManifest(), resolveMain()])
     const platforms: OibPlatformInfo[] = manifest.platforms.map((entry) => ({ platform: entry.platform, status: entry.status, ...(entry.changelog ? { changelog: entry.changelog } : {}) }))
+    const unresolved: string[] = []
     const resolvedReleases = await Promise.all(manifest.platforms.flatMap((entry) => entry.releases).map(async (release): Promise<OibPublishedRelease | null> => {
       const ref = release.tag ?? release.branch
       try {
@@ -215,11 +216,14 @@ export async function oibVersions(retry = false): Promise<OibVersions> {
         return { platform: release.platform, version: release.version, ...(release.name ? { name: release.name } : {}), channel: release.channel, prerelease: release.prerelease, releaseDate: release.releaseDate, branch: release.branch, tag: ref, commit, ...(release.url ? { url: release.url } : {}) }
       } catch (error) {
         console.warn(`[oib] ${release.platform} ${release.version} (${ref}) could not be resolved: ${error instanceof Error ? error.message : String(error)}`)
+        unresolved.push(`${OIB_PLATFORMS[release.platform].label} v${release.version}`)
         return null
       }
     }))
     const releases = resolvedReleases.filter((release): release is OibPublishedRelease => release !== null).sort((a, b) => Date.parse(b.releaseDate) - Date.parse(a.releaseDate))
-    const value: OibVersions = { main, platforms, releases }
+    // A release that cannot be resolved must be visible: its platform would otherwise silently fall back to main or an older release.
+    const warning = unresolved.length ? `Some OpenIntuneBaseline releases could not be read (${unresolved.join(", ")}). Those platforms may show main or an older release until the versions are refreshed.` : undefined
+    const value: OibVersions = { main, platforms, releases, ...(warning ? { warning } : {}) }
     admit(value)
     versions = { value, expires: Date.now() + HEAD_TTL }
     await writeCache("versions.json", { format: CACHE_FORMAT, savedAt: new Date().toISOString(), versions: value })
@@ -240,19 +244,28 @@ async function readStoredVersions(): Promise<{ savedAt: string; versions: OibVer
   const json = await readCache("versions.json")
   if (!record(json) || json.format !== CACHE_FORMAT || typeof json.savedAt !== "string" || !record(json.versions)) return null
   const { main, releases, platforms } = json.versions
-  if (!record(main) || typeof main.commit !== "string" || !SHA.test(main.commit) || !Array.isArray(releases) || !Array.isArray(platforms)) return null
-  const knownPlatforms: OibPlatformInfo[] = []
-  for (const entry of platforms) {
-    if (!record(entry) || typeof entry.platform !== "string" || !(entry.platform in OIB_PLATFORMS) || (entry.status !== "available" && entry.status !== "in-development")) return null
-    knownPlatforms.push({ platform: entry.platform as OibPlatform, status: entry.status, ...(typeof entry.changelog === "string" ? { changelog: entry.changelog } : {}) })
-  }
+  if (!record(main) || typeof main.commit !== "string" || !SHA.test(main.commit) || !Array.isArray(releases)) return null
   const known: OibPublishedRelease[] = []
   for (const release of releases) {
-    if (!record(release) || typeof release.tag !== "string" || typeof release.commit !== "string" || !SHA.test(release.commit) || typeof release.version !== "string" || typeof release.releaseDate !== "string" || typeof release.branch !== "string") return null
+    if (!record(release) || typeof release.tag !== "string" || typeof release.commit !== "string" || !SHA.test(release.commit)) return null
     const platform = tagPlatform(release.tag)
     if (!platform || platform !== release.platform) return null
+    // Versions stored before the manifest carry publishedAt and no version, branch or channel; derive them from the tag.
+    const releaseDate = typeof release.releaseDate === "string" ? release.releaseDate : typeof release.publishedAt === "string" ? release.publishedAt : null
+    const version = typeof release.version === "string" ? release.version : tagVersion(release.tag)?.slice(1)
+    if (!releaseDate || !version) return null
     const channel: OibChannel = release.channel === "beta" || release.channel === "unstable" ? release.channel : "stable"
-    known.push({ platform, version: release.version, ...(typeof release.name === "string" ? { name: release.name } : {}), channel, prerelease: release.prerelease === true, releaseDate: release.releaseDate, branch: release.branch, tag: release.tag, commit: release.commit, ...(typeof release.url === "string" ? { url: release.url } : {}) })
+    known.push({ platform, version, ...(typeof release.name === "string" ? { name: release.name } : {}), channel, prerelease: release.prerelease === true, releaseDate, branch: typeof release.branch === "string" ? release.branch : "main", tag: release.tag, commit: release.commit, ...(typeof release.url === "string" ? { url: release.url } : {}) })
+  }
+  // Versions stored before the manifest have no platform list; the platforms with known releases are available.
+  const knownPlatforms: OibPlatformInfo[] = []
+  if (Array.isArray(platforms)) {
+    for (const entry of platforms) {
+      if (!record(entry) || typeof entry.platform !== "string" || !Object.hasOwn(OIB_PLATFORMS, entry.platform) || (entry.status !== "available" && entry.status !== "in-development")) return null
+      knownPlatforms.push({ platform: entry.platform as OibPlatform, status: entry.status, ...(typeof entry.changelog === "string" ? { changelog: entry.changelog } : {}) })
+    }
+  } else {
+    for (const platform of new Set(known.map((release) => release.platform))) knownPlatforms.push({ platform, status: "available" })
   }
   return { savedAt: json.savedAt, versions: { main: { commit: main.commit, ...(typeof main.committedAt === "string" ? { committedAt: main.committedAt } : {}) }, platforms: knownPlatforms, releases: known } }
 }
@@ -367,7 +380,8 @@ function treeOf(commit: string): Promise<string[]> {
 async function downloadPack(platform: OibPlatform, commit: string): Promise<PackContent> {
   const blobs = await treeOf(commit)
   const paths = blobs.filter((path) => packFolder(platform, path) !== undefined)
-  if (!paths.length || paths.length > MAX_FILES) throw new FrameworkError("Unexpected OIB pack size.", 502)
+  if (!paths.length) throw new FrameworkError("The selected version contains no policies for this platform.", 502)
+  if (paths.length > MAX_FILES) throw new FrameworkError("Unexpected OIB pack size.", 502)
   const raw = (path: string) => `${RAW}/${commit}/${path.split("/").map(encodeURIComponent).join("/")}`
   const manifestPath = `${OIB_PLATFORMS[platform].root}PolicyManifest.json`
   const hasManifest = blobs.includes(manifestPath)

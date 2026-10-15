@@ -84,7 +84,7 @@ export function migrateLegacyOibRuns(target: { keys(): string[]; get(key: string
     }
     const migrated = legacy.filter(record).flatMap((run): OibRun[] => {
       if (typeof run.runId !== "string" || !Array.isArray(run.created) || !run.created.length || existing.some((entry) => entry.runId === run.runId)) return []
-      const platform = typeof run.platform === "string" && run.platform in OIB_PLATFORMS ? (run.platform as OibPlatform) : null
+      const platform = typeof run.platform === "string" && Object.hasOwn(OIB_PLATFORMS, run.platform) ? (run.platform as OibPlatform) : null
       if (!platform) return []
       const reference = typeof run.reference === "string" ? run.reference : "OpenIntuneBaseline Quick Start"
       const short = /([0-9a-f]{7})\s*$/.exec(reference)?.[1]
@@ -107,7 +107,7 @@ export function migrateLegacyOibRuns(target: { keys(): string[]; get(key: string
 }
 
 function platformOf(value: unknown): OibPlatform {
-  if (typeof value !== "string" || !(value in OIB_PLATFORMS)) throw new FrameworkError("Choose a supported OpenIntuneBaseline platform.")
+  if (typeof value !== "string" || !Object.hasOwn(OIB_PLATFORMS, value)) throw new FrameworkError("Choose a supported OpenIntuneBaseline platform.")
   return value as OibPlatform
 }
 

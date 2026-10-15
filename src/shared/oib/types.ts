@@ -22,7 +22,7 @@ export interface OibPublishedRelease {
   /** Optional edition name, e.g. "26H2 Edition". */
   name?: string
   channel: OibChannel
-  /** Beta and unstable releases are prereleases, only offered by default when prereleases are allowed. */
+  /** Upstream's prerelease flag; beta channel releases count as prereleases too (see isPrerelease). */
   prerelease: boolean
   releaseDate: string
   /** The branch the release lives on ("main" for stable releases cut from main). */

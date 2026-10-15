@@ -1,7 +1,7 @@
 import { useContext, useState } from "react"
 import { cn } from "~/lib/utils"
 import { OIB_PLATFORMS, type OibPlatform, type OibVersions } from "../../../shared/oib/types"
-import { defaultSelection, platformReleases } from "../../../shared/oib/versions"
+import { defaultSelection, isPrerelease, platformReleases } from "../../../shared/oib/versions"
 import { button, platformsLabel, primary, Toggle, VersionPicker, versionsLabel, VersionsContext, type Selections } from "./common"
 
 const ALL = Object.keys(OIB_PLATFORMS) as OibPlatform[]
@@ -13,11 +13,11 @@ export type { OibVersionChoice } from "./common"
 export const selectionsLabel = (selections: Selections, platforms: OibPlatform[] = []) =>
   versionsLabel((platforms.length ? platforms : ALL).map(platform => ({ platform, tag: selections[platform].tag })))
 
-/** The channel of a platform's selected release (beta/unstable carry extra risk); undefined for main or stable. */
-const selectedChannel = (versions: OibVersions, selections: Selections, platform: OibPlatform) => {
+/** Whether a platform's selected release is a prerelease (published unstable releases are not). */
+const selectedPrerelease = (versions: OibVersions, selections: Selections, platform: OibPlatform) => {
   const tag = selections[platform].tag
-  const channel = tag ? versions.releases.find(r => r.platform === platform && r.tag === tag)?.channel : undefined
-  return channel === "beta" || channel === "unstable" ? channel : undefined
+  const release = tag ? versions.releases.find(r => r.platform === platform && r.tag === tag) : undefined
+  return release ? isPrerelease(release) : false
 }
 
 /** Notes about main (unreleased changes, platforms without a release) and prerelease channel selections. */
@@ -27,9 +27,9 @@ export function mainNotes(versions: OibVersions, selections: Selections, platfor
   // Main is flagged only when it differs from every release of a platform that has releases.
   const unreleased = onMain.filter(p => platformReleases(versions, p).length && !platformReleases(versions, p).some(r => r.commit === selections[p].commit))
   const only = onMain.filter(p => !platformReleases(versions, p).length)
-  const prerelease = scope.filter(p => selectedChannel(versions, selections, p))
+  const prerelease = scope.filter(p => selectedPrerelease(versions, selections, p))
   const mainWarning = unreleased.length ? `${platformsLabel(unreleased)} ${unreleased.length === 1 ? "uses" : "use"} main, which can hold changes that are not released yet. Test in a pilot tenant first.` : ""
-  const prereleaseWarning = prerelease.length ? `${platformsLabel(prerelease)} ${prerelease.length === 1 ? "uses a beta or unstable release" : "use beta or unstable releases"}, which are not production-ready. Test in a pilot tenant first.` : ""
+  const prereleaseWarning = prerelease.length ? `${platformsLabel(prerelease)} ${prerelease.length === 1 ? "uses a prerelease" : "use prereleases"}, which are not production-ready. Test in a pilot tenant first.` : ""
   return {
     warning: [mainWarning, prereleaseWarning].filter(Boolean).join(" "),
     info: only.length ? `${platformsLabel(only)}: main (no published release yet).` : "",
@@ -39,19 +39,21 @@ export function mainNotes(versions: OibVersions, selections: Selections, platfor
 /** Version selects with a prerelease toggle, Use latest releases, Cancel and Done; nothing applies before Done. */
 export function VersionsPanel({ versions, selections, onDone, onCancel, className, allowPrerelease, onAllowPrereleaseChange }: { versions: OibVersions; selections: Selections; onDone: (value: Selections) => void; onCancel: () => void; className?: string; allowPrerelease: boolean; onAllowPrereleaseChange: (value: boolean) => void }) {
   const [draft, setDraft] = useState(selections)
+  // The toggle is part of the draft like the selects: Cancel must not change it.
+  const [draftPrerelease, setDraftPrerelease] = useState(allowPrerelease)
   const applyLatest = (prerelease: boolean) => setDraft(Object.fromEntries(ALL.map(p => [p, defaultSelection(versions, p, prerelease)])) as Selections)
   return <div className={cn("rounded-2xl border border-gray-200 bg-white p-5", className)} role="group" aria-label="OpenIntuneBaseline versions">
-    <p className="mb-4 text-sm text-gray-600">Each platform uses its latest published release unless you choose another. Older releases have fewer or older policies; main includes changes that are not released yet. Platforms without a published release use main.</p>
+    <p className="mb-4 text-sm text-gray-600">Each platform uses its latest published release unless you choose another. Older releases have fewer or older policies; main includes changes that are not released yet. Platforms without a published release use main, or their beta release where that is the only release.</p>
     <VersionPicker versions={versions} value={draft} onChange={setDraft} />
     <div className="mt-4">
-      <Toggle checked={allowPrerelease} onChange={value => { onAllowPrereleaseChange(value); applyLatest(value) }} label="Include beta and unstable prereleases">
-        Offers beta and unstable baselines as each platform's latest version. These are not production-ready — use them only to evaluate upcoming changes in a pilot tenant.
+      <Toggle checked={draftPrerelease} onChange={value => { setDraftPrerelease(value); applyLatest(value) }} label="Include beta prereleases">
+        Offers beta baselines as each platform's latest version. These are not production-ready. Use them only to evaluate upcoming changes in a pilot tenant.
       </Toggle>
     </div>
     <div className="mt-4 flex flex-wrap justify-end gap-3">
-      <button type="button" className={button} onClick={() => applyLatest(allowPrerelease)}>Use latest releases</button>
+      <button type="button" className={button} onClick={() => applyLatest(draftPrerelease)}>Use latest releases</button>
       <button type="button" className={button} onClick={onCancel}>Cancel</button>
-      <button type="button" className={primary} onClick={() => onDone(draft)}>Done</button>
+      <button type="button" className={primary} onClick={() => { onAllowPrereleaseChange(draftPrerelease); onDone(draft) }}>Done</button>
     </div>
   </div>
 }

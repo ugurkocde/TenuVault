@@ -26,7 +26,7 @@ type Flow = (typeof FLOWS)[number]["id"]
 
 // The versions chosen on this page, kept while the app runs so moving between workflows keeps them.
 let chosen: Partial<Selections> = {}
-// Whether beta and unstable prereleases are offered by default, kept across workflows like the choices.
+// Whether beta prereleases are offered by default, kept across workflows like the choices.
 let chosenPrerelease = false
 
 export default function OibPage() {
@@ -53,8 +53,9 @@ export default function OibPage() {
   }
   const selections = versions ? Object.fromEntries((Object.keys(OIB_PLATFORMS) as OibPlatform[]).map(p => [p, resolve(versions, p, overrides[p])])) as Selections : null
   // Only choices that differ from the default are kept, so a platform left alone follows new releases.
+  // chosenPrerelease (not state) so a toggle applied with Done counts immediately.
   const choose = (value: Partial<Selections>) => {
-    const next = Object.fromEntries(Object.entries(value).filter(([p, s]) => versions && JSON.stringify(s) !== JSON.stringify(defaultSelection(versions, p as OibPlatform, allowPrerelease)))) as Partial<Selections>
+    const next = Object.fromEntries(Object.entries(value).filter(([p, s]) => versions && JSON.stringify(s) !== JSON.stringify(defaultSelection(versions, p as OibPlatform, chosenPrerelease)))) as Partial<Selections>
     chosen = next; setOverrides(next)
   }
   const notes = versions && selections ? mainNotes(versions, selections) : null

@@ -36,7 +36,7 @@ A platform's policy files are downloaded the first time a version is used, with 
 | **Android** | Android Enterprise devices |
 | **BYOD** | App protection policies for iOS and Android |
 
-The available platforms, their versions and development status come from the upstream `releases.json` manifest. Platforms the manifest marks as **in development** appear but cannot be scanned yet. Beta and unstable releases are offered as a platform's latest version only when you enable prereleases.
+The platforms, their versions and development status come from the upstream `releases.json` manifest. New platforms the manifest marks as **in development** appear but cannot be scanned yet; platforms TenuVault already supports stay available. Beta releases are offered as a platform's latest version when you enable prereleases, and for platforms that only have a beta release (currently iOS) the beta is used by default with a warning. Published releases on the unstable channel are regular releases and are labelled in the version picker.
 
 ## What your plan includes
 

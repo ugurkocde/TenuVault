@@ -99,7 +99,7 @@ async function versionInput(body: Body, sources: BaselineSources): Promise<Versi
   const base = { name: text(body, "name", 200), changeNotes: text(body, "changeNotes", 4000), parameters: body.parameters, bindings }
   if (source.type === "oib") {
     const platform = source.platform
-    if (typeof platform !== "string" || !(platform in OIB_PLATFORMS)) throw new FeatureError("Choose an OIB platform.")
+    if (typeof platform !== "string" || !Object.hasOwn(OIB_PLATFORMS, platform)) throw new FeatureError("Choose an OIB platform.")
     if (typeof source.commit !== "string" || !/^[0-9a-f]{40}$/.test(source.commit)) throw new FeatureError("The OpenIntuneBaseline version is missing. Reload the latest version and try again.")
     const names = Array.isArray(source.policyNames) ? new Set(source.policyNames.slice(0, 200).map((name) => policyMatchKey(String(name)))) : null
     let pack

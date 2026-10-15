@@ -124,7 +124,7 @@ export interface OibVersionChoice {
   versions: OibVersions
   selections: Selections
   choose: (value: Selections) => void
-  /** Whether beta and unstable prereleases are offered by default. */
+  /** Whether beta prereleases are offered as the latest version by default. */
   allowPrerelease: boolean
   setAllowPrerelease: (value: boolean) => void
 }
@@ -139,7 +139,8 @@ const selectValue = (selection: OibSelection) => selection.tag ?? "main"
 
 /** One version select per platform: published releases newest first, then main. */
 export function VersionPicker({ versions, value, onChange }: { versions: OibVersions; value: Selections; onChange: (value: Selections) => void }) {
-  const date = (iso?: string) => iso ? new Date(iso).toLocaleDateString() : ""
+  // Manifest release dates are date-only (2026-09-30); parse them at local noon so the day does not shift by timezone.
+  const date = (iso?: string) => iso ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso}T12:00:00` : iso).toLocaleDateString() : ""
   return <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
     {(Object.keys(OIB_PLATFORMS) as OibPlatform[]).map(platform => {
       const releases = platformReleases(versions, platform)
