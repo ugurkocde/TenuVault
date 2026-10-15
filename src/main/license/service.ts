@@ -161,6 +161,9 @@ const SEEN_PERSIST_MS = 60 * 60_000
 export const FAILURE_COOLDOWN_MS = 60_000
 
 const STATE_KEY = "license.state"
+// Tenants removed from the app whose activation could not be released yet. Persisted
+// beside the state so a restart cannot make the retained token usable again.
+const REMOVED_TENANTS_KEY = "license.removedTenants"
 const INSTALL_ID_KEY = "license.installId"
 // Left behind by the offline TV1 license keys this service replaced.
 const LEGACY_KEYS = ["license.key", "license.trialStartedAt", "license.lastSeenAt", "license.tenants"]
@@ -253,6 +256,22 @@ export class LicenseService {
     }
     if (!this.options.persist) return
 
+    const removed = store.get(REMOVED_TENANTS_KEY)
+    if (removed) {
+      try {
+        const parsed = JSON.parse(removed) as unknown
+        if (Array.isArray(parsed)) {
+          for (const entry of parsed) {
+            if (typeof entry === "string" && guidPattern.test(entry.toLowerCase())) {
+              this.removedTenants.set(entry.toLowerCase(), {})
+            }
+          }
+        }
+      } catch {
+        /* A corrupt marker list must not break licensing; activations stay bound to this installation. */
+      }
+    }
+
     const text = store.get(STATE_KEY)
     if (!text) return
     // Only the reason is logged, never the content.
@@ -294,7 +313,18 @@ export class LicenseService {
   }
 
   private tenantPresent(tenantId: string): boolean {
-    return !this.removedTenants.has(tenantId) && (this.options.tenantPresent?.(tenantId) ?? true)
+    return !this.removedTenants.has(tenantId.toLowerCase()) && (this.options.tenantPresent?.(tenantId) ?? true)
+  }
+
+  private persistRemovedTenants(): void {
+    if (!this.options.persist) return
+    try {
+      const removed = [...this.removedTenants.keys()]
+      if (removed.length > 0) this.options.store.set(REMOVED_TENANTS_KEY, JSON.stringify(removed))
+      else this.options.store.delete(REMOVED_TENANTS_KEY)
+    } catch {
+      /* The in-memory marker still applies for this session. */
+    }
   }
 
   // Bind writes to the actual saved key and activation, independently of other tenants.
@@ -735,6 +765,7 @@ export class LicenseService {
       // A removal requested after this sign-in check must still take precedence.
       this.assertCurrent(() => this.removedTenants.get(tenant) === removal)
       this.removedTenants.delete(tenant)
+      this.persistRemovedTenants()
       return this.requireCurrent(tenant, options)
     })
   }
@@ -861,6 +892,7 @@ export class LicenseService {
     if (this.tenantMutations.has(tenant) || this.state?.activations[tenant] ||
       this.options.store.get(COMMUNITY_KEY) === tenant || this.community.has(tenant)) {
       this.removedTenants.set(tenant, {})
+      this.persistRemovedTenants()
     }
     return this.mutate([tenant], false, async () => {
       this.messages.delete(tenant)
@@ -943,6 +975,19 @@ export class LicenseService {
     return Object.keys(this.state.activations).some(
       (tenantId) => this.tenantPresent(tenantId) && this.valid(tenantId)?.cis === "internal",
     )
+  }
+
+  /**
+   * The stored entitlement token for one tenant, only when it is currently valid for
+   * this installation and the tenant is still present. Used as the bearer credential
+   * for the CIS content delivery service, which re-verifies it server-side.
+   */
+  entitlementToken(tenantId: string): string | null {
+    this.load()
+    const tenant = tenantId.toLowerCase()
+    if (!this.tenantPresent(tenant)) return null
+    if (!this.valid(tenant)) return null
+    return this.state?.activations[tenant]?.token ?? null
   }
 
   /** The license state for the signed-in tenants plus every tenant with a stored activation. */

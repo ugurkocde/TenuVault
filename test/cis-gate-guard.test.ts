@@ -33,6 +33,29 @@ describe("cisInternalGuard", () => {
     expect(handler).not.toHaveBeenCalled()
   })
 
+  it("refuses CIS content delivery without a cached entitlement before downstream guards", async () => {
+    const downstream = vi.fn(async () => null)
+    const handler = vi.fn(async () => Response.json({ ok: true }))
+    const host = new ApiHost({
+      routes: { "/api/frameworks": { POST: handler } },
+      guard: async (request) => (await cisInternalGuard(() => true, () => null)(request)) ?? downstream(),
+    })
+
+    for (const body of [
+      { action: "cis-catalog", frameworkId: "cis-benchmarks", tenantId },
+      { action: "cis-fetch-pack", frameworkId: "cis-benchmarks", tenantId, benchmark: "fakebook-os", version: "9.9.9", level: 1 },
+    ]) {
+      const response = await host.dispatch(post("/api/frameworks", body))
+      expect(response.status).toBe(401)
+    }
+    expect(downstream).not.toHaveBeenCalled()
+    expect(handler).not.toHaveBeenCalled()
+
+    const entitled = cisInternalGuard(() => true, (requested) => (requested === tenantId ? "cached-token" : null))
+    await expect(entitled(post("/api/frameworks", { action: "cis-catalog", frameworkId: "cis-benchmarks", tenantId }))).resolves.toBeNull()
+    await expect(entitled(post("/api/frameworks", { action: "assess", frameworkId: "cis-benchmarks", tenantId: "22222222-2222-2222-2222-222222222222" }))).resolves.toBeNull()
+  })
+
   it("always refuses CIS Controls and leaves other frameworks to downstream guards", async () => {
     const guard = cisInternalGuard(() => true)
     const controls = await guard(post("/api/frameworks", { action: "workspace-load", frameworkId: "cis-controls", tenantId }))

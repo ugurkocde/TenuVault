@@ -49,7 +49,8 @@ import { DisclaimerAcknowledgements, disclaimerGuard } from "./disclaimer"
 import { migrateLegacyOibRuns, setOibStore } from "./oib/service"
 import { setOibCacheDir } from "./oib/source"
 import { setFrameworkStore } from "./frameworks/workspaces"
-import { internalCisBenchmarksEnabled, setInternalCisBenchmarksProvider } from "./frameworks/service"
+import { internalCisBenchmarksEnabled, setCisEntitlementProvider, setInternalCisBenchmarksProvider } from "./frameworks/service"
+import { setCisContentFallbackBaseUrl } from "./frameworks/cis-content"
 import { setNativeFrameworkStore, setNativeFrameworkAuthorization, setNativeFrameworkNotifier } from "./frameworks/native"
 import { allows, effectiveRetentionDays, PlanRequired } from "../shared/plans"
 import { APP_STATE_START_OVER_BUTTON, APP_STATE_START_OVER_DETAIL, SecureStore, UnreadableStoreError, type Cipher } from "./storage/secure-store"
@@ -321,7 +322,9 @@ async function bootstrap(): Promise<void> {
   const disclaimer = new DisclaimerAcknowledgements(appStore)
   const checkDisclaimer = disclaimerGuard(disclaimer)
   setInternalCisBenchmarksProvider(() => license.cisInternal())
-  const checkCis = cisInternalGuard(() => internalCisBenchmarksEnabled())
+  setCisEntitlementProvider((tenantId) => license.entitlementToken(tenantId))
+  setCisContentFallbackBaseUrl(LICENSE_API_BASE)
+  const checkCis = cisInternalGuard(() => internalCisBenchmarksEnabled(), (tenantId) => license.entitlementToken(tenantId))
   const checkPlan = planGuard((tenantId) => license.requireEntitlement(tenantId).catch(() => null))
   // Drift scans run in the background; each tenant's last result is kept in its own store, or in
   // memory for the session without OS encryption.

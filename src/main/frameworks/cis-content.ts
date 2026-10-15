@@ -8,6 +8,11 @@ export const CIS_CONTENT_NOT_CONFIGURED_MESSAGE = "The CIS content delivery serv
 const CIS_CONTENT_INVALID_BASE_URL_MESSAGE = "The CIS content delivery service base URL is invalid. Set TENUVAULT_CIS_CONTENT_BASE_URL to an https URL without credentials, a query string or a fragment."
 const CIS_CONTENT_UNREACHABLE_MESSAGE = "The CIS content delivery service could not be reached."
 const CIS_CONTENT_INVALID_RESPONSE_MESSAGE = "The CIS content delivery service returned an invalid response."
+export const CIS_CONTENT_ENTITLEMENT_REQUIRED_MESSAGE = "CIS benchmark delivery requires a current license entitlement for this tenant."
+
+let fallbackBaseUrl: string | null = null
+/** Bootstrap hook: the license API origin injected at build time, used when the env override is unset. */
+export function setCisContentFallbackBaseUrl(value: string | null): void { fallbackBaseUrl = value }
 
 export class CisContentError extends Error {
   constructor(message: string, public status = 502) { super(message) }
@@ -19,7 +24,7 @@ function isTimeoutError(error: unknown): boolean {
 
 /** The configured delivery base URL without a trailing slash, or null when not configured. */
 export function cisContentBaseUrl(): string | null {
-  const raw = process.env[CIS_CONTENT_BASE_URL_ENV]
+  const raw = process.env[CIS_CONTENT_BASE_URL_ENV] ?? fallbackBaseUrl ?? undefined
   if (typeof raw !== "string") return null
   const trimmed = raw.trim()
   if (!trimmed) return null
@@ -90,10 +95,10 @@ async function readBodyWithCap(response: Response, maxBytes: number): Promise<st
   return new TextDecoder().decode(merged)
 }
 
-async function fetchJson(url: string, maxBytes: number): Promise<unknown> {
+async function fetchJson(url: string, maxBytes: number, entitlementToken: string): Promise<unknown> {
   let response: Response
   try {
-    response = await fetch(url, { headers: { Accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(CIS_CONTENT_TIMEOUT_MS) })
+    response = await fetch(url, { headers: { Accept: "application/json", Authorization: `Bearer ${entitlementToken}` }, redirect: "error", signal: AbortSignal.timeout(CIS_CONTENT_TIMEOUT_MS) })
   } catch {
     throw new CisContentError(CIS_CONTENT_UNREACHABLE_MESSAGE, 502)
   }
@@ -128,11 +133,23 @@ function toCisContentError(error: unknown): CisContentError {
   return new CisContentError(error instanceof Error ? error.message : CIS_CONTENT_INVALID_RESPONSE_MESSAGE, 502)
 }
 
-/** Loads and validates the catalog of benchmarks available from the delivery service. */
-export async function fetchCisCatalog(): Promise<CisCatalog> {
+function requireEntitlementToken(entitlementToken: string | null): string {
+  if (typeof entitlementToken !== "string" || !entitlementToken.trim()) {
+    throw new CisContentError(CIS_CONTENT_ENTITLEMENT_REQUIRED_MESSAGE, 401)
+  }
+  return entitlementToken
+}
+
+/**
+ * Loads and validates the catalog of benchmarks available from the delivery service.
+ * The caller's license entitlement token travels as a bearer credential; the service
+ * decides whether it may receive CIS content. Without a token nothing is requested.
+ */
+export async function fetchCisCatalog(entitlementToken: string | null): Promise<CisCatalog> {
+  const token = requireEntitlementToken(entitlementToken)
   const base = requireBaseUrl()
   try {
-    const json = await fetchJson(`${base}/cis/v1/catalog`, CIS_CATALOG_MAX_BYTES)
+    const json = await fetchJson(`${base}/cis/v1/catalog`, CIS_CATALOG_MAX_BYTES, token)
     return validateCisCatalog(json)
   } catch (error) {
     throw toCisContentError(error)
@@ -140,12 +157,13 @@ export async function fetchCisCatalog(): Promise<CisCatalog> {
 }
 
 /** Loads and validates one benchmark pack for the requested identity. */
-export async function fetchCisPack(expected: { benchmark: string; version: string; level: CisLevel }): Promise<CisPack> {
+export async function fetchCisPack(expected: { benchmark: string; version: string; level: CisLevel }, entitlementToken: string | null): Promise<CisPack> {
   validatePackIdentity(expected)
+  const token = requireEntitlementToken(entitlementToken)
   const base = requireBaseUrl()
   const url = `${base}/cis/v1/packs/${encodeURIComponent(expected.benchmark)}/${encodeURIComponent(expected.version)}/${expected.level}`
   try {
-    const json = await fetchJson(url, CIS_PACK_MAX_BYTES)
+    const json = await fetchJson(url, CIS_PACK_MAX_BYTES, token)
     return validateCisPack(json, expected)
   } catch (error) {
     throw toCisContentError(error)
