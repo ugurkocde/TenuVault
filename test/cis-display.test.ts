@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { benchmarkDisplayName, groupFindingsByPolicy, groupObservationsByValue, humanSettingLabel, policyDisplayName, statusMixText, trendSummaryText } from "../src/shared/frameworks/cis-display"
+import { benchmarkDisplayName, deviatingFindingKeys, groupFindingsByPolicy, groupObservationsByValue, humanSettingLabel, policyDisplayName, statusMixText, trendSummaryText } from "../src/shared/frameworks/cis-display"
 import type { Finding, Json, Observation } from "../src/shared/frameworks/policies"
 import type { AssignmentEvidence } from "../src/shared/frameworks/evidence"
 
@@ -67,6 +67,14 @@ describe("groupFindingsByPolicy", () => {
     expect(groups[1]?.counts).toEqual({ Present: 0, Different: 0, Missing: 1, Review: 0 })
     expect(groups[2]?.total).toBe(1)
     expect(groups[2]?.counts).toEqual({ Present: 0, Different: 0, Missing: 0, Review: 1 })
+  })
+})
+
+describe("deviatingFindingKeys", () => {
+  it("selects every Different and Missing finding and never Present or Review ones", () => {
+    const findings = [finding(0, "A", "one", "Present"), finding(0, "A", "two", "Different"), finding(1, "B", "three", "Missing"), finding(1, "B", "four", "Review")]
+    expect(deviatingFindingKeys(findings)).toEqual(["0:two", "1:three"])
+    expect(deviatingFindingKeys([])).toEqual([])
   })
 })
 

@@ -31,6 +31,11 @@ export interface FindingPolicyGroup {
   total: number
 }
 
+/** Keys of the findings that can be remediated: Different and Missing. Present and Review findings are never selected. */
+export function deviatingFindingKeys(findings: readonly Finding[]): string[] {
+  return findings.filter(finding => finding.status === "Different" || finding.status === "Missing").map(finding => finding.key)
+}
+
 export function groupFindingsByPolicy(findings: readonly Finding[]): FindingPolicyGroup[] {
   const groups: FindingPolicyGroup[] = []
   const byIndex = new Map<number, FindingPolicyGroup>()

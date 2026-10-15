@@ -11,7 +11,7 @@ import { convertKit, readKitZip, suggestedKitBenchmark, type KitConversion, type
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
 import { cisReadiness } from "../../shared/frameworks/cis-readiness"
 import { exceptionKey } from "../../shared/frameworks/cis-exceptions"
-import { benchmarkDisplayName, groupFindingsByPolicy, groupObservationsByValue, humanSettingLabel, policyDisplayName, statusMixText, trendSummaryText } from "../../shared/frameworks/cis-display"
+import { benchmarkDisplayName, deviatingFindingKeys, groupFindingsByPolicy, groupObservationsByValue, humanSettingLabel, policyDisplayName, statusMixText, trendSummaryText } from "../../shared/frameworks/cis-display"
 import { cisFlowSteps, cisStage, isKitPackReference, kitLevelForPolicy, packSettingCount } from "../../shared/frameworks/cis-flow"
 import { cisDriftSignals, cisReadinessTrend, sparklineSegments, type CisTrendPoint } from "../../shared/frameworks/cis-trend"
 import { cisPortfolioRows, type CisPortfolioEntry } from "../../shared/frameworks/cis-portfolio"
@@ -492,6 +492,9 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     return () => { active = false }
   }, [recommendationList])
   const findings = assessment?.findings.filter(f => filter === "All" || f.status === filter) ?? []
+  const deviatingKeys = deviatingFindingKeys(findings)
+  const allDeviatingSelected = deviatingKeys.every(key => selected.has(key))
+  function selectAllDeviating() { setSelected(old => new Set([...old, ...deviatingKeys])); setPreview(false); setConfirmed(false) }
   const readiness = assessment && framework.id === "cis-benchmarks" ? cisReadiness(assessment, policies, denominator, recommendationList, workspace?.exceptions) : null
   const trend = framework.id === "cis-benchmarks" && workspace ? cisReadinessTrend(workspace.history, recommendationList, workspace.exceptions) : []
   const drift = cisDriftSignals(trend)
@@ -860,6 +863,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
         </section>}
         <div className="mb-2 flex flex-wrap items-center gap-2" aria-label="Filter assessment findings">{["All", "Present", "Missing", "Different", "Review"].map(status => <button key={status} aria-pressed={filter === status} onClick={() => { setFilter(status); setPage(0) }} className={`rounded-full border px-3.5 py-1.5 text-sm transition-colors ${filter === status ? "border-transparent bg-primary text-primary-foreground" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>{status} <span className="ml-1 tabular-nums font-semibold">{assessment.findings.filter(f => status === "All" || f.status === status).length}</span></button>)}
           {isCis && <span className="ml-auto text-sm text-gray-500">{findings.length} of {assessment.findings.length} findings</span>}
+          {isCis && deviatingKeys.length > 0 && <button type="button" className={button} disabled={!!busy || !!creation || historical || allDeviatingSelected} onClick={selectAllDeviating}>Select all deviating ({deviatingKeys.length})</button>}
         </div>
         <p className="mb-4 text-xs leading-5 text-gray-500">Different: at least one existing configuration differs. Review: the pack contains alternative values for this setting. Select a single profile or resolve differences manually. Unassigned configurations can appear as Present. Expand a finding to inspect assignment evidence, including exclusions, filter references and unavailable reads.</p>
         {isCis ? <div>{groupFindingsByPolicy(findings).map(group => <section key={group.policyIndex} aria-label={group.policyName} className="border-t border-gray-100 py-4 first:border-t-0 first:pt-1">
@@ -878,6 +882,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
           <span className="text-sm font-medium text-gray-800">{selected.size} selected</span>
           <span className="text-xs text-gray-500">Remediate them in step 3 below, or exclude them from the score if you do not apply them on purpose.</span>
           <span className="ml-auto flex gap-2">
+            {!allDeviatingSelected && <button type="button" className={button} disabled={!!busy || historical} onClick={selectAllDeviating}>Select all deviating ({deviatingKeys.length})</button>}
             <button type="button" className={button} disabled={!!busy || historical} onClick={() => { setSelected(new Set()); setPreview(false); setConfirmed(false) }}>Clear</button>
             <button ref={excludeButton} type="button" className={button} disabled={!!busy || historical || !excludable.length} title={excludable.length ? undefined : "The selected findings are already excluded."} onClick={() => setExclusion({ owner: "", reason: "", expiresOn: "", count: excludable.length, error: "" })}>Exclude from score ({excludable.length})</button>
           </span>
