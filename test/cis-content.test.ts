@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { validateCisCatalog, validateCisPack } from "../src/shared/frameworks/cis-content"
-import { handleFramework, setInternalCisBenchmarksEnabled } from "../src/main/frameworks/service"
+import { handleFramework, setCisEntitlementProvider, setInternalCisBenchmarksEnabled } from "../src/main/frameworks/service"
 import { loadWorkspace, setFrameworkStore } from "../src/main/frameworks/workspaces"
 
 const tenantId = "11111111-1111-1111-1111-111111111111"
@@ -65,23 +65,35 @@ describe("CIS content delivery service", () => {
     data = new Map()
     setFrameworkStore({ get: (k: string) => data.get(k) ?? null, set: (k: string, v: string) => { data.set(k, v) }, delete: (k: string) => { data.delete(k) } })
     setInternalCisBenchmarksEnabled(true)
+    setCisEntitlementProvider((requestedTenant) => (requestedTenant === tenantId ? "test-entitlement" : null))
     process.env.TENUVAULT_CIS_CONTENT_BASE_URL = "https://content.example.test/"
   })
   afterEach(() => {
     vi.unstubAllGlobals()
     setInternalCisBenchmarksEnabled(null)
+    setCisEntitlementProvider(null)
     if (originalBase === undefined) delete process.env.TENUVAULT_CIS_CONTENT_BASE_URL
     else process.env.TENUVAULT_CIS_CONTENT_BASE_URL = originalBase
   })
 
   it("returns the validated catalog", async () => {
-    const fetchMock = vi.fn(async (url: string) => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       expect(url).toBe("https://content.example.test/cis/v1/catalog")
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer test-entitlement")
       return Response.json(validCatalog)
     })
     vi.stubGlobal("fetch", fetchMock)
     await expect(handleFramework({ action: "cis-catalog", tenantId, frameworkId: "cis-benchmarks" })).resolves.toEqual(validCatalog)
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("fails closed without an entitlement and never reaches the delivery service", async () => {
+    setCisEntitlementProvider(null)
+    const fetchMock = vi.fn()
+    vi.stubGlobal("fetch", fetchMock)
+    await expect(handleFramework({ action: "cis-catalog", tenantId, frameworkId: "cis-benchmarks" })).rejects.toMatchObject({ status: 401, message: expect.stringContaining("entitlement") })
+    await expect(handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })).rejects.toMatchObject({ status: 401 })
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it("saves the workspace pack with the right reference on pack success", async () => {

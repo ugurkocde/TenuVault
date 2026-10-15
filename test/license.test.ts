@@ -310,6 +310,15 @@ describe("LicenseService key expiry", () => {
     expect(service().cisInternal()).toBe(false)
   })
 
+  it("exposes the entitlement token only for a present tenant with a valid token", () => {
+    const valid = token()
+    storeLicense(valid)
+    expect(service().entitlementToken(TENANT)).toBe(valid)
+    expect(service({ tenantPresent: () => false }).entitlementToken(TENANT)).toBeNull()
+    storeLicense(token({ exp: Math.floor(T0 / 1000) - 1 }))
+    expect(service().entitlementToken(TENANT)).toBeNull()
+  })
+
   it("rejects a token whose CIS claim has an unknown value", () => {
     storeLicense(token({ cis: "customer" }))
     const license = service()

@@ -34,6 +34,16 @@ export function setInternalCisBenchmarksEnabled(value: boolean | null): void { i
  * test override, CIS Benchmarks stays off in every shipped build.
  */
 export function setInternalCisBenchmarksProvider(provider: (() => boolean) | null): void { internalCisProvider = provider }
+let cisEntitlementProvider: ((tenantId: string) => string | null) | null = null
+/**
+ * Bootstrap hook wiring CIS content delivery to the license service. The provider
+ * returns the selected tenant's currently valid entitlement token, sent as the
+ * bearer credential to the delivery service. Without a provider, delivery fails closed.
+ */
+export function setCisEntitlementProvider(provider: ((tenantId: string) => string | null) | null): void { cisEntitlementProvider = provider }
+function cisEntitlementToken(tenantId: string): string | null {
+  try { return cisEntitlementProvider?.(tenantId) ?? null } catch { return null }
+}
 export function internalCisBenchmarksEnabled(): boolean {
   if (internalCisOverride !== null) return internalCisOverride
   try {
@@ -384,7 +394,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     if (typeof body.tenantId !== "string" || !body.tenantId) throw new FrameworkError("Select a tenant and framework.")
     try {
       if (body.action === "cis-catalog") {
-        const catalog = await fetchCisCatalog()
+        const catalog = await fetchCisCatalog(cisEntitlementToken(body.tenantId))
         requireEnabledFramework(body.frameworkId)
         return catalog
       }
@@ -392,7 +402,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       const version = typeof body.version === "string" ? body.version : ""
       const level = body.level === 1 || body.level === 2 ? (body.level as CisLevel) : null
       if (!BENCHMARK_ID_PATTERN.test(benchmark) || benchmark.length > MAX_CIS_BENCHMARK_ID_LENGTH || !VERSION_PATTERN.test(version) || level === null) throw new FrameworkError("Select a benchmark, version and level.")
-      const pack = await fetchCisPack({ benchmark, version, level })
+      const pack = await fetchCisPack({ benchmark, version, level }, cisEntitlementToken(body.tenantId))
       requireEnabledFramework(body.frameworkId)
       let policies: BaselinePolicy[]
       try { policies = parsePolicies(pack.policies) }

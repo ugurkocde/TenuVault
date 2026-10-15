@@ -945,6 +945,18 @@ export class LicenseService {
     )
   }
 
+  /**
+   * The stored entitlement token for one tenant, only when it is currently valid for
+   * this installation and the tenant is still present. Used as the bearer credential
+   * for the CIS content delivery service, which re-verifies it server-side.
+   */
+  entitlementToken(tenantId: string): string | null {
+    this.load()
+    if (!this.tenantPresent(tenantId)) return null
+    if (!this.valid(tenantId)) return null
+    return this.state?.activations[tenantId.toLowerCase()]?.token ?? null
+  }
+
   /** The license state for the signed-in tenants plus every tenant with a stored activation. */
   status(signedInTenantIds: string[]): LicenseStatus {
     this.load()
