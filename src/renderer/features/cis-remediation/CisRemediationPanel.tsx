@@ -14,7 +14,8 @@ const button = "inline-flex h-10 items-center justify-center gap-2 rounded-full 
  * or whole policies. The planned deployment opens in the remediation history,
  * which hosts the shared review, apply and rollback flow for every deployment.
  */
-export function CisRemediationPanel({ tenant, assessment, policies, reference, selectedKeys, onRecompare, onPlanned }: { tenant: Tenant | undefined; assessment: Assessment; policies: BaselinePolicy[]; reference: string; selectedKeys: Set<string>; onRecompare: () => void; onPlanned: (deploymentId: string) => void }) {
+/** `recompareBlocked` disables Run comparison again and names the reason, for example a full assessment history. */
+export function CisRemediationPanel({ tenant, assessment, policies, reference, selectedKeys, onRecompare, onPlanned, recompareBlocked }: { tenant: Tenant | undefined; assessment: Assessment; policies: BaselinePolicy[]; reference: string; selectedKeys: Set<string>; onRecompare: () => void; onPlanned: (deploymentId: string) => void; recompareBlocked?: { title: string; "aria-describedby": string } }) {
   const [busy, setBusy] = useState(false)
   const deviating = assessment.findings.filter((finding) => selectedKeys.has(finding.key) && (finding.status === "Different" || finding.status === "Missing"))
   const plan = async (whole: boolean) => {
@@ -37,7 +38,7 @@ export function CisRemediationPanel({ tenant, assessment, policies, reference, s
     <div className="mt-4 flex flex-wrap gap-3">
       <button type="button" className={button} disabled={busy || !deviating.length || !tenant} onClick={() => void plan(false)}>Plan remediation for {deviating.length} selected findings</button>
       <button type="button" className={button} disabled={busy || !deviating.length || !tenant} onClick={() => void plan(true)}>Deploy whole benchmark policies</button>
-      <button type="button" className={button} disabled={busy} onClick={onRecompare}>Run comparison again</button>
+      <button type="button" className={button} disabled={busy || !!recompareBlocked} {...recompareBlocked} onClick={onRecompare}>Run comparison again</button>
     </div>
   </section>
 }

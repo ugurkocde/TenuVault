@@ -113,6 +113,25 @@ describe("CIS Benchmarks at the history cap", () => {
     expect(buttonNamed(container, "Start Assessment")!.hasAttribute("aria-describedby")).toBe(false)
   })
 
+  it("disables both run buttons of the results view with the same reason", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    const calls = stubService("cis-benchmarks", 50)
+    const container = render("cis-benchmarks")
+    await flush()
+    await act(async () => { buttonNamed(container, "View read-only")!.click() })
+    await flush()
+    const alert = historyAlert(container)
+    expect(alert).not.toBeNull()
+    for (const name of ["Run again", "Run comparison again"]) {
+      const run = buttonNamed(container, name)!
+      expect(run.disabled).toBe(true)
+      expect(run.getAttribute("aria-describedby")).toBe(alert!.id)
+    }
+    await act(async () => { buttonNamed(container, "Run comparison again")!.click() })
+    await flush()
+    expect(calls.actions.some(body => body.action === "assess" || body.action === "assess-start")).toBe(false)
+  })
+
   it("keeps every assessment when the confirmation is cancelled", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     confirmAnswer.current = false

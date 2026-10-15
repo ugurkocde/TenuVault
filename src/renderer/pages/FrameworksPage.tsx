@@ -397,7 +397,12 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   function reset() { setHistorical(false); setAssessment(null); setSelected(new Set()); setPreview(false); setConfirmed(false); setCreation(null); setPage(0) }
   async function perform(label: string, action: () => Promise<void>) {
     setBusy(label); setError("")
-    try { await action() } catch (e) { setError(e instanceof Error ? e.message : "The request failed.") } finally { setBusy("") }
+    try { await action() } catch (e) { const message = e instanceof Error ? e.message : "The request failed."; setError(message); refreshFullHistory(message) } finally { setBusy("") }
+  }
+  /** After a save was refused for a full history, reload the workspace so the alert shows the current count. */
+  function refreshFullHistory(message: string, current: () => boolean = () => true) {
+    if (!isHistoryFullError(message)) return
+    void workspaceRequest("workspace-load").then(saved => { if (current()) setWorkspace(saved) }).catch(() => undefined)
   }
   useEffect(() => () => { cisRunGeneration.current += 1 }, [])
   // A full history blocks new assessments: the main process reports it on load and refuses to save more.
@@ -405,7 +410,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   const historyCount = workspace?.history.length ?? 0
   const historyFull = !!workspace?.capacity?.full || isHistoryFullError(error)
   const removableHistory = Math.max(historyCount - KEEP_NEWEST_ASSESSMENTS, 0)
-  const historyBlocked = historyFull ? { title: "Saved assessment history is full. Remove older assessments first.", "aria-describedby": historyAlertId } : {}
+  const historyBlocked = historyFull ? { title: "Saved assessment history is full. Remove older assessments first.", "aria-describedby": historyAlertId } : undefined
   async function removeOlderAssessments() {
     if (!workspace || removableHistory <= 0 || busy) return
     const removing = removableHistory
@@ -437,6 +442,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
         accumulation = accumulateCisFindings(accumulation, snapshot.findings, snapshot.nextSince)
         if (snapshot.phase === "failed") {
           setError(snapshot.error || "Assessment failed.")
+          refreshFullHistory(snapshot.error ?? "", () => cisRunGeneration.current === generation)
           setCisRun(null)
           return
         }
@@ -469,7 +475,9 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       }
     } catch (e) {
       if (cisRunGeneration.current !== generation) return
-      setError(e instanceof Error ? e.message : "The request failed.")
+      const message = e instanceof Error ? e.message : "The request failed."
+      setError(message)
+      refreshFullHistory(message, () => cisRunGeneration.current === generation)
       setCisRun(null)
     } finally {
       if (cisRunGeneration.current === generation) setBusy("")
@@ -975,7 +983,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-        {framework.id === "cis-benchmarks" ? <CisRemediationPanel tenant={selectedTenant ?? undefined} assessment={assessment} policies={policies} reference={reference} selectedKeys={selected} onPlanned={id => setRemediationFocus({ id, at: Date.now() })} onRecompare={() => void perform("Reading tenant policies and comparing settings...", async () => { reset(); const result = await request<Assessment>({ action: "assess", tenantId: credentials!.tenantId, appId: credentials!.appId, frameworkId: framework.id, reference, policies }); setAssessment(result); setWorkspace(await workspaceRequest("workspace-load")) })} /> : framework.comparisonOnly ? <p className="mt-5 border-t pt-4 text-sm text-gray-600">This pack is available for comparison and reports only. Review missing settings and configure them through your own change process.</p>
+        {framework.id === "cis-benchmarks" ? <CisRemediationPanel tenant={selectedTenant ?? undefined} assessment={assessment} policies={policies} reference={reference} selectedKeys={selected} recompareBlocked={historyBlocked} onPlanned={id => setRemediationFocus({ id, at: Date.now() })} onRecompare={() => historyFull ? undefined : void perform("Reading tenant policies and comparing settings...", async () => { reset(); const result = await request<Assessment>({ action: "assess", tenantId: credentials!.tenantId, appId: credentials!.appId, frameworkId: framework.id, reference, policies }); setAssessment(result); setWorkspace(await workspaceRequest("workspace-load")) })} /> : framework.comparisonOnly ? <p className="mt-5 border-t pt-4 text-sm text-gray-600">This pack is available for comparison and reports only. Review missing settings and configure them through your own change process.</p>
         : <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t pt-4"><p className="text-sm text-gray-600">{chosen.length} missing root settings selected · {payloads.length} new {payloads.length === 1 ? "policy" : "policies"}</p><button className={primary} disabled={!chosen.length || !!busy || !!creation || historical} onClick={() => { setPreview(true); setConfirmed(false) }}>Preview recommended policies</button></div>}
       </>}
     </section>}
