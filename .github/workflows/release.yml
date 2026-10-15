@@ -179,7 +179,7 @@ jobs:
             exit 1
           fi
           {
-            echo "TENUVAULT_LICENSE_API_BASE=https://tenuvault.com"
+            echo "TENUVAULT_LICENSE_API_BASE=https://www.tenuvault.com"
             echo "TENUVAULT_LICENSE_BUY_URL=https://tenuvault.com/desktop#pricing"
             echo "TENUVAULT_LICENSE_PORTAL_URL=$RELEASE_PORTAL_URL"
             delimiter="EOF_$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"

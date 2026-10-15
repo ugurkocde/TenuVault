@@ -79,7 +79,7 @@ export interface LicenseServiceOptions {
   persist: boolean
   /** Ed25519 public key (SPKI PEM) that verifies entitlement tokens. */
   publicKey: string
-  /** Origin of the licensing service, such as https://tenuvault.com. */
+  /** Origin of the licensing service, such as https://www.tenuvault.com. */
   apiBase: string
   appVersion: string
   platform?: string
