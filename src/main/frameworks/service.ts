@@ -69,7 +69,7 @@ async function jsonFetch(url: string, init: RequestInit = {}): Promise<RecordJso
   return json
 }
 
-export async function collectGraph(url: string, token: string): Promise<RecordJson[]> {
+export async function collectGraph(url: string, token: string, beforeNetwork?: () => void): Promise<RecordJson[]> {
   const result: RecordJson[] = []
   const visited = new Set<string>()
   while (url) {
@@ -78,6 +78,7 @@ export async function collectGraph(url: string, token: string): Promise<RecordJs
       throw new FrameworkError("Invalid or repeated Graph continuation link. Assessment stopped.", 502)
     }
     visited.add(url)
+    beforeNetwork?.()
     const page = await jsonFetch(url, { headers: { Authorization: `Bearer ${token}` } })
     if (!Array.isArray(page.value) || !page.value.every(record)) throw new FrameworkError("Graph returned an incomplete policy collection.", 502)
     result.push(...page.value)
@@ -94,21 +95,21 @@ async function landscape(token: string, onProgress?: (progress: LandscapeProgres
   // Expanding settings severely reduces Graph's page size. Read the policy list first,
   // then each settings collection with bounded concurrency and its own continuation.
   beforeNetwork?.()
-  const policies = await collectGraph(GRAPH, token)
+  const policies = await collectGraph(GRAPH, token, beforeNetwork)
   const result: LandscapePolicy[] = []
   let read = 0
   for (let i = 0; i < policies.length; i += 4) {
     beforeNetwork?.()
     const chunk = await Promise.all(policies.slice(i, i + 4).map(async policy => {
       if (typeof policy.id !== "string" || !/^[a-f0-9-]{36}$/i.test(policy.id)) throw new FrameworkError("Policy ID missing from Graph response.", 502)
-      const settings = await collectGraph(`${GRAPH}/${policy.id}/settings`, token)
+      const settings = await collectGraph(`${GRAPH}/${policy.id}/settings`, token, beforeNetwork)
       read += 1
       onProgress?.({ read, total: policies.length, policyName: typeof policy.name === "string" ? policy.name : "" })
       if (typeof policy.settingCount === "number" && settings.length !== policy.settingCount) throw new FrameworkError("Policy settings changed during the read. Compare again.", 409)
       if (!settings.length) return null
       let targeting: AssignmentEvidence
-      try { targeting = assignmentEvidence(await collectGraph(`${GRAPH}/${policy.id}/assignments`, token)) }
-      catch { targeting = { state: "unavailable", targets: [], limitations: ["Assignment evidence could not be read completely. Check Intune access and compare again."] } }
+      try { targeting = assignmentEvidence(await collectGraph(`${GRAPH}/${policy.id}/assignments`, token, beforeNetwork)) }
+      catch { beforeNetwork?.(); targeting = { state: "unavailable", targets: [], limitations: ["Assignment evidence could not be read completely. Check Intune access and compare again."] } }
       return { ...parsePolicies({ ...policy, settings })[0]!, id: policy.id, targeting }
     }))
     result.push(...chunk.filter((policy) => policy !== null))

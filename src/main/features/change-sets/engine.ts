@@ -189,6 +189,15 @@ function requireCisChangeSetEnabled(workflow: string): void {
   if (workflow === "cis-remediation" && !internalCisBenchmarksEnabled()) throw new FeatureError("CIS comparisons are coming soon.", 403)
 }
 
+/** Checks CIS authorization immediately before every Graph request made through this caller. */
+function gatedGraph(graph: GraphCall, workflow: string): GraphCall {
+  if (workflow !== "cis-remediation") return graph
+  return async (method, path, body) => {
+    requireCisChangeSetEnabled(workflow)
+    return graph(method, path, body)
+  }
+}
+
 /** Graph failures become plain 502 answers; plan and feature errors pass through. */
 function asFeatureError(error: unknown, prefix: string): never {
   if (error instanceof FeatureError || error instanceof PlanRequired) throw error
@@ -221,7 +230,7 @@ export async function createChangeSet(deps: FeatureDeps, tenantId: string, input
   if (!input.title.trim() || input.title.length > 200) throw new FeatureError("A title of at most 200 characters is required.")
   if (!Array.isArray(input.operations) || !input.operations.length) throw new FeatureError("Select at least one operation.")
   if (input.operations.length > MAX_OPERATIONS) throw new FeatureError(`A change set holds at most ${MAX_OPERATIONS} operations. Split the change.`)
-  const graph = await reader(deps, tenant)
+  const graph = gatedGraph(await reader(deps, tenant), input.origin?.workflow ?? "change-sets")
   const listings = createListingMemo()
   const operations: ChangeOperation[] = []
   const entries: ChangeSetContent["entries"] = {}
@@ -346,7 +355,7 @@ export async function previewChangeSet(deps: FeatureDeps, tenantId: string, id: 
   const record = getChangeSet(deps, tenantId, id)
   requireCisChangeSetEnabled(record.origin.workflow)
   const { entries, problem } = integrity(deps, tenantId, record)
-  const graph = await reader(deps, tenantId)
+  const graph = gatedGraph(await reader(deps, tenantId), record.origin.workflow)
   const listings = createListingMemo()
   const operations: OperationPreview[] = []
   const fingerprints: Record<string, string> = {}
@@ -416,9 +425,11 @@ export async function approveChangeSet(deps: FeatureDeps, tenantId: string, id: 
   requireCisChangeSetEnabled(record.origin.workflow)
   if (!["in-review", "stale", "approved"].includes(record.status)) throw new FeatureError("Only change sets in review can be approved.", 409)
   const preview = await previewChangeSet(deps, tenantId, id)
+  requireCisChangeSetEnabled(record.origin.workflow)
   if (preview.blockers.length) throw new FeatureError(`This change set cannot be approved: ${preview.blockers.join(" ")}`, 409)
   if (input.contentHash !== record.contentHash) throw new FeatureError("The change set content differs from what you reviewed. Review it again.", 409)
   if (input.targetFingerprint !== preview.targetFingerprint) throw new FeatureError("The target tenant changed since your preview. Preview again before approving.", 409)
+  requireCisChangeSetEnabled(record.origin.workflow)
   const at = deps.now().toISOString()
   return deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenantId, id, (current) => ({
     ...current,
@@ -597,21 +608,23 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     let captured: ChangeSetContent["entries"] = {}
     const capturedNames: Record<string, string[]> = {}
     let graph: GraphCall
+    let gated: GraphCall
     let writer: GraphCall
     let listings = createListingMemo()
     try {
       graph = await reader(deps, tenant)
       // Acquired before anything is marked as applying: a sign-in or plan failure here hands
       // the change set back through the catch below instead of leaving it stuck in "applying".
-      writer = await deps.graph(tenant, { journal: true })
+      writer = gatedGraph(await deps.graph(tenant, { journal: true }), record.origin.workflow)
       requireCisChangeSetEnabled(record.origin.workflow)
+      gated = gatedGraph(graph, record.origin.workflow)
       if (!preChange) {
         const check = async () => {
           const observations: Record<string, Observation> = {}
           for (const operation of record.operations) {
             requireCisChangeSetEnabled(record.origin.workflow)
             try {
-              observations[operation.key] = await observe(graph, typeOf(operation.folder), operation, listings)
+              observations[operation.key] = await observe(gated, typeOf(operation.folder), operation, listings)
             } catch (error) {
               asFeatureError(error, "The target tenant could not be read, so nothing was written.")
             }
@@ -666,19 +679,22 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       const type = typeOf(operation.folder)
       const current = getChangeSet(deps, tenant, id).results[operation.key] ?? emptyResult()
       if (current.status === "verified") continue
-      if (record.origin.workflow === "cis-remediation" && !internalCisBenchmarksEnabled()) {
+      const stopIfCisRevoked = (): boolean => {
+        if (record.origin.workflow !== "cis-remediation" || internalCisBenchmarksEnabled()) return false
         saveResult(deps, tenant, id, operation.key, {
           ...current,
           status: current.status === "writing" || current.status === "uncertain" ? "uncertain" : "failed",
           message: "CIS comparisons are coming soon. Internal CIS access ended before this operation was written.",
           at: deps.now().toISOString(),
         }, actor, `Stopped ${operation.name}: internal CIS access ended`)
-        break operations
+        return true
       }
+      if (stopIfCisRevoked()) break operations
       const entry = entries[operation.key]!
       const at = () => deps.now().toISOString()
       if (current.status === "uncertain" || current.status === "writing") {
-        const settled = await reconcile(graph, type, operation, current, entry, { body: captured[operation.key]?.body ?? null, sameNameIds: capturedNames[operation.key] ?? [] })
+        const settled = await reconcile(gated, type, operation, current, entry, { body: captured[operation.key]?.body ?? null, sameNameIds: capturedNames[operation.key] ?? [] })
+        if (stopIfCisRevoked()) break operations
         if (settled.decision === "verified") {
           saveResult(deps, tenant, id, operation.key, { ...current, status: "verified", objectId: settled.objectId, readBack: settled.readBack, message: "Reconciled from live state; not written again.", at: at() }, actor, `Reconciled ${operation.name}: verified without a repeat write`)
           continue
@@ -690,16 +706,19 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       } else if (!firstAttempt) {
         let observed: Observation | null = null
         try {
-          observed = await observe(graph, type, operation)
+          observed = await observe(gated, type, operation)
         } catch (error) {
+          if (stopIfCisRevoked()) break operations
           saveResult(deps, tenant, id, operation.key, { ...current, status: current.status, message: `The target could not be read before retrying: ${error instanceof Error ? error.message : String(error)}`, at: at() }, actor, `Could not re-check ${operation.name}`)
           continue
         }
+        if (stopIfCisRevoked()) break operations
         if (observed.fingerprint !== review.operationFingerprints[operation.key]) {
           saveResult(deps, tenant, id, operation.key, { ...current, status: "failed", message: "The object changed after approval. Nothing was written; create a fresh review.", at: at() }, actor, `${operation.name} changed after approval`)
           continue
         }
       }
+      if (stopIfCisRevoked()) break operations
       const attempt: OperationResult = { ...current, status: "writing", attempts: current.attempts + 1, message: null, readBack: null, at: at() }
       saveResult(deps, tenant, id, operation.key, attempt, actor, `Writing ${operation.name}`)
       const outcome = await writeOperation(writer, type, { action: operation.action, targetId: operation.targetId, proposed: entry.body, assignments: entry.assignments, current: captured[operation.key]?.body ?? null }, (createdId) => {
@@ -786,7 +805,7 @@ export async function previewRollback(deps: FeatureDeps, tenantId: string, id: s
   const record = getChangeSet(deps, tenantId, id)
   requireCisChangeSetEnabled(record.origin.workflow)
   const { inputs, manual } = inverseOperations(deps, tenantId, record)
-  const graph = await reader(deps, tenantId)
+  const graph = gatedGraph(await reader(deps, tenantId), record.origin.workflow)
   const operations: RollbackPreview["operations"] = []
   for (const input of inputs) {
     requireCisChangeSetEnabled(record.origin.workflow)
@@ -802,6 +821,7 @@ export async function previewRollback(deps: FeatureDeps, tenantId: string, id: s
     const diff = input.action === "update" && live && input.proposed ? diffConfigurations(type, sanitizeSnapshot(type, live).snapshot, input.proposed).entries : input.action === "create" && input.proposed ? diffConfigurations(type, null, input.proposed).entries : []
     operations.push({ key: input.key, action: input.action, name: input.name ?? String(input.proposed?.[type.nameKey] ?? ""), targetId: input.targetId ?? null, blocked: input.blocked, warnings, diff })
   }
+  requireCisChangeSetEnabled(record.origin.workflow)
   return {
     changeSetId: record.id,
     operations,

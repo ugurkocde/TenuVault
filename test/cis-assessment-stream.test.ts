@@ -203,6 +203,24 @@ describe("streamed CIS assessment", () => {
     expect(loadWorkspace(tenantId, "cis-benchmarks").history.length).toBe(before)
   })
 
+  it("does not request assignments after access is revoked during a settings read", async () => {
+    const base = graphFetch()
+    const calls: string[] = []
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      calls.push(String(url))
+      if (String(url).includes("/settings")) setInternalCisBenchmarksEnabled(false)
+      return base(url)
+    }))
+    const before = loadWorkspace(tenantId, "cis-benchmarks").history.length
+    const jobId = await startJob()
+    await new Promise(resolve => setTimeout(resolve, 30))
+    setInternalCisBenchmarksEnabled(true)
+    const failed = await pollDone(jobId)
+    expect(failed.phase).toBe("failed")
+    expect(calls.some(call => call.endsWith("/assignments"))).toBe(false)
+    expect(loadWorkspace(tenantId, "cis-benchmarks").history.length).toBe(before)
+  })
+
   it("returns 404 for an unknown jobId", async () => {
     vi.stubGlobal("fetch", graphFetch())
     await expect(handleFramework({ action: "assess-status", jobId: "no-such-job", since: 0 }))

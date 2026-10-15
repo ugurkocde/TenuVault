@@ -3,7 +3,7 @@ import type { FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
 import { featureRoute, FeatureError, optionalText, text, type Body } from "../route"
 import { applyChangeSet, approveChangeSet, previewChangeSet, rejectChangeSet } from "../change-sets/engine"
-import { applyCisRemediation, approveCisRemediation, cisChangeSet, cisRollback, createCisRollback, getCisRemediation, planCisRemediation, previewCisRemediation, previewCisRollback, requireCisBenchmarksEnabled, syncCisRemediation, type CisRemediationRecord } from "./engine"
+import { applyCisRemediation, approveCisRemediation, cisChangeSet, cisRollback, createCisRollback, getCisRemediation, planCisRemediation, previewCisRemediation, previewCisRollback, requireCisBenchmarksEnabled, syncCisRemediationOutcome, type CisRemediationRecord } from "./engine"
 import type { Finding } from "../../../shared/frameworks/policies"
 
 const idOf = (body: Body): string => {
@@ -43,12 +43,12 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     preview: async (context) => previewCisRemediation(deps, context.tenantId, idOf(context.body)),
     approve: async (context) => {
       const changeSet = await approveCisRemediation(deps, context.tenantId, idOf(context.body), { contentHash: hashField(context.body, "contentHash"), targetFingerprint: hashField(context.body, "targetFingerprint"), reviewer: optionalText(context.body, "reviewer", 200), note: optionalText(context.body, "note", 2000) }, context.actor)
-      return { deployment: syncCisRemediation(deps, context.tenantId, idOf(context.body)), changeSet }
+      return { deployment: syncCisRemediationOutcome(deps, context.tenantId, idOf(context.body)), changeSet }
     },
     reject: async (context) => {
       const changeSet = cisChangeSet(deps, context.tenantId, idOf(context.body))
       rejectChangeSet(deps, context.tenantId, changeSet.id, { reviewer: optionalText(context.body, "reviewer", 200), note: optionalText(context.body, "note", 2000) }, context.actor)
-      return { deployment: syncCisRemediation(deps, context.tenantId, idOf(context.body)) }
+      return { deployment: syncCisRemediationOutcome(deps, context.tenantId, idOf(context.body)) }
     },
     apply: async (context) => applyCisRemediation(deps, context.tenantId, idOf(context.body), { contentHash: hashField(context.body, "contentHash"), confirmed: context.body.confirm === true }, context.actor),
     retry: async (context) => applyCisRemediation(deps, context.tenantId, idOf(context.body), { contentHash: hashField(context.body, "contentHash"), confirmed: context.body.confirm === true }, context.actor),

@@ -75,12 +75,12 @@ export function getCisRemediation(deps: FeatureDeps, tenantId: string, id: strin
 }
 
 /**
- * Local status bookkeeping after an apply attempt. It performs no tenant or CIS
- * content operation, so it deliberately does not recheck current authorization:
- * revocation during an apply must not mask the recorded outcome of writes that
- * already happened. Public reads use syncCisRemediation below, which is gated.
+ * Local status bookkeeping after a completed approve, reject, or apply outcome.
+ * It performs no tenant or CIS content operation, so it deliberately does not
+ * recheck current authorization: revocation after the local outcome must not mask
+ * what was already recorded. Public reads use syncCisRemediation below, gated.
  */
-function syncCisRemediationRecord(deps: FeatureDeps, tenantId: string, id: string): Stored<CisRemediationRecord> {
+export function syncCisRemediationOutcome(deps: FeatureDeps, tenantId: string, id: string): Stored<CisRemediationRecord> {
   const record = loadCisRemediation(deps, tenantId, id)
   if (!record.changeSetId) return record
   const changeSet = deps.records.get<ChangeSetRecord>(DOMAINS.changeSets, tenantId, record.changeSetId)
@@ -90,7 +90,7 @@ function syncCisRemediationRecord(deps: FeatureDeps, tenantId: string, id: strin
 
 export function syncCisRemediation(deps: FeatureDeps, tenantId: string, id: string): Stored<CisRemediationRecord> {
   requireCisBenchmarksEnabled()
-  return syncCisRemediationRecord(deps, tenantId, id)
+  return syncCisRemediationOutcome(deps, tenantId, id)
 }
 
 function settingIdOf(setting: unknown): string | null {
@@ -250,8 +250,8 @@ export async function applyCisRemediation(deps: FeatureDeps, tenantId: string, i
   if (changeSet.operations.some((operation) => operation.setsAssignments)) throw new FeatureError("This benchmark deployment would set assignments. Plan it again; assignments are never copied in this flow.", 409)
   try {
     const applied = await applyChangeSet(deps, tenantId, deployment.changeSetId, input, actor)
-    return { deployment: syncCisRemediationRecord(deps, tenantId, id), changeSet: applied }
-  } catch (error) { syncCisRemediationRecord(deps, tenantId, id); throw error }
+    return { deployment: syncCisRemediationOutcome(deps, tenantId, id), changeSet: applied }
+  } catch (error) { syncCisRemediationOutcome(deps, tenantId, id); throw error }
 }
 
 export function cisChangeSet(deps: FeatureDeps, tenantId: string, id: string): Stored<ChangeSetRecord> {
