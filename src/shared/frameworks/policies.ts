@@ -107,6 +107,8 @@ export function hasChildInstances(value: Json): boolean {
 function leafValues(instance: RecordJson, path: string, out: Map<string, string>): Map<string, string> {
   const own = `${path}/${String(instance.settingDefinitionId)}`
   const strip = (value: Json, at: string): Json => {
+    // Only group collection entries (objects holding children) are keyed by position; simple value
+    // collections and empty arrays stay exact values of their parent, as the remediation merge treats them.
     if (Array.isArray(value) && value.length && value.every(entry => record(entry) && Array.isArray(entry.children))) {
       value.forEach((entry, index) => out.set(`${own}${at}[${index}]`, JSON.stringify(strip(entry, `${at}[${index}]`))))
       return null

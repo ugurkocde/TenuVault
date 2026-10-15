@@ -6,6 +6,7 @@ import type { Finding } from "../src/shared/frameworks/policies"
 import { fakeDeps, TENANT_A } from "./feature-helpers"
 import { FakeTenant, setting, wire } from "./feature-change-sets-fakes"
 import type { Item } from "../src/shared/intune/registry"
+import { rootMatches, type Json } from "../src/shared/frameworks/policies"
 
 const DEF_A = "fakebook_setting_alpha"
 const DEF_B = "fakebook_setting_beta"
@@ -412,6 +413,30 @@ describe("CIS remediation deploy", () => {
       ["fakebook_payload_other=fake-second"],
       ["fakebook_payload_other=fake-third"],
     ])
+  })
+
+  it.each([
+    ["clears a nested simple collection to the empty recommended list", [], ["fake-a", "fake-b"]],
+    ["replaces a nested simple collection with the recommended values exactly", ["fake-c"], ["fake-a", "fake-b"]],
+  ])("%s, and the comparison then reads the root as matching", async (_name, recommended, tenantValues) => {
+    const context = setup()
+    const group = "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance"
+    const list = (values: string[]): Item => ({ "@odata.type": "#microsoft.graph.deviceManagementConfigurationSimpleSettingCollectionInstance", settingDefinitionId: "fakebook_payload_list",
+      simpleSettingCollectionValue: values.map((value) => ({ "@odata.type": "#microsoft.graph.deviceManagementConfigurationStringSettingValue", value })) })
+    const flag = (value: string): Item => ({ "@odata.type": choice, settingDefinitionId: "fakebook_payload_flag", choiceSettingValue: { value, children: [] } })
+    const root = (children: Item[]): Item => ({ "@odata.type": group, settingDefinitionId: "fakebook_payload", groupSettingCollectionValue: [{ children }] })
+    const packRoot = root([list(recommended), flag("fake-on")])
+    const pack = [{ name: "Fakebook Payload", platforms: "windows10", technologies: "mdm", description: "synthetic", settings: [{ settingInstance: packRoot }] }]
+    const existing = context.tenant.addPolicy({ name: "Tenant Payload", settings: [{ settingInstance: root([list(tenantValues), flag("fake-on"), flag("fake-extra-is-ignored")].map((entry, index) => index === 2 ? { ...entry, settingDefinitionId: "fakebook_payload_extra" } : entry)) }] })
+    expect(rootMatches(packRoot as Json, (context.tenant.policies.get(existing.id as string)!.settings as Item[])[0]!.settingInstance as Json)).toBe(false)
+    const deployment = await planCisRemediation(context.deps, TENANT_A, { title: "Deploy", reference: "synthetic 1.0", policies: pack, findings: [finding({ key: "0:0", policyIndex: 0, settingIndex: 0, status: "Different", policyName: "Fakebook Payload", settingId: "fakebook_payload", observed: [{ policyId: existing.id as string, policyName: "Tenant Payload", value: null }] })], selectedFindingKeys: ["0:0"] }, "Admin")
+    const { preview } = await approveFlow(context, deployment.id)
+    await applyCisRemediation(context.deps, TENANT_A, deployment.id, { contentHash: preview.changeSet.contentHash, confirmed: true }, "Admin")
+    const instance = (context.tenant.policies.get(existing.id as string)!.settings as Item[])[0]!.settingInstance as Item
+    const children = ((instance.groupSettingCollectionValue as Item[])[0]!.children as Item[])
+    expect(((children.find((entry) => entry.settingDefinitionId === "fakebook_payload_list")!.simpleSettingCollectionValue as Item[]).map((entry) => entry.value))).toEqual(recommended)
+    expect(children.some((entry) => entry.settingDefinitionId === "fakebook_payload_extra")).toBe(true)
+    expect(rootMatches(packRoot as Json, instance as Json)).toBe(true)
   })
 
   it("counts operations against the change-set limit", async () => {

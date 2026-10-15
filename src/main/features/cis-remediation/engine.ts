@@ -124,8 +124,11 @@ const definitionOf = (value: unknown): string | null => isRecord(value) && typeo
 function mergeInstance(pack: Json, live: Json | undefined, keepExtra: boolean): Json {
   if (Array.isArray(pack)) {
     const merged = pack.map((entry, index) => mergeInstance(entry, Array.isArray(live) ? live[index] : undefined, keepExtra))
-    // Group collection entries are matched by position, as the comparison does; later live entries stay, in order.
-    if (keepExtra && Array.isArray(live) && live.length > pack.length && pack.every((entry) => isRecord(entry) && Array.isArray(entry.children))) merged.push(...live.slice(pack.length).map((entry) => structuredClone(entry)))
+    // Group collection entries (objects holding child instances) are matched by position, as the
+    // comparison does, and later live entries stay in order. Any other array, such as a simple
+    // value collection or an empty one, is a value: the pack array replaces the live one exactly.
+    const groupEntries = pack.length > 0 && pack.every((entry) => isRecord(entry) && Array.isArray(entry.children))
+    if (keepExtra && groupEntries && Array.isArray(live) && live.length > pack.length) merged.push(...live.slice(pack.length).map((entry) => structuredClone(entry)))
     return merged
   }
   if (!isRecord(pack)) return structuredClone(pack)

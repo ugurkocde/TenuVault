@@ -86,6 +86,16 @@ describe("grouped payload comparison", () => {
     expect(status(entries([child("one", "true"), text("two", "fake")], [text("other", "second entry")]))).toBe("Present")
     expect(status(entries([text("other", "first entry")], [child("one", "true"), text("two", "fake")]))).toBe("Different")
   })
+  it("compares nested simple value collections exactly, including an empty list", () => {
+    const list = (values: string[]) => ({ "@odata.type": "#microsoft.graph.deviceManagementConfigurationSimpleSettingCollectionInstance", settingDefinitionId: "fakebook_payload_list",
+      simpleSettingCollectionValue: values.map(value => ({ "@odata.type": "#microsoft.graph.deviceManagementConfigurationStringSettingValue", value })) })
+    const withList = (values: string[]) => parsePolicies(payload("Synthetic list", [list(values), child("one", "true")]))
+    const tenantWith = (values: string[]) => ({ ...parsePolicies(payload("Tenant payload", [list(values), child("one", "true"), text("extra", "kept")]))[0]!, id: liveId })
+    expect(comparePolicies(withList([]), [tenantWith([])])[0]?.status).toBe("Present")
+    expect(comparePolicies(withList([]), [tenantWith(["fake-a"])])[0]?.status).toBe("Different")
+    expect(comparePolicies(withList(["fake-a"]), [tenantWith(["fake-a", "fake-b"])])[0]?.status).toBe("Different")
+    expect(comparePolicies(withList(["fake-a", "fake-b"]), [tenantWith(["fake-a", "fake-b"])])[0]?.status).toBe("Present")
+  })
   it("keeps exact matching for roots without child setting instances", () => {
     const flat = (value: string, extra?: object) => ({ name: "Flat", platforms: "windows10", technologies: "mdm", description: "",
       settings: [{ settingInstance: { "@odata.type": type, settingDefinitionId: "fakebook_flat", choiceSettingValue: { value, children: [], ...extra } } }] })
