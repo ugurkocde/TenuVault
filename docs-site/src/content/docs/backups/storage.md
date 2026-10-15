@@ -44,7 +44,7 @@ TenuVault reads the inventory again after either action, and the notice disappea
 
 ## Backups in your Azure storage account
 
-Use your own storage account when you want backups off the admin's computer, for example to share them between admins. This needs Pro or MSP.
+Use your own storage account when you want backups off the admin's computer, for example to share them between admins. This needs Pro or MSP. If no storage account exists yet, [Create a storage account for TenuVault](/getting-started/create-storage-account/) covers the recommended settings, a setup script for your Azure administrator, and the role assignments for your admin group.
 
 Before you choose it:
 

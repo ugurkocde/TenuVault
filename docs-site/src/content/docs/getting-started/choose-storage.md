@@ -36,7 +36,7 @@ To use a different folder, such as a network share, change it in **Settings** > 
 On Community, this option is locked and marked **Pro**, with the note **Backups in your own Azure storage account: included in TenuVault Pro and MSP. Upgrade on the License page.** Select **See plans** to compare plans.
 :::
 
-You need an existing storage account in a subscription of the tenant you signed in to. TenuVault does not create Azure resources.
+You need an existing storage account in a subscription of the tenant you signed in to. TenuVault does not create Azure resources. If none exists yet, ask your Azure administrator to create one with [Create a storage account for TenuVault](/getting-started/create-storage-account/): the page has a script that creates the account and grants your admin group access in one run.
 
 1. Select **Your Azure storage account, encrypted**. TenuVault shows **Loading your storage accounts...** while it lists the storage accounts your account can see across your subscriptions.
 2. In **Storage account**, choose the account. Each entry shows its name, resource group and region.
@@ -47,7 +47,7 @@ You need an existing storage account in a subscription of the tenant you signed 
 
 | Message | What it means |
 | --- | --- |
-| **No storage accounts found that your account can see. Ask an Azure administrator to create one and grant you access.** | Your account cannot read any storage account in Azure. Ask for a storage account and a role that can read it, such as **Reader**. |
+| **No storage accounts found that your account can see. Ask an Azure administrator to create one and grant you access.** | Your account cannot read any storage account in Azure. Send your Azure administrator [Create a storage account for TenuVault](/getting-started/create-storage-account/): its script creates the account and grants your admin group **Reader** and **Storage Blob Data Contributor**. |
 | **You do not have write access to storage account &lt;name&gt;. Ask an Azure administrator for the "Storage Blob Data Contributor" role on it. New role assignments can take a few minutes to apply.** | Assign **Storage Blob Data Contributor** on the storage account to your account, wait a few minutes, then select **Check access** again. |
 | **Storage account &lt;name&gt; rejected the request from this network. Allow this computer's public IP address in the storage account's networking settings, or connect through a network it allows.** | The storage account firewall blocks this computer. This is a network rule, not a missing role. |
 | **Storage account &lt;name&gt; could not be reached.** | Check your network, proxy and access to `<name>.blob.core.windows.net`. |
