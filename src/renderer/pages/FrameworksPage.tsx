@@ -19,6 +19,7 @@ import { parseRecommendationList, type RecommendationList } from "../../shared/f
 import { cisReadinessCsv, cisReadinessJson, governanceExportName } from "../features/shared/governance-export"
 import { accumulateCisFindings, cisRunReceivedLabel, cisRunSteps, cisRunTallies, emptyCisRunAccumulation, resolveCisRunCompletion, type CisRunPack } from "../../shared/frameworks/cis-run"
 import { refreshInternalCisBenchmarks, useInternalCisBenchmarks } from "../lib/internal-cis"
+import { cachedCisCatalog, forgetCisCatalog, rememberCisCatalog } from "../lib/cis-catalog-cache"
 import { parsePolicies, remediationPayload, rootMatches, type Assessment, type BaselinePolicy, type Finding, type Observation } from "../../shared/frameworks/policies"
 import { summarizeSetting } from "../../shared/frameworks/setting-summary"
 import { CIS_FRAMEWORKS, type Plan } from "../../shared/plans"
@@ -348,7 +349,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   const excludeButton = useRef<HTMLButtonElement>(null)
   const [cisExceptionsOpen, setCisExceptionsOpen] = useState(false)
   const [cisRun, setCisRun] = useState<AssessJobSnapshot | null>(null)
-  const [cisCatalog, setCisCatalog] = useState<CisBenchmark[] | null>(null)
+  const [cisCatalog, setCisCatalog] = useState<CisBenchmark[] | null>(() => framework.id === CIS_BENCHMARKS_ID ? cachedCisCatalog(selectedTenant?.credentials?.tenantId) : null)
   const [cisCatalogMessage, setCisCatalogMessage] = useState("")
   const [setupRequested, setSetupRequested] = useState(false)
   const cisRunGeneration = useRef(0)
@@ -457,9 +458,11 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     try {
       const catalog = await request<CisCatalog>({ action: "cis-catalog", tenantId: credentials?.tenantId, frameworkId: framework.id })
       setCisCatalog(catalog.benchmarks)
+      if (credentials?.tenantId) rememberCisCatalog(credentials.tenantId, catalog.benchmarks)
       if (!catalog.benchmarks.length) setCisCatalogMessage("No benchmarks are available from the delivery service.")
     } catch (e) {
       setCisCatalog(null)
+      if (credentials?.tenantId) forgetCisCatalog(credentials.tenantId)
       setCisCatalogMessage(e instanceof Error ? e.message : "The available benchmarks could not be loaded.")
     } finally { setBusy("") }
   }
@@ -633,7 +636,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     {isCis && stage === "setup" && <section aria-labelledby="cis-delivered-title" className="mb-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
       <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="cis-delivered-title" className="text-xl font-medium tracking-tight">Benchmarks from TenuVault</h2><span className="text-sm text-gray-500">{cisCatalog ? `${cisCatalog.length} benchmarks available` : "Delivery service"}</span></div>
       <p className="mt-2 text-sm text-gray-600">Load a benchmark pack from the TenuVault delivery service. The pack is saved in encrypted storage on this device for the selected tenant.</p>
-      <div className="mt-4"><button type="button" className={primary} disabled={!!busy || !credentials} onClick={() => void loadCisCatalog()}>Load available benchmarks</button></div>
+      <div className="mt-4"><button type="button" className={primary} disabled={!!busy || !credentials} onClick={() => void loadCisCatalog()}>{cisCatalog ? "Refresh available benchmarks" : "Load available benchmarks"}</button></div>
       {busy && <p role="status" className="mt-4 text-sm text-blue-700">{busy}</p>}
       {busy && <div role="progressbar" aria-label={busy} className="mt-2 h-2 overflow-hidden rounded-full bg-gray-100"><div className="h-full w-1/3 animate-pulse rounded-full bg-primary" /></div>}
       {cisCatalogMessage && <p role="alert" className="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">{cisCatalogMessage}</p>}

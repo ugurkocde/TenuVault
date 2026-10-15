@@ -23,6 +23,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
 
 import { refreshInternalCisBenchmarks, resetInternalCisBenchmarks, useInternalCisBenchmarks } from "../../src/renderer/lib/internal-cis"
 import { LicenseProvider, useLicense } from "../../src/renderer/lib/license"
+import { cachedCisCatalog, clearCisCatalogs, forgetCisCatalog, rememberCisCatalog } from "../../src/renderer/lib/cis-catalog-cache"
 
 const roots: Root[] = []
 const containers: HTMLDivElement[] = []
@@ -127,5 +128,32 @@ describe("useInternalCisBenchmarks", () => {
     await expect(refreshInternalCisBenchmarks()).resolves.toBe(false)
     releaseFirst({ version: "0", platform: "darwin", trayIconLoaded: false, internalCisBenchmarks: true })
     await expect(stale).resolves.toBe(false)
+  })
+})
+
+describe("CIS catalog session cache", () => {
+  const catalog = [{ id: "fakebook-os", name: "Fakebook OS", version: "9.9.9", levels: [1, 2] as (1 | 2)[] }]
+  afterEach(() => clearCisCatalogs())
+
+  it("keeps the last catalog per tenant in memory and forgets one tenant on request", () => {
+    expect(cachedCisCatalog("AAAA")).toBeNull()
+    expect(cachedCisCatalog(undefined)).toBeNull()
+    rememberCisCatalog("AAAA", catalog)
+    rememberCisCatalog("bbbb", [])
+    expect(cachedCisCatalog("aaaa")).toEqual(catalog)
+    expect(cachedCisCatalog("BBBB")).toEqual([])
+    forgetCisCatalog("aaaa")
+    expect(cachedCisCatalog("aaaa")).toBeNull()
+    expect(cachedCisCatalog("bbbb")).toEqual([])
+  })
+
+  it("clears every cached catalog when internal CIS access is revoked", async () => {
+    let internal = true
+    appInfo.mockImplementation(async () => ({ version: "0", platform: "darwin", trayIconLoaded: false, internalCisBenchmarks: internal }))
+    await refreshInternalCisBenchmarks()
+    rememberCisCatalog("aaaa", catalog)
+    internal = false
+    await refreshInternalCisBenchmarks()
+    expect(cachedCisCatalog("aaaa")).toBeNull()
   })
 })
