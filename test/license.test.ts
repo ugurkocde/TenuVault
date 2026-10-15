@@ -303,6 +303,9 @@ describe("LicenseService key expiry", () => {
   it("reports CIS internal access only for a valid token carrying the server-issued claim", () => {
     storeLicense(token({ cis: "internal" }))
     expect(service().cisInternal()).toBe(true)
+    expect(service({ tenantPresent: () => false }).cisInternal()).toBe(false)
+    storeLicense(token({ cis: "internal", exp: Math.floor(T0 / 1000) - 1 }))
+    expect(service().cisInternal()).toBe(false)
     storeLicense(token())
     expect(service().cisInternal()).toBe(false)
   })

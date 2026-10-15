@@ -39,6 +39,9 @@ describe("internal CIS Benchmarks flag", () => {
       setFrameworkStore({ get: k => data.get(k) ?? null, set: (k, v) => { data.set(k, v) }, delete: k => { data.delete(k) } })
       await expect(handleFramework({ action: "workspace-load", frameworkId: "cis-benchmarks", tenantId }))
         .resolves.toMatchObject({ frameworkId: "cis-benchmarks" })
+      setInternalCisBenchmarksProvider(() => { throw new Error("license unavailable") })
+      await expect(handleFramework({ action: "workspace-load", frameworkId: "cis-benchmarks", tenantId }))
+        .rejects.toMatchObject({ status: 403, message: "CIS comparisons are coming soon." })
     } finally {
       delete process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS
       setInternalCisBenchmarksProvider(null)

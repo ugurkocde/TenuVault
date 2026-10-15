@@ -33,7 +33,7 @@ interface Entitlement {
   exp: number
   /** Version 2: license key expiry in Unix seconds, absent for renewing subscriptions. */
   keyExp?: number
-  /** Server-issued internal CIS Benchmarks access for allowlisted installations, pre-certification only. */
+  /** Server-issued internal CIS Benchmarks access for a validated internal license on an allowlisted installation, pre-certification only. */
   cis?: "internal"
 }
 
@@ -940,7 +940,9 @@ export class LicenseService {
   cisInternal(): boolean {
     this.load()
     if (!this.state) return false
-    return Object.keys(this.state.activations).some((tenantId) => this.valid(tenantId)?.cis === "internal")
+    return Object.keys(this.state.activations).some(
+      (tenantId) => this.tenantPresent(tenantId) && this.valid(tenantId)?.cis === "internal",
+    )
   }
 
   /** The license state for the signed-in tenants plus every tenant with a stored activation. */
