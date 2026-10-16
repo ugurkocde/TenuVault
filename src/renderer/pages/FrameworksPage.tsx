@@ -11,13 +11,14 @@ import { CIS_BENCHMARKS_ID, effectiveFrameworks, internalKitImportEnabled, searc
 import { convertKit, readKitZip, suggestedKitBenchmark, type KitConversion, type KitFile, type KitLevel } from "../../shared/frameworks/cis-kit"
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
 import { distinctExclusions, excludedFindingKeys, exceptionsByHeadline, exclusionsText, formatRate, headlineLabel, levelCheckSummary, levelHeadline, listedExceptions, readinessFor, unassignedText } from "../../shared/frameworks/cis-readiness"
-import { recommendationLabel, recommendationsForFinding, recommendationTotals, type PackRecommendation } from "../../shared/frameworks/cis-recommendations"
+import { recommendationLabel, recommendationsForFinding, recommendationTotals, type PackRecommendation, type RecommendationResult } from "../../shared/frameworks/cis-recommendations"
+import { filterManualItems, recommendationResultView, type RecommendationResultFilter } from "../../shared/frameworks/recommendation-filter"
 import { exceptionKey, isActive, localDate } from "../../shared/frameworks/cis-exceptions"
 import { benchmarkTitle, cisExportFileName, deviatingFindingKeys, isSelectableFinding, packBenchmarkName, referenceDisplayName, groupFindingsByPolicy, groupObservationsByValue, policyDisplayName, settingDisplayName, statusMixText, trendSummaryText } from "../../shared/frameworks/cis-display"
 import { cisFlowSteps, cisStage, isKitPackReference, kitLevelForPolicy, packSettingCount } from "../../shared/frameworks/cis-flow"
 import { cisDriftSignals, cisReadinessTrend, exclusionUse, sparklineSegments, trendChangeText, trendExclusionsText, trendGroups, trendRate, type CisTrendPoint } from "../../shared/frameworks/cis-trend"
 import { cisPortfolioRows, portfolioBenchmarks, portfolioMembers, portfolioRate, type CisPortfolioEntry } from "../../shared/frameworks/cis-portfolio"
-import { parseRecommendationList, type RecommendationList } from "../../shared/frameworks/cis-manual"
+import { parseRecommendationList, type ManualItemView, type RecommendationList } from "../../shared/frameworks/cis-manual"
 import { cisReadinessCsv, cisReadinessJson } from "../features/shared/governance-export"
 import { Notice, saveFile, useSaveNotice } from "../components/oib/notices"
 import { cachedCisSettingNames, loadCisSettingNames, settingDefinitionIdsIn } from "../lib/cis-setting-names"
@@ -1152,25 +1153,12 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
           {readiness.levels.map(level => level.recommendations.length > 0 && <details key={`recommendations-${level.level}`} className="mt-2 border-t border-gray-100">
             <summary className="cursor-pointer py-3 text-sm font-medium text-gray-800">Recommendation results, Level {level.level}: {(({ passed, failed, review, notAssessed }) => `${passed} passed, ${failed} failed${review ? `, ${review} to review` : ""}, ${notAssessed} not assessed`)(recommendationTotals(level.recommendations))}</summary>
             <p className="text-xs text-gray-500">Each mapped setting is judged on its own value across every tenant policy that holds it. A recommendation passes only when every setting it names is in the pack and Present, and fails when any is Different or Missing. Not assessed means the pack does not hold every setting it names.</p>
-            <ul className="mt-2 max-h-80 divide-y divide-gray-100 overflow-auto border-y border-gray-100">{level.recommendations.map(item => <li key={item.id} className="flex items-start gap-3 py-2">
-              <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium ${item.result === "Pass" ? "bg-green-50 text-green-800" : item.result === "Fail" ? "bg-red-50 text-red-800" : "bg-gray-100 text-gray-700"}`}>{item.result}</span>
-              <span className="min-w-0 flex-1 text-sm text-gray-800"><span className="font-medium">{item.id}</span> {item.title}<span className="block break-all font-mono text-[11px] leading-4 text-gray-500">{item.settings.map(setting => `${setting.id} ${setting.status}`).join("; ")}</span></span>
-            </li>)}</ul>
+            <RecommendationResultList level={level.level} items={level.recommendations} names={settingNames} />
           </details>)}
           {readiness.levels.map(level => level.manual.length > 0 && <div key={`manual-${level.level}`} className="mt-4">
             <h4 className="font-medium text-gray-900">Manual, Level {level.level}</h4>
             <p className="mt-1 text-xs text-gray-500">{benchmarkTitle(readiness.benchmark, readiness.benchmarkName)} {readiness.version}, Level {level.level}. These items are not assessed automatically.</p>
-            <div className="mt-2 divide-y divide-gray-100 border-y border-gray-100">{level.manual.map(item => <details key={item.identifier} className="py-3">
-              <summary className="cursor-pointer text-sm"><span className="font-medium text-gray-800">{item.identifier}</span>{item.title && <span className="ml-2 text-gray-700">{item.title}</span>}<span className="ml-2 inline-block rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-700">Manual</span></summary>
-              <div className="mt-3 space-y-2 text-sm text-gray-700">
-                {item.hasText ? <>
-                  {item.description && <p><strong className="font-medium text-gray-900">Description:</strong> {item.description}</p>}
-                  {item.impact && <p><strong className="font-medium text-gray-900">Impact:</strong> {item.impact}</p>}
-                  {item.audit && <p><strong className="font-medium text-gray-900">Audit:</strong> {item.audit}</p>}
-                  {item.remediation && <p><strong className="font-medium text-gray-900">Remediation:</strong> {item.remediation}</p>}
-                </> : <p><a href={readiness.manualFallbackUrl} className="text-blue-700 hover:underline" onClick={event => { event.preventDefault(); void bridge.app.openExternal(readiness.manualFallbackUrl) }}>{readiness.manualFallback}</a></p>}
-              </div>
-            </details>)}</div>
+            <ManualList level={level.level} items={level.manual} fallback={readiness.manualFallback} fallbackUrl={readiness.manualFallbackUrl} />
           </div>)}
           <details ref={exclusionsPanel} open={cisExceptionsOpen} onToggle={e => setCisExceptionsOpen((e.target as HTMLDetailsElement).open)} className="mt-2 scroll-mt-6 border-t border-gray-100">
             <summary id="cis-exclusions" className="cursor-pointer py-3 text-sm font-medium text-gray-800">{(() => {
@@ -1289,6 +1277,49 @@ function targetingText(observation: Observation): string {
   if (observation.targeting.state === "unassigned") return "Targeting: Unassigned"
   if (observation.targeting.state === "review") return "Targeting: Assigned, needs review"
   return "Targeting: Assigned"
+}
+
+/** One Level's recommendation results with search over ID, title, setting IDs and setting names, and result chips. */
+function RecommendationResultList({ level, items, names }: { level: number; items: RecommendationResult[]; names: SettingNames }) {
+  const [query, setQuery] = useState("")
+  const [result, setResult] = useState<RecommendationResultFilter>("All")
+  const view = recommendationResultView(items, query, result, names)
+  return <>
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      <SearchInput label={`Search Level ${level} recommendations`} value={query} onChange={setQuery} placeholder="Search ID, title or setting" />
+      <FilterChips label={`Filter Level ${level} recommendations by result`} value={view.result} onChange={setResult} options={view.options} />
+      <span aria-live="polite" className="ml-auto text-xs text-gray-500">{view.filtering ? `${view.shown.length} of ${items.length} recommendations` : ""}</span>
+    </div>
+    <ul className="mt-2 max-h-80 divide-y divide-gray-100 overflow-auto border-y border-gray-100">{view.shown.map(item => <li key={item.id} className="flex items-start gap-3 py-2">
+      <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium ${item.result === "Pass" ? "bg-green-50 text-green-800" : item.result === "Fail" ? "bg-red-50 text-red-800" : "bg-gray-100 text-gray-700"}`}>{item.result}</span>
+      <span className="min-w-0 flex-1 text-sm text-gray-800"><span className="font-medium">{item.id}</span> {item.title}<span className="block text-xs leading-5 text-gray-600">{item.settings.map(setting => `${settingDisplayName(setting.id, names)}: ${setting.status}`).join("; ")}</span><span className="block break-all font-mono text-[11px] leading-4 text-gray-400">{item.settings.map(setting => setting.id).join("; ")}</span></span>
+    </li>)}
+      {!view.shown.length && <li className="py-3 text-center text-sm text-gray-500">No recommendations match the filters.</li>}</ul>
+  </>
+}
+
+/** One Level's manual items with search over identifier, title and benchmark text. */
+function ManualList({ level, items, fallback, fallbackUrl }: { level: number; items: ManualItemView[]; fallback: string; fallbackUrl: string }) {
+  const [query, setQuery] = useState("")
+  const shown = filterManualItems(items, query)
+  return <>
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      <SearchInput label={`Search Level ${level} manual items`} value={query} onChange={setQuery} placeholder="Search ID, title or text" />
+      <span aria-live="polite" className="ml-auto text-xs text-gray-500">{shown !== items ? `${shown.length} of ${items.length} manual items` : ""}</span>
+    </div>
+    <div className="mt-2 divide-y divide-gray-100 border-y border-gray-100">{shown.map(item => <details key={item.identifier} className="py-3">
+      <summary className="cursor-pointer text-sm"><span className="font-medium text-gray-800">{item.identifier}</span>{item.title && <span className="ml-2 text-gray-700">{item.title}</span>}<span className="ml-2 inline-block rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-700">Manual</span></summary>
+      <div className="mt-3 space-y-2 text-sm text-gray-700">
+        {item.hasText ? <>
+          {item.description && <p><strong className="font-medium text-gray-900">Description:</strong> {item.description}</p>}
+          {item.impact && <p><strong className="font-medium text-gray-900">Impact:</strong> {item.impact}</p>}
+          {item.audit && <p><strong className="font-medium text-gray-900">Audit:</strong> {item.audit}</p>}
+          {item.remediation && <p><strong className="font-medium text-gray-900">Remediation:</strong> {item.remediation}</p>}
+        </> : <p><a href={fallbackUrl} className="text-blue-700 hover:underline" onClick={event => { event.preventDefault(); void bridge.app.openExternal(fallbackUrl) }}>{fallback}</a></p>}
+      </div>
+    </details>)}
+      {!shown.length && <p className="py-3 text-center text-sm text-gray-500">No manual items match the search.</p>}</div>
+  </>
 }
 
 /**
