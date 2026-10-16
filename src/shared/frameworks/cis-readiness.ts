@@ -28,6 +28,13 @@ export interface CisLevelReadiness {
    * finding (each exception keeps its own policy Level).
    */
   exceptions: CisException[]
+  /**
+   * The exception identities (exceptionKey) this Level's headline judges, before dates apply: on the
+   * settings basis its non-Present findings, on the recommendation basis the non-Present findings of
+   * the failing settings of its recommendations. An applicable exclusion counts exactly when it is
+   * in this scope, and an unused one is explained by the headline whose scope holds it.
+   */
+  exclusionScope: string[]
   adjustedPassRate: number | null
   /** The date exclusions were judged on, as YYYY-MM-DD; see readinessFor. */
   exclusionsAsOf: string
@@ -309,10 +316,13 @@ function measure(assessment: Assessment, policies: BaselinePolicy[], denominator
     const levelExceptions = [...applicableByKey.values()].filter(exception => exception.level === level && findingKeys.has(keyOf(exception)))
     const exceptedKeys = new Set(levelExceptions.map(keyOf))
     const levelRecommendations = recommendations.filter(result => result.level === level)
-    // On the recommendation basis the exclusions on the open findings of this Level's recommendations count, wherever those findings sit.
-    const recommendationExceptions = [...new Map(levelRecommendations.flatMap(result => result.settings.flatMap(setting => setting.findingKeys))
-      .map(key => findingByKey.get(key)).filter(finding => finding && finding.status !== "Present")
-      .map(finding => applicableByKey.get(findingKey(finding!))).filter((exception): exception is CisException => !!exception)
+    // On the recommendation basis the exclusions on the open findings of the failing settings of this
+    // Level's recommendations count, wherever those findings sit. A setting a recommendation names
+    // that passes contributes none, even when a sibling in its shared root fails for another Level.
+    const recommendationScope = new Set(levelRecommendations.flatMap(result => result.settings.filter(setting => setting.status === "Missing" || setting.status === "Different" || setting.status === "Review").flatMap(setting => setting.findingKeys))
+      .map(key => findingByKey.get(key)).filter(finding => finding && finding.status !== "Present").map(finding => findingKey(finding!)))
+    const recommendationExceptions = [...new Map([...recommendationScope]
+      .map(key => applicableByKey.get(key)).filter((exception): exception is CisException => !!exception)
       .map(exception => [exception.id, exception] as const)).values()]
     const excepted = findings.filter(finding => finding.status !== "Present" && exceptedKeys.has(exceptionKey(benchmark, version, level, finding.policyName, finding.settingId))).length
     // CIS counts settings in unassigned policies as Present; this says how many of them there are.
@@ -325,6 +335,7 @@ function measure(assessment: Assessment, policies: BaselinePolicy[], denominator
       passRate: findings.length ? count("Present") / findings.length : null,
       excepted,
       exceptions: levelRecommendations.length ? recommendationExceptions : levelExceptions,
+      exclusionScope: [...(levelRecommendations.length ? recommendationScope : findingKeys)],
       adjustedPassRate: findings.length ? (count("Present") + excepted) / findings.length : null,
       exclusionsAsOf: date,
       presentInUnassigned: withTargeting ? presentFindings.filter(finding => finding.observed.length > 0 && finding.observed.every(observation => observation.targeting?.state === "unassigned")).length : null,
@@ -460,8 +471,12 @@ export function listedExceptions(summary: CisReadinessSummary, assessment: Asses
   const groups = new Map<string, Map<KitLevel, ListedException[]>>([[summary.benchmark, new Map(summary.levels.map(level => [level.level, []]))]])
   for (const exception of exceptions ?? []) {
     const current = exception.benchmark === summary.benchmark
-    const asOf = summary.levels.find(level => level.level === exception.level)?.exclusionsAsOf ?? todayISO
-    const statuses = statusByKey.get(exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId)) ?? []
+    const identity = exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId)
+    // The reason comes from the headline that would count it, on that headline's date: a Level 2
+    // exclusion a Level 1 recommendation names is judged on the Level 1 date.
+    const relevant = summary.levels.find(level => (level.exclusionScope ?? []).includes(identity))
+    const asOf = (relevant ?? summary.levels.find(level => level.level === exception.level))?.exclusionsAsOf ?? todayISO
+    const statuses = statusByKey.get(identity) ?? []
     const [state, note]: [ListedExceptionState, string | null] = inUse.has(exception.id) ? ["in-use", null]
       : !current ? ["benchmark", "Not used by this assessment"]
       : exception.version !== summary.version ? ["version", `Not in use: version ${exception.version}`]
@@ -479,6 +494,19 @@ export function listedExceptions(summary: CisReadinessSummary, assessment: Asses
   }
   return [...groups].map(([benchmark, levels]) => ({ benchmark, current: benchmark === summary.benchmark, levels: [...levels].sort(([a], [b]) => a - b).map(([level, items]) => ({ level, items })) }))
     .sort((a, b) => Number(b.current) - Number(a.current) || a.benchmark.localeCompare(b.benchmark))
+}
+
+/**
+ * The stored exclusions of one benchmark listed under the headline they affect: one in use under
+ * every Level whose headline counts it, whatever its own policy Level, and one not in use under
+ * its own policy Level. A Level that counts N exclusions therefore lists those N.
+ */
+export function exceptionsByHeadline(group: ListedExceptionGroup): { level: KitLevel; items: ListedException[] }[] {
+  const byLevel = new Map<KitLevel, ListedException[]>(group.levels.map(entry => [entry.level, []]))
+  for (const item of group.levels.flatMap(entry => entry.items)) {
+    for (const level of item.state === "in-use" && item.usedHere.length ? item.usedHere : [item.exception.level]) byLevel.set(level, [...(byLevel.get(level) ?? []), item])
+  }
+  return [...byLevel].sort(([a], [b]) => a - b).map(([level, items]) => ({ level, items }))
 }
 
 /** Keys of the findings an exclusion in use covers: they show an Excluded badge in the findings list. */

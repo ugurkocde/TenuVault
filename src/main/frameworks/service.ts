@@ -18,6 +18,10 @@ import { tenantWriteLabel, withTenantWrite } from "../features/write-lock"
 import { CisContentError, fetchCisCatalog, fetchCisPack } from "./cis-content"
 import { BENCHMARK_ID_PATTERN, MAX_CIS_BENCHMARK_ID_LENGTH, VERSION_PATTERN, type CisLevel } from "../../shared/frameworks/cis-content"
 import { retryableStatus, retryDelay, sleep } from "../graph-retry"
+import { cisExportFileName, knownBenchmarkName } from "../../shared/frameworks/cis-display"
+import { MAX_DEFINITIONS } from "../../shared/intune/drift-format"
+import { readSettingNames } from "../../portal/lib/drift/setting-names"
+import { graphCaller } from "../../portal/lib/policies/graph-restore"
 
 const GRAPH = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies"
 interface Run { assessment: Assessment; policies: BaselinePolicy[]; fingerprint: string; expires: number; consumed: boolean }
@@ -45,6 +49,13 @@ let cisEntitlementProvider: ((tenantId: string) => string | null) | null = null
  * bearer credential to the delivery service. Without a provider, delivery fails closed.
  */
 export function setCisEntitlementProvider(provider: ((tenantId: string) => string | null) | null): void { cisEntitlementProvider = provider }
+let exportSaver: ((file: ExportFile) => Promise<{ saved: boolean; path?: string }>) | null = null
+/**
+ * Bootstrap hook that saves a framework export through the native Save dialog in the main
+ * process. A request with `save: "dialog"` answers with the outcome instead of the file, so a
+ * large export is never sent to the renderer and back.
+ */
+export function setFrameworkExportSaver(saver: ((file: ExportFile) => Promise<{ saved: boolean; path?: string }>) | null): void { exportSaver = saver }
 function cisEntitlementToken(tenantId: string): string | null {
   try { return cisEntitlementProvider?.(tenantId) ?? null } catch { return null }
 }
@@ -374,13 +385,17 @@ async function exportWorkspace(body: RecordJson, workspace: FrameworkWorkspace):
   requireEnabledFramework(workspace.frameworkId)
   const context = { exportedAt: new Date().toISOString(), tenantName: tenantLabel(body.tenantName) }
   const base = `framework-${workspace.frameworkId}`
+  // CIS files are named for the benchmark, the tenant and the day, so a saved file says what it holds.
+  const cis = workspace.frameworkId === "cis-benchmarks"
+  const cisName = (reference: string, benchmarkName: string | null, part: string, extension: string) => cisExportFileName({ reference, benchmarkName, part, tenantName: context.tenantName, date: localDate(), extension })
   if (body.action === "workspace-json" && body.runId === undefined) {
     if (!workspace.history.length) throw new FrameworkError("No saved assessment to export.", 404)
-    return { file: { name: `${base}-history.json`, type: "application/json", encoding: "utf8", data: workspaceHistoryJSON(workspace.history, context) } }
+    return { file: { name: cis ? cisName("", null, "saved assessments", "json") : `${base}-history.json`, type: "application/json", encoding: "utf8", data: workspaceHistoryJSON(workspace.history, context) } }
   }
   const saved = workspace.history.find(entry => entry.assessment.runId === body.runId)
   if (!saved) throw new FrameworkError("Saved assessment not found.", 404)
   const name = `${base}-${saved.assessment.runId}`
+  const savedName = (part: string, extension: string) => cis ? cisName(saved.assessment.reference, readinessBenchmarkName(saved.policies), part, extension) : `${name}.${extension}`
   if (body.action === "workspace-cis-pdf") {
     if (workspace.frameworkId !== "cis-benchmarks") throw new FrameworkError("CIS readiness reports are available for CIS Benchmarks assessments only.", 400)
     let denominator: DenominatorEntry[] | undefined
@@ -393,13 +408,58 @@ async function exportWorkspace(body: RecordJson, workspace: FrameworkWorkspace):
     const summary = readinessFor(saved, workspace, localDate(), denominator)
     const { generateCisReadinessPDF } = await import("../../shared/compliance/report-pdf")
     const pdf = generateCisReadinessPDF(summary, { exportedAt: context.exportedAt, tenantName: context.tenantName, tenantId: workspace.tenantId, assessedAt: saved.assessment.assessedAt, runId: saved.assessment.runId }, await pdfBrandingFor(workspace.tenantId))
-    return { file: { name: `${name}.pdf`, type: "application/pdf", encoding: "base64", data: Buffer.from(pdf).toString("base64") } }
+    return { file: { name: savedName("readiness report", "pdf"), type: "application/pdf", encoding: "base64", data: Buffer.from(pdf).toString("base64") } }
   }
-  if (body.action === "workspace-csv") return { file: { name: `${name}.csv`, type: "text/csv;charset=utf-8", encoding: "utf8", data: `\uFEFF${workspaceExportCSV(saved, context)}` } }
-  if (body.action === "workspace-json") return { file: { name: `${name}.json`, type: "application/json", encoding: "utf8", data: workspaceExportJSON(saved, context) } }
+  if (body.action === "workspace-csv") return { file: { name: savedName("findings", "csv"), type: "text/csv;charset=utf-8", encoding: "utf8", data: `\uFEFF${workspaceExportCSV(saved, context, cis ? { layout: "table" } : {})}` } }
+  if (body.action === "workspace-json") return { file: { name: savedName("findings", "json"), type: "application/json", encoding: "utf8", data: workspaceExportJSON(saved, context) } }
   const { generateWorkspaceAssessmentPDF } = await import("../../shared/compliance/report-pdf")
   return { file: { name: `${name}.pdf`, type: "application/pdf", encoding: "base64", data: Buffer.from(generateWorkspaceAssessmentPDF(saved, context, await pdfBrandingFor(workspace.tenantId))).toString("base64") } }
 }
+
+/** The catalog display name stamped on a saved pack, or null. */
+function readinessBenchmarkName(policies: BaselinePolicy[]): string | null {
+  for (const policy of policies) if (typeof policy.provenance?.benchmarkName === "string" && policy.provenance.benchmarkName) return policy.provenance.benchmarkName
+  return null
+}
+
+/** Setting definition IDs a CIS view asks names for: Settings Catalog IDs only, at most MAX_DEFINITIONS. */
+function settingDefinitionIds(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new FrameworkError("Provide the setting definition IDs to name.")
+  return [...new Set(value.filter((id): id is string => typeof id === "string" && id.length <= 400 && /^[\w.~\-{}]+$/.test(id)))].slice(0, MAX_DEFINITIONS)
+}
+
+/**
+ * Validates one new CIS exception against the workspace and appends it, without saving. Refuses an
+ * expired date, a full list, a second active exception for one identity and a finding no saved
+ * assessment holds, each with the message the admin sees.
+ */
+function addCisException(workspace: FrameworkWorkspace, body: RecordJson, today: string): CisException {
+  let input: ReturnType<typeof validateNewException>
+  try { input = validateNewException(body) }
+  catch (error) { throw new FrameworkError(error instanceof Error ? error.message : "The exception is invalid.") }
+  // Dates are local, like the expiry date input: an exception is active through its expiry date, so today is the earliest.
+  if (!isDateOnly(input.expiresOn) || input.expiresOn < today) throw new FrameworkError("Provide an expiry date of today or later.")
+  const existing = workspace.exceptions ?? []
+  if (existing.length >= MAX_EXCEPTIONS) throw new FrameworkError(`Exceptions must contain at most ${MAX_EXCEPTIONS} entries. Remove an exception before adding another.`)
+  const newKey = exceptionKey(input.benchmark, input.version, input.level, input.policyName, input.settingId)
+  if (existing.some(exception => isActive(exception, today) && exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId) === newKey)) throw new FrameworkError("An active exception already exists for this finding.", 409)
+  const matchesFinding = workspace.history.some(entry => entry.assessment.findings.some(finding => {
+    const policy = entry.policies[finding.policyIndex]
+    if (!policy) return false
+    const provenance = policy.provenance ?? {}
+    const bench = typeof provenance.benchmark === "string" ? provenance.benchmark : ""
+    const ver = typeof provenance.version === "string" ? provenance.version : ""
+    const lvl = typeof provenance.level === "string" && provenance.level.includes("2") ? 2 : 1
+    return bench === input.benchmark && ver === input.version && lvl === input.level && finding.policyName === input.policyName && finding.settingId === input.settingId
+  }))
+  if (!matchesFinding) throw new FrameworkError("No saved assessment finding matches this exception. Run an assessment for this benchmark first.")
+  const exception: CisException = { ...input, id: randomUUID(), createdAt: new Date().toISOString() }
+  workspace.exceptions = [...existing, exception]
+  return exception
+}
+
+/** Most findings excluded in one batch request; the exception limit applies as well. */
+const MAX_EXCEPTION_BATCH = 500
 
 export async function handleFramework(body: RecordJson): Promise<unknown> {
   const legacy = typeof body.frameworkId === "string" && LEGACY_FRAMEWORKS.has(body.frameworkId)
@@ -441,7 +501,12 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       }
     }
     const workspace = loadWorkspace(body.tenantId, body.frameworkId)
-    if (["workspace-pdf", "workspace-csv", "workspace-json", "workspace-cis-pdf"].includes(body.action)) return exportWorkspace(body, workspace)
+    if (["workspace-pdf", "workspace-csv", "workspace-json", "workspace-cis-pdf"].includes(body.action)) {
+      const exported = await exportWorkspace(body, workspace)
+      if (body.save !== "dialog") return exported
+      if (!exportSaver) throw new FrameworkError("Saving exports is not available.", 500)
+      return { name: exported.file.name, ...(await exportSaver(exported.file)) }
+    }
     if (body.action === "workspace-save") {
       if (typeof body.reference !== "string" || body.reference.length > 200) throw new FrameworkError("Provide a source version up to 200 characters.")
       workspace.policies = Array.isArray(body.policies) && !body.policies.length ? [] : parsePolicies(body.policies)
@@ -463,29 +528,23 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       for (const [id, run] of runs) if (run.assessment.tenantId === tenantKey && run.assessment.frameworkId === body.frameworkId && removed.has(id)) runs.delete(id)
     } else if (body.action === "workspace-cis-exception-add") {
       if (body.frameworkId !== "cis-benchmarks") throw new FrameworkError("Exceptions are available for CIS Benchmarks only.")
-      let input: ReturnType<typeof validateNewException>
-      try { input = validateNewException(body) }
-      catch (error) { throw new FrameworkError(error instanceof Error ? error.message : "The exception is invalid.") }
-      // Dates are local, like the expiry date input: an exception is active through its expiry date, so today is the earliest.
-      const today = localDate()
-      if (!isDateOnly(input.expiresOn) || input.expiresOn < today) throw new FrameworkError("Provide an expiry date of today or later.")
-      const existing = workspace.exceptions ?? []
-      if (existing.length >= MAX_EXCEPTIONS) throw new FrameworkError(`Exceptions must contain at most ${MAX_EXCEPTIONS} entries. Remove an exception before adding another.`)
-      const newKey = exceptionKey(input.benchmark, input.version, input.level, input.policyName, input.settingId)
-      if (existing.some(exception => isActive(exception, today) && exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId) === newKey)) throw new FrameworkError("An active exception already exists for this finding.", 409)
-      const matchesFinding = workspace.history.some(entry => entry.assessment.findings.some(finding => {
-        const policy = entry.policies[finding.policyIndex]
-        if (!policy) return false
-        const provenance = policy.provenance ?? {}
-        const bench = typeof provenance.benchmark === "string" ? provenance.benchmark : ""
-        const ver = typeof provenance.version === "string" ? provenance.version : ""
-        const lvl = typeof provenance.level === "string" && provenance.level.includes("2") ? 2 : 1
-        return bench === input.benchmark && ver === input.version && lvl === input.level && finding.policyName === input.policyName && finding.settingId === input.settingId
-      }))
-      if (!matchesFinding) throw new FrameworkError("No saved assessment finding matches this exception. Run an assessment for this benchmark first.")
-      const exception: CisException = { ...input, id: randomUUID(), createdAt: new Date().toISOString() }
-      workspace.exceptions = [...existing, exception]
+      addCisException(workspace, body, localDate())
       saveWorkspace(workspace)
+    } else if (body.action === "workspace-cis-exception-add-batch") {
+      // Every finding is checked on its own and the accepted ones are saved in one write, so a
+      // refused finding neither stops the others nor leaves a half saved list.
+      if (body.frameworkId !== "cis-benchmarks") throw new FrameworkError("Exceptions are available for CIS Benchmarks only.")
+      if (!Array.isArray(body.items) || !body.items.length || body.items.length > MAX_EXCEPTION_BATCH) throw new FrameworkError(`Select between 1 and ${MAX_EXCEPTION_BATCH} findings to exclude.`)
+      const today = localDate()
+      const { owner, reason, expiresOn } = body
+      const results = body.items.map(item => {
+        try {
+          if (!record(item)) throw new FrameworkError("The finding to exclude is invalid.")
+          return { ok: true as const, exceptionId: addCisException(workspace, { ...item, owner, reason, expiresOn } as RecordJson, today).id }
+        } catch (error) { return { ok: false as const, error: error instanceof Error ? error.message : "The finding could not be excluded." } }
+      })
+      if (results.some(result => result.ok)) saveWorkspace(workspace)
+      return { workspace: workspaceView(loadWorkspace(body.tenantId, body.frameworkId)), results }
     } else if (body.action === "workspace-cis-exception-remove") {
       if (body.frameworkId !== "cis-benchmarks") throw new FrameworkError("Exceptions are available for CIS Benchmarks only.")
       const exceptionId = typeof body.exceptionId === "string" ? body.exceptionId : typeof body.id === "string" ? body.id : ""
@@ -519,7 +578,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       try { policies = parsePolicies(pack.policies); if (pack.recommendations) policies = attachRecommendations(policies, pack.recommendations) }
       catch (error) { throw new FrameworkError(error instanceof Error ? error.message : "The CIS pack is invalid.") }
       // The catalog display name travels in the provenance, so saved assessments keep it.
-      const benchmarkName = cisBenchmarkNames.get(`${pack.benchmark}@${pack.version}`)
+      const benchmarkName = cisBenchmarkNames.get(`${pack.benchmark}@${pack.version}`) ?? knownBenchmarkName(pack.benchmark)
       if (benchmarkName) policies = policies.map(policy => ({ ...policy, provenance: { ...policy.provenance, benchmarkName } }))
       const reference = `${pack.benchmark} ${pack.version} Level ${pack.level}`
       const workspace = loadWorkspace(body.tenantId, body.frameworkId)
@@ -570,6 +629,13 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
   }
   const { tenant, token } = await tokenFor(body)
   if (typeof body.frameworkId === "string") requireEnabledFramework(body.frameworkId)
+  if (body.action === "cis-setting-names") {
+    // Display names of Settings Catalog definitions and their choice options: Microsoft's public
+    // catalog read with the tenant token, so CIS findings and deployment diffs read in plain words.
+    if (body.frameworkId !== "cis-benchmarks") throw new FrameworkError("Setting names are available for CIS Benchmarks only.")
+    const ids = settingDefinitionIds(body.ids)
+    return ids.length ? readSettingNames(ids, graphCaller(token, fetch, { beforeAttempt: () => requireEnabledFramework("cis-benchmarks") })) : { settings: {}, options: {} }
+  }
   for (const [id, run] of runs) if (run.expires < Date.now()) runs.delete(id)
   if (body.action === "assess") {
     if (typeof body.frameworkId !== "string" || !frameworks.some(f => f.id === body.frameworkId)) throw new FrameworkError("Select a framework.")

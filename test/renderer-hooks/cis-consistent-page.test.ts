@@ -45,6 +45,7 @@ vi.mock("../../src/portal/components/ConfirmDialog", () => ({
 }))
 
 import FrameworksPage from "../../src/renderer/pages/FrameworksPage"
+import { humanSettingLabel } from "../../src/shared/frameworks/cis-display"
 
 const roots: Root[] = []
 const containers: HTMLDivElement[] = []
@@ -129,11 +130,12 @@ describe("CIS page numbers", () => {
 
   it("marks the excluded finding, never lets a Review finding be selected and names saved runs by time and rate", async () => {
     const container = await renderSaved()
-    const row = (settingId: string) => container.querySelector(`input[aria-label="Select finding ${settingId} from Synthetic policy"]`)!.closest("div")!
+    // The checkbox is named by the setting, not its raw id.
+    const row = (settingId: string) => container.querySelector(`input[aria-label="Select finding ${humanSettingLabel(settingId)} from Synthetic policy"]`)!.closest("div")!
     expect(row("synthetic_alpha").textContent).toContain("Excluded")
     expect(row("synthetic_beta").textContent).not.toContain("Excluded")
     expect(row("synthetic_gamma").textContent).not.toContain("Excluded")
-    expect((container.querySelector('input[aria-label="Select finding synthetic_gamma from Synthetic policy"]') as HTMLInputElement).disabled).toBe(true)
+    expect((container.querySelector('input[aria-label="Select finding Synthetic gamma from Synthetic policy"]') as HTMLInputElement).disabled).toBe(true)
     const saved = container.querySelector('[aria-label="Saved assessment history"]')!
     // The reference already names the Level, so the row shows the rate once.
     expect(saved.textContent).toContain("synthetic-os 9.9.9 Level 1 · 33.3% · 3 findings")

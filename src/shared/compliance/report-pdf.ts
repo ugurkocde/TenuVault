@@ -739,7 +739,7 @@ function levelSection(layout: Layout, summary: CisReadinessSummary, level: CisLe
     { label: 'Excluded from score', value: String(head.exclusions) },
     { label: 'Exclusions as of', value: head.exclusionsAsOf },
     { label: 'Present in unassigned policies', value: level.presentInUnassigned === null ? 'Not recorded' : `${level.presentInUnassigned} of ${level.present}` },
-    { label: 'Assessed automated', value: String(level.assessedAutomated ?? 'not computable without a denominator list') },
+    ...(level.assessedAutomated === null ? [] : [{ label: 'Assessed automated', value: String(level.assessedAutomated) }]),
     { label: 'Enumerated', value: String(level.enumerated) },
     { label: 'Not assessed identifiers', value: String(level.notAssessed.length) },
   ], caption)
@@ -749,7 +749,7 @@ function levelSection(layout: Layout, summary: CisReadinessSummary, level: CisLe
     layout.y += 6
   }
   layout.paragraph([{ text: level.coverage === null
-    ? `Coverage: ${coverageSourceLabel(level.coverageSource)}`
+    ? level.coverageSource === 'none' ? 'No recommendation list is loaded, so coverage is not shown.' : `Coverage: ${coverageSourceLabel(level.coverageSource)}`
     : `Coverage: ${percent(level.coverage)} (${level.assessedAutomated} of ${level.denominator}), source: ${coverageSourceLabel(level.coverageSource)}`, size: 8.4, style: 'bold', color: PALETTE.ink, lineHeight: 4 }], { after: 3 })
   if (level.notAssessed.length) {
     layout.paragraph([{ text: 'Not assessed identifiers', size: 7, style: 'bold', color: PALETTE.muted, lineHeight: 3.4 }, { text: level.notAssessed.join(', '), size: 7.6, color: PALETTE.body, lineHeight: 3.5, technical: true }], { after: 4 })

@@ -26,6 +26,20 @@ export interface PreparedFile {
  */
 export function prepareSaveFile(data: unknown, fileName: unknown, encoding: unknown = "utf8"): PreparedFile {
   if (typeof data !== "string" || data.length > SAVE_FILE_LIMIT) throw new Error("The export could not be prepared.")
+  return prepareFile(data, fileName, encoding)
+}
+
+/**
+ * The same checks for an export the main process built itself, such as a framework export of a
+ * saved workspace. It never crossed IPC, so the renderer size cap does not apply: a workspace may
+ * hold more than that cap, and its export must stay possible before older assessments are removed.
+ */
+export function prepareGeneratedFile(data: string, fileName: string, encoding: "utf8" | "base64"): PreparedFile {
+  return prepareFile(data, fileName, encoding)
+}
+
+function prepareFile(data: unknown, fileName: unknown, encoding: unknown): PreparedFile {
+  if (typeof data !== "string") throw new Error("The export could not be prepared.")
   const raw = typeof fileName === "string" ? fileName : ""
   const extension = raw.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase()
   if (!extension || !(extension in FORMATS)) throw new Error("This file type cannot be saved.")
@@ -34,6 +48,9 @@ export function prepareSaveFile(data: unknown, fileName: unknown, encoding: unkn
   if (format.encoding === "base64" && !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) throw new Error("The export could not be prepared.")
   const content = Buffer.from(data, format.encoding)
   if (extension === "pdf" && content.subarray(0, 5).toString("latin1") !== "%PDF-") throw new Error("The export could not be prepared.")
-  const base = raw.slice(0, -extension.length - 1).replace(/[^\w .()-]/g, "_").trim().slice(0, 120) || "TenuVault export"
+  // Letters and digits of any script stay, so a tenant such as Müller keeps its name.
+  const cleaned = raw.slice(0, -extension.length - 1).replace(/[^\p{L}\p{N}_ .()-]/gu, "_").trim().slice(0, 120).replace(/[. ]+$/, "")
+  // Windows refuses device names as file names, with any extension and with superscript digits.
+  const base = !cleaned ? "TenuVault export" : /^(?:con|prn|aux|nul|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3])(?:\..*)?$/i.test(cleaned) ? `_${cleaned}` : cleaned
   return { name: `${base}.${extension}`, extension: extension as SaveFileFormat, label: format.label, content }
 }

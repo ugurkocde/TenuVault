@@ -31,7 +31,7 @@ import { mergeOutcomes, retryBatches } from "~/lib/policies/restore-retry"
 import { FeatureApiError } from "@desktop/lib/feature-api"
 import { showFeaturePlanError } from "@desktop/lib/plan-dialog"
 import { PlanBadge, UpgradeNote } from "@desktop/components/UpgradeNote"
-import { formatDate, formatSize, STATUS_LABEL, statusKind, type BackupSummary, type BackupTenant } from "./types"
+import { formatDate, formatSize, statusKind, statusLabel, type BackupSummary, type BackupTenant } from "./types"
 
 interface CopyTarget {
   tenantId: string
@@ -539,7 +539,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                         {entry.scope && entry.scope.excluded.length > 0 && `, ${entry.scope.description.toLowerCase()}`}
                       </span>
                     </span>
-                    <span className={cn("text-xs", kind === "success" ? "text-gray-500" : kind === "warning" ? "text-amber-800" : "text-red-700")}>{STATUS_LABEL[kind]}</span>
+                    <span className={cn("text-xs", kind === "success" ? "text-gray-500" : kind === "warning" ? "text-amber-800" : "text-red-700")}>{statusLabel(entry.status)}</span>
                   </button>
                 )
               })}
@@ -582,7 +582,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
           {statusKind(backup.status) !== "success" && (
             <p className="mt-4 flex gap-2 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
               <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-              This backup did not complete fully, so some items may be missing from it.
+              {backup.status === "unknown" ? `${backup.error ?? "This backup's details could not be read."} Whether it completed is not known, so some items may be missing from it.` : "This backup did not complete fully, so some items may be missing from it."}
             </p>
           )}
           {itemsError && <p className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{itemsError}</p>}

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { NextRequest } from "../src/main/api/next-server-shim"
+import { FetchApplicationError } from "../src/main/api/network-error"
 import { POST as listBackups } from "../src/portal/app/api/list-backups/route"
 import { POST as backupChanges } from "../src/portal/app/api/backup-changes/route"
 import { POST as restorePreview } from "../src/portal/app/api/restore-preview/route"
@@ -84,6 +85,21 @@ describe("backup history", () => {
     storage(blobs)
     const response = await backupChanges(request({ backupId: "backup-2026-09-20-020000" }))
     expect(response.status).toBe(409)
+  })
+
+  it("says why an encrypted backup's metadata cannot be opened, in both list modes", async () => {
+    storage(blobs)
+    const served = globalThis.fetch as unknown as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes(`${newer}/metadata.json`)) throw new FetchApplicationError(new Error("Backup authentication failed. Import the correct recovery key or recover an undamaged snapshot."))
+      return served(input, init)
+    }))
+    for (const summary of [false, true]) {
+      const { backups } = await (await listBackups(request({ summary }))).json()
+      const failed = backups.find((backup: { id: string }) => backup.id === newer)
+      expect(failed).toMatchObject({ status: "unknown", error: "Backup authentication failed. Import the correct recovery key or recover an undamaged snapshot." })
+      expect(backups.find((backup: { id: string }) => backup.id === older)).toMatchObject({ status: "Success" })
+    }
   })
 })
 

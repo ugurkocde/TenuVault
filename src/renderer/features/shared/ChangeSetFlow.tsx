@@ -1,5 +1,5 @@
 import { showFeaturePlanError } from "../../lib/plan-dialog"
-import { useState } from "react"
+import { useState, type ReactNode } from "react"
 import { CheckCircle2, ChevronDown, ChevronRight, Eye, History, RotateCcw, ShieldCheck, XCircle } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { Chip } from "~/components/dashboard/tiles"
@@ -7,6 +7,8 @@ import { toast } from "../../lib/toast"
 import { ConfirmWriteDialog } from "./ConfirmWriteDialog"
 import { DiffList } from "./DiffList"
 import { formatDate, RESULT_TONE, STATUS_TONE, type ChangeSet, type ChangeSetActions, type ChangeSetPreview, type RollbackPreview } from "./change-set"
+import type { SettingNames } from "../../../shared/intune/drift"
+import { omittedSettingValues } from "../../../shared/frameworks/cis-display"
 
 const STEPS = ["Review diff", "Approve", "Apply", "Results", "Rollback preview"] as const
 
@@ -16,14 +18,28 @@ function stepOf(changeSet: ChangeSet, preview: ChangeSetPreview | null): number 
   return preview ? 1 : 0
 }
 
+/**
+ * The admin who created a change set, from its creation revision. Older revisions are dropped
+ * once a record holds its revision limit, so when the first kept revision is not the creation the
+ * attribution is left out rather than naming a later operator.
+ */
+export function changeSetCreator(changeSet: Pick<ChangeSet, "createdAt" | "history">): string | null {
+  const first = changeSet.history?.[0]
+  return first && first.at === changeSet.createdAt && first.actor ? first.actor : null
+}
+
 const inputClass = "h-9 w-full rounded-full border border-gray-200 bg-white px-3 text-sm text-gray-800 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"
 
 /**
  * One change set, step by step: review the diff against the live tenant, approve (bound to
  * the content hash and the target state just read), apply behind an explicit confirmation,
  * read the per-operation results, and preview a rollback. Without `actions` it is read-only.
+ * `embedded` leaves out the title and status a surrounding list row already shows; `intro`
+ * explains what the change does before the operations; `settingNames` shows Settings Catalog
+ * differences by display name; `sourceLabel` names the source version for people; `onApplied`
+ * runs after an apply or retry wrote to the tenant.
  */
-export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollbackHint }: { changeSet: ChangeSet; actions: ChangeSetActions | null; tenantName: string; onChanged: () => void; rollbackHint?: string }) {
+export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollbackHint, embedded = false, intro, settingNames, sourceLabel, onApplied }: { changeSet: ChangeSet; actions: ChangeSetActions | null; tenantName: string; onChanged: () => void; rollbackHint?: string; embedded?: boolean; intro?: ReactNode; settingNames?: SettingNames; sourceLabel?: string; onApplied?: () => void }) {
   const [preview, setPreview] = useState<ChangeSetPreview | null>(null)
   const [rollback, setRollback] = useState<RollbackPreview | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -33,10 +49,11 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
   const [open, setOpen] = useState<string | null>(null)
   const [showHistory, setShowHistory] = useState(false)
 
-  const run = async (label: string, action: () => Promise<unknown>, success?: string) => {
+  const run = async (label: string, action: () => Promise<unknown>, success?: string, done?: () => void) => {
     setBusy(label)
     try {
       await action()
+      done?.()
       if (success) toast(success, "success")
       onChanged()
     } catch (error) {
@@ -59,14 +76,16 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">{changeSet.title}</h3>
+          {!embedded && <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">{changeSet.title}</h3>}
           <p className="text-sm text-gray-500">
             {changeSet.kind === "rollback" ? "Rollback change set. " : ""}
-            {changeSet.ticket ? `Ticket ${changeSet.ticket}. ` : ""}Created {formatDate(changeSet.createdAt)} by {changeSet.origin.workflow}. Source version {changeSet.sourceVersion ?? "not recorded"}.
+            {/* The admin who created it, as recorded; the workflow that created it is an internal name. */}
+            {changeSet.ticket ? `Ticket ${changeSet.ticket}. ` : ""}Created {formatDate(changeSet.createdAt)}{changeSetCreator(changeSet) ? ` by ${changeSetCreator(changeSet)}` : ""}. Source version {sourceLabel ?? changeSet.sourceVersion ?? "not recorded"}.
           </p>
         </div>
-        <Chip tone={STATUS_TONE[changeSet.status]}>{changeSet.status}</Chip>
+        {!embedded && <Chip tone={STATUS_TONE[changeSet.status]}>{changeSet.status}</Chip>}
       </div>
+      {intro}
 
       <ol className="flex flex-wrap gap-2" aria-label="Steps">
         {STEPS.map((label, index) => (
@@ -109,7 +128,7 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
                     {live?.blockers.map((line, index) => <p key={`b${index}`} className="text-red-700 dark:text-red-400">{line}</p>)}
                     {live?.warnings.map((line, index) => <p key={`w${index}`} className="text-amber-800 dark:text-amber-300">{line}</p>)}
                     <p className="text-xs text-gray-500">{live ? "Difference against the live tenant now:" : "Difference recorded when the change set was created:"}</p>
-                    <DiffList entries={live?.diff ?? operation.diff} truncated={live?.diffTruncated ?? operation.diffTruncated} />
+                    <DiffList entries={live?.diff ?? operation.diff} truncated={live?.diffTruncated ?? operation.diffTruncated} {...(settingNames ? { names: settingNames } : {})} />
                   </div>
                 )}
               </li>
@@ -129,6 +148,11 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
             </div>
           )}
           <p className="text-gray-600 dark:text-gray-400">Stored approval: {preview.approval.valid ? "valid for this content and target state." : preview.approval.reason}</p>
+          {/* An approval covers the whole content, including setting values a listed difference had to leave out. */}
+          {settingNames && (() => {
+            const omitted = changeSet.operations.reduce((sum, operation) => sum + omittedSettingValues(preview.operations.find(entry => entry.key === operation.key)?.diff ?? operation.diff), 0)
+            return omitted > 0 && <p role="alert" className="font-medium text-amber-800 dark:text-amber-300">{omitted} setting {omitted === 1 ? "value is" : "values are"} not listed in the differences above. Approving covers them too: inspect the policy content before you approve.</p>
+          })()}
           {canReview && preview.blockers.length === 0 && (
             <div className="grid gap-2 sm:grid-cols-2">
               <label className="flex flex-col gap-1 text-xs text-gray-500">Reviewer<input className={inputClass} value={reviewer} maxLength={200} onChange={(event) => setReviewer(event.target.value)} placeholder="Name of the reviewer" /></label>
@@ -223,7 +247,7 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
         busy={busy === "apply"}
         onConfirm={() => {
           const hash = changeSet.contentHash
-          void run("apply", () => (confirm === "retry" ? actions!.retry(hash) : actions!.apply(hash)), "Finished. Check the result of every operation.").then(() => setConfirm(null))
+          void run("apply", () => (confirm === "retry" ? actions!.retry(hash) : actions!.apply(hash)), "Finished. Check the result of every operation.", onApplied).then(() => setConfirm(null))
         }}
       />
     </div>
