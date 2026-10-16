@@ -59,7 +59,7 @@ export class GraphSession {
         }, this.network.signal)
       } catch (error) {
         this.network.signal.throwIfAborted()
-        if ((attempted || error instanceof RequestTimeoutError) && requestFailure(error) === "network") this.network.failed("Microsoft Graph")
+        if ((attempted || error instanceof RequestTimeoutError) && requestFailure(error) === "network") this.network.failed("Microsoft Graph", error)
         if (error instanceof GraphPauseError) {
           attempt--
           continue
@@ -76,7 +76,7 @@ export class GraphSession {
         }
         if (response?.status === 429) this.resumeAt = Math.max(this.resumeAt, Date.now() + delay)
         if (attempt >= REQUEST_ATTEMPTS - 1) {
-          if (!attempted && error instanceof RequestTimeoutError) throw new TokenError(error.message)
+          if (!attempted && error instanceof RequestTimeoutError) throw new TokenError(error.message, { cause: error })
           throw error
         }
         await sleep(delay, this.network.signal)

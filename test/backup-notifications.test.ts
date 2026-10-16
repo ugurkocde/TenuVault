@@ -3,14 +3,16 @@ import { readFileSync } from "node:fs"
 import type { BrowserWindow } from "electron"
 import { transformSync } from "esbuild"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { NetworkUnreachableError } from "../src/main/api/network-error"
 import { BackupEngine, type BackupJob } from "../src/main/backup/engine"
 import { backupTenantLabel, notifyBackupFailure } from "../src/main/backup/notifications"
 import { RefusalLog, refuseUnlicensedBackup } from "../src/main/backup/refusals"
-import { scheduledResult } from "../src/main/backup/scheduler"
+import { BackupScheduler, reportsResult, scheduledResult, type ScheduledRunResult } from "../src/main/backup/scheduler"
 import { isLocalAccount } from "../src/main/storage/blob-emulator"
 import { localStorageAccountName } from "../src/shared/constants"
 import type { BackupRefusal } from "../src/shared/ipc"
 import { allows, PlanRequired } from "../src/shared/plans"
+import { memoryStore } from "./helpers"
 
 const notifications = vi.hoisted(() => ({ supported: true, created: [] as Array<{ title: string; body: string; click: () => void; show: ReturnType<typeof vi.fn<() => void>> }> }))
 vi.mock("electron", () => ({
@@ -69,6 +71,7 @@ function unattendedFixture(getToken: () => Promise<string>) {
     },
     engine,
     scheduledResult,
+    reportsResult,
     scopes: { get: () => ({ scope: { excluded: [] } }) },
     accounts: { get: () => undefined },
     host: { dispatch: vi.fn(async (_request: Request) => new Response(null, { status: 200 })) },
@@ -78,7 +81,7 @@ function unattendedFixture(getToken: () => Promise<string>) {
   }
   const run = new Function(...Object.keys(dependencies), transformSync(source, { loader: "ts" }).code + "\nreturn runScheduledBackup;")(
     ...Object.values(dependencies),
-  ) as (tenantId: string, trigger: Trigger) => Promise<{ status: string; message: string }>
+  ) as (tenantId: string, trigger: Trigger, afterFailure?: boolean) => Promise<ScheduledRunResult>
   return { run, start, engine, dispatch: dependencies.host.dispatch }
 }
 
@@ -212,5 +215,96 @@ describe("unattended backup notifications", () => {
       "Tray backup of Contoso failed",
       "Scheduled backup of Contoso failed",
     ])
+  })
+
+  it("reports a scheduled failure to reach Microsoft once per slot, across restarts", async () => {
+    let failure: Error = new NetworkUnreachableError("login.microsoftonline.com could not be reached.")
+    const store = memoryStore()
+    let now = new Date(2026, 9, 14, 10)
+    const dispatches: Array<ReturnType<typeof vi.fn>> = []
+    // A new process gets a new runner and scheduler on the same stored schedules.
+    const start = () => {
+      const fixture = unattendedFixture(async () => { throw failure })
+      dispatches.push(fixture.dispatch)
+      return { ...fixture, scheduler: new BackupScheduler(store, (tenantId, afterFailure) => fixture.run(tenantId, "scheduled", afterFailure), () => undefined, () => now) }
+    }
+    const titles = () => notifications.created.map((notification) => notification.title)
+    const audits = () => dispatches.reduce((count, dispatch) => count + dispatch.mock.calls.length, 0)
+    const tickAt = async (process: ReturnType<typeof start>, day: number, minute: number) => {
+      now = new Date(2026, 9, day, 2, minute)
+      await process.scheduler.tick()
+    }
+    let process = start()
+    process.scheduler.set({ tenantId: tenant.tenantId, enabled: true, frequency: "daily", time: "02:00" })
+    await tickAt(process, 15, 0)
+    await tickAt(process, 15, 15)
+    expect(titles()).toEqual(["Scheduled backup of Contoso failed"])
+    expect(audits()).toBe(1)
+    expect((await (dispatches[0]!.mock.calls[0]![0] as Request).json()).logEntry).toMatchObject({ eventType: "BACKUP_FAILED", result: "FAILURE" })
+    process = start()
+    await tickAt(process, 15, 30)
+    expect(titles()).toHaveLength(1)
+    expect(audits()).toBe(1)
+    expect(process.scheduler.list()[0]).toMatchObject({ attempts: 0, lastStatus: "Failed" })
+    // The next slot reports its first connection failure again.
+    await tickAt(process, 16, 0)
+    await tickAt(process, 16, 15)
+    expect(titles()).toHaveLength(2)
+    expect(audits()).toBe(2)
+    // Counted failures, successes and tray backups are reported every time.
+    const reached = failure
+    failure = new Error("Sign in to this tenant first.")
+    await tickAt(process, 16, 30)
+    expect(titles()).toHaveLength(3)
+    expect(audits()).toBe(3)
+    failure = reached
+    await process.run(tenant.tenantId, "tray")
+    await process.run(tenant.tenantId, "tray")
+    expect(titles().slice(3)).toEqual(["Tray backup of Contoso failed", "Tray backup of Contoso failed"])
+    expect(audits()).toBe(5)
+    expect(reportsResult(true, { status: "Failed", message: "Sign in to this tenant first." })).toBe(true)
+    expect(reportsResult(true, { status: "Completed", message: "Done" })).toBe(true)
+    expect(reportsResult(true, { status: "Failed", message: "Unreachable", unreachable: true })).toBe(false)
+    expect(reportsResult(false, { status: "Failed", message: "Unreachable", unreachable: true })).toBe(true)
+  })
+
+  it("reports a connection failure after a restart during the first attempt of a slot that follows a failed slot", async () => {
+    const failure = new NetworkUnreachableError("login.microsoftonline.com could not be reached.")
+    let hang = false
+    let hanging = 0
+    const store = memoryStore()
+    let now = new Date(2026, 9, 14, 10)
+    const dispatches: Array<ReturnType<typeof vi.fn>> = []
+    const start = () => {
+      const fixture = unattendedFixture(() => hang ? (hanging++, new Promise<string>(() => {})) : Promise.reject(failure))
+      dispatches.push(fixture.dispatch)
+      return new BackupScheduler(store, (tenantId, afterFailure) => fixture.run(tenantId, "scheduled", afterFailure), () => undefined, () => now)
+    }
+    const audits = () => dispatches.reduce((count, dispatch) => count + dispatch.mock.calls.length, 0)
+    let scheduler = start()
+    scheduler.set({ tenantId: tenant.tenantId, enabled: true, frequency: "daily", time: "02:00" })
+    now = new Date(2026, 9, 15, 2)
+    await scheduler.tick()
+    expect(notifications.created).toHaveLength(1)
+    // The first attempt of the next slot never finishes: the process stops during it.
+    hang = true
+    now = new Date(2026, 9, 16, 2)
+    void scheduler.tick()
+    await vi.waitFor(() => expect(hanging).toBeGreaterThan(0))
+    expect(scheduler.list()[0]).toMatchObject({ attempts: 1, attemptSlot: new Date(2026, 9, 16, 2).toISOString() })
+    expect(scheduler.list()[0]!.lastStatus).toBeUndefined()
+    expect(scheduler.list()[0]!.lastMessage).toBeUndefined()
+    hang = false
+    scheduler = start()
+    now = new Date(2026, 9, 16, 2, 15)
+    await scheduler.tick()
+    expect(notifications.created).toHaveLength(2)
+    expect(audits()).toBe(2)
+    now = new Date(2026, 9, 16, 2, 30)
+    await scheduler.tick()
+    expect(notifications.created).toHaveLength(2)
+    expect(audits()).toBe(2)
+    // The attempt that never finished still counts toward today's budget.
+    expect(scheduler.list()[0]).toMatchObject({ attempts: 1, lastStatus: "Failed", attemptSlot: new Date(2026, 9, 16, 2).toISOString() })
   })
 })

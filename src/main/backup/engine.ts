@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { BACKUP_OWNER_FILE } from "../../shared/constants"
 import { BlobWriter } from "./blob-writer"
 import { GraphSession, type GraphItem } from "./graph-session"
-import { GRAPH, BlobClaimError, GraphError, ProtectedBlobError, RequestTimeoutError, StorageError, TokenError } from "./request"
+import { GRAPH, BlobClaimError, GraphError, ProtectedBlobError, RequestTimeoutError, StorageError, TokenError, isUnreachable } from "./request"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { FetchApplicationError } from "../api/network-error"
 import { INTUNE_TYPES, itemName, type IntuneType, type Item } from "../../shared/intune/registry"
@@ -38,6 +38,8 @@ export interface BackupJob {
   backupFolder?: string
   /** Policies and types that could not be read; above zero the backup on disk is partial. */
   failures?: number
+  /** Set when the job failed because Microsoft or the storage account could not be reached, including timeouts. */
+  unreachable?: boolean
   log: string[]
 }
 
@@ -89,6 +91,46 @@ export class BackupFolderTakenError extends StorageError {
 }
 class BackupCancelledError extends Error {}
 
+/**
+ * What a run saved, whether the network answered any of its requests, and how many recorded
+ * failures had a cause that was neither the network nor an HTTP response (for example a sign-in
+ * Microsoft refused, or a local storage error). A run is unreachable only when it saved nothing,
+ * got no HTTP response and failed only because Microsoft or the storage could not be reached.
+ */
+interface RunOutcome {
+  saved: number
+  answered: boolean
+  otherFailures: number
+}
+
+/** Records a failure that is not a connection failure when it is caught, before an abort can replace it. */
+function recordFailure(outcome: RunOutcome, error: unknown): void {
+  if (!isUnreachable(error)) outcome.otherFailures++
+}
+
+/**
+ * The job's fetch, recording what each Graph or Azure Storage request ended with as soon as it
+ * ends, before status handling, retries, the circuit or a timeout can replace it with another
+ * error: any HTTP response, or a failure other than a connection failure. Responses for a local
+ * storage account (`localHost`) come from this device, not the network. A request that ends
+ * because the job aborted it says nothing new: the abort reason is classified where it is raised.
+ */
+function answeredFetch(fetchImpl: typeof fetch, outcome: RunOutcome, localHost: string | null): typeof fetch {
+  return async (input, init) => {
+    let response: Response
+    try {
+      response = await fetchImpl(input, init)
+    } catch (error) {
+      if (!init?.signal?.aborted) recordFailure(outcome, error)
+      throw error
+    }
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+    // A network error response (status 0) is not an answer.
+    if (response.type !== "error" && response.status !== 0 && new URL(url).hostname !== localHost) outcome.answered = true
+    return response
+  }
+}
+
 type NetworkService = "Microsoft Graph" | "backup storage"
 
 /** Repeated 401 or 403 responses mean the role behind them is gone, so the job stops instead of grinding the whole work list. */
@@ -116,10 +158,11 @@ export class NetworkCircuit {
     this.consecutiveAuthFailures[service] = null
   }
 
-  failed(service: NetworkService): void {
+  /** `cause` is the failure that trips the circuit, kept so the job can tell an unreachable service apart. */
+  failed(service: NetworkService, cause?: unknown): void {
     this.signal.throwIfAborted()
     if (++this.consecutiveFailures[service] < this.threshold) return
-    this.controller.abort(new Error(`Backup stopped: ${service} did not respond for ${this.consecutiveFailures[service]} consecutive requests. Earlier policies in this run were saved; the backup is incomplete.`))
+    this.controller.abort(new Error(`Backup stopped: ${service} did not respond for ${this.consecutiveFailures[service]} consecutive requests. Earlier policies in this run were saved; the backup is incomplete.`, { cause }))
     this.signal.throwIfAborted()
   }
 
@@ -136,11 +179,13 @@ export class NetworkCircuit {
   }
 }
 
-async function tokenOrStop(get: () => Promise<string>): Promise<string> {
+async function tokenOrStop(get: () => Promise<string>, outcome: RunOutcome): Promise<string> {
   try {
     return await get()
   } catch (error) {
-    throw new TokenError(error instanceof Error ? error.message : String(error))
+    recordFailure(outcome, error)
+    // Keep the cause: it tells a sign-in Microsoft refused from one that could not reach Microsoft.
+    throw new TokenError(error instanceof Error ? error.message : String(error), { cause: error })
   }
 }
 
@@ -213,10 +258,12 @@ export class BackupEngine {
 
     const timer = setTimeout(() => controller.abort(jobDeadlineError()), JOB_DEADLINE_MS)
     timer.unref?.()
-    const done = this.run(job, request, controller.signal, deadline)
+    const outcome: RunOutcome = { saved: 0, answered: false, otherFailures: 0 }
+    const done = this.run(job, request, controller.signal, deadline, outcome)
       .catch((error: unknown) => {
         job.status = error instanceof BackupCancelledError ? "Cancelled" : "Failed"
         job.exception = error instanceof Error ? error.message : String(error)
+        if (job.status === "Failed" && isUnreachable(error) && !outcome.saved && !outcome.answered && !outcome.otherFailures) job.unreachable = true
         job.progressMessage = job.status === "Cancelled" ? "Backup cancelled" : "Backup failed"
         this.write(job, `${job.progressMessage}: ${job.exception}`)
       })
@@ -233,28 +280,29 @@ export class BackupEngine {
     return job
   }
 
-  private async run(job: BackupJob, request: BackupRequest, signal: AbortSignal, deadline: number): Promise<void> {
+  private async run(job: BackupJob, request: BackupRequest, signal: AbortSignal, deadline: number, outcome: RunOutcome): Promise<void> {
     const started = this.now()
     const local = isLocalAccount(request.storageAccountName)
+    const fetchImpl = answeredFetch(this.deps.fetch, outcome, local ? `${request.storageAccountName.toLowerCase()}.blob.core.windows.net` : null)
     const backupFolder = `backup-${folderTimestamp(started)}`
     job.backupFolder = backupFolder
     this.write(job, `Backing up tenant ${request.tenantId} to ${local ? "this device (encrypted)" : `storage account ${request.storageAccountName}`}.`)
     this.write(job, `Backup folder: ${backupFolder}`)
 
-    const graphToken = () => tokenOrStop(() => this.deps.getToken(request.tenantId, request.clientId, `${GRAPH}/.default`))
+    const graphToken = () => tokenOrStop(() => this.deps.getToken(request.tenantId, request.clientId, `${GRAPH}/.default`), outcome)
     const storageToken = local
       ? async () => ""
-      : () => tokenOrStop(() => this.deps.getToken(request.tenantId, request.clientId, "https://storage.azure.com/.default"))
+      : () => tokenOrStop(() => this.deps.getToken(request.tenantId, request.clientId, "https://storage.azure.com/.default"), outcome)
 
     const concurrency = this.deps.concurrency ?? CONCURRENCY
     const network = new NetworkCircuit(3 * concurrency, signal, deadline)
-    const storage = new BlobWriter(this.deps.fetch, request.storageAccountName, storageToken, network)
+    const storage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, network)
     await storage.ensureContainer()
 
     const scope = normalizeScope(request.scope ?? EVERYTHING)
     const types = includedTypes(scope)
     if (scope.excluded.length) this.write(job, `Leaving out ${scope.excluded.length} of ${INTUNE_TYPES.length} types: ${scope.excluded.join(", ")}.`)
-    const graph = new GraphSession(this.deps.fetch, graphToken, network)
+    const graph = new GraphSession(fetchImpl, graphToken, network)
     const reader = {
       get: (path: string) => graph.get<Item>(`${GRAPH}/beta/${path}`),
       list: (path: string) => graph.list(graphUrl(path)) as Promise<Item[]>,
@@ -280,13 +328,16 @@ export class BackupEngine {
         this.write(job, `Found ${items.length} ${type.label}${skipped ? ` (${skipped} built-in skipped)` : ""}.`)
         lists[index] = { type, items }
       } catch (error) {
-        network.signal.throwIfAborted()
-        if (error instanceof RequestTimeoutError) throw error
-        if (error instanceof TokenError || (error instanceof GraphError && error.status === 401)) throw error
         // Access denied: the app registration lacks the permission or its admin consent (for example
         // one created before the type was supported), or the admin's Intune role does not cover the
         // type. It is left out and reported, without marking the backup incomplete for the rest.
-        if (error instanceof GraphError && error.status === 403 && !ORIGINAL_FOLDERS.has(type.folder)) {
+        const denied = error instanceof GraphError && error.status === 403 && !ORIGINAL_FOLDERS.has(type.folder)
+        // Counted before any rethrow, so the job sees this cause whichever failure ends it.
+        if (!denied) recordFailure(outcome, error)
+        network.signal.throwIfAborted()
+        if (error instanceof RequestTimeoutError) throw error
+        if (error instanceof TokenError || (error instanceof GraphError && error.status === 401)) throw error
+        if (denied) {
           skippedTypes.push(type.folder)
           this.write(job, `Skipped ${type.label}: access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it.`)
           return
@@ -336,7 +387,10 @@ export class BackupEngine {
           ...(type.assignmentsFormerlyExpanded ? { hashWithEmptyAssignments: snapshotHash({ ...detail, assignments: [] }) } : {}),
         }
         counts[type.folder]!++
+        outcome.saved++
       } catch (error) {
+        // Counted before any rethrow, so the job sees this cause whichever failure ends it.
+        recordFailure(outcome, error)
         network.signal.throwIfAborted()
         countAuthFailure(error)
         // An expired sign-in fails every remaining item the same way, so it stops the backup once.
@@ -388,7 +442,7 @@ export class BackupEngine {
     const commitTimer = setTimeout(() => commitController.abort(jobDeadlineError()), Math.max(0, commitDeadline - Date.now()))
     commitTimer.unref?.()
     const commitNetwork = new NetworkCircuit(3 * concurrency, commitController.signal, commitDeadline)
-    const commitStorage = new BlobWriter(this.deps.fetch, request.storageAccountName, storageToken, commitNetwork)
+    const commitStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, commitNetwork)
     try {
       await commitStorage.put(`${backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), network)
     } finally {
@@ -400,7 +454,7 @@ export class BackupEngine {
     let retentionWarnings = 0
     if (failures === 0 && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
       const retentionNetwork = new NetworkCircuit(3 * concurrency, signal, deadline)
-      const retentionStorage = new BlobWriter(this.deps.fetch, request.storageAccountName, storageToken, retentionNetwork)
+      const retentionStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, retentionNetwork)
       try {
         const result = await this.applyRetention(job, retentionStorage, backupFolder, coveredFolders(metadata), retentionNetwork.signal)
         if (result > 0) retentionWarnings++
@@ -420,6 +474,7 @@ export class BackupEngine {
 
     job.failures = failures
     job.status = failures > 0 && totalPolicies === 0 ? "Failed" : "Completed"
+    if (job.status === "Failed" && !outcome.answered && !outcome.otherFailures) job.unreachable = true
     const warnings = failures + retentionWarnings
     job.progressMessage =
       job.status === "Failed" ? "Backup failed: no policies could be saved" : warnings > 0 ? `Backup completed with ${warnings} warning${warnings === 1 ? "" : "s"}` : "Backup completed successfully"
