@@ -111,7 +111,7 @@ describe("unreachable backup jobs", () => {
   describe("with the default concurrency", () => {
     const only = (...folders: string[]) => ({ excluded: INTUNE_TYPES.filter((type) => !folders.includes(type.folder)).map((type) => type.folder) })
     const twoTypes = { ...request, scope: only("DeviceConfigurations", "CompliancePolicies") }
-    type Answer = (url: URL) => Response | Promise<Response> | null
+    type Answer = (url: URL, init?: RequestInit) => Response | Promise<Response> | null
     // Graph and storage answer through `graph` and `storage`; `null` stands for a request that gets no response.
     const run = async (backup: typeof request, graph: Answer, options: { storage?: Answer; concurrency?: number } = {}) => {
       vi.useFakeTimers()
@@ -119,9 +119,9 @@ describe("unreachable backup jobs", () => {
       const engine = new BackupEngine({
         getToken: async () => "token",
         concurrency: options.concurrency,
-        fetch: withNetworkErrors(async (input) => {
+        fetch: withNetworkErrors(async (input, init) => {
           const url = new URL(String(input))
-          const response = (url.hostname === "graph.microsoft.com" ? graph : storage)(url)
+          const response = (url.hostname === "graph.microsoft.com" ? graph : storage)(url, init)
           if (!response) throw new TypeError("net::ERR_INTERNET_DISCONNECTED")
           return response
         }),
@@ -215,6 +215,33 @@ describe("unreachable backup jobs", () => {
       expect(graphRequests).toBe(6)
       expect(job).toMatchObject({ status: "Failed", exception: expect.stringContaining("Microsoft Graph did not respond for 6 consecutive requests") })
       expect(job.unreachable).toBeUndefined()
+    })
+
+    // Chromium's net.fetch rejects a request with AbortError when its signal aborts. Such a rejection
+    // follows the job's own abort (the circuit or a request timeout) and is not another cause.
+    const abortable = (init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init!.signal!.addEventListener("abort", () => reject(new DOMException("This operation was aborted", "AbortError")), { once: true })
+    })
+
+    it("marks a backup whose in-flight request was aborted when the circuit stopped the job", async () => {
+      let pending = 0
+      const job = await run({ ...request, scope: only("DeviceConfigurations", "CompliancePolicies", "ComplianceSettingsPolicies") }, (url, init) => {
+        if (!url.pathname.endsWith("/deviceCompliancePolicies")) return null
+        pending++
+        return abortable(init)
+      }, { concurrency: 2 })
+      expect(pending).toBe(1)
+      expect(job).toMatchObject({ status: "Failed", unreachable: true, exception: expect.stringContaining("Microsoft Graph did not respond for 6 consecutive requests") })
+    })
+
+    it("marks a backup whose requests were aborted by their timeout", async () => {
+      let requests = 0
+      const job = await run(request, (_url, init) => {
+        requests++
+        return abortable(init)
+      })
+      expect(requests).toBe(3)
+      expect(job).toMatchObject({ status: "Failed", unreachable: true, exception: "Backup request timed out after 90 seconds. Check your connection and retry." })
     })
 
     it("marks a backup whose Azure storage request ended in a network error response", async () => {
