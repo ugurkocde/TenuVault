@@ -187,6 +187,41 @@ describe("unreachable backup jobs", () => {
       expect(job.unreachable).toBeUndefined()
     })
 
+    // Two readers trip the circuit after six failures. The compliance reader's sign-in is refused
+    // `delay` microtasks after the sixth transport failure, so the refusal reaches the request layer
+    // only after the circuit stopped the job and its abort reason has replaced the refusal there.
+    it.each(Array.from({ length: 13 }, (_, delay) => delay))("counts a sign-in refusal racing the circuit (%i microtasks late)", async (delay) => {
+      vi.useFakeTimers()
+      let tokens = 0
+      let graphRequests = 0
+      let refuse!: (error: Error) => void
+      const engine = new BackupEngine({
+        concurrency: 2,
+        // The second token request is the compliance reader's first; the device configurations reader's tokens are cached.
+        getToken: () => ++tokens === 2 ? new Promise<string>((_resolve, reject) => { refuse = reject }) : Promise.resolve("token"),
+        fetch: withNetworkErrors(async (input) => {
+          if (new URL(String(input)).hostname !== "graph.microsoft.com") return new Response(null, { status: 201 })
+          if (++graphRequests === 6) {
+            let left = delay
+            const later = (): unknown => left-- > 0 ? Promise.resolve().then(later) : refuse(new SignInRequiredError(TENANT, "app", "Sign in again to continue."))
+            void later()
+          }
+          throw new TypeError("net::ERR_INTERNET_DISCONNECTED")
+        }),
+      })
+      const done = engine.waitForJob(engine.start({ ...request, scope: only("DeviceConfigurations", "CompliancePolicies", "ComplianceSettingsPolicies") }))
+      await vi.advanceTimersByTimeAsync(60_000)
+      const job = await done
+      expect(graphRequests).toBe(6)
+      expect(job).toMatchObject({ status: "Failed", exception: expect.stringContaining("Microsoft Graph did not respond for 6 consecutive requests") })
+      expect(job.unreachable).toBeUndefined()
+    })
+
+    it("marks a backup whose Azure storage request ended in a network error response", async () => {
+      const job = await run({ ...request, storageAccountName: "contoso" }, () => null, { storage: () => Response.error() })
+      expect(job).toMatchObject({ status: "Failed", exception: "Storage account contoso could not be reached.", unreachable: true })
+    })
+
     it("marks a backup to Azure storage when neither storage nor Graph answers", async () => {
       const job = await run({ ...request, storageAccountName: "contoso" }, () => null, { storage: () => null })
       expect(job).toMatchObject({ status: "Failed", unreachable: true })

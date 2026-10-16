@@ -103,16 +103,30 @@ interface RunOutcome {
   otherFailures: number
 }
 
+/** Records a failure that is not a connection failure when it is caught, before an abort can replace it. */
+function recordFailure(outcome: RunOutcome, error: unknown): void {
+  if (!isUnreachable(error)) outcome.otherFailures++
+}
+
 /**
- * The job's fetch, recording any HTTP response from Graph or Azure Storage as soon as it arrives,
- * before status handling, retries, the circuit or a timeout can replace it with another error.
- * Responses for a local storage account (`localHost`) come from this device, not the network.
+ * The job's fetch, recording what each Graph or Azure Storage request ended with as soon as it
+ * ends, before status handling, retries, the circuit or a timeout can replace it with another
+ * error: any HTTP response, or a failure other than a connection failure. Responses for a local
+ * storage account (`localHost`) come from this device, not the network. A request that ends
+ * because the job aborted it says nothing new: the abort reason is classified where it is raised.
  */
 function answeredFetch(fetchImpl: typeof fetch, outcome: RunOutcome, localHost: string | null): typeof fetch {
   return async (input, init) => {
-    const response = await fetchImpl(input, init)
+    let response: Response
+    try {
+      response = await fetchImpl(input, init)
+    } catch (error) {
+      if (!init?.signal?.aborted) recordFailure(outcome, error)
+      throw error
+    }
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
-    if (new URL(url).hostname !== localHost) outcome.answered = true
+    // A network error response (status 0) is not an answer.
+    if (response.type !== "error" && response.status !== 0 && new URL(url).hostname !== localHost) outcome.answered = true
     return response
   }
 }
@@ -165,10 +179,11 @@ export class NetworkCircuit {
   }
 }
 
-async function tokenOrStop(get: () => Promise<string>): Promise<string> {
+async function tokenOrStop(get: () => Promise<string>, outcome: RunOutcome): Promise<string> {
   try {
     return await get()
   } catch (error) {
+    recordFailure(outcome, error)
     // Keep the cause: it tells a sign-in Microsoft refused from one that could not reach Microsoft.
     throw new TokenError(error instanceof Error ? error.message : String(error), { cause: error })
   }
@@ -274,10 +289,10 @@ export class BackupEngine {
     this.write(job, `Backing up tenant ${request.tenantId} to ${local ? "this device (encrypted)" : `storage account ${request.storageAccountName}`}.`)
     this.write(job, `Backup folder: ${backupFolder}`)
 
-    const graphToken = () => tokenOrStop(() => this.deps.getToken(request.tenantId, request.clientId, `${GRAPH}/.default`))
+    const graphToken = () => tokenOrStop(() => this.deps.getToken(request.tenantId, request.clientId, `${GRAPH}/.default`), outcome)
     const storageToken = local
       ? async () => ""
-      : () => tokenOrStop(() => this.deps.getToken(request.tenantId, request.clientId, "https://storage.azure.com/.default"))
+      : () => tokenOrStop(() => this.deps.getToken(request.tenantId, request.clientId, "https://storage.azure.com/.default"), outcome)
 
     const concurrency = this.deps.concurrency ?? CONCURRENCY
     const network = new NetworkCircuit(3 * concurrency, signal, deadline)
@@ -318,7 +333,7 @@ export class BackupEngine {
         // type. It is left out and reported, without marking the backup incomplete for the rest.
         const denied = error instanceof GraphError && error.status === 403 && !ORIGINAL_FOLDERS.has(type.folder)
         // Counted before any rethrow, so the job sees this cause whichever failure ends it.
-        if (!denied && !isUnreachable(error)) outcome.otherFailures++
+        if (!denied) recordFailure(outcome, error)
         network.signal.throwIfAborted()
         if (error instanceof RequestTimeoutError) throw error
         if (error instanceof TokenError || (error instanceof GraphError && error.status === 401)) throw error
@@ -375,7 +390,7 @@ export class BackupEngine {
         outcome.saved++
       } catch (error) {
         // Counted before any rethrow, so the job sees this cause whichever failure ends it.
-        if (!isUnreachable(error)) outcome.otherFailures++
+        recordFailure(outcome, error)
         network.signal.throwIfAborted()
         countAuthFailure(error)
         // An expired sign-in fails every remaining item the same way, so it stops the backup once.
