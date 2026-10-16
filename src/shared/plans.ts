@@ -29,6 +29,7 @@ export type Feature =
   | "portfolio"
   | "goldenStandards"
   | "customBaselines"
+  | "pdfBranding"
 
 /** The lowest plan that includes a feature. */
 export const FEATURE_PLAN: Record<Feature, Exclude<Plan, "community">> = {
@@ -52,6 +53,7 @@ export const FEATURE_PLAN: Record<Feature, Exclude<Plan, "community">> = {
   portfolio: "msp",
   goldenStandards: "msp",
   customBaselines: "pro",
+  pdfBranding: "pro",
 }
 
 const FEATURE_NAMES: Record<Feature, string> = {
@@ -75,6 +77,7 @@ const FEATURE_NAMES: Record<Feature, string> = {
   portfolio: "Portfolio views across customer tenants",
   goldenStandards: "Reusable golden standards for customers",
   customBaselines: "Custom baselines from OpenIntuneBaseline or a tenant snapshot",
+  pdfBranding: "Full white-label PDF reports with your logo and colors",
 }
 
 /** Licensed CIS content: its assessments and reports need baselineAllPlatforms; other frameworks are free. */

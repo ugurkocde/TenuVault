@@ -28,6 +28,17 @@ describe("plan errors across IPC and preload", () => {
     await expect(result).rejects.toMatchObject({ status: 402, upgrade: "dailySchedule" })
   })
 
+  it("surfaces a PDF branding plan refusal and passes saved branding through", async () => {
+    const refusal = JSON.parse(JSON.stringify(await withPlanError(() => { throw new PlanRequired("pdfBranding") })))
+    const state = { branding: { companyName: "Fabrikam" }, available: true }
+    let reply: unknown = refusal
+    const bridge = createRendererBridge({ pdfBranding: { get: async () => state, set: async () => reply, clear: async () => state } } as unknown as TenuVaultPreloadBridge)
+    await expect(bridge.pdfBranding.set({ companyName: "Fabrikam" })).rejects.toMatchObject({ status: 402, upgrade: "pdfBranding" })
+    reply = state
+    await expect(bridge.pdfBranding.set({ companyName: "Fabrikam" })).resolves.toBe(state)
+    await expect(bridge.pdfBranding.get()).resolves.toBe(state)
+  })
+
   it("keeps successful results and ordinary failures unchanged", async () => {
     const result = { tenantId: "tenant" }
     await expect(unwrapPlanResult(withPlanError(() => result))).resolves.toBe(result)

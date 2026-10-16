@@ -1,5 +1,13 @@
 import type { PlanIpcError } from "./plan-errors"
 import type { BackupScope } from "./intune/scope"
+import type { ReportPayload } from "./oib/report"
+import type { PdfBranding } from "./pdf/theme"
+
+/** The saved PDF branding and whether any tenant on this machine is on a plan that applies it. */
+export interface PdfBrandingState {
+  branding: PdfBranding | null
+  available: boolean
+}
 
 /** Serialized request forwarded from the renderer `fetch` bridge to the main-process API host. */
 export interface ApiRequest {
@@ -246,6 +254,14 @@ export interface TenuVaultBridge {
     get: () => Promise<AppPreferences>
     set: (changes: Partial<AppPreferences>) => Promise<AppPreferences>
   }
+  /** Customer branding of every PDF export; it applies to reports of tenants on a plan with pdfBranding. */
+  pdfBranding: {
+    get: () => Promise<PdfBrandingState>
+    /** Rejects with a plan error when no tenant on this machine is on Pro or MSP. */
+    set: (branding: PdfBranding) => Promise<PdfBrandingState>
+    /** Back to the TenuVault design. */
+    clear: () => Promise<PdfBrandingState>
+  }
   updates: {
     status: () => Promise<UpdateStatus>
     check: () => Promise<UpdateStatus>
@@ -264,8 +280,8 @@ export interface TenuVaultBridge {
     openExternal: (url: string) => Promise<void>
   }
   reports: {
-    /** Prints a self-contained HTML report to PDF and asks where to save it. */
-    savePdf: (html: string, fileName: string) => Promise<{ saved: boolean; path?: string }>
+    /** Generates a PDF of an OpenIntuneBaseline report in the main process and asks where to save it. */
+    savePdf: (report: ReportPayload, fileName: string) => Promise<{ saved: boolean; path?: string }>
     /** Asks where to save an export and writes it: CSV, JSON or text as UTF-8, a PDF as base64. The extension of `fileName` picks the format. */
     saveFile: (data: string, fileName: string, encoding?: "utf8" | "base64") => Promise<{ saved: boolean; path?: string }>
   }
@@ -276,7 +292,10 @@ export interface TenuVaultBridge {
 }
 
 /** Plan failures cross the preload boundary as data, then become renderer errors. */
-export type TenuVaultPreloadBridge = Omit<TenuVaultBridge, "auth" | "license" | "schedules"> & {
+export type TenuVaultPreloadBridge = Omit<TenuVaultBridge, "auth" | "license" | "schedules" | "pdfBranding"> & {
+  pdfBranding: Omit<TenuVaultBridge["pdfBranding"], "set"> & {
+    set: (branding: PdfBranding) => Promise<PdfBrandingState | PlanIpcError>
+  }
   auth: Omit<TenuVaultBridge["auth"], "signIn"> & {
     signIn: (tenant: string, clientId: string) => Promise<SignedInAccount | PlanIpcError>
   }

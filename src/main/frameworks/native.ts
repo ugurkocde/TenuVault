@@ -13,6 +13,7 @@ import { COMPLIANCE_RULESET_VERSION, complianceFrameworks } from '../../shared/c
 import essentialEightRequirements from '../../shared/compliance/frameworks/essential-eight-requirements.json'
 import { nativeExportCSV, nativeExportJSON, tenantLabel } from '../../shared/compliance/export'
 import { allows, CIS_FRAMEWORKS, upgradeMessage, type Plan } from '../../shared/plans'
+import { pdfBrandingFor } from '../pdf-branding'
 
 const memory = new Map<string, string>()
 const unreadable = new Set<string>()
@@ -216,7 +217,7 @@ export async function handleNativeFramework(body: RecordJson): Promise<Response>
   const name = `${framework.id}-${run.runId}`
   if (body.action === 'native-pdf') {
     const { generateNativeFrameworkPDF } = await import('../../shared/compliance/report-pdf')
-    return exportResponse(generateNativeFrameworkPDF(run, context), 'application/pdf', `${name}.pdf`)
+    return exportResponse(generateNativeFrameworkPDF(run, context, await pdfBrandingFor(tenant)), 'application/pdf', `${name}.pdf`)
   }
   if (body.action === 'native-csv') return exportResponse(`\uFEFF${nativeExportCSV(run, context)}`, 'text/csv; charset=utf-8', `${name}.csv`)
   if (body.action === 'native-json') return exportResponse(nativeExportJSON(run, context), 'application/json', `${name}.json`)

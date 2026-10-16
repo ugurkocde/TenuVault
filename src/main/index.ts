@@ -5,8 +5,10 @@ import { readFile, stat } from "node:fs/promises"
 import { pathToFileURL } from "node:url"
 import { isGuid, isMicrosoftLoginUrl, sameRendererDocument } from "../shared/security"
 import { rendererStorageKey, rendererStorageValue } from "./renderer-storage"
-import { prepareSaveFile } from "./save-file"
-import { app, BrowserWindow, dialog, ipcMain, net, Notification, safeStorage, shell } from "electron"
+import { prepareSaveFile, type PreparedFile } from "./save-file"
+import { PdfBrandingPolicy, PdfBrandingStore, setPdfBrandingPolicy } from "./pdf-branding"
+import { prepareOibReportFile, printHtmlToPdf } from "./report-export"
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, Notification, safeStorage, shell } from "electron"
 import { join } from "node:path"
 import type { ApiRequest, AppPreferences, ScheduleInput } from "../shared/ipc"
 import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN } from "../shared/constants"
@@ -243,6 +245,14 @@ async function bootstrap(): Promise<void> {
     })
     if (!response.ok || !Array.isArray((await response.json()).value)) throw new Error("Intune management access is required for this tenant's restore history.")
   })
+
+  // Every PDF export resolves branding per tenant here: saved branding applies only on a plan with pdfBranding.
+  const pdfBranding = new PdfBrandingPolicy(
+    new PdfBrandingStore(appStore, (bytes) => nativeImage.createFromBuffer(bytes)),
+    (tenantId) => license.requireEntitlement(tenantId),
+    () => license.status(signedInTenants()).tenants.map((tenant) => (tenant.entitled ? tenant.plan : null)),
+  )
+  setPdfBrandingPolicy(pdfBranding)
 
   // Nightly builds keep following nightlies until the admin switches back to stable.
   const preferences = new Preferences(appStore, { nightlyUpdates: isNightly(app.getVersion()) })
@@ -572,6 +582,12 @@ async function bootstrap(): Promise<void> {
     applyPreferences(preferences.set(rest))
     return currentPreferences()
   })
+  handleTrusted("pdfBranding:get", () => ({ branding: pdfBranding.get(), available: pdfBranding.available() }))
+  handleTrusted("pdfBranding:set", (_event, branding: unknown) => withPlanError(() => ({ branding: pdfBranding.set(branding), available: true })))
+  handleTrusted("pdfBranding:clear", () => {
+    pdfBranding.clear()
+    return { branding: null, available: pdfBranding.available() }
+  })
   handleTrusted("updates:status", () => updates.current())
   handleTrusted("updates:check", () => updates.check())
   handleTrusted("updates:install", async () => {
@@ -792,7 +808,8 @@ async function bootstrap(): Promise<void> {
     internalCisBenchmarks: internalCisBenchmarksEnabled(),
   }))
   handleTrusted("app:openExternal", (_event, url: string) => openExternalSafely(url))
-  handleTrusted("reports:savePdf", (_event, html: unknown, fileName: unknown) => savePdfReport(html, fileName))
+  handleTrusted("reports:savePdf", async (_event, report: unknown, fileName: unknown) =>
+    saveFileWithDialog(await prepareOibReportFile(report, fileName, (html, options) => printHtmlToPdf(html, options, (window) => new BrowserWindow(window))), "Save PDF report"))
   handleTrusted("reports:saveFile", (_event, data: unknown, fileName: unknown, encoding: unknown) => saveExportFile(data, fileName, encoding))
 
   createWindow()
@@ -835,43 +852,15 @@ async function openExternalSafely(url: string): Promise<void> {
   return shell.openExternal(parsed.href)
 }
 
-/**
- * Prints a report built by the renderer to PDF. The page is rendered in a hidden, sandboxed window
- * with JavaScript off and a CSP that blocks every external resource, then saved where the admin chooses.
- */
-async function savePdfReport(html: unknown, fileName: unknown): Promise<{ saved: boolean; path?: string }> {
-  if (typeof html !== "string" || !html.startsWith("<!doctype html>") || html.length > 25_000_000) throw new Error("The report could not be prepared.")
-  const base = (typeof fileName === "string" ? fileName : "").replace(/\.pdf$/i, "").replace(/[^\w .()-]/g, "_").trim().slice(0, 120) || "TenuVault report"
-  const { mkdtemp, rm, writeFile } = await import("node:fs/promises")
-  const { tmpdir } = await import("node:os")
-  const folder = await mkdtemp(join(tmpdir(), "tenuvault-report-"))
-  const page = new BrowserWindow({ show: false, webPreferences: { javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true } })
-  try {
-    page.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
-    page.webContents.on("will-navigate", (event) => event.preventDefault())
-    const file = join(folder, "report.html")
-    await writeFile(file, html, { encoding: "utf8", mode: 0o600 })
-    await page.loadFile(file)
-    const pdf = await page.webContents.printToPDF({ printBackground: true, pageSize: "A4" })
-    const result = await dialog.showSaveDialog(mainWindow!, {
-      title: "Save PDF report",
-      defaultPath: join(app.getPath("documents"), `${base}.pdf`),
-      filters: [{ name: "PDF", extensions: ["pdf"] }],
-    })
-    if (result.canceled || !result.filePath) return { saved: false }
-    await writeFile(result.filePath, pdf)
-    return { saved: true, path: result.filePath }
-  } finally {
-    page.destroy()
-    await rm(folder, { recursive: true, force: true }).catch(() => undefined)
-  }
-}
-
 /** Saves an export built by the renderer (CSV, JSON, text or a PDF as base64) where the admin chooses. */
 async function saveExportFile(data: unknown, fileName: unknown, encoding: unknown): Promise<{ saved: boolean; path?: string }> {
-  const file = prepareSaveFile(data, fileName, encoding)
+  return saveFileWithDialog(prepareSaveFile(data, fileName, encoding))
+}
+
+/** Asks where to save a checked file, under Documents by default, and writes it. */
+async function saveFileWithDialog(file: PreparedFile, title = `Save ${file.label} file`): Promise<{ saved: boolean; path?: string }> {
   const result = await dialog.showSaveDialog(mainWindow!, {
-    title: `Save ${file.label} file`,
+    title,
     defaultPath: join(app.getPath("documents"), file.name),
     filters: [{ name: file.label, extensions: [file.extension] }],
   })

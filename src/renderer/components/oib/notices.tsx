@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { CheckCircle2, Info, X } from "lucide-react"
 import { cn } from "~/lib/utils"
+import type { ReportPayload } from "../../../shared/oib/report"
 import { bridge } from "../../lib/bridge"
 import { errorText } from "./common"
 
@@ -30,11 +31,11 @@ export async function saveFile(data: string, fileName: string, encoding: "utf8" 
 /** Saves a CSV or JSON export through the Save dialog; `type` is kept for callers of the former download. */
 export const saveText = (content: string, fileName: string, _type?: string): Promise<SaveResult> => saveFile(content, fileName)
 
-/** Prints a report to PDF and asks where to save it; resolves with the outcome, never rejects. */
-export async function savePdf(html: string, fileName: string): Promise<SaveResult> {
+/** Has the main process generate a report PDF and asks where to save it; resolves with the outcome, never rejects. */
+export async function savePdf(report: ReportPayload, fileName: string): Promise<SaveResult> {
   const name = fileName.endsWith(".pdf") ? fileName : `${fileName}.pdf`
   try {
-    return saved(await bridge.reports.savePdf(html, name), name)
+    return saved(await bridge.reports.savePdf(report, name), name)
   } catch (error) {
     return { saved: false, fileName: name, error: errorText(error, "The PDF could not be saved.") }
   }
