@@ -208,7 +208,7 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
                   {current.lastStatus === "Completed" ? (
                     <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0 text-green-600" />
                   ) : (
-                    <AlertCircle className={`mt-0.5 h-4 w-4 flex-shrink-0 ${current.lastStatus === "Cancelled" ? "text-gray-500" : "text-red-600"}`} />
+                    <AlertCircle className={`mt-0.5 h-4 w-4 flex-shrink-0 ${current.lastStatus === "Failed" ? "text-red-600" : "text-gray-500"}`} />
                   )}
                   <span>
                     {formatWhen(current.lastAttemptAt)}

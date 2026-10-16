@@ -14,6 +14,14 @@ export class FetchPreconditionError extends FetchApplicationError {
   }
 }
 
+/** A request that got no HTTP response, because the host could not be reached or the connection timed out. */
+export class NetworkUnreachableError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = "NetworkUnreachableError"
+  }
+}
+
 /**
  * Explains a request that got no HTTP response (proxy, TLS inspection, DNS, firewall).
  *
@@ -38,7 +46,7 @@ export function networkFailure(error: unknown, host: string): { code: string | u
 export function describeNetworkFailure(error: unknown, host: string): unknown {
   if (!(error instanceof Error) || error instanceof FetchApplicationError || error.name === "AbortError" || error.name === "TimeoutError") return error
   const { code, guidance } = networkFailure(error, host)
-  return new Error(`${host} could not be reached. ${guidance}${code ? ` (${code})` : ""}`, { cause: error })
+  return new NetworkUnreachableError(`${host} could not be reached. ${guidance}${code ? ` (${code})` : ""}`, { cause: error })
 }
 
 /** Wraps the fetch that goes to the network so its failures name the host and cause. */

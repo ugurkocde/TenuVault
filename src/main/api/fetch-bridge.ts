@@ -96,8 +96,10 @@ export function createBridgedFetch(options: FetchBridgeOptions): typeof fetch {
         if (request.method === "POST" && response.ok) {
           const form = new URLSearchParams(requestForm)
           if (form.get("scope")?.includes("storage.azure.com")) {
-            const token = await response.clone().json() as { access_token?: unknown }
-            if (typeof token.access_token === "string") registerStorageToken(token.access_token, decodeURIComponent(tokenPath[1]))
+            // A body that is not a token (for example a captive portal page) still goes to MSAL, which
+            // reports it as a response it could not parse. Rejecting here would look like no response at all.
+            const token = await response.clone().json().catch(() => null) as { access_token?: unknown } | null
+            if (typeof token?.access_token === "string") registerStorageToken(token.access_token, decodeURIComponent(tokenPath[1]))
           }
         }
         return response

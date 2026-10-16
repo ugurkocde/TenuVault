@@ -34,7 +34,7 @@ describe("BackupScheduler", () => {
     await vi.advanceTimersByTimeAsync(59_999)
     expect(run).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1)
-    expect(run).toHaveBeenCalledExactlyOnceWith(TENANT)
+    expect(run).toHaveBeenCalledExactlyOnceWith(TENANT, false)
     await vi.advanceTimersByTimeAsync(3 * 60_000)
     expect(run).toHaveBeenCalledTimes(1)
     expect(scheduler.list()[0]).toMatchObject({ lastRunAt: local(2026, 10, 13, 9, 1), nextRunAt: local(2026, 10, 14, 2) })
@@ -301,6 +301,165 @@ describe("BackupScheduler", () => {
     expect(scheduler.list()[0]!.attempts).toBe(1)
   })
 
+  describe("failures to reach Microsoft or storage", () => {
+    const unreachable: ScheduledRunResult = { status: "Failed", message: "network_error: Network request failed: login.microsoftonline.com could not be reached. (ERR_TIMED_OUT)", unreachable: true }
+    const counted: ScheduledRunResult = { status: "Failed", message: "Sign in again to continue." }
+
+    it("are not counted during the dark wakes of a sleeping Mac, but wait 15 minutes each", async () => {
+      const { scheduler, run, setNow } = setup(local(2026, 9, 24, 10))
+      run.mockResolvedValue(unreachable)
+      scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+      // Each brief wake runs the minute timer; the ones within 15 minutes of a failure do not start a backup.
+      for (const [hour, minute] of [[2, 0], [2, 5], [2, 14], [2, 16], [2, 20], [2, 33], [2, 49], [5, 2], [5, 16]] as const) {
+        setNow(local(2026, 9, 25, hour, minute))
+        await scheduler.tick()
+      }
+      expect(run).toHaveBeenCalledTimes(5)
+      expect(scheduler.list()[0]).toMatchObject({ lastStatus: "Failed", attempts: 0, attemptSlot: local(2026, 9, 25, 2), lastAttemptAt: local(2026, 9, 25, 5, 2), nextRunAt: local(2026, 9, 25, 5, 17) })
+      expect(scheduler.list()[0]!.lastRunAt).toBeUndefined()
+      setNow(local(2026, 9, 25, 7, 30))
+      expect(scheduler.isDue(scheduler.list()[0]!)).toBe(true)
+      run.mockResolvedValueOnce({ status: "Completed", message: "Done" })
+      await scheduler.tick()
+      expect(scheduler.list()[0]).toMatchObject({ lastStatus: "Completed", lastRunAt: local(2026, 9, 25, 7, 30), attempts: 0, nextRunAt: local(2026, 9, 26, 2) })
+      setNow(local(2026, 9, 25, 8))
+      await scheduler.tick()
+      expect(run).toHaveBeenCalledTimes(6)
+    })
+
+    it("still wait 15 minutes between attempts when the timer fires every minute", async () => {
+      const { scheduler, run, setNow } = setup(local(2026, 9, 24, 10))
+      run.mockResolvedValue(unreachable)
+      scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+      for (let minute = 0; minute < 60; minute++) {
+        setNow(local(2026, 9, 25, 2, minute))
+        await scheduler.tick()
+      }
+      expect(run).toHaveBeenCalledTimes(4)
+      expect(scheduler.list()[0]).toMatchObject({ attempts: 0, lastAttemptAt: local(2026, 9, 25, 2, 45), nextRunAt: local(2026, 9, 25, 3) })
+    })
+
+    it("never let counted failures exceed three, and keep retrying the uncounted ones", async () => {
+      const { scheduler, run, setNow } = setup(local(2026, 9, 24, 10))
+      scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+      run.mockResolvedValueOnce(counted).mockResolvedValueOnce(counted)
+      run.mockResolvedValueOnce(unreachable).mockResolvedValueOnce(unreachable).mockResolvedValueOnce(unreachable)
+      run.mockResolvedValue(counted)
+      const attempts: number[] = []
+      for (const [hour, minute] of [[2, 0], [2, 15], [2, 30], [2, 45], [3, 0], [3, 15], [3, 30], [3, 45]] as const) {
+        setNow(local(2026, 9, 25, hour, minute))
+        await scheduler.tick()
+        attempts.push(scheduler.list()[0]!.attempts)
+      }
+      expect(run).toHaveBeenCalledTimes(6)
+      expect(attempts).toEqual([1, 2, 2, 2, 2, 3, 3, 3])
+      expect(scheduler.list()[0]).toMatchObject({ lastStatus: "Failed", lastMessage: counted.message, nextRunAt: local(2026, 9, 26, 2) })
+      setNow(local(2026, 9, 26, 2))
+      await scheduler.tick()
+      expect(run).toHaveBeenCalledTimes(7)
+      expect(scheduler.list()[0]).toMatchObject({ attempts: 1, attemptSlot: local(2026, 9, 26, 2) })
+    })
+
+    it("keep the wait across restarts", async () => {
+      const { scheduler, store, run, setNow } = setup(local(2026, 9, 24, 10))
+      run.mockResolvedValue(unreachable)
+      scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+      setNow(local(2026, 9, 25, 2))
+      await scheduler.tick()
+      let now = new Date(local(2026, 9, 25, 2, 14))
+      const restarted = new BackupScheduler(store, run, () => undefined, () => now)
+      expect(restarted.list()[0]).toMatchObject({ attempts: 0, lastStatus: "Failed", attemptSlot: local(2026, 9, 25, 2), nextRunAt: local(2026, 9, 25, 2, 15) })
+      await restarted.tick()
+      expect(run).toHaveBeenCalledTimes(1)
+      now = new Date(local(2026, 9, 25, 2, 15))
+      expect(restarted.isDue(restarted.list()[0]!)).toBe(true)
+      await restarted.tick()
+      expect(run).toHaveBeenCalledTimes(2)
+      expect(restarted.list()[0]!.attempts).toBe(0)
+    })
+
+    it("count when the process stops during the attempt", async () => {
+      const { scheduler, store, run, setNow } = setup(local(2026, 9, 24, 10))
+      scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+      let finish!: (result: ScheduledRunResult) => void
+      run.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+      setNow(local(2026, 9, 25, 2))
+      const pending = scheduler.tick()
+      const restarted = new BackupScheduler(store, run, () => undefined, () => new Date(local(2026, 9, 25, 2, 1)))
+      expect(restarted.list()[0]).toMatchObject({ attempts: 1, nextRunAt: local(2026, 9, 25, 2, 15) })
+      finish(unreachable)
+      await pending
+      expect(scheduler.list()[0]!.attempts).toBe(0)
+    })
+
+    it("tell the runner whether the previous attempt of the same slot failed, across restarts", async () => {
+      const { scheduler, store, run, setNow } = setup(local(2026, 9, 24, 10))
+      run.mockResolvedValue(unreachable)
+      scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+      setNow(local(2026, 9, 25, 2))
+      await scheduler.tick()
+      setNow(local(2026, 9, 25, 2, 15))
+      await scheduler.tick()
+      const restarted = new BackupScheduler(store, run, () => undefined, () => new Date(local(2026, 9, 25, 2, 30)))
+      await restarted.tick()
+      // A new slot starts fresh even though the last stored result is a failure.
+      setNow(local(2026, 9, 26, 2))
+      await scheduler.tick()
+      run.mockResolvedValueOnce({ status: "Completed", message: "Done" })
+      setNow(local(2026, 9, 26, 2, 15))
+      await scheduler.tick()
+      setNow(local(2026, 9, 27, 2))
+      await scheduler.tick()
+      expect((run.mock.calls as unknown as Array<[string, boolean]>).map(([, afterFailure]) => afterFailure)).toEqual([false, true, true, false, true, false])
+    })
+
+    it("do not carry an earlier slot's failure into a new slot's unfinished attempt", async () => {
+      const { scheduler, store, run, setNow } = setup(local(2026, 9, 24, 10))
+      run.mockResolvedValueOnce(counted)
+      scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+      setNow(local(2026, 9, 25, 2))
+      await scheduler.tick()
+      let finish!: (result: ScheduledRunResult) => void
+      run.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+      setNow(local(2026, 9, 26, 2))
+      const pending = scheduler.tick()
+      // A new process only sees the state saved before the unfinished attempt.
+      const restartedStore = memoryStore()
+      restartedStore.set("backup.schedules", store.get("backup.schedules")!)
+      finish(unreachable)
+      await pending
+      let now = new Date(local(2026, 9, 26, 2, 1))
+      const retry = vi.fn(async (): Promise<ScheduledRunResult> => unreachable)
+      const restarted = new BackupScheduler(restartedStore, retry, () => undefined, () => now)
+      expect(restarted.list()[0]).toMatchObject({ attempts: 1, attemptSlot: local(2026, 9, 26, 2), lastAttemptAt: local(2026, 9, 26, 2), nextRunAt: local(2026, 9, 26, 2, 15) })
+      expect(restarted.list()[0]!.lastStatus).toBeUndefined()
+      expect(restarted.list()[0]!.lastMessage).toBeUndefined()
+      now = new Date(local(2026, 9, 26, 2, 15))
+      await restarted.tick()
+      now = new Date(local(2026, 9, 26, 2, 30))
+      await restarted.tick()
+      expect(retry.mock.calls).toEqual([[TENANT, false], [TENANT, true]])
+      expect(restarted.list()[0]).toMatchObject({ attempts: 1, lastStatus: "Failed" })
+    })
+
+    it("do not show a retry for a slot before a change made during the attempt", async () => {
+      const { scheduler, run, setNow } = setup(local(2026, 9, 24, 10))
+      const input = { tenantId: TENANT, enabled: true, frequency: "daily" as const, time: "02:00" }
+      scheduler.set(input)
+      let finish!: (result: ScheduledRunResult) => void
+      run.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+      setNow(local(2026, 9, 25, 2))
+      const pending = scheduler.tick()
+      setNow(local(2026, 9, 25, 2, 5))
+      scheduler.set(input)
+      setNow(local(2026, 9, 25, 2, 10))
+      finish(unreachable)
+      await pending
+      expect(scheduler.list()[0]).toMatchObject({ lastStatus: "Failed", attempts: 0, nextRunAt: local(2026, 9, 26, 2) })
+      expect(scheduler.isDue(scheduler.list()[0]!)).toBe(false)
+    })
+  })
+
   it("persists retry state across scheduler restarts", async () => {
     const { scheduler, store, run, setNow } = setup(local(2026, 9, 24, 10))
     run.mockResolvedValue({ status: "Failed", message: "Network unavailable" })
@@ -371,7 +530,7 @@ describe("BackupScheduler", () => {
     finish({ status: "Completed", message: "Backup completed successfully" })
     await tick
     expect(run).toHaveBeenCalledTimes(1)
-    expect(run).toHaveBeenCalledWith(TENANT)
+    expect(run).toHaveBeenCalledWith(TENANT, false)
   })
 
   it("skips and logs malformed stored entries while keeping valid schedules", () => {
