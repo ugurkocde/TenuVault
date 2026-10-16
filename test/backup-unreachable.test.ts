@@ -111,7 +111,7 @@ describe("unreachable backup jobs", () => {
   describe("with the default concurrency", () => {
     const twoTypes = { ...request, scope: { excluded: INTUNE_TYPES.filter((type) => type.folder !== "DeviceConfigurations" && type.folder !== "CompliancePolicies").map((type) => type.folder) } }
     // Graph answers through `graph`; `null` stands for a request that gets no response. Local storage always answers.
-    const run = async (backup: typeof request, graph: (url: URL) => Response | null) => {
+    const run = async (backup: typeof request, graph: (url: URL) => Response | Promise<Response> | null) => {
       vi.useFakeTimers()
       const engine = new BackupEngine({
         getToken: async () => "token",
@@ -124,7 +124,7 @@ describe("unreachable backup jobs", () => {
         }),
       })
       const done = engine.waitForJob(engine.start(backup))
-      await vi.advanceTimersByTimeAsync(60_000)
+      await vi.advanceTimersByTimeAsync(300_000)
       return done
     }
 
@@ -139,6 +139,32 @@ describe("unreachable backup jobs", () => {
       const job = await run({ ...request, scope: { excluded: [] } }, () => null)
       expect(job).toMatchObject({ status: "Failed", unreachable: true })
       expect(job.exception).toContain("Microsoft Graph did not respond for 24 consecutive requests")
+    })
+
+    it("counts a backup stopped by the circuit after it saved a policy", async () => {
+      const items = Array.from({ length: 30 }, (_, index) => ({ id: `item-${index}`, displayName: `Item ${index}` }))
+      const job = await run({ ...request, scope: { excluded: [] } }, (url) => url.pathname.endsWith("/deviceConfigurations")
+        ? Response.json({ value: items })
+        : url.pathname.endsWith("/deviceConfigurations/item-0") ? Response.json({ id: "item-0" })
+          : url.pathname.includes("/deviceConfigurations/") ? null : Response.json({ value: [] }))
+      expect(job).toMatchObject({ status: "Failed" })
+      expect(job.exception).toContain("Microsoft Graph did not respond for 24 consecutive requests")
+      expect(job.unreachable).toBeUndefined()
+    })
+
+    it("counts a listing timeout that ends the job before a concurrent 401", async () => {
+      // Device configurations: no response, then two requests that time out after 90 seconds each (183 s).
+      // Compliance policies: two timeouts, then a 401 that arrives 30 seconds into the third request (213 s).
+      const attempts = { configurations: 0, compliance: 0 }
+      const hang = () => new Promise<Response>(() => {})
+      const job = await run(twoTypes, (url) => {
+        if (url.pathname.endsWith("/deviceConfigurations")) return ++attempts.configurations === 1 ? null : hang()
+        if (++attempts.compliance < 3) return hang()
+        return new Promise((resolve) => setTimeout(() => resolve(Response.json({ error: { message: "Unauthorized" } }, { status: 401 })), 30_000))
+      })
+      expect(attempts).toEqual({ configurations: 3, compliance: 3 })
+      expect(job).toMatchObject({ status: "Failed", exception: "Backup request timed out after 90 seconds. Check your connection and retry." })
+      expect(job.unreachable).toBeUndefined()
     })
 
     it("counts a backup that also had an HTTP failure", async () => {

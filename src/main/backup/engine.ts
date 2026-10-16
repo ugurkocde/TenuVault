@@ -295,20 +295,22 @@ export class BackupEngine {
         this.write(job, `Found ${items.length} ${type.label}${skipped ? ` (${skipped} built-in skipped)` : ""}.`)
         lists[index] = { type, items }
       } catch (error) {
-        network.signal.throwIfAborted()
-        if (error instanceof RequestTimeoutError) throw error
-        if (error instanceof TokenError || (error instanceof GraphError && error.status === 401)) throw error
         // Access denied: the app registration lacks the permission or its admin consent (for example
         // one created before the type was supported), or the admin's Intune role does not cover the
         // type. It is left out and reported, without marking the backup incomplete for the rest.
-        if (error instanceof GraphError && error.status === 403 && !ORIGINAL_FOLDERS.has(type.folder)) {
+        const denied = error instanceof GraphError && error.status === 403 && !ORIGINAL_FOLDERS.has(type.folder)
+        // Counted before any rethrow, so the job sees this cause whichever failure ends it.
+        if (!denied && !isUnreachable(error)) outcome.otherFailures++
+        network.signal.throwIfAborted()
+        if (error instanceof RequestTimeoutError) throw error
+        if (error instanceof TokenError || (error instanceof GraphError && error.status === 401)) throw error
+        if (denied) {
           skippedTypes.push(type.folder)
           this.write(job, `Skipped ${type.label}: access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it.`)
           return
         }
         countAuthFailure(error)
         failures++
-        if (!isUnreachable(error)) outcome.otherFailures++
         failedTypes.push(type.folder)
         this.write(job, `Could not read ${type.label}: ${error instanceof Error ? error.message : String(error)}`)
       }
@@ -354,12 +356,13 @@ export class BackupEngine {
         counts[type.folder]!++
         outcome.saved++
       } catch (error) {
+        // Counted before any rethrow, so the job sees this cause whichever failure ends it.
+        if (!isUnreachable(error)) outcome.otherFailures++
         network.signal.throwIfAborted()
         countAuthFailure(error)
         // An expired sign-in fails every remaining item the same way, so it stops the backup once.
         if (error instanceof TokenError || (error instanceof GraphError && error.status === 401)) throw error
         failures++
-        if (!isUnreachable(error)) outcome.otherFailures++
         const warning = `Could not back up "${displayName}": ${error instanceof Error ? error.message : String(error)}`
         if (error instanceof RequestTimeoutError) itemTimeoutWarnings.push(warning)
         this.write(job, warning)
