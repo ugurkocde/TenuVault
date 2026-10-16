@@ -1,17 +1,29 @@
 "use client"
 
 import { ArrowLeftRight, GitCompare, Loader2 } from "lucide-react"
+import { Link } from "react-router-dom"
 import { Button } from "~/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select"
 import { formatDate, TRIGGER_LABEL, type BackupSummary } from "~/components/backup/types"
 import { backupCompleteness } from "../../../shared/intune/drift"
 
-/** "Oct 6, 2026, 02:00, Scheduled" with the status when it is not a clean success. */
-function optionLabel(backup: BackupSummary): string {
-  const trigger = backup.type && backup.type in TRIGGER_LABEL ? TRIGGER_LABEL[backup.type] : "Trigger not recorded"
-  const completeness = backupCompleteness(backup.status)
-  const status = completeness === "complete" ? "" : completeness === "warnings" ? ", completed with warnings" : backup.status === "running" ? ", running" : ", incomplete"
-  return `${formatDate(backup.timestamp)}, ${trigger}${status}`
+/** "Oct 6, 2026, 02:00, Scheduled", the trigger left out when it was not recorded, and marked when it completed with warnings. */
+export function optionLabel(backup: BackupSummary): string {
+  const trigger = backup.type && backup.type in TRIGGER_LABEL ? `, ${TRIGGER_LABEL[backup.type]}` : ""
+  const warnings = backupCompleteness(backup.status) === "warnings" ? ", completed with warnings" : ""
+  return `${formatDate(backup.timestamp)}${trigger}${warnings}`
+}
+
+/** Backups drift can compare: complete ones and ones that completed with warnings, newest first as listed. */
+export function comparableBackups(backups: BackupSummary[]): BackupSummary[] {
+  return backups.filter((backup) => backupCompleteness(backup.status) !== "incomplete")
+}
+
+/** The pair after choosing a backup on one side; choosing the backup already on the other side swaps them. */
+export function choose(pair: { baseline: string | null; comparison: string | null }, side: "baseline" | "comparison", id: string): { baseline: string | null; comparison: string | null } {
+  const other = side === "baseline" ? "comparison" : "baseline"
+  if (pair[other] === id) return { [side]: id, [other]: pair[side] } as { baseline: string | null; comparison: string | null }
+  return { ...pair, [side]: id }
 }
 
 /** Why the chosen pair cannot be compared, or null. */
@@ -26,9 +38,10 @@ export function pairProblem(backups: BackupSummary[], baseline: string | null, c
 }
 
 /**
- * Picks the two backups to compare: the baseline (older) and the comparison (newer). Backups that
- * did not complete cannot be chosen; ones that completed with warnings can, and are marked, since
- * items they missed may show as deleted.
+ * Picks the two backups to compare: the baseline (older) and the comparison (newer). Only backups that
+ * can be compared are offered; the ones that did not finish or could not be read are counted below the
+ * picker instead of being listed as unavailable. Ones that completed with warnings are offered and
+ * marked, since items they missed may show as deleted.
  */
 export function BackupPairPicker({
   backups,
@@ -37,6 +50,7 @@ export function BackupPairPicker({
   comparison,
   onChange,
   onCompare,
+  onBackUp,
   busy,
   latest,
 }: {
@@ -46,20 +60,24 @@ export function BackupPairPicker({
   comparison: string | null
   onChange: (pair: { baseline: string | null; comparison: string | null }) => void
   onCompare: () => void
+  /** Starts a backup of the tenant, offered when there are too few backups to choose between. */
+  onBackUp?: () => void
   busy: boolean
   /** The two newest complete backups, offered when another pair is chosen. */
   latest: { baseline: string; comparison: string } | null
 }) {
-  const problem = pairProblem(backups, baseline, comparison)
-  const warned = [baseline, comparison].some((id) => backupCompleteness(backups.find((backup) => backup.id === id)?.status) === "warnings")
-  const select = (value: string | null, label: string, onValue: (id: string) => void, other: string | null) => (
-    <Select value={value ?? undefined} onValueChange={onValue} disabled={loading || busy}>
+  const offered = comparableBackups(backups)
+  const hidden = backups.length - offered.length
+  const problem = pairProblem(offered, baseline, comparison)
+  const warned = [baseline, comparison].some((id) => backupCompleteness(offered.find((backup) => backup.id === id)?.status) === "warnings")
+  const select = (side: "baseline" | "comparison", label: string) => (
+    <Select value={(side === "baseline" ? baseline : comparison) ?? undefined} onValueChange={(id) => onChange(choose({ baseline, comparison }, side, id))} disabled={loading || busy}>
       <SelectTrigger aria-label={label} className="h-11 w-full min-w-0 sm:w-[300px]">
         <SelectValue placeholder={loading ? "Loading backups..." : "Choose a backup"} />
       </SelectTrigger>
       <SelectContent>
-        {backups.map((backup) => (
-          <SelectItem key={backup.id} value={backup.id} disabled={backupCompleteness(backup.status) === "incomplete" || backup.id === other}>
+        {offered.map((backup) => (
+          <SelectItem key={backup.id} value={backup.id}>
             {optionLabel(backup)}
           </SelectItem>
         ))}
@@ -71,7 +89,7 @@ export function BackupPairPicker({
       <div className="flex flex-col gap-4 xl:flex-row xl:items-end">
         <label className="flex min-w-0 flex-col gap-1.5">
           <span className="text-sm text-gray-500">Baseline (older)</span>
-          {select(baseline, "Baseline backup", (id) => onChange({ baseline: id, comparison }), comparison)}
+          {select("baseline", "Baseline backup")}
         </label>
         <Button
           type="button"
@@ -87,7 +105,7 @@ export function BackupPairPicker({
         </Button>
         <label className="flex min-w-0 flex-col gap-1.5">
           <span className="text-sm text-gray-500">Comparison (newer)</span>
-          {select(comparison, "Comparison backup", (id) => onChange({ baseline, comparison: id }), baseline)}
+          {select("comparison", "Comparison backup")}
         </label>
         <Button size="lg" className="bg-coral-600 text-white hover:bg-coral-700 xl:ml-auto" onClick={onCompare} disabled={busy || loading || problem !== null}>
           {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <GitCompare className="mr-2 h-4 w-4" />}
@@ -99,8 +117,42 @@ export function BackupPairPicker({
           Use the latest two backups
         </button>
       )}
-      {!loading && backups.length > 0 && problem && <p className="mt-3 text-xs text-gray-500">{problem}</p>}
+      {!loading && offered.length > 0 && problem && <p className="mt-3 text-xs text-gray-500">{problem}</p>}
       {warned && <p className="mt-3 text-xs text-amber-700">A chosen backup completed with warnings. Items it could not read may show up as deleted or added.</p>}
+      {!loading && offered.length < 3 && (
+        <p className="mt-3 text-xs text-gray-500">
+          {fewNote(offered.length)}
+          {onBackUp && (
+            <>
+              {" "}
+              <button type="button" className="font-medium text-blue-700 hover:underline disabled:opacity-50" disabled={busy} onClick={onBackUp}>
+                Back up now
+              </button>
+            </>
+          )}
+        </p>
+      )}
+      {!loading && hidden > 0 && (
+        <p className="mt-3 text-xs text-gray-500">
+          {hiddenNote(hidden)}{" "}
+          <Link to="/portal/backup" className="font-medium text-blue-700 hover:underline">
+            See them in Backup & Restore
+          </Link>
+        </p>
+      )}
     </div>
   )
+}
+
+/** What to do when there are too few backups to choose a different pair. */
+export function fewNote(count: number): string {
+  if (count === 2) return "These are the only two backups that can be compared. A new backup lets you compare against the tenant as it is now."
+  return `${count === 1 ? "Only one backup" : "No backup"} can be compared yet. Drift detection needs two complete backups.`
+}
+
+/** Why some backups are missing from the lists. */
+export function hiddenNote(count: number): string {
+  return count === 1
+    ? "1 backup is not listed because it did not finish or its details could not be read."
+    : `${count} backups are not listed because they did not finish or their details could not be read.`
 }

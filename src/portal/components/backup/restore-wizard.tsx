@@ -31,7 +31,7 @@ import { mergeOutcomes, retryBatches } from "~/lib/policies/restore-retry"
 import { FeatureApiError } from "@desktop/lib/feature-api"
 import { showFeaturePlanError } from "@desktop/lib/plan-dialog"
 import { PlanBadge, UpgradeNote } from "@desktop/components/UpgradeNote"
-import { formatDate, formatSize, STATUS_LABEL, statusKind, type BackupSummary, type BackupTenant } from "./types"
+import { formatDate, formatSize, statusKind, statusLabel, type BackupSummary, type BackupTenant } from "./types"
 
 interface CopyTarget {
   tenantId: string
@@ -539,7 +539,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                         {entry.scope && entry.scope.excluded.length > 0 && `, ${entry.scope.description.toLowerCase()}`}
                       </span>
                     </span>
-                    <span className={cn("text-xs", kind === "success" ? "text-gray-500" : kind === "warning" ? "text-amber-800" : "text-red-700")}>{STATUS_LABEL[kind]}</span>
+                    <span className={cn("text-xs", kind === "success" ? "text-gray-500" : kind === "warning" ? "text-amber-800" : "text-red-700")}>{statusLabel(entry.status)}</span>
                   </button>
                 )
               })}

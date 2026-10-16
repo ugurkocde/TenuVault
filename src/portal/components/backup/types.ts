@@ -20,6 +20,8 @@ export interface BackupSummary {
   /** Compared with the newest older comparable backup; null when there is none. */
   changes: { added: number; modified: number; removed: number } | null
   comparedWith: string | null
+  /** Why the metadata could not be read, when it could not. */
+  error?: string
 }
 
 /** The tenant fields backup and restore requests need. */
@@ -66,7 +68,8 @@ export type StatusKind = "success" | "warning" | "failed" | "running"
 export function statusKind(status: string): StatusKind {
   const value = status.toLowerCase()
   if (value.includes("fail") || value === "incomplete") return "failed"
-  if (value.includes("warn") || value.includes("partial")) return "warning"
+  // "unknown": the metadata could not be read, so whether the backup finished is not known.
+  if (value.includes("warn") || value.includes("partial") || value === "unknown") return "warning"
   if (value === "running") return "running"
   return "success"
 }
@@ -76,4 +79,11 @@ export const STATUS_LABEL: Record<StatusKind, string> = {
   warning: "Completed with warnings",
   failed: "Failed",
   running: "Running",
+}
+
+/** The status as shown: the kind's label, named more precisely for stopped and unreadable backups. */
+export function statusLabel(status: string): string {
+  if (status === "incomplete") return "Incomplete"
+  if (status === "unknown") return "Status unknown"
+  return STATUS_LABEL[statusKind(status)]
 }

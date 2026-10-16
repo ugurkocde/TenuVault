@@ -37,6 +37,10 @@ import { GatedButton } from "@desktop/components/PlanGate"
 import { FilterChips, FilterSelect, SearchInput } from "@desktop/components/FilterControls"
 import { cancelDriftScan, startDriftScan, useDriftJob, useDriftResult } from "@desktop/lib/drift-jobs"
 import { useBackupList } from "@desktop/lib/backup-list"
+import { backupTarget, trackBackup } from "@desktop/lib/backups"
+import { toast } from "@desktop/lib/toast"
+import { RunBackupDialog } from "@desktop/components/RunBackupDialog"
+import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { Button } from "~/components/ui/button"
 import { Alert, AlertDescription } from "~/components/ui/alert"
 import { RevertProgressModal } from "~/components/drift/revert-progress-modal"
@@ -54,10 +58,10 @@ import {
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu"
 
-/** "Oct 6, 2026, 02:00 (scheduled)" */
+/** "Oct 6, 2026, 02:00 (scheduled)", or only the date when the trigger was not recorded. */
 function backupLabel(backup: DriftBackupRef): string {
-  const trigger = backup.trigger && backup.trigger in TRIGGER_LABEL ? TRIGGER_LABEL[backup.trigger as keyof typeof TRIGGER_LABEL].toLowerCase() : "trigger not recorded"
-  return `${formatDate(backup.timestamp)} (${trigger})`
+  const trigger = backup.trigger && backup.trigger in TRIGGER_LABEL ? ` (${TRIGGER_LABEL[backup.trigger as keyof typeof TRIGGER_LABEL].toLowerCase()})` : ""
+  return `${formatDate(backup.timestamp)}${trigger}`
 }
 
 const NO_BACKUPS: BackupSummary[] = []
@@ -125,6 +129,16 @@ export default function DriftDetectionPage() {
   const backups = backupList.backups ?? NO_BACKUPS
   const backupsLoaded = backupList.backups !== null
   const backupsLoading = backupList.loading && !backupsLoaded
+  // A backup started here, so the list is read again when it finishes and the new backup can be picked.
+  const { activeJobs, addJob } = useBackupProgress()
+  const [backingUp, setBackingUp] = useState(false)
+  const [startedBackup, setStartedBackup] = useState<string | null>(null)
+  const startedDone = activeJobs.some(job => job.jobId === startedBackup && job.isComplete)
+  useEffect(() => {
+    if (!startedDone) return
+    setStartedBackup(null)
+    void backupList.refresh({ force: true })
+  }, [startedDone])
   const [pair, setPair] = useState<{ baseline: string | null; comparison: string | null }>({ baseline: null, comparison: null })
   // Set once the admin picks a backup, so loading the list or a result does not override the choice.
   const pairTouched = useRef(false)
@@ -442,7 +456,10 @@ export default function DriftDetectionPage() {
   const insufficientState = (
     <EmptyState icon={<Database className="h-6 w-6" />} title="Two complete backups are needed">
       <p>Drift detection compares two complete backups of this tenant. {failedJob?.code === "INSUFFICIENT_BACKUPS" && failedJob.error ? failedJob.error : "This tenant has fewer than two. Backups that failed, are still running or stopped early are not compared."}</p>
-      <Link to="/portal/backup" className="mt-4 inline-flex h-10 items-center rounded-full bg-coral-600 px-5 text-sm font-medium text-white hover:bg-coral-700">Open Backup & Restore</Link>
+      <div className="mt-4 flex flex-wrap justify-center gap-2">
+        <Button className="h-10 rounded-full bg-coral-600 px-5 text-white hover:bg-coral-700" onClick={() => setBackingUp(true)}>Back up now</Button>
+        <Link to="/portal/backup" className="inline-flex h-10 items-center rounded-full px-5 text-sm font-medium text-gray-700 hover:bg-gray-100">Open Backup & Restore</Link>
+      </div>
     </EmptyState>
   )
 
@@ -504,6 +521,7 @@ export default function DriftDetectionPage() {
           latest={latestPair}
           onChange={(next) => { pairTouched.current = true; setPair(next) }}
           onCompare={() => { if (pair.baseline && pair.comparison) void startScan({ baseline: pair.baseline, comparison: pair.comparison }) }}
+          onBackUp={() => setBackingUp(true)}
         />
       )}
 
@@ -876,6 +894,18 @@ export default function DriftDetectionPage() {
               isSuccess: false
             })
           }, 300)
+        }}
+      />
+
+      <RunBackupDialog
+        open={backingUp && !!selectedTenant}
+        onOpenChange={setBackingUp}
+        tenant={backingUp && selectedTenant?.credentials && storageAccountName ? backupTarget(selectedTenant) : null}
+        onStarted={(jobId) => {
+          if (!selectedTenant) return
+          trackBackup(selectedTenant, jobId, addJob)
+          setStartedBackup(jobId)
+          toast(`Backup of ${selectedTenant.name} started. It is offered here when it finishes.`, "success")
         }}
       />
     </div>

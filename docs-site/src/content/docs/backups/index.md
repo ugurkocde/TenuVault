@@ -111,6 +111,7 @@ A backup ends with one of these results:
 | **Completed with warnings** | Some items or types could not be read. The rest was saved. The log and **Backup Details** list what is missing. |
 | **Failed** | No item could be saved |
 | **Incomplete** | The backup stopped before it finished, for example because TenuVault was closed, the sign-in expired or the storage could not be reached. It holds only part of the tenant. |
+| **Status unknown** | The backup's summary could not be read, so whether it finished is not known. **Backup Details** shows why, for example "Backup authentication failed" when the backup was encrypted with a different recovery key than the one on this device. Import that recovery key, or select **Refresh** when the storage did not answer. Drift detection does not offer it until its summary can be read. |
 | **Running** | The backup has not written its summary yet. A backup without a summary that started less than six hours ago is shown as running; after that it is shown as incomplete. |
 
 The **Backup Progress** dialog shows **Failed** with the error for every backup that stopped, including the ones the timeline later lists as incomplete.
