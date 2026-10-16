@@ -31,8 +31,15 @@ unsupported platforms, scheduler catch-up, overlap and failed runs. Full OS logo
 behavior requires testing on the target installed operating system; it is not simulated by a successful
 unit test or packaging check.
 
-The macOS agent runs a short-lived `/usr/bin/open` helper through Launch Services;
-it does not own the TenuVault process. Removal unloads this helper, so active app
+The macOS agent runs a short-lived `/bin/sh` helper; it does not own the TenuVault
+process. The helper exits when this user already runs the app's executable (`ps -o comm=`),
+and otherwise runs `/usr/bin/open -n -g -j` with `--hidden` through Launch Services.
+A plain `open` of a running app sends it a reopen event, which Electron reports as
+`activate` and which shows and focuses the window, so the helper never sends one: when
+the process check misses (it compares `argv[0]`) or the app starts in between, the new
+instance loses the single-instance lock and exits. At startup the app replaces the
+reopening agent of earlier builds for the same bundle, and puts it back if launchd
+refuses the replacement. Removal unloads this helper, so active app
 work continues. Reinstall detects a moved application bundle and replaces its stale
 helper definition. Removing a pre-release direct-process agent disables future loads
 and deletes its definition without unloading the running app. After removal, sign out
