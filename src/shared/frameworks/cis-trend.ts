@@ -1,4 +1,4 @@
-import { compareAssessments, exclusionsText, headlineRate, readinessFor } from "./cis-readiness"
+import { compareAssessments, exclusionsText, headlineExceptions, headlineRate, readinessFor } from "./cis-readiness"
 import type { RecommendationList } from "./cis-manual"
 import { localDate, type CisException } from "./cis-exceptions"
 import type { KitLevel } from "./cis-kit"
@@ -28,6 +28,8 @@ export interface CisTrendLevel {
   previousRunId?: string
   /** Exclusions in use for this Level, judged on exclusionsAsOf, as readinessFor counts them. */
   exclusions?: number
+  /** Ids of those exclusions, from the same headline. */
+  exclusionIds?: string[]
   exclusionsAsOf?: string
 }
 
@@ -210,7 +212,8 @@ export function cisReadinessTrend(history: CisTrendHistoryEntry[], recommendatio
         adjustedChangeFromPrevious,
         comparison,
         ...(comparison === "compared" ? { previousRunId: sorted[previousIndex]!.assessment.runId } : {}),
-        exclusions: level.exceptions.length,
+        exclusions: headlineExceptions(level).length,
+        exclusionIds: headlineExceptions(level).map(exception => exception.id),
         exclusionsAsOf: level.exclusionsAsOf,
         ...(current.basis === "recommendations" ? { basis: current.basis, recommendationPassRate: level.recommendationPassRate, adjustedRecommendationPassRate: level.adjustedRecommendationPassRate } : {}),
       }
@@ -247,4 +250,27 @@ export function trendGroups(points: CisTrendPoint[]): CisTrendGroup[] {
     groups.set(key, group)
   }
   return [...groups.values()]
+}
+
+/** A current headline that counts an exclusion: the newest run of a benchmark, version and Level. */
+export interface CisExclusionUse {
+  benchmark: string
+  benchmarkName?: string | null
+  version: string
+  level: KitLevel
+}
+
+/**
+ * Which current headlines count each exclusion: for every benchmark, version and Level, the
+ * exclusions of its newest run. The exclusions panel names them, so removing an exclusion that
+ * another benchmark uses is never silent.
+ */
+export function exclusionUse(points: CisTrendPoint[]): Map<string, CisExclusionUse[]> {
+  const newest = new Map<string, { point: CisTrendPoint; level: CisTrendLevel }>()
+  for (const point of points) for (const level of point.levels) newest.set(JSON.stringify([point.benchmark, point.version, level.level]), { point, level })
+  const uses = new Map<string, CisExclusionUse[]>()
+  for (const { point, level } of newest.values()) for (const id of level.exclusionIds ?? []) {
+    uses.set(id, [...(uses.get(id) ?? []), { benchmark: point.benchmark, benchmarkName: point.benchmarkName ?? null, version: point.version, level: level.level }])
+  }
+  return uses
 }
