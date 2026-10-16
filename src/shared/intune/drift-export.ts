@@ -54,10 +54,12 @@ export function driftCsv(result: Pick<DriftResult, "drifts" | "settingNames">): 
   return [CSV_HEADERS, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n")
 }
 
-export function driftJson(result: DriftResult, tenantName: string | undefined, exportedAt = new Date().toISOString()): string {
+/** `filter` describes the Drift Detection page filter when the report holds only the changes it showed. */
+export function driftJson(result: DriftResult, tenantName: string | undefined, exportedAt = new Date().toISOString(), filter?: string): string {
   return JSON.stringify({
     exportedAt,
     tenant: tenantName ?? null,
+    ...(filter ? { filter } : {}),
     scannedAt: result.lastScan,
     baseline: result.baseline,
     comparison: result.comparison,
