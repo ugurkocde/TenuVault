@@ -28,6 +28,7 @@ This page lists the messages TenuVault shows, grouped by area, with the cause an
 | Message | Cause | Fix |
 | --- | --- | --- |
 | Enter a tenant id or a domain such as contoso.onmicrosoft.com. | The **Tenant id or domain** field is not a GUID or a domain. | Enter the tenant ID or a verified domain of the tenant. |
+| *Module* *version* is already loaded in this PowerShell session, but the script needs version *version*. Open a new PowerShell window and run the script again. | The setup script loads all Microsoft Graph PowerShell modules at one version, and the session already holds a different Graph version, for example from an earlier command or your PowerShell profile. | Open a new PowerShell window and run `New-TenuVaultDesktopApp.ps1` again. See [Create the app registration](/getting-started/app-registration/). |
 | The client id is a GUID, printed by the setup script. | The **Application (client) id** is not a GUID. | Copy the client ID from the setup script output or from the app registration in Entra. See [Create the app registration](/getting-started/app-registration/). |
 | You signed in to a different tenant. Sign in with an account from this tenant. | The account you used belongs to another tenant, for example a guest account or the wrong browser profile. | Sign in again with an account that is a member of the tenant you are connecting. |
 | Microsoft did not return an account for this sign-in. | The sign-in window closed or completed without returning an account. | Try again, and finish the sign-in in your browser. |

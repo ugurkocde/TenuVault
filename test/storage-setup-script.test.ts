@@ -85,4 +85,16 @@ describe("New-TenuVaultDesktopApp.ps1", () => {
     expect(desktopScript).not.toContain("Azure Automation")
     expect(desktopScript).toContain("New-TenuVaultStorage.ps1")
   })
+
+  it("names the Connect tenant button the app shows", () => {
+    expect(desktopScript).toContain("TenuVault > Tenants > Connect tenant")
+    expect(desktopScript).not.toContain("Add tenant")
+  })
+
+  it("installs and imports every Graph module at the Microsoft.Graph.Authentication version", () => {
+    expect(desktopScript).toContain("Install-Module $module -RequiredVersion $graphVersion")
+    expect(desktopScript).toContain("Import-Module $module -RequiredVersion $graphVersion")
+    expect(desktopScript).toContain("Open a new PowerShell window and run the script again.")
+    expect(desktopScript.indexOf("Import-Module $module -RequiredVersion $graphVersion")).toBeLessThan(desktopScript.indexOf("Connect-MgGraph"))
+  })
 })
