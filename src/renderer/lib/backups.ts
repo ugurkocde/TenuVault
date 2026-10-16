@@ -36,17 +36,26 @@ export function trackBackup(tenant: Tenant, jobId: string, addJob: AddJob, optio
   })
 }
 
+/** Jobs already watched, so starting the same running backup twice reads the list once. */
+const watched = new Set<string>()
+
 /**
  * Calls onEnd once the backup job has ended, reading its status every intervalMs. A job the app no
- * longer knows has ended too. Returns a function that stops watching.
+ * longer knows has ended too. A job that is watched already is not watched again, and a watch gives
+ * up after maxMs, past the longest a backup runs. Returns a function that stops watching.
  */
-export function whenBackupEnds(jobId: string, onEnd: () => void, intervalMs = 3000): () => void {
+export function whenBackupEnds(jobId: string, onEnd: () => void, intervalMs = 3000, maxMs = 60 * 60_000): () => void {
+  if (watched.has(jobId)) return () => undefined
+  watched.add(jobId)
+  const until = Date.now() + maxMs
   let stopped = false
   const stop = () => {
     stopped = true
     clearInterval(timer)
+    watched.delete(jobId)
   }
   const timer = setInterval(() => {
+    if (Date.now() >= until) return stop()
     void fetch("/api/backup/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jobId }) })
       .then(async (response) => {
         const data = response.ok ? ((await response.json().catch(() => null)) as { isComplete?: boolean } | null) : null
