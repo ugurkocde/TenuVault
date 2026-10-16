@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { attachRecommendations, definitionIds, packRecommendations, recommendationLabel, recommendationResults, recommendationsForFinding, recommendationTotals } from "../src/shared/frameworks/cis-recommendations"
-import { cisReadiness, headlineRate } from "../src/shared/frameworks/cis-readiness"
+import { cisReadiness, headlineRate, levelCheckCounts } from "../src/shared/frameworks/cis-readiness"
 import { cisReadinessTrend, cisDriftSignals, sparklineSegments, trendRate } from "../src/shared/frameworks/cis-trend"
 import { cisPortfolioRows, portfolioRate } from "../src/shared/frameworks/cis-portfolio"
 import { benchmarkTitle, packBenchmarkName, referenceDisplayName } from "../src/shared/frameworks/cis-display"
@@ -117,6 +117,16 @@ describe("pack recommendations", () => {
     expect(plainCsv).toContain("Pack policy,Setting,Status")
     const plainFindings = (JSON.parse(workspaceExportJSON({ assessment: run, policies: pack }, context)) as { result: { assessment: { findings: object[] } } }).result.assessment.findings
     expect(plainFindings[0]).not.toHaveProperty("recommendations")
+  })
+
+  it("counts a description identifier at the Level its recommendation metadata assigns", () => {
+    // The Level 1 description names 1.1.1 and 1.3.1; metadata assigns 1.3.1 to Level 2, where it cannot be assessed.
+    const described = pack.map((policy, index) => index === 0 ? { ...policy, description: "Covers 1.1.1 and 1.3.1" } : policy)
+    const crossLevel = attachRecommendations(described, recommendations.map(item => item.id === "1.3.1" ? { ...item, level: 2 as const } : item))
+    const run = { ...assess(tenant), findings: comparePolicies(crossLevel, tenant) }
+    const level1 = cisReadiness(run, crossLevel).levels.find(level => level.level === 1)!
+    expect(level1.enumeratedIds).toEqual(["1.1.1"])
+    expect(levelCheckCounts(level1).checked).toBe(4)
   })
 
   it("makes the recommendation pass rate the headline when the pack lists recommendations", () => {

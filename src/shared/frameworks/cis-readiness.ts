@@ -173,6 +173,7 @@ export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[],
     .map(exception => exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId)))
   const findingByKey = new Map(assessment.findings.map(finding => [finding.key, finding]))
   const findingExcepted = (finding: Assessment["findings"][number]) => activeExceptionKeys.has(exceptionKey(benchmark, version, policies[finding.policyIndex] ? levelOf(policies[finding.policyIndex]!) : 1, finding.policyName, finding.settingId))
+  const recommendationLevel = new Map(recommendations.map(result => [result.id, result.level] as const))
   const levels: CisLevelReadiness[] = [...allLevels].sort((a, b) => a - b).map(level => {
     const indexes = new Set(policies.map((policy, index) => levelOf(policy) === level ? index : -1).filter(index => index >= 0))
     const findings = assessment.findings.filter(finding => indexes.has(finding.policyIndex))
@@ -200,7 +201,8 @@ export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[],
       // recommendation or one of another profile, so no automated count is claimed.
       assessedAutomated: cov && cov.denominatorSource !== "none" ? cov.numerator : null,
       enumerated: cov?.enumeratedIds.length ?? 0,
-      enumeratedIds: cov?.enumeratedIds ?? [],
+      // A description identifier that the recommendation metadata assigns to another Level belongs there.
+      enumeratedIds: (cov?.enumeratedIds ?? []).filter(id => (recommendationLevel.get(id) ?? level) === level),
       denominatorIdentifiers: [...new Set((effectiveDenominator ?? []).filter(entry => entry.level === level).map(entry => entry.identifier))],
       automatedIdentifiers: [...new Set((effectiveDenominator ?? []).filter(entry => entry.level === level && entry.automated).map(entry => entry.identifier))],
       denominator: cov?.denominator ?? null,
