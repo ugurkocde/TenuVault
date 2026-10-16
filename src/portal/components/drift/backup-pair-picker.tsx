@@ -19,11 +19,17 @@ export function comparableBackups(backups: BackupSummary[]): BackupSummary[] {
   return backups.filter((backup) => backupCompleteness(backup.status) !== "incomplete")
 }
 
-/** The pair after choosing a backup on one side; choosing the backup already on the other side swaps them. */
-export function choose(pair: { baseline: string | null; comparison: string | null }, side: "baseline" | "comparison", id: string): { baseline: string | null; comparison: string | null } {
+type Pair = { baseline: string | null; comparison: string | null }
+
+/**
+ * The pair after choosing a backup on one side. Choosing the backup already on the other side swaps
+ * them, and the older of the two is kept as the baseline, so a choice never leaves the pair reversed.
+ */
+export function choose(pair: Pair, side: "baseline" | "comparison", id: string, backups: BackupSummary[]): Pair {
   const other = side === "baseline" ? "comparison" : "baseline"
-  if (pair[other] === id) return { [side]: id, [other]: pair[side] } as { baseline: string | null; comparison: string | null }
-  return { ...pair, [side]: id }
+  const next = (pair[other] === id ? { [side]: id, [other]: pair[side] } : { ...pair, [side]: id }) as Pair
+  const time = (backupId: string | null) => Date.parse(backups.find((backup) => backup.id === backupId)?.timestamp ?? "")
+  return time(next.baseline) > time(next.comparison) ? { baseline: next.comparison, comparison: next.baseline } : next
 }
 
 /** Why the chosen pair cannot be compared, or null. */
@@ -77,7 +83,7 @@ export function BackupPairPicker({
     // A chosen backup that is no longer offered (for example from an earlier result) shows the placeholder.
     const chosen = side === "baseline" ? baseline : comparison
     return (
-      <Select value={offered.some((backup) => backup.id === chosen) ? chosen! : ""} onValueChange={(id) => onChange(choose({ baseline, comparison }, side, id))} disabled={loading || busy}>
+      <Select value={offered.some((backup) => backup.id === chosen) ? chosen! : ""} onValueChange={(id) => onChange(choose({ baseline, comparison }, side, id, offered))} disabled={loading || busy}>
         <SelectTrigger aria-label={label} className="h-11 w-full min-w-0 sm:w-[300px]">
           <SelectValue placeholder={loading ? "Loading backups..." : "Choose a backup"} />
         </SelectTrigger>

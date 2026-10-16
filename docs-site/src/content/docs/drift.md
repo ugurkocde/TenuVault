@@ -28,9 +28,9 @@ At the top of the page, choose:
 * **Baseline (older)**: the backup to compare from
 * **Comparison (newer)**: the backup to compare with
 
-Each list offers only the backups that can be compared, with their date and time and, when it was recorded, how they started (**Manual**, **Scheduled** or **From tray**). Backups that completed with warnings are offered and marked, because items they could not read may show up as deleted or added. Backups that did not finish or whose summary could not be read are not listed; a line under the lists says how many there are and links to **Backup & Restore**, where they are shown. Choosing the backup that is already chosen on the other side exchanges the two, as does the swap button between the lists. The baseline must be older than the comparison.
+Each list offers only the backups that can be compared, with their date and time and, when it was recorded, how they started (**Manual**, **Scheduled** or **From tray**). Backups that completed with warnings are offered and marked, because items they could not read may show up as deleted or added. Backups that did not finish or whose summary could not be read are not listed; a line under the lists says how many there are and links to **Backup & Restore**, where they are shown. Choosing a backup keeps the older of the two as the baseline: choosing the backup that is already chosen on the other side, or a baseline newer than the comparison, puts them in order. The swap button between the lists exchanges them as they are. The baseline must be older than the comparison.
 
-When only two backups can be compared, they are already chosen, and the page says so and offers **Back up now**. A backup started there is added to the lists when it finishes, so you can compare it with an older one.
+When only two backups can be compared, they are already chosen, and the page says so and offers **Back up now**. A backup started there is added to the lists when it finishes, even if you open another page meanwhile, so you can compare it with an older one.
 
 Click **Compare** to compare the chosen pair, or to compare the shown pair again. When another pair is chosen, **Use the latest two backups** under the lists picks the two newest complete backups, for example after a new backup.
 

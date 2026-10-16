@@ -36,7 +36,7 @@ import { revertibleDriftCount, shouldShowDriftNote } from "@desktop/lib/plan-not
 import { GatedButton } from "@desktop/components/PlanGate"
 import { FilterChips, FilterSelect, SearchInput } from "@desktop/components/FilterControls"
 import { cancelDriftScan, startDriftScan, useDriftJob, useDriftResult } from "@desktop/lib/drift-jobs"
-import { useBackupList } from "@desktop/lib/backup-list"
+import { refreshBackupList, useBackupList } from "@desktop/lib/backup-list"
 import { backupTarget, trackBackup, whenBackupEnds } from "@desktop/lib/backups"
 import { toast } from "@desktop/lib/toast"
 import { RunBackupDialog } from "@desktop/components/RunBackupDialog"
@@ -129,19 +129,11 @@ export default function DriftDetectionPage() {
   const backups = backupList.backups ?? NO_BACKUPS
   const backupsLoaded = backupList.backups !== null
   const backupsLoading = backupList.loading && !backupsLoaded
-  // A backup started here, so the list is read again when it finishes and the new backup can be picked.
-  // Its status is read here, not from the progress panel, which stops tracking a job it was closed on.
+  // A backup started here is watched until it ends, then the tenant's list is read again so it can be
+  // picked. The watch outlives this page and is read from the job itself, not the progress panel.
   const { addJob } = useBackupProgress()
   const [backingUp, setBackingUp] = useState(false)
   const canBackUp = !!selectedTenant?.credentials && !!storageAccountName
-  const [startedBackup, setStartedBackup] = useState<string | null>(null)
-  useEffect(() => {
-    if (!startedBackup) return
-    return whenBackupEnds(startedBackup, () => {
-      setStartedBackup(null)
-      void backupList.refresh({ force: true })
-    })
-  }, [startedBackup])
   const [pair, setPair] = useState<{ baseline: string | null; comparison: string | null }>({ baseline: null, comparison: null })
   // Set once the admin picks a backup, so loading the list or a result does not override the choice.
   const pairTouched = useRef(false)
@@ -188,7 +180,6 @@ export default function DriftDetectionPage() {
   // Another tenant starts with its own default pair.
   useEffect(() => {
     pairTouched.current = false
-    setStartedBackup(null)
     setPair({ baseline: null, comparison: null })
     setError("")
     setSelectedDrift(null)
@@ -910,7 +901,8 @@ export default function DriftDetectionPage() {
         onStarted={(jobId) => {
           if (!selectedTenant) return
           trackBackup(selectedTenant, jobId, addJob)
-          setStartedBackup(jobId)
+          const tenant = selectedTenant
+          whenBackupEnds(jobId, () => void refreshBackupList(tenant, { force: true }))
           toast(`Backup of ${selectedTenant.name} started. When it completes, it can be chosen here.`, "success")
         }}
       />

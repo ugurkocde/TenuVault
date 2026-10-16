@@ -59,12 +59,16 @@ describe("drift backup picker", () => {
     expect(optionLabel(backup("warned", "2026-10-11T02:00:00Z", "CompletedWithWarnings", null))).toMatch(/(AM|PM|\d), completed with warnings$/)
   })
 
-  it("swaps the pair when the backup on the other side is chosen", () => {
-    const pair = { baseline: "older", comparison: "newer" }
-    expect(choose(pair, "baseline", "newer")).toEqual({ baseline: "newer", comparison: "older" })
-    expect(choose(pair, "comparison", "older")).toEqual({ baseline: "newer", comparison: "older" })
-    expect(choose(pair, "baseline", "other")).toEqual({ baseline: "other", comparison: "newer" })
-    expect(choose({ baseline: null, comparison: "newer" }, "comparison", "older")).toEqual({ baseline: null, comparison: "older" })
+  it("swaps the pair when the backup on the other side is chosen, keeping the older one as baseline", () => {
+    const three = [backup("c", "2026-10-15T02:00:00Z", "Success"), backup("b", "2026-10-14T02:00:00Z", "Success"), backup("a", "2026-10-13T02:00:00Z", "Success")]
+    const pair = { baseline: "b", comparison: "c" }
+    // Choosing the comparison as baseline swaps; the pair is then reversed and put back in order.
+    expect(choose(pair, "baseline", "c", three)).toEqual({ baseline: "b", comparison: "c" })
+    expect(choose({ baseline: "a", comparison: "c" }, "comparison", "a", three)).toEqual({ baseline: "a", comparison: "c" })
+    expect(choose(pair, "baseline", "a", three)).toEqual({ baseline: "a", comparison: "c" })
+    expect(choose(pair, "comparison", "a", three)).toEqual({ baseline: "a", comparison: "b" })
+    expect(pairProblem(three, ...Object.values(choose(pair, "comparison", "a", three)) as [string, string])).toBeNull()
+    expect(choose({ baseline: null, comparison: "c" }, "comparison", "a", three)).toEqual({ baseline: null, comparison: "a" })
   })
 
   it("treats a hidden backup in the pair as not chosen from the list", () => {
