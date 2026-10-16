@@ -12,7 +12,7 @@ import { convertKit, readKitZip, suggestedKitBenchmark, type KitConversion, type
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
 import { distinctExclusions, excludedFindingKeys, exclusionsText, formatRate, headlineLabel, levelCheckSummary, levelHeadline, listedExceptions, readinessFor, unassignedText } from "../../shared/frameworks/cis-readiness"
 import { recommendationLabel, recommendationsForFinding, recommendationTotals, type PackRecommendation, type RecommendationResult } from "../../shared/frameworks/cis-recommendations"
-import { filterManualItems, filterRecommendationResults, searchRecommendationResults, type RecommendationResultFilter } from "../../shared/frameworks/recommendation-filter"
+import { filterManualItems, recommendationResultView, type RecommendationResultFilter } from "../../shared/frameworks/recommendation-filter"
 import { exceptionKey, isActive, localDate } from "../../shared/frameworks/cis-exceptions"
 import { benchmarkTitle, deviatingFindingKeys, isSelectableFinding, packBenchmarkName, referenceDisplayName, groupFindingsByPolicy, groupObservationsByValue, humanSettingLabel, policyDisplayName, statusMixText, trendSummaryText } from "../../shared/frameworks/cis-display"
 import { cisFlowSteps, cisStage, isKitPackReference, kitLevelForPolicy, packSettingCount } from "../../shared/frameworks/cis-flow"
@@ -1179,28 +1179,22 @@ function targetingText(observation: Observation): string {
   return "Targeting: Assigned"
 }
 
-const RECOMMENDATION_RESULTS: RecommendationResultFilter[] = ["All", "Pass", "Fail", "Review", "Not assessed"]
-
 /** One Level's recommendation results with search over ID, title and setting IDs, and result chips. */
 function RecommendationResultList({ level, items }: { level: number; items: RecommendationResult[] }) {
   const [query, setQuery] = useState("")
   const [result, setResult] = useState<RecommendationResultFilter>("All")
-  const searched = searchRecommendationResults(items, query)
-  const shown = filterRecommendationResults(items, query, result)
-  const filtering = searched !== items || result !== "All"
-  const options = RECOMMENDATION_RESULTS.filter(state => state !== "Review" || items.some(item => item.result === "Review"))
-    .map(state => ({ value: state, label: state, count: state === "All" ? searched.length : searched.filter(item => item.result === state).length }))
+  const view = recommendationResultView(items, query, result)
   return <>
     <div className="mt-2 flex flex-wrap items-center gap-2">
       <SearchInput label={`Search Level ${level} recommendations`} value={query} onChange={setQuery} placeholder="Search ID, title or setting" />
-      <FilterChips label={`Filter Level ${level} recommendations by result`} value={result} onChange={setResult} options={options} />
-      <span aria-live="polite" className="ml-auto text-xs text-gray-500">{filtering ? `${shown.length} of ${items.length} recommendations` : ""}</span>
+      <FilterChips label={`Filter Level ${level} recommendations by result`} value={view.result} onChange={setResult} options={view.options} />
+      <span aria-live="polite" className="ml-auto text-xs text-gray-500">{view.filtering ? `${view.shown.length} of ${items.length} recommendations` : ""}</span>
     </div>
-    <ul className="mt-2 max-h-80 divide-y divide-gray-100 overflow-auto border-y border-gray-100">{shown.map(item => <li key={item.id} className="flex items-start gap-3 py-2">
+    <ul className="mt-2 max-h-80 divide-y divide-gray-100 overflow-auto border-y border-gray-100">{view.shown.map(item => <li key={item.id} className="flex items-start gap-3 py-2">
       <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium ${item.result === "Pass" ? "bg-green-50 text-green-800" : item.result === "Fail" ? "bg-red-50 text-red-800" : "bg-gray-100 text-gray-700"}`}>{item.result}</span>
       <span className="min-w-0 flex-1 text-sm text-gray-800"><span className="font-medium">{item.id}</span> {item.title}<span className="block break-all font-mono text-[11px] leading-4 text-gray-500">{item.settings.map(setting => `${setting.id} ${setting.status}`).join("; ")}</span></span>
     </li>)}
-      {!shown.length && <li className="py-3 text-center text-sm text-gray-500">No recommendations match the filters.</li>}</ul>
+      {!view.shown.length && <li className="py-3 text-center text-sm text-gray-500">No recommendations match the filters.</li>}</ul>
   </>
 }
 
