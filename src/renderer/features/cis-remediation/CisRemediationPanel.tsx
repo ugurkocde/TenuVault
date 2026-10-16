@@ -5,6 +5,7 @@ import { showFeaturePlanError } from "../../lib/plan-dialog"
 import { toast } from "../../lib/toast"
 import type { Assessment, BaselinePolicy } from "../../../shared/frameworks/policies"
 import { packBenchmarkName } from "../../../shared/frameworks/cis-display"
+import { cachedCisCatalog } from "../../lib/cis-catalog-cache"
 import { deploymentReferenceLabel } from "./CisRemediationHistory"
 import { PATH, type Deployment } from "./api"
 
@@ -30,10 +31,12 @@ export function CisRemediationPanel({ tenant, assessment, policies, reference, s
   const plan = async (whole: boolean) => {
     if (!tenant) return
     setBusy(true)
+    const benchmarkId = reference.trim().split(/\s+/)[0] ?? ""
+    const benchmarkName = packBenchmarkName(policies) ?? cachedCisCatalog(tenant.credentials?.tenantId)?.find(benchmark => benchmark.id === benchmarkId)?.name ?? null
     try {
       const result = await featureCall<{ deployment: Deployment }>(PATH, tenant, "plan", {
-        title: remediationTitle(whole, deploymentReferenceLabel(reference, tenant.credentials?.tenantId, packBenchmarkName(policies))),
-        reference, runId: assessment.runId, policies: JSON.parse(JSON.stringify(policies)) as unknown[],
+        title: remediationTitle(whole, deploymentReferenceLabel(reference, tenant.credentials?.tenantId, benchmarkName)),
+        reference, ...(benchmarkName ? { benchmarkName } : {}), runId: assessment.runId, policies: JSON.parse(JSON.stringify(policies)) as unknown[],
         findings: assessment.findings,
         ...(whole ? { selectedPolicyIndexes: [...new Set(deviating.map((finding) => finding.policyIndex))] } : { selectedFindingKeys: deviating.map((finding) => finding.key) }),
       })

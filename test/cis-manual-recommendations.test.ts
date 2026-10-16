@@ -7,7 +7,7 @@ import JSZip from "jszip"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { parseBreakoutWorkbook, recommendationListFromWorkbook } from "../src/shared/frameworks/cis-coverage"
 import { MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDATIONS_URL, parseRecommendationList, recommendationListFromBreakout, serializeRecommendationList, validateRecommendationList } from "../src/shared/frameworks/cis-manual"
-import { cisReadiness } from "../src/shared/frameworks/cis-readiness"
+import { cisReadiness, levelCheckCounts } from "../src/shared/frameworks/cis-readiness"
 import { convertKit, type KitFile } from "../src/shared/frameworks/cis-kit"
 import { cisReadinessCsv, cisReadinessJson } from "../src/renderer/features/shared/governance-export"
 import { handleFramework, setInternalCisBenchmarksEnabled, assessPolicySet } from "../src/main/frameworks/service"
@@ -171,6 +171,11 @@ describe("manual readiness data", () => {
     const level1 = summary.levels.find(level => level.level === 1)!
     expect(level1.notAssessed).toContain("7.1.9")
     expect(level1.manual.find(item => item.identifier === "7.1.9")).toMatchObject({ hasText: false, state: "Manual", fallback: MANUAL_RECOMMENDATIONS_FALLBACK })
+    // The total counts every denominator identifier once: the covered ones and the unassessed one.
+    const counts = levelCheckCounts(level1)
+    expect(counts.total).toBe(new Set([...level1.numeratorIds, ...level1.manual.map(item => item.identifier)]).size)
+    expect(counts.checked + counts.manual).toBe(counts.total)
+    expect(counts.manual).toBeGreaterThanOrEqual(1)
   })
 
   it("includes manual items with state Manual in the governance export", () => {

@@ -44,6 +44,8 @@ export interface CisRemediationRecord extends ListedRecord {
   status: "blocked" | ChangeSetRecord["status"]
   tenantId: string
   reference: string
+  /** Display name of the benchmark when the planner knew it; older records have none. */
+  benchmarkName?: string | null
   runId: string | null
   items: CisRemediationItem[]
   changeSetId: string | null
@@ -53,6 +55,7 @@ export interface CisRemediationRecord extends ListedRecord {
 export interface PlanCisInput {
   title: string
   reference: string
+  benchmarkName?: string | null
   runId?: string | null
   policies: unknown
   findings: Finding[]
@@ -275,7 +278,7 @@ export async function planCisRemediation(deps: FeatureDeps, tenantId: string, in
   const record = deps.records.create<CisRemediationRecord>(DOMAINS.cisRemediations, tenant, {
     title: input.title.trim(), status: "in-review",
     summary: `${items.length} benchmark ${items.length === 1 ? "policy" : "policies"} ready for review. New policies are created unassigned.`,
-    tenantId: tenant, reference: input.reference, runId: input.runId ?? null, items, changeSetId: null, rollbackChangeSetId: null,
+    tenantId: tenant, reference: input.reference, benchmarkName: input.benchmarkName?.trim() || null, runId: input.runId ?? null, items, changeSetId: null, rollbackChangeSetId: null,
   }, { actor, reason: "Planned a benchmark deployment" })
   let changeSet: Stored<ChangeSetRecord>
   try {

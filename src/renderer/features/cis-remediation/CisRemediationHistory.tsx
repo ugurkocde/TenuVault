@@ -96,7 +96,7 @@ export function CisRemediationHistory({ tenant, focus }: { tenant: Tenant; focus
             {expanded ? <ChevronDown className="h-4 w-4 shrink-0" aria-hidden="true" /> : <ChevronRight className="h-4 w-4 shrink-0" aria-hidden="true" />}
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm font-medium text-gray-900">{deployment.title}</span>
-              <span className="block text-xs text-gray-500">{deploymentReferenceLabel(deployment.reference, tenantId)} · {formatDate(deployment.createdAt)} · {deployment.items.length} {deployment.items.length === 1 ? "operation" : "operations"}</span>
+              <span className="block text-xs text-gray-500">{deploymentReferenceLabel(deployment.reference, tenantId, deployment.benchmarkName)} · {formatDate(deployment.createdAt)} · {deployment.items.length} {deployment.items.length === 1 ? "operation" : "operations"}</span>
             </span>
             {state.rollback && <Chip tone={state.rollback.tone}>{state.rollback.label}</Chip>}
             <Chip tone={state.tone}>{state.label}</Chip>
