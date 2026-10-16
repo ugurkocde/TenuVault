@@ -24,13 +24,13 @@ export function deploymentState(deployment: Pick<Deployment, "status" | "rollbac
 }
 
 /**
- * A deployment reference such as "id 1.0.0 Level 1" with the id replaced by the benchmark name
- * from the loaded catalog, or by the prettified id when the catalog is not loaded.
+ * A deployment reference such as "id 1.0.0 Level 1" with the id replaced by the benchmark name:
+ * the name stamped on the pack when known, else the name in the loaded catalog, else the prettified id.
  */
-export function deploymentReferenceLabel(reference: string, tenantId: string | undefined): string {
+export function deploymentReferenceLabel(reference: string, tenantId: string | undefined, packName?: string | null): string {
   const id = reference.trim().split(/\s+/)[0] ?? ""
   if (!id) return reference
-  return referenceDisplayName(reference.trim(), benchmarkTitle(id, cachedCisCatalog(tenantId)?.find(benchmark => benchmark.id === id)?.name))
+  return referenceDisplayName(reference.trim(), packName || benchmarkTitle(id, cachedCisCatalog(tenantId)?.find(benchmark => benchmark.id === id)?.name))
 }
 
 /**

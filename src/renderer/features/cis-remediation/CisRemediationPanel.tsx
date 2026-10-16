@@ -4,7 +4,8 @@ import { featureCall } from "../../lib/feature-api"
 import { showFeaturePlanError } from "../../lib/plan-dialog"
 import { toast } from "../../lib/toast"
 import type { Assessment, BaselinePolicy } from "../../../shared/frameworks/policies"
-import { packBenchmarkName, referenceDisplayName } from "../../../shared/frameworks/cis-display"
+import { packBenchmarkName } from "../../../shared/frameworks/cis-display"
+import { deploymentReferenceLabel } from "./CisRemediationHistory"
 import { PATH, type Deployment } from "./api"
 
 /** The deployment title, naming the benchmark by its display name and kept within the 200 character limit. */
@@ -31,7 +32,7 @@ export function CisRemediationPanel({ tenant, assessment, policies, reference, s
     setBusy(true)
     try {
       const result = await featureCall<{ deployment: Deployment }>(PATH, tenant, "plan", {
-        title: remediationTitle(whole, referenceDisplayName(reference, packBenchmarkName(policies))),
+        title: remediationTitle(whole, deploymentReferenceLabel(reference, tenant.credentials?.tenantId, packBenchmarkName(policies))),
         reference, runId: assessment.runId, policies: JSON.parse(JSON.stringify(policies)) as unknown[],
         findings: assessment.findings,
         ...(whole ? { selectedPolicyIndexes: [...new Set(deviating.map((finding) => finding.policyIndex))] } : { selectedFindingKeys: deviating.map((finding) => finding.key) }),

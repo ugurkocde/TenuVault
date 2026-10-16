@@ -69,15 +69,19 @@ if ($loaded) {
     }
 }
 foreach ($module in $graphModules) {
-    if (-not (Get-Module -ListAvailable -Name $module | Where-Object Version -eq $graphVersion)) {
-        Write-Host "Installing $module $graphVersion for the current user..."
-        Install-Module $module -RequiredVersion $graphVersion -Scope CurrentUser -Force -AllowClobber
-    }
-}
-foreach ($module in $graphModules) {
     $other = Get-Module -Name $module | Where-Object Version -ne $graphVersion
     if ($other) {
         throw "$module $($other.Version) is already loaded in this PowerShell session, but the script needs version $graphVersion. Open a new PowerShell window and run the script again."
+    }
+}
+foreach ($module in $graphModules) {
+    if (-not (Get-Module -ListAvailable -Name $module | Where-Object Version -eq $graphVersion)) {
+        Write-Host "Installing $module $graphVersion for the current user..."
+        try {
+            Install-Module $module -RequiredVersion $graphVersion -Scope CurrentUser -Force -AllowClobber
+        } catch {
+            throw "Could not install $module $graphVersion, the version that matches Microsoft.Graph.Authentication $graphVersion. Check that the PowerShell Gallery is reachable, or update all Microsoft Graph modules to one version with 'Update-Module Microsoft.Graph', then run the script again. $($_.Exception.Message)"
+        }
     }
 }
 if (-not $loaded) { Import-Module Microsoft.Graph.Authentication -RequiredVersion $graphVersion }

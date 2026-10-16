@@ -47,7 +47,7 @@ The table above is the default permission set. It does not change unless you opt
 
 * An account with **Global Administrator**, **Privileged Role Administrator** or **Cloud Application Administrator**, which can grant admin consent.
 * PowerShell: Windows PowerShell 5.1 or PowerShell 7 on Windows, PowerShell 7 (`pwsh`) on macOS.
-* The Microsoft Graph PowerShell modules `Microsoft.Graph.Applications` and `Microsoft.Graph.Identity.SignIns`. The Graph modules only load together at one version, so the script uses the newest installed `Microsoft.Graph.Authentication` version and installs any missing module at that version for the current user from the PowerShell Gallery. If another Graph version is already loaded in your PowerShell session, the script stops and asks you to open a new PowerShell window.
+* The Microsoft Graph PowerShell modules `Microsoft.Graph.Applications` and `Microsoft.Graph.Identity.SignIns`. The Graph modules only load together at one version, so the script uses the newest installed `Microsoft.Graph.Authentication` version and installs any missing module at that version for the current user from the PowerShell Gallery. If another Graph version is already loaded in your PowerShell session, the script stops and asks you to open a new PowerShell window. If that version cannot be downloaded, the script stops and names it; update all Graph modules to one version with `Update-Module Microsoft.Graph` and run it again.
 * Optional: the object ID of a security group, if only its members should be able to sign in.
 
 ## Get the script

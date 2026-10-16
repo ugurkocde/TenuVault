@@ -1,6 +1,6 @@
 import { assignmentEvidence, type AssignmentEvidence } from "../../shared/frameworks/evidence"
 import { loadWorkspace, saveWorkspace, deleteWorkspace, pruneHistory, recordAssessment, recordCreation, workspaceCapacity, workspaceView, type FrameworkWorkspace } from "./workspaces"
-import { HISTORY_FULL_MESSAGE, MAX_WORKSPACE_HISTORY } from "../../shared/frameworks/workspace-history"
+import { HISTORY_FULL_MESSAGE, KEEP_NEWEST_ASSESSMENTS, MAX_WORKSPACE_HISTORY } from "../../shared/frameworks/workspace-history"
 import { tenantLabel, workspaceExportCSV, workspaceExportJSON, workspaceHistoryJSON } from "../../shared/compliance/export"
 import { createHash, randomUUID } from "node:crypto"
 import { frameworks } from "../../shared/frameworks/catalog"
@@ -364,7 +364,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       workspace.history = workspace.history.filter(entry => entry.assessment.runId !== body.runId)
       saveWorkspace(workspace)
     } else if (body.action === "workspace-prune-history") {
-      if (typeof body.keep !== "number" || !Number.isInteger(body.keep) || body.keep < 1 || body.keep > MAX_WORKSPACE_HISTORY) throw new FrameworkError(`Choose how many saved assessments to keep, from 1 to ${MAX_WORKSPACE_HISTORY}.`)
+      if (typeof body.keep !== "number" || !Number.isInteger(body.keep) || body.keep < KEEP_NEWEST_ASSESSMENTS || body.keep > MAX_WORKSPACE_HISTORY) throw new FrameworkError(`Choose how many saved assessments to keep, from ${KEEP_NEWEST_ASSESSMENTS} to ${MAX_WORKSPACE_HISTORY}.`)
       const removed = new Set(pruneHistory(workspace, body.keep))
       for (const [id, run] of runs) if (run.assessment.tenantId === tenantKey && run.assessment.frameworkId === body.frameworkId && removed.has(id)) runs.delete(id)
     } else if (body.action === "workspace-cis-exception-add") {

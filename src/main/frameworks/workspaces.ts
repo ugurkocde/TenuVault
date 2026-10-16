@@ -2,7 +2,7 @@ import type { KeyValueStore } from '../storage/secure-store'
 import { parsePolicies, record, type Assessment, type BaselinePolicy } from '../../shared/frameworks/policies'
 import { validateRecommendationList, type RecommendationList } from '../../shared/frameworks/cis-manual'
 import { validateExceptions, type CisException } from '../../shared/frameworks/cis-exceptions'
-import { HISTORY_FULL_MESSAGE, MAX_WORKSPACE_BYTES, MAX_WORKSPACE_HISTORY, type WorkspaceCapacity } from '../../shared/frameworks/workspace-history'
+import { HISTORY_FULL_MESSAGE, KEEP_NEWEST_ASSESSMENTS, MAX_WORKSPACE_BYTES, MAX_WORKSPACE_HISTORY, type WorkspaceCapacity } from '../../shared/frameworks/workspace-history'
 
 export interface AssessmentRecord {
   assessment: Assessment
@@ -73,7 +73,9 @@ export function workspaceView(workspace: FrameworkWorkspace): WorkspaceView { re
  * Removes every saved assessment except the newest `keep`, by assessment date, in one save.
  * Returns the run IDs that were removed.
  */
-export function pruneHistory(workspace: FrameworkWorkspace, keep: number): string[] {
+export function pruneHistory(workspace: FrameworkWorkspace, requestedKeep: number): string[] {
+  // The newest assessments are never removed, whatever the caller asks for.
+  const keep = Math.max(requestedKeep, KEEP_NEWEST_ASSESSMENTS)
   const newest = new Set(workspace.history.map((entry, index) => ({ index, at: Date.parse(entry.assessment.assessedAt) }))
     .sort((a, b) => b.at - a.at || a.index - b.index).slice(0, keep).map(item => item.index))
   const removed = workspace.history.filter((_, index) => !newest.has(index)).map(entry => entry.assessment.runId)

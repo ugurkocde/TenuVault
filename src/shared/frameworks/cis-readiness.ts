@@ -54,18 +54,19 @@ export function headlineRate(level: Pick<CisLevelReadiness, "passRate" | "adjust
 /**
  * How many recommendations of a Level TenuVault checks automatically and how many are left for a
  * manual check: manual and unassessed denominator items, plus pack recommendations that could not be
- * assessed. Identifiers are counted once. Without pack recommendations the checked count falls back to
- * the automated identifiers of the denominator, or to the identifiers the pack names.
+ * assessed. Identifiers are counted once. The total is known only with a denominator list. Without
+ * pack recommendations the checked count falls back to the automated identifiers of the denominator,
+ * or to the identifiers the pack names.
  */
 export function levelCheckCounts(level: Pick<CisLevelReadiness, "recommendations" | "manual" | "assessedAutomated" | "enumerated" | "denominator">): { checked: number; manual: number; total: number | null } {
   const recommendations = level.recommendations ?? []
   if (recommendations.length) {
     const checked = new Set(recommendations.filter(result => result.result !== "Not assessed").map(result => result.id))
     const manual = new Set([...level.manual.map(item => item.identifier), ...recommendations.filter(result => result.result === "Not assessed").map(result => result.id)].filter(id => !checked.has(id)))
-    return { checked: checked.size, manual: manual.size, total: level.denominator !== null || manual.size ? checked.size + manual.size : null }
+    return { checked: checked.size, manual: manual.size, total: level.denominator !== null ? checked.size + manual.size : null }
   }
   const checked = level.assessedAutomated ?? level.enumerated
-  return { checked, manual: level.manual.length, total: level.denominator !== null || level.manual.length ? checked + level.manual.length : null }
+  return { checked, manual: level.manual.length, total: level.denominator !== null ? checked + level.manual.length : null }
 }
 
 /** The sentence shown above the CIS notice for one Level, or null when nothing is checked. */
@@ -73,7 +74,12 @@ export function levelCheckSummary(level: Pick<CisLevelReadiness, "level" | "reco
   const { checked, manual, total } = levelCheckCounts(level)
   if (!checked && !manual) return null
   const noun = (count: number) => count === 1 ? "recommendation" : "recommendations"
-  if (total === null) return `Level ${level.level}: TenuVault checks ${checked} ${noun(checked)} of this pack automatically. Recommendations outside the pack, including manual ones, need a manual check.`
+  if (total === null) {
+    const prefix = `Level ${level.level}: TenuVault checks ${checked} ${noun(checked)} of this pack automatically.`
+    return manual
+      ? `${prefix} The other ${manual === 1 ? "one listed here" : `${manual} listed here`} and any recommendations outside the pack need a manual check.`
+      : `${prefix} Recommendations outside the pack, including manual ones, need a manual check.`
+  }
   if (!manual) return `Level ${level.level}: TenuVault checks all ${checked} ${noun(checked)} automatically.`
   const rest = manual === 1 ? "The other one needs a manual check." : `The other ${manual} need a manual check.`
   return `Level ${level.level}: TenuVault checks ${checked} of ${total} ${noun(total)} automatically. ${rest}`

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { handleFramework, setInternalCisBenchmarksEnabled } from "../src/main/frameworks/service"
-import { loadWorkspace, recordAssessment, setFrameworkStore, workspaceCapacity, type WorkspaceView } from "../src/main/frameworks/workspaces"
+import { loadWorkspace, pruneHistory, recordAssessment, setFrameworkStore, workspaceCapacity, type WorkspaceView } from "../src/main/frameworks/workspaces"
 import { withTenantWrite } from "../src/main/features/write-lock"
 import { HISTORY_FULL_MESSAGE, MAX_WORKSPACE_BYTES, MAX_WORKSPACE_HISTORY } from "../src/shared/frameworks/workspace-history"
 import type { Assessment } from "../src/shared/frameworks/policies"
@@ -54,6 +54,12 @@ describe("workspace history capacity", () => {
 })
 
 describe("workspace-prune-history", () => {
+  it("never removes the newest 10 even when a caller asks to keep fewer", () => {
+    fill(12)
+    expect(pruneHistory(loadWorkspace(tenant, "custom"), 1)).toEqual(["run-2", "run-1"])
+    expect(loadWorkspace(tenant, "custom").history.map(entry => entry.assessment.runId)).toEqual(Array.from({ length: 10 }, (_, index) => `run-${12 - index}`))
+  })
+
   it("keeps the newest N by assessment date in one save and leaves other tenants and frameworks untouched", async () => {
     fill(MAX_WORKSPACE_HISTORY)
     fill(12, other)
@@ -83,9 +89,9 @@ describe("workspace-prune-history", () => {
     expect(writes).toBe(0)
   })
 
-  it.each([0, 51, 1.5, -1, "10", null, undefined, Number.NaN])("rejects keep %s without changing history", async keep => {
+  it.each([0, 1, 9, 51, 10.5, -1, "10", null, undefined, Number.NaN])("rejects keep %s without changing history", async keep => {
     fill(12)
-    await expect(prune(keep)).rejects.toMatchObject({ status: 400, message: "Choose how many saved assessments to keep, from 1 to 50." })
+    await expect(prune(keep)).rejects.toMatchObject({ status: 400, message: "Choose how many saved assessments to keep, from 10 to 50." })
     expect(loadWorkspace(tenant, "custom").history).toHaveLength(12)
   })
 
@@ -116,12 +122,15 @@ describe("workspace-prune-history", () => {
   it("revokes live remediation authorization of removed assessments only", async () => {
     stubGraph()
     const first = await handleFramework({ action: "assess", tenantId: tenant, appId, frameworkId: "custom", reference: "v1", policies: POLICIES }) as Assessment
-    await new Promise(resolve => setTimeout(resolve, 5))
-    const second = await handleFramework({ action: "assess", tenantId: tenant, appId, frameworkId: "custom", reference: "v1", policies: POLICIES }) as Assessment
-    await prune(1)
+    let second: Assessment | undefined
+    for (let index = 0; index < 10; index++) {
+      await new Promise(resolve => setTimeout(resolve, 5))
+      second = await handleFramework({ action: "assess", tenantId: tenant, appId, frameworkId: "custom", reference: "v1", policies: POLICIES }) as Assessment
+    }
+    expect((await prune(10)).history).toHaveLength(10)
     await expect(handleFramework({ action: "create", tenantId: tenant, appId, runId: first.runId, keys: ["0:0"], confirmUnassigned: true })).rejects.toThrow("expired")
     // The kept run still authorizes; it reaches the selection check instead of expiring.
-    await expect(handleFramework({ action: "create", tenantId: tenant, appId, runId: second.runId, keys: [], confirmUnassigned: true })).rejects.toThrow("Review and confirm")
+    await expect(handleFramework({ action: "create", tenantId: tenant, appId, runId: second!.runId, keys: [], confirmUnassigned: true })).rejects.toThrow("Review and confirm")
   })
 })
 

@@ -23,6 +23,7 @@ describe("remediation labels", () => {
     expect(deploymentReferenceLabel("intune-synthetic-os 9.9.9 Level 1", TENANT_ID.toUpperCase())).toBe("Synthetic OS Benchmark 9.9.9 Level 1")
     expect(deploymentReferenceLabel("other-os 1.0.0 Level 2", TENANT_ID)).toBe("Other Os 1.0.0 Level 2")
     expect(deploymentReferenceLabel("", TENANT_ID)).toBe("")
+    expect(deploymentReferenceLabel("intune-synthetic-os 9.9.9 Level 1", TENANT_ID, "Stamped Pack Name")).toBe("Stamped Pack Name 9.9.9 Level 1")
   })
 })
 
@@ -40,6 +41,13 @@ describe("what TenuVault checks per Level", () => {
 
   it("says all when a denominator leaves nothing for a manual check", () => {
     expect(levelCheckSummary(level({ recommendations: [rec("1.1", "Pass"), rec("1.2", "Pass")], denominator: 2 }))).toBe("Level 1: TenuVault checks all 2 recommendations automatically.")
+  })
+
+  it("never invents a total without a denominator", () => {
+    const input = level({ recommendations: [rec("1.1", "Pass"), rec("1.2", "Not assessed")] })
+    expect(levelCheckCounts(input)).toEqual({ checked: 1, manual: 1, total: null })
+    expect(levelCheckSummary(input)).toBe("Level 1: TenuVault checks 1 recommendation of this pack automatically. The other one listed here and any recommendations outside the pack need a manual check.")
+    expect(levelCheckSummary(level({ enumerated: 2, manual: [manual("9.1"), manual("9.2")] }))).toBe("Level 1: TenuVault checks 2 recommendations of this pack automatically. The other 2 listed here and any recommendations outside the pack need a manual check.")
   })
 
   it("states only the checked count without a denominator or manual items", () => {
