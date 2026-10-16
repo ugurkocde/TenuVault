@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { BACKUP_OWNER_FILE } from "../../shared/constants"
 import { BlobWriter } from "./blob-writer"
 import { GraphSession, type GraphItem } from "./graph-session"
-import { GRAPH, BlobClaimError, GraphError, ProtectedBlobError, RequestTimeoutError, StorageError, TokenError } from "./request"
+import { GRAPH, BlobClaimError, GraphError, ProtectedBlobError, RequestTimeoutError, StorageError, TokenError, isUnreachable } from "./request"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { FetchApplicationError } from "../api/network-error"
 import { INTUNE_TYPES, itemName, type IntuneType, type Item } from "../../shared/intune/registry"
@@ -38,6 +38,8 @@ export interface BackupJob {
   backupFolder?: string
   /** Policies and types that could not be read; above zero the backup on disk is partial. */
   failures?: number
+  /** Set when the job failed because Microsoft or the storage account could not be reached, including timeouts. */
+  unreachable?: boolean
   log: string[]
 }
 
@@ -116,10 +118,11 @@ export class NetworkCircuit {
     this.consecutiveAuthFailures[service] = null
   }
 
-  failed(service: NetworkService): void {
+  /** `cause` is the failure that trips the circuit, kept so the job can tell an unreachable service apart. */
+  failed(service: NetworkService, cause?: unknown): void {
     this.signal.throwIfAborted()
     if (++this.consecutiveFailures[service] < this.threshold) return
-    this.controller.abort(new Error(`Backup stopped: ${service} did not respond for ${this.consecutiveFailures[service]} consecutive requests. Earlier policies in this run were saved; the backup is incomplete.`))
+    this.controller.abort(new Error(`Backup stopped: ${service} did not respond for ${this.consecutiveFailures[service]} consecutive requests. Earlier policies in this run were saved; the backup is incomplete.`, { cause }))
     this.signal.throwIfAborted()
   }
 
@@ -140,7 +143,8 @@ async function tokenOrStop(get: () => Promise<string>): Promise<string> {
   try {
     return await get()
   } catch (error) {
-    throw new TokenError(error instanceof Error ? error.message : String(error))
+    // Keep the cause: it tells a sign-in Microsoft refused from one that could not reach Microsoft.
+    throw new TokenError(error instanceof Error ? error.message : String(error), { cause: error })
   }
 }
 
@@ -217,6 +221,7 @@ export class BackupEngine {
       .catch((error: unknown) => {
         job.status = error instanceof BackupCancelledError ? "Cancelled" : "Failed"
         job.exception = error instanceof Error ? error.message : String(error)
+        if (job.status === "Failed" && isUnreachable(error)) job.unreachable = true
         job.progressMessage = job.status === "Cancelled" ? "Backup cancelled" : "Backup failed"
         this.write(job, `${job.progressMessage}: ${job.exception}`)
       })

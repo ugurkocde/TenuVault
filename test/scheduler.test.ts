@@ -117,8 +117,6 @@ describe("BackupScheduler", () => {
     let finish!: (result: ScheduledRunResult) => void
     run.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
     const pending = scheduler.tick()
-    // The attempt starts once the network check passes.
-    await vi.waitFor(() => expect(finish).toBeDefined())
     // A new process only sees the state saved before the unfinished attempt.
     const restartedStore = memoryStore()
     restartedStore.set("backup.schedules", store.get("backup.schedules")!)
@@ -183,7 +181,6 @@ describe("BackupScheduler", () => {
     scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
     vi.setSystemTime(new Date(2026, 9, 10, 2))
     const pending = scheduler.tick()
-    await vi.waitFor(() => expect(finish).toBeDefined())
     const restarted = new BackupScheduler(store, async () => ({ status: "Completed", message: "Done" }))
     expect(restarted.list()[0]).toMatchObject({ attempts: 1, attemptSlot: new Date(2026, 9, 10, 2).toISOString() })
     expect(restarted.isDue(restarted.list()[0]!)).toBe(false)
@@ -304,71 +301,113 @@ describe("BackupScheduler", () => {
     expect(scheduler.list()[0]!.attempts).toBe(1)
   })
 
-  it("waits for the network before a due backup spends an attempt", async () => {
-    let online = false
-    const run = vi.fn(async (): Promise<ScheduledRunResult> => ({ status: "Completed", message: "Done" }))
-    let now = new Date(local(2026, 9, 24, 10))
-    const scheduler = new BackupScheduler(memoryStore(), run, () => undefined, () => now, async () => online)
-    scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
-    for (const minute of [0, 15, 30, 45]) {
-      now = new Date(local(2026, 9, 25, 2, minute))
-      await scheduler.tick()
-    }
-    expect(run).not.toHaveBeenCalled()
-    expect(scheduler.list()[0]).toMatchObject({ attempts: 0, nextRunAt: local(2026, 9, 25, 2, 45) })
-    expect(scheduler.list()[0]!.lastAttemptAt).toBeUndefined()
-    online = true
-    now = new Date(local(2026, 9, 25, 8))
-    await scheduler.tick()
-    expect(run).toHaveBeenCalledExactlyOnceWith(TENANT)
-    expect(scheduler.list()[0]).toMatchObject({ lastStatus: "Completed", lastRunAt: local(2026, 9, 25, 8), attempts: 0 })
-  })
+  describe("failures to reach Microsoft or storage", () => {
+    const unreachable: ScheduledRunResult = { status: "Failed", message: "network_error: Network request failed: login.microsoftonline.com could not be reached. (ERR_TIMED_OUT)", unreachable: true }
+    const counted: ScheduledRunResult = { status: "Failed", message: "Sign in again to continue." }
 
-  it("does not count failures when Microsoft cannot be reached after them, as in the dark wakes of a sleeping Mac", async () => {
-    // Each brief wake passes the first check, then the request times out and the network is gone again.
-    let online = true
-    const run = vi.fn(async (): Promise<ScheduledRunResult> => {
-      online = false
-      return { status: "Failed", message: "network_error: login.microsoftonline.com could not be reached. (ERR_TIMED_OUT)" }
+    it("are not counted during the dark wakes of a sleeping Mac, but wait 15 minutes each", async () => {
+      const { scheduler, run, setNow } = setup(local(2026, 9, 24, 10))
+      run.mockResolvedValue(unreachable)
+      scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+      // Each brief wake runs the minute timer; the ones within 15 minutes of a failure do not start a backup.
+      for (const [hour, minute] of [[2, 0], [2, 5], [2, 14], [2, 16], [2, 20], [2, 33], [2, 49], [5, 2], [5, 16]] as const) {
+        setNow(local(2026, 9, 25, hour, minute))
+        await scheduler.tick()
+      }
+      expect(run).toHaveBeenCalledTimes(5)
+      expect(scheduler.list()[0]).toMatchObject({ lastStatus: "Failed", attempts: 0, attemptSlot: local(2026, 9, 25, 2), lastAttemptAt: local(2026, 9, 25, 5, 2), nextRunAt: local(2026, 9, 25, 5, 17) })
+      expect(scheduler.list()[0]!.lastRunAt).toBeUndefined()
+      setNow(local(2026, 9, 25, 7, 30))
+      expect(scheduler.isDue(scheduler.list()[0]!)).toBe(true)
+      run.mockResolvedValueOnce({ status: "Completed", message: "Done" })
+      await scheduler.tick()
+      expect(scheduler.list()[0]).toMatchObject({ lastStatus: "Completed", lastRunAt: local(2026, 9, 25, 7, 30), attempts: 0, nextRunAt: local(2026, 9, 26, 2) })
+      setNow(local(2026, 9, 25, 8))
+      await scheduler.tick()
+      expect(run).toHaveBeenCalledTimes(6)
     })
-    let now = new Date(local(2026, 9, 24, 10))
-    const scheduler = new BackupScheduler(memoryStore(), run, () => undefined, () => now, async () => online)
-    scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
-    for (const [hour, minute] of [[2, 0], [2, 16], [2, 33], [2, 49], [5, 2]] as const) {
-      online = true
-      now = new Date(local(2026, 9, 25, hour, minute))
-      await scheduler.tick()
-    }
-    expect(run).toHaveBeenCalledTimes(5)
-    expect(scheduler.list()[0]).toMatchObject({ lastStatus: "Failed", attempts: 0, nextRunAt: local(2026, 9, 25, 5, 2) })
-    run.mockResolvedValueOnce({ status: "Completed", message: "Done" })
-    online = true
-    now = new Date(local(2026, 9, 25, 8))
-    await scheduler.tick()
-    expect(scheduler.list()[0]).toMatchObject({ lastStatus: "Completed", lastRunAt: local(2026, 9, 25, 8), attempts: 0 })
-  })
 
-  it("still counts failures while Microsoft can be reached", async () => {
-    const run = vi.fn(async (): Promise<ScheduledRunResult> => ({ status: "Failed", message: "Sign in again to continue." }))
-    const online = vi.fn(async () => true)
-    let now = new Date(local(2026, 9, 24, 10))
-    const scheduler = new BackupScheduler(memoryStore(), run, () => undefined, () => now, online)
-    scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
-    for (const minute of [0, 15, 30, 45]) {
-      now = new Date(local(2026, 9, 25, 2, minute))
-      await scheduler.tick()
-    }
-    expect(run).toHaveBeenCalledTimes(3)
-    expect(scheduler.list()[0]).toMatchObject({ attempts: 3, nextRunAt: local(2026, 9, 26, 2) })
-    expect(online).toHaveBeenCalledTimes(6)
-  })
+    it("still wait 15 minutes between attempts when the timer fires every minute", async () => {
+      const { scheduler, run, setNow } = setup(local(2026, 9, 24, 10))
+      run.mockResolvedValue(unreachable)
+      scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+      for (let minute = 0; minute < 60; minute++) {
+        setNow(local(2026, 9, 25, 2, minute))
+        await scheduler.tick()
+      }
+      expect(run).toHaveBeenCalledTimes(4)
+      expect(scheduler.list()[0]).toMatchObject({ attempts: 0, lastAttemptAt: local(2026, 9, 25, 2, 45), nextRunAt: local(2026, 9, 25, 3) })
+    })
 
-  it("does not check the network when no backup is due", async () => {
-    const online = vi.fn(async () => true)
-    const scheduler = new BackupScheduler(memoryStore(), vi.fn(), () => undefined, () => new Date(local(2026, 9, 24, 10)), online)
-    scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
-    await scheduler.tick()
-    expect(online).not.toHaveBeenCalled()
+    it("never let counted failures exceed three, and keep retrying the uncounted ones", async () => {
+      const { scheduler, run, setNow } = setup(local(2026, 9, 24, 10))
+      scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+      run.mockResolvedValueOnce(counted).mockResolvedValueOnce(counted)
+      run.mockResolvedValueOnce(unreachable).mockResolvedValueOnce(unreachable).mockResolvedValueOnce(unreachable)
+      run.mockResolvedValue(counted)
+      const attempts: number[] = []
+      for (const [hour, minute] of [[2, 0], [2, 15], [2, 30], [2, 45], [3, 0], [3, 15], [3, 30], [3, 45]] as const) {
+        setNow(local(2026, 9, 25, hour, minute))
+        await scheduler.tick()
+        attempts.push(scheduler.list()[0]!.attempts)
+      }
+      expect(run).toHaveBeenCalledTimes(6)
+      expect(attempts).toEqual([1, 2, 2, 2, 2, 3, 3, 3])
+      expect(scheduler.list()[0]).toMatchObject({ lastStatus: "Failed", lastMessage: counted.message, nextRunAt: local(2026, 9, 26, 2) })
+      setNow(local(2026, 9, 26, 2))
+      await scheduler.tick()
+      expect(run).toHaveBeenCalledTimes(7)
+      expect(scheduler.list()[0]).toMatchObject({ attempts: 1, attemptSlot: local(2026, 9, 26, 2) })
+    })
+
+    it("keep the wait across restarts", async () => {
+      const { scheduler, store, run, setNow } = setup(local(2026, 9, 24, 10))
+      run.mockResolvedValue(unreachable)
+      scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+      setNow(local(2026, 9, 25, 2))
+      await scheduler.tick()
+      let now = new Date(local(2026, 9, 25, 2, 14))
+      const restarted = new BackupScheduler(store, run, () => undefined, () => now)
+      expect(restarted.list()[0]).toMatchObject({ attempts: 0, lastStatus: "Failed", attemptSlot: local(2026, 9, 25, 2), nextRunAt: local(2026, 9, 25, 2, 15) })
+      await restarted.tick()
+      expect(run).toHaveBeenCalledTimes(1)
+      now = new Date(local(2026, 9, 25, 2, 15))
+      expect(restarted.isDue(restarted.list()[0]!)).toBe(true)
+      await restarted.tick()
+      expect(run).toHaveBeenCalledTimes(2)
+      expect(restarted.list()[0]!.attempts).toBe(0)
+    })
+
+    it("count when the process stops during the attempt", async () => {
+      const { scheduler, store, run, setNow } = setup(local(2026, 9, 24, 10))
+      scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+      let finish!: (result: ScheduledRunResult) => void
+      run.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+      setNow(local(2026, 9, 25, 2))
+      const pending = scheduler.tick()
+      const restarted = new BackupScheduler(store, run, () => undefined, () => new Date(local(2026, 9, 25, 2, 1)))
+      expect(restarted.list()[0]).toMatchObject({ attempts: 1, nextRunAt: local(2026, 9, 25, 2, 15) })
+      finish(unreachable)
+      await pending
+      expect(scheduler.list()[0]!.attempts).toBe(0)
+    })
+
+    it("do not show a retry for a slot before a change made during the attempt", async () => {
+      const { scheduler, run, setNow } = setup(local(2026, 9, 24, 10))
+      const input = { tenantId: TENANT, enabled: true, frequency: "daily" as const, time: "02:00" }
+      scheduler.set(input)
+      let finish!: (result: ScheduledRunResult) => void
+      run.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+      setNow(local(2026, 9, 25, 2))
+      const pending = scheduler.tick()
+      setNow(local(2026, 9, 25, 2, 5))
+      scheduler.set(input)
+      setNow(local(2026, 9, 25, 2, 10))
+      finish(unreachable)
+      await pending
+      expect(scheduler.list()[0]).toMatchObject({ lastStatus: "Failed", attempts: 0, nextRunAt: local(2026, 9, 26, 2) })
+      expect(scheduler.isDue(scheduler.list()[0]!)).toBe(false)
+    })
   })
 
   it("persists retry state across scheduler restarts", async () => {
@@ -436,7 +475,6 @@ describe("BackupScheduler", () => {
     setNow(local(2026, 9, 25, 2))
     const tick = scheduler.tick()
     expect(scheduler.tick()).toBe(tick)
-    await vi.waitFor(() => expect(finish).toBeDefined())
     if (change === "disable") scheduler.set({ ...input, enabled: false })
     else scheduler.remove(second)
     finish({ status: "Completed", message: "Backup completed successfully" })

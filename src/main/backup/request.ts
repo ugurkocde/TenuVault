@@ -1,4 +1,4 @@
-import { FetchApplicationError } from "../api/network-error"
+import { FetchApplicationError, NetworkUnreachableError } from "../api/network-error"
 
 export const GRAPH = "https://graph.microsoft.com"
 /** Far above any real listing; stops a storage service that keeps returning continuation markers. */
@@ -41,9 +41,28 @@ export class GraphPauseError extends Error {}
 export class StorageError extends Error {}
 /** The create-only claim for a backup folder found the marker already there. */
 export class BlobClaimError extends StorageError {}
+/** The storage request ended with a network error response (status 0) instead of an HTTP status. */
+export class StorageUnreachableError extends StorageError {}
 
 export class RetryableStorageError extends Error {}
 export class RequestTimeoutError extends Error {}
+
+/** MSAL rethrows a token or discovery request that got no HTTP response with this code; it keeps only the original message. */
+const MSAL_NETWORK_ERROR = "network_error"
+
+/**
+ * Whether a backup failed because Microsoft or the storage account could not be reached, including
+ * timeouts, rather than because of the tenant, the sign-in or the storage. Follows `cause`, because
+ * sign-in and circuit errors wrap the request failure that caused them.
+ */
+export function isUnreachable(error: unknown): boolean {
+  for (let depth = 0; depth < 8 && error instanceof Error; depth++) {
+    if (error instanceof NetworkUnreachableError || error instanceof RequestTimeoutError || error instanceof StorageUnreachableError) return true
+    if (error.name === "TimeoutError" || (error as { errorCode?: unknown }).errorCode === MSAL_NETWORK_ERROR) return true
+    error = error.cause
+  }
+  return false
+}
 
 /** Only a fully read HTTP error is a status failure; failed body reads are network failures. */
 export function requestFailure(error: unknown): "network" | "status" | "token" | "other" {
@@ -93,8 +112,9 @@ export async function graphError(response: Response): Promise<string> {
   }
 }
 
+/** The message for a failed storage response. A network error response rejects with a StorageUnreachableError instead. */
 export async function storageError(response: Response, account: string): Promise<string> {
-  if (response.status === 0 || response.type === "error") return `Storage account ${account} could not be reached.`
+  if (response.status === 0 || response.type === "error") throw new StorageUnreachableError(`Storage account ${account} could not be reached.`)
   const text = await response.text()
   const code = /<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? response.headers.get("x-ms-error-code") ?? ""
   // AuthorizationFailure is the storage firewall or network rules rejecting this computer, not a missing role.

@@ -3,10 +3,11 @@ import { readFileSync } from "node:fs"
 import type { BrowserWindow } from "electron"
 import { transformSync } from "esbuild"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { NetworkUnreachableError } from "../src/main/api/network-error"
 import { BackupEngine, type BackupJob } from "../src/main/backup/engine"
 import { backupTenantLabel, notifyBackupFailure } from "../src/main/backup/notifications"
 import { RefusalLog, refuseUnlicensedBackup } from "../src/main/backup/refusals"
-import { scheduledResult } from "../src/main/backup/scheduler"
+import { reportsResult, scheduledResult } from "../src/main/backup/scheduler"
 import { isLocalAccount } from "../src/main/storage/blob-emulator"
 import { localStorageAccountName } from "../src/shared/constants"
 import type { BackupRefusal } from "../src/shared/ipc"
@@ -45,7 +46,7 @@ function tenantProfileFixture(metadata: { name?: string; domain?: string }) {
 }
 
 // Exercise the main-process runner with the real engine, without starting Electron.
-function unattendedFixture(getToken: () => Promise<string>) {
+function unattendedFixture(getToken: () => Promise<string>, schedules: () => Array<{ tenantId: string; frequency: string; attemptSlot?: string }> = () => []) {
   const engine = new BackupEngine({ fetch: vi.fn(async () => new Response(null, { status: 201 })), getToken })
   const start = vi.spyOn(engine, "start")
   const source = index.slice(index.indexOf("const refusals ="), index.indexOf("const scheduler = new BackupScheduler"))
@@ -55,7 +56,7 @@ function unattendedFixture(getToken: () => Promise<string>) {
     mainWindow: null,
     tenantProfile: tenantProfileFixture({ name: tenant.name }),
     isLocalAccount,
-    scheduler: { list: () => [] },
+    scheduler: { list: schedules },
     PlanRequired,
     allows,
     license: { requireEntitlement: async () => "msp" },
@@ -69,6 +70,7 @@ function unattendedFixture(getToken: () => Promise<string>) {
     },
     engine,
     scheduledResult,
+    reportsResult,
     scopes: { get: () => ({ scope: { excluded: [] } }) },
     accounts: { get: () => undefined },
     host: { dispatch: vi.fn(async (_request: Request) => new Response(null, { status: 200 })) },
@@ -212,5 +214,35 @@ describe("unattended backup notifications", () => {
       "Tray backup of Contoso failed",
       "Scheduled backup of Contoso failed",
     ])
+  })
+
+  it("reports a scheduled failure to reach Microsoft once per slot", async () => {
+    let attemptSlot = "2026-10-15T00:00:00.000Z"
+    let failure: Error = new NetworkUnreachableError("login.microsoftonline.com could not be reached.")
+    const { run, dispatch } = unattendedFixture(async () => { throw failure }, () => [{ tenantId: tenant.tenantId, frequency: "weekly", attemptSlot }])
+    const titles = () => notifications.created.map((notification) => notification.title)
+    expect(await run(tenant.tenantId, "scheduled")).toMatchObject({ status: "Failed", unreachable: true })
+    await run(tenant.tenantId, "scheduled")
+    expect(titles()).toEqual(["Scheduled backup of Contoso failed"])
+    expect(dispatch).toHaveBeenCalledOnce()
+    expect((await (dispatch.mock.calls[0]![0] as Request).json()).logEntry).toMatchObject({ eventType: "BACKUP_FAILED", result: "FAILURE" })
+    // Tray backups are reported every time.
+    await run(tenant.tenantId, "tray")
+    await run(tenant.tenantId, "tray")
+    expect(titles()).toEqual(["Scheduled backup of Contoso failed", "Tray backup of Contoso failed", "Tray backup of Contoso failed"])
+    expect(dispatch).toHaveBeenCalledTimes(3)
+    // A counted failure in the same slot is still reported.
+    const reached = failure
+    failure = new Error("Sign in to this tenant first.")
+    await run(tenant.tenantId, "scheduled")
+    expect(titles()).toHaveLength(4)
+    expect(dispatch).toHaveBeenCalledTimes(4)
+    // The next slot reports its first connection failure again.
+    failure = reached
+    attemptSlot = "2026-10-22T00:00:00.000Z"
+    await run(tenant.tenantId, "scheduled")
+    await run(tenant.tenantId, "scheduled")
+    expect(titles()).toHaveLength(5)
+    expect(dispatch).toHaveBeenCalledTimes(5)
   })
 })

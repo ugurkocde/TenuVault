@@ -19,7 +19,7 @@ import { ApiHost } from "./api/host"
 import { routes } from "./api/routes"
 import { AuthManager, SignInRequiredError } from "./auth/msal"
 import { BackupEngine, verifyStorageAccess, type BackupJob } from "./backup/engine"
-import { BackupScheduler, scheduledResult } from "./backup/scheduler"
+import { BackupScheduler, reportsResult, scheduledResult } from "./backup/scheduler"
 import { runTrayBackups } from "./backup/tray-backup"
 import { prepareScheduleInput } from "./backup/schedule-input"
 import { BackgroundLaunch } from "./backup/background-launch"
@@ -431,6 +431,8 @@ async function bootstrap(): Promise<void> {
 
   // Joined requests share one notification and the trigger that started the job.
   const unattendedBackupTriggers = new WeakMap<BackupJob, { trigger: "scheduled" | "tray"; notified: boolean }>()
+  // The slot each tenant last reported a scheduled failure to reach Microsoft or storage for.
+  const reportedUnreachable = new Map<string, string>()
 
   const runScheduledBackup = async (tenantId: string, trigger: "scheduled" | "tray") => {
     const profile = tenantProfile(tenantId)
@@ -439,7 +441,9 @@ async function bootstrap(): Promise<void> {
     // tenant's own storage, which is closed without a license too, so the refusal is
     // recorded in the refusal log on this device, notified and shown on the schedule.
     // The plan must also include how the backup runs: daily schedules and Azure storage are paid.
-    const daily = trigger === "scheduled" && scheduler.list().some((s) => s.tenantId.toLowerCase() === tenantId.toLowerCase() && s.frequency === "daily")
+    // A scheduled run's schedule already holds the slot the scheduler reserved for this attempt.
+    const schedule = trigger === "scheduled" ? scheduler.list().find((s) => s.tenantId.toLowerCase() === tenantId.toLowerCase()) : undefined
+    const daily = schedule?.frequency === "daily"
     const requirePlan = async (id: string) => {
       const plan = await license.requireEntitlement(id)
       if (daily && !allows(plan, "dailySchedule")) throw new PlanRequired("dailySchedule")
@@ -456,6 +460,7 @@ async function bootstrap(): Promise<void> {
     unattendedBackupTriggers.set(job, origin)
     await waitForJob(job)
     const result = scheduledResult(job)
+    if (!reportsResult(reportedUnreachable, tenantId, schedule?.attemptSlot, result)) return result
     const ok = result.status === "Completed"
     const cancelled = result.status === "Cancelled"
     const account = accounts.get(tenantId)
@@ -490,20 +495,10 @@ async function bootstrap(): Promise<void> {
     return result
   }
 
-  // Every backup starts by signing in, so any HTTP response from the sign-in service means the network is usable.
-  const microsoftReachable = async () => {
-    if (!net.isOnline()) return false
-    try {
-      await chromiumFetch("https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration", { method: "HEAD", cache: "no-store", signal: AbortSignal.timeout(15_000) })
-      return true
-    } catch {
-      return false
-    }
-  }
   const scheduler = new BackupScheduler(appStore, (tenantId) => runScheduledBackup(tenantId, "scheduled"), () => {
     mainWindow?.webContents.send("schedules:changed", scheduler.list())
     tray.refresh()
-  }, undefined, microsoftReachable)
+  })
 
   const tray = new AppTray({
     open: showWindow,

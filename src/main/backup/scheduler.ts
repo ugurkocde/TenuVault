@@ -11,6 +11,8 @@ const VALID_TIME = /^([01]\d|2[0-3]):[0-5]\d$/
 export interface ScheduledRunResult {
   status: "Completed" | "Failed" | "Cancelled"
   message: string
+  /** Failed only: Microsoft or the storage account could not be reached, so the attempt is not counted. */
+  unreachable?: boolean
 }
 
 /**
@@ -21,7 +23,21 @@ export interface ScheduledRunResult {
 export function scheduledResult(job: BackupJob): ScheduledRunResult {
   const message = job.exception ?? job.progressMessage
   if (job.status === "Cancelled") return { status: "Cancelled", message }
-  return { status: job.status === "Completed" && !job.failures ? "Completed" : "Failed", message }
+  if (job.status === "Completed" && !job.failures) return { status: "Completed", message }
+  return job.unreachable ? { status: "Failed", message, unreachable: true } : { status: "Failed", message }
+}
+
+/**
+ * Whether a scheduled result is notified and written to the audit log. A sleeping computer that
+ * wakes briefly fails with the same connection error every 15 minutes, so such a failure is
+ * reported once per tenant and slot. `reported` keeps the slot each tenant last reported one for.
+ */
+export function reportsResult(reported: Map<string, string>, tenantId: string, slot: string | undefined, result: ScheduledRunResult): boolean {
+  if (result.status !== "Failed" || !result.unreachable || !slot) return true
+  const key = tenantId.toLowerCase()
+  if (reported.get(key) === slot) return false
+  reported.set(key, slot)
+  return true
 }
 
 /**
@@ -33,9 +49,9 @@ export function scheduledResult(job: BackupJob): ScheduledRunResult {
  * caught up when it starts. Failed slots have up to three attempts, 15 minutes apart.
  * Backups run one at a time.
  *
- * A sleeping Mac wakes for a few seconds at a time for network upkeep and runs timers then, without a
- * usable network. A due backup therefore waits until Microsoft can be reached, and a failed attempt
- * does not count toward the three when Microsoft cannot be reached right after it.
+ * A failure because Microsoft or the storage account could not be reached is retried 15 minutes
+ * later without counting toward the three attempts: a sleeping Mac wakes for a few seconds at a
+ * time for network upkeep, runs timers then, and its requests time out.
  */
 export class BackupScheduler {
   private timer: NodeJS.Timeout | null = null
@@ -47,7 +63,6 @@ export class BackupScheduler {
     private readonly run: (tenantId: string) => Promise<ScheduledRunResult>,
     private readonly onChange: () => void = () => undefined,
     private readonly now: () => Date = () => new Date(),
-    private readonly online: () => Promise<boolean> = async () => true,
   ) {}
 
   list(): BackupSchedule[] {
@@ -123,10 +138,6 @@ export class BackupScheduler {
     if (this.running) return this.running
     this.running = (async () => {
       for (const tenantId of Object.keys(this.read())) {
-        const due = this.read()[tenantId]
-        if (!due || !this.isDue(due)) continue
-        if (!(await this.online())) break
-        // Read again: the schedule can change while the network is checked.
         const schedule = this.read()[tenantId]
         if (!schedule || !this.isDue(schedule)) continue
         const slot = this.lastSlot(schedule)
@@ -144,11 +155,10 @@ export class BackupScheduler {
             lastMessage: schedule.lastStatus === "Cancelled" ? undefined : schedule.lastMessage,
           },
         })
-        const result = await this.run(schedule.tenantId).catch((error: unknown) => ({
+        const result: ScheduledRunResult = await this.run(schedule.tenantId).catch((error: unknown) => ({
           status: "Failed" as const,
           message: error instanceof Error ? error.message : String(error),
         }))
-        const unreachable = result.status === "Failed" && !(await this.online())
         const all = this.read()
         const current = all[schedule.tenantId]
         if (current) {
@@ -159,7 +169,8 @@ export class BackupScheduler {
             lastAttemptAt: at,
             attemptSlot: current.since === schedule.since ? slot.toISOString() : current.attemptSlot,
             // Edits made during a backup start a new schedule with a fresh attempt budget.
-            attempts: result.status === "Completed" || current.since !== schedule.since ? 0 : result.status === "Cancelled" || unreachable ? attempts - 1 : attempts,
+            attempts: result.status === "Completed" || current.since !== schedule.since ? 0
+              : result.status === "Cancelled" || (result.status === "Failed" && result.unreachable) ? attempts - 1 : attempts,
             lastStatus: result.status,
             lastMessage: result.message,
           }
@@ -175,12 +186,10 @@ export class BackupScheduler {
   isDue(schedule: BackupSchedule): boolean {
     if (!schedule.enabled) return false
     const slot = this.lastSlot(schedule)
-    const since = Date.parse(schedule.since)
-    const lastRun = schedule.lastRunAt ? Date.parse(schedule.lastRunAt) : 0
-    if (slot.getTime() <= since || slot.getTime() <= lastRun) return false
+    if (!this.owed(schedule, slot)) return false
     if (schedule.lastStatus === "Cancelled" && schedule.attemptSlot === slot.toISOString()) return false
-    const attempts = this.slotAttempts(schedule)
-    return attempts < MAX_ATTEMPTS && (attempts === 0 || this.now().getTime() >= Date.parse(schedule.lastAttemptAt!) + RETRY_MS)
+    return this.slotAttempts(schedule, slot) < MAX_ATTEMPTS
+      && (!this.waitsForRetry(schedule, slot) || this.now().getTime() >= Date.parse(schedule.lastAttemptAt!) + RETRY_MS)
   }
 
   nextRun(schedule: BackupSchedule): Date | null {
@@ -193,17 +202,33 @@ export class BackupScheduler {
       reference.setDate(reference.getDate() + (schedule.frequency === "weekly" ? 7 : 1))
       next = this.slotOn(schedule, reference)
     }
-    const attempts = this.slotAttempts(schedule)
-    if (schedule.lastStatus !== "Cancelled" && attempts > 0 && attempts < MAX_ATTEMPTS) {
+    const slot = this.lastSlot(schedule)
+    if (schedule.lastStatus !== "Cancelled" && this.owed(schedule, slot) && this.slotAttempts(schedule, slot) < MAX_ATTEMPTS && this.waitsForRetry(schedule, slot)) {
       const retry = new Date(Date.parse(schedule.lastAttemptAt!) + RETRY_MS)
       if (retry < next) return retry
     }
     return next
   }
 
-  private slotAttempts(schedule: BackupSchedule, slot = this.lastSlot(schedule)): number {
+  /** Whether `slot` still needs a backup: it is after the last change to the schedule and the last successful run. */
+  private owed(schedule: BackupSchedule, slot: Date): boolean {
+    const lastRun = schedule.lastRunAt ? Date.parse(schedule.lastRunAt) : 0
+    return slot.getTime() > Date.parse(schedule.since) && slot.getTime() > lastRun
+  }
+
+  /** Whether the latest attempt, since the schedule was last changed, belongs to `slot`. */
+  private attempted(schedule: BackupSchedule, slot: Date): boolean {
     const lastAttempt = schedule.lastAttemptAt ? Date.parse(schedule.lastAttemptAt) : 0
-    return schedule.attemptSlot === slot.toISOString() && lastAttempt > Date.parse(schedule.since) ? schedule.attempts : 0
+    return schedule.attemptSlot === slot.toISOString() && lastAttempt > Date.parse(schedule.since)
+  }
+
+  private slotAttempts(schedule: BackupSchedule, slot: Date): number {
+    return this.attempted(schedule, slot) ? schedule.attempts : 0
+  }
+
+  /** A retry waits 15 minutes after a counted attempt, and after a failure that was not counted. */
+  private waitsForRetry(schedule: BackupSchedule, slot: Date): boolean {
+    return this.slotAttempts(schedule, slot) > 0 || (this.attempted(schedule, slot) && schedule.lastStatus === "Failed")
   }
 
   /** The most recent slot at or before now, in local time. */
