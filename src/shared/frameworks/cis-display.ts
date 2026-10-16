@@ -1,5 +1,8 @@
 import { comparable, rootMatches, type BaselinePolicy, type Finding, type Json, type Observation } from "./policies"
 import { formatRate } from "./cis-readiness"
+import { definitionLabel } from "../intune/drift-format"
+import type { SettingNames } from "../intune/drift"
+import { summarizeSetting } from "./setting-summary"
 
 export function benchmarkDisplayName(id: string): string {
   const parts = id.split("-").filter(part => part.length > 0)
@@ -13,15 +16,90 @@ export function packBenchmarkName(policies: readonly BaselinePolicy[]): string |
   return null
 }
 
-/** A benchmark named by its catalog display name, or by its prettified id when no name is known. */
+/**
+ * Catalog display names of the benchmarks the delivery service lists, so packs and deployments
+ * saved before a name was stamped read the same before and after the catalog loads.
+ */
+const KNOWN_BENCHMARK_NAMES: Readonly<Record<string, string>> = {
+  "intune-windows11": "Microsoft Intune for Windows 11",
+  "office-intune-bk": "Microsoft Intune for Office",
+  "microsoft-intune-edge": "Microsoft Intune for Edge",
+  "intune-for-defender": "Microsoft Defender Antivirus",
+  "mac-os-26": "CIS Apple macOS 26",
+}
+
+/** The display name of a known delivered benchmark id, or null. */
+export function knownBenchmarkName(id: string): string | null {
+  return Object.hasOwn(KNOWN_BENCHMARK_NAMES, id) ? KNOWN_BENCHMARK_NAMES[id]! : null
+}
+
+/** A benchmark named by its catalog display name, a known name, or its prettified id when no name is known. */
 export function benchmarkTitle(id: string, name?: string | null): string {
-  return name || benchmarkDisplayName(id)
+  return name || knownBenchmarkName(id) || benchmarkDisplayName(id)
 }
 
 /** A pack reference such as "id 1.0.0 Level 1" with the id replaced by the display name; unchanged when no name is known. */
 export function referenceDisplayName(reference: string, name?: string | null): string {
   const id = reference.split(/\s+/)[0] ?? ""
-  return name && id ? `${name}${reference.slice(id.length)}` : reference
+  const display = name || knownBenchmarkName(id)
+  return display && id ? `${display}${reference.slice(id.length)}` : reference
+}
+
+/**
+ * A readable file name for a CIS export, such as "CIS Microsoft Intune for Windows 11 5.0.0 L1
+ * findings (Contoso) 2026-10-16.csv": benchmark, version and Level from the pack reference, what
+ * the file holds, the tenant and the date. Only characters every file system accepts are kept.
+ */
+export function cisExportFileName(input: { reference: string; benchmarkName?: string | null; part: string; tenantName?: string | null; date: string; extension: string }): string {
+  const clean = (text: string) => text.replace(/[^\w .()-]/g, " ").replace(/\s+-\s+/g, " ").replace(/\s+/g, " ").trim()
+  const id = input.reference.trim().split(/\s+/)[0] ?? ""
+  const rest = input.reference.trim().slice(id.length).replace(/\bLevel (\d)\b/g, "L$1").trim()
+  const title = id ? `CIS ${benchmarkTitle(id, input.benchmarkName).replace(/^CIS\s+/i, "")}` : "CIS Benchmarks"
+  const tenant = clean(input.tenantName ?? "").slice(0, 40)
+  const base = clean([title, rest, input.part].filter(Boolean).join(" ")).slice(0, 80)
+  return `${clean(`${base}${tenant ? ` (${tenant})` : ""} ${input.date.slice(0, 10)}`)}.${input.extension}`
+}
+
+/** The display name of a Settings Catalog setting: its catalog name when read, else a readable form of its id. */
+export function settingDisplayName(settingId: string, names?: SettingNames): string {
+  return names && Object.hasOwn(names.settings, settingId) ? names.settings[settingId]! : humanSettingLabel(settingId)
+}
+
+/** A choice value as its option label when known, else the option part after its setting id, else as stored. */
+export function optionDisplayName(value: string, definitionId: string | undefined, names?: SettingNames): string {
+  if (names && Object.hasOwn(names.options, value)) return names.options[value]!
+  if (definitionId && value.toLowerCase().startsWith(`${definitionId.toLowerCase()}_`)) return value.slice(definitionId.length + 1)
+  return value
+}
+
+/**
+ * One configuration difference of a benchmark deployment in plain words, such as "Require
+ * encryption" with "Disabled" to "Enabled", for a path like
+ * settings.<definition id>.settingInstance.choiceSettingValue.value. A child choice inside a group
+ * is named by the setting its option belongs to. Paths outside the settings keep their path.
+ */
+export function readableDiffEntry(entry: { path: string; before?: string; after?: string }, names?: SettingNames): { label: string; before?: string; after?: string } {
+  const match = /^settings\.(.+?)(?:\.settingInstance(?:[.[].*)?)?$/.exec(entry.path)
+  if (!match) return { label: entry.path, ...(entry.before !== undefined ? { before: entry.before } : {}), ...(entry.after !== undefined ? { after: entry.after } : {}) }
+  let definitionId = match[1]!
+  for (const value of [entry.before, entry.after]) {
+    const owner = value?.replace(/_[^_]+$/, "")
+    if (owner && owner !== value && owner !== definitionId && ((names && Object.hasOwn(names.settings, owner)) || owner.startsWith(`${definitionId}_`))) { definitionId = owner; break }
+  }
+  const label = names && Object.hasOwn(names.settings, definitionId) ? names.settings[definitionId]! : definitionLabel(definitionId)
+  const shown = (value: string | undefined) => {
+    if (value === undefined) return undefined
+    if (/^[[{]/.test(value)) {
+      try {
+        const parsed = JSON.parse(value) as { settingInstance?: unknown } | null
+        return summarizeSetting(parsed && typeof parsed === "object" && "settingInstance" in parsed ? parsed.settingInstance : parsed, names).join("; ")
+      } catch { return value }
+    }
+    return optionDisplayName(value, definitionId, names)
+  }
+  const before = shown(entry.before)
+  const after = shown(entry.after)
+  return { label, ...(before !== undefined ? { before } : {}), ...(after !== undefined ? { after } : {}) }
 }
 
 export function humanSettingLabel(settingId: string): string {

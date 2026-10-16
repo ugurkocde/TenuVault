@@ -222,18 +222,29 @@ export function workspaceHistoryJSON(history: SavedAssessment[], context: Export
 }
 
 /** CSV export of a saved policy pack assessment: header rows, then one row per finding. */
-export function workspaceExportCSV(saved: SavedAssessment, context: ExportContext): string {
+/**
+ * CSV export of a saved pack assessment, one row per finding. The default layout puts the report
+ * header rows above the table. The table layout, used for CIS, starts with the column header on
+ * line 1 and carries the tenant, profile, assessment time and run as columns; the scope,
+ * limitations and notice stay in the JSON and PDF exports.
+ */
+export function workspaceExportCSV(saved: SavedAssessment, context: ExportContext, options: { layout?: 'report' | 'table' } = {}): string {
   // Recommendation columns appear only for packs that list their recommendations.
   const identified = saved.policies.some(policy => policy.recommendations?.length)
-  const rows: unknown[][] = [...headerRows(workspaceReportHeader(saved, context)),
-    [...(identified ? ['Recommendation ID', 'Recommendation title'] : []), 'Pack policy', 'Setting', 'Status', 'Recommended', 'Observed policies', 'Observed values', 'Assignment evidence']]
-  for (const finding of redactSecrets(saved.assessment.findings)) {
+  const table = options.layout === 'table'
+  const { assessment } = saved
+  const tenant = context.tenantName ? `${context.tenantName} (${assessment.tenantId})` : assessment.tenantId
+  const rows: unknown[][] = [...(table ? [] : headerRows(workspaceReportHeader(saved, context))),
+    [...(identified ? ['Recommendation ID', 'Recommendation title'] : []), 'Pack policy', 'Setting', 'Status', 'Recommended', 'Observed policies', 'Observed values', 'Assignment evidence',
+      ...(table ? ['Tenant', 'Profile', 'Assessed', 'Exported', 'Run'] : [])]]
+  for (const finding of redactSecrets(assessment.findings)) {
     const recommendations = identified ? recommendationsForFinding(saved.policies, finding) : []
     rows.push([...(identified ? [recommendations.map(item => item.id).join('; '), recommendations.map(item => item.title).join('; ')] : []),
       finding.policyName, finding.settingId, finding.status, JSON.stringify(finding.recommended),
       finding.observed.map(o => `${o.policyName} (${o.policyId})`).join('; ') || 'None',
       finding.observed.map(o => JSON.stringify(o.value)).join('; '),
-      finding.observed.map(o => o.targeting?.state ?? 'unknown').join('; ') || 'unknown'])
+      finding.observed.map(o => o.targeting?.state ?? 'unknown').join('; ') || 'unknown',
+      ...(table ? [tenant, assessment.reference, assessment.assessedAt, context.exportedAt, assessment.runId] : [])])
   }
   return toCSV(rows)
 }

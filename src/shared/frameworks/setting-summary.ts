@@ -1,3 +1,5 @@
+import type { SettingNames } from "../intune/drift"
+
 const MAX_FALLBACK_LENGTH = 200
 const MAX_DEPTH = 12
 const MAX_LINES = 50
@@ -47,8 +49,9 @@ function shortLabel(definitionId: string): string {
   return definitionId
 }
 
-function choiceText(value: unknown, definitionId: string | undefined): string {
+function choiceText(value: unknown, definitionId: string | undefined, names?: SettingNames): string {
   if (typeof value !== "string") return scalarText(value)
+  if (names && Object.hasOwn(names.options, value)) return truncate(names.options[value]!)
   if (!definitionId) return truncate(value)
   if (value.toLowerCase() === definitionId.toLowerCase()) return truncate(value)
   const lowerValue = value.toLowerCase()
@@ -62,24 +65,24 @@ function capLines(lines: string[]): string[] {
   return [...lines.slice(0, MAX_LINES - 1), FURTHER_NESTED_LINE]
 }
 
-function childLines(children: unknown, depth: number): string[] {
+function childLines(children: unknown, depth: number, names?: SettingNames): string[] {
   if (!Array.isArray(children)) return []
   if (depth >= MAX_DEPTH) return [FURTHER_NESTED_LINE]
   const lines: string[] = []
   for (const child of children) {
-    for (const line of summarizeInternal(child, depth + 1)) lines.push(`  ${line}`)
+    for (const line of summarizeInternal(child, depth + 1, names)) lines.push(`  ${line}`)
   }
   return capLines(lines)
 }
 
-function valueLines(record: RecordValue, definitionId: string | undefined, depth: number): string[] {
+function valueLines(record: RecordValue, definitionId: string | undefined, depth: number, names?: SettingNames): string[] {
   if (depth > MAX_DEPTH) return [FURTHER_NESTED_LINE]
   const lines: string[] = []
   if ("choiceSettingValue" in record) {
     const choice = record.choiceSettingValue
     if (isRecord(choice)) {
-      lines.push(`Selected option: ${choiceText(choice.value, definitionId)}`)
-      lines.push(...childLines(choice.children, depth))
+      lines.push(`Selected option: ${choiceText(choice.value, definitionId, names)}`)
+      lines.push(...childLines(choice.children, depth, names))
     } else {
       lines.push(`Selected option: ${scalarText(choice)}`)
     }
@@ -94,8 +97,8 @@ function valueLines(record: RecordValue, definitionId: string | undefined, depth
     if (Array.isArray(collection)) {
       for (const entry of collection) {
         if (isRecord(entry)) {
-          lines.push(`Selected option: ${choiceText(entry.value, definitionId)}`)
-          lines.push(...childLines(entry.children, depth))
+          lines.push(`Selected option: ${choiceText(entry.value, definitionId, names)}`)
+          lines.push(...childLines(entry.children, depth, names))
         } else {
           lines.push(`Selected option: ${scalarText(entry)}`)
         }
@@ -120,9 +123,9 @@ function valueLines(record: RecordValue, definitionId: string | undefined, depth
     if (Array.isArray(collection)) {
       for (const group of collection) {
         if (isRecord(group) && Array.isArray(group.children)) {
-          for (const child of group.children) lines.push(...summarizeInternal(child, depth + 1))
+          for (const child of group.children) lines.push(...summarizeInternal(child, depth + 1, names))
         } else if (isRecord(group)) {
-          lines.push(...(depth >= MAX_DEPTH ? [FURTHER_NESTED_LINE] : valueLines(group, definitionId, depth + 1)))
+          lines.push(...(depth >= MAX_DEPTH ? [FURTHER_NESTED_LINE] : valueLines(group, definitionId, depth + 1, names)))
         } else {
           lines.push(fallbackLine(group))
         }
@@ -134,7 +137,7 @@ function valueLines(record: RecordValue, definitionId: string | undefined, depth
   if ("groupSettingValue" in record) {
     const group = record.groupSettingValue
     if (isRecord(group) && Array.isArray(group.children)) {
-      for (const child of group.children) lines.push(...summarizeInternal(child, depth + 1))
+      for (const child of group.children) lines.push(...summarizeInternal(child, depth + 1, names))
     } else {
       lines.push(fallbackLine(group))
     }
@@ -147,29 +150,30 @@ function hasValueKey(record: RecordValue): boolean {
 }
 
 /**
- * Plain lines for a Settings Catalog setting instance. Choice values are shown
- * as their option token only, without claiming an enabled or disabled state.
+ * Plain lines for a Settings Catalog setting instance. With `names` read from the setting
+ * definitions, settings show their display name and choices their option label; without them
+ * choice values are shown as their option token only, without claiming an enabled or disabled state.
  */
-function summarizeInternal(value: unknown, depth: number): string[] {
+function summarizeInternal(value: unknown, depth: number, names?: SettingNames): string[] {
   if (depth > MAX_DEPTH) return [FURTHER_NESTED_LINE]
   if (!isRecord(value)) return [fallbackLine(value)]
   const definitionId = typeof value.settingDefinitionId === "string" && value.settingDefinitionId ? value.settingDefinitionId : undefined
   if (definitionId && hasValueKey(value)) {
-    const inner = valueLines(value, definitionId, depth)
+    const inner = valueLines(value, definitionId, depth, names)
     if (!inner.length) return [fallbackLine(value)]
-    const label = shortLabel(definitionId)
+    const label = names && Object.hasOwn(names.settings, definitionId) ? names.settings[definitionId]! : shortLabel(definitionId)
     return capLines([`${label}: ${inner[0]}`, ...inner.slice(1).map((line) => (line.startsWith("  ") ? line : `  ${line}`))])
   }
   if (hasValueKey(value)) {
-    const inner = valueLines(value, definitionId, depth)
+    const inner = valueLines(value, definitionId, depth, names)
     return inner.length ? capLines(inner) : [fallbackLine(value)]
   }
   return [fallbackLine(value)]
 }
 
-export function summarizeSetting(value: unknown): string[] {
+export function summarizeSetting(value: unknown, names?: SettingNames): string[] {
   try {
-    return capLines(summarizeInternal(value, 0))
+    return capLines(summarizeInternal(value, 0, names))
   } catch {
     return [FURTHER_NESTED_LINE]
   }
