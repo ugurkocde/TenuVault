@@ -386,6 +386,34 @@ describe("opening the page around a running assessment", () => {
   })
 })
 
+describe("finding filters", () => {
+  it("are view only on saved results and stay in place when the results are re-run", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    const { actions } = stubService({ answer: body => {
+      if (body.action === "running-job") return { body: { jobId: null } }
+      if (body.action === "assess-start") return { body: { jobId: "job-1" } }
+      if (body.action === "assess-status") return { body: snapshot("done", { assessment: fresh }) }
+      return { status: 500, body: { error: "unexpected" } }
+    } })
+    const { container } = render()
+    await flush()
+    const search = container.querySelector<HTMLInputElement>('input[aria-label="Search findings"]')!
+    const before = actions.length
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!
+      setValue.call(search, "no such setting")
+      search.dispatchEvent(new Event("input", { bubbles: true }))
+    })
+    await flush()
+    expect(container.textContent).toContain("No findings match the search.")
+    expect(actions.slice(before).some(body => String(body.action) !== "workspace-load")).toBe(false)
+    await act(async () => { buttonNamed(container, "Run again")!.click() })
+    await waitFor(() => levelSummary(container).includes("100%"))
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="Search findings"]')!.value).toBe("no such setting")
+    expect(container.textContent).toContain("No findings match the search.")
+  })
+})
+
 describe("checking again for a running assessment", () => {
   it("does not let a late Retry replace a fresh run's results or keep its selection on saved results", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
