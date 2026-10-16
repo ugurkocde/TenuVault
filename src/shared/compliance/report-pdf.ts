@@ -64,14 +64,15 @@ function percent(value: number | null): string {
 }
 
 /** A report layout whose every drawn string is redacted and normalised to WinAnsi. */
-function createReport(options: { shortName: string; tenant?: string; footer: string; title: string; subject: string; keywords: string; exportedAt: string; identity: unknown; branding?: PdfBranding }): Layout {
+function createReport(options: { shortName: string; tenant?: string; footer: string; title: string; subject: string; keywords: string; exportedAt: string; identity: readonly unknown[]; branding?: PdfBranding }): Layout {
+  const theme = resolveBrandTheme(options.branding)
   return createLayout({
     shortName: options.shortName, tenant: options.tenant, footer: options.footer,
     sanitize: value => ascii(redactText(value)),
     properties: { title: options.title, subject: options.subject, keywords: options.keywords },
     exportedAt: options.exportedAt,
-    identity: JSON.stringify([options.identity, options.branding ?? null]),
-    theme: resolveBrandTheme(options.branding),
+    theme,
+    identity: [...options.identity, theme.companyName ?? null],
   })
 }
 
@@ -115,7 +116,7 @@ export function generateNativeFrameworkPDF(run: NativeAssessment, context: Expor
   const layout = createReport({
     shortName: name, tenant: header.tenant.name ?? header.tenant.id, footer: 'Independent configuration comparison',
     title: `${name} configuration comparison`, subject: 'Independent Intune technical evidence mapping', keywords: 'Intune, configuration, evidence, comparison',
-    exportedAt: context.exportedAt, identity: [run, context], branding,
+    exportedAt: context.exportedAt, identity: ['native', run.runId, run.tenantId, run.frameworkId, run.snapshotSha256, run.rulesetSha256, context.exportedAt], branding,
   })
   const scope = run.assessment.scope
   const platforms = scope.platforms?.map(p => PLATFORM_LABELS[p] ?? p).join(', ') ?? 'All supported platforms'
@@ -515,7 +516,7 @@ export function generateWorkspaceAssessmentPDF(saved: SavedAssessment, context: 
   const layout = createReport({
     shortName: header.framework.name, tenant: header.tenant.name ?? header.tenant.id, footer: 'Policy pack assessment',
     title: `${header.framework.name} policy pack assessment`, subject: 'Intune policy pack comparison', keywords: 'Intune, configuration, baseline, comparison',
-    exportedAt: context.exportedAt, identity: [saved, context], branding,
+    exportedAt: context.exportedAt, identity: ['workspace', saved.assessment.runId, saved.assessment.tenantId, saved.assessment.frameworkId, saved.assessment.assessedAt, context.exportedAt], branding,
   })
   const count = (status: WorkspaceStatus) => findings.filter(f => f.status === status).length
   const total = findings.length
@@ -638,7 +639,7 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
   const layout = createReport({
     shortName: title, tenant: context.tenantName ?? context.tenantId, footer: 'CIS readiness report',
     title: `${summary.benchmark} readiness report`, subject: 'CIS readiness summary from a saved assessment', keywords: 'Intune, configuration, readiness, comparison',
-    exportedAt: context.exportedAt, identity: [summary, context], branding,
+    exportedAt: context.exportedAt, identity: ['cis', context.runId ?? null, context.tenantId, summary.benchmark, summary.version, context.assessedAt, context.exportedAt], branding,
   })
   const tenant = context.tenantName ? `${context.tenantName} (${context.tenantId})` : context.tenantId
   const benchmark = summary.benchmarkName ? `${summary.benchmarkName} (${summary.benchmark})` : summary.benchmark

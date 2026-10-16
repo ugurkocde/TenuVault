@@ -629,9 +629,18 @@ export interface StatusCell {
 
 /**
  * A heading and a table from plain columns and rows, for reports that only have text cells.
- * Strings become wrapped text; `status` adds a right aligned pill column.
+ * Strings become wrapped text; `status` adds a right aligned pill column. `lead` is a muted
+ * paragraph under the heading; without rows `empty` is printed instead of the table.
  */
-export function tableSection(layout: Layout, spec: { title: string; note?: string; toc?: boolean; columns: SectionColumn[]; rows: (string | Cell)[][]; status?: { header: string; width?: number; cell: (index: number) => StatusCell }; caption?: string }) {
+export function tableSection(layout: Layout, spec: { title: string; note?: string; lead?: string; empty?: string; toc?: boolean; marker?: { kind: MarkerKind; color: RgbColor }; columns: SectionColumn[]; rows: (string | Cell)[][]; status?: { header: string; width?: number; cell: (index: number) => StatusCell }; caption?: string }) {
+  const lead: TextItem[] = spec.lead ? [{ text: spec.lead, size: 7.6, color: PALETTE.muted, lineHeight: 3.5 }] : []
+  const leadHeight = lead.length ? layout.heightOf(layout.measure(lead, contentWidth)) + 2 : 0
+  if (!spec.rows.length) {
+    layout.heading(spec.title, { note: spec.note, toc: spec.toc, marker: spec.marker, keep: leadHeight + 10 })
+    if (lead.length) layout.paragraph(lead, { after: 2 })
+    layout.paragraph([{ text: spec.empty ?? 'Nothing to report.', size: 7.6, style: 'italic', color: PALETTE.muted, lineHeight: 3.5 }], { after: 6 })
+    return
+  }
   const columns = [...spec.columns, ...(spec.status ? [{ header: spec.status.header, width: spec.status.width ?? 34, align: 'right' as const }] : [])]
   const fixed = columns.reduce((sum, column) => sum + (column.width ?? 0), 0)
   const flexible = columns.filter(column => column.width === undefined).length
@@ -645,6 +654,10 @@ export function tableSection(layout: Layout, spec: { title: string; note?: strin
       ],
     }
   })
-  layout.heading(spec.title, { note: spec.note, toc: spec.toc })
-  table(layout, { columns: resolved, groups: [{ label: '', rows }] }, spec.caption ?? spec.title)
+  const { header, blocks } = tableBlocks(layout, { columns: resolved, groups: [{ label: '', rows }] })
+  // The heading stays with its lead, the table header and the first row, up to a third of a page.
+  layout.heading(spec.title, { note: spec.note, toc: spec.toc, marker: spec.marker, keep: Math.min(leadHeight + header.height + (header.keep ?? 0), 90) })
+  if (lead.length) layout.paragraph(lead, { after: 2 })
+  layout.flow([header, ...blocks], { caption: spec.caption ?? spec.title, repeat: index => index > 0 ? header : undefined })
+  layout.y += 4
 }

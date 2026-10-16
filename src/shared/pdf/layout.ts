@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto'
 import { jsPDF } from 'jspdf'
 import type { BrandTheme } from './theme'
-import { PALETTE, capHeight, clampLine, drawCard, drawEyebrow, drawRule, fingerprint, setFont, textWidth, wrapLines, type FontStyle, type RgbColor } from './kit'
+import { PALETTE, capHeight, clampLine, drawCard, drawEyebrow, drawMarker, drawRule, setFont, textWidth, wrapLines, type FontStyle, type MarkerKind, type RgbColor } from './kit'
 
 /**
  * Paging engine of the TenuVault reports: an A4 grid, top-of-line text drawing, cards that
@@ -60,8 +61,11 @@ export interface LayoutOptions {
   properties: { title: string; subject: string; keywords: string }
   /** The export time: the PDF creation date, so the same export yields the same bytes. */
   exportedAt: string
-  /** The inputs of the report; their fingerprint becomes the PDF file id. */
-  identity: string
+  /**
+   * Non secret, stable facts that identify the report (run id, hashes, times); their SHA-256 becomes
+   * the PDF file id. Never pass tenant data here: the id is written into the file unencrypted.
+   */
+  identity: readonly unknown[]
   theme: BrandTheme
 }
 
@@ -202,13 +206,15 @@ export function createLayout(options: LayoutOptions) {
   }
 
   /** Section heading with an optional note on the right; kept with `keep` mm of what follows. */
-  function heading(title: string, headingOptions: { note?: string; keep?: number; toc?: boolean; size?: number } = {}) {
+  function heading(title: string, headingOptions: { note?: string; keep?: number; toc?: boolean; size?: number; marker?: { kind: MarkerKind; color: RgbColor } } = {}) {
     const size = headingOptions.size ?? 10.5
     ensure(6.5 + (headingOptions.keep ?? 18))
     if (headingOptions.toc) toc.push({ title, page: page(), level: 1 })
+    const indent = headingOptions.marker ? 4.4 : 0
+    if (headingOptions.marker) drawMarker(doc, margin + 1.3, y + capHeight(size) / 2, headingOptions.marker.kind, headingOptions.marker.color, 1.3)
     setFont(doc, size, 'bold', theme.strong)
     const noteWidth = headingOptions.note ? textWidth(doc, headingOptions.note, 7) + 6 : 0
-    doc.text(clampLine(doc, title, contentWidth - noteWidth, size, 'bold'), margin, y + capHeight(size))
+    doc.text(clampLine(doc, title, contentWidth - noteWidth - indent, size, 'bold'), margin + indent, y + capHeight(size))
     if (headingOptions.note) {
       setFont(doc, 7, 'normal', PALETTE.muted)
       doc.text(headingOptions.note, right, y + capHeight(size), { align: 'right' })
@@ -236,6 +242,7 @@ export function createLayout(options: LayoutOptions) {
 
   function continuation(caption: string) {
     addPage()
+    if (!caption) return
     setFont(doc, 7.2, 'italic', PALETTE.muted)
     doc.text(clampLine(doc, `${caption} (continued)`, contentWidth, 7.2, 'italic'), margin, y + 2.6)
     y += 6
@@ -257,9 +264,9 @@ export function createLayout(options: LayoutOptions) {
     }
     blocks.forEach((block, index) => {
       const fits = y + block.height + (block.keep ?? 0) + pad <= contentBottom
+      // Nothing is drawn yet, so the whole block moves to the next page without a continuation caption.
       if (!fits && fresh && y > contentTop) {
-        if (flowOptions.caption) continuation(flowOptions.caption)
-        else addPage()
+        addPage()
         segmentTop = y
       } else if (!fits && !fresh) {
         close()
@@ -381,7 +388,7 @@ export function createLayout(options: LayoutOptions) {
     const year = created.getUTCFullYear()
     const stamp = (Number.isNaN(year) || year < 1970 || year > 2037 ? new Date(0) : created).toISOString().replace(/[-:T]/g, '').slice(0, 14)
     doc.setCreationDate(`D:${stamp}+00'00'`)
-    doc.setFileId(fingerprint(options.identity))
+    doc.setFileId(createHash('sha256').update(JSON.stringify(options.identity)).digest('hex').slice(0, 32).toUpperCase())
     return new Uint8Array(doc.output('arraybuffer'))
   }
 

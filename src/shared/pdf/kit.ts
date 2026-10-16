@@ -386,16 +386,3 @@ export function drawBrandMark(doc: jsPDF, x: number, top: number, size: number, 
   doc.setLineWidth(52 * scale)
   doc.circle(px(512), py(512), 52 * scale, 'S')
 }
-
-/** A 32 hex digit fingerprint of the text, for a file id that is stable for the same input. */
-export function fingerprint(text: string): string {
-  const seeds = [0x811c9dc5, 0x01000193, 0x9e3779b9, 0x85ebca6b]
-  return seeds.map(seed => {
-    let hash = seed >>> 0
-    for (let index = 0; index < text.length; index++) {
-      hash ^= text.charCodeAt(index)
-      hash = Math.imul(hash, 0x01000193) >>> 0
-    }
-    return hash.toString(16).padStart(8, '0')
-  }).join('').toUpperCase()
-}
