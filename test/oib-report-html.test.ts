@@ -106,10 +106,10 @@ describe("OIB report HTML", () => {
   it("keeps tenant text in any script verbatim and redacts secrets", () => {
     const report = oibComparisonReport()
     report.meta[0] = ["Tenant", "コントソ株式会社 東京本社"]
-    report.sections[0]!.rows[0]![3] = "日本語ポリシー名 Ελληνικά Кириллица 中文策略 – “quoted” …"
+    report.sections[0]!.rows[0]![3] = "日本語ポリシー名 Ελληνικά Кириллица 中文策略 \u2013 \u201cquoted\u201d \u2026"
     const document = html(report)
     expect(body(document)).toContain("コントソ株式会社 東京本社")
-    expect(body(document)).toContain("日本語ポリシー名 Ελληνικά Кириллица 中文策略 – “quoted” …")
+    expect(body(document)).toContain("日本語ポリシー名 Ελληνικά Кириллица 中文策略 \u2013 \u201cquoted\u201d \u2026")
     expect(document).toContain('<meta charset="utf-8">')
     // The system font stack covers Japanese and Chinese.
     expect(document).toContain('"Noto Sans CJK JP", "Hiragino Sans", "Microsoft YaHei"')
@@ -118,6 +118,22 @@ describe("OIB report HTML", () => {
     const validation = html(oibValidationReport())
     expect(validation).not.toContain("eyJhbGciOiJIUzI1NiJ9")
     expect(visible(validation)).toContain("Graph returned 403 Forbidden")
+  })
+
+  it("redacts secrets in the logo alternative text", () => {
+    const document = html(oibComparisonReport(), { ...BRANDING, companyName: "Fabrikam Bearer abcdef123456789" })
+    const alt = document.match(/<img [^>]*alt="([^"]*)"/)?.[1] ?? ""
+    expect(alt).toContain("Fabrikam")
+    expect(alt).not.toContain("abcdef123456789")
+    expect(document).not.toContain("abcdef123456789")
+  })
+
+  it("sizes columns of a report at the payload limits without overflowing the stack", () => {
+    const report = oibValidationReport()
+    const section = report.sections[0]!
+    const cell = "x ".repeat(10000)
+    section.rows = Array.from({ length: 20 }, () => section.columns.map(() => cell))
+    expect(() => html(report)).not.toThrow()
   })
 
   it("prints every date in the same UTC format", () => {

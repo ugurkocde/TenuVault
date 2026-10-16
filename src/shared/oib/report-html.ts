@@ -89,9 +89,12 @@ function columnWidths(section: ReportSection): number[] {
   const columns = section.columns.map((header, index) => {
     const values = sample.map((row) => row[index] ?? "")
     const lines = values.flatMap((value) => value.split("\n"))
-    const words = [...header.split(/\s+/).map((word) => word.length * 1.25), ...lines.flatMap((line) => line.split(/\s+/)).map((word) => Math.min(word.length, 20))]
-    const pills = values.filter((value) => statusTone(value)).map((value) => value.trim().length + 5)
-    const min = Math.max(5, ...words, ...pills) + 3
+    // Running maxima: spreading input-sized arrays into Math.max overflows the stack on long cells.
+    let longest = 5
+    for (const word of header.split(/\s+/)) longest = Math.max(longest, word.length * 1.25)
+    for (const line of lines) for (const word of line.split(/\s+/)) longest = Math.max(longest, Math.min(word.length, 20))
+    for (const value of values) if (statusTone(value)) longest = Math.max(longest, value.trim().length + 5)
+    const min = longest + 3
     const lengths = lines.map((line) => line.length).sort((a, b) => a - b)
     return { min, want: Math.max(min, Math.min(lengths[Math.floor((lengths.length - 1) * 0.9)] ?? 0, 70) + 3) }
   })
@@ -299,7 +302,7 @@ export function buildOibReport(report: ReportPayload, options: { exportedAt: str
   const brand = theme.companyName
     ? theme.logoDataUrl
       // A transparent PNG on a dark band sits on a white plate, as on the jsPDF cover.
-      ? `<img class="logo${!theme.logoDataUrl.startsWith("data:image/jp") && luminance(theme.primary) <= 0.5 ? " plate" : ""}" src="${escapeHtml(theme.logoDataUrl)}" alt="${escapeHtml(theme.companyName)}">`
+      ? `<img class="logo${!theme.logoDataUrl.startsWith("data:image/jp") && luminance(theme.primary) <= 0.5 ? " plate" : ""}" src="${escapeHtml(theme.logoDataUrl)}" alt="${text(theme.companyName)}">`
       : `<span class="company">${text(theme.companyName)}</span>`
     : `${brandMark()}<span class="wordmark">TenuVault</span>`
   const titleSize = report.title.length <= 22 ? 36 : report.title.length <= 30 ? 30 : report.title.length <= 60 ? 26 : 22
