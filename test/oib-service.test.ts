@@ -332,6 +332,8 @@ describe("backup choice", () => {
   it("reports the newest finished backup of the tenant with its age and the requested types it misses", async () => {
     const state: Tenant = { policies: [], backups: [
       { id: "backup-2026-10-01-100000", timestamp: minutesAgo(5), status: "running" },
+      // A run that stopped early is recorded as failed and is never offered for reuse.
+      { id: "backup-2026-10-01-095000", timestamp: minutesAgo(20), status: "Failed", metadata: { ...COMPLETE, Status: "Failed" } },
       { id: "backup-2026-10-01-090000", timestamp: minutesAgo(62), metadata: { ...COMPLETE, SkippedTypes: ["CompliancePolicies"] } },
       { id: "backup-2026-09-30-090000", timestamp: minutesAgo(600), metadata: COMPLETE },
     ] }
@@ -339,7 +341,7 @@ describe("backup choice", () => {
     const options = (folders: string[], extra = {}) => handleOib({ ...base, action: "oib-backup-options", folders, ...extra }) as Promise<OibBackupOptions>
     const { recent } = await options(["ConfigurationPolicies", "CompliancePolicies"])
     expect(recent).toMatchObject({ folder: "backup-2026-10-01-090000", ageMinutes: 60, complete: false, missing: ["compliance policies"], reason: "compliance policies skipped for missing permissions." })
-    expect(Date.parse(recent!.completedAt)).toBe(Date.parse(state.backups![1]!.timestamp) + 120_000)
+    expect(Date.parse(recent!.completedAt)).toBe(Date.parse(state.backups![2]!.timestamp) + 120_000)
     expect((await options(["ConfigurationPolicies"])).recent).toMatchObject({ complete: true, missing: [] })
     expect((await options(["ConfigurationPolicies"])).recent).not.toHaveProperty("reason")
     expect(await options(["ConfigurationPolicies"], { storageAccountName: "" })).toEqual({ recent: null })

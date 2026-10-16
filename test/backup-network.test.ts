@@ -215,8 +215,14 @@ describe("backup request recovery", () => {
     // 24 failed attempts plus at most seven already in flight. Include container and optional list.
     expect(signals.length).toBeGreaterThanOrEqual(24)
     expect(signals.length).toBeLessThanOrEqual(31)
-    expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(scenario === "after listing" ? 34 : 32)
-    expect(fetchImpl.mock.calls.some(([input]) => String(input).endsWith("/metadata.json"))).toBe(false)
+    // Plus one create-only manifest that records the saved part as failed once the folder is claimed.
+    expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(scenario === "after listing" ? 35 : 32)
+    const manifests = fetchImpl.mock.calls.filter(([input]) => String(input).endsWith("/metadata.json"))
+    if (scenario === "after listing") {
+      expect(manifests).toHaveLength(1)
+      expect(manifests[0]![1]).toMatchObject({ method: "PUT", headers: expect.objectContaining({ "if-none-match": "*" }) })
+      expect(JSON.parse(String(manifests[0]![1]!.body))).toMatchObject({ Status: "Failed", TenantId: TENANT, Error: job.exception })
+    } else expect(manifests).toHaveLength(0)
 
     hanging = false
     const next = engine.start(outageRequest)
@@ -291,8 +297,11 @@ describe("backup request recovery", () => {
     expect(signals.length).toBeGreaterThanOrEqual(24)
     expect(signals.length).toBeLessThanOrEqual(31)
     expect(signals.every(signal => signal.aborted)).toBe(true)
-    expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(service === "Graph" ? 34 : 42)
-    expect(fetchImpl.mock.calls.some(([input]) => String(input).endsWith("/metadata.json"))).toBe(false)
+    // A Graph outage leaves the storage working, so the saved part is recorded as failed; a storage outage writes nothing more.
+    expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(service === "Graph" ? 35 : 42)
+    const manifests = fetchImpl.mock.calls.filter(([input]) => String(input).endsWith("/metadata.json"))
+    expect(manifests).toHaveLength(service === "Graph" ? 1 : 0)
+    if (service === "Graph") expect(JSON.parse(String(manifests[0]![1]!.body))).toMatchObject({ Status: "Failed", ItemCounts: { TotalPolicies: 0 } })
   })
 
   it.each(["Graph", "blob"])("counts transport errors while reading an HTTP 503 %s body", async service => {

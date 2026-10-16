@@ -250,12 +250,7 @@ function fakeGraph(url: URL): Response {
 }
 
 async function finished(engine: BackupEngine, id: string) {
-  for (let i = 0; i < 200; i++) {
-    const job = engine.get(id)!
-    if (job.status !== "Running") return job
-    await new Promise((r) => setTimeout(r, 5))
-  }
-  throw new Error("backup did not finish")
+  return engine.waitForJob(engine.get(id)!)
 }
 
 describe("retention is scoped to the backup's tenant", () => {

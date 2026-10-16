@@ -81,6 +81,8 @@ const MAX_JOBS = 25
 const CONCURRENCY = 8
 export const JOB_DEADLINE_MS = 30 * 60_000
 export const MANIFEST_COMMIT_GRACE_MS = 2 * 60_000
+/** How long a run that stopped early may spend recording its folder as a failed backup. */
+export const FAILED_MANIFEST_GRACE_MS = 30_000
 
 /** Another writer already claimed this backup folder, so this backup wrote nothing. */
 export class BackupFolderTakenError extends StorageError {
@@ -90,6 +92,17 @@ export class BackupFolderTakenError extends StorageError {
   }
 }
 class BackupCancelledError extends Error {}
+
+/**
+ * Set by a run once it owns its backup folder: the manifest it would record if it stopped now.
+ * `committing` is set when the real manifest write starts, after which nothing else may write one.
+ */
+interface StoppedRun {
+  manifest?: (error: string) => Record<string, unknown>
+  committing: boolean
+  /** The service whose failures stopped the run, if one did. */
+  stoppedBy?: () => NetworkService | null
+}
 
 /**
  * What a run saved, whether the network answered any of its requests, and how many recorded
@@ -142,6 +155,8 @@ export class NetworkCircuit {
   private readonly combined: AbortSignal
   private readonly consecutiveFailures: Record<NetworkService, number> = { "Microsoft Graph": 0, "backup storage": 0 }
   private readonly consecutiveAuthFailures: Record<NetworkService, { status: number; count: number } | null> = { "Microsoft Graph": null, "backup storage": null }
+  /** The service whose failures opened the circuit. */
+  stoppedBy: NetworkService | null = null
 
   constructor(private readonly threshold: number, signal?: AbortSignal, private readonly deadline?: number) {
     this.combined = signal ? AbortSignal.any([signal, this.controller.signal]) : this.controller.signal
@@ -162,6 +177,7 @@ export class NetworkCircuit {
   failed(service: NetworkService, cause?: unknown): void {
     this.signal.throwIfAborted()
     if (++this.consecutiveFailures[service] < this.threshold) return
+    this.stoppedBy = service
     this.controller.abort(new Error(`Backup stopped: ${service} did not respond for ${this.consecutiveFailures[service]} consecutive requests. Earlier policies in this run were saved; the backup is incomplete.`, { cause }))
     this.signal.throwIfAborted()
   }
@@ -174,6 +190,7 @@ export class NetworkCircuit {
     const count = previous?.status === status ? previous.count + 1 : 1
     this.consecutiveAuthFailures[service] = { status, count }
     if (count < CONSECUTIVE_AUTH_FAILURE_LIMIT) return
+    this.stoppedBy = service
     this.controller.abort(new Error(message))
     this.signal.throwIfAborted()
   }
@@ -207,7 +224,7 @@ export class BackupEngine {
 
   cancel(jobId: string): BackupJob | undefined {
     const job = this.jobs.get(jobId)
-    if (job?.status === "Running") this.executions.get(jobId)?.controller.abort(new BackupCancelledError("Backup cancelled by you. No manifest was written for this run."))
+    if (job?.status === "Running") this.executions.get(jobId)?.controller.abort(new BackupCancelledError("Backup cancelled by you. This run is never offered as a complete backup."))
     return job
   }
 
@@ -259,20 +276,27 @@ export class BackupEngine {
     const timer = setTimeout(() => controller.abort(jobDeadlineError()), JOB_DEADLINE_MS)
     timer.unref?.()
     const outcome: RunOutcome = { saved: 0, answered: false, otherFailures: 0 }
-    const done = this.run(job, request, controller.signal, deadline, outcome)
-      .catch((error: unknown) => {
+    const stopped: StoppedRun = { committing: false }
+    const done = this.run(job, request, controller.signal, deadline, outcome, stopped)
+      .catch(async (error: unknown) => {
         job.status = error instanceof BackupCancelledError ? "Cancelled" : "Failed"
         job.exception = error instanceof Error ? error.message : String(error)
+        // Classified before the failed manifest is written, which goes around the run's fetch and cannot change it.
         if (job.status === "Failed" && isUnreachable(error) && !outcome.saved && !outcome.answered && !outcome.otherFailures) job.unreachable = true
         job.progressMessage = job.status === "Cancelled" ? "Backup cancelled" : "Backup failed"
         this.write(job, `${job.progressMessage}: ${job.exception}`)
+        // A storage that stopped answering or refused access would not take the manifest either.
+        if (!stopped.manifest || stopped.committing || stopped.stoppedBy?.() === "backup storage") return
+        // The run is over, so a backup started while the manifest is written gets its own job instead of joining this one.
+        if (this.running.get(tenantKey)?.job === job) this.running.delete(tenantKey)
+        await this.recordStopped(job, request, stopped.manifest(job.exception))
       })
       .finally(() => {
         clearTimeout(timer)
         controller.abort(new Error("Backup finished"))
         job.progress = 100
         job.endTime = this.now().toISOString()
-        this.running.delete(tenantKey)
+        if (this.running.get(tenantKey)?.job === job) this.running.delete(tenantKey)
         this.executions.delete(job.id)
       })
       .then(() => job)
@@ -280,7 +304,7 @@ export class BackupEngine {
     return job
   }
 
-  private async run(job: BackupJob, request: BackupRequest, signal: AbortSignal, deadline: number, outcome: RunOutcome): Promise<void> {
+  private async run(job: BackupJob, request: BackupRequest, signal: AbortSignal, deadline: number, outcome: RunOutcome, stopped: StoppedRun): Promise<void> {
     const started = this.now()
     const local = isLocalAccount(request.storageAccountName)
     const fetchImpl = answeredFetch(this.deps.fetch, outcome, local ? `${request.storageAccountName.toLowerCase()}.blob.core.windows.net` : null)
@@ -373,6 +397,37 @@ export class BackupEngine {
     const items: BackupItems = {}
     let done = 0
     const itemTimeoutWarnings: string[] = []
+    // Same shape as the runbook's metadata.json, describing what this run saved so far.
+    const manifest = (status: string, ended: Date, extra: Record<string, unknown> = {}) => {
+      const seconds = Math.round((ended.getTime() - started.getTime()) / 1000)
+      return {
+        BackupDate: folderTimestamp(started),
+        BackupFolder: backupFolder,
+        StartTime: displayTime(started),
+        EndTime: displayTime(ended),
+        Duration: seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`,
+        DurationSeconds: seconds,
+        ItemCounts: { ...counts, TotalPolicies: Object.values(counts).reduce((sum, count) => sum + count, 0) },
+        Status: status,
+        RunbookVersion: "desktop",
+        BackupFormat: "Individual policy files with Intune-compatible JSON",
+        Source: "TenuVault Desktop",
+        // Retention only ever removes backups recorded as this tenant's.
+        TenantId: request.tenantId.toLowerCase(),
+        Trigger: request.trigger ?? "manual",
+        Scope: { Excluded: scope.excluded },
+        Failures: failures,
+        SkippedTypes: skippedTypes,
+        FailedTypes: failedTypes,
+        // Per item fingerprints (by type folder and Intune ID), so backups can be compared without reading every file.
+        Items: sortKeys(items),
+        ...(itemTimeoutWarnings.length ? { Warnings: itemTimeoutWarnings } : {}),
+        ...extra,
+      }
+    }
+    // From here the folder is this run's, so a run that stops early records it as failed.
+    stopped.manifest = (error) => manifest("Failed", this.now(), { Error: error })
+    stopped.stoppedBy = () => network.stoppedBy
 
     await pool(work, concurrency, async ({ type, item, displayName, fileName }) => {
       job.progressMessage = `Backing up ${type.label}`
@@ -408,31 +463,8 @@ export class BackupEngine {
     }, network.signal)
 
     const ended = this.now()
-    const seconds = Math.round((ended.getTime() - started.getTime()) / 1000)
     const totalPolicies = Object.values(counts).reduce((sum, count) => sum + count, 0)
-    const metadata = {
-      BackupDate: folderTimestamp(started),
-      BackupFolder: backupFolder,
-      StartTime: displayTime(started),
-      EndTime: displayTime(ended),
-      Duration: seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`,
-      DurationSeconds: seconds,
-      ItemCounts: { ...counts, TotalPolicies: totalPolicies },
-      Status: failures > 0 ? (totalPolicies === 0 ? "Failed" : "CompletedWithWarnings") : "Success",
-      RunbookVersion: "desktop",
-      BackupFormat: "Individual policy files with Intune-compatible JSON",
-      Source: "TenuVault Desktop",
-      // Retention only ever removes backups recorded as this tenant's.
-      TenantId: request.tenantId.toLowerCase(),
-      Trigger: request.trigger ?? "manual",
-      Scope: { Excluded: scope.excluded },
-      Failures: failures,
-      SkippedTypes: skippedTypes,
-      FailedTypes: failedTypes,
-      // Per item fingerprints (by type folder and Intune ID), so backups can be compared without reading every file.
-      Items: sortKeys(items),
-      ...(itemTimeoutWarnings.length ? { Warnings: itemTimeoutWarnings } : {}),
-    }
+    const metadata = manifest(failures > 0 ? (totalPolicies === 0 ? "Failed" : "CompletedWithWarnings") : "Success", ended)
 
     // Detach cancellation at the first manifest PUT, after cancellable token acquisition.
     // Retention reads cannot delay the manifest, and a saved backup must not burn a retry slot.
@@ -444,7 +476,8 @@ export class BackupEngine {
     const commitNetwork = new NetworkCircuit(3 * concurrency, commitController.signal, commitDeadline)
     const commitStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, commitNetwork)
     try {
-      await commitStorage.put(`${backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), network)
+      // Once the PUT is sent it may land even when it reports a failure, so no failed manifest may follow it.
+      await commitStorage.put(`${backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), network, false, () => { stopped.committing = true })
     } finally {
       clearTimeout(commitTimer)
     }
@@ -479,6 +512,36 @@ export class BackupEngine {
     job.progressMessage =
       job.status === "Failed" ? "Backup failed: no policies could be saved" : warnings > 0 ? `Backup completed with ${warnings} warning${warnings === 1 ? "" : "s"}` : "Backup completed successfully"
     this.write(job, `Backup completed: ${totalPolicies} policies in ${metadata.Duration}.`)
+  }
+
+  /**
+   * Writes the manifest of a run that stopped after claiming its folder, with status Failed, so
+   * every list names the backup and its trigger and retention can remove it like any other backup
+   * of this tenant. Readers never treat a failed backup as complete. The write only creates: it
+   * never replaces a manifest that is already there. It goes around the run's fetch, so it cannot
+   * change how the failure was classified, and it gives up after FAILED_MANIFEST_GRACE_MS.
+   */
+  private async recordStopped(job: BackupJob, request: BackupRequest, metadata: Record<string, unknown>): Promise<void> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new RequestTimeoutError("The storage did not answer in time.")), FAILED_MANIFEST_GRACE_MS)
+    timer.unref?.()
+    const deadline = Date.now() + FAILED_MANIFEST_GRACE_MS
+    const network = new NetworkCircuit(3, controller.signal, deadline)
+    const token = isLocalAccount(request.storageAccountName) ? async () => "" : () => this.deps.getToken(request.tenantId, request.clientId, "https://storage.azure.com/.default")
+    const storage = new BlobWriter(this.deps.fetch, request.storageAccountName, token, network)
+    try {
+      await storage.put(`${job.backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), undefined, true)
+      this.write(job, "Recorded this backup as failed. The policies it saved stay in storage but are never offered as a complete backup.")
+    } catch (error) {
+      if (error instanceof BlobClaimError) this.write(job, "This backup already has a manifest, so it was left as it is.")
+      else {
+        // The circuit's own deadline error names the job deadline; this write has its own, shorter one.
+        const reason = controller.signal.aborted || Date.now() >= deadline ? "The storage did not answer in time" : (error instanceof Error ? error.message : String(error)).replace(/\.$/, "")
+        this.write(job, `Could not record this backup as failed: ${reason}. It is listed as incomplete.`)
+      }
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   /**
@@ -601,7 +664,7 @@ export class BackupEngine {
 
   private prune(): void {
     while (this.jobs.size > MAX_JOBS) {
-      const oldest = [...this.jobs.values()].find((job) => job.status !== "Running")
+      const oldest = [...this.jobs.values()].find((job) => job.status !== "Running" && job.endTime !== undefined)
       if (!oldest) break
       this.jobs.delete(oldest.id)
     }

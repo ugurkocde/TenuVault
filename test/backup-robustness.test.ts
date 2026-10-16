@@ -148,6 +148,13 @@ describe("bounded backup jobs", () => {
   })
 })
 
+function expectFailedManifestOnly(job: BackupJob, saved: Map<string, string>, calls: Array<{ url: URL; init: RequestInit }>) {
+  const puts = calls.filter(call => call.init.method === "PUT" && call.url.pathname.endsWith("/metadata.json"))
+  expect(puts).toHaveLength(1)
+  expect(puts[0]!.init.headers).toMatchObject({ "if-none-match": "*" })
+  expect(JSON.parse(saved.get(`${job.backupFolder}/metadata.json`)!)).toMatchObject({ Status: "Failed", Error: job.exception })
+}
+
 function nearDeadlineListing(url: URL, page: number, lastPage = 30, lastDelay = 59_500): Promise<Response> | undefined {
   if (url.hostname !== "graph.microsoft.com") return
   return new Promise(resolve => { setTimeout(() => resolve(Response.json({ value: [],
@@ -273,7 +280,7 @@ describe("manifest commit and retention interruption", () => {
     expect(calls.some(call => call.url.searchParams.get("comp") === "list")).toBe(false)
   })
 
-  it.each(["cancel", "deadline"])("fails without dispatching a manifest when %s arrives during its token wait", async interrupt => {
+  it.each(["cancel", "deadline"])("records the run as failed without dispatching its manifest when %s arrives during the token wait", async interrupt => {
     vi.useFakeTimers()
     let storageTokens = 0
     let release!: (token: string) => void
@@ -297,8 +304,8 @@ describe("manifest commit and retention interruption", () => {
     await engine.waitForJob(job)
     expect(job.status).toBe(interrupt === "cancel" ? "Cancelled" : "Failed")
     expect(job.exception).toContain(interrupt === "cancel" ? "Backup cancelled by you" : "30 minute job deadline")
-    expect(saved.has(`${job.backupFolder}/metadata.json`)).toBe(false)
-    expect(calls.some(call => call.init.method === "PUT" && call.url.pathname.endsWith("/metadata.json"))).toBe(false)
+    // The manifest PUT was never sent, so only the create-only failed manifest is written.
+    expectFailedManifestOnly(job, saved, calls)
     const count = calls.length
     release("token")
     await vi.advanceTimersByTimeAsync(300_000)
@@ -306,7 +313,7 @@ describe("manifest commit and retention interruption", () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it.each(["cancel", "deadline"])("stops immediately when %s arrives during back-off after a manifest token timeout", async interrupt => {
+  it.each(["cancel", "deadline"])("stops at once and records the run as failed when %s arrives during back-off after a manifest token timeout", async interrupt => {
     vi.useFakeTimers()
     let storageTokens = 0
     let release!: (token: string) => void
@@ -332,13 +339,14 @@ describe("manifest commit and retention interruption", () => {
     expect(job.status).toBe(interrupt === "cancel" ? "Cancelled" : "Failed")
     await engine.waitForJob(job)
     expect(job.exception).toContain(interrupt === "cancel" ? "Backup cancelled by you" : "30 minute job deadline")
-    expect(saved.has(`${job.backupFolder}/metadata.json`)).toBe(false)
-    expect(calls.some(call => call.init.method === "PUT" && call.url.pathname.endsWith("/metadata.json"))).toBe(false)
+    // The manifest PUT was never sent, so only the create-only failed manifest is written.
+    expectFailedManifestOnly(job, saved, calls)
     expect(vi.getTimerCount()).toBe(0)
     const count = calls.length
     release("token")
     await vi.advanceTimersByTimeAsync(300_000)
-    expect(storageTokens).toBe(3)
+    // The fourth token is the failed manifest's own.
+    expect(storageTokens).toBe(4)
     expect(calls).toHaveLength(count)
     const next = engine.start(request)
     await engine.waitForJob(next)
@@ -346,7 +354,7 @@ describe("manifest commit and retention interruption", () => {
     expect(next.status).toBe("Completed")
   })
 
-  it.each(["cancel", "deadline"])("fails without a manifest when %s arrives after the last item read and before commit", async interrupt => {
+  it.each(["cancel", "deadline"])("records the saved part as failed when %s arrives after the last item read and before commit", async interrupt => {
     vi.useFakeTimers()
     let job: BackupJob | undefined
     let interrupted = false
@@ -366,8 +374,12 @@ describe("manifest commit and retention interruption", () => {
     expect(job.exception).toContain(interrupt === "cancel" ? "Backup cancelled by you" : "30 minute job deadline")
     expect(interrupted).toBe(true)
     expect([...saved.keys()].filter(name => name.includes("/DeviceConfigurations/"))).toHaveLength(1)
-    expect([...saved.keys()].some(name => name.endsWith("/metadata.json"))).toBe(false)
-    expect(calls.some(call => call.init.method === "PUT" && call.url.pathname.endsWith("/metadata.json"))).toBe(false)
+    // Only the create-only failed manifest is written, never one that reports the run as complete.
+    const manifests = calls.filter(call => call.init.method === "PUT" && call.url.pathname.endsWith("/metadata.json"))
+    expect(manifests).toHaveLength(1)
+    expect(manifests[0]!.init.headers).toMatchObject({ "if-none-match": "*" })
+    expect(JSON.parse(saved.get(`${job.backupFolder}/metadata.json`)!)).toMatchObject({ Status: "Failed", Failures: 0, ItemCounts: { DeviceConfigurations: 1, TotalPolicies: 1 }, Error: job.exception })
+    expect(Object.keys(JSON.parse(saved.get(`${job.backupFolder}/metadata.json`)!).Items)).toEqual(["DeviceConfigurations/p0"])
   })
 
   it.each(["cancel", "deadline"])("completes a saved manifest when %s arrives during its PUT", async interrupt => {

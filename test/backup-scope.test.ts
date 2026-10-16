@@ -100,12 +100,7 @@ function engineSetup(graph: (url: URL) => Response, options: { retentionDays?: n
 }
 
 async function finished(engine: BackupEngine, id: string) {
-  for (let i = 0; i < 400; i++) {
-    const job = engine.get(id)!
-    if (job.status !== "Running") return job
-    await new Promise((r) => setTimeout(r, 5))
-  }
-  throw new Error("backup did not finish")
+  return engine.waitForJob(engine.get(id)!)
 }
 
 const listOf = (path: string, items: Array<Record<string, unknown>>) => ({ path: `/beta/${path}`, items })

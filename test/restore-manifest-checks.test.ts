@@ -76,6 +76,47 @@ describe('Restore manifest checks', () => {
     expect(graphWrites).toEqual([])
   })
 
+  describe('a backup recorded as failed after it stopped early', () => {
+    const snapshot: Item = { id: 'original', displayName: 'Example', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [] }
+    const failed = (items: Item | undefined): Item => ({ Status: 'Failed', Failures: 0, FailedTypes: [], Error: 'Backup cancelled by you. This run is never offered as a complete backup.', ...(items ? { Items: items } : {}) })
+    const listed = { 'DeviceConfigurations/original': { file: 'Example.json', hash: snapshotHash(snapshot) } }
+
+    it('restores a saved policy it lists on its own', async () => {
+      const graphWrites = stubFetch({ [`${backupId}/metadata.json`]: failed(listed), [policyPath]: snapshot }, { list: [policyPath] })
+      const response = await POST(request({ ...baseBody, restoreType: 'selective', selectedPolicies: [{ path: policyPath }], mode: 'copy', assignments: false }))
+      const result = await response.json()
+      expect(response.status).toBe(200)
+      expect(result.details.restoredCount).toBe(1)
+      expect(graphWrites.some((call) => call.startsWith('POST '))).toBe(true)
+    })
+
+    it('refuses a full restore, before any Graph call', async () => {
+      const graphWrites = stubFetch({ [`${backupId}/metadata.json`]: failed(listed), [policyPath]: snapshot }, { list: [policyPath] })
+      const response = await POST(request({ ...baseBody, restoreType: 'full', mode: 'copy', assignments: false }))
+      const result = await response.json()
+      expect(response.status).toBe(400)
+      expect(result.error).toBe('This backup is recorded as failed and is incomplete. Restore selected items from it, or restore from a complete backup instead.')
+      expect(graphWrites).toEqual([])
+    })
+
+    it('refuses a file the failed manifest does not list, before any Graph call', async () => {
+      const unlisted = `${backupId}/DeviceConfigurations/Landed later.json`
+      const graphWrites = stubFetch({ [`${backupId}/metadata.json`]: failed(listed), [unlisted]: snapshot }, { list: [policyPath, unlisted] })
+      const response = await POST(request({ ...baseBody, restoreType: 'selective', selectedPolicies: [{ path: unlisted }], mode: 'copy', assignments: false }))
+      expect(response.status).toBe(400)
+      expect((await response.json()).error).toContain('not listed in the backup manifest')
+      expect(graphWrites).toEqual([])
+    })
+
+    it('refuses a selective restore when the failed manifest records no items', async () => {
+      const graphWrites = stubFetch({ [`${backupId}/metadata.json`]: failed(undefined), [policyPath]: snapshot }, { list: [policyPath] })
+      const response = await POST(request({ ...baseBody, restoreType: 'selective', selectedPolicies: [{ path: policyPath }], mode: 'copy', assignments: false }))
+      expect(response.status).toBe(400)
+      expect((await response.json()).error).toBe('This backup is recorded as failed and is incomplete. Restore from a complete backup instead.')
+      expect(graphWrites).toEqual([])
+    })
+  })
+
   it('refuses a snapshot whose content no longer matches its recorded fingerprint, before any Graph call', async () => {
     const recorded: Item = { id: 'original', displayName: 'Example', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [] }
     const tampered: Item = { ...recorded, displayName: 'Changed after backup' }

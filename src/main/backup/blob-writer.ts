@@ -23,7 +23,8 @@ export class BlobWriter {
     })
   }
 
-  async put(name: string, body: string, beforeCommit?: NetworkCircuit, createOnly = false): Promise<void> {
+  /** `onDispatch` runs right before each PUT is sent, after its token and cancellation checks. */
+  async put(name: string, body: string, beforeCommit?: NetworkCircuit, createOnly = false, onDispatch?: () => void): Promise<void> {
     const path = `${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`
     await this.request(path, {
       method: "PUT",
@@ -50,7 +51,7 @@ export class BlobWriter {
         }
       }
       throw new StorageError(await storageError(response, this.account))
-    }, beforeCommit)
+    }, beforeCommit, onDispatch)
   }
 
   /** Lists blob names and, with a delimiter, virtual folders under a prefix. */
@@ -111,7 +112,7 @@ export class BlobWriter {
     })
   }
 
-  private async request<T>(path: string, init: RequestInit, read: (response: Response, signal: AbortSignal, ambiguous: boolean) => Promise<T>, beforeCommit?: NetworkCircuit): Promise<T> {
+  private async request<T>(path: string, init: RequestInit, read: (response: Response, signal: AbortSignal, ambiguous: boolean) => Promise<T>, beforeCommit?: NetworkCircuit, onDispatch?: () => void): Promise<T> {
     let ambiguous = false
     for (let attempt = 0; ; attempt++) {
       this.network?.signal.throwIfAborted()
@@ -127,6 +128,7 @@ export class BlobWriter {
           beforeCommit?.signal.throwIfAborted()
           beforeCommit = undefined
           attempted = true
+          onDispatch?.()
           response = await this.fetchImpl(`https://${this.account}.blob.core.windows.net/${path}`, {
             ...init,
             signal,
