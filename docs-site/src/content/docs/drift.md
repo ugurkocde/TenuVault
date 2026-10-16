@@ -10,9 +10,9 @@ TenuVault compares backups, not the live tenant. To include the latest changes, 
 ## Requirements
 
 * The tenant is signed in and has a storage location.
-* At least two complete backups of the tenant exist. Backups that failed, are still running or stopped early cannot be compared, because missing items would show up as deleted.
+* At least two complete backups of the tenant exist. Backups that failed, are still running, stopped early or whose summary could not be read cannot be compared, because missing items would show up as deleted.
 
-If there are not enough complete backups, the page says **Two complete backups are needed** and links to **Backup & Restore**.
+If there are not enough complete backups, the page says **Two complete backups are needed**, with **Back up now** to start a backup from this page and a link to **Backup & Restore**.
 
 ## Run drift detection
 
@@ -28,7 +28,9 @@ At the top of the page, choose:
 * **Baseline (older)**: the backup to compare from
 * **Comparison (newer)**: the backup to compare with
 
-Each backup is listed with its date and time and how it started (**Manual**, **Scheduled** or **From tray**). Backups that did not complete are shown but cannot be chosen. Backups that completed with warnings can be chosen and are marked, because items they could not read may show up as deleted or added. A backup that is already chosen on one side cannot be chosen on the other, and the swap button between the two lists exchanges them. The baseline must be older than the comparison.
+Each list offers only the backups that can be compared, with their date and time and, when it was recorded, how they started (**Manual**, **Scheduled** or **From tray**). Backups that completed with warnings are offered and marked, because items they could not read may show up as deleted or added. Backups that did not finish or whose summary could not be read are not listed; a line under the lists says how many there are and links to **Backup & Restore**, where they are shown. Choosing a backup keeps the older of the two as the baseline: choosing the backup that is already chosen on the other side, or a baseline newer than the comparison, puts them in order. The swap button between the lists exchanges them as they are. The baseline must be older than the comparison.
+
+When only two backups can be compared, they are already chosen, and the page says so and offers **Back up now**. A backup started there is added to the lists when it finishes, even if you open another page meanwhile, so you can compare it with an older one.
 
 Click **Compare** to compare the chosen pair, or to compare the shown pair again. When another pair is chosen, **Use the latest two backups** under the lists picks the two newest complete backups, for example after a new backup.
 

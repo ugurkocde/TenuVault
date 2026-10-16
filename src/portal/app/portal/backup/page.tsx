@@ -11,7 +11,7 @@ import { Alert, AlertDescription } from "~/components/ui/alert"
 import { BackupProgressModal } from "~/components/tenants/backup-progress-modal"
 import { BackupChangesDialog } from "~/components/backup/backup-changes-dialog"
 import { RestoreWizard } from "~/components/backup/restore-wizard"
-import { formatDate, formatDuration, formatSize, STATUS_LABEL, statusKind, TRIGGER_LABEL, type BackupSummary, type BackupTenant, type StatusKind } from "~/components/backup/types"
+import { formatDate, formatDuration, formatSize, statusKind, statusLabel, TRIGGER_LABEL, type BackupSummary, type BackupTenant, type StatusKind } from "~/components/backup/types"
 import { BackupSchedulePanel } from "@desktop/components/BackupSchedulePanel"
 import { RunBackupDialog } from "@desktop/components/RunBackupDialog"
 import { useTenantPlan } from "@desktop/lib/license"
@@ -312,7 +312,7 @@ export default function BackupRestorePage() {
                           </div>
                           <div className="flex flex-wrap justify-end gap-2">
                             {backup.type && <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", backup.type === "scheduled" ? "bg-blue-50 text-blue-700" : "bg-muted text-gray-700")}>{TRIGGER_LABEL[backup.type]}</span>}
-                            {kind !== "success" && <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", style.badge)}>{backup.status === "incomplete" ? "Incomplete" : STATUS_LABEL[kind]}</span>}
+                            {kind !== "success" && <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", style.badge)}>{statusLabel(backup.status)}</span>}
                           </div>
                         </div>
                         <div className="mt-3 grid grid-cols-2 gap-4 text-sm xl:grid-cols-4">
@@ -509,6 +509,7 @@ function BackupDetails({ backup, first, storageAccountName, downloading, onChang
           <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
           <div className="space-y-1">
             {backup.status === "incomplete" && <p>This backup stopped before it finished, for example because TenuVault was closed. It holds only part of the tenant.</p>}
+            {backup.status === "unknown" && <p>{backup.error ?? "This backup does not record whether it finished."} Until its details can be read, whether it finished is not known and drift detection does not offer it.</p>}
             {(backup.failures ?? 0) > 0 && <p>{backup.failures} item{backup.failures === 1 ? "" : "s"} or type{backup.failures === 1 ? "" : "s"} could not be read. The backup log lists them.</p>}
             {(backup.failedTypes?.length ?? 0) > 0 && <p>Not read: {backup.failedTypes!.map(typeLabel).join(", ")}.</p>}
             {(backup.skippedTypes?.length ?? 0) > 0 && <p>Left out because access was denied: {backup.skippedTypes!.map(typeLabel).join(", ")}. Grant admin consent for the app registration in Microsoft Entra, or run the setup script again, and check that your Intune role covers these items.</p>}
@@ -573,7 +574,7 @@ function BackupDetails({ backup, first, storageAccountName, downloading, onChang
           <h3 className="mb-3 text-xs font-medium text-gray-500">About this backup</h3>
           <dl className="divide-y divide-gray-100 text-sm">
             {[
-              ["Status", backup.status === "incomplete" ? "Incomplete" : STATUS_LABEL[kind]],
+              ["Status", statusLabel(backup.status)],
               ["Started", backup.type ? TRIGGER_LABEL[backup.type] : "Not recorded"],
               ["Included", backup.scope ? backup.scope.description : "Everything"],
               ["Stored", storageLabel(storageAccountName)],
