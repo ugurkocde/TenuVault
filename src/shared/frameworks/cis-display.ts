@@ -80,6 +80,21 @@ export interface DiffEntryInput {
   definitionId?: string
   beforeSettings?: readonly SettingLeaf[]
   afterSettings?: readonly SettingLeaf[]
+  beforeSettingsTotal?: number
+  afterSettingsTotal?: number
+}
+
+/** The recorded setting values of one side of a difference by name, and how many values that side holds in total. */
+export interface ReadableSettingValues { shown: string[]; total: number }
+
+/** Values a difference lists inline before the rest is behind an expand. */
+export const INLINE_SETTING_VALUES = 40
+
+/** Setting values a difference holds but did not record, across its entries; a view must say so before approval. */
+export function omittedSettingValues(entries: readonly DiffEntryInput[]): number {
+  return entries.reduce((sum, entry) => sum
+    + Math.max((entry.beforeSettingsTotal ?? entry.beforeSettings?.length ?? 0) - (entry.beforeSettings?.length ?? 0), 0)
+    + Math.max((entry.afterSettingsTotal ?? entry.afterSettings?.length ?? 0) - (entry.afterSettings?.length ?? 0), 0), 0)
 }
 
 /**
@@ -90,9 +105,14 @@ export interface DiffEntryInput {
  * setting or policy lists its recorded setting values by name, so a whole new policy reads as its
  * settings. Paths outside the settings keep their path.
  */
-export function readableDiffEntry(entry: DiffEntryInput, names?: SettingNames): { label: string; before?: string; after?: string } {
+export function readableDiffEntry(entry: DiffEntryInput, names?: SettingNames): { label: string; before?: string; after?: string; beforeValues?: ReadableSettingValues; afterValues?: ReadableSettingValues } {
   const nameOf = (id: string) => names && Object.hasOwn(names.settings, id) ? names.settings[id]! : definitionLabel(id)
-  const leavesText = (leaves: readonly SettingLeaf[]) => leaves.map(leaf => `${nameOf(leaf.definitionId)}: ${optionDisplayName(leaf.value, leaf.definitionId, names)}`).join("; ")
+  // The label is looked up with the whole option id; only the text shown is shortened.
+  const short = (text: string) => text.length > 160 ? `${text.slice(0, 160)}...` : text
+  const leafText = (leaf: SettingLeaf) => `${nameOf(leaf.definitionId)}: ${short(optionDisplayName(leaf.value, leaf.definitionId, names))}`
+  const valuesOf = (leaves: readonly SettingLeaf[] | undefined, total: number | undefined): ReadableSettingValues | undefined => leaves && (leaves.length || total) ? { shown: leaves.map(leafText), total: Math.max(total ?? leaves.length, leaves.length) } : undefined
+  const beforeValues = valuesOf(entry.beforeSettings, entry.beforeSettingsTotal)
+  const afterValues = valuesOf(entry.afterSettings, entry.afterSettingsTotal)
   const match = /^settings\.(.+?)(?:\.settingInstance(?:[.[].*)?)?$/.exec(entry.path)
   let definitionId = entry.definitionId ?? match?.[1]
   if (!entry.definitionId && definitionId) {
@@ -102,11 +122,10 @@ export function readableDiffEntry(entry: DiffEntryInput, names?: SettingNames): 
     }
   }
   const whole = entry.path === "(object)"
-  if (!definitionId && !whole && !entry.beforeSettings?.length && !entry.afterSettings?.length) return { label: entry.path, ...(entry.before !== undefined ? { before: entry.before } : {}), ...(entry.after !== undefined ? { after: entry.after } : {}) }
+  if (!definitionId && !whole && !beforeValues && !afterValues) return { label: entry.path, ...(entry.before !== undefined ? { before: entry.before } : {}), ...(entry.after !== undefined ? { after: entry.after } : {}) }
   const label = whole ? "Policy settings" : definitionId ? nameOf(definitionId) : entry.path
-  const shown = (value: string | undefined, leaves: readonly SettingLeaf[] | undefined) => {
-    if (value === undefined) return undefined
-    if (leaves?.length) return leavesText(leaves)
+  const shown = (value: string | undefined, values: ReadableSettingValues | undefined) => {
+    if (value === undefined || values) return undefined
     if (/^[[{]/.test(value)) {
       try {
         const parsed = JSON.parse(value) as { settingInstance?: unknown } | null
@@ -115,9 +134,9 @@ export function readableDiffEntry(entry: DiffEntryInput, names?: SettingNames): 
     }
     return optionDisplayName(value, definitionId, names)
   }
-  const before = shown(entry.before, entry.beforeSettings)
-  const after = shown(entry.after, entry.afterSettings)
-  return { label, ...(before !== undefined ? { before } : {}), ...(after !== undefined ? { after } : {}) }
+  const before = shown(entry.before, beforeValues)
+  const after = shown(entry.after, afterValues)
+  return { label, ...(before !== undefined ? { before } : {}), ...(after !== undefined ? { after } : {}), ...(beforeValues ? { beforeValues } : {}), ...(afterValues ? { afterValues } : {}) }
 }
 
 /** The setting definition ids a deployment difference names, for reading their display names. */

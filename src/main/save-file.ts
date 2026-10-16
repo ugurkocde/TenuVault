@@ -49,6 +49,8 @@ function prepareFile(data: unknown, fileName: unknown, encoding: unknown): Prepa
   const content = Buffer.from(data, format.encoding)
   if (extension === "pdf" && content.subarray(0, 5).toString("latin1") !== "%PDF-") throw new Error("The export could not be prepared.")
   // Letters and digits of any script stay, so a tenant such as Müller keeps its name.
-  const base = raw.slice(0, -extension.length - 1).replace(/[^\p{L}\p{N}_ .()-]/gu, "_").trim().slice(0, 120) || "TenuVault export"
+  const cleaned = raw.slice(0, -extension.length - 1).replace(/[^\p{L}\p{N}_ .()-]/gu, "_").trim().slice(0, 120).replace(/[. ]+$/, "")
+  // Windows refuses device names as file names, with any extension and with superscript digits.
+  const base = !cleaned ? "TenuVault export" : /^(?:con|prn|aux|nul|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3])(?:\..*)?$/i.test(cleaned) ? `_${cleaned}` : cleaned
   return { name: `${base}.${extension}`, extension: extension as SaveFileFormat, label: format.label, content }
 }

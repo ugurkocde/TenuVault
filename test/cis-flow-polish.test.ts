@@ -3,9 +3,9 @@ import { assessPolicySet, handleFramework, setFrameworkExportSaver, setInternalC
 import { setNativeFrameworkAuthorization } from "../src/main/frameworks/native"
 import { loadWorkspace, recordAssessment, setFrameworkStore } from "../src/main/frameworks/workspaces"
 import { clearSettingNames } from "../src/portal/lib/drift/setting-names"
-import { benchmarkTitle, cisExportFileName, knownBenchmarkName, optionDisplayName, readableDiffEntry, referenceDisplayName, settingDisplayName } from "../src/shared/frameworks/cis-display"
+import { benchmarkTitle, cisExportFileName, knownBenchmarkName, omittedSettingValues, optionDisplayName, readableDiffEntry, referenceDisplayName, settingDisplayName } from "../src/shared/frameworks/cis-display"
 import { localDate, type CisException } from "../src/shared/frameworks/cis-exceptions"
-import { summarizeSetting } from "../src/shared/frameworks/setting-summary"
+import { MAX_SETTING_LEAVES, summarizeSetting } from "../src/shared/frameworks/setting-summary"
 import { workspaceExportCSV } from "../src/shared/compliance/export"
 import { deploymentImpactText, deploymentReferenceLabel } from "../src/renderer/features/cis-remediation/CisRemediationHistory"
 import { clearCisCatalogs, rememberCisCatalog } from "../src/renderer/lib/cis-catalog-cache"
@@ -226,9 +226,9 @@ describe("review round 1 of the flow polish", () => {
     expect(created).toHaveLength(1)
     expect(created[0]!.path).toBe("(object)")
     expect(created[0]!.after!.length).toBeLessThanOrEqual(163)
-    expect(readableDiffEntry(created[0]!, groupNames)).toEqual({ label: "Policy settings", after: "Lock screen timeout: 30; Lock screen mode: Locked; Require Encryption: Enabled" })
+    expect(readableDiffEntry(created[0]!, groupNames)).toEqual({ label: "Policy settings", afterValues: { shown: ["Lock screen timeout: 30", "Lock screen mode: Locked", "Require Encryption: Enabled"], total: 3 } })
     const added = diffConfigurations(type, policy([groupSetting(30, "1")]), policy([groupSetting(30, "1"), { settingInstance: choice("1") }])).entries
-    expect(added.map(entry => readableDiffEntry(entry, groupNames))).toEqual([{ label: "Require Encryption", after: "Require Encryption: Enabled" }])
+    expect(added.map(entry => readableDiffEntry(entry, groupNames))).toEqual([{ label: "Require Encryption", afterValues: { shown: ["Require Encryption: Enabled"], total: 1 } }])
   })
 
   it("names the creator only when the first kept revision is the creation", () => {
@@ -267,4 +267,38 @@ describe("review round 1 of the flow polish", () => {
       setInternalCisBenchmarksEnabled(null)
     }
   }, 30_000)
+})
+
+describe("review round 2 of the flow polish", () => {
+  const type = typeForFolder("ConfigurationPolicies")!
+  const simple = (index: number) => ({ settingInstance: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationSimpleSettingInstance", settingDefinitionId: `synthetic_value_${index}`, simpleSettingValue: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationIntegerSettingValue", value: index } } })
+  const created = (count: number) => diffConfigurations(type, null, { name: "Large", description: "", platforms: "windows10", technologies: "mdm", roleScopeTagIds: ["0"], settings: Array.from({ length: count }, (_, index) => simple(index)) } as unknown as Item).entries
+
+  it("records every value of a 41 value policy, and says how many a longer one left out", () => {
+    const small = created(41)
+    expect(small[0]!.afterSettings).toHaveLength(41)
+    expect(small[0]!.afterSettingsTotal).toBe(41)
+    expect(omittedSettingValues(small)).toBe(0)
+    expect(readableDiffEntry(small[0]!, names).afterValues).toMatchObject({ total: 41 })
+    expect(readableDiffEntry(small[0]!, names).afterValues!.shown).toHaveLength(41)
+    const large = created(MAX_SETTING_LEAVES + 1)
+    expect(large[0]!.afterSettings).toHaveLength(MAX_SETTING_LEAVES)
+    expect(large[0]!.afterSettingsTotal).toBe(MAX_SETTING_LEAVES + 1)
+    expect(omittedSettingValues(large)).toBe(1)
+  })
+
+  it("looks up an option label with the whole option id of a long definition", () => {
+    const id = `device_vendor_msft_policy_config_${"verylongsettingname".repeat(10)}`
+    const option = `${id}_1`
+    expect(option.length).toBeGreaterThan(160)
+    const entries = diffConfigurations(type, null, { name: "Long", description: "", platforms: "windows10", technologies: "mdm", roleScopeTagIds: ["0"], settings: [{ settingInstance: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance", settingDefinitionId: id, choiceSettingValue: { value: option, children: [] } } }] } as unknown as Item).entries
+    expect(readableDiffEntry(entries[0]!, { settings: { [id]: "Long setting" }, options: { [option]: "Enabled" } }).afterValues!.shown).toEqual(["Long setting: Enabled"])
+  })
+
+  it("never saves a Windows device name or a trailing dot or space", () => {
+    for (const name of ["CON", "con", "PRN", "AUX", "NUL", "COM1", "COM0", "LPT9", "COM\u00b9", "lpt\u00b2", "nul.backup"]) expect(prepareSaveFile("x", `${name}.csv`).name).toBe(`_${name}.csv`)
+    expect(prepareSaveFile("x", "report. .csv").name).toBe("report.csv")
+    expect(prepareSaveFile("x", "CONTOSO.csv").name).toBe("CONTOSO.csv")
+    expect(prepareSaveFile("x", "COM10.csv").name).toBe("COM10.csv")
+  })
 })

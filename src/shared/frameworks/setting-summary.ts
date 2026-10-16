@@ -182,32 +182,43 @@ export function summarizeSetting(value: unknown, names?: SettingNames): string[]
 /** One configured value of a Settings Catalog setting: its definition and its choice or simple value as text. */
 export interface SettingLeaf { definitionId: string; value: string }
 
+/** Values kept per added or removed setting or policy; generous, so the full list shows in practice. */
+export const MAX_SETTING_LEAVES = 500
+/** A choice keeps its whole option id up to this length, so its label can still be looked up. */
+const MAX_OPTION_ID = 1000
+
 /**
  * The configured values inside any Settings Catalog content (a setting instance, a setting, a
  * keyed settings map or a whole policy body), in document order, each with the definition it
- * belongs to. Choice values keep their option id, so a view can show its label. Bounded by `limit`
- * values and by depth; each value is cut to `maxLength` characters.
+ * belongs to, and how many values there are in total. At most `limit` values are kept; `total`
+ * counts all of them, so a view can say when a list is cut. Choice values keep their whole option
+ * id (up to MAX_OPTION_ID characters) so a view can show its label; simple values are cut to
+ * `maxLength` characters.
  */
-export function settingLeaves(value: unknown, limit = 40, maxLength = 160): SettingLeaf[] {
+export function settingValues(value: unknown, limit = MAX_SETTING_LEAVES, maxLength = 160): { leaves: SettingLeaf[]; total: number } {
   const leaves: SettingLeaf[] = []
-  const text = (item: unknown) => { const shown = typeof item === "string" ? item : JSON.stringify(item) ?? String(item); return shown.length > maxLength ? `${shown.slice(0, maxLength)}...` : shown }
+  let total = 0
+  const cut = (shown: string, length: number) => shown.length > length ? `${shown.slice(0, length)}...` : shown
+  const text = (item: unknown) => cut(typeof item === "string" ? item : JSON.stringify(item) ?? String(item), maxLength)
+  const option = (item: unknown) => typeof item === "string" ? cut(item, MAX_OPTION_ID) : text(item)
+  const add = (definitionId: string, shown: string) => { total += 1; if (leaves.length < limit) leaves.push({ definitionId, value: shown }) }
   const walk = (node: unknown, depth: number): void => {
-    if (leaves.length >= limit || depth > MAX_DEPTH * 2) return
+    if (depth > MAX_DEPTH * 2) return
     if (Array.isArray(node)) { for (const entry of node) walk(entry, depth + 1); return }
     if (!isRecord(node)) return
     const id = typeof node.settingDefinitionId === "string" ? node.settingDefinitionId : null
     if (id) {
       const choice = node.choiceSettingValue
-      if (isRecord(choice) && choice.value !== undefined && choice.value !== null) leaves.push({ definitionId: id, value: text(choice.value) })
+      if (isRecord(choice) && choice.value !== undefined && choice.value !== null) add(id, option(choice.value))
       const simple = node.simpleSettingValue
-      if (isRecord(simple) && simple.value !== undefined && simple.value !== null) leaves.push({ definitionId: id, value: text(simple.value) })
-      for (const key of ["choiceSettingCollectionValue", "simpleSettingCollectionValue"] as const) {
-        const collection = node[key]
-        if (Array.isArray(collection)) for (const entry of collection) if (isRecord(entry) && entry.value !== undefined && entry.value !== null && leaves.length < limit) leaves.push({ definitionId: id, value: text(entry.value) })
-      }
+      if (isRecord(simple) && simple.value !== undefined && simple.value !== null) add(id, text(simple.value))
+      const choices = node.choiceSettingCollectionValue
+      if (Array.isArray(choices)) for (const entry of choices) if (isRecord(entry) && entry.value !== undefined && entry.value !== null) add(id, option(entry.value))
+      const simples = node.simpleSettingCollectionValue
+      if (Array.isArray(simples)) for (const entry of simples) if (isRecord(entry) && entry.value !== undefined && entry.value !== null) add(id, text(entry.value))
     }
     for (const [key, child] of Object.entries(node)) if (key !== "value") walk(child, depth + 1)
   }
   walk(value, 0)
-  return leaves.slice(0, limit)
+  return { leaves, total }
 }

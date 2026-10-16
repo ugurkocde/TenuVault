@@ -8,6 +8,7 @@ import { ConfirmWriteDialog } from "./ConfirmWriteDialog"
 import { DiffList } from "./DiffList"
 import { formatDate, RESULT_TONE, STATUS_TONE, type ChangeSet, type ChangeSetActions, type ChangeSetPreview, type RollbackPreview } from "./change-set"
 import type { SettingNames } from "../../../shared/intune/drift"
+import { omittedSettingValues } from "../../../shared/frameworks/cis-display"
 
 const STEPS = ["Review diff", "Approve", "Apply", "Results", "Rollback preview"] as const
 
@@ -147,6 +148,11 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
             </div>
           )}
           <p className="text-gray-600 dark:text-gray-400">Stored approval: {preview.approval.valid ? "valid for this content and target state." : preview.approval.reason}</p>
+          {/* An approval covers the whole content, including setting values a listed difference had to leave out. */}
+          {settingNames && (() => {
+            const omitted = changeSet.operations.reduce((sum, operation) => sum + omittedSettingValues(preview.operations.find(entry => entry.key === operation.key)?.diff ?? operation.diff), 0)
+            return omitted > 0 && <p role="alert" className="font-medium text-amber-800 dark:text-amber-300">{omitted} setting {omitted === 1 ? "value is" : "values are"} not listed in the differences above. Approving covers them too: inspect the policy content before you approve.</p>
+          })()}
           {canReview && preview.blockers.length === 0 && (
             <div className="grid gap-2 sm:grid-cols-2">
               <label className="flex flex-col gap-1 text-xs text-gray-500">Reviewer<input className={inputClass} value={reviewer} maxLength={200} onChange={(event) => setReviewer(event.target.value)} placeholder="Name of the reviewer" /></label>

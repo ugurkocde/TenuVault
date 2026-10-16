@@ -28,6 +28,10 @@ vi.mock("../../src/portal/components/ConfirmDialog", () => ({ useConfirm: () => 
 import FrameworksPage from "../../src/renderer/pages/FrameworksPage"
 import { CisRemediationHistory } from "../../src/renderer/features/cis-remediation/CisRemediationHistory"
 import { DiffList } from "../../src/renderer/features/shared/DiffList"
+import { ChangeSetFlow } from "../../src/renderer/features/shared/ChangeSetFlow"
+import { diffConfigurations } from "../../src/main/features/change-sets/model"
+import { typeForFolder, type Item } from "../../src/shared/intune/registry"
+import { MAX_SETTING_LEAVES } from "../../src/shared/frameworks/setting-summary"
 import { refreshInternalCisBenchmarks, resetInternalCisBenchmarks } from "../../src/renderer/lib/internal-cis"
 import { cachedCisCatalog, clearCisCatalogs, rememberCisCatalog } from "../../src/renderer/lib/cis-catalog-cache"
 import { clearCisSettingNames } from "../../src/renderer/lib/cis-setting-names"
@@ -257,5 +261,38 @@ describe("CIS remediation history", () => {
   it("lists a raw difference unchanged without names", () => {
     const container = mount(createElement(DiffList, { entries: diff as never }))
     expect(container.textContent).toContain(`changed ${diff[0]!.path}: ${ENCRYPTION}_0 to ${ENCRYPTION}_1`)
+  })
+})
+
+describe("long setting lists in a deployment", () => {
+  const type = typeForFolder("ConfigurationPolicies")!
+  const simple = (index: number) => ({ settingInstance: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationSimpleSettingInstance", settingDefinitionId: `synthetic_value_${index}`, simpleSettingValue: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationIntegerSettingValue", value: index } } })
+  const created = (count: number) => diffConfigurations(type, null, { name: "Large", description: "", platforms: "windows10", technologies: "mdm", roleScopeTagIds: ["0"], settings: Array.from({ length: count }, (_, index) => simple(index)) } as unknown as Item).entries
+
+  it("shows 40 of 41 settings inline and every one behind an expand", () => {
+    const container = mount(createElement(DiffList, { entries: created(41), names: { settings: {}, options: {} } }))
+    expect(container.textContent).toContain("Showing 40 of 41 settings.")
+    const expand = container.querySelector("details")!
+    expect(expand.querySelector("summary")!.textContent).toBe("Show all 41 listed settings")
+    expect(expand.querySelectorAll("li")).toHaveLength(41)
+    expect(container.textContent).not.toContain("not listed here")
+  })
+
+  it("says before approval when a policy holds more values than were recorded", async () => {
+    const diff = created(MAX_SETTING_LEAVES + 2)
+    const changeSet = { id: "cs", tenantId, createdAt: "2026-10-15T11:00:00Z", updatedAt: "2026-10-15T11:00:00Z", title: "Deploy", kind: "change", ticket: null, status: "in-review", sourceVersion: reference,
+      origin: { workflow: "cis-remediation", recordId: "r" }, contentHash: "0".repeat(64), lastError: null, review: null, results: {},
+      operations: [{ key: "op-1", folder: "ConfigurationPolicies", action: "create", targetId: null, name: "Large", setsAssignments: false, diff, diffTruncated: false, source: { label: "Synthetic" } }], preChange: null, history: [] }
+    const preview = { id: "cs", status: "in-review", contentHash: "0".repeat(64), targetFingerprint: "1".repeat(64), observedAt: "2026-10-15T11:05:00Z", operations: [{ key: "op-1", diff, diffTruncated: false, blockers: [], warnings: [] }], affectedObjects: [], blockers: [], irreversible: [], unsupportedRecovery: [], approval: { valid: false, reason: "Not approved yet." }, notice: "Preview." }
+    const fail = async () => { throw new Error("unused") }
+    const actions = { preview: async () => preview, approve: fail, reject: fail, apply: fail, retry: fail, rollbackPreview: fail, rollbackCreate: fail }
+    const container = mount(createElement(ChangeSetFlow, { changeSet: changeSet as never, actions: actions as never, tenantName: "Synthetic tenant", onChanged: () => undefined, settingNames: { settings: {}, options: {} } }))
+    await click(buttonNamed(container, "Review against the live tenant"))
+    await waitFor(() => !!container.querySelector('section[aria-label="Review"]'))
+    expect(container.querySelector('section[aria-label="Review"] [role="alert"]')!.textContent).toBe("2 setting values are not listed in the differences above. Approving covers them too: inspect the policy content before you approve.")
+    expect(buttonNamed(container, "Approve this content and target state")).toBeDefined()
+    await click([...container.querySelectorAll("section[aria-label=Operations] li > button")][0])
+    expect(container.textContent).toContain(`Showing 40 of ${MAX_SETTING_LEAVES + 2} settings.`)
+    expect(container.textContent).toContain("2 more settings are not listed here. Inspect the policy content before you approve.")
   })
 })
