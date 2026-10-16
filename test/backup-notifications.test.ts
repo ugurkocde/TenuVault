@@ -267,4 +267,44 @@ describe("unattended backup notifications", () => {
     expect(reportsResult(true, { status: "Failed", message: "Unreachable", unreachable: true })).toBe(false)
     expect(reportsResult(false, { status: "Failed", message: "Unreachable", unreachable: true })).toBe(true)
   })
+
+  it("reports a connection failure after a restart during the first attempt of a slot that follows a failed slot", async () => {
+    const failure = new NetworkUnreachableError("login.microsoftonline.com could not be reached.")
+    let hang = false
+    let hanging = 0
+    const store = memoryStore()
+    let now = new Date(2026, 9, 14, 10)
+    const dispatches: Array<ReturnType<typeof vi.fn>> = []
+    const start = () => {
+      const fixture = unattendedFixture(() => hang ? (hanging++, new Promise<string>(() => {})) : Promise.reject(failure))
+      dispatches.push(fixture.dispatch)
+      return new BackupScheduler(store, (tenantId, afterFailure) => fixture.run(tenantId, "scheduled", afterFailure), () => undefined, () => now)
+    }
+    const audits = () => dispatches.reduce((count, dispatch) => count + dispatch.mock.calls.length, 0)
+    let scheduler = start()
+    scheduler.set({ tenantId: tenant.tenantId, enabled: true, frequency: "daily", time: "02:00" })
+    now = new Date(2026, 9, 15, 2)
+    await scheduler.tick()
+    expect(notifications.created).toHaveLength(1)
+    // The first attempt of the next slot never finishes: the process stops during it.
+    hang = true
+    now = new Date(2026, 9, 16, 2)
+    void scheduler.tick()
+    await vi.waitFor(() => expect(hanging).toBeGreaterThan(0))
+    expect(scheduler.list()[0]).toMatchObject({ attempts: 1, attemptSlot: new Date(2026, 9, 16, 2).toISOString() })
+    expect(scheduler.list()[0]!.lastStatus).toBeUndefined()
+    expect(scheduler.list()[0]!.lastMessage).toBeUndefined()
+    hang = false
+    scheduler = start()
+    now = new Date(2026, 9, 16, 2, 15)
+    await scheduler.tick()
+    expect(notifications.created).toHaveLength(2)
+    expect(audits()).toBe(2)
+    now = new Date(2026, 9, 16, 2, 30)
+    await scheduler.tick()
+    expect(notifications.created).toHaveLength(2)
+    expect(audits()).toBe(2)
+    // The attempt that never finished still counts toward today's budget.
+    expect(scheduler.list()[0]).toMatchObject({ attempts: 1, lastStatus: "Failed", attemptSlot: new Date(2026, 9, 16, 2).toISOString() })
+  })
 })

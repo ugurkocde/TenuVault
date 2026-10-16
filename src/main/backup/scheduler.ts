@@ -140,6 +140,9 @@ export class BackupScheduler {
         const slot = this.lastSlot(schedule)
         const attempts = this.slotAttempts(schedule, slot) + 1
         const afterFailure = this.attempted(schedule, slot) && schedule.lastStatus === "Failed"
+        // A cancellation belongs to its finished slot, and so does any result of an earlier slot: neither
+        // describes the new unfinished attempt, including after a restart during it.
+        const keepStatus = schedule.lastStatus !== "Cancelled" && this.attempted(schedule, slot)
         // Reserve the attempt before starting work, so quitting during a request cannot reset the budget.
         this.write({
           ...this.read(),
@@ -148,9 +151,8 @@ export class BackupScheduler {
             lastAttemptAt: this.now().toISOString(),
             attemptSlot: slot.toISOString(),
             attempts,
-            // A cancellation belongs to its finished slot, not the new unfinished attempt.
-            lastStatus: schedule.lastStatus === "Cancelled" ? undefined : schedule.lastStatus,
-            lastMessage: schedule.lastStatus === "Cancelled" ? undefined : schedule.lastMessage,
+            lastStatus: keepStatus ? schedule.lastStatus : undefined,
+            lastMessage: keepStatus ? schedule.lastMessage : undefined,
           },
         })
         const result: ScheduledRunResult = await this.run(schedule.tenantId, afterFailure).catch((error: unknown) => ({

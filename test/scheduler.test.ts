@@ -413,6 +413,35 @@ describe("BackupScheduler", () => {
       expect((run.mock.calls as unknown as Array<[string, boolean]>).map(([, afterFailure]) => afterFailure)).toEqual([false, true, true, false, true, false])
     })
 
+    it("do not carry an earlier slot's failure into a new slot's unfinished attempt", async () => {
+      const { scheduler, store, run, setNow } = setup(local(2026, 9, 24, 10))
+      run.mockResolvedValueOnce(counted)
+      scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+      setNow(local(2026, 9, 25, 2))
+      await scheduler.tick()
+      let finish!: (result: ScheduledRunResult) => void
+      run.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+      setNow(local(2026, 9, 26, 2))
+      const pending = scheduler.tick()
+      // A new process only sees the state saved before the unfinished attempt.
+      const restartedStore = memoryStore()
+      restartedStore.set("backup.schedules", store.get("backup.schedules")!)
+      finish(unreachable)
+      await pending
+      let now = new Date(local(2026, 9, 26, 2, 1))
+      const retry = vi.fn(async (): Promise<ScheduledRunResult> => unreachable)
+      const restarted = new BackupScheduler(restartedStore, retry, () => undefined, () => now)
+      expect(restarted.list()[0]).toMatchObject({ attempts: 1, attemptSlot: local(2026, 9, 26, 2), lastAttemptAt: local(2026, 9, 26, 2), nextRunAt: local(2026, 9, 26, 2, 15) })
+      expect(restarted.list()[0]!.lastStatus).toBeUndefined()
+      expect(restarted.list()[0]!.lastMessage).toBeUndefined()
+      now = new Date(local(2026, 9, 26, 2, 15))
+      await restarted.tick()
+      now = new Date(local(2026, 9, 26, 2, 30))
+      await restarted.tick()
+      expect(retry.mock.calls).toEqual([[TENANT, false], [TENANT, true]])
+      expect(restarted.list()[0]).toMatchObject({ attempts: 1, lastStatus: "Failed" })
+    })
+
     it("do not show a retry for a slot before a change made during the attempt", async () => {
       const { scheduler, run, setNow } = setup(local(2026, 9, 24, 10))
       const input = { tenantId: TENANT, enabled: true, frequency: "daily" as const, time: "02:00" }
