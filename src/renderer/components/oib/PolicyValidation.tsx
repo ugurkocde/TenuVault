@@ -135,7 +135,7 @@ function ValidationFilterBar({ view, total, filter, onChange }: { view: ReturnTy
     {view.platforms.length > 1 && <FilterSelect label="Filter by platform" value={view.effective.platform} onChange={platform => onChange({ ...filter, platform })}
       options={[{ value: "" as const, label: "All platforms" }, ...view.platforms.map(platform => ({ value: platform, label: OIB_PLATFORMS[platform].label }))]} />}
     <span className="text-sm text-gray-500 lg:ml-auto">
-      <span aria-live="polite">{view.active ? `${view.shown.length} of ${total} policies shown.` : ""}</span>
+      <span aria-live="polite">{view.active ? `${view.shown.length} of ${plural(total, "policy", "policies")} shown.` : ""}</span>
       {view.active && <>{" "}<button type="button" className="font-medium text-gray-700 underline" onClick={() => onChange(NO_VALIDATION_FILTER)}>Clear filters</button></>}
     </span>
   </div>
@@ -290,7 +290,7 @@ export function PolicyValidation({ selections }: { selections: Selections }) {
   const saved = viewing?.run
   const savedResults: Shown[] = saved ? saved.results.map(r => ({ ...r, platform: saved.platform, tenantPolicyName: tenantName(r, names) })) : []
   // The list narrows by search, result and platform; exports and the counts above it keep every policy.
-  const rowView = validationFilterView(matched, filter, row => ({ text: [row.policy.name, row.match.tenant!.name, policyTypeName(row.policy.policyType), OIB_PLATFORMS[row.platform].label], platform: row.platform, status: results.get(key(row.platform, row.policy.source))?.status }))
+  const rowView = validationFilterView(matched, filter, row => ({ text: [row.policy.name, row.match.tenant!.name, OIB_PLATFORMS[row.platform].label], platform: row.platform, status: results.get(key(row.platform, row.policy.source))?.status }))
   const currentView = validationFilterView(current, filter, describeShown)
   const savedView = validationFilterView(savedResults, filter, describeShown)
   const listView = matched.length ? rowView : currentView
