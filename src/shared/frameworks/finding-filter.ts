@@ -33,3 +33,9 @@ export function filterFindings(findings: Finding[], policies: BaselinePolicy[], 
     (!filter.level || kitLevelForPolicy(policies[finding.policyIndex]) === filter.level)
     && (!terms.length || matchesTerms(textOf(finding), terms)))
 }
+
+/** Selected finding keys the current filters hide. Bulk actions still include them, so the page names them. */
+export function hiddenSelectedKeys(selected: ReadonlySet<string>, shown: readonly Pick<Finding, "key">[]): string[] {
+  const visible = new Set(shown.map(finding => finding.key))
+  return [...selected].filter(key => !visible.has(key))
+}

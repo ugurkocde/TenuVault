@@ -186,7 +186,7 @@ How matching works:
 
 Expand a finding to see **Recommended configuration** next to **Observed policies and configuration**. The observed side lists each matching policy with its value and its assignment evidence: all devices, all users, groups, exclusions and filter references. Targeting is reported as unassigned, configured, review or unavailable. A denied or incomplete assignment read is shown as unavailable, never as unassigned.
 
-Use **Search setting or policy** above the status filters to narrow the findings. It matches the setting ID, its readable name and the policy name; every word you type must match, in any order. The counts on **All**, **Present**, **Missing**, **Different** and **Review** follow the search, and the page shows how many of the findings are shown. **Clear search** removes it.
+Use **Search setting or policy** above the status filters to narrow the findings. It matches the setting ID, its readable name and the policy name; every word you type must match, in any order. The counts on **All**, **Present**, **Missing**, **Different** and **Review** follow the search, and the page shows how many of the findings are shown. **Clear search** removes it. Findings you selected stay selected when a search or status filter hides them, and the footer says how many selected findings are hidden.
 
 Findings are shown 50 per page. Click **Export report** to save the assessment as JSON. The report always holds every finding, whatever the search and status filter show.
 

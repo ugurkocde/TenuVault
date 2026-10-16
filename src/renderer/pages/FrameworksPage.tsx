@@ -33,7 +33,7 @@ import { CisRemediationPanel } from "../features/cis-remediation/CisRemediationP
 import { CisRemediationHistory } from "../features/cis-remediation/CisRemediationHistory"
 import { GatedButton } from "../components/PlanGate"
 import { FilterChips, FilterSelect, SearchInput } from "../components/FilterControls"
-import { filterFindings, findingLevels, findingSearchText, NO_FINDING_FILTER, type FindingFilter } from "../../shared/frameworks/finding-filter"
+import { filterFindings, findingLevels, findingSearchText, hiddenSelectedKeys, NO_FINDING_FILTER, type FindingFilter } from "../../shared/frameworks/finding-filter"
 import { useConfirm } from "~/components/ConfirmDialog"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import type { CisBenchmark, CisCatalog } from "../../shared/frameworks/cis-content"
@@ -542,6 +542,10 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   const searched = assessment ? filterFindings(assessment.findings, policies, shownFindingFilter, findingText) : []
   const findings = searched.filter(f => filter === "All" || f.status === filter)
   const deviatingKeys = deviatingFindingKeys(findings)
+  // Selections hidden by the search, level or status filter still count for bulk actions, so they are named there.
+  const hiddenSelected = new Set(hiddenSelectedKeys(selected, findings))
+  const hiddenSelectedText = hiddenSelected.size ? `${hiddenSelected.size} hidden by the filters` : ""
+  function showAllFindings() { setFilter("All"); setFindingFilter(NO_FINDING_FILTER); setPage(0) }
   const allDeviatingSelected = deviatingKeys.every(key => selected.has(key))
   function selectAllDeviating() { setSelected(old => new Set([...old, ...deviatingKeys])); setPreview(false); setConfirmed(false) }
   const readiness = assessment && framework.id === "cis-benchmarks" ? cisReadiness(assessment, policies, denominator, recommendationList, workspace?.exceptions) : null
@@ -962,7 +966,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
           {searching && <button type="button" className="text-sm font-medium text-gray-700 underline" onClick={() => { setFindingFilter(NO_FINDING_FILTER); setPage(0) }}>Clear search</button>}
         </div>
         <div className="mb-2 flex flex-wrap items-center gap-2"><FilterChips label="Filter assessment findings" value={filter} onChange={status => { setFilter(status); setPage(0) }} options={["All", "Present", "Missing", "Different", "Review"].map(status => ({ value: status, label: status, count: searched.filter(f => status === "All" || f.status === status).length }))} />
-          {(isCis || searching) && <span aria-live="polite" className="ml-auto text-sm text-gray-500">{findings.length} of {assessment.findings.length} findings</span>}
+          <span aria-live="polite" className="ml-auto text-sm text-gray-500">{isCis || searching ? `${findings.length} of ${assessment.findings.length} findings` : ""}</span>
           {isCis && deviatingKeys.length > 0 && <button type="button" className={button} disabled={!!busy || !!creation || historical || allDeviatingSelected} onClick={selectAllDeviating}>Select all deviating ({deviatingKeys.length})</button>}
         </div>
         <p className="mb-4 text-xs leading-5 text-gray-500">Different: at least one existing configuration differs. Review: the pack contains alternative values for this setting. Select a single profile or resolve differences manually. Unassigned configurations can appear as Present. Expand a finding to inspect assignment evidence, including exclusions, filter references and unavailable reads.</p>
@@ -979,7 +983,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
         </>}
         {!findings.length && <p role="status" className="py-6 text-center text-sm text-gray-500">{searching ? "No findings match the search." : "No findings in this category."}</p>}
         {readiness && selected.size > 0 && <div role="region" aria-label="Selected findings" className="sticky bottom-4 z-10 mt-4 flex flex-wrap items-center gap-3 rounded-3xl border border-gray-200 bg-white px-5 py-3 shadow-lg">
-          <span className="text-sm font-medium text-gray-800">{selected.size} selected</span>
+          <span className="text-sm font-medium text-gray-800">{selected.size} selected{hiddenSelectedText && <span className="font-normal text-amber-800">, {hiddenSelectedText} <button type="button" className="font-medium underline" onClick={showAllFindings}>Show all findings</button></span>}</span>
           <span className="text-xs text-gray-500">Remediate them in step 3 below, or exclude them from the score if you do not apply them on purpose.</span>
           <span className="ml-auto flex gap-2">
             {!allDeviatingSelected && <button type="button" className={button} disabled={!!busy || historical} onClick={selectAllDeviating}>Select all deviating ({deviatingKeys.length})</button>}
@@ -991,7 +995,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
           <DialogContent onCloseAutoFocus={e => { e.preventDefault(); (excludeButton.current?.isConnected ? excludeButton.current : document.getElementById("cis-exclusions"))?.focus() }}>
             <DialogHeader>
               <DialogTitle>Exclude {exclusion?.count} {exclusion?.count === 1 ? "finding" : "findings"} from the score</DialogTitle>
-              <DialogDescription>Use this for settings you do not apply on purpose. They stay listed but stop counting against the adjusted pass rate until the expiry date, when they count again and need a new decision. Raw counts do not change.</DialogDescription>
+              <DialogDescription>Use this for settings you do not apply on purpose. They stay listed but stop counting against the adjusted pass rate until the expiry date, when they count again and need a new decision. Raw counts do not change.{excludable.some(finding => hiddenSelected.has(finding.key)) && ` ${excludable.filter(finding => hiddenSelected.has(finding.key)).length} of them are hidden by the current filters.`}</DialogDescription>
             </DialogHeader>
             {exclusion && <form id="cis-exclusion" className="grid gap-3 sm:grid-cols-2" onSubmit={e => { e.preventDefault(); void excludeSelected(exclusion) }}>
               <label className="block text-xs font-medium text-gray-700">Owner<input required value={exclusion.owner} disabled={!!busy} onChange={e => setExclusion({ ...exclusion, owner: e.target.value })} className="mt-1 w-full rounded-full border border-gray-300 px-3 py-1.5 text-sm font-normal" /></label>
@@ -1006,7 +1010,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
           </DialogContent>
         </Dialog>
         {framework.id === "cis-benchmarks" ? <CisRemediationPanel tenant={selectedTenant ?? undefined} assessment={assessment} policies={policies} reference={reference} selectedKeys={selected} recompareBlocked={historyBlocked} onPlanned={id => setRemediationFocus({ id, at: Date.now() })} onRecompare={() => historyFull ? undefined : void perform("Reading tenant policies and comparing settings...", async () => { reset(); const result = await request<Assessment>({ action: "assess", tenantId: credentials!.tenantId, appId: credentials!.appId, frameworkId: framework.id, reference, policies }); setAssessment(result); setWorkspace(await workspaceRequest("workspace-load")) })} /> : framework.comparisonOnly ? <p className="mt-5 border-t pt-4 text-sm text-gray-600">This pack is available for comparison and reports only. Review missing settings and configure them through your own change process.</p>
-        : <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t pt-4"><p className="text-sm text-gray-600">{chosen.length} missing root settings selected · {payloads.length} new {payloads.length === 1 ? "policy" : "policies"}</p><button className={primary} disabled={!chosen.length || !!busy || !!creation || historical} onClick={() => { setPreview(true); setConfirmed(false) }}>Preview recommended policies</button></div>}
+        : <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t pt-4"><p className="text-sm text-gray-600">{chosen.length} missing root settings selected · {payloads.length} new {payloads.length === 1 ? "policy" : "policies"}{hiddenSelectedText && ` · ${hiddenSelectedText}`}</p><button className={primary} disabled={!chosen.length || !!busy || !!creation || historical} onClick={() => { setPreview(true); setConfirmed(false) }}>Preview recommended policies</button></div>}
       </>}
     </section>}
     {isCis && stage !== "running" && selectedTenant && credentials && <CisRemediationHistory tenant={selectedTenant} focus={remediationFocus} />}

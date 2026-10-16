@@ -420,7 +420,7 @@ export default function DriftDetectionPage() {
   const handleExport = (format: "csv" | "json") => {
     if (!result) return
     const shown = { ...result, drifts: shownDrifts }
-    const name = driftExportName(result, selectedTenant?.name)
+    const name = `${driftExportName(result, selectedTenant?.name)}${filtering ? "-filtered" : ""}`
     if (format === "csv") download(`${name}.csv`, `\ufeff${driftCsv(shown)}`, "text/csv;charset=utf-8")
     else download(`${name}.json`, driftJson(shown, selectedTenant?.name, undefined, filtering ? driftFilterText(shownFilter) : undefined), "application/json")
   }
@@ -626,12 +626,10 @@ export default function DriftDetectionPage() {
                 <FilterSelect label="Filter by policy type" value={shownFilter.type} onChange={type => setFilter(old => ({ ...old, type }))}
                   options={[{ value: "", label: "All policy types" }, ...types.map(type => ({ value: type, label: type }))]} />
               )}
-              {filtering && (
-                <span className="text-sm text-gray-500 lg:ml-auto">
-                  <span aria-live="polite">{shownDrifts.length} of {drifts.length} changes shown.</span>{" "}
-                  <button type="button" className="font-medium text-gray-700 underline" onClick={() => setFilter(NO_DRIFT_FILTER)}>Clear filters</button>
-                </span>
-              )}
+              <span className="text-sm text-gray-500 lg:ml-auto">
+                <span aria-live="polite">{filtering ? `${shownDrifts.length} of ${drifts.length} changes shown.` : ""}</span>
+                {filtering && <>{" "}<button type="button" className="font-medium text-gray-700 underline" onClick={() => setFilter(NO_DRIFT_FILTER)}>Clear filters</button></>}
+              </span>
             </div>
           )}
 

@@ -140,7 +140,7 @@ Click **Export** and choose:
 * **CSV, one row per changed setting**: the columns Item, Item type, Change, Severity, Previous name, Setting, Setting path, Before and After, plus the item's ID. Added and deleted items get one row without a setting.
 * **JSON**: the tenant, when the comparison ran, the two compared backups, the number of added, modified and deleted items, files that could not be read, and every item with its changed settings (readable values and the values as stored)
 
-The export holds the changes the page shows. While a filter is active, the menu says how many changes it exports, only those changes are written, and the JSON file names the filter in its `filter` field, for example `search: firewall; change: modified`. Clear the filters to export every change.
+The export holds the changes the page shows. While a filter is active, the menu says how many changes it exports, only those changes are written, the file name ends in `-filtered`, and the JSON file names the filter in its `filter` field, for example `search: firewall; change: modified`. Clear the filters to export every change.
 
 The file is named after the tenant and the two compared backups, for example `drift-contoso-backup-2026-10-06-020000-to-backup-2026-10-07-020000.csv`. **Export** is unavailable when no drift was found or no change matches the filters.
 

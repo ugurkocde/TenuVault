@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { attachRecommendations } from "../src/shared/frameworks/cis-recommendations"
-import { filterFindings, findingLevels, findingSearchText, NO_FINDING_FILTER } from "../src/shared/frameworks/finding-filter"
+import { filterFindings, findingLevels, findingSearchText, hiddenSelectedKeys, NO_FINDING_FILTER } from "../src/shared/frameworks/finding-filter"
 import { parsePolicies, type BaselinePolicy, type Finding } from "../src/shared/frameworks/policies"
 
 const choice = "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance"
@@ -46,6 +46,12 @@ describe("Framework finding filter", () => {
     expect(keys(filterFindings(findings, policies, { query: "", level: 2 }, text))).toEqual(["1:0"])
     expect(keys(filterFindings(findings, policies, { query: "defender", level: 1 }, text))).toEqual(["0:0", "0:1"])
     expect(keys(filterFindings(findings, policies, { query: "defender", level: 2 }, text))).toEqual([])
+  })
+
+  it("names selected findings that the search hides", () => {
+    const shown = filterFindings(findings, policies, { query: "defender", level: 0 }, text)
+    expect(hiddenSelectedKeys(new Set(["0:0", "1:0"]), shown)).toEqual(["1:0"])
+    expect(hiddenSelectedKeys(new Set(["0:0"]), shown)).toEqual([])
   })
 
   it("counts findings of policies without a level as Level 1", () => {
