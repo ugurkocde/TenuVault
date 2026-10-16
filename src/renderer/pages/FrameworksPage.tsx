@@ -436,7 +436,9 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
         if (!current()) return
         if (isWorkspaceUnreadableError(e instanceof Error ? e.message : String(e))) throw e
         lookupFailed = true
-        opened = { workspace: await workspaceRequest("workspace-load"), activeJob: null }
+        // A failure of this fallback read is just as stale once a newer run started.
+        try { opened = { workspace: await workspaceRequest("workspace-load"), activeJob: null } }
+        catch (fallback) { if (!current()) return; throw fallback }
       }
     } else opened = { workspace: await workspaceRequest("workspace-load"), activeJob: null }
     if (!current()) return

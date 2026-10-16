@@ -511,6 +511,36 @@ describe("a late workspace-open answer", () => {
     expect(levelSummary(container)).toContain("100%")
     expect(actions.some(body => body.action === "assess-status" && body.jobId === "job-a")).toBe(false)
   })
+
+  it("does not show a failure of its fallback read once a newer run started", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    stubService({ answer: body => {
+      if (body.action === "running-job") return { status: 404, body: { error: "Not found." } }
+      if (body.action === "assess-start") return { body: { jobId: "job-b" } }
+      if (body.action === "assess-status") return { body: snapshot("done", { jobId: body.jobId, assessment: fresh }) }
+      return { status: 500, body: { error: "unexpected" } }
+    } })
+    // The second workspace-load is the fallback of Retry; it is held, then fails.
+    let loads = 0
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const answer = globalThis.fetch as unknown as (path: string, init?: RequestInit) => Promise<Response>
+    vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+      if (String(init?.body).includes('"workspace-load"') && ++loads === 2) {
+        await gate
+        return Response.json({ error: "Stale fallback failure." }, { status: 500 })
+      }
+      return answer(path, init)
+    }))
+    const { container } = render()
+    await flush()
+    await retryThenRunAgain(container)
+    await waitFor(() => levelSummary(container).includes("100%"))
+    release()
+    await flush()
+    expect(container.textContent).not.toContain("Stale fallback failure")
+    expect(levelSummary(container)).toContain("100%")
+  })
 })
 
 describe("saved results are read-only", () => {
