@@ -109,16 +109,19 @@ describe("unreachable backup jobs", () => {
   })
 
   describe("with the default concurrency", () => {
-    const twoTypes = { ...request, scope: { excluded: INTUNE_TYPES.filter((type) => type.folder !== "DeviceConfigurations" && type.folder !== "CompliancePolicies").map((type) => type.folder) } }
-    // Graph answers through `graph`; `null` stands for a request that gets no response. Local storage always answers.
-    const run = async (backup: typeof request, graph: (url: URL) => Response | Promise<Response> | null) => {
+    const only = (...folders: string[]) => ({ excluded: INTUNE_TYPES.filter((type) => !folders.includes(type.folder)).map((type) => type.folder) })
+    const twoTypes = { ...request, scope: only("DeviceConfigurations", "CompliancePolicies") }
+    type Answer = (url: URL) => Response | Promise<Response> | null
+    // Graph and storage answer through `graph` and `storage`; `null` stands for a request that gets no response.
+    const run = async (backup: typeof request, graph: Answer, options: { storage?: Answer; concurrency?: number } = {}) => {
       vi.useFakeTimers()
+      const storage = options.storage ?? (() => new Response(null, { status: 201 }))
       const engine = new BackupEngine({
         getToken: async () => "token",
+        concurrency: options.concurrency,
         fetch: withNetworkErrors(async (input) => {
           const url = new URL(String(input))
-          if (url.hostname !== "graph.microsoft.com") return new Response(null, { status: 201 })
-          const response = graph(url)
+          const response = (url.hostname === "graph.microsoft.com" ? graph : storage)(url)
           if (!response) throw new TypeError("net::ERR_INTERNET_DISCONNECTED")
           return response
         }),
@@ -165,6 +168,37 @@ describe("unreachable backup jobs", () => {
       expect(attempts).toEqual({ configurations: 3, compliance: 3 })
       expect(job).toMatchObject({ status: "Failed", exception: "Backup request timed out after 90 seconds. Check your connection and retry." })
       expect(job.unreachable).toBeUndefined()
+    })
+
+    it("counts a 401 whose body was still arriving when the circuit stopped the job", async () => {
+      // Two readers trip the circuit after six failures. Compliance policies get a 401 on their third
+      // request, at 3 s, and its body takes 500 ms. Other requests fail 1 ms late, so the third listing's
+      // first failure, the sixth, trips the circuit while that body is still arriving.
+      let compliance = 0
+      const lateFailure = () => new Promise<Response>((_resolve, reject) => setTimeout(() => reject(new TypeError("net::ERR_INTERNET_DISCONNECTED")), 1))
+      const slowBody = () => new ReadableStream<Uint8Array>({ start(controller) {
+        setTimeout(() => { controller.enqueue(new TextEncoder().encode('{"error":{"message":"Unauthorized"}}')); controller.close() }, 500)
+      } })
+      const job = await run({ ...request, scope: only("DeviceConfigurations", "CompliancePolicies", "ComplianceSettingsPolicies") }, (url) =>
+        !url.pathname.endsWith("/deviceCompliancePolicies") ? lateFailure() : ++compliance === 3 ? new Response(slowBody(), { status: 401 }) : null, { concurrency: 2 })
+      expect(compliance).toBe(3)
+      expect(job).toMatchObject({ status: "Failed" })
+      expect(job.exception).toContain("Microsoft Graph did not respond for 6 consecutive requests")
+      expect(job.unreachable).toBeUndefined()
+    })
+
+    it("marks a backup to Azure storage when neither storage nor Graph answers", async () => {
+      const job = await run({ ...request, storageAccountName: "contoso" }, () => null, { storage: () => null })
+      expect(job).toMatchObject({ status: "Failed", unreachable: true })
+      expect(job.exception).toContain("contoso.blob.core.windows.net could not be reached")
+    })
+
+    it.each([201, 403])("counts a backup whose Azure storage answered %s while Graph got no response", async (status) => {
+      const job = await run({ ...request, storageAccountName: "contoso" }, () => null, { storage: () => new Response(null, { status }) })
+      expect(job.status).toBe("Failed")
+      expect(job.unreachable).toBeUndefined()
+      if (status === 403) expect(job.exception).toContain("write access to storage account contoso")
+      else expect(job).toMatchObject({ failures: 1, progressMessage: "Backup failed: no policies could be saved" })
     })
 
     it("counts a backup that also had an HTTP failure", async () => {

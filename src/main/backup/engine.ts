@@ -92,12 +92,29 @@ export class BackupFolderTakenError extends StorageError {
 class BackupCancelledError extends Error {}
 
 /**
- * What a run saved and how many recorded read failures had another cause than Microsoft or the
- * storage being unreachable. A run that saved nothing and failed only for that reason is unreachable.
+ * What a run saved, whether the network answered any of its requests, and how many recorded
+ * failures had a cause that was neither the network nor an HTTP response (for example a sign-in
+ * Microsoft refused, or a local storage error). A run is unreachable only when it saved nothing,
+ * got no HTTP response and failed only because Microsoft or the storage could not be reached.
  */
 interface RunOutcome {
   saved: number
+  answered: boolean
   otherFailures: number
+}
+
+/**
+ * The job's fetch, recording any HTTP response from Graph or Azure Storage as soon as it arrives,
+ * before status handling, retries, the circuit or a timeout can replace it with another error.
+ * Responses for a local storage account (`localHost`) come from this device, not the network.
+ */
+function answeredFetch(fetchImpl: typeof fetch, outcome: RunOutcome, localHost: string | null): typeof fetch {
+  return async (input, init) => {
+    const response = await fetchImpl(input, init)
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+    if (new URL(url).hostname !== localHost) outcome.answered = true
+    return response
+  }
 }
 
 type NetworkService = "Microsoft Graph" | "backup storage"
@@ -226,12 +243,12 @@ export class BackupEngine {
 
     const timer = setTimeout(() => controller.abort(jobDeadlineError()), JOB_DEADLINE_MS)
     timer.unref?.()
-    const outcome: RunOutcome = { saved: 0, otherFailures: 0 }
+    const outcome: RunOutcome = { saved: 0, answered: false, otherFailures: 0 }
     const done = this.run(job, request, controller.signal, deadline, outcome)
       .catch((error: unknown) => {
         job.status = error instanceof BackupCancelledError ? "Cancelled" : "Failed"
         job.exception = error instanceof Error ? error.message : String(error)
-        if (job.status === "Failed" && isUnreachable(error) && !outcome.saved && !outcome.otherFailures) job.unreachable = true
+        if (job.status === "Failed" && isUnreachable(error) && !outcome.saved && !outcome.answered && !outcome.otherFailures) job.unreachable = true
         job.progressMessage = job.status === "Cancelled" ? "Backup cancelled" : "Backup failed"
         this.write(job, `${job.progressMessage}: ${job.exception}`)
       })
@@ -251,6 +268,7 @@ export class BackupEngine {
   private async run(job: BackupJob, request: BackupRequest, signal: AbortSignal, deadline: number, outcome: RunOutcome): Promise<void> {
     const started = this.now()
     const local = isLocalAccount(request.storageAccountName)
+    const fetchImpl = answeredFetch(this.deps.fetch, outcome, local ? `${request.storageAccountName.toLowerCase()}.blob.core.windows.net` : null)
     const backupFolder = `backup-${folderTimestamp(started)}`
     job.backupFolder = backupFolder
     this.write(job, `Backing up tenant ${request.tenantId} to ${local ? "this device (encrypted)" : `storage account ${request.storageAccountName}`}.`)
@@ -263,13 +281,13 @@ export class BackupEngine {
 
     const concurrency = this.deps.concurrency ?? CONCURRENCY
     const network = new NetworkCircuit(3 * concurrency, signal, deadline)
-    const storage = new BlobWriter(this.deps.fetch, request.storageAccountName, storageToken, network)
+    const storage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, network)
     await storage.ensureContainer()
 
     const scope = normalizeScope(request.scope ?? EVERYTHING)
     const types = includedTypes(scope)
     if (scope.excluded.length) this.write(job, `Leaving out ${scope.excluded.length} of ${INTUNE_TYPES.length} types: ${scope.excluded.join(", ")}.`)
-    const graph = new GraphSession(this.deps.fetch, graphToken, network)
+    const graph = new GraphSession(fetchImpl, graphToken, network)
     const reader = {
       get: (path: string) => graph.get<Item>(`${GRAPH}/beta/${path}`),
       list: (path: string) => graph.list(graphUrl(path)) as Promise<Item[]>,
@@ -409,7 +427,7 @@ export class BackupEngine {
     const commitTimer = setTimeout(() => commitController.abort(jobDeadlineError()), Math.max(0, commitDeadline - Date.now()))
     commitTimer.unref?.()
     const commitNetwork = new NetworkCircuit(3 * concurrency, commitController.signal, commitDeadline)
-    const commitStorage = new BlobWriter(this.deps.fetch, request.storageAccountName, storageToken, commitNetwork)
+    const commitStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, commitNetwork)
     try {
       await commitStorage.put(`${backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), network)
     } finally {
@@ -421,7 +439,7 @@ export class BackupEngine {
     let retentionWarnings = 0
     if (failures === 0 && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
       const retentionNetwork = new NetworkCircuit(3 * concurrency, signal, deadline)
-      const retentionStorage = new BlobWriter(this.deps.fetch, request.storageAccountName, storageToken, retentionNetwork)
+      const retentionStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, retentionNetwork)
       try {
         const result = await this.applyRetention(job, retentionStorage, backupFolder, coveredFolders(metadata), retentionNetwork.signal)
         if (result > 0) retentionWarnings++
@@ -441,7 +459,7 @@ export class BackupEngine {
 
     job.failures = failures
     job.status = failures > 0 && totalPolicies === 0 ? "Failed" : "Completed"
-    if (job.status === "Failed" && !outcome.otherFailures) job.unreachable = true
+    if (job.status === "Failed" && !outcome.answered && !outcome.otherFailures) job.unreachable = true
     const warnings = failures + retentionWarnings
     job.progressMessage =
       job.status === "Failed" ? "Backup failed: no policies could be saved" : warnings > 0 ? `Backup completed with ${warnings} warning${warnings === 1 ? "" : "s"}` : "Backup completed successfully"
