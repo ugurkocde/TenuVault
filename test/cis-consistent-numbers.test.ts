@@ -9,7 +9,7 @@ import { cisScoreCards } from "../src/renderer/features/scores/cis"
 import { deviatingFindingKeys, isSelectableFinding, selectedDeviatingFindings } from "../src/shared/frameworks/cis-display"
 import { appliesOn, localDate, type CisException } from "../src/shared/frameworks/cis-exceptions"
 import { cisPortfolioRows, portfolioMembers } from "../src/shared/frameworks/cis-portfolio"
-import { excludedFindingKeys, exclusionsAsOf, exclusionsText, formatRate, levelHeadline, listedExceptions, readinessFor, unassignedText, type CisReadinessEntry } from "../src/shared/frameworks/cis-readiness"
+import { compareAssessments, excludedFindingKeys, exclusionsAsOf, exclusionsText, formatRate, levelHeadline, listedExceptions, readinessFor, unassignedText, type CisReadinessEntry } from "../src/shared/frameworks/cis-readiness"
 import { cisDriftSignals, cisReadinessTrend, trendChangeText, trendExclusionsText, trendGroups, trendRate } from "../src/shared/frameworks/cis-trend"
 import { attachRecommendations } from "../src/shared/frameworks/cis-recommendations"
 import type { AssignmentEvidence } from "../src/shared/frameworks/evidence"
@@ -95,7 +95,7 @@ describe("one CIS pass rate in every view", () => {
 
     // Exclusions panel: the same count of exclusions in use.
     const listed = listedExceptions(page, entry.assessment, entry.policies, workspace.exceptions, today)
-    expect(listed.flatMap(group => group.items).filter(item => item.state === "in-use")).toHaveLength(head.exclusions)
+    expect(listed.flatMap(group => group.levels.flatMap(level => level.items)).filter(item => item.state === "in-use")).toHaveLength(head.exclusions)
 
     // Trend row of the same run.
     const point = cisReadinessTrend(workspace.history, undefined, workspace.exceptions, today).find(item => item.runId === "run-new")!
@@ -262,11 +262,13 @@ describe("stored exceptions and selections", () => {
     { ...base, id: "other-benchmark", benchmark: "other-os", policyName: policies[0]!.name, settingId: "synthetic_alpha", expiresOn: "2099-01-01" },
   ]
 
-  it("lists every stored exception of the benchmark, tags the ones not in use and counts like the stat", () => {
+  it("lists every stored exception of the workspace by benchmark, tags the ones not in use and counts like the stat", () => {
     const summary = readinessFor(entry, { history: [entry], exceptions }, "2026-10-16")
     const listed = listedExceptions(summary, entry.assessment, entry.policies, exceptions, "2026-10-16")
-    expect(listed.map(group => group.level)).toEqual([1])
-    expect(listed[0]!.items.map(item => [item.exception.id, item.note])).toEqual([
+    // The assessed benchmark first; a benchmark with no saved assessment left still lists its exceptions, removable.
+    expect(listed.map(group => [group.benchmark, group.current, group.levels.map(level => level.level)])).toEqual([["synthetic-os", true, [1]], ["other-os", false, [1]]])
+    expect(listed[1]!.levels[0]!.items.map(item => [item.exception.id, item.note])).toEqual([["other-benchmark", "Not in use: another benchmark"]])
+    expect(listed[0]!.levels[0]!.items.map(item => [item.exception.id, item.note])).toEqual([
       ["in-use", null],
       ["fixed", "Not in use: setting currently present"],
       ["expired", "Expired"],
@@ -275,14 +277,14 @@ describe("stored exceptions and selections", () => {
     ])
     // "Excluded from score" counts exclusions in use, the same number as the stat and the "with N exclusions" text.
     const head = levelHeadline(summary.levels[0]!)
-    expect(head.exclusions).toBe(listed[0]!.items.filter(item => item.state === "in-use").length)
+    expect(head.exclusions).toBe(listed[0]!.levels[0]!.items.filter(item => item.state === "in-use").length)
     expect(exclusionsText(head)).toBe("50% with 1 exclusion")
     // The Excluded badge marks exactly the covered finding.
     expect([...excludedFindingKeys(summary, entry.assessment, entry.policies)]).toEqual(["0:0"])
     // Viewing an older run names exceptions added after it.
     const later = run("run-2", "2026-10-15T12:00:00.000Z", policies, ["Missing", "Present", "Different", "Review"])
     const olderView = readinessFor(entry, { history: [later, entry], exceptions: [{ ...exceptions[0]!, createdAt: "2026-10-12T12:00:00.000Z" }] }, "2026-10-16")
-    expect(listedExceptions(olderView, entry.assessment, entry.policies, [{ ...exceptions[0]!, createdAt: "2026-10-12T12:00:00.000Z" }], "2026-10-16")[0]!.items[0]!.note).toBe("Not in use: added after this assessment")
+    expect(listedExceptions(olderView, entry.assessment, entry.policies, [{ ...exceptions[0]!, createdAt: "2026-10-12T12:00:00.000Z" }], "2026-10-16")[0]!.levels[0]!.items[0]!.note).toBe("Not in use: added after this assessment")
   })
 
   it("does not show a moved rate on the recommendation basis when no recommendation is fully excluded", () => {
@@ -344,5 +346,64 @@ describe("CIS portfolio on one benchmark", () => {
     ], undefined, "2026-10-16")
     // Windows is the benchmark both tenants assessed; the Pro tenant's newer Edge run does not replace its Windows row.
     expect(rows.map(row => [row.tenantName, row.benchmark, formatRate(row.levels[0]?.headline.rate ?? null)])).toEqual([["Customer", "windows-os", "100%"], ["Own Pro tenant", "windows-os", "50%"]])
+  })
+})
+
+describe("review round 1 regressions", () => {
+  it("counts exclusions of a Level 1 recommendation whose setting a Level 2 policy carries", () => {
+    const level1 = pack("split-os", "1.0.0", 1, ["split_a"])
+    const level2 = pack("split-os", "1.0.0", 2, ["split_x"])
+    const policies = attachRecommendations([...level1, ...level2], [{ id: "1.1", title: "Carried by Level 2", level: 1, settings: ["split_x"] }, { id: "1.2", title: "Own", level: 1, settings: ["split_a"] }])
+    const assessment = assessPolicySet({ tenantId, frameworkId: "cis-benchmarks", reference: "split-os 1.0.0", policies, current: [tenantPolicy("a", "split_a", assigned)], runId: "split-1", assessedAt: "2026-10-10T12:00:00.000Z" })
+    const exception: CisException = { id: "split-x", benchmark: "split-os", version: "1.0.0", level: 2, policyName: level2[0]!.name, settingId: "split_x", owner: "Owner", reason: "Accepted", expiresOn: "2099-01-01", createdAt: "2026-10-01T12:00:00.000Z" }
+    const entry = { assessment, policies }
+    const summary = readinessFor(entry, { history: [entry], exceptions: [exception] }, "2026-10-16")
+    const head = levelHeadline(summary.levels.find(level => level.level === 1)!)
+    expect(head).toMatchObject({ basis: "recommendations", rate: 0.5, adjusted: 1, exclusions: 1 })
+    expect(exclusionsText(head)).toBe("100% with 1 exclusion")
+    const listed = listedExceptions(summary, assessment, policies, [exception], "2026-10-16")
+    expect(listed[0]!.levels.find(level => level.level === 2)!.items[0]!.state).toBe("in-use")
+    expect([...excludedFindingKeys(summary, assessment, policies)]).toEqual([assessment.findings.find(finding => finding.settingId === "split_x")!.key])
+  })
+
+  it("compares a pack whose settings only differ in object key order", () => {
+    const windows = pack("windows-os", "5.0.0", 1, ["win_a", "win_b"])
+    const reorder = (value: unknown): unknown => Array.isArray(value) ? value.map(reorder) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).reverse().map(([key, inner]) => [key, reorder(inner)])) : value
+    const reordered = windows.map(policy => ({ ...policy, settings: reorder(policy.settings) as BaselinePolicy["settings"] }))
+    expect(JSON.stringify(reordered[0]!.settings)).not.toBe(JSON.stringify(windows[0]!.settings))
+    const points = cisReadinessTrend([
+      run("win-1", "2026-10-01T09:00:00.000Z", windows, ["Present", "Present"], "windows-os 5.0.0 Level 1"),
+      run("win-2", "2026-10-02T09:00:00.000Z", reordered, ["Present", "Missing"], "windows-os 5.0.0 Level 1"),
+    ], undefined, undefined, "2026-10-16")
+    expect(trendChangeText(points[1]!.levels[0]!)).toBe("-50.0 pp")
+    expect(cisDriftSignals(points)).toHaveLength(1)
+  })
+
+  it("picks the same newest run on tied timestamps in every view, whatever the storage order", () => {
+    const windows = pack("windows-os", "5.0.0", 1, ["win_a", "win_b"])
+    const a = run("run-a", "2026-10-10T09:00:00.000Z", windows, ["Present", "Present"], "windows-os 5.0.0 Level 1")
+    const b = run("run-b", "2026-10-10T09:00:00.000Z", windows, ["Present", "Missing"], "windows-os 5.0.0 Level 1")
+    for (const history of [[a, b], [b, a]]) {
+      const workspace = { history }
+      expect(compareAssessments(a, b)).toBeLessThan(0)
+      expect(exclusionsAsOf(b, workspace, 1, "2026-10-16")).toBe("2026-10-16")
+      expect(exclusionsAsOf(a, workspace, 1, "2026-10-16")).toBe(localDate(a.assessment.assessedAt))
+      const points = cisReadinessTrend(history, undefined, undefined, "2026-10-16")
+      const newest = points[points.length - 1]!
+      expect(newest.runId).toBe("run-b")
+      expect(cisScoreCards(true, workspace, tenantId, "2026-10-16")[0]!.runId).toBe("run-b")
+      expect(cisPortfolioRows([{ tenantId, tenantName: "Contoso", workspace }], undefined, "2026-10-16")[0]!.levels[0]!.headline.rate).toBe(trendRate(newest.levels[0]!))
+    }
+  })
+
+  it("accepts an exception expiring today and refuses one that expired yesterday", async () => {
+    const policies = pack("synthetic-os", "9.9.9", 1, ["synthetic_alpha"])
+    recordAssessment(assessPolicySet({ tenantId, frameworkId: "cis-benchmarks", reference: "synthetic-os 9.9.9 Level 1", policies, current: [], runId: "run-expiry", assessedAt: "2026-10-10T12:00:00.000Z" }), policies)
+    const today = new Date()
+    const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1, 12)
+    const input = { action: "workspace-cis-exception-add", tenantId, frameworkId: "cis-benchmarks", benchmark: "synthetic-os", version: "9.9.9", level: 1, policyName: policies[0]!.name, settingId: "synthetic_alpha", owner: "Owner", reason: "Accepted" }
+    await expect(handleFramework({ ...input, expiresOn: localDate(yesterday) })).rejects.toMatchObject({ status: 400, message: "Provide an expiry date of today or later." })
+    const saved = await handleFramework({ ...input, expiresOn: localDate(today) }) as { exceptions?: CisException[] }
+    expect(saved.exceptions?.map(exception => exception.expiresOn)).toEqual([localDate(today)])
   })
 })

@@ -20,8 +20,8 @@ export function CisCard({ card }: { card: CisScoreCard }) {
             <p className="text-sm text-gray-500">Level {level.level} {level.label.toLowerCase()}</p>
             <p className="text-gray-900 tabular-nums">
               <span className="text-4xl font-light tracking-tight">{level.rate === null ? "Not available" : `${level.rate}%`}</span>
-              {level.withExclusions !== null && <span className="text-lg font-light text-gray-700">{" "}{level.withExclusions}</span>}
             </p>
+            {level.withExclusions !== null && <p className="text-sm text-gray-700">{level.withExclusions}<span className="block text-xs text-gray-500">Exclusions as of {formatDate(`${level.exclusionsAsOf}T00:00:00`)}</span></p>}
           </div>
         ))}
         {card.levels.length === 0 && <p className="text-sm text-gray-600">No Level could be read from this assessment.</p>}

@@ -1,4 +1,4 @@
-import { levelHeadline, packBenchmark, readinessFor, type CisHeadline } from "./cis-readiness"
+import { compareAssessments, levelHeadline, packBenchmark, readinessFor, type CisHeadline } from "./cis-readiness"
 import type { RecommendationList } from "./cis-manual"
 import { localDate, type CisException } from "./cis-exceptions"
 import type { KitLevel } from "./cis-kit"
@@ -158,18 +158,8 @@ export function cisPortfolioRows(entries: CisPortfolioEntry[], selected: Pick<Ci
     if (!history.length) {
       return { tenantId: entry.tenantId, tenantName, benchmark: null, version: null, assessedAt: null, levels: [], ...(saved.length ? { otherBenchmark: true } : {}) }
     }
-    let newest = history[0]!
-    let newestTime = Date.parse(newest.assessment.assessedAt)
-    if (!Number.isFinite(newestTime)) newestTime = Number.NEGATIVE_INFINITY
-    for (let index = 1; index < history.length; index++) {
-      const candidate = history[index]!
-      const time = Date.parse(candidate.assessment.assessedAt)
-      const value = Number.isFinite(time) ? time : Number.NEGATIVE_INFINITY
-      if (value > newestTime) {
-        newest = candidate
-        newestTime = value
-      }
-    }
+    // The newest in the order every CIS view uses, so ties pick the same run as the trend and the CIS page.
+    const newest = history.reduce((best, candidate) => compareAssessments(candidate, best) > 0 ? candidate : best)
     if (newest.assessment.tenantId.toLowerCase() !== entry.tenantId.toLowerCase()) {
       return { tenantId: entry.tenantId, tenantName, benchmark: null, version: null, assessedAt: null, levels: [], error: "The saved assessment belongs to a different tenant." }
     }

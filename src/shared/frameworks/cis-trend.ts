@@ -1,4 +1,4 @@
-import { exclusionsText, headlineRate, readinessFor } from "./cis-readiness"
+import { compareAssessments, exclusionsText, headlineRate, readinessFor } from "./cis-readiness"
 import type { RecommendationList } from "./cis-manual"
 import { localDate, type CisException } from "./cis-exceptions"
 import type { KitLevel } from "./cis-kit"
@@ -145,11 +145,18 @@ export function cisDriftSignals(points: CisTrendPoint[]): CisDriftEntry[] {
   return entries
 }
 
+/** A value with object keys sorted at every depth; array order is kept, as it is part of the content. */
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical)
+  if (value === null || typeof value !== "object") return value
+  return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical((value as Record<string, unknown>)[key])]))
+}
+
 /** A short fingerprint of the pack a run assessed: its reference and every policy as compared. */
 function packFingerprint(entry: CisTrendHistoryEntry): string {
   // Only what defines the assessed content: display names such as benchmarkName are left out.
   const provenance = (policy: BaselinePolicy) => ["benchmark", "version", "level"].map(key => policy.provenance?.[key] ?? null)
-  const text = JSON.stringify([entry.assessment.reference, entry.policies.map(policy => [policy.name, policy.platforms, provenance(policy), policy.settings, (policy.recommendations ?? []).map(item => [item.id, item.level, item.settings])])])
+  const text = JSON.stringify(canonical([entry.assessment.reference, entry.policies.map(policy => [policy.name, policy.platforms, provenance(policy), policy.settings, (policy.recommendations ?? []).map(item => [item.id, item.level, item.settings])])]))
   let hash = 0x811c9dc5
   for (let index = 0; index < text.length; index++) hash = Math.imul(hash ^ text.charCodeAt(index), 0x01000193) >>> 0
   return `${text.length}:${hash.toString(16)}`
@@ -172,11 +179,7 @@ export function cisReadinessTrend(history: CisTrendHistoryEntry[], recommendatio
     seen.add(runId)
     deduped.push(entry)
   }
-  const sorted = [...deduped].sort((a, b) => {
-    const diff = Date.parse(a.assessment.assessedAt) - Date.parse(b.assessment.assessedAt)
-    if (diff !== 0) return diff
-    return a.assessment.runId.localeCompare(b.assessment.runId)
-  })
+  const sorted = [...deduped].sort(compareAssessments)
   const workspace = { history: deduped, ...(recommendationList ? { recommendationList } : {}), ...(exceptions ? { exceptions } : {}) }
   const summaries = sorted.map(entry => readinessFor(entry, workspace, todayISO))
   const fingerprints = sorted.map(packFingerprint)

@@ -135,10 +135,13 @@ describe("CIS page numbers", () => {
     expect(row("synthetic_gamma").textContent).not.toContain("Excluded")
     expect((container.querySelector('input[aria-label="Select finding synthetic_gamma from Synthetic policy"]') as HTMLInputElement).disabled).toBe(true)
     const saved = container.querySelector('[aria-label="Saved assessment history"]')!
-    expect(saved.textContent).toContain("Level 1 33.3%")
+    // The reference already names the Level, so the row shows the rate once.
+    expect(saved.textContent).toContain("synthetic-os 9.9.9 Level 1 · 33.3% · 3 findings")
     expect(saved.textContent).toMatch(/2026.*\d{1,2}:\d{2}/)
     const trend = container.querySelector('[aria-label="Trend for Synthetic Os 9.9.9"]')
     expect(trend?.textContent).toContain("First assessment")
+    // The column names the basis of the rate, as the headline does.
+    expect(trend?.textContent).toContain("Level 1 settings pass rate")
     expect(trend?.textContent).toContain("66.7% with 1 exclusion")
   })
 })

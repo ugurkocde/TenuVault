@@ -1,6 +1,6 @@
 import { benchmarkTitle } from "../../../shared/frameworks/cis-display"
 import type { CisPortfolioWorkspace } from "../../../shared/frameworks/cis-portfolio"
-import { exclusionsText, levelHeadline, packBenchmark, ratePercent, readinessFor } from "../../../shared/frameworks/cis-readiness"
+import { compareAssessments, exclusionsText, levelHeadline, packBenchmark, ratePercent, readinessFor } from "../../../shared/frameworks/cis-readiness"
 import type { KitLevel } from "../../../shared/frameworks/cis-kit"
 
 export interface CisScoreLevel {
@@ -39,13 +39,10 @@ export interface CisScoreCard {
 export function cisScoreCards(access: boolean, workspace: CisPortfolioWorkspace | null | undefined, tenantId: string, todayISO?: string): CisScoreCard[] {
   if (!access) return []
   const tenant = tenantId.toLowerCase()
-  const time = (at: string) => {
-    const value = Date.parse(at)
-    return Number.isFinite(value) ? value : Number.NEGATIVE_INFINITY
-  }
+  // Newest first in the order every CIS view uses, so ties pick the same run as the CIS page.
   const history = (workspace?.history ?? [])
     .filter((entry) => entry.assessment.tenantId.toLowerCase() === tenant)
-    .sort((a, b) => time(b.assessment.assessedAt) - time(a.assessment.assessedAt))
+    .sort((a, b) => compareAssessments(b, a))
   const cards = new Map<string, CisScoreCard>()
   for (const entry of history) {
     if (cards.has(packBenchmark(entry.policies, workspace?.recommendationList).benchmark)) continue

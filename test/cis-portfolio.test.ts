@@ -141,11 +141,13 @@ describe("cisPortfolioRows", () => {
     expect(reversed[0]?.assessedAt).toBe("2026-03-01T00:00:00.000Z")
   })
 
-  it("keeps the first occurrence when assessedAt ties", () => {
+  it("breaks an assessedAt tie by run id, the order every CIS view uses, whatever the storage order", () => {
     const first = historyEntry("run-first", tenantA, "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"])
     const second = historyEntry("run-second", tenantA, "2026-01-01T00:00:00.000Z", ["Missing", "Missing", "Missing"])
-    const rows = cisPortfolioRows([entry(tenantA, "Alpha Tenant", [first, second])])
-    expect(rows[0]?.levels.find(level => level.level === 1)?.passRate).toBe(1)
+    for (const history of [[first, second], [second, first]]) {
+      const rows = cisPortfolioRows([entry(tenantA, "Alpha Tenant", history)])
+      expect(rows[0]?.levels.find(level => level.level === 1)?.passRate).toBe(0)
+    }
   })
 
   it("preserves a per tenant error row and ranks it with the not assessed rows", () => {

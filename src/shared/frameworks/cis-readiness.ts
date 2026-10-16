@@ -23,6 +23,12 @@ export interface CisLevelReadiness {
   /** The exclusions in use for this Level: active on the as-of date and matching a non-Present finding. */
   exceptions: CisException[]
   adjustedPassRate: number | null
+  /**
+   * The exclusions in use for the recommendations of this Level. A recommendation can name a
+   * setting that a policy of another Level carries, so these follow the recommendation's own
+   * findings across Levels. Absent on summaries built without recommendations.
+   */
+  recommendationExceptions?: CisException[]
   /** The date exclusions were judged on, as YYYY-MM-DD; see readinessFor. */
   exclusionsAsOf: string
   /** Present settings whose every observed policy is unassigned; null when the assessment holds no targeting evidence for them. */
@@ -95,10 +101,15 @@ export interface CisHeadline {
  * basis, and next to it the rate with exclusions when any exclusion is in use. The count of
  * exclusions is the number of exclusions in use, the same count as "Excluded from score".
  */
-export function levelHeadline(level: Pick<CisLevelReadiness, "passRate" | "adjustedPassRate" | "recommendations" | "recommendationPassRate" | "adjustedRecommendationPassRate" | "exceptions" | "exclusionsAsOf">): CisHeadline {
+export function levelHeadline(level: Pick<CisLevelReadiness, "passRate" | "adjustedPassRate" | "recommendations" | "recommendationPassRate" | "adjustedRecommendationPassRate" | "exceptions" | "recommendationExceptions" | "exclusionsAsOf">): CisHeadline {
   const head = headlineRate(level)
-  const exclusions = level.exceptions?.length ?? 0
+  const exclusions = headlineExceptions(level).length
   return { basis: head.basis, label: headlineLabel(head.basis), rate: head.rate, adjusted: exclusions && head.adjusted !== null ? head.adjusted : null, exclusions, exclusionsAsOf: level.exclusionsAsOf }
+}
+
+/** The exclusions in use on the headline basis of a Level: those of its recommendations, or those of its settings. */
+export function headlineExceptions(level: Pick<CisLevelReadiness, "recommendations" | "exceptions" | "recommendationExceptions">): CisException[] {
+  return level.recommendations?.length ? level.recommendationExceptions ?? level.exceptions ?? [] : level.exceptions ?? []
 }
 
 /**
@@ -264,7 +275,10 @@ function measure(assessment: Assessment, policies: BaselinePolicy[], denominator
   const activeExceptionKeys = new Set(applicable.filter(exception => exception.benchmark === benchmark && exception.version === version)
     .map(exception => exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId)))
   const findingByKey = new Map(assessment.findings.map(finding => [finding.key, finding]))
-  const findingExcepted = (finding: Assessment["findings"][number]) => activeExceptionKeys.has(exceptionKey(benchmark, version, policies[finding.policyIndex] ? levelOf(policies[finding.policyIndex]!) : 1, finding.policyName, finding.settingId))
+  const findingKey = (finding: Assessment["findings"][number]) => exceptionKey(benchmark, version, policies[finding.policyIndex] ? levelOf(policies[finding.policyIndex]!) : 1, finding.policyName, finding.settingId)
+  const findingExcepted = (finding: Assessment["findings"][number]) => activeExceptionKeys.has(findingKey(finding))
+  const applicableByKey = new Map(applicable.filter(exception => exception.benchmark === benchmark && exception.version === version)
+    .map(exception => [exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId), exception] as const))
   const recommendationLevel = new Map(recommendations.map(result => [result.id, result.level] as const))
   const levels: CisLevelReadiness[] = [...allLevels].sort((a, b) => a - b).map(level => {
     const indexes = new Set(policies.map((policy, index) => levelOf(policy) === level ? index : -1).filter(index => index >= 0))
@@ -292,6 +306,11 @@ function measure(assessment: Assessment, policies: BaselinePolicy[], denominator
       excepted,
       exceptions: levelExceptions,
       adjustedPassRate: findings.length ? (count("Present") + excepted) / findings.length : null,
+      // Exclusions on the open findings of this Level's recommendations, wherever those findings sit.
+      recommendationExceptions: [...new Map(recommendations.filter(result => result.level === level).flatMap(result => result.settings.flatMap(setting => setting.findingKeys))
+        .map(key => findingByKey.get(key)).filter(finding => finding && finding.status !== "Present")
+        .map(finding => applicableByKey.get(findingKey(finding!))).filter((exception): exception is CisException => !!exception)
+        .map(exception => [exception.id, exception] as const)).values()],
       exclusionsAsOf: asOf(level),
       presentInUnassigned: withTargeting ? presentFindings.filter(finding => finding.observed.length > 0 && finding.observed.every(observation => observation.targeting?.state === "unassigned")).length : null,
       // Without a denominator list an enumerated identifier cannot be told apart from a manual
@@ -341,6 +360,14 @@ function timeOf(entry: CisReadinessEntry): number {
   return Number.isFinite(time) ? time : Number.NEGATIVE_INFINITY
 }
 
+/**
+ * The one order of saved assessments every CIS view uses, oldest first: by assessment time,
+ * then by run id when two runs share a timestamp. "Newest" anywhere means last in this order.
+ */
+export function compareAssessments(a: CisReadinessEntry, b: CisReadinessEntry): number {
+  return timeOf(a) - timeOf(b) || a.assessment.runId.localeCompare(b.assessment.runId)
+}
+
 /** The Levels a saved assessment measures, read from its pack policies. */
 function packLevels(policies: BaselinePolicy[]): Set<KitLevel> {
   return new Set(policies.map(levelOf))
@@ -355,8 +382,7 @@ function packLevels(policies: BaselinePolicy[]): Set<KitLevel> {
  */
 export function exclusionsAsOf(entry: CisReadinessEntry, workspace: CisReadinessWorkspace, level: KitLevel, todayISO: string = localDate()): string {
   const { benchmark, version } = packIdentity(entry.policies, workspace.recommendationList)
-  const time = timeOf(entry)
-  const newer = workspace.history.some(other => other.assessment.runId !== entry.assessment.runId && timeOf(other) > time && packLevels(other.policies).has(level) && (() => {
+  const newer = workspace.history.some(other => other.assessment.runId !== entry.assessment.runId && compareAssessments(other, entry) > 0 && packLevels(other.policies).has(level) && (() => {
     const identity = packIdentity(other.policies, workspace.recommendationList)
     return identity.benchmark === benchmark && identity.version === version
   })())
@@ -381,7 +407,7 @@ export function readinessFor(entry: CisReadinessEntry, workspace: CisReadinessWo
   return measure(entry.assessment, entry.policies, denominator, workspace.recommendationList, applicable, asOf)
 }
 
-export type ListedExceptionState = "in-use" | "expired" | "later" | "present" | "absent" | "version"
+export type ListedExceptionState = "in-use" | "expired" | "later" | "present" | "unscored" | "absent" | "version" | "benchmark"
 
 export interface ListedException {
   exception: CisException
@@ -390,13 +416,21 @@ export interface ListedException {
   note: string | null
 }
 
+export interface ListedExceptionGroup {
+  benchmark: string
+  /** True for the benchmark of the assessment on screen, listed first. */
+  current: boolean
+  levels: { level: KitLevel; items: ListedException[] }[]
+}
+
 /**
- * Every stored exception of the assessed benchmark, by Level, with whether it counts for this
- * assessment. Exceptions that do not count stay listed and removable: they still take a place
- * under the exception limit and would apply again if the setting regressed.
+ * Every stored exception of the workspace, grouped by benchmark with the assessed benchmark
+ * first, then by Level, with whether it counts for this assessment. All of them share the
+ * exception limit, so exceptions that do not count stay listed and removable, including those of
+ * benchmarks with no saved assessment left; they would apply again if the setting regressed.
  */
-export function listedExceptions(summary: CisReadinessSummary, assessment: Assessment, policies: BaselinePolicy[], exceptions: CisException[] | undefined, todayISO: string = localDate()): { level: KitLevel; items: ListedException[] }[] {
-  const inUse = new Set(summary.levels.flatMap(level => level.exceptions.map(exception => exception.id)))
+export function listedExceptions(summary: CisReadinessSummary, assessment: Assessment, policies: BaselinePolicy[], exceptions: CisException[] | undefined, todayISO: string = localDate()): ListedExceptionGroup[] {
+  const inUse = new Set(summary.levels.flatMap(level => headlineExceptions(level).map(exception => exception.id)))
   const statusByKey = new Map<string, Assessment["findings"][number]["status"][]>()
   for (const finding of assessment.findings) {
     const policy = policies[finding.policyIndex]
@@ -404,26 +438,30 @@ export function listedExceptions(summary: CisReadinessSummary, assessment: Asses
     const key = exceptionKey(summary.benchmark, summary.version, levelOf(policy), finding.policyName, finding.settingId)
     statusByKey.set(key, [...(statusByKey.get(key) ?? []), finding.status])
   }
-  const groups = new Map<KitLevel, ListedException[]>()
-  for (const level of summary.levels) groups.set(level.level, [])
+  const groups = new Map<string, Map<KitLevel, ListedException[]>>([[summary.benchmark, new Map(summary.levels.map(level => [level.level, []]))]])
   for (const exception of exceptions ?? []) {
-    if (exception.benchmark !== summary.benchmark) continue
+    const current = exception.benchmark === summary.benchmark
     const asOf = summary.levels.find(level => level.level === exception.level)?.exclusionsAsOf ?? todayISO
     const statuses = statusByKey.get(exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId)) ?? []
     const [state, note]: [ListedExceptionState, string | null] = inUse.has(exception.id) ? ["in-use", null]
+      : !current ? ["benchmark", "Not in use: another benchmark"]
       : exception.version !== summary.version ? ["version", `Not in use: version ${exception.version}`]
       : !isActive(exception, asOf) ? ["expired", "Expired"]
       : localDate(exception.createdAt) > asOf ? ["later", "Not in use: added after this assessment"]
-      : statuses.length ? ["present", asOf === todayISO ? "Not in use: setting currently present" : "Not in use: setting present in this assessment"]
+      : statuses.length && statuses.every(status => status === "Present") ? ["present", asOf === todayISO ? "Not in use: setting currently present" : "Not in use: setting present in this assessment"]
+      : statuses.length ? ["unscored", "Not in use: setting not in a recommendation"]
       : ["absent", "Not in use: setting not in this assessment"]
-    groups.set(exception.level, [...(groups.get(exception.level) ?? []), { exception, state, note }])
+    const levels = groups.get(exception.benchmark) ?? new Map<KitLevel, ListedException[]>()
+    levels.set(exception.level, [...(levels.get(exception.level) ?? []), { exception, state, note }])
+    groups.set(exception.benchmark, levels)
   }
-  return [...groups].sort(([a], [b]) => a - b).map(([level, items]) => ({ level, items }))
+  return [...groups].map(([benchmark, levels]) => ({ benchmark, current: benchmark === summary.benchmark, levels: [...levels].sort(([a], [b]) => a - b).map(([level, items]) => ({ level, items })) }))
+    .sort((a, b) => Number(b.current) - Number(a.current) || a.benchmark.localeCompare(b.benchmark))
 }
 
 /** Keys of the findings an exclusion in use covers: they show an Excluded badge in the findings list. */
 export function excludedFindingKeys(summary: CisReadinessSummary, assessment: Assessment, policies: BaselinePolicy[]): Set<string> {
-  const inUse = new Set(summary.levels.flatMap(level => level.exceptions.map(exception => exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId))))
+  const inUse = new Set(summary.levels.flatMap(level => [...level.exceptions, ...(level.recommendationExceptions ?? [])].map(exception => exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId))))
   return new Set(assessment.findings.filter(finding => finding.status !== "Present" && policies[finding.policyIndex]
     && inUse.has(exceptionKey(summary.benchmark, summary.version, levelOf(policies[finding.policyIndex]!), finding.policyName, finding.settingId))).map(finding => finding.key))
 }
