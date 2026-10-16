@@ -10,9 +10,9 @@ import { CIS_FRAMEWORKS } from "../../shared/plans"
 import { loadNcsc } from "./ncsc"
 import { validateRecommendationList } from "../../shared/frameworks/cis-manual"
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
-import { cisReadiness } from "../../shared/frameworks/cis-readiness"
+import { readinessFor } from "../../shared/frameworks/cis-readiness"
 import { attachRecommendations } from "../../shared/frameworks/cis-recommendations"
-import { exceptionKey, isActive, isDateOnly, MAX_EXCEPTIONS, validateNewException, type CisException } from "../../shared/frameworks/cis-exceptions"
+import { exceptionKey, isActive, isDateOnly, localDate, MAX_EXCEPTIONS, validateNewException, type CisException } from "../../shared/frameworks/cis-exceptions"
 import { tenantWriteLabel, withTenantWrite } from "../features/write-lock"
 import { CisContentError, fetchCisCatalog, fetchCisPack } from "./cis-content"
 import { BENCHMARK_ID_PATTERN, MAX_CIS_BENCHMARK_ID_LENGTH, VERSION_PATTERN, type CisLevel } from "../../shared/frameworks/cis-content"
@@ -388,7 +388,8 @@ async function exportWorkspace(body: RecordJson, workspace: FrameworkWorkspace):
       try { denominator = parseDenominatorList(JSON.stringify(body.denominator)) }
       catch (error) { throw new FrameworkError(error instanceof Error ? error.message : "The denominator list is invalid.") }
     }
-    const summary = cisReadiness(saved.assessment, saved.policies, denominator, workspace.recommendationList, workspace.exceptions)
+    // The same exclusion rule as every CIS view, so the PDF matches the page for this run.
+    const summary = readinessFor(saved, workspace, localDate(), denominator)
     const { generateCisReadinessPDF } = await import("../../shared/compliance/report-pdf")
     const pdf = generateCisReadinessPDF(summary, { exportedAt: context.exportedAt, tenantName: context.tenantName, tenantId: workspace.tenantId, assessedAt: saved.assessment.assessedAt, runId: saved.assessment.runId })
     return { file: { name: `${name}.pdf`, type: "application/pdf", encoding: "base64", data: Buffer.from(pdf).toString("base64") } }
@@ -464,8 +465,9 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       let input: ReturnType<typeof validateNewException>
       try { input = validateNewException(body) }
       catch (error) { throw new FrameworkError(error instanceof Error ? error.message : "The exception is invalid.") }
-      const today = new Date().toISOString().slice(0, 10)
-      if (!isDateOnly(input.expiresOn) || input.expiresOn <= today) throw new FrameworkError("Provide an expiry date in the future.")
+      // Dates are local, like the expiry date input: an exception is active through its expiry date, so today is the earliest.
+      const today = localDate()
+      if (!isDateOnly(input.expiresOn) || input.expiresOn < today) throw new FrameworkError("Provide an expiry date of today or later.")
       const existing = workspace.exceptions ?? []
       if (existing.length >= MAX_EXCEPTIONS) throw new FrameworkError(`Exceptions must contain at most ${MAX_EXCEPTIONS} entries. Remove an exception before adding another.`)
       const newKey = exceptionKey(input.benchmark, input.version, input.level, input.policyName, input.settingId)

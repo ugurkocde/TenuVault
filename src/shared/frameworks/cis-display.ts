@@ -1,4 +1,5 @@
 import { comparable, rootMatches, type BaselinePolicy, type Finding, type Json, type Observation } from "./policies"
+import { formatRate } from "./cis-readiness"
 
 export function benchmarkDisplayName(id: string): string {
   const parts = id.split("-").filter(part => part.length > 0)
@@ -48,9 +49,23 @@ export interface FindingPolicyGroup {
   total: number
 }
 
+/**
+ * The one definition of a deviating finding that can be selected: Different or Missing. The
+ * finding checkbox, Select all deviating, Exclude from score and Plan remediation all use it.
+ * Present findings need nothing, and Review findings need a profile choice first.
+ */
+export function isSelectableFinding(finding: Pick<Finding, "status">): boolean {
+  return finding.status === "Different" || finding.status === "Missing"
+}
+
 /** Keys of the findings that can be remediated: Different and Missing. Present and Review findings are never selected. */
 export function deviatingFindingKeys(findings: readonly Finding[]): string[] {
-  return findings.filter(finding => finding.status === "Different" || finding.status === "Missing").map(finding => finding.key)
+  return findings.filter(isSelectableFinding).map(finding => finding.key)
+}
+
+/** The selected findings that bulk actions act on, in assessment order. */
+export function selectedDeviatingFindings(findings: readonly Finding[], selected: ReadonlySet<string>): Finding[] {
+  return findings.filter(finding => selected.has(finding.key) && isSelectableFinding(finding))
 }
 
 export function groupFindingsByPolicy(findings: readonly Finding[]): FindingPolicyGroup[] {
@@ -121,7 +136,7 @@ export function trendSummaryText(
   formatDate: (value: string) => string,
 ): string {
   if (!latest || !latest.levels.length) return "Trend: Not available yet"
-  const rates = latest.levels.map(entry => `Level ${entry.level} ${entry.passRate === null ? "Not available" : `${(entry.passRate * 100).toFixed(1)}%`}`).join(", ")
+  const rates = latest.levels.map(entry => `Level ${entry.level} ${formatRate(entry.passRate)}`).join(", ")
   const suffix = assessmentCount === 1 ? ", first assessment" : `, ${assessmentCount} assessments`
   return `Trend: ${rates} on ${formatDate(latest.assessedAt)}${suffix}`
 }

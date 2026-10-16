@@ -367,7 +367,7 @@ describe("CIS Benchmarks route", () => {
     expect(container.textContent).not.toContain("Recommendation results")
     // Without a recommendation list the settings pass rate leads and identifier coverage stays.
     const summary = container.querySelector('[aria-label="Level 1 summary"]')
-    expect(summary?.textContent).toContain("Pass rate")
+    expect(summary?.textContent).toContain("Settings pass rate")
     expect(summary?.textContent).not.toContain("Recommendation pass rate")
     expect(summary?.textContent).toContain("Enumerated identifiers")
     expect(container.textContent).toContain("Coverage and the assessed automated count need a denominator list")

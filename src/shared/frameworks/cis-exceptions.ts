@@ -105,3 +105,22 @@ export function exceptionKey(benchmark: string, version: string, level: 1 | 2, p
 export function isActive(exception: CisException, todayISO: string): boolean {
   return exception.expiresOn >= todayISO.slice(0, 10)
 }
+
+/**
+ * The calendar date of a moment on this device, as YYYY-MM-DD. Exception dates are compared as
+ * local dates everywhere: the expiry date input is local, so today, the creation date of an
+ * exception and the date of an assessment are read in local time as well. A value that is
+ * already a date stays as it is.
+ */
+export function localDate(value: string | Date = new Date()): string {
+  if (typeof value === "string" && DATE_PATTERN.test(value)) return value
+  const date = typeof value === "string" ? new Date(value) : value
+  if (Number.isNaN(date.getTime())) return typeof value === "string" ? value.slice(0, 10) : ""
+  const pad = (part: number) => String(part).padStart(2, "0")
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+/** An exception counts on a date when it was created on or before that date and has not expired by then. */
+export function appliesOn(exception: CisException, dateISO: string): boolean {
+  return localDate(exception.createdAt) <= dateISO && isActive(exception, dateISO)
+}

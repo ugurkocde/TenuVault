@@ -1,8 +1,9 @@
-import { cisReadiness } from "./cis-readiness"
+import { levelHeadline, packBenchmark, readinessFor, type CisHeadline } from "./cis-readiness"
 import type { RecommendationList } from "./cis-manual"
-import type { CisException } from "./cis-exceptions"
+import { localDate, type CisException } from "./cis-exceptions"
 import type { KitLevel } from "./cis-kit"
 import type { Assessment, BaselinePolicy } from "./policies"
+import { allows, type Plan } from "../plans"
 
 export interface CisPortfolioHistoryEntry {
   assessment: Assessment
@@ -33,6 +34,8 @@ export interface CisPortfolioLevel {
   adjustedRecommendationPassRate?: number | null
   excepted: number
   assessedSettings: number
+  /** The headline the CIS page shows for this run: raw rate, label and the rate with exclusions. */
+  headline: CisHeadline
 }
 
 export interface CisPortfolioRow {
@@ -43,16 +46,27 @@ export interface CisPortfolioRow {
   version: string | null
   assessedAt: string | null
   levels: CisPortfolioLevel[]
+  /** The tenant has saved assessments, but none of the selected benchmark and version. */
+  otherBenchmark?: boolean
   error?: string
+}
+
+/** One benchmark and version the portfolio can compare tenants on. */
+export interface CisPortfolioBenchmark {
+  benchmark: string
+  version: string
+  benchmarkName: string | null
+  /** Tenants with at least one saved assessment of it. */
+  tenants: number
 }
 
 function effectiveRate(level: CisPortfolioLevel | undefined): number | null {
   if (!level) return null
-  if (level.basis === "recommendations") return level.adjustedRecommendationPassRate ?? level.recommendationPassRate ?? null
-  return level.adjustedPassRate ?? level.passRate
+  if (level.basis === "recommendations") return level.recommendationPassRate ?? null
+  return level.passRate
 }
 
-/** The rate a portfolio shows and ranks for one Level, adjusted when exceptions apply. */
+/** The rate a portfolio shows and ranks for one Level: the raw headline rate, as on the CIS page. */
 export function portfolioRate(level: CisPortfolioLevel | undefined): number | null {
   return effectiveRate(level)
 }
@@ -84,22 +98,65 @@ function nameOf(row: CisPortfolioRow): string {
   return row.tenantName ?? row.tenantId
 }
 
-export function cisPortfolioRows(entries: CisPortfolioEntry[]): CisPortfolioRow[] {
+function dedupeTenants(entries: CisPortfolioEntry[]): CisPortfolioEntry[] {
   const seenTenants = new Set<string>()
-  const deduped = entries.filter(entry => {
+  return entries.filter(entry => {
     const key = entry.tenantId.toLowerCase()
     if (seenTenants.has(key)) return false
     seenTenants.add(key)
     return true
   })
+}
+
+function sameBenchmark(entry: CisPortfolioHistoryEntry, workspace: CisPortfolioWorkspace | null | undefined, selected: Pick<CisPortfolioBenchmark, "benchmark" | "version">): boolean {
+  const pack = packBenchmark(entry.policies, workspace?.recommendationList)
+  return pack.benchmark === selected.benchmark && pack.version === selected.version
+}
+
+/**
+ * The benchmarks and versions saved for the tenants of a portfolio, the one most tenants
+ * assessed first, then the most recently assessed. Only assessments of the tenant itself count.
+ */
+export function portfolioBenchmarks(entries: CisPortfolioEntry[]): CisPortfolioBenchmark[] {
+  const found = new Map<string, CisPortfolioBenchmark & { newest: number }>()
+  for (const entry of dedupeTenants(entries)) {
+    if (entry.error) continue
+    const keys = new Set<string>()
+    for (const item of entry.workspace?.history ?? []) {
+      if (item.assessment.tenantId.toLowerCase() !== entry.tenantId.toLowerCase()) continue
+      const pack = packBenchmark(item.policies, entry.workspace?.recommendationList)
+      const key = JSON.stringify([pack.benchmark, pack.version])
+      const time = Date.parse(item.assessment.assessedAt)
+      const current = found.get(key) ?? { benchmark: pack.benchmark, version: pack.version, benchmarkName: pack.benchmarkName, tenants: 0, newest: Number.NEGATIVE_INFINITY }
+      if (!keys.has(key)) current.tenants += 1
+      keys.add(key)
+      if (Number.isFinite(time) && time > current.newest) current.newest = time
+      current.benchmarkName ??= pack.benchmarkName
+      found.set(key, current)
+    }
+  }
+  return [...found.values()]
+    .sort((a, b) => b.tenants - a.tenants || b.newest - a.newest || (a.benchmarkName ?? a.benchmark).localeCompare(b.benchmarkName ?? b.benchmark) || a.version.localeCompare(b.version))
+    .map(({ newest: _newest, ...benchmark }) => benchmark)
+}
+
+/**
+ * Portfolio rows that compare tenants on one benchmark and version: each tenant's newest saved
+ * assessment of it, read with readinessFor so the rate is the one the CIS page shows for that
+ * run. Without a selection the benchmark most tenants assessed is used. Tenants without an
+ * assessment of it show as not assessed.
+ */
+export function cisPortfolioRows(entries: CisPortfolioEntry[], selected: Pick<CisPortfolioBenchmark, "benchmark" | "version"> | null = portfolioBenchmarks(entries)[0] ?? null, todayISO: string = localDate()): CisPortfolioRow[] {
+  const deduped = dedupeTenants(entries)
   const rows: CisPortfolioRow[] = deduped.map(entry => {
     const tenantName = entry.tenantName ?? null
     if (entry.error) {
       return { tenantId: entry.tenantId, tenantName, benchmark: null, version: null, assessedAt: null, levels: [], error: entry.error }
     }
-    const history = entry.workspace?.history ?? []
+    const saved = entry.workspace?.history ?? []
+    const history = selected ? saved.filter(item => sameBenchmark(item, entry.workspace, selected)) : saved
     if (!history.length) {
-      return { tenantId: entry.tenantId, tenantName, benchmark: null, version: null, assessedAt: null, levels: [] }
+      return { tenantId: entry.tenantId, tenantName, benchmark: null, version: null, assessedAt: null, levels: [], ...(saved.length ? { otherBenchmark: true } : {}) }
     }
     let newest = history[0]!
     let newestTime = Date.parse(newest.assessment.assessedAt)
@@ -116,9 +173,7 @@ export function cisPortfolioRows(entries: CisPortfolioEntry[]): CisPortfolioRow[
     if (newest.assessment.tenantId.toLowerCase() !== entry.tenantId.toLowerCase()) {
       return { tenantId: entry.tenantId, tenantName, benchmark: null, version: null, assessedAt: null, levels: [], error: "The saved assessment belongs to a different tenant." }
     }
-    const assessedDate = newest.assessment.assessedAt.slice(0, 10)
-    const applicableExceptions = (entry.workspace?.exceptions ?? []).filter(exception => exception.createdAt.slice(0, 10) <= assessedDate)
-    const summary = cisReadiness(newest.assessment, newest.policies, undefined, entry.workspace?.recommendationList, applicableExceptions, newest.assessment.assessedAt)
+    const summary = readinessFor(newest, { ...entry.workspace, history: saved }, todayISO)
     return {
       tenantId: entry.tenantId,
       tenantName,
@@ -126,7 +181,7 @@ export function cisPortfolioRows(entries: CisPortfolioEntry[]): CisPortfolioRow[
       benchmarkName: summary.benchmarkName,
       version: summary.version,
       assessedAt: newest.assessment.assessedAt,
-      levels: summary.levels.map(level => ({ level: level.level, passRate: level.passRate, adjustedPassRate: level.adjustedPassRate, excepted: level.excepted, assessedSettings: level.assessedSettings,
+      levels: summary.levels.map(level => ({ level: level.level, passRate: level.passRate, adjustedPassRate: level.adjustedPassRate, excepted: level.excepted, assessedSettings: level.assessedSettings, headline: levelHeadline(level),
         ...(level.recommendations.length
           ? { basis: "recommendations" as const, recommendationPassRate: level.recommendationPassRate, adjustedRecommendationPassRate: level.adjustedRecommendationPassRate }
           : { basis: "settings" as const }) })),
@@ -155,4 +210,21 @@ export function cisPortfolioRows(entries: CisPortfolioEntry[]): CisPortfolioRow[
     if (byName !== 0) return byName
     return a.tenantId.localeCompare(b.tenantId)
   })
+}
+
+/**
+ * Which signed-in tenants the CIS portfolio loads: customer tenants on MSP, as before, and the
+ * selected tenant itself whenever its own plan includes CIS, so its result can be compared with
+ * them. The returned plan gates the Load button: the portfolio stays an MSP view and opens when
+ * an included tenant is on MSP; otherwise the selected tenant's plan decides, as before.
+ */
+export function portfolioMembers(tenantIds: string[], planOf: (tenantId: string) => Plan | null, selectedTenantId: string | undefined): { included: string[]; notIncluded: string[]; plan: Plan | null } {
+  const selected = selectedTenantId?.toLowerCase()
+  const isIncluded = (tenantId: string) => {
+    const plan = planOf(tenantId)
+    return plan === "msp" || (tenantId.toLowerCase() === selected && plan !== null && allows(plan, "baselineAllPlatforms"))
+  }
+  const included = tenantIds.filter(isIncluded)
+  const selectedPlan = selected ? planOf(tenantIds.find(tenantId => tenantId.toLowerCase() === selected) ?? selected) : null
+  return { included, notIncluded: tenantIds.filter(tenantId => !isIncluded(tenantId)), plan: included.some(tenantId => planOf(tenantId) === "msp") ? "msp" : selectedPlan }
 }

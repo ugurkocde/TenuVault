@@ -1,17 +1,23 @@
 import { benchmarkTitle } from "../../../shared/frameworks/cis-display"
 import type { CisPortfolioWorkspace } from "../../../shared/frameworks/cis-portfolio"
-import { cisReadiness, headlineRate } from "../../../shared/frameworks/cis-readiness"
+import { exclusionsText, levelHeadline, packBenchmark, ratePercent, readinessFor } from "../../../shared/frameworks/cis-readiness"
 import type { KitLevel } from "../../../shared/frameworks/cis-kit"
 
 export interface CisScoreLevel {
   level: KitLevel
   basis: "recommendations" | "settings"
+  /** The name of the rate, as the CIS page shows it. */
+  label: "Recommendation pass rate" | "Settings pass rate"
   /** The raw measured rate in percent with one decimal, as the CIS page shows it; null when not available. */
   rate: number | null
   /** The rate with active exclusions counted as passed; null when no exclusion applies. */
   adjusted: number | null
-  /** Active exclusions that apply to this Level. */
+  /** Exclusions in use for this Level. */
   exclusions: number
+  /** The text next to the rate, as the CIS page shows it; null without exclusions in use. */
+  withExclusions: string | null
+  /** The date the exclusions were judged on, as YYYY-MM-DD. */
+  exclusionsAsOf: string
 }
 
 export interface CisScoreCard {
@@ -23,17 +29,14 @@ export interface CisScoreCard {
   levels: CisScoreLevel[]
 }
 
-/** The CIS page formats a rate as Math.round(rate * 1000) / 10; the card uses the same arithmetic. */
-const percent = (rate: number | null) => (rate === null ? null : Math.round(rate * 1000) / 10)
-
 /**
  * One card per saved CIS benchmark of a tenant: the newest saved assessment of each benchmark,
- * read with cisReadiness the way the CIS page reads its headline (the workspace recommendation
- * list and exceptions). The raw rate is the headline; the adjusted rate is shown only when
- * exclusions apply. Assessments of another tenant are ignored. Without internal CIS access
- * there are no cards at all.
+ * read with readinessFor and levelHeadline, the functions the CIS page uses for its headline,
+ * so the card shows the same rate, label and exclusions as the page. The raw rate is the
+ * headline; the rate with exclusions is shown only when exclusions are in use. Assessments of
+ * another tenant are ignored. Without internal CIS access there are no cards at all.
  */
-export function cisScoreCards(access: boolean, workspace: CisPortfolioWorkspace | null | undefined, tenantId: string): CisScoreCard[] {
+export function cisScoreCards(access: boolean, workspace: CisPortfolioWorkspace | null | undefined, tenantId: string, todayISO?: string): CisScoreCard[] {
   if (!access) return []
   const tenant = tenantId.toLowerCase()
   const time = (at: string) => {
@@ -45,8 +48,8 @@ export function cisScoreCards(access: boolean, workspace: CisPortfolioWorkspace 
     .sort((a, b) => time(b.assessment.assessedAt) - time(a.assessment.assessedAt))
   const cards = new Map<string, CisScoreCard>()
   for (const entry of history) {
-    const readiness = cisReadiness(entry.assessment, entry.policies, undefined, workspace?.recommendationList, workspace?.exceptions)
-    if (cards.has(readiness.benchmark)) continue
+    if (cards.has(packBenchmark(entry.policies, workspace?.recommendationList).benchmark)) continue
+    const readiness = readinessFor(entry, { ...workspace, history: workspace?.history ?? [] }, todayISO)
     cards.set(readiness.benchmark, {
       key: readiness.benchmark,
       title: benchmarkTitle(readiness.benchmark, readiness.benchmarkName),
@@ -54,9 +57,8 @@ export function cisScoreCards(access: boolean, workspace: CisPortfolioWorkspace 
       runId: entry.assessment.runId,
       assessedAt: entry.assessment.assessedAt,
       levels: readiness.levels.map((level) => {
-        const head = headlineRate(level)
-        const exclusions = level.exceptions.length
-        return { level: level.level, basis: head.basis, rate: percent(head.rate), adjusted: exclusions && head.adjusted !== null ? percent(head.adjusted) : null, exclusions }
+        const head = levelHeadline(level)
+        return { level: level.level, basis: head.basis, label: head.label, rate: ratePercent(head.rate), adjusted: ratePercent(head.adjusted), exclusions: head.exclusions, withExclusions: exclusionsText(head), exclusionsAsOf: head.exclusionsAsOf }
       }),
     })
   }

@@ -2,7 +2,7 @@ import { jsPDF } from 'jspdf'
 import { CAPABILITY_STATUS_LABELS, CHECK_RESULT_COLORS, CHECK_RESULT_LABELS, COLLECTION_FAMILY_LABELS, COLLECTION_STATUS_LABELS, CONTROL_STATUS_LABELS, PLATFORM_LABELS, formatReportDate, frameworkCoverageLabel } from './presentation'
 import { comparisonCounts, type NativeAssessment } from './native'
 import { EXPORT_LIMITATIONS, nativeReportHeader, redactSecrets, redactText, workspaceReportHeader, type ExportContext, type ReportHeader, type SavedAssessment } from './export'
-import { coverageSourceLabel, type CisLevelReadiness, type CisReadinessSummary } from '../frameworks/cis-readiness'
+import { coverageSourceLabel, exclusionsText, formatRate, levelHeadline, unassignedText, type CisLevelReadiness, type CisReadinessSummary } from '../frameworks/cis-readiness'
 import { recommendationTotals } from '../frameworks/cis-recommendations'
 import { displayCheckValue } from './check-results'
 import rights from './rights.json'
@@ -176,9 +176,7 @@ export interface CisReportContext extends ExportContext {
   runId?: string
 }
 
-function percent(value: number | null): string {
-  return value === null ? 'Not available' : `${Math.round(value * 1000) / 10}%`
-}
+const percent = formatRate
 
 /**
  * Local CIS readiness report from a saved assessment, in the same layout as the native
@@ -196,9 +194,7 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
       { value: String(level.assessedSettings), label: 'Assessed settings', color: [100, 116, 139] },
       { value: String(level.present), label: 'Conforming', color: CHECK_RESULT_COLORS.matches },
       { value: String(deviating), label: 'Deviating', color: CHECK_RESULT_COLORS.different },
-      level.recommendations?.length
-        ? { value: percent(level.recommendationPassRate ?? null), label: 'Recommendation pass rate', color: [37, 99, 235] }
-        : { value: percent(level.passRate), label: 'Pass rate', color: [37, 99, 235] },
+      { value: percent(levelHeadline(level).rate), label: levelHeadline(level).label, color: [37, 99, 235] },
     ]
     const gap = 3, tile = (width - gap * (tiles.length - 1)) / tiles.length
     if (state.y + 22 > 273) { doc.addPage(); state.y = 24 }
@@ -230,7 +226,12 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
   for (const level of summary.levels) {
     section(`Level ${level.level} readiness`)
     levelTiles(level)
-    text(`Assessed settings: ${level.assessedSettings}\nConforming: ${level.present}\nDeviating: ${level.different + level.missing + level.review} (different ${level.different}, missing ${level.missing}, review ${level.review})\nExcepted: ${level.excepted ?? 0}\nPass rate: ${percent(level.passRate)}\nAdjusted pass rate: ${percent(level.adjustedPassRate ?? null)}`)
+    // One headline per Level, named by its basis; the settings figures stay counts.
+    const head = levelHeadline(level)
+    const withExclusions = exclusionsText(head)
+    text(`${head.label}: ${percent(head.rate)}${withExclusions ? `, ${withExclusions} (exclusions as of ${head.exclusionsAsOf})` : ''}\nAssessed settings: ${level.assessedSettings}\nConforming: ${level.present}\nDeviating: ${level.different + level.missing + level.review} (different ${level.different}, missing ${level.missing}, review ${level.review})\nExcluded from score: ${head.exclusions}`)
+    const unassigned = unassignedText(level)
+    if (unassigned) text(unassigned)
     text(level.coverage === null
       ? `Coverage: ${coverageSourceLabel(level.coverageSource)}`
       : `Coverage: ${percent(level.coverage)} (${level.assessedAutomated} of ${level.denominator}), source: ${coverageSourceLabel(level.coverageSource)}`)
@@ -247,7 +248,7 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
     if (level.recommendations?.length) {
       heading(`Recommendation results, Level ${level.level}`)
       const totals = recommendationTotals(level.recommendations)
-      text(`Recommendation pass rate: ${percent(level.recommendationPassRate ?? null)}\nAdjusted recommendation pass rate: ${percent(level.adjustedRecommendationPassRate ?? null)}\nPassed: ${totals.passed}\nFailed: ${totals.failed}\nTo review: ${totals.review}\nNot assessed: ${totals.notAssessed}`)
+      text(`Passed: ${totals.passed}\nFailed: ${totals.failed}\nTo review: ${totals.review}\nNot assessed: ${totals.notAssessed}`)
       text(level.recommendations.map(item => `${item.id} ${item.title}: ${item.result} (${item.settings.map(setting => `${setting.id} ${setting.status}`).join(', ')})`).join('\n'))
     }
     if (level.manual.length) {

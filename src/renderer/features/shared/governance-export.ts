@@ -4,7 +4,7 @@ import type { FrameworkScore } from "../scores/api"
 import { CLASSIFICATION_LABELS, STATUS_LABELS, type Finding as HygieneFinding } from "../hygiene/api"
 import type { Finding as HealthFinding } from "../health-review/api"
 import type { AdoptionState } from "../standards/api"
-import type { CisReadinessSummary } from "../../../shared/frameworks/cis-readiness"
+import { levelHeadline, ratePercent, type CisReadinessSummary } from "../../../shared/frameworks/cis-readiness"
 import { recommendationTotals } from "../../../shared/frameworks/cis-recommendations"
 
 /**
@@ -201,31 +201,37 @@ export function standardsJson(states: AdoptionState[], tenantName: string | null
 
 // --------------------------------------------------------------------------- cis readiness
 
+/**
+ * One Level of a readiness export: one headline rate named by its basis, in percent like the
+ * CIS page, the rate with exclusions next to it and the settings counts as counts only.
+ */
 function cisReadinessRow(summary: CisReadinessSummary, level: CisReadinessSummary["levels"][number]) {
+  const head = levelHeadline(level)
   return {
     benchmark: summary.benchmark,
     version: summary.version,
     level: level.level,
     state: "Assessed",
+    headline: head.label,
+    passRatePercent: ratePercent(head.rate),
+    passRateWithExclusionsPercent: ratePercent(head.adjusted),
+    exclusions: head.exclusions,
+    exclusionsAsOf: head.exclusionsAsOf,
     assessedSettings: level.assessedSettings,
     present: level.present,
     different: level.different,
     missing: level.missing,
     review: level.review,
-    passRate: level.passRate,
-    excepted: level.excepted,
-    adjustedPassRate: level.adjustedPassRate,
+    presentInUnassignedPolicies: level.presentInUnassigned,
     exceptions: (level.exceptions ?? []).map(item => ({
       policyName: item.policyName, settingId: item.settingId, owner: item.owner, expiresOn: item.expiresOn, reason: item.reason,
     })),
     assessedAutomated: level.assessedAutomated,
     enumerated: level.enumerated,
     denominator: level.denominator,
-    coverage: level.coverage,
+    coveragePercent: ratePercent(level.coverage),
     notAssessed: level.notAssessed,
     ...(level.recommendations?.length ? {
-      recommendationPassRate: level.recommendationPassRate,
-      adjustedRecommendationPassRate: level.adjustedRecommendationPassRate,
       recommendationsExcepted: level.recommendationsExcepted,
       recommendationTotals: recommendationTotals(level.recommendations),
       recommendations: level.recommendations.map(({ id, title, level, result, settings }) => ({ id, title, level, result, settings: settings.map(({ id, status }) => ({ id, status })) })),
@@ -248,7 +254,9 @@ function cisManualRow(summary: CisReadinessSummary, level: CisReadinessSummary["
   }
 }
 
-const CIS_READINESS_HEADERS = ["Benchmark", "Version", "Level", "Assessed settings", "Present", "Different", "Missing", "Review", "Pass rate", "Assessed automated", "Enumerated", "Denominator", "Coverage", "Not assessed", "Note", "State", "Identifier", "Title", "Excepted", "Adjusted pass rate", "Exceptions"]
+const CIS_READINESS_HEADERS = ["Benchmark", "Version", "Level", "Headline", "Pass rate (%)", "Pass rate with exclusions (%)", "Exclusions", "Exclusions as of", "Assessed settings", "Present", "Different", "Missing", "Review", "Present in unassigned policies", "Assessed automated", "Enumerated", "Denominator", "Coverage (%)", "Not assessed", "Note", "State", "Identifier", "Title", "Exceptions"]
+/** A row with only the leading Benchmark, Version and Level cells and the trailing cells from Note on. */
+const cisLineRow = (benchmark: string, version: string, level: number | "", tail: unknown[]) => [benchmark, version, level, ...Array(16).fill(""), ...tail]
 
 export function cisReadinessCsv(summary: CisReadinessSummary): string {
   // The catalog display name of a delivered pack names the benchmark; Build Kit packs keep the id.
@@ -256,22 +264,21 @@ export function cisReadinessCsv(summary: CisReadinessSummary): string {
   const rows: unknown[][] = summary.levels.map((level) => {
     const row = cisReadinessRow(summary, level)
     const exceptionsText = row.exceptions.map(item => `${item.policyName} | ${item.settingId} | ${item.owner} | ${item.expiresOn} | ${item.reason}`).join("; ")
-    return [benchmark, row.version, row.level, row.assessedSettings, row.present, row.different, row.missing, row.review, row.passRate ?? "", row.assessedAutomated ?? "", row.enumerated, row.denominator ?? "", row.coverage ?? "", row.notAssessed.join("; "), row.manualNote, row.state, "", "", row.excepted, row.adjustedPassRate ?? "", exceptionsText]
+    return [benchmark, row.version, row.level, row.headline, row.passRatePercent ?? "", row.passRateWithExclusionsPercent ?? "", row.exclusions, row.exclusionsAsOf, row.assessedSettings, row.present, row.different, row.missing, row.review, row.presentInUnassignedPolicies ?? "", row.assessedAutomated ?? "", row.enumerated, row.denominator ?? "", row.coveragePercent ?? "", row.notAssessed.join("; "), row.manualNote, row.state, "", "", exceptionsText]
   })
   for (const level of summary.levels) {
     for (const item of level.manual ?? []) {
       const row = cisManualRow(summary, level, item)
-      rows.push([benchmark, row.version, row.level, "", "", "", "", "", "", "", "", "", "", "", row.fallback, row.state, row.identifier, row.title, "", "", ""])
+      rows.push(cisLineRow(benchmark, row.version, row.level, [row.fallback, row.state, row.identifier, row.title, ""]))
     }
   }
   // The CIS notice for recommendations this tool does not include, on every export.
-  rows.push([benchmark, summary.version, "", "", "", "", "", "", "", "", "", "", "", "", `${summary.manualFallback} ${summary.manualFallbackUrl}`, "Notice", "", "", "", "", ""])
+  rows.push(cisLineRow(benchmark, summary.version, "", [`${summary.manualFallback} ${summary.manualFallbackUrl}`, "Notice", "", "", ""]))
   // Packs that list their recommendations add one row per recommendation and a Mapped settings column.
   const recommendations = summary.levels.flatMap(level => level.recommendations ?? [])
   if (!recommendations.length) return toCsv([CIS_READINESS_HEADERS, ...rows])
-  const recommendationRows = recommendations.map(item => [benchmark, summary.version, item.level, "", "", "", "", "", "", "", "", "", "", "", item.result, "Recommendation", item.id, item.title, "", "", "", item.settings.map(setting => `${setting.id} ${setting.status}`).join("; "), "", ""])
-  const levelRates = summary.levels.map(level => [level.recommendationPassRate ?? "", level.adjustedRecommendationPassRate ?? ""])
-  return toCsv([[...CIS_READINESS_HEADERS, "Mapped settings", "Recommendation pass rate", "Adjusted recommendation pass rate"], ...rows.map((row, index) => [...row, "", ...(levelRates[index] ?? ["", ""])]), ...recommendationRows])
+  const recommendationRows = recommendations.map(item => cisLineRow(benchmark, summary.version, item.level, [item.result, "Recommendation", item.id, item.title, "", item.settings.map(setting => `${setting.id} ${setting.status}`).join("; ")]))
+  return toCsv([[...CIS_READINESS_HEADERS, "Mapped settings"], ...rows.map(row => [...row, ""]), ...recommendationRows])
 }
 
 export function cisReadinessJson(summary: CisReadinessSummary, tenantName: string | null, exportedAt: string): string {
