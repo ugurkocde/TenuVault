@@ -830,7 +830,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
             <h3 className="text-base font-medium text-gray-900">CIS readiness</h3>
             <p className="text-xs text-gray-500">{readiness.manualNote} This view covers the automated settings in the imported pack only.</p>
           </div>
-          {readiness.levels.some(level => levelCheckSummary(level)) && <div className="mt-3 space-y-1 text-sm text-gray-700">{readiness.levels.map(level => { const summary = levelCheckSummary(level); return summary ? <p key={level.level}>{summary}</p> : null })}</div>}
+          {readiness.levels.length > 0 && <div className="mt-3 space-y-1 text-sm text-gray-700">{readiness.levels.map(level => <p key={level.level}>{levelCheckSummary(level)}</p>)}</div>}
           <p role="note" aria-label="Manual recommendations" className="mt-3 flex items-start gap-2 rounded-2xl bg-blue-50 px-4 py-3 text-sm text-gray-800"><Info className="mt-0.5 size-4 shrink-0 text-blue-700" aria-hidden="true" /><span>{readiness.manualFallback} <a href={readiness.manualFallbackUrl} className="font-medium text-blue-700 underline underline-offset-2" onClick={event => { event.preventDefault(); void bridge.app.openExternal(readiness.manualFallbackUrl) }}>{readiness.manualFallbackUrl}</a></span></p>
           <div className="mt-4 divide-y divide-gray-100">
             {readiness.levels.map(level => {

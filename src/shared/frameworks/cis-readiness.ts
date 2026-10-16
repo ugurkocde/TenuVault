@@ -84,10 +84,10 @@ export function levelCheckCounts(level: Pick<CisLevelReadiness, "recommendations
   return { checked, manual: level.manual.length, total: null }
 }
 
-/** The sentence shown above the CIS notice for one Level, or null when nothing is checked. */
-export function levelCheckSummary(level: Pick<CisLevelReadiness, "level" | "recommendations" | "manual" | "assessedAutomated" | "enumerated" | "denominator" | "numeratorIds" | "denominatorIdentifiers">): string | null {
+/** The sentence shown above the CIS notice for one Level. It never states a total without a denominator. */
+export function levelCheckSummary(level: Pick<CisLevelReadiness, "level" | "recommendations" | "manual" | "assessedAutomated" | "enumerated" | "denominator" | "numeratorIds" | "denominatorIdentifiers">): string {
   const { checked, manual, total } = levelCheckCounts(level)
-  if (!checked && !manual) return null
+  if (!checked && !manual) return `Level ${level.level}: TenuVault compares the settings of this pack automatically. Recommendations outside the pack, including manual ones, need a manual check.`
   const noun = (count: number) => count === 1 ? "recommendation" : "recommendations"
   if (total === null) {
     const prefix = `Level ${level.level}: TenuVault checks ${checked} ${noun(checked)} of this pack automatically.`
