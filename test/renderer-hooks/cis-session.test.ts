@@ -456,6 +456,63 @@ describe("checking again for a running assessment", () => {
   })
 })
 
+describe("a late workspace-open answer", () => {
+  /** Opening fails once, so a notice offers Retry; the Retry answer names job A and is held until released. */
+  function staleRetrySetup(statusFor: (jobId: unknown) => Answer) {
+    let opens = 0
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const { actions } = stubService({ answer: body => {
+      if (body.action === "running-job") return ++opens === 1 ? { status: 404, body: { error: "Not found." } } : { body: { jobId: "job-a", reference, policies: [policy] } }
+      if (body.action === "assess-start") return { body: { jobId: "job-b" } }
+      if (body.action === "assess-status") return statusFor(body.jobId)
+      return { status: 500, body: { error: "unexpected" } }
+    } })
+    const answer = globalThis.fetch as unknown as (path: string, init?: RequestInit) => Promise<Response>
+    vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+      if (String(init?.body).includes('"workspace-open"') && opens >= 1) await gate
+      return answer(path, init)
+    }))
+    return { actions, release }
+  }
+  async function retryThenRunAgain(container: HTMLElement) {
+    const notice = [...container.querySelectorAll('[role="alert"]')].find(item => item.textContent?.includes("Could not check for a running assessment"))
+    await act(async () => { buttonNamed(notice as HTMLElement, "Retry")!.click() })
+    await act(async () => { buttonNamed(container, "Run again")!.click() })
+  }
+
+  it("does not take over a run started after it was sent", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    const { actions, release } = staleRetrySetup(jobId => ({ body: { ...snapshot("reading"), jobId } }))
+    const { container } = render()
+    await flush()
+    await retryThenRunAgain(container)
+    await waitFor(() => container.textContent.includes("Re-running assessment: reading tenant policies"))
+    release()
+    await flush()
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 700)) })
+    const polled = actions.filter(body => body.action === "assess-status").map(body => body.jobId)
+    expect(polled.length).toBeGreaterThan(1)
+    expect(polled.every(jobId => jobId === "job-b")).toBe(true)
+    expect(container.textContent).toContain("Re-running assessment: reading tenant policies")
+  })
+
+  it("does not revert newer results to the run it names", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    const older = assessment("run-a", "Missing", "2026-10-15T12:00:00Z")
+    const { actions, release } = staleRetrySetup(jobId => ({ body: snapshot("done", { jobId, assessment: jobId === "job-a" ? older : fresh }) }))
+    const { container } = render()
+    await flush()
+    await retryThenRunAgain(container)
+    await waitFor(() => levelSummary(container).includes("100%"))
+    release()
+    await flush()
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 700)) })
+    expect(levelSummary(container)).toContain("100%")
+    expect(actions.some(body => body.action === "assess-status" && body.jobId === "job-a")).toBe(false)
+  })
+})
+
 describe("saved results are read-only", () => {
   it("keeps remediation off in the panel itself, even with deviating findings selected", async () => {
     const { CisRemediationPanel } = await import("../../src/renderer/features/cis-remediation/CisRemediationPanel")

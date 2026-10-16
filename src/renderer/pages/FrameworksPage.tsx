@@ -422,13 +422,19 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
    * older evidence, and a running assessment is followed with its own pack. When the call still
    * fails, the workspace is loaded on its own and a notice offers to check again.
    */
-  async function openWorkspace(current: () => boolean, first: boolean) {
+  async function openWorkspace(mounted: () => boolean, first: boolean) {
+    // A run started or followed after this request was sent makes the whole answer stale: its
+    // workspace and running job must not replace that run's progress or newer results. A tenant
+    // change mounts a new page, which `mounted` covers.
+    const runGeneration = cisRunGeneration.current
+    const current = () => mounted() && cisRunGeneration.current === runGeneration
     let opened: OpenedWorkspace
     let lookupFailed = false
     if (isCis) {
       try { opened = await pollCisStatus(() => workspaceRequest<OpenedWorkspace>("workspace-open"), { retryable: retryableStatusPoll, current }) }
       catch (e) {
-        if (isWorkspaceUnreadableError(e instanceof Error ? e.message : String(e)) || !current()) throw e
+        if (!current()) return
+        if (isWorkspaceUnreadableError(e instanceof Error ? e.message : String(e))) throw e
         lookupFailed = true
         opened = { workspace: await workspaceRequest("workspace-load"), activeJob: null }
       }
