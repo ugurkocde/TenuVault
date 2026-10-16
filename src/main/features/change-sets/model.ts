@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { comparableSnapshot } from "../../../shared/intune/compare"
 import { buildRestorePlan } from "../../../shared/intune/restore-plan"
 import { cleanAssignment, typeForFolder, type IntuneType, type Item, type Json } from "../../../shared/intune/registry"
+import { MAX_SETTING_LEAVES, settingValues, type SettingLeaf } from "../../../shared/frameworks/setting-summary"
 import type { ListedRecord } from "../contracts"
 
 /**
@@ -47,7 +48,24 @@ export interface DiffEntry {
   change: "added" | "removed" | "changed"
   before?: string
   after?: string
+  /** The Settings Catalog definition the changed value sits in, so a view can name it; older entries have none. */
+  definitionId?: string
+  /** For an added or removed setting or policy: its Settings Catalog values, read before the value was shortened. */
+  beforeSettings?: SettingLeaf[]
+  afterSettings?: SettingLeaf[]
+  /** How many values the side holds in total; more than the list holds when the list was cut. */
+  beforeSettingsTotal?: number
+  afterSettingsTotal?: number
+  /** A text value longer than the shortened `before` or `after`, kept whole up to MAX_DIFF_TOKEN characters, so a choice keeps its option id for its label. */
+  beforeToken?: string
+  afterToken?: string
 }
+
+/** Longest whole text value kept next to a shortened one. */
+export const MAX_DIFF_TOKEN = 1000
+
+/** Setting values kept across all entries of one diff, so a change set stays bounded. */
+export const MAX_DIFF_SETTING_LEAVES = 2000
 
 /** One frozen operation of a change set, without its (possibly large) content. */
 export interface ChangeOperation {
@@ -307,24 +325,40 @@ export function diffConfigurations(type: IntuneType, before: Item | null, after:
     if (entries.length >= MAX_DIFF_ENTRIES) truncated = true
     else entries.push(entry)
   }
-  const walk = (a: Json | undefined, b: Json | undefined, path: string): void => {
+  // Each entry keeps the Settings Catalog definition it sits in, and an added or removed object
+  // keeps its setting values, both taken before values are shortened.
+  const definitionOf = (value: Json | undefined): string | undefined => value && typeof value === "object" && !Array.isArray(value) && typeof (value as Item).settingDefinitionId === "string" ? (value as Item).settingDefinitionId as string : undefined
+  let budget = MAX_DIFF_SETTING_LEAVES
+  const leavesOf = (value: Json | undefined): { leaves: SettingLeaf[]; total: number } => {
+    if (!value || typeof value !== "object") return { leaves: [], total: 0 }
+    const found = settingValues(value, Math.min(MAX_SETTING_LEAVES, budget))
+    budget -= found.leaves.length
+    return found
+  }
+  const sideOf = (side: "before" | "after", found: { leaves: SettingLeaf[]; total: number }) => found.total ? { [`${side}Settings`]: found.leaves, [`${side}SettingsTotal`]: found.total } : {}
+  const walk = (a: Json | undefined, b: Json | undefined, path: string, definition: string | undefined): void => {
     if (canonicalJson(a ?? null) === canonicalJson(b ?? null)) return
     const objectA = a && typeof a === "object" && !Array.isArray(a)
     const objectB = b && typeof b === "object" && !Array.isArray(b)
+    const inside = definitionOf(b) ?? definitionOf(a) ?? definition
     if (objectA && objectB) {
       const keys = [...new Set([...Object.keys(a as Item), ...Object.keys(b as Item)])].sort()
-      for (const key of keys) walk((a as Item)[key], (b as Item)[key], path ? `${path}.${key}` : key)
+      for (const key of keys) walk((a as Item)[key], (b as Item)[key], path ? `${path}.${key}` : key, inside)
       return
     }
     if (Array.isArray(a) && Array.isArray(b) && a.length === b.length) {
-      a.forEach((entry, index) => walk(entry, b[index], `${path}[${index}]`))
+      a.forEach((entry, index) => walk(entry, b[index], `${path}[${index}]`, inside))
       return
     }
-    if (a === undefined || a === null) push({ path: path || "(object)", change: "added", after: short(b) })
-    else if (b === undefined || b === null) push({ path: path || "(object)", change: "removed", before: short(a) })
-    else push({ path: path || "(object)", change: "changed", before: short(a), after: short(b) })
+    const where = { path: path || "(object)", ...(inside ? { definitionId: inside } : {}) }
+    const token = (side: "before" | "after", value: Json | undefined) => typeof value === "string" && value.length > MAX_DIFF_VALUE ? { [`${side}Token`]: value.slice(0, MAX_DIFF_TOKEN) } : {}
+    const before = leavesOf(a)
+    const after = leavesOf(b)
+    if (a === undefined || a === null) push({ ...where, change: "added", after: short(b), ...sideOf("after", after), ...token("after", b) })
+    else if (b === undefined || b === null) push({ ...where, change: "removed", before: short(a), ...sideOf("before", before), ...token("before", a) })
+    else push({ ...where, change: "changed", before: short(a), after: short(b), ...sideOf("before", before), ...sideOf("after", after), ...token("before", a), ...token("after", b) })
   }
-  walk(left ?? undefined, right ?? undefined, "")
+  walk(left ?? undefined, right ?? undefined, "", undefined)
   return { entries, truncated }
 }
 

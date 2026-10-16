@@ -4,7 +4,7 @@ import { featureCall } from "../../lib/feature-api"
 import { showFeaturePlanError } from "../../lib/plan-dialog"
 import { toast } from "../../lib/toast"
 import type { Assessment, BaselinePolicy } from "../../../shared/frameworks/policies"
-import { packBenchmarkName, selectedDeviatingFindings } from "../../../shared/frameworks/cis-display"
+import { knownBenchmarkName, packBenchmarkName, selectedDeviatingFindings } from "../../../shared/frameworks/cis-display"
 import { cachedCisCatalog } from "../../lib/cis-catalog-cache"
 import { deploymentReferenceLabel } from "./CisRemediationHistory"
 import { PATH, type Deployment } from "./api"
@@ -32,7 +32,7 @@ export function CisRemediationPanel({ tenant, assessment, policies, reference, s
     if (!tenant || readOnly) return
     setBusy(true)
     const benchmarkId = reference.trim().split(/\s+/)[0] ?? ""
-    const benchmarkName = (packBenchmarkName(policies)?.trim() || cachedCisCatalog(tenant.credentials?.tenantId)?.find(benchmark => benchmark.id === benchmarkId)?.name) ?? null
+    const benchmarkName = (packBenchmarkName(policies)?.trim() || knownBenchmarkName(benchmarkId) || cachedCisCatalog(tenant.credentials?.tenantId)?.find(benchmark => benchmark.id === benchmarkId)?.name) ?? null
     try {
       const result = await featureCall<{ deployment: Deployment }>(PATH, tenant, "plan", {
         title: remediationTitle(whole, deploymentReferenceLabel(reference, tenant.credentials?.tenantId, benchmarkName)),
@@ -45,8 +45,8 @@ export function CisRemediationPanel({ tenant, assessment, policies, reference, s
     } catch (error) { showFeaturePlanError(error); toast(error instanceof Error ? error.message : "Planning failed.", "error") } finally { setBusy(false) }
   }
   return <section aria-labelledby="cis-deploy-title" className="mt-5 rounded-3xl border-2 border-blue-200 bg-white p-7">
-    <h2 id="cis-deploy-title" className="text-xl font-medium tracking-tight">3. Deploy or remediate from this assessment</h2>
-    <p className="mt-2 text-sm text-gray-600">{readOnly ? "These are saved results. Run again first to get current evidence, then select deviating findings to remediate them to the benchmark value, or deploy whole benchmark policies for them." : "Select deviating findings above to remediate them to the benchmark value, or deploy whole benchmark policies for the selected findings."} New policies are created with no assignments and nothing takes effect until an administrator assigns them in Intune. Assignments are never copied. The preview is an offline comparison against this assessment, not a tenant dry run. Planned deployments open in the remediation history below, where they stay available for review, apply and rollback.</p>
+    <h2 id="cis-deploy-title" className="text-xl font-medium tracking-tight">Remediate or deploy from these results</h2>
+    <p className="mt-2 text-sm text-gray-600">{readOnly ? "These are saved results. Run again first to get current evidence, then select deviating findings to remediate them to the benchmark value, or deploy whole benchmark policies for them." : "Select deviating findings above to remediate them to the benchmark value, or deploy whole benchmark policies for the selected findings."} Missing findings and whole benchmark policies go into new policies with no assignments: nothing in them takes effect until an administrator assigns them in Intune. Different findings update the existing tenant policies that hold them in place: those policies keep their assignments, so an assigned policy applies the change to its devices after apply. Assignments are never copied or changed. The preview is an offline comparison against this assessment, not a tenant dry run. Planned deployments open in the remediation history below, where they stay available for review, apply and rollback.</p>
     <div className="mt-4 flex flex-wrap gap-3">
       <button type="button" className={button} disabled={busy || readOnly || !deviating.length || !tenant} onClick={() => void plan(false)}>Plan remediation for {deviating.length} selected findings</button>
       <button type="button" className={button} disabled={busy || readOnly || !deviating.length || !tenant} onClick={() => void plan(true)}>Deploy whole benchmark policies</button>

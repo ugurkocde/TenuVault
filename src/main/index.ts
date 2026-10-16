@@ -5,7 +5,7 @@ import { readFile, stat } from "node:fs/promises"
 import { pathToFileURL } from "node:url"
 import { isGuid, isMicrosoftLoginUrl, sameRendererDocument } from "../shared/security"
 import { rendererStorageKey, rendererStorageValue } from "./renderer-storage"
-import { prepareSaveFile, type PreparedFile } from "./save-file"
+import { prepareGeneratedFile, prepareSaveFile, type PreparedFile } from "./save-file"
 import { PdfBrandingPolicy, PdfBrandingStore, setPdfBrandingPolicy } from "./pdf-branding"
 import { prepareOibReportFile, printHtmlToPdf } from "./report-export"
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, Notification, safeStorage, shell } from "electron"
@@ -51,7 +51,7 @@ import { DisclaimerAcknowledgements, disclaimerGuard } from "./disclaimer"
 import { migrateLegacyOibRuns, setOibStore } from "./oib/service"
 import { setOibCacheDir } from "./oib/source"
 import { setFrameworkStore } from "./frameworks/workspaces"
-import { internalCisBenchmarksEnabled, isAdmittedAssessStatus, setCisEntitlementProvider, setInternalCisBenchmarksProvider } from "./frameworks/service"
+import { internalCisBenchmarksEnabled, isAdmittedAssessStatus, setCisEntitlementProvider, setFrameworkExportSaver, setInternalCisBenchmarksProvider } from "./frameworks/service"
 import { setCisContentFallbackBaseUrl } from "./frameworks/cis-content"
 import { setNativeFrameworkStore, setNativeFrameworkAuthorization, setNativeFrameworkNotifier } from "./frameworks/native"
 import { allows, effectiveRetentionDays, PlanRequired } from "../shared/plans"
@@ -333,6 +333,8 @@ async function bootstrap(): Promise<void> {
   const checkDisclaimer = disclaimerGuard(disclaimer)
   setInternalCisBenchmarksProvider(() => license.cisInternal())
   setCisEntitlementProvider((tenantId) => license.entitlementToken(tenantId))
+  // Framework exports the main process built are saved here directly, so they never round-trip through the renderer.
+  setFrameworkExportSaver((file) => saveFileWithDialog(prepareGeneratedFile(file.data, file.name, file.encoding)))
   setCisContentFallbackBaseUrl(LICENSE_API_BASE)
   const checkCis = cisInternalGuard(() => internalCisBenchmarksEnabled(), (tenantId) => license.entitlementToken(tenantId))
   const planGate = planGuard((tenantId) => license.requireEntitlement(tenantId).catch(() => null))

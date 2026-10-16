@@ -11,6 +11,7 @@ import { recordAssessment, setFrameworkStore } from "../src/main/frameworks/work
 import { requiredFeatures } from "../src/main/api/plan-gates"
 import { parsePolicies } from "../src/shared/frameworks/policies"
 import { attachRecommendations } from "../src/shared/frameworks/cis-recommendations"
+import { localDate } from "../src/shared/frameworks/cis-exceptions"
 
 const type = "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance"
 const policy = (name: string, description: string, settingId = "fakebook_setting_alpha") => JSON.stringify({
@@ -122,7 +123,11 @@ describe("CIS readiness PDF report", () => {
     expect(coverageSourceLabel("breakout-proxy")).toBe("Breakout proxy, illustrative")
     expect(coverageSourceLabel("none")).toBe("Not computable")
     const without = pdfText(generateCisReadinessPDF(summary, context))
-    expect(without).toContain("Coverage: Not computable")
+    // Without a denominator list the PDF says in plain words why coverage is missing, and claims no automated count.
+    expect(without).toContain("No recommendation list is loaded, so coverage is not shown.")
+    expect(without).not.toContain("Not computable")
+    expect(without).not.toContain("not computable without a denominator list")
+    expect(without).not.toContain("Assessed automated")
     // Without a manual recommendation list the CIS notice and its link still appear.
     expect(summary.levels.every(level => !level.manual.length)).toBe(true)
     expect(without).toContain(MANUAL_RECOMMENDATIONS_FALLBACK)
@@ -181,7 +186,8 @@ describe("CIS readiness PDF export through the main process", () => {
     const fetch = vi.fn(async () => { throw new Error("No network during export") })
     vi.stubGlobal("fetch", fetch)
     const result = await handleFramework({ action: "workspace-cis-pdf", frameworkId: "cis-benchmarks", tenantId, tenantName: "Contoso", runId: "run-1", denominator: JSON.parse(JSON.stringify(denominator())) }) as { file: ExportFile }
-    expect(result.file).toMatchObject({ name: "framework-cis-benchmarks-run-1.pdf", type: "application/pdf", encoding: "base64" })
+    // A readable name: benchmark, version, what it holds, tenant and day, never the run id.
+    expect(result.file).toMatchObject({ name: `CIS Fakebook Os 9.9.9 readiness report (Contoso) ${localDate()}.pdf`, type: "application/pdf", encoding: "base64" })
     const bytes = Buffer.from(result.file.data, "base64")
     expect(bytes.subarray(0, 5).toString()).toBe("%PDF-")
     const text = pdfText(bytes)

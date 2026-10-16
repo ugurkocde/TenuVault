@@ -10,7 +10,7 @@ import { deviatingFindingKeys, isSelectableFinding, selectedDeviatingFindings } 
 import { appliesOn, localDate, type CisException } from "../src/shared/frameworks/cis-exceptions"
 import { generateCisReadinessPDF } from "../src/shared/compliance/report-pdf"
 import { cisPortfolioRows, portfolioMembers } from "../src/shared/frameworks/cis-portfolio"
-import { compareAssessments, distinctExclusions, excludedFindingKeys, exclusionsAsOf, exclusionsText, formatRate, levelHeadline, listedExceptions, readinessFor, unassignedText, type CisReadinessEntry } from "../src/shared/frameworks/cis-readiness"
+import { compareAssessments, distinctExclusions, excludedFindingKeys, exceptionsByHeadline, exclusionsAsOf, exclusionsText, formatRate, levelHeadline, listedExceptions, readinessFor, unassignedText, type CisReadinessEntry } from "../src/shared/frameworks/cis-readiness"
 import { cisDriftSignals, cisReadinessTrend, exclusionUse, trendChangeText, trendExclusionsText, trendGroups, trendRate } from "../src/shared/frameworks/cis-trend"
 import { attachRecommendations } from "../src/shared/frameworks/cis-recommendations"
 import type { AssignmentEvidence } from "../src/shared/frameworks/evidence"
@@ -473,5 +473,63 @@ describe("review round 2: one source for the exclusions that count", () => {
     const summary = readinessFor(shown, workspace, "2026-10-16")
     const item = listedExceptions(summary, shown.assessment, shown.policies, workspace.exceptions, "2026-10-16", new Map([["ex-other", ["Other OS 2.0.0 Level 1"]]]))[1]!.levels[0]!.items[0]!
     expect(item).toMatchObject({ state: "benchmark", note: "Not used by this assessment. Used by Other OS 2.0.0 Level 1", usedElsewhere: ["Other OS 2.0.0 Level 1"] })
+  })
+})
+
+describe("review round 3: exclusions follow the headline they affect", () => {
+  const today = "2026-10-16"
+  const choiceChild = (id: string, value: string) => ({ "@odata.type": choice, settingDefinitionId: id, choiceSettingValue: { value: `${id}_${value}`, children: [] } })
+  const groupRoot = (a: string, b: string) => ({ "@odata.type": "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance", settingDefinitionId: "grp_root", groupSettingCollectionValue: [{ children: [choiceChild("grp_root_a", a), choiceChild("grp_root_b", b)] }] })
+
+  it("does not count an exclusion toward a Level whose recommendation names only the passing leaf of a shared root", () => {
+    // One root holds a Level 1 leaf that passes and a Level 2 sibling that fails.
+    const shared: BaselinePolicy = { name: "shared-os grp", platforms: "windows10", technologies: "mdm", description: "Synthetic", provenance: { schemaVersion: 1, benchmark: "shared-os", version: "1.0.0", level: "Level 1", sourceFile: "grp.json" }, settings: [{ settingInstance: groupRoot("on", "on") }] }
+    const policies = attachRecommendations([shared], [{ id: "1.1", title: "Leaf A", level: 1, settings: ["grp_root_a"] }, { id: "2.1", title: "Leaf B", level: 2, settings: ["grp_root_b"] }])
+    const current: LandscapePolicy[] = [{ id: "t", name: "Tenant t", platforms: "windows10", technologies: "mdm", description: "", settings: [{ settingInstance: groupRoot("on", "off") }], targeting: assigned }]
+    const assessment = assessPolicySet({ tenantId, frameworkId: "cis-benchmarks", reference: "shared-os 1.0.0", policies, current, runId: "grp-1", assessedAt: "2026-10-10T12:00:00.000Z" })
+    expect(assessment.findings[0]!.status).toBe("Different")
+    const exception: CisException = { id: "ex-grp", benchmark: "shared-os", version: "1.0.0", level: 1, policyName: shared.name, settingId: "grp_root", owner: "Owner", reason: "Accepted", expiresOn: "2099-01-01", createdAt: "2026-10-01T12:00:00.000Z" }
+    const workspace = { history: [{ assessment, policies }], exceptions: [exception] }
+    const summary = readinessFor(workspace.history[0]!, workspace, today)
+    const [one, two] = summary.levels.map(levelHeadline)
+    expect(summary.levels[0]!.recommendations.map(result => result.result)).toEqual(["Pass"])
+    expect([one!.rate, one!.exclusions, exclusionsText(one!)]).toEqual([1, 0, null])
+    expect([two!.rate, two!.exclusions, exclusionsText(two!)]).toEqual([0, 1, "100% with 1 exclusion"])
+    // Every view reads the same: listed, trend and Governance card.
+    expect(listedExceptions(summary, assessment, policies, workspace.exceptions, today)[0]!.levels.flatMap(level => level.items).map(item => [item.state, item.usedHere])).toEqual([["in-use", [2]]])
+    expect(cisReadinessTrend(workspace.history, undefined, workspace.exceptions, today)[0]!.levels.map(level => level.exclusionIds)).toEqual([[], ["ex-grp"]])
+    expect(cisScoreCards(true, workspace, tenantId, today)[0]!.levels.map(level => level.withExclusions)).toEqual([null, "100% with 1 exclusion"])
+  })
+
+  // Level 1 and Level 2 are both scored by recommendations: 1.1 names split_x, carried by a Level 2 policy; 2.1 names split_y.
+  const level1 = pack("split-os", "1.0.0", 1, ["split_a"])
+  const level2 = pack("split-os", "1.0.0", 2, ["split_x", "split_y"])
+  const policies = attachRecommendations([...level1, ...level2], [{ id: "1.1", title: "Carried by Level 2", level: 1, settings: ["split_x"] }, { id: "1.2", title: "Own", level: 1, settings: ["split_a"] }, { id: "2.1", title: "Level 2 own", level: 2, settings: ["split_y"] }])
+  const current = [tenantPolicy("a", "split_a", assigned), tenantPolicy("y", "split_y", assigned)]
+  const exX = (createdAt: string): CisException => ({ id: "ex-x", benchmark: "split-os", version: "1.0.0", level: 2, policyName: level2[0]!.name, settingId: "split_x", owner: "Owner", reason: "Accepted", expiresOn: "2099-01-01", createdAt })
+
+  it("lists a Level 2 exclusion that only a Level 1 recommendation counts under Level 1, noting its policy Level", () => {
+    const assessment = assessPolicySet({ tenantId, frameworkId: "cis-benchmarks", reference: "split-os 1.0.0", policies, current, runId: "split-3", assessedAt: "2026-10-10T12:00:00.000Z" })
+    const workspace = { history: [{ assessment, policies }], exceptions: [exX("2026-10-01T12:00:00.000Z")] }
+    const summary = readinessFor(workspace.history[0]!, workspace, today)
+    expect(summary.levels.map(level => levelHeadline(level).exclusions)).toEqual([1, 0])
+    const group = listedExceptions(summary, assessment, policies, workspace.exceptions, today)[0]!
+    // Grouped by policy Level the Level 1 headline would count 1 and list nothing.
+    expect(group.levels.map(level => [level.level, level.items.length])).toEqual([[1, 0], [2, 1]])
+    const byHeadline = exceptionsByHeadline(group)
+    expect(byHeadline.map(level => [level.level, level.items.map(item => [item.exception.id, item.exception.level, item.state])])).toEqual([[1, [["ex-x", 2, "in-use"]]], [2, []]])
+    // Each headline lists exactly the exclusions it counts.
+    for (const level of summary.levels) expect(byHeadline.find(entry => entry.level === level.level)!.items.filter(item => item.state === "in-use").length).toBe(levelHeadline(level).exclusions)
+  })
+
+  it("explains an unused exclusion by the date of the headline that would count it", () => {
+    const combined = assessPolicySet({ tenantId, frameworkId: "cis-benchmarks", reference: "split-os 1.0.0", policies, current, runId: "split-old", assessedAt: "2026-10-01T12:00:00.000Z" })
+    const onlyLevel1 = assessPolicySet({ tenantId, frameworkId: "cis-benchmarks", reference: "split-os 1.0.0 Level 1", policies: policies.slice(0, 1), current, runId: "split-l1", assessedAt: "2026-10-10T12:00:00.000Z" })
+    // Created after the older run: its Level 1 headline is dated the run day, its Level 2 headline today.
+    const workspace = { history: [{ assessment: onlyLevel1, policies: policies.slice(0, 1) }, { assessment: combined, policies }], exceptions: [exX("2026-10-05T12:00:00.000Z")] }
+    const older = readinessFor(workspace.history[1]!, workspace, today)
+    expect(older.levels.map(level => [level.level, level.exclusionsAsOf, levelHeadline(level).exclusions])).toEqual([[1, localDate(combined.assessedAt), 0], [2, today, 0]])
+    const item = listedExceptions(older, combined, policies, workspace.exceptions, today)[0]!.levels.flatMap(level => level.items)[0]!
+    expect([item.state, item.note]).toEqual(["later", "Not in use: added after this assessment"])
   })
 })

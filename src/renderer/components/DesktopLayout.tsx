@@ -192,7 +192,8 @@ export function DesktopLayout() {
 
   const linkClass = (active: boolean, nested = false) =>
     cn(
-      "flex items-center gap-3 rounded-full px-4 py-2.5 text-sm font-medium transition-colors",
+      // 40px rows instead of the 44px touch minimum, so every entry fits a 900px tall window.
+      "flex min-h-10 items-center gap-3 rounded-full px-4 py-2.5 text-sm font-medium transition-colors",
       active
         ? "bg-primary text-primary-foreground"
         : nested
@@ -250,7 +251,8 @@ export function DesktopLayout() {
           <TenantSwitcher />
         </div>
 
-        <nav aria-label="Main navigation" className="flex-1 space-y-1 overflow-y-auto px-3 py-3">{navigation.map((item) => renderItem(item))}<CisBenchmarksNavigation linkClass={(active) => linkClass(active)} /><FrameworkNavigation /></nav>
+        {/* min-h-0 lets the list shrink and scroll inside the panel instead of pushing past it. */}
+        <nav aria-label="Main navigation" className="min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-contain px-3 py-2">{navigation.map((item) => renderItem(item))}<CisBenchmarksNavigation linkClass={(active) => linkClass(active)} /><FrameworkNavigation /></nav>
 
         <OibJobIndicator />
         <div className="space-y-1 p-3">
