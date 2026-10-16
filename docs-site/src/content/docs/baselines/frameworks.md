@@ -102,6 +102,8 @@ Below the evidence, expand **Collection coverage and limitations**, **Framework 
 
 Export the result as a **PDF** report, **CSV** or **JSON**. JSON and CSV contain the recognized evidence, not full policy snapshots. Masked or encrypted values are shown as unavailable; secrets are never recovered or exported.
 
+The PDF report opens with a cover that shows the share of matching capabilities, the counts at a glance and the document control facts. A contents page with clickable entries and PDF bookmarks follows, then the summary, scope and limitations, the results overview, collection completeness, the evidence detail for every framework reference and the provenance and attribution page with the snapshot and ruleset hashes. Every page after the cover shows the report name, the tenant and **Page X of Y**. Pro and MSP can brand the report with their own name, logo and colors in [Settings](/settings/#pdf-branding).
+
 ### What native comparisons collect
 
 TenuVault reads twelve policy types: Settings Catalog, legacy device configuration, administrative templates, classic and Settings Catalog compliance, endpoint security intents, app protection policies (three types), feature and quality update profiles, and, when selected, Conditional Access. App configuration, scripts and enrollment settings are not collected. A read that fails or is denied stays visible as a collection gap and is never reported as a match.

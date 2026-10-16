@@ -52,6 +52,7 @@ Eligible nonprofits can use Pro at no cost. Email [support@ugurlabs.com](mailto:
 | Scheduled health review and notifications | | Yes | Yes |
 | Organization baseline customizations | | Yes | Yes |
 | Custom baselines from OpenIntuneBaseline or a tenant snapshot | | Yes | Yes |
+| Full white-label PDF reports | | Yes | Yes |
 | Reusable golden standards for customers | | | Yes |
 | Portfolio views across customer tenants | | | Yes |
 | Share the license with other admins in your tenant | | Yes, on by default | Yes, off by default |
@@ -68,7 +69,7 @@ Actions across several tenants need the MSP plan on every tenant they touch.
 
 ## What Pro adds
 
-Pro covers two tenants and includes daily scheduled backups, custom backup history, your own Azure storage, restoring several items at once, replacing items in place, restoring assignments, reverting drifted policies and the audit log. It also includes dashboard baseline scores, the policy conflict and hygiene explorer, baseline upgrades that keep your customizations, Dev to Prod settings promotion, scheduled health reviews, organization customizations and custom baselines. CIS assessments and reports are included in Pro and MSP when they become available. Community keeps its existing backup, restore, drift, OpenIntuneBaseline and non-CIS framework features.
+Pro covers two tenants and includes daily scheduled backups, custom backup history, your own Azure storage, restoring several items at once, replacing items in place, restoring assignments, reverting drifted policies and the audit log. It also includes dashboard baseline scores, the policy conflict and hygiene explorer, baseline upgrades that keep your customizations, Dev to Prod settings promotion, scheduled health reviews, organization customizations, custom baselines and full white-label PDF reports with your logo and colors. CIS assessments and reports are included in Pro and MSP when they become available. Community keeps its existing backup, restore, drift, OpenIntuneBaseline and non-CIS framework features.
 
 ## How tenants are counted
 

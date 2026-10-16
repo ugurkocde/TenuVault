@@ -42,6 +42,8 @@ Put these in the next stable release's notes, then remove them here.
 
 - Promotion keeps the destination policy's scope tags on update and blocks promotion of redacted policies without acknowledgement. Acknowledged promotions omit secrets, which must be set again in the destination.
 
+- OpenIntuneBaseline PDF reports (Existing Deployment comparison and Policy Validation) are now generated in the app with the same design as the framework reports: cover, contents and bookmarks, status pills and page numbers. Pro and MSP can brand every PDF report with their own name, logo and colors under Settings > PDF branding.
+
 - Compliance scores are now per capability and only count assigned policies. Scheduled actions are evaluated, so scores change and trend history before this version is not comparable. Older comparisons remain readable; collect a new comparison to start current scores and trends.
 
 ## Cutting a stable release
