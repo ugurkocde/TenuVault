@@ -207,7 +207,19 @@ export interface ValidationRun {
   validatedAt: string
   /** Increment when the comparison/counting semantics change. Older runs have no version. */
   validationVersion?: 1
+  /** "all": every matched policy of the platform (Validate all); "single": one policy checked on its own. Absent on older runs. */
+  selection?: "all" | "single"
   results: PolicyValidation[]
+}
+
+/**
+ * Whether a validation covers every matched policy of its platform (Validate all). Only full
+ * validations set the OIB baseline score and trend; single-policy checks stay in history only.
+ * Validations saved before the selection was recorded count as full when they hold more than
+ * one policy, the only shape a single-policy check never has.
+ */
+export function isFullValidation(run: Pick<ValidationRun, "selection" | "results">): boolean {
+  return run.selection ? run.selection === "all" : run.results.length > 1
 }
 
 export interface DeployItem {

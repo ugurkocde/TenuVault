@@ -34,7 +34,7 @@ export const HUBS: Hub[] = [
         feature: "baselineScores",
         path: "/api/scores",
         summary: "Scores per framework from saved native comparisons, with evaluated coverage and unknowns shown separately.",
-        points: ["Score = matching settings divided by evaluated settings; unknown and not evaluable results are left out and shown as coverage.", "Trends only connect assessments of the same framework version, profile and scope.", "MSP: per-tenant scores and a portfolio drill-down."],
+        points: ["Score = matching capabilities divided by evaluated capabilities, shown with its coverage; unknown capabilities and framework references without a check are left out of the score. OpenIntuneBaseline scores count expected settings.", "Trends only connect assessments of the same framework version, profile and scope.", "MSP: per-tenant scores and a portfolio drill-down."],
         Component: lazy(() => import("./scores/ScoresTab")),
       },
       {

@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto"
-import { OIB_PLATFORMS, type OibPlatform, type PolicyValidation, type ValidationRun } from "../../../shared/oib/types"
+import { isFullValidation, OIB_PLATFORMS, type OibPlatform, type PolicyValidation, type ValidationRun } from "../../../shared/oib/types"
 import type { CompliancePlatform } from "../../../shared/compliance/types"
 import type { FeatureDeps } from "../deps"
-import { buildScoreTrend, freshnessAt, scoreFromCounts, type AssessmentIdentity, type BaselineScore, type Gap, type ScoreCounts } from "./formula"
+import { buildScoreTrend, freshnessAt, scoreFromCounts, type AssessmentIdentity, type BaselineScore, type ScoreCounts } from "./formula"
 import { rankGap } from "./gap-ranking"
+import type { CountedGap } from "./gaps"
 import type { FrameworkDetail, FrameworkScore, LatestScore, RankedGap } from "./view"
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex")
@@ -34,13 +35,29 @@ function validPolicy(value: unknown): value is PolicyValidation {
     [result.mismatches, result.oibOnly, result.tenantOnly].every((entries) => Array.isArray(entries) && entries.every((entry) => entry && typeof entry.settingDefinitionId === "string" && typeof entry.label === "string"))
 }
 
+/** Whether a saved validation recorded the OIB commit it compared against. */
+const hasCommit = (run: Pick<ValidationRun, "commit">) => typeof run.commit === "string" && run.commit !== ""
+
+function validRun(run: ValidationRun): boolean {
+  // A validation without a recorded commit stays readable; it is never connected to a trend.
+  return typeof run.runId === "string" && (!hasCommit(run) || /^[a-f0-9]{40}$/i.test(run.commit)) && typeof run.reference === "string" && typeof run.validatedAt === "string" && (run.validationVersion === undefined || run.validationVersion === 1) && (run.selection === undefined || run.selection === "all" || run.selection === "single") && Array.isArray(run.results) && run.results.every(validPolicy)
+}
+
 export interface OibHistory {
   platform: OibPlatform
   runs: ValidationRun[]
+  /** Saved validations of this platform that were unreadable and left out. */
+  skipped: number
   error: string | null
 }
 
-/** Saved history only: no collection, Graph request or tenant write. Foreign records are discarded. */
+const UNREADABLE = "Saved OIB validations are incomplete or unreadable. Validate again to produce a score."
+
+/**
+ * Saved history only: no collection, Graph request or tenant write. Foreign records are
+ * discarded. An unreadable validation is skipped on its own and counted, so it never hides
+ * the readable validations of its platform.
+ */
 export async function readOibHistory(deps: FeatureDeps, tenantId: string): Promise<OibHistory[]> {
   const tenant = tenantId.toLowerCase()
   try {
@@ -50,18 +67,33 @@ export async function readOibHistory(deps: FeatureDeps, tenantId: string): Promi
     const own = body.runs.filter((entry): entry is ValidationRun => !!entry && typeof entry === "object" && (entry as ValidationRun).tenantId === tenant)
     return platforms.map((platform) => {
       const selected = own.filter((run) => run.platform === platform)
-      const valid = selected.every((run) => typeof run.runId === "string" && typeof run.commit === "string" && /^[a-f0-9]{40}$/i.test(run.commit) && typeof run.reference === "string" && typeof run.validatedAt === "string" && (run.validationVersion === undefined || run.validationVersion === 1) && Array.isArray(run.results) && run.results.every(validPolicy))
-      return { platform, runs: valid ? selected : [], error: valid ? null : "Saved OIB validations are incomplete or unreadable. Validate again to produce a score." }
+      const valid = selected.filter(validRun)
+      const skipped = selected.length - valid.length
+      return { platform, runs: valid, skipped, error: skipped && !valid.length ? UNREADABLE : null }
     })
   } catch (error) {
-    return platforms.map((platform) => ({ platform, runs: [], error: error instanceof Error ? error.message : "Saved OIB validations could not be read." }))
+    return platforms.map((platform) => ({ platform, runs: [], skipped: 0, error: error instanceof Error ? error.message : "Saved OIB validations could not be read." }))
   }
 }
+
+/**
+ * The OIB version a validation used, for display and trend compatibility: the OIB reference
+ * (release tag or branch, as saved) and the commit, "windows-v4.0 @ 1cc71a9". Validations
+ * connect only when both are the same, so a published tag, which points at one commit, stays
+ * on one trend, and any reference that moves to a new commit starts a new one. Nothing is
+ * inferred from the reference name.
+ */
+export function oibVersion(run: Pick<ValidationRun, "reference" | "commit">): string {
+  const reference = /· (\S+) @ [0-9a-f]{7}$/i.exec(run.reference)?.[1] ?? run.reference
+  return `${reference} @ ${hasCommit(run) ? run.commit.slice(0, 7) : "commit not recorded"}`
+}
+
+const NO_COMMIT = "This validation has no recorded OIB commit, so it cannot be connected to another validation."
 
 function project(run: ValidationRun, now: Date): { latest: LatestScore; gaps: RankedGap[] } {
   const counts: ScoreCounts = { matching: 0, different: 0, missing: 0, unknown: 0, outsideScope: 0 }
   const incomplete: string[] = []
-  const gaps: Gap[] = []
+  const gaps: CountedGap[] = []
   let unknownSize = false
   for (const policy of run.results) {
     const result = policy.status === "compliant" || policy.status === "drifted" ? policy.result : undefined
@@ -91,33 +123,51 @@ function project(run: ValidationRun, now: Date): { latest: LatestScore; gaps: Ra
       ...result.oibOnly.map((entry) => ({ settingId: entry.settingDefinitionId, result: "missing" as const, expected: entry.oibValue ?? "Unknown", observed: null, policyId: policy.tenantPolicyId, reason: null })),
     ]
     if (different + missing === 0) continue
-    gaps.push({ key: `${policy.source}:${policy.tenantPolicyId}`, capabilityId: policy.source, capabilityName: policy.name, platform: policy.folder === "AppProtectionAndroid" ? "android" : scope(run.platform)[0]!, capabilityStatus: "assignmentUnknown", result: different ? "different" : "missing", mixed: false, settings: settings.slice(0, 25), settingIds: [...new Set(settings.map((setting) => setting.settingId))], policies: [{ policyId: policy.tenantPolicyId, policyName: policy.tenantPolicyName, assignment: "unknown" }], controls: [], unknownChecks: unknown, limitations: ["Saved configuration comparison; assignment and device enforcement are unverified."] })
+    gaps.push({ key: `${policy.source}:${policy.tenantPolicyId}`, capabilityId: policy.source, capabilityName: policy.name, platform: policy.folder === "AppProtectionAndroid" ? "android" : scope(run.platform)[0]!, capabilityStatus: "assignmentUnknown", result: different ? "different" : "missing", countedAs: different ? "The deployed policy sets a different value." : "The deployed policy does not set the expected value.", mixed: false, settings: settings.slice(0, 25), settingIds: [...new Set(settings.map((setting) => setting.settingId))], policies: [{ policyId: policy.tenantPolicyId, policyName: policy.tenantPolicyName, assignment: "unknown" }], controls: [], unknownChecks: unknown, limitations: ["Saved configuration comparison; assignment and device enforcement are unverified."] })
   }
   const score: BaselineScore = scoreFromCounts(counts)
   if (unknownSize) score.coverage = null
   const identity: AssessmentIdentity = {
-    runId: run.runId, frameworkId: oibScoreId(run.platform), frameworkName: name(run.platform), frameworkVersion: run.commit,
+    runId: run.runId, frameworkId: oibScoreId(run.platform), frameworkName: name(run.platform), frameworkVersion: oibVersion(run),
     rulesetVersion: run.validationVersion === 1 ? "OIB root settings v1" : "OIB legacy validation",
     rulesetSha256: hash(run.validationVersion ?? "legacy"), snapshotSha256: hash(run.results),
     selectionSha256: hash(run.results.map((policy) => [policy.source, policy.tenantPolicyId]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))),
     profile: OIB_PLATFORMS[run.platform].label, platforms: scope(run.platform), assessedAt: run.validatedAt,
   }
   const ranked = gaps.map((gap) => ({ ...gap, ranking: rankGap(gap, incomplete) })).sort((a, b) => b.ranking.score - a.ranking.score || a.key.localeCompare(b.key))
-  return { latest: { identity, freshness: freshnessAt(run.validatedAt, now), score, incompleteCollection: incomplete, gapCount: ranked.length, topGaps: ranked.slice(0, 5) }, gaps: ranked }
+  const versionDetail = hasCommit(run) ? `Commit ${run.commit}` : "No OIB commit was recorded with this validation."
+  return { latest: { identity, versionDetail, unit: "setting", uncheckedReferences: 0, freshness: freshnessAt(run.validatedAt, now), score, incompleteCollection: incomplete, gapCount: ranked.length, topGaps: ranked.slice(0, 5) }, gaps: ranked }
 }
+
+export const SINGLE_POLICY_ONLY = "Only single-policy validations are saved for this platform. They stay in history and do not set a score. Run Validate all in Policy Validation to score it."
+const SINGLE_POLICY_REASON = "Single-policy validation, kept in history only. Run Validate all to set the score."
 
 export function oibFrameworkScore(history: OibHistory, now: Date): FrameworkScore {
   const base = { frameworkId: oibScoreId(history.platform), frameworkName: name(history.platform) }
-  if (history.error) return { ...base, state: "unavailable", message: history.error, latest: null, trend: [], incompatible: [] }
-  const runs = [...history.runs].sort((a, b) => Date.parse(b.validatedAt) - Date.parse(a.validatedAt))
-  if (!runs[0]) return { ...base, state: "not-assessed", message: "No saved OIB validation for this platform. Run Policy Validation in OpenIntuneBaseline first.", latest: null, trend: [], incompatible: [] }
+  if (history.error) return { ...base, state: "unavailable", message: history.error, latest: null, trend: [], incompatible: [], historyOnly: [] }
+  const sorted = [...history.runs].sort((a, b) => Date.parse(b.validatedAt) - Date.parse(a.validatedAt))
+  const runs = sorted.filter(isFullValidation)
+  const historyOnly = sorted.filter((run) => !isFullValidation(run)).map((run) => ({ runId: run.runId, assessedAt: run.validatedAt, reason: SINGLE_POLICY_REASON }))
+  const skipped = history.skipped ? ` ${history.skipped} unreadable saved validation${history.skipped === 1 ? " was" : "s were"} left out.` : ""
+  if (!runs[0] && historyOnly.length) return { ...base, state: "history-only", message: `${SINGLE_POLICY_ONLY}${skipped}`, latest: null, trend: [], incompatible: [], historyOnly }
+  if (!runs[0]) return { ...base, state: "not-assessed", message: "No saved OIB validation for this platform. Run Policy Validation in OpenIntuneBaseline first.", latest: null, trend: [], incompatible: [], historyOnly }
   const projections = runs.map((run) => project(run, now).latest)
   const latest = projections[0]!
-  const trend = buildScoreTrend(projections.map((item) => ({ identity: item.identity, score: item.score })))
-  return { ...base, state: latest.score.state, message: NOTE, latest, ...trend }
+  const built = buildScoreTrend(projections.map((item) => ({ identity: item.identity, score: item.score })))
+  // A validation without a recorded commit is never connected: its expected settings are unknown.
+  const withoutCommit = new Set(runs.filter((run) => !hasCommit(run)).map((run) => run.runId))
+  const anchor = latest.identity.runId
+  const unconnected = built.trend.filter((point) => point.runId !== anchor && (withoutCommit.has(point.runId) || withoutCommit.has(anchor)))
+  const trend = built.trend.filter((point) => !unconnected.includes(point))
+  const incompatible = [
+    ...built.incompatible.map((point) => (withoutCommit.has(point.runId) ? { ...point, reasons: [NO_COMMIT, ...point.reasons] } : point)),
+    ...unconnected.map((point) => ({ ...point, reasons: [NO_COMMIT] })),
+  ]
+  const partial = new Set(projections.filter((item) => item.incompleteCollection.length > 0).map((item) => item.identity.runId))
+  return { ...base, state: latest.score.state, message: `${NOTE}${skipped}`, latest, trend: trend.map((point) => ({ ...point, partial: partial.has(point.runId) })), incompatible, historyOnly }
 }
 
 export function oibFrameworkDetail(run: ValidationRun, now: Date): FrameworkDetail {
   const { latest, gaps } = project(run, now)
-  return { identity: latest.identity, freshness: latest.freshness, score: latest.score, incompleteCollection: latest.incompleteCollection, gaps, controls: [], unassessedNote: NOTE }
+  return { identity: latest.identity, versionDetail: latest.versionDetail, unit: latest.unit, freshness: latest.freshness, score: latest.score, incompleteCollection: latest.incompleteCollection, items: [], gaps, controls: [], unassessedNote: NOTE }
 }

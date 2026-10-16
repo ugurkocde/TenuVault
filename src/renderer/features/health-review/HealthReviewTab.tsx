@@ -44,7 +44,7 @@ export default function HealthReviewTab({ tenant, plan, allowed }: FeatureTabPro
     return (
       <div className="space-y-4">
         {data && <StatusTiles status={data} />}
-        <FindingsList tenant={tenant} findings={stored} readOnly onChanged={refresh} />
+        <FindingsList tenant={tenant} findings={stored} lastRun={data?.lastRun} load={findings} readOnly onChanged={refresh} />
       </div>
     )
   }
@@ -100,7 +100,7 @@ export default function HealthReviewTab({ tenant, plan, allowed }: FeatureTabPro
         )}
       </Tile>
 
-      <FindingsList tenant={tenant} findings={stored} onChanged={refresh} />
+      <FindingsList tenant={tenant} findings={stored} lastRun={data?.lastRun} load={findings} onChanged={refresh} />
       <EndpointsPanel tenant={tenant} endpoints={data?.endpoints ?? []} onChanged={refresh} />
       <PortfolioHealth tenant={tenant} plan={plan} />
     </div>

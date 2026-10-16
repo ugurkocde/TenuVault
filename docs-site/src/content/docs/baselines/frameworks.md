@@ -98,7 +98,9 @@ Compliance policies, device restriction profiles and endpoint protection profile
 
 Click a tile to filter the capability list by its aggregate result. All observations for each capability remain visible, including different values and unassigned policies. **Setting-by-setting evidence** lists each check with its expected and observed values, the source policy and its assignment evidence. Use the search box and the result filter to narrow the list.
 
-Below the evidence, expand **Collection coverage and limitations**, **Framework references** and **Snapshot and ruleset provenance** for the read status of each policy type, the framework requirements each check maps to, and the hashes that identify the input and ruleset.
+On Pro and MSP, the results also show the **Baseline score** of the comparison with its coverage, for example "9.6% on 96% coverage", the same value as the card in [Governance](/governance/#baseline-scores), and **Partial collection** when a policy type could not be read. A comparison scored under older rules shows "Scored under older rules. Compare again to score." instead.
+
+Below the evidence, expand **Collection coverage and limitations**, **Framework references** and **Snapshot and ruleset provenance** for the read status of each policy type, the framework requirements each check maps to, and the hashes that identify the input and ruleset. Policy types marked **Not collected** are not read for this comparison by design and are not a read gap.
 
 Export the result as a **PDF** report, **CSV** or **JSON**. JSON and CSV contain the recognized evidence, not full policy snapshots. Masked or encrypted values are shown as unavailable; secrets are never recovered or exported.
 
@@ -116,7 +118,7 @@ The native configuration score is **matching capabilities / (matching + differen
 
 This changes scores in 0.3.0. Earlier score and trend history is not comparable with the new results. Saved comparisons remain readable on the framework page, but current scores and trends start with comparisons collected under the new ruleset and detector version. Run **Compare again** to establish a new starting point.
 
-When older history is present, the framework or scores page shows: "Compliance scoring changed in this version. Scores are now per capability and only count assigned policies, so they are not comparable with earlier history." Dismissing it saves a preference on this machine, shared across tenants and both pages.
+When older history is present, the framework or scores page shows: "Compliance scoring changed in this version. Scores are now per capability and only count assigned policies, so they are not comparable with earlier history." It is shown once: after it first appears, it does not repeat on other framework pages or the scores page. Dismissing it also saves the preference on this machine, shared across tenants.
 
 The ruleset hash covers the selected framework, the capabilities it maps and an explicit detector version. Changes to unrelated frameworks do not reset this framework's history. The selected platforms and profile remain separate comparison boundaries.
 
@@ -129,6 +131,8 @@ For each saved comparison you can:
 * **View** it. PDF, CSV and JSON exports of a saved comparison use the stored result and do not query the tenant.
 * **Show changes since** to list the setting observations that changed between that comparison and the one you are viewing, with before and after values, directly under the history. Only comparisons with the same scope and ruleset can be compared.
 * **Delete** it.
+
+A comparison saved under an earlier detector version or framework mapping carries the label **Scored under older rules**. It stays readable but sets no baseline score; run **Compare again** to score the framework.
 
 If saved comparisons for a framework cannot be read, TenuVault sets them aside and shows a notice. New comparisons are saved normally. Viewing history offline still requires a signed-in account and a valid local tenant entitlement.
 

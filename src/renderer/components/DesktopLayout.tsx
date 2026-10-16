@@ -28,6 +28,7 @@ import { communityBannerVisible, earliestExpiringTenant, formatDate, formatDateT
 import { toast, Toaster } from "../lib/toast"
 import { bridge } from "../lib/bridge"
 import { FrameworkJobNotifier } from "../lib/framework-jobs"
+import { useScoreInvalidation } from "../features/scores/invalidate"
 import { DriftScanIndicator, DriftScanNotifier } from "../lib/drift-jobs"
 import { SignInBanner } from "./SignInBanner"
 import { SupportDialog } from "./SupportDialog"
@@ -174,6 +175,7 @@ function LicenseNavBadge() {
 export function DesktopLayout() {
   const { pathname } = useLocation()
   const tenants = useTenants()
+  useScoreInvalidation()
   // MSPs with several tenants get the all-tenants overview at the top.
   const navigation =
     tenants.length > 1 ? [{ name: "All tenants", href: "/portal/overview", icon: LayoutGrid }, ...allNavigation] : allNavigation

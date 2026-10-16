@@ -80,7 +80,8 @@ function scoreRow(framework: FrameworkScore) {
     stale: freshness.stale,
     partialCollection: latest.incompleteCollection.join("; "),
     scope: identity.platforms.map((platform) => PLATFORM_LABELS[platform] ?? platform).join(", "),
-    topGaps: latest.topGaps.map((gap) => `${gap.capabilityName} (${gap.result === "different" ? "different value" : "missing"}, ${gap.ranking.level})`),
+    // Each gap is labelled with how it was counted, the same words as the card.
+    topGaps: latest.topGaps.map((gap) => `${gap.capabilityName} (${gap.countedAs.replace(/\.$/, "")}; ${gap.ranking.level})`),
     message: framework.message,
   }
 }

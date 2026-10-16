@@ -125,7 +125,13 @@ export function checkBackups(tenantId: string, listing: BackupListing, now: Date
  * `evaluated` is false when a signal provider could not be read: the findings that were
  * read still count, and older signal findings are left as they were.
  */
-export function checkSignals(tenantId: string, signals: WorkSignal[], evaluated: boolean): CheckResult {
+/** A signal source that could not be read, with the screen that owns its records. */
+export interface UnreadableSignals {
+  label: string
+  link: string
+}
+
+export function checkSignals(tenantId: string, signals: WorkSignal[], evaluated: boolean, unreadable: UnreadableSignals[] = []): CheckResult {
   const findings: ObservedFinding[] = signals.map((signal) => ({
     key: signal.key,
     family: "signals",
@@ -140,9 +146,11 @@ export function checkSignals(tenantId: string, signals: WorkSignal[], evaluated:
     evidence: signal.evidence,
   }))
   if (!evaluated) {
-    const reason = "Work signals could not be read completely. Pending upgrades, conflicts, deviations and stale scores are unknown."
+    const from = unreadable.length ? ` Could not read: ${unreadable.map((source) => source.label).join(", ")}.` : ""
+    const reason = `Work signals could not be read completely.${from} Pending upgrades, conflicts, deviations and stale scores are unknown.`
     if (!findings.some((finding) => finding.key === `signals-unavailable:${tenantId}`)) {
-      findings.push({ key: `signals-unavailable:${tenantId}`, family: "signals", check: "signals-unavailable", severity: "medium", state: "unknown", title: "Work signals unknown", reason, observedAt: null, evidenceAt: null, link: "/portal/governance/standards", evidence: [] })
+      // Link to the screen whose records failed to read, not to a fixed screen.
+      findings.push({ key: `signals-unavailable:${tenantId}`, family: "signals", check: "signals-unavailable", severity: "medium", state: "unknown", title: "Work signals unknown", reason, observedAt: null, evidenceAt: null, link: unreadable[0]?.link ?? "/portal/operations/health-review", evidence: [] })
     }
     return { family: "signals", evaluated: false, detail: reason, findings }
   }
