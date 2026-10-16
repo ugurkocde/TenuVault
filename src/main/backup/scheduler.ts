@@ -32,6 +32,10 @@ export function scheduledResult(job: BackupJob): ScheduledRunResult {
  * the backup has not run since that slot. Slots missed while the app was closed are
  * caught up when it starts. Failed slots have up to three attempts, 15 minutes apart.
  * Backups run one at a time.
+ *
+ * A sleeping Mac wakes for a few seconds at a time for network upkeep and runs timers then, without a
+ * usable network. A due backup therefore waits until Microsoft can be reached, and a failed attempt
+ * does not count toward the three when Microsoft cannot be reached right after it.
  */
 export class BackupScheduler {
   private timer: NodeJS.Timeout | null = null
@@ -43,6 +47,7 @@ export class BackupScheduler {
     private readonly run: (tenantId: string) => Promise<ScheduledRunResult>,
     private readonly onChange: () => void = () => undefined,
     private readonly now: () => Date = () => new Date(),
+    private readonly online: () => Promise<boolean> = async () => true,
   ) {}
 
   list(): BackupSchedule[] {
@@ -118,6 +123,10 @@ export class BackupScheduler {
     if (this.running) return this.running
     this.running = (async () => {
       for (const tenantId of Object.keys(this.read())) {
+        const due = this.read()[tenantId]
+        if (!due || !this.isDue(due)) continue
+        if (!(await this.online())) break
+        // Read again: the schedule can change while the network is checked.
         const schedule = this.read()[tenantId]
         if (!schedule || !this.isDue(schedule)) continue
         const slot = this.lastSlot(schedule)
@@ -139,6 +148,7 @@ export class BackupScheduler {
           status: "Failed" as const,
           message: error instanceof Error ? error.message : String(error),
         }))
+        const unreachable = result.status === "Failed" && !(await this.online())
         const all = this.read()
         const current = all[schedule.tenantId]
         if (current) {
@@ -149,7 +159,7 @@ export class BackupScheduler {
             lastAttemptAt: at,
             attemptSlot: current.since === schedule.since ? slot.toISOString() : current.attemptSlot,
             // Edits made during a backup start a new schedule with a fresh attempt budget.
-            attempts: result.status === "Completed" || current.since !== schedule.since ? 0 : result.status === "Cancelled" ? attempts - 1 : attempts,
+            attempts: result.status === "Completed" || current.since !== schedule.since ? 0 : result.status === "Cancelled" || unreachable ? attempts - 1 : attempts,
             lastStatus: result.status,
             lastMessage: result.message,
           }

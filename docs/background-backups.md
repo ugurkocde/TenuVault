@@ -12,7 +12,10 @@ launches use the app's single-instance lock and do not open another window or ba
 The existing scheduler catches up the latest missed slot after launch. It serializes scheduled runs,
 and the backup engine prevents concurrent jobs for the same tenant. A failed scheduled backup is recorded and
 retried 15 minutes after the attempt finishes, up to three attempts per slot, then at the next scheduled
-slot; reopening the process does not reset its last attempt. Microsoft
+slot; reopening the process does not reset its last attempt. A due backup waits until
+login.microsoftonline.com answers (any HTTP response), and a failure that is followed by an unanswered
+check does not count as an attempt, because a sleeping Mac runs timers during brief network-upkeep
+wakes in which requests time out. Microsoft
 credentials, current plan entitlement and the configured storage must remain available. Expired
 sessions requiring interaction fail with a sign-in request; no OS task bypasses Conditional Access,
 MFA, licensing, or encryption.

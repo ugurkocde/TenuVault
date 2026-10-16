@@ -490,10 +490,20 @@ async function bootstrap(): Promise<void> {
     return result
   }
 
+  // Every backup starts by signing in, so any HTTP response from the sign-in service means the network is usable.
+  const microsoftReachable = async () => {
+    if (!net.isOnline()) return false
+    try {
+      await chromiumFetch("https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration", { method: "HEAD", cache: "no-store", signal: AbortSignal.timeout(15_000) })
+      return true
+    } catch {
+      return false
+    }
+  }
   const scheduler = new BackupScheduler(appStore, (tenantId) => runScheduledBackup(tenantId, "scheduled"), () => {
     mainWindow?.webContents.send("schedules:changed", scheduler.list())
     tray.refresh()
-  })
+  }, undefined, microsoftReachable)
 
   const tray = new AppTray({
     open: showWindow,

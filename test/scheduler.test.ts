@@ -117,6 +117,8 @@ describe("BackupScheduler", () => {
     let finish!: (result: ScheduledRunResult) => void
     run.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
     const pending = scheduler.tick()
+    // The attempt starts once the network check passes.
+    await vi.waitFor(() => expect(finish).toBeDefined())
     // A new process only sees the state saved before the unfinished attempt.
     const restartedStore = memoryStore()
     restartedStore.set("backup.schedules", store.get("backup.schedules")!)
@@ -181,6 +183,7 @@ describe("BackupScheduler", () => {
     scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
     vi.setSystemTime(new Date(2026, 9, 10, 2))
     const pending = scheduler.tick()
+    await vi.waitFor(() => expect(finish).toBeDefined())
     const restarted = new BackupScheduler(store, async () => ({ status: "Completed", message: "Done" }))
     expect(restarted.list()[0]).toMatchObject({ attempts: 1, attemptSlot: new Date(2026, 9, 10, 2).toISOString() })
     expect(restarted.isDue(restarted.list()[0]!)).toBe(false)
@@ -301,6 +304,73 @@ describe("BackupScheduler", () => {
     expect(scheduler.list()[0]!.attempts).toBe(1)
   })
 
+  it("waits for the network before a due backup spends an attempt", async () => {
+    let online = false
+    const run = vi.fn(async (): Promise<ScheduledRunResult> => ({ status: "Completed", message: "Done" }))
+    let now = new Date(local(2026, 9, 24, 10))
+    const scheduler = new BackupScheduler(memoryStore(), run, () => undefined, () => now, async () => online)
+    scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+    for (const minute of [0, 15, 30, 45]) {
+      now = new Date(local(2026, 9, 25, 2, minute))
+      await scheduler.tick()
+    }
+    expect(run).not.toHaveBeenCalled()
+    expect(scheduler.list()[0]).toMatchObject({ attempts: 0, nextRunAt: local(2026, 9, 25, 2, 45) })
+    expect(scheduler.list()[0]!.lastAttemptAt).toBeUndefined()
+    online = true
+    now = new Date(local(2026, 9, 25, 8))
+    await scheduler.tick()
+    expect(run).toHaveBeenCalledExactlyOnceWith(TENANT)
+    expect(scheduler.list()[0]).toMatchObject({ lastStatus: "Completed", lastRunAt: local(2026, 9, 25, 8), attempts: 0 })
+  })
+
+  it("does not count failures when Microsoft cannot be reached after them, as in the dark wakes of a sleeping Mac", async () => {
+    // Each brief wake passes the first check, then the request times out and the network is gone again.
+    let online = true
+    const run = vi.fn(async (): Promise<ScheduledRunResult> => {
+      online = false
+      return { status: "Failed", message: "network_error: login.microsoftonline.com could not be reached. (ERR_TIMED_OUT)" }
+    })
+    let now = new Date(local(2026, 9, 24, 10))
+    const scheduler = new BackupScheduler(memoryStore(), run, () => undefined, () => now, async () => online)
+    scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+    for (const [hour, minute] of [[2, 0], [2, 16], [2, 33], [2, 49], [5, 2]] as const) {
+      online = true
+      now = new Date(local(2026, 9, 25, hour, minute))
+      await scheduler.tick()
+    }
+    expect(run).toHaveBeenCalledTimes(5)
+    expect(scheduler.list()[0]).toMatchObject({ lastStatus: "Failed", attempts: 0, nextRunAt: local(2026, 9, 25, 5, 2) })
+    run.mockResolvedValueOnce({ status: "Completed", message: "Done" })
+    online = true
+    now = new Date(local(2026, 9, 25, 8))
+    await scheduler.tick()
+    expect(scheduler.list()[0]).toMatchObject({ lastStatus: "Completed", lastRunAt: local(2026, 9, 25, 8), attempts: 0 })
+  })
+
+  it("still counts failures while Microsoft can be reached", async () => {
+    const run = vi.fn(async (): Promise<ScheduledRunResult> => ({ status: "Failed", message: "Sign in again to continue." }))
+    const online = vi.fn(async () => true)
+    let now = new Date(local(2026, 9, 24, 10))
+    const scheduler = new BackupScheduler(memoryStore(), run, () => undefined, () => now, online)
+    scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+    for (const minute of [0, 15, 30, 45]) {
+      now = new Date(local(2026, 9, 25, 2, minute))
+      await scheduler.tick()
+    }
+    expect(run).toHaveBeenCalledTimes(3)
+    expect(scheduler.list()[0]).toMatchObject({ attempts: 3, nextRunAt: local(2026, 9, 26, 2) })
+    expect(online).toHaveBeenCalledTimes(6)
+  })
+
+  it("does not check the network when no backup is due", async () => {
+    const online = vi.fn(async () => true)
+    const scheduler = new BackupScheduler(memoryStore(), vi.fn(), () => undefined, () => new Date(local(2026, 9, 24, 10)), online)
+    scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+    await scheduler.tick()
+    expect(online).not.toHaveBeenCalled()
+  })
+
   it("persists retry state across scheduler restarts", async () => {
     const { scheduler, store, run, setNow } = setup(local(2026, 9, 24, 10))
     run.mockResolvedValue({ status: "Failed", message: "Network unavailable" })
@@ -366,6 +436,7 @@ describe("BackupScheduler", () => {
     setNow(local(2026, 9, 25, 2))
     const tick = scheduler.tick()
     expect(scheduler.tick()).toBe(tick)
+    await vi.waitFor(() => expect(finish).toBeDefined())
     if (change === "disable") scheduler.set({ ...input, enabled: false })
     else scheduler.remove(second)
     finish({ status: "Completed", message: "Backup completed successfully" })
