@@ -35,7 +35,7 @@ it('installs and removes a user-session launch agent without interpolating execu
     expect(await launcher.remove()).toEqual({ supported: true, installed: false })
     expect(exec.mock.calls.some(call => call[1][0] === 'bootout')).toBe(true)
     expect(programArguments(plist).slice(0, 2)).toEqual(['/bin/sh', '-c'])
-    expect(programArguments(plist)[2]).toContain('exec /usr/bin/open -g -j -a "$1" --args --hidden')
+    expect(programArguments(plist)[2]).toContain('exec /usr/bin/open -n -g -j -a "$1" --args --hidden')
     expect(exec.mock.calls.some(call => call[1][0] === 'disable')).toBe(true)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
@@ -125,5 +125,22 @@ it('replaces the reopening agent of an earlier build at startup and leaves other
     expect(exec.mock.calls.filter(call => call[1][0] === 'bootout')).toHaveLength(1)
     expect(await launcher.refresh()).toEqual({ supported: true, installed: true })
     expect(exec.mock.calls.filter(call => call[1][0] === 'bootstrap')).toHaveLength(1)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+it('retries a bootstrap that launchd refuses right after the bootout', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tv-background-retry-'))
+  const executable = '/Applications/TenuVault.app/Contents/MacOS/TenuVault'
+  let loaded: string | null = reopeningLaunchAgent(executable), refused = false
+  const exec = vi.fn(async (_file: string, args: string[]) => {
+    if (args[0] === 'print') { if (loaded === null) throw new Error('Could not find service'); return { stdout: programArguments(loaded).join(' ') } }
+    if (args[0] === 'bootout') loaded = null
+    if (args[0] === 'bootstrap') { if (!refused) { refused = true; throw new Error('Bootstrap failed: 5: Input/output error') } loaded = await readFile(args[2]!, 'utf8') }
+    return { stdout: '' }
+  })
+  try {
+    await mkdir(join(root, 'Library/LaunchAgents'), { recursive: true })
+    await writeFile(join(root, 'Library/LaunchAgents/com.tenuvault.desktop.background.plist'), loaded)
+    expect(await new BackgroundLaunch({ platform: 'darwin', packaged: true, executable, home: root, data: root, uid: 501, exec }).refresh()).toEqual({ supported: true, installed: true })
+    expect(exec.mock.calls.filter(call => call[1][0] === 'bootstrap')).toHaveLength(2)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
