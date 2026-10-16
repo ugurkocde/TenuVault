@@ -24,6 +24,7 @@ describe("remediation labels", () => {
     expect(deploymentReferenceLabel("other-os 1.0.0 Level 2", TENANT_ID)).toBe("Other Os 1.0.0 Level 2")
     expect(deploymentReferenceLabel("", TENANT_ID)).toBe("")
     expect(deploymentReferenceLabel("intune-synthetic-os 9.9.9 Level 1", TENANT_ID, "Stamped Pack Name")).toBe("Stamped Pack Name 9.9.9 Level 1")
+    expect(deploymentReferenceLabel("intune-synthetic-os 9.9.9 Level 1", TENANT_ID, "   ")).toBe("Synthetic OS Benchmark 9.9.9 Level 1")
   })
 })
 
@@ -60,25 +61,27 @@ describe("what TenuVault checks per Level", () => {
     expect(levelCheckSummary(level({ recommendations: [rec("1.1", "Pass"), rec("1.2", "Pass")], enumeratedIds: ["1.1", "1.2"], denominatorIdentifiers: ["1.1", "1.2"], automatedIdentifiers: ["1.1", "1.2"] }))).toBe("Level 1: TenuVault checks all 2 recommendations automatically.")
   })
 
-  it("counts description identifiers beside partial metadata without a denominator", () => {
+  it("counts only assessed recommendation metadata without a denominator, never described identifiers", () => {
+    // Without a denominator a described identifier may be manual or of another profile.
     const input = level({ recommendations: [rec("7.1.1", "Pass")], enumeratedIds: ["7.1.1", "7.1.2"] })
-    expect(levelCheckCounts(input)).toEqual({ checked: 2, manual: 0, total: null })
+    expect(levelCheckCounts(input)).toEqual({ checked: 1, manual: 0, total: null })
   })
 
   it("never invents a total without a denominator", () => {
     const input = level({ recommendations: [rec("1.1", "Pass"), rec("1.2", "Not assessed")] })
     expect(levelCheckCounts(input)).toEqual({ checked: 1, manual: 1, total: null })
     expect(levelCheckSummary(input)).toBe("Level 1: TenuVault checks 1 recommendation of this pack automatically. The other one listed here and any recommendations outside the pack need a manual check.")
-    expect(levelCheckSummary(level({ enumeratedIds: ["1.1", "1.2"], manual: [manual("9.1"), manual("9.2")] }))).toBe("Level 1: TenuVault checks 2 recommendations of this pack automatically. The other 2 listed here and any recommendations outside the pack need a manual check.")
+    expect(levelCheckSummary(level({ enumeratedIds: ["1.1", "1.2"], manual: [manual("9.1"), manual("9.2")] }))).toBe("Level 1: TenuVault compares the settings of this pack automatically. The 2 manual recommendations listed here and any recommendations outside the pack need a manual check.")
+    expect(levelCheckSummary(level({ manual: [manual("9.1")] }))).toBe("Level 1: TenuVault compares the settings of this pack automatically. The one manual recommendation listed here and any recommendations outside the pack need a manual check.")
   })
 
   it("states only the checked count without a denominator or manual items", () => {
     expect(levelCheckSummary(level({ level: 2, recommendations: [rec("1.1", "Pass")] }))).toBe("Level 2: TenuVault checks 1 recommendation of this pack automatically. Recommendations outside the pack, including manual ones, need a manual check.")
   })
 
-  it("falls back to identifier counts without pack recommendations", () => {
+  it("uses described identifiers only with a denominator and claims no count without one", () => {
     expect(levelCheckSummary(level({ enumeratedIds: ["1.1", "1.2", "1.3"], denominatorIdentifiers: ["1.1", "1.2", "1.3", "9.1"], automatedIdentifiers: ["1.1", "1.2", "1.3"], manual: [manual("9.1")] }))).toBe("Level 1: TenuVault checks 3 of 4 recommendations automatically. The other one needs a manual check.")
-    expect(levelCheckSummary(level({ enumeratedIds: ["1.1", "1.2", "1.3", "1.4"] }))).toBe("Level 1: TenuVault checks 4 recommendations of this pack automatically. Recommendations outside the pack, including manual ones, need a manual check.")
+    expect(levelCheckSummary(level({ enumeratedIds: ["1.1", "1.2", "1.3", "1.4"] }))).toBe("Level 1: TenuVault compares the settings of this pack automatically. Recommendations outside the pack, including manual ones, need a manual check.")
     // A shown Level whose pack names no identifiers still gets the outside-pack note, without a total.
     expect(levelCheckSummary(level({}))).toBe("Level 1: TenuVault compares the settings of this pack automatically. Recommendations outside the pack, including manual ones, need a manual check.")
   })

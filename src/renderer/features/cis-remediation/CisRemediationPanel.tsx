@@ -32,7 +32,7 @@ export function CisRemediationPanel({ tenant, assessment, policies, reference, s
     if (!tenant) return
     setBusy(true)
     const benchmarkId = reference.trim().split(/\s+/)[0] ?? ""
-    const benchmarkName = packBenchmarkName(policies) ?? cachedCisCatalog(tenant.credentials?.tenantId)?.find(benchmark => benchmark.id === benchmarkId)?.name ?? null
+    const benchmarkName = (packBenchmarkName(policies)?.trim() || cachedCisCatalog(tenant.credentials?.tenantId)?.find(benchmark => benchmark.id === benchmarkId)?.name) ?? null
     try {
       const result = await featureCall<{ deployment: Deployment }>(PATH, tenant, "plan", {
         title: remediationTitle(whole, deploymentReferenceLabel(reference, tenant.credentials?.tenantId, benchmarkName)),

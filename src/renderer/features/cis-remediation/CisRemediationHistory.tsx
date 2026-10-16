@@ -30,7 +30,7 @@ export function deploymentState(deployment: Pick<Deployment, "status" | "rollbac
 export function deploymentReferenceLabel(reference: string, tenantId: string | undefined, packName?: string | null): string {
   const id = reference.trim().split(/\s+/)[0] ?? ""
   if (!id) return reference
-  return referenceDisplayName(reference.trim(), packName || benchmarkTitle(id, cachedCisCatalog(tenantId)?.find(benchmark => benchmark.id === id)?.name))
+  return referenceDisplayName(reference.trim(), packName?.trim() || benchmarkTitle(id, cachedCisCatalog(tenantId)?.find(benchmark => benchmark.id === id)?.name))
 }
 
 /**

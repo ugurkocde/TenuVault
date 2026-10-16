@@ -59,24 +59,28 @@ export function headlineRate(level: Pick<CisLevelReadiness, "passRate" | "adjust
 
 /**
  * How many recommendations of a Level TenuVault checks automatically and how many are left for a
- * manual check. A recommendation is checked when an assessed pack recommendation names it or the pack
- * descriptions name it, unless its pack recommendation could not be assessed. With a denominator list
- * the total is exactly its identifiers for the Level and, as in coverage, only those it marks automated
- * can count as checked. Partial metadata cannot shrink the total and manual items outside the list cannot
- * inflate it; those still appear in the Manual section. Without a denominator no total is known and the
- * manual count is the listed manual and unassessed items.
+ * manual check. With a denominator list the total is exactly its identifiers for the Level, and a
+ * recommendation is checked when the denominator marks it automated (as in coverage) and an assessed
+ * pack recommendation or the pack descriptions name it, unless its pack recommendation could not be
+ * assessed. Partial metadata cannot shrink the total and manual items outside the list cannot inflate
+ * it; those still appear in the Manual section. Without a denominator a described identifier cannot be
+ * told apart from a manual recommendation or one of another profile, so only assessed pack
+ * recommendations count as checked, no total is known, and the manual count is the listed manual and
+ * unassessed items.
  */
 export function levelCheckCounts(level: Pick<CisLevelReadiness, "recommendations" | "manual" | "enumeratedIds" | "denominatorIdentifiers" | "automatedIdentifiers">): { checked: number; manual: number; total: number | null } {
   const recommendations = level.recommendations ?? []
   const unassessed = new Set(recommendations.filter(result => result.result === "Not assessed").map(result => result.id))
-  const checked = new Set([...recommendations.filter(result => result.result !== "Not assessed").map(result => result.id), ...(level.enumeratedIds ?? [])].filter(id => !unassessed.has(id)))
+  const assessed = recommendations.filter(result => result.result !== "Not assessed").map(result => result.id)
   // A Level the denominator list names has a known total, even when the pack has no policies for it.
   const known = new Set(level.denominatorIdentifiers ?? [])
   if (known.size) {
     const automated = new Set(level.automatedIdentifiers ?? [])
-    const inList = [...checked].filter(id => known.has(id) && automated.has(id)).length
+    const described = new Set([...assessed, ...(level.enumeratedIds ?? [])].filter(id => !unassessed.has(id)))
+    const inList = [...described].filter(id => known.has(id) && automated.has(id)).length
     return { checked: inList, manual: known.size - inList, total: known.size }
   }
+  const checked = new Set(assessed)
   const manual = new Set([...level.manual.map(item => item.identifier), ...unassessed].filter(id => !checked.has(id)))
   return { checked: checked.size, manual: manual.size, total: null }
 }
@@ -84,9 +88,15 @@ export function levelCheckCounts(level: Pick<CisLevelReadiness, "recommendations
 /** The sentence shown above the CIS notice for one Level. It never states a total without a denominator. */
 export function levelCheckSummary(level: Pick<CisLevelReadiness, "level" | "recommendations" | "manual" | "enumeratedIds" | "denominatorIdentifiers" | "automatedIdentifiers">): string {
   const { checked, manual, total } = levelCheckCounts(level)
-  if (!checked && !manual) return `Level ${level.level}: TenuVault compares the settings of this pack automatically. Recommendations outside the pack, including manual ones, need a manual check.`
   const noun = (count: number) => count === 1 ? "recommendation" : "recommendations"
   if (total === null) {
+    // Without recommendation metadata no count is claimed: the pack settings are compared as a whole.
+    if (!checked) {
+      const prefix = `Level ${level.level}: TenuVault compares the settings of this pack automatically.`
+      return manual
+        ? `${prefix} The ${manual === 1 ? "one manual recommendation" : `${manual} manual recommendations`} listed here and any recommendations outside the pack need a manual check.`
+        : `${prefix} Recommendations outside the pack, including manual ones, need a manual check.`
+    }
     const prefix = `Level ${level.level}: TenuVault checks ${checked} ${noun(checked)} of this pack automatically.`
     return manual
       ? `${prefix} The other ${manual === 1 ? "one listed here" : `${manual} listed here`} and any recommendations outside the pack need a manual check.`

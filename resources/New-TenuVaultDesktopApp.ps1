@@ -65,7 +65,11 @@ if ($loaded) {
     if (-not $graphVersion) {
         # Without an installed Authentication module no Graph module can be loaded, so nothing conflicts.
         Write-Host "Installing Microsoft.Graph.Authentication for the current user..."
-        Install-Module Microsoft.Graph.Authentication -Scope CurrentUser -Force -AllowClobber
+        try {
+            Install-Module Microsoft.Graph.Authentication -Scope CurrentUser -Force -AllowClobber
+        } catch {
+            throw "Could not install Microsoft.Graph.Authentication. Check that the PowerShell Gallery is reachable, then run the script again. $($_.Exception.Message)"
+        }
         $graphVersion = (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication | Sort-Object Version -Descending | Select-Object -First 1).Version
     }
 }
@@ -80,7 +84,7 @@ foreach ($module in $graphModules) {
         try {
             Install-Module $module -RequiredVersion $graphVersion -Scope CurrentUser -Force -AllowClobber
         } catch {
-            throw "Could not install $module $graphVersion, the version that matches Microsoft.Graph.Authentication $graphVersion. Check that the PowerShell Gallery is reachable, or update all Microsoft Graph modules to one version with 'Update-Module Microsoft.Graph', then run the script again. $($_.Exception.Message)"
+            throw "Could not install $module $graphVersion, the version that matches Microsoft.Graph.Authentication $graphVersion. Check that the PowerShell Gallery is reachable, or update the installed Microsoft Graph modules to one version with 'Get-InstalledModule Microsoft.Graph* | Update-Module', then run the script again. $($_.Exception.Message)"
         }
     }
 }
