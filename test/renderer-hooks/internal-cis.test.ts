@@ -131,6 +131,50 @@ describe("useInternalCisBenchmarks", () => {
   })
 })
 
+describe("useInternalCisBenchmarks across reloads and failed reads", () => {
+  const info = (internalCisBenchmarks: boolean) => ({ version: "0", platform: "darwin", trayIconLoaded: false, internalCisBenchmarks })
+
+  it("shows an answer that settled before the screen subscribed", async () => {
+    appInfo.mockResolvedValue(info(true))
+    await refreshInternalCisBenchmarks()
+    // The next read never settles: the screen must still show the answer already in the store.
+    appInfo.mockImplementation(() => new Promise(() => undefined))
+    const hook = renderHook()
+    expect(hook.result.current).toBe(true)
+    hook.unmount()
+  })
+
+  it("keeps the shown access when a read fails, while the caller of that read is refused", async () => {
+    appInfo.mockResolvedValue(info(true))
+    const hook = renderHook()
+    await flush()
+    expect(hook.result.current).toBe(true)
+    appInfo.mockRejectedValue(new Error("bridge unavailable"))
+    let fresh = true
+    await act(async () => { fresh = await refreshInternalCisBenchmarks() })
+    await flush()
+    expect(fresh).toBe(false)
+    expect(hook.result.current).toBe(true)
+    hook.unmount()
+  })
+
+  it("does not let an older revocation answer override a newer grant", async () => {
+    const hook = renderHook()
+    let releaseOld!: (value: unknown) => void
+    appInfo.mockReset()
+    appInfo.mockImplementationOnce(() => new Promise((resolve) => { releaseOld = resolve })).mockResolvedValue(info(true))
+    let stale: Promise<boolean> = Promise.resolve(true)
+    await act(async () => { stale = refreshInternalCisBenchmarks() })
+    await act(async () => { await refreshInternalCisBenchmarks() })
+    expect(hook.result.current).toBe(true)
+    await act(async () => { releaseOld(info(false)); await stale })
+    await flush()
+    expect(hook.result.current).toBe(true)
+    await expect(stale).resolves.toBe(false)
+    hook.unmount()
+  })
+})
+
 describe("CIS catalog session cache", () => {
   const catalog = [{ id: "fakebook-os", name: "Fakebook OS", version: "9.9.9", levels: [1, 2] as (1 | 2)[] }]
   afterEach(() => clearCisCatalogs())

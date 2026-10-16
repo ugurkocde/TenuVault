@@ -228,13 +228,40 @@ describe("CIS Benchmarks top-level sidebar entry", () => {
     expect(container.querySelector("button")).toBeNull()
   })
 
-  it("renders nothing while the license status is loading", async () => {
+  it("renders the normal entry while the license status is loading, without the upgrade state", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     licenseStatus.current = null
+    selectedTenantState.current = tenantRef("t-entitled")
+    const container = render(sidebarHarness("/portal/dashboard"))
+    await flush()
+    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).not.toBeNull()
+    expect(container.querySelector("button")).toBeNull()
+    licenseStatus.current = entitledStatus("pro")
+    const root = roots[roots.length - 1]
+    await act(async () => { root?.render(sidebarHarness("/portal/dashboard")) })
+    await flush()
+    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).not.toBeNull()
+    expect(container.querySelector("button")).toBeNull()
+  })
+
+  it("uses the account plan for a selected tenant that is not signed in", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    licenseStatus.current = communityStatus()
+    selectedTenantState.current = { id: 3, name: "Not signed in", credentials: undefined }
     const container = render(sidebarHarness("/portal/dashboard"))
     await flush()
     expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).toBeNull()
-    expect(container.textContent).not.toContain("CIS Benchmarks")
+    expect(container.querySelector("button")?.textContent).toContain("Pro")
+  })
+
+  it("renders the normal entry while the status does not list the selected tenant yet", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    licenseStatus.current = communityStatus()
+    selectedTenantState.current = tenantRef("t-entitled")
+    const container = render(sidebarHarness("/portal/dashboard"))
+    await flush()
+    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).not.toBeNull()
+    expect(container.querySelector("button")).toBeNull()
   })
 })
 
@@ -307,7 +334,10 @@ describe("CIS Benchmarks route", () => {
     const assessment = { runId: "run-1", tenantId, frameworkId: "cis-benchmarks", reference: "synthetic-os 9.9.9 Level 1", assessedAt: "2026-10-15T10:00:00Z", policyCount: 1,
       findings: [{ key: "0:0", policyIndex: 0, settingIndex: 0, policyName: "Synthetic policy", settingId: "synthetic_setting", status: "Missing", recommended: policy.settings[0]!.settingInstance, observed: [], ...findingExtra(policy) }] }
     const workspace = { version: 1, tenantId, frameworkId: "cis-benchmarks", policies: [policy], reference: assessment.reference, updatedAt: "2026-10-15T10:00:00Z", history: [{ assessment, policies: [policy] }] }
-    vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(path === "/api/cis-remediation" ? { deployments: [] } : workspace), { status: 200, headers: { "Content-Type": "application/json" } })))
+    vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+      const opening = path === "/api/frameworks" && String(init?.body).includes('"workspace-open"')
+      return new Response(JSON.stringify(path === "/api/cis-remediation" ? { deployments: [] } : opening ? { workspace, activeJob: null } : workspace), { status: 200, headers: { "Content-Type": "application/json" } })
+    }))
     const container = render(
       createElement(
         MemoryRouter,

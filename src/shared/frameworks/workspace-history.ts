@@ -17,3 +17,11 @@ export interface WorkspaceCapacity { count: number; limit: number; full: boolean
 export function isHistoryFullError(message: string): boolean {
   return message.includes(HISTORY_FULL_MESSAGE)
 }
+
+/** A saved workspace that is damaged or from an unsupported version. Only a reset can clear it. */
+export const WORKSPACE_UNREADABLE_MESSAGE = "The saved workspace cannot be read"
+
+/** True when a request failed because the saved workspace cannot be read. */
+export function isWorkspaceUnreadableError(message: string): boolean {
+  return message.includes(WORKSPACE_UNREADABLE_MESSAGE)
+}

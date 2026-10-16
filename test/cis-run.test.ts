@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest"
-import { accumulateCisFindings, cisRunReceivedLabel, cisRunSteps, cisRunTallies, emptyCisRunAccumulation, resolveCisRunCompletion, type CisRunPack } from "../src/shared/frameworks/cis-run"
+import { afterEach, describe, expect, it } from "vitest"
+import { accumulateCisFindings, CIS_STATUS_RETRY_DELAYS_MS, cisRunDisplayPhase, cisRunHeading, cisRunReceivedLabel, cisRunSteps, cisRunTallies, emptyCisRunAccumulation, pollCisStatus, resolveCisRunCompletion, type CisRunPack } from "../src/shared/frameworks/cis-run"
 import type { BaselinePolicy, Finding } from "../src/shared/frameworks/policies"
 
 function finding(key: string, status: Finding["status"] = "Present"): Finding {
@@ -105,5 +105,56 @@ describe("cisRunSteps", () => {
   it("marks every step done when done and keeps the labels stable", () => {
     expect(cisRunSteps("done").map(step => step.state)).toEqual(["done", "done", "done", "done"])
     expect(cisRunSteps("done").map(step => step.label)).toEqual(["Connect to tenant", "Read tenant policies", "Compare with the benchmark", "Save assessment"])
+  })
+})
+
+describe("pollCisStatus", () => {
+  const waits: number[] = []
+  const wait = async (ms: number) => { waits.push(ms) }
+  afterEach(() => { waits.splice(0) })
+
+  it("does not end a run on one failed status request: it re-polls with backoff", async () => {
+    let calls = 0
+    const read = async () => { calls += 1; if (calls === 1) throw new Error("Request failed (500)."); return { phase: "reading" } }
+    await expect(pollCisStatus(read, { wait })).resolves.toEqual({ phase: "reading" })
+    expect(calls).toBe(2)
+    expect(waits).toEqual([CIS_STATUS_RETRY_DELAYS_MS[0]])
+  })
+
+  it("backs off further on each failure and reports the error after a few attempts", async () => {
+    let calls = 0
+    const read = async () => { calls += 1; throw new TypeError("Failed to fetch") }
+    await expect(pollCisStatus(read, { wait })).rejects.toThrow("Failed to fetch")
+    expect(calls).toBe(CIS_STATUS_RETRY_DELAYS_MS.length + 1)
+    expect(waits).toEqual([...CIS_STATUS_RETRY_DELAYS_MS])
+    expect([...CIS_STATUS_RETRY_DELAYS_MS]).toEqual([...CIS_STATUS_RETRY_DELAYS_MS].sort((a, b) => a - b))
+  })
+
+  it("fails at once on an answer that will not change, and stops retrying for a run no longer followed", async () => {
+    const gone = Object.assign(new Error("Assessment job not found."), { status: 404 })
+    let calls = 0
+    await expect(pollCisStatus(async () => { calls += 1; throw gone }, { wait, retryable: error => (error as { status?: number }).status !== 404 })).rejects.toBe(gone)
+    expect(calls).toBe(1)
+    calls = 0
+    await expect(pollCisStatus(async () => { calls += 1; throw new Error("offline") }, { wait, current: () => false })).rejects.toThrow("offline")
+    expect(calls).toBe(1)
+    expect(waits).toEqual([])
+  })
+})
+
+describe("run screen phase and heading", () => {
+  it("shows connecting until the tenant policy list arrives, not 0 of 0 policies read", () => {
+    expect(cisRunDisplayPhase({ phase: "reading", total: 0 })).toBe("connecting")
+    expect(cisRunDisplayPhase({ phase: "reading", total: 3 })).toBe("reading")
+    expect(cisRunDisplayPhase({ phase: "comparing", total: 0 })).toBe("comparing")
+  })
+
+  it("names the current phase instead of a fixed in-progress heading", () => {
+    expect(cisRunHeading("connecting")).toBe("Connecting to the tenant")
+    expect(cisRunHeading("reading")).toBe("Reading tenant policies")
+    expect(cisRunHeading("comparing")).toBe("Comparing with the benchmark")
+    expect(cisRunHeading("saving")).toBe("Saving the assessment")
+    expect(cisRunHeading("done")).toBe("Assessment complete")
+    expect(cisRunHeading("saving", true)).toBe("Re-running assessment: saving the assessment")
   })
 })

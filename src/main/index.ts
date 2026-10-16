@@ -49,7 +49,7 @@ import { DisclaimerAcknowledgements, disclaimerGuard } from "./disclaimer"
 import { migrateLegacyOibRuns, setOibStore } from "./oib/service"
 import { setOibCacheDir } from "./oib/source"
 import { setFrameworkStore } from "./frameworks/workspaces"
-import { internalCisBenchmarksEnabled, setCisEntitlementProvider, setInternalCisBenchmarksProvider } from "./frameworks/service"
+import { internalCisBenchmarksEnabled, isAdmittedAssessStatus, setCisEntitlementProvider, setInternalCisBenchmarksProvider } from "./frameworks/service"
 import { setCisContentFallbackBaseUrl } from "./frameworks/cis-content"
 import { setNativeFrameworkStore, setNativeFrameworkAuthorization, setNativeFrameworkNotifier } from "./frameworks/native"
 import { allows, effectiveRetentionDays, PlanRequired } from "../shared/plans"
@@ -325,7 +325,10 @@ async function bootstrap(): Promise<void> {
   setCisEntitlementProvider((tenantId) => license.entitlementToken(tenantId))
   setCisContentFallbackBaseUrl(LICENSE_API_BASE)
   const checkCis = cisInternalGuard(() => internalCisBenchmarksEnabled(), (tenantId) => license.entitlementToken(tenantId))
-  const checkPlan = planGuard((tenantId) => license.requireEntitlement(tenantId).catch(() => null))
+  const planGate = planGuard((tenantId) => license.requireEntitlement(tenantId).catch(() => null))
+  // Progress polls of an assessment the plan guard admitted at start read only that job, bound to
+  // its tenant, so they do not stall behind a slow license refresh.
+  const checkPlan = async (request: Request) => (await isAdmittedAssessStatus(request)) ? null : planGate(request)
   // Drift scans run in the background; each tenant's last result is kept in its own store, or in
   // memory for the session without OS encryption.
   const memoryResults = new Map<string, string>()
