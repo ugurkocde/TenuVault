@@ -63,16 +63,16 @@ if ($loaded) {
 } else {
     $graphVersion = (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication | Sort-Object Version -Descending | Select-Object -First 1).Version
     if (-not $graphVersion) {
+        # Without an installed Authentication module no Graph module can be loaded, so nothing conflicts.
         Write-Host "Installing Microsoft.Graph.Authentication for the current user..."
         Install-Module Microsoft.Graph.Authentication -Scope CurrentUser -Force -AllowClobber
         $graphVersion = (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication | Sort-Object Version -Descending | Select-Object -First 1).Version
     }
 }
-foreach ($module in $graphModules) {
-    $other = Get-Module -Name $module | Where-Object Version -ne $graphVersion
-    if ($other) {
-        throw "$module $($other.Version) is already loaded in this PowerShell session, but the script needs version $graphVersion. Open a new PowerShell window and run the script again."
-    }
+# Any Graph module of another version already loaded in this session would conflict.
+$other = Get-Module -Name "Microsoft.Graph.*" | Where-Object Version -ne $graphVersion | Select-Object -First 1
+if ($other) {
+    throw "$($other.Name) $($other.Version) is already loaded in this PowerShell session, but the script needs version $graphVersion. Open a new PowerShell window and run the script again."
 }
 foreach ($module in $graphModules) {
     if (-not (Get-Module -ListAvailable -Name $module | Where-Object Version -eq $graphVersion)) {

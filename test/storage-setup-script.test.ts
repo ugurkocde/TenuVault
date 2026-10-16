@@ -96,6 +96,7 @@ describe("New-TenuVaultDesktopApp.ps1", () => {
     expect(desktopScript).toContain("Import-Module $module -RequiredVersion $graphVersion")
     expect(desktopScript).toContain("Open a new PowerShell window and run the script again.")
     expect(desktopScript.indexOf("Import-Module $module -RequiredVersion $graphVersion")).toBeLessThan(desktopScript.indexOf("Connect-MgGraph"))
+    expect(desktopScript).toContain(`Get-Module -Name "Microsoft.Graph.*" | Where-Object Version -ne $graphVersion`)
     expect(desktopScript.indexOf("is already loaded in this PowerShell session")).toBeLessThan(desktopScript.indexOf("Install-Module $module -RequiredVersion $graphVersion"))
     expect(desktopScript).toContain("Check that the PowerShell Gallery is reachable")
   })
