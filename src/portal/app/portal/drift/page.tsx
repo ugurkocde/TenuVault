@@ -25,6 +25,7 @@ import {
   FileSpreadsheet,
   ChevronDown,
   Database,
+  Search,
 } from "lucide-react"
 import { cn } from "~/lib/utils"
 import { useTenantPlan } from "@desktop/lib/license"
@@ -33,6 +34,7 @@ import { FeatureApiError } from "@desktop/lib/feature-api"
 import { showFeaturePlanError } from "@desktop/lib/plan-dialog"
 import { revertibleDriftCount, shouldShowDriftNote } from "@desktop/lib/plan-notes"
 import { GatedButton } from "@desktop/components/PlanGate"
+import { FilterChips, FilterSelect, SearchInput } from "@desktop/components/FilterControls"
 import { cancelDriftScan, startDriftScan, useDriftJob, useDriftResult } from "@desktop/lib/drift-jobs"
 import { useBackupList } from "@desktop/lib/backup-list"
 import { Button } from "~/components/ui/button"
@@ -44,6 +46,7 @@ import { formatDate, TRIGGER_LABEL, type BackupSummary } from "~/components/back
 import { backupCompleteness, type Drift, type DriftBackupRef, type SettingNames } from "../../../../shared/intune/drift"
 import { settingLabel } from "../../../../shared/intune/drift-format"
 import { driftCsv, driftExportName, driftJson } from "../../../../shared/intune/drift-export"
+import { driftFilterActive, driftFilterText, driftSearchText, driftTypes, filterDrifts, NO_DRIFT_FILTER, type DriftFilter } from "../../../../shared/intune/drift-filter"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -115,6 +118,7 @@ export default function DriftDetectionPage() {
   const running = job?.status === "running"
 
   const [selectedDrift, setSelectedDrift] = useState<string | null>(null)
+  const [filter, setFilter] = useState<DriftFilter>(NO_DRIFT_FILTER)
   const [error, setError] = useState("")
   // Kept between visits and refreshed in the background, so the picker does not wait for the list again.
   const backupList = useBackupList(selectedTenant)
@@ -170,6 +174,7 @@ export default function DriftDetectionPage() {
     setPair({ baseline: null, comparison: null })
     setError("")
     setSelectedDrift(null)
+    setFilter(NO_DRIFT_FILTER)
   }, [selectedTenant?.id, selectedTenant?.credentials, storageAccountName])
 
   const completeBackups = backups.filter(backup => backupCompleteness(backup.status) === "complete")
@@ -217,6 +222,26 @@ export default function DriftDetectionPage() {
     modified: drifts.filter(d => d.changeType === "modified").length,
     deleted: drifts.filter(d => d.changeType === "deleted").length,
   }
+
+  // The filter narrows the list and the export. A type that a newer scan no longer has counts as every type.
+  const searchText = useMemo(() => {
+    const cache = new WeakMap<Drift, string>()
+    return (drift: Drift) => {
+      let text = cache.get(drift)
+      if (text === undefined) cache.set(drift, text = driftSearchText(drift, result?.settingNames))
+      return text
+    }
+  }, [result?.settingNames])
+  const types = driftTypes(drifts)
+  const shownFilter: DriftFilter = { ...filter, type: types.includes(filter.type) ? filter.type : "" }
+  const filtering = driftFilterActive(shownFilter)
+  const shownDrifts = filterDrifts(drifts, shownFilter, searchText)
+  // Change type counts follow the search and type, so each chip says what choosing it shows.
+  const unfilteredByChange = filterDrifts(drifts, { ...shownFilter, change: "all" }, searchText)
+  const changeOptions = [
+    { value: "all" as const, label: "All", count: unfilteredByChange.length },
+    ...(["added", "modified", "deleted"] as const).map(change => ({ value: change, label: CHANGE_STYLE[change].label, dot: CHANGE_STYLE[change].dot, count: unfilteredByChange.filter(d => d.changeType === change).length })),
+  ]
 
 
   // Puts the policy back to the backed-up version in place, or recreates a deleted policy under its original name.
@@ -394,10 +419,10 @@ export default function DriftDetectionPage() {
 
   const handleExport = (format: "csv" | "json") => {
     if (!result) return
-    const shown = { ...result, drifts }
+    const shown = { ...result, drifts: shownDrifts }
     const name = driftExportName(result, selectedTenant?.name)
     if (format === "csv") download(`${name}.csv`, `\ufeff${driftCsv(shown)}`, "text/csv;charset=utf-8")
-    else download(`${name}.json`, driftJson(shown, selectedTenant?.name), "application/json")
+    else download(`${name}.json`, driftJson(shown, selectedTenant?.name, undefined, filtering ? driftFilterText(shownFilter) : undefined), "application/json")
   }
 
   /** What an added or deleted item is, and where its backed-up copy is. */
@@ -431,13 +456,14 @@ export default function DriftDetectionPage() {
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="lg" disabled={!result || drifts.length === 0}>
+            <Button variant="outline" size="lg" disabled={!result || shownDrifts.length === 0}>
               <Download className="h-4 w-4 mr-2" />
               Export
               <ChevronDown className="h-4 w-4 ml-1" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            {filtering && <p className="px-2 py-1.5 text-xs text-gray-500">Exports the {shownDrifts.length} {shownDrifts.length === 1 ? "change" : "changes"} shown</p>}
             <DropdownMenuItem onClick={() => handleExport("csv")}>
               <FileSpreadsheet className="h-4 w-4 mr-2" />
               CSV, one row per changed setting
@@ -591,10 +617,34 @@ export default function DriftDetectionPage() {
             </EmptyState>
           )}
 
-          {/* Changes, grouped by policy type */}
+          {/* Search, change type and policy type */}
           {drifts.length > 0 && (
+            <div className="flex flex-wrap items-center gap-3">
+              <SearchInput value={filter.query} onChange={query => setFilter(old => ({ ...old, query }))} label="Search changes" placeholder="Search policy or setting" />
+              <FilterChips label="Filter by change type" options={changeOptions} value={shownFilter.change} onChange={change => setFilter(old => ({ ...old, change }))} />
+              {types.length > 1 && (
+                <FilterSelect label="Filter by policy type" value={shownFilter.type} onChange={type => setFilter(old => ({ ...old, type }))}
+                  options={[{ value: "", label: "All policy types" }, ...types.map(type => ({ value: type, label: type }))]} />
+              )}
+              {filtering && (
+                <span className="text-sm text-gray-500 lg:ml-auto">
+                  <span aria-live="polite">{shownDrifts.length} of {drifts.length} changes shown.</span>{" "}
+                  <button type="button" className="font-medium text-gray-700 underline" onClick={() => setFilter(NO_DRIFT_FILTER)}>Clear filters</button>
+                </span>
+              )}
+            </div>
+          )}
+
+          {drifts.length > 0 && shownDrifts.length === 0 && (
+            <EmptyState icon={<Search className="h-6 w-6" />} title="No changes match the filters">
+              <Button variant="outline" className="mt-2" onClick={() => setFilter(NO_DRIFT_FILTER)}>Clear filters</Button>
+            </EmptyState>
+          )}
+
+          {/* Changes, grouped by policy type */}
+          {shownDrifts.length > 0 && (
             <div className="space-y-8">
-              {byType(drifts).map((group) => (
+              {byType(shownDrifts).map((group) => (
                 <section key={group.type} aria-label={group.type} className="space-y-3">
                   <h2 className="flex items-center gap-2 px-1 text-lg font-medium tracking-tight text-gray-900">
                     {group.type}
