@@ -66,7 +66,8 @@ export function headlineRate(level: Pick<CisLevelReadiness, "passRate" | "adjust
  */
 export function levelCheckCounts(level: Pick<CisLevelReadiness, "recommendations" | "manual" | "assessedAutomated" | "enumerated" | "denominator" | "numeratorIds" | "denominatorIdentifiers">): { checked: number; manual: number; total: number | null } {
   const recommendations = level.recommendations ?? []
-  if (level.denominator !== null) {
+  // A Level the denominator list names has a known total, even when the pack has no policies for it.
+  if (level.denominatorIdentifiers?.length) {
     // The total is every identifier of this Level in the denominator list. The checked ones are those
     // the pack covers, except a pack recommendation that could not be assessed; the rest need a manual check.
     const unassessed = new Set(recommendations.filter(result => result.result === "Not assessed").map(result => result.id))

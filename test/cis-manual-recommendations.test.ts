@@ -175,6 +175,15 @@ describe("manual readiness data", () => {
     expect(levelCheckCounts(level1)).toEqual({ checked: 1, manual: 1, total: 2 })
   })
 
+  it("keeps the total for a listed Level that the pack has no policies for", () => {
+    const { policies, assessment } = assessed()
+    const level1Policies = policies.filter(policy => !String(policy.provenance?.level ?? "").includes("2"))
+    const list = { benchmark: "fakebook-os", version: "9.9.9", items: [{ identifier: "7.1.1", level: 1 as const, automated: true }, { identifier: "9.2.1", level: 2 as const, automated: false }, { identifier: "9.2.2", level: 2 as const, automated: false }] }
+    const level2 = cisReadiness(assessment, level1Policies, undefined, list).levels.find(level => level.level === 2)!
+    expect(level2.denominatorIdentifiers).toEqual(["9.2.1", "9.2.2"])
+    expect(levelCheckSummary(level2)).toBe("Level 2: TenuVault checks 0 of 2 recommendations automatically. The other 2 need a manual check.")
+  })
+
   it("keeps the total to the denominator when a recommendation list adds manual items outside it", () => {
     const { policies, assessment } = assessed()
     const denominator = [
