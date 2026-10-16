@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto"
 import { isFullValidation, OIB_PLATFORMS, type OibPlatform, type PolicyValidation, type ValidationRun } from "../../../shared/oib/types"
-import { RELEASE_TAG } from "../../../shared/oib/versions"
 import type { CompliancePlatform } from "../../../shared/compliance/types"
 import type { FeatureDeps } from "../deps"
 import { buildScoreTrend, freshnessAt, scoreFromCounts, type AssessmentIdentity, type BaselineScore, type ScoreCounts } from "./formula"
@@ -36,8 +35,12 @@ function validPolicy(value: unknown): value is PolicyValidation {
     [result.mismatches, result.oibOnly, result.tenantOnly].every((entries) => Array.isArray(entries) && entries.every((entry) => entry && typeof entry.settingDefinitionId === "string" && typeof entry.label === "string"))
 }
 
+/** Whether a saved validation recorded the OIB commit it compared against. */
+const hasCommit = (run: Pick<ValidationRun, "commit">) => typeof run.commit === "string" && run.commit !== ""
+
 function validRun(run: ValidationRun): boolean {
-  return typeof run.runId === "string" && typeof run.commit === "string" && /^[a-f0-9]{40}$/i.test(run.commit) && typeof run.reference === "string" && typeof run.validatedAt === "string" && (run.validationVersion === undefined || run.validationVersion === 1) && (run.selection === undefined || run.selection === "all" || run.selection === "single") && Array.isArray(run.results) && run.results.every(validPolicy)
+  // A validation without a recorded commit stays readable; it is never connected to a trend.
+  return typeof run.runId === "string" && (!hasCommit(run) || /^[a-f0-9]{40}$/i.test(run.commit)) && typeof run.reference === "string" && typeof run.validatedAt === "string" && (run.validationVersion === undefined || run.validationVersion === 1) && (run.selection === undefined || run.selection === "all" || run.selection === "single") && Array.isArray(run.results) && run.results.every(validPolicy)
 }
 
 export interface OibHistory {
@@ -74,17 +77,18 @@ export async function readOibHistory(deps: FeatureDeps, tenantId: string): Promi
 }
 
 /**
- * The OIB version a validation used, for display and trend compatibility. A published release
- * tag (for example windows-v4.0) is the version, so validations of one release stay connected.
- * A moving reference, such as main or a beta branch like macos-v2.0-beta, can change its
- * expected settings at any commit, so its version includes the commit and a new commit starts
- * a new trend with "Framework version changed" as the reason.
+ * The OIB version a validation used, for display and trend compatibility: the OIB reference
+ * (release tag or branch, as saved) and the commit, "windows-v4.0 @ 1cc71a9". Validations
+ * connect only when both are the same, so a published tag, which points at one commit, stays
+ * on one trend, and any reference that moves to a new commit starts a new one. Nothing is
+ * inferred from the reference name.
  */
 export function oibVersion(run: Pick<ValidationRun, "reference" | "commit">): string {
-  const tag = /· (\S+) @ [0-9a-f]{7}$/i.exec(run.reference)?.[1]
-  const release = tag ? RELEASE_TAG.exec(tag) : null
-  return release && !release[3] ? tag! : `${tag ?? "main"} @ ${run.commit.slice(0, 7)}`
+  const reference = /· (\S+) @ [0-9a-f]{7}$/i.exec(run.reference)?.[1] ?? run.reference
+  return `${reference} @ ${hasCommit(run) ? run.commit.slice(0, 7) : "commit not recorded"}`
 }
+
+const NO_COMMIT = "This validation has no recorded OIB commit, so it cannot be connected to another validation."
 
 function project(run: ValidationRun, now: Date): { latest: LatestScore; gaps: RankedGap[] } {
   const counts: ScoreCounts = { matching: 0, different: 0, missing: 0, unknown: 0, outsideScope: 0 }
@@ -131,7 +135,7 @@ function project(run: ValidationRun, now: Date): { latest: LatestScore; gaps: Ra
     profile: OIB_PLATFORMS[run.platform].label, platforms: scope(run.platform), assessedAt: run.validatedAt,
   }
   const ranked = gaps.map((gap) => ({ ...gap, ranking: rankGap(gap, incomplete) })).sort((a, b) => b.ranking.score - a.ranking.score || a.key.localeCompare(b.key))
-  const versionDetail = `Commit ${run.commit}`
+  const versionDetail = hasCommit(run) ? `Commit ${run.commit}` : "No OIB commit was recorded with this validation."
   return { latest: { identity, versionDetail, unit: "setting", uncheckedReferences: 0, freshness: freshnessAt(run.validatedAt, now), score, incompleteCollection: incomplete, gapCount: ranked.length, topGaps: ranked.slice(0, 5) }, gaps: ranked }
 }
 
@@ -149,7 +153,16 @@ export function oibFrameworkScore(history: OibHistory, now: Date): FrameworkScor
   if (!runs[0]) return { ...base, state: "not-assessed", message: "No saved OIB validation for this platform. Run Policy Validation in OpenIntuneBaseline first.", latest: null, trend: [], incompatible: [], historyOnly }
   const projections = runs.map((run) => project(run, now).latest)
   const latest = projections[0]!
-  const { trend, incompatible } = buildScoreTrend(projections.map((item) => ({ identity: item.identity, score: item.score })))
+  const built = buildScoreTrend(projections.map((item) => ({ identity: item.identity, score: item.score })))
+  // A validation without a recorded commit is never connected: its expected settings are unknown.
+  const withoutCommit = new Set(runs.filter((run) => !hasCommit(run)).map((run) => run.runId))
+  const anchor = latest.identity.runId
+  const unconnected = built.trend.filter((point) => point.runId !== anchor && (withoutCommit.has(point.runId) || withoutCommit.has(anchor)))
+  const trend = built.trend.filter((point) => !unconnected.includes(point))
+  const incompatible = [
+    ...built.incompatible.map((point) => (withoutCommit.has(point.runId) ? { ...point, reasons: [NO_COMMIT, ...point.reasons] } : point)),
+    ...unconnected.map((point) => ({ ...point, reasons: [NO_COMMIT] })),
+  ]
   const partial = new Set(projections.filter((item) => item.incompleteCollection.length > 0).map((item) => item.identity.runId))
   return { ...base, state: latest.score.state, message: `${NOTE}${skipped}`, latest, trend: trend.map((point) => ({ ...point, partial: partial.has(point.runId) })), incompatible, historyOnly }
 }

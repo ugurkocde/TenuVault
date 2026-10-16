@@ -1,11 +1,14 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { isFullValidation, type ValidationRun, type PolicyValidation } from "../src/shared/oib/types"
 import { compareSettings } from "../src/shared/oib/compare"
 import { routes, signals } from "../src/main/features/scores"
 import { oibFrameworkDetail, oibFrameworkScore, oibVersion } from "../src/main/features/scores/oib"
 import { keepValidations } from "../src/main/oib/service"
+import { singleCheckNotice } from "../src/renderer/components/oib/PolicyValidation"
 import { call, fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
 import { fakeFrameworksApi } from "./feature-scores-fixtures"
+
+vi.mock("../src/renderer/lib/bridge", () => ({ bridge: {} }))
 
 const NOW = new Date("2026-09-30T12:00:00Z")
 const COMMIT = "a".repeat(40)
@@ -92,28 +95,42 @@ describe("OIB full validations and release versions", () => {
     expect(isFullValidation(run({ selection: "all" }))).toBe(true)
   })
 
-  it("uses the release tag as the version so validations of one release connect across commits", () => {
-    const reference = (commit: string) => `OpenIntuneBaseline Windows v4.0 · windows-v4.0 @ ${commit.slice(0, 7)}`
-    const first = run({ runId: "first", commit: "1cc71a9".padEnd(40, "0"), reference: reference("1cc71a9"), validatedAt: "2026-09-20T00:00:00Z" })
-    const second = run({ runId: "second", commit: "2dd82b0".padEnd(40, "0"), reference: reference("2dd82b0") })
-    const score = oibFrameworkScore({ platform: "windows", runs: [first, second], skipped: 0, error: null }, NOW)
-    expect(score.latest?.identity.frameworkVersion).toBe("windows-v4.0")
-    expect(score.latest?.versionDetail).toBe(`Commit ${"2dd82b0".padEnd(40, "0")}`)
-    expect(score.trend.map((point) => point.runId)).toEqual(["first", "second"])
-    expect(score.incompatible).toEqual([])
-    expect(oibVersion({ reference: "OIB Windows", commit: COMMIT })).toBe(`main @ ${COMMIT.slice(0, 7)}`)
-    expect(oibVersion({ reference: `OpenIntuneBaseline Windows · main @ ${COMMIT.slice(0, 7)}`, commit: COMMIT })).toBe(`main @ ${COMMIT.slice(0, 7)}`)
+  it("connects validations only of the same OIB reference and commit, whatever the reference is named", () => {
+    const reference = (ref: string, commit: string) => `OpenIntuneBaseline Windows v4.0 · ${ref} @ ${commit.slice(0, 7)}`
+    const one = "1cc71a9".padEnd(40, "0"), two = "2dd82b0".padEnd(40, "0")
+    // A tag, or a branch with a tag-like name, that stays on one commit connects.
+    const sameA = run({ runId: "same-a", commit: one, reference: reference("windows-v4.0", one), validatedAt: "2026-09-20T00:00:00Z" })
+    const sameB = run({ runId: "same-b", commit: one, reference: reference("windows-v4.0", one) })
+    const connected = oibFrameworkScore({ platform: "windows", runs: [sameA, sameB], skipped: 0, error: null }, NOW)
+    expect(connected.latest?.identity.frameworkVersion).toBe("windows-v4.0 @ 1cc71a9")
+    expect(connected.latest?.versionDetail).toBe(`Commit ${one}`)
+    expect(oibVersion({ reference: `OpenIntuneBaseline macOS · macos-v2.0-beta @ ${one.slice(0, 7)}`, commit: one })).toBe("macos-v2.0-beta @ 1cc71a9")
+    expect(connected.trend.map((point) => point.runId)).toEqual(["same-a", "same-b"])
+    // The same name on a new commit (a branch named like a tag, or a moved beta branch) splits with the reason.
+    for (const ref of ["windows-v4.0", "macos-v2.0-beta", "main"]) {
+      const before = run({ runId: "before", commit: one, reference: reference(ref, one), validatedAt: "2026-09-20T00:00:00Z" })
+      const after = run({ runId: "after", commit: two, reference: reference(ref, two) })
+      const split = oibFrameworkScore({ platform: "windows", runs: [before, after], skipped: 0, error: null }, NOW)
+      expect(split.trend.map((point) => point.runId)).toEqual(["after"])
+      expect(split.incompatible).toEqual([expect.objectContaining({ runId: "before", reasons: [`Framework version changed (${ref} @ 2dd82b0 and ${ref} @ 1cc71a9).`] })])
+    }
   })
 
-  it("keeps a moving beta branch on separate trends per commit, with the reason", () => {
-    const reference = (commit: string) => `OpenIntuneBaseline macOS v2.0 beta · macos-v2.0-beta @ ${commit.slice(0, 7)}`
-    const first = run({ runId: "first", platform: "macos", commit: "1cc71a9".padEnd(40, "0"), reference: reference("1cc71a9"), validatedAt: "2026-09-20T00:00:00Z" })
-    const moved = run({ runId: "moved", platform: "macos", commit: "2dd82b0".padEnd(40, "0"), reference: reference("2dd82b0"), results: [policy({ status: "drifted", result: { ...policy().result!, matched: 0, different: 4, missing: 0, mismatches: [], oibOnly: [] } })] })
-    const score = oibFrameworkScore({ platform: "macos", runs: [first, moved], skipped: 0, error: null }, NOW)
-    expect(score.latest?.identity.frameworkVersion).toBe("macos-v2.0-beta @ 2dd82b0")
-    expect(score.trend.map((point) => point.runId)).toEqual(["moved"])
-    expect(score.incompatible).toEqual([expect.objectContaining({ runId: "first", reasons: ["Framework version changed (macos-v2.0-beta @ 2dd82b0 and macos-v2.0-beta @ 1cc71a9)."] })])
-    expect(oibVersion({ reference: "OpenIntuneBaseline Windows v4.0 · windows-v4.0 @ 1cc71a9", commit: COMMIT })).toBe("windows-v4.0")
+  it("never connects a saved validation that has no recorded commit, and says why", async () => {
+    const legacy = run({ runId: "legacy", commit: undefined as never, reference: "OIB Windows", validatedAt: "2026-09-20T00:00:00Z" })
+    const current = run({ runId: "current" })
+    const score = oibFrameworkScore({ platform: "windows", runs: [legacy, current], skipped: 0, error: null }, NOW)
+    expect(score.trend.map((point) => point.runId)).toEqual(["current"])
+    expect(score.incompatible.find((entry) => entry.runId === "legacy")?.reasons).toContain("This validation has no recorded OIB commit, so it cannot be connected to another validation.")
+    const alone = oibFrameworkScore({ platform: "windows", runs: [run({ runId: "a", commit: "" }), run({ runId: "b", commit: "", validatedAt: "2026-09-20T00:00:00Z" })], skipped: 0, error: null }, NOW)
+    expect(alone.latest?.identity.frameworkVersion).toBe("OIB Windows @ commit not recorded")
+    expect(alone.latest?.versionDetail).toBe("No OIB commit was recorded with this validation.")
+    expect(alone.trend.map((point) => point.runId)).toEqual(["a"])
+    expect(alone.incompatible.map((entry) => entry.runId)).toEqual(["b"])
+    // It is read, not discarded as unreadable.
+    const deps = fakeDeps({ plans: { [TENANT_A]: "pro" }, api: api({ [TENANT_A]: [legacy] }).handler, now: () => NOW })
+    const summary = await call(routes(deps), "/api/scores", { tenantId: TENANT_A, action: "summary" })
+    expect(summary.body.frameworks.find((entry: any) => entry.frameworkId === "oib-windows")).toMatchObject({ state: "scored", latest: { identity: { runId: "legacy" } } })
   })
 
   it("never removes a full validation to keep a single-policy check", () => {
@@ -129,6 +146,8 @@ describe("OIB full validations and release versions", () => {
     expect(keepValidations([run({ runId: "new-full", selection: "all" }), ...allFull], 50).at(-1)?.runId).toBe("full-48")
     const sized = keepValidations([run({ runId: "a", selection: "single" }), full], 50, JSON.stringify([full]).length)
     expect(sized.map((entry) => entry.runId)).toEqual(["full"])
+    expect(singleCheckNotice("Defender", "drift detected", false)).toBe("Defender: drift detected. This result was not saved because Saved validations is full of Validate all results, which are kept first. Export the results to keep it, or delete older saved validations below to make room.")
+    expect(singleCheckNotice("Defender", "drift detected", true)).toBe("Defender: drift detected. Saved under Saved validations.")
   })
 
   it("skips only a malformed validation instead of hiding the platform", async () => {

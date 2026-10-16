@@ -14,7 +14,7 @@ import { GovernanceExportButtons } from "../shared/GovernanceExportButtons"
 import { scoresCsv, scoresJson } from "../shared/governance-export"
 import { useInternalCisBenchmarks } from "../../lib/internal-cis"
 import { invalidateScores } from "./invalidate"
-import { cisScoreCards } from "./cis"
+import { cisScoreCards, freshCisWorkspace } from "./cis"
 import { CisCard } from "./CisCard"
 
 /**
@@ -32,8 +32,10 @@ export default function ScoresTab({ tenant, plan, allowed }: FeatureTabProps) {
   const cisAccess = useInternalCisBenchmarks()
   // CIS assessments change on the CIS page, which does not notify this tab, so the workspace is
   // read fresh every time the tab opens and cards show only once that read is in.
-  const cis = useQuery({ queryKey: ["scores-cis", tenantId], queryFn: () => loadCisWorkspace(tenantId!), enabled: allowed && cisAccess && !!tenantId, staleTime: 0, refetchOnMount: "always" })
-  const cisFresh = cis.isFetchedAfterMount ? cis.data : undefined
+  const cisEnabled = allowed && cisAccess && !!tenantId
+  const cis = useQuery({ queryKey: ["scores-cis", tenantId], queryFn: () => loadCisWorkspace(tenantId!), enabled: cisEnabled, staleTime: 0, refetchOnMount: "always" })
+  const [mountedAt] = useState(() => Date.now())
+  const cisFresh = freshCisWorkspace(cis, mountedAt)
   const cisCards = useMemo(() => (tenantId ? cisScoreCards(cisAccess, cisFresh, tenantId) : []), [cisAccess, cisFresh, tenantId])
   const drillKey = drill ? `${drill.tenant.credentials?.tenantId}:${drill.frameworkId}` : null
   useEffect(() => {
@@ -107,7 +109,15 @@ export default function ScoresTab({ tenant, plan, allowed }: FeatureTabProps) {
           {cisCards.map((card) => <CisCard key={card.key} card={card} />)}
         </div>
       )}
-      {cisAccess && cis.error && <p className="rounded-3xl bg-card p-6 text-sm text-red-700">{cis.error instanceof Error ? cis.error.message : "The saved CIS assessments could not be read."}</p>}
+      {cisEnabled && !cisFresh && cis.isFetching && <div aria-label="Loading saved CIS assessments" className="h-40 animate-pulse rounded-3xl bg-card" />}
+      {cisEnabled && cis.status === "error" && !cis.isFetching && (
+        <section aria-label="CIS assessments unavailable" className="flex flex-wrap items-start justify-between gap-3 rounded-3xl bg-card p-6 text-sm text-red-700">
+          <p>{cis.error instanceof Error ? cis.error.message : "The saved CIS assessments could not be read."}</p>
+          <Button type="button" variant="outline" size="sm" onClick={() => void cis.refetch()}>
+            Retry
+          </Button>
+        </section>
+      )}
 
       {historyOnly.length > 0 && (
         <section aria-label="Saved results without a score" className="rounded-3xl bg-card p-6 text-sm text-gray-700">

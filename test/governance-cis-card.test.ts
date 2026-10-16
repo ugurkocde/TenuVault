@@ -4,7 +4,7 @@ import { cisReadiness, headlineRate } from "../src/shared/frameworks/cis-readine
 import type { CisException } from "../src/shared/frameworks/cis-exceptions"
 import type { CisPortfolioHistoryEntry } from "../src/shared/frameworks/cis-portfolio"
 import type { Finding } from "../src/shared/frameworks/policies"
-import { cisScoreCards } from "../src/renderer/features/scores/cis"
+import { cisScoreCards, freshCisWorkspace } from "../src/renderer/features/scores/cis"
 import { CIS_CARD_NOTE } from "../src/renderer/features/scores/CisCard"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
@@ -59,6 +59,18 @@ describe("CIS card in Governance", () => {
     const level1 = card.levels.find((level) => level.level === 1)!
     expect(level1.rate).toBe(Math.round(headlineRate(page.levels[0]!).rate! * 1000) / 10)
     expect(level1).toMatchObject({ rate: 50, adjusted: 100, exclusions: 1 })
+  })
+
+  it("shows cards only from a successful read made after the tab opened, never cached data next to a failed refetch", () => {
+    const workspace = { history: [entry("new", "2026-10-10T00:00:00.000Z", ["Present", "Missing", "Present"])] }
+    const mountedAt = 1_000
+    expect(freshCisWorkspace({ status: "success", data: workspace, dataUpdatedAt: 1_500 }, mountedAt)).toBe(workspace)
+    // A failed refetch keeps the cached workspace in the query; it must not show as current.
+    expect(freshCisWorkspace({ status: "error", data: workspace, dataUpdatedAt: 1_500 }, mountedAt)).toBeUndefined()
+    // Cached from an earlier visit, before the fresh read is in.
+    expect(freshCisWorkspace({ status: "success", data: workspace, dataUpdatedAt: 500 }, mountedAt)).toBeUndefined()
+    expect(freshCisWorkspace({ status: "pending", data: undefined, dataUpdatedAt: 0 }, mountedAt)).toBeUndefined()
+    expect(cisScoreCards(true, freshCisWorkspace({ status: "error", data: workspace, dataUpdatedAt: 1_500 }, mountedAt), TENANT)).toEqual([])
   })
 
   it("shows nothing CIS when CIS access is off", () => {

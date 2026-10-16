@@ -517,11 +517,19 @@ export function keepValidations(runs: ValidationRun[], maxRuns = VALIDATIONS_KEP
   return kept
 }
 
-function saveValidations(tenant: string, runs: ValidationRun[]): void {
-  requireStore().set(validationsKey(tenant), JSON.stringify(keepValidations(runs)))
+/** Saves the history and reports whether the validation with `runId` was kept. */
+function saveValidations(tenant: string, runs: ValidationRun[], runId?: string): boolean {
+  const kept = keepValidations(runs)
+  requireStore().set(validationsKey(tenant), JSON.stringify(kept))
+  return runId === undefined || kept.some((run) => run.runId === runId)
 }
 
-async function validate(body: RecordJson): Promise<ValidationRun> {
+/**
+ * Validates the selected policies. `saved` says whether the result is in Saved validations: a
+ * single-policy check is not kept when every retained entry is a full validation, which is never
+ * removed to make room for it.
+ */
+async function validate(body: RecordJson): Promise<ValidationRun & { saved: boolean }> {
   const platform = platformOf(body.platform)
   const tenant = tenantOf(body.tenantId)
   if (!Array.isArray(body.items) || !body.items.length || body.items.length > 200) throw new FrameworkError("Select between 1 and 200 matched policies.")
@@ -565,8 +573,8 @@ async function validate(body: RecordJson): Promise<ValidationRun> {
   const selection = body.selection === "single" || body.selection === "all" ? body.selection : undefined
   const run: ValidationRun = { runId: randomUUID(), tenantId: tenant, platform, commit: pack.catalog.commit, reference: pack.catalog.reference, validatedAt: new Date().toISOString(), validationVersion: 1, ...(selection && { selection }), results }
   // Re-checking a single policy is not kept as a separate history entry.
-  if (body.save !== false) saveValidations(tenant, [run, ...readValidations(tenant)])
-  return run
+  const saved = body.save !== false && saveValidations(tenant, [run, ...readValidations(tenant)], run.runId)
+  return { ...run, saved }
 }
 
 export async function handleOib(body: RecordJson): Promise<unknown> {

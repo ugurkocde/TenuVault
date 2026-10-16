@@ -83,11 +83,23 @@ function pdfOf(results: Shown[], tenantName: string, reference: string, validate
 }
 
 /**
- * Validates matched policies of one pack; `save` keeps the run under Saved validations. Only a
- * validation of every matched policy ("all") sets the OIB baseline score; a single-policy
- * check is kept in history only.
+ * Validates matched policies of one pack; `save` asks to keep the run under Saved validations.
+ * Only a validation of every matched policy ("all") sets the OIB baseline score; a single-policy
+ * check is kept in history only. `saved` says whether the run was actually kept.
  */
-const validateRequest = (tenant: OibTenant, catalog: OibCatalog, rows: Row[], save: boolean, selection: "all" | "single") => oibRequest<ValidationRun>({
+const validateRequest = async (tenant: OibTenant, catalog: OibCatalog, rows: Row[], save: boolean, selection: "all" | "single"): Promise<{ run: ValidationRun; saved: boolean }> => {
+  const { saved, ...run } = await requestValidation(tenant, catalog, rows, save, selection)
+  return { run, saved: saved !== false }
+}
+
+/** The notice after a single-policy check, accurate about whether Saved validations kept it. */
+export function singleCheckNotice(policyName: string, status: string, saved: boolean): string {
+  return saved
+    ? `${policyName}: ${status}. Saved under Saved validations.`
+    : `${policyName}: ${status}. This result was not saved because Saved validations is full of Validate all results, which are kept first. Export the results to keep it, or delete older saved validations below to make room.`
+}
+
+const requestValidation = (tenant: OibTenant, catalog: OibCatalog, rows: Row[], save: boolean, selection: "all" | "single") => oibRequest<ValidationRun & { saved?: boolean }>({
   action: "oib-validate", tenantId: tenant.tenantId, appId: tenant.appId, platform: catalog.platform, commit: catalog.commit, ...(catalog.tag ? { tag: catalog.tag } : {}),
   items: rows.map(r => ({ source: r.policy.source, targetId: r.match.tenant!.id })), save, selection,
 })
@@ -189,7 +201,7 @@ export function PolicyValidation({ selections }: { selections: Selections }) {
         for (const { catalog, rows } of groups) {
           if (groups.length > 1) ctx.update({ detail: OIB_PLATFORMS[catalog.platform].label })
           // One platform failing does not stop the others.
-          try { done.push(await validateRequest(t, catalog, rows, true, "all")); invalidateScores(queryClient) } catch (e) { failures.push(`${OIB_PLATFORMS[catalog.platform].label}: ${errorText(e)}`) }
+          try { done.push((await validateRequest(t, catalog, rows, true, "all")).run); invalidateScores(queryClient) } catch (e) { failures.push(`${OIB_PLATFORMS[catalog.platform].label}: ${errorText(e)}`) }
           ctx.setResult({ platforms: chosen, runs: [...done] })
         }
         if (failures.length) throw new Error(`Some platforms were not validated. ${failures.join(" ")}`)
@@ -205,11 +217,11 @@ export function PolicyValidation({ selections }: { selections: Selections }) {
     if (!pack) return
     setChecking(key(row.platform, row.policy.source)); setError(""); setNotice(""); exports.clear()
     try {
-      const run = await validateRequest(tenant!, pack, [row], true, "single")
+      const { run, saved } = await validateRequest(tenant!, pack, [row], true, "single")
       invalidateScores(queryClient)
       setSingles(s => [...s, run])
       const status = run.results[0]?.status
-      setNotice(`${row.policy.name}: ${status ? STATUS[status].label.toLowerCase() : "validated"}. Saved under Saved validations.`)
+      setNotice(singleCheckNotice(row.policy.name, status ? STATUS[status].label.toLowerCase() : "validated", saved))
       void refreshHistory()
     } catch (e) {
       setError(errorText(e))
