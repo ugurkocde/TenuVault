@@ -2,9 +2,17 @@
   "cache_type": "seo-audit-scores",
   "analyzed_at": "2026-10-17",
   "domain": "tenuvault.com",
-  "surfaces": ["https://www.tenuvault.com", "https://docs.tenuvault.com", "https://github.com/ugurkocde/TenuVault"],
+  "surfaces": [
+    "https://www.tenuvault.com",
+    "https://docs.tenuvault.com",
+    "https://github.com/ugurkocde/TenuVault"
+  ],
   "business_type": "B2B SaaS, desktop software for Microsoft Intune administrators",
-  "target_keywords": ["Intune backup", "Intune restore", "Intune disaster recovery"],
+  "target_keywords": [
+    "Intune backup",
+    "Intune restore",
+    "Intune disaster recovery"
+  ],
   "scores": {
     "technical": 78,
     "content": 70,
@@ -19,7 +27,7 @@
   "key_findings": [
     "Ranking pages live on www (separate Next.js repo) and are already well optimized on page",
     "Docs pillars did not carry the target phrases and linked to the www pillars zero times; both fixed in this PR",
-    "Primary ranking constraint is off-page authority: product launched October 2026, GitHub 4 stars vs 452 for the leading open-source script",
+    "Suspected primary constraint is off-page authority (product launched October 2026, GitHub 4 stars vs 452 for the leading open-source script); unproven until Search Console and backlink baselines exist",
     "Homepage HTML is 179 KB; Core Web Vitals unverified"
   ],
   "tool_limitations": "No Google Search Console, GA4, CrUX, Lighthouse or backlink-tool data was available. Current positions, traffic and referring domains are unmeasured."

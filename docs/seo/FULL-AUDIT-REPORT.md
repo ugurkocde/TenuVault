@@ -4,21 +4,21 @@ Date: 2026-10-17. Scope: www.tenuvault.com (live, separate Next.js repo), docs.t
 
 ## The honest headline
 
-No on-page change can guarantee position 1, 2 or 3, and anyone who promises that is selling something. The three target pages on www are already well built. The gap to the top three is mostly authority: the product launched in October 2026, the GitHub repo has 4 stars against 452 for the leading open-source Intune backup script, and the competitor set includes Veeam, AvePoint and CoreView. Realistic expectation with the plan in [ACTION-PLAN.md](ACTION-PLAN.md) executed in full: top 10 for the three head terms in 3 to 6 months, top 3 first for the long-tail variants ("restore deleted Intune policy", "does Intune have backup", "Intune disaster recovery plan"), head-term top 3 after that if backlinks and brand search follow. This pull request fixes everything that is fixable inside this repo. The www and off-page work is specified so it can be executed without re-auditing.
+No on-page change can guarantee position 1, 2 or 3, and anyone who promises that is selling something. The three target pages on www are already well built. The working hypothesis is that the gap is mostly authority: the product launched in October 2026, the GitHub repo has 4 stars against 452 for the leading open-source Intune backup script, and the competitor set includes Veeam, AvePoint and CoreView. That is a hypothesis, not a measurement. Without Search Console positions, impressions and a backlink profile, the current ranking constraint cannot be proven, and no timeline to any position can be defended. The plan in [ACTION-PLAN.md](ACTION-PLAN.md) therefore starts with measurement and makes every later priority conditional on the baseline. Long-tail variants ("restore deleted Intune policy", "does Intune have backup", "Intune disaster recovery plan") are the plausible first wins because dedicated pages already exist for them and competition is thinner, but that too is unverified until the baseline exists. This pull request fixes everything that is fixable inside this repo. The www and off-page work is specified so it can be executed without re-auditing.
 
 ## Score (docs and www combined)
 
 | Category | Weight | Score | Basis |
 | --- | --- | --- | --- |
 | Technical SEO | 22% | 78 | Canonicals, sitemaps, robots and redirects correct. Docs root redirects to Getting started. Homepage HTML is 179 KB. |
-| Content quality | 23% | 70 | Strong docs depth (37 pages, several over 2,000 words). Thin pages: tenants (132 words), audit log (193), requirements (236). No comparison pages. |
+| Content quality | 23% | 70 | Strong docs depth (37 pages, most between 600 and 2,600 words of body text, troubleshooting about 5,400). The thinnest body is the Getting started hub at about 270 words, which is acceptable for a checklist page that links onward. No comparison pages. |
 | On-page SEO | 20% | 74 before this PR, 84 after | www titles carry the exact phrases. Docs pillar titles did not ("Run a backup", "Restore items", "Disaster recovery") and docs linked to the www pillars almost nowhere. Both fixed here. |
 | Schema | 10% | 82 | www emits 4 to 8 JSON-LD blocks per page. Docs emit TechArticle, BreadcrumbList and FAQPage where defined. This PR adds author, image and a SoftwareApplication block. |
 | Performance | 10% | Unverified | No Lighthouse or CrUX run in this audit. Run before and after the www changes. |
 | AI search readiness | 10% | 76 | llms.txt, llms-small.txt and llms-full.txt exist on docs. Definition-first paragraphs and FAQs added here improve citability. |
 | Images | 5% | 60 | README icon had empty alt text (fixed). Docs carry few screenshots, so image search and rich snippets have little to work with. |
 
-Weighted overall, performance excluded and renormalized: about 75. Off-page authority is outside this scoring model and is currently the weakest factor of all.
+Weighted overall, performance excluded and renormalized: about 75. Off-page authority is outside this scoring model and unmeasured; the launch date and GitHub signals suggest it is weak, but only a backlink profile can confirm that.
 
 ## Keyword to URL map (one owner per phrase)
 
@@ -53,7 +53,7 @@ Gaps, specified for the www repo in the action plan:
 
 ### docs.tenuvault.com (this repo, fixed in this PR)
 
-* Pillar titles missed the phrases entirely and competed weakly with www instead of supporting it. Retitled with slugs unchanged: "Intune backup: run a backup", "Intune restore: restore items from a backup", "Intune disaster recovery", "Get started: your first Intune backup". Sidebar labels are explicit in astro.config.mjs, so navigation text does not change.
+* Pillar titles missed the phrases entirely and competed weakly with www instead of supporting it. Retitled with slugs unchanged: "Intune backup: run a backup", "Intune restore: restore items from a backup", "Disaster recovery: recover Intune configuration" (task-qualified on purpose, so the unqualified head term stays owned by the www pillar per the map above), "Get started: your first Intune backup". Sidebar labels are explicit in astro.config.mjs, so navigation text does not change.
 * Docs linked to the www pillars and guides zero times with keyword anchors. Twenty contextual links added across twelve pages, one relevant link per page.
 * FAQPage schema existed on only 3 of 37 pages. FAQs added to the backup and restore pillars. Note: Google restricts FAQ rich results to government and healthcare sites since 2023, so expect value through on-page answers and AI citation, not rich results. Visible text and JSON-LD are generated from the same frontmatter, so they cannot drift.
 * TechArticle schema lacked author and image, and no SoftwareApplication block existed on docs. Both added, without aggregateRating because there is no published review count to cite. Invented ratings risk a manual action.

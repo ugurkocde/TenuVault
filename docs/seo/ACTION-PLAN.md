@@ -43,7 +43,7 @@ O5. Podcast and YouTube guest spots in the Intune community. One appearance usua
 
 ## Medium: content depth in this repo
 
-M1. Thicken thin docs pages that sit in the cluster: tenants (132 words) and audit log (193). Target 600 plus words of real operational content, one screenshot each with descriptive alt text and file names.
+M1. Docs bodies are already substantial (most pages 600 to 2,600 words; recount in the report). Do not pad them. Add screenshots per M2 instead, and only expand a page when support questions show a real gap.
 M2. Screenshots for the three docs pillars (backup dialog, restore wizard review step, recovery readiness), named intune-backup-*, intune-restore-*, intune-disaster-recovery-* with matching alt text. This feeds image search and raises time on page.
 M3. FAQ frontmatter on schedules, storage, modes and cross-tenant, sourced from real support questions. Same one-source pattern as D3.
 M4. Keep llms.txt details in astro.config.mjs in sync with plan facts on www pricing. They are AI-facing canonical facts; drift there becomes wrong AI answers.

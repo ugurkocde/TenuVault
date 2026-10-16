@@ -1,5 +1,5 @@
 ---
-title: "Intune disaster recovery"
+title: "Disaster recovery: recover Intune configuration"
 description: "Intune disaster recovery with TenuVault: prepare for and recover from deleted Intune policies, a lost admin device, or a rebuild in another tenant."
 faq:
   - question: "What should I do before I need to recover Intune configuration?"

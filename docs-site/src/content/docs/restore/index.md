@@ -7,9 +7,9 @@ faq:
   - question: "Can I restore a deleted Intune policy?"
     answer: "Yes, if a backup from before the deletion exists. Choose Replace in place in the restore wizard and the deleted item is recreated under its original name. Without a backup, a deleted Intune policy cannot be recovered, because Intune has no recycle bin for policies."
   - question: "What is the difference between Create copies and Replace in place?"
-    answer: "Create copies adds separate, unassigned copies and never changes existing items, which makes it safe for testing a restore. Replace in place overwrites the current version with the backed-up version and recreates deleted items. Replace in place and restoring several items at once need Pro or MSP."
+    answer: "Create copies adds separate copies and never changes existing items. With Restore assignments turned off the copies are unassigned and reach no device, which makes them safe for testing a restore. With Restore assignments on (Pro and MSP), copies get the backed-up groups and filters and do reach devices at their next check-in. Replace in place overwrites the current version with the backed-up version and recreates deleted items. Replace in place and restoring several items at once need Pro or MSP."
   - question: "Are assignments restored with an Intune policy?"
-    answer: "Only when you turn on Restore assignments, which needs Pro or MSP. With it on, each item's assignments are replaced with the ones in the backup. Copies and cross-tenant restores arrive unassigned by default."
+    answer: "Only when you turn on Restore assignments, which needs Pro or MSP. With it on, supported items get the assignments recorded in the backup. Windows Autopilot profiles, Apple user enrollment profiles, terms and conditions and Intune roles do not support assignment replacement: restore them in a separate selection with assignments off. Copies with assignments off and cross-tenant restores arrive unassigned."
   - question: "Can I restore Intune configuration to another tenant?"
     answer: "Yes, with the MSP plan. Copies keep their original names, get the Default scope tag and are never assigned, so you recreate groups, exclusions and filters in the target tenant and then assign the copies."
 ---
