@@ -545,7 +545,7 @@ async function bootstrap(): Promise<void> {
     backgroundLaunchPending = request.catch(() => undefined)
     return request
   }
-  void updateBackgroundLaunch(() => backgroundLaunch.status()).catch(error => console.warn("Could not check background startup.", error))
+  void updateBackgroundLaunch(() => backgroundLaunch.refresh()).catch(error => console.warn("Could not check background startup.", error))
   handleTrusted("backgroundLaunch:status", () => updateBackgroundLaunch(() => backgroundLaunch.status()))
   handleTrusted("backgroundLaunch:install", () => updateBackgroundLaunch(() => backgroundLaunch.install()))
   handleTrusted("backgroundLaunch:remove", () => updateBackgroundLaunch(() => backgroundLaunch.remove()))

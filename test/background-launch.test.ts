@@ -2,7 +2,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
-import { BackgroundLaunch, launchAgent, WINDOWS_TASK } from '../src/main/backup/background-launch'
+import { execFile, spawn } from 'node:child_process'
+import { once } from 'node:events'
+import { promisify } from 'node:util'
+import { BackgroundLaunch, launchAgent, reopeningLaunchAgent, WINDOWS_TASK } from '../src/main/backup/background-launch'
+const programArguments = (plist: string) => [...plist.matchAll(/<string>([^<]*)<\/string>/g)].map(match => match[1]!.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')).slice(1, -1)
 it('uses an interactive non-elevated Windows task with login, catch-up and overlap protection', () => {
   expect(WINDOWS_TASK).toContain('-LogonType Interactive -RunLevel Limited')
   expect(WINDOWS_TASK).toContain('-AtLogOn')
@@ -30,8 +34,8 @@ it('installs and removes a user-session launch agent without interpolating execu
     expect(await launcher.install()).toEqual({ supported: true, installed: true })
     expect(await launcher.remove()).toEqual({ supported: true, installed: false })
     expect(exec.mock.calls.some(call => call[1][0] === 'bootout')).toBe(true)
-    expect(plist).toContain('<string>/usr/bin/open</string>')
-    expect(plist).not.toContain('/Contents/MacOS/')
+    expect(programArguments(plist).slice(0, 2)).toEqual(['/bin/sh', '-c'])
+    expect(programArguments(plist)[2]).toContain('exec /usr/bin/open -g -j -a "$1" --args --hidden')
     expect(exec.mock.calls.some(call => call[1][0] === 'disable')).toBe(true)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
@@ -75,5 +79,51 @@ it('removes a legacy direct-launch agent without terminating its running app', a
     expect(exec.mock.calls).toContainEqual(['/bin/launchctl', ['disable', 'gui/501/com.tenuvault.desktop.background']])
     expect(exec.mock.calls).not.toContainEqual(['/bin/launchctl', ['bootout', 'gui/501/com.tenuvault.desktop.background']])
     await expect(launcher.install()).rejects.toThrow('before reinstalling')
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it('passes the bundle and executable to the helper as arguments instead of script text', () => {
+  const args = programArguments(launchAgent('/Applications/A"$(x)&B.app/Contents/MacOS/A"$(x)&B'))
+  expect(args[2]).toBe(programArguments(launchAgent('/Applications/TenuVault.app/Contents/MacOS/TenuVault'))[2])
+  expect(args.slice(3)).toEqual(['tenuvault-background', '/Applications/A"$(x)&B.app', '/Applications/A"$(x)&B.app/Contents/MacOS/A"$(x)&B'])
+  expect(programArguments(reopeningLaunchAgent('/Applications/A&B.app/Contents/MacOS/A&B'))).toEqual(['/usr/bin/open', '-g', '-j', '-a', '/Applications/A&B.app', '--args', '--hidden'])
+})
+it.runIf(process.platform === 'darwin')('opens the app only when no process of this user runs its executable', async () => {
+  const run = promisify(execFile)
+  const script = programArguments(launchAgent('/Applications/TenuVault.app/Contents/MacOS/TenuVault'))[2]!
+  // The bundle does not exist, so the helper fails exactly when it calls open.
+  const running = spawn('/bin/sleep', ['30'])
+  try {
+    await once(running, 'spawn')
+    await expect(run('/bin/sh', ['-c', script, 'tenuvault-background', '/nonexistent/Missing.app', '/bin/sleep'])).resolves.toBeDefined()
+  } finally { running.kill() }
+  await expect(run('/bin/sh', ['-c', script, 'tenuvault-background', '/nonexistent/Missing.app', '/nonexistent/Missing.app/Contents/MacOS/Missing'])).rejects.toThrow()
+})
+it('replaces the reopening agent of an earlier build at startup and leaves other agents alone', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tv-background-refresh-'))
+  const file = join(root, 'Library/LaunchAgents/com.tenuvault.desktop.background.plist')
+  const executable = '/Applications/TenuVault.app/Contents/MacOS/TenuVault'
+  let loaded: string | null = null
+  const exec = vi.fn(async (_file: string, args: string[]) => {
+    if (args[0] === 'print') { if (loaded === null) throw new Error('Could not find service'); return { stdout: programArguments(loaded).join(' ') } }
+    if (args[0] === 'bootout') loaded = null
+    if (args[0] === 'bootstrap') loaded = await readFile(args[2]!, 'utf8')
+    return { stdout: '' }
+  })
+  const launcher = new BackgroundLaunch({ platform: 'darwin', packaged: true, executable, home: root, data: root, uid: 501, exec })
+  try {
+    expect(await launcher.refresh()).toEqual({ supported: true, installed: false })
+    await mkdir(join(root, 'Library/LaunchAgents'), { recursive: true })
+    loaded = reopeningLaunchAgent('/Applications/Old.app/Contents/MacOS/Old')
+    await writeFile(file, loaded)
+    expect(await launcher.refresh()).toEqual({ supported: true, installed: false })
+    expect(exec.mock.calls.some(call => ['bootout', 'bootstrap'].includes(call[1][0]!))).toBe(false)
+    loaded = reopeningLaunchAgent(executable)
+    await writeFile(file, loaded)
+    expect(await launcher.refresh()).toEqual({ supported: true, installed: true })
+    expect(await readFile(file, 'utf8')).toBe(launchAgent(executable))
+    expect(exec.mock.calls.filter(call => call[1][0] === 'bootout')).toHaveLength(1)
+    expect(await launcher.refresh()).toEqual({ supported: true, installed: true })
+    expect(exec.mock.calls.filter(call => call[1][0] === 'bootstrap')).toHaveLength(1)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
