@@ -46,6 +46,11 @@ describe("what TenuVault checks per Level", () => {
     expect(levelCheckSummary(input)).toBe("Level 1: TenuVault checks 2 of 3 recommendations automatically. The other one needs a manual check.")
   })
 
+  it("counts an assessed recommendation as checked when the pack description does not name it", () => {
+    const input = level({ recommendations: [rec("7.1.1", "Fail")], numeratorIds: [], denominatorIdentifiers: ["7.1.1", "7.1.2"], manual: [manual("7.1.2")], assessedAutomated: 0, denominator: 1 })
+    expect(levelCheckCounts(input)).toEqual({ checked: 1, manual: 1, total: 2 })
+  })
+
   it("says all when a denominator leaves nothing for a manual check", () => {
     expect(levelCheckSummary(level({ recommendations: [rec("1.1", "Pass"), rec("1.2", "Pass")], numeratorIds: ["1.1", "1.2"], denominatorIdentifiers: ["1.1", "1.2"], assessedAutomated: 2, denominator: 2 }))).toBe("Level 1: TenuVault checks all 2 recommendations automatically.")
   })

@@ -68,11 +68,13 @@ export function levelCheckCounts(level: Pick<CisLevelReadiness, "recommendations
   const recommendations = level.recommendations ?? []
   // A Level the denominator list names has a known total, even when the pack has no policies for it.
   if (level.denominatorIdentifiers?.length) {
-    // The total is every identifier of this Level in the denominator list. The checked ones are those
-    // the pack covers, except a pack recommendation that could not be assessed; the rest need a manual check.
+    // The total is every identifier of this Level in the denominator list. The checked ones are those an
+    // assessed pack recommendation names, plus those the pack descriptions name without recommendation
+    // metadata; a pack recommendation that could not be assessed is not checked. The rest need a manual check.
     const unassessed = new Set(recommendations.filter(result => result.result === "Not assessed").map(result => result.id))
+    const assessed = recommendations.filter(result => result.result !== "Not assessed").map(result => result.id)
     const known = new Set(level.denominatorIdentifiers ?? [])
-    const checked = new Set((level.numeratorIds ?? []).filter(id => known.has(id) && !unassessed.has(id)))
+    const checked = new Set([...assessed, ...(level.numeratorIds ?? []).filter(id => !unassessed.has(id))].filter(id => known.has(id)))
     return { checked: checked.size, manual: known.size - checked.size, total: known.size }
   }
   if (recommendations.length) {
