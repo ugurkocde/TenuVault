@@ -86,7 +86,7 @@ describe("CIS remediation history", () => {
     expect(rows[1]!.textContent).toContain("rolled back")
     expect(rows[1]!.textContent).not.toContain("rollback pending")
     expect(rows[1]!.textContent).not.toContain("applied")
-    expect(rows[0]!.textContent).toContain("synthetic-os 9.9.9 Level 1")
+    expect(rows[0]!.textContent).toContain("Synthetic Os 9.9.9 Level 1")
 
     await act(async () => { (rows[0] as HTMLButtonElement).click() })
     await flush()

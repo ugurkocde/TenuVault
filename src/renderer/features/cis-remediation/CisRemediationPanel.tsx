@@ -4,7 +4,15 @@ import { featureCall } from "../../lib/feature-api"
 import { showFeaturePlanError } from "../../lib/plan-dialog"
 import { toast } from "../../lib/toast"
 import type { Assessment, BaselinePolicy } from "../../../shared/frameworks/policies"
+import { packBenchmarkName, referenceDisplayName } from "../../../shared/frameworks/cis-display"
 import { PATH, type Deployment } from "./api"
+
+/** The deployment title, naming the benchmark by its display name and kept within the 200 character limit. */
+export function remediationTitle(whole: boolean, benchmark: string): string {
+  const [verb, noun] = whole ? ["Deploy", "policies"] : ["Remediate", "findings"]
+  const name = benchmark.trim().slice(0, 200 - verb.length - noun.length - 2).trim()
+  return name ? `${verb} ${name} ${noun}` : `${verb} benchmark ${noun}`
+}
 
 const button = "inline-flex h-10 items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
 
@@ -23,7 +31,7 @@ export function CisRemediationPanel({ tenant, assessment, policies, reference, s
     setBusy(true)
     try {
       const result = await featureCall<{ deployment: Deployment }>(PATH, tenant, "plan", {
-        title: whole ? "Deploy benchmark policies" : "Remediate benchmark findings",
+        title: remediationTitle(whole, referenceDisplayName(reference, packBenchmarkName(policies))),
         reference, runId: assessment.runId, policies: JSON.parse(JSON.stringify(policies)) as unknown[],
         findings: assessment.findings,
         ...(whole ? { selectedPolicyIndexes: [...new Set(deviating.map((finding) => finding.policyIndex))] } : { selectedFindingKeys: deviating.map((finding) => finding.key) }),
