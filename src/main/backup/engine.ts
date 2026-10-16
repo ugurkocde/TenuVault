@@ -279,24 +279,24 @@ export class BackupEngine {
     const stopped: StoppedRun = { committing: false }
     const done = this.run(job, request, controller.signal, deadline, outcome, stopped)
       .catch(async (error: unknown) => {
-        const status = error instanceof BackupCancelledError ? "Cancelled" : "Failed"
-        const exception = error instanceof Error ? error.message : String(error)
+        job.status = error instanceof BackupCancelledError ? "Cancelled" : "Failed"
+        job.exception = error instanceof Error ? error.message : String(error)
         // Classified before the failed manifest is written, which goes around the run's fetch and cannot change it.
-        const unreachable = status === "Failed" && isUnreachable(error) && !outcome.saved && !outcome.answered && !outcome.otherFailures
-        // A storage that stopped answering or refused access would not take the manifest either.
-        if (stopped.manifest && !stopped.committing && stopped.stoppedBy?.() !== "backup storage") await this.recordStopped(job, request, stopped.manifest(exception))
-        job.status = status
-        job.exception = exception
-        if (unreachable) job.unreachable = true
+        if (job.status === "Failed" && isUnreachable(error) && !outcome.saved && !outcome.answered && !outcome.otherFailures) job.unreachable = true
         job.progressMessage = job.status === "Cancelled" ? "Backup cancelled" : "Backup failed"
         this.write(job, `${job.progressMessage}: ${job.exception}`)
+        // A storage that stopped answering or refused access would not take the manifest either.
+        if (!stopped.manifest || stopped.committing || stopped.stoppedBy?.() === "backup storage") return
+        // The run is over, so a backup started while the manifest is written gets its own job instead of joining this one.
+        if (this.running.get(tenantKey)?.job === job) this.running.delete(tenantKey)
+        await this.recordStopped(job, request, stopped.manifest(job.exception))
       })
       .finally(() => {
         clearTimeout(timer)
         controller.abort(new Error("Backup finished"))
         job.progress = 100
         job.endTime = this.now().toISOString()
-        this.running.delete(tenantKey)
+        if (this.running.get(tenantKey)?.job === job) this.running.delete(tenantKey)
         this.executions.delete(job.id)
       })
       .then(() => job)
@@ -469,8 +469,6 @@ export class BackupEngine {
     // Detach cancellation at the first manifest PUT, after cancellable token acquisition.
     // Retention reads cannot delay the manifest, and a saved backup must not burn a retry slot.
     network.signal.throwIfAborted()
-    // The manifest write may land even when it reports a failure, so no failed manifest may follow it.
-    stopped.committing = true
     const commitDeadline = deadline + MANIFEST_COMMIT_GRACE_MS
     const commitController = new AbortController()
     const commitTimer = setTimeout(() => commitController.abort(jobDeadlineError()), Math.max(0, commitDeadline - Date.now()))
@@ -478,7 +476,8 @@ export class BackupEngine {
     const commitNetwork = new NetworkCircuit(3 * concurrency, commitController.signal, commitDeadline)
     const commitStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, commitNetwork)
     try {
-      await commitStorage.put(`${backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), network)
+      // Once the PUT is sent it may land even when it reports a failure, so no failed manifest may follow it.
+      await commitStorage.put(`${backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), network, false, () => { stopped.committing = true })
     } finally {
       clearTimeout(commitTimer)
     }

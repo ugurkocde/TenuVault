@@ -10,12 +10,12 @@ const request = { tenantId: TENANT, clientId: "client", storageAccountName: "con
 const prefix = "/intune-backups/"
 
 /** Azure storage in memory that honours create-only writes, and Graph with `count` policies. */
-function setup(options: { count?: number; retention?: number; override?: (url: URL, init: RequestInit, saved: Map<string, string>) => Response | Promise<Response> | undefined } = {}) {
+function setup(options: { count?: number; retention?: number; getToken?: (saved: Map<string, string>) => Promise<string>; override?: (url: URL, init: RequestInit, saved: Map<string, string>) => Response | Promise<Response> | undefined } = {}) {
   const saved = new Map<string, string>()
   const calls: Array<{ url: URL; init: RequestInit }> = []
   const engine = new BackupEngine({
     retentionDays: () => options.retention ?? 0,
-    getToken: async () => "token",
+    getToken: async () => options.getToken?.(saved) ?? "token",
     fetch: async (input, init = {}) => {
       const url = new URL(String(input))
       calls.push({ url, init })
@@ -77,9 +77,25 @@ describe("failed backup manifest", () => {
     })
     expect(Object.keys(metadata.Items).sort()).toEqual(["DeviceConfigurations/p0", "DeviceConfigurations/p1"])
     expect(saved.has(`${job.backupFolder}/${BACKUP_OWNER_FILE}`)).toBe(true)
-    expect(job.log.join("\n")).toContain("Recorded this backup as failed.")
-    // The failure line stays last.
-    expect(job.log.at(-1)).toContain(`Backup failed: ${job.exception}`)
+    expect(job.log.slice(-2)).toEqual([expect.stringContaining(`Backup failed: ${job.exception}`), expect.stringContaining("Recorded this backup as failed.")])
+  })
+
+  it("records the run as failed when the manifest's sign-in fails before its PUT is sent", async () => {
+    let refused = false
+    const { engine, saved, manifestPuts } = setup({ count: 1, getToken: async store => {
+      if (!refused && [...store.keys()].some(name => name.includes("/DeviceConfigurations/"))) {
+        refused = true
+        throw new Error("AADSTS50173: The provided grant has expired.")
+      }
+      return "token"
+    } })
+    const job = engine.start(request)
+    await engine.waitForJob(job)
+    expect(refused).toBe(true)
+    expect(job.status).toBe("Failed")
+    expect(job.exception).toContain("AADSTS50173")
+    expect(manifestPuts()).toHaveLength(1)
+    expect(JSON.parse(saved.get(`${job.backupFolder}/metadata.json`)!)).toMatchObject({ Status: "Failed", ItemCounts: { TotalPolicies: 1 }, Error: job.exception })
   })
 
   it("never replaces a manifest that is already in the folder", async () => {
@@ -138,11 +154,19 @@ describe("failed backup manifest", () => {
       if (init.method === "PUT" && url.pathname.endsWith("/metadata.json")) return new Promise(() => {})
     } })
     const job = engine.start(request)
+    let finished = false
+    void engine.waitForJob(job).then(() => { finished = true })
     await vi.advanceTimersByTimeAsync(FAILED_MANIFEST_GRACE_MS - 1)
-    expect(job.status).toBe("Running")
+    expect(finished).toBe(false)
+    expect(job.status).toBe("Failed")
+    // The tenant is free while the manifest is written: a new backup gets its own job.
+    const next = engine.start(request)
+    expect(next.id).not.toBe(job.id)
+    engine.cancel(next.id)
     await vi.advanceTimersByTimeAsync(1)
     await engine.waitForJob(job)
-    expect(job.status).toBe("Failed")
+    expect(finished).toBe(true)
+    await engine.waitForJob(next)
     expect(manifestPuts()).toHaveLength(1)
     expect(job.log.join("\n")).toContain("Could not record this backup as failed")
     const count = calls.length
