@@ -82,7 +82,7 @@ Tenants without an MSP license or without sign-in are listed as not included and
 ### Limits
 
 * Scores come only from saved native comparisons and OpenIntuneBaseline validations. Nothing is read from the live tenant to build a score.
-* A partial collection is marked **Partial collection**, and frameworks whose saved comparison could not be read are listed without a score. When several frameworks fail for the same reason, the reason is shown once with **Retry**.
+* A partial collection is marked **Partial collection**, and frameworks whose saved comparison could not be read are listed without a score. When several frameworks fail for the same reason, the reason is shown once with **Retry**. If a refresh of the scores or of an open detail fails, the error is shown with **Retry** and the earlier results and exports are hidden until a read succeeds, so an old score is never shown as current.
 
 ## Conflicts and hygiene
 

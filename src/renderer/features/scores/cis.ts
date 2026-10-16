@@ -23,14 +23,6 @@ export interface CisScoreCard {
   levels: CisScoreLevel[]
 }
 
-/**
- * The CIS workspace a card may show: only from a successful read made after the tab opened. A
- * failed refetch keeps the cached data in the query but must not show it as current.
- */
-export function freshCisWorkspace<T>(query: { status: "pending" | "error" | "success"; data: T | undefined; dataUpdatedAt: number }, mountedAt: number): T | undefined {
-  return query.status === "success" && query.dataUpdatedAt >= mountedAt ? query.data : undefined
-}
-
 /** The CIS page formats a rate as Math.round(rate * 1000) / 10; the card uses the same arithmetic. */
 const percent = (rate: number | null) => (rate === null ? null : Math.round(rate * 1000) / 10)
 

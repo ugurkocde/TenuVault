@@ -15,7 +15,7 @@ import { ComplianceScoringNotice } from '../components/ComplianceScoringNotice'
 import { useConfirm } from "~/components/ConfirmDialog"
 import { cancelFrameworkJob, startFrameworkJob, useFrameworkJob } from '../lib/framework-jobs'
 import { useTenantPlan } from '../lib/license'
-import { formatScore, loadDetail } from '../features/scores/api'
+import { formatScore, freshData, loadDetail } from '../features/scores/api'
 import { invalidateScores } from '../features/scores/invalidate'
 
 const button = 'inline-flex h-10 items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50'
@@ -147,6 +147,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
   const plan = useTenantPlan(credentials?.tenantId)
   const scoring = plan !== null && allows(plan, 'baselineScores')
   const score = useQuery({ queryKey: ['scores-detail', credentials?.tenantId, framework.id, run?.runId], queryFn: () => loadDetail(selectedTenant!, framework.id, run!.runId), enabled: scoring && !!run && !!selectedTenant, retry: false })
+  const scoreData = freshData(score)
   const readGaps = run ? collectionReadGaps(run.assessment.collectionCoverage) : []
   const olderRules = (item: NativeAssessment) => currentRunIds !== null && !currentRunIds.includes(item.runId)
   const term = query.trim().toLowerCase()
@@ -247,7 +248,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
           </button>)}
         </div>
         {scoring && <p className="mt-5 flex flex-wrap items-center gap-2 text-sm text-gray-800">
-          <span>Baseline score: <strong className="font-medium tabular-nums">{score.data ? formatScore(score.data.detail.score) : score.error ? (score.error instanceof Error ? score.error.message : 'Not available.') : 'Loading'}</strong></span>
+          <span>Baseline score: <strong className="font-medium tabular-nums">{scoreData ? formatScore(scoreData.detail.score) : score.error ? (score.error instanceof Error ? score.error.message : 'Not available.') : 'Loading'}</strong></span>
           {readGaps.length > 0 && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-800">Partial collection</span>}
           <Link className="text-blue-700 hover:underline" to="/portal/governance/scores">How the score is counted</Link>
         </p>}

@@ -52,7 +52,7 @@ The readiness tile shows whether scheduling is **Ready**, **Off**, **Sign-in req
 
 ## Work through findings
 
-The **Findings** list shows each open finding with its severity, title, reason, and when it was first seen, last checked, and when its evidence was read. **Open** after the reason goes to the screen the finding comes from. When no finding is open, the list says whether no review has run yet, or names the time of the latest review and whether it completed or could only read part of the evidence. Click **Export CSV** or **Export JSON** above the list to save the findings currently shown, including resolved findings only while they are shown.
+The **Findings** list shows each open finding with its severity, title, reason, and when it was first seen, last checked, and when its evidence was read. **Open** after the reason goes to the screen the finding comes from. If the findings cannot be read, the list shows the error with **Retry** instead of an empty list. When no finding is open, the list says whether no review has run yet, or names the time of the latest review and whether it completed or could only read part of the evidence. Click **Export CSV** or **Export JSON** above the list to save the findings currently shown, including resolved findings only while they are shown.
 
 1. To hand a finding to someone, type their name in **Owner** and click **Save owner**.
 2. To record that a finding is being handled, click **Acknowledge**. Acknowledged findings carry the admin who acknowledged them.

@@ -4,7 +4,8 @@ import { cisReadiness, headlineRate } from "../src/shared/frameworks/cis-readine
 import type { CisException } from "../src/shared/frameworks/cis-exceptions"
 import type { CisPortfolioHistoryEntry } from "../src/shared/frameworks/cis-portfolio"
 import type { Finding } from "../src/shared/frameworks/policies"
-import { cisScoreCards, freshCisWorkspace } from "../src/renderer/features/scores/cis"
+import { cisScoreCards } from "../src/renderer/features/scores/cis"
+import { freshData as freshCisWorkspace } from "../src/renderer/features/scores/api"
 import { CIS_CARD_NOTE } from "../src/renderer/features/scores/CisCard"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"

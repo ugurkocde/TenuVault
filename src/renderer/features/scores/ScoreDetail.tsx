@@ -4,7 +4,7 @@ import type { Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
 import { Chip } from "~/components/dashboard/tiles"
 import { CONTROL_STATUS_LABELS } from "../../../shared/compliance/presentation"
-import { formatDate, formatScore, loadDetail, scopeLabel, unitLabel, type CountedItem, type CountedResult, type RankedGap } from "./api"
+import { formatDate, formatScore, freshData, loadDetail, scopeLabel, unitLabel, type CountedItem, type CountedResult, type RankedGap } from "./api"
 
 /** The groups of the detail, in the order a reader works through a low score. */
 const GROUPS: Array<{ result: CountedResult; label: string; open: boolean }> = [
@@ -27,7 +27,9 @@ export function groupCounted(items: CountedItem[]): Array<{ result: CountedResul
  */
 export function ScoreDetail({ tenant, frameworkId, onClose }: { tenant: Tenant; frameworkId: string; onClose: () => void }) {
   const query = useQuery({ queryKey: ["scores-detail", tenant.credentials?.tenantId, frameworkId], queryFn: () => loadDetail(tenant, frameworkId) })
-  const detail = query.data?.detail
+  // Evidence shows only from a successful read; a failed refresh hides it behind the error.
+  const current = freshData(query)
+  const detail = current?.detail
   const gapsById = new Map((detail?.gaps ?? []).map((gap) => [gap.capabilityId, gap]))
 
   return (
@@ -36,7 +38,7 @@ export function ScoreDetail({ tenant, frameworkId, onClose }: { tenant: Tenant; 
         <div>
           <h3 className="text-lg font-medium text-gray-900">{detail ? `${detail.identity.frameworkName}: how the score is counted` : "How this score is counted"}</h3>
           <p className="text-sm text-gray-500">
-            {query.data?.tenantName ?? tenant.name}
+            {current?.tenantName ?? tenant.name}
             {detail && `, assessed ${formatDate(detail.freshness.assessedAt)}, ${scopeLabel(detail.identity.platforms)}, version ${detail.identity.frameworkVersion}, score ${formatScore(detail.score)}`}
           </p>
           {detail?.versionDetail && <p className="break-all font-mono text-xs text-gray-500">{detail.versionDetail}</p>}
@@ -48,7 +50,14 @@ export function ScoreDetail({ tenant, frameworkId, onClose }: { tenant: Tenant; 
       </div>
 
       {query.isLoading && <div className="h-24 animate-pulse rounded-2xl bg-gray-100" />}
-      {query.error && <p className="text-sm text-red-700">{query.error instanceof Error ? query.error.message : "The comparison could not be read."}</p>}
+      {query.status === "error" && (
+        <div className="flex flex-wrap items-start justify-between gap-3 text-sm text-red-700">
+          <p>{query.error instanceof Error ? query.error.message : "The comparison could not be read."}</p>
+          <Button type="button" variant="outline" size="sm" onClick={() => void query.refetch()} disabled={query.isFetching}>
+            Retry
+          </Button>
+        </div>
+      )}
 
       {detail && (
         <>

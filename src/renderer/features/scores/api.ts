@@ -51,6 +51,15 @@ export function loadPortfolio(tenant: Tenant, targets: string[]) {
   return featureCall<{ formula: string; tenants: PortfolioTenant[] }>("/api/scores", tenant, "portfolio-summary", { targetTenants: targets.map((tenantId) => ({ tenantId })) })
 }
 
+/**
+ * The data of a query that may be shown as current: only from a successful read, made at or
+ * after `since` when given (the CIS cards pass the time the tab opened). A failed refetch keeps
+ * the cached data in the query; it is hidden behind the error instead of shown as current.
+ */
+export function freshData<T>(query: { status: "pending" | "error" | "success"; data: T | undefined; dataUpdatedAt: number }, since = 0): T | undefined {
+  return query.status === "success" && query.dataUpdatedAt >= since ? query.data : undefined
+}
+
 /** "72.5%" or a plain word when there is no value; never a number for missing evidence. The one percent format of every score view. */
 export function formatPercent(value: number | null, empty = "Not scored"): string {
   return value === null || !Number.isFinite(value) ? empty : `${Math.round(value * 10) / 10}%`

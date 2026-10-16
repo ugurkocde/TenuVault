@@ -24,7 +24,11 @@ export function emptyFindingsText(lastRun: Pick<Run, "status" | "finishedAt"> | 
   return `No open findings in the latest review (${when}).`
 }
 
-export function FindingsList({ tenant, findings, lastRun, readOnly = false, onChanged }: { tenant: Tenant; findings: Finding[]; lastRun?: Run | null; readOnly?: boolean; onChanged: () => void }) {
+/**
+ * `load` is the state of the findings read: the list and its empty-state text show only after a
+ * successful read, never while it loads or after it failed.
+ */
+export function FindingsList({ tenant, findings, lastRun, load = { status: "success", error: null }, readOnly = false, onChanged }: { tenant: Tenant; findings: Finding[]; lastRun?: Run | null; load?: { status: "pending" | "error" | "success"; error: unknown }; readOnly?: boolean; onChanged: () => void }) {
   const [showResolved, setShowResolved] = useState(false)
   const active = findings.filter((finding) => finding.state !== "resolved")
   const resolved = findings.filter((finding) => finding.state === "resolved")
@@ -33,19 +37,28 @@ export function FindingsList({ tenant, findings, lastRun, readOnly = false, onCh
     <Tile aria-labelledby="health-findings-heading" className="gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h3 id="health-findings-heading" className="text-lg font-medium text-gray-900">Findings</h3>
-        <GovernanceExportButtons kind="health" tenantName={tenant.name} disabled={shown.length === 0} buildCsv={() => healthCsv(shown)} buildJson={(exportedAt) => healthJson(shown, tenant.name, exportedAt)} />
+        <GovernanceExportButtons kind="health" tenantName={tenant.name} disabled={load.status !== "success" || shown.length === 0} buildCsv={() => healthCsv(shown)} buildJson={(exportedAt) => healthJson(shown, tenant.name, exportedAt)} />
         {resolved.length > 0 && (
           <Button type="button" variant="outline" size="sm" onClick={() => setShowResolved((value) => !value)} aria-pressed={showResolved}>
             {showResolved ? "Hide resolved" : `Show ${resolved.length} resolved`}
           </Button>
         )}
       </div>
-      {shown.length === 0 && <p className="text-sm text-gray-500">{emptyFindingsText(lastRun, findings)}</p>}
-      <ul className="divide-y divide-gray-100 dark:divide-gray-800">
-        {shown.map((finding) => (
-          <FindingRow key={finding.id} tenant={tenant} finding={finding} readOnly={readOnly} onChanged={onChanged} />
-        ))}
-      </ul>
+      {load.status === "pending" && <p className="text-sm text-gray-500">Loading findings</p>}
+      {load.status === "error" && (
+        <div role="alert" className="flex flex-wrap items-start justify-between gap-3 text-sm text-red-700">
+          <p>{load.error instanceof Error ? load.error.message : "The findings could not be read."}</p>
+          <Button type="button" variant="outline" size="sm" onClick={onChanged}>Retry</Button>
+        </div>
+      )}
+      {load.status === "success" && shown.length === 0 && <p className="text-sm text-gray-500">{emptyFindingsText(lastRun, findings)}</p>}
+      {load.status === "success" && (
+        <ul className="divide-y divide-gray-100 dark:divide-gray-800">
+          {shown.map((finding) => (
+            <FindingRow key={finding.id} tenant={tenant} finding={finding} readOnly={readOnly} onChanged={onChanged} />
+          ))}
+        </ul>
+      )}
     </Tile>
   )
 }
