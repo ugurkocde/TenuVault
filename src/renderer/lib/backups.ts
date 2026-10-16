@@ -35,3 +35,26 @@ export function trackBackup(tenant: Tenant, jobId: string, addJob: AddJob, optio
     ...options,
   })
 }
+
+/**
+ * Calls onEnd once the backup job has ended, reading its status every intervalMs. A job the app no
+ * longer knows has ended too. Returns a function that stops watching.
+ */
+export function whenBackupEnds(jobId: string, onEnd: () => void, intervalMs = 3000): () => void {
+  let stopped = false
+  const stop = () => {
+    stopped = true
+    clearInterval(timer)
+  }
+  const timer = setInterval(() => {
+    void fetch("/api/backup/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jobId }) })
+      .then(async (response) => {
+        const data = response.ok ? ((await response.json().catch(() => null)) as { isComplete?: boolean } | null) : null
+        if (stopped || !(response.status === 404 || data?.isComplete)) return
+        stop()
+        onEnd()
+      })
+      .catch(() => undefined)
+  }, intervalMs)
+  return stop
+}
