@@ -44,15 +44,18 @@ export function cisFlowSteps(hasPack: boolean, hasAssessment: boolean, isRunning
 export type CisStage = "setup" | "running" | "results"
 
 /**
- * The staged view the CIS Benchmarks page shows. A live run owns the screen,
+ * The staged view the CIS Benchmarks page shows. A first run owns the screen,
  * a finished assessment shows its results, and setup is shown until an
  * assessment exists or the user explicitly asks for it with New assessment.
- * The setup request is cleared only when a run completes successfully or a
- * saved assessment is viewed, so a failed run returns to the stage it started
- * from and Back to results can clear it without touching the assessment.
+ * A re-run over shown results keeps them on screen with its progress above
+ * them, so the previous results stay visible until the new ones arrive and
+ * after a failed re-run. The setup request is cleared only when a run
+ * completes successfully or a saved assessment is viewed, so a failed run
+ * returns to the stage it started from and Back to results can clear it
+ * without touching the assessment.
  */
 export function cisStage(input: { hasRun: boolean; hasAssessment: boolean; setupRequested: boolean }): CisStage {
-  if (input.hasRun) return "running"
+  if (input.hasRun && (!input.hasAssessment || input.setupRequested)) return "running"
   if (input.hasAssessment && !input.setupRequested) return "results"
   return "setup"
 }

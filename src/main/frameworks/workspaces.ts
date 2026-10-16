@@ -2,7 +2,7 @@ import type { KeyValueStore } from '../storage/secure-store'
 import { parsePolicies, record, type Assessment, type BaselinePolicy } from '../../shared/frameworks/policies'
 import { validateRecommendationList, type RecommendationList } from '../../shared/frameworks/cis-manual'
 import { validateExceptions, type CisException } from '../../shared/frameworks/cis-exceptions'
-import { HISTORY_FULL_MESSAGE, KEEP_NEWEST_ASSESSMENTS, MAX_WORKSPACE_BYTES, MAX_WORKSPACE_HISTORY, type WorkspaceCapacity } from '../../shared/frameworks/workspace-history'
+import { HISTORY_FULL_MESSAGE, KEEP_NEWEST_ASSESSMENTS, MAX_WORKSPACE_BYTES, MAX_WORKSPACE_HISTORY, WORKSPACE_UNREADABLE_MESSAGE, type WorkspaceCapacity } from '../../shared/frameworks/workspace-history'
 
 export interface AssessmentRecord {
   assessment: Assessment
@@ -50,7 +50,7 @@ export function loadWorkspace(tenant: string, framework: string): FrameworkWorks
       if (entry.creation !== undefined && (!record(entry.creation) || typeof entry.creation.success !== "boolean" || !Array.isArray(entry.creation.results) || entry.creation.results.some(item => !record(item) || typeof item.name !== "string" || (item.id !== undefined && typeof item.id !== "string") || (item.error !== undefined && typeof item.error !== "string")))) throw new Error()
     }
     workspace = { ...value, policies, ...(storedList ? { recommendationList: storedList } : {}), ...(storedExceptions ? { exceptions: storedExceptions } : {}) } as unknown as FrameworkWorkspace
-  } catch { throw new Error('The saved workspace cannot be read') }
+  } catch { throw new Error(WORKSPACE_UNREADABLE_MESSAGE) }
 
   return workspace
 }

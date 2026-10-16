@@ -228,13 +228,40 @@ describe("CIS Benchmarks top-level sidebar entry", () => {
     expect(container.querySelector("button")).toBeNull()
   })
 
-  it("renders nothing while the license status is loading", async () => {
+  it("renders the normal entry while the license status is loading, without the upgrade state", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     licenseStatus.current = null
+    selectedTenantState.current = tenantRef("t-entitled")
+    const container = render(sidebarHarness("/portal/dashboard"))
+    await flush()
+    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).not.toBeNull()
+    expect(container.querySelector("button")).toBeNull()
+    licenseStatus.current = entitledStatus("pro")
+    const root = roots[roots.length - 1]
+    await act(async () => { root?.render(sidebarHarness("/portal/dashboard")) })
+    await flush()
+    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).not.toBeNull()
+    expect(container.querySelector("button")).toBeNull()
+  })
+
+  it("uses the account plan for a selected tenant that is not signed in", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    licenseStatus.current = communityStatus()
+    selectedTenantState.current = { id: 3, name: "Not signed in", credentials: undefined }
     const container = render(sidebarHarness("/portal/dashboard"))
     await flush()
     expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).toBeNull()
-    expect(container.textContent).not.toContain("CIS Benchmarks")
+    expect(container.querySelector("button")?.textContent).toContain("Pro")
+  })
+
+  it("renders the normal entry while the status does not list the selected tenant yet", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    licenseStatus.current = communityStatus()
+    selectedTenantState.current = tenantRef("t-entitled")
+    const container = render(sidebarHarness("/portal/dashboard"))
+    await flush()
+    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).not.toBeNull()
+    expect(container.querySelector("button")).toBeNull()
   })
 })
 

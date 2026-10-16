@@ -49,10 +49,14 @@ describe("cisStage", () => {
     expect(cisStage({ hasRun: false, hasAssessment: false, setupRequested: false })).toBe("setup")
   })
 
-  it("shows running while a run is active, whatever else is true", () => {
+  it("shows running while a first run or a run started from setup is active", () => {
     expect(cisStage({ hasRun: true, hasAssessment: false, setupRequested: false })).toBe("running")
-    expect(cisStage({ hasRun: true, hasAssessment: true, setupRequested: false })).toBe("running")
+    expect(cisStage({ hasRun: true, hasAssessment: false, setupRequested: true })).toBe("running")
     expect(cisStage({ hasRun: true, hasAssessment: true, setupRequested: true })).toBe("running")
+  })
+
+  it("keeps the shown results on screen while they are re-run", () => {
+    expect(cisStage({ hasRun: true, hasAssessment: true, setupRequested: false })).toBe("results")
   })
 
   it("shows results when an assessment exists and setup was not requested", () => {
