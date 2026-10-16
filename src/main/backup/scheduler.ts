@@ -30,14 +30,10 @@ export function scheduledResult(job: BackupJob): ScheduledRunResult {
 /**
  * Whether a scheduled result is notified and written to the audit log. A sleeping computer that
  * wakes briefly fails with the same connection error every 15 minutes, so such a failure is
- * reported once per tenant and slot. `reported` keeps the slot each tenant last reported one for.
+ * reported only when the previous attempt of the same slot did not already fail (`afterFailure`).
  */
-export function reportsResult(reported: Map<string, string>, tenantId: string, slot: string | undefined, result: ScheduledRunResult): boolean {
-  if (result.status !== "Failed" || !result.unreachable || !slot) return true
-  const key = tenantId.toLowerCase()
-  if (reported.get(key) === slot) return false
-  reported.set(key, slot)
-  return true
+export function reportsResult(afterFailure: boolean, result: ScheduledRunResult): boolean {
+  return !(afterFailure && result.status === "Failed" && result.unreachable)
 }
 
 /**
@@ -60,7 +56,8 @@ export class BackupScheduler {
 
   constructor(
     private readonly store: KeyValueStore,
-    private readonly run: (tenantId: string) => Promise<ScheduledRunResult>,
+    /** `afterFailure`: the previous attempt of this slot ended as Failed, read from the stored schedule before this attempt. */
+    private readonly run: (tenantId: string, afterFailure: boolean) => Promise<ScheduledRunResult>,
     private readonly onChange: () => void = () => undefined,
     private readonly now: () => Date = () => new Date(),
   ) {}
@@ -142,6 +139,7 @@ export class BackupScheduler {
         if (!schedule || !this.isDue(schedule)) continue
         const slot = this.lastSlot(schedule)
         const attempts = this.slotAttempts(schedule, slot) + 1
+        const afterFailure = this.attempted(schedule, slot) && schedule.lastStatus === "Failed"
         // Reserve the attempt before starting work, so quitting during a request cannot reset the budget.
         this.write({
           ...this.read(),
@@ -155,7 +153,7 @@ export class BackupScheduler {
             lastMessage: schedule.lastStatus === "Cancelled" ? undefined : schedule.lastMessage,
           },
         })
-        const result: ScheduledRunResult = await this.run(schedule.tenantId).catch((error: unknown) => ({
+        const result: ScheduledRunResult = await this.run(schedule.tenantId, afterFailure).catch((error: unknown) => ({
           status: "Failed" as const,
           message: error instanceof Error ? error.message : String(error),
         }))

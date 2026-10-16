@@ -34,7 +34,7 @@ describe("BackupScheduler", () => {
     await vi.advanceTimersByTimeAsync(59_999)
     expect(run).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1)
-    expect(run).toHaveBeenCalledExactlyOnceWith(TENANT)
+    expect(run).toHaveBeenCalledExactlyOnceWith(TENANT, false)
     await vi.advanceTimersByTimeAsync(3 * 60_000)
     expect(run).toHaveBeenCalledTimes(1)
     expect(scheduler.list()[0]).toMatchObject({ lastRunAt: local(2026, 10, 13, 9, 1), nextRunAt: local(2026, 10, 14, 2) })
@@ -392,6 +392,27 @@ describe("BackupScheduler", () => {
       expect(scheduler.list()[0]!.attempts).toBe(0)
     })
 
+    it("tell the runner whether the previous attempt of the same slot failed, across restarts", async () => {
+      const { scheduler, store, run, setNow } = setup(local(2026, 9, 24, 10))
+      run.mockResolvedValue(unreachable)
+      scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+      setNow(local(2026, 9, 25, 2))
+      await scheduler.tick()
+      setNow(local(2026, 9, 25, 2, 15))
+      await scheduler.tick()
+      const restarted = new BackupScheduler(store, run, () => undefined, () => new Date(local(2026, 9, 25, 2, 30)))
+      await restarted.tick()
+      // A new slot starts fresh even though the last stored result is a failure.
+      setNow(local(2026, 9, 26, 2))
+      await scheduler.tick()
+      run.mockResolvedValueOnce({ status: "Completed", message: "Done" })
+      setNow(local(2026, 9, 26, 2, 15))
+      await scheduler.tick()
+      setNow(local(2026, 9, 27, 2))
+      await scheduler.tick()
+      expect((run.mock.calls as unknown as Array<[string, boolean]>).map(([, afterFailure]) => afterFailure)).toEqual([false, true, true, false, true, false])
+    })
+
     it("do not show a retry for a slot before a change made during the attempt", async () => {
       const { scheduler, run, setNow } = setup(local(2026, 9, 24, 10))
       const input = { tenantId: TENANT, enabled: true, frequency: "daily" as const, time: "02:00" }
@@ -480,7 +501,7 @@ describe("BackupScheduler", () => {
     finish({ status: "Completed", message: "Backup completed successfully" })
     await tick
     expect(run).toHaveBeenCalledTimes(1)
-    expect(run).toHaveBeenCalledWith(TENANT)
+    expect(run).toHaveBeenCalledWith(TENANT, false)
   })
 
   it("skips and logs malformed stored entries while keeping valid schedules", () => {

@@ -431,19 +431,15 @@ async function bootstrap(): Promise<void> {
 
   // Joined requests share one notification and the trigger that started the job.
   const unattendedBackupTriggers = new WeakMap<BackupJob, { trigger: "scheduled" | "tray"; notified: boolean }>()
-  // The slot each tenant last reported a scheduled failure to reach Microsoft or storage for.
-  const reportedUnreachable = new Map<string, string>()
 
-  const runScheduledBackup = async (tenantId: string, trigger: "scheduled" | "tray") => {
+  const runScheduledBackup = async (tenantId: string, trigger: "scheduled" | "tray", afterFailure = false) => {
     const profile = tenantProfile(tenantId)
     if (!profile) return { status: "Failed" as const, message: "This tenant is no longer connected." }
     // A tenant the license does not cover is not backed up. Its audit log lives in the
     // tenant's own storage, which is closed without a license too, so the refusal is
     // recorded in the refusal log on this device, notified and shown on the schedule.
     // The plan must also include how the backup runs: daily schedules and Azure storage are paid.
-    // A scheduled run's schedule already holds the slot the scheduler reserved for this attempt.
-    const schedule = trigger === "scheduled" ? scheduler.list().find((s) => s.tenantId.toLowerCase() === tenantId.toLowerCase()) : undefined
-    const daily = schedule?.frequency === "daily"
+    const daily = trigger === "scheduled" && scheduler.list().some((s) => s.tenantId.toLowerCase() === tenantId.toLowerCase() && s.frequency === "daily")
     const requirePlan = async (id: string) => {
       const plan = await license.requireEntitlement(id)
       if (daily && !allows(plan, "dailySchedule")) throw new PlanRequired("dailySchedule")
@@ -460,7 +456,8 @@ async function bootstrap(): Promise<void> {
     unattendedBackupTriggers.set(job, origin)
     await waitForJob(job)
     const result = scheduledResult(job)
-    if (!reportsResult(reportedUnreachable, tenantId, schedule?.attemptSlot, result)) return result
+    // A repeated failure to reach Microsoft or storage in the same slot was already reported.
+    if (!reportsResult(afterFailure, result)) return result
     const ok = result.status === "Completed"
     const cancelled = result.status === "Cancelled"
     const account = accounts.get(tenantId)
@@ -495,7 +492,7 @@ async function bootstrap(): Promise<void> {
     return result
   }
 
-  const scheduler = new BackupScheduler(appStore, (tenantId) => runScheduledBackup(tenantId, "scheduled"), () => {
+  const scheduler = new BackupScheduler(appStore, (tenantId, afterFailure) => runScheduledBackup(tenantId, "scheduled", afterFailure), () => {
     mainWindow?.webContents.send("schedules:changed", scheduler.list())
     tray.refresh()
   })

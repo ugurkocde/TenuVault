@@ -7,11 +7,12 @@ import { NetworkUnreachableError } from "../src/main/api/network-error"
 import { BackupEngine, type BackupJob } from "../src/main/backup/engine"
 import { backupTenantLabel, notifyBackupFailure } from "../src/main/backup/notifications"
 import { RefusalLog, refuseUnlicensedBackup } from "../src/main/backup/refusals"
-import { reportsResult, scheduledResult } from "../src/main/backup/scheduler"
+import { BackupScheduler, reportsResult, scheduledResult, type ScheduledRunResult } from "../src/main/backup/scheduler"
 import { isLocalAccount } from "../src/main/storage/blob-emulator"
 import { localStorageAccountName } from "../src/shared/constants"
 import type { BackupRefusal } from "../src/shared/ipc"
 import { allows, PlanRequired } from "../src/shared/plans"
+import { memoryStore } from "./helpers"
 
 const notifications = vi.hoisted(() => ({ supported: true, created: [] as Array<{ title: string; body: string; click: () => void; show: ReturnType<typeof vi.fn<() => void>> }> }))
 vi.mock("electron", () => ({
@@ -46,7 +47,7 @@ function tenantProfileFixture(metadata: { name?: string; domain?: string }) {
 }
 
 // Exercise the main-process runner with the real engine, without starting Electron.
-function unattendedFixture(getToken: () => Promise<string>, schedules: () => Array<{ tenantId: string; frequency: string; attemptSlot?: string }> = () => []) {
+function unattendedFixture(getToken: () => Promise<string>) {
   const engine = new BackupEngine({ fetch: vi.fn(async () => new Response(null, { status: 201 })), getToken })
   const start = vi.spyOn(engine, "start")
   const source = index.slice(index.indexOf("const refusals ="), index.indexOf("const scheduler = new BackupScheduler"))
@@ -56,7 +57,7 @@ function unattendedFixture(getToken: () => Promise<string>, schedules: () => Arr
     mainWindow: null,
     tenantProfile: tenantProfileFixture({ name: tenant.name }),
     isLocalAccount,
-    scheduler: { list: schedules },
+    scheduler: { list: () => [] },
     PlanRequired,
     allows,
     license: { requireEntitlement: async () => "msp" },
@@ -80,7 +81,7 @@ function unattendedFixture(getToken: () => Promise<string>, schedules: () => Arr
   }
   const run = new Function(...Object.keys(dependencies), transformSync(source, { loader: "ts" }).code + "\nreturn runScheduledBackup;")(
     ...Object.values(dependencies),
-  ) as (tenantId: string, trigger: Trigger) => Promise<{ status: string; message: string }>
+  ) as (tenantId: string, trigger: Trigger, afterFailure?: boolean) => Promise<ScheduledRunResult>
   return { run, start, engine, dispatch: dependencies.host.dispatch }
 }
 
@@ -216,33 +217,54 @@ describe("unattended backup notifications", () => {
     ])
   })
 
-  it("reports a scheduled failure to reach Microsoft once per slot", async () => {
-    let attemptSlot = "2026-10-15T00:00:00.000Z"
+  it("reports a scheduled failure to reach Microsoft once per slot, across restarts", async () => {
     let failure: Error = new NetworkUnreachableError("login.microsoftonline.com could not be reached.")
-    const { run, dispatch } = unattendedFixture(async () => { throw failure }, () => [{ tenantId: tenant.tenantId, frequency: "weekly", attemptSlot }])
+    const store = memoryStore()
+    let now = new Date(2026, 9, 14, 10)
+    const dispatches: Array<ReturnType<typeof vi.fn>> = []
+    // A new process gets a new runner and scheduler on the same stored schedules.
+    const start = () => {
+      const fixture = unattendedFixture(async () => { throw failure })
+      dispatches.push(fixture.dispatch)
+      return { ...fixture, scheduler: new BackupScheduler(store, (tenantId, afterFailure) => fixture.run(tenantId, "scheduled", afterFailure), () => undefined, () => now) }
+    }
     const titles = () => notifications.created.map((notification) => notification.title)
-    expect(await run(tenant.tenantId, "scheduled")).toMatchObject({ status: "Failed", unreachable: true })
-    await run(tenant.tenantId, "scheduled")
+    const audits = () => dispatches.reduce((count, dispatch) => count + dispatch.mock.calls.length, 0)
+    const tickAt = async (process: ReturnType<typeof start>, day: number, minute: number) => {
+      now = new Date(2026, 9, day, 2, minute)
+      await process.scheduler.tick()
+    }
+    let process = start()
+    process.scheduler.set({ tenantId: tenant.tenantId, enabled: true, frequency: "daily", time: "02:00" })
+    await tickAt(process, 15, 0)
+    await tickAt(process, 15, 15)
     expect(titles()).toEqual(["Scheduled backup of Contoso failed"])
-    expect(dispatch).toHaveBeenCalledOnce()
-    expect((await (dispatch.mock.calls[0]![0] as Request).json()).logEntry).toMatchObject({ eventType: "BACKUP_FAILED", result: "FAILURE" })
-    // Tray backups are reported every time.
-    await run(tenant.tenantId, "tray")
-    await run(tenant.tenantId, "tray")
-    expect(titles()).toEqual(["Scheduled backup of Contoso failed", "Tray backup of Contoso failed", "Tray backup of Contoso failed"])
-    expect(dispatch).toHaveBeenCalledTimes(3)
-    // A counted failure in the same slot is still reported.
+    expect(audits()).toBe(1)
+    expect((await (dispatches[0]!.mock.calls[0]![0] as Request).json()).logEntry).toMatchObject({ eventType: "BACKUP_FAILED", result: "FAILURE" })
+    process = start()
+    await tickAt(process, 15, 30)
+    expect(titles()).toHaveLength(1)
+    expect(audits()).toBe(1)
+    expect(process.scheduler.list()[0]).toMatchObject({ attempts: 0, lastStatus: "Failed" })
+    // The next slot reports its first connection failure again.
+    await tickAt(process, 16, 0)
+    await tickAt(process, 16, 15)
+    expect(titles()).toHaveLength(2)
+    expect(audits()).toBe(2)
+    // Counted failures, successes and tray backups are reported every time.
     const reached = failure
     failure = new Error("Sign in to this tenant first.")
-    await run(tenant.tenantId, "scheduled")
-    expect(titles()).toHaveLength(4)
-    expect(dispatch).toHaveBeenCalledTimes(4)
-    // The next slot reports its first connection failure again.
+    await tickAt(process, 16, 30)
+    expect(titles()).toHaveLength(3)
+    expect(audits()).toBe(3)
     failure = reached
-    attemptSlot = "2026-10-22T00:00:00.000Z"
-    await run(tenant.tenantId, "scheduled")
-    await run(tenant.tenantId, "scheduled")
-    expect(titles()).toHaveLength(5)
-    expect(dispatch).toHaveBeenCalledTimes(5)
+    await process.run(tenant.tenantId, "tray")
+    await process.run(tenant.tenantId, "tray")
+    expect(titles().slice(3)).toEqual(["Tray backup of Contoso failed", "Tray backup of Contoso failed"])
+    expect(audits()).toBe(5)
+    expect(reportsResult(true, { status: "Failed", message: "Sign in to this tenant first." })).toBe(true)
+    expect(reportsResult(true, { status: "Completed", message: "Done" })).toBe(true)
+    expect(reportsResult(true, { status: "Failed", message: "Unreachable", unreachable: true })).toBe(false)
+    expect(reportsResult(false, { status: "Failed", message: "Unreachable", unreachable: true })).toBe(true)
   })
 })

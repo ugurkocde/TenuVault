@@ -1,5 +1,6 @@
-import { AuthError, ClientAuthErrorCodes, InteractionRequiredAuthError } from "@azure/msal-node"
+import { AuthError, ClientAuthErrorCodes, ConfidentialClientApplication, InteractionRequiredAuthError } from "@azure/msal-node"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { createBridgedFetch } from "../src/main/api/fetch-bridge"
 import { FetchApplicationError, NetworkUnreachableError, withNetworkErrors } from "../src/main/api/network-error"
 import { SignInRequiredError } from "../src/main/auth/msal"
 import { BackupEngine, NetworkCircuit } from "../src/main/backup/engine"
@@ -26,6 +27,7 @@ async function unreachableFailure(): Promise<unknown> {
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.unstubAllGlobals()
 })
 
 describe("isUnreachable", () => {
@@ -127,5 +129,28 @@ describe("unreachable backup jobs", () => {
     expect(completed.status).toBe("Completed")
     expect(completed.unreachable).toBeUndefined()
     expect(scheduledResult(completed)).toEqual({ status: "Completed", message: "Backup completed successfully" })
+  })
+})
+
+describe("token requests through the fetch bridge and MSAL", () => {
+  // MSAL sends token requests with the global fetch, which the app replaces with the bridge.
+  const tokenError = async (scope: string, network: typeof fetch) => {
+    vi.stubGlobal("fetch", createBridgedFetch({ dispatch: vi.fn(), getDelegatedToken: vi.fn(), fetch: withNetworkErrors(network) }))
+    const client = new ConfidentialClientApplication({ auth: { clientId: request.clientId, authority: `https://login.microsoftonline.com/${TENANT}`, clientSecret: "secret" } })
+    return client.acquireTokenByClientCredential({ scopes: [scope] }).then(() => null, (error: unknown) => error)
+  }
+  const portal: typeof fetch = async () => new Response("<html><body>Sign in to the network</body></html>", { status: 200, headers: { "content-type": "text/html" } })
+
+  it.each(["https://storage.azure.com/.default", "https://graph.microsoft.com/.default"])("counts a network sign-in page answering a token request for %s", async scope => {
+    const error = await tokenError(scope, portal)
+    expect(error).toMatchObject({ errorCode: "token_parsing_error" })
+    expect(isUnreachable(error)).toBe(false)
+    expect(isUnreachable(new TokenError("Failed to parse response", { cause: error }))).toBe(false)
+  })
+
+  it("treats a token request that got no response as unreachable", async () => {
+    const error = await tokenError("https://storage.azure.com/.default", async () => { throw new TypeError("net::ERR_INTERNET_DISCONNECTED") })
+    expect(error).toMatchObject({ errorCode: "network_error" })
+    expect(isUnreachable(error)).toBe(true)
   })
 })
