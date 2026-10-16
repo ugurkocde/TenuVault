@@ -346,7 +346,7 @@ describe("manifest commit and retention interruption", () => {
     expect(next.status).toBe("Completed")
   })
 
-  it.each(["cancel", "deadline"])("fails without a manifest when %s arrives after the last item read and before commit", async interrupt => {
+  it.each(["cancel", "deadline"])("records the saved part as failed when %s arrives after the last item read and before commit", async interrupt => {
     vi.useFakeTimers()
     let job: BackupJob | undefined
     let interrupted = false
@@ -366,8 +366,12 @@ describe("manifest commit and retention interruption", () => {
     expect(job.exception).toContain(interrupt === "cancel" ? "Backup cancelled by you" : "30 minute job deadline")
     expect(interrupted).toBe(true)
     expect([...saved.keys()].filter(name => name.includes("/DeviceConfigurations/"))).toHaveLength(1)
-    expect([...saved.keys()].some(name => name.endsWith("/metadata.json"))).toBe(false)
-    expect(calls.some(call => call.init.method === "PUT" && call.url.pathname.endsWith("/metadata.json"))).toBe(false)
+    // Only the create-only failed manifest is written, never one that reports the run as complete.
+    const manifests = calls.filter(call => call.init.method === "PUT" && call.url.pathname.endsWith("/metadata.json"))
+    expect(manifests).toHaveLength(1)
+    expect(manifests[0]!.init.headers).toMatchObject({ "if-none-match": "*" })
+    expect(JSON.parse(saved.get(`${job.backupFolder}/metadata.json`)!)).toMatchObject({ Status: "Failed", Failures: 0, ItemCounts: { DeviceConfigurations: 1, TotalPolicies: 1 }, Error: job.exception })
+    expect(Object.keys(JSON.parse(saved.get(`${job.backupFolder}/metadata.json`)!).Items)).toEqual(["DeviceConfigurations/p0"])
   })
 
   it.each(["cancel", "deadline"])("completes a saved manifest when %s arrives during its PUT", async interrupt => {

@@ -109,8 +109,8 @@ A backup ends with one of these results:
 | --- | --- |
 | **Complete** | Every item of every included type was saved |
 | **Completed with warnings** | Some items or types could not be read. The rest was saved. The log and **Backup Details** list what is missing. |
-| **Failed** | No item could be saved |
-| **Incomplete** | The backup stopped before it finished, for example because TenuVault was closed, the sign-in expired or the storage could not be reached. It holds only part of the tenant. |
+| **Failed** | No item could be saved, or the backup stopped after it started saving, for example because the sign-in expired, Microsoft Graph stopped responding, the 30 minute deadline passed or you cancelled it. It holds only the policies it saved and is never used as a complete backup. The timeline shows how it started, and retention removes it like any other backup once it is older than the retention period. |
+| **Incomplete** | The backup stopped and could not record its result, for example because TenuVault was closed or the storage could not be reached. It holds only part of the tenant. |
 | **Running** | The backup has not written its summary yet. A backup without a summary that started less than six hours ago is shown as running; after that it is shown as incomplete. |
 
 The **Backup Progress** dialog shows **Failed** with the error for every backup that stopped, including the ones the timeline later lists as incomplete.

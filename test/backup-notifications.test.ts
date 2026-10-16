@@ -177,7 +177,7 @@ describe("unattended backup notifications", () => {
     const joined = engine.start({ tenantId: tenant.tenantId, clientId: "app", storageAccountName: localStorageAccountName(tenant.tenantId), trigger: "manual" })
     expect(joined).toBe(start.mock.results[0]!.value)
     engine.cancel(joined.id)
-    expect(await automatic).toEqual({ status: "Cancelled", message: "Backup cancelled by you. No manifest was written for this run." })
+    expect(await automatic).toEqual({ status: "Cancelled", message: "Backup cancelled by you. This run is never offered as a complete backup." })
     expect(joined.status).toBe("Cancelled")
     expect(notifications.created).toEqual([])
     expect(dispatch).toHaveBeenCalledOnce()

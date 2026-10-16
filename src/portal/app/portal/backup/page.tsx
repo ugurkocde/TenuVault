@@ -509,6 +509,7 @@ function BackupDetails({ backup, first, storageAccountName, downloading, onChang
           <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
           <div className="space-y-1">
             {backup.status === "incomplete" && <p>This backup stopped before it finished, for example because TenuVault was closed. It holds only part of the tenant.</p>}
+            {backup.status !== "incomplete" && kind === "failed" && backup.totalPolicies > 0 && <p>This backup failed before it finished. It holds only the policies it saved and is never used as a complete backup.</p>}
             {(backup.failures ?? 0) > 0 && <p>{backup.failures} item{backup.failures === 1 ? "" : "s"} or type{backup.failures === 1 ? "" : "s"} could not be read. The backup log lists them.</p>}
             {(backup.failedTypes?.length ?? 0) > 0 && <p>Not read: {backup.failedTypes!.map(typeLabel).join(", ")}.</p>}
             {(backup.skippedTypes?.length ?? 0) > 0 && <p>Left out because access was denied: {backup.skippedTypes!.map(typeLabel).join(", ")}. Grant admin consent for the app registration in Microsoft Entra, or run the setup script again, and check that your Intune role covers these items.</p>}
