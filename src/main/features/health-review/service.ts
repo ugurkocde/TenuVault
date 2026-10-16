@@ -29,6 +29,7 @@ import {
   type HealthFinding,
   type NotificationPayload,
   type Severity,
+  type UnreadableSignals,
 } from "./rules"
 
 /** Stored health review records (domain health-reviews): one schedule and the review runs. */
@@ -168,14 +169,17 @@ function brief(message: string): string {
   return message.replace(/\s+/g, " ").trim().slice(0, 200)
 }
 
-/** Signal providers of the other workflows, each with the feature that licenses it. */
-const SIGNAL_PROVIDERS: Array<{ feature: Feature; provider: SignalProvider }> = [
-  { feature: "baselineUpgrades", provider: (deps, tenantId) => baselineSignals(deps, tenantId) },
-  { feature: "goldenStandards", provider: (deps, tenantId) => standardSignals(deps, tenantId) },
-  { feature: "hygieneExplorer", provider: hygieneSignals },
-  { feature: "baselineScores", provider: scoreSignals },
-  { feature: "baselineScores", provider: (_deps, tenantId) => cisSignals(tenantId) },
+/** Signal providers of the other workflows, each with the feature that licenses it and the screen that owns its records. */
+const SIGNAL_PROVIDERS: Array<{ feature: Feature; provider: SignalProvider; source: UnreadableSignals }> = [
+  { feature: "baselineUpgrades", provider: (deps, tenantId) => baselineSignals(deps, tenantId), source: { label: "baseline upgrades", link: "/portal/changes/baseline-upgrades" } },
+  { feature: "goldenStandards", provider: (deps, tenantId) => standardSignals(deps, tenantId), source: { label: "standards", link: "/portal/governance/standards" } },
+  { feature: "hygieneExplorer", provider: hygieneSignals, source: { label: "conflicts and hygiene", link: "/portal/governance/hygiene" } },
+  { feature: "baselineScores", provider: scoreSignals, source: { label: "baseline scores", link: "/portal/governance/scores" } },
+  { feature: "baselineScores", provider: (_deps, tenantId) => cisSignals(tenantId), source: { label: "CIS Benchmarks", link: "/portal/frameworks/cis-benchmarks" } },
 ]
+
+/** The license could not be read, so no provider ran. */
+const LICENSE_UNREADABLE: UnreadableSignals = { label: "the license", link: "/license" }
 
 /**
  * Reads the work signals of one tenant from stored records. A provider runs only when
@@ -183,17 +187,17 @@ const SIGNAL_PROVIDERS: Array<{ feature: Feature; provider: SignalProvider }> = 
  * never writes to the tenant for a signal. A provider that fails marks the family as
  * not evaluated; the signals that were read still count.
  */
-export async function collectSignals(deps: FeatureDeps, tenantId: string): Promise<{ signals: WorkSignal[]; evaluated: boolean }> {
+export async function collectSignals(deps: FeatureDeps, tenantId: string): Promise<{ signals: WorkSignal[]; evaluated: boolean; unreadable: UnreadableSignals[] }> {
   let plan: Awaited<ReturnType<FeatureDeps["plan"]>> | null = null
   try {
     plan = await deps.plan(tenantId)
   } catch {
     plan = null
   }
-  if (!plan) return { signals: [], evaluated: false }
+  if (!plan) return { signals: [], evaluated: false, unreadable: [LICENSE_UNREADABLE] }
   const signals: WorkSignal[] = []
   const seen = new Set<string>()
-  let evaluated = true
+  const unreadable: UnreadableSignals[] = []
   for (const entry of SIGNAL_PROVIDERS) {
     if (!allows(plan, entry.feature)) continue
     try {
@@ -203,10 +207,10 @@ export async function collectSignals(deps: FeatureDeps, tenantId: string): Promi
         signals.push(signal)
       }
     } catch {
-      evaluated = false
+      unreadable.push(entry.source)
     }
   }
-  return { signals, evaluated }
+  return { signals, evaluated: unreadable.length === 0, unreadable }
 }
 
 export class ReviewInProgress extends Error {
@@ -234,7 +238,7 @@ export async function runReview(deps: FeatureDeps, tenantId: string, trigger: Ru
     const listing = await listBackups(deps, tenant)
     const collected = await collectSignals(deps, tenant)
     const now = deps.now()
-    const results: CheckResult[] = [checkBackups(tenant, listing, now), checkSignals(tenant, collected.signals, collected.evaluated)]
+    const results: CheckResult[] = [checkBackups(tenant, listing, now), checkSignals(tenant, collected.signals, collected.evaluated, collected.unreadable)]
 
     // Without history: the reconciled values become new revisions and must not nest old ones.
     const existing = findingsOf(deps, tenant).map(({ history: _history, ...plain }) => plain)

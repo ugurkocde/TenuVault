@@ -97,7 +97,7 @@ Policy Validation checks deployed OIB policies setting by setting against the ba
 It covers matched Settings Catalog and Endpoint security policies, compliance policies, update rings, driver updates, Endpoint Analytics and administrative templates. Other policy types show "This policy type is not validated setting by setting." Each policy shows whether it matches the baseline or has drift, with value mismatches, settings missing in the tenant and settings only in the tenant.
 
 * **Export CSV** and **Export PDF** save the results. The PDF report has the same layout as the comparison report, with a summary table of every validated policy and its status, and a table of value mismatches, settings missing in the tenant and settings only in the tenant for each drifted policy.
-* **Saved validations** keeps the latest 50 validations per tenant, encrypted on this device.
+* **Saved validations** keeps the latest 50 validations per tenant, encrypted on this device. Only **Validate all** sets the OpenIntuneBaseline score in [Governance](/governance/#openintunebaseline-scores); a single policy check is saved and marked as not part of the score. When the history is full, the oldest single policy checks are removed first, and a full validation is never removed to make room for a single policy check. If every saved validation is a full validation, a new single policy check is not saved and the notice says so; export the results to keep it, or delete older saved validations to make room.
 * **Fix drift** (Pro and MSP) resets a drifted policy to its OIB configuration in place. Assignments stay. The tenant is always backed up first, and the fix can be undone.
 
 ## Deploy and undo

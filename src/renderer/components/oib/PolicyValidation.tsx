@@ -2,12 +2,14 @@ import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 import { ChevronDown, ChevronRight, Download, FileText, History, LoaderCircle, RotateCcw, ShieldCheck, Trash2 } from "lucide-react"
 import { cn } from "~/lib/utils"
+import { queryClient } from "~/lib/query-client"
+import { invalidateScores } from "../../features/scores/invalidate"
 import { VALIDATED_FOLDERS } from "../../../shared/oib/compare"
 import { formatReportDate } from "../../../shared/compliance/presentation"
 import { policyTypeName } from "../../../shared/oib/licensing"
 import { validationJson } from "../../../shared/oib/validation-export"
 import { toCsv, type ReportPayload } from "../../../shared/oib/report"
-import { OIB_PLATFORMS, type OibCatalog, type OibPlatform, type PolicyValidation as Validation, type SettingDiff, type ValidationRun } from "../../../shared/oib/types"
+import { isFullValidation, OIB_PLATFORMS, type OibCatalog, type OibPlatform, type PolicyValidation as Validation, type SettingDiff, type ValidationRun } from "../../../shared/oib/types"
 import { PlanBadge } from "../UpgradeNote"
 import { GatedButton } from "../PlanGate"
 import { RunsList } from "./DeployPanel"
@@ -83,10 +85,26 @@ function pdfOf(results: Shown[], tenantId: string, tenantName: string, reference
   }
 }
 
-/** Validates matched policies of one pack; `save` keeps the run under Saved validations. */
-const validateRequest = (tenant: OibTenant, catalog: OibCatalog, rows: Row[], save: boolean) => oibRequest<ValidationRun>({
+/**
+ * Validates matched policies of one pack; `save` asks to keep the run under Saved validations.
+ * Only a validation of every matched policy ("all") sets the OIB baseline score; a single-policy
+ * check is kept in history only. `saved` says whether the run was actually kept.
+ */
+const validateRequest = async (tenant: OibTenant, catalog: OibCatalog, rows: Row[], save: boolean, selection: "all" | "single"): Promise<{ run: ValidationRun; saved: boolean }> => {
+  const { saved, ...run } = await requestValidation(tenant, catalog, rows, save, selection)
+  return { run, saved: saved !== false }
+}
+
+/** The notice after a single-policy check, accurate about whether Saved validations kept it. */
+export function singleCheckNotice(policyName: string, status: string, saved: boolean): string {
+  return saved
+    ? `${policyName}: ${status}. Saved under Saved validations.`
+    : `${policyName}: ${status}. This result was not saved because Saved validations is full of Validate all results, which are kept first. Export the results to keep it, or delete older saved validations below to make room.`
+}
+
+const requestValidation = (tenant: OibTenant, catalog: OibCatalog, rows: Row[], save: boolean, selection: "all" | "single") => oibRequest<ValidationRun & { saved?: boolean }>({
   action: "oib-validate", tenantId: tenant.tenantId, appId: tenant.appId, platform: catalog.platform, commit: catalog.commit, ...(catalog.tag ? { tag: catalog.tag } : {}),
-  items: rows.map(r => ({ source: r.policy.source, targetId: r.match.tenant!.id })), save,
+  items: rows.map(r => ({ source: r.policy.source, targetId: r.match.tenant!.id })), save, selection,
 })
 
 function DiffTable({ title, items, kind }: { title: string; items: SettingDiff[]; kind: "mismatch" | "oib" | "tenant" }) {
@@ -186,7 +204,7 @@ export function PolicyValidation({ selections }: { selections: Selections }) {
         for (const { catalog, rows } of groups) {
           if (groups.length > 1) ctx.update({ detail: OIB_PLATFORMS[catalog.platform].label })
           // One platform failing does not stop the others.
-          try { done.push(await validateRequest(t, catalog, rows, true)) } catch (e) { failures.push(`${OIB_PLATFORMS[catalog.platform].label}: ${errorText(e)}`) }
+          try { done.push((await validateRequest(t, catalog, rows, true, "all")).run); invalidateScores(queryClient) } catch (e) { failures.push(`${OIB_PLATFORMS[catalog.platform].label}: ${errorText(e)}`) }
           ctx.setResult({ platforms: chosen, runs: [...done] })
         }
         if (failures.length) throw new Error(`Some platforms were not validated. ${failures.join(" ")}`)
@@ -202,10 +220,11 @@ export function PolicyValidation({ selections }: { selections: Selections }) {
     if (!pack) return
     setChecking(key(row.platform, row.policy.source)); setError(""); setNotice(""); exports.clear()
     try {
-      const run = await validateRequest(tenant!, pack, [row], true)
+      const { run, saved } = await validateRequest(tenant!, pack, [row], true, "single")
+      invalidateScores(queryClient)
       setSingles(s => [...s, run])
       const status = run.results[0]?.status
-      setNotice(`${row.policy.name}: ${status ? STATUS[status].label.toLowerCase() : "validated"}. Saved under Saved validations.`)
+      setNotice(singleCheckNotice(row.policy.name, status ? STATUS[status].label.toLowerCase() : "validated", saved))
       void refreshHistory()
     } catch (e) {
       setError(errorText(e))
@@ -226,6 +245,7 @@ export function PolicyValidation({ selections }: { selections: Selections }) {
     setDeleting({ runId, busy: true }); setHistoryError("")
     try {
       setHistory((await oibRequest<{ runs: ValidationRun[] }>({ action: "oib-validation-delete", tenantId: tenant!.tenantId, runId })).runs)
+      invalidateScores(queryClient)
       if (viewing?.run.runId === runId) { setStep(viewing.from); setViewing(null) }
       setDeleting(null)
     } catch (e) {
@@ -366,11 +386,11 @@ export function PolicyValidation({ selections }: { selections: Selections }) {
         <h2 id="saved-validations" className="flex items-center gap-2 text-lg font-medium"><History className="h-4 w-4" aria-hidden="true" />Saved validations</h2>
         <button type="button" className={button} disabled={exports.saving} onClick={() => exportJson(history, `history ${today()}`)}><Download className="h-4 w-4" aria-hidden="true" />Export all (JSON)</button>
       </div>
-      <p className="mt-1 text-xs text-gray-500">Kept in encrypted storage on this device (latest 50). Validate all and single policy checks are both saved.</p>
+      <p className="mt-1 text-xs text-gray-500">Kept in encrypted storage on this device (latest 50). Validate all and single policy checks are both saved. Only Validate all sets the OIB baseline score.</p>
       {historyError && <p role="alert" className="mt-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800">{historyError}</p>}
       <ul className="mt-2 divide-y divide-gray-100">{history.map(run => <li key={run.runId} className="py-3 text-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <span>{new Date(run.validatedAt).toLocaleString()}, {run.reference}<span className="ml-2 text-xs text-gray-500">{plural(run.results.length, "policy", "policies")}: {count(run.results, "compliant")} match, {count(run.results, "drifted")} drift, {plural(count(run.results, "error"), "error", "errors")}</span></span>
+          <span>{new Date(run.validatedAt).toLocaleString()}, {run.reference}<span className="text-xs text-gray-500">{". "}{plural(run.results.length, "policy", "policies")}: {count(run.results, "compliant")} match, {count(run.results, "drifted")} drift, {plural(count(run.results, "error"), "error", "errors")}{isFullValidation(run) ? "" : ". Single policy check, not part of the baseline score"}</span></span>
           <span className="flex gap-2">
             <button type="button" className={button} disabled={busy || step === "fix"} onClick={() => { exports.clear(); setViewing({ run, from: step === "saved" ? viewing?.from ?? "platforms" : step }); setStep("saved") }}>View</button>
             <button type="button" className={button} aria-label="Delete saved validation" aria-expanded={deleting?.runId === run.runId} disabled={!!deleting} onClick={() => setDeleting({ runId: run.runId })}><Trash2 className="h-4 w-4" aria-hidden="true" /></button>

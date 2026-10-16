@@ -9,7 +9,7 @@ import { VALIDATED_FOLDERS, validatePolicy } from "../../shared/oib/compare"
 import { extractOibId } from "../../shared/oib/manifest"
 import { compareToTenant } from "../../shared/oib/match"
 import { replaceTenantVariables } from "../../shared/oib/variables"
-import { OIB_BACKUP_REUSE_MINUTES, OIB_PLATFORMS, type DeployItem, type OibBackupChoice, type OibBackupOptions, type OibComparison, type OibPlatform, type OibProgress, type OibRecentBackup, type OibRun, type PolicyValidation, type TenantPolicy, type UndoResult, type ValidationRun } from "../../shared/oib/types"
+import { isFullValidation, OIB_BACKUP_REUSE_MINUTES, OIB_PLATFORMS, type DeployItem, type OibBackupChoice, type OibBackupOptions, type OibComparison, type OibPlatform, type OibProgress, type OibRecentBackup, type OibRun, type PolicyValidation, type TenantPolicy, type UndoResult, type ValidationRun } from "../../shared/oib/types"
 import { backupGaps, describeMissing, describeStatus, folderLabel } from "../backup/completeness"
 import { apiBody } from "../features/deps"
 import { withTenantWrite } from "../features/write-lock"
@@ -501,17 +501,35 @@ function readValidations(tenant: string): ValidationRun[] {
   }
 }
 
-function saveValidations(tenant: string, runs: ValidationRun[]): void {
-  let kept = runs.slice(0, VALIDATIONS_KEPT)
-  let json = JSON.stringify(kept)
-  while (json.length > MAX_HISTORY_CHARS && kept.length > 1) {
-    kept = kept.slice(0, -1)
-    json = JSON.stringify(kept)
+/**
+ * The validations kept within the count and size limits, newest first. The oldest single-policy
+ * check goes first; a full validation (Validate all) is only removed when no single-policy check
+ * is left, so single checks never push out the validation that sets the OIB score.
+ */
+export function keepValidations(runs: ValidationRun[], maxRuns = VALIDATIONS_KEPT, maxChars = MAX_HISTORY_CHARS): ValidationRun[] {
+  const kept = [...runs]
+  const over = () => kept.length > maxRuns || (kept.length > 1 && JSON.stringify(kept).length > maxChars)
+  while (over()) {
+    let index = kept.length - 1
+    while (index >= 0 && isFullValidation(kept[index]!)) index--
+    kept.splice(index >= 0 ? index : kept.length - 1, 1)
   }
-  requireStore().set(validationsKey(tenant), json)
+  return kept
 }
 
-async function validate(body: RecordJson): Promise<ValidationRun> {
+/** Saves the history and reports whether the validation with `runId` was kept. */
+function saveValidations(tenant: string, runs: ValidationRun[], runId?: string): boolean {
+  const kept = keepValidations(runs)
+  requireStore().set(validationsKey(tenant), JSON.stringify(kept))
+  return runId === undefined || kept.some((run) => run.runId === runId)
+}
+
+/**
+ * Validates the selected policies. `saved` says whether the result is in Saved validations: a
+ * single-policy check is not kept when every retained entry is a full validation, which is never
+ * removed to make room for it.
+ */
+async function validate(body: RecordJson): Promise<ValidationRun & { saved: boolean }> {
   const platform = platformOf(body.platform)
   const tenant = tenantOf(body.tenantId)
   if (!Array.isArray(body.items) || !body.items.length || body.items.length > 200) throw new FrameworkError("Select between 1 and 200 matched policies.")
@@ -552,10 +570,11 @@ async function validate(body: RecordJson): Promise<ValidationRun> {
   } finally {
     progress.delete(key)
   }
-  const run: ValidationRun = { runId: randomUUID(), tenantId: tenant, platform, commit: pack.catalog.commit, reference: pack.catalog.reference, validatedAt: new Date().toISOString(), validationVersion: 1, results }
+  const selection = body.selection === "single" || body.selection === "all" ? body.selection : undefined
+  const run: ValidationRun = { runId: randomUUID(), tenantId: tenant, platform, commit: pack.catalog.commit, reference: pack.catalog.reference, validatedAt: new Date().toISOString(), validationVersion: 1, ...(selection && { selection }), results }
   // Re-checking a single policy is not kept as a separate history entry.
-  if (body.save !== false) saveValidations(tenant, [run, ...readValidations(tenant)])
-  return run
+  const saved = body.save !== false && saveValidations(tenant, [run, ...readValidations(tenant)], run.runId)
+  return { ...run, saved }
 }
 
 export async function handleOib(body: RecordJson): Promise<unknown> {

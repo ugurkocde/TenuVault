@@ -6,6 +6,7 @@ import { Button } from "~/components/ui/button"
 import { Chip } from "~/components/dashboard/tiles"
 import { toast } from "../../lib/toast"
 import { ChangeSetFlow } from "../shared/ChangeSetFlow"
+import { deviationLabel } from "./state"
 import { DiffList } from "../shared/DiffList"
 import { workflowChangeActions } from "../baseline-upgrades/api"
 import { assessAdoption, configureAdoption, getAdoption, planAdoption, previewAdoption, type AdoptionPreview, type Standard } from "./api"
@@ -76,7 +77,7 @@ export function AdoptionPanel({ tenant, adoptionId, standards, canWrite, onChang
         <div className="flex flex-wrap gap-2">
           <Chip tone={adoption.status === "adopted" ? "success" : adoption.status === "draft" ? "neutral" : "warning"}>{adoption.status}</Chip>
           {state.pendingUpgrade && <Chip tone="coral">upgrade available</Chip>}
-          <Chip tone={state.freshness === "fresh" ? "success" : "warning"}>{state.freshness === "unknown" ? "deviation not assessed" : state.freshness === "stale" ? "assessment stale" : `${state.deviations ?? 0} deviation(s)`}</Chip>
+          <Chip tone={deviationLabel(state).tone}>{deviationLabel(state).text}</Chip>
         </div>
       </div>
       {adoption.lastAssessment && (

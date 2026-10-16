@@ -23,5 +23,7 @@ export function useBaselineScore(tenant: Tenant | undefined, plan: Plan | null) 
     .sort((a, b) => Date.parse(b.latest!.freshness.assessedAt) - Date.parse(a.latest!.freshness.assessedAt))[0]
   const assessed = (query.data?.frameworks ?? []).filter((framework) => framework.latest).length
   const unavailable = (query.data?.frameworks ?? []).filter((framework) => framework.state === "unavailable").length
-  return { enabled, isLoading: enabled && query.isLoading, error: query.error, latest: latest ?? null, assessed, unavailable }
+  // Saved results that set no score (older rules, OIB single-policy checks only), so the tile never calls them missing.
+  const historyOnly = (query.data?.frameworks ?? []).find((framework) => framework.state === "history-only") ?? null
+  return { enabled, isLoading: enabled && query.isLoading, error: query.error, latest: latest ?? null, assessed, unavailable, historyOnly }
 }

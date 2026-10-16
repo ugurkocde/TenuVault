@@ -14,21 +14,25 @@ const scored: FrameworkScore = {
   message: null,
   trend: [],
   incompatible: [],
+  historyOnly: [],
   latest: {
+    versionDetail: null,
+    unit: "capability",
+    uncheckedReferences: 0,
     identity: { runId: "run-1", frameworkId: "cis", frameworkName: "CIS Benchmark", frameworkVersion: "2.0", rulesetVersion: "map-3", rulesetSha256: "sha-rules", snapshotSha256: "sha-snap", profile: "Level 1", platforms: ["windows", "tenant"], assessedAt: "2026-10-01T02:00:00Z" },
     freshness: { assessedAt: "2026-10-01T02:00:00Z", ageDays: 4, stale: false },
     score: { counts: { matching: 8, different: 1, missing: 1, unknown: 2, outsideScope: 3 }, evaluated: 10, assessed: 12, score: 80, coverage: 83.3, state: "scored", reason: null },
     incompleteCollection: ["conditionalAccess: partial"],
     gapCount: 1,
     topGaps: [{
-      key: "cap-1", capabilityId: "cap-1", capabilityName: "Block legacy authentication", platform: "tenant", capabilityStatus: "partialConfiguration", result: "different", mixed: false,
+      key: "cap-1", capabilityId: "cap-1", capabilityName: "Block legacy authentication", platform: "tenant", capabilityStatus: "partialConfiguration", result: "different", countedAs: "An assigned policy sets a different value.", mixed: false,
       settings: [], settingIds: [], policies: [], controls: [{ id: "1.1", title: "Legacy auth", evidenceStrength: "direct" }], unknownChecks: 0, limitations: [],
       ranking: { level: "high", score: 80, reasons: ["High priority."] },
     }],
   },
 }
 
-const notAssessed: FrameworkScore = { frameworkId: "iso", frameworkName: "ISO 27001", state: "not-assessed", message: "No saved comparison.", latest: null, trend: [], incompatible: [] }
+const notAssessed: FrameworkScore = { frameworkId: "iso", frameworkName: "ISO 27001", state: "not-assessed", message: "No saved comparison.", latest: null, trend: [], incompatible: [], historyOnly: [] }
 
 const hygieneFinding: HygieneFinding = {
   id: "f1", title: "Duplicate setting, conflicting values", summary: "Two policies set the same setting.", status: "open", ruleId: "duplicate",
@@ -64,7 +68,7 @@ describe("scores export", () => {
     const lines = scoresCsv([scored, notAssessed]).split("\r\n")
     expect(lines[0]).toBe("Framework,Version,Profile,Mapping,State,Score (%),Coverage (%),Matching,Different,Missing,Unknown,Outside scope,Gaps,Assessed,Age (days),Stale,Partial collection,Scope,Top gaps,Message")
     expect(lines[1]).toContain("CIS Benchmark,2.0,Level 1,map-3,scored,80,83.3,8,1,1,2,3,1,2026-10-01T02:00:00Z,4,no,conditionalAccess: partial")
-    expect(lines[1]).toContain("Block legacy authentication (different value, high)")
+    expect(lines[1]).toContain("Block legacy authentication (An assigned policy sets a different value; high)")
     expect(lines[2]).toContain("ISO 27001")
     expect(lines[2]).toContain("not-assessed")
     expect(lines[2]).toContain("No saved comparison.")

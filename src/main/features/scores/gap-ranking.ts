@@ -29,7 +29,7 @@ export interface Ranking {
  *
  * Levels: 70 and above critical, 50 high, 30 medium, below 30 low.
  */
-export function rankGap(gap: Gap, incompleteCollection: string[] = []): Ranking {
+export function rankGap(gap: Pick<Gap, "platform" | "result" | "policies" | "controls" | "mixed" | "unknownChecks">, incompleteCollection: string[] = []): Ranking {
   let score = 0
   const reasons: string[] = []
   if (gap.platform === "tenant") {
@@ -45,7 +45,7 @@ export function rankGap(gap: Gap, incompleteCollection: string[] = []): Ranking 
     }
   } else {
     score += 20
-    reasons.push("No policy configures the expected setting.")
+    reasons.push("The expected setting is missing.")
   }
   if (gap.controls.some((control) => control.evidenceStrength === "direct")) {
     score += 15
@@ -59,7 +59,7 @@ export function rankGap(gap: Gap, incompleteCollection: string[] = []): Ranking 
     score += breadth
     reasons.push(`Affects ${gap.controls.length} framework control${gap.controls.length === 1 ? "" : "s"}.`)
   }
-  if (gap.mixed) reasons.push("Mixed evidence: another policy matches. Review targeting before changing anything.")
+  if (gap.mixed) reasons.push("Mixed evidence: an assigned policy matches part of this capability. Review targeting before changing anything.")
   if (gap.unknownChecks) reasons.push(`${gap.unknownChecks} related check${gap.unknownChecks === 1 ? " was" : "s were"} unknown; confirm the evidence first.`)
   if (gap.policies.some((policy) => policy.assignment === "unknown")) reasons.push("Assignment of an affected policy is unknown.")
   if (incompleteCollection.length) reasons.push("Policy collection was incomplete; other evidence may be missing.")
