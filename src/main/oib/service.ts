@@ -9,7 +9,7 @@ import { VALIDATED_FOLDERS, validatePolicy } from "../../shared/oib/compare"
 import { extractOibId } from "../../shared/oib/manifest"
 import { compareToTenant } from "../../shared/oib/match"
 import { replaceTenantVariables } from "../../shared/oib/variables"
-import { OIB_BACKUP_REUSE_MINUTES, OIB_PLATFORMS, type DeployItem, type OibBackupChoice, type OibBackupOptions, type OibComparison, type OibPlatform, type OibProgress, type OibRecentBackup, type OibRun, type PolicyValidation, type TenantPolicy, type UndoResult, type ValidationRun } from "../../shared/oib/types"
+import { isFullValidation, OIB_BACKUP_REUSE_MINUTES, OIB_PLATFORMS, type DeployItem, type OibBackupChoice, type OibBackupOptions, type OibComparison, type OibPlatform, type OibProgress, type OibRecentBackup, type OibRun, type PolicyValidation, type TenantPolicy, type UndoResult, type ValidationRun } from "../../shared/oib/types"
 import { backupGaps, describeMissing, describeStatus, folderLabel } from "../backup/completeness"
 import { apiBody } from "../features/deps"
 import { withTenantWrite } from "../features/write-lock"
@@ -501,14 +501,24 @@ function readValidations(tenant: string): ValidationRun[] {
   }
 }
 
-function saveValidations(tenant: string, runs: ValidationRun[]): void {
-  let kept = runs.slice(0, VALIDATIONS_KEPT)
-  let json = JSON.stringify(kept)
-  while (json.length > MAX_HISTORY_CHARS && kept.length > 1) {
-    kept = kept.slice(0, -1)
-    json = JSON.stringify(kept)
+/**
+ * The validations kept within the count and size limits, newest first. The oldest single-policy
+ * check goes first; a full validation (Validate all) is only removed when no single-policy check
+ * is left, so single checks never push out the validation that sets the OIB score.
+ */
+export function keepValidations(runs: ValidationRun[], maxRuns = VALIDATIONS_KEPT, maxChars = MAX_HISTORY_CHARS): ValidationRun[] {
+  const kept = [...runs]
+  const over = () => kept.length > maxRuns || (kept.length > 1 && JSON.stringify(kept).length > maxChars)
+  while (over()) {
+    let index = kept.length - 1
+    while (index >= 0 && isFullValidation(kept[index]!)) index--
+    kept.splice(index >= 0 ? index : kept.length - 1, 1)
   }
-  requireStore().set(validationsKey(tenant), json)
+  return kept
+}
+
+function saveValidations(tenant: string, runs: ValidationRun[]): void {
+  requireStore().set(validationsKey(tenant), JSON.stringify(keepValidations(runs)))
 }
 
 async function validate(body: RecordJson): Promise<ValidationRun> {

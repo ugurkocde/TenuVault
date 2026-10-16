@@ -114,7 +114,7 @@ function TileSkeleton({ className }: { className?: string }) {
  * Newest baseline score of the tenant, linking to the gated scores screen. Community sees a
  * badged teaser and no score: the score is a paid projection and is not computed for it.
  */
-function BaselineScoreTile({ tenant, plan }: { tenant: Tenant; plan: Plan | null }) {
+export function BaselineScoreTile({ tenant, plan }: { tenant: Tenant; plan: Plan | null }) {
   const router = useRouter()
   const score = useBaselineScore(tenant, plan)
   const latest = score.latest?.latest ?? null

@@ -3,7 +3,7 @@ import type { NativeAssessment } from "../../../shared/compliance/native"
 import type { TechnicalCheck } from "../../../shared/compliance/types"
 import type { Gap, GapPolicy, GapSetting } from "./formula"
 
-/** One observation behind a counted gap; "matches" appears only on a policy that is not assigned. */
+/** One observation behind a counted gap; "matches" appears on a policy that is not assigned, or on an assigned policy that covers only part of the requirement. */
 export interface CountedGapSetting extends Omit<GapSetting, "result"> {
   result: "matches" | "different" | "missing"
 }
@@ -22,10 +22,14 @@ export interface CountedGap extends Omit<Gap, "settings"> {
 
 const MAX_GAP_SETTINGS = 25
 
-/** A checked observation that explains a counted gap: a failing value, or a match on a policy that is not assigned. */
-function explainsGap(check: TechnicalCheck): check is TechnicalCheck & { result: CountedGapSetting["result"] } {
+/**
+ * A checked observation that explains a counted gap: a failing value, a match on a policy that
+ * is not assigned, or, for a capability counted missing, an assigned match that covers only part
+ * of the requirement (required groups split across policies).
+ */
+function explainsGap(check: TechnicalCheck, countedMissing: boolean): check is TechnicalCheck & { result: CountedGapSetting["result"] } {
   if (check.assessmentStatus !== "checked") return false
-  return check.result === "different" || check.result === "missing" || (check.result === "matches" && check.assignment?.state !== "assigned")
+  return check.result === "different" || check.result === "missing" || (check.result === "matches" && (countedMissing || check.assignment?.state !== "assigned"))
 }
 
 /** Every capability counted different or missing, in the order the capabilities appear. */
@@ -36,7 +40,7 @@ export function countedGaps(run: NativeAssessment): CountedGap[] {
     const checks = Array.isArray(result.checks) ? result.checks : []
     const verdict = capabilityVerdict({ ...result, checks, evidence: Array.isArray(result.evidence) ? result.evidence : [] })
     if (verdict.result !== "different" && verdict.result !== "missing") continue
-    const explaining = checks.filter(explainsGap)
+    const explaining = checks.filter((check) => explainsGap(check, verdict.result === "missing"))
     const policies = new Map<string, GapPolicy>()
     for (const check of explaining) {
       if (check.policyId) policies.set(check.policyId, { policyId: check.policyId, policyName: check.policyName ?? "Unnamed policy", assignment: check.assignment?.state ?? "unknown" })

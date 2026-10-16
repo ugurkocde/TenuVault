@@ -30,8 +30,11 @@ export default function ScoresTab({ tenant, plan, allowed }: FeatureTabProps) {
   const tenantId = tenant.credentials?.tenantId
   const query = useQuery({ queryKey: ["scores-summary", tenantId], queryFn: () => loadSummary(tenant), enabled: allowed })
   const cisAccess = useInternalCisBenchmarks()
-  const cis = useQuery({ queryKey: ["scores-cis", tenantId], queryFn: () => loadCisWorkspace(tenantId!), enabled: allowed && cisAccess && !!tenantId })
-  const cisCards = useMemo(() => (tenantId ? cisScoreCards(cisAccess, cis.data, tenantId) : []), [cisAccess, cis.data, tenantId])
+  // CIS assessments change on the CIS page, which does not notify this tab, so the workspace is
+  // read fresh every time the tab opens and cards show only once that read is in.
+  const cis = useQuery({ queryKey: ["scores-cis", tenantId], queryFn: () => loadCisWorkspace(tenantId!), enabled: allowed && cisAccess && !!tenantId, staleTime: 0, refetchOnMount: "always" })
+  const cisFresh = cis.isFetchedAfterMount ? cis.data : undefined
+  const cisCards = useMemo(() => (tenantId ? cisScoreCards(cisAccess, cisFresh, tenantId) : []), [cisAccess, cisFresh, tenantId])
   const drillKey = drill ? `${drill.tenant.credentials?.tenantId}:${drill.frameworkId}` : null
   useEffect(() => {
     if (drillKey) detailRef.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" })
@@ -43,10 +46,7 @@ export default function ScoresTab({ tenant, plan, allowed }: FeatureTabProps) {
   const unavailable = frameworks.filter((framework) => framework.state === "unavailable")
   const historyOnly = frameworks.filter((framework) => framework.state === "history-only")
   const notAssessed = frameworks.filter((framework) => framework.state === "not-assessed")
-  const refresh = () => {
-    invalidateScores(client)
-    if (cisAccess) void client.invalidateQueries({ queryKey: ["scores-cis"] })
-  }
+  const refresh = () => invalidateScores(client)
   const toggle = (frameworkId: string) => setDrill((current) => (current && current.frameworkId === frameworkId && current.tenant.credentials?.tenantId === tenantId ? null : { tenant, frameworkId }))
 
   return (

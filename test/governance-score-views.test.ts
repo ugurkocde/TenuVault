@@ -64,7 +64,8 @@ describe("score invalidation", () => {
   })
 
   it("covers every score query, whatever its stale time", () => {
-    expect(SCORE_QUERY_KEYS.map((key) => key[0])).toEqual(["scores-summary", "scores-detail", "dashboard-baseline-score"])
+    // The CIS cards are part of the score queries, so Refresh and a finished comparison reread them too.
+    expect(SCORE_QUERY_KEYS.map((key) => key[0])).toEqual(["scores-summary", "scores-detail", "dashboard-baseline-score", "scores-cis"])
     const client = seeded()
     invalidateScores(client)
     for (const key of SCORE_QUERY_KEYS) expect(invalidated(client, key)).toBe(true)

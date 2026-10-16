@@ -101,6 +101,24 @@ describe("counted capabilities and gaps", () => {
   })
 })
 
+describe("required groups split across assigned policies", () => {
+  it("counts the capability missing and keeps the assigned matches as evidence", () => {
+    const run = makeRun({ runId: "split", tenantId: TENANT_A, caps: { split: ["matches", "matches"] } })
+    const result = run.assessment.capabilities[0]!
+    result.capability = { ...result.capability, requiredGroups: ["encryption", "recovery"] }
+    const assignment = { state: "assigned" as const, targets: [], exclusions: [], filters: [], coverage: "unverified" as const }
+    result.evidence = (["encryption", "recovery"] as const).map((group, index) => ({
+      capabilityId: "split", policyId: `policy-split-${index}`, policyName: `Policy ${index}`, policyType: "settingsCatalog", source: "settingsCatalog" as const,
+      settingId: `split.setting${index}`, observedValue: "true", verdict: "enforced" as const, assignment, kind: "configuration" as const, requirementGroup: group,
+    }))
+    expect(capabilityComparison(result)).toBe("missing")
+    const [gap] = countedGaps(run)
+    expect(gap).toMatchObject({ capabilityId: "split", result: "missing", countedAs: "No single assigned policy covers all required settings of this capability, counted missing." })
+    expect(gap!.settings.map((setting) => setting.result)).toEqual(["matches", "matches"])
+    expect(gap!.policies.map((policy) => [policy.policyId, policy.assignment])).toEqual([["policy-split-0", "assigned"], ["policy-split-1", "assigned"]])
+  })
+})
+
 describe("partial collection", () => {
   const coverage = (family: string, status: CollectionCoverage["status"], errors: string[] = []): CollectionCoverage => ({ family, collectedPolicies: 0, recognizedPolicies: 0, unsupportedPolicies: 0, status, errors })
 

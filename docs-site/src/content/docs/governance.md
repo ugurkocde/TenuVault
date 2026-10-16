@@ -68,7 +68,7 @@ The scores update as soon as a framework comparison or an OpenIntuneBaseline val
 
 ### OpenIntuneBaseline scores
 
-OpenIntuneBaseline cards count expected settings instead of capabilities. Only a full validation, **Validate all** in Policy Validation, sets the card score and trend. A single policy check is saved in history but does not change the score. A platform with only single policy checks is listed under **Saved results without a score**. The version on the card is the release tag, for example `windows-v4.0`, with the commit shown below it, so validations of one release stay on one trend. A saved validation that cannot be read is left out on its own and does not hide the other validations of its platform.
+OpenIntuneBaseline cards count expected settings instead of capabilities. Only a full validation, **Validate all** in Policy Validation, sets the card score and trend. A single policy check is saved in history but does not change the score. A platform with only single policy checks is listed under **Saved results without a score**. The version on the card is the release tag, for example `windows-v4.0`, with the commit shown below it, so validations of one release stay on one trend. `main` and beta branches such as `macos-v2.0-beta` can change at any commit, so for them the version includes the commit and a new commit starts a new trend, listed with "Framework version changed" as the reason. A saved validation that cannot be read is left out on its own and does not hide the other validations of its platform.
 
 ### Portfolio scores (MSP)
 

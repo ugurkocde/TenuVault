@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 import { isFullValidation, OIB_PLATFORMS, type OibPlatform, type PolicyValidation, type ValidationRun } from "../../../shared/oib/types"
+import { RELEASE_TAG } from "../../../shared/oib/versions"
 import type { CompliancePlatform } from "../../../shared/compliance/types"
 import type { FeatureDeps } from "../deps"
 import { buildScoreTrend, freshnessAt, scoreFromCounts, type AssessmentIdentity, type BaselineScore, type ScoreCounts } from "./formula"
@@ -73,13 +74,16 @@ export async function readOibHistory(deps: FeatureDeps, tenantId: string): Promi
 }
 
 /**
- * The OIB release a validation used, for display and trend compatibility: the release tag
- * (for example windows-v4.0) taken from the saved reference, so validations of one release
- * stay connected. A validation of the main branch has no release; its commit is the version.
+ * The OIB version a validation used, for display and trend compatibility. A published release
+ * tag (for example windows-v4.0) is the version, so validations of one release stay connected.
+ * A moving reference, such as main or a beta branch like macos-v2.0-beta, can change its
+ * expected settings at any commit, so its version includes the commit and a new commit starts
+ * a new trend with "Framework version changed" as the reason.
  */
 export function oibVersion(run: Pick<ValidationRun, "reference" | "commit">): string {
   const tag = /· (\S+) @ [0-9a-f]{7}$/i.exec(run.reference)?.[1]
-  return tag && tag !== "main" ? tag : `main @ ${run.commit.slice(0, 7)}`
+  const release = tag ? RELEASE_TAG.exec(tag) : null
+  return release && !release[3] ? tag! : `${tag ?? "main"} @ ${run.commit.slice(0, 7)}`
 }
 
 function project(run: ValidationRun, now: Date): { latest: LatestScore; gaps: RankedGap[] } {

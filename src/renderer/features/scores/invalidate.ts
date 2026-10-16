@@ -2,8 +2,8 @@ import { useEffect } from "react"
 import { useQueryClient, type QueryClient } from "@tanstack/react-query"
 import { onFrameworkJobFinished, type FrameworkJob } from "../../lib/framework-jobs"
 
-/** Every query that shows a baseline score: the scores tab, an open score detail and the dashboard tile. */
-export const SCORE_QUERY_KEYS = [["scores-summary"], ["scores-detail"], ["dashboard-baseline-score"]] as const
+/** Every query that shows a baseline score: the scores tab, an open score detail, the dashboard tile and the CIS cards. */
+export const SCORE_QUERY_KEYS = [["scores-summary"], ["scores-detail"], ["dashboard-baseline-score"], ["scores-cis"]] as const
 
 /**
  * Marks every score query stale and refetches the mounted ones, so a finished comparison or

@@ -25,7 +25,7 @@ function verdictReason(result: CapabilityResult, counted: ComparisonResult): str
       return checks.length ? 'No setting could be checked, counted unknown.' : 'No configuration check exists for this capability, counted unknown.'
     case 'missing':
       if (checks.some(check => check.assessmentStatus === 'checked' && check.result === 'missing' && (!check.assignment || check.assignment.state === 'assigned'))) return 'No assigned policy configures the expected setting.'
-      if (assigned.some(check => check.assessmentStatus === 'checked' && check.result === 'matches')) return 'An assigned policy covers only part of the requirement, counted missing.'
+      if (assigned.some(check => check.assessmentStatus === 'checked' && check.result === 'matches')) return 'No single assigned policy covers all required settings of this capability, counted missing.'
       if (unassigned.some(check => check.result === 'matches')) return 'Configured but unassigned, counted missing.'
       if (unassigned.some(check => check.result === 'different')) return 'Configured with a different value but unassigned, counted missing.'
       return 'No assigned policy configures the expected setting.'

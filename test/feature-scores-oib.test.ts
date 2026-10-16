@@ -3,6 +3,7 @@ import { isFullValidation, type ValidationRun, type PolicyValidation } from "../
 import { compareSettings } from "../src/shared/oib/compare"
 import { routes, signals } from "../src/main/features/scores"
 import { oibFrameworkDetail, oibFrameworkScore, oibVersion } from "../src/main/features/scores/oib"
+import { keepValidations } from "../src/main/oib/service"
 import { call, fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
 import { fakeFrameworksApi } from "./feature-scores-fixtures"
 
@@ -102,6 +103,32 @@ describe("OIB full validations and release versions", () => {
     expect(score.incompatible).toEqual([])
     expect(oibVersion({ reference: "OIB Windows", commit: COMMIT })).toBe(`main @ ${COMMIT.slice(0, 7)}`)
     expect(oibVersion({ reference: `OpenIntuneBaseline Windows · main @ ${COMMIT.slice(0, 7)}`, commit: COMMIT })).toBe(`main @ ${COMMIT.slice(0, 7)}`)
+  })
+
+  it("keeps a moving beta branch on separate trends per commit, with the reason", () => {
+    const reference = (commit: string) => `OpenIntuneBaseline macOS v2.0 beta · macos-v2.0-beta @ ${commit.slice(0, 7)}`
+    const first = run({ runId: "first", platform: "macos", commit: "1cc71a9".padEnd(40, "0"), reference: reference("1cc71a9"), validatedAt: "2026-09-20T00:00:00Z" })
+    const moved = run({ runId: "moved", platform: "macos", commit: "2dd82b0".padEnd(40, "0"), reference: reference("2dd82b0"), results: [policy({ status: "drifted", result: { ...policy().result!, matched: 0, different: 4, missing: 0, mismatches: [], oibOnly: [] } })] })
+    const score = oibFrameworkScore({ platform: "macos", runs: [first, moved], skipped: 0, error: null }, NOW)
+    expect(score.latest?.identity.frameworkVersion).toBe("macos-v2.0-beta @ 2dd82b0")
+    expect(score.trend.map((point) => point.runId)).toEqual(["moved"])
+    expect(score.incompatible).toEqual([expect.objectContaining({ runId: "first", reasons: ["Framework version changed (macos-v2.0-beta @ 2dd82b0 and macos-v2.0-beta @ 1cc71a9)."] })])
+    expect(oibVersion({ reference: "OpenIntuneBaseline Windows v4.0 · windows-v4.0 @ 1cc71a9", commit: COMMIT })).toBe("windows-v4.0")
+  })
+
+  it("never removes a full validation to keep a single-policy check", () => {
+    const full = run({ runId: "full", selection: "all", validatedAt: "2026-09-01T00:00:00Z" })
+    const singles = Array.from({ length: 49 }, (_, index) => run({ runId: `single-${index}`, selection: "single", validatedAt: `2026-09-${String(index % 28 + 2).padStart(2, "0")}T00:00:00Z` }))
+    // Newest first, as saved: 49 single checks after one full validation, then one more single check.
+    const kept = keepValidations([run({ runId: "newest", selection: "single" }), ...singles, full], 50)
+    expect(kept).toHaveLength(50)
+    expect(kept.some((entry) => entry.runId === "full")).toBe(true)
+    expect(kept.some((entry) => entry.runId === "single-48")).toBe(false)
+    const allFull = Array.from({ length: 50 }, (_, index) => run({ runId: `full-${index}`, selection: "all" }))
+    expect(keepValidations([run({ runId: "check", selection: "single" }), ...allFull], 50).map((entry) => entry.runId)).toEqual(allFull.map((entry) => entry.runId))
+    expect(keepValidations([run({ runId: "new-full", selection: "all" }), ...allFull], 50).at(-1)?.runId).toBe("full-48")
+    const sized = keepValidations([run({ runId: "a", selection: "single" }), full], 50, JSON.stringify([full]).length)
+    expect(sized.map((entry) => entry.runId)).toEqual(["full"])
   })
 
   it("skips only a malformed validation instead of hiding the platform", async () => {
