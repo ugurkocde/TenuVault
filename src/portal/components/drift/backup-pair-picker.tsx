@@ -46,6 +46,7 @@ export function pairProblem(backups: BackupSummary[], baseline: string | null, c
 export function BackupPairPicker({
   backups,
   loading,
+  loaded,
   baseline,
   comparison,
   onChange,
@@ -56,6 +57,8 @@ export function BackupPairPicker({
 }: {
   backups: BackupSummary[]
   loading: boolean
+  /** Whether a backup list has arrived; before that, or when reading it failed, there is nothing to count. */
+  loaded: boolean
   baseline: string | null
   comparison: string | null
   onChange: (pair: { baseline: string | null; comparison: string | null }) => void
@@ -123,7 +126,7 @@ export function BackupPairPicker({
       )}
       {!loading && offered.length > 0 && problem && <p className="mt-3 text-xs text-gray-500">{problem}</p>}
       {warned && <p className="mt-3 text-xs text-amber-700">A chosen backup completed with warnings. Items it could not read may show up as deleted or added.</p>}
-      {!loading && offered.length < 3 && (
+      {loaded && !loading && offered.length < 3 && (
         <p className="mt-3 text-xs text-gray-500">
           {fewNote(offered.length)}
           {onBackUp && (
@@ -136,7 +139,7 @@ export function BackupPairPicker({
           )}
         </p>
       )}
-      {!loading && hidden > 0 && (
+      {loaded && !loading && hidden > 0 && (
         <p className="mt-3 text-xs text-gray-500">
           {hiddenNote(hidden)}{" "}
           <Link to="/portal/backup" className="font-medium text-blue-700 hover:underline">
@@ -150,7 +153,7 @@ export function BackupPairPicker({
 
 /** What to do when there are too few backups to choose a different pair. */
 export function fewNote(count: number): string {
-  if (count === 2) return "These are the only two backups that can be compared. A new backup lets you compare against the tenant as it is now."
+  if (count === 2) return "These are the only two backups that can be compared. A new backup can be compared with either of them."
   return `${count === 1 ? "Only one backup" : "No backup"} can be compared yet. Drift detection needs two complete backups.`
 }
 

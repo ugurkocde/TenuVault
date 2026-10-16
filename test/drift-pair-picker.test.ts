@@ -27,12 +27,13 @@ const backups = [
   backup("older", "2026-10-12T02:00:00Z", "Success", "manual"),
 ]
 
-const render = (list: BackupSummary[], pair = { baseline: "older", comparison: "newer" }, loading = false) =>
+const render = (list: BackupSummary[], pair = { baseline: "older", comparison: "newer" }, loading = false, loaded = true) =>
   renderToStaticMarkup(
     createElement(MemoryRouter, null,
       createElement(BackupPairPicker, {
         backups: list,
         loading,
+        loaded,
         baseline: pair.baseline,
         comparison: pair.comparison,
         onChange: () => undefined,
@@ -91,6 +92,12 @@ describe("drift backup picker", () => {
   it("adds no notes while the list loads", () => {
     const html = render(backups, { baseline: "older", comparison: "newer" }, true)
     expect(html).not.toContain("not listed")
+    expect(html).not.toContain("Back up now")
+  })
+
+  it("adds no notes before a list arrived or when reading it failed", () => {
+    const html = render([], { baseline: "older", comparison: "newer" }, false, false)
+    expect(html).not.toContain("can be compared")
     expect(html).not.toContain("Back up now")
   })
 

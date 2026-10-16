@@ -134,7 +134,7 @@ export default function DriftDetectionPage() {
   const [backingUp, setBackingUp] = useState(false)
   const canBackUp = !!selectedTenant?.credentials && !!storageAccountName
   const [startedBackup, setStartedBackup] = useState<string | null>(null)
-  const startedDone = activeJobs.some(job => job.jobId === startedBackup && job.isComplete)
+  const startedDone = activeJobs.some(entry => entry.jobId === startedBackup && entry.isComplete)
   useEffect(() => {
     if (!startedDone) return
     setStartedBackup(null)
@@ -517,6 +517,7 @@ export default function DriftDetectionPage() {
         <BackupPairPicker
           backups={backups}
           loading={backupsLoading}
+          loaded={backupsLoaded}
           baseline={pair.baseline}
           comparison={pair.comparison}
           busy={running}

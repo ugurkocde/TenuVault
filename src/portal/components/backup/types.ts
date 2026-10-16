@@ -83,7 +83,8 @@ export const STATUS_LABEL: Record<StatusKind, string> = {
 
 /** The status as shown: the kind's label, named more precisely for stopped and unreadable backups. */
 export function statusLabel(status: string): string {
-  if (status === "incomplete") return "Incomplete"
-  if (status === "unknown") return "Status unknown"
+  const value = status.toLowerCase()
+  if (value === "incomplete") return "Incomplete"
+  if (value === "unknown") return "Status unknown"
   return STATUS_LABEL[statusKind(status)]
 }

@@ -37,8 +37,8 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
       }
       return { metadata: null, metadataError: response.status !== 404 ? `Backup metadata is unavailable (${response.status}).` : undefined }
     } catch (error) {
-      // An encrypted backup that cannot be opened (another recovery key, damaged data) says why.
-      if (error instanceof Error && error.name === 'FetchApplicationError') return { metadata: null, metadataError: error.message }
+      // An encrypted backup that cannot be opened (another recovery key, damaged data, no key on this device) says why.
+      if (error instanceof Error && (error.name === 'FetchApplicationError' || error.name === 'FetchPreconditionError')) return { metadata: null, metadataError: error.message }
       return { metadata: null, metadataError: 'Backup metadata could not be read or parsed.' }
     }
   }
