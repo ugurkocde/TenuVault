@@ -70,6 +70,9 @@ export interface LayoutOptions {
   theme: BrandTheme
 }
 
+/** Width factor between jsPDF's rounded Helvetica metrics and the drawn glyphs; exported for the tests. */
+export const METRIC_ALLOWANCE = 1.015
+
 // The longest piece of a block, so a block never outgrows a page.
 const MAX_CHUNK = 96
 // Height the panel above the contents may take, so the contents keep most of their page.
@@ -89,10 +92,18 @@ export function createLayout(options: LayoutOptions) {
   const text = doc.text.bind(doc)
   const getTextWidth = doc.getTextWidth.bind(doc)
   const splitTextToSize = doc.splitTextToSize.bind(doc)
-  doc.text = ((value: string | string[], x: number, y: number, textOptions?: Parameters<typeof text>[3]) =>
-    text(Array.isArray(value) ? value.map(clean) : clean(value), x, y, textOptions)) as typeof doc.text
-  doc.getTextWidth = (value: string) => getTextWidth(clean(value))
-  doc.splitTextToSize = (value: string, width: number, splitOptions?: unknown) => splitTextToSize(clean(value), width, splitOptions)
+  doc.text = ((value: string | string[], x: number, y: number, textOptions?: Parameters<typeof text>[3]) => {
+    if (Array.isArray(value)) return text(value.map(clean), x, y, textOptions)
+    const align = textOptions?.align
+    if (align !== 'right' && align !== 'center') return text(clean(value), x, y, textOptions)
+    // jsPDF aligns with its own rounded widths; align with the allowance so right edges stay inside.
+    const width = doc.getTextWidth(value) + (textOptions?.charSpace ?? 0) * Math.max(clean(value).length - 1, 0)
+    return text(clean(value), align === 'right' ? x - width : x - width / 2, y, { ...textOptions, align: 'left' })
+  }) as typeof doc.text
+  // jsPDF's built-in Helvetica widths are rounded and read up to 1.43% narrower than the font
+  // viewers draw with, so every fit is measured with that allowance.
+  doc.getTextWidth = (value: string) => getTextWidth(clean(value)) * METRIC_ALLOWANCE
+  doc.splitTextToSize = (value: string, width: number, splitOptions?: unknown) => splitTextToSize(clean(value), width / METRIC_ALLOWANCE, splitOptions)
   // Document properties go through the same cleaning as the page text, including the company name.
   const publisher = clean(brandName(theme))
   doc.setProperties({ title: clean(options.properties.title), subject: clean(options.properties.subject), keywords: clean(options.properties.keywords), author: publisher, creator: publisher })

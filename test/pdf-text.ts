@@ -1,5 +1,7 @@
 import { inflateSync } from "node:zlib"
+import { jsPDF } from "jspdf"
 import { expect } from "vitest"
+import { METRIC_ALLOWANCE } from "../src/shared/pdf/layout"
 
 /** Text and geometry helpers for the PDF report tests. */
 
@@ -37,9 +39,27 @@ export const linkCount = (bytes: Uint8Array) => (Buffer.from(bytes).toString("la
 /** The first file id string of the trailer. */
 export const fileId = (bytes: Uint8Array) => /\/ID \[ <([0-9A-F]+)>/.exec(Buffer.from(bytes).toString("latin1"))?.[1]
 
-/** Every drawn string with its start point in mm, measured from the top left corner of the page. */
-export const textRuns = (stream: string) => [...stream.matchAll(/(-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?) Td\s*\(((?:\\.|[^\\()])*)\)\s*Tj/g)]
-  .map(match => ({ x: Number(match[1]) / MM, y: PAGE_HEIGHT_MM - Number(match[2]) / MM, text: match[3]!.replace(/\\([()\\])/g, "$1") }))
+// The standard font resources jsPDF writes first: Helvetica in its four styles.
+const FONT_STYLES: Record<string, string> = { F1: "normal", F2: "bold", F3: "italic", F4: "bolditalic" }
+const measurer = new jsPDF({ unit: "mm", format: "a4" })
+
+/** Width in mm a viewer draws, from jsPDF's rounded metrics plus the layout allowance and the character spacing. */
+function drawnWidth(text: string, font: string, size: number, charSpace: number) {
+  measurer.setFont("helvetica", FONT_STYLES[font] ?? "normal")
+  measurer.setFontSize(size)
+  return measurer.getTextWidth(text) * METRIC_ALLOWANCE + (charSpace / MM) * Math.max(text.length - 1, 0)
+}
+
+/** Every drawn string with its start point and end x in mm, measured from the top left corner of the page. */
+export const textRuns = (stream: string) => [...stream.matchAll(/(?:^|\n)BT\n([\s\S]*?)\nET(?=\n|$)/g)].flatMap(([, block]) => {
+  const font = /\/(F\d+) (\d+(?:\.\d+)?) Tf/.exec(block!)
+  const charSpace = Number(/(-?\d+(?:\.\d+)?) Tc/.exec(block!)?.[1] ?? 0)
+  return [...block!.matchAll(/(-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?) Td\s*\(((?:\\.|[^\\()])*)\)\s*Tj/g)].map(match => {
+    const x = Number(match[1]) / MM
+    const text = match[3]!.replace(/\\([()\\])/g, "$1")
+    return { x, y: PAGE_HEIGHT_MM - Number(match[2]) / MM, text, end: x + drawnWidth(text, font?.[1] ?? "F1", Number(font?.[2] ?? 10), charSpace) }
+  })
+})
 
 /** Body text of pages 2 to N without running headers, footers and "(continued)" captions, so text split across pages reads as one. */
 export const bodyText = (bytes: Uint8Array) => pageStreams(bytes).slice(1).flatMap(stream => textRuns(stream))
@@ -70,10 +90,12 @@ export function expectInsideGrid(bytes: Uint8Array, expected: GridExpectation) {
     const runs = textRuns(stream)
     // Every shown string has a start point, so none escapes the checks below.
     expect(runs.length, page).toBe(shown(stream).length)
-    for (const { x, y, text } of runs) {
+    for (const { x, y, text, end } of runs) {
       const where = `${page}: ${JSON.stringify(text.slice(0, 60))} at ${x.toFixed(1)}, ${y.toFixed(1)} mm`
       expect(x, where).toBeGreaterThanOrEqual(LEFT - 0.5)
       expect(x, where).toBeLessThanOrEqual(RIGHT + 0.5)
+      // The drawn end, not only the start, stays inside the right margin.
+      expect(end, where).toBeLessThanOrEqual(RIGHT + 0.3)
       if (index === 0) {
         if (y > COVER_BODY_BOTTOM) expect(isLabel(text, expected.coverFooter), where).toBe(true)
         continue
