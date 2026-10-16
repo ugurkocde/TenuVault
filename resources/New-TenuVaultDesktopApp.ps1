@@ -16,7 +16,9 @@
 
     Requires the Microsoft.Graph.Applications and Microsoft.Graph.Identity.SignIns modules
     and a Global Administrator, Privileged Role Administrator or Cloud Application
-    Administrator (plus consent rights) account.
+    Administrator (plus consent rights) account. The script installs missing modules for
+    the current user at the version of the installed Microsoft.Graph.Authentication
+    module, so all Graph modules load at one version.
 
 .PARAMETER TenantId
     Tenant to create the app registration in. Defaults to the tenant of the account you sign in with.
@@ -51,12 +53,43 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-foreach ($module in "Microsoft.Graph.Applications", "Microsoft.Graph.Identity.SignIns") {
-    if (-not (Get-Module -ListAvailable -Name $module)) {
-        Write-Host "Installing $module for the current user..."
-        Install-Module $module -Scope CurrentUser -Force
+# The Graph modules only load together at one version: a module built for another
+# Microsoft.Graph.Authentication version fails with an assembly conflict. Use the newest
+# installed Authentication version and install the other modules at that same version.
+$graphModules = "Microsoft.Graph.Applications", "Microsoft.Graph.Identity.SignIns"
+$loaded = Get-Module -Name Microsoft.Graph.Authentication
+if ($loaded) {
+    $graphVersion = $loaded.Version
+} else {
+    $graphVersion = (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication | Sort-Object Version -Descending | Select-Object -First 1).Version
+    if (-not $graphVersion) {
+        # Without an installed Authentication module no Graph module can be loaded, so nothing conflicts.
+        Write-Host "Installing Microsoft.Graph.Authentication for the current user..."
+        try {
+            Install-Module Microsoft.Graph.Authentication -Scope CurrentUser -Force -AllowClobber
+        } catch {
+            throw "Could not install Microsoft.Graph.Authentication. Check that the PowerShell Gallery is reachable, then run the script again. $($_.Exception.Message)"
+        }
+        $graphVersion = (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication | Sort-Object Version -Descending | Select-Object -First 1).Version
     }
 }
+# Any Graph module of another version already loaded in this session would conflict.
+$other = Get-Module -Name "Microsoft.Graph.*" | Where-Object Version -ne $graphVersion | Select-Object -First 1
+if ($other) {
+    throw "$($other.Name) $($other.Version) is already loaded in this PowerShell session, but the script needs version $graphVersion. Open a new PowerShell window and run the script again."
+}
+foreach ($module in $graphModules) {
+    if (-not (Get-Module -ListAvailable -Name $module | Where-Object Version -eq $graphVersion)) {
+        Write-Host "Installing $module $graphVersion for the current user..."
+        try {
+            Install-Module $module -RequiredVersion $graphVersion -Scope CurrentUser -Force -AllowClobber
+        } catch {
+            throw "Could not install $module $graphVersion, the version that matches Microsoft.Graph.Authentication $graphVersion. Check that the PowerShell Gallery is reachable, or update the installed Microsoft Graph modules to one version with 'Get-InstalledModule Microsoft.Graph* | Update-Module', then run the script again. $($_.Exception.Message)"
+        }
+    }
+}
+if (-not $loaded) { Import-Module Microsoft.Graph.Authentication -RequiredVersion $graphVersion }
+foreach ($module in $graphModules) { Import-Module $module -RequiredVersion $graphVersion }
 
 $connectParams = @{
     Scopes    = "Application.ReadWrite.All", "DelegatedPermissionGrant.ReadWrite.All", "AppRoleAssignment.ReadWrite.All"
@@ -144,7 +177,7 @@ if ($AllowedGroupId) {
 }
 
 Write-Host ""
-Write-Host "Done. Enter these values in TenuVault > Tenants > Add tenant:" -ForegroundColor Green
+Write-Host "Done. Enter these values in TenuVault > Tenants > Connect tenant:" -ForegroundColor Green
 Write-Host "  Tenant id:                $($context.TenantId)"
 Write-Host "  Application (client) id:  $($app.AppId)"
 Write-Host ""

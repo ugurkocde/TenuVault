@@ -26,6 +26,12 @@ export interface CisLevelReadiness {
   assessedAutomated: number | null
   /** Distinct recommendation identifiers named in the pack policy descriptions of this Level. */
   enumerated: number
+  /** The distinct recommendation identifiers named in the pack policy descriptions of this Level. */
+  enumeratedIds: string[]
+  /** Every identifier of this Level in the denominator list, automated and manual; empty without one. */
+  denominatorIdentifiers: string[]
+  /** The identifiers of this Level the denominator list marks automated; empty without one. */
+  automatedIdentifiers: string[]
   denominator: number | null
   coverage: number | null
   coverageSource: DenominatorSource
@@ -49,6 +55,56 @@ export function headlineRate(level: Pick<CisLevelReadiness, "passRate" | "adjust
   return level.recommendations?.length
     ? { basis: "recommendations", rate: level.recommendationPassRate ?? null, adjusted: level.adjustedRecommendationPassRate ?? null }
     : { basis: "settings", rate: level.passRate, adjusted: level.adjustedPassRate }
+}
+
+/**
+ * How many recommendations of a Level TenuVault checks automatically and how many are left for a
+ * manual check. With a denominator list the total is exactly its identifiers for the Level, and a
+ * recommendation is checked when the denominator marks it automated (as in coverage) and an assessed
+ * pack recommendation or the pack descriptions name it, unless its pack recommendation could not be
+ * assessed. Partial metadata cannot shrink the total and manual items outside the list cannot inflate
+ * it; those still appear in the Manual section. Without a denominator a described identifier cannot be
+ * told apart from a manual recommendation or one of another profile, so only assessed pack
+ * recommendations count as checked, no total is known, and the manual count is the listed manual and
+ * unassessed items.
+ */
+export function levelCheckCounts(level: Pick<CisLevelReadiness, "recommendations" | "manual" | "enumeratedIds" | "denominatorIdentifiers" | "automatedIdentifiers">): { checked: number; manual: number; total: number | null } {
+  const recommendations = level.recommendations ?? []
+  const unassessed = new Set(recommendations.filter(result => result.result === "Not assessed").map(result => result.id))
+  const assessed = recommendations.filter(result => result.result !== "Not assessed").map(result => result.id)
+  // A Level the denominator list names has a known total, even when the pack has no policies for it.
+  const known = new Set(level.denominatorIdentifiers ?? [])
+  if (known.size) {
+    const automated = new Set(level.automatedIdentifiers ?? [])
+    const described = new Set([...assessed, ...(level.enumeratedIds ?? [])].filter(id => !unassessed.has(id)))
+    const inList = [...described].filter(id => known.has(id) && automated.has(id)).length
+    return { checked: inList, manual: known.size - inList, total: known.size }
+  }
+  const checked = new Set(assessed)
+  const manual = new Set([...level.manual.map(item => item.identifier), ...unassessed].filter(id => !checked.has(id)))
+  return { checked: checked.size, manual: manual.size, total: null }
+}
+
+/** The sentence shown above the CIS notice for one Level. It never states a total without a denominator. */
+export function levelCheckSummary(level: Pick<CisLevelReadiness, "level" | "recommendations" | "manual" | "enumeratedIds" | "denominatorIdentifiers" | "automatedIdentifiers">): string {
+  const { checked, manual, total } = levelCheckCounts(level)
+  const noun = (count: number) => count === 1 ? "recommendation" : "recommendations"
+  if (total === null) {
+    // Without recommendation metadata no count is claimed: the pack settings are compared as a whole.
+    if (!checked) {
+      const prefix = `Level ${level.level}: TenuVault compares the settings of this pack automatically.`
+      return manual
+        ? `${prefix} The ${manual === 1 ? "one manual recommendation" : `${manual} manual recommendations`} listed here and any recommendations outside the pack need a manual check.`
+        : `${prefix} Recommendations outside the pack, including manual ones, need a manual check.`
+    }
+    const prefix = `Level ${level.level}: TenuVault checks ${checked} ${noun(checked)} of this pack automatically.`
+    return manual
+      ? `${prefix} The other ${manual === 1 ? "one listed here" : `${manual} listed here`} and any recommendations outside the pack need a manual check.`
+      : `${prefix} Recommendations outside the pack, including manual ones, need a manual check.`
+  }
+  if (!manual) return `Level ${level.level}: TenuVault checks all ${checked} ${noun(checked)} automatically.`
+  const rest = manual === 1 ? "The other one needs a manual check." : `The other ${manual} need a manual check.`
+  return `Level ${level.level}: TenuVault checks ${checked} of ${total} ${noun(total)} automatically. ${rest}`
 }
 
 /** The label printed wherever a coverage ratio appears, naming where its denominator came from. */
@@ -127,6 +183,7 @@ export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[],
     .map(exception => exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId)))
   const findingByKey = new Map(assessment.findings.map(finding => [finding.key, finding]))
   const findingExcepted = (finding: Assessment["findings"][number]) => activeExceptionKeys.has(exceptionKey(benchmark, version, policies[finding.policyIndex] ? levelOf(policies[finding.policyIndex]!) : 1, finding.policyName, finding.settingId))
+  const recommendationLevel = new Map(recommendations.map(result => [result.id, result.level] as const))
   const levels: CisLevelReadiness[] = [...allLevels].sort((a, b) => a - b).map(level => {
     const indexes = new Set(policies.map((policy, index) => levelOf(policy) === level ? index : -1).filter(index => index >= 0))
     const findings = assessment.findings.filter(finding => indexes.has(finding.policyIndex))
@@ -154,6 +211,10 @@ export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[],
       // recommendation or one of another profile, so no automated count is claimed.
       assessedAutomated: cov && cov.denominatorSource !== "none" ? cov.numerator : null,
       enumerated: cov?.enumeratedIds.length ?? 0,
+      // A description identifier that the recommendation metadata assigns to another Level belongs there.
+      enumeratedIds: (cov?.enumeratedIds ?? []).filter(id => (recommendationLevel.get(id) ?? level) === level),
+      denominatorIdentifiers: [...new Set((effectiveDenominator ?? []).filter(entry => entry.level === level).map(entry => entry.identifier))],
+      automatedIdentifiers: [...new Set((effectiveDenominator ?? []).filter(entry => entry.level === level && entry.automated).map(entry => entry.identifier))],
       denominator: cov?.denominator ?? null,
       coverage: cov?.coverage ?? null,
       coverageSource: cov?.denominatorSource ?? "none",

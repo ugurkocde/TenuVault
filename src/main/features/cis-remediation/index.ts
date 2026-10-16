@@ -32,6 +32,7 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       if (!Array.isArray(body.findings) && body.selectedPolicyIndexes === undefined) throw new FeatureError("Assessment findings are required.")
       const deployment = await planCisRemediation(deps, tenantId, {
         title: text(body, "title", 200), reference: text(body, "reference", 200),
+        benchmarkName: optionalText(body, "benchmarkName", 200),
         runId: optionalText(body, "runId", 100),
         policies: body.policies,
         findings: (Array.isArray(body.findings) ? body.findings : []) as Finding[],

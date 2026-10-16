@@ -2,6 +2,7 @@ import type { KeyValueStore } from '../storage/secure-store'
 import { parsePolicies, record, type Assessment, type BaselinePolicy } from '../../shared/frameworks/policies'
 import { validateRecommendationList, type RecommendationList } from '../../shared/frameworks/cis-manual'
 import { validateExceptions, type CisException } from '../../shared/frameworks/cis-exceptions'
+import { HISTORY_FULL_MESSAGE, KEEP_NEWEST_ASSESSMENTS, MAX_WORKSPACE_BYTES, MAX_WORKSPACE_HISTORY, type WorkspaceCapacity } from '../../shared/frameworks/workspace-history'
 
 export interface AssessmentRecord {
   assessment: Assessment
@@ -19,6 +20,8 @@ export interface FrameworkWorkspace {
   recommendationList?: RecommendationList
   exceptions?: CisException[]
 }
+/** A workspace as the framework service returns it, with how full its history is. */
+export type WorkspaceView = FrameworkWorkspace & { capacity: WorkspaceCapacity }
 const memory = new Map<string, string>()
 let store: KeyValueStore = { get: key => memory.get(key) ?? null, set: (key, value) => { memory.set(key, value) }, delete: key => { memory.delete(key) } }
 export function setFrameworkStore(value: KeyValueStore): void { store = value }
@@ -32,7 +35,7 @@ export function loadWorkspace(tenant: string, framework: string): FrameworkWorks
   let workspace: FrameworkWorkspace
   try {
     const value: unknown = JSON.parse(data)
-    if (!record(value) || value.version !== 1 || value.tenantId !== tenant.toLowerCase() || value.frameworkId !== framework || typeof value.reference !== "string" || typeof value.updatedAt !== "string" || !Array.isArray(value.policies) || !Array.isArray(value.history) || value.history.length > 50) throw new Error()
+    if (!record(value) || value.version !== 1 || value.tenantId !== tenant.toLowerCase() || value.frameworkId !== framework || typeof value.reference !== "string" || typeof value.updatedAt !== "string" || !Array.isArray(value.policies) || !Array.isArray(value.history) || value.history.length > MAX_WORKSPACE_HISTORY) throw new Error()
     const storedList = value.recommendationList !== undefined ? validateRecommendationList(value.recommendationList) : undefined
     const storedExceptions = value.exceptions !== undefined ? validateExceptions(value.exceptions) : undefined
     const policies = value.policies.length ? parsePolicies(value.policies) : []
@@ -53,8 +56,33 @@ export function loadWorkspace(tenant: string, framework: string): FrameworkWorks
 }
 export function saveWorkspace(workspace: FrameworkWorkspace): void {
   const json = JSON.stringify({ ...workspace, updatedAt: new Date().toISOString() })
-  if (json.length > 32_000_000 || workspace.history.length > 50) throw new Error('Workspace history is full. Export older assessments if you need them, then delete them before continuing.')
+  if (json.length > MAX_WORKSPACE_BYTES || workspace.history.length > MAX_WORKSPACE_HISTORY) throw new Error(HISTORY_FULL_MESSAGE)
   store.set(key(workspace.tenantId, workspace.frameworkId), json)
+}
+/** Whether the next assessment can be saved. The newest saved assessment stands in for its size. */
+export function workspaceCapacity(workspace: FrameworkWorkspace): WorkspaceCapacity {
+  const count = workspace.history.length
+  const base = { count, limit: MAX_WORKSPACE_HISTORY }
+  if (count >= MAX_WORKSPACE_HISTORY) return { ...base, full: true, reason: 'count' }
+  const next = workspace.history[0] ? JSON.stringify(workspace.history[0]).length + 1 : 0
+  if (JSON.stringify(workspace).length + next > MAX_WORKSPACE_BYTES) return { ...base, full: true, reason: 'size' }
+  return { ...base, full: false, reason: null }
+}
+export function workspaceView(workspace: FrameworkWorkspace): WorkspaceView { return { ...workspace, capacity: workspaceCapacity(workspace) } }
+/**
+ * Removes every saved assessment except the newest `keep`, by assessment date, in one save.
+ * Returns the run IDs that were removed.
+ */
+export function pruneHistory(workspace: FrameworkWorkspace, requestedKeep: number): string[] {
+  // The newest assessments are never removed, whatever the caller asks for.
+  const keep = Math.max(requestedKeep, KEEP_NEWEST_ASSESSMENTS)
+  const newest = new Set(workspace.history.map((entry, index) => ({ index, at: Date.parse(entry.assessment.assessedAt) }))
+    .sort((a, b) => b.at - a.at || a.index - b.index).slice(0, keep).map(item => item.index))
+  const removed = workspace.history.filter((_, index) => !newest.has(index)).map(entry => entry.assessment.runId)
+  if (!removed.length) return []
+  workspace.history = workspace.history.filter((_, index) => newest.has(index))
+  saveWorkspace(workspace)
+  return removed
 }
 export function deleteWorkspace(tenant: string, framework: string): void { store.delete(key(tenant, framework)) }
 export function recordAssessment(assessment: Assessment, policies: BaselinePolicy[]): void {

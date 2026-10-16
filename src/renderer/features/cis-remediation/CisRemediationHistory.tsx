@@ -4,6 +4,8 @@ import type { Tenant } from "~/contexts/TenantContext"
 import { Chip } from "~/components/dashboard/tiles"
 import { ChangeSetFlow } from "../shared/ChangeSetFlow"
 import { formatDate, STATUS_TONE } from "../shared/change-set"
+import { cachedCisCatalog } from "../../lib/cis-catalog-cache"
+import { benchmarkTitle, referenceDisplayName } from "../../../shared/frameworks/cis-display"
 import { deploymentActions, getDeployment, listDeployments, rollbackActions, type Deployment, type DeploymentDetail } from "./api"
 
 const tone = (status: Deployment["status"]) => (status === "blocked" ? "danger" : STATUS_TONE[status])
@@ -19,6 +21,16 @@ export function deploymentState(deployment: Pick<Deployment, "status" | "rollbac
       : status === "failed" || status === "partial" ? { label: "rollback failed", tone: "danger" as const }
         : { label: "rollback pending", tone: "warning" as const }
   return { label: deployment.status, tone: tone(deployment.status), rollback }
+}
+
+/**
+ * A deployment reference such as "id 1.0.0 Level 1" with the id replaced by the benchmark name:
+ * the name stamped on the pack when known, else the name in the loaded catalog, else the prettified id.
+ */
+export function deploymentReferenceLabel(reference: string, tenantId: string | undefined, packName?: string | null): string {
+  const id = reference.trim().split(/\s+/)[0] ?? ""
+  if (!id) return reference
+  return referenceDisplayName(reference.trim(), packName?.trim() || benchmarkTitle(id, cachedCisCatalog(tenantId)?.find(benchmark => benchmark.id === id)?.name))
 }
 
 /**
@@ -84,7 +96,7 @@ export function CisRemediationHistory({ tenant, focus }: { tenant: Tenant; focus
             {expanded ? <ChevronDown className="h-4 w-4 shrink-0" aria-hidden="true" /> : <ChevronRight className="h-4 w-4 shrink-0" aria-hidden="true" />}
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm font-medium text-gray-900">{deployment.title}</span>
-              <span className="block text-xs text-gray-500">{deployment.reference} · {formatDate(deployment.createdAt)} · {deployment.items.length} {deployment.items.length === 1 ? "operation" : "operations"}</span>
+              <span className="block text-xs text-gray-500">{deploymentReferenceLabel(deployment.reference, tenantId, deployment.benchmarkName)} · {formatDate(deployment.createdAt)} · {deployment.items.length} {deployment.items.length === 1 ? "operation" : "operations"}</span>
             </span>
             {state.rollback && <Chip tone={state.rollback.tone}>{state.rollback.label}</Chip>}
             <Chip tone={state.tone}>{state.label}</Chip>

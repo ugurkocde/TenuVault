@@ -27,7 +27,7 @@ At the end, the script prints your tenant ID and the application (client) ID. Yo
 
 ### Who can run the script
 
-You need the `Microsoft.Graph.Applications` and `Microsoft.Graph.Identity.SignIns` PowerShell modules (the script installs them for the current user if they are missing) and one of these roles:
+You need the `Microsoft.Graph.Applications` and `Microsoft.Graph.Identity.SignIns` PowerShell modules (the script installs missing modules for the current user at the version of your installed `Microsoft.Graph.Authentication` module, so all Graph modules load at one version) and one of these roles:
 
 * Global Administrator
 * Privileged Role Administrator

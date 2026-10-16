@@ -84,6 +84,14 @@ describe("CIS remediation deploy", () => {
     expect(JSON.stringify(updated.settings)).toContain("fake-on")
   })
 
+  it("keeps the benchmark display name beside the unchanged reference", async () => {
+    const context = setup()
+    const named = await planCisRemediation(context.deps, TENANT_A, { title: "Deploy", reference: "synthetic 1.0", benchmarkName: " Synthetic Benchmark ", policies, findings: [], selectedPolicyIndexes: [0] }, "Admin")
+    expect(named).toMatchObject({ reference: "synthetic 1.0", benchmarkName: "Synthetic Benchmark" })
+    const unnamed = await planCisRemediation(context.deps, TENANT_A, { title: "Deploy", reference: "synthetic 1.0", policies, findings: [], selectedPolicyIndexes: [0] }, "Admin")
+    expect(unnamed).toMatchObject({ reference: "synthetic 1.0", benchmarkName: null })
+  })
+
   it("handles a name collision exactly as change sets do: warns, creates another, never overwrites", async () => {
     const context = setup()
     const collision = context.tenant.addPolicy({ name: "[Baseline] Fakebook Alpha", description: "keep me" })

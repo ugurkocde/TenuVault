@@ -47,7 +47,7 @@ The table above is the default permission set. It does not change unless you opt
 
 * An account with **Global Administrator**, **Privileged Role Administrator** or **Cloud Application Administrator**, which can grant admin consent.
 * PowerShell: Windows PowerShell 5.1 or PowerShell 7 on Windows, PowerShell 7 (`pwsh`) on macOS.
-* The Microsoft Graph PowerShell modules `Microsoft.Graph.Applications` and `Microsoft.Graph.Identity.SignIns`. If they are missing, the script installs them for the current user from the PowerShell Gallery.
+* The Microsoft Graph PowerShell modules `Microsoft.Graph.Applications` and `Microsoft.Graph.Identity.SignIns`. The Graph modules only load together at one version, so the script uses the newest installed `Microsoft.Graph.Authentication` version and installs any missing module at that version for the current user from the PowerShell Gallery. If another Graph version is already loaded in your PowerShell session, the script stops and asks you to open a new PowerShell window. If that version cannot be downloaded, the script stops and names it; update the installed Graph modules to one version with `Get-InstalledModule Microsoft.Graph* | Update-Module` and run it again.
 * Optional: the object ID of a security group, if only its members should be able to sign in.
 
 ## Get the script
@@ -85,7 +85,7 @@ The same script is also built into TenuVault:
 4. Wait for the script to finish. It prints:
 
    ```
-   Done. Enter these values in TenuVault > Tenants > Add tenant:
+   Done. Enter these values in TenuVault > Tenants > Connect tenant:
      Tenant id:                <tenant id>
      Application (client) id:  <client id>
    ```
@@ -93,7 +93,7 @@ The same script is also built into TenuVault:
 5. Copy the **Application (client) id**. You enter it when you [sign in to your tenant](/getting-started/connect-tenant/). The tenant ID is always printed as a GUID, even if you passed a domain.
 
 :::note
-In the app, the button is called **Connect tenant**, not **Add tenant**. The script also ends with a reminder about admin roles. The roles TenuVault Desktop needs are listed in [Requirements](/getting-started/requirements/#admins-who-use-tenuvault).
+The script also ends with a reminder about admin roles. The roles TenuVault Desktop needs are listed in [Requirements](/getting-started/requirements/#admins-who-use-tenuvault).
 :::
 
 ### Parameters
