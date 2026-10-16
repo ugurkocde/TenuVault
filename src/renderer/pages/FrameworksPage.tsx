@@ -46,6 +46,8 @@ async function request<T>(body: unknown): Promise<T> {
   if (!response.ok) throw Object.assign(new Error(result.error || `Request failed (${response.status}).`), { status: response.status })
   return result
 }
+/** The saved workspace and the assessment still running for it, as main reads them together. */
+type OpenedWorkspace = { workspace: WorkspaceView; activeJob: { jobId: string; reference: string; policies: BaselinePolicy[] } | null }
 /** A status poll is retried unless the service answered that it will not change its mind, such as a job that no longer exists. */
 function retryableStatusPoll(error: unknown): boolean {
   const status = (error as { status?: unknown } | null)?.status
@@ -393,38 +395,51 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   })
   const workspaceQueue = useRef<Promise<unknown>>(Promise.resolve())
   const suppressedDraft = useRef<string | null>(null)
-  const workspaceRequest = (action: string, extra: object = {}) => {
-    const task = workspaceQueue.current.catch(() => undefined).then(() => request<WorkspaceView>({ action, tenantId: credentials?.tenantId, frameworkId: framework.id, ...extra }))
+  const workspaceRequest = <T = WorkspaceView,>(action: string, extra: object = {}) => {
+    const task = workspaceQueue.current.catch(() => undefined).then(() => request<T>({ action, tenantId: credentials?.tenantId, frameworkId: framework.id, ...extra }))
     workspaceQueue.current = task
     return task
   }
-  /** The assessment still running in main for this tenant, with its pack. Transient failures are retried like a status poll. */
-  async function findActiveCisJob(tenantId: string, current: () => boolean): Promise<{ jobId: string; pack: CisRunPack } | null> {
-    const found = await pollCisStatus(() => request<{ jobId?: unknown; reference?: unknown; policies?: unknown }>({ action: "assess-active", tenantId, frameworkId: framework.id }), { retryable: retryableStatusPoll, current })
-    return typeof found.jobId === "string" && typeof found.reference === "string" && Array.isArray(found.policies) ? { jobId: found.jobId, pack: { reference: found.reference, policies: found.policies as BaselinePolicy[] } } : null
+  const shownAssessment = useRef<Assessment | null>(null)
+  useEffect(() => { shownAssessment.current = assessment }, [assessment])
+  /**
+   * Shows a saved assessment as read-only results with its pack, and clears any selection made on
+   * other results. It never replaces newer results already on screen, such as a fresh run.
+   */
+  function showSavedResults(saved: Assessment, pack: CisRunPack) {
+    const shown = shownAssessment.current
+    if (shown && (shown.runId === saved.runId || Date.parse(shown.assessedAt) >= Date.parse(saved.assessedAt))) return
+    setPolicies(pack.policies); setReference(pack.reference)
+    setAssessment(saved); setHistorical(true); setSelected(new Set()); setPreview(false); setConfirmed(false); setCreation(null); setPage(0)
   }
   /**
-   * Opens the saved workspace. On the CIS page the newest saved assessment shows as the results
-   * and an assessment still running is followed with its own pack. Saved results stay read-only
-   * until a fresh run, so nothing is selected, excluded or remediated from older evidence. The
-   * running job is looked up before the workspace is read: a job that finishes in between has
-   * saved its results by then, so they are not missed.
+   * Opens the saved workspace. On the CIS page main answers with the workspace and the assessment
+   * still running for it in one consistent call, retried like a status poll. The newest saved
+   * assessment shows as read-only results, so nothing is selected, excluded or remediated from
+   * older evidence, and a running assessment is followed with its own pack. When the call still
+   * fails, the workspace is loaded on its own and a notice offers to check again.
    */
-  async function openWorkspace(tenantId: string, current: () => boolean) {
-    let running: { jobId: string; pack: CisRunPack } | null = null
+  async function openWorkspace(current: () => boolean, first: boolean) {
+    let opened: OpenedWorkspace
     let lookupFailed = false
     if (isCis) {
-      try { running = await findActiveCisJob(tenantId, current) } catch { lookupFailed = true }
-      if (!current()) return
-    }
-    const saved = await workspaceRequest("workspace-load")
+      try { opened = await pollCisStatus(() => workspaceRequest<OpenedWorkspace>("workspace-open"), { retryable: retryableStatusPoll, current }) }
+      catch (e) {
+        if (isWorkspaceUnreadableError(e instanceof Error ? e.message : String(e)) || !current()) throw e
+        lookupFailed = true
+        opened = { workspace: await workspaceRequest("workspace-load"), activeJob: null }
+      }
+    } else opened = { workspace: await workspaceRequest("workspace-load"), activeJob: null }
     if (!current()) return
-    setWorkspace(saved); setPolicies(saved.policies); setReference(saved.reference); setRecommendationList(saved.recommendationList)
+    const saved = opened.workspace
+    setWorkspace(saved)
+    if (first) { setPolicies(saved.policies); setReference(saved.reference); setRecommendationList(saved.recommendationList) }
     if (!isCis) return
-    const latest = currentSavedAssessment(saved)
-    if (latest) { setAssessment(latest.assessment); setHistorical(true) }
     setActiveLookupFailed(lookupFailed)
-    if (running) { const job = running; void trackCisJob(job.pack, async () => job.jobId) }
+    const latest = currentSavedAssessment(saved)
+    if (latest) showSavedResults(latest.assessment, { policies: saved.policies, reference: saved.reference })
+    const job = opened.activeJob
+    if (job) void trackCisJob({ policies: job.policies, reference: job.reference }, async () => job.jobId)
   }
   function showOpenError(e: unknown) {
     const message = e instanceof Error ? e.message : String(e)
@@ -434,13 +449,13 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   useEffect(() => {
     if (!credentials?.tenantId) return
     let active = true
-    void openWorkspace(credentials.tenantId, () => active).catch(e => { if (active) showOpenError(e) }).finally(() => { if (active) setWorkspaceLoading(false) })
+    void openWorkspace(() => active, true).catch(e => { if (active) showOpenError(e) }).finally(() => { if (active) setWorkspaceLoading(false) })
     return () => { active = false }
   }, [credentials?.tenantId, framework.id])
   function retryActiveLookup() {
     if (!credentials?.tenantId || cisRun) return
     setActiveLookupFailed(false)
-    void openWorkspace(credentials.tenantId, () => true).catch(showOpenError)
+    void openWorkspace(() => true, false).catch(showOpenError)
   }
   useEffect(() => {
     if (!workspace || historical || JSON.stringify({ policies, reference }) === suppressedDraft.current) return
@@ -495,7 +510,8 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     const generation = ++cisRunGeneration.current
     const current = () => cisRunGeneration.current === generation
     const tenantId = credentials.tenantId
-    setError(""); setHistoryNotice("")
+    // Starting or following a run answers the question a failed running-assessment check left open.
+    setError(""); setHistoryNotice(""); setActiveLookupFailed(false)
     setBusy("Reading tenant policies and comparing settings…")
     setCisRun({ jobId: "", phase: "connecting", status: "running", state: "running", tenantId, frameworkId: framework.id, read: 0, total: 0, currentPolicy: "", comparedPolicies: 0, packPolicies: capturedPack.policies.length, currentPackPolicy: "", findings: [], nextSince: 0, error: null, assessment: null })
     try {

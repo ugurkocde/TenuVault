@@ -249,8 +249,29 @@ function jobSnapshot(job: AssessJob, since: number): AssessJobSnapshot {
   }
 }
 
-async function runAssessJob(job: AssessJob, token: string, policies: BaselinePolicy[]): Promise<void> {
+/**
+ * Admissions and completions per tenant and framework. Opening a workspace compares it before and
+ * after reading, so a job that starts or finishes during the read is not missed.
+ */
+const jobGenerations = new Map<string, number>()
+const jobGenerationKey = (tenant: string, frameworkId: string) => `${tenant}:${frameworkId}`
+const jobGeneration = (tenant: string, frameworkId: string) => jobGenerations.get(jobGenerationKey(tenant, frameworkId)) ?? 0
+function nextJobGeneration(tenant: string, frameworkId: string): void {
+  jobGenerations.set(jobGenerationKey(tenant, frameworkId), jobGeneration(tenant, frameworkId) + 1)
+}
+
+/** The running job of a tenant and framework with the pack it assesses, or null. */
+function activeJob(tenant: string, frameworkId: string): { jobId: string; reference: string; policies: BaselinePolicy[] } | null {
+  pruneJobs()
+  const running = [...jobs.values()].find(job => !isFinished(job) && job.tenantId === tenant && job.frameworkId === frameworkId)
+  return running ? { jobId: running.id, reference: running.reference, policies: JSON.parse(running.policiesJson) as BaselinePolicy[] } : null
+}
+
+/** Runs an admitted job: it acquires the tenant token itself, so the job is visible while it connects. */
+async function runAssessJob(job: AssessJob, connect: () => Promise<{ token: string }>, policies: BaselinePolicy[]): Promise<void> {
   try {
+    const { token } = await connect()
+    requireEnabledFramework(job.frameworkId)
     job.phase = "reading"
     requireEnabledFramework(job.frameworkId)
     const current = await landscape(token, progress => {
@@ -292,6 +313,7 @@ async function runAssessJob(job: AssessJob, token: string, policies: BaselinePol
     job.assessment = null
   } finally {
     job.expiresAt = Date.now() + JOB_TTL_MS
+    nextJobGeneration(job.tenantId, job.frameworkId)
     pruneJobs()
   }
 }
@@ -322,9 +344,14 @@ export async function isAdmittedAssessStatus(request: Request): Promise<boolean>
   return !!job && job.tenantId === body.tenantId.toLowerCase() && job.frameworkId === body.frameworkId
 }
 
-export async function tokenFor(body: RecordJson, forceRefresh = false): Promise<{ tenant: string; token: string }> {
+function signedInTenant(body: RecordJson): { tenantId: string; appId: string } {
   const { tenantId, appId } = body
   if (typeof tenantId !== "string" || !/^[a-f0-9-]{36}$/i.test(tenantId) || typeof appId !== "string" || !/^[a-f0-9-]{36}$/i.test(appId)) throw new FrameworkError("Select a signed-in tenant first.")
+  return { tenantId, appId }
+}
+
+export async function tokenFor(body: RecordJson, forceRefresh = false): Promise<{ tenant: string; token: string }> {
+  const { tenantId, appId } = signedInTenant(body)
   const token = await jsonFetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
     method: "POST", body: new URLSearchParams({ client_id: appId, client_secret: DELEGATED_CLIENT_SECRET,
       grant_type: "client_credentials", force_refresh: String(forceRefresh), scope: "https://graph.microsoft.com/.default" }),
@@ -400,6 +427,17 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     }
     // Deleting does not read the saved workspace first, so it also resets one that cannot be read.
     if (body.action === "workspace-delete") { deleteWorkspace(body.tenantId, body.frameworkId); return workspaceView(loadWorkspace(body.tenantId, body.frameworkId)) }
+    if (body.action === "workspace-open") {
+      // The saved workspace and the running assessment as one consistent answer: when a job was
+      // admitted or finished while the workspace was read, both are read again.
+      const frameworkId = body.frameworkId
+      for (let attempt = 0; ; attempt += 1) {
+        const before = jobGeneration(tenantKey, frameworkId)
+        const workspace = workspaceView(loadWorkspace(body.tenantId, frameworkId))
+        const running = activeJob(tenantKey, frameworkId)
+        if (jobGeneration(tenantKey, frameworkId) === before || attempt >= 2) return { workspace, activeJob: running }
+      }
+    }
     const workspace = loadWorkspace(body.tenantId, body.frameworkId)
     if (["workspace-pdf", "workspace-csv", "workspace-json", "workspace-cis-pdf"].includes(body.action)) return exportWorkspace(body, workspace)
     if (body.action === "workspace-save") {
@@ -492,15 +530,6 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       throw new FrameworkError(error instanceof Error ? error.message : "The CIS content delivery service returned an invalid response.", 502)
     }
   }
-  if (body.action === "assess-active") {
-    // The running assessment of this tenant and framework with the pack it assesses, so a screen
-    // opened during a run can follow it and apply its results to that pack.
-    if (typeof body.tenantId !== "string" || typeof body.frameworkId !== "string") throw new FrameworkError("Select a tenant and framework.")
-    pruneJobs()
-    const tenant = body.tenantId.toLowerCase()
-    const running = [...jobs.values()].find(job => !isFinished(job) && job.tenantId === tenant && job.frameworkId === body.frameworkId)
-    return running ? { jobId: running.id, reference: running.reference, policies: JSON.parse(running.policiesJson) as BaselinePolicy[] } : { jobId: null }
-  }
   if (body.action === "assess-status") {
     pruneJobs()
     const job = typeof body.jobId === "string" ? jobs.get(body.jobId) : undefined
@@ -509,10 +538,9 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     const since = typeof body.since === "number" && Number.isFinite(body.since) && body.since > 0 ? Math.floor(body.since) : 0
     return jobSnapshot(job, since)
   }
-  const { tenant, token } = await tokenFor(body)
-  if (typeof body.frameworkId === "string") requireEnabledFramework(body.frameworkId)
-  for (const [id, run] of runs) if (run.expires < Date.now()) runs.delete(id)
   if (body.action === "assess-start") {
+    // The job is admitted before any await, so it is visible to workspace-open while it connects.
+    const tenant = signedInTenant(body).tenantId.toLowerCase()
     if (typeof body.frameworkId !== "string" || !frameworks.some(f => f.id === body.frameworkId)) throw new FrameworkError("Select a framework.")
     if (typeof body.reference !== "string" || !body.reference.trim() || body.reference.length > 200) throw new FrameworkError("Provide a source version and profile (up to 200 characters).")
     const policies = parsePolicies(body.policies)
@@ -532,10 +560,14 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       findings: [], error: null, assessment: null, expiresAt: null,
     }
     jobs.set(job.id, job)
+    nextJobGeneration(tenant, job.frameworkId)
     pruneJobs()
-    void runAssessJob(job, token, policies)
+    void runAssessJob(job, () => tokenFor(body), policies)
     return { jobId: job.id }
   }
+  const { tenant, token } = await tokenFor(body)
+  if (typeof body.frameworkId === "string") requireEnabledFramework(body.frameworkId)
+  for (const [id, run] of runs) if (run.expires < Date.now()) runs.delete(id)
   if (body.action === "assess") {
     if (typeof body.frameworkId !== "string" || !frameworks.some(f => f.id === body.frameworkId)) throw new FrameworkError("Select a framework.")
     if (typeof body.reference !== "string" || !body.reference.trim() || body.reference.length > 200) throw new FrameworkError("Provide a source version and profile (up to 200 characters).")

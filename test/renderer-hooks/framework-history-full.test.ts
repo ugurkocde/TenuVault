@@ -50,8 +50,8 @@ function stubService(frameworkId: string, count: number, assess: (body: Record<s
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>
     calls.actions.push(body)
     if (body.action === "workspace-prune-history") current = workspace(frameworkId, Number(body.keep))
+    if (body.action === "workspace-open") return Response.json({ workspace: current, activeJob: null })
     if (String(body.action).startsWith("workspace-")) return Response.json(current)
-    if (body.action === "assess-active") return Response.json({ jobId: null })
     const result = assess(body)
     return Response.json(result.body, { status: result.status })
   }))

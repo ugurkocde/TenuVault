@@ -334,7 +334,10 @@ describe("CIS Benchmarks route", () => {
     const assessment = { runId: "run-1", tenantId, frameworkId: "cis-benchmarks", reference: "synthetic-os 9.9.9 Level 1", assessedAt: "2026-10-15T10:00:00Z", policyCount: 1,
       findings: [{ key: "0:0", policyIndex: 0, settingIndex: 0, policyName: "Synthetic policy", settingId: "synthetic_setting", status: "Missing", recommended: policy.settings[0]!.settingInstance, observed: [], ...findingExtra(policy) }] }
     const workspace = { version: 1, tenantId, frameworkId: "cis-benchmarks", policies: [policy], reference: assessment.reference, updatedAt: "2026-10-15T10:00:00Z", history: [{ assessment, policies: [policy] }] }
-    vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(path === "/api/cis-remediation" ? { deployments: [] } : workspace), { status: 200, headers: { "Content-Type": "application/json" } })))
+    vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+      const opening = path === "/api/frameworks" && String(init?.body).includes('"workspace-open"')
+      return new Response(JSON.stringify(path === "/api/cis-remediation" ? { deployments: [] } : opening ? { workspace, activeJob: null } : workspace), { status: 200, headers: { "Content-Type": "application/json" } })
+    }))
     const container = render(
       createElement(
         MemoryRouter,

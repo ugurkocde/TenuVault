@@ -140,10 +140,13 @@ describe("Graph reads during a CIS assessment", () => {
     expect(calls.filter(url => url === GRAPH)).toHaveLength(1)
   })
 
-  it("does not repeat a POST: a failed token request is not retried", async () => {
+  it("does not repeat a POST: a failed token request is not retried and fails the job", async () => {
     const calls = tenantFetch(url => url.includes("oauth2") ? new Response("{}", { status: 503 }) : undefined)
-    await expect(start()).rejects.toThrow("Request failed (503)")
+    const failed = await finish(await start())
+    expect(failed.phase).toBe("failed")
+    expect(failed.error).toContain("Request failed (503)")
     expect(calls.filter(url => url.includes("oauth2"))).toHaveLength(1)
+    expect(calls.some(url => url.startsWith(GRAPH))).toBe(false)
   })
 
   it("re-reads a policy whose settings changed during the read, then completes", async () => {
@@ -177,21 +180,74 @@ describe("Graph reads during a CIS assessment", () => {
 })
 
 describe("following a running CIS assessment", () => {
-  it("finds the running job of a tenant and framework, and nothing once it finished", async () => {
+  interface Opened { workspace: { history: { assessment: Assessment }[] }; activeJob: { jobId: string; reference: string; policies: { name: string }[] } | null }
+  const open = (tenant = tenantId, frameworkId = "cis-benchmarks") => handleFramework({ action: "workspace-open", tenantId: tenant, frameworkId }) as Promise<Opened>
+
+  it("answers the workspace with the running job of that tenant and framework and its pack", async () => {
     let release!: () => void
     const gate = new Promise<void>(resolve => { release = resolve })
     tenantFetch(async url => { if (url === GRAPH) await gate; return undefined })
     const jobId = await start()
     const item = pack()
-    const found = await handleFramework({ action: "assess-active", tenantId: tenantId.toUpperCase(), frameworkId: "cis-benchmarks" }) as { jobId: string; reference: string; policies: { name: string }[] }
-    expect(found.jobId).toBe(jobId)
-    expect(found.reference).toBe(item.reference)
-    expect(found.policies.map(policy => policy.name)).toEqual((item.policies as { name: string }[]).map(policy => policy.name))
-    await expect(handleFramework({ action: "assess-active", tenantId: "44444444-4444-4444-4444-444444444444", frameworkId: "cis-benchmarks" })).resolves.toEqual({ jobId: null })
-    await expect(handleFramework({ action: "assess-active", tenantId, frameworkId: "microsoft" })).resolves.toEqual({ jobId: null })
+    const opened = await open(tenantId.toUpperCase())
+    expect(opened.activeJob?.jobId).toBe(jobId)
+    expect(opened.activeJob?.reference).toBe(item.reference)
+    expect(opened.activeJob?.policies.map(policy => policy.name)).toEqual((item.policies as { name: string }[]).map(policy => policy.name))
+    expect((await open("44444444-4444-4444-4444-444444444444")).activeJob).toBeNull()
+    expect((await open(tenantId, "custom")).activeJob).toBeNull()
     release()
     await finish(jobId)
-    await expect(handleFramework({ action: "assess-active", tenantId, frameworkId: "cis-benchmarks" })).resolves.toEqual({ jobId: null })
+    expect((await open()).activeJob).toBeNull()
+  })
+
+  it("shows a start that is still acquiring its token as a running job", async () => {
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    tenantFetch(async url => { if (url.includes("oauth2")) await gate; return undefined })
+    const jobId = await start()
+    expect((await open()).activeJob?.jobId).toBe(jobId)
+    const snapshot = await handleFramework({ action: "assess-status", jobId, tenantId, frameworkId: "cis-benchmarks", since: 0 }) as Snapshot
+    expect(snapshot.phase).toBe("connecting")
+    release()
+    expect((await finish(jobId)).phase).toBe("done")
+  })
+
+  it("returns a job admitted while the workspace is read", async () => {
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    tenantFetch(async url => { if (url === GRAPH) await gate; return undefined })
+    const workspaceKey = `framework.workspace.${tenantId}.cis-benchmarks`
+    let admitted: Promise<{ jobId: string }> | null = null
+    let admitting = false
+    // The first read of the workspace by workspace-open admits a job, as another view starting a run would.
+    setFrameworkStore({ get: k => {
+      if (k === workspaceKey && !admitting) {
+        admitting = true
+        const item = pack()
+        admitted = handleFramework({ action: "assess-start", frameworkId: "cis-benchmarks", tenantId, appId, reference: item.reference, policies: item.policies }) as Promise<{ jobId: string }>
+      }
+      return data.get(k) ?? null
+    }, set: (k, v) => { data.set(k, v) }, delete: k => { data.delete(k) } })
+    const opened = await open()
+    const { jobId } = await admitted!
+    expect(opened.activeJob?.jobId).toBe(jobId)
+    release()
+    await finish(jobId)
+  })
+
+  it("never answers without both the running job and its results while a job finishes", async () => {
+    tenantFetch()
+    const jobId = await start()
+    for (let attempt = 0; attempt < 400; attempt += 1) {
+      const opened = await open()
+      expect(!!opened.activeJob || opened.workspace.history.length === 1).toBe(true)
+      if (!opened.activeJob) break
+      await new Promise(resolve => setTimeout(resolve, 2))
+    }
+    const done = await finish(jobId)
+    const opened = await open()
+    expect(opened.activeJob).toBeNull()
+    expect(opened.workspace.history[0]?.assessment.runId).toBe(done.assessment?.runId)
   })
 
   it("admits status polls of an existing job for its own tenant without a new plan check, and nothing else", async () => {

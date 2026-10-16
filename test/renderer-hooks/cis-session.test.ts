@@ -48,7 +48,10 @@ function snapshot(phase: string, extra: object = {}) {
 }
 
 type Answer = { status?: number; body: unknown }
-/** A local framework service. `answer` handles assessment actions; workspace actions use `state`. */
+/**
+ * A local framework service. `answer` handles assessment actions; workspace actions use `state`.
+ * workspace-open asks `answer` for "running-job" (a stub hook, not a request) to learn the running job, as main reads both together.
+ */
 function stubService(options: { history?: ReturnType<typeof assessment>[]; unreadable?: boolean; answer?: (body: Record<string, unknown>) => Answer }) {
   const state = { unreadable: !!options.unreadable, current: workspace(options.history ?? [saved]) }
   const actions: Record<string, unknown>[] = []
@@ -57,8 +60,14 @@ function stubService(options: { history?: ReturnType<typeof assessment>[]; unrea
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>
     actions.push(body)
     if (body.action === "workspace-delete") { state.unreadable = false; state.current = { ...workspace([]), policies: [], reference: "" }; return Response.json(state.current) }
+    if (body.action === "workspace-open" && !state.unreadable) {
+      const job = options.answer?.({ ...body, action: "running-job" }) ?? { body: { jobId: null } }
+      if ((job.status ?? 200) >= 400) return Response.json(job.body, { status: job.status })
+      const found = job.body as { jobId?: string | null }
+      return Response.json({ workspace: state.current, activeJob: found.jobId ? found : null })
+    }
     if (String(body.action).startsWith("workspace-")) return state.unreadable ? Response.json({ error: WORKSPACE_UNREADABLE_MESSAGE }, { status: 400 }) : Response.json(state.current)
-    const result = options.answer?.(body) ?? (body.action === "assess-active" ? { body: { jobId: null } } : { status: 500, body: { error: "unexpected" } })
+    const result = options.answer?.(body) ?? (body.action === "running-job" ? { body: { jobId: null } } : { status: 500, body: { error: "unexpected" } })
     return Response.json(result.body, { status: result.status ?? 200 })
   }))
   return { state, actions }
@@ -128,7 +137,7 @@ describe("CIS Benchmarks results across navigation", () => {
     const answer = globalThis.fetch as unknown as (path: string, init?: RequestInit) => Promise<Response>
     let release!: () => void
     const gate = new Promise<void>(resolve => { release = resolve })
-    vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => { if (String(init?.body).includes("workspace-load")) await gate; return answer(path, init) }))
+    vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => { if (String(init?.body).includes("workspace-open")) await gate; return answer(path, init) }))
     const { container } = render()
     await flush()
     expect(container.textContent).toContain("Loading saved assessments")
@@ -180,7 +189,7 @@ describe("CIS Benchmarks results across navigation", () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     let polls = 0
     const { actions } = stubService({ history: [], answer: body => {
-      if (body.action === "assess-active") return { body: { jobId: "job-1", reference, policies: [policy] } }
+      if (body.action === "running-job") return { body: { jobId: "job-1", reference, policies: [policy] } }
       if (body.action === "assess-status") { polls += 1; return { body: polls === 1 ? snapshot("reading") : snapshot("done", { assessment: fresh }) } }
       return { status: 500, body: { error: "unexpected" } }
     } })
@@ -223,7 +232,7 @@ describe("Run again", () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     let polls = 0
     const { actions } = stubService({ answer: body => {
-      if (body.action === "assess-active") return { body: { jobId: null } }
+      if (body.action === "running-job") return { body: { jobId: null } }
       if (body.action === "assess-start") return { body: { jobId: "job-1" } }
       if (body.action === "assess-status") { polls += 1; return { body: polls === 1 ? snapshot("reading") : snapshot("failed", { error: "Request failed (502) at /beta/deviceManagement/configurationPolicies." }) } }
       return { status: 500, body: { error: "unexpected" } }
@@ -247,7 +256,7 @@ describe("Run again", () => {
   it("replaces the previous results when the re-run completes", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     stubService({ answer: body => {
-      if (body.action === "assess-active") return { body: { jobId: null } }
+      if (body.action === "running-job") return { body: { jobId: null } }
       if (body.action === "assess-start") return { body: { jobId: "job-1" } }
       if (body.action === "assess-status") return { body: snapshot("done", { assessment: fresh }) }
       return { status: 500, body: { error: "unexpected" } }
@@ -264,7 +273,7 @@ describe("Run again", () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     const missing = assessment("run-fresh", "Missing", "2026-10-16T10:00:00Z")
     stubService({ answer: body => {
-      if (body.action === "assess-active") return { body: { jobId: null } }
+      if (body.action === "running-job") return { body: { jobId: null } }
       if (body.action === "assess-start") return { body: { jobId: "job-1" } }
       if (body.action === "assess-status") return { body: snapshot("done", { assessment: missing }) }
       return { status: 500, body: { error: "unexpected" } }
@@ -280,15 +289,15 @@ describe("Run again", () => {
   it("says so when the saved list cannot be refreshed after a completed run", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     stubService({ answer: body => {
-      if (body.action === "assess-active") return { body: { jobId: null } }
+      if (body.action === "running-job") return { body: { jobId: null } }
       if (body.action === "assess-start") return { body: { jobId: "job-1" } }
       if (body.action === "assess-status") return { body: snapshot("done", { assessment: fresh }) }
       return { status: 500, body: { error: "unexpected" } }
     } })
     const answer = globalThis.fetch as unknown as (path: string, init?: RequestInit) => Promise<Response>
-    let loads = 0
+    // Opening succeeds; the refresh after the run fails.
     vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
-      if (String(init?.body).includes("workspace-load") && ++loads > 1) return Response.json({ error: "Storage is busy." }, { status: 500 })
+      if (String(init?.body).includes('"workspace-load"')) return Response.json({ error: "Storage is busy." }, { status: 500 })
       return answer(path, init)
     }))
     const { container } = render()
@@ -302,16 +311,17 @@ describe("Run again", () => {
 describe("opening the page around a running assessment", () => {
   const jobPack = { jobId: "job-1", reference, policies: [policy] }
 
-  it("does not miss a run that finishes between the running-job lookup and the workspace read", async () => {
+  it("opens with one workspace-open call that answers the workspace and the running job together", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     const { state, actions } = stubService({ history: [], answer: body => {
-      // The job saves its results and finishes just as the page asks whether it is still running.
-      if (body.action === "assess-active") { state.current = workspace([fresh]); return { body: { jobId: null } } }
+      // The job saved its results and finished while main read the workspace.
+      if (body.action === "running-job") { state.current = workspace([fresh]); return { body: { jobId: null } } }
       return { status: 500, body: { error: "unexpected" } }
     } })
     const { container } = render()
     await flush()
-    expect(actions.findIndex(body => body.action === "assess-active")).toBeLessThan(actions.findIndex(body => body.action === "workspace-load"))
+    expect(actions.filter(body => body.action === "workspace-open")).toHaveLength(1)
+    expect(actions.some(body => body.action === "workspace-load" || body.action === "running-job")).toBe(false)
     expect(results(container)).not.toBeNull()
     expect(levelSummary(container)).toContain("100%")
   })
@@ -320,7 +330,7 @@ describe("opening the page around a running assessment", () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     let lookups = 0
     stubService({ history: [], answer: body => {
-      if (body.action === "assess-active") return ++lookups === 1 ? { status: 503, body: { error: "Busy." } } : { body: jobPack }
+      if (body.action === "running-job") return ++lookups === 1 ? { status: 503, body: { error: "Busy." } } : { body: jobPack }
       if (body.action === "assess-status") return { body: snapshot("reading") }
       return { status: 500, body: { error: "unexpected" } }
     } })
@@ -334,7 +344,7 @@ describe("opening the page around a running assessment", () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     let lookups = 0
     stubService({ history: [], answer: body => {
-      if (body.action === "assess-active") return ++lookups === 1 ? { status: 404, body: { error: "Not found." } } : { body: jobPack }
+      if (body.action === "running-job") return ++lookups === 1 ? { status: 404, body: { error: "Not found." } } : { body: jobPack }
       if (body.action === "assess-status") return { body: snapshot("reading") }
       return { status: 500, body: { error: "unexpected" } }
     } })
@@ -350,7 +360,7 @@ describe("opening the page around a running assessment", () => {
   it("shows Connecting, not 0 of 0 policies read, before the tenant policy list arrives", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     stubService({ history: [], answer: body => {
-      if (body.action === "assess-active") return { body: jobPack }
+      if (body.action === "running-job") return { body: jobPack }
       if (body.action === "assess-status") return { body: { ...snapshot("reading"), read: 0, total: 0 } }
       return { status: 500, body: { error: "unexpected" } }
     } })
@@ -365,7 +375,7 @@ describe("opening the page around a running assessment", () => {
     const other = { ...assessment("run-other", "Present", "2026-10-16T11:00:00Z"), reference: otherReference }
     let polls = 0
     const { state } = stubService({ answer: body => {
-      if (body.action === "assess-active") return { body: { jobId: "job-1", reference: otherReference, policies: [policy] } }
+      if (body.action === "running-job") return { body: { jobId: "job-1", reference: otherReference, policies: [policy] } }
       if (body.action === "assess-status") { polls += 1; return { body: polls === 1 ? snapshot("reading") : snapshot("done", { assessment: other }) } }
       return { status: 500, body: { error: "unexpected" } }
     } })
@@ -376,7 +386,63 @@ describe("opening the page around a running assessment", () => {
   })
 })
 
+describe("checking again for a running assessment", () => {
+  it("does not let a late Retry replace a fresh run's results or keep its selection on saved results", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    const newer = assessment("run-fresh", "Missing", "2026-10-16T10:00:00Z")
+    let opens = 0
+    let releaseRetry!: () => void
+    const retryGate = new Promise<void>(resolve => { releaseRetry = resolve })
+    const { actions } = stubService({ answer: body => {
+      if (body.action === "running-job") return ++opens === 1 ? { status: 404, body: { error: "Not found." } } : { body: { jobId: null } }
+      if (body.action === "assess-start") return { body: { jobId: "job-1" } }
+      if (body.action === "assess-status") return { body: snapshot("done", { assessment: newer }) }
+      return { status: 500, body: { error: "unexpected" } }
+    } })
+    const answer = globalThis.fetch as unknown as (path: string, init?: RequestInit) => Promise<Response>
+    vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+      if (String(init?.body).includes('"workspace-open"') && opens >= 1) await retryGate
+      return answer(path, init)
+    }))
+    const { container } = render()
+    await flush()
+    const notice = [...container.querySelectorAll('[role="alert"]')].find(item => item.textContent?.includes("Could not check for a running assessment"))
+    expect(notice).toBeDefined()
+    // Retry is still waiting for main when a fresh run finishes and a finding is selected.
+    await act(async () => { buttonNamed(notice as HTMLElement, "Retry")!.click() })
+    await act(async () => { buttonNamed(container, "Run again")!.click() })
+    await waitFor(() => !container.textContent.includes("Showing a saved assessment") && !buttonNamed(container, "Re-running"))
+    expect(container.textContent).not.toContain("Could not check for a running assessment")
+    const box = container.querySelector<HTMLInputElement>('[aria-label="Assessment results"] input[type="checkbox"]')!
+    expect(box.disabled).toBe(false)
+    await act(async () => { box.click() })
+    expect(box.checked).toBe(true)
+    releaseRetry()
+    await flush()
+    // The saved assessment is older than the fresh results on screen, so it does not replace them.
+    expect(container.textContent).not.toContain("Showing a saved assessment")
+    expect(container.querySelector<HTMLInputElement>('[aria-label="Assessment results"] input[type="checkbox"]')!.checked).toBe(true)
+    const plan = buttonNamed(container, "Plan remediation for 1 selected findings")
+    expect(plan?.disabled).toBe(false)
+    expect(actions.filter(body => body.action === "workspace-open").length).toBe(2)
+  })
+})
+
 describe("saved results are read-only", () => {
+  it("keeps remediation off in the panel itself, even with deviating findings selected", async () => {
+    const { CisRemediationPanel } = await import("../../src/renderer/features/cis-remediation/CisRemediationPanel")
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    containers.push(container)
+    const root = createRoot(container)
+    roots.push(root)
+    const tenant = { id: "local", name: "Synthetic tenant", credentials: { tenantId, appId: "22222222-2222-2222-2222-222222222222" } }
+    act(() => { root.render(createElement(CisRemediationPanel, { tenant: tenant as never, assessment: saved as never, policies: [policy] as never, reference, selectedKeys: new Set(["0:0"]), onPlanned: () => undefined, readOnly: true })) })
+    const buttons = [...container.querySelectorAll("button")]
+    expect(buttons.length).toBeGreaterThan(0)
+    expect(buttons.every(item => item.disabled)).toBe(true)
+  })
+
   it("keeps exception removal off until a fresh run, and the remediation panel says to run again first", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     const { state, actions } = stubService({})
