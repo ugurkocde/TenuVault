@@ -174,7 +174,8 @@ describe("failed backup manifest", () => {
     expect(jobStatus(job).output).toContain("Could not record this backup as failed")
     await engine.waitForJob(next)
     expect(manifestPuts()).toHaveLength(1)
-    expect(job.log.join("\n")).toContain("Could not record this backup as failed")
+    expect(job.log.join("\n")).toContain("Could not record this backup as failed: The storage did not answer in time.")
+    expect(job.log.join("\n")).not.toContain("30 minute")
     const count = calls.length
     await vi.advanceTimersByTimeAsync(300_000)
     expect(calls).toHaveLength(count)

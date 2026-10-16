@@ -525,7 +525,8 @@ export class BackupEngine {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(new RequestTimeoutError("The storage did not answer in time.")), FAILED_MANIFEST_GRACE_MS)
     timer.unref?.()
-    const network = new NetworkCircuit(3, controller.signal, Date.now() + FAILED_MANIFEST_GRACE_MS)
+    const deadline = Date.now() + FAILED_MANIFEST_GRACE_MS
+    const network = new NetworkCircuit(3, controller.signal, deadline)
     const token = isLocalAccount(request.storageAccountName) ? async () => "" : () => this.deps.getToken(request.tenantId, request.clientId, "https://storage.azure.com/.default")
     const storage = new BlobWriter(this.deps.fetch, request.storageAccountName, token, network)
     try {
@@ -533,7 +534,11 @@ export class BackupEngine {
       this.write(job, "Recorded this backup as failed. The policies it saved stay in storage but are never offered as a complete backup.")
     } catch (error) {
       if (error instanceof BlobClaimError) this.write(job, "This backup already has a manifest, so it was left as it is.")
-      else this.write(job, `Could not record this backup as failed: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, "")}. It is listed as incomplete.`)
+      else {
+        // The circuit's own deadline error names the job deadline; this write has its own, shorter one.
+        const reason = controller.signal.aborted || Date.now() >= deadline ? "The storage did not answer in time" : (error instanceof Error ? error.message : String(error)).replace(/\.$/, "")
+        this.write(job, `Could not record this backup as failed: ${reason}. It is listed as incomplete.`)
+      }
     } finally {
       clearTimeout(timer)
     }
