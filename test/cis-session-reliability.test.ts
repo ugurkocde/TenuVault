@@ -182,7 +182,11 @@ describe("following a running CIS assessment", () => {
     const gate = new Promise<void>(resolve => { release = resolve })
     tenantFetch(async url => { if (url === GRAPH) await gate; return undefined })
     const jobId = await start()
-    await expect(handleFramework({ action: "assess-active", tenantId: tenantId.toUpperCase(), frameworkId: "cis-benchmarks" })).resolves.toEqual({ jobId })
+    const item = pack()
+    const found = await handleFramework({ action: "assess-active", tenantId: tenantId.toUpperCase(), frameworkId: "cis-benchmarks" }) as { jobId: string; reference: string; policies: { name: string }[] }
+    expect(found.jobId).toBe(jobId)
+    expect(found.reference).toBe(item.reference)
+    expect(found.policies.map(policy => policy.name)).toEqual((item.policies as { name: string }[]).map(policy => policy.name))
     await expect(handleFramework({ action: "assess-active", tenantId: "44444444-4444-4444-4444-444444444444", frameworkId: "cis-benchmarks" })).resolves.toEqual({ jobId: null })
     await expect(handleFramework({ action: "assess-active", tenantId, frameworkId: "microsoft" })).resolves.toEqual({ jobId: null })
     release()

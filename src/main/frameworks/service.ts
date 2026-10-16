@@ -493,12 +493,13 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     }
   }
   if (body.action === "assess-active") {
-    // The running assessment of this tenant and framework, so a screen opened during a run can follow it.
+    // The running assessment of this tenant and framework with the pack it assesses, so a screen
+    // opened during a run can follow it and apply its results to that pack.
     if (typeof body.tenantId !== "string" || typeof body.frameworkId !== "string") throw new FrameworkError("Select a tenant and framework.")
     pruneJobs()
     const tenant = body.tenantId.toLowerCase()
     const running = [...jobs.values()].find(job => !isFinished(job) && job.tenantId === tenant && job.frameworkId === body.frameworkId)
-    return { jobId: running?.id ?? null }
+    return running ? { jobId: running.id, reference: running.reference, policies: JSON.parse(running.policiesJson) as BaselinePolicy[] } : { jobId: null }
   }
   if (body.action === "assess-status") {
     pruneJobs()

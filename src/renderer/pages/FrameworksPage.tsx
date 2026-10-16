@@ -359,6 +359,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   const [workspace, setWorkspace] = useState<WorkspaceView | null>(null)
   const [unreadable, setUnreadable] = useState(false)
   const [historyNotice, setHistoryNotice] = useState("")
+  const [activeLookupFailed, setActiveLookupFailed] = useState(false)
   // Until the saved workspace has loaded, the CIS page does not know whether it has results to show.
   const [workspaceLoading, setWorkspaceLoading] = useState(() => !!selectedTenant?.credentials?.tenantId)
   const [historical, setHistorical] = useState(false)
@@ -397,32 +398,50 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     workspaceQueue.current = task
     return task
   }
+  /** The assessment still running in main for this tenant, with its pack. Transient failures are retried like a status poll. */
+  async function findActiveCisJob(tenantId: string, current: () => boolean): Promise<{ jobId: string; pack: CisRunPack } | null> {
+    const found = await pollCisStatus(() => request<{ jobId?: unknown; reference?: unknown; policies?: unknown }>({ action: "assess-active", tenantId, frameworkId: framework.id }), { retryable: retryableStatusPoll, current })
+    return typeof found.jobId === "string" && typeof found.reference === "string" && Array.isArray(found.policies) ? { jobId: found.jobId, pack: { reference: found.reference, policies: found.policies as BaselinePolicy[] } } : null
+  }
+  /**
+   * Opens the saved workspace. On the CIS page the newest saved assessment shows as the results
+   * and an assessment still running is followed with its own pack. Saved results stay read-only
+   * until a fresh run, so nothing is selected, excluded or remediated from older evidence. The
+   * running job is looked up before the workspace is read: a job that finishes in between has
+   * saved its results by then, so they are not missed.
+   */
+  async function openWorkspace(tenantId: string, current: () => boolean) {
+    let running: { jobId: string; pack: CisRunPack } | null = null
+    let lookupFailed = false
+    if (isCis) {
+      try { running = await findActiveCisJob(tenantId, current) } catch { lookupFailed = true }
+      if (!current()) return
+    }
+    const saved = await workspaceRequest("workspace-load")
+    if (!current()) return
+    setWorkspace(saved); setPolicies(saved.policies); setReference(saved.reference); setRecommendationList(saved.recommendationList)
+    if (!isCis) return
+    const latest = currentSavedAssessment(saved)
+    if (latest) { setAssessment(latest.assessment); setHistorical(true) }
+    setActiveLookupFailed(lookupFailed)
+    if (running) { const job = running; void trackCisJob(job.pack, async () => job.jobId) }
+  }
+  function showOpenError(e: unknown) {
+    const message = e instanceof Error ? e.message : String(e)
+    if (isWorkspaceUnreadableError(message)) setUnreadable(true)
+    else setError(String(e))
+  }
   useEffect(() => {
     if (!credentials?.tenantId) return
-    const tenantId = credentials.tenantId
     let active = true
-    void workspaceRequest("workspace-load").then(async saved => {
-      if (!active) return
-      setWorkspace(saved); setPolicies(saved.policies); setReference(saved.reference); setRecommendationList(saved.recommendationList)
-      if (!isCis) { setWorkspaceLoading(false); return }
-      // Coming back to the page shows the newest saved assessment as the results, and follows an
-      // assessment of this tenant that is still running. Saved results stay read-only until a
-      // fresh run, so nothing is selected, excluded or remediated from older evidence.
-      const latest = currentSavedAssessment(saved)
-      if (latest) { setAssessment(latest.assessment); setHistorical(true) }
-      const { jobId } = await request<{ jobId: string | null }>({ action: "assess-active", tenantId, frameworkId: framework.id }).catch(() => ({ jobId: null }))
-      if (!active) return
-      if (jobId) void trackCisJob({ policies: saved.policies, reference: saved.reference }, async () => jobId)
-      setWorkspaceLoading(false)
-    }).catch(e => {
-      if (!active) return
-      setWorkspaceLoading(false)
-      const message = e instanceof Error ? e.message : String(e)
-      if (isWorkspaceUnreadableError(message)) setUnreadable(true)
-      else setError(String(e))
-    })
+    void openWorkspace(credentials.tenantId, () => active).catch(e => { if (active) showOpenError(e) }).finally(() => { if (active) setWorkspaceLoading(false) })
     return () => { active = false }
   }, [credentials?.tenantId, framework.id])
+  function retryActiveLookup() {
+    if (!credentials?.tenantId || cisRun) return
+    setActiveLookupFailed(false)
+    void openWorkspace(credentials.tenantId, () => true).catch(showOpenError)
+  }
   useEffect(() => {
     if (!workspace || historical || JSON.stringify({ policies, reference }) === suppressedDraft.current) return
     suppressedDraft.current = null
@@ -701,6 +720,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       </ol>
     </nav>}
     {unreadableNotice}
+    {isCis && activeLookupFailed && !cisRun && <p role="alert" className="mt-6 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950">Could not check for a running assessment. <button type="button" className="font-medium text-blue-700 hover:underline disabled:opacity-50" disabled={!!busy} onClick={retryActiveLookup}>Retry</button></p>}
     {stage === "loading" && <p role="status" className="mt-6 text-sm text-gray-500">Loading saved assessments…</p>}
     {isCis && stage === "results" && assessment && <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-white px-5 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
       <div className="min-w-0">
@@ -989,7 +1009,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
               <p className="mt-1 text-xs text-gray-500">Adjusted pass rate: {level.adjustedPassRate === null ? "Not available" : `${Math.round(level.adjustedPassRate * 1000) / 10}%`}. Raw counts above are unchanged.</p>
               {level.exceptions.length ? <ul className="mt-2 space-y-2">{level.exceptions.map(exception => <li key={exception.id} className="flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-gray-50 p-3">
                 <span><span className="font-medium text-gray-800">{exception.policyName}</span><span className="block break-all font-mono text-xs text-gray-500">{exception.settingId}</span><span className="block text-xs text-gray-600">Owner: {exception.owner} · Expires: {formatExpiryDate(exception.expiresOn)}</span><span className="block text-xs text-gray-600">{exception.reason}</span></span>
-                <button type="button" className={button} disabled={!!busy} onClick={() => void perform("Removing exception...", async () => { const saved = await workspaceRequest("workspace-cis-exception-remove", { exceptionId: exception.id }); setWorkspace(saved) })}>Remove</button>
+                <button type="button" className={button} disabled={!!busy || historical} onClick={() => { if (historical) return; void perform("Removing exception...", async () => { const saved = await workspaceRequest("workspace-cis-exception-remove", { exceptionId: exception.id }); setWorkspace(saved) }) }}>Remove</button>
               </li>)}</ul> : <p className="mt-2 text-xs text-gray-500">Nothing is excluded for this level. Select findings and choose Exclude from score.</p>}
             </div>
           })}
@@ -1051,7 +1071,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-        {framework.id === "cis-benchmarks" ? <CisRemediationPanel tenant={selectedTenant ?? undefined} assessment={assessment} policies={policies} reference={reference} selectedKeys={selected} onPlanned={id => setRemediationFocus({ id, at: Date.now() })} /> : framework.comparisonOnly ? <p className="mt-5 border-t pt-4 text-sm text-gray-600">This pack is available for comparison and reports only. Review missing settings and configure them through your own change process.</p>
+        {framework.id === "cis-benchmarks" ? <CisRemediationPanel tenant={selectedTenant ?? undefined} assessment={assessment} policies={policies} reference={reference} selectedKeys={selected} readOnly={historical} onPlanned={id => setRemediationFocus({ id, at: Date.now() })} /> : framework.comparisonOnly ? <p className="mt-5 border-t pt-4 text-sm text-gray-600">This pack is available for comparison and reports only. Review missing settings and configure them through your own change process.</p>
         : <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t pt-4"><p className="text-sm text-gray-600">{chosen.length} missing root settings selected · {payloads.length} new {payloads.length === 1 ? "policy" : "policies"}</p><button className={primary} disabled={!chosen.length || !!busy || !!creation || historical} onClick={() => { setPreview(true); setConfirmed(false) }}>Preview recommended policies</button></div>}
       </>}
     </section>}
