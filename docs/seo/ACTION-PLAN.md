@@ -1,6 +1,6 @@
 # SEO action plan: top 3 for Intune backup, Intune restore, Intune disaster recovery
 
-Companion to [FULL-AUDIT-REPORT.md](FULL-AUDIT-REPORT.md). Priorities: Critical blocks ranking, High moves ranking within weeks, Medium within a quarter. Effort is rough engineering or marketing time. Items marked Done ship in the same pull request as this file.
+Companion to [FULL-AUDIT-REPORT.md](FULL-AUDIT-REPORT.md). Priorities describe execution order, not ranking timelines: Critical first because nothing can be attributed without it, then High, then Medium. No position or timeline is predicted anywhere in this plan; the baseline in the Critical section decides what is realistic. Effort is rough engineering or marketing time. Items marked Done ship in the same pull request as this file.
 
 ## Done in this pull request (this repo)
 
@@ -33,7 +33,7 @@ W4. Freshness loop. Monthly: add one real section to a pillar (new object type, 
 W5. Internal links on www. Every guide ends with a link to its owning pillar using the exact phrase. /features and /pricing link to all three pillars in body copy, not only the footer.
 W6. Author and trust. One author page (name, role, Microsoft community links, GitHub, LinkedIn) linked from every guide byline. Keep the CIS badge. Add sameAs to the Organization JSON-LD (GitHub, LinkedIn, YouTube once W3 exists).
 
-## High: off-page authority (this is where top 3 is actually decided)
+## High: off-page authority (the suspected constraint, unproven until the baseline exists)
 
 O1. GitHub. Add intune-restore and disaster-recovery topics if accepted. Pin the repo. Every release note links one pillar. Answer Intune backup questions in the repo Discussions and link the relevant guide. Stars follow usefulness; the 452-star script is the benchmark.
 O2. Community presence, in person, no astroturfing: r/Intune, Microsoft Tech Community, Intune Discord and Slack communities. Answer "deleted a policy, help" threads with the restore-deleted-policy guide. One genuinely helpful answer outperforms ten dropped links.
