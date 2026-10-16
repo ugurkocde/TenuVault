@@ -19,7 +19,7 @@ import { ApiHost } from "./api/host"
 import { routes } from "./api/routes"
 import { AuthManager, SignInRequiredError } from "./auth/msal"
 import { BackupEngine, verifyStorageAccess, type BackupJob } from "./backup/engine"
-import { BackupScheduler, scheduledResult } from "./backup/scheduler"
+import { BackupScheduler, reportsResult, scheduledResult } from "./backup/scheduler"
 import { runTrayBackups } from "./backup/tray-backup"
 import { prepareScheduleInput } from "./backup/schedule-input"
 import { BackgroundLaunch } from "./backup/background-launch"
@@ -432,7 +432,7 @@ async function bootstrap(): Promise<void> {
   // Joined requests share one notification and the trigger that started the job.
   const unattendedBackupTriggers = new WeakMap<BackupJob, { trigger: "scheduled" | "tray"; notified: boolean }>()
 
-  const runScheduledBackup = async (tenantId: string, trigger: "scheduled" | "tray") => {
+  const runScheduledBackup = async (tenantId: string, trigger: "scheduled" | "tray", afterFailure = false) => {
     const profile = tenantProfile(tenantId)
     if (!profile) return { status: "Failed" as const, message: "This tenant is no longer connected." }
     // A tenant the license does not cover is not backed up. Its audit log lives in the
@@ -456,6 +456,8 @@ async function bootstrap(): Promise<void> {
     unattendedBackupTriggers.set(job, origin)
     await waitForJob(job)
     const result = scheduledResult(job)
+    // A repeated failure to reach Microsoft or storage in the same slot was already reported.
+    if (!reportsResult(afterFailure, result)) return result
     const ok = result.status === "Completed"
     const cancelled = result.status === "Cancelled"
     const account = accounts.get(tenantId)
@@ -490,7 +492,7 @@ async function bootstrap(): Promise<void> {
     return result
   }
 
-  const scheduler = new BackupScheduler(appStore, (tenantId) => runScheduledBackup(tenantId, "scheduled"), () => {
+  const scheduler = new BackupScheduler(appStore, (tenantId, afterFailure) => runScheduledBackup(tenantId, "scheduled", afterFailure), () => {
     mainWindow?.webContents.send("schedules:changed", scheduler.list())
     tray.refresh()
   })
