@@ -7,7 +7,7 @@ import JSZip from "jszip"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { parseBreakoutWorkbook, recommendationListFromWorkbook } from "../src/shared/frameworks/cis-coverage"
 import { MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDATIONS_URL, parseRecommendationList, recommendationListFromBreakout, serializeRecommendationList, validateRecommendationList } from "../src/shared/frameworks/cis-manual"
-import { cisReadiness, levelCheckCounts } from "../src/shared/frameworks/cis-readiness"
+import { cisReadiness, levelCheckCounts, levelCheckSummary } from "../src/shared/frameworks/cis-readiness"
 import { convertKit, type KitFile } from "../src/shared/frameworks/cis-kit"
 import { cisReadinessCsv, cisReadinessJson } from "../src/renderer/features/shared/governance-export"
 import { handleFramework, setInternalCisBenchmarksEnabled, assessPolicySet } from "../src/main/frameworks/service"
@@ -171,11 +171,21 @@ describe("manual readiness data", () => {
     const level1 = summary.levels.find(level => level.level === 1)!
     expect(level1.notAssessed).toContain("7.1.9")
     expect(level1.manual.find(item => item.identifier === "7.1.9")).toMatchObject({ hasText: false, state: "Manual", fallback: MANUAL_RECOMMENDATIONS_FALLBACK })
-    // The total counts every denominator identifier once: the covered ones and the unassessed one.
-    const counts = levelCheckCounts(level1)
-    expect(counts.total).toBe(new Set([...level1.numeratorIds, ...level1.manual.map(item => item.identifier)]).size)
-    expect(counts.checked + counts.manual).toBe(counts.total)
-    expect(counts.manual).toBeGreaterThanOrEqual(1)
+    // The total is exactly the denominator identifiers of the Level: 7.1.1 is covered, 7.1.9 is not.
+    expect(levelCheckCounts(level1)).toEqual({ checked: 1, manual: 1, total: 2 })
+  })
+
+  it("keeps the total to the denominator when a recommendation list adds manual items outside it", () => {
+    const { policies, assessment } = assessed()
+    const denominator = [
+      { identifier: "7.1.1", level: 1 as const, automated: true },
+      { identifier: "7.1.2", level: 1 as const, automated: false },
+    ]
+    const list = { benchmark: "fakebook-os", version: "9.9.9", items: [{ identifier: "7.1.9", level: 1 as const, automated: false }] }
+    const level1 = cisReadiness(assessment, policies, denominator, list).levels.find(level => level.level === 1)!
+    expect(level1.manual.map(item => item.identifier)).toEqual(expect.arrayContaining(["7.1.2", "7.1.9"]))
+    expect(levelCheckCounts(level1)).toEqual({ checked: 1, manual: 1, total: 2 })
+    expect(levelCheckSummary(level1)).toBe("Level 1: TenuVault checks 1 of 2 recommendations automatically. The other one needs a manual check.")
   })
 
   it("includes manual items with state Manual in the governance export", () => {

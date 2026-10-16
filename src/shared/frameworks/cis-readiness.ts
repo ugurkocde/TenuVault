@@ -28,6 +28,8 @@ export interface CisLevelReadiness {
   enumerated: number
   /** Enumerated identifiers that the denominator list marks automated; empty without a denominator list. */
   numeratorIds: string[]
+  /** Every identifier of this Level in the denominator list, automated and manual; empty without one. */
+  denominatorIdentifiers: string[]
   denominator: number | null
   coverage: number | null
   coverageSource: DenominatorSource
@@ -56,20 +58,21 @@ export function headlineRate(level: Pick<CisLevelReadiness, "passRate" | "adjust
 /**
  * How many recommendations of a Level TenuVault checks automatically and how many are left for a
  * manual check: manual and unassessed denominator items, plus pack recommendations that could not be
- * assessed. Identifiers are counted once. The total is known only with a denominator list, and is then
- * counted by identifier from the denominator, so partial recommendation metadata cannot shrink it.
+ * assessed. Identifiers are counted once. The total is known only with a denominator list and is then
+ * exactly its identifiers for the Level, so partial recommendation metadata cannot shrink it and manual
+ * items outside the list cannot inflate it; those still appear in the Manual section.
  * Without a denominator the checked count comes from the pack recommendations, or from the
  * identifiers the pack names.
  */
-export function levelCheckCounts(level: Pick<CisLevelReadiness, "recommendations" | "manual" | "assessedAutomated" | "enumerated" | "denominator" | "numeratorIds">): { checked: number; manual: number; total: number | null } {
+export function levelCheckCounts(level: Pick<CisLevelReadiness, "recommendations" | "manual" | "assessedAutomated" | "enumerated" | "denominator" | "numeratorIds" | "denominatorIdentifiers">): { checked: number; manual: number; total: number | null } {
   const recommendations = level.recommendations ?? []
   if (level.denominator !== null) {
-    // The known recommendations are the automated ones of the denominator the pack covers plus every
-    // manual and unassessed item. A pack recommendation that could not be assessed is not checked.
+    // The total is every identifier of this Level in the denominator list. The checked ones are those
+    // the pack covers, except a pack recommendation that could not be assessed; the rest need a manual check.
     const unassessed = new Set(recommendations.filter(result => result.result === "Not assessed").map(result => result.id))
-    const checked = new Set((level.numeratorIds ?? []).filter(id => !unassessed.has(id)))
-    const known = new Set([...(level.numeratorIds ?? []), ...level.manual.map(item => item.identifier)])
-    return { checked: checked.size, manual: [...known].filter(id => !checked.has(id)).length, total: known.size }
+    const known = new Set(level.denominatorIdentifiers ?? [])
+    const checked = new Set((level.numeratorIds ?? []).filter(id => known.has(id) && !unassessed.has(id)))
+    return { checked: checked.size, manual: known.size - checked.size, total: known.size }
   }
   if (recommendations.length) {
     const checked = new Set(recommendations.filter(result => result.result !== "Not assessed").map(result => result.id))
@@ -81,7 +84,7 @@ export function levelCheckCounts(level: Pick<CisLevelReadiness, "recommendations
 }
 
 /** The sentence shown above the CIS notice for one Level, or null when nothing is checked. */
-export function levelCheckSummary(level: Pick<CisLevelReadiness, "level" | "recommendations" | "manual" | "assessedAutomated" | "enumerated" | "denominator" | "numeratorIds">): string | null {
+export function levelCheckSummary(level: Pick<CisLevelReadiness, "level" | "recommendations" | "manual" | "assessedAutomated" | "enumerated" | "denominator" | "numeratorIds" | "denominatorIdentifiers">): string | null {
   const { checked, manual, total } = levelCheckCounts(level)
   if (!checked && !manual) return null
   const noun = (count: number) => count === 1 ? "recommendation" : "recommendations"
@@ -200,6 +203,7 @@ export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[],
       assessedAutomated: cov && cov.denominatorSource !== "none" ? cov.numerator : null,
       enumerated: cov?.enumeratedIds.length ?? 0,
       numeratorIds: cov && cov.denominatorSource !== "none" ? cov.numeratorIds : [],
+      denominatorIdentifiers: [...new Set((effectiveDenominator ?? []).filter(entry => entry.level === level).map(entry => entry.identifier))],
       denominator: cov?.denominator ?? null,
       coverage: cov?.coverage ?? null,
       coverageSource: cov?.denominatorSource ?? "none",

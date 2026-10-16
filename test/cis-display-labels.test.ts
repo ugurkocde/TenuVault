@@ -27,27 +27,27 @@ describe("remediation labels", () => {
   })
 })
 
-type LevelInput = Pick<CisLevelReadiness, "level" | "recommendations" | "manual" | "assessedAutomated" | "enumerated" | "denominator" | "numeratorIds">
+type LevelInput = Pick<CisLevelReadiness, "level" | "recommendations" | "manual" | "assessedAutomated" | "enumerated" | "denominator" | "numeratorIds" | "denominatorIdentifiers">
 const rec = (id: string, result: "Pass" | "Fail" | "Not assessed") => ({ id, title: id, level: 1 as const, result, settings: [], findingKeys: [] }) as unknown as CisLevelReadiness["recommendations"][number]
 const manual = (identifier: string) => ({ identifier }) as CisLevelReadiness["manual"][number]
-const level = (input: Partial<LevelInput>): LevelInput => ({ level: 1, recommendations: [], manual: [], assessedAutomated: null, enumerated: 0, denominator: null, numeratorIds: [], ...input })
+const level = (input: Partial<LevelInput>): LevelInput => ({ level: 1, recommendations: [], manual: [], assessedAutomated: null, enumerated: 0, denominator: null, numeratorIds: [], denominatorIdentifiers: [], ...input })
 
 describe("what TenuVault checks per Level", () => {
   it("counts checked recommendations against the manual and unassessed ones", () => {
-    const input = level({ recommendations: [rec("1.1", "Pass"), rec("1.2", "Fail"), rec("1.3", "Not assessed")], numeratorIds: ["1.1", "1.2", "1.3"], manual: [manual("2.1"), manual("2.2")], assessedAutomated: 3, denominator: 4 })
+    const input = level({ recommendations: [rec("1.1", "Pass"), rec("1.2", "Fail"), rec("1.3", "Not assessed")], numeratorIds: ["1.1", "1.2", "1.3"], denominatorIdentifiers: ["1.1", "1.2", "1.3", "1.4", "2.1"], manual: [manual("1.4"), manual("2.1"), manual("2.2")], assessedAutomated: 3, denominator: 4 })
     expect(levelCheckCounts(input)).toEqual({ checked: 2, manual: 3, total: 5 })
     expect(levelCheckSummary(input)).toBe("Level 1: TenuVault checks 2 of 5 recommendations automatically. The other 3 need a manual check.")
   })
 
   it("counts the total from the denominator when recommendation metadata covers only part of the pack", () => {
     // Denominator 1.1, 1.2, 1.3; the pack names 1.1 and 1.2; metadata maps only 1.1; 1.3 is not assessed.
-    const input = level({ recommendations: [rec("1.1", "Pass")], numeratorIds: ["1.1", "1.2"], manual: [manual("1.3")], assessedAutomated: 2, denominator: 3 })
+    const input = level({ recommendations: [rec("1.1", "Pass")], numeratorIds: ["1.1", "1.2"], denominatorIdentifiers: ["1.1", "1.2", "1.3"], manual: [manual("1.3")], assessedAutomated: 2, denominator: 3 })
     expect(levelCheckCounts(input)).toEqual({ checked: 2, manual: 1, total: 3 })
     expect(levelCheckSummary(input)).toBe("Level 1: TenuVault checks 2 of 3 recommendations automatically. The other one needs a manual check.")
   })
 
   it("says all when a denominator leaves nothing for a manual check", () => {
-    expect(levelCheckSummary(level({ recommendations: [rec("1.1", "Pass"), rec("1.2", "Pass")], numeratorIds: ["1.1", "1.2"], assessedAutomated: 2, denominator: 2 }))).toBe("Level 1: TenuVault checks all 2 recommendations automatically.")
+    expect(levelCheckSummary(level({ recommendations: [rec("1.1", "Pass"), rec("1.2", "Pass")], numeratorIds: ["1.1", "1.2"], denominatorIdentifiers: ["1.1", "1.2"], assessedAutomated: 2, denominator: 2 }))).toBe("Level 1: TenuVault checks all 2 recommendations automatically.")
   })
 
   it("never invents a total without a denominator", () => {
@@ -62,7 +62,7 @@ describe("what TenuVault checks per Level", () => {
   })
 
   it("falls back to identifier counts without pack recommendations", () => {
-    expect(levelCheckSummary(level({ assessedAutomated: 3, enumerated: 4, numeratorIds: ["1.1", "1.2", "1.3"], manual: [manual("9.1")], denominator: 4 }))).toBe("Level 1: TenuVault checks 3 of 4 recommendations automatically. The other one needs a manual check.")
+    expect(levelCheckSummary(level({ assessedAutomated: 3, enumerated: 4, numeratorIds: ["1.1", "1.2", "1.3"], denominatorIdentifiers: ["1.1", "1.2", "1.3", "9.1"], manual: [manual("9.1")], denominator: 4 }))).toBe("Level 1: TenuVault checks 3 of 4 recommendations automatically. The other one needs a manual check.")
     expect(levelCheckSummary(level({ enumerated: 4 }))).toBe("Level 1: TenuVault checks 4 recommendations of this pack automatically. Recommendations outside the pack, including manual ones, need a manual check.")
     expect(levelCheckSummary(level({}))).toBeNull()
   })
