@@ -1,4 +1,4 @@
-import type { BaselinePolicy, Finding } from "./policies"
+import type { Assessment, BaselinePolicy, Finding } from "./policies"
 
 export type CisRunPhase = "connecting" | "reading" | "comparing" | "saving" | "done" | "failed"
 
@@ -77,6 +77,64 @@ export function resolveCisRunCompletion(captured: CisRunPack, completed: { refer
 
 export function cisRunReceivedLabel(count: number): string {
   return `${count} ${count === 1 ? "finding" : "findings"} received so far (partial results)`
+}
+
+/**
+ * The phase a run screen shows. Main reports reading as soon as the job starts, but until the
+ * tenant policy list arrives there is nothing to count, so the run still shows as connecting
+ * instead of "0 of 0 policies read".
+ */
+export function cisRunDisplayPhase(run: { phase: CisRunPhase; total: number }): CisRunPhase {
+  return run.phase === "reading" && run.total === 0 ? "connecting" : run.phase
+}
+
+const PHASE_HEADINGS: Record<CisRunPhase, string> = {
+  connecting: "Connecting to the tenant",
+  reading: "Reading tenant policies",
+  comparing: "Comparing with the benchmark",
+  saving: "Saving the assessment",
+  done: "Assessment complete",
+  failed: "Assessment failed",
+}
+
+/** The run screen heading for a phase. A re-run over shown results says so. */
+export function cisRunHeading(phase: CisRunPhase, rerun = false): string {
+  const heading = PHASE_HEADINGS[phase]
+  return rerun ? `Re-running assessment: ${heading.charAt(0).toLowerCase()}${heading.slice(1)}` : heading
+}
+
+/** Waits before each re-poll after a failed assess-status request: the job keeps running in the main process. */
+export const CIS_STATUS_RETRY_DELAYS_MS = [1000, 2000, 4000] as const
+
+/**
+ * Reads one assess-status snapshot. A failed request is retried with backoff a few times
+ * before the failure is reported, so one dropped poll does not end a run that is still
+ * going. Errors that `retryable` rejects, such as a job that no longer exists, fail at
+ * once, and `current` stops retrying once the caller no longer follows this run.
+ */
+export async function pollCisStatus<T>(read: () => Promise<T>, options: { retryable?: (error: unknown) => boolean; current?: () => boolean; wait?: (ms: number) => Promise<void> } = {}): Promise<T> {
+  const wait = options.wait ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)))
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await read()
+    } catch (error) {
+      const delay = CIS_STATUS_RETRY_DELAYS_MS[attempt]
+      if (delay === undefined || options.retryable?.(error) === false || options.current?.() === false) throw error
+      await wait(delay)
+    }
+  }
+}
+
+/**
+ * The saved assessment a CIS page shows as its current results when it opens: the newest
+ * saved assessment, when it was run with the pack the workspace still holds. When a different
+ * pack was loaded after it, the page opens on setup with that pack, and the saved assessment
+ * stays available under Saved assessments.
+ */
+export function currentSavedAssessment(workspace: { policies: BaselinePolicy[]; reference: string; history: { assessment: Assessment; policies: BaselinePolicy[] }[] }): { assessment: Assessment; policies: BaselinePolicy[] } | null {
+  const latest = workspace.history[0]
+  if (!latest || latest.assessment.reference !== workspace.reference) return null
+  return JSON.stringify(latest.policies) === JSON.stringify(workspace.policies) ? latest : null
 }
 
 export function cisRunSteps(phase: CisRunPhase): CisRunStep[] {

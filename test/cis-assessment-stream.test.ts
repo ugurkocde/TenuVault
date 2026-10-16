@@ -4,6 +4,9 @@ import { handleFramework, setInternalCisBenchmarksEnabled } from "../src/main/fr
 import { loadWorkspace, setFrameworkStore } from "../src/main/frameworks/workspaces"
 import type { Assessment, Finding, Json } from "../src/shared/frameworks/policies"
 
+// Graph read retries wait without real time passing.
+vi.mock("../src/main/graph-retry", async (importOriginal) => ({ ...(await importOriginal<typeof import("../src/main/graph-retry")>()), sleep: async () => undefined }))
+
 const type = "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance"
 const GRAPH = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies"
 const tenantId = "11111111-1111-1111-1111-111111111111"

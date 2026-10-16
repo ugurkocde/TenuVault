@@ -17,6 +17,7 @@ import { exceptionKey, isActive, isDateOnly, MAX_EXCEPTIONS, validateNewExceptio
 import { tenantWriteLabel, withTenantWrite } from "../features/write-lock"
 import { CisContentError, fetchCisCatalog, fetchCisPack } from "./cis-content"
 import { BENCHMARK_ID_PATTERN, MAX_CIS_BENCHMARK_ID_LENGTH, VERSION_PATTERN, type CisLevel } from "../../shared/frameworks/cis-content"
+import { retryableStatus, retryDelay, sleep } from "../graph-retry"
 
 const GRAPH = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies"
 interface Run { assessment: Assessment; policies: BaselinePolicy[]; fingerprint: string; expires: number; consumed: boolean }
@@ -76,8 +77,33 @@ function requireRemediableFramework(frameworkId: unknown): void {
   if (frameworks.some(f => f.id === frameworkId && f.comparisonOnly)) throw new FrameworkError("This pack is available for comparison and reports only. Policies cannot be created from it.", 403)
 }
 
-async function jsonFetch(url: string, init: RequestInit = {}): Promise<RecordJson> {
-  const response = await fetch(url, { ...init, signal: AbortSignal.timeout(60_000) })
+/** Attempts per Graph read: throttling (429) and transient service errors (5xx) are retried. */
+const READ_ATTEMPTS = 4
+/** The longest single wait and the total wait one read accepts before it fails instead. */
+const MAX_READ_RETRY_DELAY_MS = 30_000
+const READ_RETRY_BUDGET_MS = 60_000
+
+/**
+ * One JSON request. Reads wait out throttling and transient service errors, honoring
+ * Retry-After within a bounded wait, and call `beforeRetry` before each repeat so a revoked
+ * access stops the read. Writes are never repeated: a failed POST may still have been applied.
+ */
+async function jsonFetch(url: string, init: RequestInit = {}, beforeRetry?: () => void): Promise<RecordJson> {
+  const retries = !init.method || init.method.toUpperCase() === "GET" ? READ_ATTEMPTS - 1 : 0
+  const tooLong = (status: number) => new FrameworkError(`Request failed (${status}) at ${new URL(url).pathname}. The service asked to wait longer than an assessment waits. Retry later.`, 502)
+  let waited = 0
+  let response: Response
+  for (let attempt = 0; ; attempt += 1) {
+    response = await fetch(url, { ...init, signal: AbortSignal.timeout(60_000) })
+    if (response.ok || !retryableStatus(response.status) || attempt >= retries) break
+    let delay: number
+    try { delay = retryDelay(response, attempt) } catch { throw tooLong(response.status) }
+    if (delay > MAX_READ_RETRY_DELAY_MS || waited + delay > READ_RETRY_BUDGET_MS) throw tooLong(response.status)
+    waited += delay
+    await response.body?.cancel().catch(() => undefined)
+    await sleep(delay)
+    beforeRetry?.()
+  }
   if (!response.ok) throw new FrameworkError(`Request failed (${response.status}) at ${new URL(url).pathname}. ${response.status === 403 ? "Check Intune permissions for this tenant." : "No complete assessment was produced. Retry after resolving the request error."}`, response.status === 403 ? 403 : 502)
   const json: unknown = await response.json()
   if (!record(json)) throw new FrameworkError("The service returned an unexpected response.", 502)
@@ -94,7 +120,7 @@ export async function collectGraph(url: string, token: string, beforeNetwork?: (
     }
     visited.add(url)
     beforeNetwork?.()
-    const page = await jsonFetch(url, { headers: { Authorization: `Bearer ${token}` } })
+    const page = await jsonFetch(url, { headers: { Authorization: `Bearer ${token}` } }, beforeNetwork)
     if (!Array.isArray(page.value) || !page.value.every(record)) throw new FrameworkError("Graph returned an incomplete policy collection.", 502)
     result.push(...page.value)
     const next = page["@odata.nextLink"]
@@ -105,6 +131,8 @@ export async function collectGraph(url: string, token: string, beforeNetwork?: (
 }
 
 export interface LandscapeProgress { read: number; total: number; policyName: string }
+/** Re-reads of one policy whose settings do not match its reported count before the read fails. */
+const SETTINGS_REREADS = 2
 
 async function landscape(token: string, onProgress?: (progress: LandscapeProgress) => void, beforeNetwork?: () => void): Promise<LandscapePolicy[]> {
   // Expanding settings severely reduces Graph's page size. Read the policy list first,
@@ -115,17 +143,27 @@ async function landscape(token: string, onProgress?: (progress: LandscapeProgres
   let read = 0
   for (let i = 0; i < policies.length; i += 4) {
     beforeNetwork?.()
-    const chunk = await Promise.all(policies.slice(i, i + 4).map(async policy => {
-      if (typeof policy.id !== "string" || !/^[a-f0-9-]{36}$/i.test(policy.id)) throw new FrameworkError("Policy ID missing from Graph response.", 502)
-      const settings = await collectGraph(`${GRAPH}/${policy.id}/settings`, token, beforeNetwork)
+    const chunk = await Promise.all(policies.slice(i, i + 4).map(async listed => {
+      const id = listed.id
+      if (typeof id !== "string" || !/^[a-f0-9-]{36}$/i.test(id)) throw new FrameworkError("Policy ID missing from Graph response.", 502)
+      let policy = listed
+      let settings = await collectGraph(`${GRAPH}/${id}/settings`, token, beforeNetwork)
+      // A policy edited between the list read and its settings read reports a stale count.
+      // Re-read that policy and its settings a bounded number of times before failing.
+      for (let reread = 0; typeof policy.settingCount === "number" && settings.length !== policy.settingCount; reread += 1) {
+        if (reread >= SETTINGS_REREADS) throw new FrameworkError("Policy settings changed during the read. Compare again.", 409)
+        beforeNetwork?.()
+        policy = await jsonFetch(`${GRAPH}/${id}`, { headers: { Authorization: `Bearer ${token}` } }, beforeNetwork)
+        if (policy.id !== id) throw new FrameworkError("Policy ID missing from Graph response.", 502)
+        settings = await collectGraph(`${GRAPH}/${id}/settings`, token, beforeNetwork)
+      }
       read += 1
       onProgress?.({ read, total: policies.length, policyName: typeof policy.name === "string" ? policy.name : "" })
-      if (typeof policy.settingCount === "number" && settings.length !== policy.settingCount) throw new FrameworkError("Policy settings changed during the read. Compare again.", 409)
       if (!settings.length) return null
       let targeting: AssignmentEvidence
-      try { targeting = assignmentEvidence(await collectGraph(`${GRAPH}/${policy.id}/assignments`, token, beforeNetwork)) }
+      try { targeting = assignmentEvidence(await collectGraph(`${GRAPH}/${id}/assignments`, token, beforeNetwork)) }
       catch { beforeNetwork?.(); targeting = { state: "unavailable", targets: [], limitations: ["Assignment evidence could not be read completely. Check Intune access and compare again."] } }
-      return { ...parsePolicies({ ...policy, settings })[0]!, id: policy.id, targeting }
+      return { ...parsePolicies({ ...policy, settings })[0]!, id, targeting }
     }))
     result.push(...chunk.filter((policy) => policy !== null))
   }
@@ -212,8 +250,29 @@ function jobSnapshot(job: AssessJob, since: number): AssessJobSnapshot {
   }
 }
 
-async function runAssessJob(job: AssessJob, token: string, policies: BaselinePolicy[]): Promise<void> {
+/**
+ * Admissions and completions per tenant and framework. Opening a workspace compares it before and
+ * after reading, so a job that starts or finishes during the read is not missed.
+ */
+const jobGenerations = new Map<string, number>()
+const jobGenerationKey = (tenant: string, frameworkId: string) => `${tenant}:${frameworkId}`
+const jobGeneration = (tenant: string, frameworkId: string) => jobGenerations.get(jobGenerationKey(tenant, frameworkId)) ?? 0
+function nextJobGeneration(tenant: string, frameworkId: string): void {
+  jobGenerations.set(jobGenerationKey(tenant, frameworkId), jobGeneration(tenant, frameworkId) + 1)
+}
+
+/** The running job of a tenant and framework with the pack it assesses, or null. */
+function activeJob(tenant: string, frameworkId: string): { jobId: string; reference: string; policies: BaselinePolicy[] } | null {
+  pruneJobs()
+  const running = [...jobs.values()].find(job => !isFinished(job) && job.tenantId === tenant && job.frameworkId === frameworkId)
+  return running ? { jobId: running.id, reference: running.reference, policies: JSON.parse(running.policiesJson) as BaselinePolicy[] } : null
+}
+
+/** Runs an admitted job: it acquires the tenant token itself, so the job is visible while it connects. */
+async function runAssessJob(job: AssessJob, connect: () => Promise<{ token: string }>, policies: BaselinePolicy[]): Promise<void> {
   try {
+    const { token } = await connect()
+    requireEnabledFramework(job.frameworkId)
     job.phase = "reading"
     requireEnabledFramework(job.frameworkId)
     const current = await landscape(token, progress => {
@@ -255,6 +314,7 @@ async function runAssessJob(job: AssessJob, token: string, policies: BaselinePol
     job.assessment = null
   } finally {
     job.expiresAt = Date.now() + JOB_TTL_MS
+    nextJobGeneration(job.tenantId, job.frameworkId)
     pruneJobs()
   }
 }
@@ -270,9 +330,29 @@ export function assessPolicySet(input: { tenantId: string; frameworkId: string; 
     assessedAt: input.assessedAt ?? new Date().toISOString(), policyCount: input.current.length, findings: comparePolicies(input.policies, input.current), organizationalEvidence: { state: "manual", note: "Organizational controls, policy approval and operational evidence require a separate assessment." } }
 }
 
-export async function tokenFor(body: RecordJson, forceRefresh = false): Promise<{ tenant: string; token: string }> {
+/**
+ * True for a status poll of an assessment job that exists for the tenant and framework the
+ * request names. Jobs enter the job store only through assess-start, after the API host's
+ * plan guard admitted that tenant, so such a poll needs no new license check and does not
+ * wait on a license refresh. Every other request, including new work, is checked as before.
+ */
+export async function isAdmittedAssessStatus(request: Request): Promise<boolean> {
+  if (request.method !== "POST" || new URL(request.url).pathname.replace(/\/$/, "") !== "/api/frameworks") return false
+  let body: unknown
+  try { body = await request.clone().json() } catch { return false }
+  if (!record(body) || body.action !== "assess-status" || typeof body.jobId !== "string" || typeof body.tenantId !== "string" || typeof body.frameworkId !== "string") return false
+  const job = jobs.get(body.jobId)
+  return !!job && job.tenantId === body.tenantId.toLowerCase() && job.frameworkId === body.frameworkId
+}
+
+function signedInTenant(body: RecordJson): { tenantId: string; appId: string } {
   const { tenantId, appId } = body
   if (typeof tenantId !== "string" || !/^[a-f0-9-]{36}$/i.test(tenantId) || typeof appId !== "string" || !/^[a-f0-9-]{36}$/i.test(appId)) throw new FrameworkError("Select a signed-in tenant first.")
+  return { tenantId, appId }
+}
+
+export async function tokenFor(body: RecordJson, forceRefresh = false): Promise<{ tenant: string; token: string }> {
+  const { tenantId, appId } = signedInTenant(body)
   const token = await jsonFetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
     method: "POST", body: new URLSearchParams({ client_id: appId, client_secret: DELEGATED_CLIENT_SECRET,
       grant_type: "client_credentials", force_refresh: String(forceRefresh), scope: "https://graph.microsoft.com/.default" }),
@@ -346,9 +426,21 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       if (tenantWriteLabel(tenantKey) === WRITE_LABEL) throw new FrameworkError("Wait for policy creation to finish before deleting its assessment.", 409)
       for (const [id, run] of runs) if (run.assessment.tenantId === tenantKey && run.assessment.frameworkId === body.frameworkId && (body.action === "workspace-delete" || (body.action === "workspace-delete-assessment" && id === body.runId))) runs.delete(id)
     }
+    // Deleting does not read the saved workspace first, so it also resets one that cannot be read.
+    if (body.action === "workspace-delete") { deleteWorkspace(body.tenantId, body.frameworkId); return workspaceView(loadWorkspace(body.tenantId, body.frameworkId)) }
+    if (body.action === "workspace-open") {
+      // The saved workspace and the running assessment as one consistent answer: when a job was
+      // admitted or finished while the workspace was read, both are read again.
+      const frameworkId = body.frameworkId
+      for (let attempt = 0; ; attempt += 1) {
+        const before = jobGeneration(tenantKey, frameworkId)
+        const workspace = workspaceView(loadWorkspace(body.tenantId, frameworkId))
+        const running = activeJob(tenantKey, frameworkId)
+        if (jobGeneration(tenantKey, frameworkId) === before || attempt >= 2) return { workspace, activeJob: running }
+      }
+    }
     const workspace = loadWorkspace(body.tenantId, body.frameworkId)
     if (["workspace-pdf", "workspace-csv", "workspace-json", "workspace-cis-pdf"].includes(body.action)) return exportWorkspace(body, workspace)
-    if (body.action === "workspace-delete") { deleteWorkspace(body.tenantId, body.frameworkId); return workspaceView(loadWorkspace(body.tenantId, body.frameworkId)) }
     if (body.action === "workspace-save") {
       if (typeof body.reference !== "string" || body.reference.length > 200) throw new FrameworkError("Provide a source version up to 200 characters.")
       workspace.policies = Array.isArray(body.policies) && !body.policies.length ? [] : parsePolicies(body.policies)
@@ -417,6 +509,8 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       const version = typeof body.version === "string" ? body.version : ""
       const level = body.level === 1 || body.level === 2 ? (body.level as CisLevel) : null
       if (!BENCHMARK_ID_PATTERN.test(benchmark) || benchmark.length > MAX_CIS_BENCHMARK_ID_LENGTH || !VERSION_PATTERN.test(version) || level === null) throw new FrameworkError("Select a benchmark, version and level.")
+      // A pack that could not be saved is not fetched: an unreadable workspace fails before any download.
+      loadWorkspace(body.tenantId, body.frameworkId)
       const pack = await fetchCisPack({ benchmark, version, level }, cisEntitlementToken(body.tenantId))
       requireEnabledFramework(body.frameworkId)
       let policies: BaselinePolicy[]
@@ -445,10 +539,9 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     const since = typeof body.since === "number" && Number.isFinite(body.since) && body.since > 0 ? Math.floor(body.since) : 0
     return jobSnapshot(job, since)
   }
-  const { tenant, token } = await tokenFor(body)
-  if (typeof body.frameworkId === "string") requireEnabledFramework(body.frameworkId)
-  for (const [id, run] of runs) if (run.expires < Date.now()) runs.delete(id)
   if (body.action === "assess-start") {
+    // The job is admitted before any await, so it is visible to workspace-open while it connects.
+    const tenant = signedInTenant(body).tenantId.toLowerCase()
     if (typeof body.frameworkId !== "string" || !frameworks.some(f => f.id === body.frameworkId)) throw new FrameworkError("Select a framework.")
     if (typeof body.reference !== "string" || !body.reference.trim() || body.reference.length > 200) throw new FrameworkError("Provide a source version and profile (up to 200 characters).")
     const policies = parsePolicies(body.policies)
@@ -468,10 +561,14 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       findings: [], error: null, assessment: null, expiresAt: null,
     }
     jobs.set(job.id, job)
+    nextJobGeneration(tenant, job.frameworkId)
     pruneJobs()
-    void runAssessJob(job, token, policies)
+    void runAssessJob(job, () => tokenFor(body), policies)
     return { jobId: job.id }
   }
+  const { tenant, token } = await tokenFor(body)
+  if (typeof body.frameworkId === "string") requireEnabledFramework(body.frameworkId)
+  for (const [id, run] of runs) if (run.expires < Date.now()) runs.delete(id)
   if (body.action === "assess") {
     if (typeof body.frameworkId !== "string" || !frameworks.some(f => f.id === body.frameworkId)) throw new FrameworkError("Select a framework.")
     if (typeof body.reference !== "string" || !body.reference.trim() || body.reference.length > 200) throw new FrameworkError("Provide a source version and profile (up to 200 characters).")

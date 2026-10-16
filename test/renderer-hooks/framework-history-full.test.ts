@@ -50,6 +50,7 @@ function stubService(frameworkId: string, count: number, assess: (body: Record<s
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>
     calls.actions.push(body)
     if (body.action === "workspace-prune-history") current = workspace(frameworkId, Number(body.keep))
+    if (body.action === "workspace-open") return Response.json({ workspace: current, activeJob: null })
     if (String(body.action).startsWith("workspace-")) return Response.json(current)
     const result = assess(body)
     return Response.json(result.body, { status: result.status })
@@ -86,7 +87,7 @@ afterEach(() => {
 })
 
 describe("CIS Benchmarks at the history cap", () => {
-  it("shows the cap, disables Start Assessment with that reason, and removes older assessments after confirmation", async () => {
+  it("shows the cap, disables Run again with that reason, and removes older assessments after confirmation", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     const calls = stubService("cis-benchmarks", 50)
     const container = render("cis-benchmarks")
@@ -95,7 +96,7 @@ describe("CIS Benchmarks at the history cap", () => {
     expect(alert?.textContent).toContain("This workspace holds 50 saved assessments, the most it can keep.")
     expect(alert?.textContent).toContain("keeps the newest 10 and permanently deletes the other 40")
     expect(alert?.textContent).toContain("Export saved assessments JSON")
-    const start = buttonNamed(container, "Start Assessment")!
+    const start = buttonNamed(container, "Run again")!
     expect(start.disabled).toBe(true)
     expect(start.getAttribute("aria-describedby")).toBe(alert!.id)
     expect(start.title).toContain("history is full")
@@ -109,11 +110,11 @@ describe("CIS Benchmarks at the history cap", () => {
     expect(confirmCalls[0]!.description).toContain("Export saved assessments first")
     expect(calls.actions.filter(body => body.action === "workspace-prune-history")).toEqual([{ action: "workspace-prune-history", tenantId, frameworkId: "cis-benchmarks", keep: 10 }])
     expect(historyAlert(container)).toBeNull()
-    expect(buttonNamed(container, "Start Assessment")!.disabled).toBe(false)
-    expect(buttonNamed(container, "Start Assessment")!.hasAttribute("aria-describedby")).toBe(false)
+    expect(buttonNamed(container, "Run again")!.disabled).toBe(false)
+    expect(buttonNamed(container, "Run again")!.hasAttribute("aria-describedby")).toBe(false)
   })
 
-  it("disables both run buttons of the results view with the same reason", async () => {
+  it("disables the one re-run button of the results view with the same reason", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     const calls = stubService("cis-benchmarks", 50)
     const container = render("cis-benchmarks")
@@ -122,12 +123,11 @@ describe("CIS Benchmarks at the history cap", () => {
     await flush()
     const alert = historyAlert(container)
     expect(alert).not.toBeNull()
-    for (const name of ["Run again", "Run comparison again"]) {
-      const run = buttonNamed(container, name)!
-      expect(run.disabled).toBe(true)
-      expect(run.getAttribute("aria-describedby")).toBe(alert!.id)
-    }
-    await act(async () => { buttonNamed(container, "Run comparison again")!.click() })
+    const run = buttonNamed(container, "Run again")!
+    expect(run.disabled).toBe(true)
+    expect(run.getAttribute("aria-describedby")).toBe(alert!.id)
+    expect(buttonNamed(container, "Run comparison again")).toBeUndefined()
+    await act(async () => { run.click() })
     await flush()
     expect(calls.actions.some(body => body.action === "assess" || body.action === "assess-start")).toBe(false)
   })
@@ -143,7 +143,7 @@ describe("CIS Benchmarks at the history cap", () => {
     expect(confirmCalls).toHaveLength(1)
     expect(calls.actions.some(body => body.action === "workspace-prune-history")).toBe(false)
     expect(historyAlert(container)).not.toBeNull()
-    expect(buttonNamed(container, "Start Assessment")!.disabled).toBe(true)
+    expect(buttonNamed(container, "Run again")!.disabled).toBe(true)
   })
 
   it("shows a save failure at the end of a run as the full-history alert with the remove action", async () => {
@@ -154,20 +154,20 @@ describe("CIS Benchmarks at the history cap", () => {
     const container = render("cis-benchmarks")
     await flush()
     expect(historyAlert(container)).toBeNull()
-    await act(async () => { buttonNamed(container, "Start Assessment")!.click() })
+    await act(async () => { buttonNamed(container, "Run again")!.click() })
     await flush()
     const alert = historyAlert(container)
     expect(alert).not.toBeNull()
     expect(alert?.textContent).toContain("Remove older assessments")
     // The raw error is not repeated as a separate small line.
     expect([...container.querySelectorAll('p[role="alert"]')].some(item => item.textContent === HISTORY_FULL_MESSAGE)).toBe(false)
-    expect(buttonNamed(container, "Start Assessment")!.disabled).toBe(true)
+    expect(buttonNamed(container, "Run again")!.disabled).toBe(true)
     await act(async () => { buttonNamed(alert as HTMLElement, "Remove older assessments")!.click() })
     await flush()
     expect(confirmCalls[0]!.confirmLabel).toBe("Remove 39 assessments")
     expect(calls.actions.some(body => body.action === "workspace-prune-history" && body.keep === 10)).toBe(true)
     expect(historyAlert(container)).toBeNull()
-    expect(buttonNamed(container, "Start Assessment")!.disabled).toBe(false)
+    expect(buttonNamed(container, "Run again")!.disabled).toBe(false)
   })
 
   it("shows the same alert when the service refuses to start because the history is full", async () => {
@@ -175,10 +175,10 @@ describe("CIS Benchmarks at the history cap", () => {
     stubService("cis-benchmarks", 20, () => ({ status: 409, body: { error: HISTORY_FULL_MESSAGE } }))
     const container = render("cis-benchmarks")
     await flush()
-    await act(async () => { buttonNamed(container, "Start Assessment")!.click() })
+    await act(async () => { buttonNamed(container, "Run again")!.click() })
     await flush()
     expect(historyAlert(container)?.textContent).toContain("have reached the storage limit on this device")
-    expect(buttonNamed(container, "Start Assessment")!.disabled).toBe(true)
+    expect(buttonNamed(container, "Run again")!.disabled).toBe(true)
   })
 })
 
