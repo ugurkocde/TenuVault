@@ -7,7 +7,7 @@ import { displayCheckValue } from './check-results'
 import type { CapabilityResult, CapabilityStatus, ControlAssessment, ControlStatus, TechnicalCheck } from './types'
 import { PALETTE, TONES, ascii, capHeight, chipWidth, drawCard, drawChip, drawPill, drawStackedBar, mixColor, pillMetrics, setFont, textWidth, type MarkerKind, type PillOptions, type RgbColor, type Tone } from '../pdf/kit'
 import { PAGE, createLayout, type FlowBlock, type Layout, type TextItem } from '../pdf/layout'
-import { bullets, callout, distribution, drawCover, facts, hero, kpiRow, noteCard, panel, table, tableBlocks, type Fact, type Group, type LegendItem, type Row } from '../pdf/blocks'
+import { bullets, callout, distribution, introCallout, drawCover, facts, hero, kpiRow, noteCard, panel, table, tableBlocks, type Fact, type Group, type LegendItem, type Row } from '../pdf/blocks'
 import { brandName, resolveBrandTheme, type BrandTheme, type PdfBranding } from '../pdf/theme'
 import rights from './rights.json'
 
@@ -104,7 +104,7 @@ function scopeSection(layout: Layout, header: ReportHeader, extra: Fact[]) {
 }
 
 /** The About panel above the contents. */
-const aboutPanel = (layout: Layout, text: string[]) => (top: number) => callout(layout, { title: 'About this report', tone: 'warn', body: text.map(value => ({ text: value })) }, top)
+const aboutPanel = (layout: Layout, text: string[]) => introCallout(layout, { title: 'About this report', tone: 'warn', body: text.map(value => ({ text: value })) })
 
 function outcomeLegend(counts: Record<Outcome, number>): LegendItem[] {
   return OUTCOMES.map(outcome => ({ label: CHECK_RESULT_LABELS[outcome], count: counts[outcome], marker: OUTCOME_STYLE[outcome].marker, color: chartColor(outcome) }))
@@ -784,22 +784,7 @@ function levelSection(layout: Layout, summary: CisReadinessSummary, level: CisLe
   if (level.manual.length) {
     layout.heading(`Manual recommendations, Level ${level.level}`, { toc: true, keep: 26 })
     for (const manual of level.manual) {
-      const head: FlowBlock = (() => {
-        const chip = Math.min(chipWidth(doc, manual.identifier, 6.8), 60)
-        const lines = manual.title ? layout.measure([{ text: manual.title, size: 8.6, style: 'bold', color: PALETTE.ink, lineHeight: 3.9 }], contentWidth - 8 - chip - 3) : []
-        const height = Math.max(8.4, layout.heightOf(lines) + 4.4)
-        return {
-          height: height + 1.5,
-          draw: top => {
-            doc.setFillColor(...PALETTE.panel)
-            doc.roundedRect(margin, top, contentWidth, height, 2, 2, 'F')
-            doc.rect(margin, top + height - 2, contentWidth, 2, 'F')
-            drawChip(doc, margin + 4, top + (height - 4.4) / 2, manual.identifier, { size: 6.8, fill: theme.primaryTint, color: theme.strong })
-            layout.drawLines(lines, margin + 4 + chip + 3, top + (height - layout.heightOf(lines)) / 2)
-          },
-        }
-      })()
-      const blocks: FlowBlock[] = [head]
+      const blocks: FlowBlock[] = manualHeading(layout, manual.identifier, manual.title)
       if (manual.hasText) {
         for (const [label, value] of [['Description', manual.description], ['Impact', manual.impact], ['Audit', manual.audit], ['Remediation', manual.remediation]] as const) {
           if (value) blocks.push(...labelledBlocks(layout, label, [item(value, 7.4, 'normal', PALETTE.body)]))
@@ -812,4 +797,48 @@ function levelSection(layout: Layout, summary: CisReadinessSummary, level: CisLe
       layout.y += 3
     }
   }
+}
+
+// Width reserved for the identifier of a manual recommendation; a longer one wraps inside it.
+const MANUAL_ID_WIDTH = 60
+
+/**
+ * The tinted heading of a manual recommendation: the identifier as a chip, or wrapped inside its
+ * column when too long for one, and the title beside it. Long titles and identifiers continue in
+ * further blocks, each no taller than a page allows.
+ */
+function manualHeading(layout: Layout, identifier: string, title: string | undefined): FlowBlock[] {
+  const { doc, theme } = layout
+  const chip = chipWidth(doc, identifier, 6.8)
+  const asChip = chip <= MANUAL_ID_WIDTH
+  const idColumn = asChip ? chip : MANUAL_ID_WIDTH
+  const titleX = margin + 4 + idColumn + 3
+  const idParts = asChip ? [] : layout.chunk(layout.measure([{ text: identifier, size: 6.8, style: 'bold', color: theme.strong, technical: true, lineHeight: 3.1 }], MANUAL_ID_WIDTH))
+  const titleParts = title ? layout.chunk(layout.measure([{ text: title, size: 8.6, style: 'bold', color: PALETTE.ink, lineHeight: 3.9 }], contentWidth - 8 - idColumn - 3)) : []
+  const count = Math.max(1, idParts.length, titleParts.length)
+  return Array.from({ length: count }, (_, index): FlowBlock => {
+    const titleLines = titleParts[index] ?? []
+    const idLines = idParts[index] ?? []
+    const single = count === 1
+    const last = index === count - 1
+    const pad = index === 0 ? 2.2 : 0
+    const content = Math.max(layout.heightOf(titleLines), layout.heightOf(idLines), index === 0 && asChip ? 4.4 : 0)
+    const height = single ? Math.max(8.4, content + 4.4) : content + pad + (last ? 2.2 : 0)
+    return {
+      height: height + (last ? 1.5 : 0),
+      draw: top => {
+        doc.setFillColor(...PALETTE.panel)
+        if (index === 0) {
+          doc.roundedRect(margin, top, contentWidth, height, 2, 2, 'F')
+          doc.rect(margin, top + height - 2, contentWidth, 2, 'F')
+        } else {
+          doc.rect(margin, top, contentWidth, height, 'F')
+        }
+        const align = (own: number) => single ? top + (height - own) / 2 : top + pad
+        if (index === 0 && asChip) drawChip(doc, margin + 4, single ? top + (height - 4.4) / 2 : top + pad, identifier, { size: 6.8, fill: theme.primaryTint, color: theme.strong })
+        if (idLines.length) layout.drawLines(idLines, margin + 4, align(layout.heightOf(idLines)))
+        if (titleLines.length) layout.drawLines(titleLines, titleX, align(layout.heightOf(titleLines)))
+      },
+    }
+  })
 }

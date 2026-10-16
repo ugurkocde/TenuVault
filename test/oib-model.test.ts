@@ -206,6 +206,7 @@ describe("setting comparison", () => {
 describe("reports", () => {
   const ATTRIBUTION = "OpenIntuneBaseline content: SkipToTheEndpoint and contributors, GPL-3.0."
   const BRANDING = { companyName: "Fabrikam Security Services", colors: { primary: "#0B3D5C", accent: "#2BB3A3" }, preparedBy: "Avery Fabrikam", classification: "Confidential", footerText: "Fabrikam | Intune review", logo: { dataUrl: pngLogo() } }
+  const grid = (title: string, tenant: string, eyebrow: string) => ({ header: [title, tenant], footer: `TenuVault | ${eyebrow}`, coverFooter: [`TenuVault | ${eyebrow}`, "Configuration comparison, not a certification"] as [string, string] })
   const pdf = (report = oibComparisonReport(), branding?: typeof BRANDING) => generateOibReportPDF(parseReportPayload(report), { exportedAt: EXPORTED_AT, branding })
 
   it("accepts a well formed report and returns only the known fields", () => {
@@ -249,7 +250,7 @@ describe("reports", () => {
     const pages = pageStreams(bytes)
     pages.slice(1).forEach((stream, index) => expect(shown(stream)).toContain(`Page ${index + 2} of ${pages.length}`))
     expect(outlineTitles(bytes)).toEqual(expect.arrayContaining(["Contents", "Summary", "Results", "Update available", "Deprecated policies in the tenant", "Provenance and attribution"]))
-    expectInsideGrid(bytes)
+    expectInsideGrid(bytes, grid("OpenIntuneBaseline deployment comparison", "Contoso Ltd", "OpenIntuneBaseline comparison"))
     expect(Buffer.from(pdf()).equals(Buffer.from(bytes))).toBe(true)
   })
 
@@ -267,8 +268,8 @@ describe("reports", () => {
     const extreme = pdf(oibComparisonReport({ extreme: true }))
     expect(pdfText(extreme)).toContain("Ltd 's Region")
     expect(pdfText(extreme)).toContain("Update available (continued)")
-    expectInsideGrid(extreme)
-    expectInsideGrid(pdf(oibValidationReport({ extreme: true })))
+    expectInsideGrid(extreme, grid("OpenIntuneBaseline deployment comparison", oibComparisonReport({ extreme: true }).meta[0]![1].replace("\u2019", "'").trim(), "OpenIntuneBaseline comparison"))
+    expectInsideGrid(pdf(oibValidationReport({ extreme: true })), grid("OpenIntuneBaseline policy validation", "Contoso Ltd", "OpenIntuneBaseline validation"))
   })
 
   it("renders a white label report with the customer branding and the verbatim attribution only", () => {

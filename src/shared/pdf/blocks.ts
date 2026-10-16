@@ -5,6 +5,8 @@ import { PAGE, type FlowBlock, type Layout, type Line, type TextItem } from './l
 /** Report building blocks composed from the kit and the layout engine. */
 
 const { margin, right, contentWidth } = PAGE
+// Body text of the cover ends here; only the cover footer sits below.
+const COVER_BODY_BOTTOM = 283
 
 export interface GlanceRow {
   label: string
@@ -164,17 +166,28 @@ export function drawCover(layout: Layout, spec: CoverSpec) {
     if (!current || used + span > 4) rows.push([{ ...cell, span }])
     else current.push({ ...cell, span })
   }
+  // Every cell is printed: values wrap to three lines, then fewer, and as a last resort the whole grid
+  // is scaled down until it ends above the cover footer.
+  const available = COVER_BODY_BOTTOM - (gridTop + 5)
+  const measureGrid = (maxLines: number, scale: number) => rows.map(cells => {
+    const lines = cells.map(cell => layout.wrap(cell.value, cellWidth * cell.span - 3, 8.2 * scale, 'bold', { technical: true, maxLines }))
+    return { cells, lines, height: Math.max(12, Math.max(...lines.map(item => item.length)) * 3.5 + 8.6) * scale }
+  })
+  const fits = (grid: { height: number }[]) => grid.reduce((sum, row) => sum + row.height, 0) <= available
+  let scale = 1
+  let grid = [3, 2, 1].map(maxLines => measureGrid(maxLines, 1)).find(fits)
+  if (!grid) {
+    scale = available / measureGrid(1, 1).reduce((sum, row) => sum + row.height, 0)
+    grid = measureGrid(1, scale)
+  }
   let rowTop = gridTop + 5
-  for (const cells of rows) {
-    const lines = cells.map(cell => layout.wrap(cell.value, cellWidth * cell.span - 3, 8.2, 'bold', { technical: true, maxLines: 3 }))
-    const height = Math.max(12, Math.max(...lines.map(item => item.length)) * 3.5 + 8.6)
-    if (rowTop + height > PAGE.height - 14) break
+  for (const { cells, lines, height } of grid) {
     let cellX = margin
     cells.forEach((cell, index) => {
-      setFont(doc, 6.3, 'bold', PALETTE.muted)
-      doc.text(clampLine(doc, cell.label, cellWidth * cell.span - 3, 6.3, 'bold'), cellX, rowTop + 4.8)
-      setFont(doc, 8.2, 'bold', PALETTE.ink)
-      lines[index]!.forEach((line, lineIndex) => doc.text(line, cellX, rowTop + 7 + capHeight(8.2) + lineIndex * 3.5))
+      setFont(doc, 6.3 * scale, 'bold', PALETTE.muted)
+      doc.text(clampLine(doc, cell.label, cellWidth * cell.span - 3, 6.3 * scale, 'bold'), cellX, rowTop + 4.8 * scale)
+      setFont(doc, 8.2 * scale, 'bold', PALETTE.ink)
+      lines[index]!.forEach((line, lineIndex) => doc.text(line, cellX, rowTop + (7 + capHeight(8.2) + lineIndex * 3.5) * scale))
       cellX += cellWidth * cell.span
     })
     rowTop += height
@@ -211,37 +224,88 @@ function drawLogo(layout: Layout): boolean {
   }
 }
 
-/** A tinted panel with a round icon, a heading and body text; used above the contents and for notices. */
-export function callout(layout: Layout, spec: { title: string; body: TextItem[]; tone: 'warn' | 'accent'; link?: { url: string; text: string } }, top?: number): number {
+export interface CalloutSpec {
+  title: string
+  body: TextItem[]
+  tone: 'warn' | 'accent'
+  link?: { url: string; text: string }
+}
+
+const CALLOUT_TEXT_X = margin + 14
+const CALLOUT_TEXT_WIDTH = contentWidth - 14 - 6
+// Padding above and below the text of a callout card.
+const CALLOUT_PAD = 9
+
+function calloutLines(layout: Layout, spec: CalloutSpec, title: string): Line[] {
+  const icon = spec.tone === 'warn' ? TONES.warn.text : layout.theme.accentText
+  return layout.measure([{ text: title, size: 8.8, style: 'bold', color: icon, lineHeight: 4 }, ...spec.body.map(item => ({ size: 8.4, color: PALETTE.ink, lineHeight: 3.9, gap: 1.2, ...item }))], CALLOUT_TEXT_WIDTH)
+}
+
+/** Offsets counted from the first line again, for lines taken from the middle of a measured run. */
+function restack(lines: readonly Line[]): Line[] {
+  let offset = 0
+  return lines.map(line => {
+    const restacked = { ...line, offset: offset + line.gap }
+    offset += line.height
+    return restacked
+  })
+}
+
+/** One callout card at `top` holding `part`; returns its height. */
+function calloutCard(layout: Layout, spec: CalloutSpec, part: readonly Line[], top: number, options: { icon: boolean; link: boolean }): number {
   const { doc, theme } = layout
   const colors = spec.tone === 'warn'
     ? { fill: [255, 250, 243] as RgbColor, stroke: [227, 194, 158] as RgbColor, icon: TONES.warn.text }
     : { fill: theme.accentWash, stroke: theme.accentBorder, icon: theme.accentText }
-  const textX = margin + 14
-  const width = contentWidth - 14 - 6
-  const lines = layout.measure([{ text: spec.title, size: 8.8, style: 'bold', color: colors.icon, lineHeight: 4 }, ...spec.body.map(item => ({ size: 8.4, color: PALETTE.ink, lineHeight: 3.9, gap: 1.2, ...item }))], width)
+  const height = layout.heightOf(part) + CALLOUT_PAD
+  drawCard(doc, margin, top, contentWidth, height, { fill: colors.fill, stroke: colors.stroke })
+  if (options.icon) {
+    doc.setFillColor(...colors.icon)
+    doc.circle(margin + 7.5, top + 7.3, 3, 'F')
+    setFont(doc, 9, 'bold', PALETTE.white)
+    doc.text('!', margin + 7.5, top + 7.3 + capHeight(9) / 2, { align: 'center' })
+  }
+  layout.drawLines(part, CALLOUT_TEXT_X, top + 4.6)
+  if (spec.link && options.link) {
+    const last = part.findIndex(line => line.text.includes(spec.link!.text))
+    if (last >= 0) doc.link(CALLOUT_TEXT_X, top + 4.6 + part[last]!.offset - part[0]!.offset - 0.6, textWidth(doc, part[last]!.text, part[last]!.size, part[last]!.style), 4.2, { url: spec.link.url })
+  }
+  return height
+}
+
+/** Callout cards in the flow at the cursor, one per piece that fits a page. */
+function pagedCallout(layout: Layout, spec: CalloutSpec, lines: readonly Line[], icon: boolean) {
   const chunks = layout.chunk(lines, 200)
-  let used = 0
   chunks.forEach((part, index) => {
-    const height = layout.heightOf(part) + 9
-    if (top === undefined) layout.ensure(height)
-    const cardTop = top ?? layout.y
-    drawCard(doc, margin, cardTop, contentWidth, height, { fill: colors.fill, stroke: colors.stroke })
-    if (index === 0) {
-      doc.setFillColor(...colors.icon)
-      doc.circle(margin + 7.5, cardTop + 7.3, 3, 'F')
-      setFont(doc, 9, 'bold', PALETTE.white)
-      doc.text('!', margin + 7.5, cardTop + 7.3 + capHeight(9) / 2, { align: 'center' })
-    }
-    layout.drawLines(part, textX, cardTop + 4.6)
-    if (spec.link && index === chunks.length - 1) {
-      const last = part.findIndex(line => line.text.includes(spec.link!.text))
-      if (last >= 0) doc.link(textX, cardTop + 4.6 + part[last]!.offset - part[0]!.offset - 0.6, textWidth(doc, part[last]!.text, part[last]!.size, part[last]!.style), 4.2, { url: spec.link.url })
-    }
-    used += height
-    if (top === undefined) layout.y += height + 5
+    layout.ensure(layout.heightOf(part) + CALLOUT_PAD)
+    layout.y += calloutCard(layout, spec, part, layout.y, { icon: icon && index === 0, link: index === chunks.length - 1 }) + 5
   })
-  return used
+}
+
+/** A tinted panel with a round icon, a heading and body text, in the flow; continues across pages. */
+export function callout(layout: Layout, spec: CalloutSpec) {
+  pagedCallout(layout, spec, calloutLines(layout, spec, spec.title), true)
+}
+
+/**
+ * The panel above the contents, for layout.contentsPage: as much as fits in `budget` is drawn there,
+ * and anything longer continues after the contents as a "(continued)" callout, so the contents
+ * always keep their page.
+ */
+export function introCallout(layout: Layout, spec: CalloutSpec) {
+  return (top: number, budget: number): { height: number; overflow?: () => void } => {
+    const lines = calloutLines(layout, spec, spec.title)
+    let used = 0
+    let count = 0
+    while (count < lines.length && (count === 0 || used + lines[count]!.height <= budget - CALLOUT_PAD)) used += lines[count++]!.height
+    const rest = lines.slice(count)
+    const height = calloutCard(layout, spec, lines.slice(0, count), top, { icon: true, link: !rest.length })
+    if (!rest.length) return { height }
+    return {
+      height,
+      overflow: () => pagedCallout(layout, spec, restack([...calloutLines(layout, { ...spec, body: [] }, `${spec.title} (continued)`), ...rest]), false),
+    }
+  }
 }
 
 /** Hero card: a large figure with its label on the left, sentences and a progress bar on the right. */
@@ -298,24 +362,32 @@ export interface LegendItem {
 /** Section heading, a stacked bar of the items and a legend with marker, count, label and share. */
 export function distribution(layout: Layout, spec: { title: string; note: string; items: LegendItem[]; total: number }) {
   const { doc } = layout
-  layout.heading(spec.title, { note: spec.note, keep: 16 })
-  drawStackedBar(doc, margin, layout.y, contentWidth, 4, spec.items.map(item => ({ value: item.count, color: item.color })), Math.max(spec.total, 1), { gap: 0.6 })
+  // Place the legend first, so the heading, the bar and every legend row are kept on one page.
+  const legend: { item: LegendItem; label: string; countWidth: number; x: number; row: number }[] = []
   let x = margin
-  let y = layout.y + 7.4
+  let row = 0
   for (const item of spec.items.filter(entry => entry.count > 0)) {
     const share = spec.total > 0 ? `, ${Math.round((item.count / spec.total) * 100)}%` : ''
-    const label = `${item.label}${share}`
+    const label = clampLine(doc, `${item.label}${share}`, contentWidth - 12, 7)
     const countWidth = textWidth(doc, String(item.count), 7, 'bold')
     const width = 3.4 + countWidth + 1.2 + textWidth(doc, label, 7) + 6
-    if (x + width > right + 6 && x > margin) { x = margin; y += 4.2 }
-    drawMarker(doc, x + 1.1, y + 1.3, item.marker, item.color, 1)
-    setFont(doc, 7, 'bold', PALETTE.ink)
-    doc.text(String(item.count), x + 3.4, y + 2.3)
-    setFont(doc, 7, 'normal', PALETTE.muted)
-    doc.text(label, x + 3.4 + countWidth + 1.2, y + 2.3)
+    if (x + width > right + 6 && x > margin) { x = margin; row++ }
+    legend.push({ item, label, countWidth, x, row })
     x += width
   }
-  layout.y = y + 4.2 + 4
+  const rows = legend.length ? row + 1 : 0
+  layout.heading(spec.title, { note: spec.note, keep: 7.4 + rows * 4.2 + 4 })
+  drawStackedBar(doc, margin, layout.y, contentWidth, 4, spec.items.map(item => ({ value: item.count, color: item.color })), Math.max(spec.total, 1), { gap: 0.6 })
+  const top = layout.y + 7.4
+  for (const entry of legend) {
+    const y = top + entry.row * 4.2
+    drawMarker(doc, entry.x + 1.1, y + 1.3, entry.item.marker, entry.item.color, 1)
+    setFont(doc, 7, 'bold', PALETTE.ink)
+    doc.text(String(entry.item.count), entry.x + 3.4, y + 2.3)
+    setFont(doc, 7, 'normal', PALETTE.muted)
+    doc.text(entry.label, entry.x + 3.4 + entry.countWidth + 1.2, y + 2.3)
+  }
+  layout.y = top + Math.max(rows, 1) * 4.2 + 4
 }
 
 /** A note card: an eyebrow in the left column and paragraphs on the right. */

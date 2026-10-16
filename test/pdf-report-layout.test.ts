@@ -7,14 +7,24 @@ import { frameworkCoverageLabel } from "../src/shared/compliance/presentation"
 import { MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDATIONS_URL } from "../src/shared/frameworks/cis-manual"
 import { TENUVAULT_THEME, luminance, parseHexColor, resolveBrandTheme } from "../src/shared/pdf/theme"
 import { createLayout, type FlowBlock } from "../src/shared/pdf/layout"
-import { CIS_CONTEXT, EXPORTED_AT, LONG_ID, cisSummary, nativeRun, workspaceAssessment } from "./pdf-report-fixtures"
-import { expectInsideGrid, fileId, linkCount, outlineTitles, pageStreams, pdfText, shown } from "./pdf-text"
+import { distribution, drawCover } from "../src/shared/pdf/blocks"
+import { ascii } from "../src/shared/pdf/kit"
+import { CIS_CONTEXT, EXPORTED_AT, LONG_ID, LONG_MANUAL_TITLE, cisSummary, nativeRun, workspaceAssessment } from "./pdf-report-fixtures"
+import { bodyText, expectInsideGrid, fileId, textRuns, linkCount, outlineTitles, pageStreams, pdfText, shown } from "./pdf-text"
 
 const context = { exportedAt: EXPORTED_AT, tenantName: "Contoso Ltd" }
 const ELV2 = "Framework detector code adapted from IntuneDocumentation, Ugur Koc and contributors, under Elastic License 2.0. Adapted on 30 September 2026 for TenuVault desktop collection, original restricted-framework descriptions and stored-comparison reports. The accompanying framework-NOTICES.txt contains the license and publisher attribution."
 // A valid 1 by 1 PNG.
 const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
 const BRANDING = { companyName: "Fabrikam Security Services", colors: { primary: "#0B3D5C", accent: "#2BB3A3" }, preparedBy: "Avery Fabrikam", classification: "Confidential", logo: { dataUrl: PNG } }
+
+const COVER_FOOTER = "Configuration comparison, not a certification"
+/** The running header and footer each fixture report prints. */
+const GRID = {
+  native: (name = "NIST SP 800-53") => ({ header: [name, "Contoso Ltd"], footer: "TenuVault | Independent configuration comparison", coverFooter: ["TenuVault | Independent configuration comparison", COVER_FOOTER] as [string, string] }),
+  workspace: (name = "Custom Baselines") => ({ header: [name, "Contoso Ltd"], footer: "TenuVault | Policy pack assessment", coverFooter: ["TenuVault | Policy pack assessment", COVER_FOOTER] as [string, string] }),
+  cis: (footer = "TenuVault | CIS readiness report") => ({ header: ["CIS Microsoft Windows 11 Enterprise Benchmark", "Contoso Ltd"], footer, coverFooter: [footer, "Readiness comparison, not a certification"] as [string, string] }),
+}
 
 const reports = () => ({
   native: generateNativeFrameworkPDF(nativeRun(), context),
@@ -93,12 +103,62 @@ describe("report PDF layout", () => {
     const native = generateNativeFrameworkPDF(run, context)
     const workspace = generateWorkspaceAssessmentPDF(workspaceAssessment({ extreme: true }), context)
     const cis = generateCisReadinessPDF(cisSummary({ extreme: true }), CIS_CONTEXT)
-    for (const bytes of [native, workspace, cis]) expectInsideGrid(bytes)
+    expectInsideGrid(native, GRID.native())
+    expectInsideGrid(workspace, GRID.workspace())
+    expectInsideGrid(cis, GRID.cis())
     // The 300 character identifier is wrapped, never cut: all of it is printed.
     const text = pdfText(native).replace(/\s/g, "")
     expect(text).toContain(LONG_ID)
     expect(pdfText(native)).toContain("Synthetic organizational aspect 30")
     expect(pageStreams(native).length).toBeGreaterThan(40)
+    // A tall About panel continues after the contents instead of pushing them off the page.
+    const pages = pageStreams(native).map(stream => shown(stream).join(" "))
+    expect(pages[1]).toContain("About this report")
+    expect(pages[1]).toContain("Contents")
+    expect(pages.slice(2).join(" ")).toContain("About this report (continued)")
+    expect(text).toContain("Syntheticlicenceparagraph60:".replace(/\s/g, ""))
+    // A 9000 character manual title and an identifier too long for a chip are printed whole, wrapped in their columns.
+    const column = (from: number, to: number) => pageStreams(cis).slice(1).flatMap(textRuns)
+      .filter(run => run.x >= from && run.x < to && run.y > 14.6 && run.y < 282.5 && !run.text.endsWith("(continued)")).map(run => run.text).join("")
+    // The title column starts after the 60 mm identifier column.
+    expect(column(81, 196).replace(/\s/g, "")).toContain(`${LONG_MANUAL_TITLE} 1`.replace(/\s/g, ""))
+    expect(column(18, 20)).toContain(`1.${LONG_ID}`)
+    expect(bodyText(cis)).toContain("Review this synthetic manual recommendation.")
+    // Every cell of the document control grid is printed, also with a long reference and branding.
+    const branded = generateWorkspaceAssessmentPDF(workspaceAssessment({ extreme: true }), context, BRANDING)
+    const cover = shown(pageStreams(branded)[0]!).join(" ")
+    for (const label of ["Policy pack", "Tenant ID", "Report ID", "Profile", "Policies read", "Pack policies", "Assessed", "Exported", "Prepared by", "Avery Fabrikam", "Classification", "Confidential"]) expect(cover).toContain(label)
+    expectInsideGrid(branded, { header: ["Custom Baselines", "Contoso Ltd"], footer: "Fabrikam Security Services", coverFooter: ["Fabrikam Security Services", COVER_FOOTER] })
+  })
+
+  it("keeps the heading, bar and every legend row of a distribution on one page", () => {
+    const layout = createLayout({ shortName: "Test", footer: "Test", sanitize: value => value, properties: { title: "T", subject: "S", keywords: "K" }, exportedAt: EXPORTED_AT, identity: ["test"], theme: TENUVAULT_THEME })
+    layout.addPage()
+    // Room for the heading and the bar, not for three legend rows.
+    layout.y = 276 - 22
+    const items = Array.from({ length: 12 }, (_, index) => ({ label: `Status label number ${index + 1}`, count: index + 1, marker: "filled" as const, color: [31, 133, 83] as [number, number, number] }))
+    distribution(layout, { title: "Status distribution", note: "78 policies", items, total: 78 })
+    const pages = pageStreams(layout.finish())
+    expect(pages).toHaveLength(3)
+    const last = shown(pages[2]!).join(" ")
+    expect(last).toContain("Status distribution")
+    for (const item of items) expect(last).toContain(item.label)
+    expectInsideGrid(layout.finish(), { header: ["Test"], footer: "TenuVault | Test", coverFooter: ["", ""] })
+  })
+
+  it("prints every document control cell on the cover, shrinking the grid when it is full", () => {
+    const theme = resolveBrandTheme({ companyName: "Fabrikam", preparedBy: `Avery Fabrikam ${"for the security office ".repeat(4)}`, classification: "Confidential" })
+    const layout = createLayout({ shortName: "Test", footer: "Test", sanitize: value => value, properties: { title: "T", subject: "S", keywords: "K" }, exportedAt: EXPORTED_AT, identity: ["test"], theme })
+    const control = Array.from({ length: 22 }, (_, index) => ({ label: `Field ${index + 1}`, value: `Value ${index + 1} ${"long words ".repeat(index % 3 ? 2 : 9)}`, span: index % 5 === 0 ? 2 as const : 1 as const }))
+    drawCover(layout, { eyebrow: "E", title: "Title", tenant: "Contoso", facts: [], ring: 0, donuts: [{ segments: [], total: 0, value: "0%" }], donutCaption: "C", donutSub: "S", glance: [], control, footerRight: "Right" })
+    const bytes = layout.finish()
+    const cover = textRuns(pageStreams(bytes)[0]!)
+    for (const label of [...control.map(cell => cell.label), "Prepared by", "Classification", "Confidential"]) expect(cover.map(run => run.text)).toContain(label)
+    expectInsideGrid(bytes, { header: [], footer: "", coverFooter: ["Fabrikam", "Right"] })
+  })
+
+  it("normalises typographic dashes, quotes and ellipses for Helvetica", () => {
+    expect(ascii("a\u2010b\u2013c\u2014d\u2015e \u2018s\u2019 \u201cq\u201d \u2026")).toBe("a-b-c-d-e 's' \"q\" ...")
   })
 
   it("prints the facts, limitations, provenance and licence text of the native report", () => {
@@ -266,6 +326,6 @@ describe("report PDF branding", () => {
     expect(streams).toContain("0.09 0.08 0.08 rg")
     expect(Buffer.from(bytes).toString("latin1")).not.toMatch(/\/Subtype \/Image/)
     expect(pdfText(bytes)).toContain("Fabrikam")
-    expectInsideGrid(bytes)
+    expectInsideGrid(bytes, GRID.cis("Fabrikam"))
   })
 })

@@ -72,6 +72,8 @@ export interface LayoutOptions {
 
 // The longest piece of a block, so a block never outgrows a page.
 const MAX_CHUNK = 96
+// Height the panel above the contents may take, so the contents keep most of their page.
+const INTRO_BUDGET = 110
 
 export type Layout = ReturnType<typeof createLayout>
 
@@ -282,12 +284,20 @@ export function createLayout(options: LayoutOptions) {
     close()
   }
 
-  /** Reserves the contents page after the cover; `intro` draws a panel above the contents. */
-  function contentsPage(intro?: (top: number) => number) {
+  /**
+   * Reserves the contents page after the cover. `intro` draws a panel above the contents within the
+   * budget it is given and returns its height; its `overflow` is drawn on the page after the contents.
+   */
+  function contentsPage(intro?: (top: number, budget: number) => { height: number; overflow?: () => void }) {
     addPage()
     tocPage = page()
-    if (intro) y += intro(y) + 8
+    const panel = intro?.(y, INTRO_BUDGET)
+    if (panel) y += panel.height + 8
     tocTop = y
+    if (panel?.overflow) {
+      addPage()
+      panel.overflow()
+    }
   }
 
   function drawContents(): number {

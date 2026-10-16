@@ -2,7 +2,7 @@ import { CHECK_RESULT_COLORS, CONTROL_STATUS_COLORS, formatReportDate } from '..
 import { redactText } from '../compliance/export'
 import { PALETTE, TONES, ascii, pillMetrics, textWidth, type MarkerKind, type RgbColor, type Tone } from '../pdf/kit'
 import { PAGE, createLayout, type Layout } from '../pdf/layout'
-import { callout, distribution, drawCover, facts, kpiRow, tableSection, type Cell, type Fact, type GlanceRow, type LegendItem } from '../pdf/blocks'
+import { distribution, introCallout, drawCover, facts, kpiRow, tableSection, type Cell, type Fact, type GlanceRow, type LegendItem } from '../pdf/blocks'
 import { resolveBrandTheme, type PdfBranding } from '../pdf/theme'
 import { statusTone, type ReportPayload, type ReportSection, type StatusTone } from './report'
 
@@ -102,7 +102,7 @@ export function generateOibReportPDF(report: ReportPayload, options: { exportedA
     ],
     footerRight: 'Configuration comparison, not a certification',
   })
-  layout.contentsPage(long.length ? top => callout(layout, { title: 'About this report', tone: 'accent', body: long.map(([label, value]) => ({ text: `${label}: ${value}` })) }, top) : undefined)
+  layout.contentsPage(long.length ? introCallout(layout, { title: 'About this report', tone: 'accent', body: long.map(([label, value]) => ({ text: `${label}: ${value}` })) }) : undefined)
 
   layout.pageTitle('Summary', 'Summary', { lead: report.subtitle })
   if (counted.length) {

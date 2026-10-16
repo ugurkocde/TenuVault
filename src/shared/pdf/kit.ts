@@ -48,7 +48,7 @@ const POINT_TO_MM = 0.3528
 
 /** Normalises dashes, curly quotes and ellipses to the WinAnsi characters Helvetica draws. */
 export function ascii(value: string): string {
-  return value.replace(/[‐-―]/g, '-').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/…/g, '...')
+  return value.replace(/[\u2010-\u2015]/g, '-').replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/\u2026/g, '...')
 }
 
 /** A colour between two colours, for tints on the charcoal cover. */

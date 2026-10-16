@@ -16,6 +16,8 @@ import type { Finding } from "../src/shared/frameworks/policies"
 export const TENANT_ID = "8f3c2a71-5d4e-4b9a-9c1f-2e6d7b8a9c10"
 export const LONG_ID = "A".repeat(300)
 export const EXPORTED_AT = "2026-10-14T09:30:00.000Z"
+/** A manual recommendation title of about 9000 characters. */
+export const LONG_MANUAL_TITLE = Array.from({ length: 150 }, (_, n) => `Synthetic manual clause ${n + 1} of a very long title.`).join(" ")
 const guid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 
 const POLICIES = [
@@ -100,7 +102,9 @@ export function nativeRun(options: { frameworkId?: string; nativeId?: string; sc
   return {
     schemaVersion: 1, runId: "6a1f0c2e-8b7d-4e3a-9f50-1c2d3e4f5a6b", tenantId: TENANT_ID, frameworkId,
     sourceCommit: FRAMEWORK_SOURCE_COMMIT, snapshotSha256: "3b7e1d9c0a4f8e2b6d5c9a1f7e3b0d4c8a2f6e1b9d7c5a3f0e8b4d2c6a9f1e7b", rulesetSha256: "9c4e2a7f1b8d3e6c0a5f9b2d7e4c1a8f3b6d0e9c2a5f8b1d4e7c0a3f6b9d2e5c",
-    licenseNotice: "NIST-authored publications: royalty-free reuse with attribution; third-party material excluded.",
+    licenseNotice: options.extreme
+      ? Array.from({ length: 60 }, (_, n) => `Synthetic licence paragraph ${n + 1}: NIST-authored publications are reused royalty-free with attribution and third-party material is excluded.`).join(" ")
+      : "NIST-authored publications: royalty-free reuse with attribution; third-party material excluded.",
     assessment: {
       ...assessment, generatedAt: "2026-10-14T09:02:00.000Z", frameworks: [framework], capabilities,
       collectionCoverage: assessment.collectionCoverage.map((family, index) => ({
@@ -129,7 +133,7 @@ export function workspaceAssessment(options: { extreme?: boolean } = {}): SavedA
     }
   })
   return {
-    assessment: { runId: "run-2026-10-14-contoso", tenantId: TENANT_ID, frameworkId: "custom", reference: "Contoso workstation baseline v3", assessedAt: "2026-10-14T08:40:00.000Z", policyCount: 42, findings },
+    assessment: { runId: "run-2026-10-14-contoso", tenantId: TENANT_ID, frameworkId: "custom", reference: options.extreme ? `Contoso workstation baseline v3 ${"with a very long reference entered by the administrator ".repeat(6)}${LONG_ID}` : "Contoso workstation baseline v3", assessedAt: "2026-10-14T08:40:00.000Z", policyCount: 42, findings },
     policies: [0, 1, 2, 3].map(index => ({ name: `Pack policy ${index + 1}`, platforms: "windows10", technologies: "mdm", description: "", settings: [] })),
     creation: { success: false, results: [{ name: "Contoso Windows Firewall", id: guid(401) }, { name: "Contoso Windows Security options", error: "Graph returned 400: the setting value is not valid for this template." }] },
   }
@@ -161,6 +165,7 @@ function level(levelNumber: 1 | 2, extreme: boolean): CisLevelReadiness {
     manual: [
       { identifier: `${levelNumber === 1 ? 1 : 2}.1.1`, level: levelNumber, title: "Ensure the account lockout threshold is reviewed", description: "Review the lockout threshold against the password policy.", impact: "Users locked out after repeated failures need a recovery path.", audit: "Check the account policy in the domain or Entra configuration.", remediation: "Set the threshold to 5 or fewer invalid attempts.", hasText: true, fallback: MANUAL_RECOMMENDATIONS_FALLBACK, fallbackUrl: MANUAL_RECOMMENDATIONS_URL, state: "Manual" },
       { identifier: `${levelNumber === 1 ? 1 : 2}.1.2`, level: levelNumber, hasText: false, fallback: MANUAL_RECOMMENDATIONS_FALLBACK, fallbackUrl: MANUAL_RECOMMENDATIONS_URL, state: "Manual" },
+      ...(extreme ? [{ identifier: `${levelNumber}.${LONG_ID}`, level: levelNumber, title: `${LONG_MANUAL_TITLE} ${levelNumber}`, description: "Review this synthetic manual recommendation.", hasText: true, fallback: MANUAL_RECOMMENDATIONS_FALLBACK, fallbackUrl: MANUAL_RECOMMENDATIONS_URL, state: "Manual" as const }] : []),
     ],
     recommendations,
     recommendationPassRate: 0.6, recommendationsExcepted: 1, adjustedRecommendationPassRate: 0.7,
