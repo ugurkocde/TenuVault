@@ -108,6 +108,56 @@ describe("unreachable backup jobs", () => {
     expect(scheduledResult(job).unreachable).toBe(true)
   })
 
+  describe("with the default concurrency", () => {
+    const twoTypes = { ...request, scope: { excluded: INTUNE_TYPES.filter((type) => type.folder !== "DeviceConfigurations" && type.folder !== "CompliancePolicies").map((type) => type.folder) } }
+    // Graph answers through `graph`; `null` stands for a request that gets no response. Local storage always answers.
+    const run = async (backup: typeof request, graph: (url: URL) => Response | null) => {
+      vi.useFakeTimers()
+      const engine = new BackupEngine({
+        getToken: async () => "token",
+        fetch: withNetworkErrors(async (input) => {
+          const url = new URL(String(input))
+          if (url.hostname !== "graph.microsoft.com") return new Response(null, { status: 201 })
+          const response = graph(url)
+          if (!response) throw new TypeError("net::ERR_INTERNET_DISCONNECTED")
+          return response
+        }),
+      })
+      const done = engine.waitForJob(engine.start(backup))
+      await vi.advanceTimersByTimeAsync(60_000)
+      return done
+    }
+
+    it("marks a one-type backup whose Graph requests all got no response, below the circuit threshold", async () => {
+      const job = await run(request, () => null)
+      expect(job).toMatchObject({ status: "Failed", failures: 1, unreachable: true, progressMessage: "Backup failed: no policies could be saved" })
+      expect(job.exception).toBeUndefined()
+      expect(scheduledResult(job)).toEqual({ status: "Failed", message: "Backup failed: no policies could be saved", unreachable: true })
+    })
+
+    it("marks a full backup stopped by the circuit while every request got no response", async () => {
+      const job = await run({ ...request, scope: { excluded: [] } }, () => null)
+      expect(job).toMatchObject({ status: "Failed", unreachable: true })
+      expect(job.exception).toContain("Microsoft Graph did not respond for 24 consecutive requests")
+    })
+
+    it("counts a backup that also had an HTTP failure", async () => {
+      const job = await run(twoTypes, (url) => url.pathname.endsWith("/deviceCompliancePolicies") ? Response.json({ error: { message: "Forbidden" } }, { status: 403 }) : null)
+      expect(job).toMatchObject({ status: "Failed", failures: 2 })
+      expect(job.unreachable).toBeUndefined()
+      expect(scheduledResult(job).unreachable).toBeUndefined()
+    })
+
+    it("counts a partial backup that saved some policies", async () => {
+      const job = await run(twoTypes, (url) => url.pathname.includes("/deviceCompliancePolicies")
+        ? null
+        : url.pathname.endsWith("/deviceConfigurations") ? Response.json({ value: [{ id: "saved", displayName: "Saved" }] }) : Response.json({ id: "saved" }))
+      expect(job).toMatchObject({ status: "Completed", failures: 1 })
+      expect(job.unreachable).toBeUndefined()
+      expect(scheduledResult(job)).toEqual({ status: "Failed", message: job.progressMessage })
+    })
+  })
+
   it("leaves other failures and completed jobs unmarked", async () => {
     const signIn = engineWith(async () => { throw new SignInRequiredError(TENANT, "app", "Sign in again to continue.") })
     const refused = await signIn.waitForJob(signIn.start(request))

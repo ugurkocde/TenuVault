@@ -31,6 +31,8 @@ export function scheduledResult(job: BackupJob): ScheduledRunResult {
  * Whether a scheduled result is notified and written to the audit log. A sleeping computer that
  * wakes briefly fails with the same connection error every 15 minutes, so such a failure is
  * reported only when the previous attempt of the same slot did not already fail (`afterFailure`).
+ * Any Failed result counts as already failed: a counted failure, a license refusal or an earlier
+ * connection failure, each of which was reported when it happened.
  */
 export function reportsResult(afterFailure: boolean, result: ScheduledRunResult): boolean {
   return !(afterFailure && result.status === "Failed" && result.unreachable)

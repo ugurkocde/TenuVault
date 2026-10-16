@@ -91,6 +91,15 @@ export class BackupFolderTakenError extends StorageError {
 }
 class BackupCancelledError extends Error {}
 
+/**
+ * What a run saved and how many recorded read failures had another cause than Microsoft or the
+ * storage being unreachable. A run that saved nothing and failed only for that reason is unreachable.
+ */
+interface RunOutcome {
+  saved: number
+  otherFailures: number
+}
+
 type NetworkService = "Microsoft Graph" | "backup storage"
 
 /** Repeated 401 or 403 responses mean the role behind them is gone, so the job stops instead of grinding the whole work list. */
@@ -217,11 +226,12 @@ export class BackupEngine {
 
     const timer = setTimeout(() => controller.abort(jobDeadlineError()), JOB_DEADLINE_MS)
     timer.unref?.()
-    const done = this.run(job, request, controller.signal, deadline)
+    const outcome: RunOutcome = { saved: 0, otherFailures: 0 }
+    const done = this.run(job, request, controller.signal, deadline, outcome)
       .catch((error: unknown) => {
         job.status = error instanceof BackupCancelledError ? "Cancelled" : "Failed"
         job.exception = error instanceof Error ? error.message : String(error)
-        if (job.status === "Failed" && isUnreachable(error)) job.unreachable = true
+        if (job.status === "Failed" && isUnreachable(error) && !outcome.saved && !outcome.otherFailures) job.unreachable = true
         job.progressMessage = job.status === "Cancelled" ? "Backup cancelled" : "Backup failed"
         this.write(job, `${job.progressMessage}: ${job.exception}`)
       })
@@ -238,7 +248,7 @@ export class BackupEngine {
     return job
   }
 
-  private async run(job: BackupJob, request: BackupRequest, signal: AbortSignal, deadline: number): Promise<void> {
+  private async run(job: BackupJob, request: BackupRequest, signal: AbortSignal, deadline: number, outcome: RunOutcome): Promise<void> {
     const started = this.now()
     const local = isLocalAccount(request.storageAccountName)
     const backupFolder = `backup-${folderTimestamp(started)}`
@@ -298,6 +308,7 @@ export class BackupEngine {
         }
         countAuthFailure(error)
         failures++
+        if (!isUnreachable(error)) outcome.otherFailures++
         failedTypes.push(type.folder)
         this.write(job, `Could not read ${type.label}: ${error instanceof Error ? error.message : String(error)}`)
       }
@@ -341,12 +352,14 @@ export class BackupEngine {
           ...(type.assignmentsFormerlyExpanded ? { hashWithEmptyAssignments: snapshotHash({ ...detail, assignments: [] }) } : {}),
         }
         counts[type.folder]!++
+        outcome.saved++
       } catch (error) {
         network.signal.throwIfAborted()
         countAuthFailure(error)
         // An expired sign-in fails every remaining item the same way, so it stops the backup once.
         if (error instanceof TokenError || (error instanceof GraphError && error.status === 401)) throw error
         failures++
+        if (!isUnreachable(error)) outcome.otherFailures++
         const warning = `Could not back up "${displayName}": ${error instanceof Error ? error.message : String(error)}`
         if (error instanceof RequestTimeoutError) itemTimeoutWarnings.push(warning)
         this.write(job, warning)
@@ -425,6 +438,7 @@ export class BackupEngine {
 
     job.failures = failures
     job.status = failures > 0 && totalPolicies === 0 ? "Failed" : "Completed"
+    if (job.status === "Failed" && !outcome.otherFailures) job.unreachable = true
     const warnings = failures + retentionWarnings
     job.progressMessage =
       job.status === "Failed" ? "Backup failed: no policies could be saved" : warnings > 0 ? `Backup completed with ${warnings} warning${warnings === 1 ? "" : "s"}` : "Backup completed successfully"
