@@ -183,7 +183,7 @@ describe("cisReadinessTrend", () => {
     expect(level1[1]?.adjustedChangeFromPrevious).toBeNull()
   })
 
-  it("nulls the change when the immediately previous point does not contain the level", () => {
+  it("compares a Level with the previous run that has it, and never across a pack change", () => {
     const full = policies()
     const level1Only = full.slice(0, 2)
     const points = cisReadinessTrend([
@@ -196,10 +196,14 @@ describe("cisReadinessTrend", () => {
     expect(level2[0]?.passRate).toBe(1)
     expect(level2[1]).toBeUndefined()
     expect(level2[2]?.passRate).toBe(0)
-    expect(level2[2]?.changeFromPrevious).toBeNull()
-    expect(level2[2]?.adjustedChangeFromPrevious).toBeNull()
+    // Level 2 of run-3 is compared with run-1, the previous run with Level 2 and the same pack.
+    expect(level2[2]).toMatchObject({ comparison: "compared", previousRunId: "run-1" })
+    expect(level2[2]?.changeFromPrevious).toBeCloseTo(-1)
+    // run-2 assessed a smaller pack: Level 1 is not compared across it in either direction.
     const level1 = points.map(point => point.levels.find(level => level.level === 1)!)
-    expect(level1[2]?.changeFromPrevious).toBeCloseTo(-0.5)
+    expect(level1.map(level => level.comparison)).toEqual(["first", "pack-changed", "pack-changed"])
+    expect(level1[1]?.changeFromPrevious).toBeNull()
+    expect(level1[2]?.changeFromPrevious).toBeNull()
   })
 
   it("only counts exceptions created on or before each historic assessment", () => {
@@ -211,7 +215,7 @@ describe("cisReadinessTrend", () => {
     const points = cisReadinessTrend([
       entry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Missing", "Present"]),
       entry("run-2", "2026-02-01T00:00:00.000Z", ["Present", "Missing", "Present"]),
-    ], undefined, [exception])
+    ], undefined, [exception], "2026-10-16")
     const level1 = points.map(point => point.levels.find(level => level.level === 1)!)
     expect(level1[0]?.excepted).toBe(0)
     expect(level1[0]?.adjustedPassRate).toBe(0.5)
@@ -228,7 +232,7 @@ describe("cisReadinessTrend", () => {
     }
     const points = cisReadinessTrend([
       entry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Missing", "Present"]),
-    ], undefined, [exception])
+    ], undefined, [exception], "2026-10-16")
     const level1 = points[0]?.levels.find(level => level.level === 1)
     expect(level1?.excepted).toBe(1)
     expect(level1?.adjustedPassRate).toBe(1)
@@ -243,7 +247,7 @@ describe("cisReadinessTrend", () => {
     const points = cisReadinessTrend([
       entry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Missing", "Present"]),
       entry("run-2", "2026-02-01T00:00:00.000Z", ["Present", "Missing", "Present"]),
-    ], undefined, [exception])
+    ], undefined, [exception], "2026-10-16")
     const level1 = points.map(point => point.levels.find(level => level.level === 1)!)
     expect(level1[0]?.passRate).toBe(0.5)
     expect(level1[0]?.excepted).toBe(1)

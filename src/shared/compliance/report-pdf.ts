@@ -1,7 +1,7 @@
 import { CAPABILITY_STATUS_COLORS, CAPABILITY_STATUS_LABELS, CHECK_RESULT_COLORS, CHECK_RESULT_LABELS, COLLECTION_FAMILY_LABELS, COLLECTION_STATUS_LABELS, CONTROL_STATUS_COLORS, CONTROL_STATUS_LABELS, PLATFORM_LABELS, formatReportDate, frameworkCoverageLabel } from './presentation'
 import { capabilityComparison, comparisonCounts, type NativeAssessment } from './native'
 import { exportLimitations, nativeReportHeader, redactSecrets, redactText, workspaceReportHeader, type ExportContext, type ReportHeader, type SavedAssessment } from './export'
-import { coverageSourceLabel, headlineRate, levelCheckSummary, type CisLevelReadiness, type CisReadinessSummary } from '../frameworks/cis-readiness'
+import { coverageSourceLabel, exclusionsText, formatRate, levelCheckSummary, levelHeadline, unassignedText, type CisLevelReadiness, type CisReadinessSummary } from '../frameworks/cis-readiness'
 import { recommendationTotals, type RecommendationResult } from '../frameworks/cis-recommendations'
 import { displayCheckValue } from './check-results'
 import type { CapabilityResult, CapabilityStatus, ControlAssessment, ControlStatus, TechnicalCheck } from './types'
@@ -620,17 +620,22 @@ const RESULT_STYLE: Record<RecommendationResult['result'], { tone: Tone; marker:
   'Not assessed': { tone: 'neutral', marker: 'outline', color: SLATE },
 }
 
-/** The headline figure of a Level and the segments of its bar. */
-function levelHeadline(level: CisLevelReadiness) {
-  const headline = headlineRate(level)
+/**
+ * The headline figure of a Level and the segments of its bar. The rate, its basis label and the
+ * exclusions come from levelHeadline, the function every CIS view uses, so the PDF shows the
+ * numbers of the CIS page.
+ */
+function levelFigure(level: CisLevelReadiness) {
+  const headline = levelHeadline(level)
+  const named = { ...headline, label: `Level ${level.level} ${headline.label.toLowerCase()}`, withExclusions: exclusionsText(headline) }
   if (headline.basis === 'recommendations') {
     const totals = recommendationTotals(level.recommendations)
     const assessed = totals.passed + totals.failed + totals.review
-    return { ...headline, label: `Level ${level.level} recommendation pass rate`, total: assessed, segments: [
+    return { ...named, total: assessed, segments: [
       { value: totals.passed, color: CHECK_RESULT_COLORS.matches }, { value: totals.failed, color: CHECK_RESULT_COLORS.missing }, { value: totals.review, color: CHECK_RESULT_COLORS.different },
     ] }
   }
-  return { ...headline, label: `Level ${level.level} pass rate`, total: level.assessedSettings, segments: [
+  return { ...named, total: level.assessedSettings, segments: [
     { value: level.present, color: CHECK_RESULT_COLORS.matches }, { value: level.different, color: CHECK_RESULT_COLORS.different }, { value: level.missing, color: CHECK_RESULT_COLORS.missing }, { value: level.review, color: SLATE },
   ] }
 }
@@ -651,7 +656,7 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
   })
   const tenant = context.tenantName ? `${context.tenantName} (${context.tenantId})` : context.tenantId
   const benchmark = summary.benchmarkName ? `${summary.benchmarkName} (${summary.benchmark})` : summary.benchmark
-  const headlines = summary.levels.map(levelHeadline)
+  const headlines = summary.levels.map(levelFigure)
   const first = headlines[0]
   drawCover(layout, {
     eyebrow: 'CIS readiness report', title, subtitle: [summary.benchmarkName ? summary.benchmark : '', summary.version ? `Version ${summary.version}` : ''].filter(Boolean).join(' | '),
@@ -659,7 +664,7 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
     tenant: context.tenantName ?? context.tenantId,
     facts: [['Assessed', formatReportDate(context.assessedAt)], ['Exported', formatReportDate(context.exportedAt)]],
     ring: first?.rate ?? 0,
-    donuts: (summary.levels.length ? summary.levels.slice(0, 2) : []).map((level, index) => ({ segments: headlines[index]!.segments, total: headlines[index]!.total, value: headlines[index]!.rate === null ? 'n/a' : `${Math.round(headlines[index]!.rate! * 100)}%`, label: summary.levels.length > 1 ? `Level ${level.level}` : undefined })),
+    donuts: (summary.levels.length ? summary.levels.slice(0, 2) : []).map((level, index) => ({ segments: headlines[index]!.segments, total: headlines[index]!.total, value: headlines[index]!.rate === null ? 'n/a' : formatRate(headlines[index]!.rate), label: summary.levels.length > 1 ? `Level ${level.level}` : undefined })),
     donutCount: summary.levels.length === 1 ? `Level ${summary.levels[0]!.level}` : undefined,
     donutCaption: 'Headline pass rate per Level', donutSub: 'Over assessed items only; manual recommendations are not assessed',
     glance: summary.levels.slice(0, 3).flatMap((level, index) => [
@@ -692,10 +697,12 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
   summary.levels.forEach((level, index) => {
     const headline = headlines[index]!
     const deviating = level.different + level.missing + level.review
+    const unassigned = unassignedText(level)
     hero(layout, {
-      value: headline.rate === null ? 'n/a' : `${Math.round(headline.rate * 100)}%`, label: headline.label,
+      value: headline.rate === null ? 'n/a' : formatRate(headline.rate), label: headline.label,
       lead: levelCheckSummary(level, product),
-      lines: [`${level.present} of ${level.assessedSettings} assessed settings conform; ${deviating} deviate.`, `Adjusted for accepted exceptions: ${percent(headline.adjusted)}.`],
+      // The settings figures stay counts; the rate with exclusions sits next to the raw headline.
+      lines: [`Settings: ${level.present} of ${level.assessedSettings} present; ${deviating} deviate.`, ...(headline.withExclusions ? [`${headline.withExclusions}, exclusions as of ${headline.exclusionsAsOf}.`] : []), ...(unassigned ? [unassigned] : [])],
       bar: { segments: headline.segments.slice(0, 1), total: headline.total },
     })
   })
@@ -714,23 +721,24 @@ function levelSection(layout: Layout, summary: CisReadinessSummary, level: CisLe
   const caption = `Level ${level.level} readiness`
   const deviating = level.different + level.missing + level.review
   layout.pageTitle(`Level ${level.level}`, caption)
-  const rate = level.recommendations?.length
-    ? { label: 'Recommendation pass rate', value: percent(level.recommendationPassRate ?? null) }
-    : { label: 'Pass rate', value: percent(level.passRate) }
+  const head = levelHeadline(level)
+  const withExclusions = exclusionsText(head)
   kpiRow(layout, [
     { label: 'Assessed settings', value: String(level.assessedSettings), caption: 'pack settings compared', marker: 'outline', markerColor: SLATE, valueColor: theme.strong },
     { label: 'Conforming', value: String(level.present), caption: 'present with the recommended value', marker: 'filled', markerColor: CHECK_RESULT_COLORS.matches, valueColor: level.present ? TONES.good.text : PALETTE.faint },
     { label: 'Deviating', value: String(deviating), caption: `different ${level.different}, missing ${level.missing}, review ${level.review}`, marker: 'half', markerColor: CHECK_RESULT_COLORS.different, valueColor: deviating ? TONES.warn.text : PALETTE.faint },
-    { label: rate.label, value: rate.value, caption: `adjusted ${percent(level.recommendations?.length ? level.adjustedRecommendationPassRate ?? null : level.adjustedPassRate ?? null)}`, marker: 'filled', markerColor: theme.accent, valueColor: theme.strong },
+    { label: head.label, value: formatRate(head.rate), caption: withExclusions ?? 'no exclusions in use', marker: 'filled', markerColor: theme.accent, valueColor: theme.strong },
   ])
   layout.heading('Figures', { keep: 30 })
   facts(layout, [
     { label: 'Assessed settings', value: String(level.assessedSettings) },
     { label: 'Conforming', value: String(level.present) },
     { label: 'Deviating', value: `${deviating} (different ${level.different}, missing ${level.missing}, review ${level.review})` },
-    { label: 'Excepted', value: String(level.excepted ?? 0) },
-    { label: 'Pass rate', value: percent(level.passRate) },
-    { label: 'Adjusted pass rate', value: percent(level.adjustedPassRate ?? null) },
+    { label: head.label, value: formatRate(head.rate) },
+    { label: 'With exclusions', value: withExclusions ?? 'No exclusions in use' },
+    { label: 'Excluded from score', value: String(head.exclusions) },
+    { label: 'Exclusions as of', value: head.exclusionsAsOf },
+    { label: 'Present in unassigned policies', value: level.presentInUnassigned === null ? 'Not recorded' : `${level.presentInUnassigned} of ${level.present}` },
     { label: 'Assessed automated', value: String(level.assessedAutomated ?? 'not computable without a denominator list') },
     { label: 'Enumerated', value: String(level.enumerated) },
     { label: 'Not assessed identifiers', value: String(level.notAssessed.length) },
@@ -762,8 +770,6 @@ function levelSection(layout: Layout, summary: CisReadinessSummary, level: CisLe
     const totals = recommendationTotals(level.recommendations)
     layout.heading(`Recommendation results, Level ${level.level}`, { toc: true, keep: 30 })
     facts(layout, [
-      { label: 'Recommendation pass rate', value: percent(level.recommendationPassRate ?? null) },
-      { label: 'Adjusted recommendation pass rate', value: percent(level.adjustedRecommendationPassRate ?? null) },
       { label: 'Passed', value: String(totals.passed) },
       { label: 'Failed', value: String(totals.failed) },
       { label: 'To review', value: String(totals.review) },

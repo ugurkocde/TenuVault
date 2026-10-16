@@ -149,12 +149,12 @@ describe("trendSummaryText", () => {
 
   it("names every level present in the latest point", () => {
     const text = trendSummaryText({ assessedAt: "2026-10-14T00:00:00.000Z", levels: [{ level: 1, passRate: 0.687 }, { level: 2, passRate: 0.41 }] }, 3, formatDate)
-    expect(text).toBe("Trend: Level 1 68.7%, Level 2 41.0% on Oct 14, 2026, 3 assessments")
+    expect(text).toBe("Trend: Level 1 68.7%, Level 2 41% on Oct 14, 2026, 3 assessments")
   })
 
   it("uses only the levels present in that point", () => {
     const text = trendSummaryText({ assessedAt: "2026-10-14T00:00:00.000Z", levels: [{ level: 2, passRate: 0.41 }] }, 1, formatDate)
-    expect(text).toBe("Trend: Level 2 41.0% on Oct 14, 2026, first assessment")
+    expect(text).toBe("Trend: Level 2 41% on Oct 14, 2026, first assessment")
   })
 
   it("returns not available when there is no point", () => {

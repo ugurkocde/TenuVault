@@ -2,7 +2,7 @@ import { computeCoverage, type DenominatorEntry, type DenominatorSource } from "
 import { manualItemsForLevel, MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDATIONS_URL, type ManualItemView, type RecommendationList } from "./cis-manual"
 import type { KitLevel, KitPack } from "./cis-kit"
 import type { Assessment, BaselinePolicy } from "./policies"
-import { exceptionKey, isActive, type CisException } from "./cis-exceptions"
+import { appliesOn, exceptionKey, isActive, localDate, type CisException } from "./cis-exceptions"
 import { recommendationResults, type RecommendationResult } from "./cis-recommendations"
 
 export const MANUAL_NOT_ASSESSED_NOTE = "Manual recommendations are not assessed by this view."
@@ -20,8 +20,19 @@ export interface CisLevelReadiness {
   review: number
   passRate: number | null
   excepted: number
+  /**
+   * The exclusions that count toward this Level's headline, the single source for every count,
+   * badge, export and tag: applying on this Level's as-of date and, on the settings basis,
+   * covering a non-Present finding of this Level's policies, or, on the recommendation basis,
+   * covering an open finding of this Level's recommendations, whatever the policy Level of that
+   * finding (each exception keeps its own policy Level).
+   */
   exceptions: CisException[]
   adjustedPassRate: number | null
+  /** The date exclusions were judged on, as YYYY-MM-DD; see readinessFor. */
+  exclusionsAsOf: string
+  /** Present settings whose every observed policy is unassigned; null when the assessment holds no targeting evidence for them. */
+  presentInUnassigned: number | null
   /** Enumerated identifiers that the denominator list marks automated; null without a denominator list. */
   assessedAutomated: number | null
   /** Distinct recommendation identifiers named in the pack policy descriptions of this Level. */
@@ -55,6 +66,77 @@ export function headlineRate(level: Pick<CisLevelReadiness, "passRate" | "adjust
   return level.recommendations?.length
     ? { basis: "recommendations", rate: level.recommendationPassRate ?? null, adjusted: level.adjustedRecommendationPassRate ?? null }
     : { basis: "settings", rate: level.passRate, adjusted: level.adjustedPassRate }
+}
+
+/** The name of the headline rate, the same in every view and export. */
+export function headlineLabel(basis: "recommendations" | "settings"): "Recommendation pass rate" | "Settings pass rate" {
+  return basis === "recommendations" ? "Recommendation pass rate" : "Settings pass rate"
+}
+
+/** A rate in percent with one decimal, as every CIS view and export shows it; null stays null. */
+export function ratePercent(rate: number | null): number | null {
+  return rate === null ? null : Math.round(rate * 1000) / 10
+}
+
+/** A rate as text with its unit, or Not available. */
+export function formatRate(rate: number | null): string {
+  const value = ratePercent(rate)
+  return value === null ? "Not available" : `${value}%`
+}
+
+export interface CisHeadline {
+  basis: "recommendations" | "settings"
+  label: "Recommendation pass rate" | "Settings pass rate"
+  /** The raw measured rate: the headline everywhere. */
+  rate: number | null
+  /** The rate with the exclusions in use counted as passed; null when no exclusion is in use. */
+  adjusted: number | null
+  /** Exclusions that count toward this headline. */
+  exclusions: number
+  /** Their ids, to count an exclusion once where several headlines use it. */
+  exceptionIds: string[]
+  exclusionsAsOf: string
+}
+
+/**
+ * The one headline of a Level that every view and export shows: the raw rate on the headline
+ * basis, and next to it the rate with exclusions when any exclusion is in use. The count of
+ * exclusions is the number of exclusions in use, the same count as "Excluded from score".
+ */
+export function levelHeadline(level: Pick<CisLevelReadiness, "passRate" | "adjustedPassRate" | "recommendations" | "recommendationPassRate" | "adjustedRecommendationPassRate" | "exceptions" | "exclusionsAsOf">): CisHeadline {
+  const head = headlineRate(level)
+  const counted = headlineExceptions(level)
+  const exclusions = counted.length
+  return { basis: head.basis, label: headlineLabel(head.basis), rate: head.rate, adjusted: exclusions && head.adjusted !== null ? head.adjusted : null, exclusions, exceptionIds: counted.map(exception => exception.id), exclusionsAsOf: level.exclusionsAsOf }
+}
+
+/** How many distinct exclusions several headlines use together: one exclusion can count toward two Levels. */
+export function distinctExclusions(heads: readonly Pick<CisHeadline, "exceptionIds">[]): number {
+  return new Set(heads.flatMap(head => head.exceptionIds)).size
+}
+
+/** The exclusions that count toward a Level's headline, as measure decided them once; see CisLevelReadiness.exceptions. */
+export function headlineExceptions(level: Pick<CisLevelReadiness, "exceptions">): CisException[] {
+  return level.exceptions ?? []
+}
+
+/**
+ * "X% with N exclusions" next to the headline, or null when no exclusion is in use. On the
+ * recommendation basis a recommendation is only credited when every failing setting it names is
+ * excluded; when the exclusions in use credit none, the rate would not move, so the text says
+ * that instead of repeating the raw rate.
+ */
+export function exclusionsText(head: Pick<CisHeadline, "basis" | "rate" | "adjusted" | "exclusions">): string | null {
+  if (head.adjusted === null || !head.exclusions) return null
+  const count = `${head.exclusions} ${head.exclusions === 1 ? "exclusion" : "exclusions"}`
+  if (head.basis === "recommendations" && head.adjusted === head.rate) return `${count}, no recommendation fully excluded`
+  return `${formatRate(head.adjusted)} with ${count}`
+}
+
+/** The line that says how many Present settings sit only in unassigned policies; null without targeting evidence. */
+export function unassignedText(level: Pick<CisLevelReadiness, "present" | "presentInUnassigned">): string | null {
+  if (level.presentInUnassigned === null) return null
+  return `${level.presentInUnassigned} of ${level.present} present ${level.present === 1 ? "setting is" : "settings are"} in unassigned policies. CIS checks configuration; Governance scores count assigned policies only.`
 }
 
 /**
@@ -152,20 +234,42 @@ function textOf(policy: BaselinePolicy, key: string): string {
   return typeof value === "string" ? value : ""
 }
 
+/** The benchmark and version a pack is read as, and the recommendation list that applies to it. */
+function packIdentity(policies: BaselinePolicy[], recommendationList?: RecommendationList): { benchmark: string; version: string; effectiveList: RecommendationList | undefined } {
+  const policyBenchmark = policies.map(policy => textOf(policy, "benchmark")).find(Boolean)
+  const policyVersion = policies.map(policy => textOf(policy, "version")).find(Boolean)
+  const listMatches = !recommendationList || ((!policyBenchmark || recommendationList.benchmark === policyBenchmark) && (!policyVersion || recommendationList.version === policyVersion))
+  const effectiveList = listMatches ? recommendationList : undefined
+  return { benchmark: policyBenchmark ?? effectiveList?.benchmark ?? "unknown", version: policyVersion ?? effectiveList?.version ?? "", effectiveList }
+}
+
+/** The benchmark, version and catalog name a pack is assessed as, as cisReadiness reads them. */
+export function packBenchmark(policies: BaselinePolicy[], recommendationList?: RecommendationList): { benchmark: string; version: string; benchmarkName: string | null } {
+  const { benchmark, version } = packIdentity(policies, recommendationList)
+  return { benchmark, version, benchmarkName: policies.map(policy => textOf(policy, "benchmarkName")).find(Boolean) ?? null }
+}
+
 /**
  * Readiness per benchmark and Level from one assessment of an imported pack.
  * Pass rate is over assessed settings only. Coverage and the assessed automated
  * count are present only when an authoritative denominator list was supplied;
  * identifiers in that list that the pack does not enumerate are listed as not
- * assessed.
+ * assessed. Exceptions active on todayISO (default: today on this device) apply.
+ * Views of saved assessments use readinessFor, which chooses the date per Level.
  */
 export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[], denominator?: DenominatorEntry[], recommendationList?: RecommendationList, exceptions?: CisException[], todayISO?: string): CisReadinessSummary {
-  const policyBenchmark = policies.map(policy => textOf(policy, "benchmark")).find(Boolean)
-  const policyVersion = policies.map(policy => textOf(policy, "version")).find(Boolean)
-  const listMatches = !recommendationList || ((!policyBenchmark || recommendationList.benchmark === policyBenchmark) && (!policyVersion || recommendationList.version === policyVersion))
-  const effectiveList = listMatches ? recommendationList : undefined
-  const benchmark = policyBenchmark ?? effectiveList?.benchmark ?? "unknown"
-  const version = policyVersion ?? effectiveList?.version ?? ""
+  const today = localDate(todayISO ?? new Date())
+  return measure(assessment, policies, denominator, recommendationList, exceptions ?? [], () => today)
+}
+
+/**
+ * Readiness with every stored exception and the as-of date of each Level's headline. This is the
+ * one place that decides which exclusions count toward a headline: each Level judges every
+ * exception on its own as-of date, so a recommendation of one Level never credits an exclusion
+ * dated after its headline, even when the setting sits in a policy of another Level.
+ */
+function measure(assessment: Assessment, policies: BaselinePolicy[], denominator: DenominatorEntry[] | undefined, recommendationList: RecommendationList | undefined, stored: CisException[], asOf: (level: KitLevel) => string): CisReadinessSummary {
+  const { benchmark, version, effectiveList } = packIdentity(policies, recommendationList)
   const effectiveDenominator = denominator ?? (effectiveList ? effectiveList.items.map(item => ({ identifier: item.identifier, level: item.level, automated: item.automated })) : undefined)
   const packsByLevel = new Map<KitLevel, KitPack>()
   for (const policy of policies) {
@@ -180,12 +284,11 @@ export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[],
   if (!packsByLevel.size && effectiveList) for (const level of allLevels) packsByLevel.set(level, { benchmark, version, level, reference: `${benchmark} ${version} Level ${level}`.trim(), policies: [] })
   const coverage = computeCoverage({ benchmark, version, packs: [...packsByLevel.values()], ...(effectiveDenominator ? { denominator: effectiveDenominator } : {}) })
   const coverageByLevel = new Map(coverage.levels.map(level => [level.level, level]))
-  const today = todayISO ?? new Date().toISOString().slice(0, 10)
-  // Active exceptions by identity, to judge recommendations whose findings sit at any Level.
-  const activeExceptionKeys = new Set((exceptions ?? []).filter(exception => isActive(exception, today) && exception.benchmark === benchmark && exception.version === version)
-    .map(exception => exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId)))
+  const own = stored.filter(exception => exception.benchmark === benchmark && exception.version === version)
+  const keyOf = (exception: CisException) => exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId)
   const findingByKey = new Map(assessment.findings.map(finding => [finding.key, finding]))
-  const findingExcepted = (finding: Assessment["findings"][number]) => activeExceptionKeys.has(exceptionKey(benchmark, version, policies[finding.policyIndex] ? levelOf(policies[finding.policyIndex]!) : 1, finding.policyName, finding.settingId))
+  // A finding's exception identity uses the Level of the policy that holds it.
+  const findingKey = (finding: Assessment["findings"][number]) => exceptionKey(benchmark, version, policies[finding.policyIndex] ? levelOf(policies[finding.policyIndex]!) : 1, finding.policyName, finding.settingId)
   const recommendationLevel = new Map(recommendations.map(result => [result.id, result.level] as const))
   const levels: CisLevelReadiness[] = [...allLevels].sort((a, b) => a - b).map(level => {
     const indexes = new Set(policies.map((policy, index) => levelOf(policy) === level ? index : -1).filter(index => index >= 0))
@@ -198,18 +301,33 @@ export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[],
     // Exceptions never change the raw status counts. The excepted count is the
     // number of non-Present findings covered by an active exception for this
     // level, and adjustedPassRate counts those findings as passed.
+    // Every exception is judged on this Level's as-of date, the date of the headline it affects.
+    const date = asOf(level)
+    const applicableByKey = new Map(own.filter(exception => appliesOn(exception, date)).map(exception => [keyOf(exception), exception] as const))
+    const findingExcepted = (finding: Assessment["findings"][number]) => applicableByKey.has(findingKey(finding))
     const findingKeys = new Set(findings.filter(finding => finding.status !== "Present").map(finding => exceptionKey(benchmark, version, level, finding.policyName, finding.settingId)))
-    const levelExceptions = (exceptions ?? []).filter(exception => isActive(exception, today) && exception.level === level && exception.benchmark === benchmark && exception.version === version && findingKeys.has(exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId)))
-    const exceptedKeys = new Set(levelExceptions.map(exception => exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId)))
+    const levelExceptions = [...applicableByKey.values()].filter(exception => exception.level === level && findingKeys.has(keyOf(exception)))
+    const exceptedKeys = new Set(levelExceptions.map(keyOf))
+    const levelRecommendations = recommendations.filter(result => result.level === level)
+    // On the recommendation basis the exclusions on the open findings of this Level's recommendations count, wherever those findings sit.
+    const recommendationExceptions = [...new Map(levelRecommendations.flatMap(result => result.settings.flatMap(setting => setting.findingKeys))
+      .map(key => findingByKey.get(key)).filter(finding => finding && finding.status !== "Present")
+      .map(finding => applicableByKey.get(findingKey(finding!))).filter((exception): exception is CisException => !!exception)
+      .map(exception => [exception.id, exception] as const)).values()]
     const excepted = findings.filter(finding => finding.status !== "Present" && exceptedKeys.has(exceptionKey(benchmark, version, level, finding.policyName, finding.settingId))).length
+    // CIS counts settings in unassigned policies as Present; this says how many of them there are.
+    const presentFindings = findings.filter(finding => finding.status === "Present")
+    const withTargeting = presentFindings.some(finding => finding.observed.some(observation => observation.targeting))
     return {
       benchmark, version, level,
       assessedSettings: findings.length,
       present: count("Present"), different: count("Different"), missing: count("Missing"), review: count("Review"),
       passRate: findings.length ? count("Present") / findings.length : null,
       excepted,
-      exceptions: levelExceptions,
+      exceptions: levelRecommendations.length ? recommendationExceptions : levelExceptions,
       adjustedPassRate: findings.length ? (count("Present") + excepted) / findings.length : null,
+      exclusionsAsOf: date,
+      presentInUnassigned: withTargeting ? presentFindings.filter(finding => finding.observed.length > 0 && finding.observed.every(observation => observation.targeting?.state === "unassigned")).length : null,
       // Without a denominator list an enumerated identifier cannot be told apart from a manual
       // recommendation or one of another profile, so no automated count is claimed.
       assessedAutomated: cov && cov.denominatorSource !== "none" ? cov.numerator : null,
@@ -226,7 +344,7 @@ export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[],
       // Credit by exception is judged on the recommendation's own failing settings: each one is
       // covered when every non-Present finding whose root holds it has an active exception.
       // Failures of unrelated sibling settings in the same root neither block nor grant credit.
-      ...recommendationRates(recommendations.filter(result => result.level === level), result => {
+      ...recommendationRates(levelRecommendations, result => {
         // A setting outside the pack can never be shown to pass, so it rules out credit by exception.
         if (result.settings.some(setting => setting.status === "Unmapped")) return false
         const failing = result.settings.filter(setting => setting.status === "Missing" || setting.status === "Different" || setting.status === "Review")
@@ -239,4 +357,133 @@ export function cisReadiness(assessment: Assessment, policies: BaselinePolicy[],
   })
   const benchmarkName = policies.map(policy => textOf(policy, "benchmarkName")).find(Boolean) ?? null
   return { benchmark, benchmarkName, version, levels, manualNote: MANUAL_NOT_ASSESSED_NOTE, manualFallback: MANUAL_RECOMMENDATIONS_FALLBACK, manualFallbackUrl: MANUAL_RECOMMENDATIONS_URL, ...(effectiveList ? { recommendationList: effectiveList } : {}) }
+}
+
+export interface CisReadinessEntry {
+  assessment: Assessment
+  policies: BaselinePolicy[]
+}
+
+export interface CisReadinessWorkspace {
+  history: CisReadinessEntry[]
+  recommendationList?: RecommendationList
+  exceptions?: CisException[]
+}
+
+function timeOf(entry: CisReadinessEntry): number {
+  const time = Date.parse(entry.assessment.assessedAt)
+  return Number.isFinite(time) ? time : Number.NEGATIVE_INFINITY
+}
+
+/**
+ * The one order of saved assessments every CIS view uses, oldest first: by assessment time,
+ * then by run id when two runs share a timestamp. "Newest" anywhere means last in this order.
+ */
+export function compareAssessments(a: CisReadinessEntry, b: CisReadinessEntry): number {
+  return timeOf(a) - timeOf(b) || a.assessment.runId.localeCompare(b.assessment.runId)
+}
+
+/** The Levels a saved assessment measures: those of its pack policies and of the recommendations they carry. */
+function packLevels(policies: BaselinePolicy[]): Set<KitLevel> {
+  return new Set([...policies.map(levelOf), ...policies.flatMap(policy => (policy.recommendations ?? []).map(item => item.level))])
+}
+
+/**
+ * The date the exclusions of one Level of a saved assessment are judged on. The newest saved
+ * assessment of a benchmark, version and Level, and an assessment that is not saved yet, use
+ * today: what the admin excludes now shows at once. An older assessment uses its own assessment
+ * date, so its trend point keeps the score it had. The same assessment gets the same date in
+ * every view at the same moment.
+ */
+export function exclusionsAsOf(entry: CisReadinessEntry, workspace: CisReadinessWorkspace, level: KitLevel, todayISO: string = localDate()): string {
+  const { benchmark, version } = packIdentity(entry.policies, workspace.recommendationList)
+  const newer = workspace.history.some(other => other.assessment.runId !== entry.assessment.runId && compareAssessments(other, entry) > 0 && packLevels(other.policies).has(level) && (() => {
+    const identity = packIdentity(other.policies, workspace.recommendationList)
+    return identity.benchmark === benchmark && identity.version === version
+  })())
+  return newer ? localDate(entry.assessment.assessedAt) : todayISO
+}
+
+/**
+ * Readiness of one saved assessment with the one exclusion rule every CIS view uses: the CIS
+ * page headline, the Level summary, the exclusions panel, the trend, the portfolio, the
+ * Governance CIS card, the readiness CSV and JSON and the PDF. Per Level, an exception counts
+ * when it applies on the as-of date of exclusionsAsOf: created on or before that date and not
+ * expired by then. Raw rates never change; exclusions only add the rate with exclusions.
+ */
+export function readinessFor(entry: CisReadinessEntry, workspace: CisReadinessWorkspace, todayISO: string = localDate(), denominator?: DenominatorEntry[]): CisReadinessSummary {
+  const dates = new Map<KitLevel, string>()
+  const asOf = (level: KitLevel) => {
+    let date = dates.get(level)
+    if (date === undefined) dates.set(level, date = exclusionsAsOf(entry, workspace, level, todayISO))
+    return date
+  }
+  return measure(entry.assessment, entry.policies, denominator, workspace.recommendationList, workspace.exceptions ?? [], asOf)
+}
+
+export type ListedExceptionState = "in-use" | "expired" | "later" | "present" | "unscored" | "absent" | "version" | "benchmark"
+
+export interface ListedException {
+  exception: CisException
+  state: ListedExceptionState
+  /** Why a stored exception does not count for this assessment; null when it is in use. */
+  note: string | null
+  /** The Levels of this assessment whose headline counts it. */
+  usedHere: KitLevel[]
+  /** Other current headlines that count it, as given by the caller. */
+  usedElsewhere: string[]
+}
+
+export interface ListedExceptionGroup {
+  benchmark: string
+  /** True for the benchmark of the assessment on screen, listed first. */
+  current: boolean
+  levels: { level: KitLevel; items: ListedException[] }[]
+}
+
+/**
+ * Every stored exception of the workspace, grouped by benchmark with the assessed benchmark
+ * first, then by Level, with whether it counts for this assessment. All of them share the
+ * exception limit, so exceptions that do not count stay listed and removable, including those of
+ * benchmarks with no saved assessment left; they would apply again if the setting regressed.
+ */
+export function listedExceptions(summary: CisReadinessSummary, assessment: Assessment, policies: BaselinePolicy[], exceptions: CisException[] | undefined, todayISO: string = localDate(), usedElsewhere: ReadonlyMap<string, string[]> = new Map()): ListedExceptionGroup[] {
+  const inUse = new Set(summary.levels.flatMap(level => headlineExceptions(level).map(exception => exception.id)))
+  const usedHere = (id: string) => summary.levels.filter(level => headlineExceptions(level).some(exception => exception.id === id)).map(level => level.level)
+  const statusByKey = new Map<string, Assessment["findings"][number]["status"][]>()
+  for (const finding of assessment.findings) {
+    const policy = policies[finding.policyIndex]
+    if (!policy) continue
+    const key = exceptionKey(summary.benchmark, summary.version, levelOf(policy), finding.policyName, finding.settingId)
+    statusByKey.set(key, [...(statusByKey.get(key) ?? []), finding.status])
+  }
+  const groups = new Map<string, Map<KitLevel, ListedException[]>>([[summary.benchmark, new Map(summary.levels.map(level => [level.level, []]))]])
+  for (const exception of exceptions ?? []) {
+    const current = exception.benchmark === summary.benchmark
+    const asOf = summary.levels.find(level => level.level === exception.level)?.exclusionsAsOf ?? todayISO
+    const statuses = statusByKey.get(exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId)) ?? []
+    const [state, note]: [ListedExceptionState, string | null] = inUse.has(exception.id) ? ["in-use", null]
+      : !current ? ["benchmark", "Not used by this assessment"]
+      : exception.version !== summary.version ? ["version", `Not in use: version ${exception.version}`]
+      : !isActive(exception, asOf) ? ["expired", "Expired"]
+      : localDate(exception.createdAt) > asOf ? ["later", "Not in use: added after this assessment"]
+      : statuses.length && statuses.every(status => status === "Present") ? ["present", asOf === todayISO ? "Not in use: setting currently present" : "Not in use: setting present in this assessment"]
+      : statuses.length ? ["unscored", "Not in use: setting not in a recommendation"]
+      : ["absent", "Not in use: setting not in this assessment"]
+    const levels = groups.get(exception.benchmark) ?? new Map<KitLevel, ListedException[]>()
+    const elsewhere = usedElsewhere.get(exception.id) ?? []
+    // An exclusion another current headline counts says so instead of a reason it is unused.
+    const shown = state !== "in-use" && elsewhere.length ? `Not used by this assessment. Used by ${elsewhere.join(", ")}` : note
+    levels.set(exception.level, [...(levels.get(exception.level) ?? []), { exception, state, note: shown, usedHere: usedHere(exception.id), usedElsewhere: elsewhere }])
+    groups.set(exception.benchmark, levels)
+  }
+  return [...groups].map(([benchmark, levels]) => ({ benchmark, current: benchmark === summary.benchmark, levels: [...levels].sort(([a], [b]) => a - b).map(([level, items]) => ({ level, items })) }))
+    .sort((a, b) => Number(b.current) - Number(a.current) || a.benchmark.localeCompare(b.benchmark))
+}
+
+/** Keys of the findings an exclusion in use covers: they show an Excluded badge in the findings list. */
+export function excludedFindingKeys(summary: CisReadinessSummary, assessment: Assessment, policies: BaselinePolicy[]): Set<string> {
+  const inUse = new Set(summary.levels.flatMap(level => headlineExceptions(level).map(exception => exceptionKey(exception.benchmark, exception.version, exception.level, exception.policyName, exception.settingId))))
+  return new Set(assessment.findings.filter(finding => finding.status !== "Present" && policies[finding.policyIndex]
+    && inUse.has(exceptionKey(summary.benchmark, summary.version, levelOf(policies[finding.policyIndex]!), finding.policyName, finding.settingId))).map(finding => finding.key))
 }

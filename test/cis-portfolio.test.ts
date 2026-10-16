@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { cisPortfolioRows, type CisPortfolioEntry, type CisPortfolioHistoryEntry } from "../src/shared/frameworks/cis-portfolio"
+import { cisPortfolioRows, portfolioBenchmarks, portfolioRate, type CisPortfolioEntry, type CisPortfolioHistoryEntry } from "../src/shared/frameworks/cis-portfolio"
 import { convertKit, type KitFile } from "../src/shared/frameworks/cis-kit"
 import type { Assessment, BaselinePolicy, Finding } from "../src/shared/frameworks/policies"
 import type { CisException } from "../src/shared/frameworks/cis-exceptions"
@@ -141,11 +141,13 @@ describe("cisPortfolioRows", () => {
     expect(reversed[0]?.assessedAt).toBe("2026-03-01T00:00:00.000Z")
   })
 
-  it("keeps the first occurrence when assessedAt ties", () => {
+  it("breaks an assessedAt tie by run id, the order every CIS view uses, whatever the storage order", () => {
     const first = historyEntry("run-first", tenantA, "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"])
     const second = historyEntry("run-second", tenantA, "2026-01-01T00:00:00.000Z", ["Missing", "Missing", "Missing"])
-    const rows = cisPortfolioRows([entry(tenantA, "Alpha Tenant", [first, second])])
-    expect(rows[0]?.levels.find(level => level.level === 1)?.passRate).toBe(1)
+    for (const history of [[first, second], [second, first]]) {
+      const rows = cisPortfolioRows([entry(tenantA, "Alpha Tenant", history)])
+      expect(rows[0]?.levels.find(level => level.level === 1)?.passRate).toBe(0)
+    }
   })
 
   it("preserves a per tenant error row and ranks it with the not assessed rows", () => {
@@ -159,7 +161,7 @@ describe("cisPortfolioRows", () => {
     expect(rows[1]?.levels).toEqual([])
   })
 
-  it("uses the exceptions adjusted rate for ranking and reports excepted counts", () => {
+  it("ranks by the raw headline rate and shows the rate with exclusions next to it", () => {
     const exception: CisException = {
       id: "exc-1", benchmark: "fakebook-os", version: "9.9.9", level: 1,
       policyName: "Fakebook Beta", settingId: "fakebook_setting_beta",
@@ -169,12 +171,13 @@ describe("cisPortfolioRows", () => {
     const rows = cisPortfolioRows([
       entry(tenantA, "Alpha Tenant", [historyEntry("run-a", tenantA, "2026-01-01T00:00:00.000Z", ["Present", "Missing", "Present"])]),
       withException,
-    ])
-    expect(rows.map(row => row.tenantId)).toEqual([tenantB, tenantA])
-    const level1 = rows[0]?.levels.find(level => level.level === 1)
-    expect(level1?.passRate).toBe(0.5)
+    ], undefined, "2026-10-16")
+    // Both have a raw Level 1 rate of 50%; Level 2 decides. Exclusions never change the ranking.
+    expect(rows.map(row => row.tenantId)).toEqual([tenantA, tenantB])
+    const level1 = rows[1]?.levels.find(level => level.level === 1)
+    expect(portfolioRate(level1)).toBe(0.5)
     expect(level1?.excepted).toBe(1)
-    expect(level1?.adjustedPassRate).toBe(1)
+    expect(level1?.headline).toMatchObject({ label: "Settings pass rate", rate: 0.5, adjusted: 1, exclusions: 1 })
   })
 
   it("breaks rate ties by assessedAt descending, then tenant name", () => {
@@ -186,29 +189,43 @@ describe("cisPortfolioRows", () => {
     expect(rows.map(row => row.tenantId)).toEqual([tenantA, tenantB, tenantC])
   })
 
-  it("ignores an exception created after the assessment date", () => {
+  it("applies exclusions active today to the newest assessment, as the CIS page does", () => {
     const late: CisException = {
       id: "exc-late", benchmark: "fakebook-os", version: "9.9.9", level: 1,
       policyName: "Fakebook Beta", settingId: "fakebook_setting_beta",
       owner: "Ada Lovelace", reason: "Accepted later", expiresOn: "2027-01-01", createdAt: "2026-02-01T00:00:00.000Z",
     }
     const hist = historyEntry("run-b", tenantB, "2026-01-01T00:00:00.000Z", ["Present", "Missing", "Missing"])
-    const rows = cisPortfolioRows([{ tenantId: tenantB, tenantName: "Bravo Tenant", workspace: { history: [hist], exceptions: [late] } }])
+    const rows = cisPortfolioRows([{ tenantId: tenantB, tenantName: "Bravo Tenant", workspace: { history: [hist], exceptions: [late] } }], undefined, "2026-10-16")
     const level1 = rows[0]?.levels.find(level => level.level === 1)
-    expect(level1?.excepted).toBe(0)
+    expect(level1?.excepted).toBe(1)
     expect(level1?.passRate).toBe(0.5)
-    expect(level1?.adjustedPassRate).toBe(0.5)
+    expect(level1?.headline).toMatchObject({ rate: 0.5, adjusted: 1, exclusions: 1, exclusionsAsOf: "2026-10-16" })
+    // On a day the exclusion has expired it no longer counts.
+    expect(cisPortfolioRows([{ tenantId: tenantB, tenantName: "Bravo Tenant", workspace: { history: [hist], exceptions: [late] } }], undefined, "2027-01-02")[0]?.levels[0]?.headline.exclusions).toBe(0)
   })
 
-  it("groups assessed rows by benchmark and version before ranking", () => {
-    const rows = cisPortfolioRows([
+  it("compares tenants on one benchmark and version, the one most tenants assessed by default", () => {
+    const entries = [
       entry(tenantB, "Bravo Tenant", [historyEntryFor("run-b", tenantB, "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"], "otherbook-os", "1.0.0")]),
       entry(tenantA, "Alpha Tenant", [historyEntryFor("run-a", tenantA, "2026-01-01T00:00:00.000Z", ["Missing", "Missing", "Missing"], "fakebook-os", "9.9.9")]),
-      entry(tenantC, "Charlie Tenant", [historyEntryFor("run-c", tenantC, "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"], "fakebook-os", "9.9.9")]),
-      entry(tenantD, "Delta Tenant", [historyEntryFor("run-d", tenantD, "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"], "fakebook-os", "8.0.0")]),
-    ])
-    expect(rows.map(row => row.tenantId)).toEqual([tenantD, tenantC, tenantA, tenantB])
-    expect(rows.map(row => `${row.benchmark}@${row.version}`)).toEqual(["fakebook-os@8.0.0", "fakebook-os@9.9.9", "fakebook-os@9.9.9", "otherbook-os@1.0.0"])
+      // Charlie's newest run is another benchmark; its newest run of the compared benchmark is used.
+      entry(tenantC, "Charlie Tenant", [
+        historyEntryFor("run-c-other", tenantC, "2026-03-01T00:00:00.000Z", ["Missing", "Missing", "Missing"], "otherbook-os", "1.0.0"),
+        historyEntryFor("run-c", tenantC, "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"], "fakebook-os", "9.9.9"),
+      ]),
+      entry(tenantD, "Delta Tenant", [
+        historyEntryFor("run-d-new", tenantD, "2026-02-01T00:00:00.000Z", ["Present", "Present", "Present"], "fakebook-os", "8.0.0"),
+        historyEntryFor("run-d", tenantD, "2026-01-01T00:00:00.000Z", ["Present", "Missing", "Present"], "fakebook-os", "9.9.9"),
+      ]),
+    ]
+    expect(portfolioBenchmarks(entries).map(item => [item.benchmark, item.version, item.tenants])).toEqual([["fakebook-os", "9.9.9", 3], ["otherbook-os", "1.0.0", 2], ["fakebook-os", "8.0.0", 1]])
+    const rows = cisPortfolioRows(entries)
+    expect(rows.map(row => row.tenantId)).toEqual([tenantC, tenantD, tenantA, tenantB])
+    expect(rows.map(row => row.assessedAt === null ? null : `${row.benchmark}@${row.version}`)).toEqual(["fakebook-os@9.9.9", "fakebook-os@9.9.9", "fakebook-os@9.9.9", null])
+    expect(rows[3]?.otherBenchmark).toBe(true)
+    const other = cisPortfolioRows(entries, { benchmark: "otherbook-os", version: "1.0.0" })
+    expect(other.map(row => [row.tenantId, row.assessedAt === null ? null : `${row.benchmark}@${row.version}`])).toEqual([[tenantB, "otherbook-os@1.0.0"], [tenantC, "otherbook-os@1.0.0"], [tenantA, null], [tenantD, null]])
   })
 
   it("deduplicates tenants by lowercased tenant id, keeping the first occurrence", () => {

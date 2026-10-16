@@ -82,7 +82,7 @@ describe("CIS readiness PDF report", () => {
     for (const expected of [
       "TenuVault", "CIS readiness report", "fakebook-os", "Contoso",
       "Level 1 readiness", "Level 2 readiness",
-      "Assessed settings 2", "Conforming 1", "Pass rate 50%",
+      "Assessed settings 2", "Conforming 1", "Settings pass rate 50%",
       "source: Authoritative denominator",
       "Not assessed identifiers 1", "7.1.3",
       "Manual recommendations, Level 1", "7.1.4",
@@ -153,7 +153,7 @@ describe("CIS readiness PDF report", () => {
     const tileFill = (bytes: Uint8Array) => /0\.96 0\.95 0\.95 rg/.test(pdfRaw(bytes))
     expect(tileFill(nativePdf)).toBe(true)
     expect(tileFill(cisPdf)).toBe(true)
-    for (const label of ["Assessed settings", "Conforming", "Deviating", "Pass rate"]) expect(cisText).toContain(label)
+    for (const label of ["Assessed settings", "Conforming", "Deviating", "Settings pass rate"]) expect(cisText).toContain(label)
   })
 })
 

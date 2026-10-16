@@ -4,7 +4,7 @@ import { featureCall } from "../../lib/feature-api"
 import { showFeaturePlanError } from "../../lib/plan-dialog"
 import { toast } from "../../lib/toast"
 import type { Assessment, BaselinePolicy } from "../../../shared/frameworks/policies"
-import { packBenchmarkName } from "../../../shared/frameworks/cis-display"
+import { packBenchmarkName, selectedDeviatingFindings } from "../../../shared/frameworks/cis-display"
 import { cachedCisCatalog } from "../../lib/cis-catalog-cache"
 import { deploymentReferenceLabel } from "./CisRemediationHistory"
 import { PATH, type Deployment } from "./api"
@@ -27,7 +27,7 @@ const button = "inline-flex h-10 items-center justify-center gap-2 rounded-full 
 /** `readOnly` marks saved results, whose findings cannot be selected until the assessment runs again. */
 export function CisRemediationPanel({ tenant, assessment, policies, reference, selectedKeys, onPlanned, readOnly = false }: { tenant: Tenant | undefined; assessment: Assessment; policies: BaselinePolicy[]; reference: string; selectedKeys: Set<string>; onPlanned: (deploymentId: string) => void; readOnly?: boolean }) {
   const [busy, setBusy] = useState(false)
-  const deviating = assessment.findings.filter((finding) => selectedKeys.has(finding.key) && (finding.status === "Different" || finding.status === "Missing"))
+  const deviating = selectedDeviatingFindings(assessment.findings, selectedKeys)
   const plan = async (whole: boolean) => {
     if (!tenant || readOnly) return
     setBusy(true)

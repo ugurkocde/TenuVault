@@ -17,11 +17,11 @@ export function CisCard({ card }: { card: CisScoreCard }) {
       <div className="flex flex-wrap gap-x-8 gap-y-3">
         {card.levels.map((level) => (
           <div key={level.level}>
-            <p className="text-sm text-gray-500">Level {level.level} {level.basis === "recommendations" ? "recommendation pass rate" : "pass rate"}</p>
+            <p className="text-sm text-gray-500">Level {level.level} {level.label.toLowerCase()}</p>
             <p className="text-gray-900 tabular-nums">
               <span className="text-4xl font-light tracking-tight">{level.rate === null ? "Not available" : `${level.rate}%`}</span>
-              {level.adjusted !== null && <span className="text-lg font-light text-gray-700">{" "}{level.adjusted}% with {level.exclusions} exclusion{level.exclusions === 1 ? "" : "s"}</span>}
             </p>
+            {level.withExclusions !== null && <p className="text-sm text-gray-700">{level.withExclusions}<span className="block text-xs text-gray-500">Exclusions as of {formatDate(`${level.exclusionsAsOf}T00:00:00`)}</span></p>}
           </div>
         ))}
         {card.levels.length === 0 && <p className="text-sm text-gray-600">No Level could be read from this assessment.</p>}

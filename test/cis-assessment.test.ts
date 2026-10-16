@@ -170,7 +170,8 @@ describe("CIS readiness", () => {
     const level1 = cisReadiness(assessment, policies).levels[0]!
     expect(level1).toMatchObject({ enumerated: 0, assessedAutomated: null, denominator: null, coverage: null, coverageSource: "none" })
     const csv = cisReadinessCsv(cisReadiness(assessment, policies))
-    expect(csv.split("\r\n")[1]).toContain("0,,0,,,")
+    // Enumerated 0, then no denominator, coverage or not assessed identifiers.
+    expect(csv.split("\r\n")[1]).toContain(",0,,,,Manual recommendations")
     // The CIS notice is part of every readiness export, also without a manual recommendation list.
     expect(csv).toContain("Not all recommendations from the CIS Benchmarks are included in this tool. Please refer to the CIS website to access the free CIS Benchmarks PDFs for manual assessment instructions. https://www.cisecurity.org/cis-benchmarks,Notice")
     expect(JSON.parse(cisReadinessJson(cisReadiness(assessment, policies), null, "2026-10-13T10:00:00Z"))).toMatchObject({ manualFallback: expect.stringContaining("Not all recommendations"), manualFallbackUrl: "https://www.cisecurity.org/cis-benchmarks" })
@@ -182,14 +183,17 @@ describe("CIS readiness", () => {
     expect(governanceExportName("cis-readiness", "Contoso", "2026-10-13T10:00:00Z")).toBe("cis-readiness-contoso-2026-10-13")
     const csv = cisReadinessCsv(summary)
     expect(csv.split("\r\n")[0]).toContain("Benchmark,Version,Level")
-    expect(csv.split("\r\n")[0]).toContain("Excepted")
-    expect(csv.split("\r\n")[0]).toContain("Adjusted pass rate")
+    expect(csv.split("\r\n")[0]).toContain("Headline,Pass rate (%),Pass rate with exclusions (%),Exclusions,Exclusions as of")
+    expect(csv.split("\r\n")[0]).toContain("Coverage (%)")
     expect(csv.split("\r\n")[0]).toContain("Exceptions")
-    expect(csv).toContain("fakebook-os,9.9.9,1,2,1,0,1,0,0.5,2,2,3,0.6666666666666666,7.1.3")
+    expect(csv.split("\r\n")[0]).not.toMatch(/Adjusted|Excepted/)
+    // One headline named by its basis, in percent, with the settings figures as counts only.
+    expect(csv).toMatch(/fakebook-os,9\.9\.9,1,Settings pass rate,50,,0,\d{4}-\d{2}-\d{2},2,1,0,1,0,[^,]*,2,2,3,66\.7,7\.1\.3/)
     expect(csv).toContain(MANUAL_NOT_ASSESSED_NOTE)
-    const json = JSON.parse(cisReadinessJson(summary, "Contoso", "2026-10-13T10:00:00Z")) as { benchmark: string; version: string; levels: Array<{ level: number; notAssessed: string[]; excepted: number; adjustedPassRate: number | null; exceptions: unknown[] }> }
+    const json = JSON.parse(cisReadinessJson(summary, "Contoso", "2026-10-13T10:00:00Z")) as { benchmark: string; version: string; levels: Array<Record<string, unknown>> }
     expect(json.benchmark).toBe("fakebook-os")
     expect(json.version).toBe("9.9.9")
-    expect(json.levels[0]).toMatchObject({ level: 1, notAssessed: ["7.1.3"], excepted: 0, adjustedPassRate: 0.5, exceptions: [] })
+    expect(json.levels[0]).toMatchObject({ level: 1, notAssessed: ["7.1.3"], headline: "Settings pass rate", passRatePercent: 50, passRateWithExclusionsPercent: null, exclusions: 0, coveragePercent: 66.7, exceptions: [] })
+    for (const field of ["passRate", "adjustedPassRate", "recommendationPassRate", "adjustedRecommendationPassRate", "excepted", "coverage"]) expect(json.levels[0]).not.toHaveProperty(field)
   })
 })

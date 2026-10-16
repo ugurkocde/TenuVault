@@ -158,13 +158,16 @@ describe("CIS readiness with exceptions", () => {
 })
 
 describe("CIS exceptions in the PDF report", () => {
-  it("lists the excepted count and active exception details", () => {
+  it("lists the exclusion count, the rate with exclusions and active exception details", () => {
     const { policies, assessment } = assessed()
     const summary = cisReadiness(assessment, policies, undefined, undefined, [makeException()], "2026-10-13")
     const text = pdfText(generateCisReadinessPDF(summary, { exportedAt: "2026-10-13T10:00:00.000Z", tenantName: "Contoso", tenantId, assessedAt: "2026-10-13T00:00:00.000Z", runId: "run-1" }))
     // Figures are printed as label and value pairs.
-    expect(text).toContain("Excepted 1")
-    expect(text).toContain("Adjusted pass rate 100%")
+    expect(text).toContain("Excluded from score 1")
+    expect(text).toContain("Settings pass rate 50%")
+    expect(text).toContain("With exclusions 100% with 1 exclusion")
+    expect(text).toContain("Exclusions as of 2026-10-13")
+    expect(text).not.toContain("Adjusted")
     expect(text).toContain("Accepted exceptions, Level 1")
     expect(text).toContain("Fakebook Beta")
     expect(text).toContain("fakebook_setting_beta")
@@ -174,22 +177,23 @@ describe("CIS exceptions in the PDF report", () => {
 })
 
 describe("CIS exceptions in governance exports", () => {
-  it("includes excepted, adjusted pass rate and active exception details in CSV and JSON", () => {
+  it("includes the exclusions, the rate with exclusions and active exception details in CSV and JSON", () => {
     const { policies, assessment } = assessed()
     const summary = cisReadiness(assessment, policies, undefined, undefined, [makeException()], "2026-10-13")
     const csv = cisReadinessCsv(summary)
-    expect(csv.split("\r\n")[0]).toContain("Excepted")
-    expect(csv.split("\r\n")[0]).toContain("Adjusted pass rate")
+    expect(csv.split("\r\n")[0]).toContain("Pass rate with exclusions (%),Exclusions,Exclusions as of")
     expect(csv.split("\r\n")[0]).toContain("Exceptions")
+    expect(csv.split("\r\n")[1]).toContain("Settings pass rate,50,100,1,2026-10-13,")
     expect(csv).toContain("Fakebook Beta")
     expect(csv).toContain("fakebook_setting_beta")
     expect(csv).toContain("Ada Lovelace")
     expect(csv).toContain("2027-01-01")
     expect(csv).toContain("Accepted risk for lab devices")
-    const json = JSON.parse(cisReadinessJson(summary, "Contoso", "2026-10-13T10:00:00Z")) as { levels: Array<{ level: number; excepted: number; adjustedPassRate: number | null; exceptions: Array<{ policyName: string; settingId: string; owner: string; expiresOn: string; reason: string }> }> }
+    const json = JSON.parse(cisReadinessJson(summary, "Contoso", "2026-10-13T10:00:00Z")) as { levels: Array<{ level: number; exclusions: number; passRateWithExclusionsPercent: number | null; exclusionsAsOf: string; exceptions: Array<{ policyName: string; settingId: string; owner: string; expiresOn: string; reason: string }> }> }
     const level1 = json.levels.find(level => level.level === 1)!
-    expect(level1.excepted).toBe(1)
-    expect(level1.adjustedPassRate).toBe(1)
+    expect(level1.exclusions).toBe(1)
+    expect(level1.passRateWithExclusionsPercent).toBe(100)
+    expect(level1.exclusionsAsOf).toBe("2026-10-13")
     expect(level1.exceptions).toEqual([{ policyName: "Fakebook Beta", settingId: "fakebook_setting_beta", owner: "Ada Lovelace", expiresOn: "2027-01-01", reason: "Accepted risk for lab devices" }])
   })
 })

@@ -159,6 +159,7 @@ function level(levelNumber: 1 | 2, extreme: boolean): CisLevelReadiness {
       { id: "ex-2", benchmark: "cis-windows-11-enterprise", version: "4.0.0", level: 1, policyName: "Contoso Windows Firewall", settingId: extreme ? LONG_ID : "device_vendor_msft_firewall_mdmstore_publicprofile_disableinboundnotifications", owner: "Grace Hopper", reason: "Accepted risk for the build agents. ".repeat(extreme ? 20 : 3), expiresOn: "2026-12-15", createdAt: "2026-09-02T10:00:00Z" },
     ] : [],
     adjustedPassRate: levelNumber === 1 ? 63 / 84 : 19 / 31,
+    exclusionsAsOf: "2026-10-16", presentInUnassigned: levelNumber === 1 ? 48 : null,
     assessedAutomated: 72, enumerated: levelNumber === 1 ? 74 : 28, enumeratedIds: [], denominatorIdentifiers: [], automatedIdentifiers: [],
     denominator: levelNumber === 1 ? 96 : 38, coverage: levelNumber === 1 ? 72 / 96 : 26 / 38, coverageSource: "authoritative",
     notAssessed: levelNumber === 1 ? ["18.4.1", "18.4.2", "18.9.7", "18.10.3"] : ["19.5.1"],

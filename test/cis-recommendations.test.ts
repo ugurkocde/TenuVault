@@ -90,9 +90,11 @@ describe("pack recommendations", () => {
     const summary = cisReadiness(run, policies)
     expect(recommendationTotals(summary.levels[0]!.recommendations)).toEqual({ passed: 2, failed: 2, review: 0, notAssessed: 1 })
     const csv = cisReadinessCsv(summary)
-    expect(csv.split("\r\n")[0]).toMatch(/Exceptions,Mapped settings,Recommendation pass rate,Adjusted recommendation pass rate$/)
-    expect(csv.split("\r\n")[1]).toMatch(/,,0\.5,0\.5$/)
-    expect(csv).toContain("synthetic-os,9.9.9,1,,,,,,,,,,,,Fail,Recommendation,1.1.2,Synthetic leaf two,,,,synthetic_payload_two Different")
+    // One headline: the recommendation pass rate in percent, named by its basis, and no second pass rate column.
+    expect(csv.split("\r\n")[0]).toMatch(/Exceptions,Mapped settings$/)
+    expect(csv.split("\r\n")[0]).not.toContain("Recommendation pass rate")
+    expect(csv.split("\r\n")[1]).toMatch(/^synthetic-os,9\.9\.9,1,Recommendation pass rate,50,,0,/)
+    expect(csv).toContain("synthetic-os,9.9.9,1,,,,,,,,,,,,,,,,,Fail,Recommendation,1.1.2,Synthetic leaf two,,synthetic_payload_two Different")
     const json = JSON.parse(cisReadinessJson(summary, null, "2026-10-15T10:00:00Z")) as { levels: Array<{ recommendations?: Array<{ id: string }>; recommendationTotals?: unknown }> }
     expect(json.levels[0]!.recommendationTotals).toEqual({ passed: 2, failed: 2, review: 0, notAssessed: 1 })
     expect(json.levels[0]!.recommendations?.[3]).toEqual({ id: "1.2.1", title: "Synthetic beta", level: 1, result: "Fail", settings: [{ id: "synthetic_beta", status: "Missing" }] })
@@ -263,7 +265,7 @@ describe("pack recommendations", () => {
     expect(level.passRate).not.toBeNull()
     expect(headlineRate(level)).toEqual({ basis: "recommendations", rate: null, adjusted: null })
     const json = JSON.parse(cisReadinessJson(cisReadiness(run, unassessed), null, "2026-10-15T10:00:00Z")) as { levels: Array<Record<string, unknown>> }
-    expect(json.levels[0]).toMatchObject({ recommendationPassRate: null, adjustedRecommendationPassRate: null })
+    expect(json.levels[0]).toMatchObject({ headline: "Recommendation pass rate", passRatePercent: null, passRateWithExclusionsPercent: null })
 
     // Trend: a recommendations point with a null rate, no change and a break in the sparkline.
     const rated = { ...assess(tenant), runId: "run-0", assessedAt: "2026-10-14T10:00:00Z" }
