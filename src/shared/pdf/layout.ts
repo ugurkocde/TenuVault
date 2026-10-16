@@ -63,7 +63,8 @@ export interface LayoutOptions {
   exportedAt: string
   /**
    * Non secret, stable facts that identify the report (run id, hashes, times); their SHA-256 becomes
-   * the PDF file id. Never pass tenant data here: the id is written into the file unencrypted.
+   * the PDF file id. Never pass tenant data or branding text here: the id is written into the file
+   * unencrypted. Whether the report is branded is added here, never the company name.
    */
   identity: readonly unknown[]
   theme: BrandTheme
@@ -90,8 +91,9 @@ export function createLayout(options: LayoutOptions) {
     text(Array.isArray(value) ? value.map(clean) : clean(value), x, y, textOptions)) as typeof doc.text
   doc.getTextWidth = (value: string) => getTextWidth(clean(value))
   doc.splitTextToSize = (value: string, width: number, splitOptions?: unknown) => splitTextToSize(clean(value), width, splitOptions)
-  const publisher = brandName(theme)
-  doc.setProperties({ ...options.properties, author: publisher, creator: publisher })
+  // Document properties go through the same cleaning as the page text, including the company name.
+  const publisher = clean(brandName(theme))
+  doc.setProperties({ title: clean(options.properties.title), subject: clean(options.properties.subject), keywords: clean(options.properties.keywords), author: publisher, creator: publisher })
 
   const { margin, right, contentWidth, contentTop, contentBottom } = PAGE
   let y: number = contentTop
@@ -382,7 +384,7 @@ export function createLayout(options: LayoutOptions) {
     const year = created.getUTCFullYear()
     const stamp = (Number.isNaN(year) || year < 1970 || year > 2037 ? new Date(0) : created).toISOString().replace(/[-:T]/g, '').slice(0, 14)
     doc.setCreationDate(`D:${stamp}+00'00'`)
-    doc.setFileId(createHash('sha256').update(JSON.stringify(options.identity)).digest('hex').slice(0, 32).toUpperCase())
+    doc.setFileId(createHash('sha256').update(JSON.stringify([...options.identity, { branded: Boolean(theme.companyName) }])).digest('hex').slice(0, 32).toUpperCase())
     return new Uint8Array(doc.output('arraybuffer'))
   }
 

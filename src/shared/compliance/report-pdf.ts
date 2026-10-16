@@ -72,7 +72,7 @@ function createReport(options: { shortName: string; tenant?: string; footer: str
     properties: { title: options.title, subject: options.subject, keywords: options.keywords },
     exportedAt: options.exportedAt,
     theme,
-    identity: [...options.identity, theme.companyName ?? null],
+    identity: options.identity,
   })
 }
 

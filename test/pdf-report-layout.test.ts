@@ -238,6 +238,28 @@ describe("report PDF branding", () => {
     expect(workspaceExportCSV(saved, context)).toContain("TenuVault policy pack assessment")
   })
 
+  it("cleans branding text in the document properties and keeps it out of the file id", () => {
+    const secret = (name: string) => ({ ...BRANDING, companyName: name })
+    const first = generateNativeFrameworkPDF(nativeRun(), context, secret("Fabrikam Bearer abcdef123456789"))
+    const second = generateNativeFrameworkPDF(nativeRun(), context, secret("Fabrikam Bearer zyxwvu987654321"))
+    for (const bytes of [first, second]) {
+      const raw = Buffer.from(bytes).toString("latin1")
+      const author = /\/Author \(([^)]*)\)/.exec(raw)?.[1]
+      const creator = /\/Creator \(([^)]*)\)/.exec(raw)?.[1]
+      expect(author).toMatch(/^Fabrikam /)
+      expect(creator).toBe(author)
+      expect(raw).not.toContain("abcdef123456789")
+      expect(raw).not.toContain("zyxwvu987654321")
+    }
+    // The file id knows only whether the report is branded, never the company name.
+    expect(fileId(first)).toBe(fileId(second))
+    expect(fileId(first)).not.toBe(fileId(generateNativeFrameworkPDF(nativeRun(), context)))
+    const workspace = (name: string) => fileId(generateWorkspaceAssessmentPDF(workspaceAssessment(), context, secret(name)))
+    expect(workspace("Fabrikam")).toBe(workspace("Northwind Traders"))
+    const cis = (name: string) => fileId(generateCisReadinessPDF(cisSummary(), CIS_CONTEXT, secret(name)))
+    expect(cis("Fabrikam")).toBe(cis("Northwind Traders"))
+  })
+
   it("falls back to the default design for invalid colours and skips an unreadable logo", () => {
     const bytes = generateCisReadinessPDF(cisSummary(), CIS_CONTEXT, { companyName: "Fabrikam", colors: { primary: "navy" }, logo: { dataUrl: "data:image/png;base64,AAAA" } })
     const streams = pageStreams(bytes).join("\n")
