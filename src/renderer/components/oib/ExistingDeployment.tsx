@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { AlertTriangle, ArrowRight, FileText, RefreshCw } from "lucide-react"
 import { cn } from "~/lib/utils"
+import { formatReportDate } from "../../../shared/compliance/presentation"
 import { policyTypeName } from "../../../shared/oib/licensing"
 import type { ReportPayload } from "../../../shared/oib/report"
 import { OIB_PLATFORMS, type MatchStatus, type OibPlatform } from "../../../shared/oib/types"
@@ -47,7 +48,7 @@ function comparisonReport(loaded: LoadedPlatform[], tenantId: string, tenantName
     title: "OpenIntuneBaseline deployment comparison",
     eyebrow: "OpenIntuneBaseline comparison",
     subtitle: `OpenIntuneBaseline ${versionsLabel(loaded.map(l => l.catalog))}`,
-    meta: [["Tenant", tenantName], ["Compared", new Date(loaded[0]?.comparison.comparedAt ?? Date.now()).toLocaleString()], ["Tenant policies read", String(loaded.reduce((sum, l) => sum + l.comparison.tenantPolicyCount, 0))], ["Matching", "OIBID in the policy description, then policy name without version. Settings are not compared; see Policy Validation."]],
+    meta: [["Tenant", tenantName], ["Compared", formatReportDate(loaded[0]?.comparison.comparedAt ?? new Date().toISOString())], ["Tenant policies read", String(loaded.reduce((sum, l) => sum + l.comparison.tenantPolicyCount, 0))], ["Matching", "OIBID in the policy description, then policy name without version. Settings are not compared; see Policy Validation."]],
     summary: order.map(status => [STATUS_LABELS[status], String(rows.filter(r => r.match.status === status).length)]),
     sections: [
       ...order.map(status => ({

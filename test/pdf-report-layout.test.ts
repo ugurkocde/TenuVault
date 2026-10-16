@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest"
 import { generateCisReadinessPDF, generateNativeFrameworkPDF, generateWorkspaceAssessmentPDF } from "../src/shared/compliance/report-pdf"
-import { EXPORT_LIMITATIONS } from "../src/shared/compliance/export"
+import { EXPORT_LIMITATIONS, exportLimitations, frameworkUsageNotice, nativeExportCSV, workspaceExportCSV } from "../src/shared/compliance/export"
 import { FRAMEWORK_USAGE_NOTICE } from "../src/shared/compliance/native"
+import { COMPLIANCE_RULESET_VERSION } from "../src/shared/compliance/engine"
 import { frameworkCoverageLabel } from "../src/shared/compliance/presentation"
 import { MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDATIONS_URL } from "../src/shared/frameworks/cis-manual"
 import { TENUVAULT_THEME, luminance, parseHexColor, resolveBrandTheme } from "../src/shared/pdf/theme"
@@ -180,6 +181,61 @@ describe("report PDF branding", () => {
       expect(pdfText(other)).not.toContain("TenuVault")
     }
     expect(pdfText(generateCisReadinessPDF(cisSummary(), CIS_CONTEXT, { ...BRANDING, footerText: "Fabrikam | Review", logo: undefined }))).toContain("Fabrikam | Review")
+  })
+
+  it("prints tenant data that names TenuVault exactly as recorded and brands only product text", () => {
+    const TENANT_TEXT = "TenuVault Baseline"
+    const COMPANY = BRANDING.companyName
+    const ISO_BASIS = "Publisher content basis: reference-only, original TenuVault descriptions"
+    // The mapping version id is an identifier; a narrow cell may wrap it after any character.
+    const MAPPING_ID = new RegExp([...COMPLIANCE_RULESET_VERSION].map(char => char.replace(".", "\\.")).join("\\s?"), "g")
+    // What may still name TenuVault in a white label report: the verbatim licence text, tenant data and the mapping version id.
+    const rest = (text: string) => [ELV2, ISO_BASIS, TENANT_TEXT].reduce((value, part) => value.replaceAll(part, ""), text).replace(MAPPING_ID, "")
+    const expectTenantTextKept = (text: string) => {
+      expect(text).toContain(TENANT_TEXT)
+      expect(text).not.toContain(`${COMPANY} Baseline`)
+      expect(rest(text)).not.toMatch(/tenuvault/i)
+    }
+
+    const run = nativeRun({ frameworkId: "iso-27001", nativeId: "iso-27001-2022" })
+    const cap = run.assessment.capabilities.find(item => item.evidence.length && item.checks.some(check => check.policyId))!
+    const check = cap.checks.find(item => item.policyId)!
+    check.policyName = TENANT_TEXT
+    check.actualValue = TENANT_TEXT
+    cap.evidence[0]!.policyName = TENANT_TEXT
+    const native = pdfText(generateNativeFrameworkPDF(run, context, BRANDING))
+    expectTenantTextKept(native)
+    expect(native).toContain(`POLICY ${TENANT_TEXT}`)
+    expect(native).toContain(`Source metadata: ${TENANT_TEXT}, version 4`)
+    for (const branded of [frameworkUsageNotice(COMPANY), exportLimitations(COMPANY)[0]!, `${COMPANY} compares selected capabilities:`]) expect(native).toContain(branded)
+    const plain = pdfText(generateNativeFrameworkPDF(run, context))
+    for (const original of [FRAMEWORK_USAGE_NOTICE, EXPORT_LIMITATIONS[0]!, "TenuVault compares selected capabilities:", `POLICY ${TENANT_TEXT}`]) expect(plain).toContain(original)
+    expect(plain).not.toContain(COMPANY)
+
+    const saved = workspaceAssessment()
+    saved.assessment.findings[0]!.policyName = TENANT_TEXT
+    saved.assessment.findings[0]!.observed[0]!.policyName = TENANT_TEXT
+    saved.creation!.results[0]!.name = TENANT_TEXT
+    const workspace = pdfText(generateWorkspaceAssessmentPDF(saved, context, BRANDING))
+    expectTenantTextKept(workspace)
+    expect(workspace).toContain(`${TENANT_TEXT} (assignment evidence: unavailable)`)
+    expect(workspace).toContain(exportLimitations(COMPANY)[0]!)
+    expect(pdfText(generateWorkspaceAssessmentPDF(saved, context))).toContain(EXPORT_LIMITATIONS[0]!)
+
+    const summary = cisSummary()
+    summary.levels[0]!.exceptions[0]!.policyName = TENANT_TEXT
+    const cis = pdfText(generateCisReadinessPDF(summary, CIS_CONTEXT, BRANDING))
+    expectTenantTextKept(cis)
+    expect(cis).toContain(`Level 1: ${COMPANY} checks`)
+    expect(cis).toContain(exportLimitations(COMPANY)[0]!)
+    const cisPlain = pdfText(generateCisReadinessPDF(summary, CIS_CONTEXT))
+    expect(cisPlain).toContain("Level 1: TenuVault checks")
+    expect(cisPlain).toContain(EXPORT_LIMITATIONS[0]!)
+
+    // CSV exports keep naming TenuVault.
+    expect(nativeExportCSV(run, context)).toContain("TenuVault independent configuration comparison")
+    expect(nativeExportCSV(run, context)).toContain(EXPORT_LIMITATIONS[0]!)
+    expect(workspaceExportCSV(saved, context)).toContain("TenuVault policy pack assessment")
   })
 
   it("falls back to the default design for invalid colours and skips an unreadable logo", () => {

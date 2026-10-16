@@ -3,6 +3,7 @@ import { Link } from "react-router-dom"
 import { ChevronDown, ChevronRight, Download, FileText, History, LoaderCircle, RotateCcw, ShieldCheck, Trash2 } from "lucide-react"
 import { cn } from "~/lib/utils"
 import { VALIDATED_FOLDERS } from "../../../shared/oib/compare"
+import { formatReportDate } from "../../../shared/compliance/presentation"
 import { policyTypeName } from "../../../shared/oib/licensing"
 import { validationJson } from "../../../shared/oib/validation-export"
 import { toCsv, type ReportPayload } from "../../../shared/oib/report"
@@ -72,7 +73,7 @@ function pdfOf(results: Shown[], tenantId: string, tenantName: string, reference
     title: "OpenIntuneBaseline policy validation",
     eyebrow: "OpenIntuneBaseline validation",
     subtitle: reference,
-    meta: [["Tenant", tenantName], ["Validated", new Date(validatedAt).toLocaleString()], ["Policies", String(results.length)], ["Scope", "Setting-level comparison of matched policies. Read-only: nothing was changed in the tenant."]],
+    meta: [["Tenant", tenantName], ["Validated", formatReportDate(validatedAt)], ["Policies", String(results.length)], ["Scope", "Setting-level comparison of matched policies. Read-only: nothing was changed in the tenant."]],
     summary: [["Match the baseline", String(count(results, "compliant"))], ["Drift detected", String(count(results, "drifted"))], ["Not validated", String(count(results, "unsupported"))], ["Errors", String(count(results, "error"))]],
     sections: [
       { heading: "Summary", columns: ["Platform", "OIB policy", "Tenant policy", "Status", "Settings matched"], rows: results.map(r => [OIB_PLATFORMS[r.platform].label, r.name, r.tenantPolicyName, STATUS[r.status].label, r.result ? `${r.result.matched} of ${r.result.totalOib}` : ""]) },

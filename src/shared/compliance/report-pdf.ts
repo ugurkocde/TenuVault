@@ -1,6 +1,6 @@
 import { CAPABILITY_STATUS_COLORS, CAPABILITY_STATUS_LABELS, CHECK_RESULT_COLORS, CHECK_RESULT_LABELS, COLLECTION_FAMILY_LABELS, COLLECTION_STATUS_LABELS, CONTROL_STATUS_COLORS, CONTROL_STATUS_LABELS, PLATFORM_LABELS, formatReportDate, frameworkCoverageLabel } from './presentation'
 import { capabilityComparison, comparisonCounts, type NativeAssessment } from './native'
-import { EXPORT_LIMITATIONS, nativeReportHeader, redactSecrets, redactText, workspaceReportHeader, type ExportContext, type ReportHeader, type SavedAssessment } from './export'
+import { exportLimitations, nativeReportHeader, redactSecrets, redactText, workspaceReportHeader, type ExportContext, type ReportHeader, type SavedAssessment } from './export'
 import { coverageSourceLabel, headlineRate, levelCheckSummary, type CisLevelReadiness, type CisReadinessSummary } from '../frameworks/cis-readiness'
 import { recommendationTotals, type RecommendationResult } from '../frameworks/cis-recommendations'
 import { displayCheckValue } from './check-results'
@@ -8,7 +8,7 @@ import type { CapabilityResult, CapabilityStatus, ControlAssessment, ControlStat
 import { PALETTE, TONES, ascii, capHeight, chipWidth, drawCard, drawChip, drawPill, drawStackedBar, mixColor, pillMetrics, setFont, textWidth, type MarkerKind, type PillOptions, type RgbColor, type Tone } from '../pdf/kit'
 import { PAGE, createLayout, type FlowBlock, type Layout, type TextItem } from '../pdf/layout'
 import { bullets, callout, distribution, drawCover, facts, hero, kpiRow, noteCard, panel, table, tableBlocks, type Fact, type Group, type LegendItem, type Row } from '../pdf/blocks'
-import { resolveBrandTheme, type PdfBranding } from '../pdf/theme'
+import { brandName, resolveBrandTheme, type BrandTheme, type PdfBranding } from '../pdf/theme'
 import rights from './rights.json'
 
 export type { PdfBranding } from '../pdf/theme'
@@ -64,8 +64,8 @@ function percent(value: number | null): string {
 }
 
 /** A report layout whose every drawn string is redacted and normalised to WinAnsi. */
-function createReport(options: { shortName: string; tenant?: string; footer: string; title: string; subject: string; keywords: string; exportedAt: string; identity: readonly unknown[]; branding?: PdfBranding }): Layout {
-  const theme = resolveBrandTheme(options.branding)
+function createReport(options: { shortName: string; tenant?: string; footer: string; title: string; subject: string; keywords: string; exportedAt: string; identity: readonly unknown[]; theme: BrandTheme }): Layout {
+  const { theme } = options
   return createLayout({
     shortName: options.shortName, tenant: options.tenant, footer: options.footer,
     sanitize: value => ascii(redactText(value)),
@@ -75,6 +75,10 @@ function createReport(options: { shortName: string; tenant?: string; footer: str
     identity: [...options.identity, theme.companyName ?? null],
   })
 }
+
+// The prefix withCapabilitySummaries (framework-summary.ts) gives a control summary; product text, so a white label report names the company.
+const SUMMARY_PREFIX = 'TenuVault compares selected capabilities: '
+const capabilitySummary = (summary: string, product: string) => summary.startsWith(SUMMARY_PREFIX) ? `${product} compares selected capabilities: ${summary.slice(SUMMARY_PREFIX.length)}` : summary
 
 const tenantLabel = (header: { tenant: { id: string; name?: string } }) => header.tenant.name ? `${header.tenant.name} (${header.tenant.id})` : header.tenant.id
 
@@ -110,13 +114,14 @@ function outcomeLegend(counts: Record<Outcome, number>): LegendItem[] {
 export function generateNativeFrameworkPDF(run: NativeAssessment, context: ExportContext = { exportedAt: new Date().toISOString() }, branding?: PdfBranding): Uint8Array<ArrayBuffer> {
   const framework = run.assessment.frameworks[0]
   if (!framework) throw new Error('No framework comparison is available.')
-  const header = nativeReportHeader(run, context)
+  const theme = resolveBrandTheme(branding)
+  const header = nativeReportHeader(run, context, brandName(theme))
   const counts = comparisonCounts(run)
   const name = framework.framework.name
   const layout = createReport({
     shortName: name, tenant: header.tenant.name ?? header.tenant.id, footer: 'Independent configuration comparison',
     title: `${name} configuration comparison`, subject: 'Independent Intune technical evidence mapping', keywords: 'Intune, configuration, evidence, comparison',
-    exportedAt: context.exportedAt, identity: ['native', run.runId, run.tenantId, run.frameworkId, run.snapshotSha256, run.rulesetSha256, context.exportedAt], branding,
+    exportedAt: context.exportedAt, identity: ['native', run.runId, run.tenantId, run.frameworkId, run.snapshotSha256, run.rulesetSha256, context.exportedAt], theme,
   })
   const scope = run.assessment.scope
   const platforms = scope.platforms?.map(p => PLATFORM_LABELS[p] ?? p).join(', ') ?? 'All supported platforms'
@@ -313,7 +318,7 @@ export function generateNativeFrameworkPDF(run: NativeAssessment, context: Expor
     ...(run.frameworkId.startsWith('nist-') ? ['Derived from NIST-authored technical series publications with selected Intune mappings and summaries added or modified. Third-party material excluded. Provided AS IS, without NIST warranty or endorsement. Worldwide royalty-free reuse terms and attribution: https://www.nist.gov/open/license .'] : []),
   ]
   // Licence and attribution text, including the publisher content basis from rights.json, is printed verbatim, also on white label reports.
-  for (const text of attribution) layout.paragraph([{ text, size: 8.4, color: PALETTE.body, lineHeight: 3.9 }], { after: 3, verbatim: true })
+  for (const text of attribution) layout.paragraph([{ text, size: 8.4, color: PALETTE.body, lineHeight: 3.9 }], { after: 3 })
   return layout.finish()
 }
 
@@ -335,7 +340,7 @@ function referenceHeader(layout: Layout, row: ControlAssessment, mapped: Capabil
   const midX = margin + 5 + tileWidth + 5
   const midWidth = sideX - 5 - midX
   const title = layout.measure([{ text: row.control.title, size: 14, style: 'bold', color: theme.strong, lineHeight: 5.8 }], midWidth)
-  const summary = layout.measure([{ text: row.control.summary, size: 8, color: PALETTE.muted, lineHeight: 3.6 }], midWidth)
+  const summary = layout.measure([{ text: capabilitySummary(row.control.summary, brandName(theme)), size: 8, color: PALETTE.muted, lineHeight: 3.6 }], midWidth)
   const midHeight = 7.6 + layout.heightOf(title) + 0.6 + layout.heightOf(summary)
   const height = Math.max(midHeight, idLines.length * 3.6 + 6, 24) + 10
   layout.ensure(height + follow)
@@ -511,12 +516,13 @@ const WORKSPACE_STYLE: Record<WorkspaceStatus, { tone: Tone; marker: MarkerKind;
  * values are redacted before they are printed.
  */
 export function generateWorkspaceAssessmentPDF(saved: SavedAssessment, context: ExportContext, branding?: PdfBranding): Uint8Array<ArrayBuffer> {
-  const header = workspaceReportHeader(saved, context)
+  const theme = resolveBrandTheme(branding)
+  const header = workspaceReportHeader(saved, context, brandName(theme))
   const findings = redactSecrets(saved.assessment.findings)
   const layout = createReport({
     shortName: header.framework.name, tenant: header.tenant.name ?? header.tenant.id, footer: 'Policy pack assessment',
     title: `${header.framework.name} policy pack assessment`, subject: 'Intune policy pack comparison', keywords: 'Intune, configuration, baseline, comparison',
-    exportedAt: context.exportedAt, identity: ['workspace', saved.assessment.runId, saved.assessment.tenantId, saved.assessment.frameworkId, saved.assessment.assessedAt, context.exportedAt], branding,
+    exportedAt: context.exportedAt, identity: ['workspace', saved.assessment.runId, saved.assessment.tenantId, saved.assessment.frameworkId, saved.assessment.assessedAt, context.exportedAt], theme,
   })
   const count = (status: WorkspaceStatus) => findings.filter(f => f.status === status).length
   const total = findings.length
@@ -636,10 +642,12 @@ function levelHeadline(level: CisLevelReadiness) {
  */
 export function generateCisReadinessPDF(summary: CisReadinessSummary, context: CisReportContext, branding?: PdfBranding): Uint8Array<ArrayBuffer> {
   const title = summary.benchmarkName ?? summary.benchmark
+  const theme = resolveBrandTheme(branding)
+  const product = brandName(theme)
   const layout = createReport({
     shortName: title, tenant: context.tenantName ?? context.tenantId, footer: 'CIS readiness report',
     title: `${summary.benchmark} readiness report`, subject: 'CIS readiness summary from a saved assessment', keywords: 'Intune, configuration, readiness, comparison',
-    exportedAt: context.exportedAt, identity: ['cis', context.runId ?? null, context.tenantId, summary.benchmark, summary.version, context.assessedAt, context.exportedAt], branding,
+    exportedAt: context.exportedAt, identity: ['cis', context.runId ?? null, context.tenantId, summary.benchmark, summary.version, context.assessedAt, context.exportedAt], theme,
   })
   const tenant = context.tenantName ? `${context.tenantName} (${context.tenantId})` : context.tenantId
   const benchmark = summary.benchmarkName ? `${summary.benchmarkName} (${summary.benchmark})` : summary.benchmark
@@ -686,7 +694,7 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
     const deviating = level.different + level.missing + level.review
     hero(layout, {
       value: headline.rate === null ? 'n/a' : `${Math.round(headline.rate * 100)}%`, label: headline.label,
-      lead: levelCheckSummary(level),
+      lead: levelCheckSummary(level, product),
       lines: [`${level.present} of ${level.assessedSettings} assessed settings conform; ${deviating} deviate.`, `Adjusted for accepted exceptions: ${percent(headline.adjusted)}.`],
       bar: { segments: headline.segments.slice(0, 1), total: headline.total },
     })
@@ -694,7 +702,7 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
   // The CIS notice for recommendations this tool does not include, printed on every report.
   callout(layout, { title: 'Manual recommendations', tone: 'accent', body: [{ text: summary.manualNote, style: 'bold' }, { text: summary.manualFallback }, { text: summary.manualFallbackUrl, color: layout.theme.accentText, technical: true }], link: { url: summary.manualFallbackUrl, text: summary.manualFallbackUrl } })
   layout.heading('Limitations', { keep: 20 })
-  bullets(layout, [...EXPORT_LIMITATIONS], 'Limitations')
+  bullets(layout, exportLimitations(product), 'Limitations')
 
   for (const level of summary.levels) levelSection(layout, summary, level)
   return layout.finish()

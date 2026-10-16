@@ -67,6 +67,12 @@ export const TENUVAULT_THEME: BrandTheme = {
   door: [244, 243, 241],
 }
 
+/**
+ * The product name in product authored report text: the customer's company on a white label
+ * report, otherwise TenuVault. Never applied to tenant data or licence text, which print as recorded.
+ */
+export const brandName = (theme: BrandTheme): string => theme.companyName ?? 'TenuVault'
+
 /** A strict #RRGGBB colour, or undefined. */
 export function parseHexColor(value: unknown): RgbColor | undefined {
   if (typeof value !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(value)) return undefined

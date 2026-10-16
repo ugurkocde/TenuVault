@@ -197,7 +197,7 @@ export function oibComparisonReport(options: { extreme?: boolean } = {}) {
     title: "OpenIntuneBaseline deployment comparison",
     eyebrow: "OpenIntuneBaseline comparison",
     subtitle: "OpenIntuneBaseline Windows v3.8, macOS v1.0, iOS/iPadOS v2.1, Android v1.4",
-    meta: [["Tenant", options.extreme ? `Contoso Holdings International "Global" Ltd \u2019s ${"Region ".repeat(8)}` : "Contoso Ltd"], ["Compared", "14/10/2026, 10:45:12"], ["Tenant policies read", "212"], ["Matching", "OIBID in the policy description, then policy name without version. Settings are not compared; see Policy Validation."]] as Array<[string, string]>,
+    meta: [["Tenant", options.extreme ? `Contoso Holdings International "Global" Ltd \u2019s ${"Region ".repeat(8)}` : "Contoso Ltd"], ["Compared", "2026-10-14 08:45 UTC"], ["Tenant policies read", "212"], ["Matching", "OIBID in the policy description, then policy name without version. Settings are not compared; see Policy Validation."]] as Array<[string, string]>,
     summary: statuses.map(status => [status, String(rows.filter(row => row.status === status).length)]) as Array<[string, string]>,
     sections: [
       ...statuses.map(status => ({ heading: status, columns: ["Platform", "Type", "OIB policy", "Tenant policy", "Versions", "Match"], rows: rows.filter(row => row.status === status).map(row => row.row) })),
@@ -221,7 +221,7 @@ export function oibValidationReport(options: { extreme?: boolean } = {}) {
     title: "OpenIntuneBaseline policy validation",
     eyebrow: "OpenIntuneBaseline validation",
     subtitle: "OpenIntuneBaseline Windows v3.8",
-    meta: [["Tenant", "Contoso Ltd"], ["Validated", "14/10/2026, 11:02:40"], ["Policies", String(policies.length)], ["Scope", "Setting-level comparison of matched policies. Read-only: nothing was changed in the tenant."]] as Array<[string, string]>,
+    meta: [["Tenant", "Contoso Ltd"], ["Validated", "2026-10-14 09:02 UTC"], ["Policies", String(policies.length)], ["Scope", "Setting-level comparison of matched policies. Read-only: nothing was changed in the tenant."]] as Array<[string, string]>,
     summary: [["Match the baseline", "Matches the baseline"], ["Drift detected", "Drift detected"], ["Not validated", "Not validated"], ["Errors", "Validation error"]].map(([label, status]) => [label, String(policies.filter(policy => policy.status === status).length)]) as Array<[string, string]>,
     sections: [
       { heading: "Summary", columns: ["Platform", "OIB policy", "Tenant policy", "Status", "Settings matched"], rows: policies.map(policy => [policy.platform, policy.name, `${policy.name} (Contoso)`, policy.status, policy.status === "Matches the baseline" ? "42 of 42" : policy.status === "Drift detected" ? "38 of 42" : ""]) },

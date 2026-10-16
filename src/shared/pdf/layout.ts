@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { jsPDF } from 'jspdf'
-import type { BrandTheme } from './theme'
+import { brandName, type BrandTheme } from './theme'
 import { PALETTE, capHeight, clampLine, drawCard, drawEyebrow, drawMarker, drawRule, setFont, textWidth, wrapLines, type FontStyle, type MarkerKind, type RgbColor } from './kit'
 
 /**
@@ -77,14 +77,10 @@ export type Layout = ReturnType<typeof createLayout>
 export function createLayout(options: LayoutOptions) {
   const doc = new jsPDF({ unit: 'mm', format: 'a4', compress: true })
   const { sanitize, theme } = options
-  // White label reports name the customer wherever TenuVault would appear, except in verbatim legal text.
-  let verbatim = false
-  const company = theme.companyName && !/tenuvault/i.test(theme.companyName) ? theme.companyName : undefined
-  // Idempotent: cleaning a cleaned string changes nothing, so measured and drawn text agree.
-  const clean = (value: string) => {
-    const safe = sanitize(value)
-    return verbatim || !company ? safe : safe.replace(/\bTenuVault\b/g, () => company)
-  }
+  // Idempotent: cleaning a cleaned string changes nothing, so measured and drawn text agree. Text is
+  // never reworded here: tenant data prints as recorded, and product authored text names its brand
+  // at its source (brandName in theme.ts).
+  const clean = sanitize
   // One choke point: every string jsPDF measures, wraps or draws is cleaned first, so the
   // measured width is always the width of the drawn text.
   const text = doc.text.bind(doc)
@@ -94,7 +90,7 @@ export function createLayout(options: LayoutOptions) {
     text(Array.isArray(value) ? value.map(clean) : clean(value), x, y, textOptions)) as typeof doc.text
   doc.getTextWidth = (value: string) => getTextWidth(clean(value))
   doc.splitTextToSize = (value: string, width: number, splitOptions?: unknown) => splitTextToSize(clean(value), width, splitOptions)
-  const publisher = theme.companyName ?? 'TenuVault'
+  const publisher = brandName(theme)
   doc.setProperties({ ...options.properties, author: publisher, creator: publisher })
 
   const { margin, right, contentWidth, contentTop, contentBottom } = PAGE
@@ -170,8 +166,7 @@ export function createLayout(options: LayoutOptions) {
   }
 
   /** Text in the flow at the cursor, continuing on the next page when needed. */
-  function paragraph(items: readonly TextItem[] | string, paragraphOptions: { x?: number; width?: number; after?: number; verbatim?: boolean } = {}) {
-    verbatim = paragraphOptions.verbatim === true
+  function paragraph(items: readonly TextItem[] | string, paragraphOptions: { x?: number; width?: number; after?: number } = {}) {
     const x = paragraphOptions.x ?? margin
     const width = paragraphOptions.width ?? contentWidth
     const lines = measure(typeof items === 'string' ? [{ text: items, size: 8.6, color: PALETTE.body, lineHeight: 4 }] : items, width)
@@ -180,7 +175,6 @@ export function createLayout(options: LayoutOptions) {
       drawLines([{ ...line, offset: 0 }], x, y + line.gap)
       y += line.height
     }
-    verbatim = false
     y += paragraphOptions.after ?? 0
   }
 
