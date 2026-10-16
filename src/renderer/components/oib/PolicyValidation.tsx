@@ -10,6 +10,8 @@ import { policyTypeName } from "../../../shared/oib/licensing"
 import { validationJson } from "../../../shared/oib/validation-export"
 import { toCsv, type ReportPayload } from "../../../shared/oib/report"
 import { isFullValidation, OIB_PLATFORMS, type OibCatalog, type OibPlatform, type PolicyValidation as Validation, type SettingDiff, type ValidationRun } from "../../../shared/oib/types"
+import { NO_VALIDATION_FILTER, validationFilterView, type ValidationFilter, type ValidationFilterItem, type ValidationResultFilter } from "../../../shared/oib/validation-filter"
+import { FilterChips, FilterSelect, SearchInput } from "../FilterControls"
 import { PlanBadge } from "../UpgradeNote"
 import { GatedButton } from "../PlanGate"
 import { RunsList } from "./DeployPanel"
@@ -123,6 +125,25 @@ function DiffTable({ title, items, kind }: { title: string; items: SettingDiff[]
   </div>
 }
 
+const RESULT_FILTERS: Array<{ value: ValidationResultFilter; label: string }> = [
+  { value: "all", label: "All" }, { value: "compliant", label: "Matches" }, { value: "drifted", label: "Drift" }, { value: "error", label: "Errors" }, { value: "other", label: "Not validated" },
+]
+const describeShown = (r: Shown): ValidationFilterItem => ({ text: [r.name, r.tenantPolicyName, OIB_PLATFORMS[r.platform].label], platform: r.platform, status: r.status })
+
+/** Search, result and platform for a validation list; the list renders `view.shown`. */
+function ValidationFilterBar({ view, total, filter, onChange }: { view: ReturnType<typeof validationFilterView<unknown>>; total: number; filter: ValidationFilter; onChange: (filter: ValidationFilter) => void }) {
+  return <div className="mt-4 flex flex-wrap items-center gap-3">
+    <SearchInput label="Search policies" value={filter.query} onChange={query => onChange({ ...filter, query })} placeholder="Search OIB or tenant policy" />
+    <FilterChips label="Filter by result" value={view.effective.result} onChange={result => onChange({ ...filter, result })} options={RESULT_FILTERS.map(option => ({ ...option, count: view.count(option.value) }))} />
+    {view.platforms.length > 1 && <FilterSelect label="Filter by platform" value={view.effective.platform} onChange={platform => onChange({ ...filter, platform })}
+      options={[{ value: "" as const, label: "All platforms" }, ...view.platforms.map(platform => ({ value: platform, label: OIB_PLATFORMS[platform].label }))]} />}
+    <span className="text-sm text-gray-500 lg:ml-auto">
+      <span aria-live="polite">{view.active ? `${view.shown.length} of ${plural(total, "policy", "policies")} shown.` : ""}</span>
+      {view.active && <>{" "}<button type="button" className="font-medium text-gray-700 underline" onClick={() => onChange(NO_VALIDATION_FILTER)}>Clear filters</button></>}
+    </span>
+  </div>
+}
+
 function ResultDetails({ result }: { result: Validation }) {
   if (result.status === "error" || result.status === "unsupported") return <p className="mt-2 text-xs text-gray-600">{result.error}</p>
   if (!result.result) return null
@@ -156,6 +177,7 @@ export function PolicyValidation({ selections }: { selections: Selections }) {
   const [historyError, setHistoryError] = useState("")
   const [fixing, setFixing] = useState<{ row: Row; catalog: OibCatalog; changes: number } | null>(null)
   const [notice, setNotice] = useState("")
+  const [filter, setFilter] = useState<ValidationFilter>(NO_VALIDATION_FILTER)
   const [error, setError] = useState("")
   const exports = useSaveNotice()
   const refreshHistory = () => tenant ? oibRequest<{ runs: ValidationRun[] }>({ action: "oib-validations", tenantId: tenant.tenantId }).then(r => setHistory(r.runs)).catch(() => setHistory([])) : Promise.resolve()
@@ -184,7 +206,7 @@ export function PolicyValidation({ selections }: { selections: Selections }) {
     if (next === "platforms") {
       // Going back starts over; the results stay under Saved validations.
       if (job?.finishedAt) clearJob(job.id)
-      setSingles([]); setNotice(""); setError(""); exports.clear()
+      setSingles([]); setNotice(""); setError(""); setFilter(NO_VALIDATION_FILTER); exports.clear()
     }
     if (next === "results" && !loader.loaded.length && !loader.busy) {
       if (!platforms.length) { setStep("platforms"); return }
@@ -246,7 +268,7 @@ export function PolicyValidation({ selections }: { selections: Selections }) {
     try {
       setHistory((await oibRequest<{ runs: ValidationRun[] }>({ action: "oib-validation-delete", tenantId: tenant!.tenantId, runId })).runs)
       invalidateScores(queryClient)
-      if (viewing?.run.runId === runId) { setStep(viewing.from); setViewing(null) }
+      if (viewing?.run.runId === runId) { setStep(viewing.from); setViewing(null); setFilter(NO_VALIDATION_FILTER) }
       setDeleting(null)
     } catch (e) {
       setHistoryError(errorText(e, "The saved validation could not be deleted.")); setDeleting(null)
@@ -270,6 +292,13 @@ export function PolicyValidation({ selections }: { selections: Selections }) {
   const failedOnly = !loader.busy && !loader.loaded.length && loader.failed.length > 0 && !jobShown
   const saved = viewing?.run
   const savedResults: Shown[] = saved ? saved.results.map(r => ({ ...r, platform: saved.platform, tenantPolicyName: tenantName(r, names) })) : []
+  // The list narrows by search, result and platform; exports and the counts above it keep every policy.
+  const rowView = validationFilterView(matched, filter, row => ({ text: [row.policy.name, row.match.tenant!.name, OIB_PLATFORMS[row.platform].label], platform: row.platform, status: results.get(key(row.platform, row.policy.source))?.status }))
+  const currentView = validationFilterView(current, filter, describeShown)
+  const savedView = validationFilterView(savedResults, filter, describeShown)
+  const listView = matched.length ? rowView : currentView
+  const listTotal = matched.length || current.length
+  const noMatch = <li className="p-6 text-center text-sm text-gray-500">No policies match the filters. <button type="button" className="font-medium underline" onClick={() => setFilter(NO_VALIDATION_FILTER)}>Clear filters</button></li>
 
   return <>
     <FlowShell title="Policy Validation" steps={steps} step={step} focusKey={step === "saved" ? `saved:${saved?.runId}` : step} focusOnMount={initial.step !== "platforms"} onStep={id => goto(id as Step)} locked={loader.busy || busy || !!(fixJob && !fixJob.finishedAt)}
@@ -309,7 +338,8 @@ export function PolicyValidation({ selections }: { selections: Selections }) {
           <p className="mt-1 text-xs leading-5 text-gray-500">Resets a drifted policy to its OIB configuration in place. You review the change and choose the backup before anything happens. Assignments stay; the run can be undone.</p>
           {canFix && !storage && <p className="mt-2 text-xs leading-5 text-amber-900">This tenant has no backup storage, so a fix runs without a backup; undo then puts back the previous version saved in the run. <Link to="/portal/settings" className="text-blue-700 underline">Choose backup storage in Settings</Link>.</p>}
         </div>
-        <ul className="mt-4 divide-y divide-gray-100 overflow-hidden rounded-2xl bg-gray-50">{matched.map(row => {
+        {listTotal > 0 && <ValidationFilterBar view={listView} total={listTotal} filter={filter} onChange={setFilter} />}
+        <ul className="mt-4 divide-y divide-gray-100 overflow-hidden rounded-2xl bg-gray-50">{rowView.shown.map(row => {
           const k = key(row.platform, row.policy.source)
           const result = results.get(k)
           const isSupported = VALIDATED_FOLDERS.includes(row.policy.folder)
@@ -331,7 +361,7 @@ export function PolicyValidation({ selections }: { selections: Selections }) {
             {!isSupported && <p className="mt-2 text-xs text-gray-500">This policy type is not validated setting by setting.</p>}
             {result && expanded.has(k) && <ResultDetails result={result} />}
           </li>
-        })}{!matched.length && current.map(r => {
+        })}{!matched.length && currentView.shown.map(r => {
           // The packs are still loading after a return: the results so far, without the row actions.
           const k = key(r.platform, r.source)
           return <li key={k} className="p-3 text-sm">
@@ -345,7 +375,7 @@ export function PolicyValidation({ selections }: { selections: Selections }) {
             </div>
             {expanded.has(k) && <ResultDetails result={r} />}
           </li>
-        })}{!matched.length && !current.length && <li className="p-6 text-center text-sm text-gray-500">{validating ? "Results appear here as each platform finishes." : loader.busy ? "Reading your tenant's policies" : "No deployed OpenIntuneBaseline policies were found. Use New Deployment first."}</li>}</ul>
+        })}{listTotal > 0 && !listView.shown.length && noMatch}{!matched.length && !current.length && <li className="p-6 text-center text-sm text-gray-500">{validating ? "Results appear here as each platform finishes." : loader.busy ? "Reading your tenant's policies" : "No deployed OpenIntuneBaseline policies were found. Use New Deployment first."}</li>}</ul>
         <ActionBar summary={barSummary(summary)} status={jobProgress(job) ?? (checking ? "Validating the policy" : loader.line)} error={error || job?.error} back={{ onClick: () => goto("platforms"), disabled: busy }}>
           <button type="button" className={primary} disabled={busy || loader.busy || !supported.length} onClick={validateAll}><ShieldCheck className="h-4 w-4" aria-hidden="true" />{current.length ? "Validate all again" : "Validate all"} ({supported.length})</button>
         </ActionBar>
@@ -368,12 +398,13 @@ export function PolicyValidation({ selections }: { selections: Selections }) {
           <StatCard label="Drift detected" value={count(saved.results, "drifted")} tone="amber" />
           <StatCard label="Errors" value={count(saved.results, "error")} tone="red" />
         </div>
-        <ul className="mt-4 divide-y divide-gray-100 overflow-hidden rounded-2xl bg-gray-50">{savedResults.map(r => <li key={r.source} className="p-3 text-sm">
+        {savedResults.length > 0 && <ValidationFilterBar view={savedView} total={savedResults.length} filter={filter} onChange={setFilter} />}
+        <ul className="mt-4 divide-y divide-gray-100 overflow-hidden rounded-2xl bg-gray-50">{savedResults.length > 0 && !savedView.shown.length && noMatch}{savedView.shown.map(r => <li key={r.source} className="p-3 text-sm">
           <p className="text-gray-900">{r.name}</p><p className="mt-1 text-xs text-gray-600">Tenant policy: {r.tenantPolicyName}</p>
           <span className={cn("mt-1 inline-block rounded-full px-2 py-0.5 text-xs", STATUS[r.status].tone)}>{STATUS[r.status].label}</span>
           <ResultDetails result={r} />
         </li>)}</ul>
-        <ActionBar summary={barSummary()} back={{ label: viewing.from === "platforms" ? "Back" : "Back to the results", onClick: () => { setStep(viewing.from); setViewing(null) } }}>
+        <ActionBar summary={barSummary()} back={{ label: viewing.from === "platforms" ? "Back" : "Back to the results", onClick: () => { setStep(viewing.from); setViewing(null); setFilter(NO_VALIDATION_FILTER) } }}>
           <button type="button" className={button} disabled={exports.saving} onClick={() => exportJson([saved], `saved ${saved.validatedAt.slice(0, 10)}`)}><Download className="h-4 w-4" aria-hidden="true" />JSON</button>
           <button type="button" className={button} disabled={exports.saving} onClick={() => exportCsv(savedResults, `saved ${saved.validatedAt.slice(0, 10)}`)}><Download className="h-4 w-4" aria-hidden="true" />CSV</button>
           <button type="button" className={button} disabled={exports.saving} onClick={() => exportPdf(savedResults, `saved ${saved.validatedAt.slice(0, 10)}`, saved.reference, saved.validatedAt)}><FileText className="h-4 w-4" aria-hidden="true" />PDF</button>
@@ -392,7 +423,7 @@ export function PolicyValidation({ selections }: { selections: Selections }) {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <span>{new Date(run.validatedAt).toLocaleString()}, {run.reference}<span className="text-xs text-gray-500">{". "}{plural(run.results.length, "policy", "policies")}: {count(run.results, "compliant")} match, {count(run.results, "drifted")} drift, {plural(count(run.results, "error"), "error", "errors")}{isFullValidation(run) ? "" : ". Single policy check, not part of the baseline score"}</span></span>
           <span className="flex gap-2">
-            <button type="button" className={button} disabled={busy || step === "fix"} onClick={() => { exports.clear(); setViewing({ run, from: step === "saved" ? viewing?.from ?? "platforms" : step }); setStep("saved") }}>View</button>
+            <button type="button" className={button} disabled={busy || step === "fix"} onClick={() => { exports.clear(); setFilter(NO_VALIDATION_FILTER); setViewing({ run, from: step === "saved" ? viewing?.from ?? "platforms" : step }); setStep("saved") }}>View</button>
             <button type="button" className={button} aria-label="Delete saved validation" aria-expanded={deleting?.runId === run.runId} disabled={!!deleting} onClick={() => setDeleting({ runId: run.runId })}><Trash2 className="h-4 w-4" aria-hidden="true" /></button>
           </span>
         </div>
