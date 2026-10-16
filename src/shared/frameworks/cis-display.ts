@@ -82,6 +82,8 @@ export interface DiffEntryInput {
   afterSettings?: readonly SettingLeaf[]
   beforeSettingsTotal?: number
   afterSettingsTotal?: number
+  beforeToken?: string
+  afterToken?: string
 }
 
 /** The recorded setting values of one side of a difference by name, and how many values that side holds in total. */
@@ -116,7 +118,7 @@ export function readableDiffEntry(entry: DiffEntryInput, names?: SettingNames): 
   const match = /^settings\.(.+?)(?:\.settingInstance(?:[.[].*)?)?$/.exec(entry.path)
   let definitionId = entry.definitionId ?? match?.[1]
   if (!entry.definitionId && definitionId) {
-    for (const value of [entry.before, entry.after]) {
+    for (const value of [entry.beforeToken ?? entry.before, entry.afterToken ?? entry.after]) {
       const owner = value?.replace(/_[^_]+$/, "")
       if (owner && owner !== value && owner !== definitionId && ((names && Object.hasOwn(names.settings, owner)) || owner.startsWith(`${definitionId}_`))) { definitionId = owner; break }
     }
@@ -124,25 +126,27 @@ export function readableDiffEntry(entry: DiffEntryInput, names?: SettingNames): 
   const whole = entry.path === "(object)"
   if (!definitionId && !whole && !beforeValues && !afterValues) return { label: entry.path, ...(entry.before !== undefined ? { before: entry.before } : {}), ...(entry.after !== undefined ? { after: entry.after } : {}) }
   const label = whole ? "Policy settings" : definitionId ? nameOf(definitionId) : entry.path
-  const shown = (value: string | undefined, values: ReadableSettingValues | undefined) => {
-    if (value === undefined || values) return undefined
+  // A shortened text value is read from its whole token, so a long option id still finds its label.
+  const shown = (shortened: string | undefined, whole: string | undefined, values: ReadableSettingValues | undefined) => {
+    if (shortened === undefined || values) return undefined
+    const value = whole ?? shortened
     if (/^[[{]/.test(value)) {
       try {
         const parsed = JSON.parse(value) as { settingInstance?: unknown } | null
         return summarizeSetting(parsed && typeof parsed === "object" && "settingInstance" in parsed ? parsed.settingInstance : parsed, names).join("; ")
       } catch { return value }
     }
-    return optionDisplayName(value, definitionId, names)
+    return short(optionDisplayName(value, definitionId, names))
   }
-  const before = shown(entry.before, beforeValues)
-  const after = shown(entry.after, afterValues)
+  const before = shown(entry.before, entry.beforeToken, beforeValues)
+  const after = shown(entry.after, entry.afterToken, afterValues)
   return { label, ...(before !== undefined ? { before } : {}), ...(after !== undefined ? { after } : {}), ...(beforeValues ? { beforeValues } : {}), ...(afterValues ? { afterValues } : {}) }
 }
 
 /** The setting definition ids a deployment difference names, for reading their display names. */
 export function diffDefinitionIds(entry: DiffEntryInput): string[] {
   const root = /^settings\.(.+?)(?:\.settingInstance(?:[.[].*)?)?$/.exec(entry.path)?.[1]
-  const tokens = [entry.before, entry.after].filter((value): value is string => !!value && !/^[[{]/.test(value)).map(value => value.replace(/_[^_]+$/, ""))
+  const tokens = [entry.beforeToken ?? entry.before, entry.afterToken ?? entry.after].filter((value): value is string => !!value && !/^[[{]/.test(value)).map(value => value.replace(/_[^_]+$/, ""))
   return [...new Set([...(entry.definitionId ? [entry.definitionId] : []), ...(root ? [root, ...tokens.filter(id => id.startsWith(root))] : []), ...[...(entry.beforeSettings ?? []), ...(entry.afterSettings ?? [])].map(leaf => leaf.definitionId)])]
 }
 

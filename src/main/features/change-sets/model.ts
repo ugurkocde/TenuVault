@@ -56,7 +56,13 @@ export interface DiffEntry {
   /** How many values the side holds in total; more than the list holds when the list was cut. */
   beforeSettingsTotal?: number
   afterSettingsTotal?: number
+  /** A text value longer than the shortened `before` or `after`, kept whole up to MAX_DIFF_TOKEN characters, so a choice keeps its option id for its label. */
+  beforeToken?: string
+  afterToken?: string
 }
+
+/** Longest whole text value kept next to a shortened one. */
+export const MAX_DIFF_TOKEN = 1000
 
 /** Setting values kept across all entries of one diff, so a change set stays bounded. */
 export const MAX_DIFF_SETTING_LEAVES = 2000
@@ -345,11 +351,12 @@ export function diffConfigurations(type: IntuneType, before: Item | null, after:
       return
     }
     const where = { path: path || "(object)", ...(inside ? { definitionId: inside } : {}) }
+    const token = (side: "before" | "after", value: Json | undefined) => typeof value === "string" && value.length > MAX_DIFF_VALUE ? { [`${side}Token`]: value.slice(0, MAX_DIFF_TOKEN) } : {}
     const before = leavesOf(a)
     const after = leavesOf(b)
-    if (a === undefined || a === null) push({ ...where, change: "added", after: short(b), ...sideOf("after", after) })
-    else if (b === undefined || b === null) push({ ...where, change: "removed", before: short(a), ...sideOf("before", before) })
-    else push({ ...where, change: "changed", before: short(a), after: short(b), ...sideOf("before", before), ...sideOf("after", after) })
+    if (a === undefined || a === null) push({ ...where, change: "added", after: short(b), ...sideOf("after", after), ...token("after", b) })
+    else if (b === undefined || b === null) push({ ...where, change: "removed", before: short(a), ...sideOf("before", before), ...token("before", a) })
+    else push({ ...where, change: "changed", before: short(a), after: short(b), ...sideOf("before", before), ...sideOf("after", after), ...token("before", a), ...token("after", b) })
   }
   walk(left ?? undefined, right ?? undefined, "", undefined)
   return { entries, truncated }

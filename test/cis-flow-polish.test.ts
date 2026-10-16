@@ -6,6 +6,7 @@ import { clearSettingNames } from "../src/portal/lib/drift/setting-names"
 import { benchmarkTitle, cisExportFileName, knownBenchmarkName, omittedSettingValues, optionDisplayName, readableDiffEntry, referenceDisplayName, settingDisplayName } from "../src/shared/frameworks/cis-display"
 import { localDate, type CisException } from "../src/shared/frameworks/cis-exceptions"
 import { MAX_SETTING_LEAVES, summarizeSetting } from "../src/shared/frameworks/setting-summary"
+import { searchRecommendationResults } from "../src/shared/frameworks/recommendation-filter"
 import { workspaceExportCSV } from "../src/shared/compliance/export"
 import { deploymentImpactText, deploymentReferenceLabel } from "../src/renderer/features/cis-remediation/CisRemediationHistory"
 import { clearCisCatalogs, rememberCisCatalog } from "../src/renderer/lib/cis-catalog-cache"
@@ -300,5 +301,31 @@ describe("review round 2 of the flow polish", () => {
     expect(prepareSaveFile("x", "report. .csv").name).toBe("report.csv")
     expect(prepareSaveFile("x", "CONTOSO.csv").name).toBe("CONTOSO.csv")
     expect(prepareSaveFile("x", "COM10.csv").name).toBe("COM10.csv")
+  })
+})
+
+describe("review round 3 of the flow polish", () => {
+  const type = typeForFolder("ConfigurationPolicies")!
+  const id = `device_vendor_msft_policy_config_${"a".repeat(190)}`
+  const setting = (value: string) => ({ settingInstance: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance", settingDefinitionId: id, choiceSettingValue: { value: `${id}_${value}`, children: [] } } })
+  const policy = (value: string) => ({ id: "11111111-2222-3333-4444-555555555555", name: "Existing", description: "", platforms: "windows10", technologies: "mdm", roleScopeTagIds: ["0"], settings: [setting(value)] } as unknown as Item)
+
+  it("names both choices of an existing policy update whose option ids are longer than the shortened values", () => {
+    expect(id.length).toBe(223)
+    const entries = diffConfigurations(type, policy("0"), policy("1")).entries
+    expect(entries).toHaveLength(1)
+    // The stored values are shortened to the same text; the whole tokens tell them apart.
+    expect(entries[0]!.before).toBe(entries[0]!.after)
+    expect([entries[0]!.beforeToken, entries[0]!.afterToken]).toEqual([`${id}_0`, `${id}_1`])
+    expect(readableDiffEntry(entries[0]!, { settings: { [id]: "Long setting" }, options: { [`${id}_0`]: "Disabled", [`${id}_1`]: "Enabled" } })).toEqual({ label: "Long setting", before: "Disabled", after: "Enabled" })
+    expect(readableDiffEntry(entries[0]!)).toMatchObject({ before: "0", after: "1" })
+  })
+
+  it("finds a recommendation by the readable name of its setting as well as by the raw id", () => {
+    const items = [{ id: "46.7", title: "Ensure SMB signing", level: 1 as const, result: "Fail" as const, settings: [{ id: ENCRYPTION, status: "Different" as const, findingKeys: [] }], findingKeys: [] }]
+    expect(searchRecommendationResults(items, "require encryption", names)).toHaveLength(1)
+    expect(searchRecommendationResults(items, "lanmanworkstation_requireencryption", names)).toHaveLength(1)
+    expect(searchRecommendationResults(items, "require encryption")).toHaveLength(1)
+    expect(searchRecommendationResults(items, "dialect", names)).toHaveLength(0)
   })
 })
