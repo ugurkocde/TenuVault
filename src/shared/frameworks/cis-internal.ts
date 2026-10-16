@@ -1,4 +1,5 @@
 import { frameworks, type Framework } from "./catalog"
+import { matchesTerms, searchTerms } from "../search"
 
 /**
  * Internal gate for CIS Benchmarks assessment before certification. Access comes
@@ -38,7 +39,7 @@ export function isCisBenchmarksPath(pathname: string): boolean {
 }
 
 export function searchEffectiveFrameworks(list: Framework[], query: string): Framework[] {
-  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  const terms = searchTerms(query)
   if (!terms.length) return list
-  return list.filter(f => terms.every(term => `${f.name} ${f.publisher} ${f.kind} ${f.description}`.toLowerCase().includes(term)))
+  return list.filter(f => matchesTerms(`${f.name} ${f.publisher} ${f.kind} ${f.description}`.toLowerCase(), terms))
 }
