@@ -70,20 +70,24 @@ export function BackupPairPicker({
   const hidden = backups.length - offered.length
   const problem = pairProblem(offered, baseline, comparison)
   const warned = [baseline, comparison].some((id) => backupCompleteness(offered.find((backup) => backup.id === id)?.status) === "warnings")
-  const select = (side: "baseline" | "comparison", label: string) => (
-    <Select value={(side === "baseline" ? baseline : comparison) ?? undefined} onValueChange={(id) => onChange(choose({ baseline, comparison }, side, id))} disabled={loading || busy}>
-      <SelectTrigger aria-label={label} className="h-11 w-full min-w-0 sm:w-[300px]">
-        <SelectValue placeholder={loading ? "Loading backups..." : "Choose a backup"} />
-      </SelectTrigger>
-      <SelectContent>
-        {offered.map((backup) => (
-          <SelectItem key={backup.id} value={backup.id}>
-            {optionLabel(backup)}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  )
+  const select = (side: "baseline" | "comparison", label: string) => {
+    // A chosen backup that is no longer offered (for example from an earlier result) shows the placeholder.
+    const chosen = side === "baseline" ? baseline : comparison
+    return (
+      <Select value={offered.some((backup) => backup.id === chosen) ? chosen! : ""} onValueChange={(id) => onChange(choose({ baseline, comparison }, side, id))} disabled={loading || busy}>
+        <SelectTrigger aria-label={label} className="h-11 w-full min-w-0 sm:w-[300px]">
+          <SelectValue placeholder={loading ? "Loading backups..." : "Choose a backup"} />
+        </SelectTrigger>
+        <SelectContent>
+          {offered.map((backup) => (
+            <SelectItem key={backup.id} value={backup.id}>
+              {optionLabel(backup)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    )
+  }
   return (
     <div className="rounded-3xl bg-white p-6">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-end">

@@ -111,3 +111,11 @@ describe("backup status labels", () => {
     expect(statusLabel("Failed")).toBe("Failed")
   })
 })
+
+describe("drift backup picker selection", () => {
+  it("shows the placeholder for a chosen backup that is no longer offered", () => {
+    const html = render(backups, { baseline: "unread", comparison: "newer" })
+    expect(html).toContain("Choose a backup")
+    expect(html).toContain("Choose backups from the list.")
+  })
+})
