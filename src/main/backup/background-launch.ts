@@ -5,10 +5,23 @@ import { join, dirname } from 'node:path'
 const run = promisify(execFile)
 const LABEL = 'com.tenuvault.desktop.background'
 const xml = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')
-export function launchAgent(executable: string): string {
+const plist = (args: string[]) => `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>${LABEL}</string><key>ProgramArguments</key><array>${args.map(arg => `<string>${xml(arg)}</string>`).join('')}</array><key>RunAtLoad</key><true/><key>StartInterval</key><integer>300</integer><key>LimitLoadToSessionType</key><string>Aqua</string></dict></plist>`
+const bundleOf = (executable: string) => {
   const bundle = dirname(dirname(dirname(executable)))
   if (!bundle.endsWith('.app')) throw new Error('Background launch requires a macOS application bundle')
-  return `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>${LABEL}</string><key>ProgramArguments</key><array><string>/usr/bin/open</string><string>-g</string><string>-j</string><string>-a</string><string>${xml(bundle)}</string><string>--args</string><string>--hidden</string></array><key>RunAtLoad</key><true/><key>StartInterval</key><integer>300</integer><key>LimitLoadToSessionType</key><string>Aqua</string></dict></plist>`
+  return bundle
+}
+// Opening a running app sends it a reopen event, which shows and focuses the window like a dock click.
+// The helper skips the launch while this user runs the executable, and otherwise opens a new instance:
+// if TenuVault started in the meantime or the check missed it, that instance loses the single-instance
+// lock and exits, and the running app ignores its --hidden arguments instead of coming to the front.
+const OPEN_IF_NOT_RUNNING = '/bin/ps -U "$(/usr/bin/id -u)" -o comm= | /usr/bin/grep -Fxq -- "$2" || exec /usr/bin/open -n -g -j -a "$1" --args --hidden'
+export function launchAgent(executable: string): string {
+  return plist(['/bin/sh', '-c', OPEN_IF_NOT_RUNNING, 'tenuvault-background', bundleOf(executable), executable])
+}
+/** The agent of earlier builds, which reopened TenuVault every five minutes even while it was running. */
+export function reopeningLaunchAgent(executable: string): string {
+  return plist(['/usr/bin/open', '-g', '-j', '-a', bundleOf(executable), '--args', '--hidden'])
 }
 export const WINDOWS_TASK = `param([ValidateSet('status','install','remove')][string]$Operation, [string]$AppPath)
 $ErrorActionPreference = 'Stop'
@@ -55,6 +68,22 @@ export class BackgroundLaunch {
     try { const plist = await readFile(this.plist, 'utf8'), service = await this.service(); return { supported: true, installed: !!service && (!service.includes('/usr/bin/open') || (plist === launchAgent(this.options.executable) && service.includes(dirname(dirname(dirname(this.options.executable)))))) } }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { supported: true, installed: false }; throw error }
   }
+  /** Checks the status and replaces an agent of an earlier build that brought the window to the front. */
+  async refresh(): Promise<{ supported: boolean; installed: boolean }> {
+    if (this.supported && this.options.platform === 'darwin') {
+      const current = await readFile(this.plist, 'utf8').catch(() => null)
+      if (current === reopeningLaunchAgent(this.options.executable) && (await this.service())?.includes('/usr/bin/open')) {
+        try { return await this.install() }
+        catch (error) {
+          // Put the earlier agent back so restarts keep working and the next start tries again.
+          await writeFile(this.plist, current, { mode: 0o600 })
+          await this.execute('/bin/launchctl', ['bootstrap', `gui/${this.options.uid}`, this.plist]).catch(() => undefined)
+          throw error
+        }
+      }
+    }
+    return this.status()
+  }
   async install(): Promise<{ supported: boolean; installed: boolean }> {
     if (!this.supported) throw new Error('Background launch requires an installed Windows or macOS build.')
     if (this.options.platform === 'win32') await this.windows('install')
@@ -66,7 +95,9 @@ export class BackgroundLaunch {
       await writeFile(this.plist, launchAgent(this.options.executable), { mode: 0o600 })
       try {
         await this.execute('/bin/launchctl', ['enable', `${domain}/${LABEL}`])
-        await this.execute('/bin/launchctl', ['bootstrap', domain, this.plist])
+        // launchd can refuse a bootstrap right after the bootout of the same label, so try once more.
+        const bootstrap = () => this.execute('/bin/launchctl', ['bootstrap', domain, this.plist])
+        await bootstrap().catch(async () => { await new Promise(resolve => setTimeout(resolve, 1_000)); return bootstrap() })
       }
       catch (error) { await rm(this.plist, { force: true }); throw error }
     }
