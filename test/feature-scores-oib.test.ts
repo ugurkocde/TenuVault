@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest"
-import type { ValidationRun, PolicyValidation } from "../src/shared/oib/types"
+import { isFullValidation, type ValidationRun, type PolicyValidation } from "../src/shared/oib/types"
 import { compareSettings } from "../src/shared/oib/compare"
 import { routes, signals } from "../src/main/features/scores"
-import { oibFrameworkDetail, oibFrameworkScore } from "../src/main/features/scores/oib"
+import { oibFrameworkDetail, oibFrameworkScore, oibVersion } from "../src/main/features/scores/oib"
 import { call, fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
 import { fakeFrameworksApi } from "./feature-scores-fixtures"
 
@@ -12,7 +12,7 @@ const policy = (overrides: Partial<PolicyValidation> = {}): PolicyValidation => 
   source: "WINDOWS/Policy.json", name: "OIB Policy", folder: "SettingsCatalog", tenantPolicyId: "policy-1", tenantPolicyName: "Tenant policy", status: "drifted", expectedSettings: 4,
   result: { totalOib: 4, totalTenant: 4, matched: 2, different: 1, missing: 1, extra: 1, mismatches: [{ settingDefinitionId: "s3", label: "Setting 3", oibValue: "true", tenantValue: "false" }], oibOnly: [{ settingDefinitionId: "s4", label: "Setting 4", oibValue: "true" }], tenantOnly: [{ settingDefinitionId: "extra", label: "Extra", tenantValue: "true" }], compliant: false }, ...overrides,
 })
-const run = (overrides: Partial<ValidationRun> = {}): ValidationRun => ({ runId: "new", tenantId: TENANT_A, platform: "windows", commit: COMMIT, reference: "OIB Windows", validatedAt: "2026-09-29T00:00:00Z", validationVersion: 1, results: [policy()], ...overrides })
+const run = (overrides: Partial<ValidationRun> = {}): ValidationRun => ({ runId: "new", tenantId: TENANT_A, platform: "windows", commit: COMMIT, reference: "OIB Windows", validatedAt: "2026-09-29T00:00:00Z", validationVersion: 1, selection: "all", results: [policy()], ...overrides })
 
 describe("saved OIB score projections", () => {
   it("scores expected root settings and drills down without inventing control or assignment evidence", () => {
@@ -47,7 +47,7 @@ describe("saved OIB score projections", () => {
     const anchor = run({ results: [policy(), second] })
     const older = run({ runId: "old", validatedAt: "2026-09-28T00:00:00Z", results: [second, policy()] })
     const changed = [run({ runId: "commit", commit: "b".repeat(40) }), run({ runId: "selection" }), run({ runId: "version", results: anchor.results, validationVersion: undefined })].map((entry, index) => ({ ...entry, validatedAt: `2026-09-2${index + 1}T00:00:00Z` }))
-    const score = oibFrameworkScore({ platform: "windows", runs: [older, anchor, ...changed], error: null }, NOW)
+    const score = oibFrameworkScore({ platform: "windows", runs: [older, anchor, ...changed], skipped: 0, error: null }, NOW)
     expect(score.trend.map((point) => point.runId)).toEqual(["old", "new"])
     expect(score.incompatible.map((point) => point.runId)).toEqual(["version", "selection", "commit"])
     expect(score.incompatible.find((entry) => entry.runId === "selection")?.reasons).toContain("Selected policies changed.")
@@ -64,6 +64,53 @@ describe("saved OIB score projections", () => {
     const multi = compareSettings([nested] as never, [changed] as never)
     expect(multi.mismatches).toHaveLength(2)
     expect(multi.different).toBe(1)
+  })
+})
+
+describe("OIB full validations and release versions", () => {
+  const compliant = (source: string, id: string) => policy({ source, tenantPolicyId: id, status: "compliant", result: { ...policy().result!, matched: 4, different: 0, missing: 0, mismatches: [], oibOnly: [] } })
+
+  it("scores the card and trend from full validations only; a single-policy check stays in history", () => {
+    const full = run({ runId: "full", validatedAt: "2026-09-20T00:00:00Z" })
+    const single = run({ runId: "single", selection: "single", validatedAt: "2026-09-29T00:00:00Z", results: [compliant("WINDOWS/Policy.json", "policy-1")] })
+    const score = oibFrameworkScore({ platform: "windows", runs: [single, full], skipped: 0, error: null }, NOW)
+    expect(score.latest?.identity.runId).toBe("full")
+    expect(score.latest?.score.score).toBe(50)
+    expect(score.trend.map((point) => point.runId)).toEqual(["full"])
+    expect(score.historyOnly).toEqual([{ runId: "single", assessedAt: "2026-09-29T00:00:00Z", reason: expect.stringContaining("Single-policy validation") }])
+    const only = oibFrameworkScore({ platform: "windows", runs: [single], skipped: 0, error: null }, NOW)
+    expect(only).toMatchObject({ state: "history-only", latest: null, trend: [] })
+    expect(only.message).toMatch(/Validate all/)
+  })
+
+  it("treats a saved run without a recorded selection as single only when it holds one policy", () => {
+    const legacySingle = run({ runId: "legacy-1", selection: undefined })
+    const legacyFull = run({ runId: "legacy-2", selection: undefined, results: [policy(), policy({ source: "second", tenantPolicyId: "policy-2" })] })
+    expect(isFullValidation(legacySingle)).toBe(false)
+    expect(isFullValidation(legacyFull)).toBe(true)
+    expect(isFullValidation(run({ selection: "all" }))).toBe(true)
+  })
+
+  it("uses the release tag as the version so validations of one release connect across commits", () => {
+    const reference = (commit: string) => `OpenIntuneBaseline Windows v4.0 · windows-v4.0 @ ${commit.slice(0, 7)}`
+    const first = run({ runId: "first", commit: "1cc71a9".padEnd(40, "0"), reference: reference("1cc71a9"), validatedAt: "2026-09-20T00:00:00Z" })
+    const second = run({ runId: "second", commit: "2dd82b0".padEnd(40, "0"), reference: reference("2dd82b0") })
+    const score = oibFrameworkScore({ platform: "windows", runs: [first, second], skipped: 0, error: null }, NOW)
+    expect(score.latest?.identity.frameworkVersion).toBe("windows-v4.0")
+    expect(score.latest?.versionDetail).toBe(`Commit ${"2dd82b0".padEnd(40, "0")}`)
+    expect(score.trend.map((point) => point.runId)).toEqual(["first", "second"])
+    expect(score.incompatible).toEqual([])
+    expect(oibVersion({ reference: "OIB Windows", commit: COMMIT })).toBe(`main @ ${COMMIT.slice(0, 7)}`)
+    expect(oibVersion({ reference: `OpenIntuneBaseline Windows · main @ ${COMMIT.slice(0, 7)}`, commit: COMMIT })).toBe(`main @ ${COMMIT.slice(0, 7)}`)
+  })
+
+  it("skips only a malformed validation instead of hiding the platform", async () => {
+    const source = api({ [TENANT_A]: [run(), run({ runId: "broken", results: [null as never] })] })
+    const deps = fakeDeps({ plans: { [TENANT_A]: "pro" }, api: source.handler, now: () => NOW })
+    const summary = await call(routes(deps), "/api/scores", { tenantId: TENANT_A, action: "summary" })
+    const windows = summary.body.frameworks.find((entry: any) => entry.frameworkId === "oib-windows")
+    expect(windows).toMatchObject({ state: "scored", latest: { score: { score: 50 } } })
+    expect(windows.message).toContain("1 unreadable saved validation was left out.")
   })
 })
 

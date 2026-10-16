@@ -1,11 +1,12 @@
 import { useState } from "react"
+import { Link } from "react-router-dom"
 import { useMutation } from "@tanstack/react-query"
 import type { Tenant } from "~/contexts/TenantContext"
 import { Chip, Tile } from "~/components/dashboard/tiles"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { toast } from "../../lib/toast"
-import { formatTime, healthApi, SEVERITY_TONE, type Finding } from "./api"
+import { formatTime, healthApi, SEVERITY_TONE, type Finding, type Run } from "./api"
 import { GovernanceExportButtons } from "../shared/GovernanceExportButtons"
 import { healthCsv, healthJson } from "../shared/governance-export"
 
@@ -14,7 +15,16 @@ import { healthCsv, healthJson } from "../shared/governance-export"
  * never as passing. Resolved findings are listed separately with the evidence time that
  * resolved them. In read-only mode (plan without the feature) no action is offered.
  */
-export function FindingsList({ tenant, findings, readOnly = false, onChanged }: { tenant: Tenant; findings: Finding[]; readOnly?: boolean; onChanged: () => void }) {
+/** What the list says when no finding is shown: never run, clean, or only resolved findings. */
+export function emptyFindingsText(lastRun: Pick<Run, "status" | "finishedAt"> | null | undefined, findings: Finding[]): string {
+  if (!lastRun) return findings.length ? "No open findings." : "No review has run yet. Backup status is unknown."
+  const when = formatTime(lastRun.finishedAt)
+  if (lastRun.status === "partial") return `No open findings in the latest review (${when}). Some evidence could not be read, so it is not a clean result.`
+  if (lastRun.status !== "completed") return `No open findings, but the latest review (${when}) did not complete. Review again for current results.`
+  return `No open findings in the latest review (${when}).`
+}
+
+export function FindingsList({ tenant, findings, lastRun, readOnly = false, onChanged }: { tenant: Tenant; findings: Finding[]; lastRun?: Run | null; readOnly?: boolean; onChanged: () => void }) {
   const [showResolved, setShowResolved] = useState(false)
   const active = findings.filter((finding) => finding.state !== "resolved")
   const resolved = findings.filter((finding) => finding.state === "resolved")
@@ -30,7 +40,7 @@ export function FindingsList({ tenant, findings, readOnly = false, onChanged }: 
           </Button>
         )}
       </div>
-      {shown.length === 0 && <p className="text-sm text-gray-500">{findings.length ? "No open findings in the latest review." : "No review has run yet. Backup status is unknown."}</p>}
+      {shown.length === 0 && <p className="text-sm text-gray-500">{emptyFindingsText(lastRun, findings)}</p>}
       <ul className="divide-y divide-gray-100 dark:divide-gray-800">
         {shown.map((finding) => (
           <FindingRow key={finding.id} tenant={tenant} finding={finding} readOnly={readOnly} onChanged={onChanged} />
@@ -54,7 +64,15 @@ function FindingRow({ tenant, finding, readOnly, onChanged }: { tenant: Tenant; 
         {finding.acknowledgedAt && !resolved && <Chip tone="neutral">Acknowledged by {finding.acknowledgedBy ?? "an admin"}</Chip>}
         <span className="font-medium text-gray-900">{finding.title}</span>
       </div>
-      <p className="mt-1 text-sm text-gray-600">{finding.reason}</p>
+      <p className="mt-1 text-sm text-gray-600">
+        {finding.reason}
+        {finding.link && (
+          <>
+            {" "}
+            <Link to={finding.link} className="font-medium text-gray-900 underline underline-offset-2">Open</Link>
+          </>
+        )}
+      </p>
       <p className="mt-1 text-xs text-gray-500">
         First seen {formatTime(finding.firstSeenAt)}; last checked {formatTime(finding.lastSeenAt)}; evidence read {formatTime(finding.observedAt, "never (unknown)")}
         {resolved && `; resolved by fresh evidence ${formatTime(finding.resolvedAt)}`}

@@ -33,35 +33,56 @@ Baseline scores turn the framework comparisons you already saved into one score 
 2. Open **Governance** in the sidebar and choose **Baseline scores**.
 3. Click **Refresh** to recompute the scores from the saved comparisons.
 
-Each framework card shows the framework name, version, profile and mapping version, the **Technical score**, **Coverage**, the number of **Unknown** results and **Gaps**, and when it was assessed. Under the score, the card lists how many capabilities are matching, different, missing, unknown and outside scope, and the **Top actionable gaps** with their priority. Click **Export CSV** or **Export JSON** at the top of the screen to save the scores currently shown.
+Each framework card shows the framework name, version, profile and mapping version, the **Technical score** together with its coverage, for example "9.6% on 96% coverage", the number of **Unknown** results and **Gaps**, and when it was assessed. Under the score, the card lists how many capabilities were counted as matching, different, missing, unknown and outside scope, and the **Top actionable gaps** with their priority. Click **Export CSV** or **Export JSON** at the top of the screen to save the scores currently shown.
+
+**Gaps** are the capabilities counted different or missing, so the gap count always equals different plus missing. A capability counted matching is never listed as a gap. Each gap says how it was counted, for example "Configured but unassigned, counted missing" or "An assigned policy sets a different value". The CSV and JSON exports use the same count and the same labels.
+
+A card marked **Partial collection** means a policy type could not be read, so evidence in it may be missing. Policy types that a comparison does not read by design, such as scripts, app configuration and enrollment settings, are not a read gap. The framework page and the card read the same rule, so they always agree for one comparison.
 
 The score compares Intune and Conditional Access configuration with a technical mapping. It does not prove enforcement on devices or compliance with the full framework.
 
+The **Baseline score** tile on the dashboard shows the most recently assessed score, names its framework, and shows its coverage in the same format as the card.
+
 ### How the score is counted
 
-Score is matching divided by matching plus different plus missing, over evaluated capabilities only. Each capability counts once using its best assigned policy evidence, and unassigned policies cannot count as matches. Unknown results are left out of the score and shown as coverage, which is evaluated divided by evaluated plus unknown. Outside scope results are not counted. When nothing could be evaluated there is no score, shown as **Not scored**, never 0 or 100 percent.
+Score is matching divided by matching plus different plus missing, over evaluated capabilities only. Each capability counts once using its best assigned policy evidence, and unassigned policies cannot count as matches. Unknown results are left out of the score and shown as coverage, which is evaluated divided by evaluated plus unknown. A framework reference that has no configuration check counts once as unknown, and the card says how many of the unknown results are such references. Outside scope results are not counted. When nothing could be evaluated there is no score, shown as **Not scored**, never 0 or 100 percent.
+
+Read the score and its coverage together. A partial collection can change the coverage and the score without any change in the tenant.
 
 ### Look at the controls behind a score
 
-1. On a framework card, click **Controls and gaps**.
-2. Read **Gaps**, which lists each differing or missing capability with its controls, settings and priority reasons, then **Source controls**, which lists every control with its status.
-3. Click **Close** to return, or **Open comparison** on the card to open the saved comparison itself.
+1. On a framework card, click **How this score is counted**.
+2. Read **Counted capabilities**. Every capability and framework reference is listed once under the result it was counted as: **Different**, **Missing**, **Unknown**, **Matching** and **Outside scope**, each with the reason. The groups add up to the counts on the card, so you can trace a low score item by item. Different and missing capabilities also show their controls, the settings and policies behind them, including whether a policy is assigned, and the priority reasons.
+3. Read **Source controls**, which lists every control with its status.
+4. Click **Close** to return, or **Open comparison** on the card to open the saved comparison itself.
 
-A **Trend of compatible comparisons** line connects only assessments of the same framework version, profile and scope. Comparisons that do not match are listed separately under the trend and are not connected to it.
+Only one detail panel is open at a time, whether you open it from a card or from the portfolio. **Refresh** reloads the scores and an open detail.
+
+A **Trend of compatible comparisons** line connects only assessments of the same framework version, profile and scope. A point with partial collection is drawn hollow. Comparisons that do not match, and saved results that set no score, are listed separately under the trend with the reason.
+
+### Scores after an app update
+
+When an app update changes how capabilities are counted or changes a framework mapping, earlier comparisons stay saved but no longer set a score. The screen lists such a framework under **Saved results without a score** with "Scored under older rules. Compare again to score." and the reason. On the framework page, those comparisons carry the label **Scored under older rules** in **Comparison history**. Run **Compare again** to score the framework under the current rules.
+
+The scores update as soon as a framework comparison or an OpenIntuneBaseline validation finishes, on this screen and on the dashboard.
+
+### OpenIntuneBaseline scores
+
+OpenIntuneBaseline cards count expected settings instead of capabilities. Only a full validation, **Validate all** in Policy Validation, sets the card score and trend. A single policy check is saved in history but does not change the score. A platform with only single policy checks is listed under **Saved results without a score**. The version on the card is the release tag, for example `windows-v4.0`, with the commit shown below it, so validations of one release stay on one trend. A saved validation that cannot be read is left out on its own and does not hide the other validations of its platform.
 
 ### Portfolio scores (MSP)
 
 With MSP, the **Portfolio** section at the bottom of the screen shows scores per customer tenant from each tenant's own saved comparisons.
 
 1. Click **Load portfolio**, or **Refresh portfolio** after the first load.
-2. In the table, use **Controls** on a row to open that tenant's controls and gaps.
+2. In the table, use **Details** on a row to open how that tenant's score is counted.
 
 Tenants without an MSP license or without sign-in are listed as not included and are never guessed.
 
 ### Limits
 
 * Scores come only from saved native comparisons and OpenIntuneBaseline validations. Nothing is read from the live tenant to build a score.
-* A partial collection is marked **Partial collection**, and frameworks whose saved comparison could not be read are listed without a score.
+* A partial collection is marked **Partial collection**, and frameworks whose saved comparison could not be read are listed without a score. When several frameworks fail for the same reason, the reason is shown once with **Retry**.
 
 ## Conflicts and hygiene
 
@@ -140,7 +161,7 @@ Customers keep their adopted version until you adopt a newer one for them. When 
 
 ### Adoption across customers (MSP)
 
-The **Adoption across customers** section shows the adopted version, pending upgrade, deviation and assessment freshness per tenant. Click **Load portfolio** to fill the table. Connected tenants without MSP are named as not included.
+The **Adoption across customers** section shows the adopted version, pending upgrade, deviation and assessment freshness per tenant. When some policies of an adoption could not be assessed, the deviation is shown as unknown, never as 0. Click **Load portfolio** to fill the table. Connected tenants without MSP are named as not included.
 
 ### Limits
 

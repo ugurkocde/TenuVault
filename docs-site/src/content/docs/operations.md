@@ -31,7 +31,7 @@ A review also checks work signals stored by the other hubs. Each signal becomes 
 * Open conflicts and hygiene findings.
 * Baseline scores whose saved comparison is older than 30 days.
 
-Work signals come from records already stored on this computer, and a signal family appears only when the tenant plan includes that screen. The review does not read policy content live to build them. A signal that is stale or was never collected stays **Unknown**, never passing, and when a stored record cannot be read the review records **Work signals unknown** and leaves earlier signal findings unchanged.
+Work signals come from records already stored on this computer, and a signal family appears only when the tenant plan includes that screen. The review does not read policy content live to build them. A signal that is stale or was never collected stays **Unknown**, never passing, and when a stored record cannot be read the review records **Work signals unknown**, names the source it could not read, links to that screen, and leaves earlier signal findings unchanged.
 
 Each review records its outcome and summary. Findings stay stored between reviews: a finding resolves when a later review reads fresh evidence, and reopens when the problem returns.
 
@@ -52,7 +52,7 @@ The readiness tile shows whether scheduling is **Ready**, **Off**, **Sign-in req
 
 ## Work through findings
 
-The **Findings** list shows each open finding with its severity, title, reason, and when it was first seen, last checked, and when its evidence was read. Click **Export CSV** or **Export JSON** above the list to save the findings currently shown, including resolved findings only while they are shown.
+The **Findings** list shows each open finding with its severity, title, reason, and when it was first seen, last checked, and when its evidence was read. **Open** after the reason goes to the screen the finding comes from. When no finding is open, the list says whether no review has run yet, or names the time of the latest review and whether it completed or could only read part of the evidence. Click **Export CSV** or **Export JSON** above the list to save the findings currently shown, including resolved findings only while they are shown.
 
 1. To hand a finding to someone, type their name in **Owner** and click **Save owner**.
 2. To record that a finding is being handled, click **Acknowledge**. Acknowledged findings carry the admin who acknowledged them.

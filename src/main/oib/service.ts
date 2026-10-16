@@ -552,7 +552,8 @@ async function validate(body: RecordJson): Promise<ValidationRun> {
   } finally {
     progress.delete(key)
   }
-  const run: ValidationRun = { runId: randomUUID(), tenantId: tenant, platform, commit: pack.catalog.commit, reference: pack.catalog.reference, validatedAt: new Date().toISOString(), validationVersion: 1, results }
+  const selection = body.selection === "single" || body.selection === "all" ? body.selection : undefined
+  const run: ValidationRun = { runId: randomUUID(), tenantId: tenant, platform, commit: pack.catalog.commit, reference: pack.catalog.reference, validatedAt: new Date().toISOString(), validationVersion: 1, ...(selection && { selection }), results }
   // Re-checking a single policy is not kept as a separate history entry.
   if (body.save !== false) saveValidations(tenant, [run, ...readValidations(tenant)])
   return run

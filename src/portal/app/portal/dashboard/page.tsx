@@ -25,6 +25,7 @@ import { cn } from "~/lib/utils"
 import { Button } from "~/components/ui/button"
 import { useDashboardStats } from "~/hooks/dashboard/useDashboardStats"
 import { useBaselineScore } from "~/hooks/dashboard/useBaselineScore"
+import { formatDate, formatPercent } from "@desktop/features/scores/api"
 import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
 import { storageLabel } from "~/lib/storage-label"
@@ -128,7 +129,7 @@ function BaselineScoreTile({ tenant, plan }: { tenant: Tenant; plan: Plan | null
           : latest && latest.incompleteCollection.length > 0 ? <Chip tone="warning">Partial</Chip>
           : null}
       </div>
-      <TileLabel className="mt-6">Baseline score</TileLabel>
+      <TileLabel className="mt-6">{latest ? `Baseline score: ${latest.identity.frameworkName}` : "Baseline score"}</TileLabel>
       {!score.enabled ? (
         <p className="mt-1 text-sm text-gray-500">Scores and coverage from your saved framework comparisons and OIB validations, with trends. Framework comparisons stay available on every plan.</p>
       ) : score.error ? (
@@ -141,6 +142,11 @@ function BaselineScoreTile({ tenant, plan }: { tenant: Tenant; plan: Plan | null
           <BigValue className="mt-1">Unavailable</BigValue>
           <p className="mt-1 text-sm text-gray-500">Saved comparisons could not be read, so there is no score.</p>
         </>
+      ) : !latest && score.historyOnly ? (
+        <>
+          <BigValue className="mt-1">No current score</BigValue>
+          <p className="mt-1 line-clamp-3 text-sm text-gray-500">{score.historyOnly.frameworkName}: {score.historyOnly.message}</p>
+        </>
       ) : !latest ? (
         <>
           <BigValue className="mt-1">No score</BigValue>
@@ -148,10 +154,9 @@ function BaselineScoreTile({ tenant, plan }: { tenant: Tenant; plan: Plan | null
         </>
       ) : (
         <>
-          <BigValue className="mt-1">{latest.score.score === null ? "Not scored" : `${latest.score.score.toLocaleString(undefined, { maximumFractionDigits: 1 })} %`}</BigValue>
+          <BigValue className="mt-1">{formatPercent(latest.score.score)}</BigValue>
           <p className="mt-1 line-clamp-2 text-sm text-gray-500">
-            {latest.identity.frameworkName}, coverage {latest.score.coverage === null ? "none" : `${latest.score.coverage} %`}, {latest.score.counts.unknown} unknown
-            {score.assessed > 1 ? `. ${score.assessed} frameworks scored` : ""}
+            {latest.score.score === null ? latest.score.reason : `On ${formatPercent(latest.score.coverage, "unknown")} coverage, ${latest.score.counts.unknown} unknown.`} {score.assessed > 1 ? `The most recently assessed of ${score.assessed} scored frameworks, ${formatDate(latest.freshness.assessedAt)}.` : `Assessed ${formatDate(latest.freshness.assessedAt)}.`}
           </p>
           {latest.identity.selectionSha256 && <p className="mt-1 text-xs text-gray-500">Selected deployed OIB policies only.</p>}
         </>
