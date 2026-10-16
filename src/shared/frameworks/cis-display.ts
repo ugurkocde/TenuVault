@@ -2,7 +2,7 @@ import { comparable, rootMatches, type BaselinePolicy, type Finding, type Json, 
 import { formatRate } from "./cis-readiness"
 import { definitionLabel } from "../intune/drift-format"
 import type { SettingNames } from "../intune/drift"
-import { summarizeSetting } from "./setting-summary"
+import { summarizeSetting, type SettingLeaf } from "./setting-summary"
 
 export function benchmarkDisplayName(id: string): string {
   const parts = id.split("-").filter(part => part.length > 0)
@@ -51,7 +51,7 @@ export function referenceDisplayName(reference: string, name?: string | null): s
  * the file holds, the tenant and the date. Only characters every file system accepts are kept.
  */
 export function cisExportFileName(input: { reference: string; benchmarkName?: string | null; part: string; tenantName?: string | null; date: string; extension: string }): string {
-  const clean = (text: string) => text.replace(/[^\w .()-]/g, " ").replace(/\s+-\s+/g, " ").replace(/\s+/g, " ").trim()
+  const clean = (text: string) => text.replace(/[^\p{L}\p{N}_ .()-]/gu, " ").replace(/\s+-\s+/g, " ").replace(/\s+/g, " ").trim()
   const id = input.reference.trim().split(/\s+/)[0] ?? ""
   const rest = input.reference.trim().slice(id.length).replace(/\bLevel (\d)\b/g, "L$1").trim()
   const title = id ? `CIS ${benchmarkTitle(id, input.benchmarkName).replace(/^CIS\s+/i, "")}` : "CIS Benchmarks"
@@ -72,23 +72,41 @@ export function optionDisplayName(value: string, definitionId: string | undefine
   return value
 }
 
+/** A deployment difference entry as the change-set engine records it; the Settings Catalog fields are missing on older entries. */
+export interface DiffEntryInput {
+  path: string
+  before?: string
+  after?: string
+  definitionId?: string
+  beforeSettings?: readonly SettingLeaf[]
+  afterSettings?: readonly SettingLeaf[]
+}
+
 /**
  * One configuration difference of a benchmark deployment in plain words, such as "Require
- * encryption" with "Disabled" to "Enabled", for a path like
- * settings.<definition id>.settingInstance.choiceSettingValue.value. A child choice inside a group
- * is named by the setting its option belongs to. Paths outside the settings keep their path.
+ * encryption" with "Disabled" to "Enabled". The setting is the definition the engine recorded for
+ * the changed value (a child inside a group names its own setting); for older entries it comes from
+ * a path like settings.<definition id>.settingInstance... and a choice token. An added or removed
+ * setting or policy lists its recorded setting values by name, so a whole new policy reads as its
+ * settings. Paths outside the settings keep their path.
  */
-export function readableDiffEntry(entry: { path: string; before?: string; after?: string }, names?: SettingNames): { label: string; before?: string; after?: string } {
+export function readableDiffEntry(entry: DiffEntryInput, names?: SettingNames): { label: string; before?: string; after?: string } {
+  const nameOf = (id: string) => names && Object.hasOwn(names.settings, id) ? names.settings[id]! : definitionLabel(id)
+  const leavesText = (leaves: readonly SettingLeaf[]) => leaves.map(leaf => `${nameOf(leaf.definitionId)}: ${optionDisplayName(leaf.value, leaf.definitionId, names)}`).join("; ")
   const match = /^settings\.(.+?)(?:\.settingInstance(?:[.[].*)?)?$/.exec(entry.path)
-  if (!match) return { label: entry.path, ...(entry.before !== undefined ? { before: entry.before } : {}), ...(entry.after !== undefined ? { after: entry.after } : {}) }
-  let definitionId = match[1]!
-  for (const value of [entry.before, entry.after]) {
-    const owner = value?.replace(/_[^_]+$/, "")
-    if (owner && owner !== value && owner !== definitionId && ((names && Object.hasOwn(names.settings, owner)) || owner.startsWith(`${definitionId}_`))) { definitionId = owner; break }
+  let definitionId = entry.definitionId ?? match?.[1]
+  if (!entry.definitionId && definitionId) {
+    for (const value of [entry.before, entry.after]) {
+      const owner = value?.replace(/_[^_]+$/, "")
+      if (owner && owner !== value && owner !== definitionId && ((names && Object.hasOwn(names.settings, owner)) || owner.startsWith(`${definitionId}_`))) { definitionId = owner; break }
+    }
   }
-  const label = names && Object.hasOwn(names.settings, definitionId) ? names.settings[definitionId]! : definitionLabel(definitionId)
-  const shown = (value: string | undefined) => {
+  const whole = entry.path === "(object)"
+  if (!definitionId && !whole && !entry.beforeSettings?.length && !entry.afterSettings?.length) return { label: entry.path, ...(entry.before !== undefined ? { before: entry.before } : {}), ...(entry.after !== undefined ? { after: entry.after } : {}) }
+  const label = whole ? "Policy settings" : definitionId ? nameOf(definitionId) : entry.path
+  const shown = (value: string | undefined, leaves: readonly SettingLeaf[] | undefined) => {
     if (value === undefined) return undefined
+    if (leaves?.length) return leavesText(leaves)
     if (/^[[{]/.test(value)) {
       try {
         const parsed = JSON.parse(value) as { settingInstance?: unknown } | null
@@ -97,9 +115,16 @@ export function readableDiffEntry(entry: { path: string; before?: string; after?
     }
     return optionDisplayName(value, definitionId, names)
   }
-  const before = shown(entry.before)
-  const after = shown(entry.after)
+  const before = shown(entry.before, entry.beforeSettings)
+  const after = shown(entry.after, entry.afterSettings)
   return { label, ...(before !== undefined ? { before } : {}), ...(after !== undefined ? { after } : {}) }
+}
+
+/** The setting definition ids a deployment difference names, for reading their display names. */
+export function diffDefinitionIds(entry: DiffEntryInput): string[] {
+  const root = /^settings\.(.+?)(?:\.settingInstance(?:[.[].*)?)?$/.exec(entry.path)?.[1]
+  const tokens = [entry.before, entry.after].filter((value): value is string => !!value && !/^[[{]/.test(value)).map(value => value.replace(/_[^_]+$/, ""))
+  return [...new Set([...(entry.definitionId ? [entry.definitionId] : []), ...(root ? [root, ...tokens.filter(id => id.startsWith(root))] : []), ...[...(entry.beforeSettings ?? []), ...(entry.afterSettings ?? [])].map(leaf => leaf.definitionId)])]
 }
 
 export function humanSettingLabel(settingId: string): string {

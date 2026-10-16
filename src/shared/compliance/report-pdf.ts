@@ -749,7 +749,7 @@ function levelSection(layout: Layout, summary: CisReadinessSummary, level: CisLe
     layout.y += 6
   }
   layout.paragraph([{ text: level.coverage === null
-    ? level.coverageSource === 'none' ? 'Coverage is not shown for this benchmark because CIS did not publish its full recommendation list.' : `Coverage: ${coverageSourceLabel(level.coverageSource)}`
+    ? level.coverageSource === 'none' ? 'No recommendation list is loaded, so coverage is not shown.' : `Coverage: ${coverageSourceLabel(level.coverageSource)}`
     : `Coverage: ${percent(level.coverage)} (${level.assessedAutomated} of ${level.denominator}), source: ${coverageSourceLabel(level.coverageSource)}`, size: 8.4, style: 'bold', color: PALETTE.ink, lineHeight: 4 }], { after: 3 })
   if (level.notAssessed.length) {
     layout.paragraph([{ text: 'Not assessed identifiers', size: 7, style: 'bold', color: PALETTE.muted, lineHeight: 3.4 }, { text: level.notAssessed.join(', '), size: 7.6, color: PALETTE.body, lineHeight: 3.5, technical: true }], { after: 4 })

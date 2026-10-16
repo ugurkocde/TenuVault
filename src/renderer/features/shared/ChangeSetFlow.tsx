@@ -17,6 +17,16 @@ function stepOf(changeSet: ChangeSet, preview: ChangeSetPreview | null): number 
   return preview ? 1 : 0
 }
 
+/**
+ * The admin who created a change set, from its creation revision. Older revisions are dropped
+ * once a record holds its revision limit, so when the first kept revision is not the creation the
+ * attribution is left out rather than naming a later operator.
+ */
+export function changeSetCreator(changeSet: Pick<ChangeSet, "createdAt" | "history">): string | null {
+  const first = changeSet.history?.[0]
+  return first && first.at === changeSet.createdAt && first.actor ? first.actor : null
+}
+
 const inputClass = "h-9 w-full rounded-full border border-gray-200 bg-white px-3 text-sm text-gray-800 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"
 
 /**
@@ -69,7 +79,7 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
           <p className="text-sm text-gray-500">
             {changeSet.kind === "rollback" ? "Rollback change set. " : ""}
             {/* The admin who created it, as recorded; the workflow that created it is an internal name. */}
-            {changeSet.ticket ? `Ticket ${changeSet.ticket}. ` : ""}Created {formatDate(changeSet.createdAt)}{changeSet.history?.[0]?.actor ? ` by ${changeSet.history[0].actor}` : ""}. Source version {sourceLabel ?? changeSet.sourceVersion ?? "not recorded"}.
+            {changeSet.ticket ? `Ticket ${changeSet.ticket}. ` : ""}Created {formatDate(changeSet.createdAt)}{changeSetCreator(changeSet) ? ` by ${changeSetCreator(changeSet)}` : ""}. Source version {sourceLabel ?? changeSet.sourceVersion ?? "not recorded"}.
           </p>
         </div>
         {!embedded && <Chip tone={STATUS_TONE[changeSet.status]}>{changeSet.status}</Chip>}

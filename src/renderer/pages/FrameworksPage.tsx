@@ -429,6 +429,11 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   // CIS exports open the Save dialog like the Governance exports; the notice shows next to the button used.
   const [exportOrigin, setExportOrigin] = useState<ExportOrigin>("header")
   const saveCisFile = (data: string, name: string, encoding: "utf8" | "base64" = "utf8") => exportNotice.save(() => saveFile(data, name, encoding))
+  /** A CIS export the main process builds and saves through the Save dialog itself, whatever its size; a failure shows as the page error. */
+  const saveInMain = async (body: Record<string, unknown>) => {
+    const outcome = await request<{ name: string; saved: boolean; path?: string }>({ ...body, save: "dialog" })
+    await exportNotice.save(() => outcome.saved ? { saved: true, fileName: outcome.path?.split(/[\\/]/).pop() ?? outcome.name, ...(outcome.path ? { path: outcome.path } : {}) } : { saved: false, fileName: outcome.name })
+  }
   /** The status, error and saved file of a CIS export, shown next to the buttons that started it. */
   const exportStatus = (origin: ExportOrigin) => isCis && exportOrigin === origin && <>
     {busy && busyAt === "export" && <p role="status" className="w-full text-sm text-blue-700">{busy}</p>}
@@ -438,9 +443,9 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   const exportSaved = (format: "pdf" | "csv" | "json", runId?: string, origin: ExportOrigin = "header") => {
     if (isCis) setExportOrigin(origin)
     void perform(`Exporting ${format.toUpperCase()}…`, async () => {
-      const { file } = await request<{ file: ExportFile }>({ action: `workspace-${format}`, tenantId: credentials?.tenantId, tenantName: selectedTenant?.name, frameworkId: framework.id, ...(runId ? { runId } : {}) })
-      if (isCis) await saveCisFile(file.data, file.name, file.encoding)
-      else saveExport(file)
+      const body = { action: `workspace-${format}`, tenantId: credentials?.tenantId, tenantName: selectedTenant?.name, frameworkId: framework.id, ...(runId ? { runId } : {}) }
+      if (isCis) await saveInMain(body)
+      else saveExport((await request<{ file: ExportFile }>(body)).file)
     }, isCis ? "export" : "compare")
   }
   const workspaceQueue = useRef<Promise<unknown>>(Promise.resolve())
@@ -809,8 +814,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     if (!assessment) return
     setExportOrigin("header")
     void perform("Exporting PDF…", async () => {
-      const { file } = await request<{ file: ExportFile }>({ action: "workspace-cis-pdf", tenantId: credentials?.tenantId, tenantName: selectedTenant?.name, frameworkId: framework.id, runId: assessment.runId, ...(denominator ? { denominator } : {}) })
-      await saveCisFile(file.data, file.name, file.encoding)
+      await saveInMain({ action: "workspace-cis-pdf", tenantId: credentials?.tenantId, tenantName: selectedTenant?.name, frameworkId: framework.id, runId: assessment.runId, ...(denominator ? { denominator } : {}) })
     }, "export")
   }
   /** Readiness CSV or JSON, built from the readiness on screen and saved through the Save dialog. */
@@ -1245,6 +1249,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
             <button type="button" className={button} disabled={!!busy || historical} onClick={() => { setSelected(new Set()); setPreview(false); setConfirmed(false) }}>Clear</button>
             <button ref={excludeButton} type="button" className={button} disabled={!!busy || historical || !excludable.length} title={excludable.length ? undefined : "The selected findings are already excluded."} onClick={() => setExclusion({ owner: "", reason: "", expiresOn: "", count: excludable.length, error: "" })}>Exclude from score ({excludable.length})</button>
           </span>
+          {!historical && !excludable.length && <span className="w-full text-xs text-amber-800">Exclude from score is unavailable: the selected findings are already excluded.</span>}
         </div>}
         <Dialog open={exclusion !== null} onOpenChange={open => { if (!open && !busy) setExclusion(null) }}>
           <DialogContent onCloseAutoFocus={e => { e.preventDefault(); (excludeButton.current?.isConnected ? excludeButton.current : document.getElementById("cis-exclusions"))?.focus() }}>
@@ -1298,7 +1303,7 @@ function CisFindingRow({ finding, recommendations, checked, disabled, onChange, 
   const groups = groupObservationsByValue(finding.observed, finding.recommended)
   const settingName = settingDisplayName(finding.settingId, names)
   return <div className="flex items-start gap-3 py-2.5">
-    {selectable && <input type="checkbox" aria-label={`Select finding ${finding.settingId} from ${finding.policyName}`} checked={checked} disabled={disabled || !isSelectableFinding(finding)} onChange={onChange} className="mt-1 h-4 min-h-0 w-4 shrink-0" />}
+    {selectable && <input type="checkbox" aria-label={`Select finding ${settingName} from ${finding.policyName}`} checked={checked} disabled={disabled || !isSelectableFinding(finding)} onChange={onChange} className="mt-1 h-4 min-h-0 w-4 shrink-0" />}
     <details className="group min-w-0 flex-1"><summary className="flex cursor-pointer list-none items-center gap-2.5 text-sm [&::-webkit-details-marker]:hidden">
         <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium ${colors[finding.status]}`}>{finding.status}</span>
         {excluded && <span className="shrink-0 rounded-full bg-gray-200 px-2.5 py-0.5 text-xs font-medium text-gray-700">Excluded</span>}

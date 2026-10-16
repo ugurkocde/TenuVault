@@ -157,7 +157,7 @@ describe("CIS flow on the page", () => {
     await refreshInternalCisBenchmarks()
     const container = renderPage()
     await waitFor(() => container.textContent!.includes("Require Encryption"))
-    const row = container.querySelector(`input[aria-label="Select finding ${ENCRYPTION} from Synthetic policy"]`)!.closest("div")!
+    const row = container.querySelector(`input[aria-label="Select finding Require Encryption from Synthetic policy"]`)!.closest("div")!
     const summary = row.querySelector("summary")!
     expect(summary.querySelector(".font-mono")!.textContent).toBe(ENCRYPTION)
     expect([...summary.querySelectorAll("span")].some(span => span.textContent === "Require Encryption")).toBe(true)

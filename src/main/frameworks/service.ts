@@ -49,6 +49,13 @@ let cisEntitlementProvider: ((tenantId: string) => string | null) | null = null
  * bearer credential to the delivery service. Without a provider, delivery fails closed.
  */
 export function setCisEntitlementProvider(provider: ((tenantId: string) => string | null) | null): void { cisEntitlementProvider = provider }
+let exportSaver: ((file: ExportFile) => Promise<{ saved: boolean; path?: string }>) | null = null
+/**
+ * Bootstrap hook that saves a framework export through the native Save dialog in the main
+ * process. A request with `save: "dialog"` answers with the outcome instead of the file, so a
+ * large export is never sent to the renderer and back.
+ */
+export function setFrameworkExportSaver(saver: ((file: ExportFile) => Promise<{ saved: boolean; path?: string }>) | null): void { exportSaver = saver }
 function cisEntitlementToken(tenantId: string): string | null {
   try { return cisEntitlementProvider?.(tenantId) ?? null } catch { return null }
 }
@@ -494,7 +501,12 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       }
     }
     const workspace = loadWorkspace(body.tenantId, body.frameworkId)
-    if (["workspace-pdf", "workspace-csv", "workspace-json", "workspace-cis-pdf"].includes(body.action)) return exportWorkspace(body, workspace)
+    if (["workspace-pdf", "workspace-csv", "workspace-json", "workspace-cis-pdf"].includes(body.action)) {
+      const exported = await exportWorkspace(body, workspace)
+      if (body.save !== "dialog") return exported
+      if (!exportSaver) throw new FrameworkError("Saving exports is not available.", 500)
+      return { name: exported.file.name, ...(await exportSaver(exported.file)) }
+    }
     if (body.action === "workspace-save") {
       if (typeof body.reference !== "string" || body.reference.length > 200) throw new FrameworkError("Provide a source version up to 200 characters.")
       workspace.policies = Array.isArray(body.policies) && !body.policies.length ? [] : parsePolicies(body.policies)

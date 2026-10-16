@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { comparableSnapshot } from "../../../shared/intune/compare"
 import { buildRestorePlan } from "../../../shared/intune/restore-plan"
 import { cleanAssignment, typeForFolder, type IntuneType, type Item, type Json } from "../../../shared/intune/registry"
+import { settingLeaves, type SettingLeaf } from "../../../shared/frameworks/setting-summary"
 import type { ListedRecord } from "../contracts"
 
 /**
@@ -47,6 +48,11 @@ export interface DiffEntry {
   change: "added" | "removed" | "changed"
   before?: string
   after?: string
+  /** The Settings Catalog definition the changed value sits in, so a view can name it; older entries have none. */
+  definitionId?: string
+  /** For an added or removed setting or policy: its Settings Catalog values, read before the value was shortened. */
+  beforeSettings?: SettingLeaf[]
+  afterSettings?: SettingLeaf[]
 }
 
 /** One frozen operation of a change set, without its (possibly large) content. */
@@ -307,24 +313,32 @@ export function diffConfigurations(type: IntuneType, before: Item | null, after:
     if (entries.length >= MAX_DIFF_ENTRIES) truncated = true
     else entries.push(entry)
   }
-  const walk = (a: Json | undefined, b: Json | undefined, path: string): void => {
+  // Each entry keeps the Settings Catalog definition it sits in, and an added or removed object
+  // keeps its setting values, both taken before values are shortened.
+  const definitionOf = (value: Json | undefined): string | undefined => value && typeof value === "object" && !Array.isArray(value) && typeof (value as Item).settingDefinitionId === "string" ? (value as Item).settingDefinitionId as string : undefined
+  const leavesOf = (value: Json | undefined) => value && typeof value === "object" ? settingLeaves(value) : []
+  const walk = (a: Json | undefined, b: Json | undefined, path: string, definition: string | undefined): void => {
     if (canonicalJson(a ?? null) === canonicalJson(b ?? null)) return
     const objectA = a && typeof a === "object" && !Array.isArray(a)
     const objectB = b && typeof b === "object" && !Array.isArray(b)
+    const inside = definitionOf(b) ?? definitionOf(a) ?? definition
     if (objectA && objectB) {
       const keys = [...new Set([...Object.keys(a as Item), ...Object.keys(b as Item)])].sort()
-      for (const key of keys) walk((a as Item)[key], (b as Item)[key], path ? `${path}.${key}` : key)
+      for (const key of keys) walk((a as Item)[key], (b as Item)[key], path ? `${path}.${key}` : key, inside)
       return
     }
     if (Array.isArray(a) && Array.isArray(b) && a.length === b.length) {
-      a.forEach((entry, index) => walk(entry, b[index], `${path}[${index}]`))
+      a.forEach((entry, index) => walk(entry, b[index], `${path}[${index}]`, inside))
       return
     }
-    if (a === undefined || a === null) push({ path: path || "(object)", change: "added", after: short(b) })
-    else if (b === undefined || b === null) push({ path: path || "(object)", change: "removed", before: short(a) })
-    else push({ path: path || "(object)", change: "changed", before: short(a), after: short(b) })
+    const where = { path: path || "(object)", ...(inside ? { definitionId: inside } : {}) }
+    const before = leavesOf(a)
+    const after = leavesOf(b)
+    if (a === undefined || a === null) push({ ...where, change: "added", after: short(b), ...(after.length ? { afterSettings: after } : {}) })
+    else if (b === undefined || b === null) push({ ...where, change: "removed", before: short(a), ...(before.length ? { beforeSettings: before } : {}) })
+    else push({ ...where, change: "changed", before: short(a), after: short(b), ...(before.length ? { beforeSettings: before } : {}), ...(after.length ? { afterSettings: after } : {}) })
   }
-  walk(left ?? undefined, right ?? undefined, "")
+  walk(left ?? undefined, right ?? undefined, "", undefined)
   return { entries, truncated }
 }
 

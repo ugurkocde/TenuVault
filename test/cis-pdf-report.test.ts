@@ -124,7 +124,7 @@ describe("CIS readiness PDF report", () => {
     expect(coverageSourceLabel("none")).toBe("Not computable")
     const without = pdfText(generateCisReadinessPDF(summary, context))
     // Without a denominator list the PDF says in plain words why coverage is missing, and claims no automated count.
-    expect(without).toContain("Coverage is not shown for this benchmark because CIS did not publish its full recommendation list.")
+    expect(without).toContain("No recommendation list is loaded, so coverage is not shown.")
     expect(without).not.toContain("Not computable")
     expect(without).not.toContain("not computable without a denominator list")
     expect(without).not.toContain("Assessed automated")

@@ -178,3 +178,36 @@ export function summarizeSetting(value: unknown, names?: SettingNames): string[]
     return [FURTHER_NESTED_LINE]
   }
 }
+
+/** One configured value of a Settings Catalog setting: its definition and its choice or simple value as text. */
+export interface SettingLeaf { definitionId: string; value: string }
+
+/**
+ * The configured values inside any Settings Catalog content (a setting instance, a setting, a
+ * keyed settings map or a whole policy body), in document order, each with the definition it
+ * belongs to. Choice values keep their option id, so a view can show its label. Bounded by `limit`
+ * values and by depth; each value is cut to `maxLength` characters.
+ */
+export function settingLeaves(value: unknown, limit = 40, maxLength = 160): SettingLeaf[] {
+  const leaves: SettingLeaf[] = []
+  const text = (item: unknown) => { const shown = typeof item === "string" ? item : JSON.stringify(item) ?? String(item); return shown.length > maxLength ? `${shown.slice(0, maxLength)}...` : shown }
+  const walk = (node: unknown, depth: number): void => {
+    if (leaves.length >= limit || depth > MAX_DEPTH * 2) return
+    if (Array.isArray(node)) { for (const entry of node) walk(entry, depth + 1); return }
+    if (!isRecord(node)) return
+    const id = typeof node.settingDefinitionId === "string" ? node.settingDefinitionId : null
+    if (id) {
+      const choice = node.choiceSettingValue
+      if (isRecord(choice) && choice.value !== undefined && choice.value !== null) leaves.push({ definitionId: id, value: text(choice.value) })
+      const simple = node.simpleSettingValue
+      if (isRecord(simple) && simple.value !== undefined && simple.value !== null) leaves.push({ definitionId: id, value: text(simple.value) })
+      for (const key of ["choiceSettingCollectionValue", "simpleSettingCollectionValue"] as const) {
+        const collection = node[key]
+        if (Array.isArray(collection)) for (const entry of collection) if (isRecord(entry) && entry.value !== undefined && entry.value !== null && leaves.length < limit) leaves.push({ definitionId: id, value: text(entry.value) })
+      }
+    }
+    for (const [key, child] of Object.entries(node)) if (key !== "value") walk(child, depth + 1)
+  }
+  walk(value, 0)
+  return leaves.slice(0, limit)
+}

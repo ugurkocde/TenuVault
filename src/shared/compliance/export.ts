@@ -221,7 +221,6 @@ export function workspaceHistoryJSON(history: SavedAssessment[], context: Export
     assessments: history.map(saved => ({ report: workspaceReportHeader(saved, context), result: redactSecrets(withRecommendations(saved)) })) }, null, 2)
 }
 
-/** CSV export of a saved policy pack assessment: header rows, then one row per finding. */
 /**
  * CSV export of a saved pack assessment, one row per finding. The default layout puts the report
  * header rows above the table. The table layout, used for CIS, starts with the column header on

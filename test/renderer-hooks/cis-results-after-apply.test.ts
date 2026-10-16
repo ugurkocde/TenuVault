@@ -108,6 +108,22 @@ const done = () => ({ jobId: "job-1", phase: "done", status: "done", state: "don
 const freshRun = { "assess-start": () => Response.json({ jobId: "job-1" }), "assess-status": () => Response.json(done()) }
 
 describe("CIS results after changes and exclusions", () => {
+  it("says in visible text why Exclude from score is unavailable for findings already excluded", async () => {
+    const excepted = { ...workspace, exceptions: [{ id: "ex-1", benchmark: "intune-windows11", version: "5.0.0", level: 1, policyName: "Synthetic policy", settingId: ENCRYPTION, owner: "Owner", reason: "Accepted", expiresOn: "2099-01-01", createdAt: "2026-10-01T12:00:00.000Z" }] }
+    stubService({ ...freshRun, "workspace-open": () => Response.json({ workspace: excepted, activeJob: null }), "workspace-load": () => Response.json(excepted), "workspace-save": () => Response.json(excepted) })
+    await refreshInternalCisBenchmarks()
+    const container = renderPage()
+    await waitFor(() => !!buttonNamed(container, "Run again"))
+    await click(buttonNamed(container, "Run again"))
+    await waitFor(() => !container.textContent!.includes("Showing a saved assessment"))
+    const box = () => container.querySelector(`input[aria-label="Select finding Require Encryption from Synthetic policy"]`)
+    await waitFor(() => !!box())
+    await click(box())
+    const bar = container.querySelector('[aria-label="Selected findings"]')!
+    expect([...bar.querySelectorAll("button")].find(item => item.textContent?.startsWith("Exclude from score"))!.disabled).toBe(true)
+    expect(bar.textContent).toContain("Exclude from score is unavailable: the selected findings are already excluded.")
+  })
+
   it("shows an export failure from the full history alert next to that alert, also during setup", async () => {
     const full = { ...workspace, capacity: { count: 50, limit: 50, full: true, reason: "count" } }
     stubService({ "workspace-open": () => Response.json({ workspace: full, activeJob: null }), "workspace-load": () => Response.json(full), "workspace-json": () => Response.json({ error: "Error: The export could not be built." }, { status: 500 }) })
@@ -149,7 +165,9 @@ describe("CIS results after changes and exclusions", () => {
     await waitFor(() => !!buttonNamed(container, "Run again"))
     await click(buttonNamed(container, "Run again"))
     await waitFor(() => !container.textContent!.includes("Showing a saved assessment"))
-    await click(container.querySelector(`input[aria-label="Select finding ${ENCRYPTION} from Synthetic policy"]`))
+    const box = () => container.querySelector(`input[aria-label="Select finding Require Encryption from Synthetic policy"]`)
+    await waitFor(() => !!box())
+    await click(box())
     await click(buttonNamed(container, "Exclude from score (1)"))
     const dialog = () => document.body.querySelector('[role="dialog"]')!
     const fill = async (label: string, value: string) => {

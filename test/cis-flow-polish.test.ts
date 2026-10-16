@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { assessPolicySet, handleFramework, setInternalCisBenchmarksEnabled, type ExportFile } from "../src/main/frameworks/service"
+import { assessPolicySet, handleFramework, setFrameworkExportSaver, setInternalCisBenchmarksEnabled, type ExportFile } from "../src/main/frameworks/service"
 import { setNativeFrameworkAuthorization } from "../src/main/frameworks/native"
 import { loadWorkspace, recordAssessment, setFrameworkStore } from "../src/main/frameworks/workspaces"
 import { clearSettingNames } from "../src/portal/lib/drift/setting-names"
@@ -12,6 +12,10 @@ import { clearCisCatalogs, rememberCisCatalog } from "../src/renderer/lib/cis-ca
 import { clearCisSettingNames, loadCisSettingNames, MAX_NAME_ATTEMPTS, MAX_NAMED_DEFINITIONS } from "../src/renderer/lib/cis-setting-names"
 import type { SettingNames } from "../src/shared/intune/drift"
 import type { BaselinePolicy } from "../src/shared/frameworks/policies"
+import { diffConfigurations } from "../src/main/features/change-sets/model"
+import { typeForFolder, type Item } from "../src/shared/intune/registry"
+import { prepareGeneratedFile, prepareSaveFile, SAVE_FILE_LIMIT } from "../src/main/save-file"
+import { changeSetCreator } from "../src/renderer/features/shared/ChangeSetFlow"
 
 const tenantId = "11111111-1111-1111-1111-111111111111"
 const appId = "22222222-2222-2222-2222-222222222222"
@@ -196,4 +200,71 @@ describe("setting names in the renderer", () => {
     fail = false
     expect((await loadCisSettingNames(tenant, [ENCRYPTION])).options[`${ENCRYPTION}_1`]).toBe("Enabled")
   })
+})
+
+describe("review round 1 of the flow polish", () => {
+  const type = typeForFolder("ConfigurationPolicies")!
+  const GROUP = "device_vendor_msft_policy_config_securityoptions"
+  const TIMEOUT = `${GROUP}_lockscreentimeout`
+  const MODE = `${GROUP}_lockscreenmode`
+  const groupSetting = (timeout: number, mode: string) => ({ settingInstance: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance", settingDefinitionId: GROUP, groupSettingCollectionValue: [{ children: [
+    { "@odata.type": "#microsoft.graph.deviceManagementConfigurationSimpleSettingInstance", settingDefinitionId: TIMEOUT, simpleSettingValue: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationIntegerSettingValue", value: timeout } },
+    { "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance", settingDefinitionId: MODE, choiceSettingValue: { value: `${MODE}_${mode}`, children: [] } },
+  ] }] } })
+  const policy = (settings: object[]): Item => ({ name: "Security", description: "", platforms: "windows10", technologies: "mdm", roleScopeTagIds: ["0"], settings } as unknown as Item)
+  const groupNames: SettingNames = { settings: { [GROUP]: "Security options", [TIMEOUT]: "Lock screen timeout", [MODE]: "Lock screen mode", [ENCRYPTION]: "Require Encryption" }, options: { [`${MODE}_1`]: "Locked", [`${ENCRYPTION}_1`]: "Enabled" } }
+
+  it("names a changed child of a group by its own setting, from the engine's diff", () => {
+    const { entries } = diffConfigurations(type, policy([groupSetting(30, "1")]), policy([groupSetting(60, "1")]))
+    expect(entries).toHaveLength(1)
+    expect(entries[0]!.definitionId).toBe(TIMEOUT)
+    expect(readableDiffEntry(entries[0]!, groupNames)).toEqual({ label: "Lock screen timeout", before: "30", after: "60" })
+  })
+
+  it("lists a new policy and an added setting by their settings, whatever their size", () => {
+    const created = diffConfigurations(type, null, policy([groupSetting(30, "1"), { settingInstance: choice("1") }])).entries
+    expect(created).toHaveLength(1)
+    expect(created[0]!.path).toBe("(object)")
+    expect(created[0]!.after!.length).toBeLessThanOrEqual(163)
+    expect(readableDiffEntry(created[0]!, groupNames)).toEqual({ label: "Policy settings", after: "Lock screen timeout: 30; Lock screen mode: Locked; Require Encryption: Enabled" })
+    const added = diffConfigurations(type, policy([groupSetting(30, "1")]), policy([groupSetting(30, "1"), { settingInstance: choice("1") }])).entries
+    expect(added.map(entry => readableDiffEntry(entry, groupNames))).toEqual([{ label: "Require Encryption", after: "Require Encryption: Enabled" }])
+  })
+
+  it("names the creator only when the first kept revision is the creation", () => {
+    expect(changeSetCreator({ createdAt: "2026-10-15T11:00:00Z", history: [{ at: "2026-10-15T11:00:00Z", actor: "Ada Admin", reason: "Created a change set for review" }] })).toBe("Ada Admin")
+    expect(changeSetCreator({ createdAt: "2026-10-15T11:00:00Z", history: [{ at: "2026-10-16T09:00:00Z", actor: "Later Operator", reason: "Applied" }] })).toBeNull()
+    expect(changeSetCreator({ createdAt: "2026-10-15T11:00:00Z", history: [] })).toBeNull()
+  })
+
+  it("keeps letters of any script in file names", () => {
+    expect(cisExportFileName({ reference: "intune-windows11 5.0.0 Level 1", part: "findings", tenantName: "Müller & Söhne", date: "2026-10-16", extension: "csv" })).toBe("CIS Microsoft Intune for Windows 11 5.0.0 L1 findings (Müller Söhne) 2026-10-16.csv")
+    expect(prepareSaveFile("x", "CIS findings (Müller Söhne) 2026-10-16.csv").name).toBe("CIS findings (Müller Söhne) 2026-10-16.csv")
+  })
+
+  it("saves a workspace export larger than the renderer save limit from the main process", async () => {
+    const data = new Map<string, string>()
+    setFrameworkStore({ get: key => data.get(key) ?? null, set: (key, value) => { data.set(key, value) }, delete: key => { data.delete(key) } })
+    setInternalCisBenchmarksEnabled(true)
+    setNativeFrameworkAuthorization(async () => "pro")
+    const pack: BaselinePolicy = { name: "Large policy", platforms: "windows10", technologies: "mdm", description: "Synthetic", provenance: { schemaVersion: 1, benchmark: "intune-windows11", version: "5.0.0", level: "Level 1", sourceFile: "l.json" }, settings: [{ settingInstance: choice("1") }] }
+    // Two large observed values: a workspace below the 32,000,000 character limit whose export is above the 25,000,000 save limit.
+    const big = (index: number) => ({ policyId: `00000000-0000-0000-0000-00000000000${index}`, policyName: `Tenant ${index}`, value: { ...choice("0"), note: "x".repeat(13_000_000) } })
+    const assessment = { ...assessPolicySet({ tenantId, frameworkId: "cis-benchmarks", reference: "intune-windows11 5.0.0 Level 1", policies: [pack], current: [], runId: "run-large", assessedAt: "2026-10-10T12:00:00.000Z" }) }
+    assessment.findings = assessment.findings.map(finding => ({ ...finding, status: "Different" as const, observed: [big(1), big(2)] as never }))
+    recordAssessment(assessment, [pack])
+    const saved: Array<{ name: string; size: number }> = []
+    setFrameworkExportSaver(async file => { const prepared = prepareGeneratedFile(file.data, file.name, file.encoding); saved.push({ name: prepared.name, size: prepared.content.length }); return { saved: true, path: `/tmp/${prepared.name}` } })
+    try {
+      const answer = await handleFramework({ action: "workspace-json", frameworkId: "cis-benchmarks", tenantId, tenantName: "Contoso", save: "dialog" }) as { name: string; saved: boolean; path?: string; file?: unknown }
+      expect(answer).toMatchObject({ saved: true, name: `CIS Benchmarks saved assessments (Contoso) ${localDate()}.json` })
+      expect(answer.file).toBeUndefined()
+      expect(saved[0]!.size).toBeGreaterThan(SAVE_FILE_LIMIT)
+      // The renderer save path would have refused it.
+      expect(() => prepareSaveFile("x".repeat(SAVE_FILE_LIMIT + 1), saved[0]!.name)).toThrow("The export could not be prepared.")
+    } finally {
+      setFrameworkExportSaver(null)
+      setInternalCisBenchmarksEnabled(null)
+    }
+  }, 30_000)
 })

@@ -6,7 +6,7 @@ import { ChangeSetFlow } from "../shared/ChangeSetFlow"
 import { formatDate, STATUS_TONE } from "../shared/change-set"
 import { cachedCisCatalog } from "../../lib/cis-catalog-cache"
 import { cachedCisSettingNames, loadCisSettingNames } from "../../lib/cis-setting-names"
-import { benchmarkTitle, knownBenchmarkName, referenceDisplayName } from "../../../shared/frameworks/cis-display"
+import { benchmarkTitle, diffDefinitionIds, knownBenchmarkName, referenceDisplayName } from "../../../shared/frameworks/cis-display"
 import type { SettingNames } from "../../../shared/intune/drift"
 import { deploymentActions, getDeployment, listDeployments, rollbackActions, type Deployment, type DeploymentDetail } from "./api"
 
@@ -109,11 +109,7 @@ export function CisRemediationHistory({ tenant, focus, onApplied }: { tenant: Te
   const credentials = tenant.credentials
   useEffect(() => {
     const operations = [...(detail?.changeSet?.operations ?? []), ...(detail?.rollbackChangeSet?.operations ?? [])]
-    const ids = [...new Set(operations.flatMap(operation => operation.diff.flatMap(entry => {
-      const root = /^settings\.(.+?)(?:\.settingInstance(?:[.[].*)?)?$/.exec(entry.path)?.[1]
-      const options = [entry.before, entry.after].filter((value): value is string => !!value && !/^[[{]/.test(value)).map(value => value.replace(/_[^_]+$/, ""))
-      return root ? [root, ...options.filter(id => id.startsWith(root))] : []
-    })))]
+    const ids = [...new Set(operations.flatMap(operation => operation.diff.flatMap(diffDefinitionIds)))]
     if (!ids.length || !credentials?.tenantId || !credentials.appId) return
     let active = true
     void loadCisSettingNames({ tenantId: credentials.tenantId, appId: credentials.appId }, ids).then(read => { if (active) setNames(read) }).catch(() => undefined)
