@@ -1,3 +1,4 @@
+import { crc32 } from "node:zlib"
 import type { PdfBranding } from "../shared/pdf/theme"
 import { allows, PlanRequired, type Plan } from "../shared/plans"
 import type { KeyValueStore } from "./storage/secure-store"
@@ -7,7 +8,10 @@ export const PDF_BRANDING_KEY = "pdf.branding"
 /** Largest logo accepted, in decoded bytes. */
 export const LOGO_LIMIT = 1024 * 1024
 const LABEL_LIMIT = 120
-const LOGO_PIXELS = 4096
+/** Largest logo accepted, in pixels on each side. */
+export const LOGO_PIXELS = 2048
+// Longest side of the stored logo; the cover prints it at most 44 mm wide.
+const LOGO_SIDE = 1200
 
 /** Thrown for branding the admin entered that cannot be saved; the message says what to change. */
 export class BrandingError extends Error {
@@ -34,8 +38,77 @@ function color(value: unknown, name: string): string | undefined {
   return value.toUpperCase()
 }
 
-/** A PNG or JPEG data URL whose bytes really are a PNG or a JPEG of at most 1 MB. */
-function logo(value: unknown): { dataUrl: string } | undefined {
+// PNG chunks a logo may carry. Text, compressed text and ICC profiles are refused: they add nothing to a logo
+// and are the usual places for oversized or unexpected data.
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+const PNG_CHUNKS = new Set(["IHDR", "PLTE", "tRNS", "IDAT", "IEND", "sRGB", "gAMA", "cHRM", "pHYs"])
+// JPEG start of frame markers (SOF0 to SOF15 without DHT, JPG and DAC), which carry the image size.
+const JPEG_FRAMES = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf])
+const JPEG_SEGMENTS = 128
+
+/** Width and height a logo declares in its header, after a structural check of the whole file; throws BrandingError otherwise. */
+export function inspectLogo(bytes: Buffer, format: "png" | "jpeg"): { width: number; height: number } {
+  const size = format === "png" ? inspectPng(bytes) : inspectJpeg(bytes)
+  if (!size) throw new BrandingError("The logo file is not a valid PNG or JPEG image.")
+  if (size.width < 1 || size.height < 1) throw new BrandingError("The logo file is not a valid PNG or JPEG image.")
+  if (size.width > LOGO_PIXELS || size.height > LOGO_PIXELS) throw new BrandingError(`The logo can be at most ${LOGO_PIXELS} by ${LOGO_PIXELS} pixels.`)
+  return size
+}
+
+/**
+ * Walks every chunk: lengths inside the file, CRCs correct, one IHDR first, only the chunks a plain
+ * image needs, image data present and IEND last at the very end. Undefined when any check fails.
+ */
+function inspectPng(bytes: Buffer): { width: number; height: number } | undefined {
+  if (bytes.length < 8 || !bytes.subarray(0, 8).equals(PNG_SIGNATURE)) return undefined
+  let offset = 8
+  let size: { width: number; height: number } | undefined
+  let data = false
+  while (offset < bytes.length) {
+    if (offset + 12 > bytes.length) return undefined
+    const length = bytes.readUInt32BE(offset)
+    if (length > bytes.length - offset - 12) return undefined
+    const type = bytes.toString("latin1", offset + 4, offset + 8)
+    const body = bytes.subarray(offset + 4, offset + 8 + length)
+    if (crc32(body) !== bytes.readUInt32BE(offset + 8 + length)) return undefined
+    if (!PNG_CHUNKS.has(type)) return undefined
+    if ((type === "IHDR") !== (offset === 8)) return undefined
+    if (type === "IHDR") {
+      if (length !== 13) return undefined
+      const [depth, colorType, compression, filter, interlace] = bytes.subarray(offset + 16, offset + 21)
+      if (![1, 2, 4, 8, 16].includes(depth!) || ![0, 2, 3, 4, 6].includes(colorType!) || compression !== 0 || filter !== 0 || interlace! > 1) return undefined
+      size = { width: bytes.readUInt32BE(offset + 8), height: bytes.readUInt32BE(offset + 12) }
+    }
+    if (type === "IDAT") data = true
+    offset += length + 12
+    if (type === "IEND") return length === 0 && data && offset === bytes.length ? size : undefined
+  }
+  return undefined
+}
+
+/** Walks the segments up to the first start of frame and reads its size; undefined when the file ends or misbehaves first. */
+function inspectJpeg(bytes: Buffer): { width: number; height: number } | undefined {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return undefined
+  let offset = 2
+  for (let segments = 0; segments < JPEG_SEGMENTS; segments++) {
+    if (bytes[offset] !== 0xff) return undefined
+    // Fill bytes may pad a marker.
+    while (bytes[offset] === 0xff && offset < bytes.length) offset++
+    const marker = bytes[offset]
+    offset++
+    if (marker === undefined || marker === 0xd9 || marker === 0xda) return undefined
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue
+    if (offset + 2 > bytes.length) return undefined
+    const length = bytes.readUInt16BE(offset)
+    if (length < 2 || offset + length > bytes.length) return undefined
+    if (JPEG_FRAMES.has(marker)) return length >= 7 ? { width: bytes.readUInt16BE(offset + 5), height: bytes.readUInt16BE(offset + 3) } : undefined
+    offset += length
+  }
+  return undefined
+}
+
+/** A PNG or JPEG data URL of at most 1 MB whose bytes pass the structural check; the format and the bytes. */
+function logoBytes(value: unknown): { format: "png" | "jpeg"; bytes: Buffer } | undefined {
   if (value === undefined || value === null) return undefined
   const dataUrl = typeof value === "object" && !Array.isArray(value) ? (value as { dataUrl?: unknown }).dataUrl : undefined
   if (typeof dataUrl !== "string") throw new BrandingError("The logo must be a PNG or JPEG image.")
@@ -45,15 +118,66 @@ function logo(value: unknown): { dataUrl: string } | undefined {
   if (!match) throw new BrandingError("The logo must be a PNG or JPEG image.")
   const bytes = Buffer.from(match[2]!, "base64")
   if (bytes.length > LOGO_LIMIT) throw new BrandingError("The logo can be at most 1 MB.")
-  const png = bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
-  const jpeg = bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
-  if (match[1] === "png" ? !png : !jpeg) throw new BrandingError("The logo file is not a valid PNG or JPEG image.")
-  // jsPDF decodes a PNG to embed it, so a tiny file with huge dimensions could stall the export; a JPEG is embedded as is.
-  if (png && (bytes.length < 24 || bytes.readUInt32BE(16) > LOGO_PIXELS || bytes.readUInt32BE(20) > LOGO_PIXELS)) throw new BrandingError(`The logo can be at most ${LOGO_PIXELS} by ${LOGO_PIXELS} pixels.`)
-  return { dataUrl: `data:image/${match[1] === "png" ? "png" : "jpeg"};base64,${match[2]}` }
+  const format = match[1] === "png" ? "png" : "jpeg"
+  inspectLogo(bytes, format)
+  return { format, bytes }
 }
 
-/** Checks branding sent by the renderer: known fields only, labels cleaned, colors strict, the logo a real PNG or JPEG. */
+/** The part of Electron's nativeImage the logo needs; injected so the checks run without Electron. */
+export interface LogoImage {
+  isEmpty(): boolean
+  getSize(): { width: number; height: number }
+  resize(options: { width: number; height: number; quality?: "good" | "better" | "best" }): LogoImage
+  toPNG(): Buffer
+}
+
+/** Decodes image bytes; nativeImage.createFromBuffer in the app. */
+export type LogoDecoder = (bytes: Buffer) => LogoImage
+
+/** Keeps only the chunks inspectPng allows, so an encoder that adds a profile or text still yields a logo that passes. */
+function keepPlainChunks(png: Buffer): Buffer {
+  const parts: Buffer[] = [PNG_SIGNATURE]
+  for (let offset = 8; offset + 12 <= png.length;) {
+    const length = png.readUInt32BE(offset)
+    if (PNG_CHUNKS.has(png.toString("latin1", offset + 4, offset + 8))) parts.push(png.subarray(offset, offset + length + 12))
+    offset += length + 12
+  }
+  return Buffer.concat(parts)
+}
+
+/**
+ * The logo as the app stores it: checked structurally, decoded within its declared size, scaled so
+ * its longest side is at most 1200 pixels and encoded again as a plain PNG. Only this re-encoded
+ * PNG ever reaches the PDF engines, so they never decode an uploaded file.
+ */
+export function canonicalLogo(value: unknown, decode: LogoDecoder): { dataUrl: string } | undefined {
+  const logo = logoBytes(value)
+  if (!logo) return undefined
+  const declared = inspectLogo(logo.bytes, logo.format)
+  let image: LogoImage
+  try {
+    image = decode(logo.bytes)
+  } catch {
+    throw new BrandingError("The logo file is not a valid PNG or JPEG image.")
+  }
+  const actual = image.isEmpty() ? { width: 0, height: 0 } : image.getSize()
+  if (actual.width !== declared.width || actual.height !== declared.height) throw new BrandingError("The logo file is not a valid PNG or JPEG image.")
+  const scale = Math.min(1, LOGO_SIDE / Math.max(actual.width, actual.height))
+  const width = Math.max(1, Math.round(actual.width * scale))
+  const height = Math.max(1, Math.round(actual.height * scale))
+  const png = keepPlainChunks((scale < 1 ? image.resize({ width, height, quality: "best" }) : image).toPNG())
+  if (png.length > LOGO_LIMIT) throw new BrandingError("The logo is too detailed to store; use a simpler or smaller image.")
+  inspectLogo(png, "png")
+  return { dataUrl: `data:image/png;base64,${png.toString("base64")}` }
+}
+
+/** A stored logo that still passes the structural check, as a normalised data URL. */
+function logo(value: unknown): { dataUrl: string } | undefined {
+  const checked = logoBytes(value)
+  return checked && { dataUrl: `data:image/${checked.format};base64,${checked.bytes.toString("base64")}` }
+}
+
+/** Checks branding sent by the renderer or read back from the store: known fields only, labels cleaned, colors strict, the logo structurally a plain PNG or JPEG. */
 export function validateBranding(value: unknown): PdfBranding {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new BrandingError("The branding settings are invalid.")
   const input = value as Record<string, unknown>
@@ -81,7 +205,11 @@ export function validateBranding(value: unknown): PdfBranding {
 
 /** The saved PDF branding in the encrypted app store. */
 export class PdfBrandingStore {
-  constructor(private readonly store: KeyValueStore) {}
+  constructor(
+    private readonly store: KeyValueStore,
+    /** Decodes an uploaded logo so it can be stored as a re-encoded PNG. */
+    private readonly decodeLogo: LogoDecoder,
+  ) {}
 
   /** The saved branding, or null when none is saved or the stored value no longer validates. */
   get(): PdfBranding | null {
@@ -93,8 +221,11 @@ export class PdfBrandingStore {
     }
   }
 
+  /** Checks the branding and stores it with the logo re-encoded; throws BrandingError for anything that cannot be saved. */
   set(value: unknown): PdfBranding {
-    const branding = validateBranding(value)
+    const checked = validateBranding(value)
+    const image = checked.logo && canonicalLogo(checked.logo, this.decodeLogo)
+    const branding: PdfBranding = { ...checked, ...(image && { logo: image }) }
     this.store.set(PDF_BRANDING_KEY, JSON.stringify(branding))
     return branding
   }

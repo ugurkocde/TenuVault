@@ -204,7 +204,7 @@ export function PdfBrandingSettings() {
                 <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={() => fileInput.current?.click()}><ImagePlus className="mr-2 h-4 w-4" />{form.logo ? "Replace logo" : "Upload logo"}</Button>
                 {form.logo && <Button type="button" variant="ghost" size="sm" disabled={disabled} onClick={() => set({ logo: undefined })}><Trash2 className="mr-2 h-4 w-4" />Remove logo</Button>}
               </div>
-              <p className="text-xs text-gray-500">PNG or JPEG, up to 1 MB. Shown top left on the cover; a wide logo on a transparent background works best.</p>
+              <p className="text-xs text-gray-500">PNG or JPEG, up to 1 MB and 2048 by 2048 pixels. Shown top left on the cover; a wide logo on a transparent background works best.</p>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <ColorField label="Primary color" value={form.primary} disabled={disabled} onChange={primary => set({ primary })} />

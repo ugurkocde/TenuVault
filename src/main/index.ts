@@ -8,7 +8,7 @@ import { rendererStorageKey, rendererStorageValue } from "./renderer-storage"
 import { prepareSaveFile, type PreparedFile } from "./save-file"
 import { PdfBrandingPolicy, PdfBrandingStore, setPdfBrandingPolicy } from "./pdf-branding"
 import { prepareOibReportFile } from "./report-export"
-import { app, BrowserWindow, dialog, ipcMain, net, Notification, safeStorage, shell } from "electron"
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, Notification, safeStorage, shell } from "electron"
 import { join } from "node:path"
 import type { ApiRequest, AppPreferences, ScheduleInput } from "../shared/ipc"
 import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN } from "../shared/constants"
@@ -248,7 +248,7 @@ async function bootstrap(): Promise<void> {
 
   // Every PDF export resolves branding per tenant here: saved branding applies only on a plan with pdfBranding.
   const pdfBranding = new PdfBrandingPolicy(
-    new PdfBrandingStore(appStore),
+    new PdfBrandingStore(appStore, (bytes) => nativeImage.createFromBuffer(bytes)),
     (tenantId) => license.requireEntitlement(tenantId),
     () => license.status(signedInTenants()).tenants.map((tenant) => (tenant.entitled ? tenant.plan : null)),
   )

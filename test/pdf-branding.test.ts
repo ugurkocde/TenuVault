@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { BrandingError, LOGO_LIMIT, PDF_BRANDING_KEY, PdfBrandingPolicy, PdfBrandingStore, pdfBrandingFor, setPdfBrandingPolicy, validateBranding } from "../src/main/pdf-branding"
+import { crc32 } from "node:zlib"
+import { BrandingError, LOGO_LIMIT, PDF_BRANDING_KEY, PdfBrandingPolicy, PdfBrandingStore, canonicalLogo, inspectLogo, pdfBrandingFor, setPdfBrandingPolicy, validateBranding, type LogoDecoder, type LogoImage } from "../src/main/pdf-branding"
 import { prepareOibReportFile } from "../src/main/report-export"
 import { handleNativeFramework, setNativeFrameworkAuthorization, setNativeFrameworkStore } from "../src/main/frameworks/native"
 import { handleFramework, type ExportFile } from "../src/main/frameworks/service"
@@ -12,12 +13,58 @@ import { pdfText } from "./pdf-text"
 import { memoryStore } from "./helpers"
 
 const LOGO = pngLogo()
-const JPEG = `data:image/jpeg;base64,${Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 74, 70, 73, 70]).toString("base64")}`
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+/** A PNG chunk with its length and CRC; `crc` overrides the checksum. */
+function chunk(type: string, data: Buffer = Buffer.alloc(0), crc?: number): Buffer {
+  const length = Buffer.alloc(4)
+  length.writeUInt32BE(data.length)
+  const body = Buffer.concat([Buffer.from(type, "latin1"), data])
+  const sum = Buffer.alloc(4)
+  sum.writeUInt32BE(crc ?? crc32(body))
+  return Buffer.concat([length, body, sum])
+}
+function ihdr(width = 1, height = 1, depth = 8, colorType = 6): Buffer {
+  const data = Buffer.alloc(13)
+  data.writeUInt32BE(width, 0)
+  data.writeUInt32BE(height, 4)
+  data[8] = depth
+  data[9] = colorType
+  return chunk("IHDR", data)
+}
+const IDAT = chunk("IDAT", Buffer.from([0x78, 0x9c, 0x63, 0x60, 0, 0, 0, 2, 0, 1]))
+const png = (...chunks: Buffer[]) => Buffer.concat([PNG_SIGNATURE, ...chunks])
+const dataUrl = (bytes: Buffer, type = "png") => `data:image/${type};base64,${bytes.toString("base64")}`
+/** A JPEG header up to its start of frame, enough for the structural check. */
+function jpeg(width = 240, height = 80, frame = 0xc0): Buffer {
+  const app0 = Buffer.from([0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00])
+  const sof = Buffer.from([0xff, frame, 0x00, 0x11, 0x08, height >> 8, height & 0xff, width >> 8, width & 0xff, 0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01])
+  return Buffer.concat([Buffer.from([0xff, 0xd8]), app0, sof, Buffer.from([0xff, 0xd9])])
+}
+const JPEG = dataUrl(jpeg(), "jpeg")
+
+/** A stand-in for nativeImage: reports the declared size and encodes a solid PNG of the current size. */
+function fakeImage(width: number, height: number, extra: Buffer[] = []): LogoImage {
+  return {
+    isEmpty: () => width === 0 || height === 0,
+    getSize: () => ({ width, height }),
+    resize: (size) => fakeImage(size.width, size.height, extra),
+    toPNG: () => {
+      const bytes = Buffer.from(pngLogo(width, height).split(",")[1]!, "base64")
+      // Encoders may add ancillary chunks after IHDR.
+      return Buffer.concat([bytes.subarray(0, 33), ...extra, bytes.subarray(33)])
+    },
+  }
+}
+const decodeDeclared: LogoDecoder = (bytes) => {
+  const size = inspectLogo(bytes, bytes[0] === 0xff ? "jpeg" : "png")
+  return fakeImage(size.width, size.height)
+}
+const decoded = (url: string) => Buffer.from(url.split(",")[1]!, "base64")
 const BRANDING = { companyName: "Fabrikam Security Services", colors: { primary: "#0b3d5c", accent: "#2BB3A3" }, preparedBy: "Avery Fabrikam", classification: "Confidential", footerText: "Fabrikam | Review", logo: { dataUrl: LOGO } }
 const author = (bytes: Uint8Array | Buffer) => /\/Author \(([^)]*)\)/.exec(Buffer.from(bytes).toString("latin1"))?.[1]
 
 function policy(plans: Record<string, Plan | null>, store = memoryStore()) {
-  const branding = new PdfBrandingStore(store)
+  const branding = new PdfBrandingStore(store, decodeDeclared)
   return {
     store, branding,
     policy: new PdfBrandingPolicy(branding, async (tenantId) => {
@@ -52,10 +99,119 @@ describe("PDF branding validation", () => {
     [{ companyName: "F", logo: { dataUrl: `data:image/png;base64,${Buffer.alloc(LOGO_LIMIT + 3).toString("base64")}` } }, "at most 1 MB"],
     [{ companyName: "F", logo: { dataUrl: `data:image/png;base64,${"A".repeat(2_000_000)}` } }, "at most 1 MB"],
     [{ companyName: "F", extra: true }, "invalid"],
-    [{ companyName: "F", logo: { dataUrl: (() => { const bytes = Buffer.from(LOGO.split(",")[1]!, "base64"); bytes.writeUInt32BE(20_000, 16); return `data:image/png;base64,${bytes.toString("base64")}` })() } }, "4096 by 4096 pixels"],
+    [{ companyName: "F", logo: { dataUrl: dataUrl(png(ihdr(20_000, 10), IDAT, chunk("IEND"))) } }, "2048 by 2048 pixels"],
   ])("rejects %j", (value, message) => {
     expect(() => validateBranding(value)).toThrow(BrandingError)
     expect(() => validateBranding(value)).toThrow(message)
+  })
+})
+
+describe("logo structural check", () => {
+  it("accepts a plain PNG and a JPEG and reads their declared size", () => {
+    expect(inspectLogo(decoded(LOGO), "png")).toEqual({ width: 240, height: 80 })
+    expect(inspectLogo(png(ihdr(2048, 2048), chunk("sRGB", Buffer.from([0])), chunk("pHYs", Buffer.alloc(9)), IDAT, IDAT, chunk("IEND")), "png")).toEqual({ width: 2048, height: 2048 })
+    expect(inspectLogo(jpeg(), "jpeg")).toEqual({ width: 240, height: 80 })
+    // Progressive JPEG, fill bytes before a marker and a restart marker are fine.
+    expect(inspectLogo(jpeg(640, 200, 0xc2), "jpeg")).toEqual({ width: 640, height: 200 })
+    const padded = jpeg()
+    expect(inspectLogo(Buffer.concat([padded.subarray(0, 2), Buffer.from([0xff, 0xd0]), Buffer.from([0xff]), padded.subarray(2)]), "jpeg")).toEqual({ width: 240, height: 80 })
+  })
+
+  it.each([
+    ["a second IHDR", png(ihdr(), ihdr(4000, 4000), IDAT, chunk("IEND"))],
+    ["an IHDR that is not first", png(chunk("sRGB", Buffer.from([0])), ihdr(), IDAT, chunk("IEND"))],
+    ["an ICC profile", png(ihdr(), chunk("iCCP", Buffer.concat([Buffer.from("icc\0\0"), Buffer.alloc(4096)])), IDAT, chunk("IEND"))],
+    ["a text chunk", png(ihdr(), chunk("tEXt", Buffer.from("Comment\0hello")), IDAT, chunk("IEND"))],
+    ["a compressed text chunk", png(ihdr(), chunk("zTXt", Buffer.from("Comment\0\0x")), IDAT, chunk("IEND"))],
+    ["an international text chunk", png(ihdr(), chunk("iTXt", Buffer.from("Comment\0\0\0\0\0x")), IDAT, chunk("IEND"))],
+    ["an unknown chunk", png(ihdr(), chunk("eXIf", Buffer.alloc(8)), IDAT, chunk("IEND"))],
+    ["a bad CRC", png(ihdr(), chunk("IDAT", Buffer.from([1, 2, 3]), 0xdeadbeef), chunk("IEND"))],
+    ["a truncated chunk", png(ihdr(), IDAT.subarray(0, IDAT.length - 3))],
+    ["a chunk longer than the file", Buffer.concat([png(ihdr()), Buffer.from([0x7f, 0xff, 0xff, 0xff]), Buffer.from("IDAT")])],
+    ["no image data", png(ihdr(), chunk("IEND"))],
+    ["no IEND", png(ihdr(), IDAT)],
+    ["data after IEND", Buffer.concat([png(ihdr(), IDAT, chunk("IEND")), Buffer.from([0])])],
+    ["an IEND with data", png(ihdr(), IDAT, chunk("IEND", Buffer.from([0])))],
+    ["an IHDR of the wrong length", png(chunk("IHDR", Buffer.alloc(12)), IDAT, chunk("IEND"))],
+    ["an invalid bit depth", png(ihdr(1, 1, 3), IDAT, chunk("IEND"))],
+    ["an invalid colour type", png(ihdr(1, 1, 8, 5), IDAT, chunk("IEND"))],
+    ["zero width", png(ihdr(0, 10), IDAT, chunk("IEND"))],
+    ["a bad signature", Buffer.concat([Buffer.from("GIF89a\0\0"), ihdr(), IDAT, chunk("IEND")])],
+  ])("rejects a PNG with %s", (_name, bytes) => {
+    expect(() => inspectLogo(bytes, "png")).toThrow(BrandingError)
+    expect(() => validateBranding({ companyName: "F", logo: { dataUrl: dataUrl(bytes) } })).toThrow(BrandingError)
+  })
+
+  it("rejects PNG and JPEG dimensions over 2048 pixels", () => {
+    expect(() => inspectLogo(png(ihdr(2049, 10), IDAT, chunk("IEND")), "png")).toThrow("at most 2048 by 2048 pixels")
+    expect(() => inspectLogo(png(ihdr(10, 0x7fffffff), IDAT, chunk("IEND")), "png")).toThrow("at most 2048 by 2048 pixels")
+    expect(() => inspectLogo(jpeg(4000, 100), "jpeg")).toThrow("at most 2048 by 2048 pixels")
+  })
+
+  it.each([
+    ["no start of image", Buffer.from([0x00, 0xd8, 0xff, 0xe0])],
+    ["a scan before any frame", Buffer.from([0xff, 0xd8, 0xff, 0xda, 0x00, 0x02])],
+    ["an end before any frame", Buffer.from([0xff, 0xd8, 0xff, 0xd9])],
+    ["a segment longer than the file", Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x40, 0x00, 0x00])],
+    ["a segment length below two", Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x01])],
+    ["a cut length", Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00])],
+    ["garbage between segments", Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x02]), Buffer.from([0x12, 0x34])])],
+    ["a short frame header", Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x04, 0x08, 0x00])],
+    ["zero height", jpeg(10, 0)],
+    ["too many segments", Buffer.concat([Buffer.from([0xff, 0xd8]), ...Array.from({ length: 200 }, () => Buffer.from([0xff, 0xfe, 0x00, 0x02])), jpeg().subarray(2)])],
+    ["no frame at all", Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x02])],
+  ])("rejects a JPEG with %s", (_name, bytes) => {
+    expect(() => inspectLogo(bytes, "jpeg")).toThrow(BrandingError)
+  })
+})
+
+describe("logo re-encoding", () => {
+  it("stores a re-encoded PNG, scaled so its longest side is at most 1200 pixels", () => {
+    const sizes: Array<{ width: number; height: number }> = []
+    const decode: LogoDecoder = (bytes) => {
+      const size = inspectLogo(bytes, bytes[0] === 0xff ? "jpeg" : "png")
+      sizes.push(size)
+      return fakeImage(size.width, size.height)
+    }
+    const wide = canonicalLogo({ dataUrl: dataUrl(png(ihdr(2000, 500), IDAT, chunk("IEND"))) }, decode)!
+    expect(wide.dataUrl.startsWith("data:image/png;base64,")).toBe(true)
+    expect(inspectLogo(decoded(wide.dataUrl), "png")).toEqual({ width: 1200, height: 300 })
+    const tall = canonicalLogo({ dataUrl: dataUrl(jpeg(300, 1800), "jpeg") }, decode)!
+    expect(tall.dataUrl.startsWith("data:image/png;base64,")).toBe(true)
+    expect(inspectLogo(decoded(tall.dataUrl), "png")).toEqual({ width: 200, height: 1200 })
+    // A small logo keeps its size.
+    expect(inspectLogo(decoded(canonicalLogo({ dataUrl: LOGO }, decode)!.dataUrl), "png")).toEqual({ width: 240, height: 80 })
+    expect(sizes).toEqual([{ width: 2000, height: 500 }, { width: 300, height: 1800 }, { width: 240, height: 80 }])
+    expect(canonicalLogo(undefined, decode)).toBeUndefined()
+  })
+
+  it("drops ancillary chunks an encoder adds, so the stored logo passes the check on read", () => {
+    const decode: LogoDecoder = () => fakeImage(240, 80, [chunk("iCCP", Buffer.alloc(64)), chunk("tEXt", Buffer.from("Software\0x"))])
+    const logo = canonicalLogo({ dataUrl: LOGO }, decode)!
+    expect(decoded(logo.dataUrl).includes(Buffer.from("iCCP"))).toBe(false)
+    expect(decoded(logo.dataUrl).includes(Buffer.from("tEXt"))).toBe(false)
+    expect(validateBranding({ companyName: "F", logo }).logo).toEqual(logo)
+  })
+
+  it.each<[string, LogoDecoder, string]>([
+    ["the decoder fails", () => { throw new Error("decode failed") }, "not a valid PNG or JPEG"],
+    ["the image is empty", () => fakeImage(0, 0), "not a valid PNG or JPEG"],
+    ["the decoded size differs from the header", () => fakeImage(241, 80), "not a valid PNG or JPEG"],
+    ["the encoded PNG is over 1 MB", () => ({ ...fakeImage(240, 80), toPNG: () => png(ihdr(240, 80), chunk("IDAT", Buffer.alloc(LOGO_LIMIT)), chunk("IEND")) }), "too detailed"],
+  ])("rejects a logo when %s", (_name, decode, message) => {
+    expect(() => canonicalLogo({ dataUrl: LOGO }, decode)).toThrow(BrandingError)
+    expect(() => canonicalLogo({ dataUrl: LOGO }, decode)).toThrow(message)
+  })
+
+  it("re-encodes the logo when branding is saved and treats a stored logo that fails the check as no branding", () => {
+    const store = memoryStore()
+    const branding = new PdfBrandingStore(store, () => fakeImage(240, 80))
+    const saved = branding.set({ companyName: "F", logo: { dataUrl: JPEG } })
+    expect(saved.logo?.dataUrl.startsWith("data:image/png;base64,")).toBe(true)
+    expect(JSON.parse(store.get(PDF_BRANDING_KEY)!).logo).toEqual(saved.logo)
+    expect(branding.get()).toEqual(saved)
+    store.set(PDF_BRANDING_KEY, JSON.stringify({ companyName: "F", logo: { dataUrl: dataUrl(png(ihdr(), ihdr(4000, 4000), IDAT, chunk("IEND"))) } }))
+    expect(branding.get()).toBeNull()
   })
 })
 
