@@ -72,7 +72,15 @@ export class BackgroundLaunch {
   async refresh(): Promise<{ supported: boolean; installed: boolean }> {
     if (this.supported && this.options.platform === 'darwin') {
       const current = await readFile(this.plist, 'utf8').catch(() => null)
-      if (current === reopeningLaunchAgent(this.options.executable) && (await this.service())?.includes('/usr/bin/open')) return this.install()
+      if (current === reopeningLaunchAgent(this.options.executable) && (await this.service())?.includes('/usr/bin/open')) {
+        try { return await this.install() }
+        catch (error) {
+          // Put the earlier agent back so restarts keep working and the next start tries again.
+          await writeFile(this.plist, current, { mode: 0o600 })
+          await this.execute('/bin/launchctl', ['bootstrap', `gui/${this.options.uid}`, this.plist]).catch(() => undefined)
+          throw error
+        }
+      }
     }
     return this.status()
   }

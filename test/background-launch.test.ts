@@ -144,3 +144,29 @@ it('retries a bootstrap that launchd refuses right after the bootout', async () 
     expect(exec.mock.calls.filter(call => call[1][0] === 'bootstrap')).toHaveLength(2)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
+it('restores the earlier agent when the replacement cannot be loaded and replaces it on the next start', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tv-background-restore-'))
+  const file = join(root, 'Library/LaunchAgents/com.tenuvault.desktop.background.plist')
+  const executable = '/Applications/TenuVault.app/Contents/MacOS/TenuVault'
+  let loaded: string | null = reopeningLaunchAgent(executable), refusals = 2
+  const exec = vi.fn(async (_file: string, args: string[]) => {
+    if (args[0] === 'print') { if (loaded === null) throw new Error('Could not find service'); return { stdout: programArguments(loaded).join(' ') } }
+    if (args[0] === 'bootout') loaded = null
+    if (args[0] === 'bootstrap') {
+      const content = await readFile(args[2]!, 'utf8')
+      if (content === launchAgent(executable) && refusals-- > 0) throw new Error('Bootstrap failed: 5: Input/output error')
+      loaded = content
+    }
+    return { stdout: '' }
+  })
+  const launcher = new BackgroundLaunch({ platform: 'darwin', packaged: true, executable, home: root, data: root, uid: 501, exec })
+  try {
+    await mkdir(join(root, 'Library/LaunchAgents'), { recursive: true })
+    await writeFile(file, loaded)
+    await expect(launcher.refresh()).rejects.toThrow('Bootstrap failed')
+    expect(await readFile(file, 'utf8')).toBe(reopeningLaunchAgent(executable))
+    expect(loaded).toBe(reopeningLaunchAgent(executable))
+    expect(await launcher.refresh()).toEqual({ supported: true, installed: true })
+    expect(await readFile(file, 'utf8')).toBe(launchAgent(executable))
+  } finally { await rm(root, { recursive: true, force: true }) }
+})

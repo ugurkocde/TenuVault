@@ -105,7 +105,7 @@ Automatic backups run while TenuVault is running, in the window or in the menu b
 
 | Control | What it does |
 | --- | --- |
-| **Install background launch** | Adds a LaunchAgent for your user account on macOS or a scheduled task for your user account on Windows. The background runner can reopen TenuVault in the menu bar or tray within five minutes while you are signed in to the computer. It only starts TenuVault when it is not running, so it never brings an open window to the front. |
+| **Install background launch** | Adds a LaunchAgent for your user account on macOS or a scheduled task for your user account on Windows. The background runner can reopen TenuVault in the menu bar or tray within five minutes while you are signed in to the computer. It never brings an open TenuVault window to the front. |
 | **Remove background launch** | Removes the background runner. Your backup schedules stay unchanged. |
 | **Retry check** | Requests the runner status again after a failed check. Installation stays disabled until a check succeeds. |
 
