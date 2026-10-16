@@ -3,7 +3,7 @@ import { compareAdminTemplate, compareFlat, compareSettings, validatePolicy } fr
 import { policyGate, typeGate, type TenantProfile } from "../src/shared/oib/licensing"
 import { catalogPolicies, extractOibId, parseManifest } from "../src/shared/oib/manifest"
 import { baseName, compareToTenant, compareVersions, policyVersion } from "../src/shared/oib/match"
-import { escapeHtml, reportHtml, toCsv } from "../src/shared/oib/report"
+import { escapeHtml, REPORT_PRINT_OPTIONS, reportHtml, toCsv } from "../src/shared/oib/report"
 import type { OibPolicy, TenantPolicy } from "../src/shared/oib/types"
 import { replaceTenantVariables } from "../src/shared/oib/variables"
 
@@ -208,6 +208,42 @@ describe("reports", () => {
     expect(html).not.toContain("<img")
     expect(html).toContain("default-src 'none'")
     expect(escapeHtml(`"'`)).toBe("&quot;&#39;")
+  })
+
+  it("prints a header band with the mark, escaped title, subtitle and facts", () => {
+    const html = reportHtml({ title: "Comparison <b>", subtitle: "v3.8 & up", eyebrow: "<i>OIB</i>", meta: [["Tenant", "<Contoso>"], ["Compared", "today"]], summary: [["Up to date", "3"], ["<k>", "<v>"]], sections: [] })
+    const band = html.slice(html.indexOf(`<header class="band">`), html.indexOf("</header>"))
+    expect(band).toContain(`class="brand-mark"`)
+    expect(band).toContain("TenuVault")
+    expect(band).toContain("&lt;i&gt;OIB&lt;/i&gt;")
+    expect(band).toContain("<h1>Comparison &lt;b&gt;</h1>")
+    expect(band).toContain("v3.8 &amp; up")
+    expect(band).toContain("<dd>&lt;Contoso&gt;</dd>")
+    expect(html).toContain("&lt;k&gt;")
+    expect(html).not.toMatch(/<[kvb]>/)
+    expect(html).toContain("@page :first { margin-top: 0; }")
+  })
+
+  it("renders known status words as pills with a marker and leaves other values as text", () => {
+    const html = reportHtml({ title: "T", meta: [], sections: [{ heading: "Ambiguous match", columns: ["Status", "Name"], rows: [["Matches the baseline", "Drift detected"], ["Missing in tenant", "Error <x>"], ["Not validated", "Validation error"]] }] })
+    expect(html).toContain(`<span class="pill good"><svg class="mark"`)
+    expect(html).toMatch(/<span class="pill good"><svg[^>]*>.*?<\/svg>Matches the baseline<\/span>/)
+    expect(html).toContain(`<span class="pill partial">`)
+    expect(html).toContain(`<span class="pill missing">`)
+    expect(html).toContain(`<span class="pill neutral">`)
+    expect(html).toContain(`<span class="pill alert">`)
+    expect(html).toContain("<td>Error &lt;x&gt;</td>")
+    expect(html).toMatch(/<h2><span class="alert"><svg/)
+    expect(html).toContain("<thead>")
+    expect(html).toContain("thead { display: table-header-group; }")
+  })
+
+  it("prints a running footer with the document title and page numbers", () => {
+    expect(REPORT_PRINT_OPTIONS.displayHeaderFooter).toBe(true)
+    expect(REPORT_PRINT_OPTIONS.footerTemplate).toContain(`<span class="title"></span>`)
+    expect(REPORT_PRINT_OPTIONS.footerTemplate).toContain(`<span class="pageNumber"></span> of <span class="totalPages"></span>`)
+    expect(REPORT_PRINT_OPTIONS.footerTemplate).toMatch(/font-size:\d+px/)
+    expect(REPORT_PRINT_OPTIONS.margins.bottom).toBeGreaterThan(0.4)
   })
 
   it("quotes CSV cells and neutralises spreadsheet formulas", () => {

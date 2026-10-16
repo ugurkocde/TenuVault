@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url"
 import { isGuid, isMicrosoftLoginUrl, sameRendererDocument } from "../shared/security"
 import { rendererStorageKey, rendererStorageValue } from "./renderer-storage"
 import { prepareSaveFile } from "./save-file"
+import { REPORT_PRINT_OPTIONS } from "../shared/oib/report"
 import { app, BrowserWindow, dialog, ipcMain, net, Notification, safeStorage, shell } from "electron"
 import { join } from "node:path"
 import type { ApiRequest, AppPreferences, ScheduleInput } from "../shared/ipc"
@@ -849,7 +850,7 @@ async function savePdfReport(html: unknown, fileName: unknown): Promise<{ saved:
     const file = join(folder, "report.html")
     await writeFile(file, html, { encoding: "utf8", mode: 0o600 })
     await page.loadFile(file)
-    const pdf = await page.webContents.printToPDF({ printBackground: true, pageSize: "A4" })
+    const pdf = await page.webContents.printToPDF(REPORT_PRINT_OPTIONS)
     const result = await dialog.showSaveDialog(mainWindow!, {
       title: "Save PDF report",
       defaultPath: join(app.getPath("documents"), `${base}.pdf`),
