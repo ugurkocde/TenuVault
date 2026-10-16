@@ -155,8 +155,8 @@ See [Backup storage and retention](/backups/storage/) and [Schedule backups](/ba
 
 | Control | What it does |
 | --- | --- |
-| **Company name** | Required. Replaces TenuVault on the cover, in the running footer and in the PDF document properties. Up to 120 characters. |
-| **Upload logo** / **Replace logo** | Adds a PNG or JPEG of up to 1 MB and at most 2048 by 2048 pixels, shown top left on the cover instead of the TenuVault mark. TenuVault checks the file, refuses PNG files with embedded text or color profiles, and stores the logo as a PNG scaled to at most 1200 pixels on its longest side. A wide logo on a transparent background works best. Without a logo the cover shows the company name. |
+| **Company name** | Required. Replaces TenuVault on the cover and in the running footer, and in the document properties of framework, policy pack and CIS reports. Up to 120 characters. |
+| **Upload logo** / **Replace logo** | Adds a PNG or JPEG of up to 1 MB and at most 2048 by 2048 pixels, shown top left on the cover instead of the TenuVault mark. TenuVault checks the file, removes embedded color profiles, text and other metadata, and stores the logo as a PNG scaled to at most 1200 pixels on its longest side. A wide logo on a transparent background works best. Without a logo the cover shows the company name. |
 | **Remove logo** | Removes the logo; the cover shows the company name. |
 | **Primary color** | The cover band and headings, as `#RRGGBB`. Choose it with the color picker or type it. Headings use a darker shade when the color is too light to read on white. |
 | **Accent color** | The accent bar, eyebrows and chart highlights, as `#RRGGBB`. |

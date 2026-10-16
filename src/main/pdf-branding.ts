@@ -38,8 +38,8 @@ function color(value: unknown, name: string): string | undefined {
   return value.toUpperCase()
 }
 
-// PNG chunks a logo may carry. Text, compressed text and ICC profiles are refused: they add nothing to a logo
-// and are the usual places for oversized or unexpected data.
+// PNG chunks a logo keeps. Other ancillary chunks (ICC profiles, text, EXIF, which screenshots and
+// design tools add) are accepted but dropped before decoding; unknown critical chunks are refused.
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 const PNG_CHUNKS = new Set(["IHDR", "PLTE", "tRNS", "IDAT", "IEND", "sRGB", "gAMA", "cHRM", "pHYs"])
 // JPEG start of frame markers (SOF0 to SOF15 without DHT, JPG and DAC), which carry the image size.
@@ -71,7 +71,7 @@ function inspectPng(bytes: Buffer): { width: number; height: number } | undefine
     const type = bytes.toString("latin1", offset + 4, offset + 8)
     const body = bytes.subarray(offset + 4, offset + 8 + length)
     if (crc32(body) !== bytes.readUInt32BE(offset + 8 + length)) return undefined
-    if (!PNG_CHUNKS.has(type)) return undefined
+    if (!PNG_CHUNKS.has(type) && !ancillary(type)) return undefined
     if ((type === "IHDR") !== (offset === 8)) return undefined
     if (type === "IHDR") {
       if (length !== 13) return undefined
@@ -85,6 +85,9 @@ function inspectPng(bytes: Buffer): { width: number; height: number } | undefine
   }
   return undefined
 }
+
+/** An ancillary chunk: a lowercase first letter, which a decoder may skip. */
+const ancillary = (type: string) => /^[a-z][A-Za-z]{3}$/.test(type)
 
 /** Walks the segments up to the first start of frame and reads its size; undefined when the file ends or misbehaves first. */
 function inspectJpeg(bytes: Buffer): { width: number; height: number } | undefined {
@@ -156,7 +159,8 @@ export function canonicalLogo(value: unknown, decode: LogoDecoder): { dataUrl: s
   const declared = inspectLogo(logo.bytes, logo.format)
   let image: LogoImage
   try {
-    image = decode(logo.bytes)
+    // Dropped ancillary chunks never reach the decoder, so a compressed profile or text is never inflated.
+    image = decode(logo.format === "png" ? keepPlainChunks(logo.bytes) : logo.bytes)
   } catch {
     throw new BrandingError("The logo file is not a valid PNG or JPEG image.")
   }
@@ -174,7 +178,8 @@ export function canonicalLogo(value: unknown, decode: LogoDecoder): { dataUrl: s
 /** A stored logo that still passes the structural check, as a normalised data URL. */
 function logo(value: unknown): { dataUrl: string } | undefined {
   const checked = logoBytes(value)
-  return checked && { dataUrl: `data:image/${checked.format};base64,${checked.bytes.toString("base64")}` }
+  const bytes = checked?.format === "png" ? keepPlainChunks(checked.bytes) : checked?.bytes
+  return checked && bytes && { dataUrl: `data:image/${checked.format};base64,${bytes.toString("base64")}` }
 }
 
 /** Checks branding sent by the renderer or read back from the store: known fields only, labels cleaned, colors strict, the logo structurally a plain PNG or JPEG. */

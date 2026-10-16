@@ -125,11 +125,7 @@ describe("logo structural check", () => {
   it.each([
     ["a second IHDR", png(ihdr(), ihdr(4000, 4000), IDAT, chunk("IEND"))],
     ["an IHDR that is not first", png(chunk("sRGB", Buffer.from([0])), ihdr(), IDAT, chunk("IEND"))],
-    ["an ICC profile", png(ihdr(), chunk("iCCP", Buffer.concat([Buffer.from("icc\0\0"), Buffer.alloc(4096)])), IDAT, chunk("IEND"))],
-    ["a text chunk", png(ihdr(), chunk("tEXt", Buffer.from("Comment\0hello")), IDAT, chunk("IEND"))],
-    ["a compressed text chunk", png(ihdr(), chunk("zTXt", Buffer.from("Comment\0\0x")), IDAT, chunk("IEND"))],
-    ["an international text chunk", png(ihdr(), chunk("iTXt", Buffer.from("Comment\0\0\0\0\0x")), IDAT, chunk("IEND"))],
-    ["an unknown chunk", png(ihdr(), chunk("eXIf", Buffer.alloc(8)), IDAT, chunk("IEND"))],
+    ["an unknown critical chunk", png(ihdr(), chunk("ABCD", Buffer.alloc(8)), IDAT, chunk("IEND"))],
     ["a bad CRC", png(ihdr(), chunk("IDAT", Buffer.from([1, 2, 3]), 0xdeadbeef), chunk("IEND"))],
     ["a truncated chunk", png(ihdr(), IDAT.subarray(0, IDAT.length - 3))],
     ["a chunk longer than the file", Buffer.concat([png(ihdr()), Buffer.from([0x7f, 0xff, 0xff, 0xff]), Buffer.from("IDAT")])],
@@ -145,6 +141,19 @@ describe("logo structural check", () => {
   ])("rejects a PNG with %s", (_name, bytes) => {
     expect(() => inspectLogo(bytes, "png")).toThrow(BrandingError)
     expect(() => validateBranding({ companyName: "F", logo: { dataUrl: dataUrl(bytes) } })).toThrow(BrandingError)
+  })
+
+  it("accepts ancillary chunks that screenshots and design tools add and never hands them to the decoder", () => {
+    const profile = chunk("iCCP", Buffer.concat([Buffer.from("icc\0\0"), Buffer.alloc(4096)]))
+    const extras = [profile, chunk("tEXt", Buffer.from("Comment\0hello")), chunk("zTXt", Buffer.from("Comment\0\0x")), chunk("iTXt", Buffer.from("Comment\0\0\0\0\0x")), chunk("eXIf", Buffer.alloc(8))]
+    const bytes = png(ihdr(240, 80), ...extras, IDAT, chunk("IEND"))
+    expect(inspectLogo(bytes, "png")).toEqual({ width: 240, height: 80 })
+    let seen: Buffer | undefined
+    const logo = canonicalLogo({ dataUrl: dataUrl(bytes) }, input => { seen = input; return fakeImage(240, 80) })!
+    for (const type of ["iCCP", "tEXt", "zTXt", "iTXt", "eXIf"]) {
+      expect(seen!.includes(Buffer.from(type))).toBe(false)
+      expect(decoded(logo.dataUrl).includes(Buffer.from(type))).toBe(false)
+    }
   })
 
   it("rejects PNG and JPEG dimensions over 2048 pixels", () => {
