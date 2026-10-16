@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useMemo } from "react"
 import { useMutation } from "@tanstack/react-query"
 import { Building2 } from "lucide-react"
 import { useTenants, type Tenant } from "~/contexts/TenantContext"
@@ -6,18 +6,17 @@ import { Chip } from "~/components/dashboard/tiles"
 import type { Plan } from "../../../shared/plans"
 import { GatedButton } from "../../components/PlanGate"
 import { tenantLicense, tenantPlan, useLicense } from "../../lib/license"
-import { formatDate, formatPercent, loadPortfolio, type PortfolioTenant } from "./api"
-import { ScoreDetail } from "./ScoreDetail"
+import { formatDate, formatPercent, groupUnavailable, loadPortfolio, namesLabel, type PortfolioTenant } from "./api"
 
 /**
  * MSP portfolio: scores of every connected tenant whose license includes the portfolio, each
- * with its own freshness and coverage, and a drill-down to that tenant's source controls.
- * Tenants that are not licensed for it are listed as not included, never guessed.
+ * with its own freshness and coverage, and a drill-down to that tenant's score detail, shown
+ * in the one detail panel of the scores tab. Tenants that are not licensed for it are listed
+ * as not included, never guessed.
  */
-export function PortfolioScores({ tenant, plan }: { tenant: Tenant; plan: Plan | null }) {
+export function PortfolioScores({ tenant, plan, onDrill }: { tenant: Tenant; plan: Plan | null; onDrill: (tenant: Tenant, frameworkId: string) => void }) {
   const tenants = useTenants()
   const { status } = useLicense()
-  const [drill, setDrill] = useState<{ tenant: Tenant; frameworkId: string } | null>(null)
   const selectedId = tenant.credentials?.tenantId?.toLowerCase()
   const { included, excluded } = useMemo(() => {
     const others = tenants.filter((candidate) => candidate.credentials?.tenantId && candidate.credentials.tenantId.toLowerCase() !== selectedId)
@@ -58,27 +57,40 @@ export function PortfolioScores({ tenant, plan }: { tenant: Tenant; plan: Plan |
             </thead>
             <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
               {load.data.tenants.flatMap((row: PortfolioTenant) => {
-                const assessed = row.frameworks.filter((framework) => framework.state !== "not-assessed")
-                if (row.error || !assessed.length) {
+                const assessed = row.frameworks.filter((framework) => framework.state !== "not-assessed" && framework.state !== "unavailable")
+                const failed = row.frameworks.filter((framework) => framework.state === "unavailable")
+                const name = row.tenantName ?? row.tenantId
+                // Frameworks that failed for the same reason are one row, not one row each.
+                const errorRows = (row.error ? [{ message: row.error, names: [] as string[] }] : groupUnavailable(failed)).map((group) => (
+                  <tr key={`${row.tenantId}:error:${group.message}`}>
+                    <td className="py-2 pr-4 text-gray-800">{name}</td>
+                    <td colSpan={4} className="py-2 text-gray-500">{group.names.length ? `${namesLabel(group.names)} unavailable: ` : ""}{group.message}</td>
+                    <td className="py-2 text-right">
+                      <button type="button" className="text-sm font-medium text-gray-800 underline underline-offset-2 hover:text-gray-950" disabled={load.isPending} onClick={() => load.mutate()}>Retry</button>
+                    </td>
+                  </tr>
+                ))
+                if (!row.error && !assessed.length && !failed.length) {
                   return [
                     <tr key={row.tenantId}>
-                      <td className="py-2 pr-4 text-gray-800">{row.tenantName ?? row.tenantId}</td>
-                      <td colSpan={5} className="py-2 text-gray-500">{row.error ?? "No saved comparison yet."}</td>
+                      <td className="py-2 pr-4 text-gray-800">{name}</td>
+                      <td colSpan={5} className="py-2 text-gray-500">No saved comparison yet.</td>
                     </tr>,
                   ]
                 }
-                return assessed.map((framework) => {
+                if (row.error) return errorRows
+                return [...assessed.map((framework) => {
                   const target = byId(row.tenantId)
                   return (
                     <tr key={`${row.tenantId}:${framework.frameworkId}`}>
-                      <td className="py-2 pr-4 text-gray-800">{row.tenantName ?? row.tenantId}</td>
+                      <td className="py-2 pr-4 text-gray-800">{name}</td>
                       <td className="py-2 pr-4 text-gray-700">
                         {framework.frameworkName}
                         {framework.version && <span className="block text-xs text-gray-500">{framework.version}</span>}
                       </td>
-                      <td className="py-2 pr-4 tabular-nums text-gray-900">{framework.state === "unavailable" ? "Unavailable" : formatPercent(framework.score)}</td>
+                      <td className="py-2 pr-4 tabular-nums text-gray-900">{formatPercent(framework.score)}</td>
                       <td className="py-2 pr-4 tabular-nums text-gray-700">
-                        {formatPercent(framework.coverage, "None")}
+                        {formatPercent(framework.coverage, framework.score === null ? "None" : "Unknown")}
                         {framework.unknown ? <span className="block text-xs text-gray-500">{framework.unknown} unknown</span> : null}
                       </td>
                       <td className="py-2 pr-4 text-gray-700">
@@ -87,24 +99,23 @@ export function PortfolioScores({ tenant, plan }: { tenant: Tenant; plan: Plan |
                           {framework.stale && <Chip tone="warning">Stale</Chip>}
                           {framework.partial && <Chip tone="warning">Partial</Chip>}
                         </span>
-                        {framework.state === "unavailable" && framework.message && <span className="block text-xs text-gray-500">{framework.message}</span>}
+                        {framework.state === "history-only" && framework.message && <span className="block text-xs text-gray-500">{framework.message}</span>}
                       </td>
                       <td className="py-2 text-right">
-                        {target && framework.state !== "unavailable" && (
-                          <button type="button" aria-label={`Controls for ${row.tenantName ?? row.tenantId}, ${framework.frameworkName}`} className="text-sm font-medium text-gray-800 underline underline-offset-2 hover:text-gray-950" onClick={() => setDrill({ tenant: target, frameworkId: framework.frameworkId })}>
-                            Controls
+                        {target && framework.state !== "history-only" && (
+                          <button type="button" aria-label={`Score details for ${name}, ${framework.frameworkName}`} className="text-sm font-medium text-gray-800 underline underline-offset-2 hover:text-gray-950" onClick={() => onDrill(target, framework.frameworkId)}>
+                            Details
                           </button>
                         )}
                       </td>
                     </tr>
                   )
-                })
+                }), ...errorRows]
               })}
             </tbody>
           </table>
         </div>
       )}
-      {drill && <ScoreDetail key={`${drill.tenant.id}:${drill.frameworkId}`} tenant={drill.tenant} frameworkId={drill.frameworkId} onClose={() => setDrill(null)} />}
     </section>
   )
 }

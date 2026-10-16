@@ -1,4 +1,5 @@
 import { frameworks } from "../../../shared/frameworks/catalog"
+import { COMPLIANCE_DETECTOR_VERSION } from "../../../shared/compliance/detector-version"
 import type { NativeAssessment } from "../../../shared/compliance/native"
 import type { FeatureDeps } from "../deps"
 
@@ -14,8 +15,10 @@ export interface HistoryRead {
   frameworkName: string
   /** "unavailable" when the saved comparisons could not be read (denied, not connected, failed). */
   status: "ok" | "unavailable"
-  /** Newest first, as saved. Only runs of this tenant and framework. */
+  /** Newest first, as saved. Only runs of this tenant and framework scored under the current rules. */
   runs: NativeAssessment[]
+  /** Saved runs of this tenant and framework scored under older rules, with the reason; they set no score. */
+  olderRuns: Array<{ run: NativeAssessment; reason: string }>
   error: string | null
   notice: string | null
   scoringChanged?: boolean
@@ -38,11 +41,20 @@ function isRun(value: unknown, tenantId: string, frameworkId: string): value is 
   )
 }
 
+/** Why a saved comparison no longer counts under the current rules. */
+export function olderRulesReason(run: NativeAssessment): string {
+  return (run.assessment.provenance?.detectorVersion ?? 1) !== COMPLIANCE_DETECTOR_VERSION
+    ? "An app update changed how capabilities are counted."
+    : "An app update changed the framework mapping."
+}
+
 /**
  * Reads the saved native comparisons of one tenant and framework through the app's own
  * /api/frameworks route (action native-history). It never starts a collection. A failed read
  * is returned as unavailable with its message, so one denied framework or tenant does not
- * hide the others and is never shown as a result. Runs of any other tenant are dropped.
+ * hide the others and is never shown as a result. Runs of any other tenant are dropped. Runs
+ * the source no longer lists as current (scored under older rules) are kept apart in
+ * olderRuns, so they are shown as such instead of as missing.
  */
 export async function readHistory(deps: FeatureDeps, tenantId: string, frameworkId: string): Promise<HistoryRead> {
   const tenant = tenantId.toLowerCase()
@@ -53,11 +65,22 @@ export async function readHistory(deps: FeatureDeps, tenantId: string, framework
     const body = (await response.json().catch(() => null)) as { history?: unknown; notice?: unknown; currentRunIds?: unknown; scoringChanged?: unknown; error?: unknown } | null
     if (!response.ok || !body || !Array.isArray(body.history)) {
       const error = typeof body?.error === "string" ? body.error : `Saved comparisons could not be read (${response.status}).`
-      return { ...base, status: "unavailable", runs: [], error, notice: null }
+      return { ...base, status: "unavailable", runs: [], olderRuns: [], error, notice: null }
     }
-    return { ...base, status: "ok", runs: body.history.filter((run) => isRun(run, tenant, frameworkId) && (!Array.isArray(body.currentRunIds) || body.currentRunIds.includes(run.runId))), error: null, notice: typeof body.notice === "string" ? body.notice : null, scoringChanged: body.scoringChanged === true }
+    const own = body.history.filter((run): run is NativeAssessment => isRun(run, tenant, frameworkId))
+    const current = Array.isArray(body.currentRunIds) ? body.currentRunIds : null
+    const isCurrent = (run: NativeAssessment) => !current || current.includes(run.runId)
+    return {
+      ...base,
+      status: "ok",
+      runs: own.filter(isCurrent),
+      olderRuns: own.filter((run) => !isCurrent(run)).map((run) => ({ run, reason: olderRulesReason(run) })),
+      error: null,
+      notice: typeof body.notice === "string" ? body.notice : null,
+      scoringChanged: body.scoringChanged === true,
+    }
   } catch (error) {
-    return { ...base, status: "unavailable", runs: [], error: error instanceof Error ? error.message : "Saved comparisons could not be read.", notice: null }
+    return { ...base, status: "unavailable", runs: [], olderRuns: [], error: error instanceof Error ? error.message : "Saved comparisons could not be read.", notice: null }
   }
 }
 

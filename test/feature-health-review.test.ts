@@ -415,7 +415,7 @@ describe("health review work signals", () => {
 
     const community = world({ plans: { [TENANT_A]: "community" } })
     seedSignals(community.deps)
-    expect(await collectSignals(community.deps, TENANT_A)).toEqual({ signals: [], evaluated: true })
+    expect(await collectSignals(community.deps, TENANT_A)).toEqual({ signals: [], evaluated: true, unreadable: [] })
   })
 
   it("sends new signal findings to webhooks with the existing payload shape", async () => {

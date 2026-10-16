@@ -12,12 +12,12 @@ import { CustomizationsPanel } from "./CustomizationsPanel"
 import { StandardsLibrary } from "./StandardsLibrary"
 import { GovernanceExportButtons } from "../shared/GovernanceExportButtons"
 import { standardsCsv, standardsJson } from "../shared/governance-export"
-import { standardsViewState } from "./state"
+import { deviationLabel, standardsViewState } from "./state"
 import { Button } from "~/components/ui/button"
 
 const card = "space-y-4 rounded-3xl bg-card p-6 shadow-[0_1px_2px_rgba(22,21,20,0.04)]"
 
-const freshness = (state: AdoptionState) => (state.freshness === "unknown" ? "not assessed" : state.freshness === "stale" ? "stale" : `${state.deviations ?? 0} deviation(s)`)
+const freshness = (state: AdoptionState) => deviationLabel(state).text
 
 /**
  * Standards and customizations (#148). Pro: the organization's documented customizations. MSP:

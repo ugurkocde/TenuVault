@@ -364,6 +364,20 @@ describe("Policy Validation", () => {
     expect(await handleOib({ action: "oib-validation-delete", tenantId, runId: run.runId })).toEqual({ runs: [] })
   })
 
+  it("reports when a single-policy check was not kept because Saved validations holds only full validations", async () => {
+    vi.stubGlobal("fetch", world({ policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.8", value: 3 }] }, []))
+    await source()
+    const full = Array.from({ length: 50 }, (_, index) => ({ runId: `full-${index}`, tenantId, platform: "windows", commit, reference: "r", validatedAt: "2026-09-01T00:00:00Z", validationVersion: 1, selection: "all", results: [] }))
+    store.set(`oib:validations:${tenantId}`, JSON.stringify(full))
+    const single = await handleOib({ ...base, action: "oib-validate", commit, selection: "single", items: [{ source: SC, targetId: EXISTING }] }) as ValidationRun & { saved: boolean }
+    expect(single.saved).toBe(false)
+    const kept = (await handleOib({ action: "oib-validations", tenantId }) as { runs: ValidationRun[] }).runs
+    expect(kept.map((run) => run.runId)).toEqual(full.map((run) => run.runId))
+    const all = await handleOib({ ...base, action: "oib-validate", commit, selection: "all", items: [{ source: SC, targetId: EXISTING }] }) as ValidationRun & { saved: boolean }
+    expect(all).toMatchObject({ saved: true, selection: "all" })
+    expect((await handleOib({ action: "oib-validations", tenantId }) as { runs: ValidationRun[] }).runs[0]!.runId).toBe(all.runId)
+  })
+
   it("resets a drifted policy with Fix drift and records it as an undoable run", async () => {
     const writes: string[] = []
     const state: Tenant = { policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.8", value: 3 }] }

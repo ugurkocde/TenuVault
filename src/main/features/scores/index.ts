@@ -1,11 +1,12 @@
 import type { RouteModule } from "../../api/host"
 import type { SignalProvider, WorkSignal } from "../contracts"
 import type { FeatureDeps } from "../deps"
+import { isFullValidation } from "../../../shared/oib/types"
 import { featureRoute, FeatureError, optionalText, type Body } from "../route"
 import { SCORE_FORMULA, STALE_AFTER_DAYS } from "./formula"
 import { isNativeFramework, readAllHistory, readHistory } from "./history"
-import { frameworkDetail, frameworkScore, type FrameworkScore } from "./view"
-import { oibFrameworkDetail, oibFrameworkScore, oibScorePlatform, readOibHistory } from "./oib"
+import { frameworkDetail, frameworkScore, newestRun, OLDER_RULES_MESSAGE, type FrameworkScore } from "./view"
+import { SINGLE_POLICY_ONLY, oibFrameworkDetail, oibFrameworkScore, oibScorePlatform, readOibHistory } from "./oib"
 
 async function tenantScores(deps: FeatureDeps, tenantId: string): Promise<FrameworkScore[]> {
   const now = deps.now()
@@ -48,14 +49,17 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       if (platform) {
         const read = (await readOibHistory(deps, tenantId)).find((entry) => entry.platform === platform)!
         if (read.error) throw new FeatureError(read.error, 502)
-        const run = runId ? read.runs.find((entry) => entry.runId === runId) : [...read.runs].sort((a, b) => Date.parse(b.validatedAt) - Date.parse(a.validatedAt))[0]
-        if (!run) throw new FeatureError("Saved OIB validation not found.", 404)
+        // Without a run id the detail shows the run the card scores: the newest full validation.
+        const run = runId ? read.runs.find((entry) => entry.runId === runId) : [...read.runs].filter(isFullValidation).sort((a, b) => Date.parse(b.validatedAt) - Date.parse(a.validatedAt))[0]
+        if (!run) throw new FeatureError(!runId && read.runs.length ? SINGLE_POLICY_ONLY : "Saved OIB validation not found.", 404)
         return { tenantId, tenantName: deps.tenant(tenantId)?.name ?? null, detail: oibFrameworkDetail(run, deps.now()) }
       }
       const read = await readHistory(deps, tenantId, frameworkId)
       if (read.status === "unavailable") throw new FeatureError(read.error ?? "Saved comparisons could not be read.", 502)
-      const run = runId ? read.runs.find((item) => item.runId === runId) : read.runs[0]
-      if (!run) throw new FeatureError(runId ? "Saved comparison not found." : "No saved comparison for this framework.", 404)
+      const run = runId ? read.runs.find((item) => item.runId === runId) : newestRun(read.runs)
+      const older = runId ? read.olderRuns.find((item) => item.run.runId === runId) : undefined
+      if (older) throw new FeatureError(`${OLDER_RULES_MESSAGE} ${older.reason}`, 404)
+      if (!run) throw new FeatureError(runId ? "Saved comparison not found." : read.olderRuns.length ? OLDER_RULES_MESSAGE : "No saved comparison for this framework.", 404)
       return { tenantId, tenantName: deps.tenant(tenantId)?.name ?? null, detail: frameworkDetail(run, deps.now()) }
     },
 

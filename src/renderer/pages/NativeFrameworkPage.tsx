@@ -1,16 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronDown, Download, ExternalLink, FileJson, FileSpreadsheet, History, Info, LoaderCircle, X } from 'lucide-react'
 import { cn } from '~/lib/utils'
 import { useSelectedTenant } from '~/contexts/TenantContext'
 import type { Framework } from '../../shared/frameworks/catalog'
 import { FRAMEWORK_USAGE_NOTICE, capabilityComparison, comparisonCounts, compareNativeAssessments, type NativeAssessment } from '../../shared/compliance/native'
+import { collectionReadGaps } from '../../shared/compliance/counted'
+import { allows } from '../../shared/plans'
 import type { AssessmentScope, CapabilityResult, CapabilityStatus, CompliancePlatform, TechnicalCheck } from '../../shared/compliance/types'
 import { CAPABILITY_STATUS_LABELS, CHECK_RESULT_LABELS, COLLECTION_FAMILY_LABELS, COLLECTION_STATUS_LABELS, CONTROL_STATUS_LABELS, PLATFORM_LABELS, frameworkCoverageLabel } from '../../shared/compliance/presentation'
 import { displayCheckValue } from '../../shared/compliance/check-results'
 import { ComplianceScoringNotice } from '../components/ComplianceScoringNotice'
 import { useConfirm } from "~/components/ConfirmDialog"
 import { cancelFrameworkJob, startFrameworkJob, useFrameworkJob } from '../lib/framework-jobs'
+import { useTenantPlan } from '../lib/license'
+import { formatScore, freshData, loadDetail } from '../features/scores/api'
+import { invalidateScores } from '../features/scores/invalidate'
 
 const button = 'inline-flex h-10 items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50'
 const small = cn(button, 'h-8 px-3 text-xs')
@@ -64,6 +70,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
   const [error, setError] = useState('')
   const [persistent, setPersistent] = useState(false)
   const [scoringChanged, setScoringChanged] = useState(false)
+  const [currentRunIds, setCurrentRunIds] = useState<string[] | null>(null)
   const [provider, setProvider] = useState<{ edition: string; sourceContentLicense: string; contentMode: string; strategies: string[] } | null>(null)
   const [changes, setChanges] = useState<{ base: NativeAssessment; rows: ReturnType<typeof compareNativeAssessments> } | null>(null)
   const [query, setQuery] = useState('')
@@ -87,8 +94,9 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
   }, [framework.id])
 
   async function loadHistory(select?: string) {
-    const value = await request<{ history: NativeAssessment[]; persistent: boolean; notice?: string; scoringChanged?: boolean }>({ ...body, action: 'native-history' })
+    const value = await request<{ history: NativeAssessment[]; persistent: boolean; notice?: string; scoringChanged?: boolean; currentRunIds?: string[] }>({ ...body, action: 'native-history' })
     setScoringChanged(value.scoringChanged === true)
+    setCurrentRunIds(Array.isArray(value.currentRunIds) ? value.currentRunIds : null)
     setHistory(value.history); setPersistent(value.persistent); setLoaded(true)
     if (value.notice) setError(value.notice)
     setRun(current => value.history.find(item => item.runId === (select ?? current?.runId)) ?? value.history[0] ?? null)
@@ -134,6 +142,14 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
 
   const result = run?.assessment.frameworks[0]
   const counts = run ? comparisonCounts(run) : null
+  // The baseline score of the comparison on screen, read from /api/scores like the Governance card, on plans that include scores.
+  const client = useQueryClient()
+  const plan = useTenantPlan(credentials?.tenantId)
+  const scoring = plan !== null && allows(plan, 'baselineScores')
+  const score = useQuery({ queryKey: ['scores-detail', credentials?.tenantId, framework.id, run?.runId], queryFn: () => loadDetail(selectedTenant!, framework.id, run!.runId), enabled: scoring && !!run && !!selectedTenant, retry: false })
+  const scoreData = freshData(score)
+  const readGaps = run ? collectionReadGaps(run.assessment.collectionCoverage) : []
+  const olderRules = (item: NativeAssessment) => currentRunIds !== null && !currentRunIds.includes(item.runId)
   const term = query.trim().toLowerCase()
   const matches = run?.assessment.capabilities.filter(cap =>
     (!term || `${cap.capability.name} ${cap.capability.id} ${cap.checks.map(c => `${c.settingId} ${c.policyName ?? ''}`).join(' ')}`.toLowerCase().includes(term)) &&
@@ -231,6 +247,12 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
             <span className="mt-1 block text-sm text-gray-600">{labels[key]}</span>
           </button>)}
         </div>
+        {scoring && <p className="mt-5 flex flex-wrap items-center gap-2 text-sm text-gray-800">
+          <span>Baseline score: <strong className="font-medium tabular-nums">{scoreData ? formatScore(scoreData.detail.score) : score.error ? (score.error instanceof Error ? score.error.message : 'Not available.') : 'Loading'}</strong></span>
+          {!scoreData && score.error && <button type="button" className="text-blue-700 hover:underline disabled:cursor-not-allowed disabled:opacity-50" disabled={score.isFetching} onClick={() => void score.refetch()}>Retry</button>}
+          {readGaps.length > 0 && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-800">Partial collection</span>}
+          <Link className="text-blue-700 hover:underline" to="/portal/governance/scores">How the score is counted</Link>
+        </p>}
         <p className="mt-5 text-sm leading-6 text-gray-600">{frameworkCoverageLabel(result) ?? `${result.controls.length} selected technical references. This is a subset of the framework.`} {result.framework.note}</p>
         <p className="mt-2 text-xs text-gray-500">Counts cover capabilities once, using the best assigned policy evidence. Unassigned policies cannot count as matches. Individual observations remain available below. Configuration and assignment evidence do not establish actual device enforcement.</p>
       </section>
@@ -250,8 +272,8 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
         {!matches.length && !(status === 'unableToCheck' || status === 'outsideScope') && <p role="status" className="p-4 text-sm text-gray-500">No checks match this filter.</p>}
       </section>
 
-      <Disclosure title="Collection coverage and limitations" hint={(gaps => gaps ? `${gaps} policy ${gaps === 1 ? 'type' : 'types'} with read gaps` : 'All policy types read')(run.assessment.collectionCoverage.filter(f => f.errors.length).length)}>
-        {run.assessment.collectionCoverage.map(f => <div key={f.family} className="border-t pt-3 text-sm"><strong className="font-medium">{COLLECTION_FAMILY_LABELS[f.family] ?? f.family}: {COLLECTION_STATUS_LABELS[f.status] ?? f.status}</strong><p className="text-gray-600">{f.collectedPolicies} policies collected · {f.recognizedPolicies} recognized · {f.unsupportedPolicies} without recognized evidence</p>{f.errors.map((e, i) => <p className="mt-1 text-amber-800" key={i}>{e}</p>)}</div>)}
+      <Disclosure title="Collection coverage and limitations" hint={readGaps.length ? `Partial collection: ${readGaps.length} policy ${readGaps.length === 1 ? 'type' : 'types'} with read gaps` : 'All policy types this comparison uses were read'}>
+        {run.assessment.collectionCoverage.map(f => <div key={f.family} className="border-t pt-3 text-sm"><strong className="font-medium">{COLLECTION_FAMILY_LABELS[f.family] ?? f.family}: {COLLECTION_STATUS_LABELS[f.status] ?? f.status}</strong><p className="text-gray-600">{f.collectedPolicies} policies collected · {f.recognizedPolicies} recognized · {f.unsupportedPolicies} without recognized evidence</p>{f.status === 'notCollected' && !f.errors.length && <p className="mt-1 text-gray-600">Not read for this comparison: no check uses it, or its platform is outside the scope. This is not a read gap.</p>}{f.errors.map((e, i) => <p className="mt-1 text-amber-800" key={i}>{e}</p>)}</div>)}
       </Disclosure>
       <Disclosure title="Framework references" hint={`${result.controls.length} references`}>
         {result.controls.map(c => <div key={c.control.id} className="border-t pt-3 text-sm"><strong className="font-medium">{c.control.id} · {c.control.title}</strong><p className="mt-1">{CONTROL_STATUS_LABELS[c.status]}</p><p className="mt-1 text-gray-600">{c.control.summary}</p>{c.unavailableCheck && <p className="mt-1 text-amber-800">{c.unavailableCheck.reason}</p>}{c.unassessedAspects.map((a, i) => <p key={i} className="mt-1 text-gray-600">{a}</p>)}</div>)}
@@ -270,10 +292,10 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
         const itemCounts = comparisonCounts(item)
         const when = new Date(item.assessment.generatedAt).toLocaleString()
         return <li key={item.runId} aria-current={viewing || undefined} className="flex flex-wrap items-center gap-3 py-3 text-sm">
-          <span className="min-w-0 flex-1"><span className="font-medium text-gray-900">{when}</span>{viewing && <span className="ml-2 rounded-full bg-secondary px-2 py-0.5 text-xs text-foreground">Viewing</span>}<span className="block text-xs text-gray-500">{itemCounts.matches} matches · {itemCounts.different} different · {itemCounts.missing} missing · {(item.assessment.scope.platforms ?? []).map(p => platformLabels[p]).join(', ')}</span></span>
+          <span className="min-w-0 flex-1"><span className="font-medium text-gray-900">{when}</span>{viewing && <span className="ml-2 rounded-full bg-secondary px-2 py-0.5 text-xs text-foreground">Viewing</span>}{olderRules(item) && <span className="ml-2 rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-800" title="An app update changed the scoring rules or mapping. Compare again to score.">Scored under older rules</span>}<span className="block text-xs text-gray-500">{itemCounts.matches} matches · {itemCounts.different} different · {itemCounts.missing} missing · {(item.assessment.scope.platforms ?? []).map(p => platformLabels[p]).join(', ')}</span></span>
           {!viewing && <button type="button" className={small} disabled={!!busy || running} aria-label={`View comparison from ${when}`} onClick={() => { setRun(item); applyScopeOf(item); setChanges(null); window.scrollTo({ top: 0, behavior: 'smooth' }) }}>View</button>}
           {run && !viewing && <button type="button" className={small} disabled={!!busy} aria-label={`Show changes since ${when}`} onClick={() => { setError(''); try { setChanges({ base: item, rows: compareNativeAssessments(item, run) }); requestAnimationFrame(() => document.getElementById('native-changes')?.scrollIntoView({ behavior: 'smooth', block: 'start' })) } catch (e) { setChanges(null); setError(e instanceof Error ? e.message : 'Cannot compare these runs.'); window.scrollTo({ top: 0, behavior: 'smooth' }) } }}>Show changes since</button>}
-          <button type="button" className={cn(small, 'text-red-700')} disabled={!!busy} aria-label={`Delete comparison from ${when}`} onClick={async () => { if (await confirm({ title: "Delete comparison?", description: `Delete the comparison from ${when}? This cannot be undone.`, confirmLabel: "Delete", destructive: true })) void perform('Deleting comparison', async () => { await request({ ...body, action: 'native-delete', runId: item.runId }); const rest = history.filter(x => x.runId !== item.runId); setHistory(rest); if (run?.runId === item.runId) setRun(rest[0] ?? null); if (changes?.base.runId === item.runId || run?.runId === item.runId) setChanges(null) }) }}>Delete</button>
+          <button type="button" className={cn(small, 'text-red-700')} disabled={!!busy} aria-label={`Delete comparison from ${when}`} onClick={async () => { if (await confirm({ title: "Delete comparison?", description: `Delete the comparison from ${when}? This cannot be undone.`, confirmLabel: "Delete", destructive: true })) void perform('Deleting comparison', async () => { await request({ ...body, action: 'native-delete', runId: item.runId }); invalidateScores(client); const rest = history.filter(x => x.runId !== item.runId); setHistory(rest); if (run?.runId === item.runId) setRun(rest[0] ?? null); if (changes?.base.runId === item.runId || run?.runId === item.runId) setChanges(null) }) }}>Delete</button>
         </li>
       })}</ul>
     </section>}
