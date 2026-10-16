@@ -3,7 +3,7 @@ title: "Intune backup: run a backup"
 description: "Run an Intune backup with TenuVault: back up 39 Microsoft Intune object types with assignments, encrypted on your device or in your own Azure storage."
 faq:
   - question: "How do I back up Microsoft Intune policies?"
-    answer: "In TenuVault, select the tenant, open Backup & Restore and click Run Backup. Keep the saved backup choice or change it, then click Start backup. TenuVault reads the Intune configuration through Microsoft Graph with your own delegated sign-in and saves every object with its assignments."
+    answer: "In TenuVault, select the tenant, open Backup & Restore and click Run Backup. Keep the saved backup choice or change it, then click Start backup. TenuVault reads the Intune configuration through Microsoft Graph with your own delegated sign-in and saves the objects in your backup choice, with their assignments where Intune has them."
   - question: "What does an Intune backup include?"
     answer: "A full backup covers 39 Intune object types in nine areas, including Settings Catalog and device configuration policies, compliance policies, scripts, Administrative Templates, enrollment and tenant settings, plus app details and assignments. App installer files, Apple tokens and private keys cannot be exported by Microsoft Graph and are never included."
   - question: "Does Microsoft Intune have a built-in backup?"
