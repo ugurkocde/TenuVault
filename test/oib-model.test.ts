@@ -3,7 +3,10 @@ import { compareAdminTemplate, compareFlat, compareSettings, validatePolicy } fr
 import { policyGate, typeGate, type TenantProfile } from "../src/shared/oib/licensing"
 import { catalogPolicies, extractOibId, parseManifest } from "../src/shared/oib/manifest"
 import { baseName, compareToTenant, compareVersions, policyVersion } from "../src/shared/oib/match"
-import { escapeHtml, REPORT_PRINT_OPTIONS, reportHtml, toCsv } from "../src/shared/oib/report"
+import { parseReportPayload, REPORT_LIMITS, statusTone, toCsv } from "../src/shared/oib/report"
+import { generateOibReportPDF } from "../src/shared/oib/report-pdf"
+import { EXPORTED_AT, TENANT_ID, oibComparisonReport, oibValidationReport, pngLogo } from "./pdf-report-fixtures"
+import { expectInsideGrid, fileId, outlineTitles, pageStreams, pdfText, shown } from "./pdf-text"
 import type { OibPolicy, TenantPolicy } from "../src/shared/oib/types"
 import { replaceTenantVariables } from "../src/shared/oib/variables"
 
@@ -201,49 +204,85 @@ describe("setting comparison", () => {
 })
 
 describe("reports", () => {
-  it("escapes every value and loads nothing external", () => {
-    const html = reportHtml({ title: "<script>alert(1)</script>", meta: [["Tenant", "A & B"]], sections: [{ heading: "H", columns: ["C"], rows: [["<img src=x onerror=1>"]] }] })
-    expect(html.startsWith("<!doctype html>")).toBe(true)
-    expect(html).not.toContain("<script>")
-    expect(html).not.toContain("<img")
-    expect(html).toContain("default-src 'none'")
-    expect(escapeHtml(`"'`)).toBe("&quot;&#39;")
+  const ATTRIBUTION = "OpenIntuneBaseline content: SkipToTheEndpoint and contributors, GPL-3.0."
+  const BRANDING = { companyName: "Fabrikam Security Services", colors: { primary: "#0B3D5C", accent: "#2BB3A3" }, preparedBy: "Avery Fabrikam", classification: "Confidential", footerText: "Fabrikam | Intune review", logo: { dataUrl: pngLogo() } }
+  const pdf = (report = oibComparisonReport(), branding?: typeof BRANDING) => generateOibReportPDF(parseReportPayload(report), { exportedAt: EXPORTED_AT, branding })
+
+  it("accepts a well formed report and returns only the known fields", () => {
+    const report = parseReportPayload({ ...oibValidationReport(), tenantId: TENANT_ID.toUpperCase() })
+    expect(report.tenantId).toBe(TENANT_ID)
+    expect(report.sections[0]!.columns).toEqual(["Platform", "OIB policy", "Tenant policy", "Status", "Settings matched"])
+    expect(parseReportPayload({ tenantId: TENANT_ID, title: "T", meta: [], sections: [] })).toEqual({ tenantId: TENANT_ID, title: "T", meta: [], sections: [] })
   })
 
-  it("prints a header band with the mark, escaped title, subtitle and facts", () => {
-    const html = reportHtml({ title: "Comparison <b>", subtitle: "v3.8 & up", eyebrow: "<i>OIB</i>", meta: [["Tenant", "<Contoso>"], ["Compared", "today"]], summary: [["Up to date", "3"], ["<k>", "<v>"]], sections: [] })
-    const band = html.slice(html.indexOf(`<header class="band">`), html.indexOf("</header>"))
-    expect(band).toContain(`class="brand-mark"`)
-    expect(band).toContain("TenuVault")
-    expect(band).toContain("&lt;i&gt;OIB&lt;/i&gt;")
-    expect(band).toContain("<h1>Comparison &lt;b&gt;</h1>")
-    expect(band).toContain("v3.8 &amp; up")
-    expect(band).toContain("<dd>&lt;Contoso&gt;</dd>")
-    expect(html).toContain("&lt;k&gt;")
-    expect(html).not.toMatch(/<[kvb]>/)
-    expect(html).toContain("@page :first { margin-top: 0; }")
+  it("rejects reports of the wrong shape, type or size", () => {
+    const base = oibComparisonReport()
+    const section = base.sections[0]!
+    const rows = (count: number) => Array.from({ length: count }, () => ["a"])
+    for (const bad of [
+      null, "<!doctype html><p>x</p>", [], { ...base, html: "<p>" }, { ...base, tenantId: "contoso" }, { ...base, tenantId: undefined },
+      { ...base, title: 7 }, { ...base, title: "  " }, { ...base, title: "x".repeat(REPORT_LIMITS.label + 1) }, { ...base, meta: [["Tenant"]] }, { ...base, meta: [["Tenant", 1]] },
+      { ...base, summary: [["Up to date", "x".repeat(41)]] }, { ...base, sections: {} }, { ...base, sections: [{ ...section, script: "x" }] },
+      { ...base, sections: [{ ...section, columns: [] }] }, { ...base, sections: [{ ...section, rows: [["only one cell"]] }] }, { ...base, sections: [{ ...section, rows: [[1, 2, 3, 4, 5, 6]] }] },
+      { ...base, sections: [{ heading: "H", columns: ["C"], rows: [["x".repeat(REPORT_LIMITS.cell + 1)]] }] },
+      { ...base, sections: [{ heading: "H", columns: ["C"], rows: rows(REPORT_LIMITS.rows + 1) }] },
+      { ...base, sections: Array.from({ length: 11 }, () => ({ heading: "H", columns: ["C"], rows: [["x".repeat(REPORT_LIMITS.cell)]] })).concat(Array.from({ length: 500 }, () => ({ heading: "H", columns: ["C"], rows: [["x".repeat(REPORT_LIMITS.cell)]] }))) },
+    ]) expect(() => parseReportPayload(bad), JSON.stringify(bad)?.slice(0, 80)).toThrow(/The report could not be prepared/)
   })
 
-  it("renders known status words as pills with a marker and leaves other values as text", () => {
-    const html = reportHtml({ title: "T", meta: [], sections: [{ heading: "Ambiguous match", columns: ["Status", "Name"], rows: [["Matches the baseline", "Drift detected"], ["Missing in tenant", "Error <x>"], ["Not validated", "Validation error"]] }] })
-    expect(html).toContain(`<span class="pill good"><svg class="mark"`)
-    expect(html).toMatch(/<span class="pill good"><svg[^>]*>.*?<\/svg>Matches the baseline<\/span>/)
-    expect(html).toContain(`<span class="pill partial">`)
-    expect(html).toContain(`<span class="pill missing">`)
-    expect(html).toContain(`<span class="pill neutral">`)
-    expect(html).toContain(`<span class="pill alert">`)
-    expect(html).toContain("<td>Error &lt;x&gt;</td>")
-    expect(html).toMatch(/<h2><span class="alert"><svg/)
-    expect(html).toContain("<thead>")
-    expect(html).toContain("thead { display: table-header-group; }")
+  it("maps the known status words to tones and leaves other text alone", () => {
+    expect(["Matches the baseline", "Up to date", " Drift detected ", "Value mismatch", "Missing in tenant", "Validation error", "Ambiguous match", "Not validated", "Newer than OIB"].map(statusTone))
+      .toEqual(["good", "good", "different", "different", "missing", "conflict", "conflict", "neutral", "neutral"])
+    expect(statusTone("Error <x>")).toBeUndefined()
+    expect(statusTone("constructor")).toBeUndefined()
   })
 
-  it("prints a running footer with the document title and page numbers", () => {
-    expect(REPORT_PRINT_OPTIONS.displayHeaderFooter).toBe(true)
-    expect(REPORT_PRINT_OPTIONS.footerTemplate).toContain(`<span class="title"></span>`)
-    expect(REPORT_PRINT_OPTIONS.footerTemplate).toContain(`<span class="pageNumber"></span> of <span class="totalPages"></span>`)
-    expect(REPORT_PRINT_OPTIONS.footerTemplate).toMatch(/font-size:\d+px/)
-    expect(REPORT_PRINT_OPTIONS.margins.bottom).toBeGreaterThan(0.4)
+  it("prints the cover, contents, summary, every section and the attribution with page numbers and bookmarks", () => {
+    const bytes = pdf()
+    const text = pdfText(bytes)
+    for (const expected of ["OpenIntuneBaseline deployment comparison", "Contoso Ltd", TENANT_ID, "AT A GLANCE", "DOCUMENT CONTROL", "Contents", "Summary", "Status distribution", "Report details",
+      "Update available", "New policy", "Ambiguous match", "Newer than OIB", "Up to date", "Other copies still deployed", "Older versions or extra copies next to the matched policy.",
+      "Deprecated policies in the tenant", "Nothing to report.", "Provenance and attribution", ATTRIBUTION, "2026-10-14 09:30 UTC", "TenuVault | OpenIntuneBaseline comparison"]) expect(text).toContain(expected)
+    const pages = pageStreams(bytes)
+    pages.slice(1).forEach((stream, index) => expect(shown(stream)).toContain(`Page ${index + 2} of ${pages.length}`))
+    expect(outlineTitles(bytes)).toEqual(expect.arrayContaining(["Contents", "Summary", "Results", "Update available", "Deprecated policies in the tenant", "Provenance and attribution"]))
+    expectInsideGrid(bytes)
+    expect(Buffer.from(pdf()).equals(Buffer.from(bytes))).toBe(true)
+  })
+
+  it("draws status words as pills in table cells", () => {
+    const text = pdfText(pdf(oibValidationReport()))
+    for (const pill of ["Matches the baseline", "Drift detected", "Not validated", "Validation error", "Value mismatch", "Missing in tenant", "Only in tenant"]) expect(text).toContain(pill)
+    // A pill is a filled rounded rectangle in the tone of its status.
+    expect(pageStreams(pdf(oibValidationReport())).join("\n")).toContain("0.91 0.95 0.93 rg")
+  })
+
+  it("redacts secrets, normalises typographic characters and keeps long values inside the grid", () => {
+    const validation = pdfText(pdf(oibValidationReport()))
+    expect(validation).not.toContain("eyJhbGciOiJIUzI1NiJ9")
+    expect(validation).toContain("Graph returned 403 Forbidden")
+    const extreme = pdf(oibComparisonReport({ extreme: true }))
+    expect(pdfText(extreme)).toContain("Ltd 's Region")
+    expect(pdfText(extreme)).toContain("Update available (continued)")
+    expectInsideGrid(extreme)
+    expectInsideGrid(pdf(oibValidationReport({ extreme: true })))
+  })
+
+  it("renders a white label report with the customer branding and the verbatim attribution only", () => {
+    const bytes = pdf(oibComparisonReport(), BRANDING)
+    const text = pdfText(bytes)
+    for (const expected of ["Fabrikam Security Services", "Avery Fabrikam", "Confidential", "Fabrikam | Intune review", ATTRIBUTION]) expect(text).toContain(expected)
+    expect(text).not.toContain("TenuVault")
+    expect(Buffer.from(bytes).toString("latin1")).toMatch(/\/Subtype \/Image/)
+    expect(Buffer.from(bytes).toString("latin1")).toContain("/Author (Fabrikam Security Services)")
+  })
+
+  it("derives the file id from the report identity, not from its rows", () => {
+    const report = oibValidationReport()
+    const changed = structuredClone(report)
+    changed.sections[1]!.rows[0]![3] = "client_secret=abcdefghijklmnopqrstuvwx"
+    expect(fileId(pdf(changed))).toBe(fileId(pdf(report)))
+    expect(fileId(pdf({ ...report, title: "Another title" }))).not.toBe(fileId(pdf(report)))
   })
 
   it("quotes CSV cells and neutralises spreadsheet formulas", () => {

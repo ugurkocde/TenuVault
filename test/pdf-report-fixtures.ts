@@ -1,3 +1,4 @@
+import { crc32, deflateSync } from "node:zlib"
 import { assessCompliance, assessFramework, complianceFrameworks } from "../src/shared/compliance/engine"
 import { expectedValue } from "../src/shared/compliance/check-results"
 import { FRAMEWORK_SOURCE_COMMIT, FRAMEWORK_USAGE_NOTICE, type NativeAssessment } from "../src/shared/compliance/native"
@@ -176,3 +177,75 @@ export function cisSummary(options: { extreme?: boolean } = {}): CisReadinessSum
 }
 
 export const CIS_CONTEXT = { exportedAt: EXPORTED_AT, tenantName: "Contoso Ltd", tenantId: TENANT_ID, assessedAt: "2026-10-14T08:45:00.000Z", runId: "cis-run-2026-10-14" }
+
+const OIB_ATTRIBUTION = "OpenIntuneBaseline content: SkipToTheEndpoint and contributors, GPL-3.0."
+const OIB_PLATFORMS = ["Windows", "macOS", "iOS/iPadOS", "Android"]
+const OIB_POLICIES = ["Win - OIB - ES - Defender Antivirus - D - AV Configuration - v3.8", "Win - OIB - SC - Device Security - D - BitLocker (OS Disk) - v3.8", "Win - OIB - SC - Windows Update for Business - D - Update Ring - v3.8", "MacOS - OIB - Compliance - U - Device Health - v1.0", "iOS - OIB - Restrictions - D - Device Restrictions - v2.1", "Android - OIB - Work Profile - D - Password - v1.4"]
+
+/** A fictional Existing Deployment comparison as the renderer builds it; `extreme` adds long names, many rows and odd characters. */
+export function oibComparisonReport(options: { extreme?: boolean } = {}) {
+  const statuses = ["Update available", "New policy", "Ambiguous match", "Newer than OIB", "Up to date"]
+  const count = options.extreme ? 120 : 14
+  const rows = Array.from({ length: count }, (_, index) => {
+    const name = OIB_POLICIES[index % OIB_POLICIES.length]!
+    const long = options.extreme && index % 7 === 0
+    return { status: statuses[index % statuses.length]!, row: [OIB_PLATFORMS[index % OIB_PLATFORMS.length]!, index % 2 ? "Settings Catalog" : "Compliance policy", long ? `${name} ${"Extended naming convention segment ".repeat(4)}` : name,
+      index % 5 === 1 ? "" : long ? `${name}\n${name} (${guid(index)})\nLegacyCopy_${"x".repeat(80)}` : `${name.replace(/ - v\d.\d$/, "")} - v3.6`, index % 5 === 0 ? "v3.6 to v3.8" : "v3.8", index % 3 ? "OIBID" : "Name"] }
+  })
+  return {
+    tenantId: TENANT_ID,
+    title: "OpenIntuneBaseline deployment comparison",
+    eyebrow: "OpenIntuneBaseline comparison",
+    subtitle: "OpenIntuneBaseline Windows v3.8, macOS v1.0, iOS/iPadOS v2.1, Android v1.4",
+    meta: [["Tenant", options.extreme ? `Contoso Holdings International "Global" Ltd \u2019s ${"Region ".repeat(8)}` : "Contoso Ltd"], ["Compared", "14/10/2026, 10:45:12"], ["Tenant policies read", "212"], ["Matching", "OIBID in the policy description, then policy name without version. Settings are not compared; see Policy Validation."]] as Array<[string, string]>,
+    summary: statuses.map(status => [status, String(rows.filter(row => row.status === status).length)]) as Array<[string, string]>,
+    sections: [
+      ...statuses.map(status => ({ heading: status, columns: ["Platform", "Type", "OIB policy", "Tenant policy", "Versions", "Match"], rows: rows.filter(row => row.status === status).map(row => row.row) })),
+      { heading: "Other copies still deployed", note: "Older versions or extra copies next to the matched policy. They keep applying until removed.", columns: ["OIB policy", "Other copy in the tenant"], rows: [[OIB_POLICIES[0]!, `${OIB_POLICIES[0]!.replace("v3.8", "v3.4")} (${guid(901)})`]] },
+      { heading: "Deprecated policies in the tenant", columns: ["Tenant policy", "Replacement"], rows: [] },
+    ],
+    attribution: OIB_ATTRIBUTION,
+  }
+}
+
+/** A fictional Policy Validation report as the renderer builds it; `extreme` adds long setting paths and values. */
+export function oibValidationReport(options: { extreme?: boolean } = {}) {
+  const statuses = ["Matches the baseline", "Drift detected", "Drift detected", "Not validated", "Validation error"]
+  const policies = Array.from({ length: options.extreme ? 40 : 8 }, (_, index) => ({ name: OIB_POLICIES[index % OIB_POLICIES.length]!, status: statuses[index % statuses.length]!, platform: OIB_PLATFORMS[index % OIB_PLATFORMS.length]! }))
+  const path = (index: number) => options.extreme && index % 3 === 0 ? `device_vendor_msft_policy_config_defender_${"attacksurfacereductionrules_".repeat(4)}${index}` : `device_vendor_msft_policy_config_defender_allowrealtimemonitoring_${index}`
+  const deviations = (index: number) => policies[index]!.status === "Validation error"
+    ? [["Error", "", "", "The policy could not be read: Graph returned 403 Forbidden for this request. Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop"]]
+    : Array.from({ length: options.extreme ? 30 : 4 }, (_, row) => [["Value mismatch", "Missing in tenant", "Only in tenant"][row % 3]!, `Real-time monitoring ${row + 1} (${path(row)})`, row % 3 === 2 ? "(not set)" : options.extreme && row % 4 === 0 ? `{"rules":[${"\"block\",".repeat(30)}"audit"]}` : "Enabled", row % 3 === 1 ? "(not set)" : "Disabled"])
+  return {
+    tenantId: TENANT_ID,
+    title: "OpenIntuneBaseline policy validation",
+    eyebrow: "OpenIntuneBaseline validation",
+    subtitle: "OpenIntuneBaseline Windows v3.8",
+    meta: [["Tenant", "Contoso Ltd"], ["Validated", "14/10/2026, 11:02:40"], ["Policies", String(policies.length)], ["Scope", "Setting-level comparison of matched policies. Read-only: nothing was changed in the tenant."]] as Array<[string, string]>,
+    summary: [["Match the baseline", "Matches the baseline"], ["Drift detected", "Drift detected"], ["Not validated", "Not validated"], ["Errors", "Validation error"]].map(([label, status]) => [label, String(policies.filter(policy => policy.status === status).length)]) as Array<[string, string]>,
+    sections: [
+      { heading: "Summary", columns: ["Platform", "OIB policy", "Tenant policy", "Status", "Settings matched"], rows: policies.map(policy => [policy.platform, policy.name, `${policy.name} (Contoso)`, policy.status, policy.status === "Matches the baseline" ? "42 of 42" : policy.status === "Drift detected" ? "38 of 42" : ""]) },
+      ...policies.map((policy, index) => ({ policy, index })).filter(({ policy }) => policy.status === "Drift detected" || policy.status === "Validation error").map(({ policy, index }) => ({ heading: policy.name, note: `Tenant policy: ${policy.name} (Contoso)`, columns: ["Deviation", "Setting", "OIB value", "Tenant value"], rows: deviations(index) })),
+    ],
+    attribution: OIB_ATTRIBUTION,
+  }
+}
+
+/** A solid PNG of the given size with a darker band, built without an image library, as a data URL. */
+export function pngLogo(width = 240, height = 80, color: [number, number, number] = [11, 61, 92]): string {
+  const crc = (data: Buffer) => { const value = Buffer.alloc(4); value.writeUInt32BE(crc32(data)); return value }
+  const chunk = (type: string, data: Buffer) => { const length = Buffer.alloc(4); length.writeUInt32BE(data.length); const body = Buffer.concat([Buffer.from(type, "latin1"), data]); return Buffer.concat([length, body, crc(body)]) }
+  const header = Buffer.alloc(13)
+  header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 6
+  const raw = Buffer.alloc((width * 4 + 1) * height)
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const offset = y * (width * 4 + 1) + 1 + x * 4
+      const mark = x < height
+      const inside = mark ? (x - height / 2) ** 2 + (y - height / 2) ** 2 < (height / 2.4) ** 2 : y > height * 0.3 && y < height * 0.7 && (x - height) % 22 < 16
+      raw[offset] = mark ? 43 : color[0]; raw[offset + 1] = mark ? 179 : color[1]; raw[offset + 2] = mark ? 163 : color[2]; raw[offset + 3] = inside ? 255 : 0
+    }
+  }
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", header), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))])
+  return `data:image/png;base64,${png.toString("base64")}`
+}

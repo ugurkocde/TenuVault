@@ -8,6 +8,7 @@ import { comparePolicies, parsePolicies, record, remediationPayload, type Assess
 import { DELEGATED_CLIENT_SECRET } from "../../shared/constants"
 import { CIS_FRAMEWORKS } from "../../shared/plans"
 import { loadNcsc } from "./ncsc"
+import { pdfBrandingFor } from "../pdf-branding"
 import { validateRecommendationList } from "../../shared/frameworks/cis-manual"
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
 import { cisReadiness } from "../../shared/frameworks/cis-readiness"
@@ -310,13 +311,13 @@ async function exportWorkspace(body: RecordJson, workspace: FrameworkWorkspace):
     }
     const summary = cisReadiness(saved.assessment, saved.policies, denominator, workspace.recommendationList, workspace.exceptions)
     const { generateCisReadinessPDF } = await import("../../shared/compliance/report-pdf")
-    const pdf = generateCisReadinessPDF(summary, { exportedAt: context.exportedAt, tenantName: context.tenantName, tenantId: workspace.tenantId, assessedAt: saved.assessment.assessedAt, runId: saved.assessment.runId })
+    const pdf = generateCisReadinessPDF(summary, { exportedAt: context.exportedAt, tenantName: context.tenantName, tenantId: workspace.tenantId, assessedAt: saved.assessment.assessedAt, runId: saved.assessment.runId }, await pdfBrandingFor(workspace.tenantId))
     return { file: { name: `${name}.pdf`, type: "application/pdf", encoding: "base64", data: Buffer.from(pdf).toString("base64") } }
   }
   if (body.action === "workspace-csv") return { file: { name: `${name}.csv`, type: "text/csv;charset=utf-8", encoding: "utf8", data: `\uFEFF${workspaceExportCSV(saved, context)}` } }
   if (body.action === "workspace-json") return { file: { name: `${name}.json`, type: "application/json", encoding: "utf8", data: workspaceExportJSON(saved, context) } }
   const { generateWorkspaceAssessmentPDF } = await import("../../shared/compliance/report-pdf")
-  return { file: { name: `${name}.pdf`, type: "application/pdf", encoding: "base64", data: Buffer.from(generateWorkspaceAssessmentPDF(saved, context)).toString("base64") } }
+  return { file: { name: `${name}.pdf`, type: "application/pdf", encoding: "base64", data: Buffer.from(generateWorkspaceAssessmentPDF(saved, context, await pdfBrandingFor(workspace.tenantId))).toString("base64") } }
 }
 
 export async function handleFramework(body: RecordJson): Promise<unknown> {
