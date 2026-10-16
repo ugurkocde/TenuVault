@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { crc32 } from "node:zlib"
 import { BrandingError, LOGO_LIMIT, PDF_BRANDING_KEY, PdfBrandingPolicy, PdfBrandingStore, canonicalLogo, inspectLogo, pdfBrandingFor, setPdfBrandingPolicy, validateBranding, type LogoDecoder, type LogoImage } from "../src/main/pdf-branding"
-import { prepareOibReportFile } from "../src/main/report-export"
+import { existsSync } from "node:fs"
+import { readFile, stat } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { dirname, join } from "node:path"
+import type { BrowserWindowConstructorOptions } from "electron"
+import { REPORT_WINDOW, prepareOibReportFile, printHtmlToPdf, type HtmlPrinter, type ReportWindow } from "../src/main/report-export"
+import type { OibPrintOptions } from "../src/shared/oib/report-html"
 import { handleNativeFramework, setNativeFrameworkAuthorization, setNativeFrameworkStore } from "../src/main/frameworks/native"
 import { handleFramework, type ExportFile } from "../src/main/frameworks/service"
 import { recordAssessment, setFrameworkStore } from "../src/main/frameworks/workspaces"
@@ -9,7 +15,6 @@ import { PlanRequired, type Plan } from "../src/shared/plans"
 import { withPlanError } from "../src/shared/plan-errors"
 import type { BaselinePolicy } from "../src/shared/frameworks/policies"
 import { EXPORTED_AT, TENANT_ID, oibComparisonReport, pngLogo } from "./pdf-report-fixtures"
-import { pdfText } from "./pdf-text"
 import { memoryStore } from "./helpers"
 
 const LOGO = pngLogo()
@@ -264,23 +269,77 @@ describe("PDF branding storage and plan enforcement", () => {
 })
 
 describe("PDF exports use the branding of the tenant's plan", () => {
-  it("generates an OIB report in main with branding on Pro and the TenuVault design on Community", async () => {
+  it("builds an OIB report in main with branding on Pro and the TenuVault design on Community, then prints it", async () => {
     const plans: Record<string, Plan> = { [TENANT_ID]: "community" }
     const { policy: rules, branding } = policy(plans)
     branding.set(BRANDING)
     setPdfBrandingPolicy(rules)
-    const community = await prepareOibReportFile(oibComparisonReport(), "OIB comparison Contoso <2026>.pdf", EXPORTED_AT)
+    const printed: Array<{ html: string; options: OibPrintOptions }> = []
+    const print: HtmlPrinter = async (html, options) => {
+      printed.push({ html, options })
+      return new TextEncoder().encode("%PDF-1.7 test")
+    }
+    const community = await prepareOibReportFile(oibComparisonReport(), "OIB comparison Contoso <2026>.pdf", print, EXPORTED_AT)
     expect(community).toMatchObject({ name: "OIB comparison Contoso _2026_.pdf", extension: "pdf", label: "PDF" })
-    expect(community.content.subarray(0, 5).toString("latin1")).toBe("%PDF-")
-    expect(author(community.content)).toBe("TenuVault")
+    expect(community.content.toString("latin1")).toBe("%PDF-1.7 test")
+    expect(printed[0]!.html).toContain('<span class="wordmark">TenuVault</span>')
+    expect(printed[0]!.html).not.toContain("Fabrikam")
+    expect(printed[0]!.options).toMatchObject({ pageSize: "A4", printBackground: true, generateDocumentOutline: true })
     plans[TENANT_ID] = "pro"
-    const pro = await prepareOibReportFile(oibComparisonReport(), "OIB comparison", EXPORTED_AT)
+    const pro = await prepareOibReportFile(oibComparisonReport(), "OIB comparison", print, EXPORTED_AT)
     expect(pro.name).toBe("OIB comparison.pdf")
-    expect(author(pro.content)).toBe("Fabrikam Security Services")
-    expect(pdfText(pro.content)).not.toContain("TenuVault")
-    expect((await prepareOibReportFile(oibComparisonReport(), undefined, EXPORTED_AT)).name).toBe("TenuVault report.pdf")
-    await expect(prepareOibReportFile("<!doctype html><p>x</p>", "x.pdf")).rejects.toThrow("The report could not be prepared")
-    await expect(prepareOibReportFile({ ...oibComparisonReport(), tenantId: "x" }, "x.pdf")).rejects.toThrow("tenant ID")
+    expect(printed[1]!.html).toContain("Fabrikam | Review")
+    expect(printed[1]!.html).toContain("--primary: rgb(11 61 92);")
+    expect(printed[1]!.html).not.toMatch(/tenuvault/i)
+    expect((await prepareOibReportFile(oibComparisonReport(), undefined, print, EXPORTED_AT)).name).toBe("TenuVault report.pdf")
+    // The payload is checked before anything is printed, and whatever comes back must be a PDF.
+    const count = printed.length
+    await expect(prepareOibReportFile("<!doctype html><p>x</p>", "x.pdf", print)).rejects.toThrow("The report could not be prepared")
+    await expect(prepareOibReportFile({ ...oibComparisonReport(), tenantId: "x" }, "x.pdf", print)).rejects.toThrow("tenant ID")
+    expect(printed).toHaveLength(count)
+    await expect(prepareOibReportFile(oibComparisonReport(), "x.pdf", async () => new TextEncoder().encode("<html>"))).rejects.toThrow("The export could not be prepared")
+  })
+
+  it("prints in a hidden sandboxed window from a private temporary file and cleans up", async () => {
+    const events: string[] = []
+    let loaded = ""
+    let options: BrowserWindowConstructorOptions | undefined
+    const open = (fail: boolean) => (windowOptions: BrowserWindowConstructorOptions): ReportWindow => {
+      options = windowOptions
+      return {
+        webContents: {
+          setWindowOpenHandler: (handler) => events.push(`window-open:${handler().action}`),
+          on: (event, listener) => {
+            let prevented = false
+            listener({ preventDefault: () => { prevented = true } })
+            events.push(`${event}:${prevented ? "prevented" : "allowed"}`)
+          },
+          printToPDF: async (printOptions) => {
+            events.push(`print:${printOptions.pageSize}`)
+            if (fail) throw new Error("print failed")
+            return new TextEncoder().encode("%PDF-1.7")
+          },
+        },
+        loadFile: async (path) => {
+          loaded = path
+          const info = await stat(path)
+          events.push(`load:${(info.mode & 0o777).toString(8)}:${await readFile(path, "utf8")}`)
+        },
+        destroy: () => events.push("destroy"),
+      }
+    }
+    const print = { pageSize: "A4", printBackground: true, preferCSSPageSize: true, displayHeaderFooter: false, generateDocumentOutline: true, generateTaggedPDF: true, margins: { top: 1, bottom: 1, left: 1, right: 1 } } as const
+    const pdf = await printHtmlToPdf("<!doctype html><p>report</p>", print, open(false))
+    expect(Buffer.from(pdf).toString("latin1")).toBe("%PDF-1.7")
+    expect(options).toEqual(REPORT_WINDOW)
+    expect(REPORT_WINDOW).toEqual({ show: false, webPreferences: { javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true } })
+    expect(events).toEqual(["window-open:deny", "will-navigate:prevented", `load:${process.platform === "win32" ? "666" : "600"}:<!doctype html><p>report</p>`, "print:A4", "destroy"])
+    expect(loaded.startsWith(join(tmpdir(), "tenuvault-report-"))).toBe(true)
+    expect(existsSync(dirname(loaded))).toBe(false)
+    events.length = 0
+    await expect(printHtmlToPdf("<p>x</p>", print, open(true))).rejects.toThrow("print failed")
+    expect(events.at(-1)).toBe("destroy")
+    expect(existsSync(dirname(loaded))).toBe(false)
   })
 
   it("brands native and policy pack PDF exports only for a tenant on Pro or MSP", async () => {

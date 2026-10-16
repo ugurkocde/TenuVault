@@ -4,9 +4,7 @@ import { policyGate, typeGate, type TenantProfile } from "../src/shared/oib/lice
 import { catalogPolicies, extractOibId, parseManifest } from "../src/shared/oib/manifest"
 import { baseName, compareToTenant, compareVersions, policyVersion } from "../src/shared/oib/match"
 import { parseReportPayload, REPORT_LIMITS, statusTone, toCsv } from "../src/shared/oib/report"
-import { generateOibReportPDF } from "../src/shared/oib/report-pdf"
-import { EXPORTED_AT, TENANT_ID, oibComparisonReport, oibValidationReport, pngLogo } from "./pdf-report-fixtures"
-import { expectInsideGrid, fileId, outlineTitles, pageStreams, pdfText, shown } from "./pdf-text"
+import { TENANT_ID, oibComparisonReport, oibValidationReport } from "./pdf-report-fixtures"
 import type { OibPolicy, TenantPolicy } from "../src/shared/oib/types"
 import { replaceTenantVariables } from "../src/shared/oib/variables"
 
@@ -204,11 +202,6 @@ describe("setting comparison", () => {
 })
 
 describe("reports", () => {
-  const ATTRIBUTION = "OpenIntuneBaseline content: SkipToTheEndpoint and contributors, GPL-3.0."
-  const BRANDING = { companyName: "Fabrikam Security Services", colors: { primary: "#0B3D5C", accent: "#2BB3A3" }, preparedBy: "Avery Fabrikam", classification: "Confidential", footerText: "Fabrikam | Intune review", logo: { dataUrl: pngLogo() } }
-  const grid = (title: string, tenant: string, eyebrow: string) => ({ header: [title, tenant], footer: `TenuVault | ${eyebrow}`, coverFooter: [`TenuVault | ${eyebrow}`, "Configuration comparison, not a certification"] as [string, string] })
-  const pdf = (report = oibComparisonReport(), branding?: typeof BRANDING) => generateOibReportPDF(parseReportPayload(report), { exportedAt: EXPORTED_AT, branding })
-
   it("accepts a well formed report and returns only the known fields", () => {
     const report = parseReportPayload({ ...oibValidationReport(), tenantId: TENANT_ID.toUpperCase() })
     expect(report.tenantId).toBe(TENANT_ID)
@@ -239,81 +232,6 @@ describe("reports", () => {
       .toEqual(["good", "good", "different", "different", "missing", "conflict", "conflict", "neutral", "neutral"])
     expect(statusTone("Error <x>")).toBeUndefined()
     expect(statusTone("constructor")).toBeUndefined()
-  })
-
-  it("prints the cover, contents, summary, every section and the attribution with page numbers and bookmarks", () => {
-    const bytes = pdf()
-    const text = pdfText(bytes)
-    for (const expected of ["OpenIntuneBaseline deployment comparison", "Contoso Ltd", TENANT_ID, "AT A GLANCE", "DOCUMENT CONTROL", "Contents", "Summary", "Status distribution", "Report details",
-      "Update available", "New policy", "Ambiguous match", "Newer than OIB", "Up to date", "Other copies still deployed", "Older versions or extra copies next to the matched policy.",
-      "Deprecated policies in the tenant", "Nothing to report.", "Provenance and attribution", ATTRIBUTION, "2026-10-14 09:30 UTC", "TenuVault | OpenIntuneBaseline comparison"]) expect(text).toContain(expected)
-    const pages = pageStreams(bytes)
-    pages.slice(1).forEach((stream, index) => expect(shown(stream)).toContain(`Page ${index + 2} of ${pages.length}`))
-    expect(outlineTitles(bytes)).toEqual(expect.arrayContaining(["Contents", "Summary", "Results", "Update available", "Deprecated policies in the tenant", "Provenance and attribution"]))
-    expectInsideGrid(bytes, grid("OpenIntuneBaseline deployment comparison", "Contoso Ltd", "OpenIntuneBaseline comparison"))
-    expect(Buffer.from(pdf()).equals(Buffer.from(bytes))).toBe(true)
-  })
-
-  it("draws status words as pills in table cells", () => {
-    const text = pdfText(pdf(oibValidationReport()))
-    for (const pill of ["Matches the baseline", "Drift detected", "Not validated", "Validation error", "Value mismatch", "Missing in tenant", "Only in tenant"]) expect(text).toContain(pill)
-    // A pill is a filled rounded rectangle in the tone of its status.
-    expect(pageStreams(pdf(oibValidationReport())).join("\n")).toContain("0.91 0.95 0.93 rg")
-  })
-
-  it("redacts secrets, normalises typographic characters and keeps long values inside the grid", () => {
-    const validation = pdfText(pdf(oibValidationReport()))
-    expect(validation).not.toContain("eyJhbGciOiJIUzI1NiJ9")
-    expect(validation).toContain("Graph returned 403 Forbidden")
-    const extreme = pdf(oibComparisonReport({ extreme: true }))
-    expect(pdfText(extreme)).toContain("Ltd 's Region")
-    expect(pdfText(extreme)).toContain("Update available (continued)")
-    expectInsideGrid(extreme, grid("OpenIntuneBaseline deployment comparison", oibComparisonReport({ extreme: true }).meta[0]![1].replace("\u2019", "'").trim(), "OpenIntuneBaseline comparison"))
-    expectInsideGrid(pdf(oibValidationReport({ extreme: true })), grid("OpenIntuneBaseline policy validation", "Contoso Ltd", "OpenIntuneBaseline validation"))
-  })
-
-  it("renders a white label report with the customer branding and the verbatim attribution only", () => {
-    const bytes = pdf(oibComparisonReport(), BRANDING)
-    const text = pdfText(bytes)
-    // The logo stands for the company on the cover; the footer carries the customer's footer text.
-    for (const expected of ["Avery Fabrikam", "Confidential", "Fabrikam | Intune review", ATTRIBUTION]) expect(text).toContain(expected)
-    expect(text).not.toContain("TenuVault")
-    expect(Buffer.from(bytes).toString("latin1")).toMatch(/\/Subtype \/Image/)
-    expect(Buffer.from(bytes).toString("latin1")).toContain("/Author (Fabrikam Security Services)")
-  })
-
-  it("prints tenant data that names TenuVault as recorded and drops the Generated by row on a white label report", () => {
-    const comparison = oibComparisonReport()
-    comparison.sections[0]!.rows[0]![3] = "TenuVault Baseline"
-    const validation = oibValidationReport()
-    validation.sections[1]!.rows[0]![3] = "TenuVault Baseline"
-    for (const report of [comparison, validation]) {
-      const branded = pdfText(pdf(report, BRANDING))
-      expect(branded).toContain("TenuVault Baseline")
-      expect(branded).not.toContain("Fabrikam Security Services Baseline")
-      expect(branded.replaceAll("TenuVault Baseline", "")).not.toMatch(/tenuvault/i)
-      expect(branded).not.toContain("Generated by")
-      const plain = pdfText(pdf(report))
-      expect(plain).toContain("TenuVault Baseline")
-      expect(plain).toMatch(/Generated by TenuVault/i)
-    }
-  })
-
-  it("prints every date of the report in the same UTC format", () => {
-    for (const [report, date] of [[oibComparisonReport(), "2026-10-14 08:45 UTC"], [oibValidationReport(), "2026-10-14 09:02 UTC"]] as const) {
-      const text = pdfText(pdf(report))
-      expect(text).toContain(date)
-      expect(text).toContain("2026-10-14 09:30 UTC")
-      expect(text).not.toMatch(/\d{1,2}\/\d{1,2}\/\d{4}|\d{1,2}:\d{2}:\d{2}/)
-    }
-  })
-
-  it("derives the file id from the report identity, not from its rows", () => {
-    const report = oibValidationReport()
-    const changed = structuredClone(report)
-    changed.sections[1]!.rows[0]![3] = "client_secret=abcdefghijklmnopqrstuvwx"
-    expect(fileId(pdf(changed))).toBe(fileId(pdf(report)))
-    expect(fileId(pdf({ ...report, title: "Another title" }))).not.toBe(fileId(pdf(report)))
   })
 
   it("quotes CSV cells and neutralises spreadsheet formulas", () => {

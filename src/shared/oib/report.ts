@@ -48,7 +48,7 @@ const STATUS_TONES: Record<string, StatusTone> = {
 /** The tone of a known status word, or undefined for any other text. */
 export const statusTone = (value: string): StatusTone | undefined => Object.hasOwn(STATUS_TONES, value.trim()) ? STATUS_TONES[value.trim()] : undefined
 
-/** Limits of a report sent over IPC; the old HTML path capped the document at 25 million characters. */
+/** Limits of a report sent over IPC; the earlier renderer-built HTML capped the document at 25 million characters. */
 export const REPORT_LIMITS = { characters: 10_000_000, sections: 1_000, rows: 25_000, columns: 12, meta: 24, summary: 12, cell: 20_000, label: 300 } as const
 
 const GUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i

@@ -7,7 +7,7 @@ import { isGuid, isMicrosoftLoginUrl, sameRendererDocument } from "../shared/sec
 import { rendererStorageKey, rendererStorageValue } from "./renderer-storage"
 import { prepareSaveFile, type PreparedFile } from "./save-file"
 import { PdfBrandingPolicy, PdfBrandingStore, setPdfBrandingPolicy } from "./pdf-branding"
-import { prepareOibReportFile } from "./report-export"
+import { prepareOibReportFile, printHtmlToPdf } from "./report-export"
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, Notification, safeStorage, shell } from "electron"
 import { join } from "node:path"
 import type { ApiRequest, AppPreferences, ScheduleInput } from "../shared/ipc"
@@ -805,7 +805,8 @@ async function bootstrap(): Promise<void> {
     internalCisBenchmarks: internalCisBenchmarksEnabled(),
   }))
   handleTrusted("app:openExternal", (_event, url: string) => openExternalSafely(url))
-  handleTrusted("reports:savePdf", async (_event, report: unknown, fileName: unknown) => saveFileWithDialog(await prepareOibReportFile(report, fileName)))
+  handleTrusted("reports:savePdf", async (_event, report: unknown, fileName: unknown) =>
+    saveFileWithDialog(await prepareOibReportFile(report, fileName, (html, options) => printHtmlToPdf(html, options, (window) => new BrowserWindow(window))), "Save PDF report"))
   handleTrusted("reports:saveFile", (_event, data: unknown, fileName: unknown, encoding: unknown) => saveExportFile(data, fileName, encoding))
 
   createWindow()
@@ -854,9 +855,9 @@ async function saveExportFile(data: unknown, fileName: unknown, encoding: unknow
 }
 
 /** Asks where to save a checked file, under Documents by default, and writes it. */
-async function saveFileWithDialog(file: PreparedFile): Promise<{ saved: boolean; path?: string }> {
+async function saveFileWithDialog(file: PreparedFile, title = `Save ${file.label} file`): Promise<{ saved: boolean; path?: string }> {
   const result = await dialog.showSaveDialog(mainWindow!, {
-    title: `Save ${file.label} file`,
+    title,
     defaultPath: join(app.getPath("documents"), file.name),
     filters: [{ name: file.label, extensions: [file.extension] }],
   })

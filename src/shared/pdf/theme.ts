@@ -1,4 +1,4 @@
-import { mixColor, type RgbColor } from './kit'
+import { PALETTE, TONES, mixColor, type RgbColor } from './kit'
 
 /**
  * Customer branding of a report. Branding is a full white label and applies only when companyName
@@ -145,4 +145,21 @@ export function resolveBrandTheme(branding?: PdfBranding): BrandTheme {
     door: light ? CHARCOAL : TENUVAULT_THEME.door,
     ...labels,
   }
+}
+
+const cssColor = (color: RgbColor) => `rgb(${color[0]} ${color[1]} ${color[2]})`
+const kebab = (name: string) => name.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)
+
+/**
+ * CSS custom properties of a resolved theme for the HTML reports: every brand colour of the theme
+ * (`--primary`, `--strong`, `--accent-text` and so on, derived tints and the light primary contrast
+ * rule included), the neutral palette (`--ink`, `--rule`, ...) and the pill tones (`--good-text`,
+ * `--good-fill`, ...), with exactly the values the PDF kit draws with.
+ */
+export function themeCssVariables(theme: BrandTheme): Record<string, string> {
+  const brand = (['primary', 'strong', 'primaryTint', 'accent', 'accentText', 'accentWash', 'accentBorder', 'onBand', 'bandMuted', 'bandAccent', 'bandRule', 'ringSoft', 'ringStrong', 'door'] as const)
+    .map(key => [`--${kebab(key)}`, cssColor(theme[key])])
+  const palette = Object.entries(PALETTE).map(([key, color]) => [`--${kebab(key)}`, cssColor(color)])
+  const tones = Object.entries(TONES).flatMap(([key, tone]) => [[`--${key}-text`, cssColor(tone.text)], [`--${key}-fill`, cssColor(tone.fill)]])
+  return Object.fromEntries([...brand, ...palette, ...tones])
 }
