@@ -162,8 +162,11 @@ describe("CIS exceptions in the PDF report", () => {
     const { policies, assessment } = assessed()
     const summary = cisReadiness(assessment, policies, undefined, undefined, [makeException()], "2026-10-13")
     const text = pdfText(generateCisReadinessPDF(summary, { exportedAt: "2026-10-13T10:00:00.000Z", tenantName: "Contoso", tenantId, assessedAt: "2026-10-13T00:00:00.000Z", runId: "run-1" }))
-    expect(text).toContain("Excluded from score: 1")
-    expect(text).toContain("Settings pass rate: 50%, 100% with 1 exclusion (exclusions as of 2026-10-13)")
+    // Figures are printed as label and value pairs.
+    expect(text).toContain("Excluded from score 1")
+    expect(text).toContain("Settings pass rate 50%")
+    expect(text).toContain("With exclusions 100% with 1 exclusion")
+    expect(text).toContain("Exclusions as of 2026-10-13")
     expect(text).not.toContain("Adjusted")
     expect(text).toContain("Accepted exceptions, Level 1")
     expect(text).toContain("Fakebook Beta")

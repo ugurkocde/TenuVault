@@ -73,6 +73,11 @@ const bridge: TenuVaultPreloadBridge = {
     get: () => invoke("preferences:get"),
     set: (changes) => invoke("preferences:set", changes),
   },
+  pdfBranding: {
+    get: () => invoke("pdfBranding:get"),
+    set: (branding) => invoke("pdfBranding:set", branding),
+    clear: () => invoke("pdfBranding:clear"),
+  },
   updates: {
     status: () => invoke("updates:status"),
     check: () => invoke("updates:check"),
@@ -89,7 +94,7 @@ const bridge: TenuVaultPreloadBridge = {
     openExternal: (url) => invoke("app:openExternal", url),
   },
   reports: {
-    savePdf: (html, fileName) => invoke("reports:savePdf", html, fileName),
+    savePdf: (report, fileName) => invoke("reports:savePdf", report, fileName),
     saveFile: (data, fileName, encoding = "utf8") => invoke("reports:saveFile", data, fileName, encoding),
   },
   disclaimer: {

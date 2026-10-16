@@ -148,26 +148,29 @@ export function levelCheckCounts(level: Pick<CisLevelReadiness, "recommendations
   return { checked: checked.size, manual: manual.size, total: null }
 }
 
-/** The sentence shown above the CIS notice for one Level. It never states a total without a denominator. */
-export function levelCheckSummary(level: Pick<CisLevelReadiness, "level" | "recommendations" | "manual" | "enumeratedIds" | "denominatorIdentifiers" | "automatedIdentifiers">): string {
+/**
+ * The sentence shown above the CIS notice for one Level. It never states a total without a denominator.
+ * `product` names the tool: TenuVault, or the customer's company on a white label PDF.
+ */
+export function levelCheckSummary(level: Pick<CisLevelReadiness, "level" | "recommendations" | "manual" | "enumeratedIds" | "denominatorIdentifiers" | "automatedIdentifiers">, product = "TenuVault"): string {
   const { checked, manual, total } = levelCheckCounts(level)
   const noun = (count: number) => count === 1 ? "recommendation" : "recommendations"
   if (total === null) {
     // Without recommendation metadata no count is claimed: the pack settings are compared as a whole.
     if (!checked) {
-      const prefix = `Level ${level.level}: TenuVault compares the settings of this pack automatically.`
+      const prefix = `Level ${level.level}: ${product} compares the settings of this pack automatically.`
       return manual
         ? `${prefix} The ${manual === 1 ? "one manual recommendation" : `${manual} manual recommendations`} listed here and any recommendations outside the pack need a manual check.`
         : `${prefix} Recommendations outside the pack, including manual ones, need a manual check.`
     }
-    const prefix = `Level ${level.level}: TenuVault checks ${checked} ${noun(checked)} of this pack automatically.`
+    const prefix = `Level ${level.level}: ${product} checks ${checked} ${noun(checked)} of this pack automatically.`
     return manual
       ? `${prefix} The other ${manual === 1 ? "one listed here" : `${manual} listed here`} and any recommendations outside the pack need a manual check.`
       : `${prefix} Recommendations outside the pack, including manual ones, need a manual check.`
   }
-  if (!manual) return `Level ${level.level}: TenuVault checks all ${checked} ${noun(checked)} automatically.`
+  if (!manual) return `Level ${level.level}: ${product} checks all ${checked} ${noun(checked)} automatically.`
   const rest = manual === 1 ? "The other one needs a manual check." : `The other ${manual} need a manual check.`
-  return `Level ${level.level}: TenuVault checks ${checked} of ${total} ${noun(total)} automatically. ${rest}`
+  return `Level ${level.level}: ${product} checks ${checked} of ${total} ${noun(total)} automatically. ${rest}`
 }
 
 /** The label printed wherever a coverage ratio appears, naming where its denominator came from. */

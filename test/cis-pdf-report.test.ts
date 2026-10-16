@@ -82,9 +82,9 @@ describe("CIS readiness PDF report", () => {
     for (const expected of [
       "TenuVault", "CIS readiness report", "fakebook-os", "Contoso",
       "Level 1 readiness", "Level 2 readiness",
-      "Assessed settings: 2", "Conforming: 1", "Settings pass rate: 50%",
+      "Assessed settings 2", "Conforming 1", "Settings pass rate 50%",
       "source: Authoritative denominator",
-      "Not assessed identifiers: 1", "7.1.3",
+      "Not assessed identifiers 1", "7.1.3",
       "Manual recommendations, Level 1", "7.1.4",
       MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_NOT_ASSESSED_NOTE,
       "TenuVault | CIS readiness report",
@@ -96,11 +96,13 @@ describe("CIS readiness PDF report", () => {
     const identified = attachRecommendations(policies, [{ id: "7.1.2", title: "Synthetic beta recommendation", level: 1, settings: ["fakebook_setting_beta"] }])
       .map(policy => ({ ...policy, provenance: { ...policy.provenance, benchmarkName: "Fakebook Display Name" } }))
     const text = pdfText(generateCisReadinessPDF(cisReadiness(assessment, identified), context))
-    expect(text).toContain("Fakebook Display Name | 9.9.9")
-    expect(text).toContain("Recommendation pass rate: 0%")
+    expect(text).toContain("Fakebook Display Name")
+    expect(text).toContain("fakebook-os | Version 9.9.9")
+    expect(text).toContain("Recommendation pass rate 0%")
     expect(text).toContain("Recommendation results, Level 1")
-    expect(text).toContain("7.1.2 Synthetic beta recommendation: Fail (fakebook_setting_beta Missing)")
-    expect(text).toContain("Passed: 0")
+    // Recommendation, its settings and the result pill are table cells of one row.
+    expect(text).toContain("7.1.2 Synthetic beta recommendation fakebook_setting_beta Missing Fail")
+    expect(text).toContain("Passed 0")
     expect(pdfText(generateCisReadinessPDF(cisReadiness(assessment, policies), context))).not.toContain("Recommendation results")
   })
 
@@ -108,8 +110,8 @@ describe("CIS readiness PDF report", () => {
     const { policies, assessment } = assessed()
     const unassessed = attachRecommendations(policies, [{ id: "7.9.1", title: "Synthetic partly in pack", level: 1, settings: ["fakebook_setting_alpha", "fakebook_setting_unmapped"] }])
     const text = pdfText(generateCisReadinessPDF(cisReadiness(assessment, unassessed), context))
-    expect(text).toContain("Not available Recommendation pass rate")
-    expect(text).toContain("Recommendation pass rate: Not available")
+    expect(text).toContain("RECOMMENDATION PASS RATE Not available")
+    expect(text).toContain("Recommendation pass rate Not available")
   })
 
   it("labels coverage as not computable without a denominator and names the breakout proxy as illustrative", () => {
@@ -130,7 +132,7 @@ describe("CIS readiness PDF report", () => {
     expect(pdfText(generateCisReadinessPDF(proxy, context))).toContain("Breakout proxy, illustrative")
   })
 
-  it("shares the native framework report header, tiles and footer", async () => {
+  it("shares the native framework report design: panel fill, tiles and footer", async () => {
     const m = memory()
     setNativeFrameworkStore(m.store)
     setNativeFrameworkAuthorization(async () => {})

@@ -124,9 +124,13 @@ describe("one CIS pass rate in every view", () => {
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("No network during export") }))
     const exported = await handleFramework({ action: "workspace-cis-pdf", frameworkId: "cis-benchmarks", tenantId, tenantName: "Contoso", runId: "run-new" }) as { file: ExportFile }
     const text = pdfText(Buffer.from(exported.file.data, "base64"))
-    expect(text).toContain(`Settings pass rate: ${rate}, ${withExclusions} (exclusions as of ${today})`)
-    expect(text).toContain("Excluded from score: 1")
-    expect(text).not.toMatch(/Adjusted|Pass rate:/)
+    // The PDF prints figures as label and value pairs.
+    expect(text).toContain(`Settings pass rate ${rate}`)
+    expect(text).toContain(`With exclusions ${withExclusions}`)
+    expect(text).toContain(`Exclusions as of ${today}`)
+    expect(text).toContain("Excluded from score 1")
+    expect(text).toContain(`${withExclusions}, exclusions as of ${today}.`)
+    expect(text).not.toMatch(/Adjusted|Excepted/)
   })
 
   it("gives an older run its own as-of date in every view, so its trend point keeps its score", async () => {
