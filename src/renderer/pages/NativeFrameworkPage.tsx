@@ -249,6 +249,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
         </div>
         {scoring && <p className="mt-5 flex flex-wrap items-center gap-2 text-sm text-gray-800">
           <span>Baseline score: <strong className="font-medium tabular-nums">{scoreData ? formatScore(scoreData.detail.score) : score.error ? (score.error instanceof Error ? score.error.message : 'Not available.') : 'Loading'}</strong></span>
+          {!scoreData && score.error && <button type="button" className="text-blue-700 hover:underline disabled:cursor-not-allowed disabled:opacity-50" disabled={score.isFetching} onClick={() => void score.refetch()}>Retry</button>}
           {readGaps.length > 0 && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-800">Partial collection</span>}
           <Link className="text-blue-700 hover:underline" to="/portal/governance/scores">How the score is counted</Link>
         </p>}
