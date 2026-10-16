@@ -23,6 +23,7 @@ import { storageResources, type StorageChoice } from "../lib/storage"
 import { toast } from "../lib/toast"
 import { tenantPlan, useLicense } from "../lib/license"
 import { PlanBadge } from "../components/UpgradeNote"
+import { PdfBrandingSettings } from "../components/PdfBrandingSettings"
 import { useConfirm } from "~/components/ConfirmDialog"
 
 function RestoreWrites() {
@@ -669,7 +670,7 @@ export default function SettingsPage() {
       <div className="flex flex-wrap items-end justify-between gap-6 pb-2">
         <div>
           <h1 className="text-4xl font-medium tracking-tight text-gray-900">Settings</h1>
-          <p className="mt-2 text-lg text-gray-500">Sign-in, backup storage, encryption, background backups and updates.</p>
+          <p className="mt-2 text-lg text-gray-500">Sign-in, backup storage, encryption, background backups, PDF branding and updates.</p>
         </div>
       <label className="flex items-center gap-3 text-sm font-medium text-gray-600">Appearance
         <select className="h-10 rounded-full border border-gray-200 bg-white px-4 text-gray-900" defaultValue={getAppearance()} onChange={e => setAppearance(e.target.value as Appearance)}>
@@ -678,12 +679,13 @@ export default function SettingsPage() {
       </label>
       </div>
       <nav aria-label="Settings sections" className="flex flex-wrap gap-2 text-sm">
-        {[['signin', 'Sign-in'], ['storage', 'Storage and recovery'], ['background', 'Background runner'], ['updates', 'Updates'], ['about', 'About']].map(([id, title]) => <button key={id} type="button" className="h-9 rounded-full bg-card px-4 font-medium text-foreground transition-colors hover:bg-primary hover:text-primary-foreground" onClick={() => document.getElementById(`settings-${id}`)?.scrollIntoView({ block: 'start' })}>{title}</button>)}
+        {[['signin', 'Sign-in'], ['storage', 'Storage and recovery'], ['background', 'Background runner'], ['branding', 'PDF branding'], ['updates', 'Updates'], ['about', 'About']].map(([id, title]) => <button key={id} type="button" className="h-9 rounded-full bg-card px-4 font-medium text-foreground transition-colors hover:bg-primary hover:text-primary-foreground" onClick={() => document.getElementById(`settings-${id}`)?.scrollIntoView({ block: 'start' })}>{title}</button>)}
       </nav>
       <section className="scroll-mt-6" id="settings-signin"><TenantSettings /></section>
       <section className="scroll-mt-6" id="settings-storage"><BackupsOnDevice />
       <RestoreWrites /></section>
       <section className="scroll-mt-6" id="settings-background"><BackgroundAndRetention /></section>
+      <section className="scroll-mt-6" id="settings-branding"><PdfBrandingSettings /></section>
       <section className="scroll-mt-6" id="settings-updates"><Updates /></section>
       <section className="scroll-mt-6" id="settings-about"><About /></section>
     </div>

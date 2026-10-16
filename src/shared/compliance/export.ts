@@ -14,13 +14,22 @@ import { COLLECTION_FAMILY_LABELS, COLLECTION_STATUS_LABELS, PLATFORM_LABELS, fr
 
 export const REDACTED = '[redacted]'
 
-/** Stated in every framework export, so a file read on its own cannot be mistaken for more. */
-export const EXPORT_LIMITATIONS = [
-  'Independent TenuVault configuration comparison of the recorded Intune data. It is not an audit opinion, certification or complete framework assessment.',
+/**
+ * Stated in every framework export, so a file read on its own cannot be mistaken for more.
+ * `product` names the tool: TenuVault, or the customer's company on a white label PDF.
+ */
+export const exportLimitations = (product: string): string[] => [
+  `Independent ${product} configuration comparison of the recorded Intune data. It is not an audit opinion, certification or complete framework assessment.`,
   'A configuration match does not prove that a setting is assigned to the right devices or enforced on them. Device state and effective access were not collected.',
   'Results reflect the tenant at the collection date shown and were not collected again for this export.',
   'Secret values, tokens and credentials are redacted from this export.',
 ]
+
+/** The limitations of the CSV and JSON exports, which always name TenuVault. */
+export const EXPORT_LIMITATIONS = exportLimitations('TenuVault')
+
+/** The usage notice of a native comparison naming `product`; FRAMEWORK_USAGE_NOTICE itself names TenuVault. */
+export const frameworkUsageNotice = (product: string) => FRAMEWORK_USAGE_NOTICE.replace(/^Independent TenuVault /, () => `Independent ${product} `)
 
 // Property names whose values are secrets. Matched on the whole name so settings such as
 // passwordMinimumLength keep their values.
@@ -86,8 +95,8 @@ function frameworkName(id: string): string {
   return frameworks.find(f => f.id === id)?.name ?? LEGACY_NAMES[id] ?? id
 }
 
-/** The identifying facts, coverage, unknowns and limits of a saved native comparison. */
-export function nativeReportHeader(run: NativeAssessment, context: ExportContext): ReportHeader {
+/** The identifying facts, coverage, unknowns and limits of a saved native comparison; `product` names the tool in its notices. */
+export function nativeReportHeader(run: NativeAssessment, context: ExportContext, product = 'TenuVault'): ReportHeader {
   const framework = run.assessment.frameworks[0]
   if (!framework) throw new Error('No framework comparison is available.')
   const scope = run.assessment.scope
@@ -115,8 +124,8 @@ export function nativeReportHeader(run: NativeAssessment, context: ExportContext
       ...gaps.map(f => `${COLLECTION_FAMILY_LABELS[f.family] ?? f.family}: ${COLLECTION_STATUS_LABELS[f.status] ?? f.status}${f.errors.length ? ` (${f.errors.map(redactText).join(' ')})` : ''}`),
       'Group membership, filter evaluation and device enforcement are unverified.',
     ],
-    limitations: [...EXPORT_LIMITATIONS, ...(framework.framework.note ? [framework.framework.note] : [])],
-    notice: [FRAMEWORK_USAGE_NOTICE, run.licenseNotice].filter(Boolean).join(' '),
+    limitations: [...exportLimitations(product), ...(framework.framework.note ? [framework.framework.note] : [])],
+    notice: [frameworkUsageNotice(product), run.licenseNotice].filter(Boolean).join(' '),
   }
 }
 
@@ -166,8 +175,8 @@ export interface SavedAssessment {
   creation?: { success: boolean; results: { name: string; id?: string; error?: string }[] }
 }
 
-/** The identifying facts, coverage, unknowns and limits of a saved policy pack assessment. */
-export function workspaceReportHeader(saved: SavedAssessment, context: ExportContext): ReportHeader {
+/** The identifying facts, coverage, unknowns and limits of a saved policy pack assessment; `product` names the tool in its limitations. */
+export function workspaceReportHeader(saved: SavedAssessment, context: ExportContext, product = 'TenuVault'): ReportHeader {
   const { assessment } = saved
   const count = (status: string) => assessment.findings.filter(f => f.status === status).length
   const unavailable = assessment.findings.filter(f => f.observed.some(o => o.targeting?.state === 'unavailable')).length
@@ -189,7 +198,7 @@ export function workspaceReportHeader(saved: SavedAssessment, context: ExportCon
       `Not assessed: ${UNSUPPORTED.join('; ')}.`,
       assessment.organizationalEvidence?.note ?? 'Organizational evidence requires a separate assessment.',
     ],
-    limitations: [...EXPORT_LIMITATIONS, '"Present" means a matching configuration exists; it does not mean the setting is assigned or enforced.'],
+    limitations: [...exportLimitations(product), '"Present" means a matching configuration exists; it does not mean the setting is assigned or enforced.'],
     notice: ['Framework names are factual references. No publisher affiliation, endorsement or certification is implied. The source version and profile are as entered by the administrator.',
       frameworks.find(f => f.id === assessment.frameworkId)?.licenseNotice].filter(Boolean).join(' '),
   }

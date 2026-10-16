@@ -3,7 +3,8 @@ import { compareAdminTemplate, compareFlat, compareSettings, validatePolicy } fr
 import { policyGate, typeGate, type TenantProfile } from "../src/shared/oib/licensing"
 import { catalogPolicies, extractOibId, parseManifest } from "../src/shared/oib/manifest"
 import { baseName, compareToTenant, compareVersions, policyVersion } from "../src/shared/oib/match"
-import { escapeHtml, reportHtml, toCsv } from "../src/shared/oib/report"
+import { parseReportPayload, REPORT_LIMITS, statusTone, toCsv } from "../src/shared/oib/report"
+import { TENANT_ID, oibComparisonReport, oibValidationReport } from "./pdf-report-fixtures"
 import type { OibPolicy, TenantPolicy } from "../src/shared/oib/types"
 import { replaceTenantVariables } from "../src/shared/oib/variables"
 
@@ -201,13 +202,36 @@ describe("setting comparison", () => {
 })
 
 describe("reports", () => {
-  it("escapes every value and loads nothing external", () => {
-    const html = reportHtml({ title: "<script>alert(1)</script>", meta: [["Tenant", "A & B"]], sections: [{ heading: "H", columns: ["C"], rows: [["<img src=x onerror=1>"]] }] })
-    expect(html.startsWith("<!doctype html>")).toBe(true)
-    expect(html).not.toContain("<script>")
-    expect(html).not.toContain("<img")
-    expect(html).toContain("default-src 'none'")
-    expect(escapeHtml(`"'`)).toBe("&quot;&#39;")
+  it("accepts a well formed report and returns only the known fields", () => {
+    const report = parseReportPayload({ ...oibValidationReport(), tenantId: TENANT_ID.toUpperCase() })
+    expect(report.tenantId).toBe(TENANT_ID)
+    expect(report.sections[0]!.columns).toEqual(["Platform", "OIB policy", "Tenant policy", "Status", "Settings matched"])
+    expect(parseReportPayload({ tenantId: TENANT_ID, title: "T", meta: [], sections: [] })).toEqual({ tenantId: TENANT_ID, title: "T", meta: [], sections: [] })
+    // Policy Validation lists the reference of every platform in the subtitle.
+    const references = Array.from({ length: 6 }, (_, index) => `OpenIntuneBaseline Platform${index} v4.0 \u00b7 platform${index}-v4.0 @ 1cc71a9`).join("; ")
+    expect(parseReportPayload({ ...oibValidationReport(), subtitle: references }).subtitle).toBe(references)
+  })
+
+  it("rejects reports of the wrong shape, type or size", () => {
+    const base = oibComparisonReport()
+    const section = base.sections[0]!
+    const rows = (count: number) => Array.from({ length: count }, () => ["a"])
+    for (const bad of [
+      null, "<!doctype html><p>x</p>", [], { ...base, html: "<p>" }, { ...base, tenantId: "contoso" }, { ...base, tenantId: undefined },
+      { ...base, title: 7 }, { ...base, title: "  " }, { ...base, title: "x".repeat(REPORT_LIMITS.label + 1) }, { ...base, meta: [["Tenant"]] }, { ...base, meta: [["Tenant", 1]] },
+      { ...base, summary: [["Up to date", "x".repeat(41)]] }, { ...base, sections: {} }, { ...base, sections: [{ ...section, script: "x" }] },
+      { ...base, sections: [{ ...section, columns: [] }] }, { ...base, sections: [{ ...section, rows: [["only one cell"]] }] }, { ...base, sections: [{ ...section, rows: [[1, 2, 3, 4, 5, 6]] }] },
+      { ...base, sections: [{ heading: "H", columns: ["C"], rows: [["x".repeat(REPORT_LIMITS.cell + 1)]] }] },
+      { ...base, sections: [{ heading: "H", columns: ["C"], rows: rows(REPORT_LIMITS.rows + 1) }] },
+      { ...base, sections: Array.from({ length: 11 }, () => ({ heading: "H", columns: ["C"], rows: [["x".repeat(REPORT_LIMITS.cell)]] })).concat(Array.from({ length: 500 }, () => ({ heading: "H", columns: ["C"], rows: [["x".repeat(REPORT_LIMITS.cell)]] }))) },
+    ]) expect(() => parseReportPayload(bad), JSON.stringify(bad)?.slice(0, 80)).toThrow(/The report could not be prepared/)
+  })
+
+  it("maps the known status words to tones and leaves other text alone", () => {
+    expect(["Matches the baseline", "Up to date", " Drift detected ", "Value mismatch", "Missing in tenant", "Validation error", "Ambiguous match", "Not validated", "Newer than OIB"].map(statusTone))
+      .toEqual(["good", "good", "different", "different", "missing", "conflict", "conflict", "neutral", "neutral"])
+    expect(statusTone("Error <x>")).toBeUndefined()
+    expect(statusTone("constructor")).toBeUndefined()
   })
 
   it("quotes CSV cells and neutralises spreadsheet formulas", () => {

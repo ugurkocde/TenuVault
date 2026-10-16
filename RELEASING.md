@@ -42,6 +42,8 @@ Put these in the next stable release's notes, then remove them here.
 
 - Promotion keeps the destination policy's scope tags on update and blocks promotion of redacted policies without acknowledgement. Acknowledged promotions omit secrets, which must be set again in the destination.
 
+- Framework, policy pack and CIS PDF reports have a new design: cover, contents and bookmarks, status pills and page numbers. OpenIntuneBaseline PDF reports (Existing Deployment comparison and Policy Validation) share that design and still print through the app's built-in Chromium engine, so tenant and policy names in any script print as recorded. Framework, policy pack and CIS reports keep their built-in PDF font, which prints Western European characters only. Pro and MSP can brand every PDF report with their own name, logo and colors under Settings > PDF branding.
+
 - Compliance scores are now per capability and only count assigned policies. Scheduled actions are evaluated, so scores change and trend history before this version is not comparable. Older comparisons remain readable; collect a new comparison to start current scores and trends.
 
 ## Cutting a stable release
