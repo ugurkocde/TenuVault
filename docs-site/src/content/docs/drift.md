@@ -154,3 +154,8 @@ TenuVault compares each tenant's two newest complete backups, one tenant after a
 | Restore a copy from a drift | Yes | Yes | Yes |
 | **Revert** and **Recreate** | No | Yes | Yes |
 | **Check all** across tenants | No | No | Yes |
+
+## Related pages
+
+* [Intune drift detection](https://www.tenuvault.com/intune-drift-detection): what drift detection catches, on the product site
+* [Roll back an Intune policy change](https://www.tenuvault.com/guides/roll-back-intune-policy-change)

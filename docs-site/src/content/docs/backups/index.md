@@ -1,9 +1,20 @@
 ---
-title: "Run a backup"
-description: Start a backup, choose what it covers, follow its progress and read the result.
+title: "Intune backup: run a backup"
+description: "Run an Intune backup with TenuVault: back up 39 Microsoft Intune object types with assignments, encrypted on your device or in your own Azure storage."
+faq:
+  - question: "How do I back up Microsoft Intune policies?"
+    answer: "In TenuVault, select the tenant, open Backup & Restore and click Run Backup. Keep the saved backup choice or change it, then click Start backup. TenuVault reads the Intune configuration through Microsoft Graph with your own delegated sign-in and saves every object with its assignments."
+  - question: "What does an Intune backup include?"
+    answer: "A full backup covers 39 Intune object types in nine areas, including Settings Catalog and device configuration policies, compliance policies, scripts, Administrative Templates, enrollment and tenant settings, plus app details and assignments. App installer files, Apple tokens and private keys cannot be exported by Microsoft Graph and are never included."
+  - question: "Does Microsoft Intune have a built-in backup?"
+    answer: "No. Intune has no native backup, point-in-time restore or recycle bin for policies, so a deleted or changed policy cannot be recovered from the Intune portal. A backup tool such as TenuVault saves the configuration through Microsoft Graph before something goes wrong."
+  - question: "Where are Intune backups stored?"
+    answer: "Backups are encrypted with AES-256-GCM on your device and stored in a local folder or on a network share on every plan, or in your own Azure storage account on Pro and MSP. Backups are never sent to a TenuVault server."
+  - question: "How often should I back up Intune?"
+    answer: "On a schedule, so a recent backup always exists before you need it. Community includes manual and weekly scheduled backups. Pro and MSP add daily schedules. Also run a manual backup before any large policy change."
 ---
 
-A backup is a complete copy of your Intune configuration at one point in time. This page shows how to start one, choose what it covers, follow it while it runs and read the result.
+An Intune backup is a complete, point-in-time copy of your Microsoft Intune configuration: policies, scripts, enrollment and tenant settings, saved with their assignments so they can be restored later. Intune itself has no native backup or recycle bin for policies, which is why TenuVault saves the configuration through Microsoft Graph. This page shows how to start a backup, choose what it covers, follow it while it runs and read the result. For the product overview, see [Intune backup with TenuVault](https://www.tenuvault.com/intune-backup).
 
 ## How a backup works
 
@@ -162,3 +173,11 @@ Click an entry to open its **Backup Details**:
 | **Backup Selected** across tenants | No | No | Yes |
 
 If a tenant's plan does not include an action, TenuVault shows which plan does and how to upgrade.
+
+## Related pages
+
+* [Intune backup](https://www.tenuvault.com/intune-backup): what TenuVault backs up and why, on the product site
+* [Does Microsoft Intune have a built-in backup?](https://www.tenuvault.com/guides/does-intune-have-backup)
+* [What gets backed up](/backups/coverage/)
+* [Schedule backups](/backups/schedules/)
+* [Restore items](/restore/)

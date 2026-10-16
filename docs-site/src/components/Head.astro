@@ -41,9 +41,31 @@ if (!isNotFound) {
 		mainEntityOfPage: url,
 		...(lastUpdated ? { dateModified: lastUpdated.toISOString() } : {}),
 		inLanguage: 'en',
+		image: 'https://docs.tenuvault.com/og-image.png',
+		author: organization,
 		publisher: organization,
+		isPartOf: { '@type': 'WebSite', name: 'TenuVault Docs', url: new URL('/', site).href },
 		about: { '@id': 'https://www.tenuvault.com/#software' },
 	});
+
+	// The docs root redirects to Getting started, so that page is the docs home page. Describe the
+	// product there once. No aggregateRating: TenuVault has no published review count to cite.
+	if (entry.id === 'getting-started') {
+		schemas.push({
+			'@context': 'https://schema.org',
+			'@type': 'SoftwareApplication',
+			'@id': 'https://www.tenuvault.com/#software',
+			name: 'TenuVault Desktop',
+			description:
+				'Desktop app for Windows and macOS that backs up and restores Microsoft Intune configuration, detects drift between backups, and deploys OpenIntuneBaseline.',
+			applicationCategory: 'BusinessApplication',
+			operatingSystem: ['Windows', 'macOS'],
+			url: 'https://www.tenuvault.com/intune-backup',
+			downloadUrl: 'https://www.tenuvault.com/download',
+			publisher: organization,
+			offers: { '@type': 'Offer', price: '0', priceCurrency: 'EUR', description: 'Community plan, free for one tenant.' },
+		});
+	}
 
 	// One crumb per path segment that has its own page, so no crumb points at a 404.
 	const segments = Astro.url.pathname.split('/').filter(Boolean);

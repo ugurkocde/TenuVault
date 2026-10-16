@@ -125,6 +125,7 @@ By default, items are restored to the tenant selected at the top of **Backup & R
 
 ## Related pages
 
+* [Intune restore](https://www.tenuvault.com/intune-restore): restore modes and plans, on the product site
 * [Restore items](/restore/)
 * [What cannot be restored and restore write history](/restore/limitations/)
 * [Plans and features](/licensing/)

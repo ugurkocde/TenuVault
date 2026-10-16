@@ -150,3 +150,7 @@ The archive must meet these conditions:
 :::caution
 The archive declares its source tenant, but it is not signed. Import only files from a source you trust.
 :::
+
+## Related pages
+
+* [Intune backup](https://www.tenuvault.com/intune-backup): storage options and plans, on the product site

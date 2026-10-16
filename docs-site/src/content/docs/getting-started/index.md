@@ -1,6 +1,6 @@
 ---
-title: "Getting started"
-description: Go from nothing to your first encrypted Intune backup in about fifteen minutes.
+title: "Get started: your first Intune backup"
+description: Install TenuVault and take your first encrypted Microsoft Intune backup in about fifteen minutes, on Windows or macOS.
 ---
 
 This section takes you from a fresh computer to a first successful Intune backup. Follow the pages in order; each one ends where the next one starts.

@@ -1,9 +1,20 @@
 ---
-title: "Restore items"
-description: Bring Intune items back from a backup with the five step restore wizard.
+title: "Intune restore: restore items from a backup"
+description: "Restore Microsoft Intune policies from a TenuVault backup: recreate deleted items, replace changed policies in place, or create unassigned copies."
+faq:
+  - question: "How do I restore an Intune policy?"
+    answer: "Open Backup & Restore in TenuVault and start the restore wizard, or pick a backup in Backup History and click Restore from this backup. Choose the items, choose Create copies or Replace in place, review what will happen to each item, then confirm."
+  - question: "Can I restore a deleted Intune policy?"
+    answer: "Yes, if a backup from before the deletion exists. Choose Replace in place in the restore wizard and the deleted item is recreated under its original name. Without a backup, a deleted Intune policy cannot be recovered, because Intune has no recycle bin for policies."
+  - question: "What is the difference between Create copies and Replace in place?"
+    answer: "Create copies adds separate, unassigned copies and never changes existing items, which makes it safe for testing a restore. Replace in place overwrites the current version with the backed-up version and recreates deleted items. Replace in place and restoring several items at once need Pro or MSP."
+  - question: "Are assignments restored with an Intune policy?"
+    answer: "Only when you turn on Restore assignments, which needs Pro or MSP. With it on, each item's assignments are replaced with the ones in the backup. Copies and cross-tenant restores arrive unassigned by default."
+  - question: "Can I restore Intune configuration to another tenant?"
+    answer: "Yes, with the MSP plan. Copies keep their original names, get the Default scope tag and are never assigned, so you recreate groups, exclusions and filters in the target tenant and then assign the copies."
 ---
 
-The restore wizard brings Intune items back as they were when a backup ran. You pick a backup, choose the items, decide how to restore them, review exactly what will happen to each item, and then watch the restore run.
+An Intune restore brings Microsoft Intune items back exactly as they were when a backup ran, including policies that were changed or deleted afterwards. The restore wizard walks you through it: pick a backup, choose the items, decide how to restore them, review exactly what will happen to each item, and then watch the restore run. For the product overview, see [Intune restore with TenuVault](https://www.tenuvault.com/intune-restore).
 
 ## Before you start
 
@@ -161,6 +172,8 @@ Some results carry extra notes:
 
 ## Related pages
 
+* [Intune restore](https://www.tenuvault.com/intune-restore): restore modes, plans and limits, on the product site
+* [How to restore a deleted Intune policy](https://www.tenuvault.com/guides/restore-deleted-intune-policy)
 * [Restore modes and assignments](/restore/modes/)
 * [Restore to another tenant](/restore/cross-tenant/)
 * [What cannot be restored and restore write history](/restore/limitations/)

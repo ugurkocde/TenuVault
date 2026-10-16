@@ -124,3 +124,7 @@ Apps are the slowest type to back up. Because installer files are never download
 * **Types TenuVault is denied access to.** The app registration may lack the permission, for example when it was created with an older version of the setup script, or the permission may not have admin consent. Your Intune role can also exclude a type. The backup skips those types and says so in the log and in **Backup Details**. Open the app registration in Microsoft Entra, go to **API permissions** and select **Grant admin consent for &lt;your tenant&gt;**, or run the setup script again. Then sign out of the tenant in TenuVault and sign in again. If every permission already shows **Granted**, check that your Intune role covers these items. See [Create the app registration](/getting-started/app-registration/#3-add-the-delegated-permissions).
 
 Some backed-up items cannot be restored in full, for example apps that need an installer. See [What cannot be restored](/restore/limitations/).
+
+## Related pages
+
+* [Intune backup](https://www.tenuvault.com/intune-backup): coverage and plans, on the product site
