@@ -659,7 +659,7 @@ export class BackupEngine {
 
   private prune(): void {
     while (this.jobs.size > MAX_JOBS) {
-      const oldest = [...this.jobs.values()].find((job) => job.status !== "Running")
+      const oldest = [...this.jobs.values()].find((job) => job.status !== "Running" && job.endTime !== undefined)
       if (!oldest) break
       this.jobs.delete(oldest.id)
     }

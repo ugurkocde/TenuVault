@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { BackupEngine, FAILED_MANIFEST_GRACE_MS } from "../src/main/backup/engine"
 import { BACKUP_OWNER_FILE } from "../src/shared/constants"
+import { jobStatus } from "../src/main/api/desktop-routes"
 import { withNetworkErrors } from "../src/main/api/network-error"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 
@@ -159,6 +160,8 @@ describe("failed backup manifest", () => {
     await vi.advanceTimersByTimeAsync(FAILED_MANIFEST_GRACE_MS - 1)
     expect(finished).toBe(false)
     expect(job.status).toBe("Failed")
+    // Progress views keep polling until the job has finished recording itself.
+    expect(jobStatus(job).isComplete).toBe(false)
     // The tenant is free while the manifest is written: a new backup gets its own job.
     const next = engine.start(request)
     expect(next.id).not.toBe(job.id)
@@ -166,6 +169,9 @@ describe("failed backup manifest", () => {
     await vi.advanceTimersByTimeAsync(1)
     await engine.waitForJob(job)
     expect(finished).toBe(true)
+    expect(jobStatus(job)).toMatchObject({ isComplete: true, isSuccessful: false })
+    expect(jobStatus(job).endTime).toBeDefined()
+    expect(jobStatus(job).output).toContain("Could not record this backup as failed")
     await engine.waitForJob(next)
     expect(manifestPuts()).toHaveLength(1)
     expect(job.log.join("\n")).toContain("Could not record this backup as failed")
