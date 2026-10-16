@@ -7,6 +7,7 @@ export const PDF_BRANDING_KEY = "pdf.branding"
 /** Largest logo accepted, in decoded bytes. */
 export const LOGO_LIMIT = 1024 * 1024
 const LABEL_LIMIT = 120
+const LOGO_PIXELS = 4096
 
 /** Thrown for branding the admin entered that cannot be saved; the message says what to change. */
 export class BrandingError extends Error {
@@ -47,6 +48,8 @@ function logo(value: unknown): { dataUrl: string } | undefined {
   const png = bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
   const jpeg = bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
   if (match[1] === "png" ? !png : !jpeg) throw new BrandingError("The logo file is not a valid PNG or JPEG image.")
+  // jsPDF decodes a PNG to embed it, so a tiny file with huge dimensions could stall the export; a JPEG is embedded as is.
+  if (png && (bytes.length < 24 || bytes.readUInt32BE(16) > LOGO_PIXELS || bytes.readUInt32BE(20) > LOGO_PIXELS)) throw new BrandingError(`The logo can be at most ${LOGO_PIXELS} by ${LOGO_PIXELS} pixels.`)
   return { dataUrl: `data:image/${match[1] === "png" ? "png" : "jpeg"};base64,${match[2]}` }
 }
 

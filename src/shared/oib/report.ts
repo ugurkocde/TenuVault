@@ -91,7 +91,8 @@ export function parseReportPayload(value: unknown): ReportPayload {
   if (typeof value.tenantId !== "string" || !GUID.test(value.tenantId)) throw new ReportShapeError("the tenant ID is invalid")
   const title = text(value.title, "title", REPORT_LIMITS.label)!
   if (!title.trim()) throw new ReportShapeError("title is empty")
-  const subtitle = text(value.subtitle, "subtitle", REPORT_LIMITS.label, true)
+  // The subtitle lists the pack reference of every platform compared.
+  const subtitle = text(value.subtitle, "subtitle", 2_000, true)
   const eyebrow = text(value.eyebrow, "eyebrow", 120, true)
   const attribution = text(value.attribution, "attribution", 2_000, true)
   const meta = pairs(value.meta, "meta", REPORT_LIMITS.meta, 2_000)

@@ -213,6 +213,9 @@ describe("reports", () => {
     expect(report.tenantId).toBe(TENANT_ID)
     expect(report.sections[0]!.columns).toEqual(["Platform", "OIB policy", "Tenant policy", "Status", "Settings matched"])
     expect(parseReportPayload({ tenantId: TENANT_ID, title: "T", meta: [], sections: [] })).toEqual({ tenantId: TENANT_ID, title: "T", meta: [], sections: [] })
+    // Policy Validation lists the reference of every platform in the subtitle.
+    const references = Array.from({ length: 6 }, (_, index) => `OpenIntuneBaseline Platform${index} v4.0 \u00b7 platform${index}-v4.0 @ 1cc71a9`).join("; ")
+    expect(parseReportPayload({ ...oibValidationReport(), subtitle: references }).subtitle).toBe(references)
   })
 
   it("rejects reports of the wrong shape, type or size", () => {

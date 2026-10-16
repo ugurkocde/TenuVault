@@ -52,6 +52,7 @@ describe("PDF branding validation", () => {
     [{ companyName: "F", logo: { dataUrl: `data:image/png;base64,${Buffer.alloc(LOGO_LIMIT + 3).toString("base64")}` } }, "at most 1 MB"],
     [{ companyName: "F", logo: { dataUrl: `data:image/png;base64,${"A".repeat(2_000_000)}` } }, "at most 1 MB"],
     [{ companyName: "F", extra: true }, "invalid"],
+    [{ companyName: "F", logo: { dataUrl: (() => { const bytes = Buffer.from(LOGO.split(",")[1]!, "base64"); bytes.writeUInt32BE(20_000, 16); return `data:image/png;base64,${bytes.toString("base64")}` })() } }, "4096 by 4096 pixels"],
   ])("rejects %j", (value, message) => {
     expect(() => validateBranding(value)).toThrow(BrandingError)
     expect(() => validateBranding(value)).toThrow(message)

@@ -156,7 +156,7 @@ See [Backup storage and retention](/backups/storage/) and [Schedule backups](/ba
 | Control | What it does |
 | --- | --- |
 | **Company name** | Required. Replaces TenuVault on the cover, in the running footer and in the PDF document properties. Up to 120 characters. |
-| **Upload logo** / **Replace logo** | Adds a PNG or JPEG of up to 1 MB, shown top left on the cover instead of the TenuVault mark. A wide logo on a transparent background works best. Without a logo the cover shows the company name. |
+| **Upload logo** / **Replace logo** | Adds a PNG or JPEG of up to 1 MB (a PNG at most 4096 by 4096 pixels), shown top left on the cover instead of the TenuVault mark. A wide logo on a transparent background works best. Without a logo the cover shows the company name. |
 | **Remove logo** | Removes the logo; the cover shows the company name. |
 | **Primary color** | The cover band and headings, as `#RRGGBB`. Choose it with the color picker or type it. Headings use a darker shade when the color is too light to read on white. |
 | **Accent color** | The accent bar, eyebrows and chart highlights, as `#RRGGBB`. |
