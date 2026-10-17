@@ -54,11 +54,12 @@ export function UpdateSidebarLabel() {
   if (status.state !== "downloading" && status.state !== "ready") return null
   const downloading = status.state === "downloading"
   const label = !installRequested ? "Update available" : downloading ? `Downloading ${status.percent}%` : "Installing update"
+  // Each accessible name starts with the visible label, so speech input can target the button by what it says.
   const ariaLabel = !installRequested
-    ? `Download and install TenuVault ${status.version}`
+    ? `Update available: download and install TenuVault ${status.version}`
     : downloading
-      ? `Downloading TenuVault ${status.version}, ${status.percent} percent. It installs when the download finishes.`
-      : `Installing TenuVault ${status.version}`
+      ? `Downloading ${status.percent} percent. TenuVault ${status.version} installs when the download finishes.`
+      : `Installing update: TenuVault ${status.version}`
   return (
     <button
       type="button"

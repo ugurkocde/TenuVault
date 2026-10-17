@@ -102,7 +102,7 @@ describe("UpdateSidebarLabel", () => {
     expect(label?.textContent).toContain("Update available")
     expect(label?.textContent).toContain("0.3.1")
     expect(label?.getAttribute("aria-disabled")).toBeNull()
-    expect(label?.getAttribute("aria-label")).toBe("Download and install TenuVault 0.3.1")
+    expect(label?.getAttribute("aria-label")).toBe("Update available: download and install TenuVault 0.3.1")
   })
 
   it("keeps the label readable for a long nightly version, with the full version in the tooltip", async () => {
@@ -113,7 +113,7 @@ describe("UpdateSidebarLabel", () => {
     expect(label?.textContent).toContain("Update available")
     expect(label?.textContent).not.toContain("0.3.1-nightly.20261017090000")
     expect(label?.getAttribute("title")).toBe("TenuVault 0.3.1-nightly.20261017090000")
-    expect(label?.getAttribute("aria-label")).toBe("Download and install TenuVault 0.3.1-nightly.20261017090000")
+    expect(label?.getAttribute("aria-label")).toBe("Update available: download and install TenuVault 0.3.1-nightly.20261017090000")
   })
 
   it("shows a 6 character stable version but hides wider ones", async () => {
@@ -146,6 +146,7 @@ describe("UpdateSidebarLabel", () => {
     expect(button(container)?.getAttribute("aria-disabled")).toBe("true")
     expect(button(container)?.hasAttribute("disabled")).toBe(false)
     expect(button(container)?.textContent).toContain("Downloading 40%")
+    expect(button(container)?.getAttribute("aria-label")).toBe("Downloading 40 percent. TenuVault 0.3.1-nightly.20261017090000 installs when the download finishes.")
     expect(button(container)?.textContent).not.toContain("0.3.1-nightly.20261017090000")
     emit({ state: "downloading", version: "0.3.1-nightly.20261017090000", percent: 80 })
     expect(button(container)?.textContent).toContain("Downloading 80%")
@@ -166,6 +167,7 @@ describe("UpdateSidebarLabel", () => {
     expect(updatesInstall).toHaveBeenCalledTimes(1)
     expect(button(container)?.getAttribute("aria-disabled")).toBe("true")
     expect(button(container)?.textContent).toContain("Installing update")
+    expect(button(container)?.getAttribute("aria-label")).toBe("Installing update: TenuVault 0.3.1")
   })
 
   it("reports a failed download after being pressed and drops the pending install", async () => {
