@@ -56,6 +56,8 @@ describe("BackupEngine queue", () => {
     const done = await engine.waitForJob(second)
     expect(done.status).toBe("Completed")
     expect(tokenTenants).toContain(TENANT_B)
+    // The start time is stamped when the queued run actually starts, not when it was queued.
+    expect(Date.parse(done.startTime)).toBeGreaterThanOrEqual(Date.parse(first.endTime!))
   })
 
   it("settles a backup cancelled while queued at once and never runs it", async () => {

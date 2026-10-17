@@ -77,6 +77,8 @@ function TenantsPageContent() {
   const tenants = useTenants()
   const { addJob, activeJobs } = useBackupProgress()
   const backupJobFor = (tenant: Tenant) => activeJobs.find((job) => !job.isComplete && tenant.credentials && job.tenantId.toLowerCase() === tenant.credentials.tenantId.toLowerCase())
+  // A tracked backup started from another page counts too, even before this tenant's sync status catches up.
+  const backupPending = (tenant: Tenant) => tenant.syncStatus === "pending" || backupJobFor(tenant) !== undefined
   const { addTenant, updateTenant, deleteTenant: deleteTenantFromContext, getTenant } = useTenantOperations()
   const { loadTenantFromAzure, syncTenantToAzureDirect } = useTenantAzureSync()
   const [editingTenantId, setEditingTenantId] = useState<number | null>(null)
@@ -1106,9 +1108,9 @@ function TenantsPageContent() {
                     e.stopPropagation()
                     chooseBackup(tenant)
                   }}
-                  disabled={tenant.syncStatus === "pending" || tenant.isLoading}
+                  disabled={backupPending(tenant) || tenant.isLoading}
                 >
-                  {tenant.syncStatus === "pending" ? (
+                  {backupPending(tenant) ? (
                     <>
                       <Loader2 className="h-4 w-4 mr-1 animate-spin" />
                       {backupButtonLabel(backupJobFor(tenant))}
@@ -1358,10 +1360,10 @@ function TenantsPageContent() {
                           size="icon"
                           variant="outline"
                           className="size-9"
-                          aria-label={tenant.syncStatus === "pending" ? `${tenant.name}: ${backupButtonLabel(backupJobFor(tenant))}` : `Back up ${tenant.name}`} title={tenant.syncStatus === "pending" ? backupButtonLabel(backupJobFor(tenant)) : undefined} onClick={() => chooseBackup(tenant)}
-                          disabled={tenant.syncStatus === "pending" || tenant.isLoading}
+                          aria-label={backupPending(tenant) ? `${tenant.name}: ${backupButtonLabel(backupJobFor(tenant))}` : `Back up ${tenant.name}`} title={backupPending(tenant) ? backupButtonLabel(backupJobFor(tenant)) : undefined} onClick={() => chooseBackup(tenant)}
+                          disabled={backupPending(tenant) || tenant.isLoading}
                         >
-                          {tenant.syncStatus === "pending" ? (
+                          {backupPending(tenant) ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
                           ) : (
                             <Download className="h-4 w-4" />
