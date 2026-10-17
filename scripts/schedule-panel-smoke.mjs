@@ -154,7 +154,7 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
       await evaluate(`${save}.click()`)
       assert(await waitForCondition(`${body}.innerText.includes('Automatic backups paused') && !${body}.innerText.includes(${JSON.stringify(weeklyNote)})`), "paused saved weekly schedule shows the consequence")
       const link = `[...${body}.querySelectorAll('a')].find(element => element.textContent === 'Settings > Background runner')`
-      assert(await evaluate(`${link}?.getAttribute('href') === '#/portal/settings'`), "Settings link missing")
+      assert(await evaluate(`${link}?.getAttribute('href') === '#/portal/settings?section=background'`), "Settings link missing")
       await evaluate(`${link}.click()`)
       assert(await waitForCondition(`${body}.innerText.includes('Background runner') && Boolean(${doc}.getElementById('settings-background'))`), "Settings link did not open the background section page")
     } finally {

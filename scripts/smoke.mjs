@@ -521,13 +521,68 @@ await check("onboarding is the desktop wizard, without client secrets", async ()
 })
 
 await check("settings show encrypted local backup storage", async () => {
-  await go("#/portal/settings", "Backups on this device")
+  await go("#/portal/settings?section=storage", "Backups on this device")
   assert(await waitForText("Key fingerprint"), "encryption key section missing")
   await screenshot("05-settings")
 })
 
+await check("settings sidebar switches sections and names the section in the URL", async () => {
+  await go("#/portal/settings", "Storage and recovery")
+  const nav = `document.querySelector('nav[aria-label="Settings sections"]')`
+  assert(await waitForCondition(`${nav}?.querySelectorAll("a").length === 8`), "settings sidebar does not list eight sections")
+  assert(await evaluate(`document.getElementById("settings-storage").hidden === true`), "storage section visible on the default sign-in section")
+  await evaluate(`[...${nav}.querySelectorAll("a")].find(a => a.textContent.trim() === "Background runner").click()`)
+  assert(await waitForText("Keep backups for"), "background section did not appear after clicking its sidebar entry")
+  assert(await evaluate(`location.hash === "#/portal/settings?section=background"`), "section not named in the URL")
+  assert(await evaluate(`document.getElementById("settings-signin").hidden === true && !document.body.innerText.includes("Backups on this device")`), "only the clicked section should be visible")
+  assert(await evaluate(`${nav}.querySelector('[aria-current="page"]')?.textContent.trim() === "Background runner"`), "active sidebar entry not marked")
+  await evaluate(`[...${nav}.querySelectorAll("a")].find(a => a.textContent.trim() === "Sign-in").click()`)
+  assert(await waitForCondition(`document.getElementById("settings-signin").hidden === false && location.hash === "#/portal/settings?section=signin"`), "sign-in section did not come back")
+  // Unsaved input in a panel survives switching away and back.
+  await evaluate(`[...${nav}.querySelectorAll("a")].find(a => a.textContent.trim() === "Storage and recovery").click()`)
+  assert(await waitForText("Import a recovery key"), "storage section did not appear")
+  await evaluate(`[...document.getElementById("settings-storage").querySelectorAll("button")].find(b => b.textContent.trim() === "Import a recovery key").click()`)
+  const keyField = `document.getElementById("settings-storage").querySelector('textarea[aria-label="Recovery key"]')`
+  assert(await waitForCondition(`Boolean(${keyField})`), "recovery key field did not open")
+  await evaluate(`(() => { const field = ${keyField}; Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(field, 'TVK2.smoke-draft'); field.dispatchEvent(new Event('input', {bubbles:true})); })()`)
+  await evaluate(`[...${nav}.querySelectorAll("a")].find(a => a.textContent.trim() === "Updates").click()`)
+  assert(await waitForCondition(`document.getElementById("settings-updates").hidden === false`), "updates section did not appear")
+  await evaluate(`[...${nav}.querySelectorAll("a")].find(a => a.textContent.trim() === "Storage and recovery").click()`)
+  assert(await waitForCondition(`${keyField}?.value === 'TVK2.smoke-draft'`), "switching sections discarded the recovery key draft")
+  // An unknown section value falls back to sign-in instead of a blank page.
+  await evaluate(`location.hash = "#/portal/settings?section=nope"`)
+  assert(await waitForCondition(`document.getElementById("settings-signin").hidden === false`), "unknown section did not fall back to sign-in")
+  // A link that only carries the recovery key anchor still opens storage and focuses the export.
+  await evaluate(`location.hash = "#/portal/settings#recovery-key"`)
+  assert(await waitForCondition(`document.getElementById("settings-storage").hidden === false && document.activeElement?.id === "save-recovery-key"`), "anchor-only recovery key link did not open storage and focus the export")
+  // In the narrow row layout, scrolling the section strip must not move the focused export out of view.
+  await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 720, deviceScaleFactor: 1, mobile: false })
+  await evaluate(`location.hash = "#/portal/settings?section=signin"`)
+  assert(await waitForCondition(`document.getElementById("settings-signin").hidden === false`), "sign-in section did not appear at narrow width")
+  await evaluate(`location.hash = "#/portal/settings?section=storage#recovery-key"`)
+  const focusedInView = `(() => { const button = document.getElementById("save-recovery-key"); if (document.activeElement !== button) return false; const box = button.getBoundingClientRect(); return box.top >= 0 && box.bottom <= window.innerHeight })()`
+  assert(await waitForCondition(focusedInView), "focused Save recovery key ended outside the viewport at narrow width")
+  await send("Emulation.clearDeviceMetricsOverride")
+  // A dialog owned by a panel closes while its section is hidden and comes back with it.
+  // Run this part with real exit animations so focus landing is checked after teardown.
+  await evaluate(`document.getElementById("smoke-no-animations")?.remove()`)
+  await evaluate(`location.hash = "#/portal/settings?section=about"`)
+  assert(await waitForCondition(`document.getElementById("settings-about").hidden === false`), "about section did not appear")
+  await evaluate(`[...document.getElementById("settings-about").querySelectorAll("button")].find(b => b.textContent.trim() === "License agreement").click()`)
+  assert(await waitForText("TENUVAULT DESKTOP END USER LICENSE AGREEMENT"), "license agreement dialog did not open")
+  await evaluate(`location.hash = "#/portal/settings?section=signin"`)
+  assert(await waitForCondition(`!document.body.innerText.includes("TENUVAULT DESKTOP END USER LICENSE AGREEMENT")`), "dialog stayed open while its section was hidden")
+  assert(await evaluate(`document.querySelectorAll('[role="dialog"]').length === 0`), "hidden panel left a dialog in the page")
+  assert(await waitForCondition(`document.activeElement === document.querySelector('nav[aria-label="Settings sections"] [aria-current="page"]')`), "focus did not land on the active section entry after the dialog closed")
+  await evaluate(`location.hash = "#/portal/settings?section=about"`)
+  assert(await waitForText("TENUVAULT DESKTOP END USER LICENSE AGREEMENT"), "dialog did not come back with its section")
+  await evaluate(`[...document.querySelectorAll("button")].find(b => b.textContent.trim() === "Close").click()`)
+  assert(await waitForCondition(`!document.body.innerText.includes("TENUVAULT DESKTOP END USER LICENSE AGREEMENT")`), "license agreement dialog did not close")
+  await disableAnimations()
+})
+
 await check("license agreement opens from settings", async () => {
-  await go("#/portal/settings", "License agreement")
+  await go("#/portal/settings?section=about", "License agreement")
   await evaluate(`[...document.querySelectorAll("button")].find(b => b.textContent.trim() === "License agreement").click()`)
   assert(await waitForText("TENUVAULT DESKTOP END USER LICENSE AGREEMENT"), "license agreement text missing")
   assert(await waitForText("Terms of Use"), "Terms of Use link missing")
@@ -602,9 +657,9 @@ await check("policy pack frameworks keep the coverage notice collapsed", async (
 })
 
 await check("settings show background backups, retention and updates", async () => {
-  await go("#/portal/settings", "Background runner")
+  await go("#/portal/settings?section=background", "Background runner")
   assert(await waitForText("Keep backups for"), "retention setting missing")
-  assert(await waitForText("Download and install updates automatically"), "update setting missing")
+  await go("#/portal/settings?section=updates", "Download and install updates automatically")
   assert(await waitForText("Get nightly builds"), "nightly update setting missing")
   const prefs = await evaluate(`window.tenuvault.preferences.set({ nightlyUpdates: true })`)
   assert(prefs.nightlyUpdates === true, `nightly preference not stored ${JSON.stringify(prefs)}`)
@@ -624,7 +679,7 @@ for (const [platform, installed] of [["darwin", false], ["win32", true]]) {
         frame.contentDocument.open()
         frame.contentDocument.write('<html><head></head><body><div id="root"></div></body></html>')
         frame.contentDocument.close()
-        frame.contentWindow.location.hash = "#/portal/settings"
+        frame.contentWindow.location.hash = "#/portal/settings?section=background"
         frame.contentWindow.tenuvault = {
           ...window.tenuvault,
           app: { ...window.tenuvault.app, info: () => Promise.resolve({ version: "0.2.0", platform: ${JSON.stringify(platform)}, trayIconLoaded: true }) },
@@ -1070,7 +1125,7 @@ await check("restore journal applied IDs use validated inline inputs", async () 
   })()`)
   const submit = label => evaluate(`${form(label)}.querySelector('button[type="submit"]').click()`)
   try {
-    await go("#/portal/settings", "Restore write history")
+    await go("#/portal/settings?section=storage", "Restore write history")
     assert(await waitForText("Interrupted smoke policy"), "journal records did not load")
     await evaluate(`window.__restoreFailList = true`)
     await click("Refresh history")
@@ -1304,7 +1359,7 @@ await check("search with no matches and missing dates stay truthful", async () =
 })
 
 await check("appearance can switch to dark and back", async () => {
-  await go("#/portal/settings", "Appearance")
+  await go("#/portal/settings?section=appearance", "Appearance")
   await evaluate(`(() => { const select = [...document.querySelectorAll('select')].find(s => [...s.options].some(o => o.value === 'dark')); select.value = 'dark'; select.dispatchEvent(new Event('change', {bubbles:true})); })()`)
   assert(await evaluate(`document.documentElement.classList.contains('dark')`), "dark appearance was not applied")
   await screenshot("12-settings-dark")
@@ -1317,7 +1372,7 @@ await check("appearance can switch to dark and back", async () => {
   })()`)
   assert(contrast >= 4.5, `dark setup card contrast is too low: ${contrast}`)
   await screenshot("13-setup-dark")
-  await go("#/portal/settings", "Appearance")
+  await go("#/portal/settings?section=appearance", "Appearance")
   await evaluate(`(() => { const select = [...document.querySelectorAll('select')].find(s => [...s.options].some(o => o.value === 'light')); select.value = 'light'; select.dispatchEvent(new Event('change', {bubbles:true})); })()`)
   await go("#/portal/backup?tab=schedule", "Automatic backups")
 })
@@ -1337,7 +1392,7 @@ await check("unsaved schedule drafts stay with their tenant", async () => {
   assert(await evaluate(`!document.querySelector('label input[type="checkbox"]').checked`), 'draft enabled backups for another tenant')
   await switchTenant('Contoso 1')
   assert(await waitForCondition(`document.getElementById('schedule-time')?.value === '07:45'`), 'tenant draft was discarded')
-  await go("#/portal/settings", "Appearance")
+  await go("#/portal/settings?section=appearance", "Appearance")
   await go("#/portal/backup?tab=schedule", "Automatic backups")
   assert(await waitForCondition(`document.getElementById('schedule-time')?.value === '07:45'`), 'navigation discarded the draft')
 })

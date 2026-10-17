@@ -44,7 +44,7 @@ describe("recovery key notice", () => {
     const notice = render(local)
     expect(notice).toContain('role="alert"')
     expect(notice).toContain("Starting over deletes the backup encryption key")
-    expect(notice).toContain('href="/portal/settings#recovery-key"')
+    expect(notice).toContain('href="/portal/settings?section=storage#recovery-key"')
     expect(render({ ...local, recoveryExported: true })).toBe("")
   })
 })

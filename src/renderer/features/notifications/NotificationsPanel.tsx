@@ -31,7 +31,7 @@ const selectClass = "h-8 rounded-full border border-gray-200 bg-white px-3 text-
  * rules that route events to them, the Intune audit watch, and recent deliveries.
  * Channel URLs and secrets are write only: the stored value is never shown again.
  */
-export function NotificationsPanel({ tenant }: { tenant: Tenant }) {
+export function NotificationsPanel({ tenant, active = true }: { tenant: Tenant; active?: boolean }) {
   const tenantId = tenant.credentials?.tenantId
   const client = useQueryClient()
   const status = useQuery({ queryKey: ["notifications-status", tenantId], queryFn: () => notificationsApi.status(tenant), enabled: !!tenantId })
@@ -46,8 +46,8 @@ export function NotificationsPanel({ tenant }: { tenant: Tenant }) {
     <div className="space-y-4">
       {!data.licensed && <UpgradeNote feature="notifications" />}
       <p className="text-sm text-gray-600" role="note">{data.runtimeNote}</p>
-      <ChannelsTile tenant={tenant} channels={data.channels} licensed={data.licensed} onChanged={refresh} />
-      <RulesTile tenant={tenant} rules={data.rules} channels={data.channels} licensed={data.licensed} onChanged={refresh} />
+      <ChannelsTile tenant={tenant} channels={data.channels} licensed={data.licensed} active={active} onChanged={refresh} />
+      <RulesTile tenant={tenant} rules={data.rules} channels={data.channels} licensed={data.licensed} active={active} onChanged={refresh} />
       <AuditWatchTile tenant={tenant} auditWatch={data.auditWatch} licensed={data.licensed} onChanged={refresh} />
       <Tile aria-labelledby="notifications-deliveries-heading" className="gap-3">
         <h3 id="notifications-deliveries-heading" className="flex items-center gap-2 text-lg font-medium text-gray-900">
@@ -71,7 +71,7 @@ export function NotificationsPanel({ tenant }: { tenant: Tenant }) {
   )
 }
 
-function ChannelsTile({ tenant, channels, licensed, onChanged }: { tenant: Tenant; channels: PublicChannel[]; licensed: boolean; onChanged: () => void }) {
+function ChannelsTile({ tenant, channels, licensed, active, onChanged }: { tenant: Tenant; channels: PublicChannel[]; licensed: boolean; active: boolean; onChanged: () => void }) {
   const [adding, setAdding] = useState(false)
   const [preview, setPreview] = useState<string | null>(null)
   const hasLocal = channels.some((channel) => channel.kind === "local")
@@ -99,8 +99,8 @@ function ChannelsTile({ tenant, channels, licensed, onChanged }: { tenant: Tenan
           <ChannelRow key={channel.id} tenant={tenant} channel={channel} licensed={licensed} onChanged={onChanged} onPreview={() => showPreview.mutate(channel.id)} />
         ))}
       </ul>
-      {adding && <AddChannelDialog tenant={tenant} onClose={() => setAdding(false)} onAdded={() => { setAdding(false); onChanged() }} />}
-      <Dialog open={preview !== null} onOpenChange={(open) => !open && setPreview(null)}>
+      {adding && <AddChannelDialog tenant={tenant} open={active} onClose={() => setAdding(false)} onAdded={() => { setAdding(false); onChanged() }} />}
+      <Dialog open={active && preview !== null} onOpenChange={(open) => !open && setPreview(null)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Event preview</DialogTitle>
@@ -217,7 +217,7 @@ function RecipientRows({ tenant, rows, onChange }: { tenant: Tenant; rows: Recip
   )
 }
 
-function AddChannelDialog({ tenant, onClose, onAdded }: { tenant: Tenant; onClose: () => void; onAdded: () => void }) {
+function AddChannelDialog({ tenant, open, onClose, onAdded }: { tenant: Tenant; open: boolean; onClose: () => void; onAdded: () => void }) {
   const [kind, setKind] = useState<Exclude<ChannelKind, "local">>("webhook")
   const [title, setTitle] = useState("")
   const [url, setUrl] = useState("")
@@ -254,7 +254,7 @@ function AddChannelDialog({ tenant, onClose, onAdded }: { tenant: Tenant; onClos
     onError: failed,
   })
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Add a channel</DialogTitle>
@@ -317,7 +317,7 @@ function AddChannelDialog({ tenant, onClose, onAdded }: { tenant: Tenant; onClos
   )
 }
 
-function RulesTile({ tenant, rules, channels, licensed, onChanged }: { tenant: Tenant; rules: NotificationRule[]; channels: PublicChannel[]; licensed: boolean; onChanged: () => void }) {
+function RulesTile({ tenant, rules, channels, licensed, active, onChanged }: { tenant: Tenant; rules: NotificationRule[]; channels: PublicChannel[]; licensed: boolean; active: boolean; onChanged: () => void }) {
   const [adding, setAdding] = useState(false)
   const channelTitle = (id: string) => channels.find((channel) => channel.id === id)?.title ?? "Removed channel"
   return (
@@ -336,7 +336,7 @@ function RulesTile({ tenant, rules, channels, licensed, onChanged }: { tenant: T
           <RuleRow key={rule.id} tenant={tenant} rule={rule} licensed={licensed} onChanged={onChanged} channelTitle={channelTitle} />
         ))}
       </ul>
-      {adding && <AddRuleDialog tenant={tenant} channels={channels} onClose={() => setAdding(false)} onAdded={() => { setAdding(false); onChanged() }} />}
+      {adding && <AddRuleDialog tenant={tenant} channels={channels} open={active} onClose={() => setAdding(false)} onAdded={() => { setAdding(false); onChanged() }} />}
     </Tile>
   )
 }
@@ -372,7 +372,7 @@ const EVENT_TYPE_NOTES: Partial<Record<NotificationEventType, string>> = {
   "health.finding": "Configured on the Health review screen",
 }
 
-function AddRuleDialog({ tenant, channels, onClose, onAdded }: { tenant: Tenant; channels: PublicChannel[]; onClose: () => void; onAdded: () => void }) {
+function AddRuleDialog({ tenant, channels, open, onClose, onAdded }: { tenant: Tenant; channels: PublicChannel[]; open: boolean; onClose: () => void; onAdded: () => void }) {
   const [title, setTitle] = useState("")
   const [eventTypes, setEventTypes] = useState<NotificationEventType[]>(["backup.failed"])
   const [minSeverity, setMinSeverity] = useState<NotificationSeverity>("info")
@@ -386,7 +386,7 @@ function AddRuleDialog({ tenant, channels, onClose, onAdded }: { tenant: Tenant;
   const toggleEvent = (type: NotificationEventType, checked: boolean) => setEventTypes((current) => (checked ? [...current, type] : current.filter((entry) => entry !== type)))
   const toggleChannel = (id: string, checked: boolean) => setChannelIds((current) => (checked ? [...current, id] : current.filter((entry) => entry !== id)))
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Add a rule</DialogTitle>

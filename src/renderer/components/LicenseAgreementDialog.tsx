@@ -10,10 +10,10 @@ import { bridge } from "../lib/bridge"
  * A text link that opens the end user license agreement this build ships with, the same text the
  * installers show. The link is the dialog trigger, so focus returns to it when the dialog closes.
  */
-export function LicenseAgreementLink({ label = "License agreement" }: { label?: string }) {
+export function LicenseAgreementLink({ label = "License agreement", active = true }: { label?: string; active?: boolean }) {
   const [open, setOpen] = useState(false)
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={active && open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <button type="button" className="text-blue-600 hover:underline">
           {label}

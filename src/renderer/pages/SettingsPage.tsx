@@ -1,8 +1,9 @@
 import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
-import { useEffect, useId, useRef, useState } from "react"
-import { Link, useLocation } from "react-router-dom"
-import { Bell, Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, RefreshCw, Save, Upload } from "lucide-react"
+import { useEffect, useId, useRef, useState, type ReactNode } from "react"
+import { Link, useLocation, useSearchParams } from "react-router-dom"
+import { Bell, Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, Palette, RefreshCw, Save, SunMoon, Upload } from "lucide-react"
+import { cn } from "~/lib/utils"
 import { useTenantOperations, useTenants, type Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
@@ -13,7 +14,7 @@ import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import { allows, COMMUNITY_RETENTION_DAYS, effectiveRetentionDays } from "../../shared/plans"
 import { isGuid } from "../../shared/security"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
-import { StorageChooser } from "../components/StorageChooser"
+import { StorageChooser, type StorageChooserDraft } from "../components/StorageChooser"
 import { UnreadableBackupsNotice } from "../components/UnreadableBackupsNotice"
 import { RecoveryKeyImport } from "../components/RecoveryKeyImport"
 import { RecoveryKeyNotice } from "../components/RecoveryKeyNotice"
@@ -22,12 +23,13 @@ import { localTenantIds, useBackupSettings, useLocalInventoryProblems } from "..
 import { storageResources, type StorageChoice } from "../lib/storage"
 import { toast } from "../lib/toast"
 import { tenantPlan, useLicense } from "../lib/license"
+import { parseSettingsSection, settingsHref, type SettingsSectionId } from "../lib/settings-section"
 import { PlanBadge } from "../components/UpgradeNote"
 import { PdfBrandingSettings } from "../components/PdfBrandingSettings"
 import { NotificationsPanel } from "../features/notifications/NotificationsPanel"
 import { useConfirm } from "~/components/ConfirmDialog"
 
-function RestoreWrites() {
+function RestoreWrites({ active }: { active: boolean }) {
   const tenants = useTenants().filter(tenant => tenant.credentials?.tenantId)
   const [selected, setSelected] = useState("")
   const tenantId = tenants.some(tenant => tenant.credentials?.tenantId === selected) ? selected : tenants[0]?.credentials?.tenantId
@@ -46,7 +48,7 @@ function RestoreWrites() {
           {tenants.map(tenant => <option key={tenant.id} value={tenant.credentials!.tenantId}>{tenant.name}</option>)}
         </select>
       </label>
-      <TenantRestoreWrites key={tenantId} tenantId={tenantId} />
+      <TenantRestoreWrites key={tenantId} tenantId={tenantId} active={active} />
     </div>
   )
 }
@@ -119,7 +121,7 @@ function RestoreAppliedInput({ record, request, onClose }: { record: WriteRecord
   )
 }
 
-function TenantRestoreWrites({ tenantId }: { tenantId: string }) {
+function TenantRestoreWrites({ tenantId, active }: { tenantId: string; active: boolean }) {
   const { confirm, confirmDialog } = useConfirm()
   const [records, setRecords] = useState<WriteRecord[]>([])
   const [error, setError] = useState("")
@@ -155,7 +157,8 @@ function TenantRestoreWrites({ tenantId }: { tenantId: string }) {
   useEffect(() => { void request({ action: "list" }).catch(e => setError(String(e))) }, [])
   return (
     <Card>
-      {confirmDialog}
+      {/* Portaled dialogs render outside the hidden panel, so a hidden panel must not keep one open. Holding the element back keeps the pending confirmation for the return. */}
+      {active ? confirmDialog : null}
       <CardHeader>
         <CardTitle>Restore write history</CardTitle>
         <Button ref={refreshButton} variant="outline" onClick={() => void request({ action: "list" }).catch(e => setError(String(e)))}>Refresh history</Button>
@@ -203,7 +206,7 @@ function TenantRestoreWrites({ tenantId }: { tenantId: string }) {
   )
 }
 
-function NotificationSettings() {
+function NotificationSettings({ active }: { active: boolean }) {
   const tenants = useTenants().filter(tenant => tenant.credentials?.tenantId)
   const { status: licenseStatus } = useLicense()
   const [selected, setSelected] = useState("")
@@ -233,7 +236,7 @@ function NotificationSettings() {
           {tenants.map(candidate => <option key={candidate.id} value={candidate.credentials!.tenantId}>{candidate.name}</option>)}
         </select>
       </label>
-      <NotificationsPanel key={tenantId} tenant={tenant} />
+      <NotificationsPanel key={tenantId} tenant={tenant} active={active} />
     </div>
   )
 }
@@ -363,12 +366,14 @@ function currentChoice(tenant: Tenant): StorageChoice | undefined {
   }
 }
 
-function TenantSettings() {
+function TenantSettings({ active }: { active: boolean }) {
   const tenants = useTenants()
   const { updateTenant } = useTenantOperations()
   const [accounts, setAccounts] = useState<SignedInAccount[]>([])
   const [editing, setEditing] = useState<Tenant | null>(null)
   const [choice, setChoice] = useState<StorageChoice | null>(null)
+  // The Change storage dialog closes while its section is hidden; its chooser draft lives here so the reopened dialog picks up where the admin left off.
+  const [storageDraft, setStorageDraft] = useState<StorageChooserDraft | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
 
   const refresh = () => void bridge.auth.accounts().then(setAccounts)
@@ -396,6 +401,7 @@ function TenantSettings() {
       resources: { ...current, ...storage, subscriptionName: current?.subscriptionName ?? "", automationAccountName: "" },
     })
     toast(`Backups for ${editing.name} now go to ${choice.kind === "local" ? "this device" : choice.storageAccountName}.`, "success")
+    setStorageDraft(null)
     setEditing(null)
   }
 
@@ -429,7 +435,7 @@ function TenantSettings() {
                     {busy === tenantId && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     {account ? "Sign in again" : "Sign in"}
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={() => { setChoice(null); setEditing(tenant) }} disabled={!tenant.credentials}>
+                  <Button variant="ghost" size="sm" onClick={() => { setChoice(null); setStorageDraft(null); setEditing(tenant) }} disabled={!tenant.credentials}>
                     Change storage
                   </Button>
                 </div>
@@ -439,7 +445,7 @@ function TenantSettings() {
         )}
       </CardContent>
 
-      <Dialog open={Boolean(editing)} onOpenChange={(open) => !open && setEditing(null)}>
+      <Dialog open={active && Boolean(editing)} onOpenChange={(open) => { if (!open) { setStorageDraft(null); setEditing(null) } }}>
         <DialogContent className="sm:max-w-[620px]">
           <DialogHeader>
             <DialogTitle>Backup storage for {editing?.name}</DialogTitle>
@@ -453,11 +459,13 @@ function TenantSettings() {
               tenantId={editing.credentials.tenantId}
               clientId={editing.credentials.appId}
               initial={currentChoice(editing)}
+              initialDraft={storageDraft ?? undefined}
               onChange={setChoice}
+              onDraftChange={setStorageDraft}
             />
           )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
+            <Button variant="outline" onClick={() => { setStorageDraft(null); setEditing(null) }}>Cancel</Button>
             <Button disabled={!choice} onClick={saveStorage}>Save</Button>
           </DialogFooter>
         </DialogContent>
@@ -670,7 +678,7 @@ function Updates() {
   )
 }
 
-function About() {
+function About({ active }: { active: boolean }) {
   const [info, setInfo] = useState<AppInfo | null>(null)
   useEffect(() => void bridge.app.info().then(setInfo), [])
   return (
@@ -689,7 +697,7 @@ function About() {
         <p>
           <Link to="/license" className="text-blue-600 hover:underline">License</Link>
           {" · "}
-          <LicenseAgreementLink />
+          <LicenseAgreementLink active={active} />
           {" · "}
           <button type="button" className="text-blue-600 hover:underline" onClick={() => void bridge.app.openExternal("https://tenuvault.com/")}>
             Website and support
@@ -700,31 +708,133 @@ function About() {
   )
 }
 
-export default function SettingsPage() {
+function AppearanceSettings() {
   return (
-    <div className="max-w-5xl space-y-6 p-6 lg:p-8">
-      <div className="flex flex-wrap items-end justify-between gap-6 pb-2">
-        <div>
-          <h1 className="text-4xl font-medium tracking-tight text-gray-900">Settings</h1>
-          <p className="mt-2 text-lg text-gray-500">Sign-in, backup storage, encryption, background backups, notifications, PDF branding and updates.</p>
-        </div>
-      <label className="flex items-center gap-3 text-sm font-medium text-gray-600">Appearance
-        <select className="h-10 rounded-full border border-gray-200 bg-white px-4 text-gray-900" defaultValue={getAppearance()} onChange={e => setAppearance(e.target.value as Appearance)}>
-          <option value="system">Use system setting</option><option value="light">Light</option><option value="dark">Dark</option>
-        </select>
-      </label>
+    <Card>
+      <CardHeader className="p-7 pb-4">
+        <CardTitle className="flex items-center gap-3 text-xl font-medium">
+          <span className="flex size-10 items-center justify-center rounded-full bg-secondary" aria-hidden="true"><SunMoon className="h-[18px] w-[18px]" /></span> Appearance
+        </CardTitle>
+        <CardDescription>How TenuVault looks on this computer.</CardDescription>
+      </CardHeader>
+      <CardContent className="px-7 pb-7">
+        <label className="flex items-center gap-3 text-sm font-medium text-gray-600">Appearance
+          <select className="h-10 rounded-full border border-gray-200 bg-white px-4 text-gray-900" defaultValue={getAppearance()} onChange={e => setAppearance(e.target.value as Appearance)}>
+            <option value="system">Use system setting</option><option value="light">Light</option><option value="dark">Dark</option>
+          </select>
+        </label>
+      </CardContent>
+    </Card>
+  )
+}
+
+const SECTIONS: { id: SettingsSectionId; title: string; icon: typeof KeyRound }[] = [
+  { id: "signin", title: "Sign-in", icon: KeyRound },
+  { id: "storage", title: "Storage and recovery", icon: HardDrive },
+  { id: "background", title: "Background runner", icon: MonitorCog },
+  { id: "notifications", title: "Notifications", icon: Bell },
+  { id: "branding", title: "PDF branding", icon: Palette },
+  { id: "updates", title: "Updates", icon: Download },
+  { id: "appearance", title: "Appearance", icon: SunMoon },
+  { id: "about", title: "About", icon: Info },
+]
+
+export default function SettingsPage() {
+  const [searchParams] = useSearchParams()
+  const { hash } = useLocation()
+  // Links that only carry the recovery key anchor predate the section parameter; they mean the storage section.
+  const section: SettingsSectionId = hash === "#recovery-key" && !searchParams.get("section")
+    ? "storage"
+    : parseSettingsSection(searchParams.get("section"))
+
+  // Keep every panel mounted and only toggle visibility, so unsaved edits and
+  // loaded state survive switching sections. Start each section at the top,
+  // except when a deep link targets a control inside the storage section.
+  useEffect(() => {
+    if (hash !== "#recovery-key") window.scrollTo({ top: 0 })
+  }, [section, hash])
+
+  // In the narrow row layout the active entry can sit outside the scrollable
+  // strip after a deep link. Scroll the strip sideways only; scrollIntoView
+  // would also move the page and push a focused control out of view.
+  useEffect(() => {
+    if (!window.matchMedia("(max-width: 1279px)").matches) return
+    const link = document.querySelector('nav[aria-label="Settings sections"] [aria-current="page"]')
+    const strip = link?.parentElement
+    if (!link || !strip) return
+    const linkBox = link.getBoundingClientRect()
+    const stripBox = strip.getBoundingClientRect()
+    if (linkBox.left < stripBox.left) strip.scrollLeft += linkBox.left - stripBox.left - 4
+    else if (linkBox.right > stripBox.right) strip.scrollLeft += linkBox.right - stripBox.right + 4
+  }, [section])
+
+  // Hiding a panel closes its dialogs; their focus return targets are hidden
+  // too, so land focus on the active section entry instead of losing it.
+  const mounted = useRef(false)
+  useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true
+      return
+    }
+    const landFocus = () => {
+      const focused = document.activeElement
+      if (!focused || focused === document.body || focused.closest("section[hidden]")) {
+        document.querySelector<HTMLElement>('nav[aria-label="Settings sections"] [aria-current="page"]')?.focus({ preventScroll: true })
+      }
+    }
+    landFocus()
+    // A closing dialog still holds focus inside its portal through its exit
+    // animation and only drops it when the portal leaves the DOM, so keep
+    // checking while nodes are removed, then stop watching.
+    const observer = new MutationObserver(landFocus)
+    observer.observe(document.body, { childList: true, subtree: true })
+    const stop = setTimeout(() => observer.disconnect(), 1000)
+    return () => {
+      observer.disconnect()
+      clearTimeout(stop)
+    }
+  }, [section])
+
+  const panel = (id: SettingsSectionId, content: ReactNode) => (
+    <section key={id} id={`settings-${id}`} hidden={section !== id}>{content}</section>
+  )
+
+  return (
+    <div className="p-6 lg:p-8">
+      <div className="pb-2">
+        <h1 className="text-4xl font-medium tracking-tight text-gray-900">Settings</h1>
+        <p className="mt-2 text-lg text-gray-500">Sign-in, backup storage, encryption, background backups, notifications, PDF branding and updates.</p>
       </div>
-      <nav aria-label="Settings sections" className="flex flex-wrap gap-2 text-sm">
-        {[['signin', 'Sign-in'], ['storage', 'Storage and recovery'], ['background', 'Background runner'], ['notifications', 'Notifications'], ['branding', 'PDF branding'], ['updates', 'Updates'], ['about', 'About']].map(([id, title]) => <button key={id} type="button" className="h-9 rounded-full bg-card px-4 font-medium text-foreground transition-colors hover:bg-primary hover:text-primary-foreground" onClick={() => document.getElementById(`settings-${id}`)?.scrollIntoView({ block: 'start' })}>{title}</button>)}
-      </nav>
-      <section className="scroll-mt-6" id="settings-signin"><TenantSettings /></section>
-      <section className="scroll-mt-6" id="settings-storage"><BackupsOnDevice />
-      <RestoreWrites /></section>
-      <section className="scroll-mt-6" id="settings-background"><BackgroundAndRetention /></section>
-      <section className="scroll-mt-6" id="settings-notifications"><NotificationSettings /></section>
-      <section className="scroll-mt-6" id="settings-branding"><PdfBrandingSettings /></section>
-      <section className="scroll-mt-6" id="settings-updates"><Updates /></section>
-      <section className="scroll-mt-6" id="settings-about"><About /></section>
+      <div className="mt-4 flex flex-col gap-6 xl:flex-row xl:items-start">
+        <nav aria-label="Settings sections" className="flex gap-1 overflow-x-auto p-1 xl:sticky xl:top-8 xl:w-56 xl:shrink-0 xl:flex-col xl:overflow-visible xl:p-0">
+          {SECTIONS.map(({ id, title, icon: Icon }) => (
+            <Link
+              key={id}
+              to={settingsHref(id)}
+              aria-current={section === id ? "page" : undefined}
+              className={cn(
+                "flex min-h-10 shrink-0 items-center gap-3 rounded-full px-4 py-2.5 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring",
+                section === id
+                  ? "bg-primary text-primary-foreground"
+                  : "text-gray-600 hover:bg-secondary hover:text-foreground dark:text-gray-400",
+              )}
+            >
+              <Icon className="h-[18px] w-[18px]" />
+              <span className="truncate">{title}</span>
+            </Link>
+          ))}
+        </nav>
+        <div className="min-w-0 w-full max-w-5xl flex-1">
+          {panel("signin", <TenantSettings active={section === "signin"} />)}
+          {panel("storage", <div className="space-y-6"><BackupsOnDevice /><RestoreWrites active={section === "storage"} /></div>)}
+          {panel("background", <BackgroundAndRetention />)}
+          {panel("notifications", <NotificationSettings active={section === "notifications"} />)}
+          {panel("branding", <PdfBrandingSettings />)}
+          {panel("updates", <Updates />)}
+          {panel("appearance", <AppearanceSettings />)}
+          {panel("about", <About active={section === "about"} />)}
+        </div>
+      </div>
     </div>
   )
 }

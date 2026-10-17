@@ -16,7 +16,7 @@ const clipboard = vi.hoisted(() => ({ writeText: vi.fn() }))
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { backups, app: { openExternal: async () => undefined } } }))
 vi.mock("../../src/renderer/lib/license", () => ({ useTenantPlan: () => "pro" }))
 
-import { StorageChooser } from "../../src/renderer/components/StorageChooser"
+import { StorageChooser, type StorageChooserDraft } from "../../src/renderer/components/StorageChooser"
 import { announceBackupSettings, useBackupSettings } from "../../src/renderer/lib/local-inventory"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
@@ -44,23 +44,24 @@ async function flush(): Promise<void> {
   })
 }
 
-async function renderChooser() {
+async function renderChooser(initialDraft?: StorageChooserDraft) {
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: clipboard })
   vi.stubGlobal("fetch", fetchMock)
   const onChange = vi.fn()
+  const onDraftChange = vi.fn()
   const container = document.createElement("div")
   document.body.appendChild(container)
   containers.push(container)
   const root = createRoot(container)
   roots.push(root)
-  act(() => root.render(createElement(StorageChooser, { tenantId: TENANT, clientId: "client", onChange })))
+  act(() => root.render(createElement(StorageChooser, { tenantId: TENANT, clientId: "client", onChange, onDraftChange, initialDraft })))
   await flush()
   const unmount = () => {
     const index = roots.indexOf(root)
     if (index >= 0) roots.splice(index, 1)
     act(() => root.unmount())
   }
-  return { container, onChange, unmount, last: () => onChange.mock.calls.at(-1)?.[0] }
+  return { container, onChange, onDraftChange, unmount, last: () => onChange.mock.calls.at(-1)?.[0], lastDraft: () => onDraftChange.mock.calls.at(-1)?.[0] as StorageChooserDraft }
 }
 
 function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
@@ -292,5 +293,53 @@ describe("storage chooser Azure path", () => {
     await flush()
     expect(container.textContent).not.toContain("Save your recovery key before you continue")
     expect(last()).toMatchObject({ kind: "azure", storageAccountName: ACCOUNT.name })
+  })
+
+  it("restores a verified Azure draft after a remount without checking access again", async () => {
+    backups.settings.mockResolvedValue(saved)
+    backups.inventoryProblem.mockResolvedValue(null)
+    backups.verifyAzureStorage.mockResolvedValue(undefined)
+    fetchMock.mockResolvedValue(accountResponse([ACCOUNT]))
+
+    const first = await renderChooser()
+    await chooseAzure(first.container)
+    await selectAccount(first.container, ACCOUNT.name)
+    await clickText(first.container, "Check access")
+    expect(first.last()).toEqual(expect.objectContaining({ kind: "azure", storageAccountName: ACCOUNT.name }))
+    const draft = first.lastDraft()
+    expect(draft).toEqual({ kind: "azure", selectedAccount: ACCOUNT.name, verifiedAccount: ACCOUNT.name })
+    first.unmount()
+
+    const second = await renderChooser(draft)
+    expect(second.container.textContent).toContain("Access confirmed")
+    await flush()
+    expect(second.last()).toEqual({
+      kind: "azure",
+      storageAccountName: ACCOUNT.name,
+      subscriptionId: ACCOUNT.subscriptionId,
+      resourceGroupName: ACCOUNT.resourceGroup,
+      location: ACCOUNT.location,
+    })
+    expect(backups.verifyAzureStorage).toHaveBeenCalledOnce()
+  })
+
+  it("restores an unverified Azure draft after a remount and still holds the choice back", async () => {
+    backups.settings.mockResolvedValue(saved)
+    backups.inventoryProblem.mockResolvedValue(null)
+    fetchMock.mockResolvedValue(accountResponse([ACCOUNT]))
+
+    const first = await renderChooser()
+    await chooseAzure(first.container)
+    await selectAccount(first.container, ACCOUNT.name)
+    const draft = first.lastDraft()
+    expect(draft).toEqual({ kind: "azure", selectedAccount: ACCOUNT.name, verifiedAccount: "" })
+    first.unmount()
+
+    const second = await renderChooser(draft)
+    await flush()
+    expect(second.container.querySelector("select")?.value).toBe(ACCOUNT.name)
+    expect(second.container.textContent).toContain("Check access")
+    expect(second.container.textContent).not.toContain("Access confirmed")
+    expect(second.last()).toBeNull()
   })
 })
