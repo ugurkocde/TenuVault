@@ -460,6 +460,24 @@ describe("LicenseService key activations", () => {
     expect(license.status([TENANT]).tenants[0]).toMatchObject({ activated: false, message: expect.stringMatching(/revoked/) })
   })
 
+  it("picks up a plan and tenant quantity change for the same key on refresh", async () => {
+    answer = () => granted("act-a", { plan: "pro", tenants: 2 }, { plan: "pro", tenants: 2 })
+    const license = service()
+    await license.setKey("TEST-LICENSE-KEY", [TENANT])
+    expect(license.status([TENANT])).toMatchObject({ plan: "pro", tenantLimit: 2 })
+
+    // The subscription is upgraded in the portal under the same key. The cached token is
+    // still valid, so entitlement checks keep answering Pro without a service call.
+    answer = () => granted("act-a", { plan: "msp", tenants: 5 }, { plan: "msp", tenants: 5 })
+    const before = calls.length
+    await expect(license.requireEntitlement(TENANT)).resolves.toBe("pro")
+    expect(calls.length).toBe(before)
+
+    await license.refreshAll()
+    expect(license.status([TENANT])).toMatchObject({ plan: "msp", tenantLimit: 5 })
+    expect(license.plan(TENANT)).toBe("msp")
+  })
+
   it.each([200, 401, 403, 407, 502])("keeps the activation when a network intermediary returns HTML (%s)", async (status) => {
     answer = () => granted("act-a")
     const license = service()

@@ -235,6 +235,8 @@ export interface TenuVaultBridge {
   }
   license: {
     status: () => Promise<LicenseStatus>
+    /** Refreshes every cached activation with the licensing service, so a plan or tenant quantity change shows without waiting for the next periodic check. */
+    refresh: () => Promise<LicenseStatus>
     /** Saves the key and activates it for every signed-in tenant that is not licensed yet. */
     setKey: (key: string) => Promise<LicenseStatus>
     /** Retries activation for one tenant, or for every signed-in tenant without a license. */

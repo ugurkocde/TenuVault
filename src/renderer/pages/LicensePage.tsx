@@ -166,9 +166,16 @@ export default function LicensePage() {
   const keyInput = useRef<HTMLInputElement>(null)
   const [trialKeyHint, setTrialKeyHint] = useState(false)
   const { busy, error, notice, run } = useAction()
+  const checkedOnOpen = useRef(false)
 
   useEffect(() => {
     void refresh()
+    if (checkedOnOpen.current) return
+    checkedOnOpen.current = true
+    // A plan or tenant quantity changed in the customer portal under the same key only
+    // reaches the cached tokens at the next periodic check, up to 6 hours later. Opening
+    // this page asks the service now; failures keep the cached status shown above.
+    void bridge.license.refresh().then(() => refresh()).catch(() => undefined)
   }, [refresh])
 
   if (!status) {
