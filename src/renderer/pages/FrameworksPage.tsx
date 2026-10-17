@@ -10,7 +10,7 @@ import { NCSC_COMMIT, NCSC_REPOSITORY, type Framework } from "../../shared/frame
 import { CIS_BENCHMARKS_ID, effectiveFrameworks, internalKitImportEnabled, searchEffectiveFrameworks } from "../../shared/frameworks/cis-internal"
 import { convertKit, readKitZip, suggestedKitBenchmark, type KitConversion, type KitFile, type KitLevel } from "../../shared/frameworks/cis-kit"
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
-import { coverageStatement, distinctExclusions, excludedFindingKeys, exceptionsByHeadline, exclusionsText, formatRate, headlineBasisNote, headlineLabel, levelCheckSummary, levelHeadline, listedExceptions, newestAssessmentOf, readinessFor, unassignedText } from "../../shared/frameworks/cis-readiness"
+import { coverageStatement, distinctExclusions, excludedFindingKeys, exceptionsByHeadline, exclusionsText, formatRate, headlineBasisNote, headlineLabel, levelCheckSummary, levelHeadline, listedExceptions, readinessFor, unassignedText } from "../../shared/frameworks/cis-readiness"
 import { recommendationLabel, recommendationsForFinding, recommendationTotals, type PackRecommendation, type RecommendationResult } from "../../shared/frameworks/cis-recommendations"
 import { filterManualItems, recommendationResultView, type RecommendationResultFilter } from "../../shared/frameworks/recommendation-filter"
 import { exceptionKey, isActive, localDate } from "../../shared/frameworks/cis-exceptions"
@@ -23,7 +23,7 @@ import { cisReadinessCsv, cisReadinessJson } from "../features/shared/governance
 import { Notice, saveFile, useSaveNotice } from "../components/oib/notices"
 import { cachedCisSettingNames, loadCisSettingNames, settingDefinitionIdsIn } from "../lib/cis-setting-names"
 import type { SettingNames } from "../../shared/intune/drift"
-import { accumulateCisFindings, cisOpenRequest, cisRunDisplayPhase, cisRunHeading, cisRunReceivedLabel, cisRunSteps, cisRunTallies, currentSavedAssessment, emptyCisRunAccumulation, pollCisStatus, resolveCisRunCompletion, type CisRunPack } from "../../shared/frameworks/cis-run"
+import { accumulateCisFindings, CIS_OPEN_PARAMS, cisOpenRequest, cisRunDisplayPhase, cisRunHeading, cisRunReceivedLabel, cisRunSteps, cisRunTallies, currentSavedAssessment, emptyCisRunAccumulation, pollCisStatus, resolveCisRunCompletion, type CisRunPack } from "../../shared/frameworks/cis-run"
 import { refreshInternalCisBenchmarks, useInternalCisBenchmarks, useInternalCisBenchmarksAnswer } from "../lib/internal-cis"
 import { bridge } from "../lib/bridge"
 import { cachedCisCatalog, rememberCisCatalog } from "../lib/cis-catalog-cache"
@@ -140,7 +140,9 @@ export default function FrameworksPage() {
     if (!requestedTenant || !tenants.length) return
     const match = tenants.find(t => t.credentials?.tenantId.toLowerCase() === requestedTenant)
     if (match && match.id !== selectedTenant?.id) setSelectedTenantId(match.id)
-    setParams({}, { replace: true })
+    // A saved run named next to the tenant stays for that tenant's CIS page, which reads it once its
+    // workspace is open; without the tenant it has nothing to open.
+    setParams(old => { const next = new URLSearchParams(old); next.delete("tenant"); if (!match) for (const key of CIS_OPEN_PARAMS) next.delete(key); return next }, { replace: true })
   }, [requestedTenant, tenants])
   const [query, setQuery] = useState("")
   const framework = catalog.find(f => f.id === frameworkId)
@@ -370,8 +372,14 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   const { selectedTenant } = useSelectedTenant()
   // A link can name the benchmark, version and Level to open on, such as a Governance CIS card.
   const [searchParams, setSearchParams] = useSearchParams()
-  const [openRequest] = useState(() => framework.id === CIS_BENCHMARKS_ID ? cisOpenRequest(searchParams) : null)
+  // A request for another tenant waits until that tenant is selected and its page mounts.
+  const [openRequest] = useState(() => {
+    const forTenant = searchParams.get("tenant")?.toLowerCase()
+    return framework.id === CIS_BENCHMARKS_ID && (!forTenant || forTenant === selectedTenant?.credentials?.tenantId?.toLowerCase()) ? cisOpenRequest(searchParams) : null
+  })
   const [openNote, setOpenNote] = useState("")
+  // An assessment that was running when a requested saved run opened: shown as a notice, followed only on request.
+  const [pendingJob, setPendingJob] = useState<OpenedWorkspace["activeJob"]>(null)
   const [policies, setPolicies] = useState<BaselinePolicy[]>([])
   const [reference, setReference] = useState("")
   const [assessment, setAssessment] = useState<Assessment | null>(null)
@@ -505,18 +513,20 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     if (!isCis) return
     setActiveLookupFailed(lookupFailed)
     const latest = currentSavedAssessment(saved)
-    // A requested benchmark opens on its newest saved assessment of that version and Level, read-only;
-    // without one the page opens as it otherwise would and says so. A later check for a running
-    // assessment keeps the requested result instead of switching to the newest one.
-    const requested = openRequest ? newestAssessmentOf(saved.history, openRequest, saved.recommendationList) : null
+    // A requested saved run opens read-only, the exact run the link named; when it is gone the page
+    // opens as it otherwise would and says so. A later check for a running assessment keeps it.
+    const requested = openRequest ? saved.history.find(entry => entry.assessment.runId === openRequest.runId) ?? null : null
     if (first && openRequest) {
-      if (!requested) setOpenNote(`No saved assessment of ${benchmarkTitle(openRequest.benchmark)}${openRequest.version ? ` ${openRequest.version}` : ""}${openRequest.level ? ` Level ${openRequest.level}` : ""} was found, so ${latest ? "the newest saved assessment is shown" : "the page opens on setup"}.`)
-      setSearchParams(old => { const next = new URLSearchParams(old); for (const key of ["benchmark", "version", "level"]) next.delete(key); return next }, { replace: true })
+      if (!requested) setOpenNote(`The saved assessment${openRequest.benchmark ? ` of ${benchmarkTitle(openRequest.benchmark)}${openRequest.version ? ` ${openRequest.version}` : ""}${openRequest.level ? ` Level ${openRequest.level}` : ""}` : ""} was not found, so ${latest ? "the newest saved assessment is shown" : "the page opens on setup"}.`)
+      setSearchParams(old => { const next = new URLSearchParams(old); for (const key of CIS_OPEN_PARAMS) next.delete(key); return next }, { replace: true })
     }
     if (requested) showSavedResults(requested.assessment, { policies: requested.policies, reference: requested.assessment.reference })
     else if (latest) showSavedResults(latest.assessment, { policies: saved.policies, reference: saved.reference })
     const job = opened.activeJob
-    if (job) void trackCisJob({ policies: job.policies, reference: job.reference }, async () => job.jobId)
+    // A running assessment replaces the shown results when it finishes, so it is only followed
+    // at once when no saved run was requested; otherwise a notice offers to view its progress.
+    if (job && requested) setPendingJob(job)
+    else if (job) void trackCisJob({ policies: job.policies, reference: job.reference }, async () => job.jobId)
   }
   function showOpenError(e: unknown) {
     const message = errorText(e)
@@ -589,7 +599,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     const current = () => cisRunGeneration.current === generation
     const tenantId = credentials.tenantId
     // Starting or following a run answers the question a failed running-assessment check left open.
-    setError(""); setErrorAt("compare"); setHistoryNotice(""); setActiveLookupFailed(false); setOpenNote("")
+    setError(""); setErrorAt("compare"); setHistoryNotice(""); setActiveLookupFailed(false); setOpenNote(""); setPendingJob(null)
     setBusy("Reading tenant policies and comparing settings…"); setBusyAt("compare")
     setCisRun({ jobId: "", phase: "connecting", status: "running", state: "running", tenantId, frameworkId: framework.id, read: 0, total: 0, currentPolicy: "", comparedPolicies: 0, packPolicies: capturedPack.policies.length, currentPackPolicy: "", findings: [], nextSince: 0, error: null, assessment: null })
     try {
@@ -892,6 +902,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     {unreadableNotice}
     {isCis && activeLookupFailed && !cisRun && <p role="alert" className="mt-6 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950">Could not check for a running assessment. <button type="button" className="font-medium text-blue-700 hover:underline disabled:opacity-50" disabled={!!busy} onClick={retryActiveLookup}>Retry</button></p>}
     {isCis && openNote && <p role="status" className="mt-6 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950">{openNote}</p>}
+    {isCis && pendingJob && !cisRun && <p role="status" aria-label="Assessment running" className="mt-6 flex flex-wrap items-center gap-3 rounded-2xl bg-blue-50 px-4 py-3 text-sm text-gray-900"><span>An assessment of {referenceDisplayName(pendingJob.reference, packBenchmarkName(pendingJob.policies))} is running.</span><button type="button" className="font-medium text-blue-700 hover:underline" onClick={() => { const job = pendingJob; void trackCisJob({ policies: job.policies, reference: job.reference }, async () => job.jobId) }}>View progress</button></p>}
     {stage === "loading" && <p role="status" className="mt-6 text-sm text-gray-500">Loading saved assessments…</p>}
     {isCis && stage === "results" && assessment && <div ref={resultsHeader} aria-label="Results header" className="mt-6 flex scroll-mt-6 flex-wrap items-center justify-between gap-3 rounded-3xl bg-white px-5 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
       <div className="min-w-0">

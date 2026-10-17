@@ -64,14 +64,17 @@ export function cisScoreCards(access: boolean, workspace: CisPortfolioWorkspace 
 }
 
 /**
- * The CIS page link of a card: it names the card's benchmark, version and Level, so the page
- * opens on the newest saved assessment of them, the run the card shows, read-only.
+ * The CIS page link of a card: it names the saved run the card shows, so the page opens on exactly
+ * that assessment, read-only. The benchmark, version and the Level the card rates only name the
+ * run in the page's note when it was deleted in the meantime. With `tenantId` the link also selects
+ * that tenant first, as a portfolio row of another tenant needs.
  */
-export function cisCardPath(card: Pick<CisScoreCard, "key" | "version" | "levels">): string {
-  const params = new URLSearchParams({ benchmark: card.key })
+export function cisCardPath(card: Pick<CisScoreCard, "key" | "version" | "levels" | "runId">, tenantId?: string): string {
+  const params = new URLSearchParams({ run: card.runId, benchmark: card.key })
   if (card.version) params.set("version", card.version)
-  const level = card.levels[0]?.level
+  const level = (card.levels.find(item => item.rate !== null) ?? card.levels[0])?.level
   if (level) params.set("level", String(level))
+  if (tenantId) params.set("tenant", tenantId)
   return `/portal/frameworks/cis-benchmarks?${params.toString()}`
 }
 

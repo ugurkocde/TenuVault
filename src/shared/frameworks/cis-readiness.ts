@@ -212,7 +212,9 @@ export function coverageSourceLabel(source: DenominatorSource): string {
  * recommendations a pack maps to its settings, and delivered packs do not include it, so a pack can
  * list hundreds of recommendation results while coverage of the full benchmark stays unknown.
  */
-export function coverageStatement(level: Pick<CisLevelReadiness, "level" | "coverage" | "assessedAutomated" | "denominator" | "coverageSource" | "enumerated">): string {
+export function coverageStatement(level: Pick<CisLevelReadiness, "level" | "coverage" | "assessedAutomated" | "denominator" | "coverageSource" | "enumerated" | "denominatorIdentifiers">): string {
+  // A Level the list names but no policy pack of which was assessed has no coverage to compute.
+  if (level.denominator === null && (level.denominatorIdentifiers ?? []).length) return `No policy pack for Level ${level.level} was assessed, so coverage of the full benchmark is not shown for it.`
   if (level.denominator === null) return "Coverage of the full benchmark is not shown because the list of all its automated recommendations is not available."
   if (level.coverage === null) return `Coverage of the full benchmark is not shown because the list of its recommendations marks none of Level ${level.level} as automated.`
   const named = level.enumerated === 0 ? " The pack policies do not name the recommendation numbers they implement, so none of them count." : ""

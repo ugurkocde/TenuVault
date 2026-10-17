@@ -138,21 +138,29 @@ export function currentSavedAssessment(workspace: { policies: BaselinePolicy[]; 
   return JSON.stringify(latest.policies) === JSON.stringify(workspace.policies) ? latest : null
 }
 
-/** The benchmark, version and Level a link asks the CIS page to open on, such as a Governance CIS card. */
+/**
+ * The saved assessment a link asks the CIS page to open on, such as a Governance CIS card: its run
+ * id, and the benchmark, version and Level it was of, which only name it when it is gone.
+ */
 export interface CisOpenRequest {
-  benchmark: string
+  runId: string
+  benchmark?: string
   version?: string
   level?: KitLevel
 }
 
-/** The CIS page search parameters benchmark, version and level; null without a benchmark. */
+/** The CIS page search parameters run, benchmark, version and level; null without a run. */
 export function cisOpenRequest(params: URLSearchParams): CisOpenRequest | null {
+  const runId = params.get("run")?.trim()
+  if (!runId) return null
   const benchmark = params.get("benchmark")?.trim()
-  if (!benchmark) return null
   const version = params.get("version")?.trim()
   const level = params.get("level")
-  return { benchmark, ...(version ? { version } : {}), ...(level === "1" || level === "2" ? { level: Number(level) as KitLevel } : {}) }
+  return { runId, ...(benchmark ? { benchmark } : {}), ...(version ? { version } : {}), ...(level === "1" || level === "2" ? { level: Number(level) as KitLevel } : {}) }
 }
+
+/** The search parameters of an open request, removed once the CIS page has read them. */
+export const CIS_OPEN_PARAMS = ["run", "benchmark", "version", "level"] as const
 
 export function cisRunSteps(phase: CisRunPhase): CisRunStep[] {
   const current = CURRENT_STEP[phase]

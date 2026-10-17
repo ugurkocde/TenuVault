@@ -81,12 +81,19 @@ export function PortfolioScores({ tenant, plan, onDrill }: { tenant: Tenant; pla
                       <span className="block text-xs text-gray-500">CIS Benchmarks{card.version ? `, version ${card.version}` : ""}</span>
                     </td>
                     <td className="py-2 pr-4 tabular-nums text-gray-900">
-                      {card.levels.length ? card.levels.map((level) => <span key={level.level} className="block">Level {level.level} {level.rate === null ? "not available" : `${level.rate}%`}<span className="block text-xs text-gray-500">{level.label}</span></span>) : "Not available"}
+                      {card.levels.length ? card.levels.map((level) => (
+                        <span key={level.level} className="block">
+                          Level {level.level} {level.rate === null ? "not available" : `${level.rate}%`}
+                          <span className="block text-xs text-gray-500">{level.label}</span>
+                          {/* The rate with exclusions and its date, as the CIS card shows them. */}
+                          {level.withExclusions !== null && <span className="block text-xs text-gray-700">{level.withExclusions}<span className="block text-gray-500">Exclusions as of {formatDate(`${level.exclusionsAsOf}T00:00:00`)}</span></span>}
+                        </span>
+                      )) : "Not available"}
                     </td>
                     <td className="py-2 pr-4 text-xs text-gray-500">Not counted: CIS checks configuration</td>
                     <td className="py-2 pr-4 text-gray-700">{formatDate(card.assessedAt)}</td>
                     <td className="py-2 text-right">
-                      {row.tenantId.toLowerCase() === selectedId && <Link to={cisCardPath(card)} className="text-sm font-medium text-gray-800 underline underline-offset-2 hover:text-gray-950">Open</Link>}
+                      <Link to={cisCardPath(card, row.tenantId.toLowerCase() === selectedId ? undefined : row.tenantId)} aria-label={`Open ${card.title} for ${name}`} className="text-sm font-medium text-gray-800 underline underline-offset-2 hover:text-gray-950">Open</Link>
                     </td>
                   </tr>
                 )), ...(cis?.error ? [

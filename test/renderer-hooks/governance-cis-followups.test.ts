@@ -20,10 +20,19 @@ vi.mock("../../src/renderer/lib/framework-jobs", () => ({
   useFrameworkJobs: () => [],
 }))
 
-vi.mock("../../src/portal/contexts/TenantContext", () => ({
-  useSelectedTenant: () => ({ selectedTenant: selectedTenantState.current, selectedTenantId: null, setSelectedTenantId: () => undefined }),
-  useTenants: () => tenantsState.current,
-}))
+// The selected tenant is a small store, so selecting another tenant re-renders like the real context.
+const tenantListeners = vi.hoisted(() => new Set<() => void>())
+vi.mock("../../src/portal/contexts/TenantContext", async () => {
+  const React = await import("react")
+  const subscribe = (listener: () => void) => { tenantListeners.add(listener); return () => { tenantListeners.delete(listener) } }
+  return {
+    useSelectedTenant: () => {
+      const selectedTenant = React.useSyncExternalStore(subscribe, () => selectedTenantState.current)
+      return { selectedTenant, selectedTenantId: null, setSelectedTenantId: (id: string) => { selectedTenantState.current = tenantsState.current.find(candidate => (candidate as { id: string }).id === id) ?? null; for (const listener of tenantListeners) listener() } }
+    },
+    useTenants: () => tenantsState.current,
+  }
+})
 
 vi.mock("../../src/renderer/lib/license", () => {
   const tenantLicense = (status: { tenants: { tenantId: string }[] } | null, tenantId: string | undefined) => {
@@ -55,7 +64,7 @@ import { controlTitle, ScoreDetail, SOURCE_CONTROLS_NOTE } from "../../src/rende
 import { StatusTiles } from "../../src/renderer/features/health-review/HealthReviewTab"
 import { evidenceAge, type Finding as HealthFinding, type Status } from "../../src/renderer/features/health-review/api"
 import { cisOpenRequest } from "../../src/shared/frameworks/cis-run"
-import { coverageStatement } from "../../src/shared/frameworks/cis-readiness"
+import { cisReadiness, coverageStatement } from "../../src/shared/frameworks/cis-readiness"
 import type { Tenant } from "../../src/portal/contexts/TenantContext"
 import type { Finding } from "../../src/shared/frameworks/policies"
 import { statusLabel } from "../../src/renderer/features/shared/change-set"
@@ -103,11 +112,11 @@ const choice = "#microsoft.graph.deviceManagementConfigurationChoiceSettingInsta
 const setting = (id: string) => ({ settingInstance: { "@odata.type": choice, settingDefinitionId: id, choiceSettingValue: { value: `${id}_on`, children: [] } } })
 
 /** A one-Level pack of a synthetic benchmark and a saved run of it with the given statuses. */
-function savedRun(benchmark: string, name: string, runId: string, assessedAt: string, statuses: Finding["status"][], forTenant = tenantId) {
-  const policy = { name: `${name} policy`, platforms: "windows10", technologies: "mdm", description: "Synthetic", provenance: { schemaVersion: 1, benchmark, benchmarkName: name, version: "1.0.0", level: "Level 1", sourceFile: "synthetic.json" },
+function savedRun(benchmark: string, name: string, runId: string, assessedAt: string, statuses: Finding["status"][], forTenant = tenantId, level: 1 | 2 = 1) {
+  const policy = { name: `${name} policy`, platforms: "windows10", technologies: "mdm", description: "Synthetic", provenance: { schemaVersion: 1, benchmark, benchmarkName: name, version: "1.0.0", level: `Level ${level}`, sourceFile: "synthetic.json" },
     settings: statuses.map((_, index) => setting(`${benchmark.replace(/-/g, "_")}_${index}`)) }
   const findings = statuses.map((status, index) => ({ key: `0:${index}`, policyIndex: 0, settingIndex: index, policyName: policy.name, settingId: (policy.settings[index]!.settingInstance as { settingDefinitionId: string }).settingDefinitionId, status, recommended: policy.settings[index]!.settingInstance, observed: [] }))
-  const reference = `${benchmark} 1.0.0 Level 1`
+  const reference = `${benchmark} 1.0.0 Level ${level}`
   return { assessment: { runId, tenantId: forTenant, frameworkId: "cis-benchmarks", reference, assessedAt, policyCount: 1, findings }, policies: [policy] }
 }
 
@@ -118,38 +127,64 @@ function workspace() {
   return { version: 1, tenantId, frameworkId: "cis-benchmarks", policies: windows.policies, reference: windows.assessment.reference, updatedAt: windows.assessment.assessedAt, history: [windows, edge], exceptions: [] }
 }
 
-async function renderCisPage(search: string): Promise<HTMLDivElement> {
-  appInfo.mockResolvedValue({ internalCisBenchmarks: true })
-  selectedTenantState.current = { id: "local", name: "Synthetic tenant", credentials: { tenantId, appId } }
-  const saved = workspace()
-  vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
-    const opening = path === "/api/frameworks" && String(init?.body).includes('"workspace-open"')
-    const body = path === "/api/cis-remediation" ? { deployments: [] } : String(init?.body).includes('"cis-catalog"') ? { benchmarks: [] } : String(init?.body).includes('"cis-setting-names"') ? { settings: {}, options: {} } : opening ? { workspace: saved, activeJob: null } : saved
-    return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } })
-  }))
-  const container = render(createElement(MemoryRouter, { initialEntries: [`/portal/frameworks/cis-benchmarks${search}`] },
-    createElement(Routes, null, createElement(Route, { path: "/portal/frameworks/:frameworkId", element: createElement(FrameworksPage) }))))
-  await flush(3)
-  return container
+const localTenant = { id: "local", name: "Synthetic tenant", credentials: { tenantId, appId } }
+const otherTenant = { id: "other", name: "Other tenant", credentials: { tenantId: otherTenantId, appId } }
+
+/** The other tenant's workspace: an older Level 2 run and a newer Level 1 run of one benchmark. */
+function otherWorkspace() {
+  const level2 = savedRun("synthetic-windows", "Synthetic Windows", "run-other-l2", "2026-10-15T16:34:00Z", ["Present", "Present"], otherTenantId, 2)
+  const level1 = savedRun("synthetic-windows", "Synthetic Windows", "run-other-l1", "2026-10-16T09:00:00Z", ["Missing"], otherTenantId)
+  return { version: 1, tenantId: otherTenantId, frameworkId: "cis-benchmarks", policies: level1.policies, reference: level1.assessment.reference, updatedAt: level1.assessment.assessedAt, history: [level1, level2], exceptions: [] }
 }
 
+/** A running assessment as main reports it next to the workspace. */
+const runningJob = { jobId: "job-windows", reference: "synthetic-windows 1.0.0 Level 1", policies: workspace().policies }
+
+async function renderCisPage(search: string, options: { activeJob?: typeof runningJob | null; tenants?: unknown[] } = {}): Promise<{ container: HTMLDivElement; fetch: ReturnType<typeof vi.fn> }> {
+  appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+  selectedTenantState.current = localTenant
+  tenantsState.current = options.tenants ?? []
+  const fetch = vi.fn(async (path: string, init?: RequestInit) => {
+    const request = JSON.parse(String(init?.body ?? "{}")) as { action?: string; tenantId?: string }
+    const saved = request.tenantId === otherTenantId ? otherWorkspace() : workspace()
+    const body = path === "/api/cis-remediation" ? { deployments: [] } : request.action === "cis-catalog" ? { benchmarks: [] } : request.action === "cis-setting-names" ? { settings: {}, options: {} }
+      : request.action === "workspace-open" ? { workspace: saved, activeJob: options.activeJob ?? null }
+        : request.action === "assess-status" ? { jobId: "job-windows", phase: "reading", status: "running", state: "running", tenantId, frameworkId: "cis-benchmarks", read: 1, total: 4, currentPolicy: "", comparedPolicies: 0, packPolicies: 1, currentPackPolicy: "", findings: [], nextSince: 0, error: null, assessment: null }
+          : saved
+    return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } })
+  })
+  vi.stubGlobal("fetch", fetch)
+  const container = render(createElement(MemoryRouter, { initialEntries: [`/portal/frameworks/cis-benchmarks${search}`] },
+    createElement(Routes, null, createElement(Route, { path: "/portal/frameworks/:frameworkId", element: createElement(FrameworksPage) }))))
+  await flush(4)
+  return { container, fetch }
+}
+
+const statusPolls = (fetch: ReturnType<typeof vi.fn>) => fetch.mock.calls.filter(([, init]) => String((init as RequestInit | undefined)?.body).includes('"assess-status"')).length
+
 describe("Governance CIS card links", () => {
-  it("names the card's benchmark, version and Level in the CIS page link", () => {
+  it("links to the exact saved run the card shows", () => {
     const [edgeCard] = cisScoreCards(true, { history: [workspace().history[1]!] }, tenantId)
-    expect(cisCardPath(edgeCard!)).toBe("/portal/frameworks/cis-benchmarks?benchmark=synthetic-edge&version=1.0.0&level=1")
+    expect(cisCardPath(edgeCard!)).toBe("/portal/frameworks/cis-benchmarks?run=run-edge&benchmark=synthetic-edge&version=1.0.0&level=1")
+    expect(cisCardPath(edgeCard!, otherTenantId)).toBe(`/portal/frameworks/cis-benchmarks?run=run-edge&benchmark=synthetic-edge&version=1.0.0&level=1&tenant=${otherTenantId}`)
     const markup = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(CisCard, { card: edgeCard! })))
-    expect(markup).toContain('href="/portal/frameworks/cis-benchmarks?benchmark=synthetic-edge&amp;version=1.0.0&amp;level=1"')
+    expect(markup).toContain('href="/portal/frameworks/cis-benchmarks?run=run-edge&amp;benchmark=synthetic-edge&amp;version=1.0.0&amp;level=1"')
   })
 
-  it("reads the request from the link and ignores a Level it does not know", () => {
-    expect(cisOpenRequest(new URLSearchParams("benchmark=synthetic-edge&version=1.0.0&level=2"))).toEqual({ benchmark: "synthetic-edge", version: "1.0.0", level: 2 })
-    expect(cisOpenRequest(new URLSearchParams("benchmark=synthetic-edge&level=7"))).toEqual({ benchmark: "synthetic-edge" })
-    expect(cisOpenRequest(new URLSearchParams("level=1"))).toBeNull()
+  it("names the Level the card rates, not an unassessed Level 1 of a Level 2 run", () => {
+    const card = { key: "synthetic-windows", version: "1.0.0", runId: "run-other-l2", levels: [{ level: 1 as const, rate: null }, { level: 2 as const, rate: 100 }] } as unknown as Parameters<typeof cisCardPath>[0]
+    expect(cisCardPath(card)).toBe("/portal/frameworks/cis-benchmarks?run=run-other-l2&benchmark=synthetic-windows&version=1.0.0&level=2")
   })
 
-  it("opens the CIS page on the card's benchmark, read-only, with the rate the card shows", async () => {
+  it("reads the run from the link and ignores a Level it does not know", () => {
+    expect(cisOpenRequest(new URLSearchParams("run=run-1&benchmark=synthetic-edge&version=1.0.0&level=2"))).toEqual({ runId: "run-1", benchmark: "synthetic-edge", version: "1.0.0", level: 2 })
+    expect(cisOpenRequest(new URLSearchParams("run=run-1&level=7"))).toEqual({ runId: "run-1" })
+    expect(cisOpenRequest(new URLSearchParams("benchmark=synthetic-edge&level=1"))).toBeNull()
+  })
+
+  it("opens the CIS page on the card's run, read-only, with the rate the card shows", async () => {
     const [edgeCard] = cisScoreCards(true, { history: [workspace().history[1]!] }, tenantId)
-    const container = await renderCisPage("?benchmark=synthetic-edge&version=1.0.0&level=1")
+    const { container } = await renderCisPage("?run=run-edge&benchmark=synthetic-edge&version=1.0.0&level=1")
     const header = container.querySelector('[aria-label="Results header"]')!
     expect(header.textContent).toContain("Synthetic Edge 1.0.0 Level 1")
     expect(header.textContent).toContain("Showing a saved assessment.")
@@ -162,26 +197,68 @@ describe("Governance CIS card links", () => {
     expect(selectAll.disabled).toBe(true)
   })
 
-  it("opens the newest saved assessment with a short note when the requested benchmark has none", async () => {
-    const container = await renderCisPage("?benchmark=unknown-benchmark&level=1")
-    expect(container.textContent).toContain("No saved assessment of Unknown Benchmark Level 1 was found, so the newest saved assessment is shown.")
+  it("keeps a requested run on screen while another assessment runs, and follows it only on View progress", async () => {
+    const { container, fetch } = await renderCisPage("?run=run-edge&benchmark=synthetic-edge&version=1.0.0&level=1", { activeJob: runningJob })
+    expect(container.querySelector('[aria-label="Results header"]')!.textContent).toContain("Synthetic Edge 1.0.0 Level 1")
+    const notice = container.querySelector('[aria-label="Assessment running"]')!
+    expect(notice.textContent).toContain("An assessment of Synthetic Windows 1.0.0 Level 1 is running.")
+    expect(statusPolls(fetch)).toBe(0)
+    await act(async () => { [...notice.querySelectorAll("button")].find(button => button.textContent === "View progress")!.click() })
+    await flush(2)
+    expect(statusPolls(fetch)).toBeGreaterThan(0)
+    expect(container.querySelector('[aria-label="Assessment running"]')).toBeNull()
+  })
+
+  it("still follows a running assessment at once when no run was requested", async () => {
+    const { container, fetch } = await renderCisPage("", { activeJob: runningJob })
+    expect(container.querySelector('[aria-label="Assessment running"]')).toBeNull()
+    expect(statusPolls(fetch)).toBeGreaterThan(0)
+  })
+
+  it("opens a Level 2 card's own Level 2 run even when a newer Level 1 run exists", async () => {
+    const { container } = await renderCisPage(`?tenant=${otherTenantId}&run=run-other-l2&benchmark=synthetic-windows&version=1.0.0&level=2`, { tenants: [localTenant, otherTenant] })
+    expect((selectedTenantState.current as { id: string }).id).toBe("other")
+    const header = container.querySelector('[aria-label="Results header"]')!
+    expect(header.textContent).toContain("Synthetic Windows 1.0.0 Level 2")
+    expect(header.textContent).toContain("Other tenant")
+    expect(container.querySelector('[aria-label="Level 2 summary"]')!.textContent).toContain("100%")
+    expect(container.textContent).not.toContain("was not found")
+  })
+
+  it("opens the newest saved assessment with a short note when the requested run is gone", async () => {
+    const { container } = await renderCisPage("?run=deleted-run&benchmark=unknown-benchmark&level=1")
+    expect(container.textContent).toContain("The saved assessment of Unknown Benchmark Level 1 was not found, so the newest saved assessment is shown.")
     expect(container.querySelector('[aria-label="Results header"]')!.textContent).toContain("Synthetic Windows 1.0.0 Level 1")
   })
 
-  it("opens the newest saved assessment without a note when no benchmark is named", async () => {
-    const container = await renderCisPage("")
-    expect(container.textContent).not.toContain("No saved assessment of")
+  it("opens the newest saved assessment without a note when no run is named", async () => {
+    const { container } = await renderCisPage("")
+    expect(container.textContent).not.toContain("was not found")
     expect(container.querySelector('[aria-label="Results header"]')!.textContent).toContain("Synthetic Windows 1.0.0 Level 1")
   })
 })
 
 describe("CIS coverage wording", () => {
-  const level = { level: 1 as const, coverage: null, assessedAutomated: null, denominator: null, coverageSource: "none" as const, enumerated: 0 }
+  const level = { level: 1 as const, coverage: null, assessedAutomated: null, denominator: null, coverageSource: "none" as const, enumerated: 0, denominatorIdentifiers: [] as string[] }
   it("says plainly why coverage of the full benchmark is missing, even when recommendations are listed", () => {
     expect(coverageStatement(level)).toBe("Coverage of the full benchmark is not shown because the list of all its automated recommendations is not available.")
     expect(coverageStatement({ ...level, denominator: 0, coverageSource: "authoritative" })).toBe("Coverage of the full benchmark is not shown because the list of its recommendations marks none of Level 1 as automated.")
     expect(coverageStatement({ ...level, coverage: 0.75, assessedAutomated: 72, denominator: 96, coverageSource: "authoritative", enumerated: 80 })).toBe("Coverage: 75% (72 of 96 automated recommendations), source: CIS list of automated recommendations.")
     for (const text of [coverageStatement(level), coverageStatement({ ...level, denominator: 0, coverageSource: "authoritative" })]) expect(text).not.toMatch(/denominator|enumerated|identifier/i)
+  })
+
+  it("tells a Level without an assessed pack apart from a missing list", () => {
+    // The list covers Levels 1 and 2, but only the Level 1 pack was assessed.
+    const policy = { name: "Level 1 policy", platforms: "windows10", technologies: "mdm", description: "Covers 1.1", provenance: { schemaVersion: 1, benchmark: "synthetic-os", version: "1.0.0", level: "Level 1", sourceFile: "synthetic.json" }, settings: [setting("synthetic_alpha")] }
+    const assessment = { runId: "run", tenantId, frameworkId: "cis-benchmarks", reference: "synthetic-os 1.0.0 Level 1", assessedAt: "2026-10-16T10:00:00Z", policyCount: 1, findings: [{ key: "0:0", policyIndex: 0, settingIndex: 0, policyName: policy.name, settingId: "synthetic_alpha", status: "Present" as const, recommended: null, observed: [] }] }
+    const list = { benchmark: "synthetic-os", version: "1.0.0", items: [{ identifier: "1.1", level: 1 as const, automated: true, title: "One" }, { identifier: "2.1", level: 2 as const, automated: true, title: "Two" }] }
+    const summary = cisReadiness(assessment, [policy], undefined, list as never)
+    const level2 = summary.levels.find(item => item.level === 2)!
+    expect(coverageStatement(level2)).toBe("No policy pack for Level 2 was assessed, so coverage of the full benchmark is not shown for it.")
+    expect(coverageStatement(summary.levels.find(item => item.level === 1)!)).toMatch(/^Coverage: 100% \(1 of 1 automated recommendations\)/)
+    // Scores do not change: Level 2 has nothing assessed and no rate.
+    expect(level2.assessedSettings).toBe(0)
+    expect(level2.passRate).toBeNull()
   })
 })
 
@@ -193,7 +270,9 @@ describe("Governance portfolio", () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     tenantsState.current = [tenant, other]
     licenseStatus.current = { tenants: [{ tenantId, entitled: true, plan: "msp" }, { tenantId: otherTenantId, entitled: true, plan: "msp" }] }
-    const productionCis = { history: [savedRun("synthetic-windows", "Synthetic Windows", "run-prod", "2026-10-16T08:00:00Z", ["Missing"], otherTenantId)] }
+    // One exclusion in use, so the card reads "100% with 1 exclusion".
+    const productionCis = { history: [savedRun("synthetic-windows", "Synthetic Windows", "run-prod", "2026-10-16T08:00:00Z", ["Missing"], otherTenantId)],
+      exceptions: [{ id: "exc", benchmark: "synthetic-windows", version: "1.0.0", level: 1, policyName: "Synthetic Windows policy", settingId: "synthetic_windows_0", owner: "Owner", reason: "Reason", expiresOn: "2099-01-01", createdAt: "2026-10-01T00:00:00Z" }] }
     const rows = [
       { tenantId, tenantName: "Ugur Koc Lab", error: null, frameworks: [
         { frameworkId: "soc2", frameworkName: "SOC 2", state: "history-only", message: "Scored under older rules. Compare again to score. An app update changed how capabilities are counted.", score: null, coverage: null, unknown: null, gapCount: null, assessedAt: "2026-10-07T10:00:00Z", ageDays: null, stale: null, partial: null, version: null },
@@ -235,6 +314,16 @@ describe("Governance portfolio", () => {
     const cisRow = production.find(row => row.textContent?.includes("Synthetic Windows"))!
     expect(cisRow.textContent).toContain("Level 1 0%")
     expect(cisRow.textContent).toContain("CIS Benchmarks, version 1.0.0")
+  })
+
+  it("shows the rate with exclusions and its date as the CIS card does, and opens another tenant's run with that tenant", async () => {
+    const container = await renderPortfolio()
+    const cisRow = [...container.querySelectorAll("tr")].find(row => row.textContent?.includes("UgurLabs Production") && row.textContent.includes("Synthetic Windows"))!
+    const [card] = cisScoreCards(true, { history: [savedRun("synthetic-windows", "Synthetic Windows", "run-prod", "2026-10-16T08:00:00Z", ["Missing"], otherTenantId)], exceptions: [{ id: "exc", benchmark: "synthetic-windows", version: "1.0.0", level: 1, policyName: "Synthetic Windows policy", settingId: "synthetic_windows_0", owner: "Owner", reason: "Reason", expiresOn: "2099-01-01", createdAt: "2026-10-01T00:00:00Z" }] }, otherTenantId)
+    expect(card!.levels[0]!.withExclusions).toBe("100% with 1 exclusion")
+    expect(cisRow.textContent).toContain("100% with 1 exclusion")
+    expect(cisRow.textContent).toContain(`Exclusions as of ${new Date(`${card!.levels[0]!.exclusionsAsOf}T00:00:00`).toLocaleDateString(undefined, { dateStyle: "medium" })}`)
+    expect(cisRow.querySelector("a")!.getAttribute("href")).toBe(`/portal/frameworks/cis-benchmarks?run=run-prod&benchmark=synthetic-windows&version=1.0.0&level=1&tenant=${otherTenantId}`)
   })
 })
 
