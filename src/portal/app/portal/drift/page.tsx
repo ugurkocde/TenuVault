@@ -898,9 +898,9 @@ export default function DriftDetectionPage() {
         open={backingUp && canBackUp}
         onOpenChange={setBackingUp}
         tenant={backingUp && canBackUp && selectedTenant ? backupTarget(selectedTenant) : null}
-        onStarted={(jobId) => {
+        onStarted={(jobId, status) => {
           if (!selectedTenant) return
-          trackBackup(selectedTenant, jobId, addJob)
+          trackBackup(selectedTenant, jobId, addJob, { status })
           const tenant = selectedTenant
           whenBackupEnds(jobId, () => void refreshBackupList(tenant, { force: true }))
           toast(`Backup of ${selectedTenant.name} started. When it completes, it can be chosen here.`, "success")

@@ -146,7 +146,7 @@ Like the name, tags are saved in the tenant's backup storage.
 Select tenants with **Select tenant** on each card, or with the check boxes in the list view. A bar shows how many are selected, with two actions:
 
 * **Tag Selected** sets the tags you choose on every selected tenant, replacing their current tags.
-* **Backup Selected** backs up every selected tenant after you confirm. Each tenant uses its saved backup choice (see [Choose what to back up](/backups/#choose-what-to-back-up)). This needs the MSP plan on every selected tenant. If any selected tenant is not on MSP, the whole backup is refused and no backup starts.
+* **Backup Selected** backs up every selected tenant after you confirm. The backups run one at a time in the order shown: a tenant waiting its turn shows as queued, and its card shows the live progress once its backup runs. Each tenant uses its saved backup choice (see [Choose what to back up](/backups/#choose-what-to-back-up)). This needs the MSP plan on every selected tenant. If any selected tenant is not on MSP, the whole backup is refused and no backup starts.
 
 In the list view, **Check all** in the **Drift** column compares each tenant's two newest backups and shows **No drift**, the number of changes and critical changes, **Not available** (hover for the reason) or **Not checked**. This needs the MSP plan on every tenant it checks. If any checked tenant is not on MSP, the whole check is refused. See [Drift detection](/drift/).
 

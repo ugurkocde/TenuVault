@@ -234,9 +234,9 @@ export default function OverviewPage() {
         open={backingUp !== null}
         onOpenChange={(next) => !next && setBackingUp(null)}
         tenant={backingUp ? backupTarget(backingUp) : null}
-        onStarted={(jobId) => {
+        onStarted={(jobId, status) => {
           if (!backingUp) return
-          trackBackup(backingUp, jobId, addJob)
+          trackBackup(backingUp, jobId, addJob, { status })
           toast(`Backup of ${backingUp.name} started.`, "success")
         }}
       />

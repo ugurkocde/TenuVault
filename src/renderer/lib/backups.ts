@@ -12,16 +12,18 @@ export function backupTarget(tenant: Tenant): BackupTarget {
   return { name: tenant.name, credentials: tenant.credentials, storageAccountName: tenant.resources.storageAccountName }
 }
 
-/** Tracks a started backup of a tenant in the floating progress panel. */
-export function trackBackup(tenant: Tenant, jobId: string, addJob: AddJob, options: Pick<BackupJob, "isHidden" | "quiet"> = {}): void {
+/** Tracks a started backup of a tenant in the floating progress panel. A queued start waits for another tenant's backup. */
+export function trackBackup(tenant: Tenant, jobId: string, addJob: AddJob, options: Pick<BackupJob, "isHidden" | "quiet"> & { status?: string } = {}): void {
   if (!tenant.credentials) return
+  const queued = options.status === "Queued"
+  const displayOptions: Pick<BackupJob, "isHidden" | "quiet"> = { isHidden: options.isHidden, quiet: options.quiet }
   addJob({
     jobId,
     tenantName: tenant.name,
     tenantId: tenant.credentials.tenantId,
-    status: "Running",
-    progress: 5,
-    progressMessage: "Starting backup...",
+    status: queued ? "Queued" : "Running",
+    progress: queued ? 0 : 5,
+    progressMessage: queued ? "Waiting for another backup to finish..." : "Starting backup...",
     startTime: new Date().toISOString(),
     isComplete: false,
     isSuccessful: false,
@@ -32,7 +34,7 @@ export function trackBackup(tenant: Tenant, jobId: string, addJob: AddJob, optio
       automationAccountName: tenant.resources?.automationAccountName ?? "",
       storageAccountName: tenant.resources?.storageAccountName ?? "",
     },
-    ...options,
+    ...displayOptions,
   })
 }
 
@@ -47,7 +49,8 @@ const watched = new Set<string>()
 export function whenBackupEnds(jobId: string, onEnd: () => void, intervalMs = 3000, maxMs = 60 * 60_000): () => void {
   if (watched.has(jobId)) return () => undefined
   watched.add(jobId)
-  const until = Date.now() + maxMs
+  // The budget bounds the backup's own run; time spent queued behind another backup does not count.
+  let until = Date.now() + maxMs
   let stopped = false
   const stop = () => {
     stopped = true
@@ -58,7 +61,8 @@ export function whenBackupEnds(jobId: string, onEnd: () => void, intervalMs = 30
     if (Date.now() >= until) return stop()
     void fetch("/api/backup/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jobId }) })
       .then(async (response) => {
-        const data = response.ok ? ((await response.json().catch(() => null)) as { isComplete?: boolean } | null) : null
+        const data = response.ok ? ((await response.json().catch(() => null)) as { isComplete?: boolean; status?: string } | null) : null
+        if (data?.status === "Queued") until = Date.now() + maxMs
         if (stopped || !(response.status === 404 || data?.isComplete)) return
         stop()
         onEnd()

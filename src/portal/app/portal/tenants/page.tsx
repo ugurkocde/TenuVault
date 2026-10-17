@@ -33,6 +33,7 @@ import {
 } from "~/components/ui/dropdown-menu"
 import { AddTenantModal, type TenantCredentials } from "~/components/tenants/add-tenant-modal-redesigned"
 import { storageLabel } from "~/lib/storage-label"
+import { backupButtonLabel } from "~/lib/backup-job-display"
 import { BackupProgressModal } from "~/components/tenants/backup-progress-modal"
 import { TagManagementModal } from "~/components/tenants/tag-management-modal"
 import { useTenants, useTenantOperations, useTenantAzureSync, type Tenant } from "~/contexts/TenantContext"
@@ -65,7 +66,8 @@ function TenantsPageContent() {
 
   // Use context hooks
   const tenants = useTenants()
-  const { addJob } = useBackupProgress()
+  const { addJob, activeJobs } = useBackupProgress()
+  const backupJobFor = (tenant: Tenant) => activeJobs.find((job) => !job.isComplete && tenant.credentials && job.tenantId.toLowerCase() === tenant.credentials.tenantId.toLowerCase())
   const { addTenant, updateTenant, deleteTenant: deleteTenantFromContext, getTenant } = useTenantOperations()
   const { loadTenantFromAzure, syncTenantToAzureDirect } = useTenantAzureSync()
   const [editingTenantId, setEditingTenantId] = useState<number | null>(null)
@@ -199,7 +201,7 @@ function TenantsPageContent() {
     const selectedTenantObjects = tenants.filter(t => selectedTenants.includes(t.id))
 
     // Confirm with user
-    const shouldBackup = await confirm({ title: "Start backups?", description: `Are you sure you want to trigger a backup for ${selectedTenants.length} tenant${selectedTenants.length > 1 ? 's' : ''}?`, confirmLabel: "Start backup" })
+    const shouldBackup = await confirm({ title: "Start backups?", description: `Are you sure you want to trigger a backup for ${selectedTenants.length} tenant${selectedTenants.length > 1 ? 's' : ''}? Backups run one at a time, in the order shown.`, confirmLabel: "Start backup" })
 
     if (!shouldBackup) return
 
@@ -312,7 +314,7 @@ function TenantsPageContent() {
         throw failure
       }
 
-      trackBackup(tenant, data.jobId, addJob)
+      trackBackup(tenant, data.jobId, addJob, { status: typeof data.status === "string" ? data.status : undefined })
     } catch (error) {
       console.error("Error starting backup:", error)
       updateTenant(tenant.id, { syncStatus: "error" })
@@ -329,9 +331,9 @@ function TenantsPageContent() {
     }
     setScopeTenant(tenant)
   }
-  const backupStarted = (tenant: Tenant, jobId: string) => {
+  const backupStarted = (tenant: Tenant, jobId: string, status?: string) => {
     updateTenant(tenant.id, { syncStatus: "pending" })
-    trackBackup(tenant, jobId, addJob)
+    trackBackup(tenant, jobId, addJob, { status })
     setBackupJobId(jobId)
     setBackupTenant(tenant)
     setShowProgressModal(true)
@@ -959,7 +961,7 @@ function TenantsPageContent() {
                   {tenant.syncStatus === "pending" ? (
                     <>
                       <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                      Starting Backup...
+                      {backupButtonLabel(backupJobFor(tenant))}
                     </>
                   ) : (
                     <>
@@ -1206,7 +1208,7 @@ function TenantsPageContent() {
                           size="icon"
                           variant="outline"
                           className="size-9"
-                          aria-label={`Back up ${tenant.name}`} onClick={() => chooseBackup(tenant)}
+                          aria-label={tenant.syncStatus === "pending" ? `${tenant.name}: ${backupButtonLabel(backupJobFor(tenant))}` : `Back up ${tenant.name}`} title={tenant.syncStatus === "pending" ? backupButtonLabel(backupJobFor(tenant)) : undefined} onClick={() => chooseBackup(tenant)}
                           disabled={tenant.syncStatus === "pending" || tenant.isLoading}
                         >
                           {tenant.syncStatus === "pending" ? (
@@ -1284,7 +1286,7 @@ function TenantsPageContent() {
         open={scopeTenant !== null}
         onOpenChange={(next) => !next && setScopeTenant(null)}
         tenant={scopeTenant?.credentials && scopeTenant.resources?.storageAccountName ? { name: scopeTenant.name, credentials: scopeTenant.credentials, storageAccountName: scopeTenant.resources.storageAccountName } : null}
-        onStarted={(jobId) => scopeTenant && backupStarted(scopeTenant, jobId)}
+        onStarted={(jobId, status) => scopeTenant && backupStarted(scopeTenant, jobId, status)}
       />
       {backupTenant && (
         <BackupProgressModal

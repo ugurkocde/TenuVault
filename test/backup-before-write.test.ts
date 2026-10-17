@@ -46,6 +46,15 @@ describe.each(["oib", "change-set"] as const)("%s backup checks", (workflow) => 
     await expect(backupBeforeWrite(context.options)).rejects.toMatchObject({ status: 502, message: expect.stringContaining("could not be read") })
   })
 
+  it("does not count time spent queued behind another backup toward the timeout", async () => {
+    const context = setup(workflow)
+    context.post.mockResolvedValueOnce({ ok: true, status: 200, json: { jobId: "fixture-job" } })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: { isComplete: false, status: "Queued", progress: 0, progressMessage: "Waiting for another backup to finish..." } })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: { isComplete: false, status: "Queued", progress: 0, progressMessage: "Waiting for another backup to finish..." } })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: { isComplete: false, status: "Queued", progress: 0, progressMessage: "Waiting for another backup to finish..." } })
+    await expect(backupBeforeWrite(context.options)).resolves.toBe("backup-2026-09-30-120000")
+  })
+
   it("stops polling after the existing timeout", async () => {
     const context = setup(workflow)
     const post = context.post.getMockImplementation()!

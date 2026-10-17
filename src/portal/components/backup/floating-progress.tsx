@@ -144,13 +144,15 @@ export function FloatingProgress() {
                       <XCircle className="h-5 w-5 text-destructive" />
                     )
                   ) : (
-                    <Activity className="h-5 w-5 text-blue-600 animate-pulse" />
+                    <Activity className={cn("h-5 w-5 text-blue-600", job.status !== "Queued" && "animate-pulse")} />
                   )}
                   <div>
                     <h4 className="font-medium tracking-tight text-sm">{job.tenantName}</h4>
                     <p className="text-xs text-gray-500">
                       {job.isComplete ? (
                         job.isSuccessful ? "Backup completed" : job.status === "Cancelled" ? "Backup cancelled" : "Backup failed"
+                      ) : job.status === "Queued" ? (
+                        "Backup queued"
                       ) : (
                         "Backup in progress"
                       )}
@@ -286,13 +288,18 @@ export function FloatingProgress() {
       })}
 
       {/* Multiple jobs indicator */}
-      {activeJobs.length > 1 && (
-        <div className="text-center">
-          <span className="text-xs text-gray-500">
-            {activeJobs.filter(j => !j.isComplete).length} active backup{activeJobs.filter(j => !j.isComplete).length !== 1 ? 's' : ''}
-          </span>
-        </div>
-      )}
+      {activeJobs.length > 1 && (() => {
+        const running = activeJobs.filter(j => !j.isComplete && j.status !== "Queued").length
+        const queued = activeJobs.filter(j => !j.isComplete && j.status === "Queued").length
+        if (running + queued === 0) return null
+        return (
+          <div className="text-center">
+            <span className="text-xs text-gray-500">
+              {queued > 0 ? `${running} running, ${queued} queued` : `${running} active backup${running !== 1 ? 's' : ''}`}
+            </span>
+          </div>
+        )
+      })()}
     </div>
   )
 }
