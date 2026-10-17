@@ -52,7 +52,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-const backupNow = () => [...document.querySelectorAll("button")].find((button) => /Backup Now|Starting Backup/.test(button.textContent ?? "")) as HTMLButtonElement
+const backupNow = () => [...document.querySelectorAll("button")].find((button) => /Backup Now|Backing up|Backup queued|Backup running/.test(button.textContent ?? "")) as HTMLButtonElement
 
 describe("Tenants page after a backup the user cancelled", () => {
   it("enables Backup Now again once the cancelled job ends", async () => {
@@ -75,10 +75,11 @@ describe("Tenants page after a backup the user cancelled", () => {
     await act(async () => start.click())
     expect(store.tenants[0]!.syncStatus).toBe("pending")
     expect(backupNow().disabled).toBe(true)
-    expect(backupNow().textContent).toContain("Starting Backup...")
+    expect(backupNow().textContent).toContain("Backing up... 40%")
 
     await act(async () => { await vi.advanceTimersByTimeAsync(2100) })
     expect(backupNow().disabled).toBe(true)
+    expect(backupNow().textContent).toContain("Backing up... 40%")
     // The shared poller reads the job's end: cancelled by the user.
     cancelled = true
     await act(async () => { await vi.advanceTimersByTimeAsync(2100) })
