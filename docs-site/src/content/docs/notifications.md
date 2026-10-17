@@ -68,7 +68,7 @@ Delivery is at least once. An undelivered notification stays queued, retries wit
 
 ## Intune change watching
 
-Change watching reads the Intune audit log through Microsoft Graph and digests new events into one `intune.change` message per poll: what was created, updated, deleted or assigned, the policy name when the audit event carries it, and who did it.
+Change watching reads the Intune audit log through Microsoft Graph and digests new events into one `intune.change` message per poll: what was created, updated, deleted, assigned or unassigned, the policy name when the audit event carries it, and who did it. Read-only audit events (views and searches) are not changes and never appear in a digest. A digest that contains a deletion or a removed assignment is sent with warning severity.
 
 * On the desktop, watching runs while TenuVault is running and you are signed in. Default polling is every 15 minutes. After the app was closed it catches up from where it left off; after a long gap the digest says older changes may be missing.
 * Changes made through TenuVault itself are ignored by default, so your own restores do not alert you.

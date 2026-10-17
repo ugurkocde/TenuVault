@@ -20,7 +20,7 @@ export interface AuditEventRaw {
   resources?: unknown
 }
 
-export type AuditChangeType = "created" | "updated" | "deleted" | "assigned" | "changed"
+export type AuditChangeType = "created" | "updated" | "deleted" | "assigned" | "unassigned" | "changed"
 
 export interface AuditChange {
   auditId: string
@@ -29,20 +29,51 @@ export interface AuditChange {
   changeType: AuditChangeType
   /** Policy or object display name when the audit event carries one. */
   resourceName: string | null
-  /** Graph resource segment from requestUrl, for example deviceConfigurations. */
+  /** Documented Graph resource type, for example Windows10GeneralConfiguration. */
   resourceType: string | null
   actorUpn: string | null
   actorAppId: string | null
+  actorAppName: string | null
   activity: string
 }
 
-const text = (value: unknown): string | null => (typeof value === "string" && value.trim() ? value.trim() : null)
+const text = (value: unknown): string | null => {
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  return trimmed && trimmed.toLowerCase() !== "<null>" ? trimmed : null
+}
 
 const record = (value: unknown): Record<string, unknown> | null => (value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null)
 
-function changeTypeOf(raw: AuditEventRaw): AuditChangeType {
+function resourcesOf(raw: AuditEventRaw): Array<Record<string, unknown>> {
+  if (!Array.isArray(raw.resources)) return []
+  return raw.resources.flatMap((entry) => {
+    const entryRecord = record(entry)
+    return entryRecord ? [entryRecord] : []
+  })
+}
+
+function isReadOperation(raw: AuditEventRaw): boolean {
+  const operation = (text(raw.activityOperationType) ?? "").toLowerCase()
+  return operation === "get" || operation === "search"
+}
+
+function isAssignmentEvent(raw: AuditEventRaw, resources: Array<Record<string, unknown>>): boolean {
+  const activity = `${text(raw.activityType) ?? ""} ${text(raw.activity) ?? ""} ${text(raw.displayName) ?? ""}`.toLowerCase()
+  if (activity.includes("assignment")) return true
+  return resources.some((resource) => {
+    const type = `${text(resource.type) ?? ""} ${text(resource.auditResourceType) ?? ""}`.toLowerCase()
+    return type.includes("assignment")
+  })
+}
+
+function changeTypeOf(raw: AuditEventRaw, resources: Array<Record<string, unknown>>): AuditChangeType {
   const operation = (text(raw.activityOperationType) ?? "").toLowerCase()
   const activity = `${text(raw.activityType) ?? ""} ${text(raw.activity) ?? ""} ${text(raw.displayName) ?? ""}`.toLowerCase()
+  if (isAssignmentEvent(raw, resources)) {
+    if (operation.includes("delet") || operation.includes("remov") || /(^|\s)(delete|remove|unassign)/.test(activity)) return "unassigned"
+    return "assigned"
+  }
   for (const source of [operation, activity]) {
     if (source.includes("assign")) return "assigned"
     if (source.includes("creat") || source === "post") return "created"
@@ -52,34 +83,32 @@ function changeTypeOf(raw: AuditEventRaw): AuditChangeType {
   return "changed"
 }
 
-function resourceOf(raw: AuditEventRaw): Record<string, unknown> | null {
-  if (!Array.isArray(raw.resources)) return null
-  for (const entry of raw.resources) {
-    const entryRecord = record(entry)
-    if (entryRecord) return entryRecord
-  }
-  return null
+function resourceOf(resources: Array<Record<string, unknown>>): Record<string, unknown> | null {
+  return resources.find((resource) => text(resource.displayName)) ?? resources[0] ?? null
 }
 
-/** Maps one raw audit event, or null when it lacked identity fields or did not succeed. */
+/** Maps one raw audit event, or null when it lacked identity fields, did not succeed, or only read data. */
 export function mapAuditEvent(raw: AuditEventRaw): AuditChange | null {
   const id = text(raw.id)
   const at = text(raw.activityDateTime)
   if (!id || !at || Number.isNaN(Date.parse(at))) return null
+  if (isReadOperation(raw)) return null
   const result = (text(raw.activityResult) ?? "").toLowerCase()
   if (result.includes("fail") || result.includes("error")) return null
   const actor = record(raw.actor)
-  const resource = resourceOf(raw)
+  const resources = resourcesOf(raw)
+  const resource = resourceOf(resources)
   const resourceName = resource ? text(resource.displayName) : null
   return {
     auditId: id,
     at: new Date(at).toISOString(),
     category: text(raw.category) ?? "Unknown",
-    changeType: changeTypeOf(raw),
+    changeType: changeTypeOf(raw, resources),
     resourceName: resourceName ? resourceName.slice(0, 200) : null,
     resourceType: (resource ? (text(resource.type) ?? text(resource.auditResourceType)) : null) ?? text(raw.componentName),
     actorUpn: actor ? text(actor.userPrincipalName) : null,
     actorAppId: actor ? text(actor.applicationId) : null,
+    actorAppName: actor ? text(actor.applicationDisplayName) : null,
     activity: text(raw.activity) ?? text(raw.displayName) ?? "Change",
   }
 }
@@ -101,6 +130,7 @@ export function filterAuditChanges(changes: AuditChange[], options: AuditFilterO
     if (categories.size && !categories.has(change.category.toLowerCase())) return false
     if (options.ignoreOwnChanges && options.ownAppId && change.actorAppId?.toLowerCase() === options.ownAppId.toLowerCase()) return false
     if (change.actorUpn && denied.has(change.actorUpn.toLowerCase())) return false
+    if (change.actorAppName && denied.has(change.actorAppName.toLowerCase())) return false
     return true
   })
 }
@@ -113,7 +143,7 @@ export function collapseAuditChanges(changes: AuditChange[], options: { includeA
   const max = options.maxItems ?? 20
   const groups = new Map<string, { change: AuditChange; count: number }>()
   for (const change of changes) {
-    const key = [change.changeType, change.resourceName ?? change.resourceType ?? change.auditId, change.actorUpn ?? ""].join("|").toLowerCase()
+    const key = [change.changeType, change.resourceName ?? change.resourceType ?? change.auditId, change.actorUpn ?? change.actorAppName ?? change.actorAppId ?? ""].join("|").toLowerCase()
     const existing = groups.get(key)
     if (existing) existing.count++
     else groups.set(key, { change, count: 1 })
@@ -125,7 +155,7 @@ export function collapseAuditChanges(changes: AuditChange[], options: { includeA
     return {
       title,
       detail: change.resourceName && change.resourceType ? change.resourceType : change.activity,
-      ...(options.includeActor && change.actorUpn ? { actor: change.actorUpn } : {}),
+      ...(options.includeActor && (change.actorUpn ?? change.actorAppName) ? { actor: (change.actorUpn ?? change.actorAppName) as string } : {}),
       at: change.at,
     }
   })
@@ -153,7 +183,7 @@ export function intuneChangeDigest(input: {
   const counts = [...byType.entries()].map(([type, count]) => `${count} ${type}`).join(", ")
   return buildEnvelope({
     type: "intune.change",
-    severity: input.changes.some((change) => change.changeType === "deleted") ? "warning" : "info",
+    severity: input.changes.some((change) => change.changeType === "deleted" || change.changeType === "unassigned") ? "warning" : "info",
     tenantId: input.tenantId,
     tenantName: input.tenantName,
     occurredAt: newest,
