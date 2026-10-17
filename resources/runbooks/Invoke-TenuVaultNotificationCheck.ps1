@@ -921,10 +921,33 @@ function Send-TvRawMail {
         saveToSentItems = $false
     }
     $senderEncoded = [uri]::EscapeDataString($From)
-    Invoke-RestMethod -Uri "https://graph.microsoft.com/v1.0/users/$senderEncoded/sendMail" -Method Post `
-        -Headers @{ Authorization = "Bearer $GraphToken" } `
-        -Body ([Text.Encoding]::UTF8.GetBytes((ConvertTo-TenuVaultCanonicalJson $message))) `
-        -ContentType "application/json; charset=utf-8" -TimeoutSec 30 | Out-Null
+    try {
+        Invoke-RestMethod -Uri "https://graph.microsoft.com/v1.0/users/$senderEncoded/sendMail" -Method Post `
+            -Headers @{ Authorization = "Bearer $GraphToken" } `
+            -Body ([Text.Encoding]::UTF8.GetBytes((ConvertTo-TenuVaultCanonicalJson $message))) `
+            -ContentType "application/json; charset=utf-8" -TimeoutSec 30 | Out-Null
+    } catch {
+        # Surface the Graph error code and message: a bare "403 Forbidden" cannot
+        # distinguish a missing Mail.Send role from an application access policy
+        # that has not propagated yet.
+        $statusCode = 0
+        $detail = Get-TvSafeError $_.Exception.Message
+        if ($_.Exception.Response) {
+            $statusCode = [int]$_.Exception.Response.StatusCode
+            try {
+                $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+                $bodyText = $reader.ReadToEnd()
+                $reader.Dispose()
+                $parsed = $bodyText | ConvertFrom-Json -ErrorAction Stop
+                $graphError = Get-TvProp $parsed "error"
+                $code = Get-TvText (Get-TvProp $graphError "code")
+                $messageText = Get-TvText (Get-TvProp $graphError "message")
+                if ($code -or $messageText) { $detail = Get-TvSafeError "$code $messageText" }
+            } catch { }
+        }
+        if ($statusCode -gt 0) { throw "Mail send as $From failed with HTTP $statusCode. $detail" }
+        throw "Mail send as $From failed. $detail"
+    }
 }
 
 function Send-TvMail {
@@ -1206,6 +1229,8 @@ try {
         } catch {
             if ($_.Exception.Response) { $probeStatusCode = [int]$_.Exception.Response.StatusCode }
             $probeErrorText = Get-TvSafeError $_.Exception.Message
+            # Send-TvRawMail rethrows with the status in its message and no Response.
+            if ($probeStatusCode -eq 0 -and $_.Exception.Message -match "HTTP (\d{3})") { $probeStatusCode = [int]$Matches[1] }
         }
         if ($probeSucceeded) {
             throw "Mail verification failed: the watcher identity could send as $mailProbeMailbox, so Mail.Send is not restricted to $mailSender. Apply an Exchange application access policy, then run verification again."
