@@ -1,6 +1,6 @@
-import { Suspense } from "react"
-import { Link, Navigate, useParams } from "react-router-dom"
-import { useSelectedTenant } from "~/contexts/TenantContext"
+import { Suspense, useEffect } from "react"
+import { Link, Navigate, useParams, useSearchParams } from "react-router-dom"
+import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { HUBS } from "../features/hubs"
 import { canUse, LockedPreview } from "../components/PlanGate"
@@ -14,7 +14,17 @@ import { useLicense, useTenantPlan } from "../lib/license"
  */
 export default function HubPage({ hubId }: { hubId: string }) {
   const { tabId } = useParams()
-  const { selectedTenant } = useSelectedTenant()
+  const { selectedTenant, setSelectedTenantId } = useSelectedTenant()
+  const tenants = useTenants()
+  // Links from background task notifications name the tenant the work ran for.
+  const [params, setParams] = useSearchParams()
+  const requestedTenant = params.get("tenant")?.toLowerCase()
+  useEffect(() => {
+    if (!requestedTenant || !tenants.length) return
+    const match = tenants.find((tenant) => tenant.credentials?.tenantId.toLowerCase() === requestedTenant)
+    if (match && match.id !== selectedTenant?.id) setSelectedTenantId(match.id)
+    setParams({}, { replace: true })
+  }, [requestedTenant, tenants])
   const plan = useTenantPlan(selectedTenant?.credentials?.tenantId)
   // Once the license status is known, a tenant without a usable plan (not signed in or not
   // covered) sees what each screen does instead of an empty page.

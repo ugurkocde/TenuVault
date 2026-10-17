@@ -152,7 +152,8 @@ function expectFailedManifestOnly(job: BackupJob, saved: Map<string, string>, ca
   const puts = calls.filter(call => call.init.method === "PUT" && call.url.pathname.endsWith("/metadata.json"))
   expect(puts).toHaveLength(1)
   expect(puts[0]!.init.headers).toMatchObject({ "if-none-match": "*" })
-  expect(JSON.parse(saved.get(`${job.backupFolder}/metadata.json`)!)).toMatchObject({ Status: "Failed", Error: job.exception })
+  // A run the user cancelled is recorded as cancelled; every other stop as failed.
+  expect(JSON.parse(saved.get(`${job.backupFolder}/metadata.json`)!)).toMatchObject({ Status: job.status === "Cancelled" ? "Cancelled" : "Failed", Error: job.exception })
 }
 
 function nearDeadlineListing(url: URL, page: number, lastPage = 30, lastDelay = 59_500): Promise<Response> | undefined {
@@ -378,7 +379,7 @@ describe("manifest commit and retention interruption", () => {
     const manifests = calls.filter(call => call.init.method === "PUT" && call.url.pathname.endsWith("/metadata.json"))
     expect(manifests).toHaveLength(1)
     expect(manifests[0]!.init.headers).toMatchObject({ "if-none-match": "*" })
-    expect(JSON.parse(saved.get(`${job.backupFolder}/metadata.json`)!)).toMatchObject({ Status: "Failed", Failures: 0, ItemCounts: { DeviceConfigurations: 1, TotalPolicies: 1 }, Error: job.exception })
+    expect(JSON.parse(saved.get(`${job.backupFolder}/metadata.json`)!)).toMatchObject({ Status: interrupt === "cancel" ? "Cancelled" : "Failed", Failures: 0, ItemCounts: { DeviceConfigurations: 1, TotalPolicies: 1 }, Error: job.exception })
     expect(Object.keys(JSON.parse(saved.get(`${job.backupFolder}/metadata.json`)!).Items)).toEqual(["DeviceConfigurations/p0"])
   })
 

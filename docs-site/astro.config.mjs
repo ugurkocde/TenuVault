@@ -165,6 +165,7 @@ export default defineConfig({
 						{ label: 'Governance', slug: 'governance' },
 						{ label: 'Changes', slug: 'changes' },
 						{ label: 'Operations', slug: 'operations' },
+						{ label: 'Notifications', slug: 'notifications' },
 						{ label: 'OpenIntuneBaseline', slug: 'baselines/quick-start' },
 						{ label: 'My baselines', slug: 'baselines/custom-baselines' },
 						{ label: 'Framework coverage', slug: 'baselines/frameworks' },

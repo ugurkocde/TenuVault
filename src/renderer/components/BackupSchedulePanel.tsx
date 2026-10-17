@@ -8,6 +8,7 @@ import { COMMUNITY_RETENTION_DAYS } from "../../shared/plans"
 import { bridge } from "../lib/bridge"
 import { tenantLicense, tenantPlan, useLicense } from "../lib/license"
 import { describeSchedule, formatWhen, useRefusals, useSchedules, WEEKDAYS } from "../lib/schedules"
+import { settingsHref } from "../lib/settings-section"
 import { showFeaturePlanError } from "../lib/plan-dialog"
 import { toast } from "../lib/toast"
 import { weeklyScheduleNote } from "../lib/plan-notes"
@@ -171,7 +172,7 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
         </div>
         <div className="space-y-2 border-t border-gray-100 pt-5 text-sm text-gray-700">
           <h3 className="font-medium text-gray-900">Background runner</h3>
-          <Link to="/portal/settings" className="font-medium underline">Settings &gt; Background runner</Link>
+          <Link to={settingsHref("background")} className="font-medium underline">Settings &gt; Background runner</Link>
           {prefs && <>
             <p className="text-xs text-gray-500">Saved automatically for all tenants.</p>
             <label className="flex items-center gap-3">

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { comparableSnapshot } from "../../../shared/intune/compare"
 import type { Item } from "../../../shared/intune/registry"
+import { manifestStatus, stoppedEarly } from "../../../shared/intune/backup-status"
 
 /** One recorded backup item: the Intune object ID and the fingerprint of its backed-up content. */
 export interface ManifestEntry { id: string; hash: string }
@@ -32,15 +33,16 @@ const metadataStrings = (value: unknown): string[] => (Array.isArray(value) ? va
 
 /** Why this backup must not be restored for the requested files, or undefined when it may. */
 export function incompleteReason(metadata: Record<string, any> | null, manifest: Map<string, ManifestEntry> | null, paths: string[], full: boolean): string | undefined {
-  const recordedStatus = metadata?.Status ?? metadata?.status
+  // A cancel recorded as Failed by an earlier version reads as cancelled.
+  const recordedStatus = metadata ? manifestStatus(metadata) : undefined
   // Metadata is written when a backup finishes, so a full restore without a completion record
   // would restore a stopped backup as if it were whole. Selected files that are present may
   // still be restored on their own.
   if (full && recordedStatus === undefined && !manifest) return "This backup is incomplete: it has no recorded completion status. Restore selected items from it, or restore from a complete backup instead."
   if (!metadata || (recordedStatus === undefined && !manifest)) return undefined
   const status = String(recordedStatus ?? "").toLowerCase()
-  // A backup that stopped early records what it saved, so those items may still be restored one by one.
-  if (status.includes("fail") && (full || !manifest)) return `This backup is recorded as failed and is incomplete. ${manifest ? "Restore selected items from it, or restore" : "Restore"} from a complete backup instead.`
+  // A backup that failed or was cancelled records what it saved, so those items may still be restored one by one.
+  if (stoppedEarly(status) && (full || !manifest)) return `This backup is recorded as ${status === "cancelled" ? "cancelled" : "failed"} and is incomplete. ${manifest ? "Restore selected items from it, or restore" : "Restore"} from a complete backup instead.`
   const folders = new Set(paths.map((path) => path.split("/")[1]))
   const failedRequested = metadataStrings(metadata.FailedTypes).filter((folder) => folders.has(folder))
   if (failedRequested.length) return `This backup is incomplete for ${failedRequested.join(", ")}: those types could not be read when the backup ran. Restore from a complete backup instead.`

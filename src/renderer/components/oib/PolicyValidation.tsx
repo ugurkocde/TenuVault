@@ -12,6 +12,7 @@ import { toCsv, type ReportPayload } from "../../../shared/oib/report"
 import { isFullValidation, OIB_PLATFORMS, type OibCatalog, type OibPlatform, type PolicyValidation as Validation, type SettingDiff, type ValidationRun } from "../../../shared/oib/types"
 import { NO_VALIDATION_FILTER, validationFilterView, type ValidationFilter, type ValidationFilterItem, type ValidationResultFilter } from "../../../shared/oib/validation-filter"
 import { FilterChips, FilterSelect, SearchInput } from "../FilterControls"
+import { settingsHref } from "../../lib/settings-section"
 import { PlanBadge } from "../UpgradeNote"
 import { GatedButton } from "../PlanGate"
 import { RunsList } from "./DeployPanel"
@@ -336,7 +337,7 @@ export function PolicyValidation({ selections }: { selections: Selections }) {
         <div className={cn("mt-4 rounded-2xl border border-gray-200 p-4", !canFix && "opacity-70")}>
           <p className="flex items-center gap-2 text-sm font-medium text-gray-800">Fix drift{!canFix && <PlanBadge feature="driftRevert" />}</p>
           <p className="mt-1 text-xs leading-5 text-gray-500">Resets a drifted policy to its OIB configuration in place. You review the change and choose the backup before anything happens. Assignments stay; the run can be undone.</p>
-          {canFix && !storage && <p className="mt-2 text-xs leading-5 text-amber-900">This tenant has no backup storage, so a fix runs without a backup; undo then puts back the previous version saved in the run. <Link to="/portal/settings" className="text-blue-700 underline">Choose backup storage in Settings</Link>.</p>}
+          {canFix && !storage && <p className="mt-2 text-xs leading-5 text-amber-900">This tenant has no backup storage, so a fix runs without a backup; undo then puts back the previous version saved in the run. <Link to={settingsHref("signin")} className="text-blue-700 underline">Choose backup storage in Settings</Link>.</p>}
         </div>
         {listTotal > 0 && <ValidationFilterBar view={listView} total={listTotal} filter={filter} onChange={setFilter} />}
         <ul className="mt-4 divide-y divide-gray-100 overflow-hidden rounded-2xl bg-gray-50">{rowView.shown.map(row => {

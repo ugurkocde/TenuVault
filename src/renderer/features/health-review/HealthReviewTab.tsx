@@ -4,6 +4,7 @@ import { Clock, Play } from "lucide-react"
 import { BigValue, Chip, Tile, TileLabel } from "~/components/dashboard/tiles"
 import { Button } from "~/components/ui/button"
 import { toast } from "../../lib/toast"
+import { startBackgroundTask, useBackgroundTask } from "../../lib/background-tasks"
 import type { FeatureTabProps } from "../types"
 import { evidenceAge, formatTime, healthApi, OUTCOME_LABELS, STALE_EVIDENCE_DAYS, type Finding, type Status } from "./api"
 import { EndpointsPanel } from "./EndpointsPanel"
@@ -26,12 +27,25 @@ export default function HealthReviewTab({ tenant, plan, allowed }: FeatureTabPro
     void client.invalidateQueries({ queryKey: ["health-status", tenantId] })
     void client.invalidateQueries({ queryKey: ["health-findings", tenantId] })
   }
-  const run = useMutation({
-    mutationFn: () => healthApi.run(tenant),
-    onSuccess: (result) => toast(`Review ${OUTCOME_LABELS[result.run.status]?.toLowerCase() ?? result.run.status}. ${result.run.summary}`, result.run.status === "completed" ? "success" : "info"),
-    onError: (error) => toast(error instanceof Error ? error.message : "The review failed.", "error"),
-    onSettled: refresh,
-  })
+  // The review runs as a background task, so it keeps going and stays visible in the activity
+  // panel while the admin works elsewhere; coming back here shows it still running.
+  const reviewKey = tenantId ? `health-review:${tenantId.toLowerCase()}` : undefined
+  const reviewTask = useBackgroundTask(reviewKey)
+  const reviewing = reviewTask?.status === "running"
+  const startReview = () => {
+    if (!reviewKey) return
+    startBackgroundTask(reviewKey, { title: "Health review", detail: `Reviewing backups of ${tenant.name}`, href: "/portal/operations/health-review", tenantId }, async () => {
+      try {
+        const result = await healthApi.run(tenant)
+        const outcome = `Review ${OUTCOME_LABELS[result.run.status]?.toLowerCase() ?? result.run.status}. ${result.run.summary}`
+        // A run that could not read the tenant at all is a failure, not a completed review.
+        if (result.run.status === "could-not-authenticate" || result.run.status === "failed") throw new Error(outcome)
+        return outcome
+      } finally {
+        refresh()
+      }
+    })
+  }
   const schedule = useMutation({
     mutationFn: (body: { enabled?: boolean; intervalHours?: number }) => healthApi.schedule(tenant, body),
     onError: (error) => toast(error instanceof Error ? error.message : "The schedule could not be saved.", "error"),
@@ -53,7 +67,7 @@ export default function HealthReviewTab({ tenant, plan, allowed }: FeatureTabPro
   return (
     <div className="space-y-4">
       {status.error && <p className="text-sm text-red-700" role="alert">{status.error instanceof Error ? status.error.message : "Status could not be loaded."}</p>}
-      {data && <StatusTiles status={data} findings={stored} review={{ run: () => run.mutate(), running: run.isPending }} />}
+      {data && <StatusTiles status={data} findings={stored} review={{ run: startReview, running: reviewing }} />}
 
       <Tile aria-labelledby="health-schedule-heading" className="gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -64,9 +78,9 @@ export default function HealthReviewTab({ tenant, plan, allowed }: FeatureTabPro
             </h3>
             <p className="max-w-3xl text-sm text-gray-600">{data?.readiness.note}</p>
           </div>
-          <Button type="button" onClick={() => run.mutate()} disabled={run.isPending}>
+          <Button type="button" onClick={startReview} disabled={reviewing}>
             <Play className="h-4 w-4" aria-hidden="true" />
-            {run.isPending ? "Reviewing" : "Review now"}
+            {reviewing ? "Reviewing in background" : "Review now"}
           </Button>
         </div>
         <div className="flex flex-wrap items-center gap-4 text-sm">

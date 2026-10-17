@@ -175,3 +175,25 @@ input[type="checkbox"], input[type="radio"], progress { accent-color: var(--colo
 html:has([data-flow-shell]) {
   scroll-padding-bottom: calc(var(--action-bar-height, 6rem) + 1rem + var(--floating-progress-offset, 0px));
 }
+
+/* Run overlay (components/RunOverlay). Transform and opacity only, so the animation runs
+   on the compositor: no layout, no paint of the page underneath, no JavaScript per frame. */
+@keyframes run-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes run-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes run-indeterminate {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(320%); }
+}
+.run-overlay { animation: run-fade 0.18s ease-out; }
+.run-panel { animation: run-rise 0.3s ease-out; }
+.run-indeterminate { animation: run-indeterminate 1.3s ease-in-out infinite; }
+.run-results-reveal { animation: run-rise 0.45s ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .run-overlay, .run-panel, .run-indeterminate, .run-results-reveal { animation: none; }
+}

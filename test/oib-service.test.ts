@@ -329,6 +329,16 @@ describe("backup choice", () => {
     expect(state.started).toEqual([])
   })
 
+  it("never offers a backup the user cancelled, so it does not hide an older finished one", async () => {
+    const state: Tenant = { policies: [], backups: [
+      { id: "backup-2026-10-01-095000", timestamp: minutesAgo(20), status: "Cancelled", metadata: { ...COMPLETE, Status: "Cancelled" } },
+      { id: "backup-2026-10-01-090000", timestamp: minutesAgo(62), metadata: COMPLETE },
+    ] }
+    vi.stubGlobal("fetch", world(state, []))
+    const { recent } = await handleOib({ ...base, action: "oib-backup-options", folders: ["ConfigurationPolicies"] }) as OibBackupOptions
+    expect(recent).toMatchObject({ folder: "backup-2026-10-01-090000", complete: true })
+  })
+
   it("reports the newest finished backup of the tenant with its age and the requested types it misses", async () => {
     const state: Tenant = { policies: [], backups: [
       { id: "backup-2026-10-01-100000", timestamp: minutesAgo(5), status: "running" },

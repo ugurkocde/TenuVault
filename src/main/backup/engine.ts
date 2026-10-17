@@ -1,7 +1,7 @@
 export { assertStorageAccountName } from "../../shared/storage-account"
 export { ProtectedBlobError, isImmutabilityRefusal } from "./request"
 import { createHash, randomUUID } from "node:crypto"
-import { BACKUP_OWNER_FILE } from "../../shared/constants"
+import { BACKUP_CANCELLED_MESSAGE, BACKUP_OWNER_FILE } from "../../shared/constants"
 import { BlobWriter } from "./blob-writer"
 import { GraphSession, type GraphItem } from "./graph-session"
 import { GRAPH, BlobClaimError, GraphError, ProtectedBlobError, RequestTimeoutError, StorageError, TokenError, isUnreachable } from "./request"
@@ -102,7 +102,7 @@ class BackupCancelledError extends Error {}
  * `committing` is set when the real manifest write starts, after which nothing else may write one.
  */
 interface StoppedRun {
-  manifest?: (error: string) => Record<string, unknown>
+  manifest?: (status: "Failed" | "Cancelled", error: string) => Record<string, unknown>
   committing: boolean
   /** The service whose failures stopped the run, if one did. */
   stoppedBy?: () => NetworkService | null
@@ -238,7 +238,7 @@ export class BackupEngine {
 
   cancel(jobId: string): BackupJob | undefined {
     const job = this.jobs.get(jobId)
-    if (job?.status === "Running" || job?.status === "Queued") this.executions.get(jobId)?.controller.abort(new BackupCancelledError("Backup cancelled by you. This run is never offered as a complete backup."))
+    if (job?.status === "Running" || job?.status === "Queued") this.executions.get(jobId)?.controller.abort(new BackupCancelledError(`${BACKUP_CANCELLED_MESSAGE} This run is never offered as a complete backup.`))
     return job
   }
 
@@ -330,7 +330,7 @@ export class BackupEngine {
         if (!stopped.manifest || stopped.committing || stopped.stoppedBy?.() === "backup storage") return
         // The run is over, so a backup started while the manifest is written gets its own job instead of joining this one.
         if (this.running.get(tenantKey)?.job === job) this.running.delete(tenantKey)
-        await this.recordStopped(job, request, stopped.manifest(job.exception))
+        await this.recordStopped(job, request, stopped.manifest(job.status, job.exception))
       })
       .finally(() => {
         if (timer) clearTimeout(timer)
@@ -482,8 +482,8 @@ export class BackupEngine {
         ...extra,
       }
     }
-    // From here the folder is this run's, so a run that stops early records it as failed.
-    stopped.manifest = (error) => manifest("Failed", this.now(), { Error: error })
+    // From here the folder is this run's, so a run that stops early records it as failed, or as cancelled when the user cancelled it.
+    stopped.manifest = (status, error) => manifest(status, this.now(), { Error: error })
     stopped.stoppedBy = () => network.stoppedBy
 
     await pool(work, concurrency, async ({ type, item, displayName, fileName }) => {
@@ -572,9 +572,10 @@ export class BackupEngine {
   }
 
   /**
-   * Writes the manifest of a run that stopped after claiming its folder, with status Failed, so
-   * every list names the backup and its trigger and retention can remove it like any other backup
-   * of this tenant. Readers never treat a failed backup as complete. The write only creates: it
+   * Writes the manifest of a run that stopped after claiming its folder, with status Failed, or
+   * Cancelled when the user cancelled it, so every list names the backup and its trigger and
+   * retention can remove it like any other backup of this tenant. Readers never treat a failed or
+   * cancelled backup as complete. The write only creates: it
    * never replaces a manifest that is already there. It goes around the run's fetch, so it cannot
    * change how the failure was classified, and it gives up after FAILED_MANIFEST_GRACE_MS.
    */
@@ -586,15 +587,16 @@ export class BackupEngine {
     const network = new NetworkCircuit(3, controller.signal, deadline)
     const token = isLocalAccount(request.storageAccountName) ? async () => "" : () => this.deps.getToken(request.tenantId, request.clientId, "https://storage.azure.com/.default")
     const storage = new BlobWriter(this.deps.fetch, request.storageAccountName, token, network)
+    const recorded = metadata.Status === "Cancelled" ? "cancelled" : "failed"
     try {
       await storage.put(`${job.backupFolder}/metadata.json`, JSON.stringify(metadata, null, 2), undefined, true)
-      this.write(job, "Recorded this backup as failed. The policies it saved stay in storage but are never offered as a complete backup.")
+      this.write(job, `Recorded this backup as ${recorded}. The policies it saved stay in storage but are never offered as a complete backup.`)
     } catch (error) {
       if (error instanceof BlobClaimError) this.write(job, "This backup already has a manifest, so it was left as it is.")
       else {
         // The circuit's own deadline error names the job deadline; this write has its own, shorter one.
         const reason = controller.signal.aborted || Date.now() >= deadline ? "The storage did not answer in time" : (error instanceof Error ? error.message : String(error)).replace(/\.$/, "")
-        this.write(job, `Could not record this backup as failed: ${reason}. It is listed as incomplete.`)
+        this.write(job, `Could not record this backup as ${recorded}: ${reason}. It is listed as incomplete.`)
       }
     } finally {
       clearTimeout(timer)

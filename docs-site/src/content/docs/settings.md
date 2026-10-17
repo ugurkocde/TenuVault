@@ -3,15 +3,15 @@ title: "Settings reference"
 description: Every control on the Settings page, what it does and when to use it.
 ---
 
-**Settings** holds sign-in, backup storage, encryption, background backups, PDF branding and updates for this computer. Open it from the bottom of the sidebar.
+**Settings** holds sign-in, backup storage, encryption, background backups, notifications, PDF branding and updates for this computer. Open it from the bottom of the sidebar.
 
-The buttons at the top of the page jump to each section: **Sign-in**, **Storage and recovery**, **Background runner**, **PDF branding**, **Updates** and **About**.
+Choose a section in the list on the left to open it: **Sign-in**, **Storage and recovery**, **Background runner**, **Notifications**, **PDF branding**, **Updates**, **Appearance** and **About**. One section shows at a time, starting with **Sign-in**. On a narrow window the list becomes a row above the section.
 
 Settings apply to this computer only. Other admins who use TenuVault have their own settings.
 
 ## Appearance
 
-The **Appearance** list at the top right sets the color theme.
+The **Appearance** section sets the color theme.
 
 | Option | Effect |
 | --- | --- |
@@ -182,6 +182,8 @@ For screenshots and a walkthrough of switching from stable to nightly, see [Try 
 | **Get nightly builds** | Opt into previews between stable releases. Turn it off to return to the current stable release, even if it is older than the installed nightly. |
 | **Check now** | Checks immediately. Disabled while automatic updates are off. |
 | **Restart and update** | Appears when an update has downloaded. Restarts TenuVault and installs it. |
+
+While an update downloads and once it is ready, a green **Update available** label at the bottom of the sidebar installs it too: select it and TenuVault restarts as soon as the download finishes.
 
 The status line shows the current state:
 

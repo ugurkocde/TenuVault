@@ -98,6 +98,24 @@ const PHASE_HEADINGS: Record<CisRunPhase, string> = {
   failed: "Assessment failed",
 }
 
+/**
+ * Overall progress of a run as a whole-percent for the single progress bar, or
+ * null while the run is indeterminate (connecting, or already failed). Reading
+ * tenant policies fills the first 45 percent, comparing pack policies the next
+ * 45, and saving sits at 94 until the run is done, so the bar only moves forward
+ * across a normal connecting, reading, comparing, saving, done sequence.
+ */
+export function cisRunProgress(run: { phase: CisRunPhase; total: number; read: number; packPolicies: number; comparedPolicies: number }): number | null {
+  const fraction = (part: number, whole: number) => whole > 0 ? Math.min(Math.max(part, 0) / whole, 1) : 0
+  switch (cisRunDisplayPhase(run)) {
+    case "reading": return Math.round(2 + 43 * fraction(run.read, run.total))
+    case "comparing": return Math.round(45 + 45 * fraction(run.comparedPolicies, run.packPolicies))
+    case "saving": return 94
+    case "done": return 100
+    default: return null
+  }
+}
+
 /** The run screen heading for a phase. A re-run over shown results says so. */
 export function cisRunHeading(phase: CisRunPhase, rerun = false): string {
   const heading = PHASE_HEADINGS[phase]

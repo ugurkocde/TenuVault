@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
   queryFn: null as (() => Promise<TenantDashboardStats>) | null,
   navigate: vi.fn(),
   selectTenant: vi.fn(),
+  plan: null as string | null,
 }))
 vi.mock("react", async (original) => ({
   ...await original<typeof import("react")>(),
@@ -39,7 +40,7 @@ vi.mock("@desktop/lib/bridge", () => ({ bridge: {
   },
 } }))
 vi.mock("@desktop/lib/schedules", async (original) => ({ ...await original<typeof import("../src/renderer/lib/schedules")>(), useSchedules: () => state.schedules }))
-vi.mock("@desktop/lib/license", () => ({ useLicense: () => ({ status: null }), tenantLicense: () => null, tenantPlan: () => null, planName: () => "Community" }))
+vi.mock("@desktop/lib/license", () => ({ useLicense: () => ({ status: null }), tenantLicense: () => null, tenantPlan: () => state.plan, planName: () => "Community" }))
 vi.mock("@desktop/components/RunBackupDialog", () => ({ RunBackupDialog: () => null }))
 vi.mock("@desktop/components/RecoveryKeyNotice", () => ({ RecoveryKeyNotice: () => null }))
 vi.mock("@desktop/components/UnreadableBackupsNotice", () => ({ UnreadableBackupsNotice: () => null }))
@@ -59,7 +60,7 @@ const emptyStats: TenantDashboardStats = {
   backupHistory: [], failedAttempts: [], liveRuns: [], periodStart: new Date(0), backupsError: null, lastDriftCheck: null,
 }
 const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000)
-const storedBackup = (status: "success" | "failed", timestamp: Date) => ({
+const storedBackup = (status: "success" | "failed" | "cancelled", timestamp: Date) => ({
   id: `backup-${timestamp.getTime()}`, tenantId: 42, tenantName: "Contoso", timestamp, status, policiesBackedUp: 3, duration: 0, size: 0,
 })
 
@@ -79,6 +80,7 @@ beforeEach(() => {
   state.liveRuns = []
   state.activeJobs = []
   state.stats = { ...emptyStats }
+  state.plan = null
   state.navigate.mockClear()
   state.selectTenant.mockClear()
 })
@@ -113,6 +115,18 @@ describe("Overview schedule status", () => {
     expect(markup).not.toContain("Action required")
     expect(markup).not.toContain("Last automatic backup attempt failed")
     expect(markup).toContain(`Last automatic backup ${formatWhen(schedule.lastAttemptAt)}`)
+  })
+})
+
+describe("Overview cancelled automatic backup", () => {
+  it("shows a cancelled automatic backup in a neutral tone, without Action required", () => {
+    state.schedules = [{ ...schedule, lastStatus: "Cancelled" }]
+    const markup = renderToStaticMarkup(createElement(OverviewPage))
+    expect(markup).toContain(`Last automatic backup cancelled ${formatWhen(schedule.lastAttemptAt)}</span>`)
+    expect(markup).toContain("text-gray-400")
+    expect(markup).not.toContain("text-red-700")
+    expect(markup).not.toContain("Action required")
+    expect(markup).not.toContain("attempt failed")
   })
 })
 
@@ -219,6 +233,62 @@ describe("Dashboard backup counts", () => {
     const markup = renderDashboard()
     expect([chip(markup), running(markup), failed(markup)]).toEqual(["Running", "1", "0"])
     expect(markup).toContain("Target 95%, 1 of 1 backups succeeded")
+  })
+
+  it("counts a cancelled backup in storage only and shows Cancelled in a neutral chip", () => {
+    const cancelled = storedBackup("cancelled", hoursAgo(1))
+    state.stats = { ...emptyStats, periodStart: hoursAgo(24), latestBackup: cancelled, backupHistory: [cancelled, storedBackup("success", hoursAgo(2)), storedBackup("failed", hoursAgo(3))] }
+    const markup = renderDashboard()
+    const tile = markup.slice(markup.indexOf('aria-label="Last backup"'), markup.indexOf(">Last backup<"))
+    expect(tile).toMatch(/class="[^"]*bg-gray-100 text-gray-700[^"]*"><span[^>]*bg-gray-400[^>]*><\/span>Cancelled<\/span>/)
+    expect(chip(markup)).toBeNull()
+    expect(markup).toContain("3 backups in storage")
+    expect(failed(markup)).toBe("1")
+    expect(markup).toContain("50.0%")
+    expect(markup).toContain("Target 95%, 1 of 2 backups succeeded")
+  })
+
+  it("names a cancelled automatic backup in a neutral tone in the Next Backup tile", () => {
+    state.schedules = [{ ...schedule, lastStatus: "Cancelled" }]
+    for (const backupHistory of [[storedBackup("cancelled", hoursAgo(1))], []]) {
+      state.stats = { ...emptyStats, backupHistory }
+      const markup = renderDashboard()
+      expect(markup).toContain(`<p class="mt-2 text-xs text-gray-500">Last automatic backup cancelled ${formatWhen(schedule.lastAttemptAt)}</p>`)
+      expect(markup).not.toContain("before a backup was saved")
+    }
+  })
+
+  it("lists a cancelled backup and a cancel in the audit log in Recent activity in grey, and does not make the tenant critical", async () => {
+    state.plan = "pro"
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("list-backups")
+      ? Response.json({ backups: [{ name: "backup-cancelled", timestamp: hoursAgo(1).toISOString(), status: "Cancelled", runId: "desktop-cancelled" }] })
+      : String(input).includes("audit/logs")
+        ? Response.json({ data: [{ id: "audit-1", timestamp: hoursAgo(2).toISOString(), eventType: "BACKUP_CANCELLED", action: "Scheduled backup", result: "PARTIAL", severity: "INFO" }] })
+        : Response.json([])))
+    useDashboardStats("7d", 42)
+    state.stats = await state.queryFn!()
+    expect(state.stats.recentActivity).toMatchObject([{ status: "neutral", message: "Backup cancelled" }, { status: "neutral", message: "Scheduled backup" }])
+    expect(state.stats.tenants).toMatchObject({ critical: 0, warning: 1 })
+    const markup = renderDashboard()
+    const icons = [...markup.matchAll(/<span class="mt-0\.5 inline-flex size-8 shrink-0 items-center justify-center rounded-full ([^"]*)">/g)].map((match) => match[1])
+    expect(icons).toEqual(["bg-gray-100", "bg-gray-100"])
+    expect(markup).toContain("Backup cancelled")
+    expect(markup).not.toContain("bg-red-100")
+    expect(markup).not.toContain("bg-blue-100")
+  })
+
+  it("says how many backups could not be read, and nothing once they can", async () => {
+    let unresolved = 2
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("list-backups")
+      ? Response.json({ backups: [{ name: "backup-today", timestamp: hoursAgo(2).toISOString(), status: "Success", runId: "desktop-today" }], unresolved })
+      : Response.json([])))
+    useDashboardStats("7d", 42)
+    state.stats = await state.queryFn!()
+    expect(state.stats.unresolvedBackups).toBe(2)
+    expect(renderDashboard()).toContain("2 backups could not be read. Select Refresh to try again.")
+    unresolved = 0
+    state.stats = await state.queryFn!()
+    expect(renderDashboard()).not.toContain("could not be read. Select Refresh")
   })
 
   it("shows No data when no backup finished in the period", () => {

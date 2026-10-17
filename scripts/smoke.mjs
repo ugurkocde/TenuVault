@@ -521,13 +521,68 @@ await check("onboarding is the desktop wizard, without client secrets", async ()
 })
 
 await check("settings show encrypted local backup storage", async () => {
-  await go("#/portal/settings", "Backups on this device")
+  await go("#/portal/settings?section=storage", "Backups on this device")
   assert(await waitForText("Key fingerprint"), "encryption key section missing")
   await screenshot("05-settings")
 })
 
+await check("settings sidebar switches sections and names the section in the URL", async () => {
+  await go("#/portal/settings", "Storage and recovery")
+  const nav = `document.querySelector('nav[aria-label="Settings sections"]')`
+  assert(await waitForCondition(`${nav}?.querySelectorAll("a").length === 8`), "settings sidebar does not list eight sections")
+  assert(await evaluate(`document.getElementById("settings-storage").hidden === true`), "storage section visible on the default sign-in section")
+  await evaluate(`[...${nav}.querySelectorAll("a")].find(a => a.textContent.trim() === "Background runner").click()`)
+  assert(await waitForText("Keep backups for"), "background section did not appear after clicking its sidebar entry")
+  assert(await evaluate(`location.hash === "#/portal/settings?section=background"`), "section not named in the URL")
+  assert(await evaluate(`document.getElementById("settings-signin").hidden === true && !document.body.innerText.includes("Backups on this device")`), "only the clicked section should be visible")
+  assert(await evaluate(`${nav}.querySelector('[aria-current="page"]')?.textContent.trim() === "Background runner"`), "active sidebar entry not marked")
+  await evaluate(`[...${nav}.querySelectorAll("a")].find(a => a.textContent.trim() === "Sign-in").click()`)
+  assert(await waitForCondition(`document.getElementById("settings-signin").hidden === false && location.hash === "#/portal/settings?section=signin"`), "sign-in section did not come back")
+  // Unsaved input in a panel survives switching away and back.
+  await evaluate(`[...${nav}.querySelectorAll("a")].find(a => a.textContent.trim() === "Storage and recovery").click()`)
+  assert(await waitForText("Import a recovery key"), "storage section did not appear")
+  await evaluate(`[...document.getElementById("settings-storage").querySelectorAll("button")].find(b => b.textContent.trim() === "Import a recovery key").click()`)
+  const keyField = `document.getElementById("settings-storage").querySelector('textarea[aria-label="Recovery key"]')`
+  assert(await waitForCondition(`Boolean(${keyField})`), "recovery key field did not open")
+  await evaluate(`(() => { const field = ${keyField}; Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(field, 'TVK2.smoke-draft'); field.dispatchEvent(new Event('input', {bubbles:true})); })()`)
+  await evaluate(`[...${nav}.querySelectorAll("a")].find(a => a.textContent.trim() === "Updates").click()`)
+  assert(await waitForCondition(`document.getElementById("settings-updates").hidden === false`), "updates section did not appear")
+  await evaluate(`[...${nav}.querySelectorAll("a")].find(a => a.textContent.trim() === "Storage and recovery").click()`)
+  assert(await waitForCondition(`${keyField}?.value === 'TVK2.smoke-draft'`), "switching sections discarded the recovery key draft")
+  // An unknown section value falls back to sign-in instead of a blank page.
+  await evaluate(`location.hash = "#/portal/settings?section=nope"`)
+  assert(await waitForCondition(`document.getElementById("settings-signin").hidden === false`), "unknown section did not fall back to sign-in")
+  // A link that only carries the recovery key anchor still opens storage and focuses the export.
+  await evaluate(`location.hash = "#/portal/settings#recovery-key"`)
+  assert(await waitForCondition(`document.getElementById("settings-storage").hidden === false && document.activeElement?.id === "save-recovery-key"`), "anchor-only recovery key link did not open storage and focus the export")
+  // In the narrow row layout, scrolling the section strip must not move the focused export out of view.
+  await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 720, deviceScaleFactor: 1, mobile: false })
+  await evaluate(`location.hash = "#/portal/settings?section=signin"`)
+  assert(await waitForCondition(`document.getElementById("settings-signin").hidden === false`), "sign-in section did not appear at narrow width")
+  await evaluate(`location.hash = "#/portal/settings?section=storage#recovery-key"`)
+  const focusedInView = `(() => { const button = document.getElementById("save-recovery-key"); if (document.activeElement !== button) return false; const box = button.getBoundingClientRect(); return box.top >= 0 && box.bottom <= window.innerHeight })()`
+  assert(await waitForCondition(focusedInView), "focused Save recovery key ended outside the viewport at narrow width")
+  await send("Emulation.clearDeviceMetricsOverride")
+  // A dialog owned by a panel closes while its section is hidden and comes back with it.
+  // Run this part with real exit animations so focus landing is checked after teardown.
+  await evaluate(`document.getElementById("smoke-no-animations")?.remove()`)
+  await evaluate(`location.hash = "#/portal/settings?section=about"`)
+  assert(await waitForCondition(`document.getElementById("settings-about").hidden === false`), "about section did not appear")
+  await evaluate(`[...document.getElementById("settings-about").querySelectorAll("button")].find(b => b.textContent.trim() === "License agreement").click()`)
+  assert(await waitForText("TENUVAULT DESKTOP END USER LICENSE AGREEMENT"), "license agreement dialog did not open")
+  await evaluate(`location.hash = "#/portal/settings?section=signin"`)
+  assert(await waitForCondition(`!document.body.innerText.includes("TENUVAULT DESKTOP END USER LICENSE AGREEMENT")`), "dialog stayed open while its section was hidden")
+  assert(await evaluate(`document.querySelectorAll('[role="dialog"]').length === 0`), "hidden panel left a dialog in the page")
+  assert(await waitForCondition(`document.activeElement === document.querySelector('nav[aria-label="Settings sections"] [aria-current="page"]')`), "focus did not land on the active section entry after the dialog closed")
+  await evaluate(`location.hash = "#/portal/settings?section=about"`)
+  assert(await waitForText("TENUVAULT DESKTOP END USER LICENSE AGREEMENT"), "dialog did not come back with its section")
+  await evaluate(`[...document.querySelectorAll("button")].find(b => b.textContent.trim() === "Close").click()`)
+  assert(await waitForCondition(`!document.body.innerText.includes("TENUVAULT DESKTOP END USER LICENSE AGREEMENT")`), "license agreement dialog did not close")
+  await disableAnimations()
+})
+
 await check("license agreement opens from settings", async () => {
-  await go("#/portal/settings", "License agreement")
+  await go("#/portal/settings?section=about", "License agreement")
   await evaluate(`[...document.querySelectorAll("button")].find(b => b.textContent.trim() === "License agreement").click()`)
   assert(await waitForText("TENUVAULT DESKTOP END USER LICENSE AGREEMENT"), "license agreement text missing")
   assert(await waitForText("Terms of Use"), "Terms of Use link missing")
@@ -602,9 +657,9 @@ await check("policy pack frameworks keep the coverage notice collapsed", async (
 })
 
 await check("settings show background backups, retention and updates", async () => {
-  await go("#/portal/settings", "Background runner")
+  await go("#/portal/settings?section=background", "Background runner")
   assert(await waitForText("Keep backups for"), "retention setting missing")
-  assert(await waitForText("Download and install updates automatically"), "update setting missing")
+  await go("#/portal/settings?section=updates", "Download and install updates automatically")
   assert(await waitForText("Get nightly builds"), "nightly update setting missing")
   const prefs = await evaluate(`window.tenuvault.preferences.set({ nightlyUpdates: true })`)
   assert(prefs.nightlyUpdates === true, `nightly preference not stored ${JSON.stringify(prefs)}`)
@@ -624,7 +679,7 @@ for (const [platform, installed] of [["darwin", false], ["win32", true]]) {
         frame.contentDocument.open()
         frame.contentDocument.write('<html><head></head><body><div id="root"></div></body></html>')
         frame.contentDocument.close()
-        frame.contentWindow.location.hash = "#/portal/settings"
+        frame.contentWindow.location.hash = "#/portal/settings?section=background"
         frame.contentWindow.tenuvault = {
           ...window.tenuvault,
           app: { ...window.tenuvault.app, info: () => Promise.resolve({ version: "0.2.0", platform: ${JSON.stringify(platform)}, trayIconLoaded: true }) },
@@ -926,6 +981,99 @@ await check("tenant renames show Saved in both views and clear confirmation time
   }
 })
 
+await check("tenant selection toggles from cards, rows, select all and clear without shifting layout", async () => {
+  await go("#/portal/tenants", "Tenant Management")
+  await evaluate(`document.querySelector('button[aria-label="Grid view"]').click()`)
+  const bar = `[...document.querySelectorAll('main [aria-live="polite"]')].find(s => /selected|Select tenants to back up/.test(s.textContent))`
+  const card = id => `document.querySelector('[data-tenant-card="${id}"]')`
+  const setSearch = async text => {
+    await evaluate(`(() => { const input = document.querySelector('input[aria-label="Search tenants"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(text)}); input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
+  }
+  try {
+  assert(await evaluate(`${bar}.textContent.includes('Select tenants to back up')`), "selection bar hint missing before any selection")
+  // Gap between the bar and the first card, plus the bar height: both are
+  // scroll-independent, unlike raw viewport coordinates.
+  const layout = `(() => { const barRect = document.querySelector('[data-selection-bar]').getBoundingClientRect(); const cardRect = ${card(1)}.getBoundingClientRect(); return { barHeight: barRect.height, gap: cardRect.top - barRect.bottom } })()`
+  const layoutBefore = await evaluate(layout)
+  await evaluate(`document.querySelector('button[aria-label="Select Contoso 1"]').click()`)
+  assert(await waitForCondition(`${card(1)}.dataset.selected === 'true' && ${bar}.textContent.includes('1 tenant selected')`), "checkbox did not select the first tenant")
+  assert(await evaluate(`document.querySelector('button[aria-label="Select Contoso 1"]').getAttribute('aria-checked') === 'true' && ${card(1)}.innerText.includes('Selected')`), "selected card does not say Selected with a checked box")
+  const layoutAfter = await evaluate(layout)
+  assert(Math.abs(layoutAfter.barHeight - layoutBefore.barHeight) < 1 && Math.abs(layoutAfter.gap - layoutBefore.gap) < 1, `selecting the first tenant shifted the cards: ${JSON.stringify({ layoutBefore, layoutAfter })}`)
+  // Clicking the card outside its controls toggles too.
+  await evaluate(`${card(2)}.querySelector('h3').click()`)
+  assert(await waitForCondition(`${card(2)}.dataset.selected === 'true' && ${bar}.textContent.includes('2 tenants selected')`), "card click did not select the second tenant")
+  assert(await evaluate(`document.querySelector('button[aria-label="Select all matching tenants"]').getAttribute('aria-checked') === 'true'`), "select all is not checked with every tenant selected")
+  await screenshot("07-tenants-selected")
+  // Dark theme: the selected surfaces must take the dark overrides, not the
+  // light coral tints that would leave light text unreadable.
+  await evaluate(`document.documentElement.classList.add('dark')`)
+  assert(await evaluate(`getComputedStyle(document.querySelector('[data-selection-bar]')).backgroundColor === 'rgb(58, 32, 25)' && getComputedStyle(${card(1)}).backgroundColor === 'rgb(58, 32, 25)'`), "selected surfaces kept their light tint in dark mode")
+  await screenshot("07b-tenants-selected-dark")
+  await evaluate(`document.documentElement.classList.remove('dark')`)
+  // Controls inside the card never toggle: the rename button opens the editor instead.
+  await evaluate(`document.querySelector('button[aria-label="Rename tenant: Contoso 2"]').click()`)
+  assert(await waitForCondition(`Boolean(document.querySelector('button[aria-label="Save tenant name"]')) && ${card(2)}.dataset.selected === 'true'`), "rename click changed the selection")
+  // Select all also leaves the tenant being renamed alone.
+  await evaluate(`document.querySelector('button[aria-label="Select all matching tenants"]').click()`)
+  assert(await waitForCondition(`!${card(1)}.dataset.selected && ${card(2)}.dataset.selected === 'true'`), "select all toggled the tenant being renamed")
+  await evaluate(`document.querySelector('button[aria-label^="Cancel editing tenant name:"]').click()`)
+  assert(await waitForCondition(`!document.querySelector('button[aria-label="Save tenant name"]') && ${card(2)}.dataset.selected === 'true'`), "cancelling rename changed the selection")
+  await evaluate(`document.querySelector('button[aria-label="Select all matching tenants"]').click()`)
+  assert(await waitForCondition(`${bar}.textContent.includes('2 tenants selected')`), "select all did not reselect both tenants after rename")
+  // A disabled button takes no pointer events, so only a real mouse click at
+  // its coordinates proves the click cannot fall through and toggle.
+  const backupCenter = await evaluate(`(() => { const button = [...${card(2)}.querySelectorAll('button')].find(b => b.innerText.includes('Backup Now')); button.disabled = true; const rect = button.getBoundingClientRect(); return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } })()`)
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", x: backupCenter.x, y: backupCenter.y, button: "left", clickCount: 1 })
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: backupCenter.x, y: backupCenter.y, button: "left", clickCount: 1 })
+  await sleep(250)
+  assert(await evaluate(`${card(2)}.dataset.selected === 'true' && ${bar}.textContent.includes('2 tenants selected')`), "clicking the disabled Backup Now toggled the selection")
+  await evaluate(`[...${card(2)}.querySelectorAll('button')].find(b => b.innerText.includes('Backup Now')).disabled = false`)
+  // Search scopes select all and discloses hidden selections.
+  await setSearch("Contoso 2")
+  assert(await waitForCondition(`${bar}.textContent.includes('1 not shown by search')`), "bar does not disclose the tenant hidden by search")
+  await evaluate(`document.querySelector('button[aria-label="Select all matching tenants"]').click()`)
+  assert(await waitForCondition(`${bar}.textContent.includes('1 tenant selected') && ${bar}.textContent.includes('1 not shown by search') && !document.querySelector('[data-tenant-card="2"]')?.dataset.selected`), "unselecting visible tenants dropped the hidden selection")
+  await setSearch("")
+  assert(await waitForCondition(`${card(1)}.dataset.selected === 'true' && !${card(2)}.dataset.selected`), "hidden selection did not survive clearing the search")
+  await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Clear').click()`)
+  assert(await waitForCondition(`!document.querySelector('[data-tenant-card][data-selected]') && ${bar}.textContent.includes('Select tenants to back up')`), "Clear did not reset the selection")
+  assert(await evaluate(`document.activeElement?.getAttribute('aria-label') === 'Select all matching tenants'`), "Clear dropped keyboard focus instead of landing on select all")
+  // At the minimum window width the actions wrap, so the bar reserves the
+  // two row height and selection changes still move nothing.
+  await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 900, deviceScaleFactor: 1, mobile: false })
+  const narrowLayout = `(() => { const barRect = document.querySelector('[data-selection-bar]').getBoundingClientRect(); const cardRect = document.querySelector('[data-tenant-card]').getBoundingClientRect(); return { barHeight: barRect.height, gap: cardRect.top - barRect.bottom } })()`
+  const narrowBefore = await evaluate(narrowLayout)
+  await evaluate(`document.querySelector('button[aria-label="Select Contoso 1"]').click()`)
+  await setSearch("Contoso 2")
+  assert(await waitForCondition(`${bar}.textContent.includes('1 not shown by search')`), "hidden disclosure missing at narrow width")
+  const narrowAfter = await evaluate(narrowLayout)
+  assert(Math.abs(narrowAfter.barHeight - narrowBefore.barHeight) < 1 && Math.abs(narrowAfter.gap - narrowBefore.gap) < 1, `selection shifted the cards at 1024px: ${JSON.stringify({ narrowBefore, narrowAfter })}`)
+  await screenshot("07c-tenants-selected-narrow")
+  await send("Emulation.clearDeviceMetricsOverride", {})
+  await setSearch("")
+  await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Clear').click()`)
+  assert(await waitForCondition(`!document.querySelector('[data-tenant-card][data-selected]')`), "narrow width selection did not clear")
+  // List view: row click toggles, the header reports mixed, Escape clears.
+  await evaluate(`document.querySelector('button[aria-label="List view"]').click()`)
+  const row = id => `document.querySelector('[data-tenant-row="${id}"]')`
+  await evaluate(`${row(1)}.querySelector('td:nth-child(2)').click()`)
+  assert(await waitForCondition(`${row(1)}.dataset.selected === 'true' && document.querySelector('button[aria-label="Select all matching tenants in the list"]').getAttribute('aria-checked') === 'mixed'`), "row click or mixed select all state failed in list view")
+  await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Clear').focus()`)
+  await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape" })
+  await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape" })
+  assert(await waitForCondition(`!document.querySelector('[data-tenant-row][data-selected]')`), "Escape did not clear the selection")
+  assert(await evaluate(`document.activeElement?.getAttribute('aria-label') === 'Select all matching tenants'`), "Escape dropped focus from the bar instead of landing on select all")
+  } finally {
+    // Later checks start from an unfiltered grid with nothing selected.
+    await send("Emulation.clearDeviceMetricsOverride", {}).catch(() => {})
+    await evaluate(`document.documentElement.classList.remove('dark')`).catch(() => {})
+    await setSearch("").catch(() => {})
+    await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Clear')?.click()`).catch(() => {})
+    await evaluate(`document.querySelector('button[aria-label="Grid view"]')?.click()`).catch(() => {})
+  }
+})
+
 await check("tag drafts stay with their tenant and bulk tags sync every tenant", async () => {
   await go("#/portal/tenants", "Tenant Management")
   const currentTags = `document.querySelector('[role="dialog"] h3')?.nextElementSibling.innerText.trim()`
@@ -988,20 +1136,20 @@ await check("tag drafts stay with their tenant and bulk tags sync every tenant",
       assert((await evaluate(currentTags)) === "Production", `reopening the same tenant after ${method} kept its discarded draft`)
     }
     await closeTags()
-    await evaluate(`document.querySelector('input[aria-label="Select Contoso 1"]').click()`)
-    await evaluate(`document.querySelector('input[aria-label="Select Contoso 2"]').click()`)
+    await evaluate(`document.querySelector('button[aria-label="Select Contoso 1"]').click()`)
+    await evaluate(`document.querySelector('button[aria-label="Select Contoso 2"]').click()`)
     await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Tag Selected').click()`)
     assert(await waitForText("Manage Tags for 2 tenants"), "bulk tag dialog did not open")
     assert((await evaluate(currentTags)) === "No tags selected", "bulk tagging inherited a tenant's tags")
     await clickDialogButton("Non-Production")
     assert(await waitForCondition(`${currentTags}.includes('Development')`), "unsaved bulk tag edit was not applied")
     await closeTags()
-    await evaluate(`document.querySelector('input[aria-label="Select Contoso 1"]').click()`)
+    await evaluate(`document.querySelector('button[aria-label="Select Contoso 1"]').click()`)
     await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Tag Selected').click()`)
     assert(await waitForText("Manage Tags for 1 tenants"), "second bulk selection tag dialog did not open")
     assert((await evaluate(currentTags)) === "No tags selected", "second bulk selection inherited the cancelled bulk draft")
     await closeTags()
-    await evaluate(`document.querySelector('input[aria-label="Select Contoso 1"]').click()`)
+    await evaluate(`document.querySelector('button[aria-label="Select Contoso 1"]').click()`)
     await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Tag Selected').click()`)
     assert(await waitForText("Manage Tags for 2 tenants"), "bulk tag dialog did not reopen")
     assert((await evaluate(currentTags)) === "No tags selected", "reopening bulk tagging kept its discarded draft")
@@ -1070,7 +1218,7 @@ await check("restore journal applied IDs use validated inline inputs", async () 
   })()`)
   const submit = label => evaluate(`${form(label)}.querySelector('button[type="submit"]').click()`)
   try {
-    await go("#/portal/settings", "Restore write history")
+    await go("#/portal/settings?section=storage", "Restore write history")
     assert(await waitForText("Interrupted smoke policy"), "journal records did not load")
     await evaluate(`window.__restoreFailList = true`)
     await click("Refresh history")
@@ -1304,7 +1452,7 @@ await check("search with no matches and missing dates stay truthful", async () =
 })
 
 await check("appearance can switch to dark and back", async () => {
-  await go("#/portal/settings", "Appearance")
+  await go("#/portal/settings?section=appearance", "Appearance")
   await evaluate(`(() => { const select = [...document.querySelectorAll('select')].find(s => [...s.options].some(o => o.value === 'dark')); select.value = 'dark'; select.dispatchEvent(new Event('change', {bubbles:true})); })()`)
   assert(await evaluate(`document.documentElement.classList.contains('dark')`), "dark appearance was not applied")
   await screenshot("12-settings-dark")
@@ -1317,7 +1465,7 @@ await check("appearance can switch to dark and back", async () => {
   })()`)
   assert(contrast >= 4.5, `dark setup card contrast is too low: ${contrast}`)
   await screenshot("13-setup-dark")
-  await go("#/portal/settings", "Appearance")
+  await go("#/portal/settings?section=appearance", "Appearance")
   await evaluate(`(() => { const select = [...document.querySelectorAll('select')].find(s => [...s.options].some(o => o.value === 'light')); select.value = 'light'; select.dispatchEvent(new Event('change', {bubbles:true})); })()`)
   await go("#/portal/backup?tab=schedule", "Automatic backups")
 })
@@ -1337,7 +1485,7 @@ await check("unsaved schedule drafts stay with their tenant", async () => {
   assert(await evaluate(`!document.querySelector('label input[type="checkbox"]').checked`), 'draft enabled backups for another tenant')
   await switchTenant('Contoso 1')
   assert(await waitForCondition(`document.getElementById('schedule-time')?.value === '07:45'`), 'tenant draft was discarded')
-  await go("#/portal/settings", "Appearance")
+  await go("#/portal/settings?section=appearance", "Appearance")
   await go("#/portal/backup?tab=schedule", "Automatic backups")
   assert(await waitForCondition(`document.getElementById('schedule-time')?.value === '07:45'`), 'navigation discarded the draft')
 })
@@ -1381,6 +1529,9 @@ await check("switching tenants cannot show an older tenant's drift results", asy
       await sleep(300)
     }
     assert(await evaluate(`typeof window.__oldScanResolve === 'function'`), 'first tenant scan did not start')
+    // The running scan fills the page as an overlay; the sidebar stays usable underneath it.
+    assert(await waitForCondition(`!!document.querySelector('[aria-label="Drift scan in progress"] [role="progressbar"]')`), 'drift scan overlay did not show')
+    await screenshot("06b-drift-running")
     await evaluate(`document.querySelector('button[aria-label^="Switch tenant"]').dispatchEvent(new PointerEvent('pointerdown', {bubbles:true,button:0,pointerType:'mouse'}))`)
     await sleep(150)
     await evaluate(`[...document.querySelectorAll('[role="menuitem"]')].find(item => item.innerText.includes('Contoso 2')).click()`)

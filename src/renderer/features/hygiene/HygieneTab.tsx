@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react"
-import { useMutation, useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { ChevronDown, ChevronRight, ScanSearch } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { Chip } from "~/components/dashboard/tiles"
-import { toast } from "../../lib/toast"
+import { startBackgroundTask, useBackgroundTask } from "../../lib/background-tasks"
 import type { FeatureTabProps } from "../types"
 import { CLASSIFICATION_LABELS, formatDate, loadList, runScan, STATUS_LABELS, type Classification, type FindingStatus } from "./api"
 import { FindingDetail } from "./FindingDetail"
@@ -30,14 +30,20 @@ export default function HygieneTab({ tenant, plan, allowed }: FeatureTabProps) {
   const [search, setSearch] = useState("")
   const [expanded, setExpanded] = useState<string | null>(null)
   const list = useQuery({ queryKey: ["hygiene", tenant.credentials?.tenantId], queryFn: () => loadList(tenant) })
-  const scan = useMutation({
-    mutationFn: () => runScan(tenant),
-    onSuccess: () => {
-      toast("Hygiene scan finished.", "success")
-      void list.refetch()
-    },
-    onError: (error) => toast(error instanceof Error ? error.message : "The scan failed.", "error"),
-  })
+  // The scan runs as a background task, so it keeps going and stays visible in the activity
+  // panel while the admin works elsewhere; coming back here shows it still running.
+  const client = useQueryClient()
+  const scanKey = tenant.credentials?.tenantId ? `hygiene:${tenant.credentials.tenantId.toLowerCase()}` : undefined
+  const scanTask = useBackgroundTask(scanKey)
+  const scanning = scanTask?.status === "running"
+  const startScan = () => {
+    if (!scanKey) return
+    startBackgroundTask(scanKey, { title: "Hygiene scan", detail: `Scanning the latest backup of ${tenant.name}`, href: "/portal/governance/hygiene", tenantId: tenant.credentials?.tenantId }, async () => {
+      await runScan(tenant)
+      await client.invalidateQueries({ queryKey: ["hygiene", tenant.credentials?.tenantId] })
+      return `Hygiene scan of ${tenant.name} finished.`
+    })
+  }
 
   const findings = list.data?.findings ?? []
   const rules = list.data?.rules ?? []
@@ -64,9 +70,9 @@ export default function HygieneTab({ tenant, plan, allowed }: FeatureTabProps) {
             <p className="max-w-3xl text-sm text-gray-500">Built from the backup named below when the scan ran; a newer backup is used only after Scan latest backup. Types that were not collected are shown as not collected, not as clean. Group membership, filters and device state are not collected, so overlaps that depend on them stay possible, never proven.</p>
           </div>
           {allowed && (
-            <Button type="button" size="sm" disabled={scan.isPending} onClick={() => scan.mutate()}>
+            <Button type="button" size="sm" disabled={scanning} onClick={startScan}>
               <ScanSearch className="h-4 w-4" />
-              {scan.isPending ? "Scanning backup" : "Scan latest backup"}
+              {scanning ? "Scanning in background" : "Scan latest backup"}
             </Button>
           )}
         </div>

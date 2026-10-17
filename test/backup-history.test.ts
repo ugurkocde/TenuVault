@@ -4,6 +4,7 @@ import { FetchApplicationError } from "../src/main/api/network-error"
 import { POST as listBackups } from "../src/portal/app/api/list-backups/route"
 import { POST as backupChanges } from "../src/portal/app/api/backup-changes/route"
 import { POST as restorePreview } from "../src/portal/app/api/restore-preview/route"
+import { BACKUP_OWNER_FILE } from "../src/shared/constants"
 
 const args = { tenantId: "tenant", appId: "app", clientSecret: "test", storageAccountName: "store", subscriptionId: "local", resourceGroupName: "local" }
 const request = (body: object) => new NextRequest("http://tenuvault.internal/api/test", { method: "POST", body: JSON.stringify({ ...args, ...body }) })
@@ -98,6 +99,66 @@ describe("backup history", () => {
       const { backups } = await (await listBackups(request({ summary }))).json()
       const failed = backups.find((backup: { id: string }) => backup.id === newer)
       expect(failed).toMatchObject({ status: "unknown", error: "Backup authentication failed. Import the correct recovery key or recover an undamaged snapshot." })
+      expect(backups.find((backup: { id: string }) => backup.id === older)).toMatchObject({ status: "Success" })
+    }
+  })
+})
+
+describe("backups the list cannot place", () => {
+  const stopped = "backup-2026-09-26-020000"
+  const shared = { ...blobs, [`${stopped}/${BACKUP_OWNER_FILE}`]: { Source: "TenuVault Desktop", TenantId: "tenant", RunId: "desktop-stopped" }, [`${stopped}/DeviceConfigurations/A.json`]: { id: "1" } }
+
+  it("leaves out a folder whose ownership marker could not be read, in both list modes, and counts it", async () => {
+    storage(shared)
+    const served = globalThis.fetch as unknown as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    let busy = true
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (busy && String(input).endsWith(`${stopped}/${BACKUP_OWNER_FILE}`)) return new Response("<Error><Code>ServerBusy</Code></Error>", { status: 503 })
+      return served(input, init)
+    }))
+    for (const summary of [false, true]) {
+      const listed = await (await listBackups(request({ summary }))).json()
+      expect(listed.unresolved).toBe(1)
+      expect(listed.backups.map((backup: { id: string }) => backup.id)).toEqual([newer, older, "backup-2026-09-20-020000"])
+    }
+    busy = false
+    for (const summary of [false, true]) {
+      const listed = await (await listBackups(request({ summary }))).json()
+      expect(listed.unresolved).toBe(0)
+      expect(listed.backups.find((backup: { id: string }) => backup.id === stopped)).toMatchObject({ runId: "desktop-stopped", status: "incomplete" })
+    }
+  })
+
+  it("places a folder whose manifest cannot be read by its ownership marker, in both list modes", async () => {
+    const foreignBoth = "backup-2026-09-27-020000"
+    const foreignMarker = "backup-2026-09-28-020000"
+    const own = "backup-2026-09-29-020000"
+    storage({
+      ...blobs,
+      // Another tenant's backups in a shared container. Their manifests do not answer.
+      [`${foreignBoth}/metadata.json`]: { Status: "Success", TenantId: "other" }, [`${foreignBoth}/${BACKUP_OWNER_FILE}`]: { TenantId: "other", RunId: "desktop-other" },
+      [`${foreignMarker}/metadata.json`]: { Status: "Success", TenantId: "other" }, [`${foreignMarker}/${BACKUP_OWNER_FILE}`]: { TenantId: "other", RunId: "desktop-other-2" },
+      [`${own}/metadata.json`]: { Status: "Success", TenantId: "tenant", RunId: "desktop-own" }, [`${own}/${BACKUP_OWNER_FILE}`]: { TenantId: "tenant", RunId: "desktop-own" },
+    })
+    const served = globalThis.fetch as unknown as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    const busy = (input: RequestInfo | URL) => String(input).endsWith("/metadata.json") && [foreignBoth, foreignMarker, own].some((name) => String(input).includes(name))
+      || String(input).endsWith(`${foreignBoth}/${BACKUP_OWNER_FILE}`)
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => busy(input) ? new Response("<Error><Code>ServerBusy</Code></Error>", { status: 503 }) : served(input, init)))
+    for (const summary of [false, true]) {
+      const listed = await (await listBackups(request({ summary }))).json()
+      // Both reads failed: left out and counted. The marker names another tenant: left out silently.
+      expect(listed.unresolved).toBe(1)
+      expect(listed.backups.map((backup: { id: string }) => backup.id)).toEqual([own, newer, older, "backup-2026-09-20-020000"])
+      // This tenant's folder stays, its status unknown; its run is not matched, so a failed run counts through its attempt.
+      expect(listed.backups[0]).toMatchObject({ status: "unknown", runId: null })
+    }
+  })
+
+  it("lists a manifest recorded as Failed with the cancel message as Cancelled, in both list modes", async () => {
+    storage({ ...blobs, [`${newer}/metadata.json`]: { ...blobs[`${newer}/metadata.json`], Status: "Failed", Error: "Backup cancelled by you. This run is never offered as a complete backup." } })
+    for (const summary of [false, true]) {
+      const { backups } = await (await listBackups(request({ summary }))).json()
+      expect(backups.find((backup: { id: string }) => backup.id === newer)).toMatchObject({ status: "Cancelled" })
       expect(backups.find((backup: { id: string }) => backup.id === older)).toMatchObject({ status: "Success" })
     }
   })
