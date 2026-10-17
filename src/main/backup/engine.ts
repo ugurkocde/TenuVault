@@ -42,6 +42,8 @@ export interface BackupJob {
   unreachable?: boolean
   /** Set once the run claimed its backup folder. A failed job without it left no backup in storage. */
   folderClaimed?: boolean
+  /** Set when the run could not tell whether its folder claim reached storage. A folder, if any, is counted from storage. */
+  folderUnknown?: boolean
   log: string[]
 }
 
@@ -54,6 +56,8 @@ export interface BackupRequest {
   /** What to back up; everything when left out. */
   scope?: BackupScope
   trigger?: BackupTrigger
+  /** A scheduled backup's slot, as an ISO timestamp. Retries of one slot share it. */
+  slot?: string
 }
 
 export interface BackupEngineDeps {
@@ -65,8 +69,8 @@ export interface BackupEngineDeps {
   now?: () => Date
   /** Items read at the same time. Graph throttling (429) pauses every reader. */
   concurrency?: number
-  /** Called once when a job has ended, with the trigger of the request that started it. */
-  onFinished?: (job: BackupJob, trigger: BackupTrigger) => void
+  /** Called once when a job has ended, with the request that started it. */
+  onFinished?: (job: BackupJob, request: BackupRequest) => void
 }
 
 /** A Graph beta path, or an absolute nextLink that must be on the Graph origin. */
@@ -313,7 +317,7 @@ export class BackupEngine {
   /** A failing listener must not change how the job ended. */
   private finished(job: BackupJob, request: BackupRequest): void {
     try {
-      this.deps.onFinished?.(job, request.trigger ?? "manual")
+      this.deps.onFinished?.(job, request)
     } catch (error) {
       console.warn("[backup] Could not record the end of a backup:", error)
     }
@@ -391,11 +395,23 @@ export class BackupEngine {
     // Claim the folder before writing any policy, even when retention currently keeps everything.
     // The create-only write is atomic, so two writers that start in the same second cannot share
     // one folder: the loser fails here and writes nothing else.
+    // The marker names this run, so a claim whose response was lost can be told apart from a rival's.
+    const ownerFile = `${backupFolder}/${BACKUP_OWNER_FILE}`
+    let sent = 0
     try {
-      await storage.put(`${backupFolder}/${BACKUP_OWNER_FILE}`, JSON.stringify({ Source: "TenuVault Desktop", TenantId: request.tenantId.toLowerCase() }), undefined, true)
+      await storage.put(ownerFile, JSON.stringify({ Source: "TenuVault Desktop", TenantId: request.tenantId.toLowerCase(), RunId: job.id }), undefined, true, () => { sent++ })
     } catch (error) {
-      if (error instanceof BlobClaimError) throw new BackupFolderTakenError(backupFolder)
-      throw error
+      // A storage answer or a local refusal to the only create is final: a refused create is a rival's
+      // claim. After a retry, or a create that got no answer, this run's own claim may have landed,
+      // so the marker is read back.
+      const ambiguous = sent > 1 || (sent === 1 && !(error instanceof StorageError) && !(error instanceof FetchApplicationError))
+      const owner = ambiguous ? await storage.readJson(ownerFile).catch(() => undefined) : null
+      if (owner?.RunId !== job.id) {
+        if (owner === undefined) job.folderUnknown = true
+        if (error instanceof BlobClaimError) throw new BackupFolderTakenError(backupFolder)
+        throw error
+      }
+      this.write(job, "Confirmed this backup's folder claim after its response was lost.")
     }
     job.folderClaimed = true
 

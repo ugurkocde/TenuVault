@@ -28,7 +28,7 @@ import { BackgroundLaunch } from "./backup/background-launch"
 import { BackupScopes } from "./backup/scopes"
 import { includedTypes, normalizeScope, type BackupScope } from "../shared/intune/scope"
 import { RefusalLog, refuseUnlicensedBackup } from "./backup/refusals"
-import { FailedAttemptLog } from "./backup/failed-attempts"
+import { FailedAttemptLog, recordPlanRefusal } from "./backup/failed-attempts"
 import { backupTenantLabel, notifyBackupFailure } from "./backup/notifications"
 import { BackupKeys } from "./backup/keys"
 import { readBackupSettings } from "./backup/settings"
@@ -278,7 +278,7 @@ async function bootstrap(): Promise<void> {
     },
     // Community keeps 30 days of history; Pro and MSP keep what the admin chooses (0 keeps everything).
     retentionDays: (tenantId) => effectiveRetentionDays(preferences.get().retentionDays, license.plan(tenantId)),
-    onFinished: (job, trigger) => failedAttempts.finished(job, trigger),
+    onFinished: (job, request) => failedAttempts.finished(job, request),
   })
 
   const scopes = new BackupScopes(appStore)
@@ -375,7 +375,7 @@ async function bootstrap(): Promise<void> {
     transform: surfaceTokenErrors,
     // Disabled CIS routes refuse before any licensing work. The plan comes next, so the
     // disclaimer is never accepted for a change the plan refuses anyway.
-    guard: async (request) => (await checkCis(request)) ?? (await checkPlan(request)) ?? checkDisclaimer(request),
+    guard: async (request) => (await checkCis(request)) ?? (await recordPlanRefusal(failedAttempts, request, await checkPlan(request))) ?? checkDisclaimer(request),
     onHandled: createAuditRecorder((request) => host.dispatch(request), (tenantId) => accounts.get(tenantId)),
   })
 
@@ -451,11 +451,11 @@ async function bootstrap(): Promise<void> {
   // Joined requests share one notification and the trigger that started the job.
   const unattendedBackupTriggers = new WeakMap<BackupJob, { trigger: "scheduled" | "tray"; notified: boolean }>()
 
-  const runScheduledBackup = async (tenantId: string, trigger: "scheduled" | "tray", afterFailure = false) => {
+  const runScheduledBackup = async (tenantId: string, trigger: "scheduled" | "tray", afterFailure = false, slot?: string) => {
     const profile = tenantProfile(tenantId)
     if (!profile) {
       const message = "This tenant is no longer connected."
-      failedAttempts.record({ tenantId, trigger, message })
+      failedAttempts.record({ tenantId, trigger, slot, message })
       return { status: "Failed" as const, message }
     }
     // A tenant the license does not cover is not backed up. Its audit log lives in the
@@ -474,10 +474,10 @@ async function bootstrap(): Promise<void> {
       trigger,
     )
     if (refused) {
-      failedAttempts.record({ tenantId, trigger, message: refused })
+      failedAttempts.record({ tenantId, trigger, slot, message: refused })
       return { status: "Failed" as const, message: refused }
     }
-    const job = engine.start({ tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, scope: scopes.get(tenantId).scope, trigger })
+    const job = engine.start({ tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, scope: scopes.get(tenantId).scope, trigger, slot })
     const origin = unattendedBackupTriggers.get(job) ?? { trigger, notified: false }
     unattendedBackupTriggers.set(job, origin)
     await waitForJob(job)
@@ -518,7 +518,7 @@ async function bootstrap(): Promise<void> {
     return result
   }
 
-  const scheduler = new BackupScheduler(appStore, (tenantId, afterFailure) => runScheduledBackup(tenantId, "scheduled", afterFailure), () => {
+  const scheduler = new BackupScheduler(appStore, (tenantId, afterFailure, slot) => runScheduledBackup(tenantId, "scheduled", afterFailure, slot), () => {
     mainWindow?.webContents.send("schedules:changed", scheduler.list())
     tray.refresh()
   })

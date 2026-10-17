@@ -152,6 +152,8 @@ export interface FailedBackupAttempt {
   at: string
   tenantId: string
   trigger: "manual" | "scheduled" | "tray"
+  /** Scheduled only: the slot it ran for, as an ISO timestamp. A slot counts once however often it is retried. */
+  slot?: string
   /** The first line of the failure, shortened. */
   message: string
 }

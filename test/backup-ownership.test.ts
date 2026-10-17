@@ -89,7 +89,7 @@ describe("backup folder ownership", () => {
     expect(raw.toString()).not.toContain("TenuVault Desktop")
     const opened = openAzure(raw, [master], TENANT, new URL(`${base}${name}`))
     expect(opened.authenticated).toBe(true)
-    expect(JSON.parse(opened.data.toString())).toEqual(owner)
+    expect(JSON.parse(opened.data.toString())).toEqual({ ...owner, RunId: job.id })
     const puts = calls.filter(call => call.request.method === "PUT" && !new URL(call.request.url).search).map(call => call.name)
     expect(puts).toEqual([name, `${job.backupFolder}/DeviceConfigurations/Policy 0.json`, `${job.backupFolder}/metadata.json`])
     expect(calls.some(call => call.request.method === "DELETE")).toBe(false)

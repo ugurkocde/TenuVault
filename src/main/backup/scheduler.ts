@@ -58,8 +58,11 @@ export class BackupScheduler {
 
   constructor(
     private readonly store: KeyValueStore,
-    /** `afterFailure`: the previous attempt of this slot ended as Failed, read from the stored schedule before this attempt. */
-    private readonly run: (tenantId: string, afterFailure: boolean) => Promise<ScheduledRunResult>,
+    /**
+     * `afterFailure`: the previous attempt of this slot ended as Failed, read from the stored schedule before this attempt.
+     * `slot`: the slot this attempt runs for, as an ISO timestamp; every retry of the slot gets the same one.
+     */
+    private readonly run: (tenantId: string, afterFailure: boolean, slot: string) => Promise<ScheduledRunResult>,
     private readonly onChange: () => void = () => undefined,
     private readonly now: () => Date = () => new Date(),
   ) {}
@@ -157,7 +160,7 @@ export class BackupScheduler {
             lastMessage: keepStatus ? schedule.lastMessage : undefined,
           },
         })
-        const result: ScheduledRunResult = await this.run(schedule.tenantId, afterFailure).catch((error: unknown) => ({
+        const result: ScheduledRunResult = await this.run(schedule.tenantId, afterFailure, slot.toISOString()).catch((error: unknown) => ({
           status: "Failed" as const,
           message: error instanceof Error ? error.message : String(error),
         }))
