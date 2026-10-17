@@ -19,7 +19,8 @@ export function latestComplete<T extends Backup>(backups: T[]): T | null {
 export function backupHealth(backups: Backup[], now: Date, unavailable = false): 'healthy' | 'warning' | 'critical' {
   if (unavailable) return 'warning'
   const latest = latestComplete(backups)
-  if (!latest) return backups.some((item) => ['failed', 'cancelled', 'partial', 'incomplete'].includes(item.status)) ? 'critical' : 'warning'
+  // A cancelled backup gives no protection, but it is not a failure either.
+  if (!latest) return backups.some((item) => ['failed', 'partial', 'incomplete'].includes(item.status)) ? 'critical' : 'warning'
   const age = (now.getTime() - latest.timestamp.getTime()) / 3_600_000
   if (age < 0) return 'warning'
   return age < 24 ? 'healthy' : age < 48 ? 'warning' : 'critical'

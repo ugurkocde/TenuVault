@@ -117,12 +117,14 @@ describe("Overview schedule status", () => {
 })
 
 describe("Overview cancelled automatic backup", () => {
-  it("shows a cancelled automatic backup like a failed one, named as cancelled", () => {
+  it("shows a cancelled automatic backup in a neutral tone, without Action required", () => {
     state.schedules = [{ ...schedule, lastStatus: "Cancelled" }]
     const markup = renderToStaticMarkup(createElement(OverviewPage))
     expect(markup).toContain(`Last automatic backup cancelled ${formatWhen(schedule.lastAttemptAt)}</span>`)
-    expect(markup).toContain("text-red-700")
-    expect(markup).toContain("Action required")
+    expect(markup).toContain("text-gray-400")
+    expect(markup).not.toContain("text-red-700")
+    expect(markup).not.toContain("Action required")
+    expect(markup).not.toContain("attempt failed")
   })
 })
 
@@ -244,12 +246,27 @@ describe("Dashboard backup counts", () => {
     expect(markup).toContain("Target 95%, 1 of 2 backups succeeded")
   })
 
-  it("shows a cancelled automatic backup like a failed one in the Next Backup tile", () => {
+  it("names a cancelled automatic backup in a neutral tone in the Next Backup tile", () => {
     state.schedules = [{ ...schedule, lastStatus: "Cancelled" }]
-    state.stats = { ...emptyStats, backupHistory: [storedBackup("cancelled", hoursAgo(1))] }
+    for (const backupHistory of [[storedBackup("cancelled", hoursAgo(1))], []]) {
+      state.stats = { ...emptyStats, backupHistory }
+      const markup = renderDashboard()
+      expect(markup).toContain(`<p class="mt-2 text-xs text-gray-500">Last automatic backup cancelled ${formatWhen(schedule.lastAttemptAt)}</p>`)
+      expect(markup).not.toContain("before a backup was saved")
+    }
+  })
+
+  it("lists a cancelled backup in Recent activity in a neutral tone, and does not make the tenant critical", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("list-backups")
+      ? Response.json({ backups: [{ name: "backup-cancelled", timestamp: hoursAgo(1).toISOString(), status: "Cancelled", runId: "desktop-cancelled" }] })
+      : Response.json([])))
+    useDashboardStats("7d", 42)
+    state.stats = await state.queryFn!()
+    expect(state.stats.recentActivity).toMatchObject([{ status: "info", message: "Backup cancelled" }])
+    expect(state.stats.tenants).toMatchObject({ critical: 0, warning: 1 })
     const markup = renderDashboard()
-    expect(markup).toContain(`<p class="mt-2 text-xs text-red-700">Last automatic backup cancelled ${formatWhen(schedule.lastAttemptAt)}</p>`)
-    expect(markup).not.toContain("before a backup was saved")
+    expect(markup).toContain("Backup cancelled")
+    expect(markup).not.toContain("bg-red-100")
   })
 
   it("says how many backups could not be read, and nothing once they can", async () => {

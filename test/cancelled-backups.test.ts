@@ -24,7 +24,7 @@ describe("cancelled backup status", () => {
     expect(manifestStatus({ status: "Completed" })).toBe("Completed")
   })
 
-  it("treats a cancelled backup as stopped early, like a failed one", () => {
+  it("treats a cancelled backup as never complete, like a failed one", () => {
     expect(["Cancelled", "cancelled", "Failed", "FAILED"].map(stoppedEarly)).toEqual([true, true, true, true])
     expect(["Success", "Completed", "CompletedWithWarnings", "running", "incomplete", undefined].map(stoppedEarly)).toEqual([false, false, false, false, false, false])
   })
@@ -49,18 +49,22 @@ describe("Dashboard counts with a cancelled backup", () => {
     expect(summary).toMatchObject({ inProgress: 0, latestStatus: "cancelled" })
   })
 
-  it("rates tenant health as it would for a failed backup", () => {
-    expect(backupHealth(folders([["Cancelled", 1]]), now)).toBe(backupHealth(folders([["Failed", 1]]), now))
-    expect(backupHealth(folders([["Cancelled", 1]]), now)).toBe("critical")
+  it("gives no protection in tenant health, and does not turn it critical on its own", () => {
+    expect(backupHealth(folders([["Cancelled", 1]]), now)).toBe("warning")
+    expect(backupHealth(folders([["Failed", 1]]), now)).toBe("critical")
+    // The newest complete backup decides, whatever was cancelled after it.
+    expect(backupHealth(folders([["Cancelled", 1], ["Success", 2]]), now)).toBe("healthy")
+    expect(backupHealth(folders([["Cancelled", 1], ["Success", 30]]), now)).toBe("warning")
   })
 })
 
 describe("backups the user cancelled elsewhere in the app", () => {
   const listed = (id: string, timestamp: string, status: string): BackupSummary => ({ id, timestamp, type: "manual", status, totalPolicies: 3, scope: null, size: 1, duration: null, changes: null, comparedWith: null })
 
-  it("shows a cancelled backup in the backup list and restore wizard like a failed one, labelled Cancelled", () => {
-    expect(statusKind("Cancelled")).toBe(statusKind("Failed"))
+  it("shows a cancelled backup in the backup list and restore wizard as Cancelled, neither complete nor failed", () => {
+    expect(statusKind("Cancelled")).toBe("cancelled")
     expect(statusLabel("Cancelled")).toBe("Cancelled")
+    expect(statusKind("Failed")).toBe("failed")
     expect(statusLabel("Failed")).toBe("Failed")
   })
 
@@ -94,10 +98,13 @@ describe("backups the user cancelled elsewhere in the app", () => {
     expect(incompleteReason({ Status: "Cancelled", Failures: 0 }, items, paths, true)).toBe("This backup is recorded as cancelled and is incomplete. Restore selected items from it, or restore from a complete backup instead.")
   })
 
-  it("reports a tenant whose only backup was cancelled like one whose only backup failed in the health review", () => {
-    const review = (status: string) => checkBackups("tenant", { outcome: "ok", backups: [{ status, timestamp: hoursAgo(1).toISOString() }] }, now)
-    expect(review("Cancelled").findings).toEqual(review("Failed").findings)
-    expect(review("Cancelled").detail).toBe("No complete backup was found and recent backups failed or stopped early.")
+  it("treats a cancelled latest backup as no complete backup in the health review, without a failure", () => {
+    const review = (statuses: Array<[string, number]>) => checkBackups("tenant", { outcome: "ok", backups: statuses.map(([status, hours]) => ({ status, timestamp: hoursAgo(hours).toISOString() })) }, now)
+    expect(review([["Cancelled", 1]]).detail).toBe("No complete backup was found for this tenant.")
+    expect(review([["Cancelled", 1]])).toEqual(review([]))
+    expect(review([["Failed", 1]]).detail).toBe("No complete backup was found and recent backups failed or stopped early.")
+    // A cancel after a recent complete backup raises nothing.
+    expect(review([["Cancelled", 1], ["Success", 2]]).findings).toEqual([])
   })
 
   it("words the notice for folders whose ownership could not be read", () => {

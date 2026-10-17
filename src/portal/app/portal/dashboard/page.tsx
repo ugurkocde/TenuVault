@@ -25,7 +25,6 @@ import { cn } from "~/lib/utils"
 import { Button } from "~/components/ui/button"
 import { useDashboardStats } from "~/hooks/dashboard/useDashboardStats"
 import { backupSummary } from "~/lib/backup-health"
-import { stoppedEarly } from "../../../../shared/intune/backup-status"
 import { unresolvedNotice } from "~/components/backup/types"
 import { useBaselineScore } from "~/hooks/dashboard/useBaselineScore"
 import { formatDate, formatPercent } from "@desktop/features/scores/api"
@@ -224,10 +223,7 @@ function DashboardContent() {
   const latest = stats?.latestBackup ?? null
   const protectedBackup = stats?.latestCompleteBackup ?? null
   const backupsError = stats?.backupsError ?? null
-  // A cancelled automatic backup is shown like a failed one, named as cancelled.
-  const scheduleStopped = stoppedEarly(schedule?.lastStatus)
-  const scheduleCancelled = schedule?.lastStatus === "Cancelled"
-  const failedBeforeFirstBackup = scheduleStopped && !!backupStats && !backupsError && backupStats.stored === 0
+  const failedBeforeFirstBackup = schedule?.lastStatus === "Failed" && !!backupStats && !backupsError && backupStats.stored === 0
   const unresolvedBackups = stats?.unresolvedBackups ?? 0
   const health =
     stats && stats.tenants.total > 0
@@ -425,12 +421,12 @@ function DashboardContent() {
             </>
           )}
           {schedule?.lastAttemptAt && (
-            <p className={cn("mt-2 text-xs", scheduleStopped ? "text-red-700" : "text-gray-500")}>
-              {scheduleCancelled ? "Last automatic backup cancelled" : scheduleStopped ? "Last automatic backup attempt failed" : "Last automatic backup"} {formatWhen(schedule.lastAttemptAt)}
+            <p className={cn("mt-2 text-xs", schedule.lastStatus === "Failed" ? "text-red-700" : "text-gray-500")}>
+              {schedule.lastStatus === "Failed" ? "Last automatic backup attempt failed" : schedule.lastStatus === "Cancelled" ? "Last automatic backup cancelled" : "Last automatic backup"} {formatWhen(schedule.lastAttemptAt)}
             </p>
           )}
           {failedBeforeFirstBackup && (
-            <p className="mt-2 text-xs text-red-700">{scheduleCancelled ? "Automatic backup was cancelled before a backup was saved." : "Automatic backup failed before a backup was saved."}</p>
+            <p className="mt-2 text-xs text-red-700">Automatic backup failed before a backup was saved.</p>
           )}
           <div className="mt-auto pt-5">
             <Button variant="outline" size="sm" onClick={() => router.push("/portal/backup?tab=schedule")}>

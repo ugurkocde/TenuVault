@@ -10,7 +10,11 @@ export function manifestStatus(metadata: Record<string, unknown>): unknown {
   return legacyCancel ? "Cancelled" : status
 }
 
-/** A backup or job that stopped before it finished, because it failed or the user cancelled it. Neither is ever a complete backup. */
+/**
+ * A backup that stopped before it finished, because it failed or the user cancelled it: never a
+ * complete backup, for restore, comparison and every other use of its data. Not for display: a
+ * cancel is the user's choice and is shown neutral, never as a failure.
+ */
 export function stoppedEarly(status: unknown): boolean {
   const value = typeof status === "string" ? status.trim().toLowerCase() : ""
   return value.includes("fail") || value === "cancelled"

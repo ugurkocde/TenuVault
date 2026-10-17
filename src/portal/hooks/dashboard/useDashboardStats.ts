@@ -307,7 +307,7 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
         .map(backup => ({
           id: backup.id,
           type: "backup" as const,
-          status: backup.status === "success" ? "success" as const : backup.status === "failed" || backup.status === "cancelled" ? "failed" as const : backup.status === "running" ? "info" as const : "warning" as const,
+          status: backup.status === "success" ? "success" as const : backup.status === "failed" ? "failed" as const : backup.status === "running" || backup.status === "cancelled" ? "info" as const : "warning" as const,
           tenant: backup.tenantName,
           tenantId: backup.tenantId,
           time: backup.timestamp,

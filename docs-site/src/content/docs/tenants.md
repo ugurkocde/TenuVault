@@ -65,7 +65,7 @@ Use the **Reporting period** list to choose **Last 24 hours**, **Last 7 days** (
 | --- | --- |
 | **Last backup** | How long ago the newest backup ran, its date and item count, and its state: **Running**, **Completed**, **Completed with warnings**, **Incomplete**, **Failed**, **Cancelled** or **Status unknown**. Also shows **Tenant Health** (see below), the number of backups in storage of any status and age, including cancelled ones (for example "7 backups in storage"), and the buttons **Run Backup** (or **Sign in** when you are not signed in) and **Restore policies**. |
 | **Success Rate** | Successful backups as a share of finished backups in the period, against a 95% target, for example "1 of 3 backups succeeded". Finished backups are the **Successful backups** and **Failed** counts of the period together. Shows **No data** when no backup finished in the period. A backup you cancelled is not a result, so it does not count as finished. |
-| **Next Backup** | Time until the next automatic backup, the schedule and the result of the last automatic backup. If the last attempt failed and no backup is stored, it also says "Automatic backup failed before a backup was saved." A cancelled attempt is shown the same way, as **Last automatic backup cancelled**. **Set up automatic backups** or **Edit schedule** opens the schedule. See [Schedule backups](/backups/schedules/). |
+| **Next Backup** | Time until the next automatic backup, the schedule and the result of the last automatic backup. If the last attempt failed and no backup is stored, it also says "Automatic backup failed before a backup was saved." A cancelled attempt shows **Last automatic backup cancelled** in a neutral tone. **Set up automatic backups** or **Edit schedule** opens the schedule. See [Schedule backups](/backups/schedules/). |
 | **Policies protected** | The number of items in the newest complete backup, with a breakdown for settings catalog, device configurations, compliance policies and app protection policies. |
 | **Successful backups** | Backups in storage that completed successfully in the period. **Failed** counts backups in the period that failed, completed with warnings or are incomplete, plus backup attempts that failed without saving a backup, such as a sign-in that failed, a license or plan refusal or another backup that was already running. Manual, scheduled and tray attempts count, on every plan. The Dashboard counts runs: each backup run counts once, by its backup when storage holds one for it, otherwise by its attempt. The one exception: when a scheduled backup keeps failing because Microsoft or the storage could not be reached, its retries for one slot that saved nothing count once. Any other retry counts on its own, so two retries that each saved a failed backup count as two. TenuVault keeps these attempts on this device, up to 200 per tenant and for 60 days, so they still count after a restart. **Running** counts backups that have not finished yet, whatever started them, once each. A backup without a summary counts as **Failed** when its run failed. Otherwise it is running while TenuVault runs it, or for six hours after it started, because another device may be running it or TenuVault restarted during it. After that it is incomplete. **Last backup** shows **Running** whenever this count is above zero. A backup you cancelled counts in neither **Successful backups** nor **Failed**. **Scheduled** counts enabled schedules. |
 | **Drift** | When backups of this tenant were last compared, and whether the comparison worked. **Check drift** opens [Drift detection](/drift/). |
@@ -79,7 +79,7 @@ Use the **Reporting period** list to choose **Last 24 hours**, **Last 7 days** (
 | Health | When |
 | --- | --- |
 | **Healthy** | The newest complete backup is less than 24 hours old |
-| **Warning** | The newest complete backup is 24 to 48 hours old, there is no complete backup and none failed, or the backups cannot be read |
+| **Warning** | The newest complete backup is 24 to 48 hours old, there is no complete backup and none failed (for example only cancelled ones), or the backups cannot be read |
 | **Critical** | The newest complete backup is more than 48 hours old, or there is no complete backup and at least one backup failed or was incomplete |
 
 :::note
@@ -97,7 +97,7 @@ The top row counts **Tenants connected**, **Signed in**, **Licensed** and **Auto
 * **License**: how the tenant is licensed, **Community (free)**, **Not licensed**, or **License checked at first use** for a tenant whose license has not been checked yet
 * **Storage**: where the tenant's backups go
 * **Automatic backups**: the schedule and next run on separate wrapping rows, or **No automatic backups**
-* **Last backup**: the last automatic backup and whether it failed or was cancelled, or the last backup. A failed or cancelled attempt shows its full timestamp and an **Action required** badge. Click the failure row to select the tenant and open its **Schedule** tab.
+* **Last backup**: the last automatic backup and whether it failed or was cancelled, or the last backup. A failed attempt shows its full timestamp and an **Action required** badge; a cancelled one does not. Click the failure row to select the tenant and open its **Schedule** tab.
 
 The buttons on each card:
 

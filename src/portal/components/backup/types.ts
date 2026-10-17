@@ -1,5 +1,3 @@
-import { stoppedEarly } from "../../../shared/intune/backup-status"
-
 /** A backup as /api/list-backups describes it. */
 export interface BackupSummary {
   id: string
@@ -65,12 +63,13 @@ export function formatDate(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" })
 }
 
-export type StatusKind = "success" | "warning" | "failed" | "running"
+export type StatusKind = "success" | "warning" | "failed" | "cancelled" | "running"
 
 export function statusKind(status: string): StatusKind {
   const value = status.toLowerCase()
-  // A backup the user cancelled is shown like a failed one.
-  if (stoppedEarly(status) || value === "incomplete") return "failed"
+  if (value.includes("fail") || value === "incomplete") return "failed"
+  // A backup the user cancelled is neither complete nor a failure.
+  if (value === "cancelled") return "cancelled"
   // "unknown": the metadata could not be read, so whether the backup finished is not known.
   if (value.includes("warn") || value.includes("partial") || value === "unknown") return "warning"
   if (value === "running") return "running"
@@ -81,6 +80,7 @@ export const STATUS_LABEL: Record<StatusKind, string> = {
   success: "Complete",
   warning: "Completed with warnings",
   failed: "Failed",
+  cancelled: "Cancelled",
   running: "Running",
 }
 
@@ -88,7 +88,6 @@ export const STATUS_LABEL: Record<StatusKind, string> = {
 export function statusLabel(status: string): string {
   const value = status.toLowerCase()
   if (value === "incomplete") return "Incomplete"
-  if (value === "cancelled") return "Cancelled"
   if (value === "unknown") return "Status unknown"
   return STATUS_LABEL[statusKind(status)]
 }

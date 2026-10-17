@@ -33,6 +33,7 @@ const STATUS_STYLE: Record<StatusKind, { icon: typeof CheckCircle; iconBg: strin
   success: { icon: CheckCircle, iconBg: "bg-green-50", iconColor: "text-green-700", badge: "bg-green-50 text-green-700" },
   warning: { icon: AlertTriangle, iconBg: "bg-amber-50", iconColor: "text-amber-700", badge: "bg-amber-50 text-amber-800" },
   failed: { icon: AlertCircle, iconBg: "bg-red-50", iconColor: "text-red-600", badge: "bg-red-50 text-red-700" },
+  cancelled: { icon: AlertCircle, iconBg: "bg-gray-100", iconColor: "text-gray-500", badge: "bg-gray-100 text-gray-700" },
   running: { icon: Loader2, iconBg: "bg-blue-50", iconColor: "text-blue-600", badge: "bg-blue-50 text-blue-700" },
 }
 
@@ -510,12 +511,13 @@ function BackupDetails({ backup, first, storageAccountName, downloading, onChang
         </div>
       </div>
 
-      {(kind === "warning" || kind === "failed" || (backup.skippedTypes?.length ?? 0) > 0) && (
-        <div className={cn("mb-6 flex gap-3 rounded-2xl px-4 py-3 text-sm", kind === "failed" ? "bg-red-50 text-red-800" : "bg-amber-50 text-amber-900")}>
+      {(kind === "warning" || kind === "failed" || kind === "cancelled" || (backup.skippedTypes?.length ?? 0) > 0) && (
+        <div className={cn("mb-6 flex gap-3 rounded-2xl px-4 py-3 text-sm", kind === "failed" ? "bg-red-50 text-red-800" : kind === "cancelled" ? "bg-gray-100 text-gray-800" : "bg-amber-50 text-amber-900")}>
           <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
           <div className="space-y-1">
             {backup.status === "incomplete" && <p>This backup stopped before it finished, for example because TenuVault was closed. It holds only part of the tenant.</p>}
-            {backup.status !== "incomplete" && kind === "failed" && backup.totalPolicies > 0 && <p>This backup {backup.status.toLowerCase() === "cancelled" ? "was cancelled" : "failed"} before it finished. It holds only the policies it saved and is never used as a complete backup.</p>}
+            {backup.status !== "incomplete" && kind === "failed" && backup.totalPolicies > 0 && <p>This backup failed before it finished. It holds only the policies it saved and is never used as a complete backup.</p>}
+            {kind === "cancelled" && <p>This backup was cancelled before it finished. It holds only the policies it saved and is never used as a complete backup.</p>}
             {backup.status === "unknown" && <p>{backup.error ?? "This backup does not record whether it finished."} Until its details can be read, whether it finished is not known and drift detection does not offer it.</p>}
             {(backup.failures ?? 0) > 0 && <p>{backup.failures} item{backup.failures === 1 ? "" : "s"} or type{backup.failures === 1 ? "" : "s"} could not be read. The backup log lists them.</p>}
             {(backup.failedTypes?.length ?? 0) > 0 && <p>Not read: {backup.failedTypes!.map(typeLabel).join(", ")}.</p>}

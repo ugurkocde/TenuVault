@@ -34,10 +34,13 @@ describe("Backup History", () => {
     expect(renderToStaticMarkup(createElement(BackupRestorePage))).not.toContain("could not be read. Select Refresh")
   })
 
-  it("shows a cancelled backup like a failed one, labelled Cancelled", () => {
+  it("shows a cancelled backup as Cancelled in a neutral badge, never as Complete", () => {
     state.backups = [cancelled]
     const markup = renderToStaticMarkup(createElement(BackupRestorePage))
-    expect(markup).toContain('<span class="rounded-full px-2.5 py-1 text-xs font-medium bg-red-50 text-red-700">Cancelled</span>')
+    expect(markup).toContain('<span class="rounded-full px-2.5 py-1 text-xs font-medium bg-gray-100 text-gray-700">Cancelled</span>')
+    expect(markup).toContain("bg-gray-100")
+    expect(markup).not.toContain(">Complete<")
+    expect(markup).not.toContain("bg-red-50")
     state.backups = []
   })
 })

@@ -539,7 +539,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                         {entry.scope && entry.scope.excluded.length > 0 && `, ${entry.scope.description.toLowerCase()}`}
                       </span>
                     </span>
-                    <span className={cn("text-xs", kind === "success" ? "text-gray-500" : kind === "warning" ? "text-amber-800" : "text-red-700")}>{statusLabel(entry.status)}</span>
+                    <span className={cn("text-xs", kind === "success" || kind === "cancelled" ? "text-gray-500" : kind === "warning" ? "text-amber-800" : "text-red-700")}>{statusLabel(entry.status)}</span>
                   </button>
                 )
               })}
