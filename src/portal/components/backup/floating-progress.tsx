@@ -173,7 +173,9 @@ function JobRow({ job, expanded, showingOutput, cancelling, cancelError, onToggl
             </div>
           )}
         </div>
-        {job.isComplete && (
+        {/* A job whose status polling stopped on error never completes here, so it stays
+            dismissible while incomplete; healthy running jobs are removed by cancelling. */}
+        {(job.isComplete || job.pollError) && (
           <button
             type="button"
             onClick={onDismiss}
