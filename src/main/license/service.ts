@@ -16,8 +16,8 @@ import type { KeyValueStore } from "../storage/secure-store"
  *
  * TenuVault works with several tenants at once, so every tenant gets its own activation:
  * one Polar activation per (installation, tenant) pair, created the first time the tenant
- * is used. The service decides whether the key covers another tenant (Pro: one, MSP: the
- * subscription quantity) and limits each tenant to five installations.
+ * is used. The service decides whether the key covers another tenant (Pro: two tenants,
+ * MSP: the subscription quantity) and limits each tenant to five installations.
  */
 
 interface Entitlement {
