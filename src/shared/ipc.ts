@@ -147,6 +147,21 @@ export interface BackupRefusal {
   reason: string
 }
 
+/** A backup attempt that failed, kept on this device. One that also left a folder is counted from the folder. */
+export interface FailedBackupAttempt {
+  at: string
+  tenantId: string
+  /** The backup job's id, which its folder records as RunId; a unique id when no job ran. */
+  runId: string
+  trigger: "manual" | "scheduled" | "tray"
+  /** Scheduled only: the slot it ran for, as an ISO timestamp. */
+  slot?: string
+  /** Set when Microsoft or the storage could not be reached. */
+  unreachable?: boolean
+  /** The first line of the failure, shortened. */
+  message: string
+}
+
 export interface AppPreferences {
   /** Start TenuVault (hidden, in the tray) when the admin signs in to the computer. */
   startAtLogin: boolean
@@ -213,6 +228,10 @@ export interface TenuVaultBridge {
     /** What the tenant backs up on schedule and by default. */
     scope: (tenantId: string) => Promise<BackupScopeSetting>
     setScope: (tenantId: string, scope: BackupScope) => Promise<BackupScopeSetting>
+    /** The tenant's failed backup attempts, newest first. */
+    failedAttempts: (tenantId: string) => Promise<FailedBackupAttempt[]>
+    /** Run ids of the tenant's backups still running in this app, manual, scheduled or from the tray. */
+    liveRuns: (tenantId: string) => Promise<string[]>
   }
   license: {
     status: () => Promise<LicenseStatus>

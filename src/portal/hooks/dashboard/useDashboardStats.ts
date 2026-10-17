@@ -1,4 +1,4 @@
-import { normalizeBackupStatus, backupHealth, backupCounts, latestComplete } from "~/lib/backup-health"
+import { normalizeBackupStatus, backupHealth, backupSummary, latestComplete } from "~/lib/backup-health"
 import { useLicense, tenantLicense, tenantPlan } from "@desktop/lib/license"
 import { allows } from "../../../shared/plans"
 import { bridge } from "@desktop/lib/bridge"
@@ -27,7 +27,16 @@ export interface PolicyBreakdown {
   conditionalAccess: number
 }
 
-export type DashboardBackup = BackupHistoryItem & { policies?: PolicyBreakdown }
+/** `runId` is the backup job that wrote the folder, when the folder records it. */
+export type DashboardBackup = BackupHistoryItem & { policies?: PolicyBreakdown; runId?: string | null }
+
+/** A failed backup attempt, recorded by the app on this device. */
+export interface FailedAttemptItem {
+  tenantId: number
+  timestamp: Date
+  runId: string
+  message: string
+}
 
 interface BackupHistoryResult {
   items: DashboardBackup[]
@@ -39,8 +48,14 @@ interface BackupHistoryResult {
 export interface TenantDashboardStats extends DashboardStats {
   latestBackup: DashboardBackup | null
   latestCompleteBackup: DashboardBackup | null
-  /** All backups found in storage, across reporting periods. Unsaved attempts are excluded. */
-  totalBackups: number
+  /** Every backup in storage, newest first, across reporting periods. */
+  backupHistory: DashboardBackup[]
+  /** Failed attempts, newest first. One whose run left a backup in storage counts once, from the backup. */
+  failedAttempts: FailedAttemptItem[]
+  /** Run ids of backups the app is running for the tenant, from any trigger. */
+  liveRuns: string[]
+  /** Start of the selected reporting period. Pass these to backupSummary for the tile counts. */
+  periodStart: Date
   /** Set when the backup list could not be loaded, so an empty list is not shown as "no backups". */
   backupsError: string | null
   /** The most recent saved drift comparison, read through the desktop fetch bridge. */
@@ -88,6 +103,7 @@ async function fetchBackupHistory(tenant: any): Promise<BackupHistoryResult> {
       size: backup.size || backup.properties?.contentLength || 0,
       error: backup.error || backup.errorMessage || backup.properties?.errorMessage,
       policies: backup.policies,
+      runId: typeof backup.runId === "string" ? backup.runId : null,
     })).sort((a: BackupHistoryItem, b: BackupHistoryItem) => 
       b.timestamp.getTime() - a.timestamp.getTime() // Sort by newest first
     )
@@ -95,6 +111,31 @@ async function fetchBackupHistory(tenant: any): Promise<BackupHistoryResult> {
   } catch (error) {
     console.error("Error fetching backup history for", tenant.name, ":", error)
     return { items: [], error: "Backups could not be loaded." }
+  }
+}
+
+/** Failed attempts are kept by the app on this device, for every plan. */
+async function fetchFailedAttempts(tenant: any): Promise<FailedAttemptItem[]> {
+  const tenantId = tenant.credentials?.tenantId
+  if (!tenantId) return []
+  try {
+    const attempts = await bridge.backups.failedAttempts(tenantId)
+    return attempts.map((attempt) => ({ tenantId: tenant.id, timestamp: new Date(attempt.at), runId: attempt.runId, message: attempt.message }))
+  } catch (error) {
+    console.error("Error reading failed backup attempts for", tenant.name, ":", error)
+    return []
+  }
+}
+
+/** Backups the app is running for the tenant right now, from any trigger. */
+async function fetchLiveRuns(tenant: any): Promise<string[]> {
+  const tenantId = tenant.credentials?.tenantId
+  if (!tenantId) return []
+  try {
+    return await bridge.backups.liveRuns(tenantId)
+  } catch (error) {
+    console.error("Error reading running backups for", tenant.name, ":", error)
+    return []
   }
 }
 
@@ -187,11 +228,13 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
       const schedulePromises = tenants.map(tenant => fetchSchedules(tenant))
       const auditPromises = tenants.map((tenant, index) => auditAllowed[index] ? fetchAuditLogs(tenant, 20) : Promise.resolve([]))
       
-      const [allBackups, allSchedules, allAuditLogs, driftChecks] = await Promise.all([
+      const [allBackups, allSchedules, allAuditLogs, driftChecks, allFailedAttempts, allLiveRuns] = await Promise.all([
         Promise.all(backupPromises),
         Promise.all(schedulePromises),
         Promise.all(auditPromises),
         Promise.all(tenants.map(fetchDriftCheck)),
+        Promise.all(tenants.map(fetchFailedAttempts)),
+        Promise.all(tenants.map(fetchLiveRuns)),
       ])
       
       // Flatten arrays
@@ -210,10 +253,8 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
       
       // Filter backups within period
       const backupsInPeriod = backupHistory.filter(b => b.timestamp >= periodStart)
-      
-      // Counts use stored backup history. Automatic attempts that saved nothing are absent.
-      const counts = backupCounts(backupsInPeriod)
-      const { successRate } = counts
+      const failedAttempts = allFailedAttempts.flat()
+      const liveRuns = allLiveRuns.flat()
       const tenantHealth = tenants.map((tenant, index) => backupHealth(
         backupHistory.filter((backup) => backup.tenantId === tenant.id), now, !!allBackups[index]?.error,
       ))
@@ -232,11 +273,9 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
       
       // Calculate trend (compare to previous period)
       const prevPeriodStart = new Date(periodStart.getTime() - periodMs)
-      const prevPeriodBackups = backupHistory.filter(
-        b => b.timestamp >= prevPeriodStart && b.timestamp < periodStart
-      )
-      const prevSuccessRate = backupCounts(prevPeriodBackups).successRate
-      const trend = successRate - prevSuccessRate
+      const successRate = backupSummary(backupHistory, failedAttempts, { since: periodStart, live: liveRuns }).successRate
+      const prevSuccessRate = backupSummary(backupHistory, failedAttempts, { since: prevPeriodStart, until: periodStart, live: liveRuns }).successRate
+      const trend = successRate !== null && prevSuccessRate !== null ? successRate - prevSuccessRate : 0
       
       // Create recent activity from audit logs and backups
       const auditActivity = auditLogs
@@ -290,9 +329,7 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
           critical: criticalTenants,
         },
         backups: {
-          ...counts,
           scheduled: enabledSchedules.length,
-          successRate,
           trend,
         },
         nextBackup: nextSchedule ? {
@@ -304,7 +341,10 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
         recentActivity,
         latestBackup: backupHistory[0] ?? null,
         latestCompleteBackup: latestComplete(backupHistory),
-        totalBackups: backupHistory.length,
+        backupHistory,
+        failedAttempts,
+        liveRuns,
+        periodStart,
         backupsError,
         lastDriftCheck: driftChecks.filter(check => check !== null)
           .sort((a, b) => b.time.getTime() - a.time.getTime())[0] ?? null,

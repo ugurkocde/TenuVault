@@ -78,7 +78,7 @@ describe("backup folder claim", () => {
     ])
 
     const owner = JSON.parse((await store.get(account, "intune-backups", `${FOLDER}/${BACKUP_OWNER_FILE}`)).data.toString())
-    expect(owner).toEqual({ Source: "TenuVault Desktop", TenantId: TENANT })
+    expect(owner).toEqual({ Source: "TenuVault Desktop", TenantId: TENANT, RunId: winner.id })
 
     const detail = JSON.parse((await store.get(account, "intune-backups", `${FOLDER}/DeviceConfigurations/${winnerName}.json`)).data.toString())
     expect(detail).toMatchObject({ id: winnerId })

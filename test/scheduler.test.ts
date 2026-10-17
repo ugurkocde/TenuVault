@@ -34,7 +34,7 @@ describe("BackupScheduler", () => {
     await vi.advanceTimersByTimeAsync(59_999)
     expect(run).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1)
-    expect(run).toHaveBeenCalledExactlyOnceWith(TENANT, false)
+    expect(run).toHaveBeenCalledExactlyOnceWith(TENANT, false, new Date(2026, 9, 13, 2).toISOString())
     await vi.advanceTimersByTimeAsync(3 * 60_000)
     expect(run).toHaveBeenCalledTimes(1)
     expect(scheduler.list()[0]).toMatchObject({ lastRunAt: local(2026, 10, 13, 9, 1), nextRunAt: local(2026, 10, 14, 2) })
@@ -438,7 +438,7 @@ describe("BackupScheduler", () => {
       await restarted.tick()
       now = new Date(local(2026, 9, 26, 2, 30))
       await restarted.tick()
-      expect(retry.mock.calls).toEqual([[TENANT, false], [TENANT, true]])
+      expect(retry.mock.calls).toEqual([[TENANT, false, local(2026, 9, 26, 2)], [TENANT, true, local(2026, 9, 26, 2)]])
       expect(restarted.list()[0]).toMatchObject({ attempts: 1, lastStatus: "Failed" })
     })
 
@@ -530,7 +530,20 @@ describe("BackupScheduler", () => {
     finish({ status: "Completed", message: "Backup completed successfully" })
     await tick
     expect(run).toHaveBeenCalledTimes(1)
-    expect(run).toHaveBeenCalledWith(TENANT, false)
+    expect(run).toHaveBeenCalledWith(TENANT, false, local(2026, 9, 25, 2))
+  })
+
+  it("gives every retry of one slot the same slot and the next slot its own", async () => {
+    const { scheduler, run, setNow } = setup(local(2026, 9, 24, 10))
+    run.mockResolvedValue({ status: "Failed", message: "Microsoft Graph could not be reached.", unreachable: true })
+    scheduler.set({ tenantId: TENANT, enabled: true, frequency: "daily", time: "02:00" })
+    setNow(local(2026, 9, 25, 2))
+    await scheduler.tick()
+    setNow(local(2026, 9, 25, 2, 16))
+    await scheduler.tick()
+    setNow(local(2026, 9, 26, 2))
+    await scheduler.tick()
+    expect(run.mock.calls.map((call) => (call as unknown[])[2])).toEqual([local(2026, 9, 25, 2), local(2026, 9, 25, 2), local(2026, 9, 26, 2)])
   })
 
   it("skips and logs malformed stored entries while keeping valid schedules", () => {

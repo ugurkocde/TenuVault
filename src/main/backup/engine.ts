@@ -52,6 +52,8 @@ export interface BackupRequest {
   /** What to back up; everything when left out. */
   scope?: BackupScope
   trigger?: BackupTrigger
+  /** A scheduled backup's slot, as an ISO timestamp. Retries of one slot share it. */
+  slot?: string
 }
 
 export interface BackupEngineDeps {
@@ -63,6 +65,8 @@ export interface BackupEngineDeps {
   now?: () => Date
   /** Items read at the same time. Graph throttling (429) pauses every reader. */
   concurrency?: number
+  /** Called once when a job has ended, with the request that started it. */
+  onFinished?: (job: BackupJob, request: BackupRequest) => void
 }
 
 /** A Graph beta path, or an absolute nextLink that must be on the Graph origin. */
@@ -217,6 +221,12 @@ export class BackupEngine {
     return this.jobs.get(jobId)
   }
 
+  /** The run ids of the tenant's unfinished jobs, whatever started them. */
+  liveRuns(tenantId: string): string[] {
+    const active = this.running.get(tenantId.toLowerCase())
+    return active ? [active.job.id] : []
+  }
+
   /** Waits for the same bounded execution used by manual and scheduled jobs. */
   waitForJob(job: BackupJob): Promise<BackupJob> {
     return this.executions.get(job.id)?.done ?? Promise.resolve(job)
@@ -254,6 +264,7 @@ export class BackupEngine {
       this.write(conflict, `Backup failed: ${conflict.exception}`)
       this.jobs.set(conflict.id, conflict)
       this.prune()
+      this.finished(conflict, request)
       return conflict
     }
 
@@ -298,10 +309,20 @@ export class BackupEngine {
         job.endTime = this.now().toISOString()
         if (this.running.get(tenantKey)?.job === job) this.running.delete(tenantKey)
         this.executions.delete(job.id)
+        this.finished(job, request)
       })
       .then(() => job)
     this.executions.set(job.id, { controller, done })
     return job
+  }
+
+  /** A failing listener must not change how the job ended. */
+  private finished(job: BackupJob, request: BackupRequest): void {
+    try {
+      this.deps.onFinished?.(job, request)
+    } catch (error) {
+      console.warn("[backup] Could not record the end of a backup:", error)
+    }
   }
 
   private async run(job: BackupJob, request: BackupRequest, signal: AbortSignal, deadline: number, outcome: RunOutcome, stopped: StoppedRun): Promise<void> {
@@ -376,8 +397,9 @@ export class BackupEngine {
     // Claim the folder before writing any policy, even when retention currently keeps everything.
     // The create-only write is atomic, so two writers that start in the same second cannot share
     // one folder: the loser fails here and writes nothing else.
+    // The marker names this run, so the Dashboard can match a failed run to whatever folder storage holds for it.
     try {
-      await storage.put(`${backupFolder}/${BACKUP_OWNER_FILE}`, JSON.stringify({ Source: "TenuVault Desktop", TenantId: request.tenantId.toLowerCase() }), undefined, true)
+      await storage.put(`${backupFolder}/${BACKUP_OWNER_FILE}`, JSON.stringify({ Source: "TenuVault Desktop", TenantId: request.tenantId.toLowerCase(), RunId: job.id }), undefined, true)
     } catch (error) {
       if (error instanceof BlobClaimError) throw new BackupFolderTakenError(backupFolder)
       throw error
@@ -415,6 +437,7 @@ export class BackupEngine {
         // Retention only ever removes backups recorded as this tenant's.
         TenantId: request.tenantId.toLowerCase(),
         Trigger: request.trigger ?? "manual",
+        RunId: job.id,
         Scope: { Excluded: scope.excluded },
         Failures: failures,
         SkippedTypes: skippedTypes,
