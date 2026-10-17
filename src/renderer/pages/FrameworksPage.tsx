@@ -26,6 +26,8 @@ import type { SettingNames } from "../../shared/intune/drift"
 import { accumulateCisFindings, CIS_OPEN_PARAMS, cisOpenRequest, cisRunDisplayPhase, cisRunHeading, cisRunProgress, cisRunReceivedLabel, cisRunSteps, cisRunTallies, currentSavedAssessment, emptyCisRunAccumulation, pollCisStatus, resolveCisRunCompletion, type CisRunPack } from "../../shared/frameworks/cis-run"
 import { refreshInternalCisBenchmarks, useInternalCisBenchmarks, useInternalCisBenchmarksAnswer } from "../lib/internal-cis"
 import { bridge } from "../lib/bridge"
+import { startBackgroundTask, useBackgroundTask } from "../lib/background-tasks"
+import { refreshCisJobs } from "../lib/cis-jobs"
 import { cachedCisCatalog, rememberCisCatalog } from "../lib/cis-catalog-cache"
 import { parsePolicies, remediationPayload, rootMatches, type Assessment, type BaselinePolicy, type Finding, type Observation } from "../../shared/frameworks/policies"
 import { summarizeSetting } from "../../shared/frameworks/setting-summary"
@@ -47,6 +49,28 @@ const button = "inline-flex h-10 items-center justify-center gap-2 rounded-full 
 const primary = cn(button, "border-transparent bg-primary text-primary-foreground hover:bg-primary/90")
 const NativeFrameworkPage = lazy(() => import('./NativeFrameworkPage'))
 /** The part of the CIS page an action belongs to: loading a benchmark, comparing, or exporting results. */
+/**
+ * The run a background pack comparison produced, kept per tenant and framework for this window
+ * session. The activity panel entry is temporary, so the page reads this marker on open to show
+ * that exact result even when the admin returns long after the panel entry is gone.
+ */
+const compareMarkerKey = (tenantId: string, frameworkId: string) => `bg-compare:${tenantId.toLowerCase()}:${frameworkId}`
+function rememberBackgroundCompare(tenantId: string, frameworkId: string, runId: string): void {
+  try { sessionStorage.setItem(compareMarkerKey(tenantId, frameworkId), runId) } catch { /* storage unavailable */ }
+}
+function peekBackgroundCompare(tenantId: string | undefined, frameworkId: string): string | null {
+  if (!tenantId) return null
+  try { return sessionStorage.getItem(compareMarkerKey(tenantId, frameworkId)) } catch { return null }
+}
+/** Clears the marker once its run is on screen; a newer run's marker is left alone. */
+function clearBackgroundCompare(tenantId: string | undefined, frameworkId: string, runId: string): void {
+  if (!tenantId) return
+  try {
+    const key = compareMarkerKey(tenantId, frameworkId)
+    if (sessionStorage.getItem(key) === runId) sessionStorage.removeItem(key)
+  } catch { /* storage unavailable */ }
+}
+
 type ActionArea = "load" | "compare" | "export"
 /** Where a CIS export was started: the results header, the saved assessments block, the full history alert or the pack coverage button. */
 type ExportOrigin = "header" | "saved" | "alert" | "coverage"
@@ -488,6 +512,11 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   const contentStage = stage === "running" ? "setup" : stage
   const fromKit = isCis && isKitPackReference(reference, (kitConversion?.packs ?? []).map(pack => pack.reference), policies)
   const credentials = selectedTenant?.credentials
+  // A pack comparison outside CIS reads the tenant in one request; it runs as a background
+  // task so it finishes, and is saved to the workspace, even after navigating away.
+  const compareKey = credentials?.tenantId ? `assess:${credentials.tenantId.toLowerCase()}:${framework.id}` : undefined
+  const compareTask = useBackgroundTask(isCis ? undefined : compareKey)
+  const comparing = compareTask?.status === "running"
   // Reports of licensed CIS content are Pro and MSP; the main process checks the same plan.
   const plan = useTenantPlan(credentials?.tenantId)
   const { confirm, confirmDialog } = useConfirm()
@@ -522,6 +551,32 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   }
   const shownAssessment = useRef<Assessment | null>(null)
   useEffect(() => { shownAssessment.current = assessment }, [assessment])
+  const appliedCompareFinish = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    const finishedAt = compareTask?.finishedAt
+    if (isCis || compareTask?.status !== "completed" || !finishedAt) return
+    if (appliedCompareFinish.current === finishedAt) return
+    // A comparison started before this mount finished into setters that no longer exist, so
+    // show its saved run from the workspace it was recorded in. The marker and the applied
+    // stamp are only settled once that run is on screen, so leaving mid-load or a failed
+    // read keeps the result restorable on the next open.
+    let active = true
+    // Captured before the read, so only this marker can be settled by its answer. A marker a
+    // newer run writes while the read is in flight stays for that run's own restoration.
+    const markerRunId = peekBackgroundCompare(credentials?.tenantId, framework.id)
+    void workspaceRequest("workspace-load").then((saved) => {
+      if (!active) return
+      setWorkspace(saved)
+      const marked = markerRunId ? saved.history.find((entry) => entry.assessment.runId === markerRunId) : undefined
+      const latest = currentSavedAssessment(saved)
+      const target = marked ? { assessment: marked.assessment, policies: marked.policies } : latest
+      if (!target) return
+      if (shownAssessment.current?.runId !== target.assessment.runId) showSavedResults(target.assessment, { policies: target.policies, reference: target.assessment.reference })
+      appliedCompareFinish.current = finishedAt
+      if (markerRunId) clearBackgroundCompare(credentials?.tenantId, framework.id, markerRunId)
+    }).catch(() => undefined)
+    return () => { active = false }
+  }, [isCis, compareTask?.status, compareTask?.finishedAt, credentials?.tenantId, framework.id])
   /**
    * Shows a saved assessment as read-only results with its pack, and clears any selection made on
    * other results. It never replaces newer results already on screen, such as a fresh run.
@@ -545,6 +600,9 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     // change mounts a new page, which `mounted` covers.
     const runGeneration = cisRunGeneration.current
     const current = () => mounted() && cisRunGeneration.current === runGeneration
+    // Captured before the read: only this marker may be settled by the answer, never one a
+    // comparison finishing during the read has just written.
+    const backgroundRunId = first && !isCis ? peekBackgroundCompare(credentials?.tenantId, framework.id) : null
     let opened: OpenedWorkspace
     let lookupFailed = false
     if (isCis) {
@@ -562,7 +620,15 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     const saved = opened.workspace
     setWorkspace(saved)
     if (first) { setPolicies(saved.policies); setReference(saved.reference); setRecommendationList(saved.recommendationList) }
-    if (!isCis) return
+    if (!isCis) {
+      // A comparison that finished in the background while this page was closed opens on its result.
+      const backgroundRun = backgroundRunId ? saved.history.find((entry) => entry.assessment.runId === backgroundRunId) : undefined
+      if (backgroundRun) {
+        showSavedResults(backgroundRun.assessment, { policies: backgroundRun.policies, reference: backgroundRun.assessment.reference })
+        clearBackgroundCompare(credentials?.tenantId, framework.id, backgroundRunId!)
+      } else if (backgroundRunId) clearBackgroundCompare(credentials?.tenantId, framework.id, backgroundRunId)
+      return
+    }
     setActiveLookupFailed(lookupFailed)
     const latest = currentSavedAssessment(saved)
     // A requested saved run opens read-only, the exact run the link named; when it is gone the page
@@ -656,6 +722,8 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     setCisRun({ jobId: "", phase: "connecting", status: "running", state: "running", tenantId, frameworkId: framework.id, read: 0, total: 0, currentPolicy: "", comparedPolicies: 0, packPolicies: capturedPack.policies.length, currentPackPolicy: "", findings: [], nextSince: 0, error: null, assessment: null })
     try {
       const jobId = await jobFor()
+      // The activity panel mirrors this run from assess-jobs, so it stays visible on other pages.
+      void refreshCisJobs()
       if (!current()) return
       let accumulation = emptyCisRunAccumulation()
       for (;;) {
@@ -1138,9 +1206,30 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     </section>}
     {(!isCis || contentStage === "setup" || contentStage === "results") && <section {...(isCis && contentStage === "results" ? { "aria-label": "Assessment results" } : { "aria-labelledby": "compare-title" })} className={cn("mt-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]", isCis && contentStage === "results" && assessment?.runId === revealedRunId && "cis-results-reveal")}>
       {(!isCis || contentStage !== "results") && <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 id="compare-title" className="text-xl font-medium tracking-tight">2. Compare with your tenant</h2><p className="mt-1 text-sm text-gray-600">{selectedTenant ? `Selected tenant: ${selectedTenant.name}` : "Choose a connected tenant using the sidebar."}</p>{isCis && selectedTenant && !credentials && <p className="mt-1 text-sm text-amber-800">The assessment needs a signed-in tenant. Sign in to {selectedTenant.name} from the sidebar.</p>}</div>
-        {isCis ? <button className={primary} disabled={!!busy || !!cisRun || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={startCisAssessment}>{cisRun ? "Assessment running" : assessment ? "Run again" : "Start Assessment"}</button> : <button className={primary} disabled={!!busy || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={() => void perform("Reading tenant policies and comparing settings…", async () => {
-          reset(); const result = await request<Assessment>({ action: "assess", tenantId: credentials!.tenantId, appId: credentials!.appId, frameworkId: framework.id, reference, policies }); setAssessment(result); setWorkspace(await workspaceRequest("workspace-load"))
-        })}>{assessment ? "Compare again" : "Run comparison"}</button>}</div>}
+        {isCis ? <button className={primary} disabled={!!busy || !!cisRun || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={startCisAssessment}>{cisRun ? "Assessment running" : assessment ? "Run again" : "Start Assessment"}</button> : <button className={primary} disabled={!!busy || comparing || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={() => {
+          if (!compareKey) return
+          reset(); setError(""); setErrorAt("compare")
+          const chosenReference = reference
+          const chosenPolicies = policies
+          startBackgroundTask(compareKey, { title: `${framework.name} comparison`, detail: "Reading tenant policies and comparing settings", href: `/portal/frameworks/${framework.id}`, tenantId: credentials!.tenantId }, async () => {
+            try {
+              const result = await request<Assessment>({ action: "assess", tenantId: credentials!.tenantId, appId: credentials!.appId, frameworkId: framework.id, reference: chosenReference, policies: chosenPolicies })
+              // The result belongs to the captured pack: install both together, so a pack
+              // changed while the comparison ran cannot pair its policies with these findings.
+              rememberBackgroundCompare(credentials!.tenantId, framework.id, result.runId)
+              setPolicies(chosenPolicies); setReference(chosenReference); setAssessment(result); setWorkspace(await workspaceRequest("workspace-load"))
+              return `${framework.name} comparison is ready.`
+            } catch (e) {
+              // The page error still shows for an admin who stayed here; the panel carries it elsewhere.
+              const message = (e instanceof Error && errorText(e)) || "The request failed."
+              setError(message); setErrorAt("compare")
+              if (isWorkspaceUnreadableError(message)) setUnreadable(true)
+              refreshFullHistory(message)
+              throw e
+            }
+          })
+        }}>{comparing ? "Comparing in background" : assessment ? "Compare again" : "Run comparison"}</button>}</div>}
+      {comparing && <p role="status" className="mt-4 text-sm text-blue-700">Reading tenant policies and comparing settings in the background. You can keep working elsewhere; the result is saved here.</p>}
       {busy && busyAt === "compare" && !(isCis && cisRun) && <p role="status" className="mt-4 text-sm text-blue-700">{busy}</p>}
       {busy && busyAt === "compare" && isCis && !cisRun && <div role="progressbar" aria-label={busy} className="mt-2 h-2 overflow-hidden rounded-full bg-gray-100"><div className="h-full w-1/3 animate-pulse rounded-full bg-primary" /></div>}
       {historyFull && <div id={historyAlertId} role="alert" aria-label="Saved assessment history is full" className="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
