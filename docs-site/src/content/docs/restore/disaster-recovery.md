@@ -122,7 +122,7 @@ The full list is in [What cannot be restored](/restore/limitations/).
 
 * [Intune disaster recovery plan](https://www.tenuvault.com/intune-disaster-recovery): the preparation checklist, on the product site
 * [Intune restore drill](https://www.tenuvault.com/guides/intune-restore-drill): practice a restore before you need one
-* [Restore items](/restore/)
+* [Restore Intune policies](/restore/)
 * [Restore modes and assignments](/restore/modes/)
 * [Encryption and recovery key](/security/encryption/)
 * [Troubleshooting](/troubleshooting/)

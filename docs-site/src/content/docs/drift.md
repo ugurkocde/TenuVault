@@ -121,7 +121,7 @@ TenuVault records every revert and restore in the tenant's backup storage, so th
 **Revert** and **Recreate** only work with backups TenuVault has encrypted and can verify. Older unencrypted backups show "Unverified legacy snapshots cannot revert live policies. Review and restore a copy instead." Use **Restore previous version as copy** for those.
 :::
 
-For restoring several items, choosing assignments or restoring into another tenant, use the restore wizard instead. See [Restore items](/restore/).
+For restoring several items, choosing assignments or restoring into another tenant, use the restore wizard instead. See [Restore Intune policies](/restore/).
 
 ## Export a drift report
 

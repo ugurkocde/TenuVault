@@ -61,7 +61,7 @@ To compare the tenant as it is right now with your last backup, run a new backup
 
 ## Act on a change
 
-* To put an item back as it was, open **Restore from this backup** on the older backup. See [Restore items](/restore/).
+* To put an item back as it was, open **Restore from this backup** on the older backup. See [Restore Intune policies](/restore/).
 * To revert a recent change in place, or restore a copy, use [Drift detection](/drift/).
 
 ## Related pages

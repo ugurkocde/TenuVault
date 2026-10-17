@@ -150,7 +150,7 @@ Click an entry to open its **Backup Details**:
 
 | Part | What it shows |
 | --- | --- |
-| Buttons | **View Changes** ([Compare backups](/backups/compare/)), **Download** ([export as ZIP](/backups/storage/#export-a-backup-as-a-zip-file)) and **Restore from this backup** ([Restore items](/restore/)) |
+| Buttons | **View Changes** ([Compare backups](/backups/compare/)), **Download** ([export as ZIP](/backups/storage/#export-a-backup-as-a-zip-file)) and **Restore from this backup** ([Restore Intune policies](/restore/)) |
 | Warnings | Why a backup is incomplete, how many items or types could not be read, and which types were left out for missing permissions |
 | Totals | **Items**, **Size**, **Duration** and **Changes since the previous backup** |
 | **Contents** | Item counts per area. Expand an area for counts per type, and to see how many of its types the backup did not include. Areas left out entirely show **Not included**. |
@@ -180,4 +180,4 @@ If a tenant's plan does not include an action, TenuVault shows which plan does a
 * [Does Microsoft Intune have a built-in backup?](https://www.tenuvault.com/guides/does-intune-have-backup)
 * [What gets backed up](/backups/coverage/)
 * [Schedule backups](/backups/schedules/)
-* [Restore items](/restore/)
+* [Restore Intune policies](/restore/)

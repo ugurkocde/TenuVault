@@ -1,20 +1,20 @@
 ---
-title: "Intune restore: restore items from a backup"
-description: "Restore Microsoft Intune policies from a TenuVault backup: recreate deleted items, replace changed policies in place, or create unassigned copies."
+title: "Intune restore: restore policies from a backup"
+description: "Restore Microsoft Intune policies from a TenuVault backup: recreate deleted policies, replace changed policies in place, or create unassigned copies."
 faq:
   - question: "How do I restore an Intune policy?"
-    answer: "Open Backup & Restore in TenuVault and start the restore wizard, or pick a backup in Backup History and click Restore from this backup. Choose the items, choose Create copies or Replace in place, review what will happen to each item, then confirm."
+    answer: "Open Backup & Restore in TenuVault and start the restore wizard, or pick a backup in Backup History and click Restore from this backup. Choose the policies, choose Create copies or Replace in place, review what will happen to each policy, then confirm."
   - question: "Can I restore a deleted Intune policy?"
-    answer: "Yes, if a backup from before the deletion exists. Choose Replace in place in the restore wizard and the deleted item is recreated under its original name. Without a backup, a deleted Intune policy cannot be recovered, because Intune has no recycle bin for policies."
+    answer: "Yes, if a backup from before the deletion exists. Choose Replace in place in the restore wizard and the deleted policy is recreated under its original name. Without a backup, a deleted Intune policy cannot be recovered, because Intune has no recycle bin for policies."
   - question: "What is the difference between Create copies and Replace in place?"
-    answer: "Create copies adds separate copies and never changes existing items. With Restore assignments turned off the copies are unassigned and reach no device, which makes them safe for testing a restore. With Restore assignments on (Pro and MSP), copies get the backed-up groups and filters and do reach devices at their next check-in. Replace in place overwrites the current version with the backed-up version and recreates deleted items. Replace in place and restoring several items at once need Pro or MSP."
+    answer: "Create copies adds separate copies and never changes existing policies. With Restore assignments turned off the copies are unassigned and reach no device, which makes them safe for testing a restore. With Restore assignments on (Pro and MSP), copies get the backed-up groups and filters and do reach devices at their next check-in. Replace in place overwrites the current version with the backed-up version and recreates deleted policies. Replace in place and restoring several policies at once need Pro or MSP."
   - question: "Are assignments restored with an Intune policy?"
-    answer: "Only when you turn on Restore assignments, which needs Pro or MSP. With it on, supported items get the assignments recorded in the backup. Windows Autopilot profiles, Apple user enrollment profiles, terms and conditions and Intune roles do not support assignment replacement in place: restore them in a separate selection with assignments off. Copies with assignments off and cross-tenant restores arrive unassigned."
+    answer: "Only when you turn on Restore assignments, which needs Pro or MSP. With it on, the policies you restore get the assignments recorded in the backup, where assignment replacement is supported. Windows Autopilot profiles, Apple user enrollment profiles, terms and conditions and Intune roles do not support assignment replacement in place: restore them in a separate selection with assignments off. Copies with assignments off and cross-tenant restores arrive unassigned."
   - question: "Can I restore Intune configuration to another tenant?"
     answer: "Yes, with the MSP plan. Copies keep their original names, get the Default scope tag and are never assigned, so you recreate groups, exclusions and filters in the target tenant and then assign the copies."
 ---
 
-An Intune restore brings Microsoft Intune items back exactly as they were when a backup ran, including policies that were changed or deleted afterwards. The restore wizard walks you through it: pick a backup, choose the items, decide how to restore them, review exactly what will happen to each item, and then watch the restore run. For the product overview, see [Intune restore with TenuVault](https://www.tenuvault.com/intune-restore).
+An Intune restore brings Microsoft Intune policies back exactly as they were when a backup ran, including policies that were changed or deleted afterwards. The restore wizard walks you through it: pick a backup, choose the policies, decide how to restore them, review exactly what will happen to each policy, and then watch the restore run. For the product overview, see [Intune restore with TenuVault](https://www.tenuvault.com/intune-restore).
 
 ## Before you start
 
