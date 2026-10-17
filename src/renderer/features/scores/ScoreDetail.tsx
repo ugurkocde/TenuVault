@@ -20,6 +20,15 @@ export function groupCounted(items: CountedItem[]): Array<{ result: CountedResul
   return GROUPS.map((group) => ({ ...group, items: items.filter((item) => item.result === group.result) }))
 }
 
+/** A control title without the control number it repeats, such as "Endpoint evidence mapping 8.1" for control 8.1. */
+export function controlTitle(id: string, title: string): string {
+  const trimmed = title.endsWith(` ${id}`) ? title.slice(0, -id.length).trim() : title
+  return trimmed || title
+}
+
+/** Why the per-control gap counts can add up to more than the gap count of the score card. */
+export const SOURCE_CONTROLS_NOTE = "A capability can support several controls, so per-control counts add up to more than the card's gap count."
+
 /**
  * Drill-down of a framework score: every counted capability under its counted result with the
  * reason, the evidence of each gap, and the source controls. Used for the selected tenant and,
@@ -108,6 +117,7 @@ export function ScoreDetail({ tenant, frameworkId, onClose }: { tenant: Tenant; 
           {detail.controls.length > 0 && (
             <div className="overflow-x-auto">
               <h4 className="text-sm font-medium text-gray-900">Source controls ({detail.controls.length})</h4>
+              <p className="text-xs text-gray-500">{SOURCE_CONTROLS_NOTE}</p>
               <table className="mt-2 w-full text-left text-sm">
                 <thead className="text-xs text-gray-500">
                   <tr>
@@ -120,7 +130,7 @@ export function ScoreDetail({ tenant, frameworkId, onClose }: { tenant: Tenant; 
                   {detail.controls.map((control) => (
                     <tr key={control.id}>
                       <td className="py-2 pr-4 text-gray-800">
-                        <span className="font-mono text-xs">{control.id}</span> {control.title}
+                        <span className="font-mono text-xs">{control.id}</span> {controlTitle(control.id, control.title)}
                       </td>
                       <td className="py-2 pr-4 text-gray-600">{control.unavailable ? `Not checkable: ${control.unavailable}` : CONTROL_STATUS_LABELS[control.status]}</td>
                       <td className="py-2 text-gray-600 tabular-nums">{control.gapCapabilityIds.length}</td>

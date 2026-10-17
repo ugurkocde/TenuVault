@@ -87,7 +87,7 @@ function FindingRow({ tenant, finding, readOnly, onChanged }: { tenant: Tenant; 
         )}
       </p>
       <p className="mt-1 text-xs text-gray-500">
-        First seen {formatTime(finding.firstSeenAt)}; last checked {formatTime(finding.lastSeenAt)}; evidence read {formatTime(finding.observedAt, "never (unknown)")}
+        First seen {formatTime(finding.firstSeenAt)}; last checked {formatTime(finding.lastSeenAt)}; evidence from {formatTime(finding.observedAt, "never (unknown)")}
         {resolved && `; resolved by fresh evidence ${formatTime(finding.resolvedAt)}`}
       </p>
       {readOnly ? (

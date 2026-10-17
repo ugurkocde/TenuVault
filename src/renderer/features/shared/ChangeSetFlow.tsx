@@ -6,7 +6,7 @@ import { Chip } from "~/components/dashboard/tiles"
 import { toast } from "../../lib/toast"
 import { ConfirmWriteDialog } from "./ConfirmWriteDialog"
 import { DiffList } from "./DiffList"
-import { formatDate, RESULT_TONE, STATUS_TONE, type ChangeSet, type ChangeSetActions, type ChangeSetPreview, type RollbackPreview } from "./change-set"
+import { formatDate, RESULT_TONE, STATUS_TONE, statusLabel, type ChangeSet, type ChangeSetActions, type ChangeSetPreview, type RollbackPreview } from "./change-set"
 import type { SettingNames } from "../../../shared/intune/drift"
 import { omittedSettingValues } from "../../../shared/frameworks/cis-display"
 
@@ -83,7 +83,7 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
             {changeSet.ticket ? `Ticket ${changeSet.ticket}. ` : ""}Created {formatDate(changeSet.createdAt)}{changeSetCreator(changeSet) ? ` by ${changeSetCreator(changeSet)}` : ""}. Source version {sourceLabel ?? changeSet.sourceVersion ?? "not recorded"}.
           </p>
         </div>
-        {!embedded && <Chip tone={STATUS_TONE[changeSet.status]}>{changeSet.status}</Chip>}
+        {!embedded && <Chip tone={STATUS_TONE[changeSet.status]}>{statusLabel(changeSet.status)}</Chip>}
       </div>
       {intro}
 
@@ -123,7 +123,7 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
                 </button>
                 {expanded && (
                   <div className="mt-3 space-y-2 pl-6 text-sm">
-                    <p className="text-gray-500">Target object: {operation.targetId ?? result?.objectId ?? "new object"}. Source: {operation.source?.label ?? "not recorded"}.</p>
+                    <p className="text-gray-500">Target object: {(operation.targetId ?? result?.objectId) ? <>{operation.name} <span className="break-all text-xs text-gray-400">{operation.targetId ?? result?.objectId}</span></> : "new object"}. Source: {operation.source?.label ?? "not recorded"}.</p>
                     {result?.message && <p className="text-gray-700 dark:text-gray-300">{result.message}</p>}
                     {live?.blockers.map((line, index) => <p key={`b${index}`} className="text-red-700 dark:text-red-400">{line}</p>)}
                     {live?.warnings.map((line, index) => <p key={`w${index}`} className="text-amber-800 dark:text-amber-300">{line}</p>)}

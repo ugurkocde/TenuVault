@@ -1,10 +1,11 @@
+import { Link } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Clock, Play } from "lucide-react"
 import { BigValue, Chip, Tile, TileLabel } from "~/components/dashboard/tiles"
 import { Button } from "~/components/ui/button"
 import { toast } from "../../lib/toast"
 import type { FeatureTabProps } from "../types"
-import { formatTime, healthApi, OUTCOME_LABELS, type Status } from "./api"
+import { evidenceAge, formatTime, healthApi, OUTCOME_LABELS, STALE_EVIDENCE_DAYS, type Finding, type Status } from "./api"
 import { EndpointsPanel } from "./EndpointsPanel"
 import { FindingsList } from "./FindingsList"
 import { PortfolioHealth } from "./PortfolioHealth"
@@ -43,7 +44,7 @@ export default function HealthReviewTab({ tenant, plan, allowed }: FeatureTabPro
     if (!data?.lastRun && stored.length === 0) return null
     return (
       <div className="space-y-4">
-        {data && <StatusTiles status={data} />}
+        {data && <StatusTiles status={data} findings={stored} />}
         <FindingsList tenant={tenant} findings={stored} lastRun={data?.lastRun} load={findings} readOnly onChanged={refresh} />
       </div>
     )
@@ -52,7 +53,7 @@ export default function HealthReviewTab({ tenant, plan, allowed }: FeatureTabPro
   return (
     <div className="space-y-4">
       {status.error && <p className="text-sm text-red-700" role="alert">{status.error instanceof Error ? status.error.message : "Status could not be loaded."}</p>}
-      {data && <StatusTiles status={data} />}
+      {data && <StatusTiles status={data} findings={stored} review={{ run: () => run.mutate(), running: run.isPending }} />}
 
       <Tile aria-labelledby="health-schedule-heading" className="gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -107,16 +108,27 @@ export default function HealthReviewTab({ tenant, plan, allowed }: FeatureTabPro
   )
 }
 
-function StatusTiles({ status }: { status: Status }) {
+/** Where stale evidence is refreshed, by the screen a finding links to. */
+const REFRESH_LABELS: Record<string, string> = { "/portal/governance/hygiene": "Scan the latest backup in Conflicts and hygiene" }
+
+export function StatusTiles({ status, findings, review, now }: { status: Status; findings: Finding[]; review?: { run: () => void; running: boolean }; now?: number }) {
   const { schedule, readiness, lastRun, counts } = status
   const open = counts.critical + counts.high + counts.medium + counts.low
   const tone = readiness.state === "ready" ? "success" : readiness.state === "disabled" ? "neutral" : "warning"
+  const evidence = evidenceAge(findings, now)
   return (
-    <div className="grid gap-4 md:grid-cols-3">
+    <div className="space-y-4">
+    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
       <Tile>
         <TileLabel>Last review</TileLabel>
         <BigValue className="text-xl">{formatTime(schedule?.lastReviewAt ?? lastRun?.finishedAt)}</BigValue>
         {lastRun && <p className="mt-2 text-sm text-gray-600">{OUTCOME_LABELS[lastRun.status] ?? lastRun.status}{lastRun.trigger === "catch-up" ? `, catch-up after ${lastRun.missedWindows} missed windows` : ""}</p>}
+      </Tile>
+      <Tile>
+        <TileLabel>Evidence from</TileLabel>
+        <BigValue className="text-xl">{evidence.oldest ? new Date(evidence.oldest).toLocaleDateString(undefined, { dateStyle: "medium" }) : "No dated evidence"}</BigValue>
+        {evidence.ageDays !== null && <p className="mt-2 text-sm text-gray-600">Oldest evidence of the open findings, {evidence.ageDays === 0 ? "from today" : `${evidence.ageDays} ${evidence.ageDays === 1 ? "day" : "days"} old`}.</p>}
+        {evidence.stale > 0 && <div className="mt-2"><Chip tone="warning">Stale</Chip></div>}
       </Tile>
       <Tile>
         <TileLabel>Scheduling readiness</TileLabel>
@@ -128,9 +140,19 @@ function StatusTiles({ status }: { status: Status }) {
         <TileLabel>Open findings</TileLabel>
         <BigValue>{lastRun || open ? open : "Unknown"}</BigValue>
         <p className="mt-2 text-sm text-gray-600">
-          {counts.critical} critical, {counts.high} high, {counts.medium} medium, {counts.unknown} with unknown evidence
+          {counts.critical} critical, {counts.high} high, {counts.medium} medium, {counts.low} low, {counts.unknown} with unknown evidence
         </p>
       </Tile>
+    </div>
+    {evidence.stale > 0 && (
+      <div role="status" aria-label="Stale evidence" className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950">
+        <span>
+          {evidence.stale === 1 ? "1 open finding is" : `${evidence.stale} open findings are`} based on evidence older than {STALE_EVIDENCE_DAYS} days, the oldest from {formatTime(evidence.oldest)}. A review reads stored evidence, so refresh it at its source first, then review again.
+        </span>
+        {evidence.staleLink && <Link to={evidence.staleLink} className="font-medium text-gray-900 underline underline-offset-2">{REFRESH_LABELS[evidence.staleLink] ?? "Open the source"}</Link>}
+        {review && <Button type="button" size="sm" variant="outline" onClick={review.run} disabled={review.running}>{review.running ? "Reviewing" : "Review now"}</Button>}
+      </div>
+    )}
     </div>
   )
 }

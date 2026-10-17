@@ -199,11 +199,31 @@ export function levelCheckSummary(level: Pick<CisLevelReadiness, "level" | "reco
   return `Level ${level.level}: ${product} checks ${checked} of ${total} ${noun(total)} automatically. ${rest}`
 }
 
-/** The label printed wherever a coverage ratio appears, naming where its denominator came from. */
+/** The label printed wherever a coverage ratio appears, naming where the full list of automated recommendations came from. */
 export function coverageSourceLabel(source: DenominatorSource): string {
-  if (source === "authoritative") return "Authoritative denominator"
-  if (source === "breakout-proxy") return "Breakout proxy, illustrative"
-  return "Not computable"
+  if (source === "authoritative") return "CIS list of automated recommendations"
+  if (source === "breakout-proxy") return "estimate from the CIS breakout workbook"
+  return "Not available"
+}
+
+/**
+ * Coverage of the full benchmark in plain words, for the CIS page and the PDF. Coverage needs the
+ * list of every automated recommendation CIS defines for a Level. That list is separate from the
+ * recommendations a pack maps to its settings, and delivered packs do not include it, so a pack can
+ * list hundreds of recommendation results while coverage of the full benchmark stays unknown.
+ */
+export function coverageStatement(level: Pick<CisLevelReadiness, "level" | "coverage" | "assessedAutomated" | "denominator" | "coverageSource" | "enumerated" | "denominatorIdentifiers">): string {
+  // A Level the list names but no policy pack of which was assessed has no coverage to compute.
+  if (level.denominator === null && (level.denominatorIdentifiers ?? []).length) return `No policy pack for Level ${level.level} was assessed, so coverage of the full benchmark is not shown for it.`
+  if (level.denominator === null) return "Coverage of the full benchmark is not shown because the list of all its automated recommendations is not available."
+  if (level.coverage === null) return `Coverage of the full benchmark is not shown because the list of its recommendations marks none of Level ${level.level} as automated.`
+  const named = level.enumerated === 0 ? " The pack policies do not name the recommendation numbers they implement, so none of them count." : ""
+  return `Coverage: ${formatRate(level.coverage)} (${level.assessedAutomated} of ${level.denominator} automated recommendations), source: ${coverageSourceLabel(level.coverageSource)}.${named}`
+}
+
+/** Why a headline is a settings rate: the pack maps no recommendation to its settings. Null on the recommendation basis. */
+export function headlineBasisNote(head: Pick<CisHeadline, "basis">): string | null {
+  return head.basis === "settings" ? "Scored by settings because this benchmark has no recommendation mapping." : null
 }
 
 export interface CisReadinessSummary {
@@ -397,6 +417,21 @@ export function compareAssessments(a: CisReadinessEntry, b: CisReadinessEntry): 
 /** The Levels a saved assessment measures: those of its pack policies and of the recommendations they carry. */
 function packLevels(policies: BaselinePolicy[]): Set<KitLevel> {
   return new Set([...policies.map(levelOf), ...policies.flatMap(policy => (policy.recommendations ?? []).map(item => item.level))])
+}
+
+/**
+ * The newest saved assessment, in the compareAssessments order, of one benchmark and, when given,
+ * one version and one Level: the run a view of that benchmark and Level shows. Null when there is none.
+ */
+export function newestAssessmentOf<T extends CisReadinessEntry>(history: readonly T[], target: { benchmark: string; version?: string; level?: KitLevel }, recommendationList?: RecommendationList): T | null {
+  let newest: T | null = null
+  for (const entry of history) {
+    const identity = packIdentity(entry.policies, recommendationList)
+    if (identity.benchmark !== target.benchmark || (target.version !== undefined && identity.version !== target.version)) continue
+    if (target.level !== undefined && !packLevels(entry.policies).has(target.level)) continue
+    if (!newest || compareAssessments(entry, newest) > 0) newest = entry
+  }
+  return newest
 }
 
 /**

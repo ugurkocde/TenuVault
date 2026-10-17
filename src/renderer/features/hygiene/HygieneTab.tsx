@@ -9,6 +9,7 @@ import { CLASSIFICATION_LABELS, formatDate, loadList, runScan, STATUS_LABELS, ty
 import { FindingDetail } from "./FindingDetail"
 import { FleetSummary } from "./FleetSummary"
 import { ScanSummary } from "./ScanSummary"
+import { STALE_EVIDENCE_DAYS } from "../health-review/api"
 import { GovernanceExportButtons } from "../shared/GovernanceExportButtons"
 import { hygieneCsv, hygieneJson } from "../shared/governance-export"
 
@@ -60,7 +61,7 @@ export default function HygieneTab({ tenant, plan, allowed }: FeatureTabProps) {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-lg font-medium text-gray-900">{allowed ? "Policy conflicts and hygiene" : "Stored hygiene findings (read-only)"}</h3>
-            <p className="max-w-3xl text-sm text-gray-500">Built from the latest complete backup. Types that were not collected are shown as not collected, not as clean. Group membership, filters and device state are not collected, so overlaps that depend on them stay possible, never proven.</p>
+            <p className="max-w-3xl text-sm text-gray-500">Built from the backup named below when the scan ran; a newer backup is used only after Scan latest backup. Types that were not collected are shown as not collected, not as clean. Group membership, filters and device state are not collected, so overlaps that depend on them stay possible, never proven.</p>
           </div>
           {allowed && (
             <Button type="button" size="sm" disabled={scan.isPending} onClick={() => scan.mutate()}>
@@ -72,6 +73,11 @@ export default function HygieneTab({ tenant, plan, allowed }: FeatureTabProps) {
         {list.isLoading && <div className="h-24 animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-800" />}
         {list.error && <p className="text-sm text-red-700 dark:text-red-400">{list.error instanceof Error ? list.error.message : "Findings could not be loaded."}</p>}
         {list.data && !latest && <p className="text-sm text-gray-600">No scan yet. A scan reads the latest complete backup; it does not read or change the tenant apart from checking whether referenced groups exist.</p>}
+        {latest && Date.now() - Date.parse(latest.collectedAt) > STALE_EVIDENCE_DAYS * 24 * 60 * 60 * 1000 && (
+          <p role="status" className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950">
+            These findings come from a backup collected {formatDate(latest.collectedAt)}, more than {STALE_EVIDENCE_DAYS} days ago.{allowed ? " Scan latest backup to check the newest complete backup." : ""}
+          </p>
+        )}
         {latest && <ScanSummary scan={latest} ruleName={ruleName} />}
       </section>
 

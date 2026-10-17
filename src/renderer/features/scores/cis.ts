@@ -2,6 +2,7 @@ import { benchmarkTitle } from "../../../shared/frameworks/cis-display"
 import type { CisPortfolioWorkspace } from "../../../shared/frameworks/cis-portfolio"
 import { compareAssessments, exclusionsText, levelHeadline, packBenchmark, ratePercent, readinessFor } from "../../../shared/frameworks/cis-readiness"
 import type { KitLevel } from "../../../shared/frameworks/cis-kit"
+import { loadCisWorkspace } from "./api"
 
 export interface CisScoreLevel {
   level: KitLevel
@@ -60,4 +61,39 @@ export function cisScoreCards(access: boolean, workspace: CisPortfolioWorkspace 
     })
   }
   return [...cards.values()]
+}
+
+/**
+ * The CIS page link of a card: it names the saved run the card shows, so the page opens on exactly
+ * that assessment, read-only. The benchmark, version and the Level the card rates only name the
+ * run in the page's note when it was deleted in the meantime. With `tenantId` the link also selects
+ * that tenant first, as a portfolio row of another tenant needs.
+ */
+export function cisCardPath(card: Pick<CisScoreCard, "key" | "version" | "levels" | "runId">, tenantId?: string): string {
+  const params = new URLSearchParams({ run: card.runId, benchmark: card.key })
+  if (card.version) params.set("version", card.version)
+  const level = (card.levels.find(item => item.rate !== null) ?? card.levels[0])?.level
+  if (level) params.set("level", String(level))
+  if (tenantId) params.set("tenant", tenantId)
+  return `/portal/frameworks/cis-benchmarks?${params.toString()}`
+}
+
+/** The CIS cards of one portfolio tenant, or why its saved CIS assessments could not be read. */
+export type PortfolioCis = { cards: CisScoreCard[]; error: null } | { cards: []; error: string }
+
+/**
+ * The CIS cards of each portfolio tenant, keyed by lower-case tenant id, with the same rates as
+ * that tenant's Governance CIS cards. Each tenant is read on its own, so one failure does not
+ * hide the others. Without internal CIS access nothing is read.
+ */
+export async function loadPortfolioCis(access: boolean, tenantIds: string[], read: (tenantId: string) => Promise<CisPortfolioWorkspace> = loadCisWorkspace, todayISO?: string): Promise<Map<string, PortfolioCis>> {
+  if (!access) return new Map()
+  const entries = await Promise.all(tenantIds.map(async (tenantId): Promise<[string, PortfolioCis]> => {
+    try {
+      return [tenantId.toLowerCase(), { cards: cisScoreCards(true, await read(tenantId), tenantId, todayISO), error: null }]
+    } catch (error) {
+      return [tenantId.toLowerCase(), { cards: [], error: error instanceof Error ? error.message : "The saved CIS assessments could not be read." }]
+    }
+  }))
+  return new Map(entries)
 }

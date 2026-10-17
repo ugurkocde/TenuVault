@@ -91,7 +91,7 @@ From TenuVault 0.3.0, summary tiles count each capability once, using the best e
 | **Matches** | Assigned policy evidence matches the capability. Required setting groups must be together on one policy. |
 | **Different** | Assigned policy evidence is different and no complete assigned match was found. |
 | **Missing** | No assigned policy provides the capability, or required setting groups are missing. |
-| **Unable to check** | TenuVault could not read the evidence, for example because a read failed or a value is masked. |
+| **Unknown** | TenuVault could not read the evidence, for example because a read failed or a value is masked. Governance scores use the same term and leave these results out of the score. |
 | **Outside scope** | The capability applies to a platform you did not select, including Conditional Access when it is deselected. |
 
 Compliance policies, device restriction profiles and endpoint protection profiles return every on/off setting, and one left at **Not configured** reads as off. TenuVault ignores those, so they never count as **Different** or as evidence against a requirement. For example, a compliance policy that only requires the firewall is not reported as a different value for BitLocker or antivirus. Administrative template and custom (OMA-URI) settings are compared as set, because **Disabled** there is an explicit choice.

@@ -53,7 +53,7 @@ Read the score and its coverage together. A partial collection can change the co
 
 1. On a framework card, click **How this score is counted**.
 2. Read **Counted capabilities**. Every capability and framework reference is listed once under the result it was counted as: **Different**, **Missing**, **Unknown**, **Matching** and **Outside scope**, each with the reason. The groups add up to the counts on the card, so you can trace a low score item by item. Different and missing capabilities also show their controls, the settings and policies behind them, including whether a policy is assigned, and the priority reasons.
-3. Read **Source controls**, which lists every control with its status.
+3. Read **Source controls**, which lists every control with its status and its gap count. A capability can support several controls, so the per-control counts add up to more than the gap count on the card.
 4. Click **Close** to return, or **Open comparison** on the card to open the saved comparison itself.
 
 Only one detail panel is open at a time, whether you open it from a card or from the portfolio. **Refresh** reloads the scores and an open detail.
@@ -77,6 +77,8 @@ With MSP, the **Portfolio** section at the bottom of the screen shows scores per
 1. Click **Load portfolio**, or **Refresh portfolio** after the first load.
 2. In the table, use **Details** on a row to open how that tenant's score is counted.
 
+A framework whose saved results set no score, such as comparisons scored under older rules or OpenIntuneBaseline single policy checks, shows the date of its newest saved result and the reason instead of a coverage figure. A tenant without any saved comparison reads "No saved comparison yet."
+
 Tenants without an MSP license or without sign-in are listed as not included and are never guessed.
 
 ### Limits
@@ -95,6 +97,8 @@ Conflicts and hygiene finds candidate conflicting settings, duplicate profiles, 
 3. Click **Scan latest backup**. While it runs the button shows "Scanning backup".
 
 A scan reads the latest complete backup. It does not read or change the tenant apart from checking whether referenced groups exist, and it never deletes or changes a policy. If no scan has run yet, the screen says so and offers the same button.
+
+The findings stay those of the last scan until you scan again: a newer backup does not update them on its own. The screen names the source backup and its collection date, and warns when that backup was collected more than 7 days ago.
 
 ### Read a scan
 
