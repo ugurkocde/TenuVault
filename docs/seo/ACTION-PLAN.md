@@ -6,7 +6,7 @@ Companion to [FULL-AUDIT-REPORT.md](FULL-AUDIT-REPORT.md). Priorities describe e
 
 | # | Action | Files |
 | --- | --- | --- |
-| D1 | Retitle docs pillars to carry the exact phrases, slugs unchanged, sidebar labels unchanged | backups/index.md, restore/index.md, restore/disaster-recovery.md, getting-started/index.md |
+| D1 | Retitle docs pillars to carry the exact phrases, slugs unchanged; sidebar group renamed from Restore items to Restore policies, because people search for policies, not items | backups/index.md, restore/index.md, restore/disaster-recovery.md, getting-started/index.md |
 | D2 | Definition-first opening paragraphs on the three docs pillars (featured snippet and AI citation format: phrase, definition, scope, in the first 60 words) | same |
 | D3 | FAQ frontmatter on the backup and restore pillars, rendered visibly and as FAQPage JSON-LD from one source | backups/index.md, restore/index.md |
 | D4 | Twenty contextual links from twelve docs pages to the owning www pillar or guide, exact-phrase anchors, per the keyword map in the report | backups cluster, restore cluster, drift, first-backup |
