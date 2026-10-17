@@ -165,11 +165,13 @@ function ConvertTo-TenuVaultCanonicalJson {
         # Windows PowerShell 5.1 (the Automation "PowerShell" runbook runtime)
         # rejects the round-trip format for integral and decimal values, so only
         # floating point values use it. "G" renders integers identically.
-        if ($Value -is [byte] -or $Value -is [int] -or $Value -is [long] -or $Value -is [short] -or
-            $Value -is [uint32] -or $Value -is [uint64] -or $Value -is [decimal]) {
+        # Full type names: Windows PowerShell 5.1 (the Automation sandbox runtime)
+        # has no short, ushort, uint or ulong type accelerators (added in 6.2).
+        if ($Value -is [System.Byte] -or $Value -is [System.Int32] -or $Value -is [System.Int64] -or $Value -is [System.Int16] -or
+            $Value -is [System.UInt32] -or $Value -is [System.UInt64] -or $Value -is [System.Decimal]) {
             return ([IFormattable]$Value).ToString("G", [Globalization.CultureInfo]::InvariantCulture)
         }
-        if ($Value -is [double] -or $Value -is [single]) {
+        if ($Value -is [System.Double] -or $Value -is [System.Single]) {
             return ([IFormattable]$Value).ToString("R", [Globalization.CultureInfo]::InvariantCulture)
         }
 
@@ -1364,7 +1366,13 @@ try {
             $listUri = "https://$storageAccount.blob.core.windows.net/intune-backups?restype=container&comp=list&delimiter=%2F&maxresults=5000"
             if ($marker) { $listUri += "&marker=$([uri]::EscapeDataString($marker))" }
             $listResponse = Invoke-TvStorageRequest -Uri $listUri -Method Get -Token $storageToken
-            [xml]$listXml = [string]$listResponse.Content
+            # Windows PowerShell 5.1 in the Automation sandbox can misdecode the
+            # UTF-8 BOM of the storage response into leading garbage characters.
+            # Skip everything before the first tag so the cast always sees XML.
+            $listText = [string]$listResponse.Content
+            $xmlStart = $listText.IndexOf("<")
+            if ($xmlStart -gt 0) { $listText = $listText.Substring($xmlStart) }
+            [xml]$listXml = $listText
             $names = [System.Collections.Generic.List[string]]::new()
             $blobsNode = $listXml.EnumerationResults.Blobs
             if ($blobsNode) {
