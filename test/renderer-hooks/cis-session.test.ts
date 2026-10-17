@@ -1,4 +1,4 @@
-import { act, createElement } from "react"
+import { act, createElement, StrictMode } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter, Route, Routes } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -75,13 +75,16 @@ function stubService(options: { history?: ReturnType<typeof assessment>[]; unrea
 
 const roots: Root[] = []
 const containers: HTMLDivElement[] = []
-function render(path = "/portal/frameworks/cis-benchmarks"): { container: HTMLDivElement; navigate: (to: string) => void } {
+function render(path = "/portal/frameworks/cis-benchmarks", strict = false): { container: HTMLDivElement; navigate: (to: string) => void } {
   const container = document.createElement("div")
   document.body.appendChild(container)
   containers.push(container)
   const root = createRoot(container)
   roots.push(root)
-  const tree = (to: string) => createElement(MemoryRouter, { key: to, initialEntries: [to] }, createElement(Routes, null, createElement(Route, { path: "/portal/frameworks/:frameworkId", element: createElement(FrameworksPage) }), createElement(Route, { path: "/portal/dashboard", element: createElement("p", null, "Dashboard") })))
+  const tree = (to: string) => {
+    const app = createElement(MemoryRouter, { key: to, initialEntries: [to] }, createElement(Routes, null, createElement(Route, { path: "/portal/frameworks/:frameworkId", element: createElement(FrameworksPage) }), createElement(Route, { path: "/portal/dashboard", element: createElement("p", null, "Dashboard") })))
+    return strict ? createElement(StrictMode, null, app) : app
+  }
   act(() => { root.render(tree(path)) })
   return { container, navigate: to => act(() => { root.render(tree(to)) }) }
 }
@@ -196,8 +199,18 @@ describe("CIS Benchmarks results across navigation", () => {
     const { container } = render()
     await waitFor(() => container.textContent.includes("Reading tenant policies"))
     expect(container.textContent).toContain("3 of 10 policies read")
+    // The run shows as a full-page overlay with one overall progress bar, not an inline card.
+    const overlay = container.querySelector('[aria-label="Assessment in progress"]')
+    // A named region, not a generic div, so screen readers announce the label when focus lands here.
+    expect(overlay?.getAttribute("role")).toBe("region")
+    expect(overlay?.className).toContain("fixed")
+    expect(overlay?.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("15")
     expect(actions.some(body => body.action === "assess-start")).toBe(false)
     await waitFor(() => !!results(container))
+    expect(container.querySelector('[aria-label="Assessment in progress"]')).toBeNull()
+    expect(container.querySelector('[aria-label="Results header"]')?.className).toContain("cis-results-reveal")
+    // Focus lands on the revealed results instead of being lost when the overlay unmounts.
+    await waitFor(() => document.activeElement === container.querySelector('[aria-label="Results header"]'))
     expect(levelSummary(container)).toContain("100%")
   })
 
@@ -241,6 +254,7 @@ describe("Run again", () => {
     await flush()
     expect(buttonNamed(container, "Run comparison again")).toBeUndefined()
     expect([...container.querySelectorAll("button")].filter(item => item.textContent === "Run again")).toHaveLength(1)
+    buttonNamed(container, "Run again")!.focus()
     await act(async () => { buttonNamed(container, "Run again")!.click() })
     await waitFor(() => container.textContent.includes("Re-running assessment: reading tenant policies"))
     expect(results(container)).not.toBeNull()
@@ -250,7 +264,42 @@ describe("Run again", () => {
     expect(results(container)).not.toBeNull()
     expect(levelSummary(container)).toContain("0%")
     expect(container.textContent).not.toContain("Re-running assessment")
+    // Focus returns to the button that started the failed re-run.
+    await waitFor(() => document.activeElement === buttonNamed(container, "Run again"))
     expect(actions.filter(body => body.action === "assess").length).toBe(0)
+  })
+
+  it("returns focus to Run again after a failed re-run under Strict Mode", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    stubService({ answer: body => {
+      if (body.action === "running-job") return { body: { jobId: null } }
+      if (body.action === "assess-start") return { body: { jobId: "job-1" } }
+      if (body.action === "assess-status") return { body: snapshot("failed", { error: "Request failed (502)." }) }
+      return { status: 500, body: { error: "unexpected" } }
+    } })
+    const { container } = render("/portal/frameworks/cis-benchmarks", true)
+    await flush()
+    buttonNamed(container, "Run again")!.focus()
+    await act(async () => { buttonNamed(container, "Run again")!.click() })
+    await waitFor(() => container.textContent.includes("Request failed (502)"))
+    await waitFor(() => document.activeElement === buttonNamed(container, "Run again"))
+  })
+
+  it("returns focus to Start Assessment after a failed first run under Strict Mode", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    stubService({ history: [], answer: body => {
+      if (body.action === "running-job") return { body: { jobId: null } }
+      if (body.action === "assess-start") return { body: { jobId: "job-1" } }
+      if (body.action === "assess-status") return { body: snapshot("failed", { error: "Request failed (502)." }) }
+      return { status: 500, body: { error: "unexpected" } }
+    } })
+    const { container } = render("/portal/frameworks/cis-benchmarks", true)
+    await flush()
+    await waitFor(() => !!buttonNamed(container, "Start Assessment") && !buttonNamed(container, "Start Assessment")!.disabled)
+    buttonNamed(container, "Start Assessment")!.focus()
+    await act(async () => { buttonNamed(container, "Start Assessment")!.click() })
+    await waitFor(() => container.textContent.includes("Request failed (502)"))
+    await waitFor(() => document.activeElement === buttonNamed(container, "Start Assessment"))
   })
 
   it("replaces the previous results when the re-run completes", async () => {

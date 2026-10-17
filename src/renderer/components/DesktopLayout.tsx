@@ -28,12 +28,14 @@ import { communityBannerVisible, earliestExpiringTenant, formatDate, formatDateT
 import { toast, Toaster } from "../lib/toast"
 import { bridge } from "../lib/bridge"
 import { FrameworkJobNotifier } from "../lib/framework-jobs"
+import { CisJobNotifier } from "../lib/cis-jobs"
+import { BackgroundTasksPanel } from "./BackgroundTasksPanel"
 import { useScoreInvalidation } from "../features/scores/invalidate"
 import { DriftScanIndicator, DriftScanNotifier } from "../lib/drift-jobs"
 import { SignInBanner } from "./SignInBanner"
 import { SupportDialog } from "./SupportDialog"
 import { TenantSwitcher } from "./TenantSwitcher"
-import { UpdateBanner } from "./UpdateBanner"
+import { UpdateSidebarLabel } from "./UpdateSidebarLabel"
 import { TenantAccessNotice } from "./TenantAccessNotice"
 import { CisBenchmarksNavigation } from "./CisBenchmarksNavigation"
 import { FrameworkNavigation } from "./FrameworkNavigation"
@@ -256,6 +258,7 @@ export function DesktopLayout() {
 
         <OibJobIndicator />
         <div className="space-y-1 p-3">
+          <UpdateSidebarLabel />
           <Link to="/portal/settings" className={linkClass(pathname.startsWith("/portal/settings"))}>
             <Settings className="h-[18px] w-[18px]" />
             Settings
@@ -275,10 +278,9 @@ export function DesktopLayout() {
       <div className="pl-64">
         <LicenseBanner />
         <SignInBanner />
-        <UpdateBanner />
         {[/portal\/backup/, /portal\/drift/, /portal\/audit/, /portal\/(governance|changes|operations)/].some(pattern => pattern.test(pathname)) && <TenantAccessNotice />}
-        {/* Room to scroll the end of a page clear of the floating backup panel while it shows. */}
-        <main className="pb-[var(--floating-progress-offset,0px)]">
+        {/* Room to scroll the end of a page clear of the floating backup and activity panels while they show. */}
+        <main className="pb-[calc(var(--floating-progress-offset,0px)+var(--background-tasks-offset,0px))]">
           <ErrorBoundary key={pathname}>
             <Outlet />
           </ErrorBoundary>
@@ -286,8 +288,10 @@ export function DesktopLayout() {
       </div>
 
       <FloatingProgress />
+      <BackgroundTasksPanel />
       <Toaster />
       <FrameworkJobNotifier />
+      <CisJobNotifier />
       <DriftScanNotifier />
       <SupportDialog open={supportOpen} onOpenChange={setSupportOpen} />
     </div>

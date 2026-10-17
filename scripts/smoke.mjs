@@ -529,7 +529,7 @@ await check("settings show encrypted local backup storage", async () => {
 await check("settings sidebar switches sections and names the section in the URL", async () => {
   await go("#/portal/settings", "Storage and recovery")
   const nav = `document.querySelector('nav[aria-label="Settings sections"]')`
-  assert(await waitForCondition(`${nav}?.querySelectorAll("a").length === 7`), "settings sidebar does not list seven sections")
+  assert(await waitForCondition(`${nav}?.querySelectorAll("a").length === 8`), "settings sidebar does not list eight sections")
   assert(await evaluate(`document.getElementById("settings-storage").hidden === true`), "storage section visible on the default sign-in section")
   await evaluate(`[...${nav}.querySelectorAll("a")].find(a => a.textContent.trim() === "Background runner").click()`)
   assert(await waitForText("Keep backups for"), "background section did not appear after clicking its sidebar entry")
@@ -564,6 +564,8 @@ await check("settings sidebar switches sections and names the section in the URL
   assert(await waitForCondition(focusedInView), "focused Save recovery key ended outside the viewport at narrow width")
   await send("Emulation.clearDeviceMetricsOverride")
   // A dialog owned by a panel closes while its section is hidden and comes back with it.
+  // Run this part with real exit animations so focus landing is checked after teardown.
+  await evaluate(`document.getElementById("smoke-no-animations")?.remove()`)
   await evaluate(`location.hash = "#/portal/settings?section=about"`)
   assert(await waitForCondition(`document.getElementById("settings-about").hidden === false`), "about section did not appear")
   await evaluate(`[...document.getElementById("settings-about").querySelectorAll("button")].find(b => b.textContent.trim() === "License agreement").click()`)
@@ -576,6 +578,7 @@ await check("settings sidebar switches sections and names the section in the URL
   assert(await waitForText("TENUVAULT DESKTOP END USER LICENSE AGREEMENT"), "dialog did not come back with its section")
   await evaluate(`[...document.querySelectorAll("button")].find(b => b.textContent.trim() === "Close").click()`)
   assert(await waitForCondition(`!document.body.innerText.includes("TENUVAULT DESKTOP END USER LICENSE AGREEMENT")`), "license agreement dialog did not close")
+  await disableAnimations()
 })
 
 await check("license agreement opens from settings", async () => {

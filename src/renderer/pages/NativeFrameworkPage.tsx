@@ -14,6 +14,7 @@ import { displayCheckValue } from '../../shared/compliance/check-results'
 import { ComplianceScoringNotice } from '../components/ComplianceScoringNotice'
 import { useConfirm } from "~/components/ConfirmDialog"
 import { cancelFrameworkJob, startFrameworkJob, useFrameworkJob } from '../lib/framework-jobs'
+import { startBackgroundTask, useBackgroundTasks } from '../lib/background-tasks'
 import { useTenantPlan } from '../lib/license'
 import { formatScore, freshData, loadDetail } from '../features/scores/api'
 import { invalidateScores } from '../features/scores/invalidate'
@@ -81,11 +82,21 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
   const shownRun = useRef<string | undefined>(undefined)
   const body = { tenantId: credentials?.tenantId, appId: credentials?.appId, frameworkId: framework.id }
   // The main process builds every export from the saved run, redacted, without reading the tenant again.
-  const exportRun = (format: 'pdf' | 'csv' | 'json', runId: string) => void perform(`Exporting ${format.toUpperCase()}`, async () => {
-    const response = await fetch('/api/frameworks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, tenantName: selectedTenant?.name, action: `native-${format}`, runId }) })
-    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? 'Export failed.')
-    download(await response.blob(), `${framework.id}-${runId}.${format}`)
-  })
+  // Building runs as a background task, so a slow export finishes and downloads even after
+  // navigating away; the activity panel shows it meanwhile.
+  const exportKey = (format: 'pdf' | 'csv' | 'json', runId: string) => `export:${framework.id}:${runId}:${format}`
+  const exportRun = (format: 'pdf' | 'csv' | 'json', runId: string) => {
+    const requestBody = { ...body, tenantName: selectedTenant?.name, action: `native-${format}`, runId }
+    startBackgroundTask(exportKey(format, runId), { title: `${framework.name} ${format.toUpperCase()} export`, detail: `Building the ${format.toUpperCase()} export`, href: `/portal/frameworks/${framework.id}`, tenantId: credentials?.tenantId }, async () => {
+      const response = await fetch('/api/frameworks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestBody) })
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? 'Export failed.')
+      download(await response.blob(), `${framework.id}-${runId}.${format}`)
+      return `${framework.name} ${format.toUpperCase()} export downloaded.`
+    })
+  }
+  const backgroundTasks = useBackgroundTasks()
+  const exportingFormat = (format: 'pdf' | 'csv' | 'json', runId: string) =>
+    backgroundTasks.some(task => task.id === exportKey(format, runId) && task.status === 'running')
 
   useEffect(() => {
     let active = true
@@ -235,8 +246,8 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
           </div>
           <div className="flex flex-wrap gap-2">
             {([['pdf', 'PDF report', Download], ['csv', 'CSV', FileSpreadsheet], ['json', 'JSON', FileJson]] as const).map(([format, label, Icon]) =>
-              <button type="button" key={format} className={button} disabled={!!busy} onClick={() => exportRun(format, run.runId)}>
-                {busy === `Exporting ${format.toUpperCase()}` ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Icon className="size-4" aria-hidden="true" />}{label}
+              <button type="button" key={format} className={button} disabled={exportingFormat(format, run.runId)} onClick={() => exportRun(format, run.runId)}>
+                {exportingFormat(format, run.runId) ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Icon className="size-4" aria-hidden="true" />}{label}
               </button>)}
           </div>
         </div>

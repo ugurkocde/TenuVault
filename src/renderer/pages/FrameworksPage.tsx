@@ -23,9 +23,11 @@ import { cisReadinessCsv, cisReadinessJson } from "../features/shared/governance
 import { Notice, saveFile, useSaveNotice } from "../components/oib/notices"
 import { cachedCisSettingNames, loadCisSettingNames, settingDefinitionIdsIn } from "../lib/cis-setting-names"
 import type { SettingNames } from "../../shared/intune/drift"
-import { accumulateCisFindings, CIS_OPEN_PARAMS, cisOpenRequest, cisRunDisplayPhase, cisRunHeading, cisRunReceivedLabel, cisRunSteps, cisRunTallies, currentSavedAssessment, emptyCisRunAccumulation, pollCisStatus, resolveCisRunCompletion, type CisRunPack } from "../../shared/frameworks/cis-run"
+import { accumulateCisFindings, CIS_OPEN_PARAMS, cisOpenRequest, cisRunDisplayPhase, cisRunHeading, cisRunProgress, cisRunReceivedLabel, cisRunSteps, cisRunTallies, currentSavedAssessment, emptyCisRunAccumulation, pollCisStatus, resolveCisRunCompletion, type CisRunPack } from "../../shared/frameworks/cis-run"
 import { refreshInternalCisBenchmarks, useInternalCisBenchmarks, useInternalCisBenchmarksAnswer } from "../lib/internal-cis"
 import { bridge } from "../lib/bridge"
+import { startBackgroundTask, useBackgroundTask } from "../lib/background-tasks"
+import { refreshCisJobs } from "../lib/cis-jobs"
 import { cachedCisCatalog, rememberCisCatalog } from "../lib/cis-catalog-cache"
 import { parsePolicies, remediationPayload, rootMatches, type Assessment, type BaselinePolicy, type Finding, type Observation } from "../../shared/frameworks/policies"
 import { summarizeSetting } from "../../shared/frameworks/setting-summary"
@@ -33,6 +35,7 @@ import { CIS_FRAMEWORKS, type Plan } from "../../shared/plans"
 import type { AssessJobSnapshot, ExportFile } from "../../main/frameworks/service"
 import type { NcscPack } from "../../main/frameworks/ncsc"
 import { tenantLicense, tenantPlan, useLicense, useTenantPlan } from "../lib/license"
+import { BrandMark } from "../components/BrandMark"
 import { CisRemediationPanel } from "../features/cis-remediation/CisRemediationPanel"
 import { CisRemediationHistory } from "../features/cis-remediation/CisRemediationHistory"
 import { GatedButton } from "../components/PlanGate"
@@ -46,6 +49,28 @@ const button = "inline-flex h-10 items-center justify-center gap-2 rounded-full 
 const primary = cn(button, "border-transparent bg-primary text-primary-foreground hover:bg-primary/90")
 const NativeFrameworkPage = lazy(() => import('./NativeFrameworkPage'))
 /** The part of the CIS page an action belongs to: loading a benchmark, comparing, or exporting results. */
+/**
+ * The run a background pack comparison produced, kept per tenant and framework for this window
+ * session. The activity panel entry is temporary, so the page reads this marker on open to show
+ * that exact result even when the admin returns long after the panel entry is gone.
+ */
+const compareMarkerKey = (tenantId: string, frameworkId: string) => `bg-compare:${tenantId.toLowerCase()}:${frameworkId}`
+function rememberBackgroundCompare(tenantId: string, frameworkId: string, runId: string): void {
+  try { sessionStorage.setItem(compareMarkerKey(tenantId, frameworkId), runId) } catch { /* storage unavailable */ }
+}
+function peekBackgroundCompare(tenantId: string | undefined, frameworkId: string): string | null {
+  if (!tenantId) return null
+  try { return sessionStorage.getItem(compareMarkerKey(tenantId, frameworkId)) } catch { return null }
+}
+/** Clears the marker once its run is on screen; a newer run's marker is left alone. */
+function clearBackgroundCompare(tenantId: string | undefined, frameworkId: string, runId: string): void {
+  if (!tenantId) return
+  try {
+    const key = compareMarkerKey(tenantId, frameworkId)
+    if (sessionStorage.getItem(key) === runId) sessionStorage.removeItem(key)
+  } catch { /* storage unavailable */ }
+}
+
 type ActionArea = "load" | "compare" | "export"
 /** Where a CIS export was started: the results header, the saved assessments block, the full history alert or the pack coverage button. */
 type ExportOrigin = "header" | "saved" | "alert" | "coverage"
@@ -304,43 +329,88 @@ function CisPortfolio({ plan, selectedTenantId }: { plan: Plan | null; selectedT
   </section>
 }
 
-function CisRunView({ run, rerun = false, policies, reference, names }: { run: AssessJobSnapshot; rerun?: boolean; policies: BaselinePolicy[]; reference: string; names: SettingNames }) {
+/** Dot colors of the partial tallies, matching the legend of the finished results. */
+const CIS_TALLY_DOTS = { Present: "bg-green-500", Different: "bg-red-500", Missing: "bg-amber-500", Review: "bg-gray-300" } as const
+
+/**
+ * The running assessment as a full-page overlay over the content column, so starting a run never
+ * pushes the page around: the content stays mounted underneath and is uncovered when the run
+ * finishes. The sidebar (z-40) stays above it, so the app can still be navigated mid-run. All
+ * motion is transform and opacity (desktop.css), which the compositor runs off the main thread.
+ */
+function CisRunView({ run, rerun = false, error = "", policies, reference, names }: { run: AssessJobSnapshot; rerun?: boolean; error?: string; policies: BaselinePolicy[]; reference: string; names: SettingNames }) {
+  // Focus moves into the overlay on entry, because the covered page is inert while it shows.
+  // On exit it returns to the control that started the run, or to the results header when that
+  // control is gone (a first run replaces setup with results), but only when focus is still in
+  // the overlay: focus the user moved to the sidebar or a dialog is left where it is.
+  const overlayRef = useRef<HTMLDivElement>(null)
+  // Captured once, in a ref: Strict Mode replays the mount effect, and a recapture after the
+  // first cleanup would save the overlay itself instead of the control that started the run.
+  const restoreFocusTo = useRef<{ captured: boolean; target: HTMLElement | null }>({ captured: false, target: null })
+  useEffect(() => {
+    const overlay = overlayRef.current
+    if (!restoreFocusTo.current.captured) {
+      const active = document.activeElement
+      restoreFocusTo.current = { captured: true, target: active instanceof HTMLElement && active !== document.body && !(overlay && overlay.contains(active)) ? active : null }
+    }
+    overlay?.focus({ preventScroll: true })
+    return () => {
+      const active = document.activeElement
+      if (active && active !== document.body && !(overlay && overlay.contains(active))) return
+      const target = restoreFocusTo.current.target
+      if (target?.isConnected) target.focus({ preventScroll: true })
+      else document.querySelector<HTMLElement>('[aria-label="Results header"]')?.focus({ preventScroll: true })
+    }
+  }, [])
   const phase = cisRunDisplayPhase(run)
   const steps = cisRunSteps(phase)
   const tallies = cisRunTallies(run.findings)
-  const running = phase !== "done" && phase !== "failed"
-  return <div className="mt-5 rounded-3xl bg-gray-50 p-6">
-    <div role="status">
-      <h3 className="text-lg font-medium text-gray-900">{cisRunHeading(phase, rerun)}</h3>
-      {rerun && <p className="mt-1 text-sm text-gray-600">The previous results stay below until the new results are ready.</p>}
+  const progress = cisRunProgress(run)
+  const heading = cisRunHeading(phase, rerun)
+  const detail = phase === "reading" ? `${run.read} of ${run.total} policies read`
+    : phase === "comparing" ? `${run.comparedPolicies} of ${run.packPolicies} pack policies compared`
+    : phase === "saving" ? "Saving the assessment to this device"
+    : phase === "done" ? `${run.read} of ${run.total} policies read`
+    : "Signing in and preparing the comparison"
+  const currentName = phase === "reading" ? run.currentPolicy : phase === "comparing" ? run.currentPackPolicy : ""
+  return <div ref={overlayRef} role="region" tabIndex={-1} aria-label="Assessment in progress" className="cis-run-overlay fixed inset-y-0 right-0 left-64 z-30 overflow-y-auto bg-background/90 backdrop-blur-sm outline-none">
+    <div className="flex min-h-full items-center justify-center px-6 py-10">
+      <div className="cis-run-panel w-full max-w-[36rem] text-center">
+        <BrandMark className="mx-auto size-12" />
+        <div role="status" className="mt-5">
+          <h2 className="text-2xl font-light tracking-tight text-gray-900">{heading}</h2>
+          <p className="mt-2 text-sm text-gray-500">{rerun ? "Your previous results are kept if this run does not finish." : "TenuVault only reads from your tenant. Nothing is changed."}</p>
+        </div>
+        {/* Fixed height, so the percent appearing after connecting never shifts the bar below it. */}
+        <p aria-hidden="true" className="mt-7 flex h-16 items-end justify-center text-6xl font-light leading-none tabular-nums text-gray-900">{progress !== null && <>{progress}<span className="text-3xl text-gray-500">%</span></>}</p>
+        <div role="progressbar" aria-label="Assessment progress" aria-valuemin={0} aria-valuemax={100} {...(progress !== null ? { "aria-valuenow": progress } : {})} aria-valuetext={progress !== null ? `${progress} percent, ${detail}` : heading} className="mt-4 h-1.5 overflow-hidden rounded-full bg-gray-200">
+          {progress !== null
+            ? <div className="h-full w-full origin-left rounded-full bg-primary transition-transform duration-500 ease-out motion-reduce:transition-none" style={{ transform: `scaleX(${progress / 100})` }} />
+            : <div className="cis-run-indeterminate h-full w-1/3 rounded-full bg-primary" />}
+        </div>
+        {/* Fixed-height lines: long policy names truncate instead of wrapping and moving the steps. */}
+        <p className="mt-4 h-5 text-sm font-medium tabular-nums text-gray-700">{detail}</p>
+        <p title={currentName || undefined} className="h-5 truncate text-xs text-gray-500">{currentName ? `current: ${currentName}` : ""}</p>
+        <ol className="mt-7 flex items-start justify-between gap-2">
+          {steps.map((step, index) => <li key={step.label} {...(step.state === "current" ? { "aria-current": "step" as const } : {})} className="flex min-w-0 flex-1 flex-col items-center gap-1.5">
+            <span aria-hidden="true" className={cn("flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold", step.state === "done" ? "bg-green-100 text-green-800" : step.state === "current" ? "bg-primary text-primary-foreground motion-safe:animate-pulse" : "bg-gray-200 text-gray-500")}>{step.state === "done" ? <Check className="h-3.5 w-3.5" /> : index + 1}</span>
+            <span className={cn("text-xs font-medium leading-tight", step.state === "waiting" ? "text-gray-500" : "text-gray-900")}>{step.label}</span>
+            <span className="text-[11px] leading-tight text-gray-500">{step.state === "done" ? "Done" : step.state === "current" ? "In progress" : "Waiting"}</span>
+          </li>)}
+        </ol>
+        <div className="mt-7 flex flex-wrap items-center justify-center gap-2">
+          <span className="text-xs font-medium text-gray-500">Partial tallies:</span>
+          {(["Present", "Different", "Missing", "Review"] as const).map(status => <span key={status} className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1 text-xs font-medium tabular-nums text-gray-700 shadow-[0_1px_2px_rgba(22,21,20,0.06)]"><span aria-hidden="true" className={cn("size-2 rounded-full", CIS_TALLY_DOTS[status])} />{status} {tallies[status]}</span>)}
+        </div>
+        <p className="mt-3 text-xs text-gray-500">{cisRunReceivedLabel(run.findings.length)}</p>
+        {error && <p role="alert" className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}
+        {/* Partial results read like the final ones: grouped by pack policy, by setting name, nothing to select yet. */}
+        {!rerun && run.findings.length > 0 && <div aria-label="Partial results" className="mt-8 max-h-[36vh] overflow-y-auto overscroll-contain rounded-3xl bg-white px-5 py-1 text-left shadow-[0_1px_2px_rgba(22,21,20,0.04)]">{groupFindingsByPolicy(run.findings).map(group => <section key={group.policyIndex} aria-label={group.policyName} className="border-t border-gray-100 py-3 first:border-t-0">
+          <h3 title={group.policyName} className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm"><span className="min-w-0 truncate font-medium text-gray-900">{policyDisplayName(group.policyName, reference)}</span><span className="text-xs text-gray-500">{statusMixText(group.counts)}</span></h3>
+          <div className="mt-1 divide-y divide-gray-100">{group.findings.map(finding => <CisFindingRow key={finding.key} finding={finding} recommendations={recommendationsForFinding(policies, finding)} names={names} selectable={false} checked={false} disabled onChange={() => undefined} />)}</div>
+        </section>)}</div>}
+      </div>
     </div>
-    <ol className="mt-4 space-y-3">
-      {steps.map((step, index) => <li key={step.label} {...(step.state === "current" ? { "aria-current": "step" as const } : {})} className="flex items-start gap-3 text-sm">
-        <span aria-hidden="true" className={cn("mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold", step.state === "done" ? "bg-green-100 text-green-800" : step.state === "current" ? "bg-primary text-primary-foreground" : "bg-gray-200 text-gray-500")}>{step.state === "done" ? <Check className="h-3.5 w-3.5" /> : index + 1}</span>
-        <span className="min-w-0 flex-1">
-          <span className={cn("font-medium", step.state === "waiting" ? "text-gray-500" : "text-gray-900")}>{step.label}</span>
-          <span className="ml-2 text-xs text-gray-500">{step.state === "done" ? "Done" : step.state === "current" ? "In progress" : "Waiting"}</span>
-          {index === 1 && step.state !== "waiting" && <>
-            <span className="mt-1 block text-xs text-gray-600">{run.read} of {run.total} policies read{run.currentPolicy ? `, current: ${run.currentPolicy}` : ""}</span>
-            <span role="progressbar" aria-label="Reading tenant policies" aria-valuemin={0} aria-valuemax={run.total} aria-valuenow={run.read} aria-valuetext={`${run.read} of ${run.total} policies read`} className="mt-2 block h-2 overflow-hidden rounded-full bg-gray-200"><span className="block h-full rounded-full bg-primary transition-all" style={{ width: run.total ? `${(run.read / run.total) * 100}%` : "0%" }} /></span>
-          </>}
-          {index === 2 && step.state !== "waiting" && <>
-            <span className="mt-1 block text-xs text-gray-600">{run.comparedPolicies} of {run.packPolicies} pack policies compared{run.currentPackPolicy ? `, current: ${run.currentPackPolicy}` : ""}</span>
-            <span role="progressbar" aria-label="Comparing with the benchmark" aria-valuemin={0} aria-valuemax={run.packPolicies} aria-valuenow={run.comparedPolicies} aria-valuetext={`${run.comparedPolicies} of ${run.packPolicies} pack policies compared`} className="mt-2 block h-2 overflow-hidden rounded-full bg-gray-200"><span className="block h-full rounded-full bg-primary transition-all" style={{ width: run.packPolicies ? `${(run.comparedPolicies / run.packPolicies) * 100}%` : "0%" }} /></span>
-          </>}
-        </span>
-      </li>)}
-    </ol>
-    <div className="mt-5 flex flex-wrap items-center gap-2">
-      <span className="text-xs font-medium text-gray-500">Partial tallies:</span>
-      {(["Present", "Different", "Missing", "Review"] as const).map(status => <span key={status} className="rounded-full bg-white px-3 py-1 text-xs font-medium text-gray-700">{status} {tallies[status]}</span>)}
-    </div>
-    {running && <p className="mt-3 text-xs text-gray-500">{cisRunReceivedLabel(run.findings.length)}</p>}
-    {/* Partial results read like the final ones: grouped by pack policy, by setting name, nothing to select yet. */}
-    {!rerun && run.findings.length > 0 && <div aria-label="Partial results" className="mt-3 rounded-2xl bg-white px-4">{groupFindingsByPolicy(run.findings).map(group => <section key={group.policyIndex} aria-label={group.policyName} className="border-t border-gray-100 py-3 first:border-t-0">
-      <h4 title={group.policyName} className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm"><span className="min-w-0 truncate font-medium text-gray-900">{policyDisplayName(group.policyName, reference)}</span><span className="text-xs text-gray-500">{statusMixText(group.counts)}</span></h4>
-      <div className="mt-1 divide-y divide-gray-100">{group.findings.map(finding => <CisFindingRow key={finding.key} finding={finding} recommendations={recommendationsForFinding(policies, finding)} names={names} selectable={false} checked={false} disabled onChange={() => undefined} />)}</div>
-    </section>)}</div>}
   </div>
 }
 
@@ -411,6 +481,8 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   const excludeButton = useRef<HTMLButtonElement>(null)
   const [cisExceptionsOpen, setCisExceptionsOpen] = useState(false)
   const [cisRun, setCisRun] = useState<AssessJobSnapshot | null>(null)
+  // The assessment a just-finished run produced: its results are revealed with a short animation.
+  const [revealedRunId, setRevealedRunId] = useState<string | null>(null)
   const [cisCatalog, setCisCatalog] = useState<CisBenchmark[] | null>(() => framework.id === CIS_BENCHMARKS_ID ? cachedCisCatalog(selectedTenant?.credentials?.tenantId) : null)
   const [cisCatalogMessage, setCisCatalogMessage] = useState("")
   const [cisCatalogLoading, setCisCatalogLoading] = useState(false)
@@ -434,8 +506,17 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   const isCis = framework.id === CIS_BENCHMARKS_ID
   const outOfDate = !!appliedAt && !!assessment && Date.parse(assessment.assessedAt) < Date.parse(appliedAt)
   const stage = isCis ? (workspaceLoading ? "loading" : cisStage({ hasRun: !!cisRun, hasAssessment: !!assessment, setupRequested })) : null
+  // While a run overlays the page, the content underneath keeps the stage it had when the run
+  // started (setup for a first run), so nothing unmounts, the document keeps its height and the
+  // scroll position survives a failed run. The overlay covers it and its wrapper is inert.
+  const contentStage = stage === "running" ? "setup" : stage
   const fromKit = isCis && isKitPackReference(reference, (kitConversion?.packs ?? []).map(pack => pack.reference), policies)
   const credentials = selectedTenant?.credentials
+  // A pack comparison outside CIS reads the tenant in one request; it runs as a background
+  // task so it finishes, and is saved to the workspace, even after navigating away.
+  const compareKey = credentials?.tenantId ? `assess:${credentials.tenantId.toLowerCase()}:${framework.id}` : undefined
+  const compareTask = useBackgroundTask(isCis ? undefined : compareKey)
+  const comparing = compareTask?.status === "running"
   // Reports of licensed CIS content are Pro and MSP; the main process checks the same plan.
   const plan = useTenantPlan(credentials?.tenantId)
   const { confirm, confirmDialog } = useConfirm()
@@ -470,6 +551,32 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   }
   const shownAssessment = useRef<Assessment | null>(null)
   useEffect(() => { shownAssessment.current = assessment }, [assessment])
+  const appliedCompareFinish = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    const finishedAt = compareTask?.finishedAt
+    if (isCis || compareTask?.status !== "completed" || !finishedAt) return
+    if (appliedCompareFinish.current === finishedAt) return
+    // A comparison started before this mount finished into setters that no longer exist, so
+    // show its saved run from the workspace it was recorded in. The marker and the applied
+    // stamp are only settled once that run is on screen, so leaving mid-load or a failed
+    // read keeps the result restorable on the next open.
+    let active = true
+    // Captured before the read, so only this marker can be settled by its answer. A marker a
+    // newer run writes while the read is in flight stays for that run's own restoration.
+    const markerRunId = peekBackgroundCompare(credentials?.tenantId, framework.id)
+    void workspaceRequest("workspace-load").then((saved) => {
+      if (!active) return
+      setWorkspace(saved)
+      const marked = markerRunId ? saved.history.find((entry) => entry.assessment.runId === markerRunId) : undefined
+      const latest = currentSavedAssessment(saved)
+      const target = marked ? { assessment: marked.assessment, policies: marked.policies } : latest
+      if (!target) return
+      if (shownAssessment.current?.runId !== target.assessment.runId) showSavedResults(target.assessment, { policies: target.policies, reference: target.assessment.reference })
+      appliedCompareFinish.current = finishedAt
+      if (markerRunId) clearBackgroundCompare(credentials?.tenantId, framework.id, markerRunId)
+    }).catch(() => undefined)
+    return () => { active = false }
+  }, [isCis, compareTask?.status, compareTask?.finishedAt, credentials?.tenantId, framework.id])
   /**
    * Shows a saved assessment as read-only results with its pack, and clears any selection made on
    * other results. It never replaces newer results already on screen, such as a fresh run.
@@ -493,6 +600,9 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     // change mounts a new page, which `mounted` covers.
     const runGeneration = cisRunGeneration.current
     const current = () => mounted() && cisRunGeneration.current === runGeneration
+    // Captured before the read: only this marker may be settled by the answer, never one a
+    // comparison finishing during the read has just written.
+    const backgroundRunId = first && !isCis ? peekBackgroundCompare(credentials?.tenantId, framework.id) : null
     let opened: OpenedWorkspace
     let lookupFailed = false
     if (isCis) {
@@ -510,7 +620,15 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     const saved = opened.workspace
     setWorkspace(saved)
     if (first) { setPolicies(saved.policies); setReference(saved.reference); setRecommendationList(saved.recommendationList) }
-    if (!isCis) return
+    if (!isCis) {
+      // A comparison that finished in the background while this page was closed opens on its result.
+      const backgroundRun = backgroundRunId ? saved.history.find((entry) => entry.assessment.runId === backgroundRunId) : undefined
+      if (backgroundRun) {
+        showSavedResults(backgroundRun.assessment, { policies: backgroundRun.policies, reference: backgroundRun.assessment.reference })
+        clearBackgroundCompare(credentials?.tenantId, framework.id, backgroundRunId!)
+      } else if (backgroundRunId) clearBackgroundCompare(credentials?.tenantId, framework.id, backgroundRunId)
+      return
+    }
     setActiveLookupFailed(lookupFailed)
     const latest = currentSavedAssessment(saved)
     // A requested saved run opens read-only, the exact run the link named; when it is gone the page
@@ -599,11 +717,13 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     const current = () => cisRunGeneration.current === generation
     const tenantId = credentials.tenantId
     // Starting or following a run answers the question a failed running-assessment check left open.
-    setError(""); setErrorAt("compare"); setHistoryNotice(""); setActiveLookupFailed(false); setOpenNote(""); setPendingJob(null)
+    setError(""); setErrorAt("compare"); setHistoryNotice(""); setActiveLookupFailed(false); setOpenNote(""); setPendingJob(null); setRevealedRunId(null)
     setBusy("Reading tenant policies and comparing settings…"); setBusyAt("compare")
     setCisRun({ jobId: "", phase: "connecting", status: "running", state: "running", tenantId, frameworkId: framework.id, read: 0, total: 0, currentPolicy: "", comparedPolicies: 0, packPolicies: capturedPack.policies.length, currentPackPolicy: "", findings: [], nextSince: 0, error: null, assessment: null })
     try {
       const jobId = await jobFor()
+      // The activity panel mirrors this run from assess-jobs, so it stays visible on other pages.
+      void refreshCisJobs()
       if (!current()) return
       let accumulation = emptyCisRunAccumulation()
       for (;;) {
@@ -636,6 +756,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
           if (!shownAssessment.current) { setFilter("All"); setFindingFilter(NO_FINDING_FILTER) }
           setHistorical(false); setSelected(new Set()); setPreview(false); setConfirmed(false); setCreation(null); setPage(0)
           setSetupRequested(false)
+          setRevealedRunId(completed.runId)
           setAssessment(completed)
           setCisRun(null)
           // The results show at once; the saved history and trend follow in the background.
@@ -878,8 +999,11 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     {savedHistoryRows}
     {historical && <p role="status" className="mt-3 text-sm text-amber-800">Viewing a saved assessment. Compare again to obtain current evidence and enable remediation.</p>}
   </section>) : null
-  return <div className="mx-auto max-w-6xl space-y-5 p-6 lg:p-8">
+  return <div className="mx-auto max-w-6xl p-6 lg:p-8">
     {confirmDialog}
+    {isCis && cisRun && <CisRunView run={cisRun} rerun={stage === "results"} error={errorAt === "compare" ? error : ""} policies={policies} reference={reference} names={settingNames} />}
+    {/* The page under a running assessment is inert, so covered controls leave the tab order. */}
+    <div inert={isCis && !!cisRun} className="space-y-5">
     {!standalone && <Link to="/portal/frameworks" className="text-sm text-blue-700 hover:underline">Frameworks</Link>}
     <div className={`${standalone ? "" : "mt-4 "}flex flex-wrap items-start justify-between gap-4`}>
       <div><p className="text-xs uppercase tracking-widest text-gray-500">{framework.publisher} · {framework.kind}</p><h1 className={standalone ? "mt-2 text-4xl font-light tracking-tight text-gray-900" : "mt-2 text-3xl font-semibold tracking-tight text-gray-950"}>{framework.name}</h1><p className="mt-2 text-gray-600">{framework.description}</p></div>
@@ -903,8 +1027,8 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     {isCis && activeLookupFailed && !cisRun && <p role="alert" className="mt-6 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950">Could not check for a running assessment. <button type="button" className="font-medium text-blue-700 hover:underline disabled:opacity-50" disabled={!!busy} onClick={retryActiveLookup}>Retry</button></p>}
     {isCis && openNote && <p role="status" className="mt-6 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950">{openNote}</p>}
     {isCis && pendingJob && !cisRun && <p role="status" aria-label="Assessment running" className="mt-6 flex flex-wrap items-center gap-3 rounded-2xl bg-blue-50 px-4 py-3 text-sm text-gray-900"><span>An assessment of {referenceDisplayName(pendingJob.reference, packBenchmarkName(pendingJob.policies))} is running.</span><button type="button" className="font-medium text-blue-700 hover:underline" onClick={() => { const job = pendingJob; void trackCisJob({ policies: job.policies, reference: job.reference }, async () => job.jobId) }}>View progress</button></p>}
-    {stage === "loading" && <p role="status" className="mt-6 text-sm text-gray-500">Loading saved assessments…</p>}
-    {isCis && stage === "results" && assessment && <div ref={resultsHeader} aria-label="Results header" className="mt-6 flex scroll-mt-6 flex-wrap items-center justify-between gap-3 rounded-3xl bg-white px-5 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+    {contentStage === "loading" && <p role="status" className="mt-6 text-sm text-gray-500">Loading saved assessments…</p>}
+    {isCis && contentStage === "results" && assessment && <div ref={resultsHeader} tabIndex={-1} aria-label="Results header" className={cn("mt-6 flex scroll-mt-6 flex-wrap items-center justify-between gap-3 rounded-3xl bg-white px-5 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)] outline-none", assessment.runId === revealedRunId && "cis-results-reveal")}>
       <div className="min-w-0">
         <p title={assessment.reference} className="truncate text-base font-medium text-gray-900">{(() => {
           const id = readiness?.benchmark && assessment.reference.startsWith(readiness.benchmark) ? readiness.benchmark : assessment.reference.split(/\s+/)[0] ?? ""
@@ -928,25 +1052,23 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       </div>}
       {exportStatus("header")}
     </div>}
-    {isCis && stage === "results" && cisRun && <CisRunView run={cisRun} rerun policies={policies} reference={reference} names={settingNames} />}
-    {isCis && stage === "running" && cisRun && <>{error && errorAt === "compare" && <p role="alert" className="mt-6 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}<CisRunView run={cisRun} policies={policies} reference={reference} names={settingNames} /></>}
-    {isCis && stage === "setup" && assessment && <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-white p-5 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+    {isCis && contentStage === "setup" && assessment && <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-white p-5 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
       <div>
         <p className="text-base font-medium text-gray-900">{referenceDisplayName(assessment.reference, packBenchmarkName(policies))}</p>
         <p className="mt-1 text-sm text-gray-500">{assessment.policyCount} tenant policies read · {new Date(assessment.assessedAt).toLocaleString()}</p>
       </div>
       <button type="button" className={button} onClick={() => setSetupRequested(false)}>Back to results</button>
     </div>}
-    {(!isCis || stage === "setup") && <details className="group my-6 rounded-3xl bg-blue-50/60 px-6 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)] lg:px-7 [&[open]_.chevron]:rotate-180">
+    {(!isCis || contentStage === "setup") && <details className="group my-6 rounded-3xl bg-blue-50/60 px-6 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)] lg:px-7 [&[open]_.chevron]:rotate-180">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-4 [&::-webkit-details-marker]:hidden">
         <span className="flex items-center gap-3 text-sm"><Info className="size-4 shrink-0 text-blue-700" aria-hidden="true" /><span><strong className="font-medium text-gray-900">Assessment coverage</strong><span className="text-gray-600"> · What is compared, content sources and limits.</span></span></span>
         <ChevronDown className="chevron size-4 shrink-0 text-gray-500 transition-transform" aria-hidden="true" />
       </summary>
       <div className="mt-4 space-y-2 border-t border-blue-100 pt-4 text-sm leading-6 text-gray-700"><p>Mapping format v1. Automatic content: NCSC Device Security Guidance 2025 Windows Settings Catalog only. Other frameworks use administrator-supplied mappings. No certification or complete framework assessment is implied.</p><p>{framework.coverage}</p>{framework.licenseNotice && <p>{framework.licenseNotice}</p>}<p>Comparison covers Settings Catalog root settings and their nested values. Assignment targets, exclusions and filter references are reported separately from configuration. Group membership, device applicability, enforcement and other policy families remain unavailable. “Present” means a matching configuration exists; it does not mean the setting is assigned or enforced.</p></div>
     </details>}
-    {(!isCis || stage === "setup") && savedBlock}
-    {framework.id === CIS_BENCHMARKS_ID && stage === "setup" && <details className="mb-5"><summary className="inline-flex h-10 cursor-pointer list-none items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 [&::-webkit-details-marker]:hidden">Portfolio</summary><div className="mt-3"><CisPortfolio plan={plan} selectedTenantId={credentials?.tenantId} /></div></details>}
-    {isCis && stage === "setup" && <section aria-labelledby="cis-delivered-title" className="mb-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+    {(!isCis || contentStage === "setup") && savedBlock}
+    {framework.id === CIS_BENCHMARKS_ID && contentStage === "setup" && <details className="mb-5"><summary className="inline-flex h-10 cursor-pointer list-none items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 [&::-webkit-details-marker]:hidden">Portfolio</summary><div className="mt-3"><CisPortfolio plan={plan} selectedTenantId={credentials?.tenantId} /></div></details>}
+    {isCis && contentStage === "setup" && <section aria-labelledby="cis-delivered-title" className="mb-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
       <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="cis-delivered-title" className="text-xl font-medium tracking-tight">1. Load benchmark</h2><span className="text-sm text-gray-500">{cisCatalog ? `${cisCatalog.length} benchmarks available` : "Delivery service"}</span></div>
       <p className="mt-2 text-sm text-gray-600">Load a benchmark pack from the TenuVault delivery service. The pack is saved in encrypted storage on this device for the selected tenant.</p>
       {policies.length > 0 && reference && <p className="mt-2 text-sm text-gray-800">Loaded: {referenceDisplayName(reference, packBenchmarkName(policies))}, {policies.length} {policies.length === 1 ? "policy" : "policies"}. Compare it with the tenant in step 2.</p>}
@@ -963,7 +1085,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
         <div className="mt-3 flex flex-wrap gap-2">{benchmark.levels.map(level => { const loaded = reference === `${benchmark.id} ${benchmark.version} Level ${level}`; return <button key={level} type="button" aria-pressed={loaded} className={loaded ? primary : button} disabled={!!busy || !credentials} onClick={() => void loadDeliveredPack(benchmark, level)}>{loaded && <Check className="h-4 w-4" aria-hidden="true" />}Level {level}</button> })}</div>
       </div>)}</div>}
     </section>}
-    {(!isCis || (stage === "setup" && (kitImport || (policies.length > 0 && !fromKit)))) && <section {...(isCis ? { "aria-label": "Other benchmark sources" } : { "aria-labelledby": "pack-title" })} className="rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+    {(!isCis || (contentStage === "setup" && (kitImport || (policies.length > 0 && !fromKit)))) && <section {...(isCis ? { "aria-label": "Other benchmark sources" } : { "aria-labelledby": "pack-title" })} className="rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
       {!isCis && <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="pack-title" className="text-xl font-medium tracking-tight">1. Choose your policy pack</h2><span className="text-sm text-gray-500">{policies.length ? `${policies.length} policies loaded` : "No pack loaded"}</span></div>}
       {!isCis && <p className="mt-2 text-sm text-gray-600">Import one or more Settings Catalog JSON exports. Review the source, version and intended profile before comparison. Loading a pack does not change your tenant.</p>}
       {!isCis && <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -1082,11 +1204,32 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
         {(!isCis || (!fromKit && !kitImport)) && reviewLoadedPolicies}
       </>}
     </section>}
-    {(!isCis || stage === "setup" || stage === "results") && <section {...(isCis && stage === "results" ? { "aria-label": "Assessment results" } : { "aria-labelledby": "compare-title" })} className="mt-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
-      {(!isCis || stage !== "results") && <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 id="compare-title" className="text-xl font-medium tracking-tight">2. Compare with your tenant</h2><p className="mt-1 text-sm text-gray-600">{selectedTenant ? `Selected tenant: ${selectedTenant.name}` : "Choose a connected tenant using the sidebar."}</p>{isCis && selectedTenant && !credentials && <p className="mt-1 text-sm text-amber-800">The assessment needs a signed-in tenant. Sign in to {selectedTenant.name} from the sidebar.</p>}</div>
-        {isCis ? <button className={primary} disabled={!!busy || !!cisRun || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={startCisAssessment}>{cisRun ? "Assessment running" : assessment ? "Run again" : "Start Assessment"}</button> : <button className={primary} disabled={!!busy || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={() => void perform("Reading tenant policies and comparing settings…", async () => {
-          reset(); const result = await request<Assessment>({ action: "assess", tenantId: credentials!.tenantId, appId: credentials!.appId, frameworkId: framework.id, reference, policies }); setAssessment(result); setWorkspace(await workspaceRequest("workspace-load"))
-        })}>{assessment ? "Compare again" : "Run comparison"}</button>}</div>}
+    {(!isCis || contentStage === "setup" || contentStage === "results") && <section {...(isCis && contentStage === "results" ? { "aria-label": "Assessment results" } : { "aria-labelledby": "compare-title" })} className={cn("mt-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]", isCis && contentStage === "results" && assessment?.runId === revealedRunId && "cis-results-reveal")}>
+      {(!isCis || contentStage !== "results") && <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 id="compare-title" className="text-xl font-medium tracking-tight">2. Compare with your tenant</h2><p className="mt-1 text-sm text-gray-600">{selectedTenant ? `Selected tenant: ${selectedTenant.name}` : "Choose a connected tenant using the sidebar."}</p>{isCis && selectedTenant && !credentials && <p className="mt-1 text-sm text-amber-800">The assessment needs a signed-in tenant. Sign in to {selectedTenant.name} from the sidebar.</p>}</div>
+        {isCis ? <button className={primary} disabled={!!busy || !!cisRun || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={startCisAssessment}>{cisRun ? "Assessment running" : assessment ? "Run again" : "Start Assessment"}</button> : <button className={primary} disabled={!!busy || comparing || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={() => {
+          if (!compareKey) return
+          reset(); setError(""); setErrorAt("compare")
+          const chosenReference = reference
+          const chosenPolicies = policies
+          startBackgroundTask(compareKey, { title: `${framework.name} comparison`, detail: "Reading tenant policies and comparing settings", href: `/portal/frameworks/${framework.id}`, tenantId: credentials!.tenantId }, async () => {
+            try {
+              const result = await request<Assessment>({ action: "assess", tenantId: credentials!.tenantId, appId: credentials!.appId, frameworkId: framework.id, reference: chosenReference, policies: chosenPolicies })
+              // The result belongs to the captured pack: install both together, so a pack
+              // changed while the comparison ran cannot pair its policies with these findings.
+              rememberBackgroundCompare(credentials!.tenantId, framework.id, result.runId)
+              setPolicies(chosenPolicies); setReference(chosenReference); setAssessment(result); setWorkspace(await workspaceRequest("workspace-load"))
+              return `${framework.name} comparison is ready.`
+            } catch (e) {
+              // The page error still shows for an admin who stayed here; the panel carries it elsewhere.
+              const message = (e instanceof Error && errorText(e)) || "The request failed."
+              setError(message); setErrorAt("compare")
+              if (isWorkspaceUnreadableError(message)) setUnreadable(true)
+              refreshFullHistory(message)
+              throw e
+            }
+          })
+        }}>{comparing ? "Comparing in background" : assessment ? "Compare again" : "Run comparison"}</button>}</div>}
+      {comparing && <p role="status" className="mt-4 text-sm text-blue-700">Reading tenant policies and comparing settings in the background. You can keep working elsewhere; the result is saved here.</p>}
       {busy && busyAt === "compare" && !(isCis && cisRun) && <p role="status" className="mt-4 text-sm text-blue-700">{busy}</p>}
       {busy && busyAt === "compare" && isCis && !cisRun && <div role="progressbar" aria-label={busy} className="mt-2 h-2 overflow-hidden rounded-full bg-gray-100"><div className="h-full w-1/3 animate-pulse rounded-full bg-primary" /></div>}
       {historyFull && <div id={historyAlertId} role="alert" aria-label="Saved assessment history is full" className="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -1105,7 +1248,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       </div>}
       {historyNotice && <p role="status" className="mt-4 text-sm text-amber-800">{historyNotice}</p>}
       {error && errorAt === "compare" && !isHistoryFullError(error) && !(unreadable && isWorkspaceUnreadableError(error)) && <p role="alert" className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}
-      {assessment && (!isCis || stage === "results") && <>
+      {assessment && (!isCis || contentStage === "results") && <>
         {!isCis && <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500"><p>{assessment.policyCount} tenant policies read · {new Date(assessment.assessedAt).toLocaleString()}</p><div className="flex flex-wrap gap-2">{(["pdf", "csv", "json"] as ("pdf" | "csv" | "json")[]).map(format => <ExportButton key={format} framework={framework} plan={plan} disabled={!!busy} onClick={() => exportSaved(format, assessment.runId)}><Download className="h-4 w-4" aria-hidden="true" />{format === "pdf" ? "PDF report" : format.toUpperCase()}</ExportButton>)}</div></div>}
         {readiness && <section aria-label="CIS readiness" className="mb-6 border-b border-gray-100 pb-6 text-sm text-gray-700">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -1284,13 +1427,14 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
         : <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t pt-4"><p className="text-sm text-gray-600">{chosen.length} missing root settings selected · {payloads.length} new {payloads.length === 1 ? "policy" : "policies"}{hiddenSelectedText && ` · ${hiddenSelectedText}`}</p><button className={primary} disabled={!chosen.length || !!busy || !!creation || historical} onClick={() => { setPreview(true); setConfirmed(false) }}>Preview recommended policies</button></div>}
       </>}
     </section>}
-    {(stage === "setup" || stage === "results") && selectedTenant && credentials && <CisRemediationHistory tenant={selectedTenant} focus={remediationFocus} onApplied={setAppliedAt} />}
-    {isCis && stage === "results" && savedBlock}
-    {framework.id === CIS_BENCHMARKS_ID && stage === "results" && <details className="mb-5"><summary className="inline-flex h-10 cursor-pointer list-none items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 [&::-webkit-details-marker]:hidden">Portfolio</summary><div className="mt-3"><CisPortfolio plan={plan} selectedTenantId={credentials?.tenantId} /></div></details>}
+    {(contentStage === "setup" || contentStage === "results") && selectedTenant && credentials && <CisRemediationHistory tenant={selectedTenant} focus={remediationFocus} onApplied={setAppliedAt} />}
+    {isCis && contentStage === "results" && savedBlock}
+    {framework.id === CIS_BENCHMARKS_ID && contentStage === "results" && <details className="mb-5"><summary className="inline-flex h-10 cursor-pointer list-none items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 [&::-webkit-details-marker]:hidden">Portfolio</summary><div className="mt-3"><CisPortfolio plan={plan} selectedTenantId={credentials?.tenantId} /></div></details>}
     {preview && !framework.comparisonOnly && <section aria-labelledby="preview-title" className="mt-5 rounded-3xl border-2 border-blue-200 bg-white p-7"><h2 id="preview-title" className="text-xl font-medium tracking-tight">3. Review unassigned policies</h2><p className="mt-2 text-sm text-gray-600">Create {payloads.length} new {payloads.length === 1 ? "policy" : "policies"} in <strong>{selectedTenant?.name}</strong> using the selected missing settings and their nested dependencies. Existing policies stay unchanged. Review target groups and conflicts in Intune before assigning these policies.</p><details className="mt-4"><summary className="cursor-pointer text-sm font-medium">Inspect the exact policy payloads</summary><pre className="mt-3 max-h-96 overflow-auto rounded-lg bg-gray-950 p-4 text-xs text-gray-100">{JSON.stringify(payloads, null, 2)}</pre></details><label className="mt-5 flex items-start gap-3 text-sm"><input type="checkbox" checked={confirmed} disabled={!!busy || !!creation} onChange={e => setConfirmed(e.target.checked)} className="mt-1 h-4 min-h-0 w-4 shrink-0" /><span>I reviewed these recommendations and want to create unassigned policies in {selectedTenant?.name}.</span></label><button className={`${primary} mt-4`} disabled={!confirmed || !!busy || !!creation} onClick={() => void perform("Rechecking tenant policies and creating unassigned policies…", async () => {
       const result = await request<NonNullable<typeof creation>>({ action: "create", tenantId: credentials!.tenantId, appId: credentials!.appId, runId: assessment!.runId, keys: [...selected], confirmUnassigned: true }); setCreation(result); setWorkspace(await workspaceRequest("workspace-load"))
     })}>Create {payloads.length} unassigned {payloads.length === 1 ? "policy" : "policies"}</button>
     {creation && <div role="status" className={`mt-4 rounded-3xl p-5 text-sm ${creation.success ? "bg-green-50 text-green-900" : "bg-amber-50 text-amber-950"}`}><strong>{creation.success ? "Unassigned policies created. Assignment and device verification are still required." : "Some policies could not be created. Review each result before comparing again."}</strong><ul className="mt-3 space-y-2">{creation.results.map((r, i) => <li key={i}>{r.name}: {r.error || `Created (${r.id})`}</li>)}</ul></div>}</section>}
+    </div>
   </div>
 }
 

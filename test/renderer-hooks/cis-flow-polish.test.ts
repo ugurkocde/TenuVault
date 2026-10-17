@@ -204,8 +204,15 @@ describe("CIS flow on the page", () => {
     await waitFor(() => !!buttonNamed(container, "Start Assessment") && !buttonNamed(container, "Start Assessment")!.disabled)
     await click(buttonNamed(container, "Start Assessment"))
     await waitFor(() => !!container.querySelector('[aria-label="Partial results"]') && container.textContent!.includes("Require Encryption"))
+    // The first run overlays the setup page: setup stays mounted (and inert) underneath it.
+    expect(container.querySelector("#cis-delivered-title")).not.toBeNull()
+    const overlay = container.querySelector('[aria-label="Assessment in progress"]')!
+    expect(overlay.getAttribute("aria-busy")).toBeNull()
+    expect(overlay.parentElement!.className).not.toContain("space-y-5")
+    const covered = container.querySelector(".space-y-5") as (HTMLElement & { inert?: boolean }) | null
+    expect(covered?.inert ?? covered?.hasAttribute("inert")).toBe(true)
     const partial = container.querySelector('[aria-label="Partial results"]')!
-    expect(partial.querySelector('section[aria-label="Synthetic policy"] h4')!.textContent).toContain("1 different")
+    expect(partial.querySelector('section[aria-label="Synthetic policy"] h3')!.textContent).toContain("1 different")
     expect(partial.querySelectorAll('input[type="checkbox"]')).toHaveLength(0)
     expect([...partial.querySelectorAll("summary span")].some(span => span.textContent === "Require Encryption")).toBe(true)
   })

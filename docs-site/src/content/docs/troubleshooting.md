@@ -166,7 +166,7 @@ More on licenses: [Activate and manage your license](/licensing/manage/).
 | Could not check for updates: *message* | TenuVault could not reach GitHub releases. | Allow `github.com`, `release-assets.githubusercontent.com` and `objects.githubusercontent.com` over HTTPS. Backup and restore keep working without updates. See [Network connections and data flows](/security/data-flows/). |
 | Your organization manages updates for TenuVault. | Automatic updates are turned off by policy (`DisableAutoUpdate`). **Check now** is unavailable. | Your IT department deploys updates. See [Deploy TenuVault in your organization](/deploy/). |
 | Automatic updates are off. | **Download and install updates automatically** is off in **Settings** > **Updates**. | Tick the setting to turn updates back on. |
-| TenuVault *version* is ready. It installs the next time TenuVault restarts. | An update was downloaded. | Click **Restart now**, or **Restart and update** in **Settings** > **Updates**. |
+| Green **Update available** label at the bottom of the sidebar. | An update is downloading or ready to install. | Select the label. It installs and restarts TenuVault when the download finishes. Or use **Restart and update** in **Settings** > **Updates**. |
 
 A stable install follows stable releases by default. Enable **Settings** > **Updates** > **Get nightly builds** to receive previews. Turn it off to return to the current stable release, even if that version is older than the installed nightly. See [Install and update TenuVault](/getting-started/install/).
 

@@ -2,7 +2,7 @@ import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
 import { useEffect, useId, useRef, useState, type ReactNode } from "react"
 import { Link, useLocation, useSearchParams } from "react-router-dom"
-import { Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, Palette, RefreshCw, Save, SunMoon, Upload } from "lucide-react"
+import { Bell, Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, Palette, RefreshCw, Save, SunMoon, Upload } from "lucide-react"
 import { cn } from "~/lib/utils"
 import { useTenantOperations, useTenants, type Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { storageLabel } from "~/lib/storage-label"
 import type { AppInfo, AppPreferences, SignedInAccount, UpdateStatus } from "../../shared/ipc"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
-import { COMMUNITY_RETENTION_DAYS, effectiveRetentionDays } from "../../shared/plans"
+import { allows, COMMUNITY_RETENTION_DAYS, effectiveRetentionDays } from "../../shared/plans"
 import { isGuid } from "../../shared/security"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
 import { StorageChooser, type StorageChooserDraft } from "../components/StorageChooser"
@@ -26,6 +26,7 @@ import { tenantPlan, useLicense } from "../lib/license"
 import { parseSettingsSection, settingsHref, type SettingsSectionId } from "../lib/settings-section"
 import { PlanBadge } from "../components/UpgradeNote"
 import { PdfBrandingSettings } from "../components/PdfBrandingSettings"
+import { NotificationsPanel } from "../features/notifications/NotificationsPanel"
 import { useConfirm } from "~/components/ConfirmDialog"
 
 function RestoreWrites({ active }: { active: boolean }) {
@@ -202,6 +203,41 @@ function TenantRestoreWrites({ tenantId, active }: { tenantId: string; active: b
         ))}
       </CardContent>
     </Card>
+  )
+}
+
+function NotificationSettings({ active }: { active: boolean }) {
+  const tenants = useTenants().filter(tenant => tenant.credentials?.tenantId)
+  const { status: licenseStatus } = useLicense()
+  const [selected, setSelected] = useState("")
+  const tenant = tenants.find(candidate => candidate.credentials?.tenantId === selected) ?? tenants[0]
+  if (!tenant?.credentials) {
+    return (
+      <Card>
+        <CardContent className="pt-6">Connect and sign in to a tenant to set up notifications.</CardContent>
+      </Card>
+    )
+  }
+  const tenantId = tenant.credentials.tenantId
+  const plan = tenantPlan(licenseStatus?.tenants.find(entry => entry.tenantId.toLowerCase() === tenantId.toLowerCase()))
+  const locked = plan !== null && !allows(plan, "notifications")
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="flex items-center gap-3 text-xl font-medium text-gray-900">
+          <span className="flex size-10 items-center justify-center rounded-full bg-secondary" aria-hidden="true"><Bell className="h-[18px] w-[18px]" /></span> Notifications
+          {locked && <PlanBadge feature="notifications" />}
+        </h2>
+        <p className="mt-2 text-sm text-gray-500">Backup, restore, drift and Intune change alerts to this computer, a webhook, a Teams channel or email. Settings are kept per tenant.</p>
+      </div>
+      <label className="block text-sm">
+        Notifications tenant
+        <select className="ml-3 rounded border bg-background p-2" value={tenantId} onChange={event => setSelected(event.target.value)}>
+          {tenants.map(candidate => <option key={candidate.id} value={candidate.credentials!.tenantId}>{candidate.name}</option>)}
+        </select>
+      </label>
+      <NotificationsPanel key={tenantId} tenant={tenant} active={active} />
+    </div>
   )
 }
 
@@ -696,6 +732,7 @@ const SECTIONS: { id: SettingsSectionId; title: string; icon: typeof KeyRound }[
   { id: "signin", title: "Sign-in", icon: KeyRound },
   { id: "storage", title: "Storage and recovery", icon: HardDrive },
   { id: "background", title: "Background runner", icon: MonitorCog },
+  { id: "notifications", title: "Notifications", icon: Bell },
   { id: "branding", title: "PDF branding", icon: Palette },
   { id: "updates", title: "Updates", icon: Download },
   { id: "appearance", title: "Appearance", icon: SunMoon },
@@ -746,10 +783,16 @@ export default function SettingsPage() {
       }
     }
     landFocus()
-    // A closing dialog still holds focus inside its portal at this point and
-    // only drops it during teardown, so check again after the next frame.
-    const frame = requestAnimationFrame(landFocus)
-    return () => cancelAnimationFrame(frame)
+    // A closing dialog still holds focus inside its portal through its exit
+    // animation and only drops it when the portal leaves the DOM, so keep
+    // checking while nodes are removed, then stop watching.
+    const observer = new MutationObserver(landFocus)
+    observer.observe(document.body, { childList: true, subtree: true })
+    const stop = setTimeout(() => observer.disconnect(), 1000)
+    return () => {
+      observer.disconnect()
+      clearTimeout(stop)
+    }
   }, [section])
 
   const panel = (id: SettingsSectionId, content: ReactNode) => (
@@ -760,7 +803,7 @@ export default function SettingsPage() {
     <div className="p-6 lg:p-8">
       <div className="pb-2">
         <h1 className="text-4xl font-medium tracking-tight text-gray-900">Settings</h1>
-        <p className="mt-2 text-lg text-gray-500">Sign-in, backup storage, encryption, background backups, PDF branding and updates.</p>
+        <p className="mt-2 text-lg text-gray-500">Sign-in, backup storage, encryption, background backups, notifications, PDF branding and updates.</p>
       </div>
       <div className="mt-4 flex flex-col gap-6 xl:flex-row xl:items-start">
         <nav aria-label="Settings sections" className="flex gap-1 overflow-x-auto p-1 xl:sticky xl:top-8 xl:w-56 xl:shrink-0 xl:flex-col xl:overflow-visible xl:p-0">
@@ -785,6 +828,7 @@ export default function SettingsPage() {
           {panel("signin", <TenantSettings active={section === "signin"} />)}
           {panel("storage", <div className="space-y-6"><BackupsOnDevice /><RestoreWrites active={section === "storage"} /></div>)}
           {panel("background", <BackgroundAndRetention />)}
+          {panel("notifications", <NotificationSettings active={section === "notifications"} />)}
           {panel("branding", <PdfBrandingSettings />)}
           {panel("updates", <Updates />)}
           {panel("appearance", <AppearanceSettings />)}

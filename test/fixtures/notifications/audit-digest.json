@@ -1,0 +1,46 @@
+{
+  "tenantId": "11111111-1111-1111-1111-111111111111",
+  "tenantName": "Contoso",
+  "includeActor": true,
+  "events": [
+    {
+      "id": "audit-1",
+      "displayName": "Update deviceConfiguration",
+      "componentName": "DeviceConfiguration",
+      "activity": "Update",
+      "activityType": "Update deviceConfiguration",
+      "activityOperationType": "Update",
+      "activityResult": "Success",
+      "activityDateTime": "2026-10-17T10:00:00Z",
+      "category": "Policy",
+      "actor": { "applicationId": "app-portal", "applicationDisplayName": "Microsoft Intune portal", "userPrincipalName": "admin@contoso.test", "userId": "user-1", "type": "User" },
+      "resources": [{ "displayName": "WiFi Corp", "type": "DeviceConfiguration", "resourceId": "abc", "modifiedProperties": [{ "displayName": "networkName", "oldValue": "old-secret", "newValue": "new-secret" }] }]
+    },
+    {
+      "id": "audit-2",
+      "displayName": "Update deviceConfiguration",
+      "componentName": "DeviceConfiguration",
+      "activity": "Update",
+      "activityType": "Update deviceConfiguration",
+      "activityOperationType": "Update",
+      "activityResult": "Success",
+      "activityDateTime": "2026-10-17T10:01:00Z",
+      "category": "Policy",
+      "actor": { "applicationId": "app-portal", "applicationDisplayName": "Microsoft Intune portal", "userPrincipalName": "admin@contoso.test", "userId": "user-1", "type": "User" },
+      "resources": [{ "displayName": "WiFi Corp", "type": "DeviceConfiguration", "resourceId": "abc", "modifiedProperties": [] }]
+    },
+    {
+      "id": "audit-3",
+      "displayName": "Delete deviceCompliancePolicy",
+      "componentName": "DeviceCompliancePolicy",
+      "activity": "Delete",
+      "activityType": "Delete deviceCompliancePolicy",
+      "activityOperationType": "Delete",
+      "activityResult": "Success",
+      "activityDateTime": "2026-10-17T10:02:00Z",
+      "category": "Compliance",
+      "actor": { "applicationId": "app-portal", "applicationDisplayName": "Microsoft Intune portal", "userPrincipalName": "other@contoso.test", "userId": "user-2", "type": "User" },
+      "resources": [{ "displayName": "Baseline <script>alert(1)</script>", "type": "DeviceCompliancePolicy", "resourceId": "def", "modifiedProperties": [] }]
+    }
+  ]
+}

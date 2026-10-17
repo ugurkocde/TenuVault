@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest"
-import { accumulateCisFindings, CIS_STATUS_RETRY_DELAYS_MS, cisRunDisplayPhase, cisRunHeading, cisRunReceivedLabel, cisRunSteps, cisRunTallies, emptyCisRunAccumulation, pollCisStatus, resolveCisRunCompletion, type CisRunPack } from "../src/shared/frameworks/cis-run"
+import { accumulateCisFindings, CIS_STATUS_RETRY_DELAYS_MS, cisRunDisplayPhase, cisRunHeading, cisRunProgress, cisRunReceivedLabel, cisRunSteps, cisRunTallies, emptyCisRunAccumulation, pollCisStatus, resolveCisRunCompletion, type CisRunPack } from "../src/shared/frameworks/cis-run"
 import type { BaselinePolicy, Finding } from "../src/shared/frameworks/policies"
 
 function finding(key: string, status: Finding["status"] = "Present"): Finding {
@@ -156,5 +156,21 @@ describe("run screen phase and heading", () => {
     expect(cisRunHeading("saving")).toBe("Saving the assessment")
     expect(cisRunHeading("done")).toBe("Assessment complete")
     expect(cisRunHeading("saving", true)).toBe("Re-running assessment: saving the assessment")
+  })
+
+  it("maps each phase onto one overall percent that only moves forward", () => {
+    const run = (patch: Partial<Parameters<typeof cisRunProgress>[0]>) => cisRunProgress({ phase: "connecting", total: 0, read: 0, packPolicies: 0, comparedPolicies: 0, ...patch })
+    expect(run({})).toBeNull()
+    expect(run({ phase: "reading", total: 0 })).toBeNull()
+    expect(run({ phase: "reading", total: 10, read: 0 })).toBe(2)
+    expect(run({ phase: "reading", total: 10, read: 5 })).toBe(24)
+    expect(run({ phase: "reading", total: 10, read: 10 })).toBe(45)
+    expect(run({ phase: "comparing", packPolicies: 4, comparedPolicies: 2 })).toBe(68)
+    expect(run({ phase: "comparing", packPolicies: 4, comparedPolicies: 4 })).toBe(90)
+    expect(run({ phase: "saving" })).toBe(94)
+    expect(run({ phase: "done" })).toBe(100)
+    expect(run({ phase: "failed" })).toBeNull()
+    expect(run({ phase: "reading", total: 10, read: 99 })).toBe(45)
+    expect(run({ phase: "comparing", packPolicies: 0, comparedPolicies: 3 })).toBe(45)
   })
 })
