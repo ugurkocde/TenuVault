@@ -196,8 +196,14 @@ describe("CIS Benchmarks results across navigation", () => {
     const { container } = render()
     await waitFor(() => container.textContent.includes("Reading tenant policies"))
     expect(container.textContent).toContain("3 of 10 policies read")
+    // The run shows as a full-page overlay with one overall progress bar, not an inline card.
+    const overlay = container.querySelector('[aria-label="Assessment in progress"]')
+    expect(overlay?.className).toContain("fixed")
+    expect(overlay?.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("15")
     expect(actions.some(body => body.action === "assess-start")).toBe(false)
     await waitFor(() => !!results(container))
+    expect(container.querySelector('[aria-label="Assessment in progress"]')).toBeNull()
+    expect(container.querySelector('[aria-label="Results header"]')?.className).toContain("cis-results-reveal")
     expect(levelSummary(container)).toContain("100%")
   })
 

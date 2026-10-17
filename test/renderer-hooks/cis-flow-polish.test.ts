@@ -205,7 +205,7 @@ describe("CIS flow on the page", () => {
     await click(buttonNamed(container, "Start Assessment"))
     await waitFor(() => !!container.querySelector('[aria-label="Partial results"]') && container.textContent!.includes("Require Encryption"))
     const partial = container.querySelector('[aria-label="Partial results"]')!
-    expect(partial.querySelector('section[aria-label="Synthetic policy"] h4')!.textContent).toContain("1 different")
+    expect(partial.querySelector('section[aria-label="Synthetic policy"] h3')!.textContent).toContain("1 different")
     expect(partial.querySelectorAll('input[type="checkbox"]')).toHaveLength(0)
     expect([...partial.querySelectorAll("summary span")].some(span => span.textContent === "Require Encryption")).toBe(true)
   })
