@@ -120,9 +120,11 @@ describe("backups the user cancelled elsewhere in the app", () => {
 })
 
 describe("cancelled jobs and backups outside the Backups page", () => {
-  it("leaves the tenant's sync status as it was when the user cancels a job", () => {
+  it("sets the tenant's sync status back to idle, not error, when the user cancels a job", () => {
     const endTime = "2026-09-26T12:00:00Z"
-    expect(backupCompletionUpdates({ isComplete: true, isSuccessful: false, status: "Cancelled", endTime }, "2026-09-20T12:00:00Z")).toEqual({ lastSync: endTime })
+    expect(backupCompletionUpdates({ isComplete: true, isSuccessful: false, status: "Cancelled", endTime }, "2026-09-20T12:00:00Z")).toEqual({ syncStatus: "idle", lastSync: endTime })
+    // A late cancel never overwrites the status a newer attempt set.
+    expect(backupCompletionUpdates({ isComplete: true, isSuccessful: false, status: "Cancelled", endTime: "2026-09-25T12:00:00Z" }, "2026-09-20T12:00:00Z", endTime)).toEqual({})
     expect(backupCompletionUpdates({ isComplete: true, isSuccessful: false, status: "Failed", endTime }, "2026-09-20T12:00:00Z")).toEqual({ syncStatus: "error", lastSync: endTime })
   })
 

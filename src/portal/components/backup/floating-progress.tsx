@@ -248,8 +248,8 @@ export function FloatingProgress() {
 
                 {/* Exception Message */}
                 {job.exception && (
-                  <div className="bg-red-50 rounded-2xl p-3">
-                    <p className="text-xs text-red-700">{job.exception}</p>
+                  <div className={cn("rounded-2xl p-3", job.status === "Cancelled" ? "bg-gray-100" : "bg-red-50")}>
+                    <p className={cn("text-xs", job.status === "Cancelled" ? "text-gray-700" : "text-red-700")}>{job.exception}</p>
                   </div>
                 )}
 

@@ -34,7 +34,7 @@ vi.mock("@desktop/components/UpgradeNote", () => ({ PlanBadge: () => null, Upgra
 
 import { BackupProgressModal } from "../src/portal/components/tenants/backup-progress-modal"
 import { FloatingProgress } from "../src/portal/components/backup/floating-progress"
-import OnboardingPage from "../src/renderer/pages/OnboardingPage"
+import { JobStateIcon } from "../src/renderer/pages/OnboardingPage"
 import { RestoreWizard } from "../src/portal/components/backup/restore-wizard"
 
 const ended = (status: "Cancelled" | "Failed") => ({
@@ -55,34 +55,40 @@ beforeEach(() => {
 describe("a backup the user cancelled, in the progress views", () => {
   const modal = () => render(createElement(BackupProgressModal, { open: true, onOpenChange: () => undefined, tenantName: "Contoso", jobId: "job-1", credentials: null, resources: null }))
 
-  it("shows a grey icon in the Backup Progress dialog, and red only for a failure", () => {
+  it("shows a grey icon and a neutral cancel message in the Backup Progress dialog, and red only for a failure", () => {
     state.jobs = [ended("Cancelled")]
     const cancelled = modal()
     expect(cancelled).toContain("bg-gray-100 p-5 text-gray-500")
-    expect(cancelled).not.toContain("bg-red-50")
+    expect(cancelled).toContain("Backup cancelled by you.")
+    // Class tokens only: the shared button styles name aria-invalid:border-destructive for invalid fields.
+    for (const red of ["bg-red-50", "text-destructive", "border-destructive", "text-red-700"]) expect(cancelled).not.toMatch(new RegExp(`(^|["\\s])${red}(["\\s/]|$)`))
     state.jobs = [ended("Failed")]
-    expect(modal()).toContain("bg-red-50 p-5 text-red-600")
+    const failed = modal()
+    expect(failed).toContain("bg-red-50 p-5 text-red-600")
+    expect(failed).toMatch(/(^|["\s])border-destructive\/50(["\s]|$)/)
   })
 
-  it("shows a grey icon in the floating progress panel", () => {
+  it("shows a grey icon and, expanded, a neutral cancel message in the floating progress panel", () => {
+    // Expanded: the panel's first useState holds the expanded job.
+    state.overrides = new Map<number, unknown>([[0, "job-1"]])
     state.jobs = [ended("Cancelled")]
     const cancelled = render(createElement(FloatingProgress))
     expect(cancelled).toContain("Backup cancelled")
     expect(cancelled).toContain("h-5 w-5 text-gray-500")
-    expect(cancelled).not.toContain("text-destructive")
+    expect(cancelled).toMatch(/<div class="rounded-2xl p-3 bg-gray-100"><p class="text-xs text-gray-700">Backup cancelled by you\./)
+    for (const red of ["bg-red-50", "text-destructive", "text-red-700"]) expect(cancelled).not.toContain(red)
     state.jobs = [ended("Failed")]
-    expect(render(createElement(FloatingProgress))).toContain("text-destructive")
+    const failed = render(createElement(FloatingProgress))
+    expect(failed).toContain("text-destructive")
+    expect(failed).toContain('<p class="text-xs text-red-700">Sign in again.</p>')
   })
 
   it("shows a grey icon on the first backup step of setup", () => {
-    // useState calls in order: step is the first, the job the seventh.
-    state.overrides = new Map<number, unknown>([[0, 3], [6, ended("Cancelled")]])
-    const cancelled = render(createElement(OnboardingPage))
-    expect(cancelled).toContain("Backup cancelled by you.")
-    expect(cancelled).toContain("h-4 w-4 text-gray-500")
-    expect(cancelled).not.toContain("h-4 w-4 text-red-600")
-    state.overrides = new Map<number, unknown>([[0, 3], [6, ended("Failed")]])
-    expect(render(createElement(OnboardingPage))).toContain("h-4 w-4 text-red-600")
+    const icon = (status: string, isSuccessful = false, isComplete = true) => renderToStaticMarkup(createElement(JobStateIcon, { job: { status, isComplete, isSuccessful } }))
+    expect(icon("Cancelled")).toContain("h-4 w-4 text-gray-500")
+    expect(icon("Failed")).toContain("h-4 w-4 text-red-600")
+    expect(icon("Completed", true)).toContain("text-green-600")
+    expect(icon("Running", false, false)).toContain("animate-spin")
   })
 })
 

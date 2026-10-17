@@ -260,7 +260,7 @@ export function BackupProgressModal({
 
               {/* Exception Message */}
               {jobStatus.exception && (
-                <Alert variant="destructive">
+                <Alert variant={jobStatus.status === "Cancelled" ? "default" : "destructive"} className={jobStatus.status === "Cancelled" ? "border-gray-200 bg-gray-50 text-gray-700" : undefined}>
                   <AlertCircle className="h-4 w-4" />
                   <AlertDescription>{jobStatus.exception}</AlertDescription>
                 </Alert>
