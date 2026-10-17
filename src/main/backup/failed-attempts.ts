@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import type { FailedBackupAttempt } from "../../shared/ipc"
 import type { KeyValueStore } from "../storage/secure-store"
 import type { BackupJob, BackupRequest } from "./engine"
@@ -10,11 +11,12 @@ export const FAILED_ATTEMPT_DAYS = 60
 const MAX_MESSAGE = 200
 
 /**
- * Backup attempts that failed without saving a backup folder, for example a sign-in that
- * failed, a license or plan refusal, a Graph list that failed before the folder was claimed, or
- * another backup of the tenant that was already running. Storage has no trace of them, so the
- * Dashboard reads them from this log, kept in the app's encrypted store on this device, to count
- * them as failed. An attempt that wrote a folder, or may have, is not recorded: storage counts it.
+ * Backup attempts that failed, kept in the app's encrypted store on this device. Many leave no
+ * trace in storage, for example a sign-in that failed, a license or plan refusal, a Graph list that
+ * failed before the folder was claimed, or another backup of the tenant that was already running.
+ * Every failed backup job is recorded with its run id, whether or not it wrote a folder: the
+ * Dashboard drops an attempt whose run id matches a folder in storage, so whatever storage holds
+ * decides and the run counts once. Refusals outside the engine never have a folder.
  *
  * Manual and tray attempts always count. Retries of one scheduled slot count once: a computer
  * that wakes briefly from sleep fails the same slot every 15 minutes.
@@ -26,7 +28,7 @@ export class FailedAttemptLog {
   ) {}
 
   /** Null when the scheduled slot already has a failed attempt. */
-  record(entry: Omit<FailedBackupAttempt, "at">): FailedBackupAttempt | null {
+  record(entry: Omit<FailedBackupAttempt, "at" | "runId"> & { runId?: string }): FailedBackupAttempt | null {
     const tenantId = entry.tenantId.toLowerCase()
     const slot = entry.trigger === "scheduled" ? entry.slot : undefined
     const all = this.read()
@@ -35,6 +37,8 @@ export class FailedAttemptLog {
     const attempt: FailedBackupAttempt = {
       at: this.now().toISOString(),
       tenantId,
+      // Attempts without a backup job get an id no folder can carry.
+      runId: entry.runId ?? `refused-${randomUUID()}`,
       trigger: entry.trigger,
       ...(slot ? { slot } : {}),
       message: (entry.message.split("\n")[0] ?? "").slice(0, MAX_MESSAGE),
@@ -44,10 +48,10 @@ export class FailedAttemptLog {
     return attempt
   }
 
-  /** Records a finished job that failed without claiming its backup folder. */
+  /** Records a finished job that failed, with its run id. A cancelled job is not a failure. */
   finished(job: BackupJob, request: BackupRequest): void {
-    if (job.status !== "Failed" || job.folderClaimed || job.folderUnknown) return
-    this.record({ tenantId: job.tenantId, trigger: request.trigger ?? "manual", slot: request.slot, message: job.exception ?? job.progressMessage })
+    if (job.status !== "Failed") return
+    this.record({ tenantId: job.tenantId, runId: job.id, trigger: request.trigger ?? "manual", slot: request.slot, message: job.exception ?? job.progressMessage })
   }
 
   /** Newest first, for one tenant. */
@@ -55,19 +59,29 @@ export class FailedAttemptLog {
     return this.read().filter((entry) => entry.tenantId === tenantId.toLowerCase())
   }
 
-  /** Entries older than FAILED_ATTEMPT_DAYS are left out, whether or not a write has pruned them yet. */
+  /** Entries older than FAILED_ATTEMPT_DAYS, or unreadable, are left out and pruned from the store. */
   private read(): FailedBackupAttempt[] {
     const cutoff = this.now().getTime() - FAILED_ATTEMPT_DAYS * 86_400_000
+    let parsed: unknown
     try {
-      const parsed: unknown = JSON.parse(this.store.get(KEY) ?? "[]")
-      return Array.isArray(parsed)
-        ? (parsed as FailedBackupAttempt[]).filter(
-            (entry) => typeof entry?.at === "string" && Date.parse(entry.at) >= cutoff && typeof entry.tenantId === "string" && typeof entry.message === "string",
-          )
-        : []
+      parsed = JSON.parse(this.store.get(KEY) ?? "[]")
     } catch {
       return []
     }
+    if (!Array.isArray(parsed)) return []
+    const kept = (parsed as FailedBackupAttempt[]).filter(
+      (entry) => typeof entry?.at === "string" && Date.parse(entry.at) >= cutoff && typeof entry.tenantId === "string"
+        && typeof entry.runId === "string" && typeof entry.message === "string",
+    )
+    if (kept.length < parsed.length) {
+      // Reading never fails because the pruned list could not be saved; the next read prunes again.
+      try {
+        this.store.set(KEY, JSON.stringify(kept))
+      } catch (error) {
+        console.warn("[backup] Could not prune failed backup attempts:", error)
+      }
+    }
+    return kept
   }
 }
 

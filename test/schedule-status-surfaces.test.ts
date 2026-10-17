@@ -12,7 +12,7 @@ const state = vi.hoisted(() => ({
   tenants: [{ id: 42, name: "Contoso", domain: "contoso.onmicrosoft.com", lastBackup: "", credentials: { tenantId: "tenant", appId: "app" }, resources: { storageAccountName: "tvlocal-tenant" } }],
   schedules: [] as BackupSchedule[],
   failedAttempts: [] as FailedBackupAttempt[],
-  activeJobs: [] as Array<{ tenantId: string }>,
+  activeJobs: [] as Array<{ tenantId: string; isComplete: boolean; status: string }>,
   stats: null as TenantDashboardStats | null,
   queryFn: null as (() => Promise<TenantDashboardStats>) | null,
   navigate: vi.fn(),
@@ -115,9 +115,9 @@ describe("Dashboard backup counts", () => {
   it("counts an automatic attempt that saved no backup as failed in the period", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json([])))
     state.failedAttempts = [
-      { at: hoursAgo(2).toISOString(), tenantId: "tenant", trigger: "scheduled", message: "Sign in again." },
-      { at: hoursAgo(24 * 9).toISOString(), tenantId: "tenant", trigger: "manual", message: "Older than the period." },
-      { at: hoursAgo(1).toISOString(), tenantId: "other", trigger: "manual", message: "Another tenant." },
+      { at: hoursAgo(2).toISOString(), tenantId: "tenant", runId: "desktop-1", trigger: "scheduled", message: "Sign in again." },
+      { at: hoursAgo(24 * 9).toISOString(), tenantId: "tenant", runId: "desktop-2", trigger: "manual", message: "Older than the period." },
+      { at: hoursAgo(1).toISOString(), tenantId: "other", runId: "desktop-3", trigger: "manual", message: "Another tenant." },
     ]
     useDashboardStats("7d", 42)
     state.stats = await state.queryFn!()
@@ -134,7 +134,7 @@ describe("Dashboard backup counts", () => {
   })
 
   it("keeps the stored, successful, failed and success rate tiles in agreement", () => {
-    state.activeJobs = [{ tenantId: "TENANT" }]
+    state.activeJobs = [{ tenantId: "TENANT", isComplete: false, status: "Running" }]
     state.stats = {
       ...emptyStats,
       periodStart: hoursAgo(24 * 7),
@@ -143,7 +143,7 @@ describe("Dashboard backup counts", () => {
         storedBackup("failed", hoursAgo(5)),
         ...[10, 11, 12, 13, 15].map((days) => storedBackup("success", hoursAgo(24 * days))),
       ],
-      failedAttempts: [{ tenantId: 42, timestamp: hoursAgo(3), message: "A different backup is already running for this tenant." }],
+      failedAttempts: [{ tenantId: 42, timestamp: hoursAgo(3), runId: "desktop-conflict", message: "A different backup is already running for this tenant." }],
     }
     const markup = renderDashboard()
     expect(markup).toContain("7 backups in storage")
@@ -156,6 +156,18 @@ describe("Dashboard backup counts", () => {
     expect(markup).not.toContain("backups stored")
   })
 
+  it("does not count a finished job kept in the progress list as running", () => {
+    state.activeJobs = [{ tenantId: "TENANT", isComplete: true, status: "Failed" }, { tenantId: "TENANT", isComplete: false, status: "Running" }]
+    state.stats = { ...emptyStats, periodStart: hoursAgo(24), failedAttempts: [{ tenantId: 42, timestamp: hoursAgo(1), runId: "desktop-1", message: "Sign in again." }] }
+    const markup = renderDashboard()
+    expect(markup).toMatch(/>1<\/p><p[^>]*>Failed<\/p>/)
+    expect(markup).toMatch(/>1<\/p><p[^>]*>Running<\/p>/)
+    state.activeJobs = [{ tenantId: "TENANT", isComplete: true, status: "Failed" }]
+    const finished = renderDashboard()
+    expect(finished).toMatch(/>0<\/p><p[^>]*>Running<\/p>/)
+    expect(finished).not.toContain(">Running</span>")
+  })
+
   it("shows No data when no backup finished in the period", () => {
     state.stats = { ...emptyStats, periodStart: hoursAgo(24), backupHistory: [storedBackup("success", hoursAgo(48))] }
     const markup = renderDashboard()
@@ -166,7 +178,7 @@ describe("Dashboard backup counts", () => {
   })
 
   it("shows No data instead of a rate when the backups could not be read", () => {
-    state.stats = { ...emptyStats, periodStart: hoursAgo(24), backupsError: "Storage unavailable.", failedAttempts: [{ tenantId: 42, timestamp: hoursAgo(1), message: "Sign in again." }] }
+    state.stats = { ...emptyStats, periodStart: hoursAgo(24), backupsError: "Storage unavailable.", failedAttempts: [{ tenantId: 42, timestamp: hoursAgo(1), runId: "desktop-1", message: "Sign in again." }] }
     const markup = renderDashboard()
     expect(markup).toContain("No data")
     expect(markup).not.toContain("0%")

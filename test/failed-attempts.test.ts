@@ -9,6 +9,9 @@ import { planGuard } from "../src/main/api/plan-gates"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { BACKUP_OWNER_FILE, localStorageAccountName } from "../src/shared/constants"
+import { POST as listBackups } from "../src/portal/app/api/list-backups/route"
+import { NextRequest } from "../src/main/api/next-server-shim"
+import { backupSummary, normalizeBackupStatus } from "../src/portal/lib/backup-health"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { memoryStore } from "./helpers"
 
@@ -28,13 +31,13 @@ describe("FailedAttemptLog", () => {
     const log = new FailedAttemptLog(store, () => now)
     log.record({ tenantId: TENANT.toUpperCase(), trigger: "scheduled", message: "Sign in again." })
     now = new Date("2026-10-17T02:00:00Z")
-    log.record({ tenantId: TENANT, trigger: "manual", message: "A different backup is already running for this tenant." })
+    log.record({ tenantId: TENANT, runId: "desktop-conflict", trigger: "manual", message: "A different backup is already running for this tenant." })
     log.record({ tenantId: OTHER, trigger: "tray", message: "Not backed up: a license is required." })
 
     const restarted = new FailedAttemptLog(store)
     expect(restarted.list(TENANT)).toEqual([
-      { at: "2026-10-17T02:00:00.000Z", tenantId: TENANT, trigger: "manual", message: "A different backup is already running for this tenant." },
-      { at: "2026-10-16T02:00:00.000Z", tenantId: TENANT, trigger: "scheduled", message: "Sign in again." },
+      { at: "2026-10-17T02:00:00.000Z", tenantId: TENANT, runId: "desktop-conflict", trigger: "manual", message: "A different backup is already running for this tenant." },
+      { at: "2026-10-16T02:00:00.000Z", tenantId: TENANT, runId: expect.stringMatching(/^refused-/), trigger: "scheduled", message: "Sign in again." },
     ])
     expect(restarted.list(OTHER.toUpperCase())).toHaveLength(1)
   })
@@ -83,17 +86,35 @@ describe("FailedAttemptLog", () => {
   const slot = (iso: string) => ({ ...manual, trigger: "scheduled" as const, slot: iso })
   const offline = job({ unreachable: true, exception: "Microsoft Graph could not be reached." })
 
-  it("records only failed jobs that left no backup folder", () => {
+  it("records every failed job with its run id, and no completed or cancelled job", () => {
     const log = new FailedAttemptLog(memoryStore())
-    log.finished(job({ status: "Completed", folderClaimed: true }), manual)
+    log.finished(job({ status: "Completed" }), manual)
     log.finished(job({ status: "Cancelled" }), manual)
-    // A run that stopped after claiming its folder is counted from the folder (a Failed manifest).
-    log.finished(job({ folderClaimed: true, exception: "Backup stopped" }), slot("2026-10-17T02:00:00.000Z"))
-    // A claim whose outcome is unknown may have left a folder, which storage then counts.
-    log.finished(job({ folderUnknown: true }), manual)
     expect(log.list(TENANT)).toEqual([])
-    log.finished(job({ exception: "Sign in again.\nAADSTS700082" }), slot("2026-10-17T02:00:00.000Z"))
-    expect(log.list(TENANT)).toMatchObject([{ trigger: "scheduled", slot: "2026-10-17T02:00:00.000Z", message: "Sign in again." }])
+    log.finished(job({ id: "desktop-run", exception: "Sign in again.\nAADSTS700082" }), slot("2026-10-17T02:00:00.000Z"))
+    expect(log.list(TENANT)).toMatchObject([{ runId: "desktop-run", trigger: "scheduled", slot: "2026-10-17T02:00:00.000Z", message: "Sign in again." }])
+  })
+
+  it("gives attempts without a backup job a unique id no folder carries", () => {
+    const log = new FailedAttemptLog(memoryStore())
+    log.record({ tenantId: TENANT, trigger: "tray", message: "Not backed up: a license is required." })
+    log.record({ tenantId: TENANT, trigger: "tray", message: "Not backed up: a license is required." })
+    const ids = log.list(TENANT).map((entry) => entry.runId)
+    expect(new Set(ids).size).toBe(2)
+    for (const id of ids) expect(id).toMatch(/^refused-/)
+  })
+
+  it("saves the pruned list when a read drops old entries, and never throws for it", () => {
+    const store = memoryStore()
+    let now = new Date("2026-08-01T00:00:00Z")
+    new FailedAttemptLog(store, () => now).record({ tenantId: TENANT, trigger: "manual", message: "old" })
+    now = new Date(now.getTime() + (FAILED_ATTEMPT_DAYS + 1) * 86_400_000)
+    const readOnly = { ...store, set: vi.fn(() => { throw new Error("The store is not writable.") }) }
+    expect(new FailedAttemptLog(readOnly, () => now).list(TENANT)).toEqual([])
+    expect(readOnly.set).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(store.get("backup.failedAttempts")!)).toHaveLength(1)
+    expect(new FailedAttemptLog(store, () => now).list(TENANT)).toEqual([])
+    expect(JSON.parse(store.get("backup.failedAttempts")!)).toEqual([])
   })
 
   it("counts every manual and tray failure, also repeated connection failures", () => {
@@ -187,95 +208,91 @@ describe("BackupEngine end of job", () => {
     return Response.json({ id: url.pathname.split("/").pop() })
   }
 
-  it("reports each job once, with whether it claimed its folder", async () => {
-    const ended: Array<{ job: BackupJob; trigger: string | undefined; claimed: boolean | undefined }> = []
-    const onFinished = (job: BackupJob, request: BackupRequest) => void ended.push({ job, trigger: request.trigger, claimed: job.folderClaimed })
+  /** The Dashboard counts of the tenant: its folders as /api/list-backups lists them, and the log. */
+  async function dashboardCounts(store: LocalBlobStore, account: string, log: FailedAttemptLog) {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      const url = new URL(request.url)
+      if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "token" })
+      if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
+      throw new Error(`unexpected ${url}`)
+    })
+    try {
+      const body = { summary: true, tenantId: TENANT, appId: CLIENT, clientSecret: "test", subscriptionId: "local", resourceGroupName: "local", storageAccountName: account }
+      const { backups } = await (await listBackups(new NextRequest("http://tenuvault.internal/api/list-backups", { method: "POST", body: JSON.stringify(body) }))).json() as { backups: Array<{ status: string; timestamp: string; runId: string | null }> }
+      const folders = backups.map((backup) => ({ status: normalizeBackupStatus(backup), timestamp: new Date(backup.timestamp), runId: backup.runId }))
+      const attempts = log.list(TENANT).map((attempt) => ({ timestamp: new Date(attempt.at), runId: attempt.runId }))
+      return { backups, summary: backupSummary(folders, attempts, { since: new Date(Date.now() - 7 * 86_400_000), running: 0 }) }
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  }
+  const profile = oneItem(() => Response.json({ id: "dc1", displayName: "Profile" }))
+  const start = (engine: BackupEngine, account: string) => engine.waitForJob(engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }))
 
-    const ok = engineWith(oneItem(() => Response.json({ id: "dc1", displayName: "Profile" })), onFinished)
+  it("reports each job once, with the request that started it", async () => {
+    const ended: Array<{ job: BackupJob; trigger: string | undefined }> = []
+    const onFinished = (job: BackupJob, request: BackupRequest) => void ended.push({ job, trigger: request.trigger })
+    const ok = engineWith(profile, onFinished)
     const done = ok.engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: ok.account, trigger: "scheduled" })
     // A second request with another scope does not join and fails at once, without a folder.
     const conflict = ok.engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: ok.account, scope: { excluded: ["DeviceConfigurations"] } })
     expect(conflict.status).toBe("Failed")
     await ok.engine.waitForJob(done)
-    expect(ended.map((entry) => [entry.job.status, entry.trigger, entry.claimed])).toEqual([["Failed", undefined, undefined], ["Completed", "scheduled", true]])
-
-    ended.length = 0
-    const signIn = engineWith(oneItem(() => Response.json({})), onFinished, async () => { throw new Error("Sign in again.") })
-    await signIn.engine.waitForJob(signIn.engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: signIn.account }))
-    expect(ended.map((entry) => [entry.job.status, entry.claimed])).toEqual([["Failed", undefined]])
-    expect(await signIn.store.list(signIn.account, "intune-backups").catch(() => [])).toEqual([])
+    expect(ended.map((entry) => [entry.job.status, entry.trigger])).toEqual([["Failed", undefined], ["Completed", "scheduled"]])
   })
 
-  it("leaves a run that wrote a failed manifest to its folder, so it is not counted twice", async () => {
-    const store = memoryStore()
-    const log = new FailedAttemptLog(store)
+  it("counts a failed job with a folder once, from the folder", async () => {
+    const log = new FailedAttemptLog(memoryStore())
     const expired = engineWith(oneItem(() => Response.json({ error: { message: "Unauthorized" } }, { status: 401 })), (job, request) => log.finished(job, request))
-    const job = await expired.engine.waitForJob(expired.engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: expired.account }))
+    const job = await start(expired.engine, expired.account)
     expect(job.status).toBe("Failed")
-    expect(job.folderClaimed).toBe(true)
-    const names = (await expired.store.list(expired.account, "intune-backups")).map((blob) => blob.name)
-    expect(names).toContain(`${job.backupFolder}/metadata.json`)
-    expect(log.list(TENANT)).toEqual([])
+    expect(log.list(TENANT)).toMatchObject([{ runId: job.id }])
+    const { backups, summary } = await dashboardCounts(expired.store, expired.account, log)
+    // The Failed manifest names its run.
+    expect(backups).toMatchObject([{ status: "Failed", runId: job.id }])
+    expect(summary).toMatchObject({ stored: 1, successful: 0, failed: 1, finished: 1 })
   })
 
-  it("records a failure before the folder claim", async () => {
+  it("counts a failed job without a folder", async () => {
     const log = new FailedAttemptLog(memoryStore())
     const failing = engineWith((url) => url.pathname === "/beta/deviceManagement/deviceConfigurations"
       ? Response.json({ error: { message: "Unauthorized" } }, { status: 401 })
       : Response.json({ value: [] }), (job, request) => log.finished(job, request))
-    const job = await failing.engine.waitForJob(failing.engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: failing.account }))
+    const job = await start(failing.engine, failing.account)
     expect(job.status).toBe("Failed")
-    expect(job.folderClaimed).toBeUndefined()
-    expect(log.list(TENANT)).toMatchObject([{ trigger: "manual" }])
+    const { backups, summary } = await dashboardCounts(failing.store, failing.account, log)
+    expect(backups).toEqual([])
+    expect(summary).toMatchObject({ stored: 0, failed: 1, finished: 1, successRate: 0 })
   })
 
-  // Storage saves the claim marker, but the response is lost; the retry is then refused because the marker exists.
-  const lostClaimResponse = (afterwards: Storage = (_request, forward) => forward()): Storage => {
-    let lost = false
-    return async (request, forward) => {
-      if (request.method === "PUT" && new URL(request.url).pathname.endsWith(BACKUP_OWNER_FILE) && !lost) {
-        lost = true
-        await forward()
-        throw new TypeError("network error")
-      }
-      return afterwards(request, forward)
+  it("counts a claim saved behind a status zero response once", async () => {
+    const log = new FailedAttemptLog(memoryStore())
+    // Storage saves the ownership marker, but the answer is a network error response.
+    const lost: Storage = async (request, forward) => {
+      if (request.method !== "PUT" || !new URL(request.url).pathname.endsWith(BACKUP_OWNER_FILE)) return forward()
+      await forward()
+      return Response.error()
     }
-  }
-  const profile = oneItem(() => Response.json({ id: "dc1", displayName: "Profile" }))
-
-  it("continues a run whose claim landed but whose response was lost, and records no failure", async () => {
-    const log = new FailedAttemptLog(memoryStore())
-    const lost = engineWith(profile, (job, request) => log.finished(job, request), undefined, lostClaimResponse())
-    const job = await lost.engine.waitForJob(lost.engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: lost.account }))
-    expect(job.status).toBe("Completed")
-    expect(job.folderClaimed).toBe(true)
-    const owner = JSON.parse((await lost.store.get(lost.account, "intune-backups", `${job.backupFolder}/${BACKUP_OWNER_FILE}`)).data.toString())
-    expect(owner).toMatchObject({ TenantId: TENANT, RunId: job.id })
-    expect(log.list(TENANT)).toEqual([])
-  })
-
-  it("records no failure when it cannot tell whether a lost claim landed", async () => {
-    const log = new FailedAttemptLog(memoryStore())
-    const unreadable: Storage = async (request, forward) => request.method === "GET" && new URL(request.url).pathname.endsWith(BACKUP_OWNER_FILE)
-      ? new Response("<Error><Code>AuthorizationFailure</Code></Error>", { status: 403 })
-      : forward()
-    const lost = engineWith(profile, (job, request) => log.finished(job, request), undefined, lostClaimResponse(unreadable))
-    const job = await lost.engine.waitForJob(lost.engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: lost.account }))
+    const unanswered = engineWith(profile, (job, request) => log.finished(job, request), undefined, lost)
+    const job = await start(unanswered.engine, unanswered.account)
     expect(job.status).toBe("Failed")
-    expect(job).toMatchObject({ folderUnknown: true })
-    expect(job.folderClaimed).toBeUndefined()
-    expect(log.list(TENANT)).toEqual([])
+    expect(log.list(TENANT)).toMatchObject([{ runId: job.id }])
+    const { backups, summary } = await dashboardCounts(unanswered.store, unanswered.account, log)
+    // The folder holds only the marker, which names the run; the failed run counts once and not as running.
+    expect(backups).toMatchObject([{ runId: job.id, status: "running" }])
+    expect(summary).toMatchObject({ stored: 1, failed: 1, finished: 1 })
+    expect(backupSummary(backups.map((backup) => ({ status: normalizeBackupStatus(backup), timestamp: new Date(backup.timestamp), runId: backup.runId })), [], { since: new Date(0) }).inProgress).toBe(1)
   })
 
-  it("still records a rival's claim as a failure without a folder", async () => {
+  it("counts a run that lost the folder to a rival, next to the rival's own backup", async () => {
     const log = new FailedAttemptLog(memoryStore())
     const rival: Storage = async (request, forward) => request.method === "PUT" && new URL(request.url).pathname.endsWith(BACKUP_OWNER_FILE)
       ? new Response(null, { status: 412, headers: { "x-ms-error-code": "BlobAlreadyExists" } })
       : forward()
     const taken = engineWith(profile, (job, request) => log.finished(job, request), undefined, rival)
-    const job = await taken.engine.waitForJob(taken.engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: taken.account }))
+    const job = await start(taken.engine, taken.account)
     expect(job.exception).toContain("already in use by another backup")
-    expect(job.folderUnknown).toBeUndefined()
-    expect(log.list(TENANT)).toHaveLength(1)
+    expect(log.list(TENANT)).toMatchObject([{ runId: job.id }])
   })
 })

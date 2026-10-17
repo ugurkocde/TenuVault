@@ -27,12 +27,14 @@ export interface PolicyBreakdown {
   conditionalAccess: number
 }
 
-export type DashboardBackup = BackupHistoryItem & { policies?: PolicyBreakdown }
+/** `runId` is the backup job that wrote the folder, when the folder records it. */
+export type DashboardBackup = BackupHistoryItem & { policies?: PolicyBreakdown; runId?: string | null }
 
-/** A backup attempt that failed without saving a backup, recorded by the app on this device. */
+/** A failed backup attempt, recorded by the app on this device. */
 export interface FailedAttemptItem {
   tenantId: number
   timestamp: Date
+  runId: string
   message: string
 }
 
@@ -48,7 +50,7 @@ export interface TenantDashboardStats extends DashboardStats {
   latestCompleteBackup: DashboardBackup | null
   /** Every backup in storage, newest first, across reporting periods. */
   backupHistory: DashboardBackup[]
-  /** Attempts that failed without saving a backup, newest first. They count as failed in their period. */
+  /** Failed attempts, newest first. One whose run left a backup in storage counts once, from the backup. */
   failedAttempts: FailedAttemptItem[]
   /** Start of the selected reporting period. Pass all three to backupSummary for the tile counts. */
   periodStart: Date
@@ -99,6 +101,7 @@ async function fetchBackupHistory(tenant: any): Promise<BackupHistoryResult> {
       size: backup.size || backup.properties?.contentLength || 0,
       error: backup.error || backup.errorMessage || backup.properties?.errorMessage,
       policies: backup.policies,
+      runId: typeof backup.runId === "string" ? backup.runId : null,
     })).sort((a: BackupHistoryItem, b: BackupHistoryItem) => 
       b.timestamp.getTime() - a.timestamp.getTime() // Sort by newest first
     )
@@ -115,7 +118,7 @@ async function fetchFailedAttempts(tenant: any): Promise<FailedAttemptItem[]> {
   if (!tenantId) return []
   try {
     const attempts = await bridge.backups.failedAttempts(tenantId)
-    return attempts.map((attempt) => ({ tenantId: tenant.id, timestamp: new Date(attempt.at), message: attempt.message }))
+    return attempts.map((attempt) => ({ tenantId: tenant.id, timestamp: new Date(attempt.at), runId: attempt.runId, message: attempt.message }))
   } catch (error) {
     console.error("Error reading failed backup attempts for", tenant.name, ":", error)
     return []

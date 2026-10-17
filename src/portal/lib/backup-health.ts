@@ -24,17 +24,23 @@ export function backupHealth(backups: Backup[], now: Date, unavailable = false):
   return age < 24 ? 'healthy' : age < 48 ? 'warning' : 'critical'
 }
 /**
- * Every backup count the Dashboard shows, from one tenant's backups in storage and its attempts
- * that failed without saving a backup. `stored` counts every backup in storage, of any status and
- * age. The rest count the period from `since` up to `until`: successful backups, failed ones
- * (failed, completed with warnings, incomplete, and the failed attempts), and running ones, which
- * are the live jobs when `running` is given. The success rate is null when nothing finished.
+ * Every backup count the Dashboard shows, from one tenant's backups in storage and its failed
+ * attempts. `stored` counts every backup in storage, of any status and age. The rest count the
+ * period from `since` up to `until`: successful backups, failed ones (failed, completed with
+ * warnings, incomplete, and the failed attempts), and running ones, which are the live jobs when
+ * `running` is given. The success rate is null when nothing finished.
+ *
+ * A failed attempt whose run id matches a backup in storage counts once, from that backup, which
+ * then counts as failed even before its six hours as running are over: whatever storage holds decides.
  */
-export function backupSummary(backups: Backup[], failedAttempts: Array<{ timestamp: Date }>, period: { since: Date; until?: Date; running?: number }) {
+export function backupSummary(backups: Array<Backup & { runId?: string | null }>, failedAttempts: Array<{ timestamp: Date; runId?: string }>, period: { since: Date; until?: Date; running?: number }) {
   const inPeriod = <T extends { timestamp: Date }>(item: T) => item.timestamp >= period.since && (!period.until || item.timestamp < period.until)
-  const recent = backups.filter(inPeriod)
+  const stored = new Set(backups.map((item) => item.runId).filter((id) => !!id))
+  const failedRuns = new Set(failedAttempts.map((attempt) => attempt.runId).filter((id) => !!id))
+  const recent = backups.filter(inPeriod).map((item) => item.status === 'running' && item.runId && failedRuns.has(item.runId) ? { ...item, status: 'failed' as const } : item)
+  const unsaved = failedAttempts.filter((attempt) => !attempt.runId || !stored.has(attempt.runId))
   const successful = recent.filter((item) => item.status === 'success').length
-  const failed = recent.filter((item) => ['failed', 'partial', 'incomplete'].includes(item.status)).length + failedAttempts.filter(inPeriod).length
+  const failed = recent.filter((item) => ['failed', 'partial', 'incomplete'].includes(item.status)).length + unsaved.filter(inPeriod).length
   const finished = successful + failed
   return { stored: backups.length, successful, failed, finished,
     inProgress: period.running ?? recent.filter((item) => item.status === 'running').length,

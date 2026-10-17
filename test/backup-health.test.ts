@@ -28,6 +28,20 @@ it('derives every dashboard count from the same backups and failed attempts', ()
   // The previous period ends where the selected one starts.
   expect(backupSummary(backups, attempts, { since: hoursAgo(24 * 14), until: since })).toMatchObject({ successful: 4, failed: 1, finished: 5, successRate: 80 })
 })
+it('counts a failed run once, from its folder when storage holds one', () => {
+  const since = new Date(now.getTime() - 86_400_000)
+  const folders = [
+    { status: 'failed' as const, timestamp: now, runId: 'run-manifest' },
+    { status: 'running' as const, timestamp: now, runId: 'run-marker-only' },
+    { status: 'running' as const, timestamp: now, runId: 'run-live' },
+    { status: 'success' as const, timestamp: now, runId: null },
+  ]
+  const attempts = [{ timestamp: now, runId: 'run-manifest' }, { timestamp: now, runId: 'run-marker-only' }, { timestamp: now, runId: 'run-no-folder' }, { timestamp: now }]
+  // Two failed folders (one known failed though it has no manifest yet), plus two attempts without a folder.
+  expect(backupSummary(folders, attempts, { since })).toMatchObject({ stored: 4, successful: 1, failed: 4, inProgress: 1, finished: 5 })
+  // An attempt whose folder is older than the period still counts once, from that folder.
+  expect(backupSummary([{ status: 'failed', timestamp: new Date(0), runId: 'old' }], [{ timestamp: now, runId: 'old' }], { since })).toMatchObject({ failed: 0, finished: 0 })
+})
 it('has no success rate without a finished backup and takes running from the live jobs', () => {
   expect(backupSummary([], [], { since: now })).toEqual({ stored: 0, successful: 0, failed: 0, finished: 0, inProgress: 0, successRate: null })
   const running = [{ status: 'running' as const, timestamp: now }, { status: 'unknown' as const, timestamp: now }]

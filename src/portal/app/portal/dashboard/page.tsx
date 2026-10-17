@@ -197,7 +197,8 @@ function DashboardContent() {
     dataUpdatedAt,
   } = useDashboardStats(selectedPeriod, tenant?.id)
 
-  const tenantJobs = activeJobs.filter((job) => job.tenantId?.toLowerCase() === tenantGuid)
+  // Finished jobs stay in the progress list until dismissed; only unfinished ones are running.
+  const tenantJobs = activeJobs.filter((job) => job.tenantId?.toLowerCase() === tenantGuid && !job.isComplete)
   // Every backup count on the tiles comes from this one summary, so the tiles cannot disagree.
   const backupStats = stats
     ? backupSummary(stats.backupHistory, stats.failedAttempts, { since: stats.periodStart, running: tenantJobs.length })

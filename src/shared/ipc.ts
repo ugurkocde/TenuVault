@@ -147,10 +147,12 @@ export interface BackupRefusal {
   reason: string
 }
 
-/** A backup attempt that failed without saving a backup folder, kept on this device. */
+/** A backup attempt that failed, kept on this device. One that also left a folder is counted from the folder. */
 export interface FailedBackupAttempt {
   at: string
   tenantId: string
+  /** The backup job's id, which its folder records as RunId; a unique id when no job ran. */
+  runId: string
   trigger: "manual" | "scheduled" | "tray"
   /** Scheduled only: the slot it ran for, as an ISO timestamp. A slot counts once however often it is retried. */
   slot?: string

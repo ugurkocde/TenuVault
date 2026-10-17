@@ -3,6 +3,7 @@ import { typeForFolder } from "../../../../shared/intune/registry"
 import { describeScope } from "../../../../shared/intune/scope"
 import { comparable, compareBackups, summarize, type BackupFingerprint, type ChangeSummary } from "../../../../shared/intune/backup-changes"
 import { blobPath } from "../../../../shared/security"
+import { BACKUP_OWNER_FILE } from "../../../../shared/constants"
 import { mapLimit } from "../../../../shared/map-limit"
 import { MetadataCache } from "~/lib/storage/metadata-cache"
 import { backupFoldersIn, parseBackupName } from "../../../../shared/intune/backup-names"
@@ -21,9 +22,11 @@ const storageHeaders = (token: string) => ({ 'x-ms-version': '2021-12-02', 'x-ms
 
 interface MetadataRead { metadata: any; metadataError?: string }
 const metadataCache = new MetadataCache<MetadataRead>(result => !!result.metadata && !result.metadataError)
+/** A marker's run id, null for a marker without one, or undefined when it could not be read (not cached). */
+const ownerCache = new MetadataCache<string | null | undefined>(runId => runId !== undefined)
 
 /** One backup folder, described from metadata and either a folder listing or the summary inventory. */
-async function describeBackup(storageAccountName: string, name: string, accessToken: string, inventory?: { text: string; cacheKey: string; version: string }) {
+async function describeBackup(storageAccountName: string, name: string, accessToken: string, inventory?: { text: string; cacheKey: string; version: string; owner: string }) {
   const parsed = parseBackupName(name)!
   const legacy = parsed.precision === "day"
   const date = parsed.timestamp.slice(0, 10)
@@ -47,6 +50,22 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     : inventory ? Promise.resolve({ metadata: null }) : readMetadata()
   const filesRead = inventory ? Promise.resolve(inventory.text) : listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${name}/`)}`, accessToken).catch(() => { throw new Error(`Backup ${name} inventory is unavailable. Check storage access and retry.`) })
   const [{ metadata, metadataError }, filesText] = await Promise.all([metadataRead, filesRead])
+  // The run that wrote the folder, so the Dashboard counts a failed run once. A folder without a
+  // manifest names its run only in the ownership marker, which is read just for those folders.
+  const readOwner = async (): Promise<string | null | undefined> => {
+    try {
+      const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}/${BACKUP_OWNER_FILE}`, { headers: storageHeaders(accessToken) })
+      if (!response.ok) return undefined
+      const owner = await response.json()
+      return typeof owner?.RunId === 'string' ? owner.RunId as string : null
+    } catch {
+      return undefined
+    }
+  }
+  const hasOwner = filesText.includes(`<Name>${name}/${BACKUP_OWNER_FILE}</Name>`)
+  const runId = typeof metadata?.RunId === 'string' ? metadata.RunId as string
+    : metadata || metadataError || !hasOwner ? null
+    : (inventory?.owner ? await ownerCache.read(inventory.cacheKey, inventory.owner, readOwner) : await readOwner()) ?? null
   const recordedTimestamp = metadata?.timestamp ?? metadata?.Timestamp ?? metadata?.BackupDate
   const timestamp = legacy
     ? typeof recordedTimestamp === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(recordedTimestamp) && Number.isFinite(Date.parse(recordedTimestamp)) ? recordedTimestamp : date
@@ -111,6 +130,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     error: metadataError,
     warning: undefined,
     runbookVersion: metadata?.RunbookVersion ?? metadata?.runbookVersion ?? null,
+    runId,
   }
 }
 
@@ -205,7 +225,7 @@ export async function POST(request: NextRequest) {
     
     // Parse XML response to extract backup folders
     // Summary mode groups one flat inventory in process, including older backups without manifests.
-    const inventories = new Map<string, { text: string; cacheKey: string; version: string }>()
+    const inventories = new Map<string, { text: string; cacheKey: string; version: string; owner: string }>()
     if (summary) {
       for (const match of blobsText.matchAll(/<Blob>[\s\S]*?<\/Blob>/g)) {
         const name = decodeXml(match[0].match(/<Name>(.*?)<\/Name>/)?.[1] ?? '')
@@ -213,11 +233,12 @@ export async function POST(request: NextRequest) {
         if (!parseBackupName(folder)) continue
         let inventory = inventories.get(folder)
         if (!inventory) {
-          inventory = { text: '', cacheKey: JSON.stringify([String(tenantId).toLowerCase(), storageAccountName, appId, folder]), version: '' }
+          inventory = { text: '', cacheKey: JSON.stringify([String(tenantId).toLowerCase(), storageAccountName, appId, folder]), version: '', owner: '' }
           inventories.set(folder, inventory)
         }
         inventory.text += match[0]
         if (name === `${folder}/metadata.json`) inventory.version = match[0]
+        if (name === `${folder}/${BACKUP_OWNER_FILE}`) inventory.owner = match[0]
       }
     }
     const backupFolders = summary ? [...inventories.keys()] : backupFoldersIn(blobsText).map((folder) => folder.name)
