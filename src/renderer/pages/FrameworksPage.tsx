@@ -349,7 +349,7 @@ function CisRunView({ run, rerun = false, error = "", policies, reference, names
     : phase === "done" ? `${run.read} of ${run.total} policies read`
     : "Signing in and preparing the comparison"
   const currentName = phase === "reading" ? run.currentPolicy : phase === "comparing" ? run.currentPackPolicy : ""
-  return <div ref={overlayRef} tabIndex={-1} aria-label="Assessment in progress" className="cis-run-overlay fixed inset-y-0 right-0 left-64 z-30 overflow-y-auto bg-background/90 backdrop-blur-sm outline-none">
+  return <div ref={overlayRef} role="region" tabIndex={-1} aria-label="Assessment in progress" className="cis-run-overlay fixed inset-y-0 right-0 left-64 z-30 overflow-y-auto bg-background/90 backdrop-blur-sm outline-none">
     <div className="flex min-h-full items-center justify-center px-6 py-10">
       <div className="cis-run-panel w-full max-w-[36rem] text-center">
         <BrandMark className="mx-auto size-12" />
