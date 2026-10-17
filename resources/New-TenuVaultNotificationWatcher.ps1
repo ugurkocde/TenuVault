@@ -369,8 +369,15 @@ $automationAccount = Get-AzAutomationAccount -ResourceGroupName $ResourceGroupNa
 if (-not $automationAccount) {
     Write-Host "Creating Automation account '$AutomationAccountName' in $Location with a system assigned identity..."
     if ($PSCmdlet.ShouldProcess($AutomationAccountName, "Create Automation account with system assigned identity")) {
-        $automationAccount = New-AzAutomationAccount -ResourceGroupName $ResourceGroupName `
-            -Name $AutomationAccountName -Location $Location -AssignSystemIdentity
+        try {
+            $automationAccount = New-AzAutomationAccount -ResourceGroupName $ResourceGroupName `
+                -Name $AutomationAccountName -Location $Location -AssignSystemIdentity
+        } catch {
+            if ($_.Exception.Message -match "Conflict") {
+                throw "Azure refused to create Automation account '$AutomationAccountName' in $Location with a Conflict. The usual cause is the regional Automation account quota (2 Basic accounts per region on many subscriptions) or the name already being taken in that region. Run the script again with another -Location (for example northeurope) or another -AutomationAccountName. Original error: $($_.Exception.Message)"
+            }
+            throw
+        }
     }
 } else {
     Write-Host "Automation account '$AutomationAccountName' already exists; checking its identity..."
