@@ -154,8 +154,10 @@ export interface FailedBackupAttempt {
   /** The backup job's id, which its folder records as RunId; a unique id when no job ran. */
   runId: string
   trigger: "manual" | "scheduled" | "tray"
-  /** Scheduled only: the slot it ran for, as an ISO timestamp. A slot counts once however often it is retried. */
+  /** Scheduled only: the slot it ran for, as an ISO timestamp. */
   slot?: string
+  /** Set when Microsoft or the storage could not be reached. */
+  unreachable?: boolean
   /** The first line of the failure, shortened. */
   message: string
 }

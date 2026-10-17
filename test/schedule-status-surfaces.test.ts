@@ -12,7 +12,7 @@ const state = vi.hoisted(() => ({
   tenants: [{ id: 42, name: "Contoso", domain: "contoso.onmicrosoft.com", lastBackup: "", credentials: { tenantId: "tenant", appId: "app" }, resources: { storageAccountName: "tvlocal-tenant" } }],
   schedules: [] as BackupSchedule[],
   failedAttempts: [] as FailedBackupAttempt[],
-  activeJobs: [] as Array<{ tenantId: string; isComplete: boolean; status: string }>,
+  activeJobs: [] as Array<{ tenantId: string; isComplete: boolean; status: string; jobId?: string }>,
   stats: null as TenantDashboardStats | null,
   queryFn: null as (() => Promise<TenantDashboardStats>) | null,
   navigate: vi.fn(),
@@ -166,6 +166,27 @@ describe("Dashboard backup counts", () => {
     const finished = renderDashboard()
     expect(finished).toMatch(/>0<\/p><p[^>]*>Running<\/p>/)
     expect(finished).not.toContain(">Running</span>")
+  })
+
+  it("shows the same running state on the Last backup chip as in the Running count", () => {
+    const folder = { ...storedBackup("success", hoursAgo(1)), status: "running" as const, runId: "desktop-run" }
+    // The chips sit in the Last backup tile, before its label.
+    const chip = (markup: string) => markup.slice(markup.indexOf('aria-label="Last backup"'), markup.indexOf(">Last backup<")).match(/>(Running|Incomplete|Failed|Completed)</)?.[1] ?? null
+    const running = (markup: string) => markup.match(/>(\d+)<\/p><p[^>]*>Running<\/p>/)?.[1]
+    const failed = (markup: string) => markup.match(/>(\d+)<\/p><p[^>]*>Failed<\/p>/)?.[1]
+    state.stats = { ...emptyStats, periodStart: hoursAgo(24), latestBackup: folder, backupHistory: [folder] }
+    // No live job wrote the folder: it is incomplete, not running.
+    let markup = renderDashboard()
+    expect([chip(markup), running(markup), failed(markup)]).toEqual(["Incomplete", "0", "1"])
+    // Its run failed: the folder is that failure, counted once.
+    state.stats = { ...state.stats, failedAttempts: [{ tenantId: 42, timestamp: hoursAgo(1), runId: "desktop-run", message: "Backup stopped." }] }
+    markup = renderDashboard()
+    expect([chip(markup), running(markup), failed(markup)]).toEqual(["Failed", "0", "1"])
+    // Its job is still running.
+    state.stats = { ...state.stats, failedAttempts: [] }
+    state.activeJobs = [{ tenantId: "TENANT", isComplete: false, status: "Running", jobId: "desktop-run" }]
+    markup = renderDashboard()
+    expect([chip(markup), running(markup), failed(markup)]).toEqual(["Running", "1", "0"])
   })
 
   it("shows No data when no backup finished in the period", () => {

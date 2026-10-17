@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import type { FailedBackupAttempt } from "../../shared/ipc"
+import { parseBackupName } from "../../shared/intune/backup-names"
 import type { KeyValueStore } from "../storage/secure-store"
 import type { BackupJob, BackupRequest } from "./engine"
 
@@ -14,12 +15,13 @@ const MAX_MESSAGE = 200
  * Backup attempts that failed, kept in the app's encrypted store on this device. Many leave no
  * trace in storage, for example a sign-in that failed, a license or plan refusal, a Graph list that
  * failed before the folder was claimed, or another backup of the tenant that was already running.
- * Every failed backup job is recorded with its run id, whether or not it wrote a folder: the
- * Dashboard drops an attempt whose run id matches a folder in storage, so whatever storage holds
- * decides and the run counts once. Refusals outside the engine never have a folder.
  *
- * Manual and tray attempts always count. Retries of one scheduled slot count once: a computer
- * that wakes briefly from sleep fails the same slot every 15 minutes.
+ * The Dashboard counts runs. Each backup run counts once: by its folder when storage holds one for
+ * it, otherwise by its attempt record. So every failed run is recorded with its run id and the
+ * instant its folder name uses, whether or not it wrote a folder, and the Dashboard drops a record
+ * whose folder is listed. Refusals outside the engine never have a folder. The single exception:
+ * repeated failures because Microsoft or the storage could not be reached, for one scheduled slot,
+ * with no folder, count once. A computer that wakes briefly from sleep fails that way every 15 minutes.
  */
 export class FailedAttemptLog {
   constructor(
@@ -27,20 +29,22 @@ export class FailedAttemptLog {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
-  /** Null when the scheduled slot already has a failed attempt. */
-  record(entry: Omit<FailedBackupAttempt, "at" | "runId"> & { runId?: string }): FailedBackupAttempt | null {
+  /** Null for a repeated connection failure of one scheduled slot, which is counted already. */
+  record(entry: Omit<FailedBackupAttempt, "at" | "runId"> & { at?: string; runId?: string }): FailedBackupAttempt | null {
     const tenantId = entry.tenantId.toLowerCase()
     const slot = entry.trigger === "scheduled" ? entry.slot : undefined
     const all = this.read()
     const own = all.filter((item) => item.tenantId === tenantId)
-    if (slot && own.some((item) => item.trigger === "scheduled" && item.slot === slot)) return null
+    // Only when the slot's latest record is a connection failure too: any other failure always counts.
+    if (slot && entry.unreachable && own.find((item) => item.trigger === "scheduled" && item.slot === slot)?.unreachable) return null
     const attempt: FailedBackupAttempt = {
-      at: this.now().toISOString(),
+      at: entry.at ?? this.now().toISOString(),
       tenantId,
       // Attempts without a backup job get an id no folder can carry.
       runId: entry.runId ?? `refused-${randomUUID()}`,
       trigger: entry.trigger,
       ...(slot ? { slot } : {}),
+      ...(entry.unreachable ? { unreachable: true } : {}),
       message: (entry.message.split("\n")[0] ?? "").slice(0, MAX_MESSAGE),
     }
     const others = all.filter((item) => item.tenantId !== tenantId)
@@ -48,10 +52,15 @@ export class FailedAttemptLog {
     return attempt
   }
 
-  /** Records a finished job that failed, with its run id. A cancelled job is not a failure. */
+  /**
+   * Records a finished job that failed, with its run id, at the instant its folder name uses, so
+   * the run falls in one period whether its folder or this record counts it. A cancelled job is
+   * not a failure.
+   */
   finished(job: BackupJob, request: BackupRequest): void {
     if (job.status !== "Failed") return
-    this.record({ tenantId: job.tenantId, runId: job.id, trigger: request.trigger ?? "manual", slot: request.slot, message: job.exception ?? job.progressMessage })
+    const at = (job.backupFolder && parseBackupName(job.backupFolder)?.timestamp) || job.startTime
+    this.record({ tenantId: job.tenantId, runId: job.id, at, trigger: request.trigger ?? "manual", slot: request.slot, unreachable: job.unreachable, message: job.exception ?? job.progressMessage })
   }
 
   /** Newest first, for one tenant. */

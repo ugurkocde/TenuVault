@@ -201,7 +201,7 @@ function DashboardContent() {
   const tenantJobs = activeJobs.filter((job) => job.tenantId?.toLowerCase() === tenantGuid && !job.isComplete)
   // Every backup count on the tiles comes from this one summary, so the tiles cannot disagree.
   const backupStats = stats
-    ? backupSummary(stats.backupHistory, stats.failedAttempts, { since: stats.periodStart, running: tenantJobs.length })
+    ? backupSummary(stats.backupHistory, stats.failedAttempts, { since: stats.periodStart, live: tenantJobs.map((job) => job.jobId) })
     : null
   const nowDate = new Date(relativeNow)
   // Null when no backup finished in the period, or the backups could not be read, which the tile shows as "No data".
@@ -322,12 +322,12 @@ function DashboardContent() {
               <div className="flex flex-wrap items-center justify-end gap-2">
                 {tenantJobs.length > 0 ? (
                   <Chip tone="coral">Running</Chip>
-                ) : latest ? (
-                  latest.status === "success" ? <Chip tone="success">Completed</Chip>
-                    : latest.status === "partial" ? <Chip tone="warning">Completed with warnings</Chip>
-                    : latest.status === "running" ? <Chip tone="coral">Running</Chip>
-                    : latest.status === "unknown" ? <Chip tone="warning">Status unknown</Chip>
-                    : <Chip tone="danger">{latest.status === "incomplete" ? "Incomplete" : "Failed"}</Chip>
+                ) : backupStats?.latestStatus ? (
+                  backupStats.latestStatus === "success" ? <Chip tone="success">Completed</Chip>
+                    : backupStats.latestStatus === "partial" ? <Chip tone="warning">Completed with warnings</Chip>
+                    : backupStats.latestStatus === "running" ? <Chip tone="coral">Running</Chip>
+                    : backupStats.latestStatus === "unknown" ? <Chip tone="warning">Status unknown</Chip>
+                    : <Chip tone="danger">{backupStats.latestStatus === "incomplete" ? "Incomplete" : "Failed"}</Chip>
                 ) : null}
                 {health && (
                   <Chip tone={healthChip[health].tone} title="Tenant Health, based on the newest complete successful backup">
