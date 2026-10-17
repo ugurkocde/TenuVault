@@ -19,6 +19,7 @@ import {
 import { Progress } from "~/components/ui/progress"
 import { Alert, AlertDescription } from "~/components/ui/alert"
 import { 
+  Ban,
   CheckCircle2, 
   XCircle, 
   AlertCircle,
@@ -211,6 +212,8 @@ export function BackupProgressModal({
                 {jobStatus.isComplete ? (
                   jobStatus.isSuccessful ? (
                     <CheckCircle2 className="h-20 w-20 rounded-full bg-green-50 p-5 text-green-600" />
+                  ) : jobStatus.status === "Cancelled" ? (
+                    <Ban className="h-20 w-20 rounded-full bg-gray-100 p-5 text-gray-500" />
                   ) : (
                     <XCircle className="h-20 w-20 rounded-full bg-red-50 p-5 text-red-600" />
                   )

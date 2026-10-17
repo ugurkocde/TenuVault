@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { comparableSnapshot } from "../../../shared/intune/compare"
 import type { Item } from "../../../shared/intune/registry"
-import { stoppedEarly } from "../../../shared/intune/backup-status"
+import { manifestStatus, stoppedEarly } from "../../../shared/intune/backup-status"
 
 /** One recorded backup item: the Intune object ID and the fingerprint of its backed-up content. */
 export interface ManifestEntry { id: string; hash: string }
@@ -33,7 +33,8 @@ const metadataStrings = (value: unknown): string[] => (Array.isArray(value) ? va
 
 /** Why this backup must not be restored for the requested files, or undefined when it may. */
 export function incompleteReason(metadata: Record<string, any> | null, manifest: Map<string, ManifestEntry> | null, paths: string[], full: boolean): string | undefined {
-  const recordedStatus = metadata?.Status ?? metadata?.status
+  // A cancel recorded as Failed by an earlier version reads as cancelled.
+  const recordedStatus = metadata ? manifestStatus(metadata) : undefined
   // Metadata is written when a backup finishes, so a full restore without a completion record
   // would restore a stopped backup as if it were whole. Selected files that are present may
   // still be restored on their own.

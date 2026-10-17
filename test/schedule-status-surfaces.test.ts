@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
   queryFn: null as (() => Promise<TenantDashboardStats>) | null,
   navigate: vi.fn(),
   selectTenant: vi.fn(),
+  plan: null as string | null,
 }))
 vi.mock("react", async (original) => ({
   ...await original<typeof import("react")>(),
@@ -39,7 +40,7 @@ vi.mock("@desktop/lib/bridge", () => ({ bridge: {
   },
 } }))
 vi.mock("@desktop/lib/schedules", async (original) => ({ ...await original<typeof import("../src/renderer/lib/schedules")>(), useSchedules: () => state.schedules }))
-vi.mock("@desktop/lib/license", () => ({ useLicense: () => ({ status: null }), tenantLicense: () => null, tenantPlan: () => null, planName: () => "Community" }))
+vi.mock("@desktop/lib/license", () => ({ useLicense: () => ({ status: null }), tenantLicense: () => null, tenantPlan: () => state.plan, planName: () => "Community" }))
 vi.mock("@desktop/components/RunBackupDialog", () => ({ RunBackupDialog: () => null }))
 vi.mock("@desktop/components/RecoveryKeyNotice", () => ({ RecoveryKeyNotice: () => null }))
 vi.mock("@desktop/components/UnreadableBackupsNotice", () => ({ UnreadableBackupsNotice: () => null }))
@@ -79,6 +80,7 @@ beforeEach(() => {
   state.liveRuns = []
   state.activeJobs = []
   state.stats = { ...emptyStats }
+  state.plan = null
   state.navigate.mockClear()
   state.selectTenant.mockClear()
 })
@@ -256,17 +258,23 @@ describe("Dashboard backup counts", () => {
     }
   })
 
-  it("lists a cancelled backup in Recent activity in a neutral tone, and does not make the tenant critical", async () => {
+  it("lists a cancelled backup and a cancel in the audit log in Recent activity in grey, and does not make the tenant critical", async () => {
+    state.plan = "pro"
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("list-backups")
       ? Response.json({ backups: [{ name: "backup-cancelled", timestamp: hoursAgo(1).toISOString(), status: "Cancelled", runId: "desktop-cancelled" }] })
-      : Response.json([])))
+      : String(input).includes("audit/logs")
+        ? Response.json({ data: [{ id: "audit-1", timestamp: hoursAgo(2).toISOString(), eventType: "BACKUP_CANCELLED", action: "Scheduled backup", result: "PARTIAL", severity: "INFO" }] })
+        : Response.json([])))
     useDashboardStats("7d", 42)
     state.stats = await state.queryFn!()
-    expect(state.stats.recentActivity).toMatchObject([{ status: "info", message: "Backup cancelled" }])
+    expect(state.stats.recentActivity).toMatchObject([{ status: "neutral", message: "Backup cancelled" }, { status: "neutral", message: "Scheduled backup" }])
     expect(state.stats.tenants).toMatchObject({ critical: 0, warning: 1 })
     const markup = renderDashboard()
+    const icons = [...markup.matchAll(/<span class="mt-0\.5 inline-flex size-8 shrink-0 items-center justify-center rounded-full ([^"]*)">/g)].map((match) => match[1])
+    expect(icons).toEqual(["bg-gray-100", "bg-gray-100"])
     expect(markup).toContain("Backup cancelled")
     expect(markup).not.toContain("bg-red-100")
+    expect(markup).not.toContain("bg-blue-100")
   })
 
   it("says how many backups could not be read, and nothing once they can", async () => {

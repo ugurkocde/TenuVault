@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { Link } from "react-router-dom"
 import {
   Activity,
+  Ban,
   CheckCircle,
   AlertCircle,
   CalendarClock,
@@ -624,12 +625,14 @@ function DashboardContent() {
                       activity.status === "success" && "bg-green-100",
                       activity.status === "warning" && "bg-yellow-100",
                       activity.status === "failed" && "bg-red-100",
-                      activity.status === "info" && "bg-blue-100"
+                      activity.status === "info" && "bg-blue-100",
+                      activity.status === "neutral" && "bg-gray-100"
                     )}>
                       {activity.status === "success" && <CheckCircle className="h-4 w-4 text-green-700" />}
                       {activity.status === "warning" && <AlertCircle className="h-4 w-4 text-yellow-600" />}
                       {activity.status === "failed" && <AlertCircle className="h-4 w-4 text-red-600" />}
                       {activity.status === "info" && <Activity className="h-4 w-4 text-blue-600" />}
+                      {activity.status === "neutral" && <Ban className="h-4 w-4 text-gray-500" />}
                     </span>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">

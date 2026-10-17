@@ -129,6 +129,31 @@ describe("backups the list cannot place", () => {
     }
   })
 
+  it("places a folder whose manifest cannot be read by its ownership marker, in both list modes", async () => {
+    const foreignBoth = "backup-2026-09-27-020000"
+    const foreignMarker = "backup-2026-09-28-020000"
+    const own = "backup-2026-09-29-020000"
+    storage({
+      ...blobs,
+      // Another tenant's backups in a shared container. Their manifests do not answer.
+      [`${foreignBoth}/metadata.json`]: { Status: "Success", TenantId: "other" }, [`${foreignBoth}/${BACKUP_OWNER_FILE}`]: { TenantId: "other", RunId: "desktop-other" },
+      [`${foreignMarker}/metadata.json`]: { Status: "Success", TenantId: "other" }, [`${foreignMarker}/${BACKUP_OWNER_FILE}`]: { TenantId: "other", RunId: "desktop-other-2" },
+      [`${own}/metadata.json`]: { Status: "Success", TenantId: "tenant", RunId: "desktop-own" }, [`${own}/${BACKUP_OWNER_FILE}`]: { TenantId: "tenant", RunId: "desktop-own" },
+    })
+    const served = globalThis.fetch as unknown as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    const busy = (input: RequestInfo | URL) => String(input).endsWith("/metadata.json") && [foreignBoth, foreignMarker, own].some((name) => String(input).includes(name))
+      || String(input).endsWith(`${foreignBoth}/${BACKUP_OWNER_FILE}`)
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => busy(input) ? new Response("<Error><Code>ServerBusy</Code></Error>", { status: 503 }) : served(input, init)))
+    for (const summary of [false, true]) {
+      const listed = await (await listBackups(request({ summary }))).json()
+      // Both reads failed: left out and counted. The marker names another tenant: left out silently.
+      expect(listed.unresolved).toBe(1)
+      expect(listed.backups.map((backup: { id: string }) => backup.id)).toEqual([own, newer, older, "backup-2026-09-20-020000"])
+      // This tenant's folder stays, its status unknown; its run is not matched, so a failed run counts through its attempt.
+      expect(listed.backups[0]).toMatchObject({ status: "unknown", runId: null })
+    }
+  })
+
   it("lists a manifest recorded as Failed with the cancel message as Cancelled, in both list modes", async () => {
     storage({ ...blobs, [`${newer}/metadata.json`]: { ...blobs[`${newer}/metadata.json`], Status: "Failed", Error: "Backup cancelled by you. This run is never offered as a complete backup." } })
     for (const summary of [false, true]) {

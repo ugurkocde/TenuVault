@@ -7,6 +7,9 @@ import { comparableBackups } from "../src/portal/components/drift/backup-pair-pi
 import { backupCompleteness, selectBackupPair, type BackupMetadata } from "../src/shared/intune/drift"
 import { incompleteReason } from "../src/portal/lib/policies/backup-manifest"
 import { checkBackups } from "../src/main/features/health-review/rules"
+import { backupCompletionUpdates } from "../src/portal/lib/backup-completion"
+import { collectFromBackup } from "../src/main/features/hygiene/inventory"
+import { fakeDeps, TENANT_A } from "./feature-helpers"
 
 const CANCEL_ERROR = "Backup cancelled by you. This run is never offered as a complete backup."
 const now = new Date("2026-10-17T12:00:00Z")
@@ -96,6 +99,9 @@ describe("backups the user cancelled elsewhere in the app", () => {
       expect(incompleteReason({ Status, Failures: 0 }, null, paths, false)).toContain("incomplete")
     }
     expect(incompleteReason({ Status: "Cancelled", Failures: 0 }, items, paths, true)).toBe("This backup is recorded as cancelled and is incomplete. Restore selected items from it, or restore from a complete backup instead.")
+    // A cancel an earlier version recorded as Failed is named as cancelled; any other stop as failed.
+    expect(incompleteReason({ Status: "Failed", Failures: 0, Error: CANCEL_ERROR }, items, paths, true)).toBe("This backup is recorded as cancelled and is incomplete. Restore selected items from it, or restore from a complete backup instead.")
+    expect(incompleteReason({ Status: "Failed", Failures: 0, Error: "Backup timed out after the 30 minute job deadline. Retry the backup." }, items, paths, true)).toBe("This backup is recorded as failed and is incomplete. Restore selected items from it, or restore from a complete backup instead.")
   })
 
   it("treats a cancelled latest backup as no complete backup in the health review, without a failure", () => {
@@ -110,5 +116,23 @@ describe("backups the user cancelled elsewhere in the app", () => {
   it("words the notice for folders whose ownership could not be read", () => {
     expect(unresolvedNotice(1)).toBe("1 backup could not be read. Select Refresh to try again.")
     expect(unresolvedNotice(3)).toBe("3 backups could not be read. Select Refresh to try again.")
+  })
+})
+
+describe("cancelled jobs and backups outside the Backups page", () => {
+  it("leaves the tenant's sync status as it was when the user cancels a job", () => {
+    const endTime = "2026-09-26T12:00:00Z"
+    expect(backupCompletionUpdates({ isComplete: true, isSuccessful: false, status: "Cancelled", endTime }, "2026-09-20T12:00:00Z")).toEqual({ lastSync: endTime })
+    expect(backupCompletionUpdates({ isComplete: true, isSuccessful: false, status: "Failed", endTime }, "2026-09-20T12:00:00Z")).toEqual({ syncStatus: "error", lastSync: endTime })
+  })
+
+  it("names a cancelled backup chosen for a hygiene scan as cancelled, not as completed with warnings", async () => {
+    const api = async (path: string, _tenant: string, body: Record<string, unknown> = {}) => {
+      if (path === "/api/list-backups") return Response.json({ backups: [{ id: "backup-1", timestamp: "2026-09-29T02:00:00Z", status: "Cancelled" }] })
+      if (path === "/api/list-backup-contents") return Response.json({ content: { groups: [], metadata: { Status: "Cancelled", Scope: { Excluded: [] }, SkippedTypes: [], FailedTypes: [] } }, backupId: body.backupId })
+      return Response.json({ items: [] })
+    }
+    const inventory = await collectFromBackup(fakeDeps({ api }), TENANT_A, "backup-1")
+    expect(inventory).toMatchObject({ completeness: "partial", partialReason: "The backup was cancelled before it finished; some objects may be missing." })
   })
 })

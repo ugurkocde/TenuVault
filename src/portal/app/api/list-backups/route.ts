@@ -57,9 +57,9 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     : inventory ? Promise.resolve({ metadata: null }) : readMetadata()
   const filesRead = inventory ? Promise.resolve(inventory.text) : listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${name}/`)}`, accessToken).catch(() => { throw new Error(`Backup ${name} inventory is unavailable. Check storage access and retry.`) })
   const [{ metadata, metadataError }, filesText] = await Promise.all([metadataRead, filesRead])
-  // A folder without a manifest names its tenant and run only in the ownership marker, which is
-  // read just for those folders: the tenant filter applies to it, and the run id lets the
-  // Dashboard count a failed run once.
+  // A folder whose manifest does not name its tenant (none, unreadable, or from an older version)
+  // is placed by its ownership marker, read just for those folders: the tenant filter applies to
+  // it, and for a folder without a manifest the run id lets the Dashboard count a failed run once.
   const readOwner = async (): Promise<OwnerRead> => {
     try {
       const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}/${BACKUP_OWNER_FILE}`, { headers: storageHeaders(accessToken) })
@@ -74,9 +74,10 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
       return { kind: 'unreadable' }
     }
   }
-  const owner: OwnerRead = metadata || metadataError || !filesText.includes(`<Name>${name}/${BACKUP_OWNER_FILE}</Name>`) ? { kind: 'missing' }
+  const owner: OwnerRead = typeof metadata?.TenantId === 'string' || !filesText.includes(`<Name>${name}/${BACKUP_OWNER_FILE}</Name>`) ? { kind: 'missing' }
     : inventory?.owner ? await ownerCache.read(inventory.cacheKey, inventory.owner, readOwner) : await readOwner()
-  const runId = typeof metadata?.RunId === 'string' ? metadata.RunId as string : owner.kind === 'owner' ? owner.runId : null
+  // A folder whose manifest could not be read is not matched to its run: its status is unknown, so the run counts once, through its attempt record.
+  const runId = typeof metadata?.RunId === 'string' ? metadata.RunId as string : owner.kind === 'owner' && !metadata && !metadataError ? owner.runId : null
   const recordedTimestamp = metadata?.timestamp ?? metadata?.Timestamp ?? metadata?.BackupDate
   const timestamp = legacy
     ? typeof recordedTimestamp === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(recordedTimestamp) && Number.isFinite(Date.parse(recordedTimestamp)) ? recordedTimestamp : date

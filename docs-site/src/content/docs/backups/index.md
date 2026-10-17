@@ -126,7 +126,7 @@ A backup ends with one of these results:
 | **Status unknown** | The backup's summary could not be read, so whether it finished is not known. **Backup Details** shows why, for example "Backup authentication failed" when the backup was encrypted with a different recovery key than the one on this device. Import that recovery key, or select **Refresh** when the storage did not answer. Drift detection does not offer it until its summary can be read. |
 | **Running** | The backup has not written its summary yet. A backup without a summary is shown as running while TenuVault runs it, or for six hours after it started, because another device may be running it or TenuVault restarted during it; after that it is shown as incomplete. On the Dashboard, one whose run failed counts as failed. |
 
-The **Backup Progress** dialog shows **Failed** with the error for every backup that stopped, including the ones the timeline later lists as incomplete.
+The **Backup Progress** dialog shows **Failed** with the error for every backup that failed, including the ones the timeline later lists as incomplete. A backup you cancelled shows **Cancelled** with a grey icon instead.
 
 In a storage account that several tenants share, each backup records the tenant it belongs to. When that record could not be read, for example because the storage did not answer, the backup is left out of the list and the Dashboard, because it may be another tenant's. **Backup History** and the Dashboard then show "N backups could not be read. Select Refresh to try again." Once the record can be read, the backup is listed again, or left out if it belongs to another tenant.
 

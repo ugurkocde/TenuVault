@@ -10,6 +10,7 @@ import { FirstBackupNote } from "@desktop/components/FirstBackupNote"
 import { tenantLicense, tenantPlan, useLicense } from "@desktop/lib/license"
 import { azureStoragePortalUrl } from "~/lib/azure-portal"
 import { 
+  Ban,
   X,
   ChevronUp,
   ChevronDown,
@@ -140,6 +141,8 @@ export function FloatingProgress() {
                   {job.isComplete ? (
                     job.isSuccessful ? (
                       <CheckCircle2 className="h-5 w-5 text-green-600" />
+                    ) : job.status === "Cancelled" ? (
+                      <Ban className="h-5 w-5 text-gray-500" />
                     ) : (
                       <XCircle className="h-5 w-5 text-destructive" />
                     )

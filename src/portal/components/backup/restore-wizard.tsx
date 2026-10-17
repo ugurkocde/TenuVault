@@ -579,7 +579,12 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             </label>
           )}
 
-          {statusKind(backup.status) !== "success" && (
+          {statusKind(backup.status) === "cancelled" ? (
+            <p className="mt-4 flex gap-2 rounded-2xl bg-gray-100 px-4 py-3 text-sm text-gray-800">
+              <Ban className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              Cancelled: this backup was cancelled before it finished, so some items may be missing from it.
+            </p>
+          ) : statusKind(backup.status) !== "success" && (
             <p className="mt-4 flex gap-2 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
               <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
               {backup.status === "unknown" ? `${backup.error ?? "This backup's details could not be read."} Whether it completed is not known, so some items may be missing from it.` : "This backup did not complete fully, so some items may be missing from it."}

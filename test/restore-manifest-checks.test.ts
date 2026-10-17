@@ -76,7 +76,7 @@ describe('Restore manifest checks', () => {
     expect(graphWrites).toEqual([])
   })
 
-  describe('a backup recorded as failed after it stopped early', () => {
+  describe('a backup cancelled by an earlier version, recorded as Failed with the cancel message', () => {
     const snapshot: Item = { id: 'original', displayName: 'Example', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [] }
     const failed = (items: Item | undefined): Item => ({ Status: 'Failed', Failures: 0, FailedTypes: [], Error: 'Backup cancelled by you. This run is never offered as a complete backup.', ...(items ? { Items: items } : {}) })
     const listed = { 'DeviceConfigurations/original': { file: 'Example.json', hash: snapshotHash(snapshot) } }
@@ -95,7 +95,7 @@ describe('Restore manifest checks', () => {
       const response = await POST(request({ ...baseBody, restoreType: 'full', mode: 'copy', assignments: false }))
       const result = await response.json()
       expect(response.status).toBe(400)
-      expect(result.error).toBe('This backup is recorded as failed and is incomplete. Restore selected items from it, or restore from a complete backup instead.')
+      expect(result.error).toBe('This backup is recorded as cancelled and is incomplete. Restore selected items from it, or restore from a complete backup instead.')
       expect(graphWrites).toEqual([])
     })
 
@@ -112,7 +112,7 @@ describe('Restore manifest checks', () => {
       const graphWrites = stubFetch({ [`${backupId}/metadata.json`]: failed(undefined), [policyPath]: snapshot }, { list: [policyPath] })
       const response = await POST(request({ ...baseBody, restoreType: 'selective', selectedPolicies: [{ path: policyPath }], mode: 'copy', assignments: false }))
       expect(response.status).toBe(400)
-      expect((await response.json()).error).toBe('This backup is recorded as failed and is incomplete. Restore from a complete backup instead.')
+      expect((await response.json()).error).toBe('This backup is recorded as cancelled and is incomplete. Restore from a complete backup instead.')
       expect(graphWrites).toEqual([])
     })
   })

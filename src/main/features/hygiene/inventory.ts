@@ -108,9 +108,9 @@ export async function collectFromBackup(deps: FeatureDeps, tenantId: string, bac
     notCollected.push({ folder, label: typeForFolder(folder)?.label ?? folder, reason: "unreadable" })
   }
 
-  const warnings = normalizeBackupStatus(chosen) !== "success"
+  const state = normalizeBackupStatus(chosen)
   const reasons = [
-    warnings ? "The backup completed with warnings; some objects may be missing." : "",
+    state === "cancelled" ? "The backup was cancelled before it finished; some objects may be missing." : state !== "success" ? "The backup completed with warnings; some objects may be missing." : "",
     failed.size ? `${failed.size} types could not be read.` : "",
     skipped.size ? `${skipped.size} types were skipped for missing permissions.` : "",
     unreadable ? `${unreadable} backup files could not be read.` : "",

@@ -292,7 +292,8 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
                 log.eventType?.includes('POLICY') ? "policy" as const :
                 log.eventType?.includes('AUTH') ? "auth" as const :
                 "backup" as const,
-          status: log.result === 'SUCCESS' ? "success" as const : 
+          status: log.eventType === 'BACKUP_CANCELLED' ? "neutral" as const :
+                  log.result === 'SUCCESS' ? "success" as const : 
                   log.result === 'FAILURE' ? "failed" as const : 
                   log.severity === 'WARNING' ? "warning" as const : 
                   "info" as const,
@@ -307,7 +308,7 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
         .map(backup => ({
           id: backup.id,
           type: "backup" as const,
-          status: backup.status === "success" ? "success" as const : backup.status === "failed" ? "failed" as const : backup.status === "running" || backup.status === "cancelled" ? "info" as const : "warning" as const,
+          status: backup.status === "success" ? "success" as const : backup.status === "failed" ? "failed" as const : backup.status === "running" ? "info" as const : backup.status === "cancelled" ? "neutral" as const : "warning" as const,
           tenant: backup.tenantName,
           tenantId: backup.tenantId,
           time: backup.timestamp,
