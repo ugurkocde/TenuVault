@@ -3,7 +3,7 @@
 import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { trackBackup } from "@desktop/lib/backups"
 import { RunBackupDialog } from "@desktop/components/RunBackupDialog"
-import { useState, useEffect, useRef, Suspense } from "react"
+import { useState, useEffect, useRef, Suspense, type MouseEvent as ReactMouseEvent } from "react"
 import { useSearchParams } from "next/navigation"
 import {
   Search,
@@ -41,6 +41,15 @@ import { planName, tenantLicense, tenantPlan, useLicense } from "@desktop/lib/li
 import { GatedButton } from "@desktop/components/PlanGate"
 import type { Plan } from "../../../../shared/plans"
 import { Badge } from "~/components/ui/badge"
+import { Checkbox } from "~/components/ui/checkbox"
+import {
+  addTenantIds,
+  hiddenSelectedCount,
+  pruneSelection,
+  removeTenantIds,
+  toggleTenantId,
+  visibleSelectionState,
+} from "~/lib/tenant-selection"
 
 
 // Inner component that uses useSearchParams
@@ -97,10 +106,58 @@ function TenantsPageContent() {
   })
 
   const toggleTenantSelection = (id: number) => {
+    setSelectedTenants(prev => toggleTenantId(prev, id))
+  }
+
+  const filteredTenantIds = filteredTenants.map(t => t.id)
+  const visibleSelection = visibleSelectionState(selectedTenants, filteredTenantIds)
+  const hiddenSelected = hiddenSelectedCount(selectedTenants, filteredTenantIds)
+
+  // Select all only ever adds or removes the tenants the search shows, so a
+  // selection built under another search is never silently dropped.
+  const toggleVisibleSelection = () => {
     setSelectedTenants(prev =>
-      prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]
+      visibleSelection === "all"
+        ? removeTenantIds(prev, filteredTenantIds)
+        : addTenantIds(prev, filteredTenantIds)
     )
   }
+
+  const selectAllRef = useRef<HTMLButtonElement>(null)
+  const clearSelection = () => setSelectedTenants([])
+  // The action group unmounts when the selection empties; land focus on the
+  // always present select all box instead of dropping it to the body.
+  const clearSelectionFromBar = () => {
+    clearSelection()
+    selectAllRef.current?.focus()
+  }
+
+  // Clicking a card or row outside its controls toggles its selection.
+  const toggleFromSurface = (event: ReactMouseEvent, tenant: Tenant) => {
+    if (editingTenantId === tenant.id) return
+    if ((event.target as HTMLElement).closest("button, a, input, select, textarea, [role='menu'], [role='dialog']")) return
+    toggleTenantSelection(tenant.id)
+  }
+
+  // A deleted or otherwise removed tenant leaves the selection with it.
+  useEffect(() => {
+    setSelectedTenants(prev => {
+      const next = pruneSelection(prev, tenants.map(t => t.id))
+      return next.length === prev.length ? prev : next
+    })
+  }, [tenants])
+
+  // Escape clears the selection, unless a field, menu or dialog owns the key.
+  useEffect(() => {
+    if (selectedTenants.length === 0) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return
+      if ((event.target as HTMLElement).closest?.("input, textarea, select, [contenteditable='true'], [role='menu'], [role='dialog']")) return
+      setSelectedTenants([])
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [selectedTenants.length])
 
   const clearSavedConfirmation = (tenantId: number) => {
     clearTimeout(savedTimers.current.get(tenantId))
@@ -151,6 +208,7 @@ function TenantsPageContent() {
     if (shouldDelete) {
       // The desktop tenant store releases the license, sign-in and schedule; backups are kept
       deleteTenantFromContext(tenantId)
+      setSelectedTenants(prev => removeTenantIds(prev, [tenantId]))
     }
   }
 
@@ -655,32 +713,81 @@ function TenantsPageContent() {
         </div>
       </div>
 
-      {/* Bulk Actions */}
-      {selectedTenants.length > 0 && (
-        <div className="rounded-3xl bg-blue-50 px-5 py-3 flex items-center justify-between gap-4">
-          <span className="text-sm font-medium text-blue-700">
-            {selectedTenants.length} tenant{selectedTenants.length > 1 ? "s" : ""} selected
-          </span>
-          <div className="flex gap-2">
-            <GatedButton
-              feature="bulkActions"
-              plan={portfolioPlan}
-              size="sm"
-              className="bg-coral-600 text-white hover:bg-coral-700"
-              onClick={handleBulkBackup}
-              disabled={isBulkBackup}
-            >
-              <Download className="h-4 w-4 mr-1" />
-              Backup Selected
-            </GatedButton>
-            <Button
-              size="sm"
-              onClick={handleBulkTagUpdate}
-            >
-              <Tag className="h-4 w-4 mr-1" />
-              Tag Selected
-            </Button>
+      {/* Selection bar: always present at one height, so selecting the first
+          tenant never pushes the results down. */}
+      {tenants.length > 0 && (
+        <div
+          data-selection-bar
+          className={cn(
+            "flex min-h-[60px] flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-3xl px-4 py-2 transition-colors duration-150 motion-reduce:transition-none",
+            selectedTenants.length > 0 ? "bg-coral-50" : "bg-white/70"
+          )}
+        >
+          <div
+            className="flex min-h-9 cursor-pointer items-center gap-2.5"
+            onClick={(e) => {
+              if ((e.target as HTMLElement).closest("button")) return
+              if (filteredTenants.length > 0) toggleVisibleSelection()
+            }}
+          >
+            <Checkbox
+              ref={selectAllRef}
+              aria-label="Select all matching tenants"
+              checked={visibleSelection === "all" ? true : visibleSelection === "some" ? "indeterminate" : false}
+              indeterminate={visibleSelection === "some"}
+              onCheckedChange={toggleVisibleSelection}
+              disabled={filteredTenants.length === 0}
+              className="h-5 w-5 rounded-md data-[state=indeterminate]:border-coral-600 data-[state=indeterminate]:bg-coral-600 data-[state=indeterminate]:text-white"
+            />
+            <span aria-live="polite" className="text-sm">
+              {selectedTenants.length > 0 ? (
+                <>
+                  <span className="font-medium text-coral-800">
+                    {selectedTenants.length} tenant{selectedTenants.length > 1 ? "s" : ""} selected
+                  </span>
+                  {hiddenSelected > 0 && (
+                    <span className="font-normal text-coral-800">
+                      {" "}({hiddenSelected} not shown by search)
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span className="text-gray-500">Select tenants to back up or tag several at once</span>
+              )}
+            </span>
           </div>
+          {selectedTenants.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={clearSelectionFromBar}
+                title="Clear selection (Esc)"
+                className="text-coral-800 hover:bg-coral-100 hover:text-coral-900"
+              >
+                <X className="h-4 w-4 mr-1" />
+                Clear
+              </Button>
+              <GatedButton
+                feature="bulkActions"
+                plan={portfolioPlan}
+                size="sm"
+                className="bg-coral-600 text-white hover:bg-coral-700"
+                onClick={handleBulkBackup}
+                disabled={isBulkBackup}
+              >
+                <Download className="h-4 w-4 mr-1" />
+                Backup Selected
+              </GatedButton>
+              <Button
+                size="sm"
+                onClick={handleBulkTagUpdate}
+              >
+                <Tag className="h-4 w-4 mr-1" />
+                Tag Selected
+              </Button>
+            </div>
+          )}
         </div>
       )}
 
@@ -699,16 +806,36 @@ function TenantsPageContent() {
         {filteredTenants.map((tenant) => (
           <div
             key={tenant.id}
+            data-tenant-card={tenant.id}
+            data-selected={selectedTenants.includes(tenant.id) || undefined}
+            onClick={(e) => toggleFromSurface(e, tenant)}
             className={cn(
-              "group relative bg-white rounded-3xl border overflow-hidden transition-colors cursor-pointer",
+              "group relative bg-white rounded-3xl border overflow-hidden cursor-pointer transition-[background-color,border-color,box-shadow] duration-150 motion-reduce:transition-none",
               selectedTenants.includes(tenant.id)
-                ? "border-blue-200"
+                ? "border-coral-300 bg-coral-50/40 ring-2 ring-coral-500/70"
                 : "border-transparent hover:border-gray-200"
             )}
           >
-            <label className="flex items-center gap-2 px-6 pt-5 text-xs text-gray-500">
-              <input type="checkbox" checked={selectedTenants.includes(tenant.id)} onChange={() => toggleTenantSelection(tenant.id)} aria-label={`Select ${tenant.name}`} /> Select tenant
-            </label>
+            <div
+              className="flex min-h-10 items-center gap-2.5 px-6 pt-4 text-[13px]"
+              onClick={(e) => {
+                e.stopPropagation()
+                if (editingTenantId === tenant.id) return
+                if ((e.target as HTMLElement).closest("button")) return
+                toggleTenantSelection(tenant.id)
+              }}
+            >
+              <Checkbox
+                aria-label={`Select ${tenant.name}`}
+                checked={selectedTenants.includes(tenant.id)}
+                onCheckedChange={() => toggleTenantSelection(tenant.id)}
+                disabled={editingTenantId === tenant.id}
+                className="h-5 w-5 rounded-md"
+              />
+              <span className={selectedTenants.includes(tenant.id) ? "font-medium text-coral-700" : "text-gray-500"}>
+                {selectedTenants.includes(tenant.id) ? "Selected" : "Select tenant"}
+              </span>
+            </div>
             {/* Status dot */}
             <div title={tenant.status} className={cn(
               "absolute top-6 right-6 h-2 w-2 rounded-full",
@@ -981,17 +1108,13 @@ function TenantsPageContent() {
               <thead className="border-b border-gray-100">
                 <tr>
                   <th className="px-6 py-4 text-left text-xs font-medium text-gray-500">
-                    <input
-                      type="checkbox"
-                      className="rounded border-gray-300"
-                      aria-label="Select all matching tenants" checked={selectedTenants.length === filteredTenants.length && filteredTenants.length > 0}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          setSelectedTenants(filteredTenants.map(t => t.id))
-                        } else {
-                          setSelectedTenants([])
-                        }
-                      }}
+                    <Checkbox
+                      aria-label="Select all matching tenants in the list"
+                      checked={visibleSelection === "all" ? true : visibleSelection === "some" ? "indeterminate" : false}
+                      indeterminate={visibleSelection === "some"}
+                      onCheckedChange={toggleVisibleSelection}
+                      disabled={filteredTenants.length === 0}
+                      className="h-5 w-5 rounded-md data-[state=indeterminate]:border-coral-600 data-[state=indeterminate]:bg-coral-600 data-[state=indeterminate]:text-white"
                     />
                   </th>
                   <th className="px-6 py-4 text-left text-xs font-medium text-gray-500">
@@ -1041,17 +1164,21 @@ function TenantsPageContent() {
                 {filteredTenants.map((tenant) => (
                   <tr
                     key={tenant.id}
+                    data-tenant-row={tenant.id}
+                    data-selected={selectedTenants.includes(tenant.id) || undefined}
+                    onClick={(e) => toggleFromSurface(e, tenant)}
                     className={cn(
-                      "hover:bg-gray-50 transition-colors",
-                      selectedTenants.includes(tenant.id) && "bg-blue-50"
+                      "cursor-pointer transition-colors duration-150 hover:bg-gray-50 motion-reduce:transition-none",
+                      selectedTenants.includes(tenant.id) && "bg-coral-50 hover:bg-coral-50"
                     )}
                   >
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <input
-                        type="checkbox"
-                        className="rounded border-gray-300"
-                        aria-label={`Select ${tenant.name}`} checked={selectedTenants.includes(tenant.id)}
-                        onChange={() => toggleTenantSelection(tenant.id)}
+                      <Checkbox
+                        aria-label={`Select ${tenant.name}`}
+                        checked={selectedTenants.includes(tenant.id)}
+                        onCheckedChange={() => toggleTenantSelection(tenant.id)}
+                        disabled={editingTenantId === tenant.id}
+                        className="h-5 w-5 rounded-md"
                       />
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">

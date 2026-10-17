@@ -926,6 +926,61 @@ await check("tenant renames show Saved in both views and clear confirmation time
   }
 })
 
+await check("tenant selection toggles from cards, rows, select all and clear without shifting layout", async () => {
+  await go("#/portal/tenants", "Tenant Management")
+  await evaluate(`document.querySelector('button[aria-label="Grid view"]').click()`)
+  const bar = `[...document.querySelectorAll('main [aria-live="polite"]')].find(s => /selected|Select tenants to back up/.test(s.textContent))`
+  const card = id => `document.querySelector('[data-tenant-card="${id}"]')`
+  const setSearch = async text => {
+    await evaluate(`(() => { const input = document.querySelector('input[aria-label="Search tenants"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(text)}); input.dispatchEvent(new Event('input', { bubbles: true })); })()`)
+  }
+  try {
+  assert(await evaluate(`${bar}.textContent.includes('Select tenants to back up')`), "selection bar hint missing before any selection")
+  // Gap between the bar and the first card, plus the bar height: both are
+  // scroll-independent, unlike raw viewport coordinates.
+  const layout = `(() => { const barRect = document.querySelector('[data-selection-bar]').getBoundingClientRect(); const cardRect = ${card(1)}.getBoundingClientRect(); return { barHeight: barRect.height, gap: cardRect.top - barRect.bottom } })()`
+  const layoutBefore = await evaluate(layout)
+  await evaluate(`document.querySelector('button[aria-label="Select Contoso 1"]').click()`)
+  assert(await waitForCondition(`${card(1)}.dataset.selected === 'true' && ${bar}.textContent.includes('1 tenant selected')`), "checkbox did not select the first tenant")
+  assert(await evaluate(`document.querySelector('button[aria-label="Select Contoso 1"]').getAttribute('aria-checked') === 'true' && ${card(1)}.innerText.includes('Selected')`), "selected card does not say Selected with a checked box")
+  const layoutAfter = await evaluate(layout)
+  assert(Math.abs(layoutAfter.barHeight - layoutBefore.barHeight) < 1 && Math.abs(layoutAfter.gap - layoutBefore.gap) < 1, `selecting the first tenant shifted the cards: ${JSON.stringify({ layoutBefore, layoutAfter })}`)
+  // Clicking the card outside its controls toggles too.
+  await evaluate(`${card(2)}.querySelector('h3').click()`)
+  assert(await waitForCondition(`${card(2)}.dataset.selected === 'true' && ${bar}.textContent.includes('2 tenants selected')`), "card click did not select the second tenant")
+  assert(await evaluate(`document.querySelector('button[aria-label="Select all matching tenants"]').getAttribute('aria-checked') === 'true'`), "select all is not checked with every tenant selected")
+  await screenshot("07-tenants-selected")
+  // Controls inside the card never toggle: the rename button opens the editor instead.
+  await evaluate(`document.querySelector('button[aria-label="Rename tenant: Contoso 2"]').click()`)
+  assert(await waitForCondition(`Boolean(document.querySelector('button[aria-label="Save tenant name"]')) && ${card(2)}.dataset.selected === 'true'`), "rename click changed the selection")
+  await evaluate(`document.querySelector('button[aria-label^="Cancel editing tenant name:"]').click()`)
+  assert(await waitForCondition(`!document.querySelector('button[aria-label="Save tenant name"]') && ${card(2)}.dataset.selected === 'true'`), "cancelling rename changed the selection")
+  // Search scopes select all and discloses hidden selections.
+  await setSearch("Contoso 2")
+  assert(await waitForCondition(`${bar}.textContent.includes('1 not shown by search')`), "bar does not disclose the tenant hidden by search")
+  await evaluate(`document.querySelector('button[aria-label="Select all matching tenants"]').click()`)
+  assert(await waitForCondition(`${bar}.textContent.includes('1 tenant selected') && ${bar}.textContent.includes('1 not shown by search') && !document.querySelector('[data-tenant-card="2"]')?.dataset.selected`), "unselecting visible tenants dropped the hidden selection")
+  await setSearch("")
+  assert(await waitForCondition(`${card(1)}.dataset.selected === 'true' && !${card(2)}.dataset.selected`), "hidden selection did not survive clearing the search")
+  await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Clear').click()`)
+  assert(await waitForCondition(`!document.querySelector('[data-tenant-card][data-selected]') && ${bar}.textContent.includes('Select tenants to back up')`), "Clear did not reset the selection")
+  assert(await evaluate(`document.activeElement?.getAttribute('aria-label') === 'Select all matching tenants'`), "Clear dropped keyboard focus instead of landing on select all")
+  // List view: row click toggles, the header reports mixed, Escape clears.
+  await evaluate(`document.querySelector('button[aria-label="List view"]').click()`)
+  const row = id => `document.querySelector('[data-tenant-row="${id}"]')`
+  await evaluate(`${row(1)}.querySelector('td:nth-child(2)').click()`)
+  assert(await waitForCondition(`${row(1)}.dataset.selected === 'true' && document.querySelector('button[aria-label="Select all matching tenants in the list"]').getAttribute('aria-checked') === 'mixed'`), "row click or mixed select all state failed in list view")
+  await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape" })
+  await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape" })
+  assert(await waitForCondition(`!document.querySelector('[data-tenant-row][data-selected]')`), "Escape did not clear the selection")
+  } finally {
+    // Later checks start from an unfiltered grid with nothing selected.
+    await setSearch("").catch(() => {})
+    await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Clear')?.click()`).catch(() => {})
+    await evaluate(`document.querySelector('button[aria-label="Grid view"]')?.click()`).catch(() => {})
+  }
+})
+
 await check("tag drafts stay with their tenant and bulk tags sync every tenant", async () => {
   await go("#/portal/tenants", "Tenant Management")
   const currentTags = `document.querySelector('[role="dialog"] h3')?.nextElementSibling.innerText.trim()`
@@ -988,20 +1043,20 @@ await check("tag drafts stay with their tenant and bulk tags sync every tenant",
       assert((await evaluate(currentTags)) === "Production", `reopening the same tenant after ${method} kept its discarded draft`)
     }
     await closeTags()
-    await evaluate(`document.querySelector('input[aria-label="Select Contoso 1"]').click()`)
-    await evaluate(`document.querySelector('input[aria-label="Select Contoso 2"]').click()`)
+    await evaluate(`document.querySelector('button[aria-label="Select Contoso 1"]').click()`)
+    await evaluate(`document.querySelector('button[aria-label="Select Contoso 2"]').click()`)
     await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Tag Selected').click()`)
     assert(await waitForText("Manage Tags for 2 tenants"), "bulk tag dialog did not open")
     assert((await evaluate(currentTags)) === "No tags selected", "bulk tagging inherited a tenant's tags")
     await clickDialogButton("Non-Production")
     assert(await waitForCondition(`${currentTags}.includes('Development')`), "unsaved bulk tag edit was not applied")
     await closeTags()
-    await evaluate(`document.querySelector('input[aria-label="Select Contoso 1"]').click()`)
+    await evaluate(`document.querySelector('button[aria-label="Select Contoso 1"]').click()`)
     await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Tag Selected').click()`)
     assert(await waitForText("Manage Tags for 1 tenants"), "second bulk selection tag dialog did not open")
     assert((await evaluate(currentTags)) === "No tags selected", "second bulk selection inherited the cancelled bulk draft")
     await closeTags()
-    await evaluate(`document.querySelector('input[aria-label="Select Contoso 1"]').click()`)
+    await evaluate(`document.querySelector('button[aria-label="Select Contoso 1"]').click()`)
     await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Tag Selected').click()`)
     assert(await waitForText("Manage Tags for 2 tenants"), "bulk tag dialog did not reopen")
     assert((await evaluate(currentTags)) === "No tags selected", "reopening bulk tagging kept its discarded draft")
