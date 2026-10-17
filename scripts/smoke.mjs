@@ -555,6 +555,14 @@ await check("settings sidebar switches sections and names the section in the URL
   // A link that only carries the recovery key anchor still opens storage and focuses the export.
   await evaluate(`location.hash = "#/portal/settings#recovery-key"`)
   assert(await waitForCondition(`document.getElementById("settings-storage").hidden === false && document.activeElement?.id === "save-recovery-key"`), "anchor-only recovery key link did not open storage and focus the export")
+  // In the narrow row layout, scrolling the section strip must not move the focused export out of view.
+  await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 720, deviceScaleFactor: 1, mobile: false })
+  await evaluate(`location.hash = "#/portal/settings?section=signin"`)
+  assert(await waitForCondition(`document.getElementById("settings-signin").hidden === false`), "sign-in section did not appear at narrow width")
+  await evaluate(`location.hash = "#/portal/settings?section=storage#recovery-key"`)
+  const focusedInView = `(() => { const button = document.getElementById("save-recovery-key"); if (document.activeElement !== button) return false; const box = button.getBoundingClientRect(); return box.top >= 0 && box.bottom <= window.innerHeight })()`
+  assert(await waitForCondition(focusedInView), "focused Save recovery key ended outside the viewport at narrow width")
+  await send("Emulation.clearDeviceMetricsOverride")
 })
 
 await check("license agreement opens from settings", async () => {

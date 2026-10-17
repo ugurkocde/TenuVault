@@ -712,10 +712,17 @@ export default function SettingsPage() {
   }, [section, hash])
 
   // In the narrow row layout the active entry can sit outside the scrollable
-  // strip after a deep link; bring it into view without moving the page.
+  // strip after a deep link. Scroll the strip sideways only; scrollIntoView
+  // would also move the page and push a focused control out of view.
   useEffect(() => {
     if (!window.matchMedia("(max-width: 1279px)").matches) return
-    document.querySelector('nav[aria-label="Settings sections"] [aria-current="page"]')?.scrollIntoView({ block: "nearest", inline: "nearest" })
+    const link = document.querySelector('nav[aria-label="Settings sections"] [aria-current="page"]')
+    const strip = link?.parentElement
+    if (!link || !strip) return
+    const linkBox = link.getBoundingClientRect()
+    const stripBox = strip.getBoundingClientRect()
+    if (linkBox.left < stripBox.left) strip.scrollLeft += linkBox.left - stripBox.left - 4
+    else if (linkBox.right > stripBox.right) strip.scrollLeft += linkBox.right - stripBox.right + 4
   }, [section])
 
   const panel = (id: SettingsSectionId, content: ReactNode) => (
