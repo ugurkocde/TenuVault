@@ -97,11 +97,12 @@ Setup is two copy and paste scripts in the TenuVault repository under `resources
 
 Costs are the Automation job minutes of short read-only runs in the customer subscription. The setup script prints the cadence it configured; start hourly and tighten only if the latency matters.
 
-One full setup run looks like this. Everything is created in a new resource group, the storage account is the one from the backup setup, and the script is safe to run again for upgrades:
+One full setup run looks like this. The storage account is the one from the backup setup, the resource group is created when it is missing (that is what `-Location` is for), and the script is safe to run again for upgrades:
 
 ```powershell
 ./New-TenuVaultNotificationWatcher.ps1 `
   -TenantId <tenant-guid> -StorageAccountName <backup-storage-account> `
+  -ResourceGroupName rg-tenuvault-watchers -Location northeurope `
   -TeamsWebhookUrl <workflows-url> -AlertEmail you@example.com `
   -GrantGraphRoles -IncludeMailSend `
   -MailSender notifications@contoso.com `
@@ -110,7 +111,7 @@ One full setup run looks like this. Everything is created in a new resource grou
 
 ### If the watcher itself breaks
 
-A watcher that fails silently would defeat its purpose, so setup refuses to guess about failure reporting. Pass `-AlertEmail` and the script creates an Azure Monitor action group and a metric alert on failed Automation jobs in the watcher resource group, so a broken watcher emails you through Azure Monitor, independent of the runbook itself. Passing `-NoFailureAlert` is the explicit opt-out. Every run also writes `heartbeat.json` (last run time, watermark, last error) into the state container, which is the quickest health check: if `heartbeat.json` is older than the schedule, runs are not happening.
+A watcher that fails silently would defeat its purpose, so setup refuses to guess about failure reporting. Pass `-AlertEmail` and the script creates an Azure Monitor action group and a metric alert on failed Automation jobs in the watcher resource group, so a broken watcher emails you through Azure Monitor, independent of the runbook itself. Passing `-NoFailureAlert` is the explicit opt-out. Successful runs also write `heartbeat.json` (last run time, watermark, last error) into the state container. A fresh heartbeat is the quickest health check. A stale one only means there is no recent health evidence: a watcher that lost storage access keeps failing without updating it, so check the Automation account's job history to see whether runs happen and how they fail.
 
 Two setup errors worth knowing before you meet them:
 
@@ -121,11 +122,11 @@ Two setup errors worth knowing before you meet them:
 
 The watcher sends mail app-only with the `Mail.Send` application permission. On its own that permission could send as any mailbox, so the watcher refuses to use it until you prove from the receiving side that Exchange restricts it. Setup can grant the role (`-IncludeMailSend -GrantGraphRoles`), but the restriction and the proof are yours to run once:
 
-1. Create a mail-enabled security group containing only the sender mailbox, then restrict the watcher identity to it in Exchange Online PowerShell: `New-ApplicationAccessPolicy -AppId <watcher identity app id> -PolicyScopeGroupId <group> -AccessRight RestrictAccess`. The setup output prints the identity ids you need.
+1. Create a mail-enabled security group containing only the sender mailbox, then restrict the watcher identity to it in Exchange Online PowerShell: `New-ApplicationAccessPolicy -AppId <watcher identity application id> -PolicyScopeGroupId <group> -AccessRight RestrictAccess`. Setup prints the identity's principal (object) id, which is not the application id Exchange wants. Get the application id from that principal id in Microsoft Graph PowerShell with `(Get-MgServicePrincipal -ServicePrincipalId <principal id>).AppId`, or in the Entra admin center under Enterprise applications on the identity's page.
 2. Set `-MailSender` to that mailbox and `-MailProbeMailbox` to a second mailbox that is outside the group.
 3. Start the runbook once with the `VerifyMailOnly` parameter set. It sends a short verification mail as the sender (must succeed), then attempts to send as the probe mailbox (must be rejected with HTTP 403). Only then does it record `mailVerified` in `state.json`, and normal runs start delivering mail. The verification expires after 90 days, and changing the sender requires a new one; normal runs say so in their output and skip mail until it passes again.
 
-Plan for Exchange propagation: a brand-new access policy and scope group can take hours before app-only sending is actually allowed for the in-scope mailbox. During that window verification fails with `ErrorAccessDenied ... [RAOP] Blocked by tenant configured AppOnly AccessPolicy settings` even when every setting reads correctly, including `Test-ApplicationAccessPolicy` saying Granted. That is propagation, not a configuration error. Do not rebuild the policy; rebuilding restarts the wait. Re-run the verification later the same day or the next morning.
+Plan for Exchange propagation: a brand-new access policy and scope group can take hours before app-only sending is actually allowed for the in-scope mailbox. During that window verification fails with `ErrorAccessDenied ... [RAOP] Blocked by tenant configured AppOnly AccessPolicy settings`. First rule out the configuration causes with the same error text: the sender mailbox is really a member of the scope group, the policy uses the identity's application id (not its principal id), and `Test-ApplicationAccessPolicy` says Granted for the sender and Denied for an outside mailbox. If all of that reads correctly, what remains is propagation. Do not rebuild the policy then; rebuilding restarts the wait. Re-run the verification later the same day or the next morning.
 
 ## Troubleshooting
 
