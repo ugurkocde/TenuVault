@@ -130,6 +130,8 @@ describe("rendering", () => {
 
   it("HTML mail has severity badge, verb chips, friendly times and a fixed action link", () => {
     expect(friendlyTime("2026-10-17T18:54:26.033Z")).toBe("2026-10-17 18:54 UTC")
+    expect(friendlyTime("2026-10-17T18:54:26")).toBe("2026-10-17 18:54 UTC")
+    expect(friendlyTime("2026-10-17T18:54:26+02:00")).toBe("2026-10-17 16:54 UTC")
     expect(friendlyTime("not-a-date")).toBe("not-a-date")
     const changes = fixture.events.map((event) => mapAuditEvent(event as AuditEventRaw)!)
     const digest = intuneChangeDigest({ tenantId: TENANT, tenantName: "Contoso", changes, includeActor: true, source: "azure-watcher" })

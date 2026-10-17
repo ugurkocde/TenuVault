@@ -78,7 +78,10 @@ export function emailText(envelope: NotificationEnvelope): string {
 
 /** "2026-10-17T18:54:26.033Z" as "2026-10-17 18:54 UTC"; unparsable values pass through unchanged. */
 export function friendlyTime(iso: string): string {
-  const at = new Date(iso)
+  // Offsetless timestamps are read as UTC, never as machine-local time, so the
+  // desktop and the PowerShell watcher render the same text for the same input.
+  const normalized = /T\d{2}:\d{2}/.test(iso) && !/(?:Z|[+-]\d{2}:?\d{2})$/i.test(iso.trim()) ? `${iso.trim()}Z` : iso
+  const at = new Date(normalized)
   if (Number.isNaN(at.getTime())) return iso
   const pad = (value: number) => String(value).padStart(2, "0")
   return `${at.getUTCFullYear()}-${pad(at.getUTCMonth() + 1)}-${pad(at.getUTCDate())} ${pad(at.getUTCHours())}:${pad(at.getUTCMinutes())} UTC`
