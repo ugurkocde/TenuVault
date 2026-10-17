@@ -122,7 +122,7 @@ async function recordRestore(bodyText: string, response: Response, dispatch: (re
   const ok = response.ok && data.success === true
   // Some copies were created, so the restore completed with failures rather than failing outright.
   const partial = !ok && (data.partial === true || (response.ok && ((data.details?.restoredCount ?? 0) > 0 || (data.details?.partialCount ?? 0) > 0)))
-  if (!policyCopy && response.status !== 400) {
+  if (!policyCopy && ![400, 402, 403].includes(response.status)) {
     try {
       const partialRestore = data.status === "PartiallyCompleted" || (data.details?.partialCount ?? 0) > 0 || partial
       onRestore?.({

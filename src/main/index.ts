@@ -63,7 +63,7 @@ import { installedBySetup, isNightly, Updates, updatesDisabledByPolicy } from ".
 import { featureRoutes, startFeatures } from "./features"
 import { emitBackupOutcome, emitDriftOutcome, emitRestoreOutcome } from "./features/notifications/producers"
 import { channelsOf, matchingChannelIds, rulesOf } from "./features/notifications/service"
-import { backupEvent } from "../shared/notifications/envelope"
+import { backupEvent, driftEvent, type NotificationEnvelope } from "../shared/notifications/envelope"
 import { apiBody, type FeatureDeps } from "./features/deps"
 import { TenantRecords } from "./features/records"
 import { DriftJobs, driftScanRoutes } from "./drift/jobs"
@@ -381,6 +381,10 @@ async function bootstrap(): Promise<void> {
         }).catch(() => undefined)
       }
       if (job.status === "cancelled" || mainWindow?.isFocused() || !Notification.isSupported()) return
+      if (job.status === "completed" && job.summary && job.summary.added + job.summary.modified + job.summary.deleted > 0) {
+        const probe = driftEvent({ tenantId: job.tenantId, occurredAt: job.finishedAt ?? new Date().toISOString(), jobId: job.jobId, added: job.summary.added, modified: job.summary.modified, deleted: job.summary.deleted, source: "desktop" })
+        if (localChannelCovers(job.tenantId, probe)) return
+      }
       const tenant = tenantProfile(job.tenantId)?.name ?? "your tenant"
       const notification = new Notification({
         title: job.status === "completed" ? "Drift scan ready" : "Drift scan failed",
@@ -472,12 +476,11 @@ async function bootstrap(): Promise<void> {
     notification.show()
   })
 
-  // The legacy failure toast stands down when a rule already delivers backup failures
-  // to a local notification channel, so the admin is not toasted twice for one failure.
-  const localChannelCoversBackupFailure = (tenantId: string): boolean => {
+  // Whether a rule already delivers this kind of event to a local channel, so the
+  // legacy OS toast for the same outcome can stand down instead of firing twice.
+  const localChannelCovers = (tenantId: string, probe: NotificationEnvelope): boolean => {
     try {
       const channels = channelsOf(featureDeps, tenantId)
-      const probe = backupEvent({ tenantId, status: "Failed", backupFolder: "probe", occurredAt: new Date().toISOString(), source: "desktop" })
       const selected = matchingChannelIds(rulesOf(featureDeps, tenantId), channels, probe)
       return channels.some((channel) => channel.kind === "local" && selected.includes(channel.id))
     } catch {
@@ -486,7 +489,6 @@ async function bootstrap(): Promise<void> {
   }
 
   const notifyFailure = (tenantId: string, name: string, message: string, trigger: "scheduled" | "tray") => {
-    if (localChannelCoversBackupFailure(tenantId)) return
     notifyBackupFailure({ tenantId, name }, message, trigger, () => {
       showWindow()
       return mainWindow
@@ -574,7 +576,9 @@ async function bootstrap(): Promise<void> {
       .catch(() => undefined)
     if (!ok && !cancelled && !origin.notified) {
       origin.notified = true
-      notifyFailure(tenantId, profile.name, job.exception ?? "Open TenuVault for details.", origin.trigger)
+      // The channel delivery above already toasted this failure when a local rule covers it.
+      const probe = backupEvent({ tenantId, status: "Failed", backupFolder: job.backupFolder ?? job.id, occurredAt: job.endTime ?? new Date().toISOString(), source: "desktop" })
+      if (!localChannelCovers(tenantId, probe)) notifyFailure(tenantId, profile.name, job.exception ?? "Open TenuVault for details.", origin.trigger)
     }
     return result
   }

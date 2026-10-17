@@ -43,11 +43,15 @@ describe("Azure notification watcher scripts", () => {
     expect(setup).not.toMatch(/New-AzADAppCredential|client.?secret/i)
   })
 
-  it("keeps a persistent outbox, an infinite lease, Automation identity and a config gate", () => {
+  it("keeps a persistent outbox, a renewed finite lease, Automation identity and a config gate", () => {
     for (const marker of [
       "pendingEnvelopes",
       "deadEnvelopes",
-      '"x-ms-lease-duration" = "-1"',
+      '"x-ms-lease-duration" = "60"',
+      '"x-ms-lease-action" = "renew"',
+      "deliveredChannels",
+      "attemptsByChannel",
+      "mailVerifiedSender",
       "IDENTITY_ENDPOINT",
       "X-IDENTITY-HEADER",
       "$listXml.EnumerationResults.Blobs",
@@ -71,6 +75,7 @@ describe("Azure notification watcher scripts", () => {
     expect(at).toBeGreaterThan(0)
     expect(desktopApp.indexOf('"Mail.Send"')).toBeGreaterThan(at)
     expect(desktopApp.indexOf('"GroupMember.Read.All"')).toBeGreaterThan(at)
+    expect(desktopApp.indexOf('"User.Read.All"')).toBeGreaterThan(at)
   })
 
   it.runIf(Boolean(pwsh))("PowerShell renders the identical canonical digest as TypeScript", () => {

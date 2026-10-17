@@ -146,6 +146,8 @@ if ($IncludeNotifications) {
     # Opt-in only: notification email as the signed-in admin, plus group recipient resolution.
     $resources[0].Scopes += "Mail.Send"
     $resources[0].Scopes += "GroupMember.Read.All"
+    # Reading other members' mail and userType needs their basic profile properties.
+    $resources[0].Scopes += "User.Read.All"
 }
 
 $requiredResourceAccess = @()

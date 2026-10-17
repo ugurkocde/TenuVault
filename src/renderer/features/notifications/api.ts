@@ -123,12 +123,16 @@ export const notificationsApi = {
   addChannel: (tenant: Tenant, body: AddChannelBody) => featureCall<{ channel: PublicChannel }>(PATH, tenant, "add-channel", { ...body }),
   updateChannel: (tenant: Tenant, channelId: string, body: UpdateChannelBody) => featureCall<{ channel: PublicChannel }>(PATH, tenant, "update-channel", { channelId, ...body }),
   revokeChannel: (tenant: Tenant, channelId: string) => featureCall<{ removed: string }>(PATH, tenant, "revoke-channel", { channelId }),
+  /** Turning a channel off stays free on every plan; sets enabled false only. */
+  revokeDisableChannel: (tenant: Tenant, channelId: string) => featureCall<{ channel: PublicChannel }>(PATH, tenant, "revoke-disable-channel", { channelId }),
   testChannel: (tenant: Tenant, channelId: string) => featureCall<{ delivery: DeliveryResult; channel: PublicChannel }>(PATH, tenant, "test-channel", { channelId }),
   previewEvent: (tenant: Tenant, channelId?: string) => featureCall<{ body: string; envelope: NotificationEnvelope }>(PATH, tenant, "preview-event", channelId ? { channelId } : {}),
   addRule: (tenant: Tenant, body: RuleBody) => featureCall<{ rule: NotificationRule }>(PATH, tenant, "add-rule", { ...body }),
   updateRule: (tenant: Tenant, ruleId: string, body: RuleBody) => featureCall<{ rule: NotificationRule }>(PATH, tenant, "update-rule", { ruleId, ...body }),
   revokeRule: (tenant: Tenant, ruleId: string) => featureCall<{ removed: string }>(PATH, tenant, "revoke-rule", { ruleId }),
   updateAuditWatch: (tenant: Tenant, body: AuditWatchBody) => featureCall<{ auditWatch: AuditWatch }>(PATH, tenant, "update-audit-watch", { ...body }),
+  /** Turning change watching off stays free on every plan. */
+  revokeAuditWatch: (tenant: Tenant) => featureCall<{ auditWatch: AuditWatch }>(PATH, tenant, "revoke-audit-watch"),
   runAuditWatch: (tenant: Tenant) => featureCall<{ auditWatch: AuditWatch | null; enqueued: number; changes: number; error: string | null }>(PATH, tenant, "run-audit-watch"),
   listGroups: (tenant: Tenant, search: string) => featureCall<{ groups: GroupResult[] }>(PATH, tenant, "list-groups", { search }).then((result) => result.groups),
 }

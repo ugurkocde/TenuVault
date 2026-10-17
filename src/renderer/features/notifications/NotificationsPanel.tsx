@@ -120,7 +120,12 @@ function channelTarget(channel: PublicChannel): string {
 }
 
 function ChannelRow({ tenant, channel, licensed, onChanged, onPreview }: { tenant: Tenant; channel: PublicChannel; licensed: boolean; onChanged: () => void; onPreview: () => void }) {
-  const update = useMutation({ mutationFn: (enabled: boolean) => notificationsApi.updateChannel(tenant, channel.id, { enabled }), onSuccess: onChanged, onError: failed })
+  const update = useMutation({
+    // Turning off after a downgrade uses the free revoke action; turning on stays licensed.
+    mutationFn: (enabled: boolean) => (!enabled && !licensed ? notificationsApi.revokeDisableChannel(tenant, channel.id) : notificationsApi.updateChannel(tenant, channel.id, { enabled })),
+    onSuccess: onChanged,
+    onError: failed,
+  })
   const revoke = useMutation({ mutationFn: () => notificationsApi.revokeChannel(tenant, channel.id), onSuccess: () => { toast("Channel removed", "success"); onChanged() }, onError: failed })
   const test = useMutation({
     mutationFn: () => notificationsApi.testChannel(tenant, channel.id),
@@ -141,7 +146,7 @@ function ChannelRow({ tenant, channel, licensed, onChanged, onPreview }: { tenan
         {last ? `${last.ok ? "Last delivery succeeded" : `Last delivery failed after ${last.attempts} attempts: ${last.error ?? "unknown error"}`} (${formatTime(last.at)}${last.test ? ", test" : ""})` : "Nothing delivered yet."}
       </p>
       <div className="flex flex-wrap gap-2">
-        <Button type="button" size="sm" variant="outline" onClick={() => update.mutate(!channel.enabled)} disabled={!licensed || update.isPending}>{channel.enabled ? "Turn off" : "Turn on"}</Button>
+        <Button type="button" size="sm" variant="outline" onClick={() => update.mutate(!channel.enabled)} disabled={update.isPending || (!licensed && !channel.enabled)}>{channel.enabled ? "Turn off" : "Turn on"}</Button>
         <Button type="button" size="sm" variant="outline" onClick={() => test.mutate()} disabled={!licensed || test.isPending}>{test.isPending ? "Sending" : "Send test"}</Button>
         <Button type="button" size="sm" variant="outline" onClick={onPreview}><Eye className="h-4 w-4" aria-hidden="true" />Preview event</Button>
         <Button type="button" size="sm" variant="outline" onClick={() => revoke.mutate()} disabled={revoke.isPending}><Trash2 className="h-4 w-4" aria-hidden="true" />Remove</Button>
@@ -358,7 +363,7 @@ function RuleRow({ tenant, rule, licensed, onChanged, channelTitle }: { tenant: 
 }
 
 /** Event types a new rule cannot pick: shown disabled so they never look functional. Stored rules that already contain them still render in RuleRow. */
-const INERT_EVENT_TYPES: ReadonlySet<NotificationEventType> = new Set(["test", "watcher.stale"])
+const INERT_EVENT_TYPES: ReadonlySet<NotificationEventType> = new Set(["test", "watcher.stale", "backup.missed", "health.finding"])
 
 const EVENT_TYPE_NOTES: Partial<Record<NotificationEventType, string>> = {
   test: "Sent from a channel Send test button and bypasses rules",
@@ -406,7 +411,7 @@ function AddRuleDialog({ tenant, channels, onClose, onAdded }: { tenant: Tenant;
                 )
               })}
             </div>
-            <p className="text-xs text-gray-500">Test notifications are sent from a channel Send test button and bypass rules. Watcher stale has no producer in the desktop app, so neither can be picked here.</p>
+            <p className="text-xs text-gray-500">Greyed out types cannot be picked for a new rule. Test notifications bypass rules, watcher stale and missed backups are reported outside the desktop app, and health findings are configured on the Health review screen. Rules that already contain these types keep them unchanged.</p>
           </fieldset>
           <div className="flex flex-wrap items-center gap-4 text-sm">
             <label className="flex items-center gap-2 text-gray-700">
@@ -453,16 +458,20 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
     setExternalWatcher(auditWatch?.externalWatcher ?? false)
   }, [auditWatch])
 
+  // Without entitlement the only save allowed is turning watching off, through the free revoke action.
+  const turningOff = !licensed && Boolean(auditWatch?.enabled) && !enabled
   const save = useMutation({
     mutationFn: () =>
-      notificationsApi.updateAuditWatch(tenant, {
-        enabled,
-        intervalMinutes,
-        categories: categories.split(",").map((entry) => entry.trim()).filter(Boolean),
-        ignoreOwnChanges,
-        includeActor,
-        externalWatcher,
-      }),
+      !licensed
+        ? notificationsApi.revokeAuditWatch(tenant)
+        : notificationsApi.updateAuditWatch(tenant, {
+            enabled,
+            intervalMinutes,
+            categories: categories.split(",").map((entry) => entry.trim()).filter(Boolean),
+            ignoreOwnChanges,
+            includeActor,
+            externalWatcher,
+          }),
     onSuccess: () => { toast("Change watching saved", "success"); onChanged() },
     onError: failed,
   })
@@ -488,11 +497,12 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
         </div>
         <Chip tone={auditWatch?.enabled ? "success" : "neutral"}>{auditWatch?.enabled ? "Watching" : "Off"}</Chip>
       </div>
-      <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); save.mutate() }}>
+      <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); if (licensed || turningOff) save.mutate() }}>
         <label className="flex items-center gap-2 text-sm text-gray-800">
-          <input type="checkbox" className="size-4 accent-coral-600" checked={enabled} disabled={!licensed} onChange={(event) => setEnabled(event.target.checked)} />
+          <input type="checkbox" className="size-4 accent-coral-600" checked={enabled} disabled={!licensed && !auditWatch?.enabled} onChange={(event) => setEnabled(event.target.checked)} />
           Watch for Intune changes while TenuVault is running
         </label>
+        {!licensed && auditWatch?.enabled && <p className="text-xs text-gray-500" role="note">This tenant no longer includes notifications. You can still turn change watching off here; turning it back on needs the plan.</p>}
         <div className="space-y-1">
           <label className="flex items-center gap-2 text-sm text-gray-800">
             <input type="checkbox" className="size-4 accent-coral-600" checked={externalWatcher} disabled={!licensed} onChange={(event) => setExternalWatcher(event.target.checked)} />
@@ -529,7 +539,7 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
         </p>
         {auditWatch?.lastError && <p className="text-sm text-red-700" role="status">Last poll error: {auditWatch.lastError}</p>}
         <div className="flex flex-wrap gap-2">
-          <Button type="submit" size="sm" disabled={!licensed || save.isPending}>{save.isPending ? "Saving" : "Save change watching"}</Button>
+          <Button type="submit" size="sm" disabled={save.isPending || (!licensed && !turningOff)}>{save.isPending ? "Saving" : "Save change watching"}</Button>
           <Button type="button" size="sm" variant="outline" onClick={() => poll.mutate()} disabled={!licensed || poll.isPending}>{poll.isPending ? "Polling" : "Poll now"}</Button>
         </div>
       </form>

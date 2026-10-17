@@ -62,7 +62,7 @@ export function defaultAuditWatch(): AuditWatchRecord {
     includeActor: false,
     externalWatcher: false,
     watermark: null,
-    recentIds: [],
+    recent: [],
     lastPollAt: null,
     lastError: null,
   }
@@ -271,7 +271,11 @@ async function listGroupMembers(graph: Awaited<ReturnType<FeatureDeps["graph"]>>
     const response: { status: number; body: GraphItem } = await graph("GET", path)
     if (response.status !== 200) return { error: brief(graphError(response.body, response.status)) }
     const values = Array.isArray(response.body.value) ? (response.body.value as GraphItem[]) : []
+    let sawUser = false
+    let sawIdentity = false
     for (const member of values) {
+      if (member["@odata.type"] === "#microsoft.graph.user" || typeof member.userType === "string") sawUser = true
+      if (typeof member.mail === "string" || typeof member.userPrincipalName === "string" || typeof member.userType === "string") sawIdentity = true
       // Transitive members include nested groups; only user objects are mailboxes we may add.
       const kind = member["@odata.type"]
       const isUser = kind === "#microsoft.graph.user" || (kind === undefined && typeof member.userType === "string")
@@ -282,6 +286,9 @@ async function listGroupMembers(graph: Awaited<ReturnType<FeatureDeps["graph"]>>
       if (addresses.length > MAX_RECIPIENTS) return { error: `A recipient group has more than ${MAX_RECIPIENTS} mailboxes. Send to a distribution list address instead.` }
     }
     path = nextPath(response.body)
+    if (!path && sawUser && !sawIdentity && addresses.length === 0) {
+      return { error: "Group members came back without mail properties. The app registration needs User.Read.All for group recipients: rerun the setup script with -IncludeNotifications and sign in again." }
+    }
   }
   return { addresses }
 }
@@ -305,9 +312,9 @@ export async function pollAuditWatch(deps: FeatureDeps, tenantId: string, option
   const since = watch.watermark ? new Date(Date.parse(watch.watermark) - AUDIT_OVERLAP_MS) : new Date(now.getTime() - 24 * 3_600_000)
   try {
     const graph = await deps.graph(tenant)
-    const seen = new Set(watch.recentIds)
+    const seen = new Set(watch.recent.map((entry) => entry.id))
     const collected: AuditChange[] = []
-    const seenNow: string[] = []
+    const seenNow: Array<{ id: string; at: string }> = []
     let newestSeenAt: string | null = null
     let path: string | null =
       `deviceManagement/auditEvents?$select=${AUDIT_EVENT_SELECT}&$filter=${encodeURIComponent(`activityDateTime gt ${since.toISOString()}`)}&$orderby=activityDateTime&$top=200`
@@ -322,7 +329,7 @@ export async function pollAuditWatch(deps: FeatureDeps, tenantId: string, option
       for (const raw of values) {
         const change = mapAuditEvent(raw)
         if (!change) continue
-        seenNow.push(change.auditId)
+        seenNow.push({ id: change.auditId, at: change.at })
         if (!newestSeenAt || change.at > newestSeenAt) newestSeenAt = change.at
         if (!seen.has(change.auditId)) collected.push(change)
         if (collected.length >= MAX_AUDIT_EVENTS_PER_POLL) break
@@ -348,10 +355,14 @@ export async function pollAuditWatch(deps: FeatureDeps, tenantId: string, option
       // the same digest with the same eventId, which the outbox then dedupes.
       enqueued = await emit(deps, tenant, digest, { ...options, deferFlush: true })
     }
-    const recentIds = [...watch.recentIds, ...seenNow].filter((id, index, all) => all.indexOf(id) === index).slice(-MAX_RECENT_AUDIT_IDS)
+    const newWatermark = newestSeenAt && (!watch.watermark || newestSeenAt > watch.watermark) ? newestSeenAt : watch.watermark ?? now.toISOString()
+    const pruneBefore = Date.parse(newWatermark) - AUDIT_OVERLAP_MS
+    const byId = new Map<string, { id: string; at: string }>()
+    for (const entry of [...watch.recent, ...seenNow]) if (Date.parse(entry.at) > pruneBefore) byId.set(entry.id, entry)
+    const recent = [...byId.values()].sort((a, b) => (a.at < b.at ? -1 : 1)).slice(-MAX_RECENT_AUDIT_IDS)
     saveAuditWatch(deps, tenant, {
-      watermark: newestSeenAt && (!watch.watermark || newestSeenAt > watch.watermark) ? newestSeenAt : watch.watermark ?? now.toISOString(),
-      recentIds,
+      watermark: newWatermark,
+      recent,
       lastPollAt: now.toISOString(),
       lastError: null,
     }, { actor: null, reason: `Audit poll read ${seenNow.length} events, ${filtered.length} new changes` })

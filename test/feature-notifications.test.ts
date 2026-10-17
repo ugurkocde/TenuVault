@@ -212,26 +212,28 @@ describe("Intune audit watching", () => {
 
 describe("review round regressions", () => {
   it("a busy overlap window cannot stall the audit poller", async () => {
-    const many = Array.from({ length: 600 }, (_, i) => ({
+    const many = Array.from({ length: 2501 }, (_, i) => ({
       id: `bulk-${i}`,
       displayName: "Update policy",
       componentName: "Policy",
       activity: "Update",
       activityOperationType: "Update",
       activityResult: "Success",
-      activityDateTime: new Date(Date.parse("2026-10-17T11:00:00Z") + i * 1000).toISOString(),
+      activityDateTime: new Date(Date.parse("2026-10-17T11:00:00Z") + i * 600).toISOString(),
       category: "Policy",
       actor: { applicationId: "app-portal", userPrincipalName: "admin@contoso.test" },
       resources: [{ displayName: `Policy ${i}`, type: "Policy" }],
     }))
-    const w = world({ graph: () => async (_method: string, _path: string) => ({ status: 200, body: { value: many } }) })
+    const w = world({ graph: () => async (_method: string, path: string) => {
+      // Honor the $filter like Graph would: only events after the requested time come back.
+      const since = decodeURIComponent(path).match(/activityDateTime gt ([^&]+)/)?.[1]
+      const value = since ? many.filter((event) => event.activityDateTime > since) : many
+      return { status: 200, body: { value } }
+    } })
     saveAuditWatch(w.deps, TENANT_A, { enabled: true }, { actor: null, reason: "test" })
-    const first = await pollAuditWatch(w.deps, TENANT_A)
-    expect(first.changes).toBe(500)
-    const second = await pollAuditWatch(w.deps, TENANT_A)
-    expect(second.changes).toBe(100)
-    const third = await pollAuditWatch(w.deps, TENANT_A)
-    expect(third.changes).toBe(0)
+    const counts: number[] = []
+    for (let poll = 0; poll < 7; poll++) counts.push((await pollAuditWatch(w.deps, TENANT_A)).changes)
+    expect(counts).toEqual([500, 500, 500, 500, 500, 1, 0])
   })
 
   it("signed out sessions pause email deliveries without burning attempts", async () => {
@@ -251,5 +253,22 @@ describe("review round regressions", () => {
     const entry = outboxOf(deps, TENANT_A)[0]
     expect(entry).toMatchObject({ state: "pending", attempts: 0 })
     expect(graphCalls).toHaveLength(0)
+  })
+})
+
+describe("turning things off after downgrade", () => {
+  it("disables a channel and audit watching without the notifications feature", async () => {
+    const w = world()
+    const seeded = w.deps.records.create<ChannelRecord>(DOMAINS.notificationChannels, TENANT_B, {
+      kind: "webhook", title: "Old", status: "enabled", summary: "", enabled: true, url: "https://hooks.example.test/x", headerName: null, headerValue: null, signRequests: false, recipients: [], lastDelivery: null, deliveries: [],
+    }, { actor: null, reason: "seed" })
+    const disabled = await call(w.routes, PATH, { tenantId: TENANT_B, action: "revoke-disable-channel", channelId: seeded.id })
+    expect(disabled.status).toBe(200)
+    expect(disabled.body.channel.enabled).toBe(false)
+    const watchOff = await call(w.routes, PATH, { tenantId: TENANT_B, action: "revoke-audit-watch" })
+    expect(watchOff.status).toBe(200)
+    expect(watchOff.body.auditWatch.enabled).toBe(false)
+    const enable = await call(w.routes, PATH, { tenantId: TENANT_B, action: "update-channel", channelId: seeded.id, enabled: true })
+    expect(enable.status).toBe(402)
   })
 })

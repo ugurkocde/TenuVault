@@ -62,6 +62,7 @@ Delegated permissions let an app act on behalf of a signed-in user. They never g
 | `Group.Read.All` (optional, only with `-IncludeGroupRead`) | Reads whether a group referenced by a policy assignment exists, so the hygiene unresolved groups check can report missing groups. Not requested by default. Without it that check stays unknown. TenuVault reads group existence only (`GET groups/{id}?$select=id`); it does not list groups or read membership. |
 | `Mail.Send` (optional, only with `-IncludeNotifications`) | Sends notification email as the signed-in admin (`POST /me/sendMail`). Not requested by default. Only notification channels of kind email use it. |
 | `GroupMember.Read.All` (optional, only with `-IncludeNotifications`) | Resolves the members of an Entra group picked as an email notification recipient, at send time only, guests excluded. Not requested by default. Sending to a list address needs no group permission. |
+| `User.Read.All` (optional, only with `-IncludeNotifications`) | Reads mail address and user type of those group members so they can be addressed and guests excluded. Without it, Graph returns member objects with those fields empty and group recipients resolve to nobody. |
 
 :::note
 **About `Policy.Read.All`:** the setup script requests this permission, but no feature in the current version of TenuVault Desktop calls an API that requires it. TenuVault Desktop does not back up Conditional Access or other Entra policies. If your security review requires it, you can remove this permission from the app registration.
@@ -104,7 +105,7 @@ The hygiene scan shows the same remediation next to the unresolved groups unknow
 
 ## Notification email and group recipients (optional)
 
-Email notification channels send as the signed-in admin and can resolve Entra group recipients. Both are off unless you opt in with `-IncludeNotifications` on a fresh registration, or by adding the delegated `Mail.Send` and `GroupMember.Read.All` permissions to an existing registration and granting admin consent:
+Email notification channels send as the signed-in admin and can resolve Entra group recipients. Both are off unless you opt in with `-IncludeNotifications` on a fresh registration, or by adding the delegated `Mail.Send`, `GroupMember.Read.All` and `User.Read.All` permissions to an existing registration and granting admin consent:
 
 ```powershell
 ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -IncludeNotifications

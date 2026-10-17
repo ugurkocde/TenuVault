@@ -80,8 +80,12 @@ export interface AuditWatchRecord {
   /** Set when an Azure watcher owns change alerts for this tenant; desktop polling then stands down. */
   externalWatcher: boolean
   watermark: string | null
-  /** Audit event ids already ingested within the overlap window, newest last, capped. */
-  recentIds: string[]
+  /**
+   * Audit events already ingested, with their timestamps. Pruned relative to the
+   * watermark minus the overlap window, so dedupe always covers the full overlap
+   * instead of evicting by count and resurrecting old events as new.
+   */
+  recent: Array<{ id: string; at: string }>
   lastPollAt: string | null
   lastError: string | null
 }
@@ -90,7 +94,7 @@ export const MAX_CHANNELS = 10
 export const MAX_RULES = 25
 export const MAX_DELIVERY_LOG = 20
 export const MAX_OUTBOX_KEPT = 300
-export const MAX_RECENT_AUDIT_IDS = 2000
+export const MAX_RECENT_AUDIT_IDS = 10000
 export const MAX_RECIPIENTS = 200
 
 export const SEVERITIES: NotificationSeverity[] = ["info", "warning", "critical"]

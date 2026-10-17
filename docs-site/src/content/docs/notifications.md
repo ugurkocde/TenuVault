@@ -73,7 +73,7 @@ Change watching reads the Intune audit log through Microsoft Graph and digests n
 * On the desktop, watching runs while TenuVault is running and you are signed in. Default polling is every 15 minutes. After the app was closed it catches up from where it left off; after a long gap the digest says older changes may be missing.
 * Changes made through TenuVault itself are ignored by default, so your own restores do not alert you.
 * Repeated edits of the same policy by the same admin collapse into one line with a count, and a digest shows at most 20 lines plus a remainder count, so a bulk edit does not flood a channel.
-* The watcher reads a fixed list of audit fields (ids, times, category, verb, actor, resource names). Audit request bodies and changed setting values are never read or sent.
+* The watcher reads a fixed list of audit fields (ids, times, category, operation type, actor, resource names). Audit request bodies and changed setting values are never read or sent.
 * The actor name is personal data and is off by default. Turn it on only for destinations your policies allow it to reach.
 
 ## Alerts while this computer is off: the Azure watcher

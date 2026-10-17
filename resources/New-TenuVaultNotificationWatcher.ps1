@@ -19,9 +19,10 @@
         webhook URL, webhook secret and Teams URL stored encrypted when provided
       * links the runbook to a recurring schedule (hourly by default)
       * with -GrantGraphRoles, also assigns the Microsoft Graph application roles
-        the identity needs (DeviceManagementApps.Read.All, plus Mail.Send and
-        GroupMember.Read.All when the matching switches are set) and prints a
-        consent receipt
+        the identity needs (DeviceManagementApps.Read.All, plus Mail.Send with
+        -IncludeMailSend) and prints a consent receipt. No group read role is
+        granted: the runbook never resolves groups, mail recipients are plain
+        addresses
 
     Without -GrantGraphRoles a Global Administrator must assign those Graph roles to
     the managed identity before the watcher can read audit events. The script prints
@@ -99,10 +100,17 @@
     is restricted to -MailSender.
 
 .PARAMETER AlertEmail
-    Optional email address for setup failure alerting. When set, an Azure Monitor
-    action group with this receiver and a metric alert for failed Automation jobs
-    are created when the Az.Monitor cmdlets are available. When they are not, the
-    script warns and prints the manual step instead of failing.
+    Email address for failure alerting. When set, an Azure Monitor action group
+    with this receiver and a metric alert for failed Automation jobs are created
+    when the Az.Monitor cmdlets are available. When they are not, the script
+    warns and prints the manual step instead of failing. One of -AlertEmail or
+    -NoFailureAlert is required: without either the script stops before writing
+    anything, because a watcher that fails silently is worse than no watcher.
+
+.PARAMETER NoFailureAlert
+    Explicitly accept having no Azure Monitor failure alert for the watcher.
+    Failed scheduled runs will then only be visible in the Automation job list
+    and in a stale heartbeat.json inside the state container.
 
 .PARAMETER MissedBackupHours
     Emit a backup.missed event when the newest backup folder is older than this
@@ -122,19 +130,15 @@
     -MailSender. Requires -MailSender and -MailRecipients: the script stops before
     granting anything when either is missing.
 
-.PARAMETER IncludeGroupRead
-    With -GrantGraphRoles, also assign GroupMember.Read.All so the watcher can
-    resolve group scoped mail recipients later.
-
 .PARAMETER Remove
     Remove the schedule link, schedule, runbook and Automation variables, then list
     the Graph application roles to revoke manually.
 
 .EXAMPLE
-    ./New-TenuVaultNotificationWatcher.ps1 -TenantId 11111111-1111-1111-1111-111111111111 -StorageAccountName tvbkp1234567890ab -Location westeurope -TeamsWebhookUrl "https://..."
+    ./New-TenuVaultNotificationWatcher.ps1 -TenantId 11111111-1111-1111-1111-111111111111 -StorageAccountName tvbkp1234567890ab -Location westeurope -TeamsWebhookUrl "https://..." -AlertEmail ops@contoso.com
 
 .EXAMPLE
-    ./New-TenuVaultNotificationWatcher.ps1 -TenantId 11111111-1111-1111-1111-111111111111 -StorageAccountName tvbkp1234567890ab -GrantGraphRoles -IncludeMailSend -MailSender tenuvault@contoso.com -MailRecipients ops@contoso.com
+    ./New-TenuVaultNotificationWatcher.ps1 -TenantId 11111111-1111-1111-1111-111111111111 -StorageAccountName tvbkp1234567890ab -GrantGraphRoles -IncludeMailSend -MailSender tenuvault@contoso.com -MailRecipients ops@contoso.com -AlertEmail ops@contoso.com
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -153,11 +157,11 @@ param(
     [string[]]$MailRecipients,
     [string]$MailProbeMailbox,
     [string]$AlertEmail,
+    [switch]$NoFailureAlert,
     [ValidateRange(1, 8760)][int]$MissedBackupHours = 48,
     [switch]$IncludeActor,
     [switch]$GrantGraphRoles,
     [switch]$IncludeMailSend,
-    [switch]$IncludeGroupRead,
     [switch]$Remove
 )
 
@@ -173,12 +177,11 @@ $automationVariableNames = @(
     "TenuVaultTenantId", "TenuVaultTenantName", "TenuVaultStorageAccount",
     "TenuVaultWebhookUrl", "TenuVaultWebhookSecret", "TenuVaultTeamsWebhookUrl",
     "TenuVaultMailSender", "TenuVaultMailRecipients", "TenuVaultMailProbeMailbox",
-    "TenuVaultMissedBackupHours", "TenuVaultIncludeActor"
+    "TenuVaultMissedBackupHours", "TenuVaultIncludeActor", "TenuVaultConfigVersion"
 )
 
 $graphRoleNames = @("DeviceManagementApps.Read.All")
 if ($IncludeMailSend) { $graphRoleNames += "Mail.Send" }
-if ($IncludeGroupRead) { $graphRoleNames += "GroupMember.Read.All" }
 
 # Validate every input before the first Azure write, so a typo cannot leave a half
 # configured watcher behind.
@@ -210,14 +213,17 @@ if ($AlertEmail -and $AlertEmail -notmatch "^[^@\s]+@[^@\s]+$") {
 if ($IncludeMailSend -and (-not $MailSender -or -not $MailRecipients)) {
     throw "-IncludeMailSend requires -MailSender and -MailRecipients. Refusing to grant Mail.Send without a named sender mailbox and recipients."
 }
+if ($AlertEmail -and $NoFailureAlert) {
+    throw "-AlertEmail and -NoFailureAlert contradict each other. Pass only one of them."
+}
+if (-not $Remove -and -not $AlertEmail -and -not $NoFailureAlert) {
+    throw "Decide how failed watcher runs will be noticed before anything is created: pass -AlertEmail <address> to create an Azure Monitor failure alert, or -NoFailureAlert to explicitly accept that failed runs are only visible in the Automation job list and a stale heartbeat. Nothing was written."
+}
 if ((-not $Remove) -and -not (Test-Path $runbookPath)) {
     throw "Runbook file not found: $runbookPath. Keep this script next to the runbooks folder from the TenuVault release."
 }
 if ($IncludeMailSend -and -not $GrantGraphRoles) {
     Write-Warning "-IncludeMailSend only applies with -GrantGraphRoles. Mail.Send must be assigned to the managed identity before mail delivery works."
-}
-if ($IncludeGroupRead -and -not $GrantGraphRoles) {
-    Write-Warning "-IncludeGroupRead only applies with -GrantGraphRoles. GroupMember.Read.All must be assigned to the managed identity separately."
 }
 
 foreach ($module in "Az.Accounts", "Az.Resources", "Az.Automation", "Az.Storage") {
@@ -231,6 +237,16 @@ if (-not (Get-AzContext)) { Connect-AzAccount | Out-Null }
 if ($SubscriptionId) { Set-AzContext -Subscription $SubscriptionId | Out-Null }
 $context = Get-AzContext
 Write-Host "Subscription: $($context.Subscription.Name) ($($context.Subscription.Id))"
+
+# The watcher identity, state and consent would land in the wrong directory if the
+# signed in context is another tenant than the one being configured. Stop before
+# any resource write in that case.
+if ($TenantId -match '^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$') {
+    $contextTenantId = [string]$context.Tenant.Id
+    if ($contextTenantId -and $contextTenantId.ToLowerInvariant() -ne $TenantId.ToLowerInvariant()) {
+        throw "The current Az context is signed in to tenant $contextTenantId, but -TenantId is $TenantId. Run Connect-AzAccount -Tenant $TenantId (and select the right subscription), then run this script again. Nothing was written."
+    }
+}
 
 function Set-TenuVaultAutomationVariable {
     [CmdletBinding(SupportsShouldProcess)]
@@ -323,7 +339,7 @@ if ($Remove) {
     Write-Host "Revoke these Microsoft Graph application roles from the managed identity manually"
     Write-Host "(Entra ID > Enterprise applications > the Automation account identity > Permissions):"
     foreach ($role in $graphRoleNames) { Write-Host "  * $role" }
-    Write-Host "Also check for Mail.Send and GroupMember.Read.All when an earlier run granted them."
+    Write-Host "Also check for Mail.Send when an earlier run granted it."
     if ($principalId) { Write-Host "Managed identity object (principal) id: $principalId" }
     Write-Host "The container scoped storage role assignments can be removed in the storage account"
     Write-Host "under Access control (IAM) when the watcher identity is no longer used."
@@ -458,6 +474,7 @@ if ($MailRecipients) { Set-TenuVaultAutomationVariable -Name "TenuVaultMailRecip
 if ($MailProbeMailbox) { Set-TenuVaultAutomationVariable -Name "TenuVaultMailProbeMailbox" -Value $MailProbeMailbox }
 Set-TenuVaultAutomationVariable -Name "TenuVaultMissedBackupHours" -Value ([string]$MissedBackupHours)
 Set-TenuVaultAutomationVariable -Name "TenuVaultIncludeActor" -Value $(if ($IncludeActor) { "true" } else { "false" })
+Set-TenuVaultAutomationVariable -Name "TenuVaultConfigVersion" -Value "1"
 
 # ---------------------------------------------------------------------------
 # Schedule and link. Schedule intervals cannot be edited in place, so a schedule
@@ -513,20 +530,20 @@ if ($PSCmdlet.ShouldProcess($runbookName, "Link runbook to schedule '$scheduleNa
 # ---------------------------------------------------------------------------
 
 $alertStatus = $null
+if ($NoFailureAlert) { $alertStatus = "disabled by -NoFailureAlert (no Azure Monitor alert will fire)" }
 if ($AlertEmail) {
     $actionGroupName = "ag-tenuvault-watcher"
     $metricAlertName = "TenuVault watcher failed jobs"
     $manualAlertStep = "Manual step: in the Azure portal open Monitor > Alerts > Create > Metric rule, scope it to Automation account '$AutomationAccountName', choose a failed jobs signal, and add an action group that emails $AlertEmail."
-    foreach ($module in "Az.Monitor") {
-        if (Get-Module -ListAvailable -Name $module) { Import-Module $module -ErrorAction SilentlyContinue }
-    }
-    $hasActionGroupCmdlets = [bool](Get-Command New-AzActionGroup -ErrorAction SilentlyContinue) -and
+    if (Get-Module -ListAvailable -Name "Az.Monitor") { Import-Module "Az.Monitor" -ErrorAction SilentlyContinue }
+    $hasActionGroupCmdlets = [bool](Get-Command Set-AzActionGroup -ErrorAction SilentlyContinue) -and
         [bool](Get-Command New-AzActionGroupReceiver -ErrorAction SilentlyContinue)
-    $hasMetricAlertCmdlets = [bool](Get-Command New-AzMetricAlertRuleV2 -ErrorAction SilentlyContinue) -and
+    $hasMetricAlertCmdlets = [bool](Get-Command Add-AzMetricAlertRuleV2 -ErrorAction SilentlyContinue) -and
+        [bool](Get-Command New-AzMetricAlertRuleV2DimensionSelection -ErrorAction SilentlyContinue) -and
         ([bool](Get-Command New-AzMetricAlertRuleV2Criteria -ErrorAction SilentlyContinue) -or
          [bool](Get-Command New-AzMetricAlertRuleV2StaticThresholdCriteria -ErrorAction SilentlyContinue))
     if (-not ($hasActionGroupCmdlets -and $hasMetricAlertCmdlets)) {
-        Write-Warning "Az.Monitor alert cmdlets are not available in this session, so no action group or metric alert was created."
+        Write-Warning "Az.Monitor alert cmdlets (Set-AzActionGroup, Add-AzMetricAlertRuleV2) are not available in this session, so no action group or metric alert was created."
         Write-Host $manualAlertStep -ForegroundColor Yellow
         $alertStatus = "not created (Az.Monitor cmdlets unavailable, manual step printed above)"
     } else {
@@ -534,23 +551,26 @@ if ($AlertEmail) {
             $aaResource = Get-AzResource -ResourceGroupName $ResourceGroupName -Name $AutomationAccountName `
                 -ResourceType "Microsoft.Automation/automationAccounts" -ErrorAction Stop
             $actionGroup = $null
-            try { $actionGroup = Get-AzActionGroup -ResourceGroupName $ResourceGroupName -Name $actionGroupName -ErrorAction Stop } catch { $actionGroup = $null }
-            if ($actionGroup) {
-                Write-Host "Action group '$actionGroupName' already exists."
-            } elseif ($PSCmdlet.ShouldProcess($actionGroupName, "Create action group for $AlertEmail")) {
+            if ($PSCmdlet.ShouldProcess($actionGroupName, "Create or update action group for $AlertEmail")) {
                 $receiver = New-AzActionGroupReceiver -Name "TenuVaultAdmins" -EmailReceiver -EmailAddress $AlertEmail
-                $actionGroup = New-AzActionGroup -ResourceGroupName $ResourceGroupName -Name $actionGroupName `
+                $actionGroup = Set-AzActionGroup -ResourceGroupName $ResourceGroupName -Name $actionGroupName `
                     -ShortName "tenuvault" -Receiver $receiver
-                Write-Host "Action group '$actionGroupName' created for $AlertEmail."
+                Write-Host "Action group '$actionGroupName' in place for $AlertEmail."
             }
             $metricAlert = $null
-            try { $metricAlert = Get-AzMetricAlertRuleV2 -ResourceGroupName $ResourceGroupName -Name $metricAlertName -ErrorAction Stop } catch { $metricAlert = $null }
+            if (Get-Command Get-AzMetricAlertRuleV2 -ErrorAction SilentlyContinue) {
+                try { $metricAlert = Get-AzMetricAlertRuleV2 -ResourceGroupName $ResourceGroupName -Name $metricAlertName -ErrorAction Stop } catch { $metricAlert = $null }
+            }
             if ($metricAlert) {
                 Write-Host "Metric alert '$metricAlertName' already exists."
             } elseif ($actionGroup -and $PSCmdlet.ShouldProcess($metricAlertName, "Create metric alert for failed Automation jobs")) {
+                # TotalJob counts every job, so the Status dimension must be pinned
+                # to Failed or successful scheduled runs would raise the alert too.
+                $dimensionSelection = New-AzMetricAlertRuleV2DimensionSelection -DimensionName "Status" -ValuesToInclude "Failed"
                 $criteriaParams = @{
                     MetricNamespace = "Microsoft.Automation/automationAccounts"
                     MetricName = "TotalJob"
+                    DimensionSelection = $dimensionSelection
                     Operator = "GreaterThan"
                     Threshold = 0
                     TimeAggregation = "Total"
@@ -560,12 +580,23 @@ if ($AlertEmail) {
                 } else {
                     New-AzMetricAlertRuleV2StaticThresholdCriteria @criteriaParams
                 }
-                $metricAlert = New-AzMetricAlertRuleV2 -ResourceGroupName $ResourceGroupName -Name $metricAlertName `
-                    -TargetResourceId $aaResource.ResourceId -WindowSize ([TimeSpan]::FromHours(1)) `
-                    -Frequency ([TimeSpan]::FromMinutes(15)) -Severity 3 `
-                    -ActionGroupId $actionGroup.Id -Criteria $criteria `
-                    -Description "TenuVault notification watcher Automation jobs are failing."
-                Write-Host "Metric alert '$metricAlertName' created."
+                $addAlertParams = @{
+                    Name = $metricAlertName
+                    ResourceGroupName = $ResourceGroupName
+                    TargetResourceId = $aaResource.ResourceId
+                    WindowSize = ([TimeSpan]::FromHours(1))
+                    Frequency = ([TimeSpan]::FromMinutes(15))
+                    Severity = 3
+                    ActionGroupId = $actionGroup.Id
+                    Description = "TenuVault notification watcher Automation jobs are failing."
+                }
+                if ((Get-Command Add-AzMetricAlertRuleV2).Parameters.ContainsKey("Criteria")) {
+                    $addAlertParams.Criteria = $criteria
+                } else {
+                    $addAlertParams.Condition = $criteria
+                }
+                $metricAlert = Add-AzMetricAlertRuleV2 @addAlertParams
+                Write-Host "Metric alert '$metricAlertName' created (TotalJob with Status = Failed)."
             }
             $alertStatus = "action group '$actionGroupName' and metric alert '$metricAlertName' in place for $AlertEmail"
         } catch {

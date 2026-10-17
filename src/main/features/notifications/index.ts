@@ -140,6 +140,13 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       return { channel: publicChannel(updated!) }
     },
 
+    // Turning a channel off stays free on every plan, like revoking it.
+    "revoke-disable-channel": ({ tenantId, body, deps, actor }) => {
+      const channel = requireChannel(deps, tenantId, body)
+      const updated = deps.records.update<ChannelRecord>(DOMAINS.notificationChannels, tenantId, channel.id, (value) => ({ ...value, enabled: false, status: "disabled" as const }), { actor, reason: "Channel turned off" })
+      return { channel: publicChannel(updated!) }
+    },
+
     "revoke-channel": ({ tenantId, body, deps }) => {
       const channel = requireChannel(deps, tenantId, body)
       deps.records.remove(DOMAINS.notificationChannels, tenantId, channel.id)
@@ -225,6 +232,12 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       const current = auditWatchOf(deps, tenantId)
       if (enabled === true && !current?.watermark) change.watermark = deps.now().toISOString()
       const saved = saveAuditWatch(deps, tenantId, change, { actor, reason: enabled === false ? "Intune change watching turned off" : enabled === true ? "Intune change watching turned on" : "Intune change watching changed" })
+      return { auditWatch: publicAuditWatch(saved) }
+    },
+
+    // Turning change watching off stays free on every plan.
+    "revoke-audit-watch": ({ tenantId, deps, actor }) => {
+      const saved = saveAuditWatch(deps, tenantId, { enabled: false }, { actor, reason: "Intune change watching turned off" })
       return { auditWatch: publicAuditWatch(saved) }
     },
 
@@ -332,7 +345,7 @@ export function publicRule(rule: Stored<RuleRecord>) {
 
 export function publicAuditWatch(watch: Stored<AuditWatchRecord> | null) {
   const value = watch ?? { ...defaultAuditWatch(), id: null, createdAt: null, updatedAt: null, history: [] }
-  const { history, recentIds: _recentIds, ...rest } = value as Stored<AuditWatchRecord>
+  const { history, recent: _recent, ...rest } = value as Stored<AuditWatchRecord>
   return { ...rest, history: (history ?? []).map(({ at, actor, reason }) => ({ at, actor, reason })) }
 }
 
