@@ -1,6 +1,6 @@
 ---
-title: "Disaster recovery"
-description: Prepare for and recover from lost Intune configuration, a lost admin device, or a rebuild in another tenant.
+title: "Disaster recovery: recover Intune configuration"
+description: "Intune disaster recovery with TenuVault: prepare for and recover from deleted Intune policies, a lost admin device, or a rebuild in another tenant."
 faq:
   - question: "What should I do before I need to recover Intune configuration?"
     answer: "Schedule backups, save the recovery key in your password manager, keep backups off the admin device (in an Azure storage account on Pro and MSP, or on a network share), keep an independent copy of important backups, check recovery readiness and practice a restore with Create copies."
@@ -14,7 +14,7 @@ faq:
     answer: "Yes, with the MSP plan. You can copy items from a backup of one connected tenant into another connected tenant. Copies keep their original names, get the Default scope tag and are never assigned, so you recreate groups, exclusions and filters and then assign the copies."
 ---
 
-A backup is only useful if you can restore from it when things go wrong. This page shows how to prepare, and which TenuVault workflow to use for each recovery scenario.
+Intune disaster recovery means getting Microsoft Intune configuration back after policies are deleted or changed, an admin device is lost, or a tenant has to be rebuilt. A backup is only useful if you can restore from it when things go wrong. This page shows how to prepare, and which TenuVault workflow to use for each recovery scenario. For the planning checklist, see the [Intune disaster recovery plan](https://www.tenuvault.com/intune-disaster-recovery) on the product site.
 
 ## Prepare before you need it
 
@@ -120,7 +120,9 @@ The full list is in [What cannot be restored](/restore/limitations/).
 
 ## Related pages
 
-* [Restore items](/restore/)
+* [Intune disaster recovery plan](https://www.tenuvault.com/intune-disaster-recovery): the preparation checklist, on the product site
+* [Intune restore drill](https://www.tenuvault.com/guides/intune-restore-drill): practice a restore before you need one
+* [Restore Intune policies](/restore/)
 * [Restore modes and assignments](/restore/modes/)
 * [Encryption and recovery key](/security/encryption/)
 * [Troubleshooting](/troubleshooting/)

@@ -131,7 +131,8 @@ The journal keeps up to 1,000 records. When it is full, TenuVault removes comple
 
 ## Related pages
 
-* [Restore items](/restore/)
+* [Intune restore](https://www.tenuvault.com/intune-restore): what restores automatically and what does not, on the product site
+* [Restore Intune policies](/restore/)
 * [Disaster recovery](/restore/disaster-recovery/)
 * [What gets backed up](/backups/coverage/)
 * [Troubleshooting](/troubleshooting/)

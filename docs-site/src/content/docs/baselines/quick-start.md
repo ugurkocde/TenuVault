@@ -132,7 +132,7 @@ Every deployment and drift fix is recorded on this device with the IDs of the ob
 
 If the run list cannot load, it shows the error with a **Retry** button. Retry reloads the history. A load failure does not mean there are no runs to undo.
 
-Undo deletes the objects the run created and puts the previous versions of updated policies back. It does not touch anything else. To go back further, restore from the backup taken before the run. See [Restore items](/restore/).
+Undo deletes the objects the run created and puts the previous versions of updated policies back. It does not touch anything else. To go back further, restore from the backup taken before the run. See [Restore Intune policies](/restore/).
 
 Failed writes follow the same safety rules as restores. A write with an unknown outcome is not repeated automatically; resolve it in **Settings** > **Storage and recovery** > **Restore write history**. See [Restore write history](/restore/limitations/#restore-write-history).
 

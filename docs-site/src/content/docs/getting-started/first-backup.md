@@ -58,4 +58,8 @@ TenuVault is set up. Next:
 
 * [Schedule backups](/backups/schedules/). Community tenants can back up weekly; Pro and MSP can also back up daily.
 * Keep TenuVault running in the menu bar on macOS or the tray on Windows so schedules run. See [Settings reference](/settings/#background-runner).
-* Learn how to [restore items](/restore/) and [detect drift](/drift/).
+* Learn how to [restore Intune policies](/restore/) and [detect drift](/drift/).
+
+## Related pages
+
+* [Set up and schedule Microsoft Intune backups](https://www.tenuvault.com/guides/intune-backup-setup): the setup guide, on the product site

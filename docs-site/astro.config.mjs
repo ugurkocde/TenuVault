@@ -150,7 +150,7 @@ export default defineConfig({
 							],
 						},
 						{
-							label: 'Restore items',
+							label: 'Restore policies',
 							collapsed: true,
 							items: [
 								{ label: 'Overview', slug: 'restore' },

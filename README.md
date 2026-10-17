@@ -1,15 +1,15 @@
 <div align="center">
 
-<img src="build/icon.png" alt="" width="88" height="88">
+<img src="build/icon.png" alt="TenuVault Desktop app icon" width="88" height="88">
 
-# TenuVault
+# TenuVault: Intune Backup, Restore and Disaster Recovery
 
 **Intune backup, restore, drift detection and OpenIntuneBaseline, on your machine.**
 
 A desktop app for Windows and macOS, built for organisations whose admins are not allowed to sign in
 to third-party web apps, or whose Conditional Access policies block them.
 
-[Website](https://tenuvault.com) · [Documentation](https://docs.tenuvault.com/getting-started/) · [Pricing](https://tenuvault.com/pricing) · [Trust Center](https://tenuvault.com/trust)
+[Website](https://www.tenuvault.com) · [Intune backup](https://www.tenuvault.com/intune-backup) · [Intune restore](https://www.tenuvault.com/intune-restore) · [Intune disaster recovery](https://www.tenuvault.com/intune-disaster-recovery) · [Documentation](https://docs.tenuvault.com/getting-started/) · [Pricing](https://www.tenuvault.com/pricing) · [Trust Center](https://www.tenuvault.com/trust)
 
 </div>
 
@@ -36,12 +36,12 @@ See the [installation guide](https://docs.tenuvault.com/getting-started/install/
 
 ## What it does
 
-- **Backup.** Settings Catalog, device configurations, compliance, scripts, Administrative Templates
+- **[Intune backup](https://www.tenuvault.com/intune-backup).** Settings Catalog, device configurations, compliance, scripts, Administrative Templates
   and more, with their assignments. On demand or on a daily or weekly schedule, encrypted on this
-  device or in your own Azure storage account.
-- **Restore.** Bring back single items or whole sets from any backup. Copies are created as separate
-  policies; cross-tenant copies arrive unassigned and need reviewed target dependencies.
-- **Drift detection.** See what changed between backups, down to the setting, and export the result
+  device or in your own Azure storage account. See [what gets backed up](https://docs.tenuvault.com/backups/coverage/).
+- **[Intune restore](https://www.tenuvault.com/intune-restore).** Bring back single policies or whole sets of policies from any backup, including deleted policies. Copies are created as separate
+  policies; cross-tenant copies arrive unassigned and need reviewed target dependencies. For tenant-wide loss, see the [Intune disaster recovery plan](https://www.tenuvault.com/intune-disaster-recovery) and the [disaster recovery runbook](https://docs.tenuvault.com/restore/disaster-recovery/).
+- **[Drift detection](https://www.tenuvault.com/intune-drift-detection).** See what changed between backups, down to the setting, and export the result
   as JSON or CSV.
 - **OpenIntuneBaseline.** Deploy, compare and validate OpenIntuneBaseline policies from the latest
   upstream version, with a backup first and undo per run. New policies are created unassigned.
