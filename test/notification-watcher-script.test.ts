@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 import { intuneChangeDigest, mapAuditEvent, type AuditEventRaw } from "../src/shared/notifications/audit"
 import { canonicalJson } from "../src/shared/notifications/envelope"
@@ -107,13 +108,13 @@ describe("Azure notification watcher scripts", () => {
   it.runIf(Boolean(pwsh))("PowerShell renders the identical canonical digest as TypeScript", () => {
     const changes = fixture.events.map((event) => mapAuditEvent(event as AuditEventRaw)!)
     const expected = canonicalJson(intuneChangeDigest({ tenantId: fixture.tenantId, tenantName: fixture.tenantName, changes, includeActor: fixture.includeActor, source: "azure-watcher" }))
-    const script = new URL("./fixtures/notifications/render-digest.ps1", import.meta.url).pathname
+    const script = fileURLToPath(new URL("./fixtures/notifications/render-digest.ps1", import.meta.url))
     const output = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim()
     expect(output).toBe(expected)
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("PowerShell renders designed HTML mail with escaped tenant text", () => {
-    const script = new URL("./fixtures/notifications/render-mail.ps1", import.meta.url).pathname
+    const script = fileURLToPath(new URL("./fixtures/notifications/render-mail.ps1", import.meta.url))
     const html = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" })
     expect(html).toContain("TENUVAULT")
     expect(html).toContain(">Deleted</span>")
@@ -130,8 +131,8 @@ describe("Azure notification watcher scripts", () => {
     const changes = liveFixture.events.map((event) => mapAuditEvent(event as AuditEventRaw)).filter((change) => change !== null)
     expect(changes.map((change) => change.changeType)).toEqual(["assigned", "unassigned", "created"])
     const expected = canonicalJson(intuneChangeDigest({ tenantId: liveFixture.tenantId, tenantName: liveFixture.tenantName, changes, includeActor: liveFixture.includeActor, source: "azure-watcher" }))
-    const script = new URL("./fixtures/notifications/render-digest.ps1", import.meta.url).pathname
-    const livePath = new URL("./fixtures/notifications/audit-live.json", import.meta.url).pathname
+    const script = fileURLToPath(new URL("./fixtures/notifications/render-digest.ps1", import.meta.url))
+    const livePath = fileURLToPath(new URL("./fixtures/notifications/audit-live.json", import.meta.url))
     const output = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-FixturePath", livePath], { encoding: "utf8" }).trim()
     expect(output).toBe(expected)
   }, 60_000)
