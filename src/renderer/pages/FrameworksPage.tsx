@@ -10,11 +10,11 @@ import { NCSC_COMMIT, NCSC_REPOSITORY, type Framework } from "../../shared/frame
 import { CIS_BENCHMARKS_ID, effectiveFrameworks, internalKitImportEnabled, searchEffectiveFrameworks } from "../../shared/frameworks/cis-internal"
 import { convertKit, readKitZip, suggestedKitBenchmark, type KitConversion, type KitFile, type KitLevel } from "../../shared/frameworks/cis-kit"
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
-import { distinctExclusions, excludedFindingKeys, exceptionsByHeadline, exclusionsText, formatRate, headlineLabel, levelCheckSummary, levelHeadline, listedExceptions, readinessFor, unassignedText } from "../../shared/frameworks/cis-readiness"
+import { coverageStatement, distinctExclusions, excludedFindingKeys, exceptionsByHeadline, exclusionsText, formatRate, headlineBasisNote, headlineLabel, levelCheckSummary, levelHeadline, listedExceptions, newestAssessmentOf, readinessFor, unassignedText } from "../../shared/frameworks/cis-readiness"
 import { recommendationLabel, recommendationsForFinding, recommendationTotals, type PackRecommendation, type RecommendationResult } from "../../shared/frameworks/cis-recommendations"
 import { filterManualItems, recommendationResultView, type RecommendationResultFilter } from "../../shared/frameworks/recommendation-filter"
 import { exceptionKey, isActive, localDate } from "../../shared/frameworks/cis-exceptions"
-import { benchmarkTitle, cisExportFileName, deviatingFindingKeys, isSelectableFinding, packBenchmarkName, referenceDisplayName, groupFindingsByPolicy, groupObservationsByValue, policyDisplayName, settingDisplayName, statusMixText, trendSummaryText } from "../../shared/frameworks/cis-display"
+import { benchmarkTitle, cisExportFileName, deviatingFindingKeys, isSelectableFinding, knownSettingName, packBenchmarkName, referenceDisplayName, groupFindingsByPolicy, groupObservationsByValue, policyDisplayName, settingDisplayName, statusMixText, trendSummaryText } from "../../shared/frameworks/cis-display"
 import { cisFlowSteps, cisStage, isKitPackReference, kitLevelForPolicy, packSettingCount } from "../../shared/frameworks/cis-flow"
 import { cisDriftSignals, cisReadinessTrend, exclusionUse, sparklineSegments, trendChangeText, trendExclusionsText, trendGroups, trendRate, type CisTrendPoint } from "../../shared/frameworks/cis-trend"
 import { cisPortfolioRows, portfolioBenchmarks, portfolioMembers, portfolioRate, type CisPortfolioEntry } from "../../shared/frameworks/cis-portfolio"
@@ -23,7 +23,7 @@ import { cisReadinessCsv, cisReadinessJson } from "../features/shared/governance
 import { Notice, saveFile, useSaveNotice } from "../components/oib/notices"
 import { cachedCisSettingNames, loadCisSettingNames, settingDefinitionIdsIn } from "../lib/cis-setting-names"
 import type { SettingNames } from "../../shared/intune/drift"
-import { accumulateCisFindings, cisRunDisplayPhase, cisRunHeading, cisRunReceivedLabel, cisRunSteps, cisRunTallies, currentSavedAssessment, emptyCisRunAccumulation, pollCisStatus, resolveCisRunCompletion, type CisRunPack } from "../../shared/frameworks/cis-run"
+import { accumulateCisFindings, cisOpenRequest, cisRunDisplayPhase, cisRunHeading, cisRunReceivedLabel, cisRunSteps, cisRunTallies, currentSavedAssessment, emptyCisRunAccumulation, pollCisStatus, resolveCisRunCompletion, type CisRunPack } from "../../shared/frameworks/cis-run"
 import { refreshInternalCisBenchmarks, useInternalCisBenchmarks, useInternalCisBenchmarksAnswer } from "../lib/internal-cis"
 import { bridge } from "../lib/bridge"
 import { cachedCisCatalog, rememberCisCatalog } from "../lib/cis-catalog-cache"
@@ -269,7 +269,7 @@ function CisPortfolio({ plan, selectedTenantId }: { plan: Plan | null; selectedT
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div>
         <h2 className="text-lg font-medium text-gray-900">Portfolio</h2>
-        <p className="mt-1 text-sm text-gray-500">Tenants compared on one benchmark and version, ranked by the raw headline rate of each tenant's newest saved assessment of it, as the CIS page shows it. Tenants with no saved assessment of it are shown as not assessed.</p>
+        <p className="mt-1 text-sm text-gray-500">Tenants compared on one benchmark and version, ranked by the raw headline rate of each tenant's newest saved assessment of each Level, as the CIS page shows it. Tenants with no saved assessment of it are shown as not assessed.</p>
       </div>
       <GatedButton feature="portfolio" plan={portfolioPlan} variant="outline" size="sm" disabled={busy || !included.length} onClick={() => void load()}>{busy ? "Loading" : rows ? "Refresh portfolio" : "Load portfolio"}</GatedButton>
     </div>
@@ -284,7 +284,7 @@ function CisPortfolio({ plan, selectedTenantId }: { plan: Plan | null; selectedT
       <tbody className="divide-y divide-gray-100">{rows.map(row => {
         const level1 = row.levels.find(level => level.level === 1)
         const level2 = row.levels.find(level => level.level === 2)
-        const rate = (level: typeof level1) => level ? <>{formatRate(portfolioRate(level))}<span className="block text-xs font-normal text-gray-500">{level.headline.label}</span>{exclusionsText(level.headline) && <span className="block text-xs font-normal text-gray-700">{exclusionsText(level.headline)}</span>}</> : "Not available"
+        const rate = (level: typeof level1) => level ? <>{formatRate(portfolioRate(level))}<span className="block text-xs font-normal text-gray-500">{level.headline.label}</span>{exclusionsText(level.headline) && <span className="block text-xs font-normal text-gray-700">{exclusionsText(level.headline)}</span>}{formatLocaleDateTime(level.assessedAt) !== formatLocaleDateTime(row.assessedAt!) && <span className="block text-xs font-normal text-gray-500">Assessed {formatLocaleDateTime(level.assessedAt)}</span>}</> : "Not available"
         const excepted = distinctExclusions(row.levels.map(level => level.headline))
         return <tr key={row.tenantId}>
           <td className="py-2 pr-4 text-gray-800">{row.tenantName ?? row.tenantId}</td>
@@ -368,6 +368,10 @@ function CisExportMenu({ plan, disabled, readinessDisabled, onPdf, onFindingsCsv
 
 function FrameworkDetail({ framework, standalone = false, kitImport = false }: { framework: Framework; standalone?: boolean; kitImport?: boolean }) {
   const { selectedTenant } = useSelectedTenant()
+  // A link can name the benchmark, version and Level to open on, such as a Governance CIS card.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [openRequest] = useState(() => framework.id === CIS_BENCHMARKS_ID ? cisOpenRequest(searchParams) : null)
+  const [openNote, setOpenNote] = useState("")
   const [policies, setPolicies] = useState<BaselinePolicy[]>([])
   const [reference, setReference] = useState("")
   const [assessment, setAssessment] = useState<Assessment | null>(null)
@@ -501,7 +505,16 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     if (!isCis) return
     setActiveLookupFailed(lookupFailed)
     const latest = currentSavedAssessment(saved)
-    if (latest) showSavedResults(latest.assessment, { policies: saved.policies, reference: saved.reference })
+    // A requested benchmark opens on its newest saved assessment of that version and Level, read-only;
+    // without one the page opens as it otherwise would and says so. A later check for a running
+    // assessment keeps the requested result instead of switching to the newest one.
+    const requested = openRequest ? newestAssessmentOf(saved.history, openRequest, saved.recommendationList) : null
+    if (first && openRequest) {
+      if (!requested) setOpenNote(`No saved assessment of ${benchmarkTitle(openRequest.benchmark)}${openRequest.version ? ` ${openRequest.version}` : ""}${openRequest.level ? ` Level ${openRequest.level}` : ""} was found, so ${latest ? "the newest saved assessment is shown" : "the page opens on setup"}.`)
+      setSearchParams(old => { const next = new URLSearchParams(old); for (const key of ["benchmark", "version", "level"]) next.delete(key); return next }, { replace: true })
+    }
+    if (requested) showSavedResults(requested.assessment, { policies: requested.policies, reference: requested.assessment.reference })
+    else if (latest) showSavedResults(latest.assessment, { policies: saved.policies, reference: saved.reference })
     const job = opened.activeJob
     if (job) void trackCisJob({ policies: job.policies, reference: job.reference }, async () => job.jobId)
   }
@@ -530,7 +543,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   }, [policies, reference, !!workspace, historical])
   const chosen = assessment?.findings.filter(f => selected.has(f.key)) ?? []
   const payloads = [...new Set(chosen.map(f => f.policyIndex))].map(index => remediationPayload(policies[index]!, chosen.filter(f => f.policyIndex === index).map(f => policies[index]!.settings[f.settingIndex]!), reference))
-  function reset() { setHistorical(false); setAssessment(null); setSelected(new Set()); setPreview(false); setConfirmed(false); setCreation(null); setPage(0) }
+  function reset() { setOpenNote(""); setHistorical(false); setAssessment(null); setSelected(new Set()); setPreview(false); setConfirmed(false); setCreation(null); setPage(0) }
   /** Runs one page action; its status and any error show in `area`, next to the control that started it. */
   async function perform(label: string, action: () => Promise<void>, area: ActionArea = "compare") {
     setBusy(label); setBusyAt(area); setError(""); setErrorAt(area)
@@ -576,7 +589,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     const current = () => cisRunGeneration.current === generation
     const tenantId = credentials.tenantId
     // Starting or following a run answers the question a failed running-assessment check left open.
-    setError(""); setErrorAt("compare"); setHistoryNotice(""); setActiveLookupFailed(false)
+    setError(""); setErrorAt("compare"); setHistoryNotice(""); setActiveLookupFailed(false); setOpenNote("")
     setBusy("Reading tenant policies and comparing settings…"); setBusyAt("compare")
     setCisRun({ jobId: "", phase: "connecting", status: "running", state: "running", tenantId, frameworkId: framework.id, read: 0, total: 0, currentPolicy: "", comparedPolicies: 0, packPolicies: capturedPack.policies.length, currentPackPolicy: "", findings: [], nextSince: 0, error: null, assessment: null })
     try {
@@ -878,6 +891,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     </nav>}
     {unreadableNotice}
     {isCis && activeLookupFailed && !cisRun && <p role="alert" className="mt-6 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950">Could not check for a running assessment. <button type="button" className="font-medium text-blue-700 hover:underline disabled:opacity-50" disabled={!!busy} onClick={retryActiveLookup}>Retry</button></p>}
+    {isCis && openNote && <p role="status" className="mt-6 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950">{openNote}</p>}
     {stage === "loading" && <p role="status" className="mt-6 text-sm text-gray-500">Loading saved assessments…</p>}
     {isCis && stage === "results" && assessment && <div ref={resultsHeader} aria-label="Results header" className="mt-6 flex scroll-mt-6 flex-wrap items-center justify-between gap-3 rounded-3xl bg-white px-5 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
       <div className="min-w-0">
@@ -1103,14 +1117,12 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
               const withExclusions = exclusionsText(head)
               const unassigned = unassignedText(level)
               const percentText = formatRate
-              // A delivered pack that lists recommendations reports them instead of identifier coverage.
+              // A delivered pack that lists recommendations reports them instead of coverage of the full benchmark.
               const stats: [string, string][] = [
                 ["Assessed settings", String(level.assessedSettings)],
                 ...(coverageShown(level) ? [
-                  ["Enumerated identifiers", String(level.enumerated)],
-                  ["Assessed automated", level.assessedAutomated === null ? "Needs a denominator list" : String(level.assessedAutomated)],
-                  ["Coverage", level.coverage !== null ? `${percentText(level.coverage)} (${level.assessedAutomated} of ${level.denominator})` : level.denominator === null ? "Needs a denominator list" : "No automated entries listed"],
-                  ["Not assessed", level.notAssessed.length ? level.notAssessed.join(", ") : "None listed"],
+                  ["Coverage of the full benchmark", level.coverage !== null ? `${percentText(level.coverage)} (${level.assessedAutomated} of ${level.denominator})` : "Not available"],
+                  ...(level.denominator !== null ? [["Automated recommendations not checked", level.notAssessed.length ? level.notAssessed.join(", ") : "None"]] : []),
                 ] as [string, string][] : []),
                 ["Excluded from score", String(head.exclusions)],
               ]
@@ -1123,6 +1135,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
                   <p className="text-xs font-medium text-gray-500">{benchmarkTitle(level.benchmark, readiness.benchmarkName)} · Level {level.level}{level.version ? ` · ${level.version}` : ""}</p>
                   <p className={`mt-1 font-light tabular-nums tracking-tight text-gray-900 ${head.rate === null ? "text-2xl" : "text-5xl"}`}>{head.rate === null ? "Not available" : percentText(head.rate)}</p>
                   <p className="mt-1 text-xs text-gray-500">{head.label}</p>
+                  {headlineBasisNote(head) && <p className="mt-1 text-xs text-gray-600">{headlineBasisNote(head)}</p>}
                   {head.basis === "recommendations" && head.rate === null && <p className="mt-1 text-xs text-gray-600">No recommendation of this Level could be assessed: the pack does not hold every setting they name.</p>}
                   {withExclusions && <p className="mt-1 text-xs font-medium text-gray-700">{withExclusions}<span className="block font-normal text-gray-500">Exclusions as of {formatExpiryDate(head.exclusionsAsOf)}</span></p>}
                   {head.basis === "recommendations" && <p className="mt-1 text-xs text-gray-600">Settings: {level.present} of {level.assessedSettings} present</p>}
@@ -1147,9 +1160,8 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
               </article>
             })}
           </div>
-          {readiness.levels.some(level => coverageShown(level) && level.denominator === null) && <p className="text-xs text-gray-500">Coverage and the assessed automated count need a denominator list: the benchmark list of automated recommendations for each Level. {denominator || recommendationList ? "None is loaded for every Level shown." : "None is loaded, and delivered benchmark packs do not include one."} Enumerated identifiers counts the recommendation identifiers named in the pack policy descriptions; without the list they cannot be checked against the automated recommendations. Pass rates do not depend on it.</p>}
-          {readiness.levels.some(level => coverageShown(level) && level.enumerated === 0) && <p className="mt-1 text-xs text-gray-500">The policy descriptions of {readiness.levels.filter(level => coverageShown(level) && level.enumerated === 0).map(level => `Level ${level.level}`).join(" and ")} name no recommendation identifiers, so coverage cannot be derived from this pack even with a denominator list.</p>}
-          {readiness.levels.some(level => coverageShown(level) && level.denominator !== null && level.coverage === null) && <p className="mt-1 text-xs text-gray-500">The denominator list marks no recommendation of {readiness.levels.filter(level => coverageShown(level) && level.denominator !== null && level.coverage === null).map(level => `Level ${level.level}`).join(" and ")} as automated, so there is no coverage ratio to show.</p>}
+          {/* Coverage of the full benchmark in plain words; pass rates do not depend on it. */}
+          {readiness.levels.filter(coverageShown).map(level => <p key={`coverage-${level.level}`} className="mt-1 text-xs text-gray-500">{readiness.levels.length > 1 ? `Level ${level.level}: ` : ""}{coverageStatement(level)} Pass rates do not depend on it.</p>)}
           {readiness.levels.map(level => level.recommendations.length > 0 && <details key={`recommendations-${level.level}`} className="mt-2 border-t border-gray-100">
             <summary className="cursor-pointer py-3 text-sm font-medium text-gray-800">Recommendation results, Level {level.level}: {(({ passed, failed, review, notAssessed }) => `${passed} passed, ${failed} failed${review ? `, ${review} to review` : ""}, ${notAssessed} not assessed`)(recommendationTotals(level.recommendations))}</summary>
             <p className="text-xs text-gray-500">Each mapped setting is judged on its own value across every tenant policy that holds it. A recommendation passes only when every setting it names is in the pack and Present, and fails when any is Different or Missing. Not assessed means the pack does not hold every setting it names.</p>
@@ -1179,7 +1191,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
               <h4 className={benchmarkGroup.current ? "font-medium text-gray-900" : "text-sm text-gray-700"}>Level {group.level}{benchmarkGroup.current ? `: ${head?.exclusions ?? 0} excluded from score` : ""}</h4>
               {head && <p className="mt-1 text-xs text-gray-500">{head.label} {formatRate(head.rate)}{withExclusions ? `, ${withExclusions}` : ""}. Exclusions as of {formatExpiryDate(head.exclusionsAsOf)}. Raw counts above are unchanged.</p>}
               {group.items.length ? <ul className="mt-2 space-y-2">{group.items.map(listedItem => { const { exception, note } = listedItem; return <li key={`${group.level}-${exception.id}`} className="flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-gray-50 p-3">
-                <span><span className="font-medium text-gray-800">{exception.policyName}</span>{exception.level !== group.level && <span className="ml-2 inline-block rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-800">Policy Level {exception.level}</span>}{note && <span className="ml-2 inline-block rounded-full bg-gray-200 px-2.5 py-0.5 text-xs font-medium text-gray-700">{note}</span>}<span className="block text-xs text-gray-700">{settingDisplayName(exception.settingId, settingNames)}</span><span className="block break-all font-mono text-xs text-gray-500">{exception.version} · {exception.settingId}</span><span className="block text-xs text-gray-600">Owner: {exception.owner} · Expires: {formatExpiryDate(exception.expiresOn)}</span><span className="block text-xs text-gray-600">{exception.reason}</span></span>
+                <span><span className="font-medium text-gray-800">{exception.policyName}</span>{exception.level !== group.level && <span className="ml-2 inline-block rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-800">Policy Level {exception.level}</span>}{note && <span className="ml-2 inline-block rounded-full bg-gray-200 px-2.5 py-0.5 text-xs font-medium text-gray-700">{note}</span>}{knownSettingName(exception.settingId, settingNames) && <span className="block text-xs text-gray-700">{knownSettingName(exception.settingId, settingNames)}</span>}<span className="block break-all font-mono text-xs text-gray-500">{exception.version} · {exception.settingId}</span><span className="block text-xs text-gray-600">Owner: {exception.owner} · Expires: {formatExpiryDate(exception.expiresOn)}</span><span className="block text-xs text-gray-600">{exception.reason}</span></span>
                 <button type="button" className={button} disabled={!!busy || historical} onClick={() => void removeException(listedItem)}>Remove</button>
               </li> })}</ul> : <p className="mt-2 text-xs text-gray-500">Nothing is excluded for this level. Select findings and choose Exclude from score.</p>}
             </div>

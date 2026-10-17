@@ -125,3 +125,27 @@ export const OUTCOME_LABELS: Record<string, string> = {
 }
 
 export const SEVERITY_TONE = { critical: "danger", high: "danger", medium: "warning", low: "neutral" } as const
+
+/** Evidence older than this many days is flagged in the Health review header. */
+export const STALE_EVIDENCE_DAYS = 7
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/**
+ * How old the evidence behind the open findings is: the oldest evidence date (observedAt, the
+ * backup read time for backup checks and the collection time of a work signal, such as the
+ * backup a hygiene scan read), its age in whole days, and the open findings whose evidence is
+ * older than STALE_EVIDENCE_DAYS with the screen of the oldest one, where it is refreshed.
+ */
+export function evidenceAge(findings: Pick<Finding, "state" | "observedAt" | "link">[], now: number = Date.now()): { oldest: string | null; ageDays: number | null; stale: number; staleLink: string | null } {
+  const dated = findings
+    .filter((finding) => finding.state !== "resolved" && finding.observedAt && Number.isFinite(Date.parse(finding.observedAt)))
+    .sort((a, b) => Date.parse(a.observedAt!) - Date.parse(b.observedAt!))
+  const oldest = dated[0] ?? null
+  const stale = dated.filter((finding) => now - Date.parse(finding.observedAt!) > STALE_EVIDENCE_DAYS * DAY_MS)
+  return {
+    oldest: oldest?.observedAt ?? null,
+    ageDays: oldest ? Math.max(0, Math.floor((now - Date.parse(oldest.observedAt!)) / DAY_MS)) : null,
+    stale: stale.length,
+    staleLink: stale[0]?.link ?? null,
+  }
+}

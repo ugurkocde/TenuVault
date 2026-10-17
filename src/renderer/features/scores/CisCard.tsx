@@ -2,11 +2,11 @@ import { Link } from "react-router-dom"
 import { ArrowUpRight } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { formatDate } from "./api"
-import type { CisScoreCard } from "./cis"
+import { cisCardPath, type CisScoreCard } from "./cis"
 
 export const CIS_CARD_NOTE = "CIS checks configuration: settings in unassigned policies count as present. The framework scores above check assigned coverage, so unassigned policies do not count there."
 
-/** One saved CIS benchmark with the same headline rate as the CIS page, linking to it. */
+/** One saved CIS benchmark with the same headline rate as the CIS page, linking to that benchmark there. */
 export function CisCard({ card }: { card: CisScoreCard }) {
   return (
     <section aria-label={`${card.title} readiness`} className="flex flex-col gap-4 rounded-3xl bg-card p-6 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
@@ -29,7 +29,7 @@ export function CisCard({ card }: { card: CisScoreCard }) {
       <p className="text-xs text-gray-500">{CIS_CARD_NOTE}</p>
       <div className="mt-auto">
         <Button asChild variant="ghost" size="sm">
-          <Link to="/portal/frameworks/cis-benchmarks">
+          <Link to={cisCardPath(card)}>
             Open CIS Benchmarks
             <ArrowUpRight className="h-4 w-4" />
           </Link>

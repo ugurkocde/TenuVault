@@ -1,4 +1,4 @@
-import { compareAssessments, levelHeadline, packBenchmark, readinessFor, type CisHeadline } from "./cis-readiness"
+import { compareAssessments, levelHeadline, newestAssessmentOf, packBenchmark, readinessFor, type CisHeadline, type CisLevelReadiness } from "./cis-readiness"
 import type { RecommendationList } from "./cis-manual"
 import { localDate, type CisException } from "./cis-exceptions"
 import type { KitLevel } from "./cis-kit"
@@ -36,6 +36,8 @@ export interface CisPortfolioLevel {
   assessedSettings: number
   /** The headline the CIS page shows for this run: raw rate, label and the rate with exclusions. */
   headline: CisHeadline
+  /** When the assessment this Level comes from ran: the newest saved assessment of this Level. */
+  assessedAt: string
 }
 
 export interface CisPortfolioRow {
@@ -140,10 +142,19 @@ export function portfolioBenchmarks(entries: CisPortfolioEntry[]): CisPortfolioB
     .map(({ newest: _newest, ...benchmark }) => benchmark)
 }
 
+function portfolioLevel(level: CisLevelReadiness, assessedAt: string): CisPortfolioLevel {
+  return { level: level.level, passRate: level.passRate, adjustedPassRate: level.adjustedPassRate, excepted: level.excepted, assessedSettings: level.assessedSettings, headline: levelHeadline(level), assessedAt,
+    ...(level.recommendations.length
+      ? { basis: "recommendations" as const, recommendationPassRate: level.recommendationPassRate, adjustedRecommendationPassRate: level.adjustedRecommendationPassRate }
+      : { basis: "settings" as const }) }
+}
+
 /**
- * Portfolio rows that compare tenants on one benchmark and version: each tenant's newest saved
- * assessment of it, read with readinessFor so the rate is the one the CIS page shows for that
- * run. Without a selection the benchmark most tenants assessed is used. Tenants without an
+ * Portfolio rows that compare tenants on one benchmark and version. Each Level comes from the
+ * tenant's newest saved assessment of that Level, in the compareAssessments order, read with
+ * readinessFor so the rate is the one the CIS page and the trend show for that run: a newer
+ * Level 1 run does not hide an older Level 2 run. The row's assessed date is its newest run.
+ * Without a selection the benchmark most tenants assessed is used. Tenants without an
  * assessment of it show as not assessed.
  */
 export function cisPortfolioRows(entries: CisPortfolioEntry[], selected: Pick<CisPortfolioBenchmark, "benchmark" | "version"> | null = portfolioBenchmarks(entries)[0] ?? null, todayISO: string = localDate()): CisPortfolioRow[] {
@@ -163,7 +174,16 @@ export function cisPortfolioRows(entries: CisPortfolioEntry[], selected: Pick<Ci
     if (newest.assessment.tenantId.toLowerCase() !== entry.tenantId.toLowerCase()) {
       return { tenantId: entry.tenantId, tenantName, benchmark: null, version: null, assessedAt: null, levels: [], error: "The saved assessment belongs to a different tenant." }
     }
-    const summary = readinessFor(newest, { ...entry.workspace, history: saved }, todayISO)
+    const workspace = { ...entry.workspace, history: saved }
+    const summary = readinessFor(newest, workspace, todayISO)
+    const own = history.filter(item => item.assessment.tenantId.toLowerCase() === entry.tenantId.toLowerCase())
+    const levels = selected
+      ? ([1, 2] as const).flatMap(level => {
+        const run = newestAssessmentOf(own, { ...selected, level }, entry.workspace?.recommendationList)
+        const readiness = run && (run === newest ? summary : readinessFor(run, workspace, todayISO)).levels.find(item => item.level === level)
+        return readiness ? [portfolioLevel(readiness, run.assessment.assessedAt)] : []
+      })
+      : summary.levels.map(level => portfolioLevel(level, newest.assessment.assessedAt))
     return {
       tenantId: entry.tenantId,
       tenantName,
@@ -171,10 +191,7 @@ export function cisPortfolioRows(entries: CisPortfolioEntry[], selected: Pick<Ci
       benchmarkName: summary.benchmarkName,
       version: summary.version,
       assessedAt: newest.assessment.assessedAt,
-      levels: summary.levels.map(level => ({ level: level.level, passRate: level.passRate, adjustedPassRate: level.adjustedPassRate, excepted: level.excepted, assessedSettings: level.assessedSettings, headline: levelHeadline(level),
-        ...(level.recommendations.length
-          ? { basis: "recommendations" as const, recommendationPassRate: level.recommendationPassRate, adjustedRecommendationPassRate: level.adjustedRecommendationPassRate }
-          : { basis: "settings" as const }) })),
+      levels,
     }
   })
   return [...rows].sort((a, b) => {

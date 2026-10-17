@@ -84,8 +84,8 @@ describe("CIS readiness PDF report", () => {
       "TenuVault", "CIS readiness report", "fakebook-os", "Contoso",
       "Level 1 readiness", "Level 2 readiness",
       "Assessed settings 2", "Conforming 1", "Settings pass rate 50%",
-      "source: Authoritative denominator",
-      "Not assessed identifiers 1", "7.1.3",
+      "source: CIS list of automated recommendations",
+      "Automated recommendations not checked 1", "7.1.3",
       "Manual recommendations, Level 1", "7.1.4",
       MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_NOT_ASSESSED_NOTE,
       "TenuVault | CIS readiness report",
@@ -119,12 +119,13 @@ describe("CIS readiness PDF report", () => {
     const { policies, assessment } = assessed()
     const summary = cisReadiness(assessment, policies)
     expect(summary.levels[0]!.coverageSource).toBe("none")
-    expect(coverageSourceLabel("authoritative")).toBe("Authoritative denominator")
-    expect(coverageSourceLabel("breakout-proxy")).toBe("Breakout proxy, illustrative")
-    expect(coverageSourceLabel("none")).toBe("Not computable")
+    expect(coverageSourceLabel("authoritative")).toBe("CIS list of automated recommendations")
+    expect(coverageSourceLabel("breakout-proxy")).toBe("estimate from the CIS breakout workbook")
+    expect(coverageSourceLabel("none")).toBe("Not available")
     const without = pdfText(generateCisReadinessPDF(summary, context))
     // Without a denominator list the PDF says in plain words why coverage is missing, and claims no automated count.
-    expect(without).toContain("No recommendation list is loaded, so coverage is not shown.")
+    expect(without).toContain("Coverage of the full benchmark is not shown because the list of all its automated recommendations is not available.")
+    for (const internal of ["denominator", "Denominator", "Enumerated", "identifiers"]) expect(without).not.toContain(internal)
     expect(without).not.toContain("Not computable")
     expect(without).not.toContain("not computable without a denominator list")
     expect(without).not.toContain("Assessed automated")
@@ -134,7 +135,7 @@ describe("CIS readiness PDF report", () => {
     expect(without).toContain("https://www.cisecurity.org/cis-benchmarks")
     expect(without).not.toContain("Authoritative denominator")
     const proxy = { ...summary, levels: summary.levels.map(level => ({ ...level, coverage: 0.5, denominator: 4, coverageSource: "breakout-proxy" as const })) }
-    expect(pdfText(generateCisReadinessPDF(proxy, context))).toContain("Breakout proxy, illustrative")
+    expect(pdfText(generateCisReadinessPDF(proxy, context))).toContain("source: estimate from the CIS breakout workbook")
   })
 
   it("shares the native framework report design: panel fill, tiles and footer", async () => {
@@ -192,7 +193,7 @@ describe("CIS readiness PDF export through the main process", () => {
     expect(bytes.subarray(0, 5).toString()).toBe("%PDF-")
     const text = pdfText(bytes)
     expect(text).toContain("Level 1 readiness")
-    expect(text).toContain("Authoritative denominator")
+    expect(text).toContain("source: CIS list of automated recommendations")
     expect(fetch).not.toHaveBeenCalled()
     await expect(handleFramework({ action: "workspace-cis-pdf", frameworkId: "cis-benchmarks", tenantId, runId: "missing" }))
       .rejects.toMatchObject({ status: 404 })

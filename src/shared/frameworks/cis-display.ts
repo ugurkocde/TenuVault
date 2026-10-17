@@ -65,6 +65,18 @@ export function settingDisplayName(settingId: string, names?: SettingNames): str
   return names && Object.hasOwn(names.settings, settingId) ? names.settings[settingId]! : humanSettingLabel(settingId)
 }
 
+/** The name Graph gives every top-level setting group collection, such as most macOS payloads; it names no setting. */
+const GENERIC_GROUP_NAME = "Top Level Setting Group Collection"
+
+/**
+ * The display name read for a setting, or null when none was read or Graph only has the generic
+ * group collection name: views then show the raw id once instead of a guess next to it.
+ */
+export function knownSettingName(settingId: string, names?: SettingNames): string | null {
+  const name = names && Object.hasOwn(names.settings, settingId) ? names.settings[settingId]! : null
+  return name && name !== GENERIC_GROUP_NAME ? name : null
+}
+
 /** A choice value as its option label when known, else the option part after its setting id, else as stored. */
 export function optionDisplayName(value: string, definitionId: string | undefined, names?: SettingNames): string {
   if (names && Object.hasOwn(names.options, value)) return names.options[value]!

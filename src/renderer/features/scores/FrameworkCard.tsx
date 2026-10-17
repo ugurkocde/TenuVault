@@ -3,7 +3,7 @@ import { ArrowUpRight, ListTree } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { Chip } from "~/components/dashboard/tiles"
 import type { FrameworkScore } from "./api"
-import { formatDate, formatPercent, formatScore, scopeLabel, unitLabel } from "./api"
+import { ageText, formatDate, formatPercent, formatScore, scopeLabel, unitLabel } from "./api"
 import { Trend } from "./Trend"
 
 const PRIORITY_TONE = { critical: "danger", high: "warning", medium: "neutral", low: "neutral" } as const
@@ -60,7 +60,7 @@ export function FrameworkCard({ score, tenantName, onDrillDown, selected }: { sc
       <p className="text-xs text-gray-500">
         {total} {unitLabel(latest.unit, total)} counted: {counts.matching} matching, {counts.different} different, {counts.missing} missing, {counts.unknown} unknown, {counts.outsideScope} outside scope.
         {latest.uncheckedReferences > 0 && ` ${latest.uncheckedReferences} of the unknown ${latest.uncheckedReferences === 1 ? "is a framework reference" : "are framework references"} without a configuration check.`} Tenant {tenantName}. Assessed {formatDate(freshness.assessedAt)}
-        {freshness.ageDays !== null ? ` (${freshness.ageDays} day${freshness.ageDays === 1 ? "" : "s"} ago)` : ""}. Scope: {scopeLabel(identity.platforms)}.
+        {ageText(freshness.assessedAt, freshness.ageDays) ? ` (${ageText(freshness.assessedAt, freshness.ageDays)})` : ""}. Scope: {scopeLabel(identity.platforms)}.
       </p>
 
       <Trend score={score} />

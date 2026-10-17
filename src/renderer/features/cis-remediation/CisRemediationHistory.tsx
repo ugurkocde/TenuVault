@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight } from "lucide-react"
 import type { Tenant } from "~/contexts/TenantContext"
 import { Chip } from "~/components/dashboard/tiles"
 import { ChangeSetFlow } from "../shared/ChangeSetFlow"
-import { formatDate, STATUS_TONE } from "../shared/change-set"
+import { formatDate, STATUS_TONE, statusLabel } from "../shared/change-set"
 import { cachedCisCatalog } from "../../lib/cis-catalog-cache"
 import { cachedCisSettingNames, loadCisSettingNames } from "../../lib/cis-setting-names"
 import { benchmarkTitle, diffDefinitionIds, knownBenchmarkName, referenceDisplayName } from "../../../shared/frameworks/cis-display"
@@ -22,7 +22,7 @@ export function deploymentState(deployment: Pick<Deployment, "status" | "rollbac
     : status === "rejected" ? { label: "rollback rejected", tone: "neutral" as const }
       : status === "failed" || status === "partial" ? { label: "rollback failed", tone: "danger" as const }
         : { label: "rollback pending", tone: "warning" as const }
-  return { label: deployment.status, tone: tone(deployment.status), rollback }
+  return { label: statusLabel(deployment.status), tone: tone(deployment.status), rollback }
 }
 
 /**

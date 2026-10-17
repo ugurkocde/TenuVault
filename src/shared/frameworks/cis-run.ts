@@ -1,4 +1,5 @@
 import type { Assessment, BaselinePolicy, Finding } from "./policies"
+import type { KitLevel } from "./cis-kit"
 
 export type CisRunPhase = "connecting" | "reading" | "comparing" | "saving" | "done" | "failed"
 
@@ -135,6 +136,22 @@ export function currentSavedAssessment(workspace: { policies: BaselinePolicy[]; 
   const latest = workspace.history[0]
   if (!latest || latest.assessment.reference !== workspace.reference) return null
   return JSON.stringify(latest.policies) === JSON.stringify(workspace.policies) ? latest : null
+}
+
+/** The benchmark, version and Level a link asks the CIS page to open on, such as a Governance CIS card. */
+export interface CisOpenRequest {
+  benchmark: string
+  version?: string
+  level?: KitLevel
+}
+
+/** The CIS page search parameters benchmark, version and level; null without a benchmark. */
+export function cisOpenRequest(params: URLSearchParams): CisOpenRequest | null {
+  const benchmark = params.get("benchmark")?.trim()
+  if (!benchmark) return null
+  const version = params.get("version")?.trim()
+  const level = params.get("level")
+  return { benchmark, ...(version ? { version } : {}), ...(level === "1" || level === "2" ? { level: Number(level) as KitLevel } : {}) }
 }
 
 export function cisRunSteps(phase: CisRunPhase): CisRunStep[] {

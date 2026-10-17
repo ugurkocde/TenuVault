@@ -369,8 +369,11 @@ describe("CIS Benchmarks route", () => {
     const summary = container.querySelector('[aria-label="Level 1 summary"]')
     expect(summary?.textContent).toContain("Settings pass rate")
     expect(summary?.textContent).not.toContain("Recommendation pass rate")
-    expect(summary?.textContent).toContain("Enumerated identifiers")
-    expect(container.textContent).toContain("Coverage and the assessed automated count need a denominator list")
+    // Coverage of the full benchmark is stated in plain words; internal counters stay out of the view.
+    expect(summary?.textContent).toContain("Coverage of the full benchmarkNot available")
+    expect(summary?.textContent).toContain("Scored by settings because this benchmark has no recommendation mapping.")
+    for (const hidden of ["Enumerated identifiers", "Assessed automated", "denominator"]) expect(container.textContent).not.toContain(hidden)
+    expect(container.textContent).toContain("Coverage of the full benchmark is not shown because the list of all its automated recommendations is not available.")
     vi.unstubAllGlobals()
   })
 

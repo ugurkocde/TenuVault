@@ -31,6 +31,11 @@ export const STATUS_TONE: Record<ChangeSetRecord["status"], "neutral" | "coral" 
   uncertain: "danger",
 }
 
+/** A change set status in words: "in review" instead of the stored "in-review". */
+export function statusLabel(status: string): string {
+  return status === "in-review" ? "in review" : status
+}
+
 export const RESULT_TONE: Record<OperationResult["status"], "neutral" | "success" | "warning" | "danger"> = {
   pending: "neutral",
   writing: "warning",

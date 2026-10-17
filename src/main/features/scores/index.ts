@@ -74,7 +74,7 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
             tenantId: id,
             tenantName: deps.tenant(id)?.name ?? null,
             error: null,
-            frameworks: frameworks.map(({ frameworkId, frameworkName, state, message, latest }) => ({
+            frameworks: frameworks.map(({ frameworkId, frameworkName, state, message, latest, historyOnly }) => ({
               frameworkId,
               frameworkName,
               state,
@@ -83,7 +83,8 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
               coverage: latest?.score.coverage ?? null,
               unknown: latest?.score.counts.unknown ?? null,
               gapCount: latest?.gapCount ?? null,
-              assessedAt: latest?.freshness.assessedAt ?? null,
+              // A result kept in history only still has its date: the newest of those results.
+              assessedAt: latest?.freshness.assessedAt ?? historyOnly[0]?.assessedAt ?? null,
               ageDays: latest?.freshness.ageDays ?? null,
               stale: latest?.freshness.stale ?? null,
               partial: latest ? latest.incompleteCollection.length > 0 : null,

@@ -41,7 +41,9 @@ Each review records its outcome and summary. Findings stay stored between review
 2. Open **Operations** in the sidebar.
 3. In **Schedule**, click **Review now**. While it runs the button shows "Reviewing".
 
-The tiles at the top then show **Last review** with its outcome, **Scheduling readiness**, and **Open findings** with the counts per severity, including how many rest on unknown evidence. A first review that runs late after missed windows is marked as a catch-up and names how many windows were missed.
+The tiles at the top then show **Last review** with its outcome, **Evidence from** with the date of the oldest evidence behind the open findings, **Scheduling readiness**, and **Open findings** with the counts for critical, high, medium and low, including how many rest on unknown evidence. A first review that runs late after missed windows is marked as a catch-up and names how many windows were missed.
+
+A review reads stored evidence, so a review on its own does not make old evidence newer. When the evidence of an open finding is older than 7 days, a warning names how many findings it affects and the oldest date, links to the screen where the evidence is refreshed, for example **Scan the latest backup in Conflicts and hygiene**, and offers **Review now** to review again afterwards.
 
 ## Schedule reviews
 
@@ -52,7 +54,7 @@ The readiness tile shows whether scheduling is **Ready**, **Off**, **Sign-in req
 
 ## Work through findings
 
-The **Findings** list shows each open finding with its severity, title, reason, and when it was first seen, last checked, and when its evidence was read. **Open** after the reason goes to the screen the finding comes from. If the findings cannot be read, the list shows the error with **Retry** instead of an empty list. When no finding is open, the list says whether no review has run yet, or names the time of the latest review and whether it completed or could only read part of the evidence. Click **Export CSV** or **Export JSON** above the list to save the findings currently shown, including resolved findings only while they are shown.
+The **Findings** list shows each open finding with its severity, title, reason, and when it was first seen, last checked, and the date of its evidence: when backups were read, or when a work signal was collected, such as the backup a hygiene scan read. **Open** after the reason goes to the screen the finding comes from. If the findings cannot be read, the list shows the error with **Retry** instead of an empty list. When no finding is open, the list says whether no review has run yet, or names the time of the latest review and whether it completed or could only read part of the evidence. Click **Export CSV** or **Export JSON** above the list to save the findings currently shown, including resolved findings only while they are shown.
 
 1. To hand a finding to someone, type their name in **Owner** and click **Save owner**.
 2. To record that a finding is being handled, click **Acknowledge**. Acknowledged findings carry the admin who acknowledged them.

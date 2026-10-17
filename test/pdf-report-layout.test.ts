@@ -175,7 +175,7 @@ describe("report PDF layout", () => {
       "Policy ID: 00000000-0000-4000-8000-000000000101", "Targets: Group: All Corporate Devices", "Exclusions: Group: Kiosk Devices",
       "Source metadata: WIN Baseline BitLocker, version 4, modified 2026-09-28T14:10:00Z",
       "Group membership, filter evaluation and device enforcement are unverified.",
-      "Setting configured and assigned", "Matches", "Different", "Missing", "Unable to check", "Outside scope",
+      "Setting configured and assigned", "Matches", "Different", "Missing", "Unknown", "Outside scope",
     ]) expect(text).toContain(expected)
     const e8 = pdfText(generateNativeFrameworkPDF(nativeRun({ frameworkId: "essential-eight", nativeId: "essential-eight", scope: { platforms: ["windows"], essentialEightMaturityLevel: 2 } }), context))
     expect(e8).toContain("Creative Commons Attribution 4.0: https://creativecommons.org/licenses/by/4.0/")
@@ -193,7 +193,7 @@ describe("report PDF layout", () => {
 
   it("prints the CIS notice, coverage, exceptions and manual recommendations", () => {
     const text = pdfText(generateCisReadinessPDF(cisSummary(), CIS_CONTEXT))
-    for (const expected of [MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDATIONS_URL, "Coverage: 75% (72 of 96), source: Authoritative denominator", "18.4.1, 18.4.2, 18.9.7, 18.10.3",
+    for (const expected of [MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDATIONS_URL, "Coverage: 75% (72 of 96 automated recommendations), source: CIS list of automated recommendations.", "18.4.1, 18.4.2, 18.9.7, 18.10.3",
       "Grace Hopper", "Ensure the account lockout threshold is reviewed", "Set the threshold to 5 or fewer invalid attempts.", "With exclusions 70% with 2 exclusions", "Recommendation pass rate 60%", "Not assessed"]) expect(text).toContain(expected)
   })
 })

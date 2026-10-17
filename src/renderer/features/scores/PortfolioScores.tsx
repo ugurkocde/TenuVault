@@ -1,4 +1,5 @@
 import { useMemo } from "react"
+import { Link } from "react-router-dom"
 import { useMutation } from "@tanstack/react-query"
 import { Building2 } from "lucide-react"
 import { useTenants, type Tenant } from "~/contexts/TenantContext"
@@ -6,13 +7,16 @@ import { Chip } from "~/components/dashboard/tiles"
 import type { Plan } from "../../../shared/plans"
 import { GatedButton } from "../../components/PlanGate"
 import { tenantLicense, tenantPlan, useLicense } from "../../lib/license"
+import { useInternalCisBenchmarks } from "../../lib/internal-cis"
 import { formatDate, formatPercent, groupUnavailable, loadPortfolio, namesLabel, type PortfolioTenant } from "./api"
+import { cisCardPath, loadPortfolioCis } from "./cis"
 
 /**
  * MSP portfolio: scores of every connected tenant whose license includes the portfolio, each
  * with its own freshness and coverage, and a drill-down to that tenant's score detail, shown
  * in the one detail panel of the scores tab. Tenants that are not licensed for it are listed
- * as not included, never guessed.
+ * as not included, never guessed. With internal CIS access each tenant's saved CIS benchmarks
+ * are listed too, with the rates of that tenant's Governance CIS cards.
  */
 export function PortfolioScores({ tenant, plan, onDrill }: { tenant: Tenant; plan: Plan | null; onDrill: (tenant: Tenant, frameworkId: string) => void }) {
   const tenants = useTenants()
@@ -23,7 +27,14 @@ export function PortfolioScores({ tenant, plan, onDrill }: { tenant: Tenant; pla
     const licensed = (candidate: Tenant) => tenantPlan(tenantLicense(status, candidate.credentials?.tenantId)) === "msp"
     return { included: others.filter(licensed), excluded: others.filter((candidate) => !licensed(candidate)) }
   }, [tenants, status, selectedId])
-  const load = useMutation({ mutationFn: () => loadPortfolio(tenant, included.map((candidate) => candidate.credentials!.tenantId!)) })
+  const cisAccess = useInternalCisBenchmarks()
+  const load = useMutation({
+    mutationFn: async () => {
+      const targets = included.map((candidate) => candidate.credentials!.tenantId!)
+      const [scores, cis] = await Promise.all([loadPortfolio(tenant, targets), loadPortfolioCis(cisAccess, [tenant.credentials!.tenantId!, ...targets])])
+      return { ...scores, cis }
+    },
+  })
   const byId = (id: string) => tenants.find((candidate) => candidate.credentials?.tenantId?.toLowerCase() === id)
 
   return (
@@ -60,6 +71,30 @@ export function PortfolioScores({ tenant, plan, onDrill }: { tenant: Tenant; pla
                 const assessed = row.frameworks.filter((framework) => framework.state !== "not-assessed" && framework.state !== "unavailable")
                 const failed = row.frameworks.filter((framework) => framework.state === "unavailable")
                 const name = row.tenantName ?? row.tenantId
+                const cis = load.data.cis.get(row.tenantId.toLowerCase())
+                // CIS benchmarks are listed with the rate of the tenant's CIS card; CIS checks configuration, so there is no coverage.
+                const cisRows = [...(cis?.cards ?? []).map((card) => (
+                  <tr key={`${row.tenantId}:cis:${card.key}`}>
+                    <td className="py-2 pr-4 text-gray-800">{name}</td>
+                    <td className="py-2 pr-4 text-gray-700">
+                      {card.title}
+                      <span className="block text-xs text-gray-500">CIS Benchmarks{card.version ? `, version ${card.version}` : ""}</span>
+                    </td>
+                    <td className="py-2 pr-4 tabular-nums text-gray-900">
+                      {card.levels.length ? card.levels.map((level) => <span key={level.level} className="block">Level {level.level} {level.rate === null ? "not available" : `${level.rate}%`}<span className="block text-xs text-gray-500">{level.label}</span></span>) : "Not available"}
+                    </td>
+                    <td className="py-2 pr-4 text-xs text-gray-500">Not counted: CIS checks configuration</td>
+                    <td className="py-2 pr-4 text-gray-700">{formatDate(card.assessedAt)}</td>
+                    <td className="py-2 text-right">
+                      {row.tenantId.toLowerCase() === selectedId && <Link to={cisCardPath(card)} className="text-sm font-medium text-gray-800 underline underline-offset-2 hover:text-gray-950">Open</Link>}
+                    </td>
+                  </tr>
+                )), ...(cis?.error ? [
+                  <tr key={`${row.tenantId}:cis:error`}>
+                    <td className="py-2 pr-4 text-gray-800">{name}</td>
+                    <td colSpan={5} className="py-2 text-gray-500">CIS Benchmarks unavailable: {cis.error}</td>
+                  </tr>,
+                ] : [])]
                 // Frameworks that failed for the same reason are one row, not one row each.
                 const errorRows = (row.error ? [{ message: row.error, names: [] as string[] }] : groupUnavailable(failed)).map((group) => (
                   <tr key={`${row.tenantId}:error:${group.message}`}>
@@ -71,6 +106,7 @@ export function PortfolioScores({ tenant, plan, onDrill }: { tenant: Tenant; pla
                   </tr>
                 ))
                 if (!row.error && !assessed.length && !failed.length) {
+                  if (cisRows.length) return cisRows
                   return [
                     <tr key={row.tenantId}>
                       <td className="py-2 pr-4 text-gray-800">{name}</td>
@@ -78,7 +114,7 @@ export function PortfolioScores({ tenant, plan, onDrill }: { tenant: Tenant; pla
                     </tr>,
                   ]
                 }
-                if (row.error) return errorRows
+                if (row.error) return [...errorRows, ...cisRows]
                 return [...assessed.map((framework) => {
                   const target = byId(row.tenantId)
                   return (
@@ -89,17 +125,21 @@ export function PortfolioScores({ tenant, plan, onDrill }: { tenant: Tenant; pla
                         {framework.version && <span className="block text-xs text-gray-500">{framework.version}</span>}
                       </td>
                       <td className="py-2 pr-4 tabular-nums text-gray-900">{formatPercent(framework.score)}</td>
-                      <td className="py-2 pr-4 tabular-nums text-gray-700">
-                        {formatPercent(framework.coverage, framework.score === null ? "None" : "Unknown")}
-                        {framework.unknown ? <span className="block text-xs text-gray-500">{framework.unknown} unknown</span> : null}
-                      </td>
+                      {framework.state === "history-only" ? (
+                        // Results kept in history only have no score and so no coverage: the reason says why.
+                        <td className="py-2 pr-4 text-xs text-gray-500">{framework.message ?? "Kept in history only, no score."}</td>
+                      ) : (
+                        <td className="py-2 pr-4 tabular-nums text-gray-700">
+                          {formatPercent(framework.coverage, framework.score === null ? "None" : "Unknown")}
+                          {framework.unknown ? <span className="block text-xs text-gray-500">{framework.unknown} unknown</span> : null}
+                        </td>
+                      )}
                       <td className="py-2 pr-4 text-gray-700">
                         {formatDate(framework.assessedAt)}
                         <span className="ml-1 inline-flex gap-1">
                           {framework.stale && <Chip tone="warning">Stale</Chip>}
                           {framework.partial && <Chip tone="warning">Partial</Chip>}
                         </span>
-                        {framework.state === "history-only" && framework.message && <span className="block text-xs text-gray-500">{framework.message}</span>}
                       </td>
                       <td className="py-2 text-right">
                         {target && framework.state !== "history-only" && (
@@ -110,7 +150,7 @@ export function PortfolioScores({ tenant, plan, onDrill }: { tenant: Tenant; pla
                       </td>
                     </tr>
                   )
-                }), ...errorRows]
+                }), ...errorRows, ...cisRows]
               })}
             </tbody>
           </table>

@@ -175,6 +175,15 @@ describe("runs scored under older rules", () => {
     expect(detail.body.error).toMatch(/Scored under older rules/)
   })
 
+  it("gives a portfolio row of older-rule runs its assessed date and reason, never an unknown date", async () => {
+    const old = makeRun({ runId: "old", tenantId: TENANT_A, frameworkId: "iso-27001" })
+    old.assessment.provenance.detectorVersion = 5
+    const deps = fakeDeps({ plans: { [TENANT_A]: "msp" }, api: api([old], []), now: () => NOW })
+    const { body } = await call(routes(deps), "/api/scores", { tenantId: TENANT_A, action: "portfolio-summary", targetTenants: [] })
+    const iso = body.tenants[0].frameworks.find((entry: any) => entry.frameworkId === "iso-27001")
+    expect(iso).toMatchObject({ state: "history-only", score: null, coverage: null, assessedAt: "2026-09-29T10:00:00Z", message: "Scored under older rules. Compare again to score. An app update changed how capabilities are counted." })
+  })
+
   it("keeps older-rule runs out of the trend but lists them with the reason, and names a mapping change", async () => {
     const current = makeRun({ runId: "current", tenantId: TENANT_A, frameworkId: "iso-27001", at: "2026-09-29T10:00:00Z" })
     const mapping = makeRun({ runId: "mapping", tenantId: TENANT_A, frameworkId: "iso-27001", at: "2026-09-01T10:00:00Z" })

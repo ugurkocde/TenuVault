@@ -260,3 +260,35 @@ describe("cisPortfolioRows", () => {
     expect(JSON.stringify(input)).toBe(snapshot)
   })
 })
+
+describe("CIS portfolio per Level", () => {
+  /** One run of a single Level pack, as loading Level 1 or Level 2 of a delivered benchmark saves it. */
+  function levelRun(runId: string, level: 1 | 2, assessedAt: string, status: Finding["status"]): CisPortfolioHistoryEntry {
+    const pack = convertKit(kitFiles, { id: "fakebook-os", version: "9.9.9" }).packs.find(item => item.level === level)!
+    const findings: Finding[] = pack.policies.map((item, index) => ({ key: `${index}:0`, policyIndex: index, settingIndex: 0, policyName: item.name, settingId: String((item.settings[0]!.settingInstance as { settingDefinitionId: string }).settingDefinitionId), status, recommended: null, observed: [] }))
+    return { assessment: { runId, tenantId: tenantA, frameworkId: "cis-benchmarks", reference: pack.reference, assessedAt, policyCount: 1, findings }, policies: pack.policies }
+  }
+
+  it("takes each Level from the newest assessment of that Level, so a newer Level 1 run does not hide Level 2", () => {
+    // The Defender case: Level 2 assessed at 100% first, then Level 1 assessed later.
+    const level2 = levelRun("run-l2", 2, "2026-10-15T16:34:00Z", "Present")
+    const level1 = levelRun("run-l1", 1, "2026-10-16T09:00:00Z", "Missing")
+    const olderLevel1 = levelRun("run-l1-old", 1, "2026-10-14T09:00:00Z", "Present")
+    const [row] = cisPortfolioRows([entry(tenantA, "Ugur Koc Lab", [level1, olderLevel1, level2])], { benchmark: "fakebook-os", version: "9.9.9" }, "2026-10-17")
+    expect(row!.assessedAt).toBe("2026-10-16T09:00:00Z")
+    const l1 = row!.levels.find(level => level.level === 1)!
+    const l2 = row!.levels.find(level => level.level === 2)!
+    expect(portfolioRate(l1)).toBe(0)
+    expect(l1.assessedAt).toBe("2026-10-16T09:00:00Z")
+    expect(portfolioRate(l2)).toBe(1)
+    expect(l2.assessedAt).toBe("2026-10-15T16:34:00Z")
+  })
+
+  it("uses the shared order for ties, as the trend does", () => {
+    const a = levelRun("run-a", 2, "2026-10-15T16:34:00Z", "Missing")
+    const b = levelRun("run-b", 2, "2026-10-15T16:34:00Z", "Present")
+    const [row] = cisPortfolioRows([entry(tenantA, "Lab", [b, a])], { benchmark: "fakebook-os", version: "9.9.9" }, "2026-10-17")
+    // Same time: the run id decides, as compareAssessments orders them everywhere.
+    expect(portfolioRate(row!.levels.find(level => level.level === 2))).toBe(1)
+  })
+})

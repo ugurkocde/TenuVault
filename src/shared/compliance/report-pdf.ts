@@ -1,7 +1,7 @@
 import { CAPABILITY_STATUS_COLORS, CAPABILITY_STATUS_LABELS, CHECK_RESULT_COLORS, CHECK_RESULT_LABELS, COLLECTION_FAMILY_LABELS, COLLECTION_STATUS_LABELS, CONTROL_STATUS_COLORS, CONTROL_STATUS_LABELS, PLATFORM_LABELS, formatReportDate, frameworkCoverageLabel } from './presentation'
 import { capabilityComparison, comparisonCounts, type NativeAssessment } from './native'
 import { exportLimitations, nativeReportHeader, redactSecrets, redactText, workspaceReportHeader, type ExportContext, type ReportHeader, type SavedAssessment } from './export'
-import { coverageSourceLabel, exclusionsText, formatRate, levelCheckSummary, levelHeadline, unassignedText, type CisLevelReadiness, type CisReadinessSummary } from '../frameworks/cis-readiness'
+import { coverageStatement, exclusionsText, formatRate, headlineBasisNote, levelCheckSummary, levelHeadline, unassignedText, type CisLevelReadiness, type CisReadinessSummary } from '../frameworks/cis-readiness'
 import { recommendationTotals, type RecommendationResult } from '../frameworks/cis-recommendations'
 import { displayCheckValue } from './check-results'
 import type { CapabilityResult, CapabilityStatus, ControlAssessment, ControlStatus, TechnicalCheck } from './types'
@@ -50,7 +50,7 @@ const CAPABILITY_STYLE: Record<CapabilityStatus, { tone: Tone; marker: MarkerKin
   notApplicable: { tone: 'neutral', marker: 'dash' },
 }
 
-// Unable to check and outside scope share slate; charts draw outside scope lighter so the segments stay apart.
+// Unknown and outside scope share slate; charts draw outside scope lighter so the segments stay apart.
 const chartColor = (outcome: Outcome): RgbColor => outcome === 'outsideScope' ? mixColor(SLATE, PALETTE.white, 0.5) : CHECK_RESULT_COLORS[outcome]
 const outcomePill = (outcome: Outcome): PillOptions => ({ ...OUTCOME_STYLE[outcome], markerColor: CHECK_RESULT_COLORS[outcome] })
 const controlPill = (status: ControlStatus): PillOptions => ({ ...CONTROL_STYLE[status], markerColor: CONTROL_STATUS_COLORS[status] })
@@ -174,7 +174,7 @@ export function generateNativeFrameworkPDF(run: NativeAssessment, context: Expor
     { label: 'Matches', value: String(counts.matches), caption: 'match on an assigned policy', marker: 'filled', markerColor: CHECK_RESULT_COLORS.matches, valueColor: tileColor('matches') },
     { label: 'Different', value: String(counts.different), caption: 'an assigned policy sets another value', marker: 'half', markerColor: CHECK_RESULT_COLORS.different, valueColor: tileColor('different') },
     { label: 'Missing', value: String(counts.missing), caption: 'no assigned policy sets the value', marker: 'triangle', markerColor: CHECK_RESULT_COLORS.missing, valueColor: tileColor('missing') },
-    { label: 'Unable to check', value: String(counts.unableToCheck), caption: `plus ${counts.outsideScope} outside the selected scope`, marker: 'outline', markerColor: CHECK_RESULT_COLORS.unableToCheck, valueColor: tileColor('unableToCheck') },
+    { label: 'Unknown', value: String(counts.unableToCheck), caption: `plus ${counts.outsideScope} outside the selected scope`, marker: 'outline', markerColor: CHECK_RESULT_COLORS.unableToCheck, valueColor: tileColor('unableToCheck') },
   ])
   distribution(layout, { title: 'Outcome distribution', note: `${total} capabilities`, items: outcomeLegend(counts), total })
   const attention = run.assessment.capabilities
@@ -257,7 +257,7 @@ export function generateNativeFrameworkPDF(run: NativeAssessment, context: Expor
     const repeated = mapped.filter(cap => detailed.has(cap.capability.id))
     const cards = mapped.filter(cap => !detailed.has(cap.capability.id)).map(cap => ({ cap, ...capabilityCard(layout, cap) }))
     referenceHeader(layout, row, mapped, outcomeOf, cards[0] ? cards[0].lead + 7 : 30)
-    if (row.unavailableCheck) panel(layout, { title: 'Unable to check', items: [row.unavailableCheck.reason ?? 'No supported detector.'], marker: 'outline', color: SLATE, caption: row.control.id })
+    if (row.unavailableCheck) panel(layout, { title: 'Unknown', items: [row.unavailableCheck.reason ?? 'No supported detector.'], marker: 'outline', color: SLATE, caption: row.control.id })
     for (const { cap, blocks, repeat, lead } of cards) {
       layout.ensure(lead + 3)
       layout.anchor(`cap:${cap.capability.id}`)
@@ -698,11 +698,12 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
     const headline = headlines[index]!
     const deviating = level.different + level.missing + level.review
     const unassigned = unassignedText(level)
+    const basisNote = headlineBasisNote(levelHeadline(level))
     hero(layout, {
       value: headline.rate === null ? 'n/a' : formatRate(headline.rate), label: headline.label,
       lead: levelCheckSummary(level, product),
       // The settings figures stay counts; the rate with exclusions sits next to the raw headline.
-      lines: [`Settings: ${level.present} of ${level.assessedSettings} present; ${deviating} deviate.`, ...(headline.withExclusions ? [`${headline.withExclusions}, exclusions as of ${headline.exclusionsAsOf}.`] : []), ...(unassigned ? [unassigned] : [])],
+      lines: [`Settings: ${level.present} of ${level.assessedSettings} present; ${deviating} deviate.`, ...(headline.withExclusions ? [`${headline.withExclusions}, exclusions as of ${headline.exclusionsAsOf}.`] : []), ...(unassigned ? [unassigned] : []), ...(basisNote ? [basisNote] : [])],
       bar: { segments: headline.segments.slice(0, 1), total: headline.total },
     })
   })
@@ -739,20 +740,18 @@ function levelSection(layout: Layout, summary: CisReadinessSummary, level: CisLe
     { label: 'Excluded from score', value: String(head.exclusions) },
     { label: 'Exclusions as of', value: head.exclusionsAsOf },
     { label: 'Present in unassigned policies', value: level.presentInUnassigned === null ? 'Not recorded' : `${level.presentInUnassigned} of ${level.present}` },
-    ...(level.assessedAutomated === null ? [] : [{ label: 'Assessed automated', value: String(level.assessedAutomated) }]),
-    { label: 'Enumerated', value: String(level.enumerated) },
-    { label: 'Not assessed identifiers', value: String(level.notAssessed.length) },
+    // Coverage counts appear only with the full list of automated recommendations, in plain words.
+    ...(level.assessedAutomated === null ? [] : [{ label: 'Automated recommendations checked', value: String(level.assessedAutomated) }]),
+    ...(level.denominator === null ? [] : [{ label: 'Automated recommendations not checked', value: String(level.notAssessed.length) }]),
   ], caption)
   layout.heading('Coverage', { keep: 14 })
   if (level.coverage !== null) {
     drawStackedBar(doc, margin, layout.y, contentWidth, 3, [{ value: level.coverage, color: theme.accent }], 1)
     layout.y += 6
   }
-  layout.paragraph([{ text: level.coverage === null
-    ? level.coverageSource === 'none' ? 'No recommendation list is loaded, so coverage is not shown.' : `Coverage: ${coverageSourceLabel(level.coverageSource)}`
-    : `Coverage: ${percent(level.coverage)} (${level.assessedAutomated} of ${level.denominator}), source: ${coverageSourceLabel(level.coverageSource)}`, size: 8.4, style: 'bold', color: PALETTE.ink, lineHeight: 4 }], { after: 3 })
+  layout.paragraph([{ text: coverageStatement(level), size: 8.4, style: 'bold', color: PALETTE.ink, lineHeight: 4 }], { after: 3 })
   if (level.notAssessed.length) {
-    layout.paragraph([{ text: 'Not assessed identifiers', size: 7, style: 'bold', color: PALETTE.muted, lineHeight: 3.4 }, { text: level.notAssessed.join(', '), size: 7.6, color: PALETTE.body, lineHeight: 3.5, technical: true }], { after: 4 })
+    layout.paragraph([{ text: 'Automated recommendations not checked', size: 7, style: 'bold', color: PALETTE.muted, lineHeight: 3.4 }, { text: level.notAssessed.join(', '), size: 7.6, color: PALETTE.body, lineHeight: 3.5, technical: true }], { after: 4 })
   }
   if (level.exceptions?.length) {
     layout.heading(`Accepted exceptions, Level ${level.level}`, { toc: true, keep: 22 })

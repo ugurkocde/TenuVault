@@ -82,7 +82,8 @@ export const CHECK_RESULT_LABELS = {
   matches: "Matches",
   different: "Different",
   missing: "Missing",
-  unableToCheck: "Unable to check",
+  // The Governance score views call the same outcome Unknown; one term everywhere.
+  unableToCheck: "Unknown",
   outsideScope: "Outside scope",
 } as const;
 

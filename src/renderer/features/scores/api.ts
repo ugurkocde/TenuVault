@@ -85,6 +85,13 @@ export function formatDate(iso: string | null): string {
   return Number.isNaN(date.getTime()) ? "Unknown date" : date.toLocaleDateString(undefined, { dateStyle: "medium" })
 }
 
+/** How long ago a comparison ran: "today" on the same local day, never "0 days ago". Null without an age. */
+export function ageText(assessedAt: string, ageDays: number | null, now: Date = new Date()): string | null {
+  if (ageDays === null) return null
+  if (ageDays === 0) return new Date(assessedAt).toDateString() === now.toDateString() ? "today" : "less than a day ago"
+  return `${ageDays} day${ageDays === 1 ? "" : "s"} ago`
+}
+
 const PLATFORM_LABELS: Record<string, string> = { windows: "Windows", macos: "macOS", ios: "iOS", android: "Android", tenant: "Conditional Access" }
 
 export function scopeLabel(platforms: string[]): string {
