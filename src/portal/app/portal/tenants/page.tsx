@@ -728,13 +728,15 @@ function TenantsPageContent() {
       </div>
 
       {/* Selection bar: always present at one height, so selecting the first
-          tenant never pushes the results down. */}
+          tenant never pushes the results down. The blue utilities below are
+          the theme tokens: desktop.css renders them coral and carries their
+          dark overrides, which the literal coral classes do not have. */}
       {tenants.length > 0 && (
         <div
           data-selection-bar
           className={cn(
             "flex min-h-[60px] flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-3xl px-4 py-2 transition-colors duration-150 motion-reduce:transition-none",
-            selectedTenants.length > 0 ? "bg-coral-50" : "bg-white/70"
+            selectedTenants.length > 0 ? "bg-blue-50" : "bg-white"
           )}
         >
           <div
@@ -756,11 +758,11 @@ function TenantsPageContent() {
             <span aria-live="polite" className="text-sm">
               {selectedTenants.length > 0 ? (
                 <>
-                  <span className="font-medium text-coral-800">
+                  <span className="font-medium text-blue-800">
                     {selectedTenants.length} tenant{selectedTenants.length > 1 ? "s" : ""} selected
                   </span>
                   {hiddenSelected > 0 && (
-                    <span className="font-normal text-coral-800">
+                    <span className="font-normal text-blue-800">
                       {" "}({hiddenSelected} not shown by search)
                     </span>
                   )}
@@ -777,7 +779,7 @@ function TenantsPageContent() {
                 size="sm"
                 onClick={clearSelectionFromBar}
                 title="Clear selection (Esc)"
-                className="text-coral-800 hover:bg-coral-100 hover:text-coral-900"
+                className="text-blue-800 hover:bg-gray-100"
               >
                 <X className="h-4 w-4 mr-1" />
                 Clear
@@ -826,7 +828,7 @@ function TenantsPageContent() {
             className={cn(
               "group relative bg-white rounded-3xl border overflow-hidden cursor-pointer transition-[background-color,border-color,box-shadow] duration-150 motion-reduce:transition-none",
               selectedTenants.includes(tenant.id)
-                ? "border-coral-300 bg-coral-50/40 ring-2 ring-coral-500/70"
+                ? "border-blue-200 bg-blue-50/50 ring-2 ring-blue-500/70"
                 : "border-transparent hover:border-gray-200"
             )}
           >
@@ -846,7 +848,7 @@ function TenantsPageContent() {
                 disabled={editingTenantId === tenant.id}
                 className="h-5 w-5 rounded-md"
               />
-              <span className={selectedTenants.includes(tenant.id) ? "font-medium text-coral-700" : "text-gray-500"}>
+              <span className={selectedTenants.includes(tenant.id) ? "font-medium text-blue-700" : "text-gray-500"}>
                 {selectedTenants.includes(tenant.id) ? "Selected" : "Select tenant"}
               </span>
             </div>
@@ -1183,7 +1185,7 @@ function TenantsPageContent() {
                     onClick={(e) => toggleFromSurface(e, tenant)}
                     className={cn(
                       "cursor-pointer transition-colors duration-150 hover:bg-gray-50 motion-reduce:transition-none",
-                      selectedTenants.includes(tenant.id) && "bg-coral-50 hover:bg-coral-50"
+                      selectedTenants.includes(tenant.id) && "bg-blue-50 hover:bg-blue-50/50"
                     )}
                   >
                     <td className="px-6 py-4 whitespace-nowrap">

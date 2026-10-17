@@ -950,6 +950,12 @@ await check("tenant selection toggles from cards, rows, select all and clear wit
   assert(await waitForCondition(`${card(2)}.dataset.selected === 'true' && ${bar}.textContent.includes('2 tenants selected')`), "card click did not select the second tenant")
   assert(await evaluate(`document.querySelector('button[aria-label="Select all matching tenants"]').getAttribute('aria-checked') === 'true'`), "select all is not checked with every tenant selected")
   await screenshot("07-tenants-selected")
+  // Dark theme: the selected surfaces must take the dark overrides, not the
+  // light coral tints that would leave light text unreadable.
+  await evaluate(`document.documentElement.classList.add('dark')`)
+  assert(await evaluate(`getComputedStyle(document.querySelector('[data-selection-bar]')).backgroundColor === 'rgb(58, 32, 25)' && getComputedStyle(${card(1)}).backgroundColor === 'rgb(58, 32, 25)'`), "selected surfaces kept their light tint in dark mode")
+  await screenshot("07b-tenants-selected-dark")
+  await evaluate(`document.documentElement.classList.remove('dark')`)
   // Controls inside the card never toggle: the rename button opens the editor instead.
   await evaluate(`document.querySelector('button[aria-label="Rename tenant: Contoso 2"]').click()`)
   assert(await waitForCondition(`Boolean(document.querySelector('button[aria-label="Save tenant name"]')) && ${card(2)}.dataset.selected === 'true'`), "rename click changed the selection")
@@ -985,6 +991,7 @@ await check("tenant selection toggles from cards, rows, select all and clear wit
   assert(await evaluate(`document.activeElement?.getAttribute('aria-label') === 'Select all matching tenants'`), "Escape dropped focus from the bar instead of landing on select all")
   } finally {
     // Later checks start from an unfiltered grid with nothing selected.
+    await evaluate(`document.documentElement.classList.remove('dark')`).catch(() => {})
     await setSearch("").catch(() => {})
     await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Clear')?.click()`).catch(() => {})
     await evaluate(`document.querySelector('button[aria-label="Grid view"]')?.click()`).catch(() => {})
