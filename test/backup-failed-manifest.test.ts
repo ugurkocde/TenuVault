@@ -81,6 +81,22 @@ describe("failed backup manifest", () => {
     expect(job.log.slice(-2)).toEqual([expect.stringContaining(`Backup failed: ${job.exception}`), expect.stringContaining("Recorded this backup as failed.")])
   })
 
+  it("records a run the user cancels after claiming its folder as cancelled", async () => {
+    let job!: ReturnType<BackupEngine["start"]>
+    const { engine, saved, manifestPuts } = setup({ count: 3, override: url => {
+      if (graphItem(url, "p2")) engine.cancel(job.id)
+      return undefined
+    } })
+    job = engine.start(request)
+    await engine.waitForJob(job)
+    expect(job.status).toBe("Cancelled")
+    expect(manifestPuts()).toHaveLength(1)
+    const metadata = JSON.parse(saved.get(`${job.backupFolder}/metadata.json`)!)
+    expect(metadata).toMatchObject({ Status: "Cancelled", TenantId: TENANT, Trigger: "scheduled", Error: job.exception })
+    expect(metadata.Error).toMatch(/^Backup cancelled by you\./)
+    expect(job.log.at(-1)).toContain("Recorded this backup as cancelled.")
+  })
+
   it("records the run as failed when the manifest's sign-in fails before its PUT is sent", async () => {
     let refused = false
     const { engine, saved, manifestPuts } = setup({ count: 1, getToken: async store => {
@@ -182,7 +198,7 @@ describe("failed backup manifest", () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it("never lets a failed backup stand in for an older complete copy of a type during retention", async () => {
+  it.each(["Failed", "Cancelled"])("never lets a %s backup stand in for an older complete copy of a type during retention", async status => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date("2026-10-12T12:00:00Z"))
     const { engine, saved } = setup({ count: 1, retention: 30 })
@@ -192,7 +208,7 @@ describe("failed backup manifest", () => {
     saved.set(`${complete}/CompliancePolicies/Old.json`, "{}")
     saved.set(`${complete}/metadata.json`, JSON.stringify({ TenantId: TENANT, Status: "Success", Failures: 0, Scope: { Excluded: [] }, ItemCounts: { CompliancePolicies: 1, TotalPolicies: 1 } }))
     saved.set(`${failed}/CompliancePolicies/Newer.json`, "{}")
-    saved.set(`${failed}/metadata.json`, JSON.stringify({ TenantId: TENANT, Status: "Failed", Failures: 0, Scope: { Excluded: [] }, ItemCounts: { CompliancePolicies: 1, TotalPolicies: 1 } }))
+    saved.set(`${failed}/metadata.json`, JSON.stringify({ TenantId: TENANT, Status: status, Failures: 0, Scope: { Excluded: [] }, ItemCounts: { CompliancePolicies: 1, TotalPolicies: 1 } }))
     const job = engine.start(request)
     await vi.advanceTimersByTimeAsync(0)
     await engine.waitForJob(job)

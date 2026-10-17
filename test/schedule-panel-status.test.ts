@@ -30,7 +30,8 @@ function lastAttempt(status: BackupSchedule["lastStatus"]): string {
 describe("schedule panel last attempt", () => {
   it.each([
     [undefined, "Last automatic backup<", "text-gray-500"],
-    ["Cancelled", "Last automatic backup cancelled", "text-gray-500"],
+    // A cancelled automatic backup is shown like a failed one, named as cancelled.
+    ["Cancelled", "Last automatic backup cancelled", "text-red-600"],
     ["Failed", "Last automatic backup attempt failed", "text-red-600"],
     ["Completed", "Last automatic backup<", "text-green-600"],
   ] as const)("shows status %s with a matching label and icon", (status, label, icon) => {

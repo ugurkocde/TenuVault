@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { comparableSnapshot } from "../../../shared/intune/compare"
 import type { Item } from "../../../shared/intune/registry"
+import { stoppedEarly } from "../../../shared/intune/backup-status"
 
 /** One recorded backup item: the Intune object ID and the fingerprint of its backed-up content. */
 export interface ManifestEntry { id: string; hash: string }
@@ -39,8 +40,8 @@ export function incompleteReason(metadata: Record<string, any> | null, manifest:
   if (full && recordedStatus === undefined && !manifest) return "This backup is incomplete: it has no recorded completion status. Restore selected items from it, or restore from a complete backup instead."
   if (!metadata || (recordedStatus === undefined && !manifest)) return undefined
   const status = String(recordedStatus ?? "").toLowerCase()
-  // A backup that stopped early records what it saved, so those items may still be restored one by one.
-  if (status.includes("fail") && (full || !manifest)) return `This backup is recorded as failed and is incomplete. ${manifest ? "Restore selected items from it, or restore" : "Restore"} from a complete backup instead.`
+  // A backup that failed or was cancelled records what it saved, so those items may still be restored one by one.
+  if (stoppedEarly(status) && (full || !manifest)) return `This backup is recorded as ${status === "cancelled" ? "cancelled" : "failed"} and is incomplete. ${manifest ? "Restore selected items from it, or restore" : "Restore"} from a complete backup instead.`
   const folders = new Set(paths.map((path) => path.split("/")[1]))
   const failedRequested = metadataStrings(metadata.FailedTypes).filter((folder) => folders.has(folder))
   if (failedRequested.length) return `This backup is incomplete for ${failedRequested.join(", ")}: those types could not be read when the backup ran. Restore from a complete backup instead.`

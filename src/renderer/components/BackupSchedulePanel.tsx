@@ -4,6 +4,7 @@ import { AlertCircle, AlertTriangle, CalendarClock, CheckCircle2, Info, Layers, 
 import { Button } from "~/components/ui/button"
 import { Label } from "~/components/ui/label"
 import type { AppPreferences } from "../../shared/ipc"
+import { stoppedEarly } from "../../shared/intune/backup-status"
 import { COMMUNITY_RETENTION_DAYS } from "../../shared/plans"
 import { bridge } from "../lib/bridge"
 import { tenantLicense, tenantPlan, useLicense } from "../lib/license"
@@ -208,7 +209,7 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
                   {current.lastStatus === "Completed" ? (
                     <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0 text-green-600" />
                   ) : (
-                    <AlertCircle className={`mt-0.5 h-4 w-4 flex-shrink-0 ${current.lastStatus === "Failed" ? "text-red-600" : "text-gray-500"}`} />
+                    <AlertCircle className={`mt-0.5 h-4 w-4 flex-shrink-0 ${stoppedEarly(current.lastStatus) ? "text-red-600" : "text-gray-500"}`} />
                   )}
                   <span>
                     {formatWhen(current.lastAttemptAt)}

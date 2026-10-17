@@ -59,7 +59,7 @@ const emptyStats: TenantDashboardStats = {
   backupHistory: [], failedAttempts: [], liveRuns: [], periodStart: new Date(0), backupsError: null, lastDriftCheck: null,
 }
 const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000)
-const storedBackup = (status: "success" | "failed", timestamp: Date) => ({
+const storedBackup = (status: "success" | "failed" | "cancelled", timestamp: Date) => ({
   id: `backup-${timestamp.getTime()}`, tenantId: 42, tenantName: "Contoso", timestamp, status, policiesBackedUp: 3, duration: 0, size: 0,
 })
 
@@ -113,6 +113,16 @@ describe("Overview schedule status", () => {
     expect(markup).not.toContain("Action required")
     expect(markup).not.toContain("Last automatic backup attempt failed")
     expect(markup).toContain(`Last automatic backup ${formatWhen(schedule.lastAttemptAt)}`)
+  })
+})
+
+describe("Overview cancelled automatic backup", () => {
+  it("shows a cancelled automatic backup like a failed one, named as cancelled", () => {
+    state.schedules = [{ ...schedule, lastStatus: "Cancelled" }]
+    const markup = renderToStaticMarkup(createElement(OverviewPage))
+    expect(markup).toContain(`Last automatic backup cancelled ${formatWhen(schedule.lastAttemptAt)}</span>`)
+    expect(markup).toContain("text-red-700")
+    expect(markup).toContain("Action required")
   })
 })
 
@@ -219,6 +229,41 @@ describe("Dashboard backup counts", () => {
     const markup = renderDashboard()
     expect([chip(markup), running(markup), failed(markup)]).toEqual(["Running", "1", "0"])
     expect(markup).toContain("Target 95%, 1 of 1 backups succeeded")
+  })
+
+  it("counts a cancelled backup in storage only and shows Cancelled in a neutral chip", () => {
+    const cancelled = storedBackup("cancelled", hoursAgo(1))
+    state.stats = { ...emptyStats, periodStart: hoursAgo(24), latestBackup: cancelled, backupHistory: [cancelled, storedBackup("success", hoursAgo(2)), storedBackup("failed", hoursAgo(3))] }
+    const markup = renderDashboard()
+    const tile = markup.slice(markup.indexOf('aria-label="Last backup"'), markup.indexOf(">Last backup<"))
+    expect(tile).toMatch(/class="[^"]*bg-gray-100 text-gray-700[^"]*"><span[^>]*bg-gray-400[^>]*><\/span>Cancelled<\/span>/)
+    expect(chip(markup)).toBeNull()
+    expect(markup).toContain("3 backups in storage")
+    expect(failed(markup)).toBe("1")
+    expect(markup).toContain("50.0%")
+    expect(markup).toContain("Target 95%, 1 of 2 backups succeeded")
+  })
+
+  it("shows a cancelled automatic backup like a failed one in the Next Backup tile", () => {
+    state.schedules = [{ ...schedule, lastStatus: "Cancelled" }]
+    state.stats = { ...emptyStats, backupHistory: [storedBackup("cancelled", hoursAgo(1))] }
+    const markup = renderDashboard()
+    expect(markup).toContain(`<p class="mt-2 text-xs text-red-700">Last automatic backup cancelled ${formatWhen(schedule.lastAttemptAt)}</p>`)
+    expect(markup).not.toContain("before a backup was saved")
+  })
+
+  it("says how many backups could not be read, and nothing once they can", async () => {
+    let unresolved = 2
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("list-backups")
+      ? Response.json({ backups: [{ name: "backup-today", timestamp: hoursAgo(2).toISOString(), status: "Success", runId: "desktop-today" }], unresolved })
+      : Response.json([])))
+    useDashboardStats("7d", 42)
+    state.stats = await state.queryFn!()
+    expect(state.stats.unresolvedBackups).toBe(2)
+    expect(renderDashboard()).toContain("2 backups could not be read. Select Refresh to try again.")
+    unresolved = 0
+    state.stats = await state.queryFn!()
+    expect(renderDashboard()).not.toContain("could not be read. Select Refresh")
   })
 
   it("shows No data when no backup finished in the period", () => {

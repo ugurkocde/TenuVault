@@ -46,7 +46,7 @@ The steps across the top are **Backup**, **Items**, **Options**, **Review** and 
 
 ## Step 1: Choose a backup
 
-**Choose a backup** lists every backup for the selected tenant that holds at least one item and is not still running. Each entry shows the date and time, the number of items, the size and the backup status (**Complete**, **Completed with warnings**, **Failed**, **Incomplete** or **Status unknown**). A backup that left some types out also shows its scope.
+**Choose a backup** lists every backup for the selected tenant that holds at least one item and is not still running. Each entry shows the date and time, the number of items, the size and the backup status (**Complete**, **Completed with warnings**, **Failed**, **Cancelled**, **Incomplete** or **Status unknown**). A backup that left some types out also shows its scope.
 
 Backups that stopped early are listed too, because they still hold complete snapshots of the items they saved. When you choose one, step 2 shows: "This backup did not complete fully, so some items may be missing from it." For a backup whose status is unknown, step 2 shows why its details could not be read and that some items may be missing.
 

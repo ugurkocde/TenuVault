@@ -11,7 +11,7 @@ import { Alert, AlertDescription } from "~/components/ui/alert"
 import { BackupProgressModal } from "~/components/tenants/backup-progress-modal"
 import { BackupChangesDialog } from "~/components/backup/backup-changes-dialog"
 import { RestoreWizard } from "~/components/backup/restore-wizard"
-import { formatDate, formatDuration, formatSize, statusKind, statusLabel, TRIGGER_LABEL, type BackupSummary, type BackupTenant, type StatusKind } from "~/components/backup/types"
+import { formatDate, formatDuration, formatSize, statusKind, statusLabel, TRIGGER_LABEL, unresolvedNotice, type BackupSummary, type BackupTenant, type StatusKind } from "~/components/backup/types"
 import { BackupSchedulePanel } from "@desktop/components/BackupSchedulePanel"
 import { RunBackupDialog } from "@desktop/components/RunBackupDialog"
 import { useTenantPlan } from "@desktop/lib/license"
@@ -272,6 +272,12 @@ export default function BackupRestorePage() {
             {completedBackup && completedBackup.tenantId === selectedTenant?.credentials?.tenantId.toLowerCase() && (
               <div className="mb-4"><FirstBackupNote key={completedBackup.jobId} plan={plan} /></div>
             )}
+            {backupList.unresolved > 0 && (
+              <p className="mb-4 flex items-start gap-2 text-sm text-amber-800">
+                <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                {unresolvedNotice(backupList.unresolved)}
+              </p>
+            )}
             {retentionMessage && (
               <p className="mb-4 text-sm text-gray-500">
                 {retentionMessage}{" "}
@@ -509,7 +515,7 @@ function BackupDetails({ backup, first, storageAccountName, downloading, onChang
           <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
           <div className="space-y-1">
             {backup.status === "incomplete" && <p>This backup stopped before it finished, for example because TenuVault was closed. It holds only part of the tenant.</p>}
-            {backup.status !== "incomplete" && kind === "failed" && backup.totalPolicies > 0 && <p>This backup failed before it finished. It holds only the policies it saved and is never used as a complete backup.</p>}
+            {backup.status !== "incomplete" && kind === "failed" && backup.totalPolicies > 0 && <p>This backup {backup.status.toLowerCase() === "cancelled" ? "was cancelled" : "failed"} before it finished. It holds only the policies it saved and is never used as a complete backup.</p>}
             {backup.status === "unknown" && <p>{backup.error ?? "This backup does not record whether it finished."} Until its details can be read, whether it finished is not known and drift detection does not offer it.</p>}
             {(backup.failures ?? 0) > 0 && <p>{backup.failures} item{backup.failures === 1 ? "" : "s"} or type{backup.failures === 1 ? "" : "s"} could not be read. The backup log lists them.</p>}
             {(backup.failedTypes?.length ?? 0) > 0 && <p>Not read: {backup.failedTypes!.map(typeLabel).join(", ")}.</p>}

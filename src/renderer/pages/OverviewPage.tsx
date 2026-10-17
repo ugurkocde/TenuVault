@@ -7,6 +7,7 @@ import { Button } from "~/components/ui/button"
 import { Chip, Fact, RoundIconButton, Tile, TileLabel } from "~/components/dashboard/tiles"
 import { storageLabel } from "~/lib/storage-label"
 import type { SignedInAccount } from "../../shared/ipc"
+import { stoppedEarly } from "../../shared/intune/backup-status"
 import { backupTarget, trackBackup } from "../lib/backups"
 import { RunBackupDialog } from "../components/RunBackupDialog"
 import { UnreadableBackupsNotice } from "../components/UnreadableBackupsNotice"
@@ -100,7 +101,8 @@ export default function OverviewPage() {
           const tenantId = tenant.credentials?.tenantId?.toLowerCase() ?? ""
           const account = accounts.find((a) => a.tenantId === tenantId)
           const schedule = schedules.find((s) => s.tenantId === tenantId)
-          const failed = schedule?.lastStatus === "Failed"
+          // A cancelled automatic backup is shown like a failed one, named as cancelled.
+          const failed = stoppedEarly(schedule?.lastStatus)
           const license = tenantLicense(status, tenantId)
           return (
             <Tile key={tenant.id}>
@@ -182,7 +184,7 @@ export default function OverviewPage() {
                         <button type="button" className="flex w-full items-start gap-2 text-left text-red-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2" onClick={() => open(tenant, "/portal/backup?tab=schedule")}>
                           <AlertCircle className="h-4 w-4 shrink-0 text-red-600" />
                           <span className="min-w-0 break-words">
-                            Last automatic backup attempt failed{schedule.lastAttemptAt ? ` ${formatWhen(schedule.lastAttemptAt)}` : ""}
+                            {schedule?.lastStatus === "Cancelled" ? "Last automatic backup cancelled" : "Last automatic backup attempt failed"}{schedule?.lastAttemptAt ? ` ${formatWhen(schedule.lastAttemptAt)}` : ""}
                           </span>
                         </button>
                         <Chip tone="danger">Action required</Chip>

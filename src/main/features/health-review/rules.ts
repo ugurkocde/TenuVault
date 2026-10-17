@@ -94,7 +94,7 @@ export function checkBackups(tenantId: string, listing: BackupListing, now: Date
   if (health === "healthy" && latest) {
     return { family: "backup", evaluated: true, detail: `Latest complete backup ${hoursAgo(latest.timestamp, now)}.`, findings: [] }
   }
-  const failed = backups.some((backup) => ["failed", "partial", "incomplete"].includes(backup.status))
+  const failed = backups.some((backup) => ["failed", "cancelled", "partial", "incomplete"].includes(backup.status))
   const reason = latest
     ? latest.timestamp.getTime() > now.getTime()
       ? "The latest complete backup has a timestamp in the future; check the computer clock. Backup age is unknown."

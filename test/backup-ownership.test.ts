@@ -121,7 +121,7 @@ describe("backup folder ownership", () => {
     await expect(fetch(`${base}${name}`, { headers: { Authorization: "Bearer token" } })).rejects.toThrow("Backup authentication failed")
   })
 
-  it("records a cancelled folder as failed and keeps it through a later complete backup within retention", async () => {
+  it("records a cancelled folder as cancelled and keeps it through a later complete backup within retention", async () => {
     let hanging = true
     const { engine, saved, calls } = setup({ count: 1, override: url => {
       if (hanging && url.hostname === "graph.microsoft.com" && !url.pathname.endsWith("/deviceConfigurations")) return new Promise(() => {})
@@ -136,8 +136,8 @@ describe("backup folder ownership", () => {
     const manifest = `${cancelled.backupFolder}/metadata.json`
     const opened = openAzure(saved.get(manifest)!, [master], TENANT, new URL(`${base}${manifest}`))
     expect(opened.authenticated).toBe(true)
-    expect(JSON.parse(opened.data.toString())).toMatchObject({ Status: "Failed", TenantId: TENANT, Trigger: "manual", ItemCounts: { TotalPolicies: 0 }, Error: cancelled.exception })
-    expect(cancelled.log.join("\n")).toContain("Recorded this backup as failed.")
+    expect(JSON.parse(opened.data.toString())).toMatchObject({ Status: "Cancelled", TenantId: TENANT, Trigger: "manual", ItemCounts: { TotalPolicies: 0 }, Error: cancelled.exception })
+    expect(cancelled.log.join("\n")).toContain("Recorded this backup as cancelled.")
     hanging = false
     const original = new Map(saved)
     await vi.advanceTimersByTimeAsync(6 * 60 * 60_000 + 1000)
