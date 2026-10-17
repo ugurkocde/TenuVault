@@ -257,8 +257,8 @@ export function BackgroundTasksPanel() {
   }
 
   return (
-    <div ref={panel} className="fixed bottom-[calc(var(--floating-progress-offset,1rem)+0.5rem)] right-4 z-50 w-80">
-      <section aria-label="Background activity" className="overflow-hidden rounded-3xl border border-border bg-card shadow-sm">
+    <div ref={panel} className="fixed bottom-[calc(var(--floating-progress-offset,1rem)+0.5rem)] right-4 z-50 w-[22rem] max-w-[calc(100vw-2rem)]">
+      <section aria-label="Background activity" className="overflow-hidden rounded-3xl border border-border bg-card shadow-[0_12px_32px_-12px_rgba(22,21,20,0.35)]">
         <div className="flex items-center gap-2 px-4 py-3">
           {runningCount > 0 ? (
             <LoaderCircle className="h-4 w-4 shrink-0 animate-spin text-blue-700" aria-hidden="true" />

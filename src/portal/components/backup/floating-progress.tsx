@@ -1,31 +1,203 @@
 "use client"
 
 import { useState, useEffect, useLayoutEffect, useRef } from "react"
-import { useBackupProgress } from "~/contexts/BackupProgressContext"
+import { useBackupProgress, type BackupJob } from "~/contexts/BackupProgressContext"
 import { Progress } from "~/components/ui/progress"
-import { Button } from "~/components/ui/button"
 import { cn } from "~/lib/utils"
 import { bridge } from "@desktop/lib/bridge"
 import { FirstBackupNote } from "@desktop/components/FirstBackupNote"
 import { tenantLicense, tenantPlan, useLicense } from "@desktop/lib/license"
 import { azureStoragePortalUrl } from "~/lib/azure-portal"
-import { 
+import { backupActivitySummary, backupJobPhase, type BackupJobPhase } from "~/lib/backup-job-display"
+import {
   Ban,
   X,
-  ChevronUp,
   ChevronDown,
+  ChevronUp,
   CheckCircle2,
+  Clock3,
+  LoaderCircle,
   XCircle,
-  Activity,
   ExternalLink,
-  FileText
+  FileText,
 } from "lucide-react"
 
+const PHASE_LABEL: Record<BackupJobPhase, string> = {
+  running: "Backup in progress",
+  queued: "Backup queued",
+  completed: "Backup completed",
+  failed: "Backup failed",
+  cancelled: "Backup cancelled",
+}
+
+function formatTime(dateString?: string): string {
+  if (!dateString) return "N/A"
+  return new Date(dateString).toLocaleTimeString()
+}
+
+function formatDuration(startTime?: string, endTime?: string): string {
+  if (!startTime) return "N/A"
+  const start = new Date(startTime).getTime()
+  const end = endTime ? new Date(endTime).getTime() : Date.now()
+  const duration = Math.max(0, Math.floor((end - start) / 1000))
+  return `${Math.floor(duration / 60)}m ${duration % 60}s`
+}
+
+function PhaseIcon({ phase }: { phase: BackupJobPhase }) {
+  if (phase === "running") return <LoaderCircle className="h-5 w-5 animate-spin text-coral-500" aria-hidden="true" />
+  if (phase === "queued") return <Clock3 className="h-5 w-5 text-gray-500" aria-hidden="true" />
+  if (phase === "completed") return <CheckCircle2 className="h-5 w-5 text-green-600" aria-hidden="true" />
+  if (phase === "cancelled") return <Ban className="h-5 w-5 text-gray-500" aria-hidden="true" />
+  return <XCircle className="h-5 w-5 text-destructive" aria-hidden="true" />
+}
+
+interface JobRowProps {
+  job: BackupJob
+  expanded: boolean
+  showingOutput: boolean
+  cancelling: boolean
+  cancelError?: string
+  onToggleExpanded: () => void
+  onToggleOutput: () => void
+  onCancel: () => void
+  onDismiss: () => void
+}
+
+function JobRow({ job, expanded, showingOutput, cancelling, cancelError, onToggleExpanded, onToggleOutput, onCancel, onDismiss }: JobRowProps) {
+  const { status: licenseStatus } = useLicense()
+  const phase = backupJobPhase(job)
+  const active = phase === "running" || phase === "queued"
+  const portalUrl = azureStoragePortalUrl({
+    tenantId: job.credentials.tenantId,
+    subscriptionId: job.resources.subscriptionId,
+    resourceGroupName: job.resources.resourceGroupName,
+    storageAccountName: job.resources.storageAccountName,
+  })
+  const detail = active && job.progressMessage ? job.progressMessage : PHASE_LABEL[phase]
+
+  return (
+    <li className="px-4 py-3">
+      <div className="flex items-start gap-2.5">
+        <span className="mt-0.5 shrink-0"><PhaseIcon phase={phase} /></span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2">
+            <p className="min-w-0 flex-1 truncate text-sm font-medium tracking-tight text-foreground">{job.tenantName}</p>
+            {active && <span className="shrink-0 text-xs font-medium tabular-nums text-muted-foreground">{job.progress}%</span>}
+          </div>
+          <p className="truncate text-xs text-muted-foreground" title={detail}>{detail}</p>
+          {active && (
+            <Progress
+              value={job.progress}
+              aria-label={`${job.tenantName} backup progress`}
+              className={cn("mt-2 h-1 bg-secondary [&>div]:bg-coral-500", phase === "queued" && "[&>div]:bg-muted-foreground")}
+            />
+          )}
+          {cancelError && <p role="alert" className="mt-1.5 break-words text-xs text-destructive">{cancelError}</p>}
+          {job.pollError && <p role="alert" className="mt-1.5 break-words text-xs text-destructive">{job.pollError}</p>}
+          {job.isComplete && job.isSuccessful && !job.quiet && (
+            <FirstBackupNote plan={tenantPlan(tenantLicense(licenseStatus, job.tenantId))} />
+          )}
+
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium">
+            {active && job.jobId.startsWith("desktop-") && (
+              <button
+                type="button"
+                disabled={cancelling}
+                onClick={onCancel}
+                aria-label={`Cancel backup for ${job.tenantName}`}
+                className="text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+              >
+                {cancelling ? "Cancelling…" : "Cancel backup"}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onToggleExpanded}
+              aria-expanded={expanded}
+              aria-label={`${expanded ? "Hide" : "Show"} details for ${job.tenantName}`}
+              className="text-muted-foreground transition-colors hover:text-foreground"
+            >
+              {expanded ? "Hide details" : "Details"}
+            </button>
+          </div>
+
+          {expanded && (
+            <div className="mt-2.5 space-y-2.5 border-t border-border pt-2.5">
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
+                <dt className="text-muted-foreground">Status</dt>
+                <dd className={cn("text-right font-medium text-foreground", phase === "completed" && "text-green-600", phase === "failed" && "text-destructive")}>{job.status}</dd>
+                <dt className="text-muted-foreground">Started</dt>
+                <dd className="text-right tabular-nums text-foreground">{formatTime(job.startTime)}</dd>
+                {job.isComplete && (
+                  <>
+                    <dt className="text-muted-foreground">Finished</dt>
+                    <dd className="text-right tabular-nums text-foreground">{formatTime(job.endTime)}</dd>
+                    <dt className="text-muted-foreground">Duration</dt>
+                    <dd className="text-right tabular-nums text-foreground">{formatDuration(job.startTime, job.endTime)}</dd>
+                  </>
+                )}
+              </dl>
+              {job.exception && (
+                <div className={cn("rounded-2xl p-3", phase === "cancelled" ? "bg-gray-100" : "bg-red-50")}>
+                  <p className={cn("text-xs", phase === "cancelled" ? "text-gray-700" : "text-red-700")}>{job.exception}</p>
+                </div>
+              )}
+              {job.output && (
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={onToggleOutput}
+                    aria-expanded={showingOutput}
+                    className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    <FileText className="h-3.5 w-3.5" aria-hidden="true" />
+                    {showingOutput ? "Hide output" : "Show output"}
+                  </button>
+                  {showingOutput && (
+                    <div className="max-h-40 overflow-auto rounded-xl bg-slate-950 p-3 text-xs">
+                      <pre className="whitespace-pre-wrap break-words text-slate-50">{job.output}</pre>
+                    </div>
+                  )}
+                </div>
+              )}
+              {job.isComplete && portalUrl && (
+                <button
+                  type="button"
+                  onClick={() => window.open(portalUrl, "_blank")}
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                  View in Azure
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+        {job.isComplete && (
+          <button
+            type="button"
+            onClick={onDismiss}
+            aria-label={`Dismiss backup for ${job.tenantName}`}
+            className="shrink-0 rounded-full p-1 text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        )}
+      </div>
+    </li>
+  )
+}
+
+/**
+ * One compact panel for every backup in flight, fixed at the bottom right. Jobs are
+ * rows in a single list under a summary header, so two or three backups stay a small
+ * stack instead of a tower of full cards. The whole panel collapses to its header.
+ */
 export function FloatingProgress() {
   const { activeJobs: allJobs, removeJob } = useBackupProgress()
-  const { status: licenseStatus } = useLicense()
   const activeJobs = allJobs.filter(job => !job.isHidden)
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null)
+  const [collapsed, setCollapsed] = useState(false)
   const [showOutput, setShowOutput] = useState<Record<string, boolean>>({})
   const [userCollapsed, setUserCollapsed] = useState<Set<string>>(new Set())
   const [cancelling, setCancelling] = useState<Record<string, boolean>>({})
@@ -65,42 +237,20 @@ export function FloatingProgress() {
 
   if (activeJobs.length === 0) return null
 
-  const formatTime = (dateString?: string) => {
-    if (!dateString) return "N/A"
-    return new Date(dateString).toLocaleTimeString()
-  }
-
-  const getDuration = (startTime?: string, endTime?: string) => {
-    if (!startTime) return "N/A"
-    const start = new Date(startTime).getTime()
-    const end = endTime ? new Date(endTime).getTime() : Date.now()
-    const duration = Math.floor((end - start) / 1000)
-    const minutes = Math.floor(duration / 60)
-    const seconds = duration % 60
-    return `${minutes}m ${seconds}s`
-  }
-
   const toggleJobExpansion = (jobId: string) => {
     setExpandedJobId(prevId => {
       const isCurrentlyExpanded = prevId === jobId
       if (isCurrentlyExpanded) {
-        // User is collapsing, track this
         setUserCollapsed(prev => new Set(prev).add(jobId))
         return null
-      } else {
-        // User is expanding, remove from collapsed set
-        setUserCollapsed(prev => {
-          const newSet = new Set(prev)
-          newSet.delete(jobId)
-          return newSet
-        })
-        return jobId
       }
+      setUserCollapsed(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(jobId)
+        return newSet
+      })
+      return jobId
     })
-  }
-
-  const toggleOutput = (jobId: string) => {
-    setShowOutput(prev => ({ ...prev, [jobId]: !prev[jobId] }))
   }
 
   const cancelJob = async (jobId: string) => {
@@ -114,195 +264,66 @@ export function FloatingProgress() {
     }
   }
 
+  const anyActive = activeJobs.some(job => !job.isComplete)
+  const anyFailed = activeJobs.some(job => backupJobPhase(job) === "failed")
+  const anySuccessful = activeJobs.some(job => job.isSuccessful)
+  const finished = activeJobs.filter(job => job.isComplete)
+
   return (
-    <div ref={panel} className="fixed bottom-4 right-4 z-50 space-y-2">
-      {activeJobs.map((job) => {
-        const isExpanded = expandedJobId === job.jobId
-        const showingOutput = showOutput[job.jobId] || false
-        const portalUrl = azureStoragePortalUrl({
-          tenantId: job.credentials.tenantId,
-          subscriptionId: job.resources.subscriptionId,
-          resourceGroupName: job.resources.resourceGroupName,
-          storageAccountName: job.resources.storageAccountName,
-        })
-
-        return (
-          <div
-            key={job.jobId}
-            className={cn(
-              "bg-card rounded-3xl border border-border shadow-sm transition-all duration-300 overflow-hidden",
-              isExpanded ? "w-96" : "w-80"
-            )}
+    <div ref={panel} className="fixed bottom-4 right-4 z-50 w-[22rem] max-w-[calc(100vw-2rem)]">
+      <section aria-label="Backup activity" className="overflow-hidden rounded-3xl border border-border bg-card shadow-[0_12px_32px_-12px_rgba(22,21,20,0.35)]">
+        <div className="flex items-center gap-2 px-4 py-3">
+          {anyActive ? (
+            <LoaderCircle className="h-4 w-4 shrink-0 animate-spin text-coral-500" aria-hidden="true" />
+          ) : anyFailed ? (
+            <XCircle className="h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />
+          ) : anySuccessful ? (
+            <CheckCircle2 className="h-4 w-4 shrink-0 text-green-600" aria-hidden="true" />
+          ) : (
+            <Ban className="h-4 w-4 shrink-0 text-gray-500" aria-hidden="true" />
+          )}
+          <h2 className="min-w-0 flex-1 truncate text-sm font-medium tracking-tight text-foreground">
+            Backups
+            <span className="ml-2 font-normal text-muted-foreground">{backupActivitySummary(activeJobs)}</span>
+          </h2>
+          {finished.length > 0 && (
+            <button
+              type="button"
+              onClick={() => finished.forEach(job => removeJob(job.jobId))}
+              className="shrink-0 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Clear
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setCollapsed(value => !value)}
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? "Show backups" : "Hide backups"}
+            className="shrink-0 rounded-full p-1 text-muted-foreground transition-colors hover:text-foreground"
           >
-            {/* Header */}
-            <div className="p-5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  {job.isComplete ? (
-                    job.isSuccessful ? (
-                      <CheckCircle2 className="h-5 w-5 text-green-600" />
-                    ) : job.status === "Cancelled" ? (
-                      <Ban className="h-5 w-5 text-gray-500" />
-                    ) : (
-                      <XCircle className="h-5 w-5 text-destructive" />
-                    )
-                  ) : (
-                    <Activity className={cn("h-5 w-5 text-blue-600", job.status !== "Queued" && "animate-pulse")} />
-                  )}
-                  <div>
-                    <h4 className="font-medium tracking-tight text-sm">{job.tenantName}</h4>
-                    <p className="text-xs text-gray-500">
-                      {job.isComplete ? (
-                        job.isSuccessful ? "Backup completed" : job.status === "Cancelled" ? "Backup cancelled" : "Backup failed"
-                      ) : job.status === "Queued" ? (
-                        "Backup queued"
-                      ) : (
-                        "Backup in progress"
-                      )}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 w-8 p-0"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      toggleJobExpansion(job.jobId)
-                    }}
-                  >
-                    {isExpanded ? (
-                      <ChevronUp className="h-4 w-4" />
-                    ) : (
-                      <ChevronDown className="h-4 w-4" />
-                    )}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 w-8 p-0"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      removeJob(job.jobId)
-                    }}
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-
-              {job.isComplete && job.isSuccessful && !job.quiet && (
-                <div className="mt-3"><FirstBackupNote plan={tenantPlan(tenantLicense(licenseStatus, job.tenantId))} /></div>
-              )}
-
-              {/* Progress Bar */}
-              {!job.isComplete && (
-                <div className="mt-3 space-y-1">
-                  <div className="flex justify-between text-xs">
-                    <span className="text-gray-600">{job.progressMessage}</span>
-                    <span className="font-medium">{job.progress}%</span>
-                  </div>
-                  <Progress value={job.progress} className="h-1.5 bg-gray-100 [&>div]:bg-coral-500" />
-                  {job.jobId.startsWith("desktop-") && (
-                    <Button variant="outline" size="sm" disabled={cancelling[job.jobId]} onClick={() => void cancelJob(job.jobId)}>
-                      {cancelling[job.jobId] ? "Cancelling…" : "Cancel backup"}
-                    </Button>
-                  )}
-                  {cancelErrors[job.jobId] && <p role="alert" className="break-words text-xs text-destructive">{cancelErrors[job.jobId]}</p>}
-                  {job.pollError && <p role="alert" className="break-words text-xs text-destructive">{job.pollError}</p>}
-                </div>
-              )}
-            </div>
-
-            {/* Expanded Content */}
-            {isExpanded && (
-              <div className="px-5 pb-5 space-y-3 text-sm">
-                {/* Status Details */}
-                <div className="space-y-2 rounded-2xl bg-gray-50 p-4">
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Status:</span>
-                    <span className={cn(
-                      "font-medium",
-                      job.isSuccessful && "text-green-600",
-                      job.status === "Failed" && "text-destructive"
-                    )}>
-                      {job.status}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Start Time:</span>
-                    <span>{formatTime(job.startTime)}</span>
-                  </div>
-                  {job.isComplete && (
-                    <>
-                      <div className="flex justify-between">
-                        <span className="text-gray-500">End Time:</span>
-                        <span>{formatTime(job.endTime)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-500">Duration:</span>
-                        <span>{getDuration(job.startTime, job.endTime)}</span>
-                      </div>
-                    </>
-                  )}
-                </div>
-
-                {/* Exception Message */}
-                {job.exception && (
-                  <div className={cn("rounded-2xl p-3", job.status === "Cancelled" ? "bg-gray-100" : "bg-red-50")}>
-                    <p className={cn("text-xs", job.status === "Cancelled" ? "text-gray-700" : "text-red-700")}>{job.exception}</p>
-                  </div>
-                )}
-
-                {/* Job Output */}
-                {job.output && (
-                  <div className="space-y-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => toggleOutput(job.jobId)}
-                      className="w-full"
-                    >
-                      <FileText className="mr-2 h-4 w-4" />
-                      {showingOutput ? "Hide" : "Show"} Output
-                    </Button>
-                    {showingOutput && (
-                      <div className="max-h-40 overflow-auto rounded-2xl bg-slate-950 p-3 text-xs">
-                        <pre className="text-slate-50">{job.output}</pre>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Actions */}
-                {job.isComplete && portalUrl && (
-                  <div className="flex gap-2 pt-2">
-                    <Button variant="outline" size="sm" className="flex-1" onClick={() => window.open(portalUrl, "_blank")}>
-                      <ExternalLink className="mr-2 h-3 w-3" />
-                      View in Azure
-                    </Button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )
-      })}
-
-      {/* Multiple jobs indicator */}
-      {activeJobs.length > 1 && (() => {
-        const running = activeJobs.filter(j => !j.isComplete && j.status !== "Queued").length
-        const queued = activeJobs.filter(j => !j.isComplete && j.status === "Queued").length
-        if (running + queued === 0) return null
-        return (
-          <div className="text-center">
-            <span className="text-xs text-gray-500">
-              {queued > 0 ? `${running} running, ${queued} queued` : `${running} active backup${running !== 1 ? 's' : ''}`}
-            </span>
-          </div>
-        )
-      })()}
+            {collapsed ? <ChevronUp className="h-4 w-4" aria-hidden="true" /> : <ChevronDown className="h-4 w-4" aria-hidden="true" />}
+          </button>
+        </div>
+        {!collapsed && (
+          <ul className="max-h-[min(60vh,26rem)] divide-y divide-border overflow-y-auto border-t border-border">
+            {activeJobs.map(job => (
+              <JobRow
+                key={job.jobId}
+                job={job}
+                expanded={expandedJobId === job.jobId}
+                showingOutput={showOutput[job.jobId] || false}
+                cancelling={cancelling[job.jobId] || false}
+                cancelError={cancelErrors[job.jobId]}
+                onToggleExpanded={() => toggleJobExpansion(job.jobId)}
+                onToggleOutput={() => setShowOutput(prev => ({ ...prev, [job.jobId]: !prev[job.jobId] }))}
+                onCancel={() => void cancelJob(job.jobId)}
+                onDismiss={() => removeJob(job.jobId)}
+              />
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   )
 }
