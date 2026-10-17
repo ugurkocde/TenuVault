@@ -320,14 +320,21 @@ function CisRunView({ run, rerun = false, error = "", policies, reference, names
   // control is gone (a first run replaces setup with results), but only when focus is still in
   // the overlay: focus the user moved to the sidebar or a dialog is left where it is.
   const overlayRef = useRef<HTMLDivElement>(null)
+  // Captured once, in a ref: Strict Mode replays the mount effect, and a recapture after the
+  // first cleanup would save the overlay itself instead of the control that started the run.
+  const restoreFocusTo = useRef<{ captured: boolean; target: HTMLElement | null }>({ captured: false, target: null })
   useEffect(() => {
     const overlay = overlayRef.current
-    const previouslyFocused = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null
+    if (!restoreFocusTo.current.captured) {
+      const active = document.activeElement
+      restoreFocusTo.current = { captured: true, target: active instanceof HTMLElement && active !== document.body && !(overlay && overlay.contains(active)) ? active : null }
+    }
     overlay?.focus({ preventScroll: true })
     return () => {
       const active = document.activeElement
       if (active && active !== document.body && !(overlay && overlay.contains(active))) return
-      if (previouslyFocused?.isConnected) previouslyFocused.focus({ preventScroll: true })
+      const target = restoreFocusTo.current.target
+      if (target?.isConnected) target.focus({ preventScroll: true })
       else document.querySelector<HTMLElement>('[aria-label="Results header"]')?.focus({ preventScroll: true })
     }
   }, [])

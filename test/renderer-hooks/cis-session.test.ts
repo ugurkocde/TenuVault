@@ -1,4 +1,4 @@
-import { act, createElement } from "react"
+import { act, createElement, StrictMode } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter, Route, Routes } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -75,13 +75,16 @@ function stubService(options: { history?: ReturnType<typeof assessment>[]; unrea
 
 const roots: Root[] = []
 const containers: HTMLDivElement[] = []
-function render(path = "/portal/frameworks/cis-benchmarks"): { container: HTMLDivElement; navigate: (to: string) => void } {
+function render(path = "/portal/frameworks/cis-benchmarks", strict = false): { container: HTMLDivElement; navigate: (to: string) => void } {
   const container = document.createElement("div")
   document.body.appendChild(container)
   containers.push(container)
   const root = createRoot(container)
   roots.push(root)
-  const tree = (to: string) => createElement(MemoryRouter, { key: to, initialEntries: [to] }, createElement(Routes, null, createElement(Route, { path: "/portal/frameworks/:frameworkId", element: createElement(FrameworksPage) }), createElement(Route, { path: "/portal/dashboard", element: createElement("p", null, "Dashboard") })))
+  const tree = (to: string) => {
+    const app = createElement(MemoryRouter, { key: to, initialEntries: [to] }, createElement(Routes, null, createElement(Route, { path: "/portal/frameworks/:frameworkId", element: createElement(FrameworksPage) }), createElement(Route, { path: "/portal/dashboard", element: createElement("p", null, "Dashboard") })))
+    return strict ? createElement(StrictMode, null, app) : app
+  }
   act(() => { root.render(tree(path)) })
   return { container, navigate: to => act(() => { root.render(tree(to)) }) }
 }
@@ -262,6 +265,39 @@ describe("Run again", () => {
     // Focus returns to the button that started the failed re-run.
     await waitFor(() => document.activeElement === buttonNamed(container, "Run again"))
     expect(actions.filter(body => body.action === "assess").length).toBe(0)
+  })
+
+  it("returns focus to Run again after a failed re-run under Strict Mode", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    stubService({ answer: body => {
+      if (body.action === "running-job") return { body: { jobId: null } }
+      if (body.action === "assess-start") return { body: { jobId: "job-1" } }
+      if (body.action === "assess-status") return { body: snapshot("failed", { error: "Request failed (502)." }) }
+      return { status: 500, body: { error: "unexpected" } }
+    } })
+    const { container } = render("/portal/frameworks/cis-benchmarks", true)
+    await flush()
+    buttonNamed(container, "Run again")!.focus()
+    await act(async () => { buttonNamed(container, "Run again")!.click() })
+    await waitFor(() => container.textContent.includes("Request failed (502)"))
+    await waitFor(() => document.activeElement === buttonNamed(container, "Run again"))
+  })
+
+  it("returns focus to Start Assessment after a failed first run under Strict Mode", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    stubService({ history: [], answer: body => {
+      if (body.action === "running-job") return { body: { jobId: null } }
+      if (body.action === "assess-start") return { body: { jobId: "job-1" } }
+      if (body.action === "assess-status") return { body: snapshot("failed", { error: "Request failed (502)." }) }
+      return { status: 500, body: { error: "unexpected" } }
+    } })
+    const { container } = render("/portal/frameworks/cis-benchmarks", true)
+    await flush()
+    await waitFor(() => !!buttonNamed(container, "Start Assessment") && !buttonNamed(container, "Start Assessment")!.disabled)
+    buttonNamed(container, "Start Assessment")!.focus()
+    await act(async () => { buttonNamed(container, "Start Assessment")!.click() })
+    await waitFor(() => container.textContent.includes("Request failed (502)"))
+    await waitFor(() => document.activeElement === buttonNamed(container, "Start Assessment"))
   })
 
   it("replaces the previous results when the re-run completes", async () => {
