@@ -91,6 +91,7 @@ describe("Azure notification watcher scripts", () => {
     expect(runbook).toContain("[System.Int16]")
     expect(runbook).toContain('$listText.IndexOf("<")')
     expect(setup).toContain("regional Automation account quota")
+    expect(runbook).toContain("Mail send as $From failed with HTTP $statusCode")
   })
 
   it("watcher and desktop queries exclude read operations server side", () => {
