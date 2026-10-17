@@ -18,7 +18,7 @@ No on-page change can guarantee position 1, 2 or 3, and anyone who promises that
 | AI search readiness | 10% | 76 | llms.txt, llms-small.txt and llms-full.txt exist on docs. Definition-first paragraphs and FAQs added here improve citability. |
 | Images | 5% | 60 | README icon had empty alt text (fixed). Docs carry few screenshots, so image search and rich snippets have little to work with. |
 
-Weighted overall, performance excluded and renormalized: about 75. Off-page authority is outside this scoring model and unmeasured; the launch date and GitHub signals suggest it is weak, but only a backlink profile can confirm that.
+Weighted overall, performance excluded and renormalized: about 76.5 using the post-PR on-page score (about 74 with the pre-PR score). Off-page authority is outside this scoring model and unmeasured; the launch date and GitHub signals suggest it is weak, but only a backlink profile can confirm that.
 
 ## Keyword to URL map (one owner per phrase)
 

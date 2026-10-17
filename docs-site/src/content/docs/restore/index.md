@@ -14,7 +14,7 @@ faq:
     answer: "Yes, with the MSP plan. Copies keep their original names, get the Default scope tag and are never assigned, so you recreate groups, exclusions and filters in the target tenant and then assign the copies."
 ---
 
-An Intune restore brings Microsoft Intune policies back exactly as they were when a backup ran, including policies that were changed or deleted afterwards. The restore wizard walks you through it: pick a backup, choose the policies, decide how to restore them, review exactly what will happen to each policy, and then watch the restore run. For the product overview, see [Intune restore with TenuVault](https://www.tenuvault.com/intune-restore).
+An Intune restore brings Microsoft Intune policies back as they were when a backup ran, including policies that were changed or deleted afterwards. Recreated policies get new IDs in Intune, and references within the same restore are pointed to them. The restore wizard walks you through it: pick a backup, choose the policies, decide how to restore them, review exactly what will happen to each policy, and then watch the restore run. For the product overview, see [Intune restore with TenuVault](https://www.tenuvault.com/intune-restore).
 
 ## Before you start
 
