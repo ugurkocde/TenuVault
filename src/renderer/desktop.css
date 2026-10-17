@@ -176,24 +176,24 @@ html:has([data-flow-shell]) {
   scroll-padding-bottom: calc(var(--action-bar-height, 6rem) + 1rem + var(--floating-progress-offset, 0px));
 }
 
-/* CIS run overlay (FrameworksPage CisRunView). Transform and opacity only, so the animation runs
+/* Run overlay (components/RunOverlay). Transform and opacity only, so the animation runs
    on the compositor: no layout, no paint of the page underneath, no JavaScript per frame. */
-@keyframes cis-run-fade {
+@keyframes run-fade {
   from { opacity: 0; }
   to { opacity: 1; }
 }
-@keyframes cis-run-rise {
+@keyframes run-rise {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
 }
-@keyframes cis-run-indeterminate {
+@keyframes run-indeterminate {
   from { transform: translateX(-110%); }
   to { transform: translateX(320%); }
 }
-.cis-run-overlay { animation: cis-run-fade 0.18s ease-out; }
-.cis-run-panel { animation: cis-run-rise 0.3s ease-out; }
-.cis-run-indeterminate { animation: cis-run-indeterminate 1.3s ease-in-out infinite; }
-.cis-results-reveal { animation: cis-run-rise 0.45s ease-out both; }
+.run-overlay { animation: run-fade 0.18s ease-out; }
+.run-panel { animation: run-rise 0.3s ease-out; }
+.run-indeterminate { animation: run-indeterminate 1.3s ease-in-out infinite; }
+.run-results-reveal { animation: run-rise 0.45s ease-out both; }
 @media (prefers-reduced-motion: reduce) {
-  .cis-run-overlay, .cis-run-panel, .cis-run-indeterminate, .cis-results-reveal { animation: none; }
+  .run-overlay, .run-panel, .run-indeterminate, .run-results-reveal { animation: none; }
 }

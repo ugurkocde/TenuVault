@@ -74,7 +74,7 @@ TenuVault reads your Intune policies and compares them with the framework mappin
 
 ### 2. Follow the progress
 
-A progress bar shows the current step, for example "Reading settings catalog policies (1 of 12): 4 of 37 policies", with the percentage and elapsed time. Click **Cancel comparison** to stop it.
+While you stay on the page, the comparison fills it with its progress: the current step, for example "Reading settings catalog policies (1 of 12): 4 of 37 policies", with the percentage and elapsed time. Click **Cancel comparison** there to stop it. Previous results stay underneath and come back unchanged if the comparison does not finish.
 
 The comparison runs in the background, so you can keep using TenuVault:
 
