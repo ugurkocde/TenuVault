@@ -22,7 +22,7 @@
     "performance": null,
     "ai_search_readiness": 76,
     "images": 60,
-    "weighted_overall_excluding_performance": 75
+    "weighted_overall_excluding_performance": 76.5
   },
   "key_findings": [
     "Ranking pages live on www (separate Next.js repo) and are already well optimized on page",
