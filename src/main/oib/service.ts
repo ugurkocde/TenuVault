@@ -269,8 +269,8 @@ async function backupOptions(body: RecordJson): Promise<OibBackupOptions> {
   const tenant = tenantOf(body.tenantId)
   const folders = foldersOf(body.folders)
   if (!hasStorage(body)) return { recent: null }
-  // A failed backup holds only part of the tenant, so it never hides an older finished one.
-  const finished = (await tenantBackups(body, tenant)).filter((backup) => !["running", "incomplete", "failed"].includes(normalizeBackupStatus(backup)))
+  // A failed or cancelled backup holds only part of the tenant, so it never hides an older finished one.
+  const finished = (await tenantBackups(body, tenant)).filter((backup) => !["running", "incomplete", "failed", "cancelled"].includes(normalizeBackupStatus(backup)))
   for (const backup of finished.slice(0, RECENT_CANDIDATES)) {
     // A backup that cannot be read is passed over, like one recorded for another tenant.
     const recent = await inspectBackup(body, tenant, backup, folders).catch(() => null)

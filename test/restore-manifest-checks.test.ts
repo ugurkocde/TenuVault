@@ -76,7 +76,7 @@ describe('Restore manifest checks', () => {
     expect(graphWrites).toEqual([])
   })
 
-  describe('a backup recorded as failed after it stopped early', () => {
+  describe('a backup cancelled by an earlier version, recorded as Failed with the cancel message', () => {
     const snapshot: Item = { id: 'original', displayName: 'Example', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [] }
     const failed = (items: Item | undefined): Item => ({ Status: 'Failed', Failures: 0, FailedTypes: [], Error: 'Backup cancelled by you. This run is never offered as a complete backup.', ...(items ? { Items: items } : {}) })
     const listed = { 'DeviceConfigurations/original': { file: 'Example.json', hash: snapshotHash(snapshot) } }
@@ -95,7 +95,7 @@ describe('Restore manifest checks', () => {
       const response = await POST(request({ ...baseBody, restoreType: 'full', mode: 'copy', assignments: false }))
       const result = await response.json()
       expect(response.status).toBe(400)
-      expect(result.error).toBe('This backup is recorded as failed and is incomplete. Restore selected items from it, or restore from a complete backup instead.')
+      expect(result.error).toBe('This backup is recorded as cancelled and is incomplete. Restore selected items from it, or restore from a complete backup instead.')
       expect(graphWrites).toEqual([])
     })
 
@@ -112,8 +112,29 @@ describe('Restore manifest checks', () => {
       const graphWrites = stubFetch({ [`${backupId}/metadata.json`]: failed(undefined), [policyPath]: snapshot }, { list: [policyPath] })
       const response = await POST(request({ ...baseBody, restoreType: 'selective', selectedPolicies: [{ path: policyPath }], mode: 'copy', assignments: false }))
       expect(response.status).toBe(400)
-      expect((await response.json()).error).toBe('This backup is recorded as failed and is incomplete. Restore from a complete backup instead.')
+      expect((await response.json()).error).toBe('This backup is recorded as cancelled and is incomplete. Restore from a complete backup instead.')
       expect(graphWrites).toEqual([])
+    })
+  })
+
+  describe('a backup the user cancelled after it claimed its folder', () => {
+    const snapshot: Item = { id: 'original', displayName: 'Example', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [] }
+    const cancelled: Item = { Status: 'Cancelled', Failures: 0, FailedTypes: [], Error: 'Backup cancelled by you. This run is never offered as a complete backup.', Items: { 'DeviceConfigurations/original': { file: 'Example.json', hash: snapshotHash(snapshot) } } }
+
+    it('refuses a full restore like a failed backup, before any Graph call', async () => {
+      const graphWrites = stubFetch({ [`${backupId}/metadata.json`]: cancelled, [policyPath]: snapshot }, { list: [policyPath] })
+      const response = await POST(request({ ...baseBody, restoreType: 'full', mode: 'copy', assignments: false }))
+      expect(response.status).toBe(400)
+      expect((await response.json()).error).toBe('This backup is recorded as cancelled and is incomplete. Restore selected items from it, or restore from a complete backup instead.')
+      expect(graphWrites).toEqual([])
+    })
+
+    it('restores a saved policy it lists on its own', async () => {
+      const graphWrites = stubFetch({ [`${backupId}/metadata.json`]: cancelled, [policyPath]: snapshot }, { list: [policyPath] })
+      const response = await POST(request({ ...baseBody, restoreType: 'selective', selectedPolicies: [{ path: policyPath }], mode: 'copy', assignments: false }))
+      expect(response.status).toBe(200)
+      expect((await response.json()).details.restoredCount).toBe(1)
+      expect(graphWrites.some((call) => call.startsWith('POST '))).toBe(true)
     })
   })
 

@@ -42,6 +42,8 @@ interface BackupHistoryResult {
   items: DashboardBackup[]
   /** Why the backups could not be listed; null when the list is complete. */
   error: string | null
+  /** Folders left out because their ownership could not be read. */
+  unresolved?: number
 }
 
 /** Dashboard stats plus the details the tile layout shows for the selected tenant. */
@@ -58,6 +60,8 @@ export interface TenantDashboardStats extends DashboardStats {
   periodStart: Date
   /** Set when the backup list could not be loaded, so an empty list is not shown as "no backups". */
   backupsError: string | null
+  /** Backup folders left out of the counts because their ownership could not be read; a refresh may bring them back. */
+  unresolvedBackups?: number
   /** The most recent saved drift comparison, read through the desktop fetch bridge. */
   lastDriftCheck: { time: Date; succeeded: boolean } | null
 }
@@ -107,7 +111,7 @@ async function fetchBackupHistory(tenant: any): Promise<BackupHistoryResult> {
     })).sort((a: BackupHistoryItem, b: BackupHistoryItem) => 
       b.timestamp.getTime() - a.timestamp.getTime() // Sort by newest first
     )
-    return { items, error: null }
+    return { items, error: null, unresolved: typeof data?.unresolved === "number" ? data.unresolved : 0 }
   } catch (error) {
     console.error("Error fetching backup history for", tenant.name, ":", error)
     return { items: [], error: "Backups could not be loaded." }
@@ -241,6 +245,7 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
       const backupHistory = allBackups.flatMap(result => result.items)
         .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
       const backupsError = allBackups.find(result => result.error)?.error ?? null
+      const unresolvedBackups = allBackups.reduce((sum, result) => sum + (result.unresolved ?? 0), 0)
       const schedules = allSchedules.flat()
       const auditLogs = allAuditLogs.flat()
       
@@ -287,7 +292,8 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
                 log.eventType?.includes('POLICY') ? "policy" as const :
                 log.eventType?.includes('AUTH') ? "auth" as const :
                 "backup" as const,
-          status: log.result === 'SUCCESS' ? "success" as const : 
+          status: log.eventType === 'BACKUP_CANCELLED' ? "neutral" as const :
+                  log.result === 'SUCCESS' ? "success" as const : 
                   log.result === 'FAILURE' ? "failed" as const : 
                   log.severity === 'WARNING' ? "warning" as const : 
                   "info" as const,
@@ -302,12 +308,13 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
         .map(backup => ({
           id: backup.id,
           type: "backup" as const,
-          status: backup.status === "success" ? "success" as const : backup.status === "failed" ? "failed" as const : backup.status === "running" ? "info" as const : "warning" as const,
+          status: backup.status === "success" ? "success" as const : backup.status === "failed" ? "failed" as const : backup.status === "running" ? "info" as const : backup.status === "cancelled" ? "neutral" as const : "warning" as const,
           tenant: backup.tenantName,
           tenantId: backup.tenantId,
           time: backup.timestamp,
           message: backup.status === "failed"
             ? `Backup failed${backup.error ? `: ${truncateMessage(backup.error)}` : ""}`
+            : backup.status === "cancelled" ? "Backup cancelled"
             : backup.status === "partial"
               ? `Backup completed with warnings - ${backup.policiesBackedUp} policies`
               : backup.status === "success" ? `Backup completed successfully - ${backup.policiesBackedUp} policies`
@@ -346,6 +353,7 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
         liveRuns,
         periodStart,
         backupsError,
+        unresolvedBackups,
         lastDriftCheck: driftChecks.filter(check => check !== null)
           .sort((a, b) => b.time.getTime() - a.time.getTime())[0] ?? null,
       }

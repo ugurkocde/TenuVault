@@ -50,7 +50,16 @@ export function featureRoute(path: FeatureRoutePath, deps: FeatureDeps, handlers
         }
         try {
           const features = featureRouteFeatures(path, action)
-          const plan = await deps.plan(tenantId)
+          // Read and revoke actions must keep working when entitlement resolution itself
+          // throws (an expired MSP license leaves extra tenants unclaimable): they carry
+          // no feature requirement, so community is the safe stand-in for them.
+          let plan: Awaited<ReturnType<FeatureDeps["plan"]>>
+          try {
+            plan = await deps.plan(tenantId)
+          } catch (error) {
+            if (features.length > 0) throw error
+            plan = "community"
+          }
           const missing = features.find((feature) => !allows(plan, feature))
           if (missing) throw new PlanRequired(missing)
           const targetTenants = await checkTargets(deps, tenantId, body.targetTenants, features)

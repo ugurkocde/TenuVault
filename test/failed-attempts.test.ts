@@ -242,10 +242,10 @@ describe("BackupEngine end of job", () => {
     })
     try {
       const body = { summary: true, tenantId: TENANT, appId: CLIENT, clientSecret: "test", subscriptionId: "local", resourceGroupName: "local", storageAccountName: account }
-      const { backups } = await (await listBackups(new NextRequest("http://tenuvault.internal/api/list-backups", { method: "POST", body: JSON.stringify(body) }))).json() as { backups: Array<{ status: string; timestamp: string; runId: string | null }> }
+      const { backups, unresolved } = await (await listBackups(new NextRequest("http://tenuvault.internal/api/list-backups", { method: "POST", body: JSON.stringify(body) }))).json() as { backups: Array<{ status: string; timestamp: string; runId: string | null }>; unresolved: number }
       const folders = backups.map((backup) => ({ status: normalizeBackupStatus(backup), timestamp: new Date(backup.timestamp), runId: backup.runId }))
       const attempts = log.list(TENANT).map((attempt) => ({ timestamp: new Date(attempt.at), runId: attempt.runId }))
-      return { backups, summary: backupSummary(folders, attempts, { since: new Date(Date.now() - 7 * 86_400_000), live }) }
+      return { backups, unresolved, summary: backupSummary(folders, attempts, { since: new Date(Date.now() - 7 * 86_400_000), live }) }
     } finally {
       vi.unstubAllGlobals()
     }
@@ -347,16 +347,58 @@ describe("BackupEngine end of job", () => {
   }
   const isMarkerRead = (request: Request) => request.method === "GET" && new URL(request.url).pathname.endsWith(BACKUP_OWNER_FILE)
 
-  it("counts a run once when its folder's marker cannot be read", async () => {
+  it("leaves out a folder whose marker cannot be read, counts its failed run once, and lists it once the marker can be read", async () => {
     const log = new FailedAttemptLog(memoryStore())
     // Seven hours ago, so a folder without a manifest is no longer shown as running.
     const unanswered = engineWith(profile, (job, request) => log.finished(job, request), undefined, markerOnly, () => new Date(Date.now() - 7 * 3_600_000))
     const job = await start(unanswered.engine, unanswered.account)
     expect(job.status).toBe("Failed")
-    const { backups, summary } = await dashboardCounts(unanswered.store, unanswered.account, log, async (request, forward) =>
-      isMarkerRead(request) ? new Response("<Error><Code>ServerBusy</Code></Error>", { status: 503 }) : forward())
-    expect(backups).toMatchObject([{ status: "unknown", runId: null, error: expect.stringContaining("ownership could not be read") }])
+    for (const failure of [
+      () => new Response("<Error><Code>ServerBusy</Code></Error>", { status: 503 }),
+      () => Promise.reject(new TypeError("fetch failed")),
+      () => new Response("not json", { status: 200, headers: { "x-tenuvault-authenticated": "true" } }),
+    ]) {
+      const { backups, unresolved, summary } = await dashboardCounts(unanswered.store, unanswered.account, log, async (request, forward) => isMarkerRead(request) ? failure() : forward())
+      expect(backups).toEqual([])
+      expect(unresolved).toBe(1)
+      expect(summary).toMatchObject({ stored: 0, failed: 1, finished: 1, latestStatus: null })
+    }
+    // Nothing about the unresolved folder was kept: the next read lists it, and the run still counts once.
+    const { backups, unresolved, summary } = await dashboardCounts(unanswered.store, unanswered.account, log)
+    expect(backups).toMatchObject([{ runId: job.id, status: "incomplete" }])
+    expect(unresolved).toBe(0)
     expect(summary).toMatchObject({ stored: 1, failed: 1, finished: 1 })
+  })
+
+  it("counts a backup the user cancelled after the claim in storage only, as Cancelled", async () => {
+    const log = new FailedAttemptLog(memoryStore())
+    let engine!: BackupEngine
+    const cancelling = engineWith(profile, (job, request) => log.finished(job, request), undefined, async (request, forward) => {
+      // The user cancels while the first policy is uploaded, after the folder was claimed.
+      if (request.method === "PUT" && new URL(request.url).pathname.includes("/DeviceConfigurations/")) engine.cancel(engine.liveRuns(TENANT)[0]!)
+      return forward()
+    })
+    engine = cancelling.engine
+    const job = await start(engine, cancelling.account)
+    expect(job.status).toBe("Cancelled")
+    expect(log.list(TENANT)).toEqual([])
+    const { backups, summary } = await dashboardCounts(cancelling.store, cancelling.account, log, undefined, [job.id])
+    expect(backups).toMatchObject([{ status: "Cancelled", runId: job.id }])
+    expect(summary).toMatchObject({ stored: 1, successful: 0, failed: 0, finished: 0, inProgress: 0, successRate: null, latestStatus: "cancelled" })
+  })
+
+  it("lists a backup cancelled before this version, recorded as Failed with the cancel message, as Cancelled", async () => {
+    const store = new LocalBlobStore(mkdtempSync(join(tmpdir(), "tv-legacy-cancel-")), [randomBytes(32)])
+    const account = localStorageAccountName(TENANT)
+    await handleLocalBlobRequest(store, new Request(`https://${account}.blob.core.windows.net/intune-backups?restype=container`, { method: "PUT" }))
+    const manifest = (folder: string, body: unknown) => handleLocalBlobRequest(store, new Request(`https://${account}.blob.core.windows.net/intune-backups/${folder}/metadata.json`,
+      { method: "PUT", headers: { "x-ms-blob-type": "BlockBlob" }, body: JSON.stringify(body) }))
+    const day = new Date().toISOString().slice(0, 10)
+    await manifest(`backup-${day}-010000`, { Status: "Failed", TenantId: TENANT, RunId: "desktop-cancelled", Error: "Backup cancelled by you. This run is never offered as a complete backup." })
+    await manifest(`backup-${day}-000000`, { Status: "Failed", TenantId: TENANT, RunId: "desktop-deadline", Error: "Backup timed out after the 30 minute job deadline. Retry the backup." })
+    const { backups, summary } = await dashboardCounts(store, account, new FailedAttemptLog(memoryStore()))
+    expect(backups.map((backup) => [backup.runId, backup.status])).toEqual([["desktop-cancelled", "Cancelled"], ["desktop-deadline", "Failed"]])
+    expect(summary).toMatchObject({ stored: 2, failed: 1, finished: 1, latestStatus: "cancelled" })
   })
 
   describe("folders without a manifest from another tenant", () => {
@@ -372,6 +414,22 @@ describe("BackupEngine end of job", () => {
       await put(store, account, "backup-2026-10-16-030000", { Source: "TenuVault Desktop", TenantId: TENANT.toUpperCase(), RunId: "desktop-own" })
       return { store, account }
     }
+
+    it("leaves out another tenant's newer folder whose marker storage did not answer, from the count and the Last backup chip", async () => {
+      const { store, account } = await shared()
+      // Tenant B's newest folder: its marker read fails with 503.
+      await put(store, account, "backup-2026-10-16-040000", { Source: "TenuVault Desktop", TenantId: OTHER, RunId: "desktop-other-new" })
+      const busy: Storage = async (request, forward) => isMarkerRead(request) && request.url.includes("040000") ? new Response("<Error><Code>ServerBusy</Code></Error>", { status: 503 }) : forward()
+      const { backups, unresolved, summary } = await dashboardCounts(store, account, new FailedAttemptLog(memoryStore()), busy)
+      expect(backups.map((backup) => backup.runId)).toEqual(["desktop-own"])
+      expect(unresolved).toBe(1)
+      // Tenant A's own folder, from a run that stopped more than six hours ago, is the newest it sees.
+      expect(summary).toMatchObject({ stored: 1, latestStatus: "incomplete" })
+      // Once it can be read, it is left out silently as tenant B's.
+      const after = await dashboardCounts(store, account, new FailedAttemptLog(memoryStore()))
+      expect(after.backups.map((backup) => backup.runId)).toEqual(["desktop-own"])
+      expect(after.unresolved).toBe(0)
+    })
 
     it("leaves out a marker that names another tenant", async () => {
       const { store, account } = await shared()

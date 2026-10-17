@@ -61,6 +61,7 @@ import { Preferences } from "./preferences"
 import { AppTray } from "./tray"
 import { installedBySetup, isNightly, Updates, updatesDisabledByPolicy } from "./updates"
 import { featureRoutes, startFeatures } from "./features"
+import { emitBackupOutcome, emitDriftOutcome, emitRestoreOutcome } from "./features/notifications/producers"
 import { apiBody, type FeatureDeps } from "./features/deps"
 import { TenantRecords } from "./features/records"
 import { DriftJobs, driftScanRoutes } from "./drift/jobs"
@@ -278,7 +279,13 @@ async function bootstrap(): Promise<void> {
     },
     // Community keeps 30 days of history; Pro and MSP keep what the admin chooses (0 keeps everything).
     retentionDays: (tenantId) => effectiveRetentionDays(preferences.get().retentionDays, license.plan(tenantId)),
-    onFinished: (job, request) => failedAttempts.finished(job, request),
+    onFinished: (job, request) => {
+      failedAttempts.finished(job, request)
+      // Manual backup outcomes notify here; scheduled and tray outcomes notify from the
+      // scheduler path, which already suppresses repeated unreachable failures.
+      if ((request.trigger ?? "manual") !== "manual") return
+      void notifyBackupOutcome(job, "manual")
+    },
   })
 
   const scopes = new BackupScopes(appStore)
@@ -357,17 +364,36 @@ async function bootstrap(): Promise<void> {
     store: driftStore ?? { get: (key) => memoryResults.get(key) ?? null, set: (key, value) => void memoryResults.set(key, value), delete: (key) => void memoryResults.delete(key) },
     // When the window is not in front, a system notification says the scan finished; the app itself shows a toast.
     notify: (job) => {
-      if (job.status === "cancelled" || mainWindow?.isFocused() || !Notification.isSupported()) return
-      const tenant = tenantProfile(job.tenantId)?.name ?? "your tenant"
-      const notification = new Notification({
-        title: job.status === "completed" ? "Drift scan ready" : "Drift scan failed",
-        body: job.status === "completed" ? `The backups of ${tenant} were compared. Click to review the drift.` : job.error ?? "Open TenuVault for details.",
-      })
-      notification.on("click", () => {
-        showWindow()
-        void mainWindow?.webContents.executeJavaScript(`location.hash = ${JSON.stringify(`/portal/drift?tenant=${job.tenantId}`)}`)
-      })
-      notification.show()
+      void (async () => {
+        let localNotified = false
+        if (job.status === "completed" && job.summary) {
+          const saved = driftJobs.result(job.tenantId)
+          const items = saved && saved.jobId === job.jobId
+            ? saved.drifts.slice(0, 20).map((drift) => ({ title: `${drift.changeType}: ${drift.configName}`, detail: drift.type }))
+            : undefined
+          const result = await emitDriftOutcome(featureDeps, job.tenantId, {
+            jobId: job.jobId,
+            finishedAt: job.finishedAt ?? new Date().toISOString(),
+            added: job.summary.added,
+            modified: job.summary.modified,
+            deleted: job.summary.deleted,
+            items,
+          }).catch(() => ({ created: 0, localCreated: false }))
+          localNotified = result.localCreated
+        }
+        if (job.status === "cancelled" || mainWindow?.isFocused() || !Notification.isSupported()) return
+        if (localNotified) return
+        const tenant = tenantProfile(job.tenantId)?.name ?? "your tenant"
+        const notification = new Notification({
+          title: job.status === "completed" ? "Drift scan ready" : "Drift scan failed",
+          body: job.status === "completed" ? `The backups of ${tenant} were compared. Click to review the drift.` : job.error ?? "Open TenuVault for details.",
+        })
+        notification.on("click", () => {
+          showWindow()
+          void mainWindow?.webContents.executeJavaScript(`location.hash = ${JSON.stringify(`/portal/drift?tenant=${job.tenantId}`)}`)
+        })
+        notification.show()
+      })()
     },
   })
   const host: ApiHost = new ApiHost({
@@ -376,7 +402,17 @@ async function bootstrap(): Promise<void> {
     // Disabled CIS routes refuse before any licensing work. The plan comes next, so the
     // disclaimer is never accepted for a change the plan refuses anyway.
     guard: async (request) => (await checkCis(request)) ?? (await recordPlanRefusal(failedAttempts, request, await checkPlan(request))) ?? checkDisclaimer(request),
-    onHandled: createAuditRecorder((request) => host.dispatch(request), (tenantId) => accounts.get(tenantId)),
+    onHandled: createAuditRecorder((request) => host.dispatch(request), (tenantId) => accounts.get(tenantId), (notice) => {
+      void emitRestoreOutcome(featureDeps, notice.tenantId, {
+        status: notice.status,
+        jobId: notice.jobId,
+        finishedAt: new Date().toISOString(),
+        restored: notice.restored,
+        failed: notice.failed,
+        partial: notice.partial,
+        message: notice.message,
+      }).catch(() => undefined)
+    }),
   })
 
   // Tenant profiles are kept by the renderer; scheduled backups read them from the store.
@@ -451,6 +487,21 @@ async function bootstrap(): Promise<void> {
   // Joined requests share one notification and the trigger that started the job.
   const unattendedBackupTriggers = new WeakMap<BackupJob, { trigger: "scheduled" | "tray"; notified: boolean }>()
 
+  // Best-effort notification event for one finished backup job, with fixed summary text
+  // only. Resolves true when a local channel intent was queued for this outcome.
+  const notifyBackupOutcome = async (job: BackupJob, trigger: string): Promise<boolean> => {
+    if (job.status === "Cancelled") return false
+    const result = await emitBackupOutcome(featureDeps, job.tenantId, {
+      status: job.status === "Failed" ? "Failed" : job.failures || /completed with \d+ warnings?/i.test(job.progressMessage) ? "CompletedWithWarnings" : "Success",
+      backupFolder: job.backupFolder ?? `job:${job.id}`,
+      finishedAt: job.endTime ?? new Date().toISOString(),
+      failures: job.failures ?? 0,
+      trigger,
+      message: null,
+    }).catch(() => ({ created: 0, localCreated: false }))
+    return result.localCreated
+  }
+
   const runScheduledBackup = async (tenantId: string, trigger: "scheduled" | "tray", afterFailure = false, slot?: string) => {
     const profile = tenantProfile(tenantId)
     if (!profile) {
@@ -486,6 +537,7 @@ async function bootstrap(): Promise<void> {
     if (!reportsResult(afterFailure, result)) return result
     const ok = result.status === "Completed"
     const cancelled = result.status === "Cancelled"
+    const localNotified = cancelled ? false : await notifyBackupOutcome(job, trigger)
     const account = accounts.get(tenantId)
     // Record scheduled backups in the tenant's audit log, attributed to the signed-in admin.
     void host
@@ -513,7 +565,8 @@ async function bootstrap(): Promise<void> {
       .catch(() => undefined)
     if (!ok && !cancelled && !origin.notified) {
       origin.notified = true
-      notifyFailure(tenantId, profile.name, job.exception ?? "Open TenuVault for details.", origin.trigger)
+      // The channel delivery above already toasted this failure when a local intent was queued.
+      if (!localNotified) notifyFailure(tenantId, profile.name, job.exception ?? "Open TenuVault for details.", origin.trigger)
     }
     return result
   }

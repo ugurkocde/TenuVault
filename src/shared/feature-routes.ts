@@ -27,6 +27,7 @@ export const FEATURE_ROUTES = {
   "/api/baseline-upgrades": { feature: "baselineUpgrades" },
   "/api/promotion": { feature: "promotion" },
   "/api/health-review": { feature: "healthReview" },
+  "/api/notifications": { feature: "notifications" },
   "/api/standards": { feature: "customizations", prefixes: { "standard-": "goldenStandards" } },
   "/api/custom-baselines": { feature: "customBaselines" },
   "/api/cis-remediation": { feature: "baselineAllPlatforms" },

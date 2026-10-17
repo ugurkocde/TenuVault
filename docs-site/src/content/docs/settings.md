@@ -183,6 +183,8 @@ For screenshots and a walkthrough of switching from stable to nightly, see [Try 
 | **Check now** | Checks immediately. Disabled while automatic updates are off. |
 | **Restart and update** | Appears when an update has downloaded. Restarts TenuVault and installs it. |
 
+While an update downloads and once it is ready, a green **Update available** label at the bottom of the sidebar installs it too: select it and TenuVault restarts as soon as the download finishes.
+
 The status line shows the current state:
 
 | Status | Meaning |

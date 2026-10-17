@@ -1,4 +1,5 @@
 import { coveredFolders, type ScopeMetadata } from "./scope"
+import { stoppedEarly } from "./backup-status"
 
 /** Per item fingerprints a backup's metadata.json holds, keyed by "<type folder>/<Intune ID>". */
 export type BackupItems = Record<string, {
@@ -38,9 +39,9 @@ export function itemsOf(metadata: BackupFingerprint | null | undefined): BackupI
   return items && typeof items === "object" && !Array.isArray(items) ? (items as BackupItems) : null
 }
 
-/** Whether a backup can be compared: it finished, and it was made by a version that records fingerprints. */
+/** Whether a backup can be compared: it finished (it did not fail and was not cancelled), and it was made by a version that records fingerprints. */
 export function comparable(metadata: BackupFingerprint | null | undefined): boolean {
-  return itemsOf(metadata) !== null && String(metadata?.Status ?? "").toLowerCase() !== "failed"
+  return itemsOf(metadata) !== null && !stoppedEarly(metadata?.Status)
 }
 
 /**
