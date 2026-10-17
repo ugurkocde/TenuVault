@@ -654,6 +654,7 @@ async function bootstrap(): Promise<void> {
     }
   }
   handleTrusted("license:status", () => license.status(signedInTenants()))
+  handleTrusted("license:refresh", () => withStatus(() => license.refreshAll()))
   handleTrusted("license:setKey", (_event, key: unknown) => {
     if (typeof key !== "string" || key.length > 256) throw new Error("Enter a valid license key.")
     return withStatus(() => license.setKey(key, signedInTenants()))
