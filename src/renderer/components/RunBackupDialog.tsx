@@ -20,7 +20,7 @@ interface RunBackupDialogProps {
   counts?: Record<string, number>
   /** Types the latest backup left out. */
   uncounted?: string[]
-  onStarted: (jobId: string) => void
+  onStarted: (jobId: string, status?: string) => void
 }
 
 const same = (a: BackupScope, b: BackupScope) => normalizeScope(a).excluded.join() === normalizeScope(b).excluded.join()
@@ -56,10 +56,10 @@ export function RunBackupDialog({ open, onOpenChange, tenant, counts, uncounted,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...tenant.credentials, storageAccountName: tenant.storageAccountName, scope }),
       })
-      const data = (await response.json()) as { jobId?: string; error?: string }
+      const data = (await response.json()) as { jobId?: string; status?: string; error?: string }
       if (!response.ok || !data.jobId) throw new Error(data.error ?? "The backup could not start.")
       onOpenChange(false)
-      onStarted(data.jobId)
+      onStarted(data.jobId, data.status)
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure))
     } finally {

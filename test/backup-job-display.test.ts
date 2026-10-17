@@ -1,5 +1,5 @@
 import { expect, it } from "vitest"
-import { isBackupJobPollable, resolveBackupJobDisplay, toBackupJobDisplay } from "../src/portal/lib/backup-job-display"
+import { backupButtonLabel, isBackupJobPollable, resolveBackupJobDisplay, toBackupJobDisplay } from "../src/portal/lib/backup-job-display"
 
 const running = { status: "Running", progress: 5, progressMessage: "Starting backup...", isComplete: false, isSuccessful: false }
 const completed = { status: "Completed", progress: 100, progressMessage: "Backup complete", startTime: "2026-10-13T10:00:00Z", endTime: "2026-10-13T10:05:00Z", isComplete: true, isSuccessful: true }
@@ -15,6 +15,12 @@ it("prefers the live tracked job over a previous snapshot", () => {
 
 it("converts a tracked backup job to its display status including the poll error", () => {
   expect(toBackupJobDisplay({ ...completed, output: "done", pollError: "Failed to check job status" })).toEqual({ ...completed, output: "done", exception: undefined, pollError: "Failed to check job status" })
+})
+
+it("labels a tenant backup button queued, running with progress, or untracked", () => {
+  expect(backupButtonLabel({ status: "Queued", progress: 0 })).toBe("Backup queued...")
+  expect(backupButtonLabel({ status: "Running", progress: 42 })).toBe("Backing up... 42%")
+  expect(backupButtonLabel(undefined)).toBe("Backup running...")
 })
 
 it("does not poll a job that completed or recorded a poll error", () => {

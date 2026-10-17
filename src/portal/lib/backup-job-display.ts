@@ -53,6 +53,17 @@ export function resolveBackupJobDisplay(
   return tracked ?? snapshot ?? fallback
 }
 
+/**
+ * What a tenant's disabled backup button says while its backup waits or runs. Queued jobs wait
+ * for another tenant's backup; running jobs show their live progress. Without a tracked job
+ * (for example a backup started elsewhere) the button only knows a backup is under way.
+ */
+export function backupButtonLabel(job: { status: string; progress: number } | undefined): string {
+  if (!job) return "Backup running..."
+  if (job.status === "Queued") return "Backup queued..."
+  return `Backing up... ${job.progress}%`
+}
+
 /** A backup job is polled only while it is incomplete and has no recorded poll error. */
 export function isBackupJobPollable(job: { isComplete: boolean; pollError?: string }): boolean {
   return !job.isComplete && !job.pollError

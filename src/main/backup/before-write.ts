@@ -31,7 +31,8 @@ export async function backupBeforeWrite(options: BackupOptions): Promise<string>
   const jobId = started.json.jobId
   const types = `${folders.length} policy type${folders.length === 1 ? "" : "s"}`
   report?.({ stage: `Backing up ${types}`, percent: 0, backupJobId: jobId })
-  const deadline = options.now() + polling.timeoutMs
+  // The timeout bounds the backup's own run; time spent queued behind another backup does not count.
+  let deadline = options.now() + polling.timeoutMs
   for (;;) {
     const status = await post("/api/backup/status", { jobId })
     if (!status.ok) fail(`The ${backup} status could not be read, so ${stopped}.`)
@@ -52,6 +53,7 @@ export async function backupBeforeWrite(options: BackupOptions): Promise<string>
       }
       return backupFolder
     }
+    if (status.json.status === "Queued") deadline = options.now() + polling.timeoutMs
     if (options.now() > deadline) fail(`The ${backup} did not finish within an hour, so ${stopped}.`, 504)
     const percent = typeof status.json.progress === "number" && Number.isFinite(status.json.progress) ? Math.min(100, Math.max(0, Math.round(status.json.progress))) : undefined
     report?.({ stage: `Backing up ${types}: ${typeof status.json.progressMessage === "string" ? status.json.progressMessage : "in progress"}`, ...(percent !== undefined ? { percent } : {}), backupJobId: jobId })

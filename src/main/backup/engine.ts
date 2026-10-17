@@ -23,7 +23,7 @@ import { coveredFolders, EVERYTHING, includedTypes, normalizeScope, type BackupS
  * encrypted store on this device (served through the fetch bridge).
  */
 
-export type BackupStatus = "Running" | "Completed" | "Failed" | "Cancelled"
+export type BackupStatus = "Queued" | "Running" | "Completed" | "Failed" | "Cancelled"
 
 export interface BackupJob {
   id: string
@@ -214,6 +214,10 @@ export class BackupEngine {
   private readonly jobs = new Map<string, BackupJob>()
   private readonly running = new Map<string, { job: BackupJob; key: string }>()
   private readonly executions = new Map<string, { controller: AbortController; done: Promise<BackupJob> }>()
+  /** Backups run one at a time, in start order, like the scheduler and the tray: each run reads with its own concurrency, so running tenants at once would multiply Graph requests and invite throttling. */
+  private queueTail: Promise<void> = Promise.resolve()
+  /** Jobs started but not finished yet, the running one plus every queued one. */
+  private pending = 0
 
   constructor(private readonly deps: BackupEngineDeps) {}
 
@@ -234,7 +238,7 @@ export class BackupEngine {
 
   cancel(jobId: string): BackupJob | undefined {
     const job = this.jobs.get(jobId)
-    if (job?.status === "Running") this.executions.get(jobId)?.controller.abort(new BackupCancelledError(`${BACKUP_CANCELLED_MESSAGE} This run is never offered as a complete backup.`))
+    if (job?.status === "Running" || job?.status === "Queued") this.executions.get(jobId)?.controller.abort(new BackupCancelledError(`${BACKUP_CANCELLED_MESSAGE} This run is never offered as a complete backup.`))
     return job
   }
 
@@ -269,26 +273,53 @@ export class BackupEngine {
     }
 
     const controller = new AbortController()
-    const deadline = Date.now() + JOB_DEADLINE_MS
+    const queued = this.pending > 0
+    this.pending++
     const job: BackupJob = {
       id: `desktop-${randomUUID()}`,
       tenantId: request.tenantId,
       storageAccountName: request.storageAccountName,
-      status: "Running",
-      progress: 5,
-      progressMessage: "Starting backup...",
+      status: queued ? "Queued" : "Running",
+      progress: queued ? 0 : 5,
+      progressMessage: queued ? "Waiting for another backup to finish..." : "Starting backup...",
       startTime: this.now().toISOString(),
       log: [],
     }
     this.jobs.set(job.id, job)
     this.running.set(tenantKey, { job, key })
     this.prune()
+    if (queued) this.write(job, "Queued behind another tenant's backup; backups run one at a time.")
 
-    const timer = setTimeout(() => controller.abort(jobDeadlineError()), JOB_DEADLINE_MS)
-    timer.unref?.()
     const outcome: RunOutcome = { saved: 0, answered: false, otherFailures: 0 }
     const stopped: StoppedRun = { committing: false }
-    const done = this.run(job, request, controller.signal, deadline, outcome, stopped)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    // The deadline and the start time count from when the run actually starts, not from when it was queued.
+    const execute = async () => {
+      if (controller.signal.aborted) throw controller.signal.reason
+      job.status = "Running"
+      job.progress = 5
+      job.progressMessage = "Starting backup..."
+      job.startTime = this.now().toISOString()
+      const deadline = Date.now() + JOB_DEADLINE_MS
+      timer = setTimeout(() => controller.abort(jobDeadlineError()), JOB_DEADLINE_MS)
+      timer.unref?.()
+      await this.run(job, request, controller.signal, deadline, outcome, stopped)
+    }
+    // A queued backup cancelled before its turn settles at once instead of holding its tenant
+    // until every backup ahead of it has finished. Its place in the chain still waits for those
+    // backups (see queueTail below), so the next queued backup cannot jump ahead of them.
+    const previous = this.queueTail
+    const waitForTurn = () => new Promise<void>((resolve, reject) => {
+      const onAbort = () => reject(controller.signal.reason)
+      if (controller.signal.aborted) return onAbort()
+      controller.signal.addEventListener("abort", onAbort, { once: true })
+      void previous.then(() => {
+        controller.signal.removeEventListener("abort", onAbort)
+        resolve()
+      })
+    })
+    // An unqueued backup begins synchronously inside start(), as it did before the queue existed.
+    const done = (queued ? waitForTurn().then(execute) : execute())
       .catch(async (error: unknown) => {
         job.status = error instanceof BackupCancelledError ? "Cancelled" : "Failed"
         job.exception = error instanceof Error ? error.message : String(error)
@@ -303,15 +334,19 @@ export class BackupEngine {
         await this.recordStopped(job, request, stopped.manifest(job.status, job.exception))
       })
       .finally(() => {
-        clearTimeout(timer)
+        if (timer) clearTimeout(timer)
         controller.abort(new Error("Backup finished"))
         job.progress = 100
         job.endTime = this.now().toISOString()
         if (this.running.get(tenantKey)?.job === job) this.running.delete(tenantKey)
         this.executions.delete(job.id)
+        this.pending--
         this.finished(job, request)
       })
       .then(() => job)
+    // The next queued backup starts only once this one has fully settled, failed manifest
+    // included, and never before the backups ahead of a queued cancellation have finished.
+    this.queueTail = Promise.all([previous, done.then(() => undefined, () => undefined)]).then(() => undefined)
     this.executions.set(job.id, { controller, done })
     return job
   }
@@ -689,7 +724,7 @@ export class BackupEngine {
 
   private prune(): void {
     while (this.jobs.size > MAX_JOBS) {
-      const oldest = [...this.jobs.values()].find((job) => job.status !== "Running" && job.endTime !== undefined)
+      const oldest = [...this.jobs.values()].find((job) => job.status !== "Running" && job.status !== "Queued" && job.endTime !== undefined)
       if (!oldest) break
       this.jobs.delete(oldest.id)
     }
