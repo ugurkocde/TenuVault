@@ -4,7 +4,7 @@ Date: 2026-10-17. Scope: www.tenuvault.com (live, separate Next.js repo), docs.t
 
 ## The honest headline
 
-No on-page change can guarantee position 1, 2 or 3, and anyone who promises that is selling something. The three target pages on www are already well built. The working hypothesis is that the gap is mostly authority: the product launched in October 2026, the GitHub repo has 4 stars against 452 for the leading open-source Intune backup script, and the competitor set includes Veeam, AvePoint and CoreView. That is a hypothesis, not a measurement. Without Search Console positions, impressions and a backlink profile, the current ranking constraint cannot be proven, and no timeline to any position can be defended. The plan in [ACTION-PLAN.md](ACTION-PLAN.md) therefore starts with measurement and makes every later priority conditional on the baseline. Long-tail variants ("restore deleted Intune policy", "does Intune have backup", "Intune disaster recovery plan") are the plausible first wins because dedicated pages already exist for them and competition is thinner, but that too is unverified until the baseline exists. This pull request fixes everything that is fixable inside this repo. The www and off-page work is specified so it can be executed without re-auditing.
+No on-page change can guarantee position 1, 2 or 3, and anyone who promises that is selling something. The three target pages on www are already well built. The working hypothesis is that the gap is mostly authority: the product launched in October 2026, the GitHub repo has 4 stars against 452 for the leading open-source Intune backup script, and the competitor set includes Veeam, AvePoint and CoreView. That is a hypothesis, not a measurement. Without Search Console positions, impressions and a backlink profile, the current ranking constraint cannot be proven, and no timeline to any position can be defended. Follow-up work therefore starts with measurement and makes every later priority conditional on the baseline. Long-tail variants ("restore deleted Intune policy", "does Intune have backup", "Intune disaster recovery plan") are the plausible first wins because dedicated pages already exist for them and competition is thinner, but that too is unverified until the baseline exists. This pull request fixes everything that is fixable inside this repo. The www and off-page work is specified so it can be executed without re-auditing.
 
 ## Score (docs and www combined)
 
@@ -44,7 +44,7 @@ Strengths, verified by fetch on 2026-10-17:
 * Canonicals self-reference correctly, sitemap.xml lists 26 URLs with lastmod dates, robots.txt allows everything except /api/ and lists both sitemaps.
 * JSON-LD on every checked page (4 blocks on the homepage, 8 on the pillars).
 
-Gaps, specified for the www repo in the action plan:
+Gaps to fix in the www repo:
 
 * Homepage response is 179 KB of HTML with heavy client JS. Performance unverified, likely the biggest technical risk to Core Web Vitals.
 * No comparison or alternative pages ("TenuVault vs PowerShell scripts", "Intune backup tools compared"), which is where commercial-intent searches with winnable difficulty sit.
@@ -62,7 +62,7 @@ Gaps, specified for the www repo in the action plan:
 ### GitHub (fixed in this PR, plus one manual step)
 
 * The README already ranks: it appeared first in this audit's web search for native Intune backup questions. But it linked to none of the three pillar pages. Pillar links with exact anchors added in the header nav and feature list, the H1 now carries the three phrases, and the icon alt text is no longer empty.
-* Repo topics already include intune-backup, microsoft-intune and microsoft-graph. Manual step in the action plan: add intune-restore and disaster-recovery topics if GitHub accepts them, and pin the repo on the owner profile.
+* Repo topics already include intune-backup, microsoft-intune and microsoft-graph. Manual step: add intune-restore and disaster-recovery topics if GitHub accepts them, and pin the repo on the owner profile.
 
 ## Competitor set for the three phrases
 
@@ -79,5 +79,5 @@ Gaps, specified for the www repo in the action plan:
 
 * Experience: the docs are specific and operational (exact UI labels, error strings, plan limits), which is the strongest experience signal on the site. Keep screenshots current.
 * Expertise: author identity exists on www (meta author Ugur Koc). Add an author page with Microsoft-community credentials and link it from guides.
-* Authority: CIS SecureSuite membership badge is in the www footer. Third-party listings (G2, Capterra, Microsoft AppSource if eligible) and Intune community mentions are missing and are in the action plan.
+* Authority: CIS SecureSuite membership badge is in the www footer. Third-party listings (G2, Capterra, Microsoft AppSource if eligible) and Intune community mentions are missing.
 * Trust: the honest limitations pages (what cannot be restored, what Graph does not export) help rather than hurt. Do not dilute them for keywords.
