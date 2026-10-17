@@ -509,10 +509,12 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     // stamp are only settled once that run is on screen, so leaving mid-load or a failed
     // read keeps the result restorable on the next open.
     let active = true
+    // Captured before the read, so only this marker can be settled by its answer. A marker a
+    // newer run writes while the read is in flight stays for that run's own restoration.
+    const markerRunId = peekBackgroundCompare(credentials?.tenantId, framework.id)
     void workspaceRequest("workspace-load").then((saved) => {
       if (!active) return
       setWorkspace(saved)
-      const markerRunId = peekBackgroundCompare(credentials?.tenantId, framework.id)
       const marked = markerRunId ? saved.history.find((entry) => entry.assessment.runId === markerRunId) : undefined
       const latest = currentSavedAssessment(saved)
       const target = marked ? { assessment: marked.assessment, policies: marked.policies } : latest
@@ -546,6 +548,9 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     // change mounts a new page, which `mounted` covers.
     const runGeneration = cisRunGeneration.current
     const current = () => mounted() && cisRunGeneration.current === runGeneration
+    // Captured before the read: only this marker may be settled by the answer, never one a
+    // comparison finishing during the read has just written.
+    const backgroundRunId = first && !isCis ? peekBackgroundCompare(credentials?.tenantId, framework.id) : null
     let opened: OpenedWorkspace
     let lookupFailed = false
     if (isCis) {
@@ -565,7 +570,6 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     if (first) { setPolicies(saved.policies); setReference(saved.reference); setRecommendationList(saved.recommendationList) }
     if (!isCis) {
       // A comparison that finished in the background while this page was closed opens on its result.
-      const backgroundRunId = first ? peekBackgroundCompare(credentials?.tenantId, framework.id) : null
       const backgroundRun = backgroundRunId ? saved.history.find((entry) => entry.assessment.runId === backgroundRunId) : undefined
       if (backgroundRun) {
         showSavedResults(backgroundRun.assessment, { policies: backgroundRun.policies, reference: backgroundRun.assessment.reference })
