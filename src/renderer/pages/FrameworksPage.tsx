@@ -316,8 +316,21 @@ const CIS_TALLY_DOTS = { Present: "bg-green-500", Different: "bg-red-500", Missi
  */
 function CisRunView({ run, rerun = false, error = "", policies, reference, names }: { run: AssessJobSnapshot; rerun?: boolean; error?: string; policies: BaselinePolicy[]; reference: string; names: SettingNames }) {
   // Focus moves into the overlay on entry, because the covered page is inert while it shows.
+  // On exit it returns to the control that started the run, or to the results header when that
+  // control is gone (a first run replaces setup with results), but only when focus is still in
+  // the overlay: focus the user moved to the sidebar or a dialog is left where it is.
   const overlayRef = useRef<HTMLDivElement>(null)
-  useEffect(() => { overlayRef.current?.focus({ preventScroll: true }) }, [])
+  useEffect(() => {
+    const overlay = overlayRef.current
+    const previouslyFocused = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null
+    overlay?.focus({ preventScroll: true })
+    return () => {
+      const active = document.activeElement
+      if (active && active !== document.body && !(overlay && overlay.contains(active))) return
+      if (previouslyFocused?.isConnected) previouslyFocused.focus({ preventScroll: true })
+      else document.querySelector<HTMLElement>('[aria-label="Results header"]')?.focus({ preventScroll: true })
+    }
+  }, [])
   const phase = cisRunDisplayPhase(run)
   const steps = cisRunSteps(phase)
   const tallies = cisRunTallies(run.findings)
@@ -940,7 +953,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     {isCis && openNote && <p role="status" className="mt-6 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950">{openNote}</p>}
     {isCis && pendingJob && !cisRun && <p role="status" aria-label="Assessment running" className="mt-6 flex flex-wrap items-center gap-3 rounded-2xl bg-blue-50 px-4 py-3 text-sm text-gray-900"><span>An assessment of {referenceDisplayName(pendingJob.reference, packBenchmarkName(pendingJob.policies))} is running.</span><button type="button" className="font-medium text-blue-700 hover:underline" onClick={() => { const job = pendingJob; void trackCisJob({ policies: job.policies, reference: job.reference }, async () => job.jobId) }}>View progress</button></p>}
     {contentStage === "loading" && <p role="status" className="mt-6 text-sm text-gray-500">Loading saved assessments…</p>}
-    {isCis && contentStage === "results" && assessment && <div ref={resultsHeader} aria-label="Results header" className={cn("mt-6 flex scroll-mt-6 flex-wrap items-center justify-between gap-3 rounded-3xl bg-white px-5 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)]", assessment.runId === revealedRunId && "cis-results-reveal")}>
+    {isCis && contentStage === "results" && assessment && <div ref={resultsHeader} tabIndex={-1} aria-label="Results header" className={cn("mt-6 flex scroll-mt-6 flex-wrap items-center justify-between gap-3 rounded-3xl bg-white px-5 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)] outline-none", assessment.runId === revealedRunId && "cis-results-reveal")}>
       <div className="min-w-0">
         <p title={assessment.reference} className="truncate text-base font-medium text-gray-900">{(() => {
           const id = readiness?.benchmark && assessment.reference.startsWith(readiness.benchmark) ? readiness.benchmark : assessment.reference.split(/\s+/)[0] ?? ""

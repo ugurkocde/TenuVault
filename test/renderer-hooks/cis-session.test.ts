@@ -204,6 +204,8 @@ describe("CIS Benchmarks results across navigation", () => {
     await waitFor(() => !!results(container))
     expect(container.querySelector('[aria-label="Assessment in progress"]')).toBeNull()
     expect(container.querySelector('[aria-label="Results header"]')?.className).toContain("cis-results-reveal")
+    // Focus lands on the revealed results instead of being lost when the overlay unmounts.
+    await waitFor(() => document.activeElement === container.querySelector('[aria-label="Results header"]'))
     expect(levelSummary(container)).toContain("100%")
   })
 
@@ -247,6 +249,7 @@ describe("Run again", () => {
     await flush()
     expect(buttonNamed(container, "Run comparison again")).toBeUndefined()
     expect([...container.querySelectorAll("button")].filter(item => item.textContent === "Run again")).toHaveLength(1)
+    buttonNamed(container, "Run again")!.focus()
     await act(async () => { buttonNamed(container, "Run again")!.click() })
     await waitFor(() => container.textContent.includes("Re-running assessment: reading tenant policies"))
     expect(results(container)).not.toBeNull()
@@ -256,6 +259,8 @@ describe("Run again", () => {
     expect(results(container)).not.toBeNull()
     expect(levelSummary(container)).toContain("0%")
     expect(container.textContent).not.toContain("Re-running assessment")
+    // Focus returns to the button that started the failed re-run.
+    await waitFor(() => document.activeElement === buttonNamed(container, "Run again"))
     expect(actions.filter(body => body.action === "assess").length).toBe(0)
   })
 
