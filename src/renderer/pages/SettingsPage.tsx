@@ -14,7 +14,7 @@ import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import { COMMUNITY_RETENTION_DAYS, effectiveRetentionDays } from "../../shared/plans"
 import { isGuid } from "../../shared/security"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
-import { StorageChooser } from "../components/StorageChooser"
+import { StorageChooser, type StorageChooserDraft } from "../components/StorageChooser"
 import { UnreadableBackupsNotice } from "../components/UnreadableBackupsNotice"
 import { RecoveryKeyImport } from "../components/RecoveryKeyImport"
 import { RecoveryKeyNotice } from "../components/RecoveryKeyNotice"
@@ -336,6 +336,8 @@ function TenantSettings({ active }: { active: boolean }) {
   const [accounts, setAccounts] = useState<SignedInAccount[]>([])
   const [editing, setEditing] = useState<Tenant | null>(null)
   const [choice, setChoice] = useState<StorageChoice | null>(null)
+  // The Change storage dialog closes while its section is hidden; its chooser draft lives here so the reopened dialog picks up where the admin left off.
+  const [storageDraft, setStorageDraft] = useState<StorageChooserDraft | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
 
   const refresh = () => void bridge.auth.accounts().then(setAccounts)
@@ -363,6 +365,7 @@ function TenantSettings({ active }: { active: boolean }) {
       resources: { ...current, ...storage, subscriptionName: current?.subscriptionName ?? "", automationAccountName: "" },
     })
     toast(`Backups for ${editing.name} now go to ${choice.kind === "local" ? "this device" : choice.storageAccountName}.`, "success")
+    setStorageDraft(null)
     setEditing(null)
   }
 
@@ -396,7 +399,7 @@ function TenantSettings({ active }: { active: boolean }) {
                     {busy === tenantId && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     {account ? "Sign in again" : "Sign in"}
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={() => { setChoice(null); setEditing(tenant) }} disabled={!tenant.credentials}>
+                  <Button variant="ghost" size="sm" onClick={() => { setChoice(null); setStorageDraft(null); setEditing(tenant) }} disabled={!tenant.credentials}>
                     Change storage
                   </Button>
                 </div>
@@ -406,7 +409,7 @@ function TenantSettings({ active }: { active: boolean }) {
         )}
       </CardContent>
 
-      <Dialog open={active && Boolean(editing)} onOpenChange={(open) => !open && setEditing(null)}>
+      <Dialog open={active && Boolean(editing)} onOpenChange={(open) => { if (!open) { setStorageDraft(null); setEditing(null) } }}>
         <DialogContent className="sm:max-w-[620px]">
           <DialogHeader>
             <DialogTitle>Backup storage for {editing?.name}</DialogTitle>
@@ -420,11 +423,13 @@ function TenantSettings({ active }: { active: boolean }) {
               tenantId={editing.credentials.tenantId}
               clientId={editing.credentials.appId}
               initial={currentChoice(editing)}
+              initialDraft={storageDraft ?? undefined}
               onChange={setChoice}
+              onDraftChange={setStorageDraft}
             />
           )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
+            <Button variant="outline" onClick={() => { setStorageDraft(null); setEditing(null) }}>Cancel</Button>
             <Button disabled={!choice} onClick={saveStorage}>Save</Button>
           </DialogFooter>
         </DialogContent>
@@ -734,10 +739,17 @@ export default function SettingsPage() {
       mounted.current = true
       return
     }
-    const focused = document.activeElement
-    if (!focused || focused === document.body || focused.closest("section[hidden]")) {
-      document.querySelector<HTMLElement>('nav[aria-label="Settings sections"] [aria-current="page"]')?.focus({ preventScroll: true })
+    const landFocus = () => {
+      const focused = document.activeElement
+      if (!focused || focused === document.body || focused.closest("section[hidden]")) {
+        document.querySelector<HTMLElement>('nav[aria-label="Settings sections"] [aria-current="page"]')?.focus({ preventScroll: true })
+      }
     }
+    landFocus()
+    // A closing dialog still holds focus inside its portal at this point and
+    // only drops it during teardown, so check again after the next frame.
+    const frame = requestAnimationFrame(landFocus)
+    return () => cancelAnimationFrame(frame)
   }, [section])
 
   const panel = (id: SettingsSectionId, content: ReactNode) => (

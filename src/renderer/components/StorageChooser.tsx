@@ -14,17 +14,28 @@ import { PlanBadge, UpgradeNote } from "./UpgradeNote"
 
 const STORAGE_GUIDE_URL = "https://docs.tenuvault.com/getting-started/create-storage-account/"
 
+/** The in-progress selection, so a caller that unmounts the chooser can restore it later. */
+export interface StorageChooserDraft {
+  kind: StorageChoice["kind"]
+  selectedAccount: string
+  verifiedAccount: string
+}
+
 interface StorageChooserProps {
   tenantId: string
   clientId: string
   initial?: StorageChoice
+  /** A draft captured from an earlier mount of this chooser; wins over initial. */
+  initialDraft?: StorageChooserDraft
   /** Called with a verified choice, or null while the choice is incomplete or unverified. */
   onChange: (choice: StorageChoice | null) => void
+  /** Called whenever the in-progress selection changes. */
+  onDraftChange?: (draft: StorageChooserDraft) => void
 }
 
 /** Lets the admin keep backups encrypted on this device or in their own Azure storage account. */
-export function StorageChooser({ tenantId, clientId, initial, onChange }: StorageChooserProps) {
-  const [kind, setKind] = useState<StorageChoice["kind"]>(initial?.kind ?? "local")
+export function StorageChooser({ tenantId, clientId, initial, initialDraft, onChange, onDraftChange }: StorageChooserProps) {
+  const [kind, setKind] = useState<StorageChoice["kind"]>(initialDraft?.kind ?? initial?.kind ?? "local")
   const [settingsError, setSettingsError] = useState("")
   const [settings, setSettings] = useBackupSettings((error) =>
     setSettingsError(error instanceof Error ? error.message : String(error)),
@@ -46,13 +57,13 @@ export function StorageChooser({ tenantId, clientId, initial, onChange }: Storag
   }
   const [accounts, setAccounts] = useState<AzureStorageAccount[] | null>(null)
   const [loadError, setLoadError] = useState("")
-  const [selected, setSelected] = useState(initial?.kind === "azure" ? initial.storageAccountName : "")
+  const [selected, setSelected] = useState(initialDraft?.selectedAccount ?? (initial?.kind === "azure" ? initial.storageAccountName : ""))
   const selectedRef = useRef(selected)
   selectedRef.current = selected
   const [verifying, setVerifying] = useState(false)
   // The account name access was confirmed for, so a check that resolves after the
   // selection moved can never mark the newly selected account as confirmed.
-  const [verifiedFor, setVerifiedFor] = useState("")
+  const [verifiedFor, setVerifiedFor] = useState(initialDraft?.verifiedAccount ?? "")
   const verified = verifiedFor !== "" && verifiedFor === selected
   const [verifyError, setVerifyError] = useState("")
   const [loadAttempt, setLoadAttempt] = useState(0)
@@ -88,6 +99,12 @@ export function StorageChooser({ tenantId, clientId, initial, onChange }: Storag
       })
     return () => { active = false }
   }, [kind, accounts, tenantId, clientId, community, loadAttempt])
+
+  useEffect(() => {
+    onDraftChange?.({ kind, selectedAccount: selected, verifiedAccount: verifiedFor })
+    // onDraftChange is a callback prop; re-running on its identity would loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind, selected, verifiedFor])
 
   useEffect(() => {
     if (kind === "local") return onChange({ kind: "local" })

@@ -571,6 +571,7 @@ await check("settings sidebar switches sections and names the section in the URL
   await evaluate(`location.hash = "#/portal/settings?section=signin"`)
   assert(await waitForCondition(`!document.body.innerText.includes("TENUVAULT DESKTOP END USER LICENSE AGREEMENT")`), "dialog stayed open while its section was hidden")
   assert(await evaluate(`document.querySelectorAll('[role="dialog"]').length === 0`), "hidden panel left a dialog in the page")
+  assert(await waitForCondition(`document.activeElement === document.querySelector('nav[aria-label="Settings sections"] [aria-current="page"]')`), "focus did not land on the active section entry after the dialog closed")
   await evaluate(`location.hash = "#/portal/settings?section=about"`)
   assert(await waitForText("TENUVAULT DESKTOP END USER LICENSE AGREEMENT"), "dialog did not come back with its section")
   await evaluate(`[...document.querySelectorAll("button")].find(b => b.textContent.trim() === "Close").click()`)
