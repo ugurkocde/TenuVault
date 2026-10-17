@@ -228,6 +228,29 @@ interface AssessJob {
   error: string | null
   assessment: Assessment | null
   expiresAt: number | null
+  startedAt: string
+  finishedAt: string | null
+}
+
+/** One assessment job without its findings, for the background activity panel on every page. */
+export interface AssessJobSummary {
+  jobId: string
+  tenantId: string
+  frameworkId: string
+  reference: string
+  phase: AssessPhase
+  status: "running" | "done" | "failed"
+  read: number
+  total: number
+  currentPolicy: string
+  comparedPolicies: number
+  packPolicies: number
+  currentPackPolicy: string
+  findingsCount: number
+  error: string | null
+  runId: string | null
+  startedAt: string
+  finishedAt: string | null
 }
 
 const jobs = new Map<string, AssessJob>()
@@ -247,6 +270,21 @@ function pruneJobs(): void {
     if (!oldestFinished) break
     jobs.delete(oldestFinished[0])
   }
+}
+
+/** Every running and recently finished assessment job, newest first, without findings payloads. */
+export function listAssessJobs(): AssessJobSummary[] {
+  pruneJobs()
+  return [...jobs.values()]
+    .map((job) => ({
+      jobId: job.id, tenantId: job.tenantId, frameworkId: job.frameworkId, reference: job.reference,
+      phase: job.phase, status: job.phase === "done" ? "done" as const : job.phase === "failed" ? "failed" as const : "running" as const,
+      read: job.read, total: job.total, currentPolicy: job.currentPolicy,
+      comparedPolicies: job.comparedPolicies, packPolicies: job.packPolicies, currentPackPolicy: job.currentPackPolicy,
+      findingsCount: job.findings.length, error: job.error, runId: job.assessment?.runId ?? null,
+      startedAt: job.startedAt, finishedAt: job.finishedAt,
+    }))
+    .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
 }
 
 function jobSnapshot(job: AssessJob, since: number): AssessJobSnapshot {
@@ -324,6 +362,7 @@ async function runAssessJob(job: AssessJob, connect: () => Promise<{ token: stri
     job.error = error instanceof Error ? error.message : "Assessment failed."
     job.assessment = null
   } finally {
+    job.finishedAt = new Date().toISOString()
     job.expiresAt = Date.now() + JOB_TTL_MS
     nextJobGeneration(job.tenantId, job.frameworkId)
     pruneJobs()
@@ -351,6 +390,8 @@ export async function isAdmittedAssessStatus(request: Request): Promise<boolean>
   if (request.method !== "POST" || new URL(request.url).pathname.replace(/\/$/, "") !== "/api/frameworks") return false
   let body: unknown
   try { body = await request.clone().json() } catch { return false }
+  // Listing job summaries exposes no findings and starts no work, so the panel may poll it freely.
+  if (record(body) && body.action === "assess-jobs") return true
   if (!record(body) || body.action !== "assess-status" || typeof body.jobId !== "string" || typeof body.tenantId !== "string" || typeof body.frameworkId !== "string") return false
   const job = jobs.get(body.jobId)
   return !!job && job.tenantId === body.tenantId.toLowerCase() && job.frameworkId === body.frameworkId
@@ -592,6 +633,10 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       throw new FrameworkError(error instanceof Error ? error.message : "The CIS content delivery service returned an invalid response.", 502)
     }
   }
+  if (body.action === "assess-jobs") {
+    // Summaries only, like native-jobs: the activity panel polls this from every page.
+    return { jobs: listAssessJobs() }
+  }
   if (body.action === "assess-status") {
     pruneJobs()
     const job = typeof body.jobId === "string" ? jobs.get(body.jobId) : undefined
@@ -620,6 +665,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       phase: "connecting", read: 0, total: 0, currentPolicy: "",
       comparedPolicies: 0, packPolicies: policies.length, currentPackPolicy: "",
       findings: [], error: null, assessment: null, expiresAt: null,
+      startedAt: new Date().toISOString(), finishedAt: null,
     }
     jobs.set(job.id, job)
     nextJobGeneration(tenant, job.frameworkId)

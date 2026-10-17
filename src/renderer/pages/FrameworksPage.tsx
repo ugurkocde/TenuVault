@@ -26,6 +26,8 @@ import type { SettingNames } from "../../shared/intune/drift"
 import { accumulateCisFindings, CIS_OPEN_PARAMS, cisOpenRequest, cisRunDisplayPhase, cisRunHeading, cisRunReceivedLabel, cisRunSteps, cisRunTallies, currentSavedAssessment, emptyCisRunAccumulation, pollCisStatus, resolveCisRunCompletion, type CisRunPack } from "../../shared/frameworks/cis-run"
 import { refreshInternalCisBenchmarks, useInternalCisBenchmarks, useInternalCisBenchmarksAnswer } from "../lib/internal-cis"
 import { bridge } from "../lib/bridge"
+import { startBackgroundTask, useBackgroundTask } from "../lib/background-tasks"
+import { refreshCisJobs } from "../lib/cis-jobs"
 import { cachedCisCatalog, rememberCisCatalog } from "../lib/cis-catalog-cache"
 import { parsePolicies, remediationPayload, rootMatches, type Assessment, type BaselinePolicy, type Finding, type Observation } from "../../shared/frameworks/policies"
 import { summarizeSetting } from "../../shared/frameworks/setting-summary"
@@ -436,6 +438,11 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   const stage = isCis ? (workspaceLoading ? "loading" : cisStage({ hasRun: !!cisRun, hasAssessment: !!assessment, setupRequested })) : null
   const fromKit = isCis && isKitPackReference(reference, (kitConversion?.packs ?? []).map(pack => pack.reference), policies)
   const credentials = selectedTenant?.credentials
+  // A pack comparison outside CIS reads the tenant in one request; it runs as a background
+  // task so it finishes, and is saved to the workspace, even after navigating away.
+  const compareKey = credentials?.tenantId ? `assess:${credentials.tenantId.toLowerCase()}:${framework.id}` : undefined
+  const compareTask = useBackgroundTask(isCis ? undefined : compareKey)
+  const comparing = compareTask?.status === "running"
   // Reports of licensed CIS content are Pro and MSP; the main process checks the same plan.
   const plan = useTenantPlan(credentials?.tenantId)
   const { confirm, confirmDialog } = useConfirm()
@@ -470,6 +477,19 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   }
   const shownAssessment = useRef<Assessment | null>(null)
   useEffect(() => { shownAssessment.current = assessment }, [assessment])
+  const appliedCompareFinish = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    if (isCis || compareTask?.status !== "completed" || !compareTask.finishedAt) return
+    if (appliedCompareFinish.current === compareTask.finishedAt) return
+    appliedCompareFinish.current = compareTask.finishedAt
+    // A comparison started before this mount finished into setters that no longer exist, so
+    // show the newest saved assessment from the workspace it was recorded in.
+    void workspaceRequest("workspace-load").then((saved) => {
+      setWorkspace(saved)
+      const latest = currentSavedAssessment(saved)
+      if (latest) showSavedResults(latest.assessment, { policies: latest.policies, reference: latest.assessment.reference })
+    }).catch(() => undefined)
+  }, [isCis, compareTask?.status, compareTask?.finishedAt])
   /**
    * Shows a saved assessment as read-only results with its pack, and clears any selection made on
    * other results. It never replaces newer results already on screen, such as a fresh run.
@@ -604,6 +624,8 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     setCisRun({ jobId: "", phase: "connecting", status: "running", state: "running", tenantId, frameworkId: framework.id, read: 0, total: 0, currentPolicy: "", comparedPolicies: 0, packPolicies: capturedPack.policies.length, currentPackPolicy: "", findings: [], nextSince: 0, error: null, assessment: null })
     try {
       const jobId = await jobFor()
+      // The activity panel mirrors this run from assess-jobs, so it stays visible on other pages.
+      void refreshCisJobs()
       if (!current()) return
       let accumulation = emptyCisRunAccumulation()
       for (;;) {
@@ -1084,9 +1106,27 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     </section>}
     {(!isCis || stage === "setup" || stage === "results") && <section {...(isCis && stage === "results" ? { "aria-label": "Assessment results" } : { "aria-labelledby": "compare-title" })} className="mt-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
       {(!isCis || stage !== "results") && <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 id="compare-title" className="text-xl font-medium tracking-tight">2. Compare with your tenant</h2><p className="mt-1 text-sm text-gray-600">{selectedTenant ? `Selected tenant: ${selectedTenant.name}` : "Choose a connected tenant using the sidebar."}</p>{isCis && selectedTenant && !credentials && <p className="mt-1 text-sm text-amber-800">The assessment needs a signed-in tenant. Sign in to {selectedTenant.name} from the sidebar.</p>}</div>
-        {isCis ? <button className={primary} disabled={!!busy || !!cisRun || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={startCisAssessment}>{cisRun ? "Assessment running" : assessment ? "Run again" : "Start Assessment"}</button> : <button className={primary} disabled={!!busy || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={() => void perform("Reading tenant policies and comparing settings…", async () => {
-          reset(); const result = await request<Assessment>({ action: "assess", tenantId: credentials!.tenantId, appId: credentials!.appId, frameworkId: framework.id, reference, policies }); setAssessment(result); setWorkspace(await workspaceRequest("workspace-load"))
-        })}>{assessment ? "Compare again" : "Run comparison"}</button>}</div>}
+        {isCis ? <button className={primary} disabled={!!busy || !!cisRun || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={startCisAssessment}>{cisRun ? "Assessment running" : assessment ? "Run again" : "Start Assessment"}</button> : <button className={primary} disabled={!!busy || comparing || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={() => {
+          if (!compareKey) return
+          reset(); setError(""); setErrorAt("compare")
+          const chosenReference = reference
+          const chosenPolicies = policies
+          startBackgroundTask(compareKey, { title: `${framework.name} comparison`, detail: "Reading tenant policies and comparing settings", href: `/portal/frameworks/${framework.id}` }, async () => {
+            try {
+              const result = await request<Assessment>({ action: "assess", tenantId: credentials!.tenantId, appId: credentials!.appId, frameworkId: framework.id, reference: chosenReference, policies: chosenPolicies })
+              setAssessment(result); setWorkspace(await workspaceRequest("workspace-load"))
+              return `${framework.name} comparison is ready.`
+            } catch (e) {
+              // The page error still shows for an admin who stayed here; the panel carries it elsewhere.
+              const message = (e instanceof Error && errorText(e)) || "The request failed."
+              setError(message); setErrorAt("compare")
+              if (isWorkspaceUnreadableError(message)) setUnreadable(true)
+              refreshFullHistory(message)
+              throw e
+            }
+          })
+        }}>{comparing ? "Comparing in background" : assessment ? "Compare again" : "Run comparison"}</button>}</div>}
+      {comparing && <p role="status" className="mt-4 text-sm text-blue-700">Reading tenant policies and comparing settings in the background. You can keep working elsewhere; the result is saved here.</p>}
       {busy && busyAt === "compare" && !(isCis && cisRun) && <p role="status" className="mt-4 text-sm text-blue-700">{busy}</p>}
       {busy && busyAt === "compare" && isCis && !cisRun && <div role="progressbar" aria-label={busy} className="mt-2 h-2 overflow-hidden rounded-full bg-gray-100"><div className="h-full w-1/3 animate-pulse rounded-full bg-primary" /></div>}
       {historyFull && <div id={historyAlertId} role="alert" aria-label="Saved assessment history is full" className="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
