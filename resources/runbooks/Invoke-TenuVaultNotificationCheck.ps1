@@ -1399,6 +1399,7 @@ try {
     # what is eligible right now. An intended destination that is not currently
     # eligible (for example configured mail that is not verified yet) is not
     # attempted, consumes no attempts, and keeps the envelope pending.
+    $newlyExhausted = [System.Collections.Generic.List[string]]::new()
     $eligibleDestinations = [System.Collections.Generic.List[string]]::new()
     if ($webhookUrl) { $eligibleDestinations.Add("webhook") }
     if ($teamsWebhookUrl) { $eligibleDestinations.Add("teams") }
@@ -1441,6 +1442,7 @@ try {
                 } else {
                     $channelAttempts = Add-TvDeliveryFailure -Entry $pendingEntry -Destination $destination `
                         -ErrorText $sendError.Exception.Message
+                    if ($channelAttempts -eq 5) { $newlyExhausted.Add("${destination}: $(Get-TvSafeError $sendError.Exception.Message)") }
                     Write-Output "Delivery to $destination failed for event $($eventIdValue.Substring(0, 12)) attempt ${channelAttempts}: $($pendingEntry.lastError)"
                     if (-not $lastError) { $lastError = $pendingEntry.lastError }
                     & $saveState
@@ -1483,11 +1485,14 @@ try {
     Set-TvBlobText -Uri $heartbeatBlobUri -Token $storageToken -Text (ConvertTo-TenuVaultCanonicalJson $heartbeat)
     Write-Output "Watcher run complete. Events sent: $eventsSent. Pending: $($pendingEnvelopes.Count). Watermark: $watermarkIso."
     # State and heartbeat are persisted and deliveries were attempted. Only now
-    # surface failed ingestion or a failed missed backup check as a failed run,
-    # so both stay observable in the Automation job status and the failure
-    # alert without losing work.
+    # surface failed ingestion, a failed missed backup check, or a destination
+    # that exhausted its retries as a failed run, so all three stay observable
+    # in the Automation job status and the failure alert without losing work.
+    # An exhausted destination fails exactly the run that exhausts it; later
+    # runs keep delivering other work without re-alarming every hour.
     if ($ingestionError) { throw $ingestionError }
     if ($missedCheckFailed) { throw "Missed backup check failed for this run. See the heartbeat lastError for details." }
+    if ($newlyExhausted.Count -gt 0) { throw "A notification destination exhausted its retries and its events need attention: $($newlyExhausted -join '; ')" }
 } catch {
     $lastError = Get-TvSafeError $_.Exception.Message
     if ($leaseId -and $storageToken -and $heartbeatBlobUri) {

@@ -54,6 +54,7 @@ describe("Azure notification watcher scripts", () => {
       "deliveredChannels",
       "attemptsByChannel",
       "mailVerifiedSender",
+      "newlyExhausted",
       "IDENTITY_ENDPOINT",
       "X-IDENTITY-HEADER",
       "$listXml.EnumerationResults.Blobs",
