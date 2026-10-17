@@ -121,8 +121,11 @@ export async function loadDriftResult(tenantId: string, force = false): Promise<
     }
     return "loaded"
   } catch {
+    // A superseded read that rejects is not a failure of the current result: reporting it
+    // as one would overwrite the newer scan's failure state (or recreate a cleared one).
+    if (resultGenerations.get(tenant) !== generation) return "superseded"
     // Reported as no saved result; the page can still start a scan.
-    if (resultGenerations.get(tenant) === generation && !(tenant in state.results)) state = { ...state, results: { ...state.results, [tenant]: null } }
+    if (!(tenant in state.results)) state = { ...state, results: { ...state.results, [tenant]: null } }
     return "failed"
   } finally {
     loadingResults.delete(tenant)

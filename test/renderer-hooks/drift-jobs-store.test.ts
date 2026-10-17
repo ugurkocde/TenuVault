@@ -14,9 +14,19 @@ vi.mock("../../src/renderer/lib/toast", () => ({ toast: () => undefined }))
 import { loadDriftResult, refreshDriftJobs, useDriftResult, useDriftResultFailure, type DriftJob, type DriftResultLoad, type SavedDriftResult } from "../../src/renderer/lib/drift-jobs"
 
 const tenantId = "99999999-9999-9999-9999-999999999999"
+let probeTenant = tenantId
 
-function result(jobId: string): SavedDriftResult {
-  return { schemaVersion: 1, tenantId, jobId, storageAccountName: "tvlocal-synthetic" } as unknown as SavedDriftResult
+function result(jobId: string, tenant = probeTenant): SavedDriftResult {
+  return { schemaVersion: 1, tenantId: tenant, jobId, storageAccountName: "tvlocal-synthetic" } as unknown as SavedDriftResult
+}
+
+function job(jobId: string, status: DriftJob["status"]): DriftJob {
+  return {
+    jobId, tenantId: probeTenant, status, phase: "comparing", detail: "Comparing",
+    done: 1, total: 2, percent: status === "completed" ? 100 : 50,
+    startedAt: new Date().toISOString(), baseline: null, comparison: null,
+    ...(status === "completed" ? { finishedAt: new Date().toISOString() } : {}),
+  }
 }
 
 const roots: Root[] = []
@@ -25,8 +35,8 @@ let seen: SavedDriftResult | null = null
 
 let failure: string | null = null
 function Probe() {
-  seen = useDriftResult(tenantId).result
-  failure = useDriftResultFailure(tenantId)
+  seen = useDriftResult(probeTenant).result
+  failure = useDriftResultFailure(probeTenant)
   return null
 }
 
@@ -79,7 +89,7 @@ describe("drift result store", () => {
 
   it("records a completed scan whose result could not be read, and clears it when the result arrives", async () => {
     const running: DriftJob = {
-      jobId: "job-fail", tenantId, status: "running", phase: "comparing", detail: "Comparing",
+      jobId: "job-fail", tenantId: probeTenant, status: "running", phase: "comparing", detail: "Comparing",
       done: 1, total: 2, percent: 50, startedAt: new Date().toISOString(), baseline: null, comparison: null,
     }
     let jobs: DriftJob[] = [running]
@@ -102,8 +112,73 @@ describe("drift result store", () => {
     expect(failure).toBe("job-fail")
 
     resultReadable = true
-    await act(async () => { await expect(loadDriftResult(tenantId, true)).resolves.toBe("loaded") })
+    await act(async () => { await expect(loadDriftResult(probeTenant, true)).resolves.toBe("loaded") })
     expect(seen?.jobId).toBe("job-fail")
+    expect(failure).toBeNull()
+  })
+  it("keeps the newer scan's failure when an older superseded read rejects late", async () => {
+    probeTenant = "88888888-8888-8888-8888-888888888888"
+    let rejectHeld: (() => void) | null = null
+    const held = new Promise<void>((_resolve, reject) => { rejectHeld = () => reject(new Error("read failed")) })
+    let jobs: DriftJob[] = [job("job-old-held", "running")]
+    let resultCalls = 0
+    vi.stubGlobal("fetch", vi.fn(async (_path: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { action?: string }
+      if (body.action === "jobs") return Response.json({ jobs })
+      if (body.action === "result") {
+        resultCalls += 1
+        if (resultCalls === 1) return Response.json({ result: null })
+        if (resultCalls === 2) { await held; return Response.json({ result: result("job-old-held") }) }
+        return new Response(JSON.stringify({ error: "Storage could not be read." }), { status: 500 })
+      }
+      return Response.json({})
+    }))
+    renderProbe()
+    await act(async () => { await refreshDriftJobs() })
+    jobs = [job("job-old-held", "completed")]
+    await act(async () => { await refreshDriftJobs() })
+    // A newer scan runs and its own result read fails while the older read is still held.
+    jobs = [job("job-new-fail", "running")]
+    await act(async () => { await refreshDriftJobs() })
+    jobs = [job("job-new-fail", "completed")]
+    await act(async () => { await refreshDriftJobs() })
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+    expect(failure).toBe("job-new-fail")
+
+    await act(async () => { rejectHeld?.() })
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+    expect(failure).toBe("job-new-fail")
+  })
+
+  it("does not recreate a failure when a superseded read rejects after a successful retry", async () => {
+    probeTenant = "77777777-7777-7777-7777-777777777777"
+    let rejectHeld: (() => void) | null = null
+    const held = new Promise<void>((_resolve, reject) => { rejectHeld = () => reject(new Error("read failed")) })
+    let jobs: DriftJob[] = [job("job-retry", "running")]
+    let resultCalls = 0
+    vi.stubGlobal("fetch", vi.fn(async (_path: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { action?: string }
+      if (body.action === "jobs") return Response.json({ jobs })
+      if (body.action === "result") {
+        resultCalls += 1
+        if (resultCalls === 1) return Response.json({ result: null })
+        if (resultCalls === 2) { await held; return Response.json({ result: result("job-retry") }) }
+        return Response.json({ result: result("job-retry") })
+      }
+      return Response.json({})
+    }))
+    renderProbe()
+    await act(async () => { await refreshDriftJobs() })
+    jobs = [job("job-retry", "completed")]
+    await act(async () => { await refreshDriftJobs() })
+    // The retry supersedes the held completion read and brings the result in.
+    await act(async () => { await expect(loadDriftResult(probeTenant, true)).resolves.toBe("loaded") })
+    expect(seen?.jobId).toBe("job-retry")
+    expect(failure).toBeNull()
+
+    await act(async () => { rejectHeld?.() })
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+    expect(seen?.jobId).toBe("job-retry")
     expect(failure).toBeNull()
   })
 })
