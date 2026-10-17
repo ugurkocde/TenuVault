@@ -24,7 +24,8 @@ export interface DashboardStats {
 export interface DashboardActivity {
   id: string
   type: "backup" | "restore" | "schedule" | "policy" | "auth"
-  status: "success" | "warning" | "failed" | "info"
+  /** Neutral: something the user chose, such as a cancelled backup. */
+  status: "success" | "warning" | "failed" | "info" | "neutral"
   tenant: string
   tenantId: number
   time: Date

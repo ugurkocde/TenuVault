@@ -192,7 +192,7 @@ export default function OverviewPage() {
                         <CheckCircle2 className="h-4 w-4 shrink-0 text-gray-400" />
                         <span className="min-w-0 break-words">
                           {schedule?.lastAttemptAt
-                            ? `Last automatic backup ${formatWhen(schedule.lastAttemptAt)}`
+                            ? `Last automatic backup${schedule.lastStatus === "Cancelled" ? " cancelled" : ""} ${formatWhen(schedule.lastAttemptAt)}`
                             : tenant.lastBackup
                               ? `Last backup ${formatWhen(tenant.lastBackup)}`
                               : "No backups yet"}

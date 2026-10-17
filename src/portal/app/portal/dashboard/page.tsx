@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { Link } from "react-router-dom"
 import {
   Activity,
+  Ban,
   CheckCircle,
   AlertCircle,
   CalendarClock,
@@ -25,6 +26,7 @@ import { cn } from "~/lib/utils"
 import { Button } from "~/components/ui/button"
 import { useDashboardStats } from "~/hooks/dashboard/useDashboardStats"
 import { backupSummary } from "~/lib/backup-health"
+import { unresolvedNotice } from "~/components/backup/types"
 import { useBaselineScore } from "~/hooks/dashboard/useBaselineScore"
 import { formatDate, formatPercent } from "@desktop/features/scores/api"
 import { useBackupProgress } from "~/contexts/BackupProgressContext"
@@ -223,6 +225,7 @@ function DashboardContent() {
   const protectedBackup = stats?.latestCompleteBackup ?? null
   const backupsError = stats?.backupsError ?? null
   const failedBeforeFirstBackup = schedule?.lastStatus === "Failed" && !!backupStats && !backupsError && backupStats.stored === 0
+  const unresolvedBackups = stats?.unresolvedBackups ?? 0
   const health =
     stats && stats.tenants.total > 0
       ? stats.tenants.critical > 0 ? "critical" : stats.tenants.warning > 0 ? "warning" : "healthy"
@@ -312,6 +315,12 @@ function DashboardContent() {
           <AlertDescription>{statsErrorMessage}</AlertDescription>
         </Alert>
       )}
+      {unresolvedBackups > 0 && (
+        <Alert>
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{unresolvedNotice(unresolvedBackups)}</AlertDescription>
+        </Alert>
+      )}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         {/* Last backup */}
@@ -325,6 +334,7 @@ function DashboardContent() {
                     : backupStats.latestStatus === "partial" ? <Chip tone="warning">Completed with warnings</Chip>
                     : backupStats.latestStatus === "running" ? <Chip tone="coral">Running</Chip>
                     : backupStats.latestStatus === "unknown" ? <Chip tone="warning">Status unknown</Chip>
+                    : backupStats.latestStatus === "cancelled" ? <Chip>Cancelled</Chip>
                     : <Chip tone="danger">{backupStats.latestStatus === "incomplete" ? "Incomplete" : "Failed"}</Chip>
                 ) : null}
                 {health && (
@@ -413,7 +423,7 @@ function DashboardContent() {
           )}
           {schedule?.lastAttemptAt && (
             <p className={cn("mt-2 text-xs", schedule.lastStatus === "Failed" ? "text-red-700" : "text-gray-500")}>
-              {schedule.lastStatus === "Failed" ? "Last automatic backup attempt failed" : "Last automatic backup"} {formatWhen(schedule.lastAttemptAt)}
+              {schedule.lastStatus === "Failed" ? "Last automatic backup attempt failed" : schedule.lastStatus === "Cancelled" ? "Last automatic backup cancelled" : "Last automatic backup"} {formatWhen(schedule.lastAttemptAt)}
             </p>
           )}
           {failedBeforeFirstBackup && (
@@ -615,12 +625,14 @@ function DashboardContent() {
                       activity.status === "success" && "bg-green-100",
                       activity.status === "warning" && "bg-yellow-100",
                       activity.status === "failed" && "bg-red-100",
-                      activity.status === "info" && "bg-blue-100"
+                      activity.status === "info" && "bg-blue-100",
+                      activity.status === "neutral" && "bg-gray-100"
                     )}>
                       {activity.status === "success" && <CheckCircle className="h-4 w-4 text-green-700" />}
                       {activity.status === "warning" && <AlertCircle className="h-4 w-4 text-yellow-600" />}
                       {activity.status === "failed" && <AlertCircle className="h-4 w-4 text-red-600" />}
                       {activity.status === "info" && <Activity className="h-4 w-4 text-blue-600" />}
+                      {activity.status === "neutral" && <Ban className="h-4 w-4 text-gray-500" />}
                     </span>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">

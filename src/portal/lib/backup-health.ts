@@ -1,9 +1,10 @@
-export type BackupState = 'success' | 'failed' | 'partial' | 'running' | 'incomplete' | 'unknown'
+export type BackupState = 'success' | 'failed' | 'cancelled' | 'partial' | 'running' | 'incomplete' | 'unknown'
 export function normalizeBackupStatus(backup: { status?: unknown; properties?: { status?: unknown }; result?: unknown }): BackupState {
   const raw = [backup.status, backup.properties?.status, backup.result].find((value) => typeof value === 'string' && value.trim().length > 0)
   switch (typeof raw === 'string' ? raw.trim().toLowerCase() : '') {
     case 'success': case 'succeeded': case 'completed': return 'success'
     case 'failed': case 'error': return 'failed'
+    case 'cancelled': return 'cancelled'
     case 'partial': case 'partiallycompleted': case 'completedwithwarnings': case 'warning': return 'partial'
     case 'running': case 'inprogress': case 'queued': return 'running'
     case 'incomplete': return 'incomplete'
@@ -18,6 +19,7 @@ export function latestComplete<T extends Backup>(backups: T[]): T | null {
 export function backupHealth(backups: Backup[], now: Date, unavailable = false): 'healthy' | 'warning' | 'critical' {
   if (unavailable) return 'warning'
   const latest = latestComplete(backups)
+  // A cancelled backup gives no protection, but it is not a failure either.
   if (!latest) return backups.some((item) => ['failed', 'partial', 'incomplete'].includes(item.status)) ? 'critical' : 'warning'
   const age = (now.getTime() - latest.timestamp.getTime()) / 3_600_000
   if (age < 0) return 'warning'
@@ -27,7 +29,9 @@ export function backupHealth(backups: Backup[], now: Date, unavailable = false):
  * Every backup count the Dashboard shows, from one tenant's backups in storage and its failed
  * attempts. `stored` counts every backup in storage, of any status and age. Successful and failed
  * count the period from `since` up to `until`: failed holds failed backups, backups completed with
- * warnings, incomplete ones and the failed attempts. The success rate is null when nothing finished.
+ * warnings, incomplete ones and the failed attempts. A backup the user cancelled is not a result:
+ * it counts in `stored` only, never in successful, failed or the success rate. The success rate is
+ * null when nothing finished.
  *
  * The Dashboard counts runs. Each backup run counts once: by its folder when storage holds one for
  * it, otherwise by its attempt record. A folder without a manifest is failed when its run id
@@ -43,7 +47,7 @@ export function backupSummary(backups: Array<Backup & { runId?: string | null }>
   const stored = new Set(backups.map((item) => item.runId).filter((id) => !!id))
   const failedRuns = new Set(failedAttempts.map((attempt) => attempt.runId).filter((id) => !!id))
   // A run that already wrote its manifest or its failure record has finished, even while the engine still reports it.
-  const finishedRuns = new Set([...backups.filter((item) => item.runId && ['success', 'failed', 'partial'].includes(item.status)).map((item) => item.runId), ...failedRuns])
+  const finishedRuns = new Set([...backups.filter((item) => item.runId && ['success', 'failed', 'cancelled', 'partial'].includes(item.status)).map((item) => item.runId), ...failedRuns])
   const live = new Set((period.live ?? []).filter((id) => !finishedRuns.has(id)))
   // The list says running for a folder without a manifest that started less than six hours ago, and incomplete after that.
   const statusOf = (item: Backup & { runId?: string | null }): BackupState => {

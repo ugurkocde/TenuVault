@@ -63,11 +63,13 @@ export function formatDate(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" })
 }
 
-export type StatusKind = "success" | "warning" | "failed" | "running"
+export type StatusKind = "success" | "warning" | "failed" | "cancelled" | "running"
 
 export function statusKind(status: string): StatusKind {
   const value = status.toLowerCase()
   if (value.includes("fail") || value === "incomplete") return "failed"
+  // A backup the user cancelled is neither complete nor a failure.
+  if (value === "cancelled") return "cancelled"
   // "unknown": the metadata could not be read, so whether the backup finished is not known.
   if (value.includes("warn") || value.includes("partial") || value === "unknown") return "warning"
   if (value === "running") return "running"
@@ -78,6 +80,7 @@ export const STATUS_LABEL: Record<StatusKind, string> = {
   success: "Complete",
   warning: "Completed with warnings",
   failed: "Failed",
+  cancelled: "Cancelled",
   running: "Running",
 }
 
@@ -87,4 +90,9 @@ export function statusLabel(status: string): string {
   if (value === "incomplete") return "Incomplete"
   if (value === "unknown") return "Status unknown"
   return STATUS_LABEL[statusKind(status)]
+}
+
+/** Shown when backup folders were left out of the list because their ownership could not be read. */
+export function unresolvedNotice(count: number): string {
+  return `${count} backup${count === 1 ? "" : "s"} could not be read. Select Refresh to try again.`
 }

@@ -1,7 +1,7 @@
 import { showCommunityLimitError } from "../lib/plan-dialog"
 import { useEffect, useRef, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
-import { ArrowLeft, CheckCircle2, Database, HardDriveDownload, KeyRound, Loader2, Play, ShieldCheck, XCircle } from "lucide-react"
+import { ArrowLeft, Ban, CheckCircle2, Database, HardDriveDownload, KeyRound, Loader2, Play, ShieldCheck, XCircle } from "lucide-react"
 import { useSelectedTenant, useTenantOperations } from "~/contexts/TenantContext"
 import { useBackupProgress } from "~/contexts/BackupProgressContext"
 import { Button } from "~/components/ui/button"
@@ -28,6 +28,13 @@ const STEPS = [
 ]
 
 type JobStatus = BackupJobDisplay
+
+/** The first backup's state: running, completed, cancelled by the user (grey) or failed. */
+export function JobStateIcon({ job }: { job: Pick<JobStatus, "isComplete" | "isSuccessful" | "status"> }) {
+  if (!job.isComplete) return <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+  if (job.isSuccessful) return <CheckCircle2 className="h-4 w-4 text-green-600" />
+  return job.status === "Cancelled" ? <Ban className="h-4 w-4 text-gray-500" /> : <XCircle className="h-4 w-4 text-red-600" />
+}
 
 /**
  * First-run setup: connect a tenant with the admin's own app registration, choose where
@@ -279,9 +286,7 @@ export default function OnboardingPage() {
               <div className="space-y-3">
                 <div className="flex items-center justify-between text-sm">
                   <span className="flex items-center gap-2 text-gray-800">
-                    {!displayJob.isComplete && <Loader2 className="h-4 w-4 animate-spin text-blue-600" />}
-                    {displayJob.isComplete && displayJob.isSuccessful && <CheckCircle2 className="h-4 w-4 text-green-600" />}
-                    {displayJob.isComplete && !displayJob.isSuccessful && <XCircle className="h-4 w-4 text-red-600" />}
+                    <JobStateIcon job={displayJob} />
                     {displayJob.exception ?? displayJob.progressMessage}
                   </span>
                   <span className="text-gray-500">{displayJob.progress}%</span>

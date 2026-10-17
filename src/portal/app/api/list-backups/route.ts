@@ -6,6 +6,7 @@ import { blobPath } from "../../../../shared/security"
 import { BACKUP_OWNER_FILE } from "../../../../shared/constants"
 import { mapLimit } from "../../../../shared/map-limit"
 import { MetadataCache } from "~/lib/storage/metadata-cache"
+import { manifestStatus } from "../../../../shared/intune/backup-status"
 import { backupFoldersIn, parseBackupName } from "../../../../shared/intune/backup-names"
 import { type NextRequest, NextResponse } from "next/server"
 
@@ -24,7 +25,8 @@ interface MetadataRead { metadata: any; metadataError?: string }
 const metadataCache = new MetadataCache<MetadataRead>(result => !!result.metadata && !result.metadataError)
 /**
  * What a folder's ownership marker says. `foreign` is a marker that cannot be opened or
- * authenticated for this tenant; `unreadable` is a read that failed. Only a marker that was read
+ * authenticated for this tenant; `unreadable` is a marker that exists but could not be read (any
+ * status but 404, a network error or a body that cannot be parsed). Only a marker that was read
  * is cached: importing the recovery key, or storage answering again, brings the folder back.
  */
 type OwnerRead = { kind: 'owner'; tenantId: string | null; runId: string | null } | { kind: 'missing' } | { kind: 'foreign' } | { kind: 'unreadable' }
@@ -55,9 +57,9 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     : inventory ? Promise.resolve({ metadata: null }) : readMetadata()
   const filesRead = inventory ? Promise.resolve(inventory.text) : listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${name}/`)}`, accessToken).catch(() => { throw new Error(`Backup ${name} inventory is unavailable. Check storage access and retry.`) })
   const [{ metadata, metadataError }, filesText] = await Promise.all([metadataRead, filesRead])
-  // A folder without a manifest names its tenant and run only in the ownership marker, which is
-  // read just for those folders: the tenant filter applies to it, and the run id lets the
-  // Dashboard count a failed run once.
+  // A folder whose manifest does not name its tenant (none, unreadable, or from an older version)
+  // is placed by its ownership marker, read just for those folders: the tenant filter applies to
+  // it, and for a folder without a manifest the run id lets the Dashboard count a failed run once.
   const readOwner = async (): Promise<OwnerRead> => {
     try {
       const response = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}/${BACKUP_OWNER_FILE}`, { headers: storageHeaders(accessToken) })
@@ -67,16 +69,15 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
       const owner = await response.json()
       return { kind: 'owner', tenantId: typeof owner?.TenantId === 'string' ? owner.TenantId : null, runId: typeof owner?.RunId === 'string' ? owner.RunId : null }
     } catch (error) {
-      // Sealed for another tenant or key, or damaged. A missing key or sign-in on this device is a precondition and may pass.
+      // Sealed for another tenant or key, or damaged. A missing key or sign-in on this device leaves the marker unreadable until it is fixed.
       if (error instanceof Error && error.name === 'FetchApplicationError') return { kind: 'foreign' }
       return { kind: 'unreadable' }
     }
   }
-  const owner: OwnerRead = metadata || metadataError || !filesText.includes(`<Name>${name}/${BACKUP_OWNER_FILE}</Name>`) ? { kind: 'missing' }
+  const owner: OwnerRead = typeof metadata?.TenantId === 'string' || !filesText.includes(`<Name>${name}/${BACKUP_OWNER_FILE}</Name>`) ? { kind: 'missing' }
     : inventory?.owner ? await ownerCache.read(inventory.cacheKey, inventory.owner, readOwner) : await readOwner()
-  // A folder whose run cannot be told is not counted as failed: the run counts once, through its attempt record.
-  const ownerError = owner.kind === 'unreadable' ? 'Backup ownership could not be read. Select Refresh to try again.' : undefined
-  const runId = typeof metadata?.RunId === 'string' ? metadata.RunId as string : owner.kind === 'owner' ? owner.runId : null
+  // A folder whose manifest could not be read is not matched to its run: its status is unknown, so the run counts once, through its attempt record.
+  const runId = typeof metadata?.RunId === 'string' ? metadata.RunId as string : owner.kind === 'owner' && !metadata && !metadataError ? owner.runId : null
   const recordedTimestamp = metadata?.timestamp ?? metadata?.Timestamp ?? metadata?.BackupDate
   const timestamp = legacy
     ? typeof recordedTimestamp === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(recordedTimestamp) && Number.isFinite(Date.parse(recordedTimestamp)) ? recordedTimestamp : date
@@ -114,7 +115,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     type: typeof metadata?.Trigger === 'string' ? metadata.Trigger : typeof metadata?.trigger === 'string' ? metadata.trigger : null,
     // metadata.json is written last. Without it the backup is still running, or it stopped (for example
     // when the app quit) and holds only part of the tenant.
-    status: metadataError || ownerError ? 'unknown' : metadata ? String(metadata.Status ?? metadata.status ?? 'unknown') : legacy ? 'unknown' : Date.now() - Date.parse(timestamp) < 6 * 3600_000 ? 'running' : 'incomplete',
+    status: metadataError ? 'unknown' : metadata ? String(manifestStatus(metadata) ?? 'unknown') : legacy ? 'unknown' : Date.now() - Date.parse(timestamp) < 6 * 3600_000 ? 'running' : 'incomplete',
     configs: files,
     policyCount: totalPolicies,
     totalPolicies,
@@ -138,12 +139,13 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     changes: null as ChangeSummary | null,
     comparedWith: null as string | null,
     fingerprint: metadata as BackupFingerprint | null | undefined,
-    error: metadataError ?? ownerError,
+    error: metadataError,
     warning: undefined,
     runbookVersion: metadata?.RunbookVersion ?? metadata?.runbookVersion ?? null,
     runId,
     ownerTenantId: owner.kind === 'owner' ? owner.tenantId : null,
     foreign: owner.kind === 'foreign',
+    unresolved: owner.kind === 'unreadable',
   }
 }
 
@@ -262,10 +264,13 @@ export async function POST(request: NextRequest) {
     // A container can be shared by several tenants. Backups recorded as another tenant's, in the
     // manifest or for a folder without one in its ownership marker, are left out, and so are folders
     // whose marker cannot be opened for this tenant. Older backups that do not record a tenant are still listed.
+    // A folder whose marker could not be read may be another tenant's, so it is left out too and
+    // counted as unresolved; its run, if it failed, counts once through its attempt record.
     const described = await mapLimit(backupFolders, 6, (name) => describeBackup(storageAccountName, name, accessToken, inventories.get(name)))
+    const unresolved = described.filter((backup) => backup.unresolved).length
     backups.push(...described.filter((backup) => {
       const owner = (backup.fingerprint as { TenantId?: unknown } | null | undefined)?.TenantId ?? backup.ownerTenantId
-      return !backup.foreign && (typeof owner !== 'string' || owner.toLowerCase() === String(tenantId).toLowerCase())
+      return !backup.foreign && !backup.unresolved && (typeof owner !== 'string' || owner.toLowerCase() === String(tenantId).toLowerCase())
     }))
 
     // Sort by timestamp descending
@@ -284,9 +289,10 @@ export async function POST(request: NextRequest) {
       delete backup.fingerprint
       delete backup.ownerTenantId
       delete backup.foreign
+      delete backup.unresolved
     }
 
-    return NextResponse.json({ backups })
+    return NextResponse.json({ backups, unresolved })
   } catch (error) {
     console.error("List backups error:", error)
     return NextResponse.json(
