@@ -567,6 +567,10 @@ function Get-TvFriendlyTime {
 # digest looks the same whether the desktop app or the Azure watcher sent it.
 function Get-TvEmailHtml {
     param([object]$Envelope)
+    # Built from its code point so this script stays pure ASCII: Windows
+    # PowerShell 5.1 parses BOM-less files with the host ANSI codepage and
+    # would misdecode a literal middle dot in the Automation sandbox.
+    $dot = [char]0x00B7
     $badge = switch ([string](Get-TvProp $Envelope "severity")) {
         "critical" { @{ Label = "Critical"; Color = "#b42318"; Background = "#fef3f2"; Bar = "#f04438" } }
         "warning"  { @{ Label = "Warning";  Color = "#b54708"; Background = "#fffaeb"; Bar = "#f79009" } }
@@ -602,7 +606,7 @@ function Get-TvEmailHtml {
         if (Get-TvProp $item "detail") { $metaParts.Add([string](Get-TvProp $item "detail")) }
         if (Get-TvProp $item "actor") { $metaParts.Add("by $(Get-TvProp $item 'actor')") }
         if (Get-TvProp $item "at") { $metaParts.Add((Get-TvFriendlyTime (Get-TvProp $item "at"))) }
-        $meta = if ($metaParts.Count -gt 0) { "<div style=`"font-size:12px;line-height:18px;color:#475467;margin-top:2px`">$(Get-TvHtmlEscape ($metaParts -join ' · '))</div>" } else { "" }
+        $meta = if ($metaParts.Count -gt 0) { "<div style=`"font-size:12px;line-height:18px;color:#475467;margin-top:2px`">$(Get-TvHtmlEscape ($metaParts -join " $dot "))</div>" } else { "" }
         $itemRows += "<tr><td style=`"padding:10px 16px;border-top:1px solid #eaecf0`"><div style=`"font-size:14px;line-height:20px`">$chip<span style=`"font-weight:600`">$(Get-TvHtmlEscape $title)</span></div>$meta</td></tr>"
     }
 
@@ -639,7 +643,7 @@ function Get-TvEmailHtml {
         $itemsTable
         $moreRow
         $actionRow
-        "<tr><td style=`"padding:18px 24px 20px`"><div style=`"border-top:1px solid #eaecf0;padding-top:12px;font-size:12px;line-height:18px;color:#98a2b3`">Azure watcher · $(Get-TvHtmlEscape (Get-TvFriendlyTime (Get-TvProp $Envelope 'occurredAt'))) · Event $(Get-TvHtmlEscape $eventShort)</div></td></tr>"
+        "<tr><td style=`"padding:18px 24px 20px`"><div style=`"border-top:1px solid #eaecf0;padding-top:12px;font-size:12px;line-height:18px;color:#98a2b3`">Azure watcher $dot $(Get-TvHtmlEscape (Get-TvFriendlyTime (Get-TvProp $Envelope 'occurredAt'))) $dot Event $(Get-TvHtmlEscape $eventShort)</div></td></tr>"
         "</table></div>"
     ) -join ""
 }
