@@ -116,6 +116,26 @@ describe("UpdateSidebarLabel", () => {
     expect(label?.getAttribute("aria-label")).toBe("Download and install TenuVault 0.3.1-nightly.20261017090000")
   })
 
+  it("shows a 6 character stable version but hides wider ones", async () => {
+    updatesStatus.mockResolvedValue({ state: "ready", version: "10.2.3" })
+    const container = render()
+    await flush()
+    const label = button(container)
+    expect(label?.textContent).toContain("Update available")
+    expect(label?.textContent).toContain("10.2.3")
+    // The label itself never shrinks; the version span absorbs any overflow.
+    const spans = [...label!.querySelectorAll("span")]
+    expect(spans[0]?.className).toContain("shrink-0")
+    expect(spans[1]?.className).toContain("truncate")
+    for (const version of ["0.10.12", "10.20.30", "10.100.10"]) {
+      emit({ state: "ready", version })
+      await flush()
+      expect(button(container)?.textContent).toContain("Update available")
+      expect(button(container)?.textContent).not.toContain(version)
+      expect(button(container)?.getAttribute("title")).toBe(`TenuVault ${version}`)
+    }
+  })
+
   it("installs once the download finishes after being pressed during downloading", async () => {
     updatesStatus.mockResolvedValue({ state: "downloading", version: "0.3.1-nightly.20261017090000", percent: 40 })
     const container = render()

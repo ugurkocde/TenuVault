@@ -79,13 +79,14 @@ export function UpdateSidebarLabel() {
       ) : (
         <Download className="h-[18px] w-[18px] flex-shrink-0" aria-hidden="true" />
       )}
-      <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+      {/* The label never shrinks; the version takes whatever width is left and truncates itself. */}
+      <span className="shrink-0 whitespace-nowrap text-left">{label}</span>
       {/*
         The version shows only while unpressed and only when short, such as a stable 0.3.1.
-        A nightly version like 0.3.1-nightly.20261017090000 would truncate the label or the
-        download percent, so it stays in the tooltip and the accessible name instead.
+        A nightly version like 0.3.1-nightly.20261017090000 stays in the tooltip and the
+        accessible name instead, so neither the label nor the download percent can truncate.
       */}
-      {!installRequested && status.version.length <= 8 && <span className="shrink-0 text-[11px] text-white" aria-hidden="true">{status.version}</span>}
+      {!installRequested && status.version.length <= 6 && <span className="min-w-0 flex-1 truncate text-right text-[11px] text-white" aria-hidden="true">{status.version}</span>}
     </button>
   )
 }
