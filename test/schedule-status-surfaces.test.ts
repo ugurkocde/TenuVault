@@ -6,11 +6,13 @@ import OverviewPage from "../src/renderer/pages/OverviewPage"
 import DashboardPage from "../src/portal/app/portal/dashboard/page"
 import { useDashboardStats, type TenantDashboardStats } from "../src/portal/hooks/dashboard/useDashboardStats"
 import { describeSchedule, formatWhen } from "../src/renderer/lib/schedules"
-import type { BackupSchedule } from "../src/shared/ipc"
+import type { BackupSchedule, FailedBackupAttempt } from "../src/shared/ipc"
 
 const state = vi.hoisted(() => ({
   tenants: [{ id: 42, name: "Contoso", domain: "contoso.onmicrosoft.com", lastBackup: "", credentials: { tenantId: "tenant", appId: "app" }, resources: { storageAccountName: "tvlocal-tenant" } }],
   schedules: [] as BackupSchedule[],
+  failedAttempts: [] as FailedBackupAttempt[],
+  activeJobs: [] as Array<{ tenantId: string }>,
   stats: null as TenantDashboardStats | null,
   queryFn: null as (() => Promise<TenantDashboardStats>) | null,
   navigate: vi.fn(),
@@ -27,8 +29,11 @@ vi.mock("~/contexts/TenantContext", () => ({
   useTenants: () => state.tenants,
   useSelectedTenant: () => ({ selectedTenant: state.tenants[0], setSelectedTenantId: state.selectTenant }),
 }))
-vi.mock("~/contexts/BackupProgressContext", () => ({ useBackupProgress: () => ({ activeJobs: [], addJob: vi.fn() }) }))
-vi.mock("@desktop/lib/bridge", () => ({ bridge: { schedules: { list: async () => state.schedules } } }))
+vi.mock("~/contexts/BackupProgressContext", () => ({ useBackupProgress: () => ({ activeJobs: state.activeJobs, addJob: vi.fn() }) }))
+vi.mock("@desktop/lib/bridge", () => ({ bridge: {
+  schedules: { list: async () => state.schedules },
+  backups: { failedAttempts: async (tenantId: string) => state.failedAttempts.filter((attempt) => attempt.tenantId === tenantId) },
+} }))
 vi.mock("@desktop/lib/schedules", async (original) => ({ ...await original<typeof import("../src/renderer/lib/schedules")>(), useSchedules: () => state.schedules }))
 vi.mock("@desktop/lib/license", () => ({ useLicense: () => ({ status: null }), tenantLicense: () => null, tenantPlan: () => null, planName: () => "Community" }))
 vi.mock("@desktop/components/RunBackupDialog", () => ({ RunBackupDialog: () => null }))
@@ -45,10 +50,14 @@ vi.mock("@tanstack/react-query", () => ({ useQuery: (options: { queryFn: () => P
 const schedule: BackupSchedule = { tenantId: "tenant", enabled: true, frequency: "weekly", weekday: 0, time: "19:48", since: "2026-10-01T00:00:00Z", nextRunAt: "2026-10-18T17:48:00Z", lastRunAt: "2026-10-04T17:48:00Z", lastAttemptAt: "2026-10-11T17:48:00Z", attempts: 1, lastStatus: "Failed" }
 const emptyStats: TenantDashboardStats = {
   tenants: { total: 1, healthy: 0, warning: 1, critical: 0 },
-  backups: { successful: 0, failed: 0, inProgress: 0, scheduled: 1, successRate: 100, trend: 0 },
+  backups: { scheduled: 1, trend: 0 },
   nextBackup: null, recentActivity: [], latestBackup: null, latestCompleteBackup: null,
-  totalBackups: 0, backupsError: null, lastDriftCheck: null,
+  backupHistory: [], failedAttempts: [], periodStart: new Date(0), backupsError: null, lastDriftCheck: null,
 }
+const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000)
+const storedBackup = (status: "success" | "failed", timestamp: Date) => ({
+  id: `backup-${timestamp.getTime()}`, tenantId: 42, tenantName: "Contoso", timestamp, status, policiesBackedUp: 3, duration: 0, size: 0,
+})
 
 function elements(node: ReactNode): ReactElement<Record<string, unknown>>[] {
   if (Array.isArray(node)) return node.flatMap(elements)
@@ -62,6 +71,8 @@ function renderDashboard(): string {
 
 beforeEach(() => {
   state.schedules = [{ ...schedule }]
+  state.failedAttempts = []
+  state.activeJobs = []
   state.stats = { ...emptyStats }
   state.navigate.mockClear()
   state.selectTenant.mockClear()
@@ -100,26 +111,73 @@ describe("Overview schedule status", () => {
   })
 })
 
-describe("Dashboard stored backup status", () => {
-  it("explains an automatic failure with zero stored backups without increasing the Failed count", async () => {
+describe("Dashboard backup counts", () => {
+  it("counts an automatic attempt that saved no backup as failed in the period", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json([])))
+    state.failedAttempts = [
+      { at: hoursAgo(2).toISOString(), tenantId: "tenant", trigger: "scheduled", message: "Sign in again." },
+      { at: hoursAgo(24 * 9).toISOString(), tenantId: "tenant", trigger: "manual", message: "Older than the period." },
+      { at: hoursAgo(1).toISOString(), tenantId: "other", trigger: "manual", message: "Another tenant." },
+    ]
     useDashboardStats("7d", 42)
     state.stats = await state.queryFn!()
-    expect(state.stats.totalBackups).toBe(0)
-    expect(state.stats.backups.failed).toBe(0)
+    expect(state.stats.backupHistory).toEqual([])
+    expect(state.stats.failedAttempts.map((attempt) => attempt.message)).toEqual(["Sign in again.", "Older than the period."])
     const markup = renderDashboard()
-    expect(markup).toContain('aria-label="Stored backups"')
-    expect(markup).toContain("Successful and failed counts use stored backup history.")
+    expect(markup).toContain('aria-label="Successful backups"')
+    expect(markup).toContain("Failed includes attempts that saved no backup.")
     expect(markup).toContain("Automatic backup failed before a backup was saved.")
-    expect(markup).toMatch(/>0<\/p><p[^>]*>Failed<\/p>/)
+    expect(markup).toMatch(/>1<\/p><p[^>]*>Failed<\/p>/)
+    expect(markup).toContain("0%")
+    expect(markup).toContain("Target 95%, 0 of 1 backups succeeded")
+    expect(markup).not.toContain("in storage")
+  })
+
+  it("keeps the stored, successful, failed and success rate tiles in agreement", () => {
+    state.activeJobs = [{ tenantId: "TENANT" }]
+    state.stats = {
+      ...emptyStats,
+      periodStart: hoursAgo(24 * 7),
+      backupHistory: [
+        storedBackup("success", hoursAgo(1)),
+        storedBackup("failed", hoursAgo(5)),
+        ...[10, 11, 12, 13, 15].map((days) => storedBackup("success", hoursAgo(24 * days))),
+      ],
+      failedAttempts: [{ tenantId: 42, timestamp: hoursAgo(3), message: "A different backup is already running for this tenant." }],
+    }
+    const markup = renderDashboard()
+    expect(markup).toContain("7 backups in storage")
+    expect(markup).toMatch(/aria-label="Successful backups"[\s\S]*?>Successful backups<[\s\S]*?>1<\/[\s\S]*?>Last 7 days</)
+    expect(markup).toMatch(/>2<\/p><p[^>]*>Failed<\/p>/)
+    expect(markup).toMatch(/>1<\/p><p[^>]*>Running<\/p>/)
+    expect(markup).toContain("33.3%")
+    expect(markup).toContain("Target 95%, 1 of 3 backups succeeded")
+    expect(markup).not.toContain("Stored backups")
+    expect(markup).not.toContain("backups stored")
+  })
+
+  it("shows No data when no backup finished in the period", () => {
+    state.stats = { ...emptyStats, periodStart: hoursAgo(24), backupHistory: [storedBackup("success", hoursAgo(48))] }
+    const markup = renderDashboard()
+    expect(markup).toContain("1 backup in storage")
+    expect(markup).toContain("No data")
+    expect(markup).toContain("No finished backups in this period")
+    expect(markup).not.toContain("100%")
+  })
+
+  it("shows No data instead of a rate when the backups could not be read", () => {
+    state.stats = { ...emptyStats, periodStart: hoursAgo(24), backupsError: "Storage unavailable.", failedAttempts: [{ tenantId: 42, timestamp: hoursAgo(1), message: "Sign in again." }] }
+    const markup = renderDashboard()
+    expect(markup).toContain("No data")
+    expect(markup).not.toContain("0%")
   })
 
   it.each([
-    { totalBackups: 1, backupsError: null, lastStatus: "Failed" },
-    { totalBackups: 0, backupsError: "Storage unavailable.", lastStatus: "Failed" },
-    { totalBackups: 0, backupsError: null, lastStatus: "Completed" },
-  ] as const)("does not claim an unsaved failure for %j", ({ totalBackups, backupsError, lastStatus }) => {
-    state.stats = { ...emptyStats, totalBackups, backupsError }
+    { stored: 1, backupsError: null, lastStatus: "Failed" },
+    { stored: 0, backupsError: "Storage unavailable.", lastStatus: "Failed" },
+    { stored: 0, backupsError: null, lastStatus: "Completed" },
+  ] as const)("does not claim an unsaved failure for %j", ({ stored, backupsError, lastStatus }) => {
+    state.stats = { ...emptyStats, backupHistory: Array.from({ length: stored }, () => storedBackup("success", hoursAgo(1))), backupsError }
     state.schedules = [{ ...schedule, lastStatus }]
     expect(renderDashboard()).not.toContain("Automatic backup failed before a backup was saved.")
   })

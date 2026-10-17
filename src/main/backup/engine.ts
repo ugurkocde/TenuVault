@@ -40,6 +40,8 @@ export interface BackupJob {
   failures?: number
   /** Set when the job failed because Microsoft or the storage account could not be reached, including timeouts. */
   unreachable?: boolean
+  /** Set once the run claimed its backup folder. A failed job without it left no backup in storage. */
+  folderClaimed?: boolean
   log: string[]
 }
 
@@ -63,6 +65,8 @@ export interface BackupEngineDeps {
   now?: () => Date
   /** Items read at the same time. Graph throttling (429) pauses every reader. */
   concurrency?: number
+  /** Called once when a job has ended, with the trigger of the request that started it. */
+  onFinished?: (job: BackupJob, trigger: BackupTrigger) => void
 }
 
 /** A Graph beta path, or an absolute nextLink that must be on the Graph origin. */
@@ -254,6 +258,7 @@ export class BackupEngine {
       this.write(conflict, `Backup failed: ${conflict.exception}`)
       this.jobs.set(conflict.id, conflict)
       this.prune()
+      this.finished(conflict, request)
       return conflict
     }
 
@@ -298,10 +303,20 @@ export class BackupEngine {
         job.endTime = this.now().toISOString()
         if (this.running.get(tenantKey)?.job === job) this.running.delete(tenantKey)
         this.executions.delete(job.id)
+        this.finished(job, request)
       })
       .then(() => job)
     this.executions.set(job.id, { controller, done })
     return job
+  }
+
+  /** A failing listener must not change how the job ended. */
+  private finished(job: BackupJob, request: BackupRequest): void {
+    try {
+      this.deps.onFinished?.(job, request.trigger ?? "manual")
+    } catch (error) {
+      console.warn("[backup] Could not record the end of a backup:", error)
+    }
   }
 
   private async run(job: BackupJob, request: BackupRequest, signal: AbortSignal, deadline: number, outcome: RunOutcome, stopped: StoppedRun): Promise<void> {
@@ -382,6 +397,7 @@ export class BackupEngine {
       if (error instanceof BlobClaimError) throw new BackupFolderTakenError(backupFolder)
       throw error
     }
+    job.folderClaimed = true
 
     // File names are chosen in list order, before the parallel reads, so they do not depend on timing.
     const work: Array<{ type: IntuneType; item: GraphItem; displayName: string; fileName: string }> = []

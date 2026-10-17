@@ -118,7 +118,7 @@ The **Backup Progress** dialog shows **Failed** with the error for every backup 
 
 The dashboard refreshes backup summaries every 30 seconds. It reuses unchanged summary metadata and reads one container inventory, including its continuation pages, instead of listing every backup folder separately. Counts, policy breakdowns and backup results stay the same.
 
-An automatic attempt can fail before any backup is saved. Its failure appears in the [Schedule status](/backups/schedules/#when-a-scheduled-backup-fails), but it does not increase Dashboard's **Stored backups** counts. Click a scheduled or tray failure notification to open the affected tenant's **Schedule** tab.
+A backup attempt can fail before any backup is saved. It does not appear in the timeline, but the Dashboard counts it as **Failed** and in **Success Rate** for the period. An automatic attempt also appears in the [Schedule status](/backups/schedules/#when-a-scheduled-backup-fails). Click a scheduled or tray failure notification to open the affected tenant's **Schedule** tab.
 
 Types skipped because access was denied do not make the backup incomplete. **Backup Details** lists them: "Left out because access was denied". Open the app registration in Microsoft Entra, go to **API permissions** and select **Grant admin consent for &lt;your tenant&gt;**, or run the setup script again. Then sign out of the tenant in TenuVault and sign in again. If every permission already shows **Granted**, check that your Intune role covers these items. See [Create the app registration](/getting-started/app-registration/#3-add-the-delegated-permissions).
 

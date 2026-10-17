@@ -23,9 +23,20 @@ export function backupHealth(backups: Backup[], now: Date, unavailable = false):
   if (age < 0) return 'warning'
   return age < 24 ? 'healthy' : age < 48 ? 'warning' : 'critical'
 }
-export function backupCounts(backups: Backup[]) {
-  const successful = backups.filter((item) => item.status === 'success').length
-  const failed = backups.filter((item) => ['failed', 'partial', 'incomplete'].includes(item.status)).length
-  return { successful, failed, inProgress: backups.filter((item) => item.status === 'running').length,
-    successRate: successful + failed ? successful / (successful + failed) * 100 : 0 }
+/**
+ * Every backup count the Dashboard shows, from one tenant's backups in storage and its attempts
+ * that failed without saving a backup. `stored` counts every backup in storage, of any status and
+ * age. The rest count the period from `since` up to `until`: successful backups, failed ones
+ * (failed, completed with warnings, incomplete, and the failed attempts), and running ones, which
+ * are the live jobs when `running` is given. The success rate is null when nothing finished.
+ */
+export function backupSummary(backups: Backup[], failedAttempts: Array<{ timestamp: Date }>, period: { since: Date; until?: Date; running?: number }) {
+  const inPeriod = <T extends { timestamp: Date }>(item: T) => item.timestamp >= period.since && (!period.until || item.timestamp < period.until)
+  const recent = backups.filter(inPeriod)
+  const successful = recent.filter((item) => item.status === 'success').length
+  const failed = recent.filter((item) => ['failed', 'partial', 'incomplete'].includes(item.status)).length + failedAttempts.filter(inPeriod).length
+  const finished = successful + failed
+  return { stored: backups.length, successful, failed, finished,
+    inProgress: period.running ?? recent.filter((item) => item.status === 'running').length,
+    successRate: finished ? successful / finished * 100 : null }
 }

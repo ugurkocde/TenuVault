@@ -7,12 +7,9 @@ export interface DashboardStats {
     warning: number
     critical: number
   }
+  /** Backup counts come from backupSummary; these are what it does not cover. */
   backups: {
-    successful: number
-    failed: number
-    inProgress: number
     scheduled: number
-    successRate: number
     trend: number // Percentage change
   }
   nextBackup: {

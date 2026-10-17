@@ -147,6 +147,15 @@ export interface BackupRefusal {
   reason: string
 }
 
+/** A backup attempt that failed without saving a backup folder, kept on this device. */
+export interface FailedBackupAttempt {
+  at: string
+  tenantId: string
+  trigger: "manual" | "scheduled" | "tray"
+  /** The first line of the failure, shortened. */
+  message: string
+}
+
 export interface AppPreferences {
   /** Start TenuVault (hidden, in the tray) when the admin signs in to the computer. */
   startAtLogin: boolean
@@ -213,6 +222,8 @@ export interface TenuVaultBridge {
     /** What the tenant backs up on schedule and by default. */
     scope: (tenantId: string) => Promise<BackupScopeSetting>
     setScope: (tenantId: string, scope: BackupScope) => Promise<BackupScopeSetting>
+    /** Attempts of the tenant that failed without saving a backup, newest first. */
+    failedAttempts: (tenantId: string) => Promise<FailedBackupAttempt[]>
   }
   license: {
     status: () => Promise<LicenseStatus>

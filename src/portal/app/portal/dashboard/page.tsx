@@ -24,6 +24,7 @@ import {
 import { cn } from "~/lib/utils"
 import { Button } from "~/components/ui/button"
 import { useDashboardStats } from "~/hooks/dashboard/useDashboardStats"
+import { backupSummary } from "~/lib/backup-health"
 import { useBaselineScore } from "~/hooks/dashboard/useBaselineScore"
 import { formatDate, formatPercent } from "@desktop/features/scores/api"
 import { useBackupProgress } from "~/contexts/BackupProgressContext"
@@ -197,14 +198,13 @@ function DashboardContent() {
   } = useDashboardStats(selectedPeriod, tenant?.id)
 
   const tenantJobs = activeJobs.filter((job) => job.tenantId?.toLowerCase() === tenantGuid)
-  const backupStats = stats ? { ...stats.backups, inProgress: tenantJobs.length } : null
+  // Every backup count on the tiles comes from this one summary, so the tiles cannot disagree.
+  const backupStats = stats
+    ? backupSummary(stats.backupHistory, stats.failedAttempts, { since: stats.periodStart, running: tenantJobs.length })
+    : null
   const nowDate = new Date(relativeNow)
-  // With no finished backups there is no success rate to show (the stats default to 100%).
-  const hasFinishedBackups = (backupStats?.successful ?? 0) + (backupStats?.failed ?? 0) > 0
-  const successRateValue =
-    hasFinishedBackups && typeof backupStats?.successRate === "number" && Number.isFinite(backupStats.successRate)
-      ? backupStats.successRate
-      : null
+  // Null when no backup finished in the period, or the backups could not be read, which the tile shows as "No data".
+  const successRateValue = stats?.backupsError ? null : backupStats?.successRate ?? null
   const recentActivities = stats?.recentActivity ?? []
   const computedLastUpdated = dataUpdatedAt
     ? formatDistanceToNow(new Date(dataUpdatedAt), { addSuffix: true }, nowDate)
@@ -221,7 +221,7 @@ function DashboardContent() {
   const latest = stats?.latestBackup ?? null
   const protectedBackup = stats?.latestCompleteBackup ?? null
   const backupsError = stats?.backupsError ?? null
-  const failedBeforeFirstBackup = schedule?.lastStatus === "Failed" && !!stats && !backupsError && stats.totalBackups === 0
+  const failedBeforeFirstBackup = schedule?.lastStatus === "Failed" && !!backupStats && !backupsError && backupStats.stored === 0
   const health =
     stats && stats.tenants.total > 0
       ? stats.tenants.critical > 0 ? "critical" : stats.tenants.warning > 0 ? "warning" : "healthy"
@@ -364,9 +364,9 @@ function DashboardContent() {
                 </Button>
               )}
               <Button onClick={() => router.push("/portal/backup?tab=restore")}>Restore policies</Button>
-              {stats && stats.totalBackups > 0 && (
+              {backupStats && backupStats.stored > 0 && (
                 <span className="ml-auto text-sm text-gray-500 tabular-nums">
-                  {stats.totalBackups} backup{stats.totalBackups === 1 ? "" : "s"} stored
+                  {backupStats.stored} backup{backupStats.stored === 1 ? "" : "s"} in storage
                 </span>
               )}
             </div>
@@ -387,7 +387,7 @@ function DashboardContent() {
             </div>
             <p className="mt-auto text-xs text-white/70">
               {successRateValue !== null
-                ? <>Target 95%, {backupStats?.successful ?? 0} of {(backupStats?.successful ?? 0) + (backupStats?.failed ?? 0)} succeeded</>
+                ? <>Target 95%, {backupStats?.successful ?? 0} of {backupStats?.finished ?? 0} backups succeeded</>
                 : "No finished backups in this period"}
             </p>
           </Tile>
@@ -470,16 +470,16 @@ function DashboardContent() {
 
         {/* Backup status in the period */}
         {statsLoading ? <TileSkeleton /> : (
-          <Tile aria-label="Stored backups">
-            <TileLabel>Stored backups</TileLabel>
+          <Tile aria-label="Successful backups">
+            <TileLabel>Successful backups</TileLabel>
             <BigValue className="mt-1 text-4xl">{backupStats?.successful || 0}</BigValue>
-            <p className="text-sm text-gray-500">Successful backups, {periodLabels[selectedPeriod]?.toLowerCase()}</p>
-            <p className="mt-1 text-xs text-gray-500">Successful and failed counts use stored backup history.</p>
+            <p className="text-sm text-gray-500">{periodLabels[selectedPeriod]}</p>
+            <p className="mt-1 text-xs text-gray-500">Failed includes attempts that saved no backup.</p>
             <div className="mt-auto grid grid-cols-3 gap-2 pt-5 text-center">
               {[
                 ["Failed", backupStats?.failed || 0],
                 ["Running", backupStats?.inProgress || 0],
-                ["Scheduled", backupStats?.scheduled || 0],
+                ["Scheduled", stats?.backups.scheduled || 0],
               ].map(([label, value]) => (
                 <div key={label} className="min-w-0 rounded-2xl bg-gray-100 px-1 py-2.5">
                   <p className="text-lg font-light text-gray-900 tabular-nums">{value}</p>
@@ -509,7 +509,7 @@ function DashboardContent() {
               <>
                 <BigValue className="mt-1">Not checked</BigValue>
                 <p className="mt-1 text-sm text-gray-500">
-                  {!backupsError && (stats?.totalBackups ?? 0) < 2
+                  {!backupsError && (backupStats?.stored ?? 0) < 2
                     ? "Drift compares two backups. Run another backup first."
                     : "No drift check in recent activity."}
                 </p>

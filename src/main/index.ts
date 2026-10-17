@@ -28,6 +28,7 @@ import { BackgroundLaunch } from "./backup/background-launch"
 import { BackupScopes } from "./backup/scopes"
 import { includedTypes, normalizeScope, type BackupScope } from "../shared/intune/scope"
 import { RefusalLog, refuseUnlicensedBackup } from "./backup/refusals"
+import { FailedAttemptLog } from "./backup/failed-attempts"
 import { backupTenantLabel, notifyBackupFailure } from "./backup/notifications"
 import { BackupKeys } from "./backup/keys"
 import { readBackupSettings } from "./backup/settings"
@@ -267,6 +268,8 @@ async function bootstrap(): Promise<void> {
   setAuditOutboxStore(canEncrypt() ? appStore : undefined)
   // Roadmap workflow records.
   const records = new TenantRecords(workspaceStore)
+  // Backups that failed before saving anything, counted on the Dashboard on every plan.
+  const failedAttempts = new FailedAttemptLog(appStore)
   const engine = new BackupEngine({
     fetch: bridgedFetch,
     getToken: async (tenantId, clientId, scope) => {
@@ -275,6 +278,7 @@ async function bootstrap(): Promise<void> {
     },
     // Community keeps 30 days of history; Pro and MSP keep what the admin chooses (0 keeps everything).
     retentionDays: (tenantId) => effectiveRetentionDays(preferences.get().retentionDays, license.plan(tenantId)),
+    onFinished: (job, trigger) => failedAttempts.finished(job, trigger),
   })
 
   const scopes = new BackupScopes(appStore)
@@ -449,7 +453,11 @@ async function bootstrap(): Promise<void> {
 
   const runScheduledBackup = async (tenantId: string, trigger: "scheduled" | "tray", afterFailure = false) => {
     const profile = tenantProfile(tenantId)
-    if (!profile) return { status: "Failed" as const, message: "This tenant is no longer connected." }
+    if (!profile) {
+      const message = "This tenant is no longer connected."
+      failedAttempts.record({ tenantId, trigger, message })
+      return { status: "Failed" as const, message }
+    }
     // A tenant the license does not cover is not backed up. Its audit log lives in the
     // tenant's own storage, which is closed without a license too, so the refusal is
     // recorded in the refusal log on this device, notified and shown on the schedule.
@@ -465,7 +473,10 @@ async function bootstrap(): Promise<void> {
       { tenantId, name: profile.name },
       trigger,
     )
-    if (refused) return { status: "Failed" as const, message: refused }
+    if (refused) {
+      failedAttempts.record({ tenantId, trigger, message: refused })
+      return { status: "Failed" as const, message: refused }
+    }
     const job = engine.start({ tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, scope: scopes.get(tenantId).scope, trigger })
     const origin = unattendedBackupTriggers.get(job) ?? { trigger, notified: false }
     unattendedBackupTriggers.set(job, origin)
@@ -733,6 +744,7 @@ async function bootstrap(): Promise<void> {
     if (typeof tenantId !== "string") throw new Error("Choose a tenant.")
     return scopes.get(tenantId)
   })
+  handleTrusted("backups:failedAttempts", (_event, tenantId: unknown) => (typeof tenantId === "string" ? failedAttempts.list(tenantId) : []))
   handleTrusted("backups:setScope", (_event, tenantId: unknown, scope: unknown) => {
     if (typeof tenantId !== "string" || !scope || typeof scope !== "object") throw new Error("Choose what to back up.")
     const normalized = normalizeScope(scope as BackupScope)
