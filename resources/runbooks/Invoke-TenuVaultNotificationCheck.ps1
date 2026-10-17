@@ -932,12 +932,23 @@ function Send-TvRawMail {
         # that has not propagated yet.
         $statusCode = 0
         $detail = Get-TvSafeError $_.Exception.Message
-        if ($_.Exception.Response) {
-            $statusCode = [int]$_.Exception.Response.StatusCode
+        if ($_.Exception.Response) { $statusCode = [int]$_.Exception.Response.StatusCode }
+        # The error record usually carries the Graph body already. The response
+        # stream is only a fallback, and it can sit at its end in PowerShell 5.1,
+        # so rewind it first when it supports seeking.
+        $bodyText = $null
+        if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $bodyText = [string]$_.ErrorDetails.Message }
+        if (-not $bodyText -and $_.Exception.Response) {
             try {
-                $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+                $stream = $_.Exception.Response.GetResponseStream()
+                if ($stream.CanSeek) { $stream.Position = 0 }
+                $reader = New-Object System.IO.StreamReader($stream)
                 $bodyText = $reader.ReadToEnd()
                 $reader.Dispose()
+            } catch { }
+        }
+        if ($bodyText) {
+            try {
                 $parsed = $bodyText | ConvertFrom-Json -ErrorAction Stop
                 $graphError = Get-TvProp $parsed "error"
                 $code = Get-TvText (Get-TvProp $graphError "code")
