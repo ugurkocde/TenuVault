@@ -302,14 +302,26 @@ function requireRule(deps: FeatureDeps, tenantId: string, body: Body): Stored<Ru
   return rule
 }
 
-/** A channel as the renderer may see it: no URL path, no secret value, no history snapshots. */
+/** A channel as the renderer may see it: an explicit field list, so stored fields stay private by default. */
 export function publicChannel(channel: Stored<ChannelRecord>) {
-  const { history, headerValue, url, ...rest } = channel
   return {
-    ...rest,
-    urlHost: urlHost(url),
-    hasSecret: Boolean(headerValue),
-    history: history.map(({ at, actor, reason }) => ({ at, actor, reason })),
+    id: channel.id,
+    tenantId: channel.tenantId,
+    createdAt: channel.createdAt,
+    updatedAt: channel.updatedAt,
+    kind: channel.kind,
+    title: channel.title,
+    status: channel.status,
+    summary: channel.summary,
+    enabled: channel.enabled,
+    urlHost: urlHost(channel.url),
+    headerName: channel.headerName,
+    hasSecret: Boolean(channel.headerValue),
+    signRequests: channel.signRequests,
+    recipients: channel.recipients,
+    lastDelivery: channel.lastDelivery,
+    deliveries: channel.deliveries,
+    history: channel.history.map(({ at, actor, reason }) => ({ at, actor, reason })),
   }
 }
 

@@ -15,7 +15,7 @@ describe("Azure notification watcher scripts", () => {
   it("never reads audit request bodies or property values", () => {
     expect(runbook).not.toContain("requestBody")
     expect(runbook).not.toContain("modifiedProperties")
-    expect(runbook).toContain("id,activity,activityDateTime,category,httpVerb,initiatedByUpn,initiatedByAppId,requestUrl,resources")
+    expect(runbook).toContain("id,displayName,componentName,actor,activity,activityDateTime,activityType,activityOperationType,activityResult,category,resources")
   })
 
   it("claims the state lease before any delivery function runs", () => {
@@ -41,6 +41,28 @@ describe("Azure notification watcher scripts", () => {
     expect(setup).toContain("DeviceManagementApps.Read.All")
     expect(setup).toContain("-AssignSystemIdentity")
     expect(setup).not.toMatch(/New-AzADAppCredential|client.?secret/i)
+  })
+
+  it("keeps a persistent outbox, an infinite lease, Automation identity and a config gate", () => {
+    for (const marker of [
+      "pendingEnvelopes",
+      "deadEnvelopes",
+      '"x-ms-lease-duration" = "-1"',
+      "IDENTITY_ENDPOINT",
+      "X-IDENTITY-HEADER",
+      "$listXml.EnumerationResults.Blobs",
+      "$blobsNode.BlobPrefix",
+      "Unsupported TenuVaultConfigVersion",
+      "configHash",
+      "[switch]$VerifyMailOnly",
+      "mailVerified",
+    ]) {
+      expect(runbook).toContain(marker)
+    }
+    // Intents are persisted before delivery is attempted.
+    expect(runbook.indexOf("Save-TvState")).toBeGreaterThan(0)
+    expect(setup).toContain("[string]$AlertEmail")
+    expect(setup).toContain("Mail.Send")
   })
 
   it("desktop setup adds notification scopes only with the opt-in switch", () => {

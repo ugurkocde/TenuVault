@@ -221,7 +221,18 @@ function AddChannelDialog({ tenant, onClose, onAdded }: { tenant: Tenant; onClos
   const [signRequests, setSignRequests] = useState(false)
   const [rows, setRows] = useState<RecipientRow[]>([{ type: "address", value: "" }])
   const recipients = buildRecipients(rows)
-  const valid = kind === "email" ? recipients.length > 0 : Boolean(url.trim()) && (!signRequests || Boolean(headerValue))
+  const headerPairIncomplete = kind === "webhook" && !signRequests && Boolean(headerName.trim()) !== Boolean(headerValue)
+  const secretHint =
+    kind !== "webhook"
+      ? null
+      : signRequests && !headerValue
+        ? "Request signing needs a secret value."
+        : !signRequests && headerValue && !headerName.trim()
+          ? "Add a header name for this secret, or turn on request signing to use the value as the signing secret."
+          : !signRequests && headerName.trim() && !headerValue
+            ? "Add the secret value for this header, or clear the header name."
+            : null
+  const valid = kind === "email" ? recipients.length > 0 : Boolean(url.trim()) && (!signRequests || Boolean(headerValue)) && !headerPairIncomplete
   const add = useMutation({
     mutationFn: () =>
       notificationsApi.addChannel(tenant, {
@@ -281,6 +292,7 @@ function AddChannelDialog({ tenant, onClose, onAdded }: { tenant: Tenant; onClos
                 <input type="checkbox" className="size-4 accent-coral-600" checked={signRequests} onChange={(event) => setSignRequests(event.target.checked)} />
                 Sign requests with the secret value (HMAC). Needs a secret value; the header name stays optional.
               </label>
+              {secretHint && <p className="text-xs text-amber-700" role="status">{secretHint}</p>}
               <p className="text-xs text-gray-500">The secret value is stored on this computer, sent only to your endpoint, and never shown again.</p>
             </>
           )}
@@ -308,7 +320,7 @@ function RulesTile({ tenant, rules, channels, licensed, onChanged }: { tenant: T
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 id="notifications-rules-heading" className="text-lg font-medium text-gray-900">Rules</h3>
-          <p className="max-w-3xl text-sm text-gray-600">A rule sends matching events, at or above its minimum severity, to its channels. Digest mode suits Intune changes, which already arrive as one summary per poll.</p>
+          <p className="max-w-3xl text-sm text-gray-600">A rule sends matching events, at or above its minimum severity, to its channels. Intune changes already arrive as one summary per poll.</p>
         </div>
         <Button type="button" variant="outline" size="sm" disabled={!licensed || channels.length === 0} onClick={() => setAdding(true)}><Plus className="h-4 w-4" aria-hidden="true" />Add rule</Button>
       </div>
@@ -333,7 +345,7 @@ function RuleRow({ tenant, rule, licensed, onChanged, channelTitle }: { tenant: 
         <Chip tone={rule.enabled ? "success" : "neutral"}>{rule.enabled ? "On" : "Off"}</Chip>
         <span className="font-medium text-gray-900">{rule.title}</span>
         <Chip tone={rule.minSeverity === "critical" ? "danger" : rule.minSeverity === "warning" ? "warning" : "neutral"}>{rule.minSeverity} and above</Chip>
-        <Chip tone="neutral">{rule.mode}</Chip>
+        {rule.mode === "digest" && <span className="text-sm text-gray-500">Mode: digest</span>}
       </div>
       <p className="text-sm text-gray-600">{rule.eventTypes.map((type) => EVENT_TYPE_LABELS[type] ?? type).join(", ")}</p>
       <p className="text-sm text-gray-500">To: {rule.channelIds.map(channelTitle).join(", ") || "no channels"}</p>
@@ -345,15 +357,24 @@ function RuleRow({ tenant, rule, licensed, onChanged, channelTitle }: { tenant: 
   )
 }
 
+/** Event types a new rule cannot pick: shown disabled so they never look functional. Stored rules that already contain them still render in RuleRow. */
+const INERT_EVENT_TYPES: ReadonlySet<NotificationEventType> = new Set(["test", "watcher.stale"])
+
+const EVENT_TYPE_NOTES: Partial<Record<NotificationEventType, string>> = {
+  test: "Sent from a channel Send test button and bypasses rules",
+  "watcher.stale": "No producer in the desktop app",
+  "backup.missed": "Azure watcher only",
+  "health.finding": "Configured on the Health review screen",
+}
+
 function AddRuleDialog({ tenant, channels, onClose, onAdded }: { tenant: Tenant; channels: PublicChannel[]; onClose: () => void; onAdded: () => void }) {
   const [title, setTitle] = useState("")
   const [eventTypes, setEventTypes] = useState<NotificationEventType[]>(["backup.failed"])
   const [minSeverity, setMinSeverity] = useState<NotificationSeverity>("info")
   const [channelIds, setChannelIds] = useState<string[]>(channels[0] ? [channels[0].id] : [])
-  const [mode, setMode] = useState<"immediate" | "digest">("immediate")
   const valid = eventTypes.length > 0 && channelIds.length > 0
   const add = useMutation({
-    mutationFn: () => notificationsApi.addRule(tenant, { title: title.trim() || undefined, eventTypes, minSeverity, channelIds, mode }),
+    mutationFn: () => notificationsApi.addRule(tenant, { title: title.trim() || undefined, eventTypes, minSeverity, channelIds, mode: "immediate" }),
     onSuccess: () => { toast("Rule added", "success"); onAdded() },
     onError: failed,
   })
@@ -371,26 +392,27 @@ function AddRuleDialog({ tenant, channels, onClose, onAdded }: { tenant: Tenant;
           <fieldset className="space-y-1.5">
             <legend className="text-sm text-gray-700">Event types</legend>
             <div className="grid gap-1.5 sm:grid-cols-2">
-              {NOTIFICATION_EVENT_TYPES.map((type) => (
-                <label key={type} className="flex items-center gap-2 text-sm text-gray-700">
-                  <input type="checkbox" className="size-4 accent-coral-600" checked={eventTypes.includes(type)} onChange={(event) => toggleEvent(type, event.target.checked)} />
-                  {EVENT_TYPE_LABELS[type]}
-                </label>
-              ))}
+              {NOTIFICATION_EVENT_TYPES.map((type) => {
+                const inert = INERT_EVENT_TYPES.has(type)
+                const note = EVENT_TYPE_NOTES[type]
+                return (
+                  <label key={type} className={inert ? "flex items-center gap-2 text-sm text-gray-400" : "flex items-center gap-2 text-sm text-gray-700"}>
+                    <input type="checkbox" className="size-4 accent-coral-600" disabled={inert} checked={!inert && eventTypes.includes(type)} onChange={(event) => toggleEvent(type, event.target.checked)} />
+                    <span>
+                      {EVENT_TYPE_LABELS[type]}
+                      {note && <span className="text-gray-500"> ({note})</span>}
+                    </span>
+                  </label>
+                )
+              })}
             </div>
+            <p className="text-xs text-gray-500">Test notifications are sent from a channel Send test button and bypass rules. Watcher stale has no producer in the desktop app, so neither can be picked here.</p>
           </fieldset>
           <div className="flex flex-wrap items-center gap-4 text-sm">
             <label className="flex items-center gap-2 text-gray-700">
               Minimum severity
               <select className={selectClass} value={minSeverity} onChange={(event) => setMinSeverity(event.target.value as NotificationSeverity)}>
                 {SEVERITIES.map((severity) => <option key={severity} value={severity}>{severity}</option>)}
-              </select>
-            </label>
-            <label className="flex items-center gap-2 text-gray-700">
-              Mode
-              <select className={selectClass} value={mode} onChange={(event) => setMode(event.target.value as "immediate" | "digest")}>
-                <option value="immediate">Immediate, one message per event</option>
-                <option value="digest">Digest, one summary per poll</option>
               </select>
             </label>
           </div>
@@ -420,6 +442,7 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
   const [categories, setCategories] = useState("")
   const [ignoreOwnChanges, setIgnoreOwnChanges] = useState(true)
   const [includeActor, setIncludeActor] = useState(false)
+  const [externalWatcher, setExternalWatcher] = useState(false)
 
   useEffect(() => {
     setEnabled(auditWatch?.enabled ?? false)
@@ -427,6 +450,7 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
     setCategories((auditWatch?.categories ?? []).join(", "))
     setIgnoreOwnChanges(auditWatch?.ignoreOwnChanges ?? true)
     setIncludeActor(auditWatch?.includeActor ?? false)
+    setExternalWatcher(auditWatch?.externalWatcher ?? false)
   }, [auditWatch])
 
   const save = useMutation({
@@ -437,6 +461,7 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
         categories: categories.split(",").map((entry) => entry.trim()).filter(Boolean),
         ignoreOwnChanges,
         includeActor,
+        externalWatcher,
       }),
     onSuccess: () => { toast("Change watching saved", "success"); onChanged() },
     onError: failed,
@@ -463,12 +488,18 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
         </div>
         <Chip tone={auditWatch?.enabled ? "success" : "neutral"}>{auditWatch?.enabled ? "Watching" : "Off"}</Chip>
       </div>
-      {auditWatch?.externalWatcher && <p className="text-sm text-gray-600" role="note">An Azure watcher owns change alerts for this tenant, so desktop polling stands down.</p>}
       <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); save.mutate() }}>
         <label className="flex items-center gap-2 text-sm text-gray-800">
           <input type="checkbox" className="size-4 accent-coral-600" checked={enabled} disabled={!licensed} onChange={(event) => setEnabled(event.target.checked)} />
           Watch for Intune changes while TenuVault is running
         </label>
+        <div className="space-y-1">
+          <label className="flex items-center gap-2 text-sm text-gray-800">
+            <input type="checkbox" className="size-4 accent-coral-600" checked={externalWatcher} disabled={!licensed} onChange={(event) => setExternalWatcher(event.target.checked)} />
+            An Azure watcher owns change alerts for this tenant
+          </label>
+          <p className="text-xs text-gray-500">With this on, desktop polling stands down for this tenant so each change is reported once, by the Azure watcher.</p>
+        </div>
         <div className="flex flex-wrap items-center gap-4 text-sm">
           <label className="flex items-center gap-2 text-gray-700">
             Check every
@@ -487,6 +518,7 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
             Include who made each change (actor UPN)
           </label>
         </div>
+        <p className="text-xs text-gray-500">Actor names are personal data and are off by default. Leave this off for destinations outside Microsoft 365, such as generic webhooks or external email addresses.</p>
         <label className="block text-sm text-gray-700">
           Audit categories (optional, comma separated; empty means all)
           <Input className="mt-1" value={categories} disabled={!licensed} maxLength={1000} placeholder="For example: Policy, Compliance" onChange={(event) => setCategories(event.target.value)} />

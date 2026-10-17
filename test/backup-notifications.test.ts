@@ -78,6 +78,9 @@ function unattendedFixture(getToken: () => Promise<string>) {
     INTERNAL_API_ORIGIN: "http://tenuvault.internal",
     DELEGATED_CLIENT_SECRET: "",
     notifyFailure: (tenantId: string, name: string, message: string, trigger: Trigger) => notifyBackupFailure({ tenantId, name }, message, trigger, () => null),
+    // Notification channel events are covered by the notifications suites; here they are inert.
+    emitBackupOutcome: vi.fn(async () => 0),
+    featureDeps: {},
   }
   const run = new Function(...Object.keys(dependencies), transformSync(source, { loader: "ts" }).code + "\nreturn runScheduledBackup;")(
     ...Object.values(dependencies),

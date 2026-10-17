@@ -1,20 +1,22 @@
 /**
  * Mapping of Intune audit events (GET deviceManagement/auditEvents) to notification
- * change items. Only allowlisted fields are read: id, activity, activityDateTime,
- * category, httpVerb, initiatedByUpn, initiatedByAppId and requestUrl, plus resource
- * display names when present. Request bodies and audit property values are never read.
+ * change items, following the documented auditEvent resource: identity and operation
+ * fields plus resource display names and types. Modified property values inside
+ * resources are never read.
  */
 import { buildEnvelope, type NotificationEnvelope, type NotificationItem } from "./envelope"
 
 export interface AuditEventRaw {
   id?: unknown
+  displayName?: unknown
+  componentName?: unknown
   activity?: unknown
+  activityType?: unknown
+  activityOperationType?: unknown
+  activityResult?: unknown
   activityDateTime?: unknown
   category?: unknown
-  httpVerb?: unknown
-  initiatedByUpn?: unknown
-  initiatedByAppId?: unknown
-  requestUrl?: unknown
+  actor?: unknown
   resources?: unknown
 }
 
@@ -36,55 +38,49 @@ export interface AuditChange {
 
 const text = (value: unknown): string | null => (typeof value === "string" && value.trim() ? value.trim() : null)
 
+const record = (value: unknown): Record<string, unknown> | null => (value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null)
+
 function changeTypeOf(raw: AuditEventRaw): AuditChangeType {
-  const activity = (text(raw.activity) ?? "").toLowerCase()
-  if (activity.includes("assign")) return "assigned"
-  const verb = (text(raw.httpVerb) ?? "").toUpperCase()
-  if (verb === "POST") return "created"
-  if (verb === "PUT" || verb === "PATCH") return "updated"
-  if (verb === "DELETE") return "deleted"
-  if (activity.includes("creat")) return "created"
-  if (activity.includes("delet") || activity.includes("remov")) return "deleted"
-  if (activity.includes("updat") || activity.includes("edit") || activity.includes("patch")) return "updated"
+  const operation = (text(raw.activityOperationType) ?? "").toLowerCase()
+  const activity = `${text(raw.activityType) ?? ""} ${text(raw.activity) ?? ""} ${text(raw.displayName) ?? ""}`.toLowerCase()
+  for (const source of [operation, activity]) {
+    if (source.includes("assign")) return "assigned"
+    if (source.includes("creat") || source === "post") return "created"
+    if (source.includes("delet") || source.includes("remov") || source === "delete") return "deleted"
+    if (source.includes("updat") || source.includes("patch") || source.includes("edit") || source === "put") return "updated"
+  }
   return "changed"
 }
 
-function resourceTypeOf(raw: AuditEventRaw): string | null {
-  const url = text(raw.requestUrl)
-  if (!url) return null
-  const path = url.replace(/^https?:\/\/[^/]+/i, "").replace(/^\/(beta|v1\.0)\//i, "/")
-  const segments = path.split("/").filter(Boolean)
-  const at = segments.findIndex((segment) => segment.toLowerCase() === "devicemanagement")
-  const segment = at >= 0 ? segments[at + 1] : segments[0]
-  return segment ? decodeURIComponent(segment).slice(0, 120) : null
-}
-
-function resourceNameOf(raw: AuditEventRaw): string | null {
+function resourceOf(raw: AuditEventRaw): Record<string, unknown> | null {
   if (!Array.isArray(raw.resources)) return null
   for (const entry of raw.resources) {
-    if (entry && typeof entry === "object") {
-      const name = text((entry as Record<string, unknown>).displayName)
-      if (name) return name.slice(0, 200)
-    }
+    const entryRecord = record(entry)
+    if (entryRecord) return entryRecord
   }
   return null
 }
 
-/** Maps one raw audit event, or null when it lacks the fields a digest needs. */
+/** Maps one raw audit event, or null when it lacked identity fields or did not succeed. */
 export function mapAuditEvent(raw: AuditEventRaw): AuditChange | null {
   const id = text(raw.id)
   const at = text(raw.activityDateTime)
   if (!id || !at || Number.isNaN(Date.parse(at))) return null
+  const result = (text(raw.activityResult) ?? "").toLowerCase()
+  if (result.includes("fail") || result.includes("error")) return null
+  const actor = record(raw.actor)
+  const resource = resourceOf(raw)
+  const resourceName = resource ? text(resource.displayName) : null
   return {
     auditId: id,
     at: new Date(at).toISOString(),
     category: text(raw.category) ?? "Unknown",
     changeType: changeTypeOf(raw),
-    resourceName: resourceNameOf(raw),
-    resourceType: resourceTypeOf(raw),
-    actorUpn: text(raw.initiatedByUpn),
-    actorAppId: text(raw.initiatedByAppId),
-    activity: text(raw.activity) ?? "Change",
+    resourceName: resourceName ? resourceName.slice(0, 200) : null,
+    resourceType: (resource ? (text(resource.type) ?? text(resource.auditResourceType)) : null) ?? text(raw.componentName),
+    actorUpn: actor ? text(actor.userPrincipalName) : null,
+    actorAppId: actor ? text(actor.applicationId) : null,
+    activity: text(raw.activity) ?? text(raw.displayName) ?? "Change",
   }
 }
 
@@ -171,5 +167,5 @@ export function intuneChangeDigest(input: {
   })
 }
 
-/** The $select allowlist for audit event reads. Request bodies are excluded on purpose. */
-export const AUDIT_EVENT_SELECT = "id,activity,activityDateTime,category,httpVerb,initiatedByUpn,initiatedByAppId,requestUrl,resources"
+/** The $select allowlist for audit event reads, matching the documented auditEvent resource. */
+export const AUDIT_EVENT_SELECT = "id,displayName,componentName,actor,activity,activityDateTime,activityType,activityOperationType,activityResult,category,resources"

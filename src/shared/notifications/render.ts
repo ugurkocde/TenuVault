@@ -11,6 +11,11 @@ export function escapeHtml(value: string): string {
 
 const SEVERITY_STYLE: Record<NotificationEnvelope["severity"], string> = { info: "default", warning: "warning", critical: "attention" }
 
+/** Adaptive Card TextBlocks render a Markdown subset; tenant text must stay literal. */
+export function escapeMarkdown(value: string): string {
+  return value.replace(/([\\`*_{}[\]()#+-.!>])/g, "\\$1")
+}
+
 function footer(envelope: NotificationEnvelope): string {
   const where = envelope.source === "azure-watcher" ? "Azure watcher" : "TenuVault desktop"
   return `${where} · ${envelope.occurredAt} · Event ${envelope.eventId.slice(0, 12)}`
@@ -23,17 +28,17 @@ export function localText(envelope: NotificationEnvelope): { title: string; body
 
 /** The Teams Workflows payload: a message with one Adaptive Card attachment. */
 export function teamsWorkflowsPayload(envelope: NotificationEnvelope): Record<string, unknown> {
-  const facts = envelope.details.map((entry) => ({ title: entry.label, value: entry.value }))
+  const facts = envelope.details.map((entry) => ({ title: escapeMarkdown(entry.label), value: escapeMarkdown(entry.value) }))
   const body: Array<Record<string, unknown>> = [
-    { type: "TextBlock", size: "Medium", weight: "Bolder", text: envelope.title, wrap: true, style: SEVERITY_STYLE[envelope.severity] },
-    { type: "TextBlock", text: envelope.summary, wrap: true },
+    { type: "TextBlock", size: "Medium", weight: "Bolder", text: escapeMarkdown(envelope.title), wrap: true, style: SEVERITY_STYLE[envelope.severity] },
+    { type: "TextBlock", text: escapeMarkdown(envelope.summary), wrap: true },
   ]
   if (facts.length) body.push({ type: "FactSet", facts })
   for (const item of envelope.items) {
-    body.push({ type: "TextBlock", text: itemLine(item), wrap: true, spacing: "Small" })
+    body.push({ type: "TextBlock", text: escapeMarkdown(itemLine(item)), wrap: true, spacing: "Small" })
   }
   if (envelope.moreCount > 0) body.push({ type: "TextBlock", text: `And ${envelope.moreCount} more. Open TenuVault for the full list.`, wrap: true, isSubtle: true })
-  body.push({ type: "TextBlock", text: footer(envelope), wrap: true, isSubtle: true, size: "Small" })
+  body.push({ type: "TextBlock", text: escapeMarkdown(footer(envelope)), wrap: true, isSubtle: true, size: "Small" })
   return {
     type: "message",
     attachments: [

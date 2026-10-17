@@ -139,6 +139,7 @@ describe("email delivery and group resolution", () => {
           return { status: 200, body: { value: [
             { mail: "one@contoso.test", userType: "Member" },
             { mail: "guest@vendor.test", userType: "Guest" },
+            { mail: "nested-group@contoso.test", displayName: "Nested group", "@odata.type": "#microsoft.graph.group" },
             { userPrincipalName: "two@contoso.test", userType: "Member" },
             { displayName: "No mail" },
           ] } }
@@ -170,7 +171,7 @@ describe("Intune audit watching", () => {
       graph: () => async (method: string, path: string) => {
         if (path.startsWith("deviceManagement/auditEvents")) {
           expect(path).toContain("activityDateTime")
-          expect(path).not.toContain("requestBody")
+          expect(path).toContain("activityOperationType")
           return { status: 200, body: { value: events } }
         }
         return { status: 404, body: {} }
@@ -192,7 +193,7 @@ describe("Intune audit watching", () => {
   })
 
   it("excludes changes made through TenuVault itself by default", async () => {
-    const own = fixture.events.map((event) => ({ ...event, initiatedByAppId: "99999999-9999-9999-9999-999999999999" }))
+    const own = fixture.events.map((event) => ({ ...event, actor: { ...event.actor, applicationId: "99999999-9999-9999-9999-999999999999" } }))
     const w = auditWorld(own)
     saveAuditWatch(w.deps, TENANT_A, { enabled: true }, { actor: null, reason: "test" })
     const result = await pollAuditWatch(w.deps, TENANT_A)
@@ -206,5 +207,49 @@ describe("Intune audit watching", () => {
     expect(result.error).toContain("403")
     const status = await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-status" })
     expect(status.body.auditWatch.lastError).toContain("403")
+  })
+})
+
+describe("review round regressions", () => {
+  it("a busy overlap window cannot stall the audit poller", async () => {
+    const many = Array.from({ length: 600 }, (_, i) => ({
+      id: `bulk-${i}`,
+      displayName: "Update policy",
+      componentName: "Policy",
+      activity: "Update",
+      activityOperationType: "Update",
+      activityResult: "Success",
+      activityDateTime: new Date(Date.parse("2026-10-17T11:00:00Z") + i * 1000).toISOString(),
+      category: "Policy",
+      actor: { applicationId: "app-portal", userPrincipalName: "admin@contoso.test" },
+      resources: [{ displayName: `Policy ${i}`, type: "Policy" }],
+    }))
+    const w = world({ graph: () => async (_method: string, _path: string) => ({ status: 200, body: { value: many } }) })
+    saveAuditWatch(w.deps, TENANT_A, { enabled: true }, { actor: null, reason: "test" })
+    const first = await pollAuditWatch(w.deps, TENANT_A)
+    expect(first.changes).toBe(500)
+    const second = await pollAuditWatch(w.deps, TENANT_A)
+    expect(second.changes).toBe(100)
+    const third = await pollAuditWatch(w.deps, TENANT_A)
+    expect(third.changes).toBe(0)
+  })
+
+  it("signed out sessions pause email deliveries without burning attempts", async () => {
+    const graphCalls: string[] = []
+    const deps = fakeDeps({
+      plans: { [TENANT_A]: "pro" },
+      now: () => NOW,
+      actor: () => null,
+      graph: () => async (method: string, path: string) => { graphCalls.push(path); return { status: 202, body: {} } },
+    })
+    const r = routes(deps)
+    const created = await call(r, PATH, { tenantId: TENANT_A, action: "add-channel", kind: "email", recipients: [{ type: "address", address: "ops@contoso.test" }] })
+    expect(created.status).toBe(200)
+    const rule = await call(r, PATH, { tenantId: TENANT_A, action: "add-rule", eventTypes: ["backup.failed"], minSeverity: "info", channelIds: [created.body.channel.id] })
+    expect(rule.status).toBe(200)
+    await emitBackupOutcome(deps, TENANT_A, { status: "Failed", backupFolder: "backup-signedout", finishedAt: NOW.toISOString(), trigger: "scheduled" })
+    const entry = outboxOf(deps, TENANT_A)[0]
+    expect(entry).toMatchObject({ state: "pending", attempts: 0 })
+    expect(graphCalls).toHaveLength(0)
   })
 })

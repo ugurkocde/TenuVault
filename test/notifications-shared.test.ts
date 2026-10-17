@@ -55,7 +55,7 @@ describe("audit mapping and digest", () => {
   const changes = fixture.events.map((event) => mapAuditEvent(event as AuditEventRaw)!)
 
   it("maps verbs, resource names and types, without reading property values", () => {
-    expect(changes[0]).toMatchObject({ changeType: "updated", resourceName: "WiFi Corp", resourceType: "deviceConfigurations", actorUpn: "admin@contoso.test" })
+    expect(changes[0]).toMatchObject({ changeType: "updated", resourceName: "WiFi Corp", resourceType: "DeviceConfiguration", actorUpn: "admin@contoso.test", actorAppId: "app-portal" })
     expect(changes[2]?.changeType).toBe("deleted")
     const digest = intuneChangeDigest({ tenantId: TENANT, tenantName: "Contoso", changes, includeActor: true, source: "desktop" })
     const serialized = canonicalJson(digest)
@@ -103,6 +103,14 @@ describe("rendering", () => {
     expect(payload.type).toBe("message")
     expect(payload.attachments[0]?.contentType).toContain("adaptive")
     expect(payload.attachments[0]?.content.body.some((block) => block.text?.includes("test"))).toBe(true)
+  })
+
+  it("escapes markdown links in card text", () => {
+    const hostile = testEvent({ tenantId: TENANT, occurredAt: "2026-10-17T00:00:00Z", channelTitle: "[Review required](https://attacker.example)", source: "desktop" })
+    const payload = teamsWorkflowsPayload(hostile) as { attachments: Array<{ content: { body: Array<{ text?: string }> } }> }
+    const texts = payload.attachments[0]!.content.body.map((block) => block.text ?? "").join(" ")
+    expect(texts).toContain("\\[Review required\\]")
+    expect(texts).not.toContain("[Review required](https://attacker.example)")
   })
 
   it("hostile policy names stay text in cards and mail", () => {

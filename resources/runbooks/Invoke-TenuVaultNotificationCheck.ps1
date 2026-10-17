@@ -14,11 +14,13 @@
     and the same digest wording. The shared fixture under test/fixtures/notifications
     proves the two implementations agree.
 
-    State (watermark, recent audit event ids, sent event ids) lives in state.json in
-    the tenuvault-notification-state container. A blob lease on state.json is taken
-    before any delivery, so two overlapping runs cannot send the same digest twice.
-    A heartbeat.json blob next to it lets the desktop app show that the watcher is
-    alive.
+    State (watermark, recent audit event ids, sent event ids and the pending delivery
+    outbox) lives in state.json in the tenuvault-notification-state container. New
+    envelopes are saved to the outbox before delivery is attempted, so a crashed or
+    failed run retries them instead of losing them. A blob lease on state.json is
+    taken before any delivery, so two overlapping runs cannot send the same digest
+    twice. A heartbeat.json blob next to it lets the desktop app show that the watcher
+    is alive.
 
     Payload allowlist: envelopes carry names, counts, statuses, timestamps and, when
     TenuVaultIncludeActor is true, actor UPNs. Audit request bodies and audit property
@@ -26,11 +28,16 @@
     logged.
 
     Dot source the file with -LibraryOnly to load the library functions without
-    running the watcher, which is how the parity check script uses it.
+    running the watcher, which is how the parity check script uses it. Run with
+    -VerifyMailOnly once after Mail.Send is granted and restricted by an Exchange
+    application access policy: it proves the identity can send as the configured
+    sender mailbox and cannot send as the probe mailbox, then records
+    mailVerified in state.json. Mail stays disabled until that check passes.
 #>
 [CmdletBinding()]
 param(
-    [switch]$LibraryOnly
+    [switch]$LibraryOnly,
+    [switch]$VerifyMailOnly
 )
 
 # ---------------------------------------------------------------------------
@@ -100,6 +107,13 @@ function Get-TvSafeError {
 # Library: event identity, canonical JSON, envelope building
 # ---------------------------------------------------------------------------
 
+function Get-TvSha256Hex {
+    param([Parameter(Mandatory, Position = 0)][AllowEmptyString()][string]$Value)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $hashBytes = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Value)) } finally { $sha.Dispose() }
+    return [BitConverter]::ToString($hashBytes).Replace("-", "").ToLowerInvariant()
+}
+
 function Get-TenuVaultEventId {
     [CmdletBinding()]
     param(
@@ -107,10 +121,7 @@ function Get-TenuVaultEventId {
         [Parameter(Mandatory, Position = 1)][string]$Type,
         [Parameter(Mandatory, Position = 2)][AllowEmptyString()][string]$NaturalKey
     )
-    $idInput = "$($TenantId.ToLowerInvariant())|$Type|$NaturalKey"
-    $sha = [Security.Cryptography.SHA256]::Create()
-    try { $hashBytes = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($idInput)) } finally { $sha.Dispose() }
-    return [BitConverter]::ToString($hashBytes).Replace("-", "").ToLowerInvariant()
+    return Get-TvSha256Hex "$($TenantId.ToLowerInvariant())|$Type|$NaturalKey"
 }
 
 function ConvertTo-TvJsonString {
@@ -267,54 +278,49 @@ function ConvertFrom-TenuVaultAuditEvent {
         $at = ConvertTo-TvIso (Get-TvProp $Raw "activityDateTime")
         if (-not $id -or -not $at) { return }
 
+        # Failed operations changed nothing, so they never enter a digest.
+        $resultLower = ""
+        $resultText = Get-TvText (Get-TvProp $Raw "activityResult")
+        if ($resultText) { $resultLower = $resultText.ToLowerInvariant() }
+        if ($resultLower.Contains("fail") -or $resultLower.Contains("error")) { return }
+
         $activity = Get-TvText (Get-TvProp $Raw "activity")
-        $verb = Get-TvText (Get-TvProp $Raw "httpVerb")
-        $activityLower = if ($activity) { $activity.ToLowerInvariant() } else { "" }
-        $verbUpper = if ($verb) { $verb.ToUpperInvariant() } else { "" }
-        $changeType = if ($activityLower.Contains("assign")) { "assigned" }
-            elseif ($verbUpper -eq "POST") { "created" }
-            elseif ($verbUpper -eq "PUT" -or $verbUpper -eq "PATCH") { "updated" }
-            elseif ($verbUpper -eq "DELETE") { "deleted" }
-            elseif ($activityLower.Contains("creat")) { "created" }
-            elseif ($activityLower.Contains("delet") -or $activityLower.Contains("remov")) { "deleted" }
-            elseif ($activityLower.Contains("updat") -or $activityLower.Contains("edit") -or $activityLower.Contains("patch")) { "updated" }
-            else { "changed" }
+        if (-not $activity) { $activity = Get-TvText (Get-TvProp $Raw "displayName") }
+        $operationText = Get-TvText (Get-TvProp $Raw "activityOperationType")
+        $operationLower = if ($operationText) { $operationText.ToLowerInvariant() } else { "" }
+        $activityTypeText = Get-TvText (Get-TvProp $Raw "activityType")
+        $activityText = Get-TvText (Get-TvProp $Raw "activity")
+        $displayText = Get-TvText (Get-TvProp $Raw "displayName")
+        $activityLower = (@($activityTypeText, $activityText, $displayText) -join " ").ToLowerInvariant()
+        # The operation type is checked first with the full rule set. The combined
+        # activity text is only a fallback, matching changeTypeOf in audit.ts.
+        $changeType = "changed"
+        foreach ($source in @($operationLower, $activityLower)) {
+            if ($source.Contains("assign")) { $changeType = "assigned"; break }
+            if ($source.Contains("creat") -or $source -eq "post") { $changeType = "created"; break }
+            if ($source.Contains("delet") -or $source.Contains("remov") -or $source -eq "delete") { $changeType = "deleted"; break }
+            if ($source.Contains("updat") -or $source.Contains("patch") -or $source.Contains("edit") -or $source -eq "put") { $changeType = "updated"; break }
+        }
 
+        # Resource name and type come from the first object entry of the resources
+        # collection (type first, then auditResourceType, then componentName).
+        # Modified property values inside resources are never read.
+        $resource = $null
+        foreach ($entry in @(Get-TvProp $Raw "resources")) {
+            if ($entry -is [PSCustomObject] -or $entry -is [System.Collections.IDictionary]) { $resource = $entry; break }
+        }
+        $resourceNameText = if ($resource) { Get-TvText (Get-TvProp $resource "displayName") } else { $null }
+        $resourceName = if ($resourceNameText) {
+            if ($resourceNameText.Length -gt 200) { $resourceNameText.Substring(0, 200) } else { $resourceNameText }
+        } else { $null }
         $resourceType = $null
-        $url = Get-TvText (Get-TvProp $Raw "requestUrl")
-        if ($url) {
-            $path = $url -replace "^https?://[^/]+", ""
-            $path = $path -replace "^/(beta|v1\.0)/", "/"
-            $segments = @($path.Split("/") | Where-Object { $_ })
-            $segment = $null
-            for ($i = 0; $i -lt $segments.Count; $i++) {
-                if ($segments[$i].ToLowerInvariant() -eq "devicemanagement") {
-                    if ($i + 1 -lt $segments.Count) { $segment = $segments[$i + 1] }
-                    break
-                }
-            }
-            if ($null -eq $segment -and $path -notmatch "devicemanagement" -and $segments.Count -gt 0) {
-                $hasDeviceManagement = @($segments | Where-Object { $_.ToLowerInvariant() -eq "devicemanagement" }).Count -gt 0
-                if (-not $hasDeviceManagement) { $segment = $segments[0] }
-            }
-            if ($segment) {
-                $decoded = [uri]::UnescapeDataString($segment)
-                $resourceType = if ($decoded.Length -gt 120) { $decoded.Substring(0, 120) } else { $decoded }
-            }
+        if ($resource) {
+            $resourceType = Get-TvText (Get-TvProp $resource "type")
+            if (-not $resourceType) { $resourceType = Get-TvText (Get-TvProp $resource "auditResourceType") }
         }
+        if (-not $resourceType) { $resourceType = Get-TvText (Get-TvProp $Raw "componentName") }
 
-        $resourceName = $null
-        $resources = @(Get-TvProp $Raw "resources")
-        if ($resources.Count -gt 0 -and $null -ne $resources[0] -and $resources[0] -isnot [string]) {
-            foreach ($entry in $resources) {
-                if ($null -eq $entry) { continue }
-                $name = Get-TvText (Get-TvProp $entry "displayName")
-                if ($name) {
-                    $resourceName = if ($name.Length -gt 200) { $name.Substring(0, 200) } else { $name }
-                    break
-                }
-            }
-        }
+        $actor = Get-TvProp $Raw "actor"
 
         $category = Get-TvText (Get-TvProp $Raw "category")
         if (-not $category) { $category = "Unknown" }
@@ -326,8 +332,8 @@ function ConvertFrom-TenuVaultAuditEvent {
             changeType   = $changeType
             resourceName = $resourceName
             resourceType = $resourceType
-            actorUpn     = Get-TvText (Get-TvProp $Raw "initiatedByUpn")
-            actorAppId   = Get-TvText (Get-TvProp $Raw "initiatedByAppId")
+            actorUpn     = Get-TvText (Get-TvProp $actor "userPrincipalName")
+            actorAppId   = Get-TvText (Get-TvProp $actor "applicationId")
             activity     = $activity
         }
     }
@@ -522,6 +528,14 @@ function Get-TvEmailText {
     return $lines -join "`n"
 }
 
+function Get-TvMarkdownEscape {
+    param([object]$Value)
+    if ($null -eq $Value) { return "" }
+    # Same escape set as escapeMarkdown in render.ts, so a hostile policy name
+    # cannot format or link inside an Adaptive Card TextBlock.
+    return [regex]::Replace([string]$Value, '([\\`*_{}\[\]()#+\-.!>])', '\$1')
+}
+
 function New-TvTeamsPayload {
     param([object]$Envelope)
     $style = switch ([string](Get-TvProp $Envelope "severity")) {
@@ -532,16 +546,16 @@ function New-TvTeamsPayload {
     $body = [System.Collections.Generic.List[object]]::new()
     $body.Add([pscustomobject][ordered]@{
         type = "TextBlock"; size = "Medium"; weight = "Bolder"
-        text = [string](Get-TvProp $Envelope "title"); wrap = $true; style = $style
+        text = Get-TvMarkdownEscape (Get-TvProp $Envelope "title"); wrap = $true; style = $style
     })
-    $body.Add([pscustomobject][ordered]@{ type = "TextBlock"; text = [string](Get-TvProp $Envelope "summary"); wrap = $true })
+    $body.Add([pscustomobject][ordered]@{ type = "TextBlock"; text = Get-TvMarkdownEscape (Get-TvProp $Envelope "summary"); wrap = $true })
     $facts = @(@(Get-TvProp $Envelope "details") | Where-Object { $_ } | ForEach-Object {
-        [pscustomobject][ordered]@{ title = [string](Get-TvProp $_ "label"); value = [string](Get-TvProp $_ "value") }
+        [pscustomobject][ordered]@{ title = Get-TvMarkdownEscape (Get-TvProp $_ "label"); value = Get-TvMarkdownEscape (Get-TvProp $_ "value") }
     })
     if ($facts.Count -gt 0) { $body.Add([pscustomobject][ordered]@{ type = "FactSet"; facts = $facts }) }
     foreach ($item in @(Get-TvProp $Envelope "items")) {
         if ($null -eq $item) { continue }
-        $body.Add([pscustomobject][ordered]@{ type = "TextBlock"; text = (Get-TvItemLine $item); wrap = $true; spacing = "Small" })
+        $body.Add([pscustomobject][ordered]@{ type = "TextBlock"; text = Get-TvMarkdownEscape (Get-TvItemLine $item); wrap = $true; spacing = "Small" })
     }
     if ([int](Get-TvProp $Envelope "moreCount") -gt 0) {
         $body.Add([pscustomobject][ordered]@{
@@ -549,7 +563,7 @@ function New-TvTeamsPayload {
             wrap = $true; isSubtle = $true
         })
     }
-    $body.Add([pscustomobject][ordered]@{ type = "TextBlock"; text = (Get-TvFooter $Envelope); wrap = $true; isSubtle = $true; size = "Small" })
+    $body.Add([pscustomobject][ordered]@{ type = "TextBlock"; text = Get-TvMarkdownEscape (Get-TvFooter $Envelope); wrap = $true; isSubtle = $true; size = "Small" })
     return [pscustomobject][ordered]@{
         type = "message"
         attachments = @([pscustomobject][ordered]@{
@@ -569,12 +583,24 @@ function New-TvTeamsPayload {
 
 function Get-TvManagedIdentityToken {
     param([Parameter(Mandatory)][string]$Resource)
-    $uri = "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=$([uri]::EscapeDataString($Resource))"
+    # Azure Automation and App Service style hosts expose a local identity endpoint
+    # through environment variables. That endpoint is authoritative when present.
+    # The link local IMDS address is only a fallback for hosts without one.
+    $identityEndpoint = [Environment]::GetEnvironmentVariable("IDENTITY_ENDPOINT")
+    $headers = @{ Metadata = "true" }
+    if ($identityEndpoint) {
+        $separator = if ($identityEndpoint.Contains("?")) { "&" } else { "?" }
+        $uri = "$identityEndpoint$($separator)api-version=2019-08-01&resource=$([uri]::EscapeDataString($Resource))"
+        $identityHeader = [Environment]::GetEnvironmentVariable("IDENTITY_HEADER")
+        if ($identityHeader) { $headers["X-IDENTITY-HEADER"] = $identityHeader }
+    } else {
+        $uri = "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=$([uri]::EscapeDataString($Resource))"
+    }
     $lastError = $null
     foreach ($attempt in 1..3) {
         try {
-            $response = Invoke-RestMethod -Uri $uri -Headers @{ Metadata = "true" } -Method Get -TimeoutSec 30
-            if (-not $response.access_token) { throw "The instance metadata service returned no access token." }
+            $response = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -TimeoutSec 30
+            if (-not $response.access_token) { throw "The identity endpoint returned no access token." }
             return [string]$response.access_token
         } catch {
             $lastError = $_
@@ -635,6 +661,16 @@ function Get-TvBlobText {
     }
 }
 
+function ConvertFrom-TvJson {
+    param([Parameter(Mandatory)][string]$Text)
+    # Keep timestamps as strings where the host PowerShell supports it, so saved
+    # envelopes round trip byte for byte instead of becoming DateTime values.
+    if ((Get-Command ConvertFrom-Json).Parameters.ContainsKey("DateKind")) {
+        return $Text | ConvertFrom-Json -DateKind String
+    }
+    return $Text | ConvertFrom-Json
+}
+
 function Set-TvBlobText {
     param(
         [Parameter(Mandatory)][string]$Uri, [Parameter(Mandatory)][string]$Token,
@@ -644,6 +680,24 @@ function Set-TvBlobText {
     if ($LeaseId) { $headers["x-ms-lease-id"] = $LeaseId }
     Invoke-TvStorageRequest -Uri $Uri -Method Put -Token $Token -Headers $headers `
         -BodyBytes ([Text.Encoding]::UTF8.GetBytes($Text)) -ContentType "application/json; charset=utf-8" | Out-Null
+}
+
+function Save-TvStateBlob {
+    param(
+        [Parameter(Mandatory)][string]$Uri, [Parameter(Mandatory)][string]$Token,
+        [Parameter(Mandatory)][string]$Text, [Parameter(Mandatory)][string]$LeaseId
+    )
+    try {
+        Set-TvBlobText -Uri $Uri -Token $Token -Text $Text -LeaseId $LeaseId
+    } catch {
+        $statusCode = 0
+        if ($_.Exception.Response) { $statusCode = [int]$_.Exception.Response.StatusCode }
+        $detail = Get-TvSafeError $_.Exception.Message
+        if ($statusCode -eq 409 -or $statusCode -eq 412 -or $detail -match "lease") {
+            throw "State write failed because the state lease was lost (HTTP $statusCode). Aborting before any further delivery."
+        }
+        throw
+    }
 }
 
 function Send-TvWebhook {
@@ -680,6 +734,31 @@ function Send-TvTeams {
     }
 }
 
+function Send-TvRawMail {
+    param(
+        [Parameter(Mandatory)][string]$From,
+        [Parameter(Mandatory)][string[]]$To,
+        [Parameter(Mandatory)][string]$Subject,
+        [Parameter(Mandatory)][string]$BodyText,
+        [Parameter(Mandatory)][string]$GraphToken
+    )
+    $message = [pscustomobject][ordered]@{
+        message = [pscustomobject][ordered]@{
+            subject = $Subject
+            body = [pscustomobject][ordered]@{ contentType = "Text"; content = $BodyText }
+            toRecipients = @($To | ForEach-Object {
+                [pscustomobject][ordered]@{ emailAddress = [pscustomobject][ordered]@{ address = $_ } }
+            })
+        }
+        saveToSentItems = $false
+    }
+    $senderEncoded = [uri]::EscapeDataString($From)
+    Invoke-RestMethod -Uri "https://graph.microsoft.com/v1.0/users/$senderEncoded/sendMail" -Method Post `
+        -Headers @{ Authorization = "Bearer $GraphToken" } `
+        -Body ([Text.Encoding]::UTF8.GetBytes((ConvertTo-TenuVaultCanonicalJson $message))) `
+        -ContentType "application/json; charset=utf-8" -TimeoutSec 30 | Out-Null
+}
+
 function Send-TvMail {
     param([object]$Envelope, [string]$MailSender, [string]$Recipients, [string]$GraphToken)
     if (-not $MailSender -or -not $Recipients) { return }
@@ -690,23 +769,9 @@ function Send-TvMail {
     }
     $subject = "TenuVault: $prefix$(Get-TvProp $Envelope 'title')"
     if ($subject.Length -gt 250) { $subject = $subject.Substring(0, 250) }
-    $to = @($Recipients.Split(",;") | ForEach-Object { $_.Trim() } | Where-Object { $_ } | ForEach-Object {
-        [pscustomobject][ordered]@{ emailAddress = [pscustomobject][ordered]@{ address = $_ } }
-    })
+    $to = @($Recipients.Split(",;") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     if ($to.Count -eq 0) { return }
-    $message = [pscustomobject][ordered]@{
-        message = [pscustomobject][ordered]@{
-            subject = $subject
-            body = [pscustomobject][ordered]@{ contentType = "Text"; content = Get-TvEmailText $Envelope }
-            toRecipients = $to
-        }
-        saveToSentItems = $false
-    }
-    $senderEncoded = [uri]::EscapeDataString($MailSender)
-    Invoke-RestMethod -Uri "https://graph.microsoft.com/v1.0/users/$senderEncoded/sendMail" -Method Post `
-        -Headers @{ Authorization = "Bearer $GraphToken" } `
-        -Body ([Text.Encoding]::UTF8.GetBytes((ConvertTo-TenuVaultCanonicalJson $message))) `
-        -ContentType "application/json; charset=utf-8" -TimeoutSec 30 | Out-Null
+    Send-TvRawMail -From $MailSender -To $to -Subject $subject -BodyText (Get-TvEmailText $Envelope) -GraphToken $GraphToken
 }
 
 if ($LibraryOnly) { return }
@@ -723,6 +788,7 @@ $runAtIso = ConvertTo-TvIso $runAt
 $eventsSent = 0
 $lastError = $null
 $configVersion = "1"
+$configHash = $null
 $leaseId = $null
 $storageToken = $null
 $stateBlobUri = $null
@@ -739,8 +805,9 @@ try {
     $teamsWebhookUrl = Get-TvAutomationVariable "TenuVaultTeamsWebhookUrl"
     $mailSender = Get-TvAutomationVariable "TenuVaultMailSender"
     $mailRecipients = Get-TvAutomationVariable "TenuVaultMailRecipients"
+    $mailProbeMailbox = Get-TvAutomationVariable "TenuVaultMailProbeMailbox"
     $configVersionValue = Get-TvAutomationVariable "TenuVaultConfigVersion"
-    if ($configVersionValue) { $configVersion = $configVersionValue }
+    if ($configVersionValue) { $configVersion = $configVersionValue.Trim() }
 
     $missedBackupHours = 48
     $missedValue = Get-TvAutomationVariable "TenuVaultMissedBackupHours"
@@ -756,6 +823,24 @@ try {
     if ($webhookUrl -and $webhookUrl -notmatch "^https://") { throw "TenuVaultWebhookUrl must use https." }
     if ($teamsWebhookUrl -and $teamsWebhookUrl -notmatch "^https://") { throw "TenuVaultTeamsWebhookUrl must use https." }
 
+    # Fingerprint of the effective configuration for the heartbeat: non-secret values
+    # in full, secrets only as presence flags, so drift is visible without leaking.
+    $configFingerprint = @(
+        "tenantId=$($tenantId.ToLowerInvariant())"
+        "tenantName=$tenantName"
+        "storageAccount=$storageAccount"
+        "mailSender=$mailSender"
+        "mailRecipients=$mailRecipients"
+        "mailProbeMailbox=$mailProbeMailbox"
+        "missedBackupHours=$missedBackupHours"
+        "includeActor=$($includeActor.ToString().ToLowerInvariant())"
+        "configVersion=$configVersion"
+        "webhookUrl=$(if ($webhookUrl) { 'present' } else { 'absent' })"
+        "webhookSecret=$(if ($webhookSecret) { 'present' } else { 'absent' })"
+        "teamsWebhookUrl=$(if ($teamsWebhookUrl) { 'present' } else { 'absent' })"
+    ) -join "|"
+    $configHash = Get-TvSha256Hex $configFingerprint
+
     $graphToken = Get-TvManagedIdentityToken "https://graph.microsoft.com/"
     $storageToken = Get-TvManagedIdentityToken "https://storage.azure.com/"
 
@@ -764,14 +849,37 @@ try {
     $heartbeatBlobUri = "$stateContainerUri/heartbeat.json"
     $leaseQueryUri = "$stateBlobUri`?comp=lease"
 
-    # Create the state blob once, then take the lease before any delivery. A run that
-    # finds the lease held exits quietly: the other run owns delivery for this window.
+    # Only configuration version 1 is understood. Anything else stops the run
+    # before any polling, with the reason recorded in the heartbeat.
+    if ($configVersion -ne "1") {
+        $lastError = "Unsupported TenuVaultConfigVersion '$configVersion'. This runbook supports version 1 only."
+        try {
+            $rejectedHeartbeat = [pscustomobject][ordered]@{
+                runAt = $runAtIso
+                runbookVersion = $runbookVersion
+                configVersion = $configVersion
+                configHash = $configHash
+                watermark = $watermarkIso
+                eventsSent = $eventsSent
+                lastError = $lastError
+            }
+            Set-TvBlobText -Uri $heartbeatBlobUri -Token $storageToken -Text (ConvertTo-TenuVaultCanonicalJson $rejectedHeartbeat)
+        } catch { Write-Output "Could not write the config rejection heartbeat." }
+        throw $lastError
+    }
+
+    # Create the state blob once, then take the lease before any delivery. The lease
+    # is infinite (duration -1) and is released in the finally block below, so a long
+    # run can never lose it mid delivery. A run that finds the lease held exits
+    # quietly: the other run owns delivery for this window.
     $existingStateText = Get-TvBlobText -Uri $stateBlobUri -Token $storageToken
     if ($null -eq $existingStateText) {
         $initialWatermark = ConvertTo-TvIso $runAt.AddHours(-1)
         $initialState = [pscustomobject][ordered]@{
-            tenantId = $tenantId.ToLowerInvariant(); watermark = $initialWatermark
+            tenantId = $tenantId.ToLowerInvariant(); configVersion = $configVersion
+            watermark = $initialWatermark
             recentAuditIds = @(); sentEventIds = @(); lastMissedKey = $null
+            pendingEnvelopes = @(); deadEnvelopes = @(); mailVerified = $false
         }
         Set-TvBlobText -Uri $stateBlobUri -Token $storageToken -Text (ConvertTo-TenuVaultCanonicalJson $initialState)
         $existingStateText = Get-TvBlobText -Uri $stateBlobUri -Token $storageToken
@@ -780,7 +888,7 @@ try {
     $leaseId = [Guid]::NewGuid().ToString()
     try {
         Invoke-TvStorageRequest -Uri $leaseQueryUri -Method Put -Token $storageToken -Headers @{
-            "x-ms-lease-action" = "acquire"; "x-ms-lease-duration" = "60"; "x-ms-proposed-lease-id" = $leaseId
+            "x-ms-lease-action" = "acquire"; "x-ms-lease-duration" = "-1"; "x-ms-proposed-lease-id" = $leaseId
         } | Out-Null
     } catch {
         $statusCode = 0
@@ -794,15 +902,13 @@ try {
     }
 
     $stateText = Get-TvBlobText -Uri $stateBlobUri -Token $storageToken
-    $state = if ($stateText) { $stateText | ConvertFrom-Json } else { $null }
+    $state = if ($stateText) { ConvertFrom-TvJson $stateText } else { $null }
     $stateTenantId = if ($state) { Get-TvText (Get-TvProp $state "tenantId") } else { $null }
     if ($stateTenantId -and $stateTenantId.ToLowerInvariant() -ne $tenantId.ToLowerInvariant()) {
         throw "State tenant does not match TenuVaultTenantId. Refusing to run against the wrong tenant state."
     }
     $watermarkIso = if ($state) { ConvertTo-TvIso (Get-TvProp $state "watermark") } else { $null }
     if (-not $watermarkIso) { $watermarkIso = ConvertTo-TvIso $runAt.AddHours(-1) }
-    $stateConfigVersion = if ($state) { Get-TvText (Get-TvProp $state "configVersion") } else { $null }
-    if ($stateConfigVersion -and -not $configVersionValue) { $configVersion = $stateConfigVersion }
 
     $recentById = @{}
     if ($state) {
@@ -822,56 +928,144 @@ try {
         }
     }
     $lastMissedKey = if ($state) { Get-TvText (Get-TvProp $state "lastMissedKey") } else { $null }
+    $mailVerified = $false
+    if ($state) { $mailVerified = (Get-TvProp $state "mailVerified") -eq $true }
+
+    # Delivery outbox: envelopes waiting for a successful send, with retry counts.
+    $pendingEnvelopes = [System.Collections.Generic.List[object]]::new()
+    $deadEnvelopes = [System.Collections.Generic.List[object]]::new()
+    if ($state) {
+        foreach ($listName in "pendingEnvelopes", "deadEnvelopes") {
+            $targetList = if ($listName -eq "pendingEnvelopes") { $pendingEnvelopes } else { $deadEnvelopes }
+            foreach ($entry in @(Get-TvProp $state $listName)) {
+                if ($null -eq $entry) { continue }
+                $savedEnvelope = Get-TvProp $entry "envelope"
+                if (-not $savedEnvelope -or -not (Get-TvText (Get-TvProp $savedEnvelope "eventId"))) { continue }
+                $savedAttempts = 0
+                [void][int]::TryParse("$(Get-TvProp $entry 'attempts')", [ref]$savedAttempts)
+                $targetList.Add([pscustomobject][ordered]@{
+                    envelope = $savedEnvelope
+                    attempts = $savedAttempts
+                    lastError = Get-TvText (Get-TvProp $entry "lastError")
+                })
+            }
+        }
+    }
+
+    # Builds the full state object from the live collections. Used for every save,
+    # so the pre delivery save and the final save can never drift apart in shape.
+    $buildState = {
+        $pruneBefore = ConvertTo-TvIso $runAt.AddHours(-48)
+        $recentList = [System.Collections.Generic.List[object]]::new()
+        foreach ($entryId in $recentById.Keys) {
+            $entryAt = $recentById[$entryId]
+            if ($entryAt -and [StringComparer]::Ordinal.Compare([string]$entryAt, $pruneBefore) -lt 0) { continue }
+            $recentList.Add([pscustomobject][ordered]@{ id = [string]$entryId; at = [string]$entryAt })
+        }
+        $recentTrimmed = @($recentList | Sort-Object { [string](Get-TvProp $_ "at") } -Descending | Select-Object -First 2000)
+        [array]::Reverse($recentTrimmed)
+        $sentArr = @($sentEventIds.ToArray())
+        if ($sentArr.Count -gt 2000) { $sentArr = $sentArr[($sentArr.Count - 2000)..($sentArr.Count - 1)] }
+        $deadArr = @($deadEnvelopes.ToArray())
+        if ($deadArr.Count -gt 50) { $deadArr = $deadArr[($deadArr.Count - 50)..($deadArr.Count - 1)] }
+        [pscustomobject][ordered]@{
+            tenantId = $tenantId.ToLowerInvariant()
+            configVersion = $configVersion
+            watermark = $watermarkIso
+            recentAuditIds = $recentTrimmed
+            sentEventIds = $sentArr
+            lastMissedKey = $lastMissedKey
+            pendingEnvelopes = @($pendingEnvelopes.ToArray())
+            deadEnvelopes = $deadArr
+            mailVerified = $mailVerified
+        }
+    }
+
+    # Mail gate: Mail.Send must be proven restricted to the sender mailbox before
+    # any notification mail is sent. Verification sends as the sender (must work)
+    # and as an unrelated probe mailbox (must be rejected by the access policy).
+    if ($VerifyMailOnly) {
+        if (-not $mailSender) { throw "TenuVaultMailSender is not set. Configure the sender mailbox before running mail verification." }
+        if (-not $mailProbeMailbox) { throw "TenuVaultMailProbeMailbox is not set. Configure a mailbox outside the mail access policy scope before running mail verification." }
+        if ($mailProbeMailbox.ToLowerInvariant() -eq $mailSender.ToLowerInvariant()) { throw "TenuVaultMailProbeMailbox must differ from TenuVaultMailSender." }
+        Send-TvRawMail -From $mailSender -To @($mailSender) -Subject "TenuVault mail verification" `
+            -BodyText "The TenuVault watcher verified that it can send mail as $mailSender." -GraphToken $graphToken
+        Write-Output "Sending as the configured sender mailbox works."
+        $probeSucceeded = $false
+        try {
+            Send-TvRawMail -From $mailProbeMailbox -To @($mailSender) -Subject "TenuVault mail verification probe" `
+                -BodyText "This message must never arrive. It proves Mail.Send is not restricted." -GraphToken $graphToken
+            $probeSucceeded = $true
+        } catch {
+            Write-Output "Sending as the probe mailbox was rejected, as required."
+        }
+        if ($probeSucceeded) {
+            throw "Mail verification failed: the watcher identity could send as $mailProbeMailbox, so Mail.Send is not restricted to $mailSender. Apply an Exchange application access policy, then run verification again."
+        }
+        $mailVerified = $true
+        Save-TvStateBlob -Uri $stateBlobUri -Token $storageToken -Text (ConvertTo-TenuVaultCanonicalJson (& $buildState)) -LeaseId $leaseId
+        $verifiedHeartbeat = [pscustomobject][ordered]@{
+            runAt = $runAtIso
+            runbookVersion = $runbookVersion
+            configVersion = $configVersion
+            configHash = $configHash
+            watermark = $watermarkIso
+            eventsSent = $eventsSent
+            lastError = $null
+        }
+        Set-TvBlobText -Uri $heartbeatBlobUri -Token $storageToken -Text (ConvertTo-TenuVaultCanonicalJson $verifiedHeartbeat)
+        Write-Output "Mail verification passed. mailVerified is recorded in state.json."
+        return
+    }
+
+    $mailConfigured = [bool]($mailSender -and $mailRecipients)
+    $mailEnabled = $mailConfigured -and $mailVerified
+    if (($mailSender -or $mailRecipients) -and -not $mailVerified) {
+        $lastError = "Mail delivery is skipped until mail verification passes. Run this runbook once with -VerifyMailOnly after restricting Mail.Send to the sender mailbox."
+        Write-Output $lastError
+    }
 
     # --- Intune audit events ---------------------------------------------------
     $filterFrom = ConvertTo-TvIso ([DateTimeOffset]::Parse($watermarkIso).UtcDateTime.AddMinutes(-30))
-    $select = "id,activity,activityDateTime,category,httpVerb,initiatedByUpn,initiatedByAppId,requestUrl,resources"
+    $select = "id,displayName,componentName,actor,activity,activityDateTime,activityType,activityOperationType,activityResult,category,resources"
     $query = "`$select=$([uri]::EscapeDataString($select))&`$filter=$([uri]::EscapeDataString("activityDateTime gt $filterFrom"))&`$orderby=$([uri]::EscapeDataString('activityDateTime'))&`$top=200"
     $nextUri = "https://graph.microsoft.com/beta/deviceManagement/auditEvents?$query"
     $graphHeaders = @{ Authorization = "Bearer $graphToken"; ConsistencyLevel = "eventual" }
 
-    $mappedEvents = [System.Collections.Generic.List[object]]::new()
-    $fetchedCount = 0
-    while ($nextUri -and $fetchedCount -lt 500) {
+    # The ingestion cap counts NEW changes only. Duplicates inside the 30 minute
+    # overlap never consume budget, and the watermark tracks the newest event seen
+    # (duplicates included), so a busy overlap window cannot stall progress.
+    $priorRecent = @{}
+    foreach ($priorId in $recentById.Keys) { $priorRecent[[string]$priorId] = $true }
+    $newChanges = [System.Collections.Generic.List[object]]::new()
+    $seenThisRun = @{}
+    $seenCount = 0
+    $newestSeenIso = $watermarkIso
+    $ingestionCapReached = $false
+    $pageCount = 0
+    while ($nextUri -and -not $ingestionCapReached -and $pageCount -lt 500) {
+        $pageCount++
         $page = Invoke-RestMethod -Uri $nextUri -Headers $graphHeaders -Method Get -TimeoutSec 60
         foreach ($rawEvent in @($page.value)) {
-            if ($fetchedCount -ge 500) { break }
-            $fetchedCount++
+            if ($null -eq $rawEvent) { continue }
+            $seenCount++
+            $rawAt = ConvertTo-TvIso (Get-TvProp $rawEvent "activityDateTime")
+            if ($rawAt -and [StringComparer]::Ordinal.Compare($rawAt, $newestSeenIso) -gt 0) { $newestSeenIso = $rawAt }
             $change = ConvertFrom-TenuVaultAuditEvent $rawEvent
-            if ($change) { $mappedEvents.Add($change) }
+            if (-not $change) { continue }
+            $auditIdValue = [string](Get-TvProp $change "auditId")
+            if ($priorRecent.ContainsKey($auditIdValue) -or $seenThisRun.ContainsKey($auditIdValue)) { continue }
+            if ($newChanges.Count -ge 500) { $ingestionCapReached = $true; break }
+            $seenThisRun[$auditIdValue] = $true
+            $newChanges.Add($change)
         }
         $nextUri = Get-TvProp $page "@odata.nextLink"
     }
-    Write-Output "Fetched $fetchedCount audit events, $($mappedEvents.Count) mappable."
+    Write-Output "Seen $seenCount audit events, $($newChanges.Count) new."
 
-    $newChanges = [System.Collections.Generic.List[object]]::new()
-    $newestProcessedIso = $watermarkIso
-    foreach ($change in $mappedEvents) {
-        $changeAt = [string](Get-TvProp $change "at")
-        if ([StringComparer]::Ordinal.Compare($changeAt, $newestProcessedIso) -gt 0) { $newestProcessedIso = $changeAt }
-        $auditIdValue = [string](Get-TvProp $change "auditId")
-        $recentById[$auditIdValue] = $changeAt
-    }
-    # Rebuild the new set against the snapshot that existed before this run.
-    $priorRecent = @{}
-    if ($state) {
-        foreach ($entry in @(Get-TvProp $state "recentAuditIds")) {
-            $entryId = Get-TvText (Get-TvProp $entry "id")
-            if (-not $entryId -and $entry -is [string]) { $entryId = Get-TvText $entry }
-            if ($entryId) { $priorRecent[$entryId] = $true }
-        }
-    }
-    $seenThisRun = @{}
-    foreach ($change in $mappedEvents) {
-        $auditIdValue = [string](Get-TvProp $change "auditId")
-        if ($priorRecent.ContainsKey($auditIdValue) -or $seenThisRun.ContainsKey($auditIdValue)) { continue }
-        $seenThisRun[$auditIdValue] = $true
-        $newChanges.Add($change)
-    }
-
-    $envelopes = [System.Collections.Generic.List[object]]::new()
+    $candidateEnvelopes = [System.Collections.Generic.List[object]]::new()
     if ($newChanges.Count -gt 0) {
-        $envelopes.Add((New-TenuVaultAuditDigest -TenantId $tenantId -TenantName $tenantName `
+        $candidateEnvelopes.Add((New-TenuVaultAuditDigest -TenantId $tenantId -TenantName $tenantName `
             -Changes @($newChanges.ToArray()) -IncludeActor $includeActor))
     }
 
@@ -884,8 +1078,11 @@ try {
         $listResponse = Invoke-TvStorageRequest -Uri $listUri -Method Get -Token $storageToken
         [xml]$listXml = [string]$listResponse.Content
         $names = [System.Collections.Generic.List[string]]::new()
-        foreach ($prefix in @($listXml.EnumerationResults.BlobPrefix)) { if ($prefix.Name) { $names.Add([string]$prefix.Name) } }
-        foreach ($blob in @($listXml.EnumerationResults.Blobs.Blob)) { if ($blob.Name) { $names.Add([string]$blob.Name) } }
+        $blobsNode = $listXml.EnumerationResults.Blobs
+        if ($blobsNode) {
+            foreach ($prefix in @($blobsNode.BlobPrefix)) { if ($prefix -and $prefix.Name) { $names.Add([string]$prefix.Name) } }
+            foreach ($blob in @($blobsNode.Blob)) { if ($blob -and $blob.Name) { $names.Add([string]$blob.Name) } }
+        }
         foreach ($name in $names) {
             $folderTime = Get-TenuVaultBackupFolderTime $name
             if ($folderTime -and (-not $newestBackup -or $folderTime -gt $newestBackup)) { $newestBackup = $folderTime }
@@ -896,77 +1093,98 @@ try {
 
     $newestBackupIso = if ($newestBackup) { ConvertTo-TvIso $newestBackup } else { $null }
     $missedThresholdTime = $runAt.AddHours(-$missedBackupHours)
+    $missedKeyToSet = $null
     if (-not $newestBackup -or $newestBackup -lt $missedThresholdTime) {
         $missedEvent = New-TenuVaultMissedBackupEvent -TenantId $tenantId -TenantName $tenantName `
             -OccurredAt $runAtIso -LastBackupAt $newestBackupIso -ThresholdHours $missedBackupHours
-        $missedKey = "missed:$(if ($newestBackupIso) { $newestBackupIso } else { 'none' }):$missedBackupHours"
-        if ($missedKey -ne $lastMissedKey -and -not $sentEventIds.Contains([string](Get-TvProp $missedEvent "eventId"))) {
-            $envelopes.Add($missedEvent)
-        }
-        $lastMissedKey = $missedKey
+        $missedKeyToSet = "missed:$(if ($newestBackupIso) { $newestBackupIso } else { 'none' }):$missedBackupHours"
+        $candidateEnvelopes.Add($missedEvent)
     }
 
-    # --- Delivery ----------------------------------------------------------------
+    # --- Ingest into the outbox, then mark sources consumed and SAVE --------------
+    # Nothing is marked consumed until its envelope is safely in pendingEnvelopes,
+    # and state is persisted before any delivery attempt. A crash after this save
+    # retries from the outbox on the next run instead of losing the events.
+    $knownEventIds = @{}
+    foreach ($pendingEntry in $pendingEnvelopes) { $knownEventIds[[string](Get-TvProp (Get-TvProp $pendingEntry "envelope") "eventId")] = $true }
+    foreach ($deadEntry in $deadEnvelopes) { $knownEventIds[[string](Get-TvProp (Get-TvProp $deadEntry "envelope") "eventId")] = $true }
+    foreach ($sentId in $sentEventIds) { $knownEventIds[[string]$sentId] = $true }
+    foreach ($candidate in $candidateEnvelopes) {
+        $candidateId = [string](Get-TvProp $candidate "eventId")
+        if ($knownEventIds.ContainsKey($candidateId)) { continue }
+        $knownEventIds[$candidateId] = $true
+        $pendingEnvelopes.Add([pscustomobject][ordered]@{
+            envelope = $candidate
+            attempts = 0
+            lastError = $null
+        })
+    }
+    foreach ($change in $newChanges) {
+        $recentById[[string](Get-TvProp $change "auditId")] = [string](Get-TvProp $change "at")
+    }
+    if ($missedKeyToSet) { $lastMissedKey = $missedKeyToSet }
+    $watermarkIso = $newestSeenIso
+    Save-TvStateBlob -Uri $stateBlobUri -Token $storageToken -Text (ConvertTo-TenuVaultCanonicalJson (& $buildState)) -LeaseId $leaseId
+
+    # --- Delivery from the outbox ---------------------------------------------------
+    # An envelope leaves the outbox only when every configured channel accepted it.
+    # Failures increment attempts and stay pending. After 5 failed attempts the
+    # envelope moves to deadEnvelopes (newest 50 kept) for manual inspection.
     $channelCount = 0
     if ($webhookUrl) { $channelCount++ }
     if ($teamsWebhookUrl) { $channelCount++ }
-    if ($mailSender -and $mailRecipients) { $channelCount++ }
-    if ($envelopes.Count -gt 0 -and $channelCount -eq 0) {
-        Write-Output "No delivery channel is configured. $($envelopes.Count) event(s) left unsent."
-    }
+    if ($mailEnabled) { $channelCount++ }
 
-    foreach ($envelope in $envelopes) {
-        $eventIdValue = [string](Get-TvProp $envelope "eventId")
-        if ($sentEventIds.Contains($eventIdValue)) { continue }
-        if ($channelCount -eq 0) { continue }
-        try {
-            Send-TvWebhook -Envelope $envelope -Url $webhookUrl -Secret $webhookSecret
-            Send-TvTeams -Envelope $envelope -Url $teamsWebhookUrl
-            Send-TvMail -Envelope $envelope -MailSender $mailSender -Recipients $mailRecipients -GraphToken $graphToken
-            $sentEventIds.Add($eventIdValue)
-            $eventsSent++
-        } catch {
-            # The event stays out of sentEventIds, so a later run can retry it while
-            # its audit ids are still inside the recent window handled above.
-            Write-Output "Delivery failed for event $($eventIdValue.Substring(0, 12)): $(Get-TvSafeError $_.Exception.Message)"
-            if (-not $lastError) { $lastError = Get-TvSafeError $_.Exception.Message }
+    if ($pendingEnvelopes.Count -gt 0 -and $channelCount -eq 0) {
+        Write-Output "No delivery channel is configured. $($pendingEnvelopes.Count) envelope(s) remain in the outbox."
+    } else {
+        foreach ($pendingEntry in @($pendingEnvelopes.ToArray())) {
+            $envelope = Get-TvProp $pendingEntry "envelope"
+            $eventIdValue = [string](Get-TvProp $envelope "eventId")
+            if ($sentEventIds.Contains($eventIdValue)) {
+                [void]$pendingEnvelopes.Remove($pendingEntry)
+                continue
+            }
+            try {
+                Send-TvWebhook -Envelope $envelope -Url $webhookUrl -Secret $webhookSecret
+                Send-TvTeams -Envelope $envelope -Url $teamsWebhookUrl
+                if ($mailEnabled) {
+                    Send-TvMail -Envelope $envelope -MailSender $mailSender -Recipients $mailRecipients -GraphToken $graphToken
+                }
+                [void]$pendingEnvelopes.Remove($pendingEntry)
+                $sentEventIds.Add($eventIdValue)
+                $eventsSent++
+            } catch {
+                $attemptsNow = [int](Get-TvProp $pendingEntry "attempts") + 1
+                $pendingEntry.attempts = $attemptsNow
+                $pendingEntry.lastError = Get-TvSafeError $_.Exception.Message
+                Write-Output "Delivery failed for event $($eventIdValue.Substring(0, 12)) attempt ${attemptsNow}: $($pendingEntry.lastError)"
+                if ($attemptsNow -ge 5) {
+                    [void]$pendingEnvelopes.Remove($pendingEntry)
+                    $deadEnvelopes.Add($pendingEntry)
+                    while ($deadEnvelopes.Count -gt 50) { $deadEnvelopes.RemoveAt(0) }
+                    $lastError = "Event $($eventIdValue.Substring(0, 12)) moved to deadEnvelopes after 5 failed attempts. Last error: $($pendingEntry.lastError)"
+                } elseif (-not $lastError) {
+                    $lastError = $pendingEntry.lastError
+                }
+            }
         }
     }
 
-    # --- Persist state and heartbeat ---------------------------------------------
-    $watermarkIso = $newestProcessedIso
-    $pruneBefore = ConvertTo-TvIso $runAt.AddHours(-48)
-    $recentList = [System.Collections.Generic.List[object]]::new()
-    foreach ($entryId in $recentById.Keys) {
-        $entryAt = $recentById[$entryId]
-        if ($entryAt -and [StringComparer]::Ordinal.Compare([string]$entryAt, $pruneBefore) -lt 0) { continue }
-        $recentList.Add([pscustomobject][ordered]@{ id = [string]$entryId; at = [string]$entryAt })
-    }
-    $recentTrimmed = @($recentList | Sort-Object { [string](Get-TvProp $_ "at") } -Descending | Select-Object -First 2000)
-    [array]::Reverse($recentTrimmed)
-    $sentTrimmed = $sentEventIds
-    if ($sentTrimmed.Count -gt 2000) { $sentTrimmed = $sentTrimmed.GetRange($sentTrimmed.Count - 2000, 2000) }
-
-    $newState = [pscustomobject][ordered]@{
-        tenantId = $tenantId.ToLowerInvariant()
-        configVersion = $configVersion
-        watermark = $watermarkIso
-        recentAuditIds = $recentTrimmed
-        sentEventIds = @($sentTrimmed.ToArray())
-        lastMissedKey = $lastMissedKey
-    }
-    Set-TvBlobText -Uri $stateBlobUri -Token $storageToken -Text (ConvertTo-TenuVaultCanonicalJson $newState) -LeaseId $leaseId
+    # --- Persist final state and heartbeat ------------------------------------------
+    Save-TvStateBlob -Uri $stateBlobUri -Token $storageToken -Text (ConvertTo-TenuVaultCanonicalJson (& $buildState)) -LeaseId $leaseId
 
     $heartbeat = [pscustomobject][ordered]@{
         runAt = $runAtIso
         runbookVersion = $runbookVersion
         configVersion = $configVersion
+        configHash = $configHash
         watermark = $watermarkIso
         eventsSent = $eventsSent
         lastError = $lastError
     }
     Set-TvBlobText -Uri $heartbeatBlobUri -Token $storageToken -Text (ConvertTo-TenuVaultCanonicalJson $heartbeat)
-    Write-Output "Watcher run complete. Events sent: $eventsSent. Watermark: $watermarkIso."
+    Write-Output "Watcher run complete. Events sent: $eventsSent. Pending: $($pendingEnvelopes.Count). Watermark: $watermarkIso."
 } catch {
     $lastError = Get-TvSafeError $_.Exception.Message
     if ($leaseId -and $storageToken -and $heartbeatBlobUri) {
@@ -975,6 +1193,7 @@ try {
                 runAt = $runAtIso
                 runbookVersion = $runbookVersion
                 configVersion = $configVersion
+                configHash = $configHash
                 watermark = $watermarkIso
                 eventsSent = $eventsSent
                 lastError = $lastError
@@ -989,7 +1208,7 @@ try {
             Invoke-TvStorageRequest -Uri $leaseQueryUri -Method Put -Token $storageToken -Headers @{
                 "x-ms-lease-action" = "release"; "x-ms-lease-id" = $leaseId
             } | Out-Null
-        } catch { Write-Output "Could not release the state lease. It expires on its own." }
+        } catch { Write-Output "Could not release the state lease. Break the lease on state.json in the storage account before the next run." }
     }
 }
 

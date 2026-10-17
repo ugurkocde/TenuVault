@@ -74,11 +74,11 @@ Change watching reads the Intune audit log through Microsoft Graph and digests n
 * Changes made through TenuVault itself are ignored by default, so your own restores do not alert you.
 * Repeated edits of the same policy by the same admin collapse into one line with a count, and a digest shows at most 20 lines plus a remainder count, so a bulk edit does not flood a channel.
 * The watcher reads a fixed list of audit fields (ids, times, category, verb, actor, resource names). Audit request bodies and changed setting values are never read or sent.
-* The actor name is personal data. You can turn it off; do that for destinations outside Microsoft 365 if your policies require it.
+* The actor name is personal data and is off by default. Turn it on only for destinations your policies allow it to reach.
 
 ## Alerts while this computer is off: the Azure watcher
 
-Desktop notifications stop when the computer is off, asleep or signed out. The Azure watcher closes that gap. It is a PowerShell runbook in an Azure Automation account in the customer tenant, running on a schedule with a managed identity and no stored secret. It watches the same Intune audit events and checks the age of the newest backup folder in the backup storage account, then delivers to the same kinds of channels: webhook, Teams Workflows and email.
+Desktop notifications stop when the computer is off, asleep or signed out. The Azure watcher closes that gap. It is a PowerShell runbook in an Azure Automation account in the customer tenant, running on a schedule with a managed identity and no stored secret. It watches the same Intune audit events and checks the age of the newest backup folder in the backup storage account, then delivers to the same kinds of channels: webhook, Teams Workflows and email. The event content is identical; watcher email is plain text instead of the desktop HTML layout.
 
 What it can and cannot see, plainly:
 

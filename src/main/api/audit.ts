@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { AuditEventType, AuditResult, AuditSeverity, type CreateAuditLogInput } from "~/lib/audit/types"
 import type { SignedInAccount } from "../../shared/ipc"
 import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, localStorageAccountName } from "../../shared/constants"
@@ -121,16 +122,17 @@ async function recordRestore(bodyText: string, response: Response, dispatch: (re
   const ok = response.ok && data.success === true
   // Some copies were created, so the restore completed with failures rather than failing outright.
   const partial = !ok && (data.partial === true || (response.ok && ((data.details?.restoredCount ?? 0) > 0 || (data.details?.partialCount ?? 0) > 0)))
-  if (!policyCopy) {
+  if (!policyCopy && response.status !== 400) {
     try {
+      const partialRestore = data.status === "PartiallyCompleted" || (data.details?.partialCount ?? 0) > 0 || partial
       onRestore?.({
         tenantId: body.tenantId,
-        jobId: data.jobId ?? data.policyId ?? body.backupId ?? body.tenantId,
-        status: ok ? "Completed" : partial ? "PartiallyCompleted" : "Failed",
+        jobId: data.jobId ?? randomUUID(),
+        status: ok && !partialRestore ? "Completed" : partialRestore ? "PartiallyCompleted" : "Failed",
         restored: data.details?.restoredCount ?? 0,
         failed: data.details?.failedCount ?? 0,
         partial: data.details?.partialCount ?? 0,
-        message: data.error ?? null,
+        message: null,
       })
     } catch { /* Notifications are best effort and never block the audit record. */ }
   }

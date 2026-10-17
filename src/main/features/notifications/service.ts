@@ -59,7 +59,7 @@ export function defaultAuditWatch(): AuditWatchRecord {
     intervalMinutes: 15,
     categories: [],
     ignoreOwnChanges: true,
-    includeActor: true,
+    includeActor: false,
     externalWatcher: false,
     watermark: null,
     recentIds: [],
@@ -97,7 +97,7 @@ export function matchingChannelIds(rules: RuleRecord[], channels: Array<ChannelR
  * (skipping channels that already hold this event), then flushes due deliveries.
  * Returns how many intents were created.
  */
-export async function emit(deps: FeatureDeps, tenantId: string, envelope: NotificationEnvelope, options: NotificationOptions & { channelIds?: string[] } = {}): Promise<number> {
+export async function emit(deps: FeatureDeps, tenantId: string, envelope: NotificationEnvelope, options: NotificationOptions & { channelIds?: string[]; deferFlush?: boolean } = {}): Promise<number> {
   const tenant = tenantId.toLowerCase()
   const channels = channelsOf(deps, tenant)
   const selected = options.channelIds ?? matchingChannelIds(rulesOf(deps, tenant), channels, envelope)
@@ -106,8 +106,8 @@ export async function emit(deps: FeatureDeps, tenantId: string, envelope: Notifi
   for (const channelId of selected) {
     const channel = channels.find((entry) => entry.id === channelId)
     if (!channel || !channel.enabled) continue
+    // A pending or sent intent already covers this event; a failed one does not block a fresh emission.
     if (existing.some((entry) => entry.channelId === channelId && entry.eventId === envelope.eventId && entry.state !== "failed")) continue
-    if (existing.some((entry) => entry.channelId === channelId && entry.eventId === envelope.eventId && entry.state === "failed")) continue
     deps.records.create<OutboxRecord>(DOMAINS.notificationOutbox, tenant, {
       channelId,
       channelTitle: channel.title,
@@ -123,7 +123,7 @@ export async function emit(deps: FeatureDeps, tenantId: string, envelope: Notifi
     created++
   }
   if (created > 0) pruneOutbox(deps, tenant)
-  await flushOutbox(deps, tenant, options)
+  if (!options.deferFlush) await flushOutbox(deps, tenant, options)
   return created
 }
 
@@ -156,9 +156,11 @@ export async function flushOutbox(deps: FeatureDeps, tenantId: string, _options:
         continue
       }
       if (!channel.enabled) continue
+      // Graph backed channels pause while signed out instead of burning their attempts.
+      if (channel.kind === "email" && !deps.actor(tenant)) continue
       const result = await deliverToChannel(deps, tenant, channel, entry.envelope)
       recordChannelDelivery(deps, tenant, channel.id, result)
-      const attempts = entry.attempts + result.attempts
+      const attempts = entry.attempts + Math.max(1, result.attempts)
       if (result.ok) {
         deps.records.update<OutboxRecord>(DOMAINS.notificationOutbox, tenant, entry.id, (value) => ({ ...value, state: "sent", attempts, lastError: null, lastStatus: result.status, sentAt: deps.now().toISOString() }), { actor: null, reason: `Delivered to ${channel.title}` })
         sent++
@@ -270,6 +272,10 @@ async function listGroupMembers(graph: Awaited<ReturnType<FeatureDeps["graph"]>>
     if (response.status !== 200) return { error: brief(graphError(response.body, response.status)) }
     const values = Array.isArray(response.body.value) ? (response.body.value as GraphItem[]) : []
     for (const member of values) {
+      // Transitive members include nested groups; only user objects are mailboxes we may add.
+      const kind = member["@odata.type"]
+      const isUser = kind === "#microsoft.graph.user" || (kind === undefined && typeof member.userType === "string")
+      if (!isUser) continue
       if (typeof member.userType === "string" && member.userType.toLowerCase() === "guest") continue
       const mail = typeof member.mail === "string" ? member.mail : typeof member.userPrincipalName === "string" && member.userPrincipalName.includes("@") ? member.userPrincipalName : null
       if (mail) addresses.push(mail)
@@ -302,11 +308,13 @@ export async function pollAuditWatch(deps: FeatureDeps, tenantId: string, option
     const seen = new Set(watch.recentIds)
     const collected: AuditChange[] = []
     const seenNow: string[] = []
+    let newestSeenAt: string | null = null
     let path: string | null =
       `deviceManagement/auditEvents?$select=${AUDIT_EVENT_SELECT}&$filter=${encodeURIComponent(`activityDateTime gt ${since.toISOString()}`)}&$orderby=activityDateTime&$top=200`
     let pages = 0
-    let exhausted = false
-    while (path && pages < 25) {
+    // The cap counts newly collected events, never duplicates inside the overlap, so a
+    // busy tenant cannot stall the poller re-reading the same first page forever.
+    while (path && pages < 50 && collected.length < MAX_AUDIT_EVENTS_PER_POLL) {
       pages++
       const response: { status: number; body: GraphItem } = await graph("GET", path)
       if (response.status !== 200) throw new Error(graphError(response.body, response.status))
@@ -315,14 +323,13 @@ export async function pollAuditWatch(deps: FeatureDeps, tenantId: string, option
         const change = mapAuditEvent(raw)
         if (!change) continue
         seenNow.push(change.auditId)
+        if (!newestSeenAt || change.at > newestSeenAt) newestSeenAt = change.at
         if (!seen.has(change.auditId)) collected.push(change)
-        if (seenNow.length >= MAX_AUDIT_EVENTS_PER_POLL) break
+        if (collected.length >= MAX_AUDIT_EVENTS_PER_POLL) break
       }
-      if (seenNow.length >= MAX_AUDIT_EVENTS_PER_POLL) break
+      if (collected.length >= MAX_AUDIT_EVENTS_PER_POLL) break
       path = nextPath(response.body)
-      if (!path) exhausted = true
     }
-    void exhausted
     const profile = deps.tenant(tenant)
     const filtered = filterAuditChanges(collected, { categories: watch.categories, ownAppId: profile?.clientId ?? null, ignoreOwnChanges: watch.ignoreOwnChanges })
     filtered.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
@@ -337,16 +344,18 @@ export async function pollAuditWatch(deps: FeatureDeps, tenantId: string, option
         source: "desktop",
         gapNotice: gap ? "Change watching was off for a while; older changes may be missing from this digest." : null,
       })
-      enqueued = await emit(deps, tenant, digest, options)
+      // Intents first, dedupe state second, delivery last: a crash between them rebuilds
+      // the same digest with the same eventId, which the outbox then dedupes.
+      enqueued = await emit(deps, tenant, digest, { ...options, deferFlush: true })
     }
-    const newestSeen = collected.reduce<string | null>((max, change) => (!max || change.at > max ? change.at : max), null)
     const recentIds = [...watch.recentIds, ...seenNow].filter((id, index, all) => all.indexOf(id) === index).slice(-MAX_RECENT_AUDIT_IDS)
     saveAuditWatch(deps, tenant, {
-      watermark: newestSeen && (!watch.watermark || newestSeen > watch.watermark) ? newestSeen : watch.watermark ?? now.toISOString(),
+      watermark: newestSeenAt && (!watch.watermark || newestSeenAt > watch.watermark) ? newestSeenAt : watch.watermark ?? now.toISOString(),
       recentIds,
       lastPollAt: now.toISOString(),
       lastError: null,
     }, { actor: null, reason: `Audit poll read ${seenNow.length} events, ${filtered.length} new changes` })
+    if (enqueued > 0) await flushOutbox(deps, tenant, options)
     return { enqueued, changes: filtered.length, error: null }
   } catch (error) {
     const message = brief(error instanceof Error ? error.message : String(error))

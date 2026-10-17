@@ -5,36 +5,42 @@
   "events": [
     {
       "id": "audit-1",
-      "activity": "Update deviceConfiguration",
+      "displayName": "Update deviceConfiguration",
+      "componentName": "DeviceConfiguration",
+      "activity": "Update",
+      "activityType": "Update deviceConfiguration",
+      "activityOperationType": "Update",
+      "activityResult": "Success",
       "activityDateTime": "2026-10-17T10:00:00Z",
       "category": "Policy",
-      "httpVerb": "PATCH",
-      "initiatedByUpn": "admin@contoso.test",
-      "initiatedByAppId": "app-portal",
-      "requestUrl": "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/abc",
-      "resources": [{ "displayName": "WiFi Corp", "modifiedProperties": [{ "displayName": "networkName", "oldValue": "old-secret", "newValue": "new-secret" }] }]
+      "actor": { "applicationId": "app-portal", "applicationDisplayName": "Microsoft Intune portal", "userPrincipalName": "admin@contoso.test", "userId": "user-1", "type": "User" },
+      "resources": [{ "displayName": "WiFi Corp", "type": "DeviceConfiguration", "resourceId": "abc", "modifiedProperties": [{ "displayName": "networkName", "oldValue": "old-secret", "newValue": "new-secret" }] }]
     },
     {
       "id": "audit-2",
-      "activity": "Update deviceConfiguration",
+      "displayName": "Update deviceConfiguration",
+      "componentName": "DeviceConfiguration",
+      "activity": "Update",
+      "activityType": "Update deviceConfiguration",
+      "activityOperationType": "Update",
+      "activityResult": "Success",
       "activityDateTime": "2026-10-17T10:01:00Z",
       "category": "Policy",
-      "httpVerb": "PATCH",
-      "initiatedByUpn": "admin@contoso.test",
-      "initiatedByAppId": "app-portal",
-      "requestUrl": "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/abc",
-      "resources": [{ "displayName": "WiFi Corp" }]
+      "actor": { "applicationId": "app-portal", "applicationDisplayName": "Microsoft Intune portal", "userPrincipalName": "admin@contoso.test", "userId": "user-1", "type": "User" },
+      "resources": [{ "displayName": "WiFi Corp", "type": "DeviceConfiguration", "resourceId": "abc", "modifiedProperties": [] }]
     },
     {
       "id": "audit-3",
-      "activity": "Delete deviceCompliancePolicy",
+      "displayName": "Delete deviceCompliancePolicy",
+      "componentName": "DeviceCompliancePolicy",
+      "activity": "Delete",
+      "activityType": "Delete deviceCompliancePolicy",
+      "activityOperationType": "Delete",
+      "activityResult": "Success",
       "activityDateTime": "2026-10-17T10:02:00Z",
       "category": "Compliance",
-      "httpVerb": "DELETE",
-      "initiatedByUpn": "other@contoso.test",
-      "initiatedByAppId": "app-portal",
-      "requestUrl": "https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies/def",
-      "resources": [{ "displayName": "Baseline <script>alert(1)</script>" }]
+      "actor": { "applicationId": "app-portal", "applicationDisplayName": "Microsoft Intune portal", "userPrincipalName": "other@contoso.test", "userId": "user-2", "type": "User" },
+      "resources": [{ "displayName": "Baseline <script>alert(1)</script>", "type": "DeviceCompliancePolicy", "resourceId": "def", "modifiedProperties": [] }]
     }
   ]
 }
