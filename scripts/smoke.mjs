@@ -984,6 +984,21 @@ await check("tenant selection toggles from cards, rows, select all and clear wit
   await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Clear').click()`)
   assert(await waitForCondition(`!document.querySelector('[data-tenant-card][data-selected]') && ${bar}.textContent.includes('Select tenants to back up')`), "Clear did not reset the selection")
   assert(await evaluate(`document.activeElement?.getAttribute('aria-label') === 'Select all matching tenants'`), "Clear dropped keyboard focus instead of landing on select all")
+  // At the minimum window width the actions wrap, so the bar reserves the
+  // two row height and selection changes still move nothing.
+  await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 900, deviceScaleFactor: 1, mobile: false })
+  const narrowLayout = `(() => { const barRect = document.querySelector('[data-selection-bar]').getBoundingClientRect(); const cardRect = document.querySelector('[data-tenant-card]').getBoundingClientRect(); return { barHeight: barRect.height, gap: cardRect.top - barRect.bottom } })()`
+  const narrowBefore = await evaluate(narrowLayout)
+  await evaluate(`document.querySelector('button[aria-label="Select Contoso 1"]').click()`)
+  await setSearch("Contoso 2")
+  assert(await waitForCondition(`${bar}.textContent.includes('1 not shown by search')`), "hidden disclosure missing at narrow width")
+  const narrowAfter = await evaluate(narrowLayout)
+  assert(Math.abs(narrowAfter.barHeight - narrowBefore.barHeight) < 1 && Math.abs(narrowAfter.gap - narrowBefore.gap) < 1, `selection shifted the cards at 1024px: ${JSON.stringify({ narrowBefore, narrowAfter })}`)
+  await screenshot("07c-tenants-selected-narrow")
+  await send("Emulation.clearDeviceMetricsOverride", {})
+  await setSearch("")
+  await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Clear').click()`)
+  assert(await waitForCondition(`!document.querySelector('[data-tenant-card][data-selected]')`), "narrow width selection did not clear")
   // List view: row click toggles, the header reports mixed, Escape clears.
   await evaluate(`document.querySelector('button[aria-label="List view"]').click()`)
   const row = id => `document.querySelector('[data-tenant-row="${id}"]')`
@@ -996,6 +1011,7 @@ await check("tenant selection toggles from cards, rows, select all and clear wit
   assert(await evaluate(`document.activeElement?.getAttribute('aria-label') === 'Select all matching tenants'`), "Escape dropped focus from the bar instead of landing on select all")
   } finally {
     // Later checks start from an unfiltered grid with nothing selected.
+    await send("Emulation.clearDeviceMetricsOverride", {}).catch(() => {})
     await evaluate(`document.documentElement.classList.remove('dark')`).catch(() => {})
     await setSearch("").catch(() => {})
     await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Clear')?.click()`).catch(() => {})

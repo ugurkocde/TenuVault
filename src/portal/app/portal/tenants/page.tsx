@@ -740,7 +740,9 @@ function TenantsPageContent() {
         <div
           data-selection-bar
           className={cn(
-            "flex min-h-[60px] flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-3xl px-4 py-2 transition-colors duration-150 motion-reduce:transition-none",
+            // Below xl the actions wrap under the count, so the reserved
+            // height covers two rows there and one row from xl up.
+            "flex min-h-[104px] flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-3xl px-4 py-2 transition-colors duration-150 motion-reduce:transition-none xl:min-h-[60px]",
             selectedTenants.length > 0 ? "bg-blue-50" : "bg-white"
           )}
         >
