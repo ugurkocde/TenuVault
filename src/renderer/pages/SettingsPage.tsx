@@ -28,7 +28,7 @@ import { PlanBadge } from "../components/UpgradeNote"
 import { PdfBrandingSettings } from "../components/PdfBrandingSettings"
 import { useConfirm } from "~/components/ConfirmDialog"
 
-function RestoreWrites() {
+function RestoreWrites({ active }: { active: boolean }) {
   const tenants = useTenants().filter(tenant => tenant.credentials?.tenantId)
   const [selected, setSelected] = useState("")
   const tenantId = tenants.some(tenant => tenant.credentials?.tenantId === selected) ? selected : tenants[0]?.credentials?.tenantId
@@ -47,7 +47,7 @@ function RestoreWrites() {
           {tenants.map(tenant => <option key={tenant.id} value={tenant.credentials!.tenantId}>{tenant.name}</option>)}
         </select>
       </label>
-      <TenantRestoreWrites key={tenantId} tenantId={tenantId} />
+      <TenantRestoreWrites key={tenantId} tenantId={tenantId} active={active} />
     </div>
   )
 }
@@ -120,7 +120,7 @@ function RestoreAppliedInput({ record, request, onClose }: { record: WriteRecord
   )
 }
 
-function TenantRestoreWrites({ tenantId }: { tenantId: string }) {
+function TenantRestoreWrites({ tenantId, active }: { tenantId: string; active: boolean }) {
   const { confirm, confirmDialog } = useConfirm()
   const [records, setRecords] = useState<WriteRecord[]>([])
   const [error, setError] = useState("")
@@ -156,7 +156,8 @@ function TenantRestoreWrites({ tenantId }: { tenantId: string }) {
   useEffect(() => { void request({ action: "list" }).catch(e => setError(String(e))) }, [])
   return (
     <Card>
-      {confirmDialog}
+      {/* Portaled dialogs render outside the hidden panel, so a hidden panel must not keep one open. Holding the element back keeps the pending confirmation for the return. */}
+      {active ? confirmDialog : null}
       <CardHeader>
         <CardTitle>Restore write history</CardTitle>
         <Button ref={refreshButton} variant="outline" onClick={() => void request({ action: "list" }).catch(e => setError(String(e)))}>Refresh history</Button>
@@ -329,7 +330,7 @@ function currentChoice(tenant: Tenant): StorageChoice | undefined {
   }
 }
 
-function TenantSettings() {
+function TenantSettings({ active }: { active: boolean }) {
   const tenants = useTenants()
   const { updateTenant } = useTenantOperations()
   const [accounts, setAccounts] = useState<SignedInAccount[]>([])
@@ -405,7 +406,7 @@ function TenantSettings() {
         )}
       </CardContent>
 
-      <Dialog open={Boolean(editing)} onOpenChange={(open) => !open && setEditing(null)}>
+      <Dialog open={active && Boolean(editing)} onOpenChange={(open) => !open && setEditing(null)}>
         <DialogContent className="sm:max-w-[620px]">
           <DialogHeader>
             <DialogTitle>Backup storage for {editing?.name}</DialogTitle>
@@ -636,7 +637,7 @@ function Updates() {
   )
 }
 
-function About() {
+function About({ active }: { active: boolean }) {
   const [info, setInfo] = useState<AppInfo | null>(null)
   useEffect(() => void bridge.app.info().then(setInfo), [])
   return (
@@ -655,7 +656,7 @@ function About() {
         <p>
           <Link to="/license" className="text-blue-600 hover:underline">License</Link>
           {" · "}
-          <LicenseAgreementLink />
+          <LicenseAgreementLink active={active} />
           {" · "}
           <button type="button" className="text-blue-600 hover:underline" onClick={() => void bridge.app.openExternal("https://tenuvault.com/")}>
             Website and support
@@ -725,6 +726,20 @@ export default function SettingsPage() {
     else if (linkBox.right > stripBox.right) strip.scrollLeft += linkBox.right - stripBox.right + 4
   }, [section])
 
+  // Hiding a panel closes its dialogs; their focus return targets are hidden
+  // too, so land focus on the active section entry instead of losing it.
+  const mounted = useRef(false)
+  useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true
+      return
+    }
+    const focused = document.activeElement
+    if (!focused || focused === document.body || focused.closest("section[hidden]")) {
+      document.querySelector<HTMLElement>('nav[aria-label="Settings sections"] [aria-current="page"]')?.focus({ preventScroll: true })
+    }
+  }, [section])
+
   const panel = (id: SettingsSectionId, content: ReactNode) => (
     <section key={id} id={`settings-${id}`} hidden={section !== id}>{content}</section>
   )
@@ -755,13 +770,13 @@ export default function SettingsPage() {
           ))}
         </nav>
         <div className="min-w-0 w-full max-w-5xl flex-1">
-          {panel("signin", <TenantSettings />)}
-          {panel("storage", <div className="space-y-6"><BackupsOnDevice /><RestoreWrites /></div>)}
+          {panel("signin", <TenantSettings active={section === "signin"} />)}
+          {panel("storage", <div className="space-y-6"><BackupsOnDevice /><RestoreWrites active={section === "storage"} /></div>)}
           {panel("background", <BackgroundAndRetention />)}
           {panel("branding", <PdfBrandingSettings />)}
           {panel("updates", <Updates />)}
           {panel("appearance", <AppearanceSettings />)}
-          {panel("about", <About />)}
+          {panel("about", <About active={section === "about"} />)}
         </div>
       </div>
     </div>

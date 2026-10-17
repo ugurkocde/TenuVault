@@ -563,6 +563,18 @@ await check("settings sidebar switches sections and names the section in the URL
   const focusedInView = `(() => { const button = document.getElementById("save-recovery-key"); if (document.activeElement !== button) return false; const box = button.getBoundingClientRect(); return box.top >= 0 && box.bottom <= window.innerHeight })()`
   assert(await waitForCondition(focusedInView), "focused Save recovery key ended outside the viewport at narrow width")
   await send("Emulation.clearDeviceMetricsOverride")
+  // A dialog owned by a panel closes while its section is hidden and comes back with it.
+  await evaluate(`location.hash = "#/portal/settings?section=about"`)
+  assert(await waitForCondition(`document.getElementById("settings-about").hidden === false`), "about section did not appear")
+  await evaluate(`[...document.getElementById("settings-about").querySelectorAll("button")].find(b => b.textContent.trim() === "License agreement").click()`)
+  assert(await waitForText("TENUVAULT DESKTOP END USER LICENSE AGREEMENT"), "license agreement dialog did not open")
+  await evaluate(`location.hash = "#/portal/settings?section=signin"`)
+  assert(await waitForCondition(`!document.body.innerText.includes("TENUVAULT DESKTOP END USER LICENSE AGREEMENT")`), "dialog stayed open while its section was hidden")
+  assert(await evaluate(`document.querySelectorAll('[role="dialog"]').length === 0`), "hidden panel left a dialog in the page")
+  await evaluate(`location.hash = "#/portal/settings?section=about"`)
+  assert(await waitForText("TENUVAULT DESKTOP END USER LICENSE AGREEMENT"), "dialog did not come back with its section")
+  await evaluate(`[...document.querySelectorAll("button")].find(b => b.textContent.trim() === "Close").click()`)
+  assert(await waitForCondition(`!document.body.innerText.includes("TENUVAULT DESKTOP END USER LICENSE AGREEMENT")`), "license agreement dialog did not close")
 })
 
 await check("license agreement opens from settings", async () => {
