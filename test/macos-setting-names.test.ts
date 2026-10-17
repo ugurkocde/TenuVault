@@ -16,9 +16,11 @@ const GENERIC_GROUP_NAME = "Top Level Setting Group Collection"
 const GATEKEEPER = "com.apple.systempolicy.control_com.apple.systempolicy.control"
 const RESTRICTIONS = "com.apple.applicationaccess_com.apple.applicationaccess"
 const ASSESSMENT = "com.apple.systempolicy.control_enableassessment"
+const FILEVAULT = "com.apple.mcx.filevault2_com.apple.mcx.filevault2"
 const definitions: Record<string, Record<string, unknown>> = {
   [GATEKEEPER]: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationSettingGroupCollectionDefinition", displayName: GENERIC_GROUP_NAME, name: "com.apple.systempolicy.control", description: "com.apple.systempolicy.control", keywords: [" System Policy Control ", "Gatekeeper Settings", "GateKeeper"], childIds: [ASSESSMENT] },
   [RESTRICTIONS]: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationSettingGroupCollectionDefinition", displayName: GENERIC_GROUP_NAME, description: "Synthetic Top Level Setting Group Collection", keywords: [] },
+  [FILEVAULT]: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationSettingGroupCollectionDefinition", displayName: GENERIC_GROUP_NAME, keywords: [" ", 7, "FileVault"] },
   [ASSESSMENT]: { displayName: "Enable Assessment", options: [{ itemId: `${ASSESSMENT}_false`, displayName: "False" }, { itemId: `${ASSESSMENT}_true`, displayName: "True" }] },
 }
 
@@ -52,6 +54,12 @@ const staleNames: SettingNames = { settings: { [GATEKEEPER]: GENERIC_GROUP_NAME,
 
 describe("macOS setting group names from Graph", () => {
   beforeEach(() => clearSettingNames())
+
+  it("skips blank and non-text keywords", async () => {
+    const { graph } = batchGraph()
+    const names = await readSettingNames([FILEVAULT], graph)
+    expect(names.settings[FILEVAULT]).toBe("FileVault")
+  })
 
   it("names a group collection by its first keyword, leaves it unnamed without one and keeps normal names", async () => {
     const { graph } = batchGraph()

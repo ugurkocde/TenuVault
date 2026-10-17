@@ -40,8 +40,8 @@ function parseDefinition(body: { displayName?: unknown; keywords?: unknown; opti
   const name = body.displayName.trim()
   if (name !== GENERIC_GROUP_NAME) return { name, options }
   // A top-level group collection, such as a macOS payload, is named by its first keyword, such as "System Policy Control".
-  const keyword = Array.isArray(body.keywords) && typeof body.keywords[0] === "string" ? body.keywords[0].trim() : ""
-  return { name: keyword || null, options }
+  const keyword = Array.isArray(body.keywords) ? body.keywords.find((word): word is string => typeof word === "string" && word.trim() !== "") : undefined
+  return { name: keyword?.trim() ?? null, options }
 }
 
 interface BatchItem {
