@@ -4,6 +4,7 @@ import { collapseAuditChanges, filterAuditChanges, intuneChangeDigest, mapAuditE
 import { backupEvent, buildEnvelope, canonicalJson, driftEvent, eventId, sha256Hex, testEvent } from "../src/shared/notifications/envelope"
 import { emailHtml, emailSubject, emailText, teamsWorkflowsPayload } from "../src/shared/notifications/render"
 import fixture from "./fixtures/notifications/audit-digest.json"
+import liveFixture from "./fixtures/notifications/audit-live.json"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 
@@ -77,6 +78,19 @@ describe("audit mapping and digest", () => {
     expect(filterAuditChanges(changes, { ownAppId: "app-portal", ignoreOwnChanges: true })).toHaveLength(0)
     expect(filterAuditChanges(changes, { categories: ["compliance"] })).toHaveLength(1)
     expect(filterAuditChanges(changes, { deniedActors: ["ADMIN@contoso.test"] })).toHaveLength(1)
+  })
+
+  it("drops read operations and classifies assignment events against the parent policy", () => {
+    const live = liveFixture.events.map((event) => mapAuditEvent(event as AuditEventRaw))
+    expect(live[0]).toBeNull()
+    expect(live[1]).toBeNull()
+    expect(live[2]).toMatchObject({ changeType: "assigned", resourceName: "WiFi Corp", resourceType: "DeviceConfiguration", actorUpn: null, actorAppName: "Contoso Automation" })
+    expect(live[3]).toMatchObject({ changeType: "unassigned", resourceName: "WiFi Corp" })
+    expect(live[4]?.changeType).toBe("created")
+    const kept = live.filter((change) => change !== null)
+    const { items } = collapseAuditChanges(kept, { includeActor: true })
+    expect(items[0]?.actor).toBe("Contoso Automation")
+    expect(filterAuditChanges(kept, { deniedActors: ["contoso automation"] })).toHaveLength(1)
   })
 
   it("digest id depends on the sorted audit ids only", () => {

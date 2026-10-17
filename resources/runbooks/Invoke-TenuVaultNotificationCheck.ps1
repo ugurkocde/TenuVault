@@ -58,7 +58,12 @@ function Get-TvProp {
 
 function Get-TvText {
     param([object]$Value)
-    if ($Value -is [string] -and $Value.Trim()) { return $Value.Trim() }
+    if ($Value -is [string] -and $Value.Trim()) {
+        $trimmed = $Value.Trim()
+        # Graph audit payloads use the literal "<null>" for absent values.
+        if ($trimmed.ToLowerInvariant() -eq "<null>") { return $null }
+        return $trimmed
+    }
     return $null
 }
 
@@ -283,6 +288,11 @@ function ConvertFrom-TenuVaultAuditEvent {
         $at = ConvertTo-TvIso (Get-TvProp $Raw "activityDateTime")
         if (-not $id -or -not $at) { return }
 
+        # Read-only operations changed nothing, so they never enter a digest.
+        $operationText = Get-TvText (Get-TvProp $Raw "activityOperationType")
+        $operationLower = if ($operationText) { $operationText.ToLowerInvariant() } else { "" }
+        if ($operationLower -eq "get" -or $operationLower -eq "search") { return }
+
         # Failed operations changed nothing, so they never enter a digest.
         $resultLower = ""
         $resultText = Get-TvText (Get-TvProp $Raw "activityResult")
@@ -291,29 +301,50 @@ function ConvertFrom-TenuVaultAuditEvent {
 
         $activity = Get-TvText (Get-TvProp $Raw "activity")
         if (-not $activity) { $activity = Get-TvText (Get-TvProp $Raw "displayName") }
-        $operationText = Get-TvText (Get-TvProp $Raw "activityOperationType")
-        $operationLower = if ($operationText) { $operationText.ToLowerInvariant() } else { "" }
         $activityTypeText = Get-TvText (Get-TvProp $Raw "activityType")
         $activityText = Get-TvText (Get-TvProp $Raw "activity")
         $displayText = Get-TvText (Get-TvProp $Raw "displayName")
         $activityLower = (@($activityTypeText, $activityText, $displayText) -join " ").ToLowerInvariant()
-        # The operation type is checked first with the full rule set. The combined
-        # activity text is only a fallback, matching changeTypeOf in audit.ts.
-        $changeType = "changed"
-        foreach ($source in @($operationLower, $activityLower)) {
-            if ($source.Contains("assign")) { $changeType = "assigned"; break }
-            if ($source.Contains("creat") -or $source -eq "post") { $changeType = "created"; break }
-            if ($source.Contains("delet") -or $source.Contains("remov") -or $source -eq "delete") { $changeType = "deleted"; break }
-            if ($source.Contains("updat") -or $source.Contains("patch") -or $source.Contains("edit") -or $source -eq "put") { $changeType = "updated"; break }
+
+        # Object entries of the resources collection. Modified property values
+        # inside resources are never read.
+        $resourceEntries = @()
+        foreach ($entry in @(Get-TvProp $Raw "resources")) {
+            if ($entry -is [PSCustomObject] -or $entry -is [System.Collections.IDictionary]) { $resourceEntries += $entry }
         }
 
-        # Resource name and type come from the first object entry of the resources
-        # collection (type first, then auditResourceType, then componentName).
-        # Modified property values inside resources are never read.
-        $resource = $null
-        foreach ($entry in @(Get-TvProp $Raw "resources")) {
-            if ($entry -is [PSCustomObject] -or $entry -is [System.Collections.IDictionary]) { $resource = $entry; break }
+        # Assignment creates and deletes are assignment changes, not policy
+        # creates and deletes, matching changeTypeOf in audit.ts.
+        $isAssignment = $activityLower.Contains("assignment")
+        if (-not $isAssignment) {
+            foreach ($entry in $resourceEntries) {
+                $entryType = (@((Get-TvText (Get-TvProp $entry "type")), (Get-TvText (Get-TvProp $entry "auditResourceType"))) -join " ").ToLowerInvariant()
+                if ($entryType.Contains("assignment")) { $isAssignment = $true; break }
+            }
         }
+        $changeType = "changed"
+        if ($isAssignment) {
+            if ($operationLower.Contains("delet") -or $operationLower.Contains("remov") -or $activityLower -match "(^|\s)(delete|remove|unassign)") {
+                $changeType = "unassigned"
+            } else { $changeType = "assigned" }
+        } else {
+            # The operation type is checked first with the full rule set. The combined
+            # activity text is only a fallback, matching changeTypeOf in audit.ts.
+            foreach ($source in @($operationLower, $activityLower)) {
+                if ($source.Contains("assign")) { $changeType = "assigned"; break }
+                if ($source.Contains("creat") -or $source -eq "post") { $changeType = "created"; break }
+                if ($source.Contains("delet") -or $source.Contains("remov") -or $source -eq "delete") { $changeType = "deleted"; break }
+                if ($source.Contains("updat") -or $source.Contains("patch") -or $source.Contains("edit") -or $source -eq "put") { $changeType = "updated"; break }
+            }
+        }
+
+        # Resource name and type come from the first resource entry that carries a
+        # display name (the parent policy on assignment events), else the first entry.
+        $resource = $null
+        foreach ($entry in $resourceEntries) {
+            if (Get-TvText (Get-TvProp $entry "displayName")) { $resource = $entry; break }
+        }
+        if (-not $resource -and $resourceEntries.Count -gt 0) { $resource = $resourceEntries[0] }
         $resourceNameText = if ($resource) { Get-TvText (Get-TvProp $resource "displayName") } else { $null }
         $resourceName = if ($resourceNameText) {
             if ($resourceNameText.Length -gt 200) { $resourceNameText.Substring(0, 200) } else { $resourceNameText }
@@ -339,6 +370,7 @@ function ConvertFrom-TenuVaultAuditEvent {
             resourceType = $resourceType
             actorUpn     = Get-TvText (Get-TvProp $actor "userPrincipalName")
             actorAppId   = Get-TvText (Get-TvProp $actor "applicationId")
+            actorAppName = Get-TvText (Get-TvProp $actor "applicationDisplayName")
             activity     = $activity
         }
     }
@@ -373,6 +405,8 @@ function New-TenuVaultAuditDigest {
         if (-not $targetKey) { $targetKey = Get-TvProp $change "resourceType" }
         if (-not $targetKey) { $targetKey = Get-TvProp $change "auditId" }
         $actorKey = Get-TvProp $change "actorUpn"
+        if (-not $actorKey) { $actorKey = Get-TvProp $change "actorAppName" }
+        if (-not $actorKey) { $actorKey = Get-TvProp $change "actorAppId" }
         if ($null -eq $actorKey) { $actorKey = "" }
         $key = (@([string](Get-TvProp $change "changeType"), [string]$targetKey, [string]$actorKey) -join "|").ToLowerInvariant()
         if ($groups.Contains($key)) { $counts[$key] = $counts[$key] + 1 }
@@ -395,7 +429,9 @@ function New-TenuVaultAuditDigest {
             [string](Get-TvProp $change "resourceType")
         } else { [string](Get-TvProp $change "activity") }
         $item = [ordered]@{ title = $title; detail = $detail }
-        if ($IncludeActor -and (Get-TvProp $change "actorUpn")) { $item["actor"] = [string](Get-TvProp $change "actorUpn") }
+        $actorLabel = Get-TvProp $change "actorUpn"
+        if (-not $actorLabel) { $actorLabel = Get-TvProp $change "actorAppName" }
+        if ($IncludeActor -and $actorLabel) { $item["actor"] = [string]$actorLabel }
         $item["at"] = [string](Get-TvProp $change "at")
         $items.Add([pscustomobject]$item)
     }
@@ -1225,7 +1261,7 @@ try {
     # --- Intune audit events ---------------------------------------------------
     $filterFrom = ConvertTo-TvIso ([DateTimeOffset]::Parse($watermarkIso).UtcDateTime.AddMinutes(-30))
     $select = "id,displayName,componentName,actor,activity,activityDateTime,activityType,activityOperationType,activityResult,category,resources"
-    $query = "`$select=$([uri]::EscapeDataString($select))&`$filter=$([uri]::EscapeDataString("activityDateTime gt $filterFrom"))&`$orderby=$([uri]::EscapeDataString('activityDateTime'))&`$top=200"
+    $query = "`$select=$([uri]::EscapeDataString($select))&`$filter=$([uri]::EscapeDataString("activityDateTime gt $filterFrom and activityOperationType ne 'Get' and activityOperationType ne 'Search'"))&`$orderby=$([uri]::EscapeDataString('activityDateTime'))&`$top=200"
     $freshUri = "https://graph.microsoft.com/beta/deviceManagement/auditEvents?$query"
     $graphHeaders = @{ Authorization = "Bearer $graphToken"; ConsistencyLevel = "eventual" }
 

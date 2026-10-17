@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest"
 import { intuneChangeDigest, mapAuditEvent, type AuditEventRaw } from "../src/shared/notifications/audit"
 import { canonicalJson } from "../src/shared/notifications/envelope"
 import fixture from "./fixtures/notifications/audit-digest.json"
+import liveFixture from "./fixtures/notifications/audit-live.json"
 
 const runbook = readFileSync(new URL("../resources/runbooks/Invoke-TenuVaultNotificationCheck.ps1", import.meta.url), "utf8")
 const setup = readFileSync(new URL("../resources/New-TenuVaultNotificationWatcher.ps1", import.meta.url), "utf8")
@@ -85,11 +86,30 @@ describe("Azure notification watcher scripts", () => {
     expect(desktopApp.indexOf('"User.Read.All"')).toBeGreaterThan(at)
   })
 
+  it("watcher and desktop queries exclude read operations server side", () => {
+    expect(runbook).toContain("activityOperationType ne 'Get'")
+    expect(runbook).toContain("activityOperationType ne 'Search'")
+    const service = readFileSync(new URL("../src/main/features/notifications/service.ts", import.meta.url), "utf8")
+    expect(service).toContain("activityOperationType ne 'Get'")
+    expect(service).toContain("activityOperationType ne 'Search'")
+    expect(desktopApp).toContain("Mail.Send, GroupMember.Read.All and User.Read.All")
+  })
+
   it.runIf(Boolean(pwsh))("PowerShell renders the identical canonical digest as TypeScript", () => {
     const changes = fixture.events.map((event) => mapAuditEvent(event as AuditEventRaw)!)
     const expected = canonicalJson(intuneChangeDigest({ tenantId: fixture.tenantId, tenantName: fixture.tenantName, changes, includeActor: fixture.includeActor, source: "azure-watcher" }))
     const script = new URL("./fixtures/notifications/render-digest.ps1", import.meta.url).pathname
     const output = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim()
+    expect(output).toBe(expected)
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("PowerShell matches TypeScript on live-shaped read and assignment events", () => {
+    const changes = liveFixture.events.map((event) => mapAuditEvent(event as AuditEventRaw)).filter((change) => change !== null)
+    expect(changes.map((change) => change.changeType)).toEqual(["assigned", "unassigned", "created"])
+    const expected = canonicalJson(intuneChangeDigest({ tenantId: liveFixture.tenantId, tenantName: liveFixture.tenantName, changes, includeActor: liveFixture.includeActor, source: "azure-watcher" }))
+    const script = new URL("./fixtures/notifications/render-digest.ps1", import.meta.url).pathname
+    const livePath = new URL("./fixtures/notifications/audit-live.json", import.meta.url).pathname
+    const output = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-FixturePath", livePath], { encoding: "utf8" }).trim()
     expect(output).toBe(expected)
   }, 60_000)
 })
