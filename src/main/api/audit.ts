@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { AuditEventType, AuditResult, AuditSeverity, type CreateAuditLogInput } from "~/lib/audit/types"
 import type { SignedInAccount } from "../../shared/ipc"
 import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, localStorageAccountName } from "../../shared/constants"
@@ -25,9 +26,20 @@ interface AuditBody {
  * Records audit log entries for API calls, attributed to the admin signed in to the
  * tenant. Entries are written to the tenant's backup storage by /api/audit/log.
  */
+export interface RestoreNotice {
+  tenantId: string
+  jobId: string
+  status: "Completed" | "PartiallyCompleted" | "Failed"
+  restored: number
+  failed: number
+  partial: number
+  message: string | null
+}
+
 export function createAuditRecorder(
   dispatch: (request: Request) => Promise<Response>,
   accountFor: (tenantId: string) => SignedInAccount | null,
+  onRestore?: (notice: RestoreNotice) => void,
 ) {
   return (request: Request, requestBody: string, response: Response): void => {
     const path = new URL(request.url).pathname
@@ -44,7 +56,7 @@ export function createAuditRecorder(
     }
 
     if (["/api/restore-backup", "/api/revert-policy"].includes(path) && request.method === "POST") {
-      void recordRestore(requestBody, response.clone(), dispatch, accountFor, path === "/api/revert-policy")
+      void recordRestore(requestBody, response.clone(), dispatch, accountFor, path === "/api/revert-policy", onRestore)
         .catch((error: unknown) => console.error("[audit] Failed to record restore:", error))
       return
     }
@@ -100,7 +112,7 @@ export function createAuditRecorder(
 }
 
 /** Restore runs synchronously and can partially fail despite returning HTTP 200. */
-async function recordRestore(bodyText: string, response: Response, dispatch: (request: Request) => Promise<Response>, accountFor: (id: string) => SignedInAccount | null, policyCopy = false) {
+async function recordRestore(bodyText: string, response: Response, dispatch: (request: Request) => Promise<Response>, accountFor: (id: string) => SignedInAccount | null, policyCopy = false, onRestore?: (notice: RestoreNotice) => void) {
   const body = JSON.parse(bodyText) as AuditBody & { backupId?: string; originalName?: string; action?: string; mode?: string }
   if (typeof body?.tenantId !== "string" || !body.tenantId || !body.appId || !body.clientSecret || !body.storageAccountName) return
   const data = await response.json().catch(() => ({})) as {
@@ -110,6 +122,20 @@ async function recordRestore(bodyText: string, response: Response, dispatch: (re
   const ok = response.ok && data.success === true
   // Some copies were created, so the restore completed with failures rather than failing outright.
   const partial = !ok && (data.partial === true || (response.ok && ((data.details?.restoredCount ?? 0) > 0 || (data.details?.partialCount ?? 0) > 0)))
+  if (!policyCopy && ![400, 402, 403].includes(response.status)) {
+    try {
+      const partialRestore = data.status === "PartiallyCompleted" || (data.details?.partialCount ?? 0) > 0 || partial
+      onRestore?.({
+        tenantId: body.tenantId,
+        jobId: data.jobId ?? randomUUID(),
+        status: ok && !partialRestore ? "Completed" : partialRestore ? "PartiallyCompleted" : "Failed",
+        restored: data.details?.restoredCount ?? 0,
+        failed: data.details?.failedCount ?? 0,
+        partial: data.details?.partialCount ?? 0,
+        message: null,
+      })
+    } catch { /* Notifications are best effort and never block the audit record. */ }
+  }
   const account = accountFor(body.tenantId)
   const logEntry: CreateAuditLogInput = {
     eventType: policyCopy ? (body.action === "revert" ? AuditEventType.POLICY_REVERTED : AuditEventType.POLICY_RESTORED) : ok || partial ? AuditEventType.RESTORE_COMPLETED : AuditEventType.RESTORE_FAILED,

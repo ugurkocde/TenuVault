@@ -25,6 +25,7 @@ export type Feature =
   | "baselineUpgrades"
   | "promotion"
   | "healthReview"
+  | "notifications"
   | "customizations"
   | "portfolio"
   | "goldenStandards"
@@ -49,6 +50,7 @@ export const FEATURE_PLAN: Record<Feature, Exclude<Plan, "community">> = {
   baselineUpgrades: "pro",
   promotion: "pro",
   healthReview: "pro",
+  notifications: "pro",
   customizations: "pro",
   portfolio: "msp",
   goldenStandards: "msp",
@@ -73,6 +75,7 @@ const FEATURE_NAMES: Record<Feature, string> = {
   baselineUpgrades: "Baseline upgrades that keep your customizations",
   promotion: "Dev to Prod settings promotion",
   healthReview: "Scheduled health review and notifications",
+  notifications: "Notifications to Teams, email and webhooks, with Intune change watching",
   customizations: "Organization baseline customizations",
   portfolio: "Portfolio views across customer tenants",
   goldenStandards: "Reusable golden standards for customers",
