@@ -55,7 +55,13 @@ export async function refreshCisJobs(): Promise<void> {
     const { jobs: next } = await request<{ jobs: CisJob[] }>({ action: "assess-jobs" })
     if (!Array.isArray(next)) throw new Error("Framework request failed.")
     if (sent === revision) apply(next)
-    else schedule()
+    else {
+      // A newer answer landed while this read was in flight, so this one is discarded. Read
+      // once more: this discarded answer may be the only one that saw a just-started job,
+      // and without a running job in state the poller would stop and never learn of it.
+      schedule()
+      void refreshCisJobs()
+    }
   } catch {
     loaded = false
     schedule()
