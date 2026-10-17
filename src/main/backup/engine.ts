@@ -309,7 +309,7 @@ export class BackupEngine {
     // until every backup ahead of it has finished. Its place in the chain still waits for those
     // backups (see queueTail below), so the next queued backup cannot jump ahead of them.
     const previous = this.queueTail
-    const turn = new Promise<void>((resolve, reject) => {
+    const waitForTurn = () => new Promise<void>((resolve, reject) => {
       const onAbort = () => reject(controller.signal.reason)
       if (controller.signal.aborted) return onAbort()
       controller.signal.addEventListener("abort", onAbort, { once: true })
@@ -318,7 +318,8 @@ export class BackupEngine {
         resolve()
       })
     })
-    const done = turn.then(execute)
+    // An unqueued backup begins synchronously inside start(), as it did before the queue existed.
+    const done = (queued ? waitForTurn().then(execute) : execute())
       .catch(async (error: unknown) => {
         job.status = error instanceof BackupCancelledError ? "Cancelled" : "Failed"
         job.exception = error instanceof Error ? error.message : String(error)

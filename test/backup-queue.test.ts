@@ -43,7 +43,11 @@ describe("BackupEngine queue", () => {
   it("runs backups of different tenants one at a time, reporting the second as queued", async () => {
     const { engine, release, tokenTenants, start } = setup()
     const first = start(TENANT_A)
+    // An unqueued backup still begins synchronously inside start(), as before the queue existed:
+    // its run has already claimed a backup folder by the time start() returns.
+    expect(first.backupFolder).toBeDefined()
     const second = start(TENANT_B)
+    expect(second.backupFolder).toBeUndefined()
     await tick()
 
     expect(first.status).toBe("Running")
