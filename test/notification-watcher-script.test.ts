@@ -87,9 +87,10 @@ describe("Azure notification watcher scripts", () => {
   })
 
   it("runbook avoids type accelerators the Automation sandbox cannot resolve", () => {
-    expect(runbook).not.toMatch(/\[short\]|\[ushort\]|\[uint32\]|\[uint64\]|\[single\]|\[sbyte\]/)
+    expect(runbook).not.toMatch(/\[(short|ushort|uint|ulong)\]/)
     expect(runbook).toContain("[System.Int16]")
     expect(runbook).toContain('$listText.IndexOf("<")')
+    expect(setup).toContain("regional Automation account quota")
   })
 
   it("watcher and desktop queries exclude read operations server side", () => {

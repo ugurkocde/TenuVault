@@ -165,8 +165,8 @@ function ConvertTo-TenuVaultCanonicalJson {
         # Windows PowerShell 5.1 (the Automation "PowerShell" runbook runtime)
         # rejects the round-trip format for integral and decimal values, so only
         # floating point values use it. "G" renders integers identically.
-        # Full type names: the Azure Automation sandbox runspace does not register
-        # every type accelerator (the short, uint32 and single aliases fail there).
+        # Full type names: Windows PowerShell 5.1 (the Automation sandbox runtime)
+        # has no short, ushort, uint or ulong type accelerators (added in 6.2).
         if ($Value -is [System.Byte] -or $Value -is [System.Int32] -or $Value -is [System.Int64] -or $Value -is [System.Int16] -or
             $Value -is [System.UInt32] -or $Value -is [System.UInt64] -or $Value -is [System.Decimal]) {
             return ([IFormattable]$Value).ToString("G", [Globalization.CultureInfo]::InvariantCulture)

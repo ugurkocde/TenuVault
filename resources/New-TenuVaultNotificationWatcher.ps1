@@ -374,7 +374,7 @@ if (-not $automationAccount) {
                 -Name $AutomationAccountName -Location $Location -AssignSystemIdentity
         } catch {
             if ($_.Exception.Message -match "Conflict") {
-                throw "Azure refused to create Automation account '$AutomationAccountName' in $Location with a Conflict. The usual cause is the regional Automation account quota (2 Basic accounts per region on many subscriptions) or the name already being taken in that region. Run the script again with another -Location (for example northeurope) or another -AutomationAccountName. Original error: $($_.Exception.Message)"
+                throw "Azure refused to create Automation account '$AutomationAccountName' in $Location with a Conflict. The usual cause is the regional Automation account quota (as low as 2 accounts per region on many subscription types) or the name already being taken in that region. Run the script again with another -Location (for example northeurope) or another -AutomationAccountName. Original error: $($_.Exception.Message)"
             }
             throw
         }
