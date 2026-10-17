@@ -12,6 +12,8 @@ import type { AssessmentScope, CapabilityResult, CapabilityStatus, CompliancePla
 import { CAPABILITY_STATUS_LABELS, CHECK_RESULT_LABELS, COLLECTION_FAMILY_LABELS, COLLECTION_STATUS_LABELS, CONTROL_STATUS_LABELS, PLATFORM_LABELS, frameworkCoverageLabel } from '../../shared/compliance/presentation'
 import { displayCheckValue } from '../../shared/compliance/check-results'
 import { ComplianceScoringNotice } from '../components/ComplianceScoringNotice'
+import { RunOverlay } from '../components/RunOverlay'
+import { nativeRunHeading, nativeRunSteps } from '../../shared/compliance/native-run'
 import { useConfirm } from "~/components/ConfirmDialog"
 import { cancelFrameworkJob, startFrameworkJob, useFrameworkJob } from '../lib/framework-jobs'
 import { startBackgroundTask, useBackgroundTasks } from '../lib/background-tasks'
@@ -79,6 +81,24 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
   const [, setDismissed] = useState(0)
   const job = useFrameworkJob(credentials?.tenantId, framework.id)
   const running = job?.status === 'running'
+  // The running comparison shows as a full-page overlay (RunOverlay), like a CIS assessment.
+  // It stays up until the finished comparison's result is loaded, then the results are revealed.
+  const sawRunningJob = useRef<string | null>(null)
+  const sawForKey = useRef<string | undefined>(undefined)
+  const [loadSettledJobId, setLoadSettledJobId] = useState<string | null>(null)
+  const [cancelError, setCancelError] = useState<{ jobId: string; message: string } | null>(null)
+  const [revealedRunId, setRevealedRunId] = useState<string | null>(null)
+  // Tracked during render, reset before record in the same pass, and finishing derived from
+  // the completed job and the run on screen: state set in the completion effect would let
+  // one render without the overlay through, remounting it and capturing focus a second time.
+  const sawKey = `${credentials?.tenantId ?? ''}:${framework.id}`
+  if (sawForKey.current !== sawKey) {
+    sawForKey.current = sawKey
+    sawRunningJob.current = null
+  }
+  if (running && job) sawRunningJob.current = job.jobId
+  const finishing = !!job && job.status === 'completed' && sawRunningJob.current === job.jobId && !!job.runId && run?.runId !== job.runId && loadSettledJobId !== job.jobId
+  const showOverlay = !!job && (running || finishing)
   const shownRun = useRef<string | undefined>(undefined)
   const body = { tenantId: credentials?.tenantId, appId: credentials?.appId, frameworkId: framework.id }
   // The main process builds every export from the saved run, redacted, without reading the tenant again.
@@ -120,24 +140,31 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
   }
   useEffect(() => {
     if (!credentials?.tenantId) return
+    setLoadSettledJobId(null)
+    setRevealedRunId(null)
     shownRun.current = job?.runId
     void loadHistory().catch(e => setError(e instanceof Error ? e.message : 'History unavailable.'))
   }, [credentials?.tenantId, framework.id])
 
   // A comparison that finishes while this page is open (or while the admin was elsewhere) shows its result.
+  // One this page saw running keeps the overlay up until its result is loaded, then reveals it.
   useEffect(() => {
     if (job?.status !== 'completed' || !job.runId || shownRun.current === job.runId) return
     shownRun.current = job.runId
     setChanges(null)
-    void loadHistory(job.runId).catch(e => setError(e instanceof Error ? e.message : 'History unavailable.'))
+    const wasRunning = sawRunningJob.current === job.jobId
+    void loadHistory(job.runId)
+      .then(() => { if (wasRunning) setRevealedRunId(job.runId!) })
+      .catch(e => setError(e instanceof Error ? e.message : 'History unavailable.'))
+      .finally(() => setLoadSettledJobId(job.jobId))
   }, [job?.status, job?.runId])
 
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
-    if (!running) return
+    if (!showOverlay) return
     const timer = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(timer)
-  }, [running])
+  }, [showOverlay])
 
   async function perform(label: string, work: () => Promise<void>) {
     setBusy(label); setError('')
@@ -145,10 +172,21 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
   }
   const start = () => void perform('Starting comparison', async () => {
     if (!credentials) return
+    setRevealedRunId(null)
     const started = await startFrameworkJob({ tenantId: credentials.tenantId, appId: credentials.appId, frameworkId: framework.id, scope })
     dismissedJobs.add(job?.jobId ?? '')
     shownRun.current = started.runId
   })
+  // A failed cancel is reported in the overlay, where the admin pressed it, not under it.
+  const cancel = () => {
+    if (!job) return
+    const target = job
+    setCancelError(null)
+    void perform('Cancelling', async () => {
+      try { await cancelFrameworkJob(target, credentials?.appId) }
+      catch (e) { setCancelError({ jobId: target.jobId, message: e instanceof Error ? e.message : 'The comparison could not be cancelled.' }) }
+    })
+  }
   const togglePlatform = (platform: CompliancePlatform) => setScope(s => ({ ...s, platforms: s.platforms?.includes(platform) ? s.platforms.filter(x => x !== platform) : [...(s.platforms ?? []), platform] }))
 
   const result = run?.assessment.frameworks[0]
@@ -168,8 +206,23 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
   const failedJob = job && (job.status === 'failed' || job.status === 'cancelled') && !dismissedJobs.has(job.jobId) ? job : null
   const disabledReason = !credentials ? 'Select a signed-in tenant in the sidebar to compare its settings.' : !scope.platforms?.length ? 'Select at least one platform.' : ''
 
-  return <div className="mx-auto max-w-6xl space-y-5 p-6 lg:p-8">
+  return <div className="mx-auto max-w-6xl p-6 lg:p-8">
     {confirmDialog}
+    {showOverlay && job && <RunOverlay
+      ariaLabel="Comparison in progress"
+      title={nativeRunHeading(job.step, finishing)}
+      subtitle={run ? 'Your previous results are kept if this comparison does not finish.' : 'TenuVault only reads from your tenant. Nothing is changed.'}
+      percent={finishing ? 100 : job.percent}
+      progressLabel="Comparison progress"
+      detail={finishing ? 'Loading the result' : job.detail}
+      subDetail={`${elapsed(job.startedAt, now)} elapsed`}
+      steps={nativeRunSteps(job.step, finishing)}
+      focusFallbackSelector="#native-summary"
+      error={cancelError?.jobId === job.jobId ? cancelError.message : ''}
+      actions={running ? <button type="button" className={button} disabled={!!busy} onClick={cancel}>Cancel comparison</button> : undefined}
+    />}
+    {/* The page under a running comparison is inert, so covered controls leave the tab order. */}
+    <div inert={showOverlay} className="space-y-5">
     <nav aria-label="Breadcrumb" className="text-sm text-gray-500"><Link className="text-blue-700 hover:underline" to="/portal/frameworks">Frameworks</Link><span className="mx-2" aria-hidden="true">/</span><span aria-current="page">{framework.name}</span></nav>
     <header className="flex flex-wrap items-start justify-between gap-4">
       <div className="min-w-0 max-w-3xl">
@@ -205,7 +258,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
           <p className="mt-1 text-sm text-gray-600">{selectedTenant ? <>Read-only comparison of <strong className="font-medium text-gray-800">{selectedTenant.name}</strong>. Results are saved on this device.</> : 'Choose a connected tenant in the sidebar.'}</p>
         </div>
         {running
-          ? <button type="button" className={button} disabled={!!busy} onClick={() => void perform('Cancelling', () => cancelFrameworkJob(job, credentials?.appId))}>Cancel comparison</button>
+          ? <button type="button" className={button} disabled={!!busy} onClick={cancel}>Cancel comparison</button>
           : <button type="button" className={primary} disabled={!!busy || !!disabledReason} title={disabledReason || undefined} onClick={start}>{busy === 'Starting comparison' && <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />}{run ? 'Compare again' : 'Compare settings'}</button>}
       </div>
       <fieldset disabled={running || !!busy} className="mt-5">
@@ -220,11 +273,6 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
         {framework.nativeId === 'def-stan-05-138-i4' && <label className="flex items-center gap-3 font-medium text-gray-800">Target cyber risk level<select className="h-9 rounded-full border border-gray-200 bg-white px-3 font-normal" disabled={running || !!busy} value={scope.defStanRiskLevel} onChange={e => setScope(s => ({ ...s, defStanRiskLevel: Number(e.target.value) as 0 | 1 | 2 | 3 }))}>{[0, 1, 2, 3].map(level => <option key={level} value={level}>Risk level {level}</option>)}</select></label>}
       </div>}
       {credentials && disabledReason && !running && <p className="mt-4 text-sm text-gray-500">{disabledReason}</p>}
-      {running && <div role="status" aria-live="polite" className="mt-5 rounded-2xl bg-gray-50 p-4">
-        <div className="flex items-center justify-between gap-3 text-sm"><span className="flex min-w-0 items-center gap-2 font-medium text-gray-800"><LoaderCircle className="size-4 shrink-0 animate-spin" aria-hidden="true" /><span className="truncate">{job.detail}</span></span><span className="shrink-0 tabular-nums text-gray-500">{job.percent}% · {elapsed(job.startedAt, now)}</span></div>
-        <div className="mt-3 h-2 overflow-hidden rounded-full bg-gray-200" role="progressbar" aria-label="Comparison progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={job.percent}><div className="h-full rounded-full bg-primary transition-[width] duration-500" style={{ width: `${job.percent}%` }} /></div>
-        <p className="mt-3 text-xs text-gray-500">You can keep using TenuVault. The comparison continues in the background and you are notified when it is done.</p>
-      </div>}
       {failedJob && !running && <div role="alert" className={cn('mt-5 flex items-start justify-between gap-3 rounded-2xl px-4 py-3 text-sm', failedJob.status === 'failed' ? 'bg-red-50 text-red-800' : 'bg-gray-50 text-gray-700')}>
         <span>{failedJob.status === 'failed' ? `The last comparison failed. ${failedJob.error ?? ''}` : 'The last comparison was cancelled.'}</span>
         <button type="button" aria-label="Dismiss" onClick={() => { dismissedJobs.add(failedJob.jobId); setDismissed(n => n + 1) }}><X className="size-4" aria-hidden="true" /></button>
@@ -238,10 +286,10 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
     </section>}
 
     {run && result && counts && <>
-      <section className={card} aria-labelledby="native-summary">
+      <section className={cn(card, run.runId === revealedRunId && 'run-results-reveal')} aria-labelledby="native-summary">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h2 id="native-summary" className="text-xl font-medium tracking-tight">Results</h2>
+            <h2 id="native-summary" tabIndex={-1} className="text-xl font-medium tracking-tight outline-none">Results</h2>
             <p className="mt-1 text-sm text-gray-600">{new Date(run.assessment.generatedAt).toLocaleString()} · {result.framework.version} · Mapping {run.assessment.provenance.rulesetVersion} · {(run.assessment.scope.platforms ?? platforms).map(p => platformLabels[p]).join(', ')}{framework.nativeId === 'essential-eight' && ` · Maturity level ${run.assessment.scope.essentialEightMaturityLevel ?? 1}`}{framework.nativeId === 'def-stan-05-138-i4' && ` · Risk level ${run.assessment.scope.defStanRiskLevel ?? 1}`}{history[0]?.runId !== run.runId && <span className="ml-2 rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-800">Saved comparison</span>}</p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -314,6 +362,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
         <div className="flex items-start justify-between gap-3"><div><h2 id="native-changes" className="text-xl font-medium tracking-tight">{changes.rows.length} changed setting {changes.rows.length === 1 ? 'observation' : 'observations'}</h2><p className="mt-1 text-sm text-gray-600">From {new Date(changes.base.assessment.generatedAt).toLocaleString()} to {new Date(run.assessment.generatedAt).toLocaleString()}. Same tenant, scope and ruleset. Changes can reflect collection availability or assignment evidence as well as configuration values.</p></div><button type="button" className={small} onClick={() => setChanges(null)}>Close</button></div>
         {changes.rows.map(c => <ChangeRow key={c.setting} change={c} run={run} />)}
       </section>}
+    </div>
   </div>
 }
 

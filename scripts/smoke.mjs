@@ -1529,6 +1529,9 @@ await check("switching tenants cannot show an older tenant's drift results", asy
       await sleep(300)
     }
     assert(await evaluate(`typeof window.__oldScanResolve === 'function'`), 'first tenant scan did not start')
+    // The running scan fills the page as an overlay; the sidebar stays usable underneath it.
+    assert(await waitForCondition(`!!document.querySelector('[aria-label="Drift scan in progress"] [role="progressbar"]')`), 'drift scan overlay did not show')
+    await screenshot("06b-drift-running")
     await evaluate(`document.querySelector('button[aria-label^="Switch tenant"]').dispatchEvent(new PointerEvent('pointerdown', {bubbles:true,button:0,pointerType:'mouse'}))`)
     await sleep(150)
     await evaluate(`[...document.querySelectorAll('[role="menuitem"]')].find(item => item.innerText.includes('Contoso 2')).click()`)

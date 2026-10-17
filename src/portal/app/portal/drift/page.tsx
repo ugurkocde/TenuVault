@@ -35,7 +35,9 @@ import { showFeaturePlanError } from "@desktop/lib/plan-dialog"
 import { revertibleDriftCount, shouldShowDriftNote } from "@desktop/lib/plan-notes"
 import { GatedButton } from "@desktop/components/PlanGate"
 import { FilterChips, FilterSelect, SearchInput } from "@desktop/components/FilterControls"
-import { cancelDriftScan, startDriftScan, useDriftJob, useDriftResult } from "@desktop/lib/drift-jobs"
+import { cancelDriftScan, loadDriftResult, onDriftScanFinished, startDriftScan, useDriftJob, useDriftResult, useDriftResultFailure } from "@desktop/lib/drift-jobs"
+import { RunOverlay } from "@desktop/components/RunOverlay"
+import { driftRunHeading, driftRunSteps } from "../../../../shared/intune/drift-run"
 import { refreshBackupList, useBackupList } from "@desktop/lib/backup-list"
 import { backupTarget, trackBackup, whenBackupEnds } from "@desktop/lib/backups"
 import { toast } from "@desktop/lib/toast"
@@ -120,6 +122,46 @@ export default function DriftDetectionPage() {
   const job = useDriftJob(tenantId)
   const { result, loaded } = useDriftResult(tenantId)
   const running = job?.status === "running"
+  // The running scan shows as a full-page overlay (RunOverlay), like a CIS assessment. It stays
+  // up until the finished scan's saved result is the one on screen, then the results summary is
+  // revealed. A scan this page started (Compare, or the re-scan after a revert) captures focus;
+  // the auto-started first scan and a scan joined on arrival do not.
+  const startedHere = useRef(false)
+  const sawRunningJob = useRef<string | null>(null)
+  const sawForTenant = useRef<string | undefined>(undefined)
+  const [revealedJobId, setRevealedJobId] = useState<string | null>(null)
+  const [resultReadyJobId, setResultReadyJobId] = useState<string | null>(null)
+  // Kept in the store per tenant, so one tenant's unresolved failure survives switching away.
+  const resultLoadFailedJobId = useDriftResultFailure(tenantId)
+  const [cancelError, setCancelError] = useState<{ jobId: string; message: string } | null>(null)
+  const currentJob = useRef(job)
+  currentJob.current = job
+  // Tracked during render, reset before record in the same pass: an effect would run after
+  // the tenant-change reset below and lose the job this page mounted into, so its completion
+  // would lift the overlay onto the previous result without a reveal.
+  if (sawForTenant.current !== tenantId) {
+    sawForTenant.current = tenantId
+    sawRunningJob.current = null
+  }
+  if (running && job) sawRunningJob.current = job.jobId
+  // The store re-reads the saved result before it announces a completed scan, so this also
+  // lifts the overlay when that read could not produce the new result. A failed read keeps
+  // the cached result in the store, so it must be named as the earlier one, with a retry.
+  // Only the current job's announcement lifts the overlay: a superseded scan announced late
+  // (its read was held, then discarded) must not touch the newer scan's readiness.
+  useEffect(() => onDriftScanFinished((finished, load) => {
+    if (finished.status !== "completed" || finished.tenantId !== tenantId) return
+    if (finished.jobId !== currentJob.current?.jobId || load === "superseded") return
+    setResultReadyJobId(finished.jobId)
+  }), [tenantId])
+  useEffect(() => {
+    if (result && sawRunningJob.current === result.jobId) {
+      sawRunningJob.current = null
+      setRevealedJobId(result.jobId)
+    }
+  }, [result?.jobId])
+  const finishing = !!job && job.status === "completed" && sawRunningJob.current === job.jobId && result?.jobId !== job.jobId && resultReadyJobId !== job.jobId
+  const showOverlay = !!selectedTenant && !!job && (running || finishing)
 
   const [selectedDrift, setSelectedDrift] = useState<string | null>(null)
   const [filter, setFilter] = useState<DriftFilter>(NO_DRIFT_FILTER)
@@ -179,6 +221,8 @@ export default function DriftDetectionPage() {
 
   // Another tenant starts with its own default pair.
   useEffect(() => {
+    startedHere.current = false
+    setRevealedJobId(null)
     pairTouched.current = false
     setPair({ baseline: null, comparison: null })
     setError("")
@@ -205,6 +249,7 @@ export default function DriftDetectionPage() {
 
   const startScan = async (chosen?: { baseline: string; comparison: string }) => {
     if (!tenantId) return
+    startedHere.current = true
     setError("")
     setConfirmDialog(null)
     try {
@@ -460,7 +505,136 @@ export default function DriftDetectionPage() {
   )
 
   return (
-    <div className="p-8 space-y-8">
+    <>
+      {/* The running scan as a full-page overlay: real progress from the main process; it keeps
+          running when you leave the page, and the activity panel mirrors it there. */}
+      {showOverlay && job && (
+        <RunOverlay
+          ariaLabel="Drift scan in progress"
+          title={driftRunHeading(job.phase, finishing)}
+          subtitle={result
+            ? "Your previous result is kept if this scan does not finish. The scan keeps running if you open another page."
+            : "TenuVault only reads your saved backups. Nothing in Intune is changed. The scan keeps running if you open another page."}
+          percent={finishing ? 100 : job.percent}
+          progressLabel="Drift scan progress"
+          detail={finishing ? "Loading the result" : job.detail}
+          steps={driftRunSteps(job.phase, finishing)}
+          captureFocus={startedHere.current}
+          focusFallbackSelector="#drift-results-summary"
+          error={cancelError?.jobId === job.jobId ? cancelError.message : ""}
+          actions={running ? (
+            <Button variant="outline" onClick={() => { const target = job; setCancelError(null); void cancelDriftScan(target).catch((failure: unknown) => setCancelError({ jobId: target.jobId, message: failure instanceof Error ? failure.message : "The scan could not be cancelled." })) }}>
+              <X className="mr-2 h-4 w-4" />
+              Cancel scan
+            </Button>
+          ) : undefined}
+        />
+      )}
+      {/* Confirmation Dialog */}
+      <Dialog open={!!confirmDialog} onOpenChange={(open) => { if (!open) setConfirmDialog(null) }}>
+        {confirmDialog && (
+          <DialogContent className="max-w-md p-8">
+            {/* Icon */}
+            <div className="flex justify-center mb-6">
+              <div className={cn(
+                "h-16 w-16 rounded-full flex items-center justify-center",
+                confirmDialog.action === "revert" 
+                  ? "bg-red-50 text-red-600" 
+                  : "bg-blue-50 text-blue-600"
+              )}>
+                {confirmDialog.action === "revert" ? (
+                  <RefreshCw className="h-8 w-8" />
+                ) : (
+                  <Plus className="h-8 w-8" />
+                )}
+              </div>
+            </div>
+            
+            {/* Content */}
+            <div className="text-center mb-8">
+              <DialogTitle className="text-2xl font-medium tracking-tight text-gray-900 mb-3">{confirmDialog.title}</DialogTitle>
+              <DialogDescription className="text-gray-600 leading-relaxed">{confirmDialog.message}</DialogDescription>
+            </div>
+            
+            {/* Policy Info */}
+            <div className="bg-gray-50 rounded-2xl p-4 mb-6">
+              <div className="flex items-center gap-3">
+                <FileText className="h-5 w-5 text-gray-400" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-gray-900">Policy Name</p>
+                  <p className="text-sm text-gray-600">{drifts.find(d => d.id === confirmDialog.driftId)?.configName}</p>
+                </div>
+              </div>
+            </div>
+            
+            {/* Actions */}
+            <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => setConfirmDialog(null)}
+              >
+                Cancel
+              </Button>
+              {confirmDialog.action === "revert" ? (
+                <Button variant="destructive" className="flex-1 font-medium" onClick={executeRevert}>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  {confirmDialog.recreate ? "Recreate policy" : "Revert policy"}
+                </Button>
+              ) : (
+                <Button className="flex-1 text-white font-medium bg-coral-600 hover:bg-coral-700" onClick={executeRevert}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Create copy
+                </Button>
+              )}
+            </div>
+          </DialogContent>
+        )}
+      </Dialog>
+      
+      {/* Revert Progress Modal */}
+      <RevertProgressModal
+        isOpen={progressModal.isOpen}
+        onClose={() => setProgressModal(prev => ({ ...prev, isOpen: false }))}
+        action={progressModal.action}
+        policyName={progressModal.policyName}
+        currentStep={progressModal.currentStep}
+        error={progressModal.error}
+        isComplete={progressModal.isComplete}
+        isSuccess={progressModal.isSuccess}
+        newPolicyId={progressModal.newPolicyId}
+        policyType={progressModal.policyType}
+        onComplete={() => {
+          setProgressModal(prev => ({ ...prev, isOpen: false }))
+          // Reset the progress modal state
+          setTimeout(() => {
+            setProgressModal({
+              isOpen: false,
+              action: "revert",
+              policyName: "",
+              currentStep: 0,
+              error: null,
+              isComplete: false,
+              isSuccess: false
+            })
+          }, 300)
+        }}
+      />
+
+      <RunBackupDialog
+        open={backingUp && canBackUp}
+        onOpenChange={setBackingUp}
+        tenant={backingUp && canBackUp && selectedTenant ? backupTarget(selectedTenant) : null}
+        onStarted={(jobId) => {
+          if (!selectedTenant) return
+          trackBackup(selectedTenant, jobId, addJob)
+          const tenant = selectedTenant
+          whenBackupEnds(jobId, () => void refreshBackupList(tenant, { force: true }))
+          toast(`Backup of ${selectedTenant.name} started. When it completes, it can be chosen here.`, "success")
+        }}
+      />
+      {/* The page under a running scan is inert, so covered controls leave the tab order. */}
+      <div inert={showOverlay} className="p-8 space-y-8">
       {/* Header */}
       <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
         <div>
@@ -522,38 +696,20 @@ export default function DriftDetectionPage() {
         />
       )}
 
-      {/* Running scan: real progress from the main process; it keeps running when you leave the page. */}
-      {selectedTenant && running && job && (
-        <div className="rounded-3xl bg-white p-8">
-          <div className="mx-auto flex max-w-xl flex-col items-center">
-            <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-blue-50">
-              <Loader2 className="h-7 w-7 animate-spin text-blue-600" />
-            </div>
-            <h3 className="mb-2 text-xl font-medium tracking-tight text-gray-900">Comparing backups</h3>
-            <p className="mb-4 text-center text-gray-600" aria-live="polite">{job.detail}</p>
-            <div className="mb-4 w-full">
-              <div className="mb-2 flex items-center justify-between text-sm text-gray-600">
-                <span>{job.phase === "comparing" && job.total > 0 ? `${job.done} of ${job.total} policies` : "Progress"}</span>
-                <span>{job.percent}%</span>
-              </div>
-              <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100">
-                <div className="h-2 rounded-full bg-coral-500 transition-all duration-300 ease-out" style={{ width: `${job.percent}%` }} />
-              </div>
-            </div>
-            <p className="mb-5 text-center text-xs text-gray-500">The scan keeps running if you open another page. You will be notified when it is ready.</p>
-            <Button variant="outline" onClick={() => void cancelDriftScan(job).catch((failure: unknown) => setError(failure instanceof Error ? failure.message : "The scan could not be cancelled."))}>
-              <X className="mr-2 h-4 w-4" />
-              Cancel scan
-            </Button>
-          </div>
-        </div>
-      )}
-
       {/* Error State */}
       {shownError && (
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
           <AlertDescription>{shownError}</AlertDescription>
+        </Alert>
+      )}
+      {resultLoadFailedJobId && job?.jobId === resultLoadFailedJobId && result?.jobId !== resultLoadFailedJobId && !showOverlay && (
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>
+            The last drift scan finished, but its result could not be loaded.{result ? " The result below is from an earlier scan." : ""}{" "}
+            <button type="button" className="font-medium underline" onClick={() => { if (tenantId) void loadDriftResult(tenantId, true) }}>Retry</button>
+          </AlertDescription>
         </Alert>
       )}
       {failedJob && failedJob.code !== "INSUFFICIENT_BACKUPS" && (
@@ -576,7 +732,7 @@ export default function DriftDetectionPage() {
       {showResult && result && (
         <>
           {/* The compared pair and what changed */}
-          <div className="space-y-3 rounded-3xl bg-white px-6 py-5 text-sm text-gray-700">
+          <div id="drift-results-summary" tabIndex={-1} className={cn("space-y-3 rounded-3xl bg-white px-6 py-5 text-sm text-gray-700 outline-none", result.jobId === revealedJobId && "run-results-reveal")}>
             <p>
               <span className="text-gray-500">Baseline:</span> <span className="font-medium text-gray-900">{backupLabel(result.baseline)}</span>
               <span className="mx-2 text-gray-400" aria-label="compared with">→</span>
@@ -803,109 +959,7 @@ export default function DriftDetectionPage() {
         </>
       )}
 
-      {/* Confirmation Dialog */}
-      <Dialog open={!!confirmDialog} onOpenChange={(open) => { if (!open) setConfirmDialog(null) }}>
-        {confirmDialog && (
-          <DialogContent className="max-w-md p-8">
-            {/* Icon */}
-            <div className="flex justify-center mb-6">
-              <div className={cn(
-                "h-16 w-16 rounded-full flex items-center justify-center",
-                confirmDialog.action === "revert" 
-                  ? "bg-red-50 text-red-600" 
-                  : "bg-blue-50 text-blue-600"
-              )}>
-                {confirmDialog.action === "revert" ? (
-                  <RefreshCw className="h-8 w-8" />
-                ) : (
-                  <Plus className="h-8 w-8" />
-                )}
-              </div>
-            </div>
-            
-            {/* Content */}
-            <div className="text-center mb-8">
-              <DialogTitle className="text-2xl font-medium tracking-tight text-gray-900 mb-3">{confirmDialog.title}</DialogTitle>
-              <DialogDescription className="text-gray-600 leading-relaxed">{confirmDialog.message}</DialogDescription>
-            </div>
-            
-            {/* Policy Info */}
-            <div className="bg-gray-50 rounded-2xl p-4 mb-6">
-              <div className="flex items-center gap-3">
-                <FileText className="h-5 w-5 text-gray-400" />
-                <div className="flex-1">
-                  <p className="text-sm font-medium text-gray-900">Policy Name</p>
-                  <p className="text-sm text-gray-600">{drifts.find(d => d.id === confirmDialog.driftId)?.configName}</p>
-                </div>
-              </div>
-            </div>
-            
-            {/* Actions */}
-            <div className="flex items-center gap-3">
-              <Button
-                variant="outline"
-                className="flex-1"
-                onClick={() => setConfirmDialog(null)}
-              >
-                Cancel
-              </Button>
-              {confirmDialog.action === "revert" ? (
-                <Button variant="destructive" className="flex-1 font-medium" onClick={executeRevert}>
-                  <RefreshCw className="h-4 w-4 mr-2" />
-                  {confirmDialog.recreate ? "Recreate policy" : "Revert policy"}
-                </Button>
-              ) : (
-                <Button className="flex-1 text-white font-medium bg-coral-600 hover:bg-coral-700" onClick={executeRevert}>
-                  <Plus className="h-4 w-4 mr-2" />
-                  Create copy
-                </Button>
-              )}
-            </div>
-          </DialogContent>
-        )}
-      </Dialog>
-      
-      {/* Revert Progress Modal */}
-      <RevertProgressModal
-        isOpen={progressModal.isOpen}
-        onClose={() => setProgressModal(prev => ({ ...prev, isOpen: false }))}
-        action={progressModal.action}
-        policyName={progressModal.policyName}
-        currentStep={progressModal.currentStep}
-        error={progressModal.error}
-        isComplete={progressModal.isComplete}
-        isSuccess={progressModal.isSuccess}
-        newPolicyId={progressModal.newPolicyId}
-        policyType={progressModal.policyType}
-        onComplete={() => {
-          setProgressModal(prev => ({ ...prev, isOpen: false }))
-          // Reset the progress modal state
-          setTimeout(() => {
-            setProgressModal({
-              isOpen: false,
-              action: "revert",
-              policyName: "",
-              currentStep: 0,
-              error: null,
-              isComplete: false,
-              isSuccess: false
-            })
-          }, 300)
-        }}
-      />
-
-      <RunBackupDialog
-        open={backingUp && canBackUp}
-        onOpenChange={setBackingUp}
-        tenant={backingUp && canBackUp && selectedTenant ? backupTarget(selectedTenant) : null}
-        onStarted={(jobId) => {
-          if (!selectedTenant) return
-          trackBackup(selectedTenant, jobId, addJob)
-          const tenant = selectedTenant
-          whenBackupEnds(jobId, () => void refreshBackupList(tenant, { force: true }))
-          toast(`Backup of ${selectedTenant.name} started. When it completes, it can be chosen here.`, "success")
-        }}
-      />
-    </div>
+      </div>
+    </>
   )
 }
