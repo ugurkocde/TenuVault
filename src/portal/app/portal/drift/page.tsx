@@ -35,7 +35,7 @@ import { showFeaturePlanError } from "@desktop/lib/plan-dialog"
 import { revertibleDriftCount, shouldShowDriftNote } from "@desktop/lib/plan-notes"
 import { GatedButton } from "@desktop/components/PlanGate"
 import { FilterChips, FilterSelect, SearchInput } from "@desktop/components/FilterControls"
-import { cancelDriftScan, onDriftScanFinished, startDriftScan, useDriftJob, useDriftResult } from "@desktop/lib/drift-jobs"
+import { cancelDriftScan, loadDriftResult, onDriftScanFinished, startDriftScan, useDriftJob, useDriftResult } from "@desktop/lib/drift-jobs"
 import { RunOverlay } from "@desktop/components/RunOverlay"
 import { driftRunHeading, driftRunSteps } from "../../../../shared/intune/drift-run"
 import { refreshBackupList, useBackupList } from "@desktop/lib/backup-list"
@@ -128,19 +128,30 @@ export default function DriftDetectionPage() {
   // the auto-started first scan and a scan joined on arrival do not.
   const startedHere = useRef(false)
   const sawRunningJob = useRef<string | null>(null)
+  const sawForTenant = useRef<string | undefined>(undefined)
   const [revealedJobId, setRevealedJobId] = useState<string | null>(null)
   const [resultReadyJobId, setResultReadyJobId] = useState<string | null>(null)
-  useEffect(() => {
-    if (running && job) sawRunningJob.current = job.jobId
-  }, [running, job?.jobId])
+  const [resultLoadFailed, setResultLoadFailed] = useState(false)
+  // Tracked during render, reset before record in the same pass: an effect would run after
+  // the tenant-change reset below and lose the job this page mounted into, so its completion
+  // would lift the overlay onto the previous result without a reveal.
+  if (sawForTenant.current !== tenantId) {
+    sawForTenant.current = tenantId
+    sawRunningJob.current = null
+  }
+  if (running && job) sawRunningJob.current = job.jobId
   // The store re-reads the saved result before it announces a completed scan, so this also
-  // lifts the overlay when that read could not produce the new result.
-  useEffect(() => onDriftScanFinished((finished) => {
-    if (finished.status === "completed" && finished.tenantId === tenantId) setResultReadyJobId(finished.jobId)
+  // lifts the overlay when that read could not produce the new result. A failed read keeps
+  // the cached result in the store, so it must be named as the earlier one, with a retry.
+  useEffect(() => onDriftScanFinished((finished, loaded) => {
+    if (finished.status !== "completed" || finished.tenantId !== tenantId) return
+    setResultReadyJobId(finished.jobId)
+    if (!loaded) setResultLoadFailed(true)
   }), [tenantId])
   useEffect(() => {
     if (result && sawRunningJob.current === result.jobId) {
       sawRunningJob.current = null
+      setResultLoadFailed(false)
       setRevealedJobId(result.jobId)
     }
   }, [result?.jobId])
@@ -206,8 +217,8 @@ export default function DriftDetectionPage() {
   // Another tenant starts with its own default pair.
   useEffect(() => {
     startedHere.current = false
-    sawRunningJob.current = null
     setRevealedJobId(null)
+    setResultLoadFailed(false)
     pairTouched.current = false
     setPair({ baseline: null, comparison: null })
     setError("")
@@ -685,6 +696,15 @@ export default function DriftDetectionPage() {
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
           <AlertDescription>{shownError}</AlertDescription>
+        </Alert>
+      )}
+      {resultLoadFailed && !showOverlay && (
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>
+            The last drift scan finished, but its result could not be loaded.{result ? " The result below is from an earlier scan." : ""}{" "}
+            <button type="button" className="font-medium underline" onClick={() => { if (tenantId) void loadDriftResult(tenantId, true).then((loaded) => { if (loaded) setResultLoadFailed(false) }) }}>Retry</button>
+          </AlertDescription>
         </Alert>
       )}
       {failedJob && failedJob.code !== "INSUFFICIENT_BACKUPS" && (

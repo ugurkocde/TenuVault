@@ -55,17 +55,29 @@ export function RunOverlay({ ariaLabel, title, subtitle, percent, progressLabel,
   const restoreFocusTo = useRef<{ captured: boolean; target: HTMLElement | null }>({ captured: false, target: null })
   const captureOnMount = useRef(captureFocus).current
   const fallback = useRef(focusFallbackSelector).current
+  // Where focus was last seen, tracked on focusin: by cleanup time the overlay may already be
+  // out of the DOM, which puts focus on body and hides that it just left the overlay.
+  const focusInside = useRef(false)
   useEffect(() => {
-    if (!captureOnMount) return
     const overlay = overlayRef.current
-    if (!restoreFocusTo.current.captured) {
-      const active = document.activeElement
-      restoreFocusTo.current = { captured: true, target: active instanceof HTMLElement && active !== document.body && !(overlay && overlay.contains(active)) ? active : null }
+    const track = (event: FocusEvent) => { focusInside.current = !!(overlay && event.target instanceof Node && overlay.contains(event.target)) }
+    document.addEventListener("focusin", track)
+    if (captureOnMount) {
+      if (!restoreFocusTo.current.captured) {
+        const active = document.activeElement
+        restoreFocusTo.current = { captured: true, target: active instanceof HTMLElement && active !== document.body && !(overlay && overlay.contains(active)) ? active : null }
+      }
+      overlay?.focus({ preventScroll: true })
+      focusInside.current = true
     }
-    overlay?.focus({ preventScroll: true })
     return () => {
+      document.removeEventListener("focusin", track)
       const active = document.activeElement
-      if (active && active !== document.body && !(overlay && overlay.contains(active))) return
+      const inside = focusInside.current || !!(overlay && active && overlay.contains(active))
+      if (active && active !== document.body && !inside) return
+      // A run that never captured focus only moves it when the overlay itself held it (the
+      // admin tabbed to Cancel), so an auto-started run finishing never yanks focus either.
+      if (!captureOnMount && !inside) return
       const target = restoreFocusTo.current.target
       if (target?.isConnected) target.focus({ preventScroll: true })
       else document.querySelector<HTMLElement>(fallback)?.focus({ preventScroll: true })

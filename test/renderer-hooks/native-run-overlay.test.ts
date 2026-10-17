@@ -77,12 +77,17 @@ function jobSummary(partial: Partial<FrameworkJob>): FrameworkJob {
 const roots: Root[] = []
 const containers: HTMLDivElement[] = []
 let history: NativeAssessment[] = []
+let historyGate: Promise<void> | null = null
+let releaseHistory: (() => void) | null = null
+function holdHistory(): void {
+  historyGate = new Promise<void>(resolve => { releaseHistory = resolve })
+}
 
 function render(): HTMLDivElement {
   vi.stubGlobal("fetch", vi.fn(async (_path: string, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body)) as { action?: string }
     if (body.action === "native-info") return Response.json({ rights: { edition: "Synthetic", sourceContentLicense: "None", contentMode: "independent-reference", strategies: [] } })
-    if (body.action === "native-history") return Response.json({ history, persistent: true, currentRunIds: history.map(run => run.runId) })
+    if (body.action === "native-history") { if (historyGate) await historyGate; return Response.json({ history, persistent: true, currentRunIds: history.map(run => run.runId) }) }
     return Response.json({})
   }))
   const container = document.createElement("div")
@@ -112,6 +117,8 @@ afterEach(() => {
   jobStore.job = undefined
   jobStore.cancel.mockClear()
   history = []
+  historyGate = null
+  releaseHistory = null
   vi.unstubAllGlobals()
 })
 
@@ -149,6 +156,50 @@ describe("NativeFrameworkPage run overlay", () => {
     expect(jobStore.cancel).toHaveBeenCalled()
     setJob(jobSummary({ status: "failed", percent: 42, error: "Read failed.", finishedAt: new Date().toISOString() }))
     expect(container.querySelector('[aria-label="Comparison in progress"]')).toBeNull()
+    expect(container.textContent).toContain("The last comparison failed.")
+  })
+
+  it("keeps the same overlay mounted through a delayed completion after mounting mid-run, without stealing moved focus", async () => {
+    history = [nativeRun("run-old")]
+    jobStore.job = jobSummary({})
+    const container = render()
+    await flush()
+    const view = container.querySelector('[aria-label="Comparison in progress"]')
+    expect(view).not.toBeNull()
+    expect(container.querySelector('[aria-labelledby="native-summary"]')).not.toBeNull()
+    // Focus the admin moved away (here: a stand-in outside the page) must stay put.
+    const outside = document.createElement("button")
+    document.body.appendChild(outside)
+    act(() => outside.focus())
+
+    history = [nativeRun("run-1"), nativeRun("run-old")]
+    holdHistory()
+    setJob(jobSummary({ status: "completed", step: "saving", percent: 97, runId: "run-1", finishedAt: new Date().toISOString() }))
+    await flush()
+    // Same node, still up at 100 percent while the result loads, focus untouched.
+    expect(container.querySelector('[aria-label="Comparison in progress"]')).toBe(view)
+    expect(container.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("100")
+    expect(document.activeElement).toBe(outside)
+
+    await act(async () => { releaseHistory?.() })
+    await flush()
+    await flush()
+    expect(container.querySelector('[aria-label="Comparison in progress"]')).toBeNull()
+    expect(container.querySelector('[aria-labelledby="native-summary"]')?.className).toContain("run-results-reveal")
+    outside.remove()
+  })
+
+  it("keeps the previous results on screen when a re-run fails", async () => {
+    history = [nativeRun("run-old")]
+    const container = render()
+    await flush()
+    expect(container.querySelector('[aria-labelledby="native-summary"]')).not.toBeNull()
+    setJob(jobSummary({}))
+    expect(container.querySelector('[aria-label="Comparison in progress"]')).not.toBeNull()
+    setJob(jobSummary({ status: "failed", error: "Read failed.", finishedAt: new Date().toISOString() }))
+    await flush()
+    expect(container.querySelector('[aria-label="Comparison in progress"]')).toBeNull()
+    expect(container.querySelector('[aria-labelledby="native-summary"]')).not.toBeNull()
     expect(container.textContent).toContain("The last comparison failed.")
   })
 

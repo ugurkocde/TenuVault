@@ -13,8 +13,9 @@ const driftStore = vi.hoisted(() => ({
   result: null as SavedDriftResult | null,
   results: {} as Record<string, SavedDriftResult | null>,
   listeners: new Set<() => void>(),
-  finishListeners: new Set<(job: DriftJob) => void>(),
+  finishListeners: new Set<(job: DriftJob, loaded: boolean) => void>(),
   cancel: vi.fn(),
+  loadResult: vi.fn(async (): Promise<boolean> => true),
   emit() { for (const listener of this.listeners) listener() },
   setJob(job: DriftJob | undefined) { this.job = job; this.emit() },
   setResult(result: SavedDriftResult | null) {
@@ -22,7 +23,7 @@ const driftStore = vi.hoisted(() => ({
     this.results = { ...this.results, [result?.tenantId ?? tenant.id]: result }
     this.emit()
   },
-  finish(job: DriftJob) { for (const listener of this.finishListeners) listener(job) },
+  finish(job: DriftJob, loaded = true) { for (const listener of this.finishListeners) listener(job, loaded) },
 }))
 
 vi.mock("../../src/renderer/lib/drift-jobs", async () => {
@@ -48,7 +49,8 @@ vi.mock("../../src/renderer/lib/drift-jobs", async () => {
       driftStore.cancel(job)
       driftStore.setJob({ ...job, status: "cancelled", finishedAt: new Date().toISOString() })
     },
-    onDriftScanFinished: (listener: (job: DriftJob) => void) => {
+    loadDriftResult: driftStore.loadResult,
+    onDriftScanFinished: (listener: (job: DriftJob, loaded: boolean) => void) => {
       driftStore.finishListeners.add(listener)
       return () => void driftStore.finishListeners.delete(listener)
     },
@@ -147,6 +149,8 @@ afterEach(() => {
   driftStore.result = null
   driftStore.results = {}
   driftStore.cancel.mockClear()
+  driftStore.loadResult.mockReset()
+  driftStore.loadResult.mockImplementation(async () => true)
 })
 
 describe("DriftDetectionPage run overlay", () => {
@@ -201,6 +205,79 @@ describe("DriftDetectionPage run overlay", () => {
     expect(overlay(container)).toBeNull()
     expect(document.activeElement).toBe(compare)
     // The previous result is still the one on screen.
+    expect(container.querySelector("#drift-results-summary")).not.toBeNull()
+  })
+
+  it("gates completion and reveals when the page mounted into an already running scan", async () => {
+    tenant.id = "55555555-5555-5555-5555-555555555555"
+    driftStore.results = { [tenant.id]: savedResult("job-previous") }
+    driftStore.job = {
+      jobId: "job-running", tenantId: tenant.id, status: "running", phase: "comparing",
+      detail: "Comparing policies: 4 of 10", done: 4, total: 10, percent: 44,
+      startedAt: new Date().toISOString(), baseline: null, comparison: null,
+    }
+    const container = render()
+    await flush()
+    expect(overlay(container)).not.toBeNull()
+    const completed: DriftJob = { ...driftStore.job, status: "completed", phase: "history", percent: 100, finishedAt: new Date().toISOString() }
+    act(() => driftStore.setJob(completed))
+    // Still held: the result of this job is not on screen yet.
+    expect(overlay(container)).not.toBeNull()
+    expect(container.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("100")
+    act(() => {
+      driftStore.setResult(savedResult(completed.jobId))
+      driftStore.finish(completed)
+    })
+    await flush()
+    expect(overlay(container)).toBeNull()
+    expect(container.querySelector("#drift-results-summary")?.className).toContain("run-results-reveal")
+  })
+
+  it("names the previous result and offers a retry when the finished result cannot be loaded", async () => {
+    tenant.id = "66666666-6666-6666-6666-666666666666"
+    driftStore.results = { [tenant.id]: savedResult("job-previous") }
+    const container = render()
+    await flush()
+    const compare = container.querySelector<HTMLElement>("#compare-button")!
+    await act(async () => { compare.dispatchEvent(new MouseEvent("click", { bubbles: true })) })
+    await flush()
+    expect(overlay(container)).not.toBeNull()
+    const completed: DriftJob = { ...driftStore.job!, status: "completed", percent: 100, finishedAt: new Date().toISOString() }
+    act(() => {
+      driftStore.setJob(completed)
+      driftStore.finish(completed, false)
+    })
+    await flush()
+    expect(overlay(container)).toBeNull()
+    expect(container.textContent).toContain("its result could not be loaded")
+    expect(container.textContent).toContain("The result below is from an earlier scan.")
+    expect(container.querySelector("#drift-results-summary")).not.toBeNull()
+    expect(container.querySelector("#drift-results-summary")?.className).not.toContain("run-results-reveal")
+
+    driftStore.loadResult.mockImplementation(async () => {
+      driftStore.setResult(savedResult(completed.jobId))
+      return true
+    })
+    const retry = [...container.querySelectorAll("button")].find(button => button.textContent === "Retry")!
+    await act(async () => { retry.dispatchEvent(new MouseEvent("click", { bubbles: true })) })
+    await flush()
+    expect(container.textContent).not.toContain("its result could not be loaded")
+    expect(container.querySelector("#drift-results-summary")?.className).toContain("run-results-reveal")
+  })
+
+  it("lifts at once onto the previous result and the failure notice when a scan fails", async () => {
+    tenant.id = "77777777-7777-7777-7777-777777777777"
+    driftStore.results = { [tenant.id]: savedResult("job-previous") }
+    const container = render()
+    await flush()
+    const compare = container.querySelector<HTMLElement>("#compare-button")!
+    await act(async () => { compare.dispatchEvent(new MouseEvent("click", { bubbles: true })) })
+    await flush()
+    expect(overlay(container)).not.toBeNull()
+    act(() => driftStore.setJob({ ...driftStore.job!, status: "failed", error: "Storage could not be read.", finishedAt: "2026-10-17T12:00:00.000Z" }))
+    await flush()
+    expect(overlay(container)).toBeNull()
+    expect(container.textContent).toContain("The last drift scan failed.")
     expect(container.querySelector("#drift-results-summary")).not.toBeNull()
   })
 

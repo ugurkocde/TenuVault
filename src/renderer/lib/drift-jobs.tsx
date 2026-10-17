@@ -23,7 +23,8 @@ interface State {
 
 let state: State = { jobs: [], results: {} }
 const listeners = new Set<() => void>()
-const finishListeners = new Set<(job: DriftJob) => void>()
+/** Called when a scan this window saw running ends; for a completed scan, whether its saved result could be read. */
+const finishListeners = new Set<(job: DriftJob, resultLoaded: boolean) => void>()
 const loadingResults = new Set<string>()
 let loaded = false
 // Responses to polls sent before a local change are stale and must not undo it.
@@ -48,8 +49,8 @@ function apply(next: DriftJob[]) {
   for (const job of next) {
     if (job.status === "running" || previous.get(job.jobId)?.status !== "running") continue
     // Only jobs this window saw running announce their end, not ones finished before a reload.
-    if (job.status === "completed") void loadDriftResult(job.tenantId, true).then(() => finishListeners.forEach((listener) => listener(job)))
-    else for (const listener of finishListeners) listener(job)
+    if (job.status === "completed") void loadDriftResult(job.tenantId, true).then((loaded) => finishListeners.forEach((listener) => listener(job, loaded)))
+    else for (const listener of finishListeners) listener(job, false)
   }
   schedule()
 }
@@ -85,17 +86,23 @@ export async function cancelDriftScan(job: DriftJob): Promise<void> {
   await refreshDriftJobs()
 }
 
-/** Reads the tenant's saved result from the main process, once unless `force`. */
-export async function loadDriftResult(tenantId: string, force = false): Promise<void> {
+/**
+ * Reads the tenant's saved result from the main process, once unless `force`. Reports whether
+ * the read succeeded: a failed read keeps the cached result, so callers that uncover it (the
+ * drift page after a scan) must not present it as the new one.
+ */
+export async function loadDriftResult(tenantId: string, force = false): Promise<boolean> {
   const tenant = tenantId.toLowerCase()
-  if (!force && (tenant in state.results || loadingResults.has(tenant))) return
+  if (!force && (tenant in state.results || loadingResults.has(tenant))) return true
   loadingResults.add(tenant)
   try {
     const { result } = await request<{ result: SavedDriftResult | null }>({ action: "result", tenantId: tenant })
     state = { ...state, results: { ...state.results, [tenant]: result } }
+    return true
   } catch {
     // Reported as no saved result; the page can still start a scan.
     if (!(tenant in state.results)) state = { ...state, results: { ...state.results, [tenant]: null } }
+    return false
   } finally {
     loadingResults.delete(tenant)
     emit()
@@ -133,7 +140,7 @@ export function useDriftResult(tenantId: string | undefined): { result: SavedDri
   return { result: results[tenant] ?? null, loaded: tenant in results }
 }
 
-export function onDriftScanFinished(listener: (job: DriftJob) => void): () => void {
+export function onDriftScanFinished(listener: (job: DriftJob, resultLoaded: boolean) => void): () => void {
   finishListeners.add(listener)
   return () => void finishListeners.delete(listener)
 }

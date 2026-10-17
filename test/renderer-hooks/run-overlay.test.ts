@@ -152,6 +152,16 @@ describe("RunOverlay", () => {
     expect(document.activeElement).toBe(sidebar)
   })
 
+  it("moves focus to the fallback when a non-capturing overlay held it, without capturing on entry", () => {
+    const { container, setRunning } = render({ captureFocus: false })
+    setRunning(true)
+    const cancel = [...container.querySelectorAll("button")].find(button => button.textContent === "Cancel scan")!
+    act(() => cancel.focus())
+    expect(document.activeElement).toBe(cancel)
+    setRunning(false)
+    expect(document.activeElement).toBe(container.querySelector("#results-heading"))
+  })
+
   it("renders the error as an alert and the actions as working controls", () => {
     const onCancel = vi.fn()
     const { container, setRunning } = render({ error: "The status could not be read.", onCancel })

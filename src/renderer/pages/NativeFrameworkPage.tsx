@@ -84,12 +84,19 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
   // The running comparison shows as a full-page overlay (RunOverlay), like a CIS assessment.
   // It stays up until the finished comparison's result is loaded, then the results are revealed.
   const sawRunningJob = useRef<string | null>(null)
-  const [awaitingRunId, setAwaitingRunId] = useState<string | null>(null)
+  const sawForKey = useRef<string | undefined>(undefined)
+  const [loadSettledJobId, setLoadSettledJobId] = useState<string | null>(null)
   const [revealedRunId, setRevealedRunId] = useState<string | null>(null)
-  useEffect(() => {
-    if (running && job) sawRunningJob.current = job.jobId
-  }, [running, job?.jobId])
-  const finishing = !!awaitingRunId && job?.status === 'completed'
+  // Tracked during render, reset before record in the same pass, and finishing derived from
+  // the completed job and the run on screen: state set in the completion effect would let
+  // one render without the overlay through, remounting it and capturing focus a second time.
+  const sawKey = `${credentials?.tenantId ?? ''}:${framework.id}`
+  if (sawForKey.current !== sawKey) {
+    sawForKey.current = sawKey
+    sawRunningJob.current = null
+  }
+  if (running && job) sawRunningJob.current = job.jobId
+  const finishing = !!job && job.status === 'completed' && sawRunningJob.current === job.jobId && !!job.runId && run?.runId !== job.runId && loadSettledJobId !== job.jobId
   const showOverlay = !!job && (running || finishing)
   const shownRun = useRef<string | undefined>(undefined)
   const body = { tenantId: credentials?.tenantId, appId: credentials?.appId, frameworkId: framework.id }
@@ -132,8 +139,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
   }
   useEffect(() => {
     if (!credentials?.tenantId) return
-    sawRunningJob.current = null
-    setAwaitingRunId(null)
+    setLoadSettledJobId(null)
     setRevealedRunId(null)
     shownRun.current = job?.runId
     void loadHistory().catch(e => setError(e instanceof Error ? e.message : 'History unavailable.'))
@@ -146,11 +152,10 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
     shownRun.current = job.runId
     setChanges(null)
     const wasRunning = sawRunningJob.current === job.jobId
-    if (wasRunning) setAwaitingRunId(job.runId)
     void loadHistory(job.runId)
       .then(() => { if (wasRunning) setRevealedRunId(job.runId!) })
       .catch(e => setError(e instanceof Error ? e.message : 'History unavailable.'))
-      .finally(() => { if (wasRunning) setAwaitingRunId(null) })
+      .finally(() => setLoadSettledJobId(job.jobId))
   }, [job?.status, job?.runId])
 
   const [now, setNow] = useState(Date.now())
