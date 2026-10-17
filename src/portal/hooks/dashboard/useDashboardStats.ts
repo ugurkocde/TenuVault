@@ -52,7 +52,9 @@ export interface TenantDashboardStats extends DashboardStats {
   backupHistory: DashboardBackup[]
   /** Failed attempts, newest first. One whose run left a backup in storage counts once, from the backup. */
   failedAttempts: FailedAttemptItem[]
-  /** Start of the selected reporting period. Pass all three to backupSummary for the tile counts. */
+  /** Run ids of backups the app is running for the tenant, from any trigger. */
+  liveRuns: string[]
+  /** Start of the selected reporting period. Pass these to backupSummary for the tile counts. */
   periodStart: Date
   /** Set when the backup list could not be loaded, so an empty list is not shown as "no backups". */
   backupsError: string | null
@@ -121,6 +123,18 @@ async function fetchFailedAttempts(tenant: any): Promise<FailedAttemptItem[]> {
     return attempts.map((attempt) => ({ tenantId: tenant.id, timestamp: new Date(attempt.at), runId: attempt.runId, message: attempt.message }))
   } catch (error) {
     console.error("Error reading failed backup attempts for", tenant.name, ":", error)
+    return []
+  }
+}
+
+/** Backups the app is running for the tenant right now, from any trigger. */
+async function fetchLiveRuns(tenant: any): Promise<string[]> {
+  const tenantId = tenant.credentials?.tenantId
+  if (!tenantId) return []
+  try {
+    return await bridge.backups.liveRuns(tenantId)
+  } catch (error) {
+    console.error("Error reading running backups for", tenant.name, ":", error)
     return []
   }
 }
@@ -214,12 +228,13 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
       const schedulePromises = tenants.map(tenant => fetchSchedules(tenant))
       const auditPromises = tenants.map((tenant, index) => auditAllowed[index] ? fetchAuditLogs(tenant, 20) : Promise.resolve([]))
       
-      const [allBackups, allSchedules, allAuditLogs, driftChecks, allFailedAttempts] = await Promise.all([
+      const [allBackups, allSchedules, allAuditLogs, driftChecks, allFailedAttempts, allLiveRuns] = await Promise.all([
         Promise.all(backupPromises),
         Promise.all(schedulePromises),
         Promise.all(auditPromises),
         Promise.all(tenants.map(fetchDriftCheck)),
         Promise.all(tenants.map(fetchFailedAttempts)),
+        Promise.all(tenants.map(fetchLiveRuns)),
       ])
       
       // Flatten arrays
@@ -239,6 +254,7 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
       // Filter backups within period
       const backupsInPeriod = backupHistory.filter(b => b.timestamp >= periodStart)
       const failedAttempts = allFailedAttempts.flat()
+      const liveRuns = allLiveRuns.flat()
       const tenantHealth = tenants.map((tenant, index) => backupHealth(
         backupHistory.filter((backup) => backup.tenantId === tenant.id), now, !!allBackups[index]?.error,
       ))
@@ -257,8 +273,8 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
       
       // Calculate trend (compare to previous period)
       const prevPeriodStart = new Date(periodStart.getTime() - periodMs)
-      const successRate = backupSummary(backupHistory, failedAttempts, { since: periodStart }).successRate
-      const prevSuccessRate = backupSummary(backupHistory, failedAttempts, { since: prevPeriodStart, until: periodStart }).successRate
+      const successRate = backupSummary(backupHistory, failedAttempts, { since: periodStart, live: liveRuns }).successRate
+      const prevSuccessRate = backupSummary(backupHistory, failedAttempts, { since: prevPeriodStart, until: periodStart, live: liveRuns }).successRate
       const trend = successRate !== null && prevSuccessRate !== null ? successRate - prevSuccessRate : 0
       
       // Create recent activity from audit logs and backups
@@ -327,6 +343,7 @@ export function useDashboardStats(selectedPeriod: string = "7d", tenantId?: numb
         latestCompleteBackup: latestComplete(backupHistory),
         backupHistory,
         failedAttempts,
+        liveRuns,
         periodStart,
         backupsError,
         lastDriftCheck: driftChecks.filter(check => check !== null)

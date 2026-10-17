@@ -201,7 +201,7 @@ function DashboardContent() {
   const tenantJobs = activeJobs.filter((job) => job.tenantId?.toLowerCase() === tenantGuid && !job.isComplete)
   // Every backup count on the tiles comes from this one summary, so the tiles cannot disagree.
   const backupStats = stats
-    ? backupSummary(stats.backupHistory, stats.failedAttempts, { since: stats.periodStart, live: tenantJobs.map((job) => job.jobId) })
+    ? backupSummary(stats.backupHistory, stats.failedAttempts, { since: stats.periodStart, live: [...stats.liveRuns, ...tenantJobs.map((job) => job.jobId)] })
     : null
   const nowDate = new Date(relativeNow)
   // Null when no backup finished in the period, or the backups could not be read, which the tile shows as "No data".
@@ -320,9 +320,7 @@ function DashboardContent() {
             <div className="flex items-start justify-between gap-3">
               <TileIcon icon={Database} />
               <div className="flex flex-wrap items-center justify-end gap-2">
-                {tenantJobs.length > 0 ? (
-                  <Chip tone="coral">Running</Chip>
-                ) : backupStats?.latestStatus ? (
+                {backupStats?.latestStatus ? (
                   backupStats.latestStatus === "success" ? <Chip tone="success">Completed</Chip>
                     : backupStats.latestStatus === "partial" ? <Chip tone="warning">Completed with warnings</Chip>
                     : backupStats.latestStatus === "running" ? <Chip tone="coral">Running</Chip>
@@ -389,7 +387,7 @@ function DashboardContent() {
             <p className="mt-auto text-xs text-white/70">
               {successRateValue !== null
                 ? <>Target 95%, {backupStats?.successful ?? 0} of {backupStats?.finished ?? 0} backups succeeded</>
-                : "No finished backups in this period"}
+                : backupsError ? "Backups could not be read" : "No finished backups in this period"}
             </p>
           </Tile>
         )}

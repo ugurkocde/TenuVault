@@ -24,10 +24,11 @@ interface MetadataRead { metadata: any; metadataError?: string }
 const metadataCache = new MetadataCache<MetadataRead>(result => !!result.metadata && !result.metadataError)
 /**
  * What a folder's ownership marker says. `foreign` is a marker that cannot be opened or
- * authenticated for this tenant; `unreadable` is a read that failed and is not cached.
+ * authenticated for this tenant; `unreadable` is a read that failed. Only a marker that was read
+ * is cached: importing the recovery key, or storage answering again, brings the folder back.
  */
 type OwnerRead = { kind: 'owner'; tenantId: string | null; runId: string | null } | { kind: 'missing' } | { kind: 'foreign' } | { kind: 'unreadable' }
-const ownerCache = new MetadataCache<OwnerRead>(result => result.kind !== 'unreadable')
+const ownerCache = new MetadataCache<OwnerRead>(result => result.kind === 'owner')
 
 /** One backup folder, described from metadata and either a folder listing or the summary inventory. */
 async function describeBackup(storageAccountName: string, name: string, accessToken: string, inventory?: { text: string; cacheKey: string; version: string; owner: string }) {

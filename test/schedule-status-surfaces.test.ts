@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   tenants: [{ id: 42, name: "Contoso", domain: "contoso.onmicrosoft.com", lastBackup: "", credentials: { tenantId: "tenant", appId: "app" }, resources: { storageAccountName: "tvlocal-tenant" } }],
   schedules: [] as BackupSchedule[],
   failedAttempts: [] as FailedBackupAttempt[],
+  liveRuns: [] as string[],
   activeJobs: [] as Array<{ tenantId: string; isComplete: boolean; status: string; jobId?: string }>,
   stats: null as TenantDashboardStats | null,
   queryFn: null as (() => Promise<TenantDashboardStats>) | null,
@@ -32,7 +33,10 @@ vi.mock("~/contexts/TenantContext", () => ({
 vi.mock("~/contexts/BackupProgressContext", () => ({ useBackupProgress: () => ({ activeJobs: state.activeJobs, addJob: vi.fn() }) }))
 vi.mock("@desktop/lib/bridge", () => ({ bridge: {
   schedules: { list: async () => state.schedules },
-  backups: { failedAttempts: async (tenantId: string) => state.failedAttempts.filter((attempt) => attempt.tenantId === tenantId) },
+  backups: {
+    failedAttempts: async (tenantId: string) => state.failedAttempts.filter((attempt) => attempt.tenantId === tenantId),
+    liveRuns: async (tenantId: string) => tenantId === "tenant" ? state.liveRuns : [],
+  },
 } }))
 vi.mock("@desktop/lib/schedules", async (original) => ({ ...await original<typeof import("../src/renderer/lib/schedules")>(), useSchedules: () => state.schedules }))
 vi.mock("@desktop/lib/license", () => ({ useLicense: () => ({ status: null }), tenantLicense: () => null, tenantPlan: () => null, planName: () => "Community" }))
@@ -52,7 +56,7 @@ const emptyStats: TenantDashboardStats = {
   tenants: { total: 1, healthy: 0, warning: 1, critical: 0 },
   backups: { scheduled: 1, trend: 0 },
   nextBackup: null, recentActivity: [], latestBackup: null, latestCompleteBackup: null,
-  backupHistory: [], failedAttempts: [], periodStart: new Date(0), backupsError: null, lastDriftCheck: null,
+  backupHistory: [], failedAttempts: [], liveRuns: [], periodStart: new Date(0), backupsError: null, lastDriftCheck: null,
 }
 const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000)
 const storedBackup = (status: "success" | "failed", timestamp: Date) => ({
@@ -72,6 +76,7 @@ function renderDashboard(): string {
 beforeEach(() => {
   state.schedules = [{ ...schedule }]
   state.failedAttempts = []
+  state.liveRuns = []
   state.activeJobs = []
   state.stats = { ...emptyStats }
   state.navigate.mockClear()
@@ -168,25 +173,52 @@ describe("Dashboard backup counts", () => {
     expect(finished).not.toContain(">Running</span>")
   })
 
+  // The chips sit in the Last backup tile, before its label.
+  const chip = (markup: string) => markup.slice(markup.indexOf('aria-label="Last backup"'), markup.indexOf(">Last backup<")).match(/>(Running|Incomplete|Failed|Completed)</)?.[1] ?? null
+  const running = (markup: string) => markup.match(/>(\d+)<\/p><p[^>]*>Running<\/p>/)?.[1]
+  const failed = (markup: string) => markup.match(/>(\d+)<\/p><p[^>]*>Failed<\/p>/)?.[1]
+
   it("shows the same running state on the Last backup chip as in the Running count", () => {
-    const folder = { ...storedBackup("success", hoursAgo(1)), status: "running" as const, runId: "desktop-run" }
-    // The chips sit in the Last backup tile, before its label.
-    const chip = (markup: string) => markup.slice(markup.indexOf('aria-label="Last backup"'), markup.indexOf(">Last backup<")).match(/>(Running|Incomplete|Failed|Completed)</)?.[1] ?? null
-    const running = (markup: string) => markup.match(/>(\d+)<\/p><p[^>]*>Running<\/p>/)?.[1]
-    const failed = (markup: string) => markup.match(/>(\d+)<\/p><p[^>]*>Failed<\/p>/)?.[1]
-    state.stats = { ...emptyStats, periodStart: hoursAgo(24), latestBackup: folder, backupHistory: [folder] }
-    // No live job wrote the folder: it is incomplete, not running.
+    const recent = { ...storedBackup("success", hoursAgo(1)), status: "running" as const, runId: "desktop-run" }
+    const old = { ...recent, status: "incomplete" as const, timestamp: hoursAgo(7) }
+    // Older than six hours and not live: incomplete.
+    state.stats = { ...emptyStats, periodStart: hoursAgo(24), latestBackup: old, backupHistory: [old] }
     let markup = renderDashboard()
     expect([chip(markup), running(markup), failed(markup)]).toEqual(["Incomplete", "0", "1"])
     // Its run failed: the folder is that failure, counted once.
-    state.stats = { ...state.stats, failedAttempts: [{ tenantId: 42, timestamp: hoursAgo(1), runId: "desktop-run", message: "Backup stopped." }] }
+    state.stats = { ...emptyStats, periodStart: hoursAgo(24), latestBackup: recent, backupHistory: [recent], failedAttempts: [{ tenantId: 42, timestamp: hoursAgo(1), runId: "desktop-run", message: "Backup stopped." }] }
     markup = renderDashboard()
     expect([chip(markup), running(markup), failed(markup)]).toEqual(["Failed", "0", "1"])
-    // Its job is still running.
+    // Recent and not live here, for example running on another device: running.
     state.stats = { ...state.stats, failedAttempts: [] }
-    state.activeJobs = [{ tenantId: "TENANT", isComplete: false, status: "Running", jobId: "desktop-run" }]
     markup = renderDashboard()
     expect([chip(markup), running(markup), failed(markup)]).toEqual(["Running", "1", "0"])
+    // A manual job of this window that has no folder yet: running too, counted once with the engine's list.
+    state.stats = { ...emptyStats, periodStart: hoursAgo(24), liveRuns: ["desktop-manual"] }
+    state.activeJobs = [{ tenantId: "TENANT", isComplete: false, status: "Running", jobId: "desktop-manual" }]
+    markup = renderDashboard()
+    expect([chip(markup), running(markup), failed(markup)]).toEqual(["Running", "1", "0"])
+  })
+
+  it("counts a scheduled backup the engine is running as Running, in the chip, the count and the trend", async () => {
+    // The scheduled job is not in this window's progress list; only the engine knows it.
+    state.liveRuns = ["desktop-scheduled"]
+    const day = 86_400_000
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("list-backups")
+      ? Response.json({ backups: [
+        { name: "backup-scheduled", timestamp: hoursAgo(0.5).toISOString(), status: "running", runId: "desktop-scheduled" },
+        { name: "backup-today", timestamp: hoursAgo(2).toISOString(), status: "Success", runId: "desktop-today" },
+        { name: "backup-last-week", timestamp: new Date(Date.now() - 9 * day).toISOString(), status: "Success", runId: "desktop-last-week" },
+      ] })
+      : Response.json([])))
+    useDashboardStats("7d", 42)
+    state.stats = await state.queryFn!()
+    expect(state.stats.liveRuns).toEqual(["desktop-scheduled"])
+    // Both periods are fully successful: the running backup is not a failure.
+    expect(state.stats.backups.trend).toBe(0)
+    const markup = renderDashboard()
+    expect([chip(markup), running(markup), failed(markup)]).toEqual(["Running", "1", "0"])
+    expect(markup).toContain("Target 95%, 1 of 1 backups succeeded")
   })
 
   it("shows No data when no backup finished in the period", () => {
@@ -203,6 +235,8 @@ describe("Dashboard backup counts", () => {
     const markup = renderDashboard()
     expect(markup).toContain("No data")
     expect(markup).not.toContain("0%")
+    expect(markup).toContain("Backups could not be read")
+    expect(markup).not.toContain("No finished backups in this period")
   })
 
   it.each([

@@ -221,6 +221,12 @@ export class BackupEngine {
     return this.jobs.get(jobId)
   }
 
+  /** The run ids of the tenant's unfinished jobs, whatever started them. */
+  liveRuns(tenantId: string): string[] {
+    const active = this.running.get(tenantId.toLowerCase())
+    return active ? [active.job.id] : []
+  }
+
   /** Waits for the same bounded execution used by manual and scheduled jobs. */
   waitForJob(job: BackupJob): Promise<BackupJob> {
     return this.executions.get(job.id)?.done ?? Promise.resolve(job)

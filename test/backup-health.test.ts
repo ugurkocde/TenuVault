@@ -42,21 +42,27 @@ it('counts a failed run once, from its folder when storage holds one', () => {
   // An attempt whose folder is older than the period still counts once, from that folder.
   expect(backupSummary([{ status: 'failed', timestamp: new Date(0), runId: 'old' }], [{ timestamp: now, runId: 'old' }], { since })).toMatchObject({ failed: 0, finished: 0 })
 })
-it('treats a folder without a manifest as running only while its live job runs', () => {
+it('reads a folder without a manifest as failed, running or incomplete, with the chip and count in agreement', () => {
   const since = new Date(now.getTime() - 86_400_000)
-  const folder = [{ status: 'running' as const, timestamp: now, runId: 'run-a' }]
-  // The Last backup chip (latestStatus) and the counts agree in every case.
-  expect(backupSummary(folder, [], { since, live: ['run-a'] })).toMatchObject({ inProgress: 1, failed: 0, latestStatus: 'running' })
-  expect(backupSummary(folder, [], { since, live: [] })).toMatchObject({ inProgress: 0, failed: 1, latestStatus: 'incomplete' })
-  expect(backupSummary(folder, [{ timestamp: now, runId: 'run-a' }], { since, live: [] })).toMatchObject({ inProgress: 0, failed: 1, finished: 1, latestStatus: 'failed' })
+  // The list says running for one under six hours old and incomplete after that.
+  const recent = [{ status: 'running' as const, timestamp: now, runId: 'run-a' }]
+  // Live in the engine (any trigger): running, counted once with the live job.
+  expect(backupSummary(recent, [], { since, live: ['run-a'] })).toMatchObject({ inProgress: 1, failed: 0, finished: 0, latestStatus: 'running' })
+  // Not live here but recent: maybe another device, or the app restarted mid run.
+  expect(backupSummary(recent, [], { since, live: [] })).toMatchObject({ inProgress: 1, failed: 0, latestStatus: 'running' })
+  // Its run failed: the folder is that failure, counted once.
+  expect(backupSummary(recent, [{ timestamp: now, runId: 'run-a' }], { since, live: [] })).toMatchObject({ inProgress: 0, failed: 1, finished: 1, latestStatus: 'failed' })
+  expect(backupSummary([{ status: 'incomplete', timestamp: now, runId: 'run-a' }], [], { since, live: [] })).toMatchObject({ inProgress: 0, failed: 1, latestStatus: 'incomplete' })
+  // A live job that has no folder yet is running too, and the chip says so.
+  expect(backupSummary([{ status: 'success', timestamp: now, runId: 'run-old' }], [], { since, live: ['run-new'] })).toMatchObject({ inProgress: 1, successful: 1, latestStatus: 'running' })
   // A folder whose run cannot be told (status unknown) is neither: its attempt counts the run once.
   expect(backupSummary([{ status: 'unknown', timestamp: now, runId: null }], [{ timestamp: now, runId: 'run-b' }], { since, live: [] })).toMatchObject({ stored: 1, failed: 1, finished: 1, latestStatus: 'unknown' })
 })
-it('has no success rate without a finished backup and takes running from the live jobs', () => {
+it('has no success rate without a finished backup and counts each running run once', () => {
   expect(backupSummary([], [], { since: now })).toEqual({ stored: 0, successful: 0, failed: 0, finished: 0, inProgress: 0, successRate: null, latestStatus: null })
-  const running = [{ status: 'running' as const, timestamp: now }, { status: 'unknown' as const, timestamp: now }]
-  expect(backupSummary(running, [], { since: now })).toMatchObject({ stored: 2, finished: 0, inProgress: 1, successRate: null })
-  expect(backupSummary(running, [], { since: now, live: [] }).inProgress).toBe(0)
+  const running = [{ status: 'running' as const, timestamp: now, runId: 'run-a' }, { status: 'running' as const, timestamp: now }, { status: 'unknown' as const, timestamp: now }]
+  expect(backupSummary(running, [], { since: now })).toMatchObject({ stored: 3, finished: 0, inProgress: 2, successRate: null })
+  expect(backupSummary(running, [], { since: now, live: ['run-a', 'run-a', 'run-b'] }).inProgress).toBe(3)
   expect(backupSummary([], [{ timestamp: now }], { since: now })).toMatchObject({ stored: 0, failed: 1, finished: 1, successRate: 0 })
 })
 it('does not let a recent failed backup hide stale protection', () => {

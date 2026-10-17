@@ -745,6 +745,7 @@ async function bootstrap(): Promise<void> {
     return scopes.get(tenantId)
   })
   handleTrusted("backups:failedAttempts", (_event, tenantId: unknown) => (typeof tenantId === "string" ? failedAttempts.list(tenantId) : []))
+  handleTrusted("backups:liveRuns", (_event, tenantId: unknown) => (typeof tenantId === "string" ? engine.liveRuns(tenantId) : []))
   handleTrusted("backups:setScope", (_event, tenantId: unknown, scope: unknown) => {
     if (typeof tenantId !== "string" || !scope || typeof scope !== "object") throw new Error("Choose what to back up.")
     const normalized = normalizeScope(scope as BackupScope)

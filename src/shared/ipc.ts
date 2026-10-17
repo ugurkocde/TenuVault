@@ -228,8 +228,10 @@ export interface TenuVaultBridge {
     /** What the tenant backs up on schedule and by default. */
     scope: (tenantId: string) => Promise<BackupScopeSetting>
     setScope: (tenantId: string, scope: BackupScope) => Promise<BackupScopeSetting>
-    /** Attempts of the tenant that failed without saving a backup, newest first. */
+    /** The tenant's failed backup attempts, newest first. */
     failedAttempts: (tenantId: string) => Promise<FailedBackupAttempt[]>
+    /** Run ids of the tenant's backups still running in this app, manual, scheduled or from the tray. */
+    liveRuns: (tenantId: string) => Promise<string[]>
   }
   license: {
     status: () => Promise<LicenseStatus>

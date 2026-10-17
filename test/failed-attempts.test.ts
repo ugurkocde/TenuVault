@@ -232,7 +232,7 @@ describe("BackupEngine end of job", () => {
   }
 
   /** The Dashboard counts of the tenant: its folders as /api/list-backups lists them, and the log. */
-  async function dashboardCounts(store: LocalBlobStore, account: string, log: FailedAttemptLog, read: Storage = (_request, forward) => forward()) {
+  async function dashboardCounts(store: LocalBlobStore, account: string, log: FailedAttemptLog, read: Storage = (_request, forward) => forward(), live: string[] = []) {
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
       const url = new URL(request.url)
@@ -245,7 +245,7 @@ describe("BackupEngine end of job", () => {
       const { backups } = await (await listBackups(new NextRequest("http://tenuvault.internal/api/list-backups", { method: "POST", body: JSON.stringify(body) }))).json() as { backups: Array<{ status: string; timestamp: string; runId: string | null }> }
       const folders = backups.map((backup) => ({ status: normalizeBackupStatus(backup), timestamp: new Date(backup.timestamp), runId: backup.runId }))
       const attempts = log.list(TENANT).map((attempt) => ({ timestamp: new Date(attempt.at), runId: attempt.runId }))
-      return { backups, summary: backupSummary(folders, attempts, { since: new Date(Date.now() - 7 * 86_400_000), live: [] }) }
+      return { backups, summary: backupSummary(folders, attempts, { since: new Date(Date.now() - 7 * 86_400_000), live }) }
     } finally {
       vi.unstubAllGlobals()
     }
@@ -319,6 +319,27 @@ describe("BackupEngine end of job", () => {
     expect(log.list(TENANT)).toMatchObject([{ runId: job.id }])
   })
 
+  it("reports a paused scheduled run as live, so the Dashboard counts it as running and not failed", async () => {
+    const log = new FailedAttemptLog(memoryStore())
+    let resume!: () => void
+    const paused = new Promise<void>((resolve) => { resume = resolve })
+    const scheduled = engineWith(oneItem(() => Response.json({ id: "dc1", displayName: "Profile" })), (job, request) => log.finished(job, request), undefined, async (request, forward) => {
+      // The policy upload waits, after the folder was claimed.
+      if (request.method === "PUT" && new URL(request.url).pathname.includes("/DeviceConfigurations/")) await paused
+      return forward()
+    })
+    const job = scheduled.engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: scheduled.account, trigger: "scheduled", slot: "2026-10-17T02:00:00.000Z" })
+    await vi.waitFor(async () => expect((await scheduled.store.list(scheduled.account, "intune-backups")).length).toBeGreaterThan(0))
+    expect(scheduled.engine.liveRuns(TENANT.toUpperCase())).toEqual([job.id])
+    expect(scheduled.engine.liveRuns(OTHER)).toEqual([])
+    const { backups, summary } = await dashboardCounts(scheduled.store, scheduled.account, log, undefined, scheduled.engine.liveRuns(TENANT))
+    expect(backups).toMatchObject([{ runId: job.id, status: "running" }])
+    expect(summary).toMatchObject({ inProgress: 1, failed: 0, finished: 0, successRate: null, latestStatus: "running" })
+    resume()
+    await scheduled.engine.waitForJob(job)
+    expect(scheduled.engine.liveRuns(TENANT)).toEqual([])
+  })
+
   const markerOnly: Storage = async (request, forward) => {
     if (request.method !== "PUT" || !new URL(request.url).pathname.endsWith(BACKUP_OWNER_FILE)) return forward()
     await forward()
@@ -370,6 +391,16 @@ describe("BackupEngine end of job", () => {
         return new Response(await response.text(), { status: response.status, headers })
       })
       expect(backups).toEqual([])
+    })
+
+    it("brings a folder back once its marker can be opened, for example after the recovery key is imported", async () => {
+      const { store, account } = await shared()
+      const log = new FailedAttemptLog(memoryStore())
+      const noKey = Object.assign(new Error("Backup authentication failed"), { name: "FetchApplicationError" })
+      const before = await dashboardCounts(store, account, log, async (request, forward) => isMarkerRead(request) && request.url.includes("030000") ? Promise.reject(noKey) : forward())
+      expect(before.backups).toEqual([])
+      const after = await dashboardCounts(store, account, log)
+      expect(after.backups.map((backup) => backup.runId)).toEqual(["desktop-own"])
     })
   })
 })
