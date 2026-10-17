@@ -88,6 +88,7 @@ describe("audit mapping and digest", () => {
     expect(live[3]).toMatchObject({ changeType: "unassigned", resourceName: "WiFi Corp" })
     expect(live[4]?.changeType).toBe("created")
     const kept = live.filter((change) => change !== null)
+    expect(intuneChangeDigest({ tenantId: TENANT, changes: kept, includeActor: true, source: "desktop" }).severity).toBe("warning")
     const { items } = collapseAuditChanges(kept, { includeActor: true })
     expect(items[0]?.actor).toBe("Contoso Automation")
     expect(filterAuditChanges(kept, { deniedActors: ["contoso automation"] })).toHaveLength(1)

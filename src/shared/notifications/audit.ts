@@ -183,7 +183,7 @@ export function intuneChangeDigest(input: {
   const counts = [...byType.entries()].map(([type, count]) => `${count} ${type}`).join(", ")
   return buildEnvelope({
     type: "intune.change",
-    severity: input.changes.some((change) => change.changeType === "deleted") ? "warning" : "info",
+    severity: input.changes.some((change) => change.changeType === "deleted" || change.changeType === "unassigned") ? "warning" : "info",
     tenantId: input.tenantId,
     tenantName: input.tenantName,
     occurredAt: newest,

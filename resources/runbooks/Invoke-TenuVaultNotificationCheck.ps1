@@ -465,7 +465,7 @@ function New-TenuVaultAuditDigest {
     if ($GapNotice) { $summary += " $GapNotice" }
 
     return New-TvEnvelope -Type "intune.change" `
-        -Severity $(if (@($mapped | Where-Object { (Get-TvProp $_ "changeType") -eq "deleted" }).Count -gt 0) { "warning" } else { "info" }) `
+        -Severity $(if (@($mapped | Where-Object { (Get-TvProp $_ "changeType") -eq "deleted" -or (Get-TvProp $_ "changeType") -eq "unassigned" }).Count -gt 0) { "warning" } else { "info" }) `
         -TenantId $TenantId -TenantName $TenantName -OccurredAt $newest `
         -NaturalKey ($sortedIds -join ",") `
         -Title "Intune changes: $tenantLabel" -Summary $summary `
