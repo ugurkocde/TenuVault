@@ -552,7 +552,7 @@ if ($AlertEmail) {
             } | ConvertTo-Json -Depth 12
             $metricAlertId = "/subscriptions/$($context.Subscription.Id)/resourceGroups/$ResourceGroupName/providers/microsoft.insights/metricAlerts/$([uri]::EscapeDataString($metricAlertName))"
             $metricAlertResponse = Invoke-AzRestMethod -Method Put `
-                -Path "$metricAlertId`?api-version=2023-01-01" -Payload $metricAlertPayload
+                -Path "$metricAlertId`?api-version=2018-03-01" -Payload $metricAlertPayload
             $metricAlertStatus = 0
             if ($metricAlertResponse -and $metricAlertResponse.PSObject.Properties["StatusCode"]) { $metricAlertStatus = [int]$metricAlertResponse.StatusCode }
             if ($metricAlertStatus -ge 300) { throw "the metricAlerts request returned HTTP $metricAlertStatus" }

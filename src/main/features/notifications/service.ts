@@ -304,6 +304,7 @@ async function listGroupMembers(graph: Awaited<ReturnType<FeatureDeps["graph"]>>
     }
     path = nextPath(response.body)
   }
+  if (path) return { error: "This group is too large to resolve completely. Send to a distribution list address instead." }
   if (inaccessibleUsers > 0) {
     return { error: "Some group members came back without mail properties, so the recipient list would be incomplete. The app registration needs User.Read.All for group recipients: rerun the setup script with -IncludeNotifications and sign in again." }
   }

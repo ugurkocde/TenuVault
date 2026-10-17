@@ -157,9 +157,14 @@ function ConvertTo-TenuVaultCanonicalJson {
         if ($Value -is [string]) { return ConvertTo-TvJsonString $Value }
         if ($Value -is [bool]) { return $Value.ToString().ToLowerInvariant() }
         if ($Value -is [DateTime] -or $Value -is [DateTimeOffset]) { return ConvertTo-TvJsonString (ConvertTo-TvIso $Value) }
+        # Windows PowerShell 5.1 (the Automation "PowerShell" runbook runtime)
+        # rejects the round-trip format for integral and decimal values, so only
+        # floating point values use it. "G" renders integers identically.
         if ($Value -is [byte] -or $Value -is [int] -or $Value -is [long] -or $Value -is [short] -or
-            $Value -is [uint32] -or $Value -is [uint64] -or $Value -is [decimal] -or
-            $Value -is [double] -or $Value -is [single]) {
+            $Value -is [uint32] -or $Value -is [uint64] -or $Value -is [decimal]) {
+            return ([IFormattable]$Value).ToString("G", [Globalization.CultureInfo]::InvariantCulture)
+        }
+        if ($Value -is [double] -or $Value -is [single]) {
             return ([IFormattable]$Value).ToString("R", [Globalization.CultureInfo]::InvariantCulture)
         }
 
@@ -750,6 +755,19 @@ function Add-TvSavedEnvelopes {
             $channelText = Get-TvText $channelName
             if ($channelText) { $deliveredChannels.Add($channelText) }
         }
+        $deadChannels = [System.Collections.Generic.List[string]]::new()
+        foreach ($channelName in @(Get-TvProp $entry "deadChannels")) {
+            $channelText = Get-TvText $channelName
+            if ($channelText -and -not $deliveredChannels.Contains($channelText)) { $deadChannels.Add($channelText) }
+        }
+        # Entries saved before deadChannels existed: a destination already at the
+        # attempt limit is dead by definition and must not be attempted again.
+        foreach ($channelName in @($attemptsByChannel.Keys)) {
+            if ([int]$attemptsByChannel[$channelName] -ge 5 -and -not $deliveredChannels.Contains([string]$channelName) -and
+                -not $deadChannels.Contains([string]$channelName)) {
+                $deadChannels.Add([string]$channelName)
+            }
+        }
         # The intended destinations are frozen at enqueue time. Entries saved before
         # this field existed inherit the destinations configured at load time.
         $hasIntendedChannels = $false
@@ -771,10 +789,45 @@ function Add-TvSavedEnvelopes {
             attempts = $savedAttempts
             attemptsByChannel = $attemptsByChannel
             deliveredChannels = $deliveredChannels
+            deadChannels = $deadChannels
             intendedChannels = $intendedChannels
             lastError = Get-TvText (Get-TvProp $entry "lastError")
         })
     }
+}
+
+function Add-TvDeliveryFailure {
+    param(
+        [Parameter(Mandatory)][object]$Entry,
+        [Parameter(Mandatory)][string]$Destination,
+        [Parameter(Mandatory)][string]$ErrorText
+    )
+    $attemptsByChannel = $Entry.attemptsByChannel
+    $channelAttempts = 0
+    if ($attemptsByChannel.Contains($Destination)) { $channelAttempts = [int]$attemptsByChannel[$Destination] }
+    $channelAttempts++
+    $attemptsByChannel[$Destination] = $channelAttempts
+    $Entry.attempts = [int](Get-TvProp $Entry "attempts") + 1
+    $Entry.lastError = "${Destination}: $(Get-TvSafeError $ErrorText)"
+    # Exhaustion is per destination: only this destination stops being attempted.
+    # Other intended destinations keep their own lifecycle on the same entry.
+    if ($channelAttempts -ge 5 -and -not $Entry.deadChannels.Contains($Destination)) {
+        $Entry.deadChannels.Add($Destination)
+    }
+    return $channelAttempts
+}
+
+function Get-TvOutboxTerminalState {
+    param([Parameter(Mandatory)][object]$Entry)
+    $intended = $Entry.intendedChannels
+    if ($intended.Count -eq 0) { return "pending" }
+    foreach ($destination in $intended) {
+        if (-not $Entry.deliveredChannels.Contains($destination) -and -not $Entry.deadChannels.Contains($destination)) {
+            return "pending"
+        }
+    }
+    if ($Entry.deliveredChannels.Count -gt 0) { return "sent" }
+    return "dead"
 }
 
 function Send-TvWebhook {
@@ -1184,6 +1237,7 @@ try {
     $pageCount = 0
     $nextUri = $freshUri
     $resumedContinuation = $false
+    $ingestionError = $null
     if ($continuation) {
         $nextUri = $continuation
         $resumedContinuation = $true
@@ -1206,7 +1260,12 @@ try {
                 $nextUri = $freshUri
                 continue
             }
-            throw
+            # A Graph outage or a persistent 403 must not abort the run here:
+            # record it, stop ingesting, and still run the missed backup check
+            # and every pending delivery. The run fails nonzero at the very end.
+            $ingestionError = "Audit ingestion failed: $(Get-TvSafeError $_.Exception.Message)"
+            Write-Output "$ingestionError Pending deliveries will still be attempted."
+            break
         }
         $resumedContinuation = $false
         foreach ($rawEvent in @($page.value)) {
@@ -1226,10 +1285,18 @@ try {
             $nextUri = Get-TvText (Get-TvProp $page "@odata.nextLink")
         }
     }
-    # Persist wherever paging stopped: the next page URL after a fully consumed
-    # page, the current page URL when the new event cap broke mid page, or null
-    # when pagination ran to exhaustion.
-    $continuation = Get-TvText $nextUri
+    if ($ingestionError) {
+        # Discard the partial collection and keep the saved watermark and
+        # continuation, so the next run retries the same window cleanly.
+        $newChanges.Clear()
+        $newestSeenIso = $watermarkIso
+        if (-not $lastError) { $lastError = $ingestionError }
+    } else {
+        # Persist wherever paging stopped: the next page URL after a fully consumed
+        # page, the current page URL when the new event cap broke mid page, or null
+        # when pagination ran to exhaustion.
+        $continuation = Get-TvText $nextUri
+    }
     Write-Output "Seen $seenCount audit events, $($newChanges.Count) new."
 
     $candidateEnvelopes = [System.Collections.Generic.List[object]]::new()
@@ -1302,6 +1369,7 @@ try {
             attempts = 0
             attemptsByChannel = [ordered]@{}
             deliveredChannels = [System.Collections.Generic.List[string]]::new()
+            deadChannels = [System.Collections.Generic.List[string]]::new()
             intendedChannels = $intendedChannels
             lastError = $null
         })
@@ -1337,15 +1405,14 @@ try {
                 continue
             }
             $deliveredChannels = $pendingEntry.deliveredChannels
-            $attemptsByChannel = $pendingEntry.attemptsByChannel
             $intendedChannels = $pendingEntry.intendedChannels
             if ($intendedChannels.Count -eq 0 -and $configuredDestinations.Count -gt 0) {
                 foreach ($channelName in $configuredDestinations) { $intendedChannels.Add($channelName) }
                 & $saveState
             }
-            $entryDead = $false
             foreach ($destination in @($intendedChannels.ToArray())) {
                 if ($deliveredChannels.Contains($destination)) { continue }
+                if ($pendingEntry.deadChannels.Contains($destination)) { continue }
                 if (-not $eligibleDestinations.Contains($destination)) { continue }
                 Update-TvStateLease -LeaseQueryUri $leaseQueryUri -Token $storageToken -LeaseId $leaseId
                 $sendError = $null
@@ -1362,32 +1429,30 @@ try {
                     $deliveredChannels.Add($destination)
                     & $saveState
                 } else {
-                    $channelAttempts = 0
-                    if ($attemptsByChannel.Contains($destination)) { $channelAttempts = [int]$attemptsByChannel[$destination] }
-                    $channelAttempts++
-                    $attemptsByChannel[$destination] = $channelAttempts
-                    $pendingEntry.attempts = [int](Get-TvProp $pendingEntry "attempts") + 1
-                    $pendingEntry.lastError = "${destination}: $(Get-TvSafeError $sendError.Exception.Message)"
+                    $channelAttempts = Add-TvDeliveryFailure -Entry $pendingEntry -Destination $destination `
+                        -ErrorText $sendError.Exception.Message
                     Write-Output "Delivery to $destination failed for event $($eventIdValue.Substring(0, 12)) attempt ${channelAttempts}: $($pendingEntry.lastError)"
                     if (-not $lastError) { $lastError = $pendingEntry.lastError }
-                    if ($channelAttempts -ge 5) { $entryDead = $true }
                     & $saveState
                 }
             }
-            $allDelivered = $true
-            foreach ($destination in $intendedChannels) {
-                if (-not $deliveredChannels.Contains($destination)) { $allDelivered = $false }
-            }
-            if ($entryDead) {
+            # Terminal only when every intended destination is delivered or dead.
+            # A gated or still retrying destination keeps the entry pending, even
+            # when another destination on the same entry just exhausted.
+            $terminalState = Get-TvOutboxTerminalState -Entry $pendingEntry
+            if ($terminalState -eq "dead") {
                 [void]$pendingEnvelopes.Remove($pendingEntry)
                 $deadEnvelopes.Add($pendingEntry)
                 while ($deadEnvelopes.Count -gt 50) { $deadEnvelopes.RemoveAt(0) }
-                $lastError = "Event $($eventIdValue.Substring(0, 12)) moved to deadEnvelopes after 5 failed attempts on one destination. Last error: $($pendingEntry.lastError)"
+                $lastError = "Event $($eventIdValue.Substring(0, 12)) moved to deadEnvelopes: every intended destination is dead and none delivered. Last error: $($pendingEntry.lastError)"
                 & $saveState
-            } elseif ($allDelivered) {
+            } elseif ($terminalState -eq "sent") {
                 [void]$pendingEnvelopes.Remove($pendingEntry)
                 $sentEventIds.Add($eventIdValue)
                 $eventsSent++
+                if ($pendingEntry.deadChannels.Count -gt 0) {
+                    $lastError = "Event $($eventIdValue.Substring(0, 12)) completed with dead destination(s): $($pendingEntry.deadChannels -join ', '). Last error: $($pendingEntry.lastError)"
+                }
                 & $saveState
             }
         }
@@ -1407,6 +1472,10 @@ try {
     }
     Set-TvBlobText -Uri $heartbeatBlobUri -Token $storageToken -Text (ConvertTo-TenuVaultCanonicalJson $heartbeat)
     Write-Output "Watcher run complete. Events sent: $eventsSent. Pending: $($pendingEnvelopes.Count). Watermark: $watermarkIso."
+    # State and heartbeat are persisted and deliveries were attempted. Only now
+    # surface a failed audit ingestion as a failed run, so it stays observable
+    # in the Automation job status and the failure alert without losing work.
+    if ($ingestionError) { throw $ingestionError }
 } catch {
     $lastError = Get-TvSafeError $_.Exception.Message
     if ($leaseId -and $storageToken -and $heartbeatBlobUri) {

@@ -68,6 +68,10 @@ describe("Azure notification watcher scripts", () => {
     // Intents are persisted before delivery is attempted.
     expect(runbook.indexOf("Save-TvState")).toBeGreaterThan(0)
     expect(setup).toContain("[string]$AlertEmail")
+    // metricAlerts only exists as 2018-03-01 in ARM; actionGroups is 2023-01-01.
+    expect(setup).toContain("metricAlerts")
+    expect(setup).not.toMatch(/metricAlert[^\n]*api-version=2023-01-01/)
+    expect(setup).toContain("api-version=2018-03-01")
     expect(setup).toContain("Mail.Send")
   })
 

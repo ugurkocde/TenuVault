@@ -158,6 +158,21 @@ describe("email delivery and group resolution", () => {
     expect(outboxOf(w.deps, TENANT_A)[0]?.state).toBe("sent")
   })
 
+  it("fails closed when group paging cannot finish", async () => {
+    const w = world({
+      graph: () => async (method: string, path: string) => {
+        if (path.startsWith("groups/")) return { status: 200, body: { value: [{ mail: "a@contoso.test", userType: "Member", "@odata.type": "#microsoft.graph.user" }], "@odata.nextLink": "https://graph.microsoft.com/beta/groups/x/transitiveMembers?$skiptoken=more" } }
+        return { status: 202, body: {} }
+      },
+    })
+    const created = await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-channel", kind: "email", recipients: [{ type: "group", groupId: "44444444-4444-4444-4444-444444444444" }] })
+    await addRule(w, [created.body.channel.id])
+    await emitBackupOutcome(w.deps, TENANT_A, { status: "Failed", backupFolder: "backup-paging", finishedAt: NOW.toISOString(), trigger: "scheduled" })
+    const entry = outboxOf(w.deps, TENANT_A)[0]
+    expect(entry?.state).toBe("pending")
+    expect(entry?.lastError).toContain("too large")
+  })
+
   it("rejects malformed recipients at setup", async () => {
     const w = world()
     const created = await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-channel", kind: "email", recipients: [{ type: "address", address: "not-an-address" }] })
