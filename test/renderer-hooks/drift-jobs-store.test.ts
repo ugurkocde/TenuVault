@@ -11,7 +11,7 @@ vi.mock("../../src/portal/contexts/TenantContext", () => ({
 }))
 vi.mock("../../src/renderer/lib/toast", () => ({ toast: () => undefined }))
 
-import { loadDriftResult, useDriftResult, type SavedDriftResult } from "../../src/renderer/lib/drift-jobs"
+import { loadDriftResult, refreshDriftJobs, useDriftResult, useDriftResultFailure, type DriftJob, type DriftResultLoad, type SavedDriftResult } from "../../src/renderer/lib/drift-jobs"
 
 const tenantId = "99999999-9999-9999-9999-999999999999"
 
@@ -23,9 +23,23 @@ const roots: Root[] = []
 const containers: HTMLDivElement[] = []
 let seen: SavedDriftResult | null = null
 
+let failure: string | null = null
 function Probe() {
   seen = useDriftResult(tenantId).result
+  failure = useDriftResultFailure(tenantId)
   return null
+}
+
+function renderProbe(): void {
+  const container = document.createElement("div")
+  document.body.appendChild(container)
+  containers.push(container)
+  let root: Root
+  act(() => {
+    root = createRoot(container)
+    roots.push(root)
+    root.render(createElement(MemoryRouter, null, createElement(Probe)))
+  })
 }
 
 afterEach(() => {
@@ -50,24 +64,46 @@ describe("drift result store", () => {
       }
       return Response.json({ jobs: [] })
     }))
-    const container = document.createElement("div")
-    document.body.appendChild(container)
-    containers.push(container)
-    let root: Root
-    act(() => {
-      root = createRoot(container)
-      roots.push(root)
-      root.render(createElement(MemoryRouter, null, createElement(Probe)))
-    })
+    renderProbe()
 
     // A slow Retry for the older scan starts first; the newer scan's read supersedes it.
-    let staleRead: Promise<boolean> | undefined
+    let staleRead: Promise<DriftResultLoad> | undefined
     await act(async () => { staleRead = loadDriftResult(tenantId, true) })
     await act(async () => { await loadDriftResult(tenantId, true) })
     expect(seen?.jobId).toBe("job-new")
 
     await act(async () => { releaseFirst?.() })
-    await expect(staleRead).resolves.toBe(false)
+    await expect(staleRead).resolves.toBe("superseded")
     expect(seen?.jobId).toBe("job-new")
+  })
+
+  it("records a completed scan whose result could not be read, and clears it when the result arrives", async () => {
+    const running: DriftJob = {
+      jobId: "job-fail", tenantId, status: "running", phase: "comparing", detail: "Comparing",
+      done: 1, total: 2, percent: 50, startedAt: new Date().toISOString(), baseline: null, comparison: null,
+    }
+    let jobs: DriftJob[] = [running]
+    let resultReadable = false
+    vi.stubGlobal("fetch", vi.fn(async (_path: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { action?: string }
+      if (body.action === "jobs") return Response.json({ jobs })
+      if (body.action === "result") {
+        if (!resultReadable) return new Response(JSON.stringify({ error: "Storage could not be read." }), { status: 500 })
+        return Response.json({ result: result("job-fail") })
+      }
+      return Response.json({})
+    }))
+    renderProbe()
+    await act(async () => { await refreshDriftJobs() })
+    expect(failure).toBeNull()
+    jobs = [{ ...running, status: "completed", percent: 100, finishedAt: new Date().toISOString() }]
+    await act(async () => { await refreshDriftJobs() })
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+    expect(failure).toBe("job-fail")
+
+    resultReadable = true
+    await act(async () => { await expect(loadDriftResult(tenantId, true)).resolves.toBe("loaded") })
+    expect(seen?.jobId).toBe("job-fail")
+    expect(failure).toBeNull()
   })
 })

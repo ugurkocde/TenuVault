@@ -218,6 +218,21 @@ describe("NativeFrameworkPage run overlay", () => {
     expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1)
   })
 
+  it("does not carry a cancel error into the next run", async () => {
+    jobStore.cancel.mockRejectedValueOnce(new Error("The comparison could not be cancelled."))
+    const container = render()
+    await flush()
+    setJob(jobSummary({}))
+    const view = container.querySelector('[aria-label="Comparison in progress"]')!
+    const cancel = [...view.querySelectorAll("button")].find(button => button.textContent === "Cancel comparison")!
+    await act(async () => { cancel.dispatchEvent(new MouseEvent("click", { bubbles: true })) })
+    await flush()
+    expect(view.querySelector('[role="alert"]')).not.toBeNull()
+    setJob(jobSummary({ jobId: "job-2" }))
+    const next = container.querySelector('[aria-label="Comparison in progress"]')!
+    expect(next.querySelector('[role="alert"]')).toBeNull()
+  })
+
   it("does not replay the reveal for a saved comparison opened later", async () => {
     history = [nativeRun("run-saved")]
     const container = render()

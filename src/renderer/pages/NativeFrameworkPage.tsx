@@ -86,7 +86,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
   const sawRunningJob = useRef<string | null>(null)
   const sawForKey = useRef<string | undefined>(undefined)
   const [loadSettledJobId, setLoadSettledJobId] = useState<string | null>(null)
-  const [cancelError, setCancelError] = useState('')
+  const [cancelError, setCancelError] = useState<{ jobId: string; message: string } | null>(null)
   const [revealedRunId, setRevealedRunId] = useState<string | null>(null)
   // Tracked during render, reset before record in the same pass, and finishing derived from
   // the completed job and the run on screen: state set in the completion effect would let
@@ -179,15 +179,14 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
   })
   // A failed cancel is reported in the overlay, where the admin pressed it, not under it.
   const cancel = () => {
-    setCancelError('')
+    if (!job) return
+    const target = job
+    setCancelError(null)
     void perform('Cancelling', async () => {
-      try { await cancelFrameworkJob(job!, credentials?.appId) }
-      catch (e) { setCancelError(e instanceof Error ? e.message : 'The comparison could not be cancelled.') }
+      try { await cancelFrameworkJob(target, credentials?.appId) }
+      catch (e) { setCancelError({ jobId: target.jobId, message: e instanceof Error ? e.message : 'The comparison could not be cancelled.' }) }
     })
   }
-  useEffect(() => {
-    if (!running) setCancelError('')
-  }, [running])
   const togglePlatform = (platform: CompliancePlatform) => setScope(s => ({ ...s, platforms: s.platforms?.includes(platform) ? s.platforms.filter(x => x !== platform) : [...(s.platforms ?? []), platform] }))
 
   const result = run?.assessment.frameworks[0]
@@ -219,7 +218,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
       subDetail={`${elapsed(job.startedAt, now)} elapsed`}
       steps={nativeRunSteps(job.step, finishing)}
       focusFallbackSelector="#native-summary"
-      error={cancelError}
+      error={cancelError?.jobId === job.jobId ? cancelError.message : ''}
       actions={running ? <button type="button" className={button} disabled={!!busy} onClick={cancel}>Cancel comparison</button> : undefined}
     />}
     {/* The page under a running comparison is inert, so covered controls leave the tab order. */}

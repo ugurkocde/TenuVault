@@ -13,18 +13,28 @@ const driftStore = vi.hoisted(() => ({
   result: null as SavedDriftResult | null,
   results: {} as Record<string, SavedDriftResult | null>,
   listeners: new Set<() => void>(),
-  finishListeners: new Set<(job: DriftJob, loaded: boolean) => void>(),
+  finishListeners: new Set<(job: DriftJob, load: string) => void>(),
+  failures: {} as Record<string, string>,
   cancel: vi.fn(),
   cancelFails: false,
-  loadResult: vi.fn(async (): Promise<boolean> => true),
+  loadResult: vi.fn(async (): Promise<string> => "loaded"),
   emit() { for (const listener of this.listeners) listener() },
   setJob(job: DriftJob | undefined) { this.job = job; this.emit() },
   setResult(result: SavedDriftResult | null) {
     this.result = result
     this.results = { ...this.results, [result?.tenantId ?? tenant.id]: result }
+    if (result && this.failures[result.tenantId]) {
+      const failures = { ...this.failures }
+      delete failures[result.tenantId]
+      this.failures = failures
+    }
     this.emit()
   },
-  finish(job: DriftJob, loaded = true) { for (const listener of this.finishListeners) listener(job, loaded) },
+  finish(job: DriftJob, load = "loaded") {
+    if (load === "failed") this.failures = { ...this.failures, [job.tenantId]: job.jobId }
+    for (const listener of this.finishListeners) listener(job, load)
+    this.emit()
+  },
 }))
 
 vi.mock("../../src/renderer/lib/drift-jobs", async () => {
@@ -52,7 +62,11 @@ vi.mock("../../src/renderer/lib/drift-jobs", async () => {
       driftStore.setJob({ ...job, status: "cancelled", finishedAt: new Date().toISOString() })
     },
     loadDriftResult: driftStore.loadResult,
-    onDriftScanFinished: (listener: (job: DriftJob, loaded: boolean) => void) => {
+    useDriftResultFailure: (tenantId: string | undefined) => {
+      const failures = React.useSyncExternalStore(subscribe, () => driftStore.failures)
+      return tenantId ? failures[tenantId.toLowerCase()] ?? null : null
+    },
+    onDriftScanFinished: (listener: (job: DriftJob, load: string) => void) => {
       driftStore.finishListeners.add(listener)
       return () => void driftStore.finishListeners.delete(listener)
     },
@@ -150,10 +164,11 @@ afterEach(() => {
   driftStore.job = undefined
   driftStore.result = null
   driftStore.results = {}
+  driftStore.failures = {}
   driftStore.cancel.mockClear()
   driftStore.cancelFails = false
   driftStore.loadResult.mockReset()
-  driftStore.loadResult.mockImplementation(async () => true)
+  driftStore.loadResult.mockImplementation(async () => "loaded")
 })
 
 describe("DriftDetectionPage run overlay", () => {
@@ -248,7 +263,7 @@ describe("DriftDetectionPage run overlay", () => {
     const completed: DriftJob = { ...driftStore.job!, status: "completed", percent: 100, finishedAt: new Date().toISOString() }
     act(() => {
       driftStore.setJob(completed)
-      driftStore.finish(completed, false)
+      driftStore.finish(completed, "failed")
     })
     await flush()
     expect(overlay(container)).toBeNull()
@@ -257,9 +272,15 @@ describe("DriftDetectionPage run overlay", () => {
     expect(container.querySelector("#drift-results-summary")).not.toBeNull()
     expect(container.querySelector("#drift-results-summary")?.className).not.toContain("run-results-reveal")
 
+    // A superseded older scan announced late must not bring the overlay back or drop the warning.
+    act(() => driftStore.finish({ ...completed, jobId: "job-superseded" }, "superseded"))
+    await flush()
+    expect(overlay(container)).toBeNull()
+    expect(container.textContent).toContain("its result could not be loaded")
+
     driftStore.loadResult.mockImplementation(async () => {
       driftStore.setResult(savedResult(completed.jobId))
-      return true
+      return "loaded"
     })
     const retry = [...container.querySelectorAll("button")].find(button => button.textContent === "Retry")!
     await act(async () => { retry.dispatchEvent(new MouseEvent("click", { bubbles: true })) })
@@ -300,7 +321,7 @@ describe("DriftDetectionPage run overlay", () => {
     const completedA: DriftJob = { ...driftStore.job!, status: "completed", percent: 100, finishedAt: new Date().toISOString() }
     act(() => {
       driftStore.setJob(completedA)
-      driftStore.finish(completedA, false)
+      driftStore.finish(completedA, "failed")
     })
     await flush()
     expect(container.textContent).toContain("its result could not be loaded")
@@ -310,7 +331,7 @@ describe("DriftDetectionPage run overlay", () => {
     driftStore.loadResult.mockImplementation(async () => {
       await new Promise<void>(resolve => { releaseRetry = resolve })
       driftStore.setResult({ ...savedResult(completedA.jobId), tenantId: tenantA })
-      return true
+      return "loaded"
     })
     const retry = [...container.querySelectorAll("button")].find(button => button.textContent === "Retry")!
     await act(async () => { retry.dispatchEvent(new MouseEvent("click", { bubbles: true })) })
@@ -323,7 +344,7 @@ describe("DriftDetectionPage run overlay", () => {
     }
     act(() => driftStore.setJob(completedB))
     await flush()
-    act(() => driftStore.finish(completedB, false))
+    act(() => driftStore.finish(completedB, "failed"))
     await flush()
     expect(container.textContent).toContain("its result could not be loaded")
 
@@ -349,6 +370,79 @@ describe("DriftDetectionPage run overlay", () => {
     const view = overlay(container)
     expect(view).not.toBeNull()
     expect(view?.querySelector('[role="alert"]')?.textContent).toBe("The scan could not be cancelled.")
+  })
+
+  it("keeps each tenant's load failure warning across tenant switches", async () => {
+    const tenantA = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    const tenantB = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+    tenant.id = tenantA
+    driftStore.results = {
+      [tenantA]: { ...savedResult("job-a-previous"), tenantId: tenantA },
+      [tenantB]: { ...savedResult("job-b-previous"), tenantId: tenantB },
+    }
+    const container = render()
+    await flush()
+    const failFor = async (jobId: string) => {
+      const running: DriftJob = {
+        jobId, tenantId: tenant.id, status: "running", phase: "comparing",
+        detail: "Comparing policies: 4 of 10", done: 4, total: 10, percent: 44,
+        startedAt: new Date().toISOString(), baseline: null, comparison: null,
+      }
+      act(() => driftStore.setJob(running))
+      await flush()
+      const completed: DriftJob = { ...running, status: "completed", percent: 100, finishedAt: new Date().toISOString() }
+      act(() => driftStore.setJob(completed))
+      await flush()
+      act(() => driftStore.finish(completed, "failed"))
+      await flush()
+      return completed
+    }
+    const completedA = await failFor("job-a")
+    expect(container.textContent).toContain("its result could not be loaded")
+
+    tenant.id = tenantB
+    act(() => driftStore.setJob(undefined))
+    await flush()
+    await failFor("job-b")
+    expect(container.textContent).toContain("its result could not be loaded")
+
+    tenant.id = tenantA
+    act(() => driftStore.setJob(completedA))
+    await flush()
+    // Tenant A's unresolved warning is still there on return.
+    expect(container.textContent).toContain("its result could not be loaded")
+    expect(container.querySelector("#drift-results-summary")).not.toBeNull()
+  })
+
+  it("does not carry a cancel error into another tenant's running scan", async () => {
+    const tenantA = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    const tenantB = "12121212-1212-1212-1212-121212121212"
+    tenant.id = tenantA
+    driftStore.results = {
+      [tenantA]: { ...savedResult("job-a-previous"), tenantId: tenantA },
+      [tenantB]: { ...savedResult("job-b-previous"), tenantId: tenantB },
+    }
+    driftStore.cancelFails = true
+    const container = render()
+    await flush()
+    const compare = container.querySelector<HTMLElement>("#compare-button")!
+    await act(async () => { compare.dispatchEvent(new MouseEvent("click", { bubbles: true })) })
+    await flush()
+    const cancel = [...container.querySelectorAll("button")].find(button => button.textContent?.includes("Cancel scan"))!
+    await act(async () => { cancel.dispatchEvent(new MouseEvent("click", { bubbles: true })) })
+    await flush()
+    expect(overlay(container)?.querySelector('[role="alert"]')).not.toBeNull()
+
+    tenant.id = tenantB
+    act(() => driftStore.setJob({
+      jobId: "job-b-running", tenantId: tenantB, status: "running", phase: "comparing",
+      detail: "Comparing policies: 1 of 10", done: 1, total: 10, percent: 18,
+      startedAt: new Date().toISOString(), baseline: null, comparison: null,
+    }))
+    await flush()
+    const viewB = overlay(container)
+    expect(viewB).not.toBeNull()
+    expect(viewB?.querySelector('[role="alert"]')).toBeNull()
   })
 
   it("opens on a saved result with no overlay and no reveal", async () => {

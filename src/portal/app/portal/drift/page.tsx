@@ -35,7 +35,7 @@ import { showFeaturePlanError } from "@desktop/lib/plan-dialog"
 import { revertibleDriftCount, shouldShowDriftNote } from "@desktop/lib/plan-notes"
 import { GatedButton } from "@desktop/components/PlanGate"
 import { FilterChips, FilterSelect, SearchInput } from "@desktop/components/FilterControls"
-import { cancelDriftScan, loadDriftResult, onDriftScanFinished, startDriftScan, useDriftJob, useDriftResult } from "@desktop/lib/drift-jobs"
+import { cancelDriftScan, loadDriftResult, onDriftScanFinished, startDriftScan, useDriftJob, useDriftResult, useDriftResultFailure } from "@desktop/lib/drift-jobs"
 import { RunOverlay } from "@desktop/components/RunOverlay"
 import { driftRunHeading, driftRunSteps } from "../../../../shared/intune/drift-run"
 import { refreshBackupList, useBackupList } from "@desktop/lib/backup-list"
@@ -131,8 +131,11 @@ export default function DriftDetectionPage() {
   const sawForTenant = useRef<string | undefined>(undefined)
   const [revealedJobId, setRevealedJobId] = useState<string | null>(null)
   const [resultReadyJobId, setResultReadyJobId] = useState<string | null>(null)
-  const [resultLoadFailed, setResultLoadFailed] = useState<{ tenantId: string; jobId: string } | null>(null)
-  const [cancelError, setCancelError] = useState("")
+  // Kept in the store per tenant, so one tenant's unresolved failure survives switching away.
+  const resultLoadFailedJobId = useDriftResultFailure(tenantId)
+  const [cancelError, setCancelError] = useState<{ jobId: string; message: string } | null>(null)
+  const currentJob = useRef(job)
+  currentJob.current = job
   // Tracked during render, reset before record in the same pass: an effect would run after
   // the tenant-change reset below and lose the job this page mounted into, so its completion
   // would lift the overlay onto the previous result without a reveal.
@@ -144,21 +147,19 @@ export default function DriftDetectionPage() {
   // The store re-reads the saved result before it announces a completed scan, so this also
   // lifts the overlay when that read could not produce the new result. A failed read keeps
   // the cached result in the store, so it must be named as the earlier one, with a retry.
-  useEffect(() => onDriftScanFinished((finished, loaded) => {
+  // Only the current job's announcement lifts the overlay: a superseded scan announced late
+  // (its read was held, then discarded) must not touch the newer scan's readiness.
+  useEffect(() => onDriftScanFinished((finished, load) => {
     if (finished.status !== "completed" || finished.tenantId !== tenantId) return
+    if (finished.jobId !== currentJob.current?.jobId || load === "superseded") return
     setResultReadyJobId(finished.jobId)
-    if (!loaded) setResultLoadFailed({ tenantId: finished.tenantId, jobId: finished.jobId })
   }), [tenantId])
   useEffect(() => {
-    if (result && resultLoadFailed?.jobId === result.jobId) setResultLoadFailed(null)
     if (result && sawRunningJob.current === result.jobId) {
       sawRunningJob.current = null
       setRevealedJobId(result.jobId)
     }
-  }, [result?.jobId, resultLoadFailed?.jobId])
-  useEffect(() => {
-    if (!running) setCancelError("")
-  }, [running])
+  }, [result?.jobId])
   const finishing = !!job && job.status === "completed" && sawRunningJob.current === job.jobId && result?.jobId !== job.jobId && resultReadyJobId !== job.jobId
   const showOverlay = !!selectedTenant && !!job && (running || finishing)
 
@@ -520,9 +521,9 @@ export default function DriftDetectionPage() {
           steps={driftRunSteps(job.phase, finishing)}
           captureFocus={startedHere.current}
           focusFallbackSelector="#drift-results-summary"
-          error={cancelError}
+          error={cancelError?.jobId === job.jobId ? cancelError.message : ""}
           actions={running ? (
-            <Button variant="outline" onClick={() => { setCancelError(""); void cancelDriftScan(job).catch((failure: unknown) => setCancelError(failure instanceof Error ? failure.message : "The scan could not be cancelled.")) }}>
+            <Button variant="outline" onClick={() => { const target = job; setCancelError(null); void cancelDriftScan(target).catch((failure: unknown) => setCancelError({ jobId: target.jobId, message: failure instanceof Error ? failure.message : "The scan could not be cancelled." })) }}>
               <X className="mr-2 h-4 w-4" />
               Cancel scan
             </Button>
@@ -702,7 +703,7 @@ export default function DriftDetectionPage() {
           <AlertDescription>{shownError}</AlertDescription>
         </Alert>
       )}
-      {resultLoadFailed && resultLoadFailed.tenantId === tenantId && job?.jobId === resultLoadFailed.jobId && !showOverlay && (
+      {resultLoadFailedJobId && job?.jobId === resultLoadFailedJobId && result?.jobId !== resultLoadFailedJobId && !showOverlay && (
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
           <AlertDescription>

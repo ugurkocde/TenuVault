@@ -19,12 +19,16 @@ interface State {
   jobs: DriftJob[]
   /** Last saved result per tenant; null when the tenant has none, missing until loaded. */
   results: Record<string, SavedDriftResult | null>
+  /** Per tenant, the completed scan whose saved result could not be read, until a result is read. */
+  failures: Record<string, string>
 }
 
-let state: State = { jobs: [], results: {} }
+let state: State = { jobs: [], results: {}, failures: {} }
 const listeners = new Set<() => void>()
-/** Called when a scan this window saw running ends; for a completed scan, whether its saved result could be read. */
-const finishListeners = new Set<(job: DriftJob, resultLoaded: boolean) => void>()
+/** How a saved-result read ended: applied, failed (cached result kept), or superseded by a newer read. */
+export type DriftResultLoad = "loaded" | "failed" | "superseded"
+/** Called when a scan this window saw running ends; for a completed scan, how its result read ended. */
+const finishListeners = new Set<(job: DriftJob, result: DriftResultLoad) => void>()
 const loadingResults = new Set<string>()
 // Newest result read per tenant. A read sent before a newer scan saved its result (for
 // example a slow Retry) must not overwrite that newer result when its response lands.
@@ -52,8 +56,14 @@ function apply(next: DriftJob[]) {
   for (const job of next) {
     if (job.status === "running" || previous.get(job.jobId)?.status !== "running") continue
     // Only jobs this window saw running announce their end, not ones finished before a reload.
-    if (job.status === "completed") void loadDriftResult(job.tenantId, true).then((loaded) => finishListeners.forEach((listener) => listener(job, loaded)))
-    else for (const listener of finishListeners) listener(job, false)
+    if (job.status === "completed") void loadDriftResult(job.tenantId, true).then((result) => {
+      if (result === "failed") {
+        state = { ...state, failures: { ...state.failures, [job.tenantId]: job.jobId } }
+        emit()
+      }
+      finishListeners.forEach((listener) => listener(job, result))
+    })
+    else for (const listener of finishListeners) listener(job, "superseded")
   }
   schedule()
 }
@@ -94,21 +104,26 @@ export async function cancelDriftScan(job: DriftJob): Promise<void> {
  * the read succeeded: a failed read keeps the cached result, so callers that uncover it (the
  * drift page after a scan) must not present it as the new one.
  */
-export async function loadDriftResult(tenantId: string, force = false): Promise<boolean> {
+export async function loadDriftResult(tenantId: string, force = false): Promise<DriftResultLoad> {
   const tenant = tenantId.toLowerCase()
-  if (!force && (tenant in state.results || loadingResults.has(tenant))) return true
+  if (!force && (tenant in state.results || loadingResults.has(tenant))) return "loaded"
   const generation = (resultGenerations.get(tenant) ?? 0) + 1
   resultGenerations.set(tenant, generation)
   loadingResults.add(tenant)
   try {
     const { result } = await request<{ result: SavedDriftResult | null }>({ action: "result", tenantId: tenant })
-    if (resultGenerations.get(tenant) !== generation) return false
+    if (resultGenerations.get(tenant) !== generation) return "superseded"
     state = { ...state, results: { ...state.results, [tenant]: result } }
-    return true
+    if (result && state.failures[tenant]) {
+      const failures = { ...state.failures }
+      delete failures[tenant]
+      state = { ...state, failures }
+    }
+    return "loaded"
   } catch {
     // Reported as no saved result; the page can still start a scan.
     if (resultGenerations.get(tenant) === generation && !(tenant in state.results)) state = { ...state, results: { ...state.results, [tenant]: null } }
-    return false
+    return "failed"
   } finally {
     loadingResults.delete(tenant)
     emit()
@@ -146,7 +161,13 @@ export function useDriftResult(tenantId: string | undefined): { result: SavedDri
   return { result: results[tenant] ?? null, loaded: tenant in results }
 }
 
-export function onDriftScanFinished(listener: (job: DriftJob, resultLoaded: boolean) => void): () => void {
+/** The completed scan of this tenant whose saved result could not be read, if any is unresolved. */
+export function useDriftResultFailure(tenantId: string | undefined): string | null {
+  const failures = useSyncExternalStore(subscribe, () => state.failures)
+  return tenantId ? failures[tenantId.toLowerCase()] ?? null : null
+}
+
+export function onDriftScanFinished(listener: (job: DriftJob, result: DriftResultLoad) => void): () => void {
   finishListeners.add(listener)
   return () => void finishListeners.delete(listener)
 }
