@@ -208,7 +208,7 @@ describe("CIS Benchmarks results across navigation", () => {
     expect(actions.some(body => body.action === "assess-start")).toBe(false)
     await waitFor(() => !!results(container))
     expect(container.querySelector('[aria-label="Assessment in progress"]')).toBeNull()
-    expect(container.querySelector('[aria-label="Results header"]')?.className).toContain("cis-results-reveal")
+    expect(container.querySelector('[aria-label="Results header"]')?.className).toContain("run-results-reveal")
     // Focus lands on the revealed results instead of being lost when the overlay unmounts.
     await waitFor(() => document.activeElement === container.querySelector('[aria-label="Results header"]'))
     expect(levelSummary(container)).toContain("100%")

@@ -35,7 +35,7 @@ import { CIS_FRAMEWORKS, type Plan } from "../../shared/plans"
 import type { AssessJobSnapshot, ExportFile } from "../../main/frameworks/service"
 import type { NcscPack } from "../../main/frameworks/ncsc"
 import { tenantLicense, tenantPlan, useLicense, useTenantPlan } from "../lib/license"
-import { BrandMark } from "../components/BrandMark"
+import { RunOverlay } from "../components/RunOverlay"
 import { CisRemediationPanel } from "../features/cis-remediation/CisRemediationPanel"
 import { CisRemediationHistory } from "../features/cis-remediation/CisRemediationHistory"
 import { GatedButton } from "../components/PlanGate"
@@ -333,35 +333,10 @@ function CisPortfolio({ plan, selectedTenantId }: { plan: Plan | null; selectedT
 const CIS_TALLY_DOTS = { Present: "bg-green-500", Different: "bg-red-500", Missing: "bg-amber-500", Review: "bg-gray-300" } as const
 
 /**
- * The running assessment as a full-page overlay over the content column, so starting a run never
- * pushes the page around: the content stays mounted underneath and is uncovered when the run
- * finishes. The sidebar (z-40) stays above it, so the app can still be navigated mid-run. All
- * motion is transform and opacity (desktop.css), which the compositor runs off the main thread.
+ * The running assessment in the shared run overlay. This wrapper only maps the CIS run
+ * onto the overlay: its phases, tallies and partial findings are the CIS parts.
  */
 function CisRunView({ run, rerun = false, error = "", policies, reference, names }: { run: AssessJobSnapshot; rerun?: boolean; error?: string; policies: BaselinePolicy[]; reference: string; names: SettingNames }) {
-  // Focus moves into the overlay on entry, because the covered page is inert while it shows.
-  // On exit it returns to the control that started the run, or to the results header when that
-  // control is gone (a first run replaces setup with results), but only when focus is still in
-  // the overlay: focus the user moved to the sidebar or a dialog is left where it is.
-  const overlayRef = useRef<HTMLDivElement>(null)
-  // Captured once, in a ref: Strict Mode replays the mount effect, and a recapture after the
-  // first cleanup would save the overlay itself instead of the control that started the run.
-  const restoreFocusTo = useRef<{ captured: boolean; target: HTMLElement | null }>({ captured: false, target: null })
-  useEffect(() => {
-    const overlay = overlayRef.current
-    if (!restoreFocusTo.current.captured) {
-      const active = document.activeElement
-      restoreFocusTo.current = { captured: true, target: active instanceof HTMLElement && active !== document.body && !(overlay && overlay.contains(active)) ? active : null }
-    }
-    overlay?.focus({ preventScroll: true })
-    return () => {
-      const active = document.activeElement
-      if (active && active !== document.body && !(overlay && overlay.contains(active))) return
-      const target = restoreFocusTo.current.target
-      if (target?.isConnected) target.focus({ preventScroll: true })
-      else document.querySelector<HTMLElement>('[aria-label="Results header"]')?.focus({ preventScroll: true })
-    }
-  }, [])
   const phase = cisRunDisplayPhase(run)
   const steps = cisRunSteps(phase)
   const tallies = cisRunTallies(run.findings)
@@ -373,45 +348,30 @@ function CisRunView({ run, rerun = false, error = "", policies, reference, names
     : phase === "done" ? `${run.read} of ${run.total} policies read`
     : "Signing in and preparing the comparison"
   const currentName = phase === "reading" ? run.currentPolicy : phase === "comparing" ? run.currentPackPolicy : ""
-  return <div ref={overlayRef} role="region" tabIndex={-1} aria-label="Assessment in progress" className="cis-run-overlay fixed inset-y-0 right-0 left-64 z-30 overflow-y-auto bg-background/90 backdrop-blur-sm outline-none">
-    <div className="flex min-h-full items-center justify-center px-6 py-10">
-      <div className="cis-run-panel w-full max-w-[36rem] text-center">
-        <BrandMark className="mx-auto size-12" />
-        <div role="status" className="mt-5">
-          <h2 className="text-2xl font-light tracking-tight text-gray-900">{heading}</h2>
-          <p className="mt-2 text-sm text-gray-500">{rerun ? "Your previous results are kept if this run does not finish." : "TenuVault only reads from your tenant. Nothing is changed."}</p>
-        </div>
-        {/* Fixed height, so the percent appearing after connecting never shifts the bar below it. */}
-        <p aria-hidden="true" className="mt-7 flex h-16 items-end justify-center text-6xl font-light leading-none tabular-nums text-gray-900">{progress !== null && <>{progress}<span className="text-3xl text-gray-500">%</span></>}</p>
-        <div role="progressbar" aria-label="Assessment progress" aria-valuemin={0} aria-valuemax={100} {...(progress !== null ? { "aria-valuenow": progress } : {})} aria-valuetext={progress !== null ? `${progress} percent, ${detail}` : heading} className="mt-4 h-1.5 overflow-hidden rounded-full bg-gray-200">
-          {progress !== null
-            ? <div className="h-full w-full origin-left rounded-full bg-primary transition-transform duration-500 ease-out motion-reduce:transition-none" style={{ transform: `scaleX(${progress / 100})` }} />
-            : <div className="cis-run-indeterminate h-full w-1/3 rounded-full bg-primary" />}
-        </div>
-        {/* Fixed-height lines: long policy names truncate instead of wrapping and moving the steps. */}
-        <p className="mt-4 h-5 text-sm font-medium tabular-nums text-gray-700">{detail}</p>
-        <p title={currentName || undefined} className="h-5 truncate text-xs text-gray-500">{currentName ? `current: ${currentName}` : ""}</p>
-        <ol className="mt-7 flex items-start justify-between gap-2">
-          {steps.map((step, index) => <li key={step.label} {...(step.state === "current" ? { "aria-current": "step" as const } : {})} className="flex min-w-0 flex-1 flex-col items-center gap-1.5">
-            <span aria-hidden="true" className={cn("flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold", step.state === "done" ? "bg-green-100 text-green-800" : step.state === "current" ? "bg-primary text-primary-foreground motion-safe:animate-pulse" : "bg-gray-200 text-gray-500")}>{step.state === "done" ? <Check className="h-3.5 w-3.5" /> : index + 1}</span>
-            <span className={cn("text-xs font-medium leading-tight", step.state === "waiting" ? "text-gray-500" : "text-gray-900")}>{step.label}</span>
-            <span className="text-[11px] leading-tight text-gray-500">{step.state === "done" ? "Done" : step.state === "current" ? "In progress" : "Waiting"}</span>
-          </li>)}
-        </ol>
-        <div className="mt-7 flex flex-wrap items-center justify-center gap-2">
-          <span className="text-xs font-medium text-gray-500">Partial tallies:</span>
-          {(["Present", "Different", "Missing", "Review"] as const).map(status => <span key={status} className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1 text-xs font-medium tabular-nums text-gray-700 shadow-[0_1px_2px_rgba(22,21,20,0.06)]"><span aria-hidden="true" className={cn("size-2 rounded-full", CIS_TALLY_DOTS[status])} />{status} {tallies[status]}</span>)}
-        </div>
-        <p className="mt-3 text-xs text-gray-500">{cisRunReceivedLabel(run.findings.length)}</p>
-        {error && <p role="alert" className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}
-        {/* Partial results read like the final ones: grouped by pack policy, by setting name, nothing to select yet. */}
-        {!rerun && run.findings.length > 0 && <div aria-label="Partial results" className="mt-8 max-h-[36vh] overflow-y-auto overscroll-contain rounded-3xl bg-white px-5 py-1 text-left shadow-[0_1px_2px_rgba(22,21,20,0.04)]">{groupFindingsByPolicy(run.findings).map(group => <section key={group.policyIndex} aria-label={group.policyName} className="border-t border-gray-100 py-3 first:border-t-0">
-          <h3 title={group.policyName} className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm"><span className="min-w-0 truncate font-medium text-gray-900">{policyDisplayName(group.policyName, reference)}</span><span className="text-xs text-gray-500">{statusMixText(group.counts)}</span></h3>
-          <div className="mt-1 divide-y divide-gray-100">{group.findings.map(finding => <CisFindingRow key={finding.key} finding={finding} recommendations={recommendationsForFinding(policies, finding)} names={names} selectable={false} checked={false} disabled onChange={() => undefined} />)}</div>
-        </section>)}</div>}
+  return <RunOverlay
+    ariaLabel="Assessment in progress"
+    title={heading}
+    subtitle={rerun ? "Your previous results are kept if this run does not finish." : "TenuVault only reads from your tenant. Nothing is changed."}
+    percent={progress}
+    progressLabel="Assessment progress"
+    detail={detail}
+    subDetail={currentName ? `current: ${currentName}` : ""}
+    steps={steps}
+    error={error}
+    summary={<>
+      <div className="mt-7 flex flex-wrap items-center justify-center gap-2">
+        <span className="text-xs font-medium text-gray-500">Partial tallies:</span>
+        {(["Present", "Different", "Missing", "Review"] as const).map(status => <span key={status} className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1 text-xs font-medium tabular-nums text-gray-700 shadow-[0_1px_2px_rgba(22,21,20,0.06)]"><span aria-hidden="true" className={cn("size-2 rounded-full", CIS_TALLY_DOTS[status])} />{status} {tallies[status]}</span>)}
       </div>
-    </div>
-  </div>
+      <p className="mt-3 text-xs text-gray-500">{cisRunReceivedLabel(run.findings.length)}</p>
+    </>}
+  >
+    {/* Partial results read like the final ones: grouped by pack policy, by setting name, nothing to select yet. */}
+    {!rerun && run.findings.length > 0 && <div aria-label="Partial results" className="mt-8 max-h-[36vh] overflow-y-auto overscroll-contain rounded-3xl bg-white px-5 py-1 text-left shadow-[0_1px_2px_rgba(22,21,20,0.04)]">{groupFindingsByPolicy(run.findings).map(group => <section key={group.policyIndex} aria-label={group.policyName} className="border-t border-gray-100 py-3 first:border-t-0">
+      <h3 title={group.policyName} className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm"><span className="min-w-0 truncate font-medium text-gray-900">{policyDisplayName(group.policyName, reference)}</span><span className="text-xs text-gray-500">{statusMixText(group.counts)}</span></h3>
+      <div className="mt-1 divide-y divide-gray-100">{group.findings.map(finding => <CisFindingRow key={finding.key} finding={finding} recommendations={recommendationsForFinding(policies, finding)} names={names} selectable={false} checked={false} disabled onChange={() => undefined} />)}</div>
+    </section>)}</div>}
+  </RunOverlay>
 }
 
 function CisExportMenu({ plan, disabled, readinessDisabled, onPdf, onFindingsCsv, onFindingsJson, onReadinessCsv, onReadinessJson }: {
@@ -1028,7 +988,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     {isCis && openNote && <p role="status" className="mt-6 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950">{openNote}</p>}
     {isCis && pendingJob && !cisRun && <p role="status" aria-label="Assessment running" className="mt-6 flex flex-wrap items-center gap-3 rounded-2xl bg-blue-50 px-4 py-3 text-sm text-gray-900"><span>An assessment of {referenceDisplayName(pendingJob.reference, packBenchmarkName(pendingJob.policies))} is running.</span><button type="button" className="font-medium text-blue-700 hover:underline" onClick={() => { const job = pendingJob; void trackCisJob({ policies: job.policies, reference: job.reference }, async () => job.jobId) }}>View progress</button></p>}
     {contentStage === "loading" && <p role="status" className="mt-6 text-sm text-gray-500">Loading saved assessments…</p>}
-    {isCis && contentStage === "results" && assessment && <div ref={resultsHeader} tabIndex={-1} aria-label="Results header" className={cn("mt-6 flex scroll-mt-6 flex-wrap items-center justify-between gap-3 rounded-3xl bg-white px-5 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)] outline-none", assessment.runId === revealedRunId && "cis-results-reveal")}>
+    {isCis && contentStage === "results" && assessment && <div ref={resultsHeader} tabIndex={-1} aria-label="Results header" className={cn("mt-6 flex scroll-mt-6 flex-wrap items-center justify-between gap-3 rounded-3xl bg-white px-5 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)] outline-none", assessment.runId === revealedRunId && "run-results-reveal")}>
       <div className="min-w-0">
         <p title={assessment.reference} className="truncate text-base font-medium text-gray-900">{(() => {
           const id = readiness?.benchmark && assessment.reference.startsWith(readiness.benchmark) ? readiness.benchmark : assessment.reference.split(/\s+/)[0] ?? ""
@@ -1204,7 +1164,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
         {(!isCis || (!fromKit && !kitImport)) && reviewLoadedPolicies}
       </>}
     </section>}
-    {(!isCis || contentStage === "setup" || contentStage === "results") && <section {...(isCis && contentStage === "results" ? { "aria-label": "Assessment results" } : { "aria-labelledby": "compare-title" })} className={cn("mt-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]", isCis && contentStage === "results" && assessment?.runId === revealedRunId && "cis-results-reveal")}>
+    {(!isCis || contentStage === "setup" || contentStage === "results") && <section {...(isCis && contentStage === "results" ? { "aria-label": "Assessment results" } : { "aria-labelledby": "compare-title" })} className={cn("mt-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]", isCis && contentStage === "results" && assessment?.runId === revealedRunId && "run-results-reveal")}>
       {(!isCis || contentStage !== "results") && <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 id="compare-title" className="text-xl font-medium tracking-tight">2. Compare with your tenant</h2><p className="mt-1 text-sm text-gray-600">{selectedTenant ? `Selected tenant: ${selectedTenant.name}` : "Choose a connected tenant using the sidebar."}</p>{isCis && selectedTenant && !credentials && <p className="mt-1 text-sm text-amber-800">The assessment needs a signed-in tenant. Sign in to {selectedTenant.name} from the sidebar.</p>}</div>
         {isCis ? <button className={primary} disabled={!!busy || !!cisRun || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={startCisAssessment}>{cisRun ? "Assessment running" : assessment ? "Run again" : "Start Assessment"}</button> : <button className={primary} disabled={!!busy || comparing || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={() => {
           if (!compareKey) return

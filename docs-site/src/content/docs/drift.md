@@ -38,7 +38,7 @@ Click **Compare** to compare the chosen pair, or to compare the shown pair again
 
 A comparison runs in the background, so you can open other pages while it works:
 
-* The page shows **Comparing backups** with the current step and how many policies of the total were compared so far.
+* While you stay on the page, the scan fills it with its progress: the current step, how many policies of the total were compared so far, and a progress bar. A previous result stays underneath and comes back unchanged if the scan does not finish.
 * While a scan runs, a spinner shows next to **Drift Detection** in the sidebar.
 * When the scan is ready and you are on another page, a message says so with a **View results** link. When the TenuVault window is not in front, a system notification appears instead.
 * Click **Cancel scan** to stop it. No further backup files are read and the previous result stays.
