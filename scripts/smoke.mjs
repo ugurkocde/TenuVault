@@ -955,6 +955,14 @@ await check("tenant selection toggles from cards, rows, select all and clear wit
   assert(await waitForCondition(`Boolean(document.querySelector('button[aria-label="Save tenant name"]')) && ${card(2)}.dataset.selected === 'true'`), "rename click changed the selection")
   await evaluate(`document.querySelector('button[aria-label^="Cancel editing tenant name:"]').click()`)
   assert(await waitForCondition(`!document.querySelector('button[aria-label="Save tenant name"]') && ${card(2)}.dataset.selected === 'true'`), "cancelling rename changed the selection")
+  // A disabled button takes no pointer events, so only a real mouse click at
+  // its coordinates proves the click cannot fall through and toggle.
+  const backupCenter = await evaluate(`(() => { const button = [...${card(2)}.querySelectorAll('button')].find(b => b.innerText.includes('Backup Now')); button.disabled = true; const rect = button.getBoundingClientRect(); return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } })()`)
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", x: backupCenter.x, y: backupCenter.y, button: "left", clickCount: 1 })
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: backupCenter.x, y: backupCenter.y, button: "left", clickCount: 1 })
+  await sleep(250)
+  assert(await evaluate(`${card(2)}.dataset.selected === 'true' && ${bar}.textContent.includes('2 tenants selected')`), "clicking the disabled Backup Now toggled the selection")
+  await evaluate(`[...${card(2)}.querySelectorAll('button')].find(b => b.innerText.includes('Backup Now')).disabled = false`)
   // Search scopes select all and discloses hidden selections.
   await setSearch("Contoso 2")
   assert(await waitForCondition(`${bar}.textContent.includes('1 not shown by search')`), "bar does not disclose the tenant hidden by search")

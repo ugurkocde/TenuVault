@@ -143,7 +143,7 @@ Like the name, tags are saved in the tenant's backup storage.
 
 ### Act on several tenants
 
-Select tenants with **Select tenant** on each card, or with the check boxes in the list view. Clicking a card or list row outside its buttons also selects or unselects it, and a selected tenant shows **Selected**. The bar above the tenants always shows how many are selected. Its check box selects or unselects every tenant matching the current search without touching tenants the search hides; the bar says how many selected tenants are not shown by search. **Clear**, or pressing **Escape**, unselects everything. With at least one tenant selected, the bar offers two actions:
+Select tenants with **Select tenant** on each card, or with the check boxes in the list view. Clicking a card or list row outside its buttons also selects or unselects it, and a selected tenant shows **Selected**. The bar above the tenants always shows how many are selected. Its check box selects or unselects every tenant matching the current search without touching tenants the search hides; the bar says how many selected tenants are not shown by search. **Clear** unselects everything. Pressing **Escape** does the same, unless a text field, menu, or dialog is open, where Escape keeps its usual meaning there. With at least one tenant selected, the bar offers two actions:
 
 * **Tag Selected** sets the tags you choose on every selected tenant, replacing their current tags.
 * **Backup Selected** backs up every selected tenant after you confirm. Each tenant uses its saved backup choice (see [Choose what to back up](/backups/#choose-what-to-back-up)). This needs the MSP plan on every selected tenant. If any selected tenant is not on MSP, the whole backup is refused and no backup starts.

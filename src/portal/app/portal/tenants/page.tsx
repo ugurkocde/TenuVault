@@ -124,18 +124,23 @@ function TenantsPageContent() {
   }
 
   const selectAllRef = useRef<HTMLButtonElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const clearSelection = () => setSelectedTenants([])
   // The action group unmounts when the selection empties; land focus on the
-  // always present select all box instead of dropping it to the body.
+  // always present select all box instead of dropping it to the body. When
+  // the search matches nothing that box is disabled, so focus the search.
   const clearSelectionFromBar = () => {
     clearSelection()
-    selectAllRef.current?.focus()
+    if (filteredTenants.length > 0) selectAllRef.current?.focus()
+    else searchInputRef.current?.focus()
   }
 
   // Clicking a card or row outside its controls toggles its selection.
+  // Action containers opt out with data-no-select because a disabled button
+  // takes no pointer events, so its clicks would land on the surface instead.
   const toggleFromSurface = (event: ReactMouseEvent, tenant: Tenant) => {
     if (editingTenantId === tenant.id) return
-    if ((event.target as HTMLElement).closest("button, a, input, select, textarea, [role='menu'], [role='dialog']")) return
+    if ((event.target as HTMLElement).closest("button, a, input, select, textarea, [role='menu'], [role='dialog'], [data-no-select]")) return
     toggleTenantSelection(tenant.id)
   }
 
@@ -678,6 +683,7 @@ function TenantsPageContent() {
         <div className="flex-1 relative">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
           <input
+            ref={searchInputRef}
             type="text"
             aria-label="Search tenants" placeholder="Search by name or domain..."
             value={searchQuery}
@@ -1074,7 +1080,7 @@ function TenantsPageContent() {
 
 
               {/* Actions */}
-              <div className="flex gap-2">
+              <div className="flex gap-2" data-no-select>
                 <Button
                   className="w-full bg-coral-600 text-white hover:bg-coral-700"
                   onClick={(e) => {
@@ -1328,7 +1334,7 @@ function TenantsPageContent() {
                       })()}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2" data-no-select>
                         <Button
                           size="icon"
                           variant="outline"
