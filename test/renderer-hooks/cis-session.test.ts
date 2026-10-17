@@ -201,6 +201,8 @@ describe("CIS Benchmarks results across navigation", () => {
     expect(container.textContent).toContain("3 of 10 policies read")
     // The run shows as a full-page overlay with one overall progress bar, not an inline card.
     const overlay = container.querySelector('[aria-label="Assessment in progress"]')
+    // A named region, not a generic div, so screen readers announce the label when focus lands here.
+    expect(overlay?.getAttribute("role")).toBe("region")
     expect(overlay?.className).toContain("fixed")
     expect(overlay?.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("15")
     expect(actions.some(body => body.action === "assess-start")).toBe(false)
