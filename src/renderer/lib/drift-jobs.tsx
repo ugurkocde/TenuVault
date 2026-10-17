@@ -26,6 +26,9 @@ const listeners = new Set<() => void>()
 /** Called when a scan this window saw running ends; for a completed scan, whether its saved result could be read. */
 const finishListeners = new Set<(job: DriftJob, resultLoaded: boolean) => void>()
 const loadingResults = new Set<string>()
+// Newest result read per tenant. A read sent before a newer scan saved its result (for
+// example a slow Retry) must not overwrite that newer result when its response lands.
+const resultGenerations = new Map<string, number>()
 let loaded = false
 // Responses to polls sent before a local change are stale and must not undo it.
 let revision = 0
@@ -94,14 +97,17 @@ export async function cancelDriftScan(job: DriftJob): Promise<void> {
 export async function loadDriftResult(tenantId: string, force = false): Promise<boolean> {
   const tenant = tenantId.toLowerCase()
   if (!force && (tenant in state.results || loadingResults.has(tenant))) return true
+  const generation = (resultGenerations.get(tenant) ?? 0) + 1
+  resultGenerations.set(tenant, generation)
   loadingResults.add(tenant)
   try {
     const { result } = await request<{ result: SavedDriftResult | null }>({ action: "result", tenantId: tenant })
+    if (resultGenerations.get(tenant) !== generation) return false
     state = { ...state, results: { ...state.results, [tenant]: result } }
     return true
   } catch {
     // Reported as no saved result; the page can still start a scan.
-    if (!(tenant in state.results)) state = { ...state, results: { ...state.results, [tenant]: null } }
+    if (resultGenerations.get(tenant) === generation && !(tenant in state.results)) state = { ...state, results: { ...state.results, [tenant]: null } }
     return false
   } finally {
     loadingResults.delete(tenant)

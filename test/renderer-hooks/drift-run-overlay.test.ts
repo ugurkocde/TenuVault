@@ -15,6 +15,7 @@ const driftStore = vi.hoisted(() => ({
   listeners: new Set<() => void>(),
   finishListeners: new Set<(job: DriftJob, loaded: boolean) => void>(),
   cancel: vi.fn(),
+  cancelFails: false,
   loadResult: vi.fn(async (): Promise<boolean> => true),
   emit() { for (const listener of this.listeners) listener() },
   setJob(job: DriftJob | undefined) { this.job = job; this.emit() },
@@ -47,6 +48,7 @@ vi.mock("../../src/renderer/lib/drift-jobs", async () => {
     },
     cancelDriftScan: async (job: DriftJob) => {
       driftStore.cancel(job)
+      if (driftStore.cancelFails) throw new Error("The scan could not be cancelled.")
       driftStore.setJob({ ...job, status: "cancelled", finishedAt: new Date().toISOString() })
     },
     loadDriftResult: driftStore.loadResult,
@@ -149,6 +151,7 @@ afterEach(() => {
   driftStore.result = null
   driftStore.results = {}
   driftStore.cancel.mockClear()
+  driftStore.cancelFails = false
   driftStore.loadResult.mockReset()
   driftStore.loadResult.mockImplementation(async () => true)
 })
@@ -279,6 +282,73 @@ describe("DriftDetectionPage run overlay", () => {
     expect(overlay(container)).toBeNull()
     expect(container.textContent).toContain("The last drift scan failed.")
     expect(container.querySelector("#drift-results-summary")).not.toBeNull()
+  })
+
+  it("keeps another tenant's load failure warning when a delayed retry resolves", async () => {
+    const tenantA = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    const tenantB = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    tenant.id = tenantA
+    driftStore.results = {
+      [tenantA]: { ...savedResult("job-a-previous"), tenantId: tenantA },
+      [tenantB]: { ...savedResult("job-b-previous"), tenantId: tenantB },
+    }
+    const container = render()
+    await flush()
+    const compare = container.querySelector<HTMLElement>("#compare-button")!
+    await act(async () => { compare.dispatchEvent(new MouseEvent("click", { bubbles: true })) })
+    await flush()
+    const completedA: DriftJob = { ...driftStore.job!, status: "completed", percent: 100, finishedAt: new Date().toISOString() }
+    act(() => {
+      driftStore.setJob(completedA)
+      driftStore.finish(completedA, false)
+    })
+    await flush()
+    expect(container.textContent).toContain("its result could not be loaded")
+
+    // The retry for tenant A stays in flight while the admin switches to tenant B.
+    let releaseRetry: (() => void) | null = null
+    driftStore.loadResult.mockImplementation(async () => {
+      await new Promise<void>(resolve => { releaseRetry = resolve })
+      driftStore.setResult({ ...savedResult(completedA.jobId), tenantId: tenantA })
+      return true
+    })
+    const retry = [...container.querySelectorAll("button")].find(button => button.textContent === "Retry")!
+    await act(async () => { retry.dispatchEvent(new MouseEvent("click", { bubbles: true })) })
+
+    tenant.id = tenantB
+    const completedB: DriftJob = {
+      jobId: "job-b", tenantId: tenantB, status: "completed", phase: "history",
+      detail: "Comparing policies: 10 of 10", done: 10, total: 10, percent: 100,
+      startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), baseline: null, comparison: null,
+    }
+    act(() => driftStore.setJob(completedB))
+    await flush()
+    act(() => driftStore.finish(completedB, false))
+    await flush()
+    expect(container.textContent).toContain("its result could not be loaded")
+
+    await act(async () => { releaseRetry?.() })
+    await flush()
+    // Tenant A's retry resolving must not clear tenant B's warning.
+    expect(container.textContent).toContain("its result could not be loaded")
+    expect(container.querySelector("#drift-results-summary")).not.toBeNull()
+  })
+
+  it("shows a failed cancellation inside the overlay", async () => {
+    tenant.id = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    driftStore.results = { [tenant.id]: savedResult("job-previous") }
+    driftStore.cancelFails = true
+    const container = render()
+    await flush()
+    const compare = container.querySelector<HTMLElement>("#compare-button")!
+    await act(async () => { compare.dispatchEvent(new MouseEvent("click", { bubbles: true })) })
+    await flush()
+    const cancel = [...container.querySelectorAll("button")].find(button => button.textContent?.includes("Cancel scan"))!
+    await act(async () => { cancel.dispatchEvent(new MouseEvent("click", { bubbles: true })) })
+    await flush()
+    const view = overlay(container)
+    expect(view).not.toBeNull()
+    expect(view?.querySelector('[role="alert"]')?.textContent).toBe("The scan could not be cancelled.")
   })
 
   it("opens on a saved result with no overlay and no reveal", async () => {

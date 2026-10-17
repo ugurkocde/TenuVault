@@ -86,6 +86,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
   const sawRunningJob = useRef<string | null>(null)
   const sawForKey = useRef<string | undefined>(undefined)
   const [loadSettledJobId, setLoadSettledJobId] = useState<string | null>(null)
+  const [cancelError, setCancelError] = useState('')
   const [revealedRunId, setRevealedRunId] = useState<string | null>(null)
   // Tracked during render, reset before record in the same pass, and finishing derived from
   // the completed job and the run on screen: state set in the completion effect would let
@@ -176,6 +177,17 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
     dismissedJobs.add(job?.jobId ?? '')
     shownRun.current = started.runId
   })
+  // A failed cancel is reported in the overlay, where the admin pressed it, not under it.
+  const cancel = () => {
+    setCancelError('')
+    void perform('Cancelling', async () => {
+      try { await cancelFrameworkJob(job!, credentials?.appId) }
+      catch (e) { setCancelError(e instanceof Error ? e.message : 'The comparison could not be cancelled.') }
+    })
+  }
+  useEffect(() => {
+    if (!running) setCancelError('')
+  }, [running])
   const togglePlatform = (platform: CompliancePlatform) => setScope(s => ({ ...s, platforms: s.platforms?.includes(platform) ? s.platforms.filter(x => x !== platform) : [...(s.platforms ?? []), platform] }))
 
   const result = run?.assessment.frameworks[0]
@@ -207,7 +219,8 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
       subDetail={`${elapsed(job.startedAt, now)} elapsed`}
       steps={nativeRunSteps(job.step, finishing)}
       focusFallbackSelector="#native-summary"
-      actions={running ? <button type="button" className={button} disabled={!!busy} onClick={() => void perform('Cancelling', () => cancelFrameworkJob(job, credentials?.appId))}>Cancel comparison</button> : undefined}
+      error={cancelError}
+      actions={running ? <button type="button" className={button} disabled={!!busy} onClick={cancel}>Cancel comparison</button> : undefined}
     />}
     {/* The page under a running comparison is inert, so covered controls leave the tab order. */}
     <div inert={showOverlay} className="space-y-5">
@@ -246,7 +259,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
           <p className="mt-1 text-sm text-gray-600">{selectedTenant ? <>Read-only comparison of <strong className="font-medium text-gray-800">{selectedTenant.name}</strong>. Results are saved on this device.</> : 'Choose a connected tenant in the sidebar.'}</p>
         </div>
         {running
-          ? <button type="button" className={button} disabled={!!busy} onClick={() => void perform('Cancelling', () => cancelFrameworkJob(job, credentials?.appId))}>Cancel comparison</button>
+          ? <button type="button" className={button} disabled={!!busy} onClick={cancel}>Cancel comparison</button>
           : <button type="button" className={primary} disabled={!!busy || !!disabledReason} title={disabledReason || undefined} onClick={start}>{busy === 'Starting comparison' && <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />}{run ? 'Compare again' : 'Compare settings'}</button>}
       </div>
       <fieldset disabled={running || !!busy} className="mt-5">

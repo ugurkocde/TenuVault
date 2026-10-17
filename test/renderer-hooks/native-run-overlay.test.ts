@@ -203,6 +203,21 @@ describe("NativeFrameworkPage run overlay", () => {
     expect(container.textContent).toContain("The last comparison failed.")
   })
 
+  it("shows a failed cancellation inside the overlay", async () => {
+    jobStore.cancel.mockRejectedValueOnce(new Error("The comparison could not be cancelled."))
+    const container = render()
+    await flush()
+    setJob(jobSummary({}))
+    const view = container.querySelector('[aria-label="Comparison in progress"]')!
+    const cancel = [...view.querySelectorAll("button")].find(button => button.textContent === "Cancel comparison")!
+    await act(async () => { cancel.dispatchEvent(new MouseEvent("click", { bubbles: true })) })
+    await flush()
+    expect(container.querySelector('[aria-label="Comparison in progress"]')).not.toBeNull()
+    expect(view.querySelector('[role="alert"]')?.textContent).toBe("The comparison could not be cancelled.")
+    // The page error behind the overlay stays empty, so the message is not duplicated on lift.
+    expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1)
+  })
+
   it("does not replay the reveal for a saved comparison opened later", async () => {
     history = [nativeRun("run-saved")]
     const container = render()
