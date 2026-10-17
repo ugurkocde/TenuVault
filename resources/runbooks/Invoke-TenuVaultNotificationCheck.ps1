@@ -548,27 +548,104 @@ function Get-TvFooter {
     return "Azure watcher | $(Get-TvProp $Envelope 'occurredAt') | Event $(([string](Get-TvProp $Envelope 'eventId')).Substring(0, 12))"
 }
 
-function Get-TvEmailText {
+function Get-TvHtmlEscape {
+    param([object]$Value)
+    if ($null -eq $Value) { return "" }
+    $text = [string]$Value
+    return $text.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace('"', "&quot;").Replace("'", "&#39;")
+}
+
+function Get-TvFriendlyTime {
+    param([object]$Value)
+    $iso = ConvertTo-TvIso $Value
+    if (-not $iso) { return [string]$Value }
+    # ConvertTo-TvIso renders yyyy-MM-ddTHH:mm:ss.fffZ, so the first 16 chars are the readable form.
+    return ($iso.Substring(0, 16).Replace("T", " ") + " UTC")
+}
+
+# Mirrors emailHtml in render.ts: same layout, badges and fixed action link, so a
+# digest looks the same whether the desktop app or the Azure watcher sent it.
+function Get-TvEmailHtml {
     param([object]$Envelope)
-    $lines = [System.Collections.Generic.List[string]]::new()
-    $lines.Add([string](Get-TvProp $Envelope "title"))
-    $lines.Add("")
-    $lines.Add([string](Get-TvProp $Envelope "summary"))
-    $lines.Add("")
+    # Built from its code point so this script stays pure ASCII: Windows
+    # PowerShell 5.1 parses BOM-less files with the host ANSI codepage and
+    # would misdecode a literal middle dot in the Automation sandbox.
+    $dot = [char]0x00B7
+    $badge = switch ([string](Get-TvProp $Envelope "severity")) {
+        "critical" { @{ Label = "Critical"; Color = "#b42318"; Background = "#fef3f2"; Bar = "#f04438" } }
+        "warning"  { @{ Label = "Warning";  Color = "#b54708"; Background = "#fffaeb"; Bar = "#f79009" } }
+        default    { @{ Label = "Info";     Color = "#175cd3"; Background = "#eff4ff"; Bar = "#2e90fa" } }
+    }
+    $verbStyles = @{
+        Created    = @("#067647", "#ecfdf3"); Updated = @("#175cd3", "#eff4ff"); Changed = @("#175cd3", "#eff4ff")
+        Assigned   = @("#6941c6", "#f4f3ff"); Unassigned = @("#b54708", "#fffaeb"); Deleted = @("#b42318", "#fef3f2")
+    }
+    $tenant = Get-TvText (Get-TvProp (Get-TvProp $Envelope "tenant") "name")
+    if (-not $tenant) { $tenant = Get-TvText (Get-TvProp (Get-TvProp $Envelope "tenant") "id") }
+
+    $detailRows = ""
     foreach ($detail in @(Get-TvProp $Envelope "details")) {
-        $lines.Add("$(Get-TvProp $detail 'label'): $(Get-TvProp $detail 'value')")
+        if ($null -eq $detail) { continue }
+        $detailRows += "<tr><td style=`"padding:5px 16px 5px 0;color:#475467;font-size:13px;white-space:nowrap;vertical-align:top`">$(Get-TvHtmlEscape (Get-TvProp $detail 'label'))</td><td style=`"padding:5px 0;font-size:13px`">$(Get-TvHtmlEscape (Get-TvProp $detail 'value'))</td></tr>"
     }
-    $items = @(Get-TvProp $Envelope "items")
-    if ($items.Count -gt 0 -and $null -ne $items[0]) {
-        $lines.Add("")
-        foreach ($item in $items) { $lines.Add((Get-TvItemLine $item)) }
+
+    $itemRows = ""
+    foreach ($item in @(Get-TvProp $Envelope "items")) {
+        if ($null -eq $item) { continue }
+        $title = [string](Get-TvProp $item "title")
+        $chip = ""
+        $colonAt = $title.IndexOf(":")
+        if ($colonAt -gt 0) {
+            $verb = $title.Substring(0, $colonAt).Trim()
+            if ($verbStyles.ContainsKey($verb)) {
+                $chip = "<span style=`"display:inline-block;padding:1px 8px;border-radius:999px;background:$($verbStyles[$verb][1]);color:$($verbStyles[$verb][0]);font-size:12px;font-weight:600;margin-right:8px`">$(Get-TvHtmlEscape $verb)</span>"
+                $title = $title.Substring($colonAt + 1).Trim()
+            }
+        }
+        $metaParts = [System.Collections.Generic.List[string]]::new()
+        if (Get-TvProp $item "detail") { $metaParts.Add([string](Get-TvProp $item "detail")) }
+        if (Get-TvProp $item "actor") { $metaParts.Add("by $(Get-TvProp $item 'actor')") }
+        if (Get-TvProp $item "at") { $metaParts.Add((Get-TvFriendlyTime (Get-TvProp $item "at"))) }
+        $meta = if ($metaParts.Count -gt 0) { "<div style=`"font-size:12px;line-height:18px;color:#475467;margin-top:2px`">$(Get-TvHtmlEscape ($metaParts -join " $dot "))</div>" } else { "" }
+        $itemRows += "<tr><td style=`"padding:10px 16px;border-top:1px solid #eaecf0`"><div style=`"font-size:14px;line-height:20px`">$chip<span style=`"font-weight:600`">$(Get-TvHtmlEscape $title)</span></div>$meta</td></tr>"
     }
+
+    $moreRow = ""
     if ([int](Get-TvProp $Envelope "moreCount") -gt 0) {
-        $lines.Add("And $(Get-TvProp $Envelope 'moreCount') more. Open TenuVault for the full list.")
+        $moreRow = "<tr><td style=`"padding:8px 24px 0;font-size:13px;color:#475467`">And $(Get-TvProp $Envelope 'moreCount') more. Open TenuVault for the full list.</td></tr>"
     }
-    $lines.Add("")
-    $lines.Add((Get-TvFooter $Envelope))
-    return $lines -join "`n"
+    $actionRow = ""
+    if ((Get-TvProp $Envelope "type") -eq "intune.change") {
+        $actionRow = "<tr><td style=`"padding:18px 24px 4px`"><a href=`"https://intune.microsoft.com`" style=`"display:inline-block;padding:9px 16px;border-radius:6px;background:#175cd3;color:#ffffff;font-size:14px;font-weight:600;text-decoration:none`">Open the Intune admin center</a></td></tr>"
+    }
+    $tenantRow = ""
+    if ($tenant) {
+        $tenantRow = "<tr><td style=`"padding:14px 24px 0`"><div style=`"font-size:12px;color:#667085`">Tenant&nbsp;&nbsp;<span style=`"color:#101828;font-size:13px`">$(Get-TvHtmlEscape $tenant)</span></div></td></tr>"
+    }
+    $detailsTable = ""
+    if ($detailRows) { $detailsTable = "<tr><td style=`"padding:10px 24px 4px`"><table role=`"presentation`" cellspacing=`"0`" cellpadding=`"0`">$detailRows</table></td></tr>" }
+    $itemsTable = ""
+    if ($itemRows) { $itemsTable = "<tr><td style=`"padding:12px 8px 4px`"><table role=`"presentation`" width=`"100%`" cellspacing=`"0`" cellpadding=`"0`">$itemRows</table></td></tr>" }
+    $eventShort = ([string](Get-TvProp $Envelope "eventId")).Substring(0, 12)
+
+    return @(
+        "<div style=`"margin:0;padding:24px 12px;background:#f6f7f9;font-family:'Segoe UI',SegoeUI,Arial,sans-serif;color:#101828`">"
+        "<table role=`"presentation`" width=`"640`" align=`"center`" cellspacing=`"0`" cellpadding=`"0`" style=`"width:640px;max-width:100%;margin:0 auto;background:#ffffff;border:1px solid #e4e7ec;border-radius:8px;border-collapse:separate;overflow:hidden`">"
+        "<tr><td style=`"height:3px;background:$($badge.Bar);font-size:0;line-height:0`">&nbsp;</td></tr>"
+        "<tr><td style=`"padding:20px 24px 0`"><table role=`"presentation`" width=`"100%`" cellspacing=`"0`" cellpadding=`"0`"><tr>"
+        "<td style=`"font-size:12px;font-weight:600;letter-spacing:2px;color:#667085`">TENUVAULT</td>"
+        "<td align=`"right`"><span style=`"display:inline-block;padding:2px 10px;border-radius:999px;background:$($badge.Background);color:$($badge.Color);font-size:12px;font-weight:600`">$($badge.Label)</span></td>"
+        "</tr></table></td></tr>"
+        "<tr><td style=`"padding:14px 24px 0`"><div style=`"font-size:20px;line-height:28px;font-weight:600`">$(Get-TvHtmlEscape (Get-TvProp $Envelope 'title'))</div>"
+        "<div style=`"font-size:14px;line-height:21px;color:#344054;margin-top:6px`">$(Get-TvHtmlEscape (Get-TvProp $Envelope 'summary'))</div></td></tr>"
+        $tenantRow
+        $detailsTable
+        $itemsTable
+        $moreRow
+        $actionRow
+        "<tr><td style=`"padding:18px 24px 20px`"><div style=`"border-top:1px solid #eaecf0;padding-top:12px;font-size:12px;line-height:18px;color:#98a2b3`">Azure watcher $dot $(Get-TvHtmlEscape (Get-TvFriendlyTime (Get-TvProp $Envelope 'occurredAt'))) $dot Event $(Get-TvHtmlEscape $eventShort)</div></td></tr>"
+        "</table></div>"
+    ) -join ""
 }
 
 function Get-TvMarkdownEscape {
@@ -908,12 +985,13 @@ function Send-TvRawMail {
         [Parameter(Mandatory)][string[]]$To,
         [Parameter(Mandatory)][string]$Subject,
         [Parameter(Mandatory)][string]$BodyText,
-        [Parameter(Mandatory)][string]$GraphToken
+        [Parameter(Mandatory)][string]$GraphToken,
+        [ValidateSet("Text", "HTML")][string]$BodyContentType = "Text"
     )
     $message = [pscustomobject][ordered]@{
         message = [pscustomobject][ordered]@{
             subject = $Subject
-            body = [pscustomobject][ordered]@{ contentType = "Text"; content = $BodyText }
+            body = [pscustomobject][ordered]@{ contentType = $BodyContentType; content = $BodyText }
             toRecipients = @($To | ForEach-Object {
                 [pscustomobject][ordered]@{ emailAddress = [pscustomobject][ordered]@{ address = $_ } }
             })
@@ -973,7 +1051,7 @@ function Send-TvMail {
     if ($subject.Length -gt 250) { $subject = $subject.Substring(0, 250) }
     $to = @(($Recipients -split "[,;]") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     if ($to.Count -eq 0) { throw "Mail delivery failed: TenuVaultMailRecipients contains no recipient addresses." }
-    Send-TvRawMail -From $MailSender -To $to -Subject $subject -BodyText (Get-TvEmailText $Envelope) -GraphToken $GraphToken
+    Send-TvRawMail -From $MailSender -To $to -Subject $subject -BodyText (Get-TvEmailHtml $Envelope) -GraphToken $GraphToken -BodyContentType "HTML"
 }
 
 if ($LibraryOnly) { return }
