@@ -82,3 +82,18 @@ it('skips blank status fields and trims meaningful fallback states', () => {
   expect(normalizeBackupStatus({ status: '  ', properties: { status: '' }, result: 'Succeeded' })).toBe('success')
   expect(normalizeBackupStatus({ status: '  ' })).toBe('unknown')
 })
+it('stops counting a run as running once its manifest or failure record is saved', () => {
+  const since = new Date(now.getTime() - 86_400_000)
+  const folders = [{ status: 'success' as const, timestamp: now, runId: 'run-done' }]
+  const attempts = [{ timestamp: now, runId: 'run-failed' }]
+  // The engine still reports both runs while it cleans up after writing their results.
+  expect(backupSummary(folders, attempts, { since, live: ['run-done', 'run-failed'] }))
+    .toMatchObject({ successful: 1, failed: 1, inProgress: 0, latestStatus: 'success' })
+})
+it('keeps a known failed run failed after its folder without a manifest turns incomplete', () => {
+  const since = new Date(now.getTime() - 86_400_000)
+  const folders = [{ status: 'incomplete' as const, timestamp: now, runId: 'run-failed' }, { status: 'incomplete' as const, timestamp: new Date(now.getTime() - 1000), runId: 'run-live' }]
+  expect(backupSummary(folders, [{ timestamp: now, runId: 'run-failed' }], { since, live: ['run-live'] }))
+    .toMatchObject({ failed: 1, inProgress: 1, latestStatus: 'running' })
+  expect(backupSummary(folders.slice(0, 1), [{ timestamp: now, runId: 'run-failed' }], { since })).toMatchObject({ failed: 1, latestStatus: 'failed' })
+})

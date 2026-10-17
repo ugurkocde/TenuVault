@@ -32,7 +32,8 @@ export function backupHealth(backups: Backup[], now: Date, unavailable = false):
  * The Dashboard counts runs. Each backup run counts once: by its folder when storage holds one for
  * it, otherwise by its attempt record. A folder without a manifest is failed when its run id
  * matches a failed attempt. Otherwise it is running while `live` (the run ids of the app's
- * unfinished jobs) holds its run id, or for six hours after it started, since another device may
+ * unfinished jobs, less those whose manifest or failure record is already saved) holds its run id,
+ * or for six hours after it started, since another device may
  * be running it or the app restarted mid run; after that it is incomplete. Running counts the live
  * jobs and the other running folders, once per run, and `latestStatus` (the Last backup chip) is
  * running whenever that count is above zero, so the two always agree.
@@ -41,10 +42,14 @@ export function backupSummary(backups: Array<Backup & { runId?: string | null }>
   const inPeriod = <T extends { timestamp: Date }>(item: T) => item.timestamp >= period.since && (!period.until || item.timestamp < period.until)
   const stored = new Set(backups.map((item) => item.runId).filter((id) => !!id))
   const failedRuns = new Set(failedAttempts.map((attempt) => attempt.runId).filter((id) => !!id))
-  const live = new Set(period.live)
-  // The list says running for a folder without a manifest that started less than six hours ago.
-  const statusOf = (item: Backup & { runId?: string | null }): BackupState =>
-    item.status === 'running' && item.runId && failedRuns.has(item.runId) ? 'failed' : item.status
+  // A run that already wrote its manifest or its failure record has finished, even while the engine still reports it.
+  const finishedRuns = new Set([...backups.filter((item) => item.runId && ['success', 'failed', 'partial'].includes(item.status)).map((item) => item.runId), ...failedRuns])
+  const live = new Set((period.live ?? []).filter((id) => !finishedRuns.has(id)))
+  // The list says running for a folder without a manifest that started less than six hours ago, and incomplete after that.
+  const statusOf = (item: Backup & { runId?: string | null }): BackupState => {
+    if ((item.status !== 'running' && item.status !== 'incomplete') || !item.runId) return item.status
+    return failedRuns.has(item.runId) ? 'failed' : live.has(item.runId) ? 'running' : item.status
+  }
   const recent = backups.filter(inPeriod).map(statusOf)
   const unsaved = failedAttempts.filter((attempt) => !attempt.runId || !stored.has(attempt.runId))
   const successful = recent.filter((status) => status === 'success').length
