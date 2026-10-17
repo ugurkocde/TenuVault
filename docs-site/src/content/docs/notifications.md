@@ -48,6 +48,8 @@ Teams notifications use a Workflows incoming webhook, the supported replacement 
 
 Messages arrive as an Adaptive Card posted by Workflows, with the event title, summary, details and changed items. Good to know: the workflow belongs to the person who created it and stops when that account is disabled, and tenant policies for the Workflows app can block it. If a test message fails, the channel shows the answer it got.
 
+![An Intune change digest as a Workflows card in a Teams channel, with three changes and their policy names](/images/notifications/notifications-teams.png)
+
 ### Email
 
 Email is sent through Microsoft Graph as the signed-in admin. It needs the optional `Mail.Send` permission: re-run the app registration script with `-IncludeNotifications` to add it, see [Permissions](/security/permissions/). Without it, email deliveries fail with a Graph permission error while other channels keep working.
@@ -56,6 +58,10 @@ Recipients can be:
 
 * Email addresses, including distribution lists and Microsoft 365 group addresses. Exchange expands them. Note that a Microsoft 365 group only delivers to members who subscribed to group mail.
 * An Entra group you pick or paste by object ID. Its members are resolved when the mail is sent, guests excluded, up to 200 people. Larger groups should use a distribution list address instead.
+
+Mail arrives as HTML with a severity badge, one row per change with a colored verb marker (created, updated, deleted, assigned, unassigned), readable UTC times, and, for Intune change digests, a button into the Intune admin center. The same design is used by the desktop app and the Azure watcher. Links in mail are fixed Microsoft addresses chosen by TenuVault; links from tenant data are never rendered.
+
+![An Intune change digest as HTML email with severity badge, verb markers and an admin center button](/images/notifications/notifications-email.png)
 
 ## Rules
 
@@ -78,7 +84,7 @@ Change watching reads the Intune audit log through Microsoft Graph and digests n
 
 ## Alerts while this computer is off: the Azure watcher
 
-Desktop notifications stop when the computer is off, asleep or signed out. The Azure watcher closes that gap. It is a PowerShell runbook in an Azure Automation account in the customer tenant, running on a schedule with a managed identity and no stored secret. It watches the same Intune audit events and checks the age of the newest backup folder in the backup storage account, then delivers to the same kinds of channels: webhook, Teams Workflows and email. The event content is identical; watcher email is plain text instead of the desktop HTML layout.
+Desktop notifications stop when the computer is off, asleep or signed out. The Azure watcher closes that gap. It is a PowerShell runbook in an Azure Automation account in the customer tenant, running on a schedule with a managed identity and no stored secret. It watches the same Intune audit events and checks the age of the newest backup folder in the backup storage account, then delivers to the same kinds of channels: webhook, Teams Workflows and email. The event content and the mail design are identical to the desktop app.
 
 What it can and cannot see, plainly:
 
@@ -91,6 +97,36 @@ Setup is two copy and paste scripts in the TenuVault repository under `resources
 
 Costs are the Automation job minutes of short read-only runs in the customer subscription. The setup script prints the cadence it configured; start hourly and tighten only if the latency matters.
 
+One full setup run looks like this. Everything is created in a new resource group, the storage account is the one from the backup setup, and the script is safe to run again for upgrades:
+
+```powershell
+./New-TenuVaultNotificationWatcher.ps1 `
+  -TenantId <tenant-guid> -StorageAccountName <backup-storage-account> `
+  -TeamsWebhookUrl <workflows-url> -AlertEmail you@example.com `
+  -GrantGraphRoles -IncludeMailSend `
+  -MailSender notifications@contoso.com `
+  -MailRecipients team@contoso.com
+```
+
+### If the watcher itself breaks
+
+A watcher that fails silently would defeat its purpose, so setup refuses to guess about failure reporting. Pass `-AlertEmail` and the script creates an Azure Monitor action group and a metric alert on failed Automation jobs in the watcher resource group, so a broken watcher emails you through Azure Monitor, independent of the runbook itself. Passing `-NoFailureAlert` is the explicit opt-out. Every run also writes `heartbeat.json` (last run time, watermark, last error) into the state container, which is the quickest health check: if `heartbeat.json` is older than the schedule, runs are not happening.
+
+Two setup errors worth knowing before you meet them:
+
+* `Conflict` while creating the Automation account usually means the regional Automation account quota (as low as 2 accounts per region on many subscription types) or the account name being taken in that region. Run again with another `-Location` or `-AutomationAccountName`.
+* A run that reports a missed backup check failure after listing the storage account is a real storage or role problem. The message includes the storage answer; check that the identity still has its two container-scoped roles and that they are permanently active, not PIM-eligible.
+
+### Watcher email and the one-time verification
+
+The watcher sends mail app-only with the `Mail.Send` application permission. On its own that permission could send as any mailbox, so the watcher refuses to use it until you prove from the receiving side that Exchange restricts it. Setup can grant the role (`-IncludeMailSend -GrantGraphRoles`), but the restriction and the proof are yours to run once:
+
+1. Create a mail-enabled security group containing only the sender mailbox, then restrict the watcher identity to it in Exchange Online PowerShell: `New-ApplicationAccessPolicy -AppId <watcher identity app id> -PolicyScopeGroupId <group> -AccessRight RestrictAccess`. The setup output prints the identity ids you need.
+2. Set `-MailSender` to that mailbox and `-MailProbeMailbox` to a second mailbox that is outside the group.
+3. Start the runbook once with the `VerifyMailOnly` parameter set. It sends a short verification mail as the sender (must succeed), then attempts to send as the probe mailbox (must be rejected with HTTP 403). Only then does it record `mailVerified` in `state.json`, and normal runs start delivering mail. The verification expires after 90 days, and changing the sender requires a new one; normal runs say so in their output and skip mail until it passes again.
+
+Plan for Exchange propagation: a brand-new access policy and scope group can take hours before app-only sending is actually allowed for the in-scope mailbox. During that window verification fails with `ErrorAccessDenied ... [RAOP] Blocked by tenant configured AppOnly AccessPolicy settings` even when every setting reads correctly, including `Test-ApplicationAccessPolicy` saying Granted. That is propagation, not a configuration error. Do not rebuild the policy; rebuilding restarts the wait. Re-run the verification later the same day or the next morning.
+
 ## Troubleshooting
 
 | Symptom | Likely cause |
@@ -100,3 +136,7 @@ Costs are the Automation job minutes of short read-only runs in the customer sub
 | No Intune change digests | Watching is off, you are signed out, or changes were made through TenuVault and are being ignored. The watch card shows the last poll and its error. |
 | The same alert arrived twice | A delivery succeeded but its confirmation was lost and the queue retried. The `eventId` is the same; this is expected at-least-once behaviour. |
 | Webhook URL refused | Only public https addresses are allowed, without credentials in the URL. |
+| Watcher mail verification fails with `ErrorAccessDenied ... [RAOP]` | The Exchange application access policy or its scope group has not propagated yet, or the sender mailbox is not in the scope group. Wait and re-run verification; see the watcher email section above. |
+| Watcher output says mail delivery is skipped | Mail was never verified for this sender, the sender changed, or the verification is older than 90 days. Run the runbook once with `VerifyMailOnly`. |
+| Automation account creation fails with `Conflict` | Regional Automation account quota or name taken. Retry setup with another `-Location` or `-AutomationAccountName`. |
+| Azure Monitor reports failed watcher jobs | Open the newest job in the Automation account. The exception names the step; `heartbeat.json` in the state container shows the last error and watermark. |
