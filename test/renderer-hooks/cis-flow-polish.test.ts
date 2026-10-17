@@ -173,6 +173,26 @@ describe("CIS flow on the page", () => {
     expect(container.querySelector('[aria-label="Results header"]')!.textContent).toContain("Synthetic tenant")
   })
 
+  it("names a nested macOS finding without the generic group collection name", async () => {
+    const group = "com.apple.systempolicy.control_com.apple.systempolicy.control"
+    const child = "com.apple.systempolicy.control_enableassessment"
+    const gatekeeper = (value: string) => ({ "@odata.type": "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance", settingDefinitionId: group, groupSettingCollectionValue: [{ children: [{ "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance", settingDefinitionId: child, choiceSettingValue: { value: `${child}_${value}`, children: [] } }] }] })
+    const macPolicy = { ...policy, name: "macOS policy", platforms: "macOS", settings: [{ settingInstance: gatekeeper("true") }] }
+    const finding = { ...saved.findings[0]!, policyName: "macOS policy", settingId: group, recommended: gatekeeper("true"), observed: [{ ...saved.findings[0]!.observed[0]!, value: gatekeeper("false") }] }
+    const macWorkspace = { ...workspace, policies: [macPolicy], history: [{ assessment: { ...saved, findings: [finding] }, policies: [macPolicy] }] }
+    // Names cached before the generic name was left out still hold it.
+    const stale = { settings: { [group]: "Top Level Setting Group Collection", [child]: "Enable Assessment" }, options: { [`${child}_true`]: "True", [`${child}_false`]: "False" } }
+    stubService({ "workspace-open": () => Response.json({ workspace: macWorkspace, activeJob: null }), "cis-setting-names": () => Response.json(stale) })
+    await refreshInternalCisBenchmarks()
+    const container = renderPage()
+    await waitFor(() => container.textContent!.includes("Enable Assessment"))
+    const row = container.querySelector('input[aria-label="Select finding Com.apple.systempolicy.control from macOS policy"]')!.closest("div")!
+    expect(row.querySelector("summary .font-mono")!.textContent).toBe(group)
+    const lists = [...row.querySelectorAll("ul li")].map(item => item.textContent)
+    expect(lists).toContain("com.apple.systempolicy.control: Enable Assessment: Selected option: True")
+    expect(container.textContent).not.toContain("Top Level Setting Group Collection")
+  })
+
   it("streams partial results grouped by policy and setting name, with nothing to select", async () => {
     stubService({
       "assess-start": () => Response.json({ jobId: "job-1" }),

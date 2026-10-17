@@ -96,6 +96,24 @@ export function humanize(name: string): string {
 /** A name from the scan's SettingNames; own keys only, since IDs and values are arbitrary strings. */
 const lookup = (map: Record<string, string> | undefined, key: string): string | undefined => (map && Object.hasOwn(map, key) ? map[key] : undefined)
 
+/** The name Graph gives every top-level setting group collection, such as most macOS payloads; it names no setting. */
+export const GENERIC_GROUP_NAME = "Top Level Setting Group Collection"
+
+/**
+ * The display name read for a setting definition, or undefined when none was read or it is only
+ * the generic group collection name (names read before it was left out), so the id fallback applies.
+ */
+export function settingNameOf(definitionId: string, names?: SettingNames): string | undefined {
+  const name = lookup(names?.settings, definitionId)
+  return name && name !== GENERIC_GROUP_NAME ? name : undefined
+}
+
+/** A top-level payload id that repeats itself, com.apple.applicationaccess_com.apple.applicationaccess, as com.apple.applicationaccess; others unchanged. */
+export function payloadSettingId(definitionId: string): string {
+  const half = (definitionId.length - 1) / 2
+  return half > 0 && Number.isInteger(half) && definitionId[half] === "_" && definitionId.slice(0, half) === definitionId.slice(half + 1) ? definitionId.slice(0, half) : definitionId
+}
+
 const VENDOR_PREFIX = /^(?:device|user)_vendor_msft_(?:policy_(?:config|result)_)?|^vendor_msft_|^com\.apple\./i
 
 /**
@@ -103,9 +121,9 @@ const VENDOR_PREFIX = /^(?:device|user)_vendor_msft_(?:policy_(?:config|result)_
  * device_vendor_msft_policy_config_defender_allowcloudprotection -> "Defender: Allow cloud protection".
  */
 export function definitionLabel(definitionId: string, names?: SettingNames): string {
-  const named = lookup(names?.settings, definitionId)
+  const named = settingNameOf(definitionId, names)
   if (named) return named
-  const parts = definitionId.replace(VENDOR_PREFIX, "").split(/[_.]/).filter(Boolean)
+  const parts = payloadSettingId(definitionId).replace(VENDOR_PREFIX, "").split(/[_.]/).filter(Boolean)
   if (parts.length === 0) return definitionId
   const setting = humanize(parts[parts.length - 1]!)
   return parts.length === 1 ? setting : `${humanize(parts[parts.length - 2]!)}: ${setting}`

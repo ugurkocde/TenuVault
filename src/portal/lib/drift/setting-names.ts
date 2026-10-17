@@ -1,8 +1,10 @@
 import type { SettingNames } from "../../../shared/intune/drift"
+import { GENERIC_GROUP_NAME } from "../../../shared/intune/drift-format"
 import type { Item } from "../../../shared/intune/registry"
 import type { GraphCall } from "~/lib/policies/graph-restore"
 
-type Definition = { name: string; options: Record<string, string> }
+/** A read definition; name is null when Graph gives it only the generic group collection name and no keyword. */
+type Definition = { name: string | null; options: Record<string, string> }
 
 /**
  * Setting definitions read so far, by ID; null for IDs Graph does not know. Definitions are
@@ -27,20 +29,25 @@ function cacheDefinition(id: string, definition: Definition | null): void {
   }
 }
 
-function parseDefinition(body: { displayName?: unknown; options?: unknown }): Definition | null {
+function parseDefinition(body: { displayName?: unknown; keywords?: unknown; options?: unknown }): Definition | null {
   const options: Record<string, string> = {}
   if (Array.isArray(body.options)) {
     for (const option of body.options as Array<{ itemId?: unknown; displayName?: unknown }>) {
       if (typeof option?.itemId === "string" && typeof option.displayName === "string" && option.displayName.trim()) options[option.itemId] = option.displayName.trim()
     }
   }
-  return typeof body.displayName === "string" && body.displayName.trim() ? { name: body.displayName.trim(), options } : null
+  if (typeof body.displayName !== "string" || !body.displayName.trim()) return null
+  const name = body.displayName.trim()
+  if (name !== GENERIC_GROUP_NAME) return { name, options }
+  // A top-level group collection, such as a macOS payload, is named by its first keyword, such as "System Policy Control".
+  const keyword = Array.isArray(body.keywords) && typeof body.keywords[0] === "string" ? body.keywords[0].trim() : ""
+  return { name: keyword || null, options }
 }
 
 interface BatchItem {
   id: string
   status: number
-  body?: { displayName?: unknown; options?: unknown }
+  body?: { displayName?: unknown; keywords?: unknown; options?: unknown }
 }
 
 /**
@@ -88,7 +95,7 @@ export async function readSettingNames(ids: string[], graph: GraphCall, signal?:
   for (const id of ids) {
     const definition = definitions.get(id)
     if (!definition) continue
-    names.settings[id] = definition.name
+    if (definition.name) names.settings[id] = definition.name
     Object.assign(names.options, definition.options)
   }
   return names
