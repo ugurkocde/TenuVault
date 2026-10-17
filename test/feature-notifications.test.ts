@@ -187,6 +187,8 @@ describe("Intune audit watching", () => {
         if (path.startsWith("deviceManagement/auditEvents")) {
           expect(path).toContain("activityDateTime")
           expect(path).toContain("activityOperationType")
+          expect(decodeURIComponent(path)).toContain("activityOperationType ne 'Get'")
+          expect(decodeURIComponent(path)).toContain("activityOperationType ne 'Search'")
           return { status: 200, body: { value: events } }
         }
         return { status: 404, body: {} }

@@ -38,7 +38,7 @@
     it that check stays unknown. Off by default, so the default permission set is unchanged.
 
 .PARAMETER IncludeNotifications
-    When set, also requests the delegated Mail.Send and GroupMember.Read.All permissions.
+    When set, also requests the delegated Mail.Send, GroupMember.Read.All and User.Read.All permissions.
     Notification email channels send as the signed-in admin and can resolve Entra group
     recipients. Without it, email channels fail with a Graph permission error while
     webhook and Teams channels keep working. Off by default.

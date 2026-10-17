@@ -349,7 +349,7 @@ async function pollAuditWatchOnce(deps: FeatureDeps, tenantId: string, options: 
     const collected: AuditChange[] = []
     const seenNow: Array<{ id: string; at: string }> = []
     let newestSeenAt: string | null = null
-    const freshPath = `deviceManagement/auditEvents?$select=${AUDIT_EVENT_SELECT}&$filter=${encodeURIComponent(`activityDateTime gt ${since.toISOString()}`)}&$orderby=activityDateTime&$top=200`
+    const freshPath = `deviceManagement/auditEvents?$select=${AUDIT_EVENT_SELECT}&$filter=${encodeURIComponent(`activityDateTime gt ${since.toISOString()} and activityOperationType ne 'Get' and activityOperationType ne 'Search'`)}&$orderby=activityDateTime&$top=200`
     let path: string | null = watch.continuation ?? freshPath
     let resumed = Boolean(watch.continuation)
     let pages = 0
