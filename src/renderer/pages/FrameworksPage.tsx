@@ -48,6 +48,25 @@ const button = "inline-flex h-10 items-center justify-center gap-2 rounded-full 
 const primary = cn(button, "border-transparent bg-primary text-primary-foreground hover:bg-primary/90")
 const NativeFrameworkPage = lazy(() => import('./NativeFrameworkPage'))
 /** The part of the CIS page an action belongs to: loading a benchmark, comparing, or exporting results. */
+/**
+ * The run a background pack comparison produced, kept per tenant and framework for this window
+ * session. The activity panel entry is temporary, so the page reads this marker on open to show
+ * that exact result even when the admin returns long after the panel entry is gone.
+ */
+const compareMarkerKey = (tenantId: string, frameworkId: string) => `bg-compare:${tenantId.toLowerCase()}:${frameworkId}`
+function rememberBackgroundCompare(tenantId: string, frameworkId: string, runId: string): void {
+  try { sessionStorage.setItem(compareMarkerKey(tenantId, frameworkId), runId) } catch { /* storage unavailable */ }
+}
+function takeBackgroundCompare(tenantId: string | undefined, frameworkId: string): string | null {
+  if (!tenantId) return null
+  try {
+    const key = compareMarkerKey(tenantId, frameworkId)
+    const runId = sessionStorage.getItem(key)
+    if (runId) sessionStorage.removeItem(key)
+    return runId
+  } catch { return null }
+}
+
 type ActionArea = "load" | "compare" | "export"
 /** Where a CIS export was started: the results header, the saved assessments block, the full history alert or the pack coverage button. */
 type ExportOrigin = "header" | "saved" | "alert" | "coverage"
@@ -482,6 +501,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     if (isCis || compareTask?.status !== "completed" || !compareTask.finishedAt) return
     if (appliedCompareFinish.current === compareTask.finishedAt) return
     appliedCompareFinish.current = compareTask.finishedAt
+    takeBackgroundCompare(credentials?.tenantId, framework.id)
     // A comparison started before this mount finished into setters that no longer exist, so
     // show the newest saved assessment from the workspace it was recorded in.
     void workspaceRequest("workspace-load").then((saved) => {
@@ -530,7 +550,13 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     const saved = opened.workspace
     setWorkspace(saved)
     if (first) { setPolicies(saved.policies); setReference(saved.reference); setRecommendationList(saved.recommendationList) }
-    if (!isCis) return
+    if (!isCis) {
+      // A comparison that finished in the background while this page was closed opens on its result.
+      const backgroundRunId = first ? takeBackgroundCompare(credentials?.tenantId, framework.id) : null
+      const backgroundRun = backgroundRunId ? saved.history.find((entry) => entry.assessment.runId === backgroundRunId) : undefined
+      if (backgroundRun) showSavedResults(backgroundRun.assessment, { policies: backgroundRun.policies, reference: backgroundRun.assessment.reference })
+      return
+    }
     setActiveLookupFailed(lookupFailed)
     const latest = currentSavedAssessment(saved)
     // A requested saved run opens read-only, the exact run the link named; when it is gone the page
@@ -1111,10 +1137,13 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
           reset(); setError(""); setErrorAt("compare")
           const chosenReference = reference
           const chosenPolicies = policies
-          startBackgroundTask(compareKey, { title: `${framework.name} comparison`, detail: "Reading tenant policies and comparing settings", href: `/portal/frameworks/${framework.id}` }, async () => {
+          startBackgroundTask(compareKey, { title: `${framework.name} comparison`, detail: "Reading tenant policies and comparing settings", href: `/portal/frameworks/${framework.id}`, tenantId: credentials!.tenantId }, async () => {
             try {
               const result = await request<Assessment>({ action: "assess", tenantId: credentials!.tenantId, appId: credentials!.appId, frameworkId: framework.id, reference: chosenReference, policies: chosenPolicies })
-              setAssessment(result); setWorkspace(await workspaceRequest("workspace-load"))
+              // The result belongs to the captured pack: install both together, so a pack
+              // changed while the comparison ran cannot pair its policies with these findings.
+              rememberBackgroundCompare(credentials!.tenantId, framework.id, result.runId)
+              setPolicies(chosenPolicies); setReference(chosenReference); setAssessment(result); setWorkspace(await workspaceRequest("workspace-load"))
               return `${framework.name} comparison is ready.`
             } catch (e) {
               // The page error still shows for an admin who stayed here; the panel carries it elsewhere.

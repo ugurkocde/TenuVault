@@ -10,9 +10,25 @@ export type { BackgroundTask, BackgroundTaskOptions, BackgroundTaskReport }
  * their own stores; the activity panel shows all of them together. A finished task toasts
  * when the admin is not already looking at its result page.
  */
+let selectedTenantId: string | undefined
+
+/** Records the tenant on screen, called by the activity panel, which is always mounted. */
+export function noteBackgroundTaskTenant(tenantId: string | undefined): void {
+  selectedTenantId = tenantId
+}
+
+/** The task's result route naming its tenant, so the link opens that tenant's page. */
+export function taskHref(task: Pick<BackgroundTask, "href" | "tenantId">): string | undefined {
+  if (!task.href) return undefined
+  if (!task.tenantId || task.href.includes("tenant=")) return task.href
+  return `${task.href}${task.href.includes("?") ? "&" : "?"}tenant=${task.tenantId}`
+}
+
 const store = createBackgroundTaskStore({
+  currentTenantId: () => selectedTenantId,
   notify: (task) => {
-    const action = task.href ? { label: task.status === "completed" ? "View results" : "Open", href: task.href } : undefined
+    const href = taskHref(task)
+    const action = href ? { label: task.status === "completed" ? "View results" : "Open", href } : undefined
     if (task.status === "completed") toast(task.detail ?? `${task.title} finished.`, "success", action)
     else toast(`${task.title} failed. ${task.error ?? ""}`.trim(), "error", action)
   },

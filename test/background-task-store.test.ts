@@ -11,11 +11,12 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-function makeStore(hash = "#/portal/dashboard") {
+function makeStore(hash = "#/portal/dashboard", currentTenantId?: string) {
   const notified: BackgroundTask[] = []
   const store = createBackgroundTaskStore({
     notify: (task) => notified.push(task),
     currentHash: () => hash,
+    currentTenantId: () => currentTenantId,
     autoRemoveMs: 30_000,
   })
   return { store, notified }
@@ -49,6 +50,17 @@ it("does not notify when the result page is already open", async () => {
   await vi.advanceTimersByTimeAsync(0)
   expect(store.getSnapshot()[0]!.status).toBe("completed")
   expect(notified).toEqual([])
+})
+
+it("still notifies on the result page of a different tenant", async () => {
+  const other = makeStore("#/portal/governance/hygiene", "tenant-b")
+  other.store.start("scan:a", { title: "Hygiene scan", href: "/portal/governance/hygiene", tenantId: "tenant-a" }, async () => "done")
+  await vi.advanceTimersByTimeAsync(0)
+  expect(other.notified).toHaveLength(1)
+  const same = makeStore("#/portal/governance/hygiene", "tenant-a")
+  same.store.start("scan:a", { title: "Hygiene scan", href: "/portal/governance/hygiene", tenantId: "tenant-a" }, async () => "done")
+  await vi.advanceTimersByTimeAsync(0)
+  expect(same.notified).toEqual([])
 })
 
 it("ignores a second start of a running key and accepts it again after the finish", async () => {

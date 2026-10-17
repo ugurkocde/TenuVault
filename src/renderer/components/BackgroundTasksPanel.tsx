@@ -2,10 +2,10 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import { CheckCircle2, ChevronDown, ChevronUp, LoaderCircle, X, XCircle } from "lucide-react"
 import { Progress } from "~/components/ui/progress"
-import { useTenants } from "~/contexts/TenantContext"
+import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { cisRunDisplayPhase, cisRunHeading, cisRunProgress } from "../../shared/frameworks/cis-run"
-import { clearFinishedBackgroundTasks, dismissBackgroundTask, useBackgroundTasks } from "../lib/background-tasks"
+import { clearFinishedBackgroundTasks, dismissBackgroundTask, noteBackgroundTaskTenant, taskHref, useBackgroundTasks } from "../lib/background-tasks"
 import { useCisJobs } from "../lib/cis-jobs"
 import { cancelDriftScan, useDriftJobs } from "../lib/drift-jobs"
 import { cancelFrameworkJob, useFrameworkJobs } from "../lib/framework-jobs"
@@ -23,8 +23,10 @@ interface PanelTask {
   status: PanelStatus
   startedAt: number
   href?: string
+  tenantId?: string
   cancel?: () => Promise<void>
   dismiss?: () => void
+  onOpen?: () => void
 }
 
 /** How long a finished mirrored job stays in the panel. Failures stay until dismissed. */
@@ -79,7 +81,7 @@ function TaskCard({ task, now }: { task: PanelTask; now: number }) {
           {(task.href || (running && task.cancel)) && (
             <div className="mt-2 flex flex-wrap items-center gap-3 text-xs font-medium">
               {task.href && (
-                <Link to={task.href} className="text-blue-700 hover:underline">
+                <Link to={task.href} onClick={task.onOpen} className="text-blue-700 hover:underline">
                   {task.status === "completed" ? "View results" : "Open"}
                 </Link>
               )}
@@ -114,27 +116,43 @@ export function BackgroundTasksPanel() {
   const frameworkJobs = useFrameworkJobs()
   const cisJobs = useCisJobs()
   const tenants = useTenants()
+  const { selectedTenant, setSelectedTenantId } = useSelectedTenant()
+  useEffect(() => { noteBackgroundTaskTenant(selectedTenant?.credentials?.tenantId) }, [selectedTenant?.credentials?.tenantId])
   const [collapsed, setCollapsed] = useState(false)
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(new Set())
   const [now, setNow] = useState(Date.now())
   const panel = useRef<HTMLDivElement>(null)
   // Mirrored jobs this window saw running; only their finish is shown, not older history.
   const seenRunning = useRef(new Set<string>())
+  // Failures observed this session, kept after the main process prunes its job history.
+  const retainedFailures = useRef(new Map<string, PanelTask>())
 
   const tenantName = (tenantId: string) =>
     tenants.find((tenant) => tenant.credentials?.tenantId.toLowerCase() === tenantId.toLowerCase())?.name
+  const selectTenant = (tenantId: string | undefined) => {
+    if (!tenantId) return
+    const match = tenants.find((tenant) => tenant.credentials?.tenantId.toLowerCase() === tenantId.toLowerCase())
+    if (match && match.id !== selectedTenant?.id) setSelectedTenantId(match.id)
+  }
+  const dismissMirrored = (id: string) => {
+    retainedFailures.current.delete(id)
+    setDismissed((prev) => new Set(prev).add(id))
+  }
 
   const mirrored: PanelTask[] = []
   const consider = (task: PanelTask, finishedAt?: string) => {
     if (task.status === "running") seenRunning.current.add(task.id)
     if (dismissed.has(task.id)) return
+    const openable = { ...task, onOpen: () => selectTenant(task.tenantId) }
     if (task.status === "running") {
-      mirrored.push(task)
+      mirrored.push(openable)
       return
     }
     if (!seenRunning.current.has(task.id)) return
     if (task.status === "completed" && finishedAt && now - Date.parse(finishedAt) > FINISHED_VISIBLE_MS) return
-    mirrored.push({ ...task, dismiss: () => setDismissed((prev) => new Set(prev).add(task.id)) })
+    const finished = { ...openable, dismiss: () => dismissMirrored(task.id) }
+    if (task.status === "failed") retainedFailures.current.set(task.id, finished)
+    mirrored.push(finished)
   }
   for (const job of driftJobs) {
     consider({
@@ -146,6 +164,7 @@ export function BackgroundTasksPanel() {
       status: job.status,
       startedAt: Date.parse(job.startedAt),
       href: `/portal/drift?tenant=${job.tenantId}`,
+      tenantId: job.tenantId,
       cancel: job.status === "running" ? () => cancelDriftScan(job) : undefined,
     }, job.finishedAt)
   }
@@ -159,6 +178,7 @@ export function BackgroundTasksPanel() {
       status: job.status,
       startedAt: Date.parse(job.startedAt),
       href: `/portal/frameworks/${job.frameworkId}?tenant=${job.tenantId}`,
+      tenantId: job.tenantId,
       cancel: job.status === "running" ? () => cancelFrameworkJob(job) : undefined,
     }, job.finishedAt)
   }
@@ -173,7 +193,14 @@ export function BackgroundTasksPanel() {
       status: job.status === "done" ? "completed" : job.status,
       startedAt: Date.parse(job.startedAt),
       href: `/portal/frameworks/${job.frameworkId}?tenant=${job.tenantId}`,
+      tenantId: job.tenantId,
     }, job.finishedAt ?? undefined)
+  }
+
+  // Failures stay until dismissed even after main prunes them from its job lists.
+  const mirroredIds = new Set(mirrored.map((task) => task.id))
+  for (const retained of retainedFailures.current.values()) {
+    if (!mirroredIds.has(retained.id) && !dismissed.has(retained.id)) mirrored.push(retained)
   }
 
   const tasks: PanelTask[] = [
@@ -185,7 +212,9 @@ export function BackgroundTasksPanel() {
       percent: task.percent,
       status: task.status,
       startedAt: task.startedAt,
-      href: task.href,
+      href: taskHref(task),
+      tenantId: task.tenantId,
+      onOpen: () => selectTenant(task.tenantId),
       dismiss: task.status !== "running" ? () => dismissBackgroundTask(task.id) : undefined,
     })),
   ].sort((a, b) => (a.status === "running" ? 0 : 1) - (b.status === "running" ? 0 : 1) || b.startedAt - a.startedAt)
@@ -223,6 +252,7 @@ export function BackgroundTasksPanel() {
 
   const clearFinished = () => {
     clearFinishedBackgroundTasks()
+    for (const task of mirrored) if (task.status !== "running") retainedFailures.current.delete(task.id)
     setDismissed((prev) => new Set([...prev, ...mirrored.filter((task) => task.status !== "running").map((task) => task.id)]))
   }
 

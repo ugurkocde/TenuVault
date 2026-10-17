@@ -87,7 +87,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
   const exportKey = (format: 'pdf' | 'csv' | 'json', runId: string) => `export:${framework.id}:${runId}:${format}`
   const exportRun = (format: 'pdf' | 'csv' | 'json', runId: string) => {
     const requestBody = { ...body, tenantName: selectedTenant?.name, action: `native-${format}`, runId }
-    startBackgroundTask(exportKey(format, runId), { title: `${framework.name} ${format.toUpperCase()} export`, detail: `Building the ${format.toUpperCase()} export`, href: `/portal/frameworks/${framework.id}` }, async () => {
+    startBackgroundTask(exportKey(format, runId), { title: `${framework.name} ${format.toUpperCase()} export`, detail: `Building the ${format.toUpperCase()} export`, href: `/portal/frameworks/${framework.id}`, tenantId: credentials?.tenantId }, async () => {
       const response = await fetch('/api/frameworks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestBody) })
       if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? 'Export failed.')
       download(await response.blob(), `${framework.id}-${runId}.${format}`)

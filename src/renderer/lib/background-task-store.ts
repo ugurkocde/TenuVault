@@ -20,6 +20,8 @@ export interface BackgroundTask {
   finishedAt?: number
   /** The in-app route that shows the result, for example /portal/governance/hygiene. */
   href?: string
+  /** The tenant the work ran for, when the result page is tenant scoped. */
+  tenantId?: string
   error?: string
 }
 
@@ -32,6 +34,7 @@ export interface BackgroundTaskOptions {
   title: string
   detail?: string
   href?: string
+  tenantId?: string
 }
 
 const DEFAULT_AUTO_REMOVE_MS = 30_000
@@ -62,6 +65,8 @@ export function createBackgroundTaskStore(options: {
   /** How long a completed task stays listed. Failed tasks stay until dismissed. */
   autoRemoveMs?: number
   currentHash?: () => string
+  /** The tenant on screen, so a result page open for another tenant does not suppress the notice. */
+  currentTenantId?: () => string | undefined
   now?: () => number
 }): BackgroundTaskStore {
   const autoRemoveMs = options.autoRemoveMs ?? DEFAULT_AUTO_REMOVE_MS
@@ -97,7 +102,9 @@ export function createBackgroundTaskStore(options: {
 
   function finish(task: BackgroundTask) {
     replace(task)
-    if (!isOnTaskPage(currentHash(), task.href)) options.notify(task)
+    const onResultPage = isOnTaskPage(currentHash(), task.href)
+      && (!task.tenantId || options.currentTenantId?.()?.toLowerCase() === task.tenantId.toLowerCase())
+    if (!onResultPage) options.notify(task)
     if (task.status === "completed") {
       clearTimer(task.id)
       timers.set(task.id, setTimeout(() => dismiss(task.id), autoRemoveMs))
@@ -112,6 +119,7 @@ export function createBackgroundTaskStore(options: {
         title: taskOptions.title,
         detail: taskOptions.detail,
         href: taskOptions.href,
+        tenantId: taskOptions.tenantId,
         status: "running",
         startedAt: now(),
       }

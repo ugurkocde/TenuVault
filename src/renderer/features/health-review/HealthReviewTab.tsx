@@ -34,7 +34,7 @@ export default function HealthReviewTab({ tenant, plan, allowed }: FeatureTabPro
   const reviewing = reviewTask?.status === "running"
   const startReview = () => {
     if (!reviewKey) return
-    startBackgroundTask(reviewKey, { title: "Health review", detail: `Reviewing backups of ${tenant.name}`, href: "/portal/operations/health-review" }, async () => {
+    startBackgroundTask(reviewKey, { title: "Health review", detail: `Reviewing backups of ${tenant.name}`, href: "/portal/operations/health-review", tenantId }, async () => {
       try {
         const result = await healthApi.run(tenant)
         const outcome = `Review ${OUTCOME_LABELS[result.run.status]?.toLowerCase() ?? result.run.status}. ${result.run.summary}`

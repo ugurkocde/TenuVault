@@ -38,7 +38,7 @@ export default function HygieneTab({ tenant, plan, allowed }: FeatureTabProps) {
   const scanning = scanTask?.status === "running"
   const startScan = () => {
     if (!scanKey) return
-    startBackgroundTask(scanKey, { title: "Hygiene scan", detail: `Scanning the latest backup of ${tenant.name}`, href: "/portal/governance/hygiene" }, async () => {
+    startBackgroundTask(scanKey, { title: "Hygiene scan", detail: `Scanning the latest backup of ${tenant.name}`, href: "/portal/governance/hygiene", tenantId: tenant.credentials?.tenantId }, async () => {
       await runScan(tenant)
       await client.invalidateQueries({ queryKey: ["hygiene", tenant.credentials?.tenantId] })
       return `Hygiene scan of ${tenant.name} finished.`
