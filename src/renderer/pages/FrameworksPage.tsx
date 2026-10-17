@@ -57,14 +57,17 @@ const compareMarkerKey = (tenantId: string, frameworkId: string) => `bg-compare:
 function rememberBackgroundCompare(tenantId: string, frameworkId: string, runId: string): void {
   try { sessionStorage.setItem(compareMarkerKey(tenantId, frameworkId), runId) } catch { /* storage unavailable */ }
 }
-function takeBackgroundCompare(tenantId: string | undefined, frameworkId: string): string | null {
+function peekBackgroundCompare(tenantId: string | undefined, frameworkId: string): string | null {
   if (!tenantId) return null
+  try { return sessionStorage.getItem(compareMarkerKey(tenantId, frameworkId)) } catch { return null }
+}
+/** Clears the marker once its run is on screen; a newer run's marker is left alone. */
+function clearBackgroundCompare(tenantId: string | undefined, frameworkId: string, runId: string): void {
+  if (!tenantId) return
   try {
     const key = compareMarkerKey(tenantId, frameworkId)
-    const runId = sessionStorage.getItem(key)
-    if (runId) sessionStorage.removeItem(key)
-    return runId
-  } catch { return null }
+    if (sessionStorage.getItem(key) === runId) sessionStorage.removeItem(key)
+  } catch { /* storage unavailable */ }
 }
 
 type ActionArea = "load" | "compare" | "export"
@@ -498,18 +501,28 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   useEffect(() => { shownAssessment.current = assessment }, [assessment])
   const appliedCompareFinish = useRef<number | undefined>(undefined)
   useEffect(() => {
-    if (isCis || compareTask?.status !== "completed" || !compareTask.finishedAt) return
-    if (appliedCompareFinish.current === compareTask.finishedAt) return
-    appliedCompareFinish.current = compareTask.finishedAt
-    takeBackgroundCompare(credentials?.tenantId, framework.id)
+    const finishedAt = compareTask?.finishedAt
+    if (isCis || compareTask?.status !== "completed" || !finishedAt) return
+    if (appliedCompareFinish.current === finishedAt) return
     // A comparison started before this mount finished into setters that no longer exist, so
-    // show the newest saved assessment from the workspace it was recorded in.
+    // show its saved run from the workspace it was recorded in. The marker and the applied
+    // stamp are only settled once that run is on screen, so leaving mid-load or a failed
+    // read keeps the result restorable on the next open.
+    let active = true
     void workspaceRequest("workspace-load").then((saved) => {
+      if (!active) return
       setWorkspace(saved)
+      const markerRunId = peekBackgroundCompare(credentials?.tenantId, framework.id)
+      const marked = markerRunId ? saved.history.find((entry) => entry.assessment.runId === markerRunId) : undefined
       const latest = currentSavedAssessment(saved)
-      if (latest) showSavedResults(latest.assessment, { policies: latest.policies, reference: latest.assessment.reference })
+      const target = marked ? { assessment: marked.assessment, policies: marked.policies } : latest
+      if (!target) return
+      if (shownAssessment.current?.runId !== target.assessment.runId) showSavedResults(target.assessment, { policies: target.policies, reference: target.assessment.reference })
+      appliedCompareFinish.current = finishedAt
+      if (markerRunId) clearBackgroundCompare(credentials?.tenantId, framework.id, markerRunId)
     }).catch(() => undefined)
-  }, [isCis, compareTask?.status, compareTask?.finishedAt])
+    return () => { active = false }
+  }, [isCis, compareTask?.status, compareTask?.finishedAt, credentials?.tenantId, framework.id])
   /**
    * Shows a saved assessment as read-only results with its pack, and clears any selection made on
    * other results. It never replaces newer results already on screen, such as a fresh run.
@@ -552,9 +565,12 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     if (first) { setPolicies(saved.policies); setReference(saved.reference); setRecommendationList(saved.recommendationList) }
     if (!isCis) {
       // A comparison that finished in the background while this page was closed opens on its result.
-      const backgroundRunId = first ? takeBackgroundCompare(credentials?.tenantId, framework.id) : null
+      const backgroundRunId = first ? peekBackgroundCompare(credentials?.tenantId, framework.id) : null
       const backgroundRun = backgroundRunId ? saved.history.find((entry) => entry.assessment.runId === backgroundRunId) : undefined
-      if (backgroundRun) showSavedResults(backgroundRun.assessment, { policies: backgroundRun.policies, reference: backgroundRun.assessment.reference })
+      if (backgroundRun) {
+        showSavedResults(backgroundRun.assessment, { policies: backgroundRun.policies, reference: backgroundRun.assessment.reference })
+        clearBackgroundCompare(credentials?.tenantId, framework.id, backgroundRunId!)
+      } else if (backgroundRunId) clearBackgroundCompare(credentials?.tenantId, framework.id, backgroundRunId)
       return
     }
     setActiveLookupFailed(lookupFailed)
