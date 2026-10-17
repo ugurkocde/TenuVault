@@ -1,6 +1,6 @@
 import { comparable, rootMatches, type BaselinePolicy, type Finding, type Json, type Observation } from "./policies"
 import { formatRate } from "./cis-readiness"
-import { definitionLabel } from "../intune/drift-format"
+import { definitionLabel, payloadSettingId, settingNameOf } from "../intune/drift-format"
 import type { SettingNames } from "../intune/drift"
 import { summarizeSetting, type SettingLeaf } from "./setting-summary"
 
@@ -62,19 +62,15 @@ export function cisExportFileName(input: { reference: string; benchmarkName?: st
 
 /** The display name of a Settings Catalog setting: its catalog name when read, else a readable form of its id. */
 export function settingDisplayName(settingId: string, names?: SettingNames): string {
-  return names && Object.hasOwn(names.settings, settingId) ? names.settings[settingId]! : humanSettingLabel(settingId)
+  return settingNameOf(settingId, names) ?? humanSettingLabel(settingId)
 }
-
-/** The name Graph gives every top-level setting group collection, such as most macOS payloads; it names no setting. */
-const GENERIC_GROUP_NAME = "Top Level Setting Group Collection"
 
 /**
  * The display name read for a setting, or null when none was read or Graph only has the generic
  * group collection name: views then show the raw id once instead of a guess next to it.
  */
 export function knownSettingName(settingId: string, names?: SettingNames): string | null {
-  const name = names && Object.hasOwn(names.settings, settingId) ? names.settings[settingId]! : null
-  return name && name !== GENERIC_GROUP_NAME ? name : null
+  return settingNameOf(settingId, names) ?? null
 }
 
 /** A choice value as its option label when known, else the option part after its setting id, else as stored. */
@@ -120,7 +116,7 @@ export function omittedSettingValues(entries: readonly DiffEntryInput[]): number
  * settings. Paths outside the settings keep their path.
  */
 export function readableDiffEntry(entry: DiffEntryInput, names?: SettingNames): { label: string; before?: string; after?: string; beforeValues?: ReadableSettingValues; afterValues?: ReadableSettingValues } {
-  const nameOf = (id: string) => names && Object.hasOwn(names.settings, id) ? names.settings[id]! : definitionLabel(id)
+  const nameOf = (id: string) => definitionLabel(id, names)
   // The label is looked up with the whole option id; only the text shown is shortened.
   const short = (text: string) => text.length > 160 ? `${text.slice(0, 160)}...` : text
   const leafText = (leaf: SettingLeaf) => `${nameOf(leaf.definitionId)}: ${short(optionDisplayName(leaf.value, leaf.definitionId, names))}`
@@ -163,7 +159,7 @@ export function diffDefinitionIds(entry: DiffEntryInput): string[] {
 }
 
 export function humanSettingLabel(settingId: string): string {
-  let rest = settingId
+  let rest = payloadSettingId(settingId)
   for (const prefix of ["device_vendor_msft_policy_config_", "device_vendor_msft_policy_"]) {
     if (rest.startsWith(prefix)) { rest = rest.slice(prefix.length); break }
   }

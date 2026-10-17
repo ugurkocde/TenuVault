@@ -1,4 +1,5 @@
 import type { SettingNames } from "../intune/drift"
+import { payloadSettingId, settingNameOf } from "../intune/drift-format"
 
 const MAX_FALLBACK_LENGTH = 200
 const MAX_DEPTH = 12
@@ -46,7 +47,7 @@ function shortLabel(definitionId: string): string {
       return shortened || definitionId
     }
   }
-  return definitionId
+  return payloadSettingId(definitionId)
 }
 
 function choiceText(value: unknown, definitionId: string | undefined, names?: SettingNames): string {
@@ -161,7 +162,7 @@ function summarizeInternal(value: unknown, depth: number, names?: SettingNames):
   if (definitionId && hasValueKey(value)) {
     const inner = valueLines(value, definitionId, depth, names)
     if (!inner.length) return [fallbackLine(value)]
-    const label = names && Object.hasOwn(names.settings, definitionId) ? names.settings[definitionId]! : shortLabel(definitionId)
+    const label = settingNameOf(definitionId, names) ?? shortLabel(definitionId)
     return capLines([`${label}: ${inner[0]}`, ...inner.slice(1).map((line) => (line.startsWith("  ") ? line : `  ${line}`))])
   }
   if (hasValueKey(value)) {
