@@ -978,9 +978,11 @@ await check("tenant selection toggles from cards, rows, select all and clear wit
   const row = id => `document.querySelector('[data-tenant-row="${id}"]')`
   await evaluate(`${row(1)}.querySelector('td:nth-child(2)').click()`)
   assert(await waitForCondition(`${row(1)}.dataset.selected === 'true' && document.querySelector('button[aria-label="Select all matching tenants in the list"]').getAttribute('aria-checked') === 'mixed'`), "row click or mixed select all state failed in list view")
+  await evaluate(`[...document.querySelectorAll('button')].find(b => b.innerText.trim() === 'Clear').focus()`)
   await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape" })
   await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape" })
   assert(await waitForCondition(`!document.querySelector('[data-tenant-row][data-selected]')`), "Escape did not clear the selection")
+  assert(await evaluate(`document.activeElement?.getAttribute('aria-label') === 'Select all matching tenants'`), "Escape dropped focus from the bar instead of landing on select all")
   } finally {
     // Later checks start from an unfiltered grid with nothing selected.
     await setSearch("").catch(() => {})

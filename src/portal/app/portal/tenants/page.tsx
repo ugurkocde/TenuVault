@@ -129,10 +129,13 @@ function TenantsPageContent() {
   // The action group unmounts when the selection empties; land focus on the
   // always present select all box instead of dropping it to the body. When
   // the search matches nothing that box is disabled, so focus the search.
+  const focusSelectionFallback = () => {
+    if (selectAllRef.current && !selectAllRef.current.disabled) selectAllRef.current.focus()
+    else searchInputRef.current?.focus()
+  }
   const clearSelectionFromBar = () => {
     clearSelection()
-    if (filteredTenants.length > 0) selectAllRef.current?.focus()
-    else searchInputRef.current?.focus()
+    focusSelectionFallback()
   }
 
   // Clicking a card or row outside its controls toggles its selection.
@@ -158,7 +161,12 @@ function TenantsPageContent() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return
       if ((event.target as HTMLElement).closest?.("input, textarea, select, [contenteditable='true'], [role='menu'], [role='dialog']")) return
+      // Clearing unmounts the bar actions; if one of them holds focus, move
+      // it to a control that survives instead of dropping it to the body.
+      const active = document.activeElement as HTMLElement | null
+      const focusInsideBar = Boolean(active?.closest?.("[data-selection-bar]")) && active !== selectAllRef.current
       setSelectedTenants([])
+      if (focusInsideBar) focusSelectionFallback()
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
