@@ -111,7 +111,7 @@ Email notification channels send as the signed-in admin and can resolve Entra gr
 ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -IncludeNotifications
 ```
 
-See [Notifications](/notifications/) for what is sent. The Azure watcher has its own managed identity and its own application roles (`DeviceManagementApps.Read.All`, and only when used, `Mail.Send` restricted to one mailbox in Exchange and `GroupMember.Read.All`); the watcher setup script prints exactly what it granted.
+See [Notifications](/notifications/) for what is sent. The Azure watcher has its own managed identity and its own application roles (`DeviceManagementApps.Read.All`, and only when used, `Mail.Send` restricted to one mailbox in Exchange); the watcher setup script prints exactly what it granted.
 
 ## Restrict sign-in to a group
 

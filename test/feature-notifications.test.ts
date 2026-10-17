@@ -147,14 +147,14 @@ describe("email delivery and group resolution", () => {
         return { status: 202, body: {} }
       },
     })
-    const created = await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-channel", kind: "email", recipients: [{ type: "group", groupId: "44444444-4444-4444-4444-444444444444" }, { type: "address", address: "list@contoso.test" }] })
+    const created = await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-channel", kind: "email", recipients: [{ type: "group", groupId: "44444444-4444-4444-4444-444444444444" }, { type: "address", address: "john.doe@contoso.test" }, { type: "address", address: "ops@alerts.contoso.test" }] })
     expect(created.status).toBe(200)
     await addRule(w, [created.body.channel.id])
     await emitBackupOutcome(w.deps, TENANT_A, { status: "Failed", backupFolder: "backup-mail", finishedAt: NOW.toISOString(), trigger: "scheduled" })
     const send = graphCalls.find((entry) => entry.path === "me/sendMail")
     expect(send).toBeTruthy()
     const recipients = (send!.body as { message: { toRecipients: Array<{ emailAddress: { address: string } }> } }).message.toRecipients.map((entry) => entry.emailAddress.address)
-    expect(recipients.sort()).toEqual(["list@contoso.test", "one@contoso.test", "two@contoso.test"])
+    expect(recipients.sort()).toEqual(["john.doe@contoso.test", "one@contoso.test", "ops@alerts.contoso.test", "two@contoso.test"])
     expect(outboxOf(w.deps, TENANT_A)[0]?.state).toBe("sent")
   })
 
@@ -289,5 +289,28 @@ describe("turning things off after downgrade", () => {
     expect(watchOff.body.auditWatch.enabled).toBe(false)
     const enable = await call(w.routes, PATH, { tenantId: TENANT_B, action: "update-channel", channelId: seeded.id, enabled: true })
     expect(enable.status).toBe(402)
+  })
+})
+
+describe("concurrent audit polls", () => {
+  it("a second poll for the same tenant is a no-op while one is running", async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let calls = 0
+    const w = world({
+      graph: () => async (_method: string, _path: string) => {
+        calls++
+        await gate
+        return { status: 200, body: { value: fixture.events } }
+      },
+    })
+    saveAuditWatch(w.deps, TENANT_A, { enabled: true }, { actor: null, reason: "test" })
+    const first = pollAuditWatch(w.deps, TENANT_A)
+    const second = await pollAuditWatch(w.deps, TENANT_A)
+    expect(second).toEqual({ enqueued: 0, changes: 0, error: null })
+    release()
+    const result = await first
+    expect(result.changes).toBe(3)
+    expect(calls).toBe(1)
   })
 })

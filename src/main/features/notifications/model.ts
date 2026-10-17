@@ -113,7 +113,20 @@ export function isChannelKind(value: unknown): value is ChannelKind {
   return value === "local" || value === "webhook" || value === "teams" || value === "email"
 }
 
-const EMAIL_ADDRESS = /^[^\s@<>()[\]\\.,;:"']+@[^\s@<>()[\]\\.,;:"']+\.[^\s@<>()[\]\\.,;:"']+$/
+const EMAIL_LOCAL = /^[A-Za-z0-9!#$%&'*+\-/=?^_`{|}~]+(?:\.[A-Za-z0-9!#$%&'*+\-/=?^_`{|}~]+)*$/
+const EMAIL_DOMAIN_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/
+
+/** Practical address check: dotted local parts and multi label domains are normal mail. */
+export function isValidEmailAddress(address: string): boolean {
+  if (address.length === 0 || address.length > 320) return false
+  const at = address.split("@")
+  if (at.length !== 2) return false
+  const [local, domain] = at as [string, string]
+  if (local.length === 0 || local.length > 64 || !EMAIL_LOCAL.test(local)) return false
+  const labels = domain.split(".")
+  if (labels.length < 2 || labels.some((label) => !EMAIL_DOMAIN_LABEL.test(label))) return false
+  return /^[A-Za-z]{2,}$/.test(labels[labels.length - 1]!)
+}
 const GUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
 
 /** Parses and bounds the recipient list of an email channel. Returns an error message or the list. */
@@ -126,7 +139,7 @@ export function parseRecipients(value: unknown): { ok: true; recipients: EmailRe
     const record = entry as Record<string, unknown>
     if (record.type === "address") {
       const address = typeof record.address === "string" ? record.address.trim() : ""
-      if (address.length > 320 || !EMAIL_ADDRESS.test(address)) return { ok: false, error: `"${address.slice(0, 60)}" is not a valid email address.` }
+      if (!isValidEmailAddress(address)) return { ok: false, error: `"${address.slice(0, 60)}" is not a valid email address.` }
       recipients.push({ type: "address", address })
     } else if (record.type === "group") {
       const groupId = typeof record.groupId === "string" ? record.groupId.trim() : ""

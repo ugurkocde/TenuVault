@@ -971,8 +971,18 @@ try {
     ) -join "|"
     $configHash = Get-TvSha256Hex $configFingerprint
 
-    $graphToken = Get-TvManagedIdentityToken "https://graph.microsoft.com/"
+    # Storage first: state, lease and queued deliveries must keep working when
+    # Graph token acquisition fails. The Graph failure is deferred like an
+    # ingestion failure and surfaces at the end of the run.
     $storageToken = Get-TvManagedIdentityToken "https://storage.azure.com/"
+    $graphToken = $null
+    $graphTokenError = $null
+    try {
+        $graphToken = Get-TvManagedIdentityToken "https://graph.microsoft.com/"
+    } catch {
+        $graphTokenError = "Graph token acquisition failed: $(Get-TvSafeError $_.Exception.Message)"
+        Write-Output "$graphTokenError Audit ingestion is skipped; missed backup checking and pending deliveries still run."
+    }
 
     $stateContainerUri = "https://$storageAccount.blob.core.windows.net/tenuvault-notification-state"
     $stateBlobUri = "$stateContainerUri/state.json"
@@ -1237,12 +1247,12 @@ try {
     $pageCount = 0
     $nextUri = $freshUri
     $resumedContinuation = $false
-    $ingestionError = $null
+    $ingestionError = $graphTokenError
     if ($continuation) {
         $nextUri = $continuation
         $resumedContinuation = $true
     }
-    while ($nextUri -and -not $ingestionCapReached -and $pageCount -lt 500) {
+    while ($graphToken -and $nextUri -and -not $ingestionCapReached -and $pageCount -lt 500) {
         Update-TvStateLease -LeaseQueryUri $leaseQueryUri -Token $storageToken -LeaseId $leaseId
         $pageCount++
         $page = $null
@@ -1473,9 +1483,11 @@ try {
     Set-TvBlobText -Uri $heartbeatBlobUri -Token $storageToken -Text (ConvertTo-TenuVaultCanonicalJson $heartbeat)
     Write-Output "Watcher run complete. Events sent: $eventsSent. Pending: $($pendingEnvelopes.Count). Watermark: $watermarkIso."
     # State and heartbeat are persisted and deliveries were attempted. Only now
-    # surface a failed audit ingestion as a failed run, so it stays observable
-    # in the Automation job status and the failure alert without losing work.
+    # surface failed ingestion or a failed missed backup check as a failed run,
+    # so both stay observable in the Automation job status and the failure
+    # alert without losing work.
     if ($ingestionError) { throw $ingestionError }
+    if ($missedCheckFailed) { throw "Missed backup check failed for this run. See the heartbeat lastError for details." }
 } catch {
     $lastError = Get-TvSafeError $_.Exception.Message
     if ($leaseId -and $storageToken -and $heartbeatBlobUri) {

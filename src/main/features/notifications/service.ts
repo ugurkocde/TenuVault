@@ -322,7 +322,22 @@ function nextPath(body: GraphItem): string | null {
  * overlap, dedupes by audit event id, and emits one digest for the new changes.
  * Ingestion (watermark) advances independently of delivery, which the outbox owns.
  */
+const polling = new WeakMap<FeatureDeps, Set<string>>()
+
 export async function pollAuditWatch(deps: FeatureDeps, tenantId: string, options: NotificationOptions = {}): Promise<{ enqueued: number; changes: number; error: string | null }> {
+  const tenant = tenantId.toLowerCase()
+  const active = polling.get(deps) ?? new Set<string>()
+  polling.set(deps, active)
+  if (active.has(tenant)) return { enqueued: 0, changes: 0, error: null }
+  active.add(tenant)
+  try {
+    return await pollAuditWatchOnce(deps, tenant, options)
+  } finally {
+    active.delete(tenant)
+  }
+}
+
+async function pollAuditWatchOnce(deps: FeatureDeps, tenantId: string, options: NotificationOptions = {}): Promise<{ enqueued: number; changes: number; error: string | null }> {
   const tenant = tenantId.toLowerCase()
   const watch = auditWatchOf(deps, tenant)
   if (!watch || !watch.enabled || watch.externalWatcher) return { enqueued: 0, changes: 0, error: null }
