@@ -959,8 +959,13 @@ await check("tenant selection toggles from cards, rows, select all and clear wit
   // Controls inside the card never toggle: the rename button opens the editor instead.
   await evaluate(`document.querySelector('button[aria-label="Rename tenant: Contoso 2"]').click()`)
   assert(await waitForCondition(`Boolean(document.querySelector('button[aria-label="Save tenant name"]')) && ${card(2)}.dataset.selected === 'true'`), "rename click changed the selection")
+  // Select all also leaves the tenant being renamed alone.
+  await evaluate(`document.querySelector('button[aria-label="Select all matching tenants"]').click()`)
+  assert(await waitForCondition(`!${card(1)}.dataset.selected && ${card(2)}.dataset.selected === 'true'`), "select all toggled the tenant being renamed")
   await evaluate(`document.querySelector('button[aria-label^="Cancel editing tenant name:"]').click()`)
   assert(await waitForCondition(`!document.querySelector('button[aria-label="Save tenant name"]') && ${card(2)}.dataset.selected === 'true'`), "cancelling rename changed the selection")
+  await evaluate(`document.querySelector('button[aria-label="Select all matching tenants"]').click()`)
+  assert(await waitForCondition(`${bar}.textContent.includes('2 tenants selected')`), "select all did not reselect both tenants after rename")
   // A disabled button takes no pointer events, so only a real mouse click at
   // its coordinates proves the click cannot fall through and toggle.
   const backupCenter = await evaluate(`(() => { const button = [...${card(2)}.querySelectorAll('button')].find(b => b.innerText.includes('Backup Now')); button.disabled = true; const rect = button.getBoundingClientRect(); return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } })()`)

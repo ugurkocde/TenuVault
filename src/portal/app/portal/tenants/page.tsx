@@ -110,7 +110,12 @@ function TenantsPageContent() {
   }
 
   const filteredTenantIds = filteredTenants.map(t => t.id)
-  const visibleSelection = visibleSelectionState(selectedTenants, filteredTenantIds)
+  // The tenant being renamed is frozen for selection, including via select
+  // all, matching its disabled checkbox.
+  const selectableTenantIds = editingTenantId === null
+    ? filteredTenantIds
+    : filteredTenantIds.filter(id => id !== editingTenantId)
+  const visibleSelection = visibleSelectionState(selectedTenants, selectableTenantIds)
   const hiddenSelected = hiddenSelectedCount(selectedTenants, filteredTenantIds)
 
   // Select all only ever adds or removes the tenants the search shows, so a
@@ -118,8 +123,8 @@ function TenantsPageContent() {
   const toggleVisibleSelection = () => {
     setSelectedTenants(prev =>
       visibleSelection === "all"
-        ? removeTenantIds(prev, filteredTenantIds)
-        : addTenantIds(prev, filteredTenantIds)
+        ? removeTenantIds(prev, selectableTenantIds)
+        : addTenantIds(prev, selectableTenantIds)
     )
   }
 
