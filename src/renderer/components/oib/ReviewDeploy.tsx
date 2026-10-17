@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react"
 import { Link } from "react-router-dom"
 import { AlertTriangle, CheckCircle2, Rocket, RotateCcw, XCircle } from "lucide-react"
 import { useTenants } from "~/contexts/TenantContext"
+import { settingsHref } from "../../lib/settings-section"
 import { cn } from "~/lib/utils"
 import { OIB_BACKUP_REUSE_MINUTES, OIB_PLATFORMS, type OibBackupOptions, type OibRecentBackup, type OibRun } from "../../../shared/oib/types"
 import { PlanBadge } from "../UpgradeNote"
@@ -239,7 +240,7 @@ export function ReviewDeploy({ batches: given, flow, kind = "deploy", onBack, ba
         <legend className="text-sm font-medium text-gray-800">Backup before changes</legend>
         <div className="mt-2 grid gap-2" aria-busy={backup.loading}>
           {!storage ? <>
-            {option("none", "Skip the backup", <>This tenant has no backup storage, so no backup can be taken. <Link to="/portal/settings" className="text-blue-700 underline">Choose backup storage in Settings</Link>. {skipText(kind)}</>)}
+            {option("none", "Skip the backup", <>This tenant has no backup storage, so no backup can be taken. <Link to={settingsHref("signin")} className="text-blue-700 underline">Choose backup storage in Settings</Link>. {skipText(kind)}</>)}
           </> : <>
             {backup.usable && option("reuse", `Use the backup from ${minutesAgo(backup.recent!.ageMinutes)}`, `Completed ${new Date(backup.recent!.completedAt).toLocaleString()} without errors and covers every policy type this ${noun} changes. Nothing is backed up again.`)}
             {option("new", "Back up the affected policy types now", `Backs up only the policy types this ${noun} changes before anything else happens. If the backup fails, nothing is changed.`)}

@@ -5,13 +5,13 @@ description: Every control on the Settings page, what it does and when to use it
 
 **Settings** holds sign-in, backup storage, encryption, background backups, PDF branding and updates for this computer. Open it from the bottom of the sidebar.
 
-The buttons at the top of the page jump to each section: **Sign-in**, **Storage and recovery**, **Background runner**, **PDF branding**, **Updates** and **About**.
+Choose a section in the list on the left to open it: **Sign-in**, **Storage and recovery**, **Background runner**, **PDF branding**, **Updates**, **Appearance** and **About**. One section shows at a time, starting with **Sign-in**. On a narrow window the list becomes a row above the section.
 
 Settings apply to this computer only. Other admins who use TenuVault have their own settings.
 
 ## Appearance
 
-The **Appearance** list at the top right sets the color theme.
+The **Appearance** section sets the color theme.
 
 | Option | Effect |
 | --- | --- |

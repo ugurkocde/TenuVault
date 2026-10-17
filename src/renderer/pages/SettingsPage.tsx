@@ -1,8 +1,9 @@
 import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
-import { useEffect, useId, useRef, useState } from "react"
-import { Link, useLocation } from "react-router-dom"
-import { Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, RefreshCw, Save, Upload } from "lucide-react"
+import { useEffect, useId, useRef, useState, type ReactNode } from "react"
+import { Link, useLocation, useSearchParams } from "react-router-dom"
+import { Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, Palette, RefreshCw, Save, SunMoon, Upload } from "lucide-react"
+import { cn } from "~/lib/utils"
 import { useTenantOperations, useTenants, type Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
@@ -22,6 +23,7 @@ import { localTenantIds, useBackupSettings, useLocalInventoryProblems } from "..
 import { storageResources, type StorageChoice } from "../lib/storage"
 import { toast } from "../lib/toast"
 import { tenantPlan, useLicense } from "../lib/license"
+import { parseSettingsSection, settingsHref, type SettingsSectionId } from "../lib/settings-section"
 import { PlanBadge } from "../components/UpgradeNote"
 import { PdfBrandingSettings } from "../components/PdfBrandingSettings"
 import { useConfirm } from "~/components/ConfirmDialog"
@@ -664,30 +666,97 @@ function About() {
   )
 }
 
-export default function SettingsPage() {
+function AppearanceSettings() {
   return (
-    <div className="max-w-5xl space-y-6 p-6 lg:p-8">
-      <div className="flex flex-wrap items-end justify-between gap-6 pb-2">
-        <div>
-          <h1 className="text-4xl font-medium tracking-tight text-gray-900">Settings</h1>
-          <p className="mt-2 text-lg text-gray-500">Sign-in, backup storage, encryption, background backups, PDF branding and updates.</p>
-        </div>
-      <label className="flex items-center gap-3 text-sm font-medium text-gray-600">Appearance
-        <select className="h-10 rounded-full border border-gray-200 bg-white px-4 text-gray-900" defaultValue={getAppearance()} onChange={e => setAppearance(e.target.value as Appearance)}>
-          <option value="system">Use system setting</option><option value="light">Light</option><option value="dark">Dark</option>
-        </select>
-      </label>
+    <Card>
+      <CardHeader className="p-7 pb-4">
+        <CardTitle className="flex items-center gap-3 text-xl font-medium">
+          <span className="flex size-10 items-center justify-center rounded-full bg-secondary" aria-hidden="true"><SunMoon className="h-[18px] w-[18px]" /></span> Appearance
+        </CardTitle>
+        <CardDescription>How TenuVault looks on this computer.</CardDescription>
+      </CardHeader>
+      <CardContent className="px-7 pb-7">
+        <label className="flex items-center gap-3 text-sm font-medium text-gray-600">Appearance
+          <select className="h-10 rounded-full border border-gray-200 bg-white px-4 text-gray-900" defaultValue={getAppearance()} onChange={e => setAppearance(e.target.value as Appearance)}>
+            <option value="system">Use system setting</option><option value="light">Light</option><option value="dark">Dark</option>
+          </select>
+        </label>
+      </CardContent>
+    </Card>
+  )
+}
+
+const SECTIONS: { id: SettingsSectionId; title: string; icon: typeof KeyRound }[] = [
+  { id: "signin", title: "Sign-in", icon: KeyRound },
+  { id: "storage", title: "Storage and recovery", icon: HardDrive },
+  { id: "background", title: "Background runner", icon: MonitorCog },
+  { id: "branding", title: "PDF branding", icon: Palette },
+  { id: "updates", title: "Updates", icon: Download },
+  { id: "appearance", title: "Appearance", icon: SunMoon },
+  { id: "about", title: "About", icon: Info },
+]
+
+export default function SettingsPage() {
+  const [searchParams] = useSearchParams()
+  const { hash } = useLocation()
+  // Links that only carry the recovery key anchor predate the section parameter; they mean the storage section.
+  const section: SettingsSectionId = hash === "#recovery-key" && !searchParams.get("section")
+    ? "storage"
+    : parseSettingsSection(searchParams.get("section"))
+
+  // Keep every panel mounted and only toggle visibility, so unsaved edits and
+  // loaded state survive switching sections. Start each section at the top,
+  // except when a deep link targets a control inside the storage section.
+  useEffect(() => {
+    if (hash !== "#recovery-key") window.scrollTo({ top: 0 })
+  }, [section, hash])
+
+  // In the narrow row layout the active entry can sit outside the scrollable
+  // strip after a deep link; bring it into view without moving the page.
+  useEffect(() => {
+    if (!window.matchMedia("(max-width: 1279px)").matches) return
+    document.querySelector('nav[aria-label="Settings sections"] [aria-current="page"]')?.scrollIntoView({ block: "nearest", inline: "nearest" })
+  }, [section])
+
+  const panel = (id: SettingsSectionId, content: ReactNode) => (
+    <section key={id} id={`settings-${id}`} hidden={section !== id}>{content}</section>
+  )
+
+  return (
+    <div className="p-6 lg:p-8">
+      <div className="pb-2">
+        <h1 className="text-4xl font-medium tracking-tight text-gray-900">Settings</h1>
+        <p className="mt-2 text-lg text-gray-500">Sign-in, backup storage, encryption, background backups, PDF branding and updates.</p>
       </div>
-      <nav aria-label="Settings sections" className="flex flex-wrap gap-2 text-sm">
-        {[['signin', 'Sign-in'], ['storage', 'Storage and recovery'], ['background', 'Background runner'], ['branding', 'PDF branding'], ['updates', 'Updates'], ['about', 'About']].map(([id, title]) => <button key={id} type="button" className="h-9 rounded-full bg-card px-4 font-medium text-foreground transition-colors hover:bg-primary hover:text-primary-foreground" onClick={() => document.getElementById(`settings-${id}`)?.scrollIntoView({ block: 'start' })}>{title}</button>)}
-      </nav>
-      <section className="scroll-mt-6" id="settings-signin"><TenantSettings /></section>
-      <section className="scroll-mt-6" id="settings-storage"><BackupsOnDevice />
-      <RestoreWrites /></section>
-      <section className="scroll-mt-6" id="settings-background"><BackgroundAndRetention /></section>
-      <section className="scroll-mt-6" id="settings-branding"><PdfBrandingSettings /></section>
-      <section className="scroll-mt-6" id="settings-updates"><Updates /></section>
-      <section className="scroll-mt-6" id="settings-about"><About /></section>
+      <div className="mt-4 flex flex-col gap-6 xl:flex-row xl:items-start">
+        <nav aria-label="Settings sections" className="flex gap-1 overflow-x-auto p-1 xl:sticky xl:top-8 xl:w-56 xl:shrink-0 xl:flex-col xl:overflow-visible xl:p-0">
+          {SECTIONS.map(({ id, title, icon: Icon }) => (
+            <Link
+              key={id}
+              to={settingsHref(id)}
+              aria-current={section === id ? "page" : undefined}
+              className={cn(
+                "flex min-h-10 shrink-0 items-center gap-3 rounded-full px-4 py-2.5 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring",
+                section === id
+                  ? "bg-primary text-primary-foreground"
+                  : "text-gray-600 hover:bg-secondary hover:text-foreground dark:text-gray-400",
+              )}
+            >
+              <Icon className="h-[18px] w-[18px]" />
+              <span className="truncate">{title}</span>
+            </Link>
+          ))}
+        </nav>
+        <div className="min-w-0 w-full max-w-5xl flex-1">
+          {panel("signin", <TenantSettings />)}
+          {panel("storage", <div className="space-y-6"><BackupsOnDevice /><RestoreWrites /></div>)}
+          {panel("background", <BackgroundAndRetention />)}
+          {panel("branding", <PdfBrandingSettings />)}
+          {panel("updates", <Updates />)}
+          {panel("appearance", <AppearanceSettings />)}
+          {panel("about", <About />)}
+        </div>
+      </div>
     </div>
   )
 }
