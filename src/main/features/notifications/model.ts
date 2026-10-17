@@ -86,6 +86,8 @@ export interface AuditWatchRecord {
    * instead of evicting by count and resurrecting old events as new.
    */
   recent: Array<{ id: string; at: string }>
+  /** Next page to resume when a poll stopped on its page or volume cap mid-window. */
+  continuation: string | null
   lastPollAt: string | null
   lastError: string | null
 }
@@ -94,7 +96,7 @@ export const MAX_CHANNELS = 10
 export const MAX_RULES = 25
 export const MAX_DELIVERY_LOG = 20
 export const MAX_OUTBOX_KEPT = 300
-export const MAX_RECENT_AUDIT_IDS = 10000
+export const MAX_RECENT_AUDIT_IDS = 25000
 export const MAX_RECIPIENTS = 200
 
 export const SEVERITIES: NotificationSeverity[] = ["info", "warning", "critical"]

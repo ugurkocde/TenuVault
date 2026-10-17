@@ -70,7 +70,7 @@ describe("notification channels and rules", () => {
     const channel = await addWebhook(w, { headerValue: "signing-secret", signRequests: true })
     await addRule(w, [channel.id])
     const created = await emitBackupOutcome(w.deps, TENANT_A, { status: "Failed", backupFolder: "backup-2026-10-17-010000", finishedAt: NOW.toISOString(), failures: 3, trigger: "scheduled" })
-    expect(created).toBe(1)
+    expect(created).toEqual({ created: 1, localCreated: false })
     expect(w.posts).toHaveLength(1)
     const init = w.posts[0]!.init
     const body = String(init.body)
@@ -93,7 +93,7 @@ describe("notification channels and rules", () => {
     expect(w.posts).toHaveLength(1)
     expect(outboxOf(w.deps, TENANT_A)[0]?.state).toBe("pending")
     // Same event again while pending: no new intent, no new send.
-    expect(await emitBackupOutcome(w.deps, TENANT_A, outcome)).toBe(0)
+    expect((await emitBackupOutcome(w.deps, TENANT_A, outcome)).created).toBe(0)
     expect(w.posts).toHaveLength(1)
     w.advance(31_000)
     const flushed = await flushOutbox(w.deps, TENANT_A)
@@ -114,7 +114,7 @@ describe("notification channels and rules", () => {
     const w = world()
     const channel = await addWebhook(w)
     await addRule(w, [channel.id], { minSeverity: "critical" })
-    expect(await emitBackupOutcome(w.deps, TENANT_A, { status: "Success", backupFolder: "backup-ok", finishedAt: NOW.toISOString(), trigger: "manual" })).toBe(0)
+    expect((await emitBackupOutcome(w.deps, TENANT_A, { status: "Success", backupFolder: "backup-ok", finishedAt: NOW.toISOString(), trigger: "manual" })).created).toBe(0)
     expect(w.posts).toHaveLength(0)
   })
 
@@ -225,10 +225,14 @@ describe("review round regressions", () => {
       resources: [{ displayName: `Policy ${i}`, type: "Policy" }],
     }))
     const w = world({ graph: () => async (_method: string, path: string) => {
-      // Honor the $filter like Graph would: only events after the requested time come back.
-      const since = decodeURIComponent(path).match(/activityDateTime gt ([^&]+)/)?.[1]
-      const value = since ? many.filter((event) => event.activityDateTime > since) : many
-      return { status: 200, body: { value } }
+      // Honor the $filter and page like Graph: 200 per page with a nextLink skiptoken.
+      const decoded = decodeURIComponent(path)
+      const since = decoded.match(/activityDateTime gt ([^&]+)/)?.[1]
+      const offset = Number(decoded.match(/\$skiptoken=(\d+)/)?.[1] ?? 0)
+      const filtered = since ? many.filter((event) => event.activityDateTime > since) : many
+      const value = filtered.slice(offset, offset + 200)
+      const next = offset + 200 < filtered.length ? { "@odata.nextLink": `https://graph.microsoft.com/beta/deviceManagement/auditEvents?$skiptoken=${offset + 200}` } : {}
+      return { status: 200, body: { value, ...next } }
     } })
     saveAuditWatch(w.deps, TENANT_A, { enabled: true }, { actor: null, reason: "test" })
     const counts: number[] = []

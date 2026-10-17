@@ -31,6 +31,8 @@ describe("Azure notification watcher scripts", () => {
     expect(runbook).not.toContain("TVAZ1")
     expect(runbook).not.toContain("metadata.json")
     expect(runbook).toContain("intune-backups")
+    expect(runbook).toContain("restype=container")
+    expect(runbook).not.toContain("resttype=")
   })
 
   it("setup scopes storage roles to containers and gates Graph roles behind a switch", () => {

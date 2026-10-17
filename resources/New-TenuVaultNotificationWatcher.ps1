@@ -102,10 +102,11 @@
 .PARAMETER AlertEmail
     Email address for failure alerting. When set, an Azure Monitor action group
     with this receiver and a metric alert for failed Automation jobs are created
-    when the Az.Monitor cmdlets are available. When they are not, the script
-    warns and prints the manual step instead of failing. One of -AlertEmail or
-    -NoFailureAlert is required: without either the script stops before writing
-    anything, because a watcher that fails silently is worse than no watcher.
+    or updated through ARM REST calls, before the schedule is linked. When alert
+    creation fails the script stops: the watcher does not run on a schedule
+    without its failure alert. One of -AlertEmail or -NoFailureAlert is
+    required: without either the script stops before writing anything, because
+    a watcher that fails silently is worse than no watcher.
 
 .PARAMETER NoFailureAlert
     Explicitly accept having no Azure Monitor failure alert for the watcher.
@@ -243,8 +244,8 @@ Write-Host "Subscription: $($context.Subscription.Name) ($($context.Subscription
 # any resource write in that case.
 if ($TenantId -match '^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$') {
     $contextTenantId = [string]$context.Tenant.Id
-    if ($contextTenantId -and $contextTenantId.ToLowerInvariant() -ne $TenantId.ToLowerInvariant()) {
-        throw "The current Az context is signed in to tenant $contextTenantId, but -TenantId is $TenantId. Run Connect-AzAccount -Tenant $TenantId (and select the right subscription), then run this script again. Nothing was written."
+    if ($contextTenantId.ToLowerInvariant() -ne $TenantId.ToLowerInvariant()) {
+        throw "The current Az context tenant is '$(if ($contextTenantId) { $contextTenantId } else { '<empty>' })', but -TenantId is $TenantId. An empty context tenant counts as a mismatch. Run Connect-AzAccount -Tenant $TenantId (and select the right subscription), then run this script again. Nothing was written."
     }
 }
 
@@ -477,6 +478,93 @@ Set-TenuVaultAutomationVariable -Name "TenuVaultIncludeActor" -Value $(if ($Incl
 Set-TenuVaultAutomationVariable -Name "TenuVaultConfigVersion" -Value "1"
 
 # ---------------------------------------------------------------------------
+# Failure alerting, deliberately before the schedule is linked: with -AlertEmail
+# the alert must exist first, because a scheduled watcher without a failure
+# alert fails silently. The Az.Monitor cmdlets for this were removed in Az 11,
+# so the action group and metric alert are written with ARM REST PUT calls.
+# PUT also updates resources an earlier run created, including re-scoping an
+# existing alert to the Status = Failed criteria.
+# ---------------------------------------------------------------------------
+
+$alertStatus = $null
+if ($NoFailureAlert) { $alertStatus = "disabled by -NoFailureAlert (no Azure Monitor alert will fire)" }
+if ($AlertEmail) {
+    $actionGroupName = "ag-tenuvault-watcher"
+    $metricAlertName = "TenuVault watcher failed jobs"
+    if (-not (Get-Command Invoke-AzRestMethod -ErrorAction SilentlyContinue)) {
+        throw "Invoke-AzRestMethod is not available, so the failure alert for $AlertEmail cannot be created. Install or update the Az.Accounts module, or pass -NoFailureAlert to accept a watcher without a failure alert. The schedule was not linked."
+    }
+    if ($WhatIfPreference) {
+        $alertStatus = "would be created for $AlertEmail (WhatIf: no changes were made)"
+        Write-Host "What if: action group '$actionGroupName' and metric alert '$metricAlertName' would be created for $AlertEmail."
+    } elseif ($PSCmdlet.ShouldProcess($metricAlertName, "Create failure alert for $AlertEmail")) {
+        try {
+            $aaResource = Get-AzResource -ResourceGroupName $ResourceGroupName -Name $AutomationAccountName `
+                -ResourceType "Microsoft.Automation/automationAccounts" -ErrorAction Stop
+            $actionGroupId = "/subscriptions/$($context.Subscription.Id)/resourceGroups/$ResourceGroupName/providers/microsoft.insights/actionGroups/$actionGroupName"
+            $actionGroupPayload = @{
+                location = "Global"
+                properties = @{
+                    groupShortName = "tenuvault"
+                    enabled = $true
+                    emailReceivers = @(
+                        @{ name = "TenuVaultAdmins"; emailAddress = $AlertEmail; useCommonAlertSchema = $true }
+                    )
+                }
+            } | ConvertTo-Json -Depth 10
+            $actionGroupResponse = Invoke-AzRestMethod -Method Put `
+                -Path "$actionGroupId`?api-version=2023-01-01" -Payload $actionGroupPayload
+            $actionGroupStatus = 0
+            if ($actionGroupResponse -and $actionGroupResponse.PSObject.Properties["StatusCode"]) { $actionGroupStatus = [int]$actionGroupResponse.StatusCode }
+            if ($actionGroupStatus -ge 300) { throw "the actionGroups request returned HTTP $actionGroupStatus" }
+            Write-Host "Action group '$actionGroupName' in place for $AlertEmail."
+
+            $metricAlertPayload = @{
+                location = "global"
+                properties = @{
+                    description = "TenuVault notification watcher Automation jobs are failing."
+                    severity = 3
+                    enabled = $true
+                    scopes = @($aaResource.ResourceId)
+                    evaluationFrequency = "PT15M"
+                    windowSize = "PT1H"
+                    targetResourceType = "Microsoft.Automation/automationAccounts"
+                    targetResourceRegion = $Location
+                    criteria = @{
+                        "odata.type" = "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria"
+                        allOf = @(
+                            @{
+                                name = "FailedJobs"
+                                metricName = "TotalJob"
+                                metricNamespace = "Microsoft.Automation/automationAccounts"
+                                operator = "GreaterThan"
+                                threshold = 0
+                                timeAggregation = "Total"
+                                dimensions = @(
+                                    @{ name = "Status"; operator = "Include"; values = @("Failed") }
+                                )
+                                criterionType = "StaticThresholdCriterion"
+                            }
+                        )
+                    }
+                    actions = @( @{ actionGroupId = $actionGroupId } )
+                }
+            } | ConvertTo-Json -Depth 12
+            $metricAlertId = "/subscriptions/$($context.Subscription.Id)/resourceGroups/$ResourceGroupName/providers/microsoft.insights/metricAlerts/$([uri]::EscapeDataString($metricAlertName))"
+            $metricAlertResponse = Invoke-AzRestMethod -Method Put `
+                -Path "$metricAlertId`?api-version=2023-01-01" -Payload $metricAlertPayload
+            $metricAlertStatus = 0
+            if ($metricAlertResponse -and $metricAlertResponse.PSObject.Properties["StatusCode"]) { $metricAlertStatus = [int]$metricAlertResponse.StatusCode }
+            if ($metricAlertStatus -ge 300) { throw "the metricAlerts request returned HTTP $metricAlertStatus" }
+            Write-Host "Metric alert '$metricAlertName' in place (TotalJob with Status = Failed)."
+            $alertStatus = "action group '$actionGroupName' and metric alert '$metricAlertName' in place for $AlertEmail"
+        } catch {
+            throw "Creating the failure alert for $AlertEmail failed, so the schedule was not linked and the watcher will not run unattended without its alert. Fix the cause and run this script again, or pass -NoFailureAlert to accept a watcher without a failure alert. Cause: $($_.Exception.Message)"
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Schedule and link. Schedule intervals cannot be edited in place, so a schedule
 # with a different interval is replaced together with its link.
 # ---------------------------------------------------------------------------
@@ -520,90 +608,6 @@ if ($PSCmdlet.ShouldProcess($runbookName, "Link runbook to schedule '$scheduleNa
             -AutomationAccountName $AutomationAccountName -RunbookName $runbookName `
             -ScheduleName $scheduleName | Out-Null
         Write-Host "Runbook linked to schedule '$scheduleName'."
-    }
-}
-
-# ---------------------------------------------------------------------------
-# Optional failure alerting. Az.Monitor is used only when its cmdlets are already
-# available: without them the script warns and prints the manual step rather
-# than failing the whole setup over a monitoring nicety.
-# ---------------------------------------------------------------------------
-
-$alertStatus = $null
-if ($NoFailureAlert) { $alertStatus = "disabled by -NoFailureAlert (no Azure Monitor alert will fire)" }
-if ($AlertEmail) {
-    $actionGroupName = "ag-tenuvault-watcher"
-    $metricAlertName = "TenuVault watcher failed jobs"
-    $manualAlertStep = "Manual step: in the Azure portal open Monitor > Alerts > Create > Metric rule, scope it to Automation account '$AutomationAccountName', choose a failed jobs signal, and add an action group that emails $AlertEmail."
-    if (Get-Module -ListAvailable -Name "Az.Monitor") { Import-Module "Az.Monitor" -ErrorAction SilentlyContinue }
-    $hasActionGroupCmdlets = [bool](Get-Command Set-AzActionGroup -ErrorAction SilentlyContinue) -and
-        [bool](Get-Command New-AzActionGroupReceiver -ErrorAction SilentlyContinue)
-    $hasMetricAlertCmdlets = [bool](Get-Command Add-AzMetricAlertRuleV2 -ErrorAction SilentlyContinue) -and
-        [bool](Get-Command New-AzMetricAlertRuleV2DimensionSelection -ErrorAction SilentlyContinue) -and
-        ([bool](Get-Command New-AzMetricAlertRuleV2Criteria -ErrorAction SilentlyContinue) -or
-         [bool](Get-Command New-AzMetricAlertRuleV2StaticThresholdCriteria -ErrorAction SilentlyContinue))
-    if (-not ($hasActionGroupCmdlets -and $hasMetricAlertCmdlets)) {
-        Write-Warning "Az.Monitor alert cmdlets (Set-AzActionGroup, Add-AzMetricAlertRuleV2) are not available in this session, so no action group or metric alert was created."
-        Write-Host $manualAlertStep -ForegroundColor Yellow
-        $alertStatus = "not created (Az.Monitor cmdlets unavailable, manual step printed above)"
-    } else {
-        try {
-            $aaResource = Get-AzResource -ResourceGroupName $ResourceGroupName -Name $AutomationAccountName `
-                -ResourceType "Microsoft.Automation/automationAccounts" -ErrorAction Stop
-            $actionGroup = $null
-            if ($PSCmdlet.ShouldProcess($actionGroupName, "Create or update action group for $AlertEmail")) {
-                $receiver = New-AzActionGroupReceiver -Name "TenuVaultAdmins" -EmailReceiver -EmailAddress $AlertEmail
-                $actionGroup = Set-AzActionGroup -ResourceGroupName $ResourceGroupName -Name $actionGroupName `
-                    -ShortName "tenuvault" -Receiver $receiver
-                Write-Host "Action group '$actionGroupName' in place for $AlertEmail."
-            }
-            $metricAlert = $null
-            if (Get-Command Get-AzMetricAlertRuleV2 -ErrorAction SilentlyContinue) {
-                try { $metricAlert = Get-AzMetricAlertRuleV2 -ResourceGroupName $ResourceGroupName -Name $metricAlertName -ErrorAction Stop } catch { $metricAlert = $null }
-            }
-            if ($metricAlert) {
-                Write-Host "Metric alert '$metricAlertName' already exists."
-            } elseif ($actionGroup -and $PSCmdlet.ShouldProcess($metricAlertName, "Create metric alert for failed Automation jobs")) {
-                # TotalJob counts every job, so the Status dimension must be pinned
-                # to Failed or successful scheduled runs would raise the alert too.
-                $dimensionSelection = New-AzMetricAlertRuleV2DimensionSelection -DimensionName "Status" -ValuesToInclude "Failed"
-                $criteriaParams = @{
-                    MetricNamespace = "Microsoft.Automation/automationAccounts"
-                    MetricName = "TotalJob"
-                    DimensionSelection = $dimensionSelection
-                    Operator = "GreaterThan"
-                    Threshold = 0
-                    TimeAggregation = "Total"
-                }
-                $criteria = if (Get-Command New-AzMetricAlertRuleV2Criteria -ErrorAction SilentlyContinue) {
-                    New-AzMetricAlertRuleV2Criteria @criteriaParams
-                } else {
-                    New-AzMetricAlertRuleV2StaticThresholdCriteria @criteriaParams
-                }
-                $addAlertParams = @{
-                    Name = $metricAlertName
-                    ResourceGroupName = $ResourceGroupName
-                    TargetResourceId = $aaResource.ResourceId
-                    WindowSize = ([TimeSpan]::FromHours(1))
-                    Frequency = ([TimeSpan]::FromMinutes(15))
-                    Severity = 3
-                    ActionGroupId = $actionGroup.Id
-                    Description = "TenuVault notification watcher Automation jobs are failing."
-                }
-                if ((Get-Command Add-AzMetricAlertRuleV2).Parameters.ContainsKey("Criteria")) {
-                    $addAlertParams.Criteria = $criteria
-                } else {
-                    $addAlertParams.Condition = $criteria
-                }
-                $metricAlert = Add-AzMetricAlertRuleV2 @addAlertParams
-                Write-Host "Metric alert '$metricAlertName' created (TotalJob with Status = Failed)."
-            }
-            $alertStatus = "action group '$actionGroupName' and metric alert '$metricAlertName' in place for $AlertEmail"
-        } catch {
-            Write-Warning "Creating the failure alert failed: $($_.Exception.Message)"
-            Write-Host $manualAlertStep -ForegroundColor Yellow
-            $alertStatus = "not created (manual step printed above)"
-        }
     }
 }
 

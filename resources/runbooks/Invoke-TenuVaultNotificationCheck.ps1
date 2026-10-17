@@ -720,7 +720,8 @@ function Add-TvSavedEnvelopes {
     param(
         [AllowNull()][object]$State,
         [Parameter(Mandatory)][string]$ListName,
-        [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[object]]$TargetList
+        [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[object]]$TargetList,
+        [string[]]$DefaultIntendedChannels = @()
     )
     if ($null -eq $State) { return }
     foreach ($entry in @(Get-TvProp $State $ListName)) {
@@ -749,11 +750,28 @@ function Add-TvSavedEnvelopes {
             $channelText = Get-TvText $channelName
             if ($channelText) { $deliveredChannels.Add($channelText) }
         }
+        # The intended destinations are frozen at enqueue time. Entries saved before
+        # this field existed inherit the destinations configured at load time.
+        $hasIntendedChannels = $false
+        if ($entry -is [System.Collections.IDictionary]) { $hasIntendedChannels = $entry.Contains("intendedChannels") }
+        elseif ($entry) { $hasIntendedChannels = $null -ne $entry.PSObject.Properties["intendedChannels"] }
+        $intendedChannels = [System.Collections.Generic.List[string]]::new()
+        if ($hasIntendedChannels) {
+            foreach ($channelName in @(Get-TvProp $entry "intendedChannels")) {
+                $channelText = Get-TvText $channelName
+                if ($channelText -and -not $intendedChannels.Contains($channelText)) { $intendedChannels.Add($channelText) }
+            }
+        } else {
+            foreach ($channelName in $DefaultIntendedChannels) {
+                if ($channelName -and -not $intendedChannels.Contains($channelName)) { $intendedChannels.Add($channelName) }
+            }
+        }
         $TargetList.Add([pscustomobject][ordered]@{
             envelope = $savedEnvelope
             attempts = $savedAttempts
             attemptsByChannel = $attemptsByChannel
             deliveredChannels = $deliveredChannels
+            intendedChannels = $intendedChannels
             lastError = Get-TvText (Get-TvProp $entry "lastError")
         })
     }
@@ -828,8 +846,8 @@ function Send-TvMail {
     }
     $subject = "TenuVault: $prefix$(Get-TvProp $Envelope 'title')"
     if ($subject.Length -gt 250) { $subject = $subject.Substring(0, 250) }
-    $to = @($Recipients.Split(",;") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    if ($to.Count -eq 0) { return }
+    $to = @(($Recipients -split "[,;]") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    if ($to.Count -eq 0) { throw "Mail delivery failed: TenuVaultMailRecipients contains no recipient addresses." }
     Send-TvRawMail -From $MailSender -To $to -Subject $subject -BodyText (Get-TvEmailText $Envelope) -GraphToken $GraphToken
 }
 
@@ -938,8 +956,8 @@ try {
         $initialState = [pscustomobject][ordered]@{
             tenantId = $tenantId.ToLowerInvariant(); configVersion = $configVersion
             watermark = $initialWatermark
-            recentAuditIds = @(); sentEventIds = @(); lastMissedKey = $null
-            pendingEnvelopes = @(); deadEnvelopes = @(); mailVerified = $false; mailVerifiedSender = $null
+            recentAuditIds = @(); sentEventIds = @(); lastMissedKey = $null; continuation = $null
+            pendingEnvelopes = @(); deadEnvelopes = @(); mailVerified = $false; mailVerifiedSender = $null; mailVerifiedAt = $null
         }
         Set-TvBlobText -Uri $stateBlobUri -Token $storageToken -Text (ConvertTo-TenuVaultCanonicalJson $initialState)
         $existingStateText = Get-TvBlobText -Uri $stateBlobUri -Token $storageToken
@@ -988,12 +1006,22 @@ try {
         }
     }
     $lastMissedKey = if ($state) { Get-TvText (Get-TvProp $state "lastMissedKey") } else { $null }
+    $continuation = if ($state) { Get-TvText (Get-TvProp $state "continuation") } else { $null }
     $mailVerified = $false
     $mailVerifiedSender = $null
+    $mailVerifiedAt = $null
     if ($state) {
         $mailVerified = (Get-TvProp $state "mailVerified") -eq $true
         $mailVerifiedSender = Get-TvText (Get-TvProp $state "mailVerifiedSender")
+        $mailVerifiedAt = ConvertTo-TvIso (Get-TvProp $state "mailVerifiedAt")
     }
+
+    # Destinations an envelope is owed to, judged by configuration, not by current
+    # eligibility: configured but unverified mail still counts as intended.
+    $configuredDestinations = [System.Collections.Generic.List[string]]::new()
+    if ($webhookUrl) { $configuredDestinations.Add("webhook") }
+    if ($teamsWebhookUrl) { $configuredDestinations.Add("teams") }
+    if ($mailSender -and $mailRecipients) { $configuredDestinations.Add("mail") }
 
     # Delivery outbox: envelopes waiting for a successful send, with per destination
     # delivery and retry state. Each list is passed to the loader as an explicit
@@ -1001,8 +1029,10 @@ try {
     # into $null in the pipeline and crash the reload on the first saved entry.
     $pendingEnvelopes = [System.Collections.Generic.List[object]]::new()
     $deadEnvelopes = [System.Collections.Generic.List[object]]::new()
-    Add-TvSavedEnvelopes -State $state -ListName "pendingEnvelopes" -TargetList $pendingEnvelopes
-    Add-TvSavedEnvelopes -State $state -ListName "deadEnvelopes" -TargetList $deadEnvelopes
+    Add-TvSavedEnvelopes -State $state -ListName "pendingEnvelopes" -TargetList $pendingEnvelopes `
+        -DefaultIntendedChannels @($configuredDestinations.ToArray())
+    Add-TvSavedEnvelopes -State $state -ListName "deadEnvelopes" -TargetList $deadEnvelopes `
+        -DefaultIntendedChannels @($configuredDestinations.ToArray())
 
     # Builds the full state object from the live collections. Used for every save,
     # so the pre delivery save and the final save can never drift apart in shape.
@@ -1018,7 +1048,7 @@ try {
             if ($entryAt -and [StringComparer]::Ordinal.Compare([string]$entryAt, $pruneBefore) -lt 0) { continue }
             $recentList.Add([pscustomobject][ordered]@{ id = [string]$entryId; at = [string]$entryAt })
         }
-        $recentTrimmed = @($recentList | Sort-Object { [string](Get-TvProp $_ "at") } -Descending | Select-Object -First 10000)
+        $recentTrimmed = @($recentList | Sort-Object { [string](Get-TvProp $_ "at") } -Descending | Select-Object -First 25000)
         [array]::Reverse($recentTrimmed)
         $sentArr = @($sentEventIds.ToArray())
         if ($sentArr.Count -gt 2000) { $sentArr = $sentArr[($sentArr.Count - 2000)..($sentArr.Count - 1)] }
@@ -1031,10 +1061,12 @@ try {
             recentAuditIds = $recentTrimmed
             sentEventIds = $sentArr
             lastMissedKey = $lastMissedKey
+            continuation = $continuation
             pendingEnvelopes = @($pendingEnvelopes.ToArray())
             deadEnvelopes = $deadArr
             mailVerified = $mailVerified
             mailVerifiedSender = $mailVerifiedSender
+            mailVerifiedAt = $mailVerifiedAt
         }
     }
 
@@ -1049,17 +1081,20 @@ try {
     # any notification mail is sent. Verification sends as the sender (must work)
     # and as an unrelated probe mailbox (must be rejected by the access policy).
     if ($VerifyMailOnly) {
+        # A verification run distrusts any earlier result from the very start, before
+        # any validation that can throw, so a failed or interrupted verify can never
+        # leave a stale approval behind.
+        $mailVerified = $false
+        $mailVerifiedSender = $null
+        $mailVerifiedAt = $null
+        & $saveState
         if (-not $mailSender) { throw "TenuVaultMailSender is not set. Configure the sender mailbox before running mail verification." }
         if (-not $mailProbeMailbox) { throw "TenuVaultMailProbeMailbox is not set. Configure a mailbox outside the mail access policy scope before running mail verification." }
         if ($mailProbeMailbox.ToLowerInvariant() -eq $mailSender.ToLowerInvariant()) { throw "TenuVaultMailProbeMailbox must differ from TenuVaultMailSender." }
-        # A verification run distrusts any earlier result from the start, so a
-        # failed or interrupted verify can never leave a stale approval behind.
-        $mailVerified = $false
-        $mailVerifiedSender = $null
-        & $saveState
         Send-TvRawMail -From $mailSender -To @($mailSender) -Subject "TenuVault mail verification" `
             -BodyText "The TenuVault watcher verified that it can send mail as $mailSender." -GraphToken $graphToken
         Write-Output "Sending as the configured sender mailbox works."
+        Update-TvStateLease -LeaseQueryUri $leaseQueryUri -Token $storageToken -LeaseId $leaseId
         $probeSucceeded = $false
         $probeStatusCode = 0
         $probeErrorText = $null
@@ -1085,6 +1120,7 @@ try {
         Write-Output "Sending as the probe mailbox was rejected with HTTP 403, as required."
         $mailVerified = $true
         $mailVerifiedSender = $mailSender
+        $mailVerifiedAt = $runAtIso
         & $saveState
         $verifiedHeartbeat = [pscustomobject][ordered]@{
             runAt = $runAtIso
@@ -1101,12 +1137,22 @@ try {
     }
 
     $mailConfigured = [bool]($mailSender -and $mailRecipients)
-    $senderVerified = $mailVerified -and $mailVerifiedSender -and $mailSender -and
+    # Verification proves the access policy as it was on that day. Policies drift, so
+    # a verification older than 90 days (or without a recorded date) no longer counts.
+    $verificationFresh = $false
+    if ($mailVerifiedAt) {
+        $verifiedAge = ([DateTimeOffset]$runAt) - [DateTimeOffset]::Parse($mailVerifiedAt)
+        $verificationFresh = $verifiedAge.TotalDays -le 90
+    }
+    $senderMatches = $mailVerifiedSender -and $mailSender -and
         ($mailSender.ToLowerInvariant() -eq $mailVerifiedSender.ToLowerInvariant())
+    $senderVerified = [bool]($mailVerified -and $senderMatches -and $verificationFresh)
     $mailEnabled = $mailConfigured -and $senderVerified
     if (($mailSender -or $mailRecipients) -and -not $senderVerified) {
         $lastError = if ($mailVerified -and $mailVerifiedSender -and $mailSender -and $mailSender.ToLowerInvariant() -ne $mailVerifiedSender.ToLowerInvariant()) {
             "Mail delivery is skipped: the configured sender $mailSender differs from the verified sender $mailVerifiedSender. Run this runbook once with -VerifyMailOnly for the new sender."
+        } elseif ($mailVerified -and $senderMatches -and -not $verificationFresh) {
+            "Mail delivery is skipped: the mail verification for $mailSender is older than 90 days. Run this runbook once with -VerifyMailOnly to verify again."
         } else {
             "Mail delivery is skipped until mail verification passes. Run this runbook once with -VerifyMailOnly after restricting Mail.Send to the sender mailbox."
         }
@@ -1117,12 +1163,17 @@ try {
     $filterFrom = ConvertTo-TvIso ([DateTimeOffset]::Parse($watermarkIso).UtcDateTime.AddMinutes(-30))
     $select = "id,displayName,componentName,actor,activity,activityDateTime,activityType,activityOperationType,activityResult,category,resources"
     $query = "`$select=$([uri]::EscapeDataString($select))&`$filter=$([uri]::EscapeDataString("activityDateTime gt $filterFrom"))&`$orderby=$([uri]::EscapeDataString('activityDateTime'))&`$top=200"
-    $nextUri = "https://graph.microsoft.com/beta/deviceManagement/auditEvents?$query"
+    $freshUri = "https://graph.microsoft.com/beta/deviceManagement/auditEvents?$query"
     $graphHeaders = @{ Authorization = "Bearer $graphToken"; ConsistencyLevel = "eventual" }
 
     # The ingestion cap counts NEW changes only. Duplicates inside the 30 minute
     # overlap never consume budget, and the watermark tracks the newest event seen
     # (duplicates included), so a busy overlap window cannot stall progress.
+    # A saved continuation resumes exactly where the previous run stopped, before
+    # any fresh overlap query. Like the desktop poller, the leftover page URL is
+    # what gets persisted: the current page when the new event cap breaks mid page
+    # (its remaining events are re-read and deduped), or the next link when a full
+    # page was consumed and the page cap stopped the loop.
     $priorRecent = @{}
     foreach ($priorId in $recentById.Keys) { $priorRecent[[string]$priorId] = $true }
     $newChanges = [System.Collections.Generic.List[object]]::new()
@@ -1131,9 +1182,33 @@ try {
     $newestSeenIso = $watermarkIso
     $ingestionCapReached = $false
     $pageCount = 0
+    $nextUri = $freshUri
+    $resumedContinuation = $false
+    if ($continuation) {
+        $nextUri = $continuation
+        $resumedContinuation = $true
+    }
     while ($nextUri -and -not $ingestionCapReached -and $pageCount -lt 500) {
+        Update-TvStateLease -LeaseQueryUri $leaseQueryUri -Token $storageToken -LeaseId $leaseId
         $pageCount++
-        $page = Invoke-RestMethod -Uri $nextUri -Headers $graphHeaders -Method Get -TimeoutSec 60
+        $page = $null
+        try {
+            $page = Invoke-RestMethod -Uri $nextUri -Headers $graphHeaders -Method Get -TimeoutSec 60
+        } catch {
+            $pageStatusCode = 0
+            if ($_.Exception.Response) { $pageStatusCode = [int]$_.Exception.Response.StatusCode }
+            if ($resumedContinuation -and $pageStatusCode -eq 400) {
+                # A stored continuation can expire. Discard it and restart once
+                # from the fresh overlap query inside the same run.
+                Write-Output "The saved audit continuation was rejected with HTTP 400. Restarting from the overlap query."
+                $continuation = $null
+                $resumedContinuation = $false
+                $nextUri = $freshUri
+                continue
+            }
+            throw
+        }
+        $resumedContinuation = $false
         foreach ($rawEvent in @($page.value)) {
             if ($null -eq $rawEvent) { continue }
             $seenCount++
@@ -1147,8 +1222,14 @@ try {
             $seenThisRun[$auditIdValue] = $true
             $newChanges.Add($change)
         }
-        $nextUri = Get-TvProp $page "@odata.nextLink"
+        if (-not $ingestionCapReached) {
+            $nextUri = Get-TvText (Get-TvProp $page "@odata.nextLink")
+        }
     }
+    # Persist wherever paging stopped: the next page URL after a fully consumed
+    # page, the current page URL when the new event cap broke mid page, or null
+    # when pagination ran to exhaustion.
+    $continuation = Get-TvText $nextUri
     Write-Output "Seen $seenCount audit events, $($newChanges.Count) new."
 
     $candidateEnvelopes = [System.Collections.Generic.List[object]]::new()
@@ -1158,31 +1239,44 @@ try {
     }
 
     # --- Missed backup check -----------------------------------------------------
+    # A listing failure must never block delivery of envelopes already waiting in
+    # the outbox: record the error, skip missed detection for this run, and carry
+    # on. Lease renewal failure stays fatal and is raised outside this guard.
     $newestBackup = $null
+    $missedCheckFailed = $false
     $marker = $null
     do {
-        $listUri = "https://$storageAccount.blob.core.windows.net/intune-backups?resttype=container&comp=list&delimiter=%2F&maxresults=5000"
-        if ($marker) { $listUri += "&marker=$([uri]::EscapeDataString($marker))" }
-        $listResponse = Invoke-TvStorageRequest -Uri $listUri -Method Get -Token $storageToken
-        [xml]$listXml = [string]$listResponse.Content
-        $names = [System.Collections.Generic.List[string]]::new()
-        $blobsNode = $listXml.EnumerationResults.Blobs
-        if ($blobsNode) {
-            foreach ($prefix in @($blobsNode.BlobPrefix)) { if ($prefix -and $prefix.Name) { $names.Add([string]$prefix.Name) } }
-            foreach ($blob in @($blobsNode.Blob)) { if ($blob -and $blob.Name) { $names.Add([string]$blob.Name) } }
+        Update-TvStateLease -LeaseQueryUri $leaseQueryUri -Token $storageToken -LeaseId $leaseId
+        try {
+            $listUri = "https://$storageAccount.blob.core.windows.net/intune-backups?restype=container&comp=list&delimiter=%2F&maxresults=5000"
+            if ($marker) { $listUri += "&marker=$([uri]::EscapeDataString($marker))" }
+            $listResponse = Invoke-TvStorageRequest -Uri $listUri -Method Get -Token $storageToken
+            [xml]$listXml = [string]$listResponse.Content
+            $names = [System.Collections.Generic.List[string]]::new()
+            $blobsNode = $listXml.EnumerationResults.Blobs
+            if ($blobsNode) {
+                foreach ($prefix in @($blobsNode.BlobPrefix)) { if ($prefix -and $prefix.Name) { $names.Add([string]$prefix.Name) } }
+                foreach ($blob in @($blobsNode.Blob)) { if ($blob -and $blob.Name) { $names.Add([string]$blob.Name) } }
+            }
+            foreach ($name in $names) {
+                $folderTime = Get-TenuVaultBackupFolderTime $name
+                if ($folderTime -and (-not $newestBackup -or $folderTime -gt $newestBackup)) { $newestBackup = $folderTime }
+            }
+            $marker = [string]$listXml.EnumerationResults.NextMarker
+            if (-not $marker) { $marker = $null }
+        } catch {
+            $missedCheckFailed = $true
+            $marker = $null
+            $listingError = "Missed backup check failed and was skipped for this run: $(Get-TvSafeError $_.Exception.Message)"
+            Write-Output $listingError
+            if (-not $lastError) { $lastError = $listingError }
         }
-        foreach ($name in $names) {
-            $folderTime = Get-TenuVaultBackupFolderTime $name
-            if ($folderTime -and (-not $newestBackup -or $folderTime -gt $newestBackup)) { $newestBackup = $folderTime }
-        }
-        $marker = [string]$listXml.EnumerationResults.NextMarker
-        if (-not $marker) { $marker = $null }
     } while ($marker)
 
     $newestBackupIso = if ($newestBackup) { ConvertTo-TvIso $newestBackup } else { $null }
     $missedThresholdTime = $runAt.AddHours(-$missedBackupHours)
     $missedKeyToSet = $null
-    if (-not $newestBackup -or $newestBackup -lt $missedThresholdTime) {
+    if (-not $missedCheckFailed -and (-not $newestBackup -or $newestBackup -lt $missedThresholdTime)) {
         $missedEvent = New-TenuVaultMissedBackupEvent -TenantId $tenantId -TenantName $tenantName `
             -OccurredAt $runAtIso -LastBackupAt $newestBackupIso -ThresholdHours $missedBackupHours
         $missedKeyToSet = "missed:$(if ($newestBackupIso) { $newestBackupIso } else { 'none' }):$missedBackupHours"
@@ -1201,11 +1295,14 @@ try {
         $candidateId = [string](Get-TvProp $candidate "eventId")
         if ($knownEventIds.ContainsKey($candidateId)) { continue }
         $knownEventIds[$candidateId] = $true
+        $intendedChannels = [System.Collections.Generic.List[string]]::new()
+        foreach ($channelName in $configuredDestinations) { $intendedChannels.Add($channelName) }
         $pendingEnvelopes.Add([pscustomobject][ordered]@{
             envelope = $candidate
             attempts = 0
             attemptsByChannel = [ordered]@{}
             deliveredChannels = [System.Collections.Generic.List[string]]::new()
+            intendedChannels = $intendedChannels
             lastError = $null
         })
     }
@@ -1219,16 +1316,18 @@ try {
     # --- Delivery from the outbox, per destination -----------------------------------
     # Each destination is attempted independently. Right after a destination accepts
     # an envelope it is recorded in deliveredChannels and state is saved, so a retry
-    # never resends to a destination that already got it. An envelope completes only
-    # when every configured destination has it, and goes dead only when one single
-    # destination reaches 5 failed attempts (its delivered list is kept).
-    $destinations = [System.Collections.Generic.List[string]]::new()
-    if ($webhookUrl) { $destinations.Add("webhook") }
-    if ($teamsWebhookUrl) { $destinations.Add("teams") }
-    if ($mailEnabled) { $destinations.Add("mail") }
+    # never resends to a destination that already got it. Completion is judged against
+    # the intended destinations frozen on the entry at enqueue time, never against
+    # what is eligible right now. An intended destination that is not currently
+    # eligible (for example configured mail that is not verified yet) is not
+    # attempted, consumes no attempts, and keeps the envelope pending.
+    $eligibleDestinations = [System.Collections.Generic.List[string]]::new()
+    if ($webhookUrl) { $eligibleDestinations.Add("webhook") }
+    if ($teamsWebhookUrl) { $eligibleDestinations.Add("teams") }
+    if ($mailEnabled) { $eligibleDestinations.Add("mail") }
 
-    if ($pendingEnvelopes.Count -gt 0 -and $destinations.Count -eq 0) {
-        Write-Output "No delivery channel is configured. $($pendingEnvelopes.Count) envelope(s) remain in the outbox."
+    if ($pendingEnvelopes.Count -gt 0 -and $eligibleDestinations.Count -eq 0) {
+        Write-Output "No delivery channel is currently eligible. $($pendingEnvelopes.Count) envelope(s) remain in the outbox."
     } else {
         foreach ($pendingEntry in @($pendingEnvelopes.ToArray())) {
             $envelope = Get-TvProp $pendingEntry "envelope"
@@ -1239,9 +1338,15 @@ try {
             }
             $deliveredChannels = $pendingEntry.deliveredChannels
             $attemptsByChannel = $pendingEntry.attemptsByChannel
+            $intendedChannels = $pendingEntry.intendedChannels
+            if ($intendedChannels.Count -eq 0 -and $configuredDestinations.Count -gt 0) {
+                foreach ($channelName in $configuredDestinations) { $intendedChannels.Add($channelName) }
+                & $saveState
+            }
             $entryDead = $false
-            foreach ($destination in @($destinations.ToArray())) {
+            foreach ($destination in @($intendedChannels.ToArray())) {
                 if ($deliveredChannels.Contains($destination)) { continue }
+                if (-not $eligibleDestinations.Contains($destination)) { continue }
                 Update-TvStateLease -LeaseQueryUri $leaseQueryUri -Token $storageToken -LeaseId $leaseId
                 $sendError = $null
                 try {
@@ -1270,7 +1375,7 @@ try {
                 }
             }
             $allDelivered = $true
-            foreach ($destination in $destinations) {
+            foreach ($destination in $intendedChannels) {
                 if (-not $deliveredChannels.Contains($destination)) { $allDelivered = $false }
             }
             if ($entryDead) {

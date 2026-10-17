@@ -47,7 +47,13 @@ export function outboxOf(deps: FeatureDeps, tenantId: string): Stored<OutboxReco
 }
 
 export function auditWatchOf(deps: FeatureDeps, tenantId: string): Stored<AuditWatchRecord> | null {
-  return deps.records.list<AuditWatchRecord>(DOMAINS.notificationAuditWatch, tenantId)[0] ?? null
+  const watch = deps.records.list<AuditWatchRecord>(DOMAINS.notificationAuditWatch, tenantId)[0] ?? null
+  if (!watch) return null
+  // Records written by early branch builds carried recentIds strings and no continuation.
+  const legacy = watch as Stored<AuditWatchRecord> & { recentIds?: string[] }
+  if (!Array.isArray(watch.recent)) legacy.recent = (legacy.recentIds ?? []).map((id) => ({ id, at: watch.watermark ?? new Date(0).toISOString() }))
+  if (legacy.continuation === undefined) legacy.continuation = null
+  return watch
 }
 
 export function defaultAuditWatch(): AuditWatchRecord {
@@ -63,6 +69,7 @@ export function defaultAuditWatch(): AuditWatchRecord {
     externalWatcher: false,
     watermark: null,
     recent: [],
+    continuation: null,
     lastPollAt: null,
     lastError: null,
   }
@@ -97,12 +104,22 @@ export function matchingChannelIds(rules: RuleRecord[], channels: Array<ChannelR
  * (skipping channels that already hold this event), then flushes due deliveries.
  * Returns how many intents were created.
  */
+export interface EmitResult {
+  created: number
+  channelIds: string[]
+}
+
 export async function emit(deps: FeatureDeps, tenantId: string, envelope: NotificationEnvelope, options: NotificationOptions & { channelIds?: string[]; deferFlush?: boolean } = {}): Promise<number> {
+  return (await emitDetailed(deps, tenantId, envelope, options)).created
+}
+
+export async function emitDetailed(deps: FeatureDeps, tenantId: string, envelope: NotificationEnvelope, options: NotificationOptions & { channelIds?: string[]; deferFlush?: boolean } = {}): Promise<EmitResult> {
   const tenant = tenantId.toLowerCase()
   const channels = channelsOf(deps, tenant)
   const selected = options.channelIds ?? matchingChannelIds(rulesOf(deps, tenant), channels, envelope)
   const existing = outboxOf(deps, tenant)
   let created = 0
+  const createdChannelIds: string[] = []
   for (const channelId of selected) {
     const channel = channels.find((entry) => entry.id === channelId)
     if (!channel || !channel.enabled) continue
@@ -121,10 +138,11 @@ export async function emit(deps: FeatureDeps, tenantId: string, envelope: Notifi
       sentAt: null,
     }, { actor: null, reason: `Queued ${envelope.type} for ${channel.title}` })
     created++
+    createdChannelIds.push(channelId)
   }
   if (created > 0) pruneOutbox(deps, tenant)
   if (!options.deferFlush) await flushOutbox(deps, tenant, options)
-  return created
+  return { created, channelIds: createdChannelIds }
 }
 
 function pruneOutbox(deps: FeatureDeps, tenantId: string): void {
@@ -266,16 +284,15 @@ async function listGroupMembers(graph: Awaited<ReturnType<FeatureDeps["graph"]>>
   const addresses: string[] = []
   let path: string | null = `groups/${groupId}/transitiveMembers?$select=mail,userPrincipalName,userType&$top=200`
   let pages = 0
+  let inaccessibleUsers = 0
   while (path && pages < 20) {
     pages++
     const response: { status: number; body: GraphItem } = await graph("GET", path)
     if (response.status !== 200) return { error: brief(graphError(response.body, response.status)) }
     const values = Array.isArray(response.body.value) ? (response.body.value as GraphItem[]) : []
-    let sawUser = false
-    let sawIdentity = false
     for (const member of values) {
-      if (member["@odata.type"] === "#microsoft.graph.user" || typeof member.userType === "string") sawUser = true
-      if (typeof member.mail === "string" || typeof member.userPrincipalName === "string" || typeof member.userType === "string") sawIdentity = true
+      const hasIdentity = typeof member.mail === "string" || typeof member.userPrincipalName === "string" || typeof member.userType === "string"
+      if ((member["@odata.type"] === "#microsoft.graph.user" || typeof member.userType === "string") && !hasIdentity) inaccessibleUsers++
       // Transitive members include nested groups; only user objects are mailboxes we may add.
       const kind = member["@odata.type"]
       const isUser = kind === "#microsoft.graph.user" || (kind === undefined && typeof member.userType === "string")
@@ -286,9 +303,9 @@ async function listGroupMembers(graph: Awaited<ReturnType<FeatureDeps["graph"]>>
       if (addresses.length > MAX_RECIPIENTS) return { error: `A recipient group has more than ${MAX_RECIPIENTS} mailboxes. Send to a distribution list address instead.` }
     }
     path = nextPath(response.body)
-    if (!path && sawUser && !sawIdentity && addresses.length === 0) {
-      return { error: "Group members came back without mail properties. The app registration needs User.Read.All for group recipients: rerun the setup script with -IncludeNotifications and sign in again." }
-    }
+  }
+  if (inaccessibleUsers > 0) {
+    return { error: "Some group members came back without mail properties, so the recipient list would be incomplete. The app registration needs User.Read.All for group recipients: rerun the setup script with -IncludeNotifications and sign in again." }
   }
   return { addresses }
 }
@@ -316,22 +333,35 @@ export async function pollAuditWatch(deps: FeatureDeps, tenantId: string, option
     const collected: AuditChange[] = []
     const seenNow: Array<{ id: string; at: string }> = []
     let newestSeenAt: string | null = null
-    let path: string | null =
-      `deviceManagement/auditEvents?$select=${AUDIT_EVENT_SELECT}&$filter=${encodeURIComponent(`activityDateTime gt ${since.toISOString()}`)}&$orderby=activityDateTime&$top=200`
+    const freshPath = `deviceManagement/auditEvents?$select=${AUDIT_EVENT_SELECT}&$filter=${encodeURIComponent(`activityDateTime gt ${since.toISOString()}`)}&$orderby=activityDateTime&$top=200`
+    let path: string | null = watch.continuation ?? freshPath
+    let resumed = Boolean(watch.continuation)
     let pages = 0
     // The cap counts newly collected events, never duplicates inside the overlap, so a
     // busy tenant cannot stall the poller re-reading the same first page forever.
     while (path && pages < 50 && collected.length < MAX_AUDIT_EVENTS_PER_POLL) {
       pages++
       const response: { status: number; body: GraphItem } = await graph("GET", path)
-      if (response.status !== 200) throw new Error(graphError(response.body, response.status))
+      if (response.status !== 200) {
+        // A stored continuation can expire; restart once from the overlap query.
+        if (resumed && response.status === 400) {
+          resumed = false
+          path = freshPath
+          continue
+        }
+        throw new Error(graphError(response.body, response.status))
+      }
+      resumed = false
       const values = Array.isArray(response.body.value) ? (response.body.value as AuditEventRaw[]) : []
       for (const raw of values) {
         const change = mapAuditEvent(raw)
         if (!change) continue
         seenNow.push({ id: change.auditId, at: change.at })
         if (!newestSeenAt || change.at > newestSeenAt) newestSeenAt = change.at
-        if (!seen.has(change.auditId)) collected.push(change)
+        if (!seen.has(change.auditId)) {
+          seen.add(change.auditId)
+          collected.push(change)
+        }
         if (collected.length >= MAX_AUDIT_EVENTS_PER_POLL) break
       }
       if (collected.length >= MAX_AUDIT_EVENTS_PER_POLL) break
@@ -363,6 +393,7 @@ export async function pollAuditWatch(deps: FeatureDeps, tenantId: string, option
     saveAuditWatch(deps, tenant, {
       watermark: newWatermark,
       recent,
+      continuation: path,
       lastPollAt: now.toISOString(),
       lastError: null,
     }, { actor: null, reason: `Audit poll read ${seenNow.length} events, ${filtered.length} new changes` })
