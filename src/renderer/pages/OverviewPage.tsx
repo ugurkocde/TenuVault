@@ -73,7 +73,12 @@ export default function OverviewPage() {
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Tile focal className="justify-between">
           <p className="text-sm text-white/70">Tenants connected</p>
-          <p className="mt-3 text-4xl font-light tabular-nums">{tenants.length}</p>
+          <div>
+            <p className="mt-3 text-4xl font-light tabular-nums">{tenants.length}</p>
+            {status?.plan && status.tenantLimit !== null && (
+              <p className="mt-1 text-sm text-white/70">{`${planName(status.plan)} covers ${status.tenantLimit} tenant${status.tenantLimit === 1 ? "" : "s"}`}</p>
+            )}
+          </div>
         </Tile>
         {[
           ["Signed in", signedInCount],
@@ -84,7 +89,7 @@ export default function OverviewPage() {
             <TileLabel>{label}</TileLabel>
             <p className="mt-3 text-4xl font-light text-gray-900 tabular-nums">
               {count}
-              <span className="text-lg text-gray-400"> of {tenants.length}</span>
+              <span className="text-lg text-gray-400"> of {tenants.length} connected</span>
             </p>
           </Tile>
         ))}
