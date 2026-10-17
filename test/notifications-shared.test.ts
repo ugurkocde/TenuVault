@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { describe, expect, it } from "vitest"
 import { collapseAuditChanges, filterAuditChanges, intuneChangeDigest, mapAuditEvent, type AuditEventRaw } from "../src/shared/notifications/audit"
 import { backupEvent, buildEnvelope, canonicalJson, driftEvent, eventId, sha256Hex, testEvent } from "../src/shared/notifications/envelope"
-import { emailHtml, emailSubject, emailText, teamsWorkflowsPayload } from "../src/shared/notifications/render"
+import { emailHtml, emailSubject, emailText, friendlyTime, teamsWorkflowsPayload } from "../src/shared/notifications/render"
 import fixture from "./fixtures/notifications/audit-digest.json"
 import liveFixture from "./fixtures/notifications/audit-live.json"
 
@@ -126,6 +126,20 @@ describe("rendering", () => {
     const texts = payload.attachments[0]!.content.body.map((block) => block.text ?? "").join(" ")
     expect(texts).toContain("\\[Review required\\]")
     expect(texts).not.toContain("[Review required](https://attacker.example)")
+  })
+
+  it("HTML mail has severity badge, verb chips, friendly times and a fixed action link", () => {
+    expect(friendlyTime("2026-10-17T18:54:26.033Z")).toBe("2026-10-17 18:54 UTC")
+    expect(friendlyTime("not-a-date")).toBe("not-a-date")
+    const changes = fixture.events.map((event) => mapAuditEvent(event as AuditEventRaw)!)
+    const digest = intuneChangeDigest({ tenantId: TENANT, tenantName: "Contoso", changes, includeActor: true, source: "azure-watcher" })
+    const html = emailHtml(digest)
+    expect(html).toContain("Warning")
+    expect(html).toContain(">Deleted</span>")
+    expect(html).toContain("2026-10-17 10:00 UTC")
+    expect(html).not.toContain("2026-10-17T10:00:00")
+    expect(html).toContain("https://intune.microsoft.com")
+    expect(emailHtml(envelope)).not.toContain("intune.microsoft.com")
   })
 
   it("hostile policy names stay text in cards and mail", () => {

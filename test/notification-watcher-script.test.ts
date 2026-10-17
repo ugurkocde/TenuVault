@@ -111,6 +111,20 @@ describe("Azure notification watcher scripts", () => {
     expect(output).toBe(expected)
   }, 60_000)
 
+  it.runIf(Boolean(pwsh))("PowerShell renders designed HTML mail with escaped tenant text", () => {
+    const script = new URL("./fixtures/notifications/render-mail.ps1", import.meta.url).pathname
+    const html = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" })
+    expect(html).toContain("TENUVAULT")
+    expect(html).toContain(">Deleted</span>")
+    expect(html).toContain("2026-10-17 10:00 UTC")
+    expect(html).not.toContain("2026-10-17T10:00:00")
+    expect(html).toContain("https://intune.microsoft.com")
+    expect(html).not.toContain("<script>alert(1)</script>")
+    expect(html).toContain("&lt;script&gt;")
+    expect(runbook).toContain('BodyContentType "HTML"')
+    expect(runbook).not.toContain("function Get-TvEmailText")
+  }, 60_000)
+
   it.runIf(Boolean(pwsh))("PowerShell matches TypeScript on live-shaped read and assignment events", () => {
     const changes = liveFixture.events.map((event) => mapAuditEvent(event as AuditEventRaw)).filter((change) => change !== null)
     expect(changes.map((change) => change.changeType)).toEqual(["assigned", "unassigned", "created"])
