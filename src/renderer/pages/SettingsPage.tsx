@@ -2,7 +2,7 @@ import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
 import { useEffect, useId, useRef, useState } from "react"
 import { Link, useLocation } from "react-router-dom"
-import { Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, RefreshCw, Save, Upload } from "lucide-react"
+import { Bell, Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, RefreshCw, Save, Upload } from "lucide-react"
 import { useTenantOperations, useTenants, type Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { storageLabel } from "~/lib/storage-label"
 import type { AppInfo, AppPreferences, SignedInAccount, UpdateStatus } from "../../shared/ipc"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
-import { COMMUNITY_RETENTION_DAYS, effectiveRetentionDays } from "../../shared/plans"
+import { allows, COMMUNITY_RETENTION_DAYS, effectiveRetentionDays } from "../../shared/plans"
 import { isGuid } from "../../shared/security"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
 import { StorageChooser } from "../components/StorageChooser"
@@ -24,6 +24,7 @@ import { toast } from "../lib/toast"
 import { tenantPlan, useLicense } from "../lib/license"
 import { PlanBadge } from "../components/UpgradeNote"
 import { PdfBrandingSettings } from "../components/PdfBrandingSettings"
+import { NotificationsPanel } from "../features/notifications/NotificationsPanel"
 import { useConfirm } from "~/components/ConfirmDialog"
 
 function RestoreWrites() {
@@ -199,6 +200,41 @@ function TenantRestoreWrites({ tenantId }: { tenantId: string }) {
         ))}
       </CardContent>
     </Card>
+  )
+}
+
+function NotificationSettings() {
+  const tenants = useTenants().filter(tenant => tenant.credentials?.tenantId)
+  const { status: licenseStatus } = useLicense()
+  const [selected, setSelected] = useState("")
+  const tenant = tenants.find(candidate => candidate.credentials?.tenantId === selected) ?? tenants[0]
+  if (!tenant?.credentials) {
+    return (
+      <Card>
+        <CardContent className="pt-6">Connect and sign in to a tenant to set up notifications.</CardContent>
+      </Card>
+    )
+  }
+  const tenantId = tenant.credentials.tenantId
+  const plan = tenantPlan(licenseStatus?.tenants.find(entry => entry.tenantId.toLowerCase() === tenantId.toLowerCase()))
+  const locked = plan !== null && !allows(plan, "notifications")
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="flex items-center gap-3 text-xl font-medium text-gray-900">
+          <span className="flex size-10 items-center justify-center rounded-full bg-secondary" aria-hidden="true"><Bell className="h-[18px] w-[18px]" /></span> Notifications
+          {locked && <PlanBadge feature="notifications" />}
+        </h2>
+        <p className="mt-2 text-sm text-gray-500">Backup, restore, drift and Intune change alerts to this computer, a webhook, a Teams channel or email. Settings are kept per tenant.</p>
+      </div>
+      <label className="block text-sm">
+        Notifications tenant
+        <select className="ml-3 rounded border bg-background p-2" value={tenantId} onChange={event => setSelected(event.target.value)}>
+          {tenants.map(candidate => <option key={candidate.id} value={candidate.credentials!.tenantId}>{candidate.name}</option>)}
+        </select>
+      </label>
+      <NotificationsPanel key={tenantId} tenant={tenant} />
+    </div>
   )
 }
 
@@ -670,7 +706,7 @@ export default function SettingsPage() {
       <div className="flex flex-wrap items-end justify-between gap-6 pb-2">
         <div>
           <h1 className="text-4xl font-medium tracking-tight text-gray-900">Settings</h1>
-          <p className="mt-2 text-lg text-gray-500">Sign-in, backup storage, encryption, background backups, PDF branding and updates.</p>
+          <p className="mt-2 text-lg text-gray-500">Sign-in, backup storage, encryption, background backups, notifications, PDF branding and updates.</p>
         </div>
       <label className="flex items-center gap-3 text-sm font-medium text-gray-600">Appearance
         <select className="h-10 rounded-full border border-gray-200 bg-white px-4 text-gray-900" defaultValue={getAppearance()} onChange={e => setAppearance(e.target.value as Appearance)}>
@@ -679,12 +715,13 @@ export default function SettingsPage() {
       </label>
       </div>
       <nav aria-label="Settings sections" className="flex flex-wrap gap-2 text-sm">
-        {[['signin', 'Sign-in'], ['storage', 'Storage and recovery'], ['background', 'Background runner'], ['branding', 'PDF branding'], ['updates', 'Updates'], ['about', 'About']].map(([id, title]) => <button key={id} type="button" className="h-9 rounded-full bg-card px-4 font-medium text-foreground transition-colors hover:bg-primary hover:text-primary-foreground" onClick={() => document.getElementById(`settings-${id}`)?.scrollIntoView({ block: 'start' })}>{title}</button>)}
+        {[['signin', 'Sign-in'], ['storage', 'Storage and recovery'], ['background', 'Background runner'], ['notifications', 'Notifications'], ['branding', 'PDF branding'], ['updates', 'Updates'], ['about', 'About']].map(([id, title]) => <button key={id} type="button" className="h-9 rounded-full bg-card px-4 font-medium text-foreground transition-colors hover:bg-primary hover:text-primary-foreground" onClick={() => document.getElementById(`settings-${id}`)?.scrollIntoView({ block: 'start' })}>{title}</button>)}
       </nav>
       <section className="scroll-mt-6" id="settings-signin"><TenantSettings /></section>
       <section className="scroll-mt-6" id="settings-storage"><BackupsOnDevice />
       <RestoreWrites /></section>
       <section className="scroll-mt-6" id="settings-background"><BackgroundAndRetention /></section>
+      <section className="scroll-mt-6" id="settings-notifications"><NotificationSettings /></section>
       <section className="scroll-mt-6" id="settings-branding"><PdfBrandingSettings /></section>
       <section className="scroll-mt-6" id="settings-updates"><Updates /></section>
       <section className="scroll-mt-6" id="settings-about"><About /></section>

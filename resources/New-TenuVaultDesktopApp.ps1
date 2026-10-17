@@ -37,6 +37,12 @@
     unresolved groups check needs it to tell whether a referenced group exists. Without
     it that check stays unknown. Off by default, so the default permission set is unchanged.
 
+.PARAMETER IncludeNotifications
+    When set, also requests the delegated Mail.Send and GroupMember.Read.All permissions.
+    Notification email channels send as the signed-in admin and can resolve Entra group
+    recipients. Without it, email channels fail with a Graph permission error while
+    webhook and Teams channels keep working. Off by default.
+
 .EXAMPLE
     ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -AllowedGroupId 5f0c...
 
@@ -48,7 +54,8 @@ param(
     [string]$TenantId,
     [string]$DisplayName = "TenuVault Desktop",
     [string]$AllowedGroupId,
-    [switch]$IncludeGroupRead
+    [switch]$IncludeGroupRead,
+    [switch]$IncludeNotifications
 )
 
 $ErrorActionPreference = "Stop"
@@ -133,6 +140,12 @@ $resources = @(
 if ($IncludeGroupRead) {
     # Opt-in only: lets the hygiene unresolved groups check read group existence.
     $resources[0].Scopes += "Group.Read.All"
+}
+
+if ($IncludeNotifications) {
+    # Opt-in only: notification email as the signed-in admin, plus group recipient resolution.
+    $resources[0].Scopes += "Mail.Send"
+    $resources[0].Scopes += "GroupMember.Read.All"
 }
 
 $requiredResourceAccess = @()

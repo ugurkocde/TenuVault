@@ -61,6 +61,7 @@ import { Preferences } from "./preferences"
 import { AppTray } from "./tray"
 import { installedBySetup, isNightly, Updates, updatesDisabledByPolicy } from "./updates"
 import { featureRoutes, startFeatures } from "./features"
+import { emitBackupOutcome, emitDriftOutcome, emitRestoreOutcome } from "./features/notifications/producers"
 import { apiBody, type FeatureDeps } from "./features/deps"
 import { TenantRecords } from "./features/records"
 import { DriftJobs, driftScanRoutes } from "./drift/jobs"
@@ -278,7 +279,19 @@ async function bootstrap(): Promise<void> {
     },
     // Community keeps 30 days of history; Pro and MSP keep what the admin chooses (0 keeps everything).
     retentionDays: (tenantId) => effectiveRetentionDays(preferences.get().retentionDays, license.plan(tenantId)),
-    onFinished: (job, request) => failedAttempts.finished(job, request),
+    onFinished: (job, request) => {
+      failedAttempts.finished(job, request)
+      // Best-effort notification events for every finished backup; rules decide who hears about it.
+      if (job.status === "Cancelled" || !job.backupFolder) return
+      void emitBackupOutcome(featureDeps, job.tenantId, {
+        status: job.status === "Failed" ? "Failed" : job.failures ? "CompletedWithWarnings" : "Success",
+        backupFolder: job.backupFolder,
+        finishedAt: job.endTime ?? new Date().toISOString(),
+        failures: job.failures ?? 0,
+        trigger: request.trigger ?? "manual",
+        message: job.exception ?? job.progressMessage,
+      }).catch(() => undefined)
+    },
   })
 
   const scopes = new BackupScopes(appStore)
@@ -357,6 +370,15 @@ async function bootstrap(): Promise<void> {
     store: driftStore ?? { get: (key) => memoryResults.get(key) ?? null, set: (key, value) => void memoryResults.set(key, value), delete: (key) => void memoryResults.delete(key) },
     // When the window is not in front, a system notification says the scan finished; the app itself shows a toast.
     notify: (job) => {
+      if (job.status === "completed" && job.summary) {
+        void emitDriftOutcome(featureDeps, job.tenantId, {
+          jobId: job.jobId,
+          finishedAt: job.finishedAt ?? new Date().toISOString(),
+          added: job.summary.added,
+          modified: job.summary.modified,
+          deleted: job.summary.deleted,
+        }).catch(() => undefined)
+      }
       if (job.status === "cancelled" || mainWindow?.isFocused() || !Notification.isSupported()) return
       const tenant = tenantProfile(job.tenantId)?.name ?? "your tenant"
       const notification = new Notification({
@@ -376,7 +398,17 @@ async function bootstrap(): Promise<void> {
     // Disabled CIS routes refuse before any licensing work. The plan comes next, so the
     // disclaimer is never accepted for a change the plan refuses anyway.
     guard: async (request) => (await checkCis(request)) ?? (await recordPlanRefusal(failedAttempts, request, await checkPlan(request))) ?? checkDisclaimer(request),
-    onHandled: createAuditRecorder((request) => host.dispatch(request), (tenantId) => accounts.get(tenantId)),
+    onHandled: createAuditRecorder((request) => host.dispatch(request), (tenantId) => accounts.get(tenantId), (notice) => {
+      void emitRestoreOutcome(featureDeps, notice.tenantId, {
+        status: notice.status,
+        jobId: notice.jobId,
+        finishedAt: new Date().toISOString(),
+        restored: notice.restored,
+        failed: notice.failed,
+        partial: notice.partial,
+        message: notice.message,
+      }).catch(() => undefined)
+    }),
   })
 
   // Tenant profiles are kept by the renderer; scheduled backups read them from the store.

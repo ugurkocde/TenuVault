@@ -1,0 +1,40 @@
+{
+  "tenantId": "11111111-1111-1111-1111-111111111111",
+  "tenantName": "Contoso",
+  "includeActor": true,
+  "events": [
+    {
+      "id": "audit-1",
+      "activity": "Update deviceConfiguration",
+      "activityDateTime": "2026-10-17T10:00:00Z",
+      "category": "Policy",
+      "httpVerb": "PATCH",
+      "initiatedByUpn": "admin@contoso.test",
+      "initiatedByAppId": "app-portal",
+      "requestUrl": "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/abc",
+      "resources": [{ "displayName": "WiFi Corp", "modifiedProperties": [{ "displayName": "networkName", "oldValue": "old-secret", "newValue": "new-secret" }] }]
+    },
+    {
+      "id": "audit-2",
+      "activity": "Update deviceConfiguration",
+      "activityDateTime": "2026-10-17T10:01:00Z",
+      "category": "Policy",
+      "httpVerb": "PATCH",
+      "initiatedByUpn": "admin@contoso.test",
+      "initiatedByAppId": "app-portal",
+      "requestUrl": "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/abc",
+      "resources": [{ "displayName": "WiFi Corp" }]
+    },
+    {
+      "id": "audit-3",
+      "activity": "Delete deviceCompliancePolicy",
+      "activityDateTime": "2026-10-17T10:02:00Z",
+      "category": "Compliance",
+      "httpVerb": "DELETE",
+      "initiatedByUpn": "other@contoso.test",
+      "initiatedByAppId": "app-portal",
+      "requestUrl": "https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies/def",
+      "resources": [{ "displayName": "Baseline <script>alert(1)</script>" }]
+    }
+  ]
+}
