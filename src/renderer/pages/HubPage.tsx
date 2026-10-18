@@ -52,7 +52,7 @@ export default function HubPage({ hubId }: { hubId: string }) {
             to={`/portal/${hub.id}/${candidate.id}`}
             aria-current={candidate.id === tab.id ? "page" : undefined}
             className={cn(
-              "flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors",
+              "flex h-10 items-center gap-2 rounded-full px-4 text-sm font-medium transition-colors",
               candidate.id === tab.id ? "bg-primary text-primary-foreground" : "bg-card text-gray-700 hover:bg-secondary",
             )}
           >

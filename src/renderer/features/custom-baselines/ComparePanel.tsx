@@ -138,8 +138,8 @@ function ComparisonView({ comparison }: { comparison: Comparison }) {
               {policy.note && <p className="mt-1 text-xs text-gray-500">{policy.note}</p>}
               {policy.differences.length > 0 && (
                 <table className="mt-2 w-full text-left text-xs">
-                  <thead className="text-gray-500"><tr><th className="py-1 pr-2 font-medium">Setting</th><th className="pr-2 font-medium">Baseline</th><th className="font-medium">Tenant</th></tr></thead>
-                  <tbody>{policy.differences.map((difference) => <tr key={difference.key} className="border-t border-gray-100 align-top dark:border-gray-800"><td className="break-all py-1 pr-2 font-mono">{difference.key}{difference.kind === "unsupported" ? <span className="block font-sans text-gray-500">not comparable: {difference.note}</span> : null}</td><td className="break-all pr-2 font-mono text-gray-600 dark:text-gray-400">{difference.base ?? "absent"}</td><td className="break-all font-mono text-gray-600 dark:text-gray-400">{difference.local ?? "absent"}</td></tr>)}</tbody>
+                  <thead className="text-gray-500"><tr><th className="py-1 pr-2 font-medium">Setting</th><th className="py-1 pr-2 font-medium">Baseline</th><th className="py-1 font-medium">Tenant</th></tr></thead>
+                  <tbody>{policy.differences.map((difference) => <tr key={difference.key} className="border-t border-gray-100 align-top dark:border-gray-800"><td className="break-all py-1 pr-2 font-mono">{difference.key}{difference.kind === "unsupported" ? <span className="block font-sans text-gray-500">not comparable: {difference.note}</span> : null}</td><td className="break-all py-1 pr-2 font-mono text-gray-600 dark:text-gray-400">{difference.base ?? "absent"}</td><td className="break-all py-1 font-mono text-gray-600 dark:text-gray-400">{difference.local ?? "absent"}</td></tr>)}</tbody>
                 </table>
               )}
             </li>

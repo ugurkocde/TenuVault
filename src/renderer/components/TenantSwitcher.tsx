@@ -29,7 +29,7 @@ export function TenantSwitcher() {
         onClick={() => void navigate("/portal/onboarding")}
         className="flex w-full items-center gap-3 rounded-full bg-secondary py-1.5 pl-1.5 pr-4 text-sm font-medium text-foreground transition-colors hover:bg-accent"
       >
-        <span className="flex size-8 items-center justify-center rounded-full bg-card" aria-hidden="true"><Plus className="h-4 w-4" /></span> Connect a tenant
+        <span className="flex size-9 items-center justify-center rounded-full bg-card" aria-hidden="true"><Plus className="h-4 w-4" /></span> Connect a tenant
       </button>
     )
   }

@@ -20,7 +20,7 @@ export interface FilterChip<T extends string> {
 
 export function FilterChips<T extends string>({ options, value, onChange, label }: { options: FilterChip<T>[]; value: T; onChange: (value: T) => void; label: string }) {
   return <div role="group" aria-label={label} className="flex flex-wrap items-center gap-2">
-    {options.map(option => <button key={option.value} type="button" aria-pressed={value === option.value} onClick={() => onChange(option.value)} className={cn("inline-flex items-center rounded-full border px-3.5 py-1.5 text-sm transition-colors", value === option.value ? "border-transparent bg-primary text-primary-foreground" : "border-gray-200 text-gray-600 hover:bg-gray-50")}>
+    {options.map(option => <button key={option.value} type="button" aria-pressed={value === option.value} onClick={() => onChange(option.value)} className={cn("inline-flex h-10 items-center rounded-full border px-3.5 text-sm transition-colors", value === option.value ? "border-transparent bg-primary text-primary-foreground" : "border-gray-200 text-gray-600 hover:bg-gray-50")}>
       {option.dot && <span className={cn("mr-1.5 h-2 w-2 rounded-full", option.dot)} aria-hidden="true" />}
       {option.label}
       {option.count !== undefined && <span className="ml-1 tabular-nums font-semibold">{option.count}</span>}

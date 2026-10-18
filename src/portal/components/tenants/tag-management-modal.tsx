@@ -142,7 +142,7 @@ export function TagManagementModal({
             <h3 className="text-xs font-medium text-gray-500 mb-3">
               Current Tags ({selectedTags.length})
             </h3>
-            <div className="flex flex-wrap gap-2 min-h-[40px] p-4 bg-gray-50 rounded-2xl">
+            <div className="flex flex-wrap items-center content-center gap-2 min-h-[40px] p-4 bg-gray-50 rounded-2xl">
               {selectedTags.length === 0 ? (
                 <span className="text-sm text-gray-500">No tags selected</span>
               ) : (

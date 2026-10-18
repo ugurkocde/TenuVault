@@ -532,14 +532,14 @@ function BackupDetails({ backup, first, storageAccountName, downloading, onChang
           ["Size", formatSize(backup.size)],
           ["Duration", formatDuration(backup.duration)],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-2xl bg-gray-50 p-4">
+          <div key={label} className="flex flex-col rounded-2xl bg-gray-50 p-4">
             <span className="text-xs text-gray-500">{label}</span>
-            <p className="mt-1 text-2xl font-medium tracking-tight text-gray-900">{value}</p>
+            <p className="mt-auto pt-1 text-2xl font-medium tracking-tight text-gray-900">{value}</p>
           </div>
         ))}
-        <div className="rounded-2xl bg-gray-50 p-4">
+        <div className="flex flex-col rounded-2xl bg-gray-50 p-4">
           <span className="text-xs text-gray-500">Changes since the previous backup</span>
-          <div className="mt-1 text-2xl font-medium tracking-tight text-gray-900">
+          <div className="mt-auto pt-1 text-2xl font-medium tracking-tight text-gray-900">
             <ChangesText backup={backup} first={first} />
           </div>
         </div>
@@ -589,7 +589,7 @@ function BackupDetails({ backup, first, storageAccountName, downloading, onChang
               ["Stored", storageLabel(storageAccountName)],
               ["Backup ID", backup.id],
             ].map(([label, value]) => (
-              <div key={label} className="flex justify-between gap-4 py-2.5 first:pt-0">
+              <div key={label} className="flex items-baseline justify-between gap-4 py-2.5 first:pt-0">
                 <dt className="text-gray-500">{label}</dt>
                 <dd className={cn("text-right font-medium text-gray-900", label === "Backup ID" && "font-mono text-xs")}>{value}</dd>
               </div>

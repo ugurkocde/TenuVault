@@ -93,7 +93,7 @@ export function RunOverlay({ ariaLabel, title, subtitle, percent, progressLabel,
           {subtitle && <p className="mt-2 text-sm text-gray-500">{subtitle}</p>}
         </div>
         {/* Fixed height, so the percent appearing after connecting never shifts the bar below it. */}
-        <p aria-hidden="true" className="mt-7 flex h-16 items-end justify-center text-6xl font-light leading-none tabular-nums text-gray-900">{percent !== null && <>{percent}<span className="text-3xl text-gray-500">%</span></>}</p>
+        <p aria-hidden="true" className="mt-7 flex h-16 items-baseline justify-center text-6xl font-light leading-none tabular-nums text-gray-900">{percent !== null && <>{percent}<span className="text-3xl text-gray-500">%</span></>}</p>
         <div role="progressbar" aria-label={progressLabel} aria-valuemin={0} aria-valuemax={100} {...(percent !== null ? { "aria-valuenow": percent } : {})} aria-valuetext={valueText} className="mt-4 h-1.5 overflow-hidden rounded-full bg-gray-200">
           {percent !== null
             ? <div className="h-full w-full origin-left rounded-full bg-primary transition-transform duration-500 ease-out motion-reduce:transition-none" style={{ transform: `scaleX(${percent / 100})` }} />

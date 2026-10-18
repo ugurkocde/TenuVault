@@ -12,7 +12,7 @@ export function CisCard({ card }: { card: CisScoreCard }) {
     <section aria-label={`${card.title} readiness`} className="flex flex-col gap-4 rounded-3xl bg-card p-6 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
       <div>
         <h3 className="text-lg font-medium text-gray-900">{card.title}</h3>
-        <p className="text-sm text-gray-500">CIS Benchmarks{card.version ? `, version ${card.version}` : ""}. Newest saved assessment, {formatDate(card.assessedAt)}.</p>
+        <p className="mt-0.5 text-sm text-gray-500">CIS Benchmarks{card.version ? `, version ${card.version}` : ""}. Newest saved assessment, {formatDate(card.assessedAt)}.</p>
       </div>
       <div className="flex flex-wrap gap-x-8 gap-y-3">
         {card.levels.map((level) => (
