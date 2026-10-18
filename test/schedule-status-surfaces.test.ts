@@ -329,13 +329,21 @@ describe("Dashboard backup counts", () => {
 
 describe("Dashboard last updated label", () => {
   it("reserves the widest label width so the ticking seconds never move the header row", () => {
-    state.dataUpdatedAt = Date.now() - 9_000
-    const markup = renderDashboard()
-    expect(markup).toContain("Last updated 9 seconds ago")
-    // Invisible sizers hold the box at its widest width. Without them the
-    // 9 to 10 second step widens the span and pushes the whole row left.
-    expect(markup).toMatch(/<span aria-hidden="true" class="[^"]*invisible[^"]*">Last updated 59 seconds ago<\/span>/)
-    expect(markup).toMatch(/<span aria-hidden="true" class="[^"]*invisible[^"]*">Last updated 59 minutes ago<\/span>/)
-    expect(markup).toMatch(/<span class="[^"]*\bgrid\b[^"]*tabular-nums[^"]*">/)
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-10-18T12:00:09Z"))
+    try {
+      state.dataUpdatedAt = Date.now() - 9_000
+      const markup = renderDashboard()
+      // The visible label and every sizer share one grid cell, so the box is
+      // held at its widest width on a single row. Without the sizers the 9 to
+      // 10 second step widens the span and pushes the whole row left.
+      expect(markup).toContain('<span class="col-start-1 row-start-1 whitespace-nowrap">Last updated 9 seconds ago</span>')
+      for (const widest of ["Last updated 59 seconds ago", "Last updated 59 minutes ago", "Last updated 99999 days ago"]) {
+        expect(markup).toContain(`<span aria-hidden="true" class="invisible col-start-1 row-start-1 whitespace-nowrap">${widest}</span>`)
+      }
+      expect(markup).toMatch(/<span class="[^"]*\bgrid\b[^"]*tabular-nums[^"]*">/)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
