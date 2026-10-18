@@ -15,6 +15,7 @@ const state = vi.hoisted(() => ({
   liveRuns: [] as string[],
   activeJobs: [] as Array<{ tenantId: string; isComplete: boolean; status: string; jobId?: string }>,
   stats: null as TenantDashboardStats | null,
+  dataUpdatedAt: 0,
   queryFn: null as (() => Promise<TenantDashboardStats>) | null,
   navigate: vi.fn(),
   selectTenant: vi.fn(),
@@ -49,7 +50,7 @@ vi.mock("@desktop/components/UpgradeNote", () => ({ PlanBadge: () => null }))
 vi.mock("~/hooks/dashboard/useBaselineScore", () => ({ useBaselineScore: () => ({ enabled: false }) }))
 vi.mock("@tanstack/react-query", () => ({ useQuery: (options: { queryFn: () => Promise<TenantDashboardStats> }) => {
   state.queryFn = options.queryFn
-  return { data: state.stats, isLoading: !state.stats, isFetching: false }
+  return { data: state.stats, isLoading: !state.stats, isFetching: false, dataUpdatedAt: state.dataUpdatedAt }
 } }))
 
 const schedule: BackupSchedule = { tenantId: "tenant", enabled: true, frequency: "weekly", weekday: 0, time: "19:48", since: "2026-10-01T00:00:00Z", nextRunAt: "2026-10-18T17:48:00Z", lastRunAt: "2026-10-04T17:48:00Z", lastAttemptAt: "2026-10-11T17:48:00Z", attempts: 1, lastStatus: "Failed" }
@@ -80,6 +81,7 @@ beforeEach(() => {
   state.liveRuns = []
   state.activeJobs = []
   state.stats = { ...emptyStats }
+  state.dataUpdatedAt = 0
   state.plan = null
   state.navigate.mockClear()
   state.selectTenant.mockClear()
@@ -322,5 +324,18 @@ describe("Dashboard backup counts", () => {
   it("waits for backup history before describing an unsaved failure", () => {
     state.stats = null
     expect(renderDashboard()).not.toContain("Automatic backup failed before a backup was saved.")
+  })
+})
+
+describe("Dashboard last updated label", () => {
+  it("reserves the widest label width so the ticking seconds never move the header row", () => {
+    state.dataUpdatedAt = Date.now() - 9_000
+    const markup = renderDashboard()
+    expect(markup).toContain("Last updated 9 seconds ago")
+    // Invisible sizers hold the box at its widest width. Without them the
+    // 9 to 10 second step widens the span and pushes the whole row left.
+    expect(markup).toMatch(/<span aria-hidden="true" class="[^"]*invisible[^"]*">Last updated 59 seconds ago<\/span>/)
+    expect(markup).toMatch(/<span aria-hidden="true" class="[^"]*invisible[^"]*">Last updated 59 minutes ago<\/span>/)
+    expect(markup).toMatch(/<span class="[^"]*\bgrid\b[^"]*tabular-nums[^"]*">/)
   })
 })

@@ -304,7 +304,13 @@ function DashboardContent() {
             )}
           </Button>
           {lastUpdatedLabel && (
-            <span className="w-full text-xs text-gray-500 lg:w-auto">Last updated {lastUpdatedLabel}</span>
+            // The invisible sizers reserve the widest label, so the ticking
+            // count never widens this box and shifts the whole header row.
+            <span className="grid w-full text-xs text-gray-500 tabular-nums lg:w-auto">
+              <span aria-hidden="true" className="invisible col-start-1 row-start-1 whitespace-nowrap">Last updated 59 seconds ago</span>
+              <span aria-hidden="true" className="invisible col-start-1 row-start-1 whitespace-nowrap">Last updated 59 minutes ago</span>
+              <span className="col-start-1 row-start-1 whitespace-nowrap">Last updated {lastUpdatedLabel}</span>
+            </span>
           )}
         </div>
       </header>
