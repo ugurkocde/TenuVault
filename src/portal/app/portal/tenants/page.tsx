@@ -1269,7 +1269,7 @@ function TenantsPageContent() {
                                   variant="ghost"
                                   size="sm"
                                   onClick={() => startEditingTenant(tenant)}
-                                  className="h-5 w-5 p-0 opacity-100"
+                                  className="h-6 w-6 p-0 opacity-100"
                                 >
                                   <Pencil className="h-3 w-3" />
                                 </Button>

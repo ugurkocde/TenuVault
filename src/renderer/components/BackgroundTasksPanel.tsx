@@ -94,7 +94,7 @@ function TaskCard({ task, now }: { task: PanelTask; now: number }) {
           )}
         </div>
         {task.dismiss && (
-          <button type="button" onClick={task.dismiss} className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:text-foreground" aria-label={`Dismiss ${task.title}`}>
+          <button type="button" onClick={task.dismiss} className="-mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:text-foreground" aria-label={`Dismiss ${task.title}`}>
             <X className="h-3.5 w-3.5" aria-hidden="true" />
           </button>
         )}
