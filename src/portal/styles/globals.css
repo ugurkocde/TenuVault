@@ -129,9 +129,13 @@
     -webkit-text-size-adjust: 100%;
   }
   
-  /* Ensure touch targets are at least 44px for mobile */
-  button, a, input, select, textarea {
-    min-height: 44px;
+  /* Touch targets are at least 44px tall on coarse pointers only. On the desktop every control
+     declares its own height; an unconditional minimum here would silently stretch h-8 to h-11
+     controls to 44px, turn size-9 icon buttons into 36x44 ovals and push text off center. */
+  @media (hover: none) and (pointer: coarse) {
+    button, a, input, select, textarea {
+      min-height: 44px;
+    }
   }
   
   /* Safe area insets for modern devices */

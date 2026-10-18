@@ -169,7 +169,7 @@ function LicenseBanner() {
 function LicenseNavBadge() {
   const { status } = useLicense()
   if (!status) return null
-  const chip = "ml-auto rounded-full px-2 py-0.5 text-[11px] font-medium"
+  const chip = "ml-auto rounded-full px-2 py-0.5 text-[11px] font-medium leading-4"
   const state = licenseChipState(status)
   return <span className={cn(chip, state.tone === "inactive" ? "bg-red-50 text-red-700" : "bg-gray-100 text-gray-700")}>{state.label}</span>
 }

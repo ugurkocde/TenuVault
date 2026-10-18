@@ -249,7 +249,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
 
     <ComplianceScoringNotice key={credentials?.tenantId} changed={scoringChanged} />
 
-    {error && <p role="alert" className="flex items-start justify-between gap-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800"><span>{error}</span><button type="button" aria-label="Dismiss error" onClick={() => setError('')}><X className="size-4" aria-hidden="true" /></button></p>}
+    {error && <p role="alert" className="flex items-start justify-between gap-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800"><span>{error}</span><button type="button" aria-label="Dismiss error" onClick={() => setError('')} className="-mr-1 -mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full"><X className="size-4" aria-hidden="true" /></button></p>}
 
     <section className={card} aria-labelledby="native-scope">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -275,7 +275,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
       {credentials && disabledReason && !running && <p className="mt-4 text-sm text-gray-500">{disabledReason}</p>}
       {failedJob && !running && <div role="alert" className={cn('mt-5 flex items-start justify-between gap-3 rounded-2xl px-4 py-3 text-sm', failedJob.status === 'failed' ? 'bg-red-50 text-red-800' : 'bg-gray-50 text-gray-700')}>
         <span>{failedJob.status === 'failed' ? `The last comparison failed. ${failedJob.error ?? ''}` : 'The last comparison was cancelled.'}</span>
-        <button type="button" aria-label="Dismiss" onClick={() => { dismissedJobs.add(failedJob.jobId); setDismissed(n => n + 1) }}><X className="size-4" aria-hidden="true" /></button>
+        <button type="button" aria-label="Dismiss" onClick={() => { dismissedJobs.add(failedJob.jobId); setDismissed(n => n + 1) }} className="-mr-1 -mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full"><X className="size-4" aria-hidden="true" /></button>
       </div>}
     </section>
 
@@ -290,7 +290,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <h2 id="native-summary" tabIndex={-1} className="text-xl font-medium tracking-tight outline-none">Results</h2>
-            <p className="mt-1 text-sm text-gray-600">{new Date(run.assessment.generatedAt).toLocaleString()} · {result.framework.version} · Mapping {run.assessment.provenance.rulesetVersion} · {(run.assessment.scope.platforms ?? platforms).map(p => platformLabels[p]).join(', ')}{framework.nativeId === 'essential-eight' && ` · Maturity level ${run.assessment.scope.essentialEightMaturityLevel ?? 1}`}{framework.nativeId === 'def-stan-05-138-i4' && ` · Risk level ${run.assessment.scope.defStanRiskLevel ?? 1}`}{history[0]?.runId !== run.runId && <span className="ml-2 rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-800">Saved comparison</span>}</p>
+            <p className="mt-1 text-sm text-gray-600">{new Date(run.assessment.generatedAt).toLocaleString()} · {result.framework.version} · Mapping {run.assessment.provenance.rulesetVersion} · {(run.assessment.scope.platforms ?? platforms).map(p => platformLabels[p]).join(', ')}{framework.nativeId === 'essential-eight' && ` · Maturity level ${run.assessment.scope.essentialEightMaturityLevel ?? 1}`}{framework.nativeId === 'def-stan-05-138-i4' && ` · Risk level ${run.assessment.scope.defStanRiskLevel ?? 1}`}{history[0]?.runId !== run.runId && <span className="ml-2 inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 align-middle text-xs leading-4 text-amber-800">Saved comparison</span>}</p>
           </div>
           <div className="flex flex-wrap gap-2">
             {([['pdf', 'PDF report', Download], ['csv', 'CSV', FileSpreadsheet], ['json', 'JSON', FileJson]] as const).map(([format, label, Icon]) =>

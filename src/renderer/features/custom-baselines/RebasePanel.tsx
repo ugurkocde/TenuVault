@@ -101,16 +101,16 @@ export function RebasePanel({ tenant, baseline, rebases, allowed, onChanged }: {
                         {entry.comparison && !entry.blockers.length && (
                           <div className="overflow-x-auto">
                             <table className="w-full text-left text-xs">
-                              <thead className="text-gray-500"><tr><th className="py-1 pr-2 font-medium">Setting</th><th className="pr-2 font-medium">Outcome</th><th className="pr-2 font-medium">Original release</th><th className="pr-2 font-medium">Your version</th><th className="pr-2 font-medium">New release</th><th className="font-medium">Use</th></tr></thead>
+                              <thead className="text-gray-500"><tr><th className="py-1 pr-2 font-medium">Setting</th><th className="py-1 pr-2 font-medium">Outcome</th><th className="py-1 pr-2 font-medium">Original release</th><th className="py-1 pr-2 font-medium">Your version</th><th className="py-1 pr-2 font-medium">New release</th><th className="py-1 font-medium">Use</th></tr></thead>
                               <tbody>
                                 {entry.comparison.settings.filter((setting) => setting.kind !== "unchanged").map((setting) => (
                                   <tr key={setting.key} className="border-t border-gray-100 align-top dark:border-gray-800">
                                     <td className="break-all py-1 pr-2 font-mono text-gray-800 dark:text-gray-200">{setting.key}</td>
-                                    <td className="pr-2"><Chip tone={SETTING_TONE(setting.kind)} title={setting.note ?? undefined}>{(KIND_LABEL[setting.kind] ?? setting.kind).replace("your customization", "your edit")}</Chip></td>
-                                    <td className="break-all pr-2 font-mono text-gray-600 dark:text-gray-400">{setting.base ?? "absent"}</td>
-                                    <td className="break-all pr-2 font-mono text-gray-600 dark:text-gray-400">{setting.local ?? "absent"}</td>
-                                    <td className="break-all pr-2 font-mono text-gray-600 dark:text-gray-400">{setting.upstream ?? "absent"}</td>
-                                    <td>
+                                    <td className="py-1 pr-2"><Chip tone={SETTING_TONE(setting.kind)} title={setting.note ?? undefined}>{(KIND_LABEL[setting.kind] ?? setting.kind).replace("your customization", "your edit")}</Chip></td>
+                                    <td className="break-all py-1 pr-2 font-mono text-gray-600 dark:text-gray-400">{setting.base ?? "absent"}</td>
+                                    <td className="break-all py-1 pr-2 font-mono text-gray-600 dark:text-gray-400">{setting.local ?? "absent"}</td>
+                                    <td className="break-all py-1 pr-2 font-mono text-gray-600 dark:text-gray-400">{setting.upstream ?? "absent"}</td>
+                                    <td className="py-1">
                                       {setting.needsResolution ? (
                                         <select aria-label={`Decision for ${setting.key}`} disabled={!editable} value={settings[entry.key]?.[setting.key] ?? entry.resolutions[setting.key] ?? ""} onChange={(event) => setSettings({ ...settings, [entry.key]: { ...settings[entry.key], [setting.key]: event.target.value as "local" | "upstream" } })} className="rounded-full border border-gray-200 bg-white px-2 py-1 dark:border-gray-700 dark:bg-gray-900">
                                           <option value="" disabled>choose</option>

@@ -114,7 +114,7 @@ export function VersionEditor({ tenant, baseline, version, allowed, onViewVersio
               {expanded && (
                 <div className="mt-3 overflow-x-auto">
                   <table className="w-full text-left text-xs">
-                    <thead className="text-gray-500"><tr><th className="py-1 pr-2 font-medium">Setting</th><th className="pr-2 font-medium">Value</th><th className="font-medium"><span className="sr-only">Actions</span></th></tr></thead>
+                    <thead className="text-gray-500"><tr><th className="py-1 pr-2 font-medium">Setting</th><th className="py-1 pr-2 font-medium">Value</th><th className="py-1 font-medium"><span className="sr-only">Actions</span></th></tr></thead>
                     <tbody>
                       {policy.settings.map((setting) => {
                         const removedSetting = removedSettings.has(`${policy.key}\u0000${setting.key}`)

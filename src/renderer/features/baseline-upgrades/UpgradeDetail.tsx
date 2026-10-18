@@ -85,18 +85,18 @@ export function UpgradeDetail({ tenant, upgrade, comparison, changeSets, allowed
                   {compared && (
                     <div className="overflow-x-auto">
                       <table className="w-full text-left text-xs">
-                        <thead className="text-gray-500"><tr><th className="py-1 pr-2 font-medium">Setting</th><th className="pr-2 font-medium">Outcome</th><th className="pr-2 font-medium">Installed</th><th className="pr-2 font-medium">Tenant</th><th className="pr-2 font-medium">Release</th><th className="font-medium">Use</th></tr></thead>
+                        <thead className="text-gray-500"><tr><th className="py-1 pr-2 font-medium">Setting</th><th className="py-1 pr-2 font-medium">Outcome</th><th className="py-1 pr-2 font-medium">Installed</th><th className="py-1 pr-2 font-medium">Tenant</th><th className="py-1 pr-2 font-medium">Release</th><th className="py-1 font-medium">Use</th></tr></thead>
                         <tbody>
                           {compared.settings.filter((setting) => setting.kind !== "unchanged").map((setting) => {
                             const chosen = settings[policy.key]?.[setting.key] ?? policy.resolutions[setting.key]
                             return (
                               <tr key={setting.key} className="border-t border-gray-100 align-top dark:border-gray-800">
                                 <td className="break-all py-1 pr-2 font-mono text-gray-800 dark:text-gray-200">{setting.key}{policy.documented.includes(setting.key) ? <span className="ml-1 font-sans text-gray-500">(documented)</span> : null}</td>
-                                <td className="pr-2"><Chip tone={SETTING_TONE(setting.kind)} title={setting.note ?? undefined}>{KIND_LABEL[setting.kind] ?? setting.kind}</Chip></td>
-                                <td className="break-all pr-2 font-mono text-gray-600 dark:text-gray-400">{setting.base ?? "absent"}</td>
-                                <td className="break-all pr-2 font-mono text-gray-600 dark:text-gray-400">{setting.local ?? "absent"}</td>
-                                <td className="break-all pr-2 font-mono text-gray-600 dark:text-gray-400">{setting.upstream ?? "absent"}</td>
-                                <td>
+                                <td className="py-1 pr-2"><Chip tone={SETTING_TONE(setting.kind)} title={setting.note ?? undefined}>{KIND_LABEL[setting.kind] ?? setting.kind}</Chip></td>
+                                <td className="break-all py-1 pr-2 font-mono text-gray-600 dark:text-gray-400">{setting.base ?? "absent"}</td>
+                                <td className="break-all py-1 pr-2 font-mono text-gray-600 dark:text-gray-400">{setting.local ?? "absent"}</td>
+                                <td className="break-all py-1 pr-2 font-mono text-gray-600 dark:text-gray-400">{setting.upstream ?? "absent"}</td>
+                                <td className="py-1">
                                   {setting.needsResolution ? (
                                     <select aria-label={`Resolution for ${setting.key}`} disabled={!editable || !!policy.batch} value={chosen ?? ""} onChange={(event) => setSettings({ ...settings, [policy.key]: { ...settings[policy.key], [setting.key]: event.target.value as Choice } })} className="rounded-full border border-gray-200 bg-white px-2 py-1 dark:border-gray-700 dark:bg-gray-900">
                                       <option value="" disabled>choose</option>

@@ -21,7 +21,7 @@ export function FrameworkCard({ score, tenantName, onDrillDown, selected }: { sc
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="text-lg font-medium text-gray-900">{identity.frameworkName}</h3>
-          <p className="text-sm text-gray-500">
+          <p className="mt-0.5 text-sm text-gray-500">
             Version {identity.frameworkVersion}, {identity.profile}, mapping {identity.rulesetVersion}
             {latest.versionDetail && <span className="block break-all font-mono text-xs">{latest.versionDetail}</span>}
           </p>

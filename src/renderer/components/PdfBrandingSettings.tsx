@@ -82,7 +82,7 @@ function CoverPreview({ form }: { form: Form }) {
   return (
     <figure aria-label="Report cover preview" className="w-full max-w-[240px] shrink-0">
       <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
-        <div className="relative h-[150px] overflow-hidden px-4 py-3" style={{ background: HEX.test(form.primary) ? form.primary : DEFAULT_PRIMARY, color: onBand }}>
+        <div className="relative min-h-[150px] overflow-hidden px-4 py-3" style={{ background: HEX.test(form.primary) ? form.primary : DEFAULT_PRIMARY, color: onBand }}>
           <svg aria-hidden="true" viewBox="0 0 100 100" className="absolute -right-10 -top-8 h-36 w-36 opacity-40">
             <circle cx="50" cy="50" r="40" fill="none" stroke={accent} strokeWidth="9" strokeDasharray="160 252" />
             <circle cx="50" cy="50" r="48" fill="none" stroke={onBand} strokeOpacity="0.2" strokeWidth="0.8" />

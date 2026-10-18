@@ -115,15 +115,15 @@ export default function StandardsTab({ tenant, plan, allowed }: FeatureTabProps)
           {portfolio && (
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
-                <thead className="text-xs text-gray-500"><tr><th className="py-1 pr-3 font-medium">Tenant</th><th className="pr-3 font-medium">Standard</th><th className="pr-3 font-medium">Adopted</th><th className="pr-3 font-medium">Latest</th><th className="font-medium">Deviation</th></tr></thead>
+                <thead className="text-xs text-gray-500"><tr><th className="py-1 pr-3 font-medium">Tenant</th><th className="py-1 pr-3 font-medium">Standard</th><th className="py-1 pr-3 font-medium">Adopted</th><th className="py-1 pr-3 font-medium">Latest</th><th className="py-1 font-medium">Deviation</th></tr></thead>
                 <tbody>
                   {portfolio.tenants.flatMap((entry) => (entry.adoptions.length ? entry.adoptions : [null]).map((state, index) => (
                     <tr key={`${entry.tenantId}-${index}`} className="border-t border-gray-100 dark:border-gray-800">
                       <td className="py-1 pr-3 text-gray-900 dark:text-gray-100">{entry.name ?? entry.tenantId}</td>
-                      <td className="pr-3 text-gray-700 dark:text-gray-300">{state?.title ?? "none"}</td>
-                      <td className="pr-3 text-gray-700 dark:text-gray-300">{state?.adoptedVersion ? `v${state.adoptedVersion}` : "not yet"}</td>
-                      <td className="pr-3 text-gray-700 dark:text-gray-300">{state ? `v${state.latestVersion ?? "?"}${state.pendingUpgrade ? " (upgrade pending)" : ""}` : ""}</td>
-                      <td className="text-gray-700 dark:text-gray-300">{state ? freshness(state) : ""}</td>
+                      <td className="py-1 pr-3 text-gray-700 dark:text-gray-300">{state?.title ?? "none"}</td>
+                      <td className="py-1 pr-3 text-gray-700 dark:text-gray-300">{state?.adoptedVersion ? `v${state.adoptedVersion}` : "not yet"}</td>
+                      <td className="py-1 pr-3 text-gray-700 dark:text-gray-300">{state ? `v${state.latestVersion ?? "?"}${state.pendingUpgrade ? " (upgrade pending)" : ""}` : ""}</td>
+                      <td className="py-1 text-gray-700 dark:text-gray-300">{state ? freshness(state) : ""}</td>
                     </tr>
                   )))}
                 </tbody>
