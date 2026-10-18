@@ -41,6 +41,14 @@ async function flush(): Promise<void> {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
 }
 
+async function waitFor(check: () => boolean, ms = 3000): Promise<void> {
+  const until = Date.now() + ms
+  while (!check()) {
+    if (Date.now() > until) throw new Error("Condition not met in time.")
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
+  }
+}
+
 async function render(plan: "community" | "pro" | "msp", state: PdfBrandingState) {
   license.status = statusFor(plan)
   pdfBranding.get.mockResolvedValue(state)
@@ -143,7 +151,8 @@ describe("Settings PDF branding section", () => {
     expect(container.textContent).toContain("Choose a PNG or JPEG image.")
     Object.defineProperty(input, "files", { configurable: true, value: [new File([Buffer.from(PNG.split(",")[1]!, "base64")], "logo.png", { type: "image/png" })] })
     await act(async () => { input.dispatchEvent(new Event("change", { bubbles: true })) })
-    await flush()
+    await waitFor(() => container.querySelector<HTMLImageElement>('img[alt="Current logo"]')?.src === PNG
+      && container.querySelector<HTMLImageElement>('img[alt="Logo"]')?.src === PNG)
     expect(container.querySelector<HTMLImageElement>('img[alt="Current logo"]')?.src).toBe(PNG)
     expect(container.querySelector<HTMLImageElement>('img[alt="Logo"]')?.src).toBe(PNG)
   })
