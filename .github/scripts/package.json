@@ -1,0 +1,8 @@
+{
+  "name": "tenuvault-release-scripts",
+  "private": true,
+  "description": "Dependencies of the release workflow scripts. Not part of the app.",
+  "dependencies": {
+    "@vercel/blob": "2.8.2"
+  }
+}

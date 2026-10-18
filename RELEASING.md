@@ -63,6 +63,29 @@ git tag v0.1.0 && git push origin v0.1.0
 
 For a minor or major release, raise the version in `package.json` first; nightlies then preview it.
 
+## Microsoft Store
+
+TenuVault is listed in the Microsoft Store as an EXE app (Partner Center, Ugurlabs account).
+Partner Center rejects GitHub release asset URLs because they redirect, so after every stable
+release the `store` job of the Release workflow copies both Windows installers to the website's
+public Vercel Blob store (`intunesnap-website-blob`). The package URLs follow this pattern:
+
+```
+https://aip4uoqwpdmqzreb.public.blob.vercel-storage.com/desktop/v<version>/TenuVault-<version>-win-x64.exe
+https://aip4uoqwpdmqzreb.public.blob.vercel-storage.com/desktop/v<version>/TenuVault-<version>-win-arm64.exe
+```
+
+- The job uploads exactly the files on the GitHub release, checked against their SHA-256 digests,
+  then fetches each URL without following redirects and checks HTTP 200 and the digest. The URLs
+  are in the job summary, not in the release notes.
+- Microsoft requires that the file behind a submitted URL never changes, so objects are never
+  overwritten. Re-running the job passes when the stored files are identical and fails when they
+  differ. A fixed build ships as a new version with new URLs.
+- Nightlies are never uploaded.
+- Secret `VERCEL_BLOB_READ_WRITE_TOKEN`: the `BLOB_READ_WRITE_TOKEN` of the TenuVault-Website
+  Vercel project (production). Without it, stable releases still publish on GitHub, but the
+  `store` job fails.
+
 ## Signing secrets
 
 Every release is signed. Set these repository secrets once (Settings > Secrets and variables >
@@ -91,6 +114,8 @@ macOS, Developer ID and notarization:
 | `APPLE_API_ISSUER` | The issuer ID |
 
 Licensing (already set): secret `TENUVAULT_LICENSE_PUBLIC_KEY`, variable `TENUVAULT_LICENSE_PORTAL_URL`.
+
+Microsoft Store (already set): secret `VERCEL_BLOB_READ_WRITE_TOKEN`, see [Microsoft Store](#microsoft-store).
 
 ## Release trust boundary
 

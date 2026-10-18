@@ -342,3 +342,47 @@ jobs:
         run: |
           gh release list --limit 200 --json tagName,isPrerelease --jq '[.[] | select(.isPrerelease and (.tagName | test("-nightly\\.")))] | .[20:] | .[].tagName' |
             while read -r tag; do gh release delete "$tag" --cleanup-tag --yes; done
+
+  # The Microsoft Store rejects GitHub asset URLs because they redirect. Stable Windows installers are
+  # copied to the website's public Vercel Blob store; Partner Center lists those URLs, and Microsoft
+  # requires that the file behind one never changes.
+  store:
+    name: Upload Windows installers for the Microsoft Store
+    needs: [meta, publish]
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.meta.outputs.channel == 'stable' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: .github/scripts/package-lock.json
+
+      - name: Install the Vercel Blob client
+        run: npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund
+
+      # Exactly the files on the release, with the digests GitHub recorded for them.
+      - name: Download the Windows installers from the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$RUNNER_TEMP/store" \
+            -p "TenuVault-$VERSION-win-x64.exe" -p "TenuVault-$VERSION-win-arm64.exe"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .assets > "$RUNNER_TEMP/assets.json"
+
+      - name: Upload to Vercel Blob and verify the public URLs
+        env:
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.VERCEL_BLOB_READ_WRITE_TOKEN }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          node .github/scripts/store-blob.mjs "$VERSION" "$RUNNER_TEMP/store" "$RUNNER_TEMP/assets.json"
