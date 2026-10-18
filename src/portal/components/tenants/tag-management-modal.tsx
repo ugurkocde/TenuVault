@@ -179,7 +179,7 @@ export function TagManagementModal({
 
             {/* Custom Tag Input */}
             {showCustomInput && (
-              <div className="flex gap-2 mb-3">
+              <div className="flex items-center gap-2 mb-3">
                 <Input
                   placeholder="Enter custom tag..."
                   value={customTag}

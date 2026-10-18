@@ -80,7 +80,7 @@ export function Toaster() {
                 </a>
               )}
             </div>
-            <button type="button" onClick={() => dismiss(item.id)} className="flex size-5 shrink-0 items-center justify-center rounded-full text-gray-400 hover:text-gray-600" aria-label="Dismiss">
+            <button type="button" onClick={() => dismiss(item.id)} className="-mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-gray-400 hover:text-gray-600" aria-label="Dismiss">
               <X className="h-4 w-4" />
             </button>
           </div>

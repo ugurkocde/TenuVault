@@ -18,6 +18,6 @@ describe("dialog header", () => {
   it("reserves room for the absolute close button so titles and descriptions never run under it", () => {
     const dialog = readFileSync(join(root, "src/portal/components/ui/dialog.tsx"), "utf8")
     const header = dialog.match(/const DialogHeader[\s\S]*?^\)/m)?.[0] ?? ""
-    expect(header).toMatch(/pr-10/)
+    expect(header).toMatch(/"flex flex-col space-y-1\.5 pr-10/)
   })
 })
