@@ -3,7 +3,7 @@ import type { FrameworkWorkspace, WorkspaceView } from "../../main/frameworks/wo
 import { isHistoryFullError, isWorkspaceUnreadableError, KEEP_NEWEST_ASSESSMENTS } from "../../shared/frameworks/workspace-history"
 import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState } from "react"
 import { Link, useParams, useSearchParams } from "react-router-dom"
-import { ArrowRight, Check, ChevronDown, Download, ExternalLink, Info } from "lucide-react"
+import { ArrowRight, Check, ChevronDown, Download, ExternalLink, FileJson, FileSpreadsheet, FileText, Info } from "lucide-react"
 import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { NCSC_COMMIT, NCSC_REPOSITORY, type Framework } from "../../shared/frameworks/catalog"
@@ -389,11 +389,11 @@ function CisExportMenu({ plan, disabled, readinessDisabled, onPdf, onFindingsCsv
   return <details className="relative">
     <summary className={cn(button, "cursor-pointer list-none [&::-webkit-details-marker]:hidden")}>Export <ChevronDown className="h-4 w-4" aria-hidden="true" /></summary>
     <div className="absolute right-0 z-10 mt-2 w-56 rounded-2xl border border-gray-200 bg-white p-2 shadow-lg">
-      <GatedButton feature="baselineAllPlatforms" plan={plan} variant="ghost" size="sm" disabled={disabled} className="w-full justify-start" onClick={event => { close(event); onPdf() }}>PDF report</GatedButton>
-      <GatedButton feature="baselineAllPlatforms" plan={plan} variant="ghost" size="sm" disabled={disabled} className="w-full justify-start" onClick={event => { close(event); onFindingsCsv() }}>Findings CSV</GatedButton>
-      <GatedButton feature="baselineAllPlatforms" plan={plan} variant="ghost" size="sm" disabled={disabled} className="w-full justify-start" onClick={event => { close(event); onFindingsJson() }}>Findings JSON</GatedButton>
-      <button type="button" className={itemClass} disabled={disabled || readinessDisabled} onClick={event => { close(event); onReadinessCsv() }}>Readiness CSV</button>
-      <button type="button" className={itemClass} disabled={disabled || readinessDisabled} onClick={event => { close(event); onReadinessJson() }}>Readiness JSON</button>
+      <GatedButton feature="baselineAllPlatforms" plan={plan} variant="ghost" size="sm" disabled={disabled} className="w-full justify-start gap-2" onClick={event => { close(event); onPdf() }}><FileText className="h-4 w-4" aria-hidden="true" />PDF report</GatedButton>
+      <GatedButton feature="baselineAllPlatforms" plan={plan} variant="ghost" size="sm" disabled={disabled} className="w-full justify-start gap-2" onClick={event => { close(event); onFindingsCsv() }}><FileSpreadsheet className="h-4 w-4" aria-hidden="true" />Findings CSV</GatedButton>
+      <GatedButton feature="baselineAllPlatforms" plan={plan} variant="ghost" size="sm" disabled={disabled} className="w-full justify-start gap-2" onClick={event => { close(event); onFindingsJson() }}><FileJson className="h-4 w-4" aria-hidden="true" />Findings JSON</GatedButton>
+      <button type="button" className={itemClass} disabled={disabled || readinessDisabled} onClick={event => { close(event); onReadinessCsv() }}><FileSpreadsheet className="h-4 w-4" aria-hidden="true" />Readiness CSV</button>
+      <button type="button" className={itemClass} disabled={disabled || readinessDisabled} onClick={event => { close(event); onReadinessJson() }}><FileJson className="h-4 w-4" aria-hidden="true" />Readiness JSON</button>
     </div>
   </details>
 }
