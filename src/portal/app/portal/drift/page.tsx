@@ -49,7 +49,7 @@ import { RevertProgressModal } from "~/components/drift/revert-progress-modal"
 import { ChangeList } from "~/components/drift/change-list"
 import { BackupPairPicker } from "~/components/drift/backup-pair-picker"
 import { formatDate, TRIGGER_LABEL, type BackupSummary } from "~/components/backup/types"
-import { backupCompleteness, type Drift, type DriftBackupRef, type SettingNames } from "../../../../shared/intune/drift"
+import { backupCompleteness, driftActionBlockers, type Drift, type DriftBackupRef, type SettingNames } from "../../../../shared/intune/drift"
 import { settingLabel } from "../../../../shared/intune/drift-format"
 import { driftCsv, driftExportName, driftJson } from "../../../../shared/intune/drift-export"
 import { driftFilterActive, driftFilterText, driftSearchText, driftTypes, filterDrifts, NO_DRIFT_FILTER, type DriftFilter } from "../../../../shared/intune/drift-filter"
@@ -823,6 +823,16 @@ export default function DriftDetectionPage() {
                     const style = CHANGE_STYLE[drift.changeType]
                     const open = selectedDrift === drift.id
                     const settings = changedSettings(drift, result.settingNames)
+                    // Actions Intune cannot run (such as recreating an app whose installer a backup cannot hold) are greyed out with their reason, as in the restore wizard.
+                    const blockers = driftActionBlockers(drift)
+                    const revertLabel = drift.changeType === "deleted" ? "Recreate" : "Revert"
+                    const blockerNote = blockers.revert && blockers.copy
+                      ? blockers.revert === blockers.copy ? blockers.revert : `${revertLabel} is not available: ${blockers.revert} Restore as copy is not available: ${blockers.copy}`
+                      : blockers.revert
+                        ? `${revertLabel} is not available: ${blockers.revert}`
+                        : blockers.copy
+                          ? `Restore as copy is not available: ${blockers.copy}`
+                          : undefined
                     return (
                       <div
                         key={drift.id}
@@ -919,31 +929,36 @@ export default function DriftDetectionPage() {
                             )}
 
                             {!drift.lastRevertedAt && !drift.isRevertDrift && (drift.changeType === "deleted" || drift.changeType === "modified") && (
-                              <div className="flex flex-wrap items-center gap-2">
-                                <GatedButton
-                                  feature="driftRevert"
-                                  plan={plan}
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => handleRevertAction(drift)}
-                                  disabled={revertingDriftId === drift.id}
-                                >
-                                  <RefreshCw className="h-4 w-4 mr-1" />
-                                  {drift.changeType === "deleted" ? "Recreate" : "Revert"}
-                                </GatedButton>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => handleRestoreAction(drift)}
-                                  disabled={revertingDriftId === drift.id}
-                                >
-                                  {revertingDriftId === drift.id ? (
-                                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                                  ) : (
-                                    <Plus className="h-4 w-4 mr-1" />
-                                  )}
-                                  {drift.changeType === "deleted" ? "Restore as copy" : "Restore previous version as copy"}
-                                </Button>
+                              <div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <GatedButton
+                                    feature="driftRevert"
+                                    plan={plan}
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleRevertAction(drift)}
+                                    disabled={revertingDriftId === drift.id || !!blockers.revert}
+                                    title={blockers.revert}
+                                  >
+                                    <RefreshCw className="h-4 w-4 mr-1" />
+                                    {drift.changeType === "deleted" ? "Recreate" : "Revert"}
+                                  </GatedButton>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleRestoreAction(drift)}
+                                    disabled={revertingDriftId === drift.id || !!blockers.copy}
+                                    title={blockers.copy}
+                                  >
+                                    {revertingDriftId === drift.id ? (
+                                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                                    ) : (
+                                      <Plus className="h-4 w-4 mr-1" />
+                                    )}
+                                    {drift.changeType === "deleted" ? "Restore as copy" : "Restore previous version as copy"}
+                                  </Button>
+                                </div>
+                                {blockerNote && <p className="mt-2 text-xs text-gray-500">{blockerNote}</p>}
                               </div>
                             )}
                           </div>

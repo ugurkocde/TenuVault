@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from '../src/main/api/next-server-shim'
 import { compareObjects, POST as drift } from '../src/portal/app/api/detect-drifts/route'
+import { driftActionBlockers } from '../src/shared/intune/drift'
 import { POST as listBackups } from '../src/portal/app/api/list-backups/route'
 
 const args = { tenantId: 'tenant', appId: 'app', clientSecret: 'test', storageAccountName: 'store', subscriptionId: 'local', resourceGroupName: 'local' }
@@ -9,6 +10,24 @@ const prefixes = (names: string[]) => names.map(name => `<BlobPrefix><Name>${nam
 afterEach(() => vi.unstubAllGlobals())
 
 const setting = (id: string, value: string) => ({ id: '0', settingInstance: { '@odata.type': '#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance', settingDefinitionId: id, choiceSettingValue: { value, children: [] } } })
+
+describe('Drift restore actions', () => {
+  const installer = 'Intune does not let apps download installer files. Upload the installer again to restore this app.'
+
+  it('blocks Recreate and Restore as copy for a deleted item that cannot be created again', () => {
+    expect(driftActionBlockers({ changeType: 'deleted', createBlocker: installer })).toEqual({ revert: installer, copy: installer })
+    expect(driftActionBlockers({ changeType: 'deleted' })).toEqual({ revert: undefined, copy: undefined })
+  })
+
+  it('blocks only the copy for a changed item that can still be written back in place', () => {
+    expect(driftActionBlockers({ changeType: 'modified', createBlocker: installer })).toEqual({ revert: undefined, copy: installer })
+    expect(driftActionBlockers({ changeType: 'modified', replaceBlocker: 'cannot be updated in place' })).toEqual({ revert: 'cannot be updated in place', copy: undefined })
+  })
+
+  it('offers no restore action for an added item', () => {
+    expect(driftActionBlockers({ changeType: 'added', createBlocker: installer, replaceBlocker: installer })).toEqual({})
+  })
+})
 
 describe('Drift comparison', () => {
   it('reports settings added to or removed from a Settings Catalog policy', () => {
@@ -90,6 +109,69 @@ describe('Drift comparison', () => {
     expect(result.drifts.find((entry: { configId: string }) => entry.configId === 'c').likelyRestoredCopy).toBeUndefined()
     expect(result.summary).toMatchObject({ total: 2, added: 2 })
     expect(result.stats.compared).toBe(3)
+  })
+
+  it('marks a deleted app that needs its installer as not recreatable, and leaves a web app recreatable', async () => {
+    const older = 'backup-2026-09-22-120000'
+    const newer = 'backup-2026-09-23-120000'
+    const files: Record<string, string[]> = {
+      [older]: [`${older}/Apps/SevenZip.json`, `${older}/Apps/Portal.json`],
+      [newer]: [],
+    }
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input))
+      if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
+      if (url.pathname === '/api/revert-metadata') return Response.json({ reverts: {} })
+      if (url.searchParams.get('delimiter')) return new Response(prefixes([newer, older]))
+      const prefix = url.searchParams.get('prefix')
+      if (prefix) {
+        const folder = prefix.split('/')[0]!
+        return new Response((files[folder] ?? []).map(name => `<Blob><Name>${name}</Name></Blob>`).join(''))
+      }
+      if (url.pathname.endsWith('/metadata.json')) return Response.json({ Status: 'Success' })
+      if (url.pathname.endsWith('/SevenZip.json')) return Response.json({ id: 'w32', displayName: '7-Zip', '@odata.type': '#microsoft.graph.win32LobApp' })
+      return Response.json({ id: 'web', displayName: 'Portal', '@odata.type': '#microsoft.graph.webApp', appUrl: 'https://example.invalid' })
+    }))
+    const response = await drift(request())
+    expect(response.status).toBe(200)
+    const result = await response.json()
+    expect(result.drifts).toHaveLength(2)
+    const sevenZip = result.drifts.find((entry: { configId: string }) => entry.configId === 'w32')
+    expect(sevenZip).toMatchObject({ changeType: 'deleted', configName: '7-Zip' })
+    expect(sevenZip.createBlocker).toContain('installer')
+    const portal = result.drifts.find((entry: { configId: string }) => entry.configId === 'web')
+    expect(portal).toMatchObject({ changeType: 'deleted', configName: 'Portal' })
+    expect(portal.createBlocker).toBeUndefined()
+  })
+
+  it('keeps a changed installer app revertible in place while blocking a copy of it', async () => {
+    const older = 'backup-2026-09-22-120000'
+    const newer = 'backup-2026-09-23-120000'
+    const files: Record<string, string[]> = {
+      [older]: [`${older}/Apps/SevenZip.json`],
+      [newer]: [`${newer}/Apps/SevenZip.json`],
+    }
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input))
+      if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
+      if (url.pathname === '/api/revert-metadata') return Response.json({ reverts: {} })
+      if (url.searchParams.get('delimiter')) return new Response(prefixes([newer, older]))
+      const prefix = url.searchParams.get('prefix')
+      if (prefix) {
+        const folder = prefix.split('/')[0]!
+        return new Response((files[folder] ?? []).map(name => `<Blob><Name>${name}</Name></Blob>`).join(''))
+      }
+      if (url.pathname.endsWith('/metadata.json')) return Response.json({ Status: 'Success' })
+      const folder = decodeURIComponent(url.pathname.split('/')[2]!)
+      return Response.json({ id: 'w32', displayName: '7-Zip', '@odata.type': '#microsoft.graph.win32LobApp', informationUrl: folder === older ? 'https://example.invalid/old' : 'https://example.invalid/new' })
+    }))
+    const response = await drift(request())
+    expect(response.status).toBe(200)
+    const result = await response.json()
+    expect(result.drifts).toHaveLength(1)
+    expect(result.drifts[0]).toMatchObject({ changeType: 'modified', configName: '7-Zip' })
+    expect(result.drifts[0].createBlocker).toContain('installer')
+    expect(result.drifts[0].replaceBlocker).toBeUndefined()
   })
 })
 

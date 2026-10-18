@@ -45,6 +45,19 @@ describe("Community plan notes", () => {
     expect(drifts).toEqual(original)
   })
 
+  it("does not count policies whose revert path Intune cannot run, such as a deleted app that needs its installer", () => {
+    const installer = "Intune does not let apps download installer files. Upload the installer again to restore this app."
+    const drifts = [
+      { changeType: "deleted" as const, createBlocker: installer },
+      { changeType: "modified" as const, replaceBlocker: "cannot be updated in place" },
+      // A changed app that needs an installer can still be reverted in place; only a copy is blocked.
+      { changeType: "modified" as const, createBlocker: installer },
+      { changeType: "deleted" as const },
+    ]
+
+    expect(revertibleDriftCount(drifts)).toBe(2)
+  })
+
   it("starts the retention note exactly seven days before the cap", () => {
     expect(retentionNote("community", [backup(22)], now)).toBeNull()
     expect(retentionNote("community", [backup(23 - 1 / 86400)], now)).toBeNull()
