@@ -18,7 +18,7 @@ export function ComplianceScoringNotice({ changed }: { changed: boolean }) {
   if (!shown) return null
   return <div role="status" className="flex items-start justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
     <p>{COMPLIANCE_SCORING_NOTICE}</p>
-    <button type="button" aria-label="Dismiss compliance scoring notice" onClick={() => {
+    <button type="button" aria-label="Dismiss compliance scoring notice" className="-mr-1 -mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full" onClick={() => {
       localStorage.setItem(COMPLIANCE_SCORING_NOTICE_KEY, "true")
       setDismissed(true)
     }}><X className="size-4" aria-hidden="true" /></button>

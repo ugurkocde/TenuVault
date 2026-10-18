@@ -54,7 +54,7 @@ export function Notice({ result, onDismiss, className }: { result: SaveResult | 
       <p>{result.error ? result.error : result.saved ? <>{result.path ? "Saved" : "Exported"} <strong className="font-medium">{result.fileName}</strong>.</> : "Nothing was saved."}</p>
       {result.path && <p className="mt-0.5 break-all text-xs opacity-80">{result.path}</p>}
     </div>
-    {onDismiss && <button type="button" onClick={onDismiss} className="rounded-full p-0.5 opacity-70 hover:opacity-100" aria-label="Dismiss"><X className="h-4 w-4" aria-hidden="true" /></button>}
+    {onDismiss && <button type="button" onClick={onDismiss} className="-mr-1 -mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full opacity-70 hover:opacity-100" aria-label="Dismiss"><X className="h-4 w-4" aria-hidden="true" /></button>}
   </div>
 }
 

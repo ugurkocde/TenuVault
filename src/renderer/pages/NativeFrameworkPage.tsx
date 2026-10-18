@@ -249,7 +249,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
 
     <ComplianceScoringNotice key={credentials?.tenantId} changed={scoringChanged} />
 
-    {error && <p role="alert" className="flex items-start justify-between gap-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800"><span>{error}</span><button type="button" aria-label="Dismiss error" onClick={() => setError('')}><X className="size-4" aria-hidden="true" /></button></p>}
+    {error && <p role="alert" className="flex items-start justify-between gap-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800"><span>{error}</span><button type="button" aria-label="Dismiss error" onClick={() => setError('')} className="-mr-1 -mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full"><X className="size-4" aria-hidden="true" /></button></p>}
 
     <section className={card} aria-labelledby="native-scope">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -275,7 +275,7 @@ export default function NativeFrameworkPage({ framework }: { framework: Framewor
       {credentials && disabledReason && !running && <p className="mt-4 text-sm text-gray-500">{disabledReason}</p>}
       {failedJob && !running && <div role="alert" className={cn('mt-5 flex items-start justify-between gap-3 rounded-2xl px-4 py-3 text-sm', failedJob.status === 'failed' ? 'bg-red-50 text-red-800' : 'bg-gray-50 text-gray-700')}>
         <span>{failedJob.status === 'failed' ? `The last comparison failed. ${failedJob.error ?? ''}` : 'The last comparison was cancelled.'}</span>
-        <button type="button" aria-label="Dismiss" onClick={() => { dismissedJobs.add(failedJob.jobId); setDismissed(n => n + 1) }}><X className="size-4" aria-hidden="true" /></button>
+        <button type="button" aria-label="Dismiss" onClick={() => { dismissedJobs.add(failedJob.jobId); setDismissed(n => n + 1) }} className="-mr-1 -mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full"><X className="size-4" aria-hidden="true" /></button>
       </div>}
     </section>
 

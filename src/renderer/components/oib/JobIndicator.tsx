@@ -31,7 +31,7 @@ export function OibJobCard({ job, onDismiss }: { job: OibJob; onDismiss?: () => 
       <span className="mt-0.5 block text-muted-foreground">{progress ? progressText(progress) : job.error ? "Open to see what happened" : "Open to see the result"}</span>
       {job.percent != null && !job.finishedAt && <span className="mt-1.5 block h-1 overflow-hidden rounded-full bg-gray-200" aria-hidden="true"><span className="block h-full rounded-full bg-primary" style={{ width: `${job.percent}%` }} /></span>}
     </button>
-    {onDismiss && <button type="button" onClick={onDismiss} className="rounded-full p-0.5 text-muted-foreground hover:text-foreground" aria-label={`Dismiss ${jobTitle(job)}`}><X className="h-3.5 w-3.5" aria-hidden="true" /></button>}
+    {onDismiss && <button type="button" onClick={onDismiss} className="-mr-1 -mt-1 flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:text-foreground" aria-label={`Dismiss ${jobTitle(job)}`}><X className="h-3.5 w-3.5" aria-hidden="true" /></button>}
   </div>
 }
 

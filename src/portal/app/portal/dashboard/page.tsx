@@ -487,14 +487,14 @@ function DashboardContent() {
             <BigValue className="mt-1 text-4xl">{backupStats?.successful || 0}</BigValue>
             <p className="text-sm text-gray-500">{periodLabels[selectedPeriod]}</p>
             <p className="mt-1 text-xs text-gray-500">Failed includes attempts that saved no backup.</p>
-            {/* Below a 208px content width the three boxes stack as full width rows, so "Scheduled" never truncates. */}
-            <div className="mt-auto grid grid-cols-1 gap-2 pt-5 text-center @min-[208px]:grid-cols-3">
+            {/* Below a 216px content width the three boxes stack as full width rows, so "Scheduled" never truncates. */}
+            <div className="mt-auto grid grid-cols-1 gap-2 pt-5 text-center @min-[216px]:grid-cols-3">
               {[
                 ["Failed", backupStats?.failed || 0],
                 ["Running", backupStats?.inProgress || 0],
                 ["Scheduled", stats?.backups.scheduled || 0],
               ].map(([label, value]) => (
-                <div key={label} className="flex min-w-0 items-center justify-between rounded-2xl bg-gray-100 px-3 py-2 @min-[208px]:block @min-[208px]:px-1.5 @min-[208px]:py-2.5">
+                <div key={label} className="flex min-w-0 items-center justify-between rounded-2xl bg-gray-100 px-3 py-2 @min-[216px]:block @min-[216px]:px-1 @min-[216px]:py-2.5">
                   <p className="text-lg font-light text-gray-900 tabular-nums">{value}</p>
                   <p className="truncate text-[11px] leading-4 text-gray-500">{label}</p>
                 </div>
