@@ -1,5 +1,6 @@
 import { decodeXml, listBlobPages } from "~/lib/storage/list"
-import { typeForFolder } from "../../../../shared/intune/registry"
+import { typeForFolder, type Item } from "../../../../shared/intune/registry"
+import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
 import { withoutUnreadAssignments } from "../../../../shared/intune/read"
 import { coveredFolders, type ScopeMetadata } from "../../../../shared/intune/scope"
 import { itemsOf, sameItem, type BackupFingerprint, type BackupItems } from "../../../../shared/intune/backup-changes"
@@ -440,6 +441,7 @@ async function detectDrifts(
           changeType: "deleted",
           description: `${policyType} policy deleted`,
           impact: determineImpact(policyType, "deleted", policyContent),
+          ...restoreBlockers(task.name, policyContent),
         }
       }
       const [newerContent, olderContent] = await Promise.all([read(task.newer!, newerBackup.name), read(task.older!, olderBackup.name)])
@@ -460,6 +462,7 @@ async function detectDrifts(
         description: generateChangeDescription(policyType, changes),
         impact: determineImpact(policyType, "modified", newerContent, changes),
         changes,
+        ...restoreBlockers(task.name, olderContent),
       }
     } finally {
       done++
@@ -495,6 +498,26 @@ function folderOf(fileName: string): string {
 function typeOfFile(fileName: string) {
   const folder = folderOf(fileName)
   return typeForFolder(folder === 'DeviceCompliancePolicies' ? 'CompliancePolicies' : folder)
+}
+
+/**
+ * Why the backed-up snapshot cannot be created again or written back in place, in the drift
+ * field names, so the page can leave out actions Intune would refuse (such as recreating an
+ * app whose installer a backup cannot hold) instead of failing them halfway. Only what the
+ * snapshot itself proves is recorded: the newer backup is not the live item, so it is not
+ * passed as the current version the way the restore preview passes the live one. A check
+ * that cannot run leaves the actions offered; the restore itself still refuses server-side,
+ * and one odd snapshot must not fail the whole comparison.
+ */
+function restoreBlockers(fileName: string, snapshot: PolicyContent | null): Pick<Drift, 'createBlocker' | 'replaceBlocker'> {
+  const type = typeOfFile(fileName)
+  if (!type || !snapshot) return {}
+  try {
+    const { blocker, replaceBlocker } = restoreCapabilities(type, snapshot as Item)
+    return { ...(blocker ? { createBlocker: blocker } : {}), ...(replaceBlocker ? { replaceBlocker } : {}) }
+  } catch {
+    return {}
+  }
 }
 
 function getPolicyType(fileName: string): string {

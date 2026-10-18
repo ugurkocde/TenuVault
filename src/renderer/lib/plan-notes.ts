@@ -1,8 +1,9 @@
 import { COMMUNITY_RETENTION_DAYS, type Plan } from "../../shared/plans"
-import type { Drift } from "../../shared/intune/drift"
+import { driftActionBlockers, type Drift } from "../../shared/intune/drift"
 
-export function revertibleDriftCount(drifts: readonly Pick<Drift, "changeType" | "lastRevertedAt" | "isRevertDrift">[]): number {
-  return drifts.filter((drift) => !drift.lastRevertedAt && !drift.isRevertDrift && (drift.changeType === "modified" || drift.changeType === "deleted")).length
+/** Changed or deleted policies a Revert or Recreate click can actually run on; an item Intune cannot recreate, such as a deleted app that needs its installer, is not promised to any plan. */
+export function revertibleDriftCount(drifts: readonly Pick<Drift, "changeType" | "lastRevertedAt" | "isRevertDrift" | "createBlocker" | "replaceBlocker">[]): number {
+  return drifts.filter((drift) => !drift.lastRevertedAt && !drift.isRevertDrift && (drift.changeType === "modified" || drift.changeType === "deleted") && !driftActionBlockers(drift).revert).length
 }
 
 export function shouldShowDriftNote(plan: Plan | null, count: number): boolean {

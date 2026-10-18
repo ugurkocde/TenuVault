@@ -129,6 +129,8 @@ A progress dialog shows each step: **Fetching policy from backup**, **Preparing 
 
 TenuVault records every revert and restore in the tenant's backup storage, so the change is marked **Reverted** and its history shows in later results. Each action is also recorded in the [audit log](/audit-log/).
 
+An action that Intune cannot run is greyed out and shows its reason under the buttons instead of failing halfway. The common case is a deleted app that uses an installer file, such as a Win32 or line-of-business app: a backup holds only the app details, never the installer, so neither **Recreate** nor **Restore as copy** is offered. Upload the installer again through Intune to bring such an app back. A changed installer app can still be **Reverted** in place; only restoring it as a copy is unavailable. Store, web and Microsoft 365 apps need no installer and keep both actions. See [What cannot be restored](/restore/limitations/).
+
 :::caution
 **Revert** and **Recreate** only work with backups TenuVault has encrypted and can verify. Older unencrypted backups show "Unverified legacy snapshots cannot revert live policies. Review and restore a copy instead." Use **Restore previous version as copy** for those.
 :::

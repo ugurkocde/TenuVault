@@ -48,6 +48,29 @@ export interface Drift {
    */
   backupFile?: string
   changes?: DriftChange[]
+  /**
+   * Why the backed-up version cannot be created again, which blocks Recreate and Restore as copy:
+   * for example an app that needs its installer file, which a backup cannot hold. Missing in
+   * results saved before this was recorded, and when the snapshot could not be read.
+   */
+  createBlocker?: string
+  /** Why the live item cannot be put back to the backed-up version in place, which blocks Revert. */
+  replaceBlocker?: string
+}
+
+/**
+ * Why each restore action of a changed or deleted item cannot run, or undefined when it can.
+ * Recreate (a deleted item) and Restore as copy both create the item again, so the create
+ * blocker stops them; Revert of a changed item writes in place, so only the replace blocker
+ * stops it. A changed app that needs its installer can therefore still be reverted, while a
+ * deleted one offers neither action.
+ */
+export function driftActionBlockers(drift: Pick<Drift, "changeType" | "createBlocker" | "replaceBlocker">): { revert?: string; copy?: string } {
+  if (drift.changeType === "added") return {}
+  return {
+    revert: drift.changeType === "deleted" ? drift.createBlocker : drift.replaceBlocker,
+    copy: drift.createBlocker,
+  }
 }
 
 export interface DriftSummary {
