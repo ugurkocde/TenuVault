@@ -2,7 +2,7 @@ import { decodeXml } from "~/lib/storage/list"
 import { blobPath, isSafeArchivePath } from "../../../../shared/security"
 import { BACKUP_OWNER_FILE, MAX_BACKUP_ARCHIVE_BYTES, MAX_BACKUP_ARCHIVE_FILES } from "../../../../shared/constants"
 import { type NextRequest, NextResponse } from "next/server"
-import { OTHER_TENANT_BACKUP, ownedBy } from "~/lib/policies/backup-owner"
+import { OTHER_TENANT_BACKUP, ownedBy, readOwnedBackup } from "~/lib/policies/backup-owner"
 
 interface ListedFile {
   path: string
@@ -183,8 +183,15 @@ export async function POST(request: NextRequest) {
     let processedFiles = 0
 
     // The backup's metadata is read first, on its own: a shared container can hold other
-    // tenants' backups, and those are refused before any other file is read.
+    // tenants' backups, and those are refused before any other file is read. A backup without
+    // metadata is placed by its ownership marker.
     const metadataPath = `${backupId}/metadata.json`
+    if (!filePaths.includes(metadataPath)) {
+      const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}`, {
+        headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${accessToken}` },
+      }), backupId, tenantId)
+      if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
+    }
     const others = filePaths.filter((path) => path !== metadataPath)
     const batches: string[][] = others.length === filePaths.length ? [] : [[metadataPath]]
     for (let i = 0; i < others.length; i += batchSize) batches.push(others.slice(i, i + batchSize))

@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from "next/server"
 import { decodeXml, listBlobPages } from "~/lib/storage/list"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { validateBackup, type SnapshotRead } from "~/lib/policies/restore-validation"
-import { OTHER_TENANT_BACKUP, ownedBy } from "~/lib/policies/backup-owner"
+import { readOwnedBackup } from "~/lib/policies/backup-owner"
 import type { Item } from "../../../../shared/intune/registry"
 
 const blobUrl = (storageAccountName: string, name: string) => `https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`
@@ -44,14 +44,9 @@ export async function POST(request: NextRequest) {
       if (validPolicyPath(name, backupId)) listedPaths.push(name)
     }
 
-    let metadata: Record<string, any> | null = null
-    const metadataResponse = await fetch(blobUrl(storageAccountName, `${backupId}/metadata.json`), { headers: storageHeaders(token) })
-    if (metadataResponse.ok) {
-      metadata = (await metadataResponse.json().catch(() => null)) as Record<string, any> | null
-    } else if (metadataResponse.status !== 404) {
-      return NextResponse.json({ error: "Failed to read backup metadata" }, { status: 500 })
-    }
-    if (!ownedBy(metadata, tenantId)) return NextResponse.json({ error: OTHER_TENANT_BACKUP }, { status: 403 })
+    const owned = await readOwnedBackup((name) => fetch(blobUrl(storageAccountName, name), { headers: storageHeaders(token) }), backupId, tenantId)
+    if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
+    const metadata = owned.metadata
 
     const readSnapshot = async (path: string): Promise<SnapshotRead> => {
       let response: Response

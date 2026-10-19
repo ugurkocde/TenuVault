@@ -86,3 +86,31 @@ describe("backup routes refuse another tenant's backup", () => {
     expect(ownedBy({ TenantId: OTHER }, OWN)).toBe(false)
   })
 })
+
+describe("backups without metadata and unreadable metadata", () => {
+  const marker = `${backupId}/.tenuvault-owner.json`
+
+  it.each(routes)("%s refuses a backup without metadata whose ownership marker names another tenant", async (path, handler, extra) => {
+    const graph = stubStorage({ [marker]: { TenantId: OTHER }, [policyPath]: snapshot })
+    const response = await handler(request(path, { ...base, ...extra }))
+    expect(response.status).toBe(403)
+    expect(graph).toEqual([])
+  })
+
+  it.each(routes)("%s refuses metadata sealed for another tenant instead of treating it as legacy", async (path, handler, extra) => {
+    stubStorage({ [policyPath]: snapshot })
+    const sealed = Object.assign(new Error("sealed"), { name: "FetchApplicationError" })
+    const inner = globalThis.fetch
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith("metadata.json") ? Promise.reject(sealed) : inner(input, init)))
+    const response = await handler(request(path, { ...base, ...extra }))
+    expect(response.status).toBe(403)
+  })
+
+  it("revert-policy refuses to restore a file from another tenant's backup", async () => {
+    const { POST: revertPolicy } = await import("../src/portal/app/api/revert-policy/route")
+    const graph = stubStorage({ [`${backupId}/metadata.json`]: { TenantId: OTHER }, [policyPath]: snapshot })
+    const response = await revertPolicy(request("/api/revert-policy", { ...base, action: "restore", policyId: "original", policyType: "DeviceConfigurations", backupPath: policyPath }) as never)
+    expect(response.status).toBe(403)
+    expect(graph).toEqual([])
+  })
+})

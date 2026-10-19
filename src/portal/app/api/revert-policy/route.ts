@@ -1,3 +1,4 @@
+import { readOwnedBackup } from "~/lib/policies/backup-owner"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { isGraphId } from "../../../../shared/security"
 import { graphCaller, Restorer } from "~/lib/policies/graph-restore"
@@ -85,6 +86,12 @@ export async function POST(request: NextRequest) {
       getAccessToken(tenantId, appId, clientSecret, "https://storage.azure.com/.default"),
       getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
     ])
+
+    // A shared container can hold other tenants' backups; never restore from one of those.
+    const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`, {
+      headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${storageToken}` },
+    }), backupPath.split('/')[0] ?? '', tenantId)
+    if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
 
     // Fetch the policy content from the backup
     const policyUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups/${backupPath.split("/").map(encodeURIComponent).join("/")}`

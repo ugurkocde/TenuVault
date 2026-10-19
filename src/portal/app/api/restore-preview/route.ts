@@ -1,7 +1,7 @@
 import { recoveryReadiness, type RecoveryReadiness } from "../../../../shared/intune/recovery"
 import { type NextRequest, NextResponse } from "next/server"
 import { validPolicyPath } from "~/lib/policies/restore"
-import { OTHER_TENANT_BACKUP, ownedBy } from "~/lib/policies/backup-owner"
+import { readOwnedBackup } from "~/lib/policies/backup-owner"
 import { graphCaller, readLive } from "~/lib/policies/graph-restore"
 import { itemName, typeForFolder, type Item } from "../../../../shared/intune/registry"
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
@@ -60,12 +60,10 @@ export async function POST(request: NextRequest) {
       token(tenantId, appId, clientSecret, "https://storage.azure.com/.default"),
       live === true ? token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default") : Promise.resolve(""),
     ])
-    const metadataResponse = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${encodeURIComponent(backupId)}/metadata.json`, {
+    const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`, {
       headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${storageToken}` },
-    })
-    if (!metadataResponse.ok && metadataResponse.status !== 404) return NextResponse.json({ error: "Failed to read backup metadata" }, { status: 500 })
-    const metadata = metadataResponse.ok ? await metadataResponse.json().catch(() => null) : null
-    if (!ownedBy(metadata, tenantId)) return NextResponse.json({ error: OTHER_TENANT_BACKUP }, { status: 403 })
+    }), backupId, tenantId)
+    if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
     const graph = graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) })
 
     const preview = async (path: string): Promise<PreviewItem> => {

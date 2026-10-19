@@ -15,6 +15,8 @@ function stubListing(listing: string) {
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
     if (url.searchParams.get('comp') === 'list') return new Response(`<Blobs>${listing}</Blobs>`)
     bodyFetches.push(url.pathname)
+    // Blobs that are not listed do not exist.
+    if (!listing.includes(`<Name>${decodeURIComponent(url.pathname.replace('/intune-backups/', ''))}</Name>`)) return new Response('', { status: 404 })
     return Response.json({ policy: 'x' })
   }))
   return bodyFetches
@@ -51,5 +53,10 @@ it('excludes directory and ownership marker blobs from the size cap and the arch
   const bodyFetches = stubListing(blob(`${args.backupId}/DeviceConfigurations/`, MAX + 1) + blob(`${args.backupId}/.tenuvault-owner.json`, MAX + 1) + blob(`${args.backupId}/DeviceConfigurations/A.json`, 10))
   const response = await download(request())
   expect(response.status).toBe(200)
-  expect(bodyFetches).toEqual([`/intune-backups/${args.backupId}/DeviceConfigurations/A.json`])
+  // Without metadata, the ownership marker is read to place the backup; it is not archived.
+  expect(bodyFetches).toEqual([
+    `/intune-backups/${args.backupId}/metadata.json`,
+    `/intune-backups/${args.backupId}/.tenuvault-owner.json`,
+    `/intune-backups/${args.backupId}/DeviceConfigurations/A.json`,
+  ])
 })

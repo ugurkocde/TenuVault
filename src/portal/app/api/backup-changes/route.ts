@@ -4,7 +4,7 @@ import { typeForFolder } from "../../../../shared/intune/registry"
 import { comparable, compareBackups, type BackupFingerprint } from "../../../../shared/intune/backup-changes"
 import { compareObjects } from "../detect-drifts/route"
 import { withoutUnreadAssignments } from "../../../../shared/intune/read"
-import { OTHER_TENANT_BACKUP, ownedBy } from "~/lib/policies/backup-owner"
+import { ownedBy, readOwnedBackup } from "~/lib/policies/backup-owner"
 
 /** Changed items that also get a field by field comparison; the rest are listed without one. */
 const MAX_DETAILED = 100
@@ -41,8 +41,11 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const current = (await read(`${backupId}/metadata.json`)) as BackupFingerprint | null
-    if (!ownedBy(current, tenantId)) return NextResponse.json({ error: OTHER_TENANT_BACKUP }, { status: 403 })
+    const owned = await readOwnedBackup((name) => fetch(`${container}/${name.split("/").map(encodeURIComponent).join("/")}`, {
+      headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` },
+    }), backupId, tenantId)
+    if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
+    const current = owned.metadata as BackupFingerprint | null
     if (!current || !comparable(current)) {
       return NextResponse.json({ error: "This backup was made by an older version of TenuVault or did not finish, so its changes cannot be listed.", code: "NOT_COMPARABLE" }, { status: 409 })
     }
