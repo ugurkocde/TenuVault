@@ -127,4 +127,67 @@ describe("backup folder claim", () => {
     expect(puts).toEqual([{ name: `${FOLDER}/${BACKUP_OWNER_FILE}`, ifNoneMatch: "*" }])
     expect([...saved.keys()]).toEqual([`${FOLDER}/${BACKUP_OWNER_FILE}`])
   })
+
+  /** Azure storage that stores the first create-only PUT of `lost` but loses its response, and starts with `existing` blobs. */
+  function lossyAzure(lost: string, existing: Record<string, string> = {}) {
+    const saved = new Map(Object.entries(existing))
+    const graph = graphFor("Alpha", "a1")
+    let dropped = false
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      const url = new URL(request.url)
+      if (url.hostname === "graph.microsoft.com") return graph(url)
+      const name = decodeURIComponent(url.pathname.replace(/^\/intune-backups\//, ""))
+      if (request.method === "PUT" && url.searchParams.get("restype") === "container") return new Response(null, { status: 201 })
+      if (request.method === "PUT") {
+        if (request.headers.get("if-none-match") === "*" && saved.has(name)) {
+          return new Response(`<?xml version="1.0" encoding="utf-8"?><Error><Code>BlobAlreadyExists</Code></Error>`, { status: 409, headers: { "x-ms-error-code": "BlobAlreadyExists" } })
+        }
+        if (name === lost && !dropped) {
+          dropped = true
+          // The write commits on the server, then the connection resets before the response arrives.
+          saved.set(name, await request.text())
+          throw new TypeError("fetch failed")
+        }
+        saved.set(name, await request.text())
+        return new Response(null, { status: 201 })
+      }
+      if (request.method === "GET" && saved.has(name)) return new Response(saved.get(name), { status: 200 })
+      return new Response(null, { status: 404 })
+    }) as unknown as typeof fetch
+    return { saved, fetchImpl }
+  }
+
+  it("keeps its own folder claim when a retried claim finds the marker its lost first attempt wrote", async () => {
+    const owner = `${FOLDER}/${BACKUP_OWNER_FILE}`
+    const { saved, fetchImpl } = lossyAzure(owner)
+    const engine = new BackupEngine({ fetch: fetchImpl, getToken: async () => "token", now: () => new Date(FIXED) })
+    const job = await settled(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: "contoso" }))
+
+    expect(job.exception ?? "").not.toContain("already in use")
+    expect(job.status).toBe("Completed")
+    expect(JSON.parse(saved.get(owner)!)).toEqual({ Source: "TenuVault Desktop", TenantId: TENANT, RunId: job.id })
+    expect(JSON.parse(saved.get(`${FOLDER}/metadata.json`)!).Status).toBe("Success")
+  }, 15_000)
+
+  it("still refuses a retried claim when the marker there belongs to another run", async () => {
+    const owner = `${FOLDER}/${BACKUP_OWNER_FILE}`
+    // The first attempt's response is lost and the retry finds a rival's marker, not this run's.
+    const { saved, fetchImpl } = lossyAzure("never-written")
+    const wrapped = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      if (request.method === "PUT" && new URL(request.url).pathname.endsWith(BACKUP_OWNER_FILE) && !saved.has(owner)) {
+        saved.set(owner, JSON.stringify({ Source: "TenuVault Desktop", TenantId: TENANT, RunId: "desktop-rival" }))
+        throw new TypeError("fetch failed")
+      }
+      return fetchImpl(request)
+    }) as unknown as typeof fetch
+    const engine = new BackupEngine({ fetch: wrapped, getToken: async () => "token", now: () => new Date(FIXED) })
+    const job = await settled(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: "contoso" }))
+
+    expect(job.status).toBe("Failed")
+    expect(job.exception).toContain("already in use")
+    expect(JSON.parse(saved.get(owner)!).RunId).toBe("desktop-rival")
+    expect(saved.has(`${FOLDER}/metadata.json`)).toBe(false)
+  }, 15_000)
 })

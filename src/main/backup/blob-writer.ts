@@ -23,9 +23,23 @@ export class BlobWriter {
     })
   }
 
-  /** `onDispatch` runs right before each PUT is sent, after its token and cancellation checks. */
+  /**
+   * `onDispatch` runs right before each PUT is sent, after its token and cancellation checks.
+   * A create-only body must be unique to its writer (the engine includes the run id), so a retry
+   * that finds identical bytes knows its own earlier attempt created the blob.
+   */
   async put(name: string, body: string, beforeCommit?: NetworkCircuit, createOnly = false, onDispatch?: () => void): Promise<void> {
     const path = `${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`
+    // The earlier PUT may have landed. Read through the same decrypting wrapper and compare plaintext.
+    const landed = async (response: Response, signal: AbortSignal) => {
+      const stored = await this.request(path, { method: "GET", signal }, async (readBack) => {
+        if (!readBack.ok) throw new StorageError(await storageError(readBack, this.account))
+        return readBack.text()
+      })
+      if (stored !== body) return false
+      void response.body?.cancel().catch(() => undefined)
+      return true
+    }
     await this.request(path, {
       method: "PUT",
       headers: { "x-ms-blob-type": "BlockBlob", "content-type": "application/json", ...(createOnly ? { "if-none-match": "*" } : {}) },
@@ -33,22 +47,16 @@ export class BlobWriter {
     }, async (response, signal, ambiguous) => {
       if (response.ok) return
       if (createOnly && (response.status === 412 || response.headers.get("x-ms-error-code") === "BlobAlreadyExists")) {
-        // The conditional create was refused because the blob already exists. This must not fall
-        // through to the readback comparison below: a rival claim can hold identical marker bytes.
+        // The conditional create was refused because the blob already exists. On a first attempt it
+        // belongs to someone else. On a retry it may be this writer's own earlier attempt whose
+        // response was lost; only identical bytes, which hold this run's id, count as ours.
+        if (ambiguous && await landed(response, signal)) return
         void response.body?.cancel().catch(() => undefined)
         throw new BlobClaimError(`Blob already exists: ${name}`)
       }
       if (ambiguous && (response.status === 409 || response.status === 412
         || isImmutabilityRefusal(response.status, response.headers.get("x-ms-error-code") ?? ""))) {
-        // The earlier PUT may have landed. Read through the same decrypting wrapper and compare plaintext.
-        const stored = await this.request(path, { method: "GET", signal }, async (readBack) => {
-          if (!readBack.ok) throw new StorageError(await storageError(readBack, this.account))
-          return readBack.text()
-        })
-        if (stored === body) {
-          void response.body?.cancel().catch(() => undefined)
-          return
-        }
+        if (await landed(response, signal)) return
       }
       throw new StorageError(await storageError(response, this.account))
     }, beforeCommit, onDispatch)
