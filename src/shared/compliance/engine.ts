@@ -75,6 +75,29 @@ function satisfies(value: unknown, expectation: ValueExpectation): boolean {
   }
 }
 
+const NOT_CONFIGURED_ENUMS = new Set(["notconfigured", "userdefined"]);
+
+// Graph template enums use "notConfigured" or "userDefined" for "Not
+// configured", unless the expected value is itself one of those defaults.
+function isNotConfiguredEnum(
+  value: unknown,
+  expectation: ValueExpectation,
+): boolean {
+  if (typeof value !== "string") return false;
+  const normalized = value.toLowerCase();
+  if (!NOT_CONFIGURED_ENUMS.has(normalized)) return false;
+  const expected =
+    expectation.kind === "equals"
+      ? [expectation.value]
+      : expectation.kind === "oneOf"
+        ? expectation.values
+        : [];
+  return !expected.some(
+    (candidate) =>
+      typeof candidate === "string" && candidate.toLowerCase() === normalized,
+  );
+}
+
 export function normalizeOdataType(value: unknown): string {
   if (typeof value !== "string") return "";
   return value
@@ -414,6 +437,9 @@ function evaluateConfiguration(
             signal.enforcedWhen.value === true
           )
             continue;
+          // Enum properties default to "notConfigured" or "userDefined" in the
+          // same way.
+          if (isNotConfiguredEnum(value, signal.enforcedWhen)) continue;
           values = [value];
         } else {
           settingId = signal.presentationId
