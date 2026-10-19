@@ -124,7 +124,7 @@ export default function BaselineUpgradesTab({ tenant, allowed }: FeatureTabProps
 
       {detail.data && (
         <section aria-label="Upgrade" className={card}>
-          <UpgradeDetail tenant={tenant} upgrade={detail.data.upgrade} comparison={detail.data.comparison} changeSets={detail.data.changeSets} allowed={allowed} onChanged={refresh} />
+          <UpgradeDetail key={detail.data.upgrade.id} tenant={tenant} upgrade={detail.data.upgrade} comparison={detail.data.comparison} changeSets={detail.data.changeSets} allowed={allowed} onChanged={refresh} />
         </section>
       )}
     </div>

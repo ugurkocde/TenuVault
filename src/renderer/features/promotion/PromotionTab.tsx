@@ -96,6 +96,7 @@ export default function PromotionTab({ tenant, allowed }: FeatureTabProps) {
           )}
           {changeSet && (
             <ChangeSetFlow
+              key={changeSet.id}
               changeSet={changeSet}
               actions={allowed ? promotionActions(tenant, promotion, setSourceChanges) : null}
               tenantName={tenant.name}
@@ -106,7 +107,7 @@ export default function PromotionTab({ tenant, allowed }: FeatureTabProps) {
           {rollbackChangeSet && (
             <div className="space-y-2 border-t border-gray-100 pt-5 dark:border-gray-800">
               <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Rollback</p>
-              <ChangeSetFlow changeSet={rollbackChangeSet} actions={allowed ? rollbackActions(tenant, promotion) : null} tenantName={tenant.name} onChanged={refresh} />
+              <ChangeSetFlow key={rollbackChangeSet.id} changeSet={rollbackChangeSet} actions={allowed ? rollbackActions(tenant, promotion) : null} tenantName={tenant.name} onChanged={refresh} />
             </div>
           )}
         </section>

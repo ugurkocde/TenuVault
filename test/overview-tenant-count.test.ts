@@ -34,6 +34,7 @@ vi.mock("@desktop/lib/schedules", async (original) => ({ ...await original<typeo
 vi.mock("@desktop/lib/license", () => ({
   useLicense: () => ({ status: state.status }),
   tenantLicense: () => null,
+  tenantPlan: () => null,
   planName: (plan: string | null) => (plan === "msp" ? "MSP" : plan === "pro" ? "Pro" : "Community"),
   formatDate: () => "",
 }))

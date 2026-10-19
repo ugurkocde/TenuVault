@@ -65,7 +65,7 @@ export default function BaselinesPage() {
                 <p className="text-sm text-gray-600 dark:text-gray-400">Choose a platform under Your own baseline in the OpenIntuneBaseline section and select Customize. The exact OIB commit is recorded as the base of later upgrades.</p>
                 <Button type="button" variant="outline" onClick={() => navigate("/portal/oib")}>Open OpenIntuneBaseline</Button>
               </div>
-              <SnapshotCreator tenant={selectedTenant} allowed={allowed} plan={plan} onCreated={(id) => { void list.refetch(); navigate(`/portal/baselines/${id}`) }} />
+              <SnapshotCreator key={selectedTenant.id} tenant={selectedTenant} allowed={allowed} plan={plan} onCreated={(id) => { void list.refetch(); navigate(`/portal/baselines/${id}`) }} />
             </div>
           </section>
 

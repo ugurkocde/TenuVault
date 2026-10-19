@@ -9,7 +9,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu"
-import { tenantLicense, useLicense } from "../lib/license"
+import { tenantLicense, tenantPlan, useLicense } from "../lib/license"
 
 /**
  * Picks the tenant every page works on, like the directory switcher in the Azure portal.
@@ -20,7 +20,10 @@ export function TenantSwitcher() {
   const { selectedTenant, setSelectedTenantId } = useSelectedTenant()
   const { status } = useLicense()
   const navigate = useNavigate()
-  const unlicensed = (tenantId: string | undefined) => tenantLicense(status, tenantId)?.entitled === false
+  const unlicensed = (tenantId: string | undefined) => {
+    const license = tenantLicense(status, tenantId)
+    return license !== undefined && tenantPlan(license) === null
+  }
 
   if (tenants.length === 0) {
     return (
