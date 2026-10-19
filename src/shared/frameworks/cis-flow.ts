@@ -65,10 +65,10 @@ export function packSettingCount(pack: Pick<KitPack, "policies">): number {
   return pack.policies.reduce((total, policy) => total + policy.settings.length, 0)
 }
 
-/** The CIS Level a policy belongs to, from its kit provenance. Defaults to Level 1. */
+/** The CIS Level a policy belongs to, from its kit provenance ("Level 2" or 2). Defaults to Level 1. */
 export function kitLevelForPolicy(policy: BaselinePolicy | undefined): KitLevel {
   const level = policy?.provenance?.level
-  return typeof level === "string" && level.includes("2") ? 2 : 1
+  return level === 2 || (typeof level === "string" && level.includes("2")) ? 2 : 1
 }
 
 function provenanceText(policy: BaselinePolicy, key: string): string {

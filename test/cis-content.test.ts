@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { validateCisCatalog, validateCisPack } from "../src/shared/frameworks/cis-content"
 import { handleFramework, setCisEntitlementProvider, setInternalCisBenchmarksEnabled } from "../src/main/frameworks/service"
 import { loadWorkspace, setFrameworkStore } from "../src/main/frameworks/workspaces"
+import { kitLevelForPolicy } from "../src/shared/frameworks/cis-flow"
+import { readinessFor } from "../src/shared/frameworks/cis-readiness"
 
 const tenantId = "11111111-1111-1111-1111-111111111111"
 const type = "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance"
@@ -134,7 +136,22 @@ describe("CIS content delivery service", () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string) => Response.json(url.endsWith("/catalog") ? validCatalog : validPack)))
     await handleFramework({ action: "cis-catalog", tenantId, frameworkId: "cis-benchmarks" })
     await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })
-    expect(loadWorkspace(tenantId, "cis-benchmarks").policies[0]?.provenance).toEqual({ benchmarkName: "Fakebook OS" })
+    expect(loadWorkspace(tenantId, "cis-benchmarks").policies[0]?.provenance).toEqual({ benchmark: "fakebook-os", version: "9.9.9", level: "Level 1", benchmarkName: "Fakebook OS" })
+  })
+
+  it("keeps the benchmark, version and Level of a delivered Level 2 pack, so it scores as Level 2", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ...validPack, level: 2, policies: [{ ...policy(), provenance: { level: 1, benchmark: "other-os" } }] })))
+    await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 2 })
+    const policies = loadWorkspace(tenantId, "cis-benchmarks").policies
+    expect(policies[0]?.provenance).toMatchObject({ benchmark: "fakebook-os", version: "9.9.9", level: "Level 2" })
+    const entry = { assessment: { runId: "run-1", tenantId, frameworkId: "cis-benchmarks", reference: "fakebook-os 9.9.9 Level 2", assessedAt: "2026-10-10T12:00:00.000Z", policyCount: 1, findings: [] }, policies }
+    expect(readinessFor(entry, { history: [entry] })).toMatchObject({ benchmark: "fakebook-os", version: "9.9.9", levels: [{ level: 2 }] })
+  })
+
+  it("reads a numeric provenance Level", () => {
+    expect(kitLevelForPolicy({ ...policy(), provenance: { level: 2 } })).toBe(2)
+    expect(kitLevelForPolicy({ ...policy(), provenance: { level: 1 } })).toBe(1)
+    expect(kitLevelForPolicy({ ...policy(), provenance: { level: "Level 2" } })).toBe(2)
   })
 
   it("keeps pack recommendations on the pack policies, unmatched ones on the first policy", async () => {

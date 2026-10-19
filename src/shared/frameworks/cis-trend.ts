@@ -1,4 +1,4 @@
-import { compareAssessments, exclusionsText, headlineExceptions, headlineRate, readinessFor } from "./cis-readiness"
+import { compareAssessments, exclusionsText, headlineExceptions, headlineRate, packLevels, readinessFor } from "./cis-readiness"
 import type { RecommendationList } from "./cis-manual"
 import { localDate, type CisException } from "./cis-exceptions"
 import type { KitLevel } from "./cis-kit"
@@ -31,6 +31,8 @@ export interface CisTrendLevel {
   /** Ids of those exclusions, from the same headline. */
   exclusionIds?: string[]
   exclusionsAsOf?: string
+  /** False when the run's pack does not measure this Level and only the recommendation list names it. Absent means measured. */
+  measured?: boolean
 }
 
 /** The rate a trend level follows: the recommendation pass rate when available, else the settings pass rate. */
@@ -112,7 +114,7 @@ export function sparklineSegments(points: CisTrendPoint[], level: KitLevel): num
 export function cisDriftSignals(points: CisTrendPoint[]): CisDriftEntry[] {
   const newestOf = new Map<string, { index: number; level: CisTrendLevel }>()
   points.forEach((point, index) => {
-    for (const level of point.levels) newestOf.set(JSON.stringify([point.benchmark, point.version, level.level]), { index, level })
+    for (const level of point.levels) if (level.measured !== false) newestOf.set(JSON.stringify([point.benchmark, point.version, level.level]), { index, level })
   })
   const entries: CisDriftEntry[] = []
   for (const { index, level } of newestOf.values()) {
@@ -124,7 +126,7 @@ export function cisDriftSignals(points: CisTrendPoint[]): CisDriftEntry[] {
     if (level.previousRunId !== undefined) previousPoint = points.find(point => point.runId === level.previousRunId)
     else for (let at = index - 1; at >= 0 && !previousPoint; at--) {
       const candidate = points[at]!
-      if (candidate.benchmark === newest.benchmark && candidate.version === newest.version && candidate.levels.some(entry => entry.level === level.level)) previousPoint = candidate
+      if (candidate.benchmark === newest.benchmark && candidate.version === newest.version && candidate.levels.some(entry => entry.level === level.level && entry.measured !== false)) previousPoint = candidate
     }
     const previous = previousPoint?.levels.find(entry => entry.level === level.level)
     const previousRate = previous ? trendRate(previous) : null
@@ -185,13 +187,15 @@ export function cisReadinessTrend(history: CisTrendHistoryEntry[], recommendatio
   const workspace = { history: deduped, ...(recommendationList ? { recommendationList } : {}), ...(exceptions ? { exceptions } : {}) }
   const summaries = sorted.map(entry => readinessFor(entry, workspace, todayISO))
   const fingerprints = sorted.map(packFingerprint)
+  // A summary lists every Level of a loaded recommendation list, so the Levels a run measured come from its pack.
+  const measuredLevels = sorted.map(entry => packLevels(entry.policies))
   return sorted.map((entry, index) => {
     const summary = summaries[index]!
     const levels: CisTrendLevel[] = summary.levels.map(level => {
       let previousIndex = -1
       for (let at = index - 1; at >= 0 && previousIndex < 0; at--) {
         const candidate = summaries[at]!
-        if (candidate.benchmark === summary.benchmark && candidate.version === summary.version && candidate.levels.some(item => item.level === level.level)) previousIndex = at
+        if (candidate.benchmark === summary.benchmark && candidate.version === summary.version && measuredLevels[at]!.has(level.level)) previousIndex = at
       }
       const comparison = previousIndex < 0 ? "first" as const : fingerprints[previousIndex] === fingerprints[index] ? "compared" as const : "pack-changed" as const
       const previous = comparison === "compared" ? summaries[previousIndex]!.levels.find(item => item.level === level.level) : undefined
@@ -215,6 +219,7 @@ export function cisReadinessTrend(history: CisTrendHistoryEntry[], recommendatio
         exclusions: headlineExceptions(level).length,
         exclusionIds: headlineExceptions(level).map(exception => exception.id),
         exclusionsAsOf: level.exclusionsAsOf,
+        ...(measuredLevels[index]!.has(level.level) ? {} : { measured: false }),
         ...(current.basis === "recommendations" ? { basis: current.basis, recommendationPassRate: level.recommendationPassRate, adjustedRecommendationPassRate: level.adjustedRecommendationPassRate } : {}),
       }
     })
@@ -267,7 +272,7 @@ export interface CisExclusionUse {
  */
 export function exclusionUse(points: CisTrendPoint[]): Map<string, CisExclusionUse[]> {
   const newest = new Map<string, { point: CisTrendPoint; level: CisTrendLevel }>()
-  for (const point of points) for (const level of point.levels) newest.set(JSON.stringify([point.benchmark, point.version, level.level]), { point, level })
+  for (const point of points) for (const level of point.levels) if (level.measured !== false) newest.set(JSON.stringify([point.benchmark, point.version, level.level]), { point, level })
   const uses = new Map<string, CisExclusionUse[]>()
   for (const { point, level } of newest.values()) for (const id of level.exclusionIds ?? []) {
     uses.set(id, [...(uses.get(id) ?? []), { benchmark: point.benchmark, benchmarkName: point.benchmarkName ?? null, version: point.version, level: level.level }])

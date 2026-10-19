@@ -473,7 +473,8 @@ export class BackupEngine {
         TenantId: request.tenantId.toLowerCase(),
         Trigger: request.trigger ?? "manual",
         RunId: job.id,
-        Scope: { Excluded: scope.excluded },
+        // Included records the types this run attempted, so later app versions do not count types added since as covered.
+        Scope: { Excluded: scope.excluded, Included: types.map((type) => type.folder) },
         Failures: failures,
         SkippedTypes: skippedTypes,
         FailedTypes: failedTypes,

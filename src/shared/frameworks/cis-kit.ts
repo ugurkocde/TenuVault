@@ -54,9 +54,10 @@ type LevelMark = KitLevel | "combined" | "bitlocker" | "unknown"
  */
 export function classifyKitFile(path: string): LevelMark {
   const text = normalized(path)
-  if (/\bl1\s*\+\s*l2\b/i.test(text) || /\blevel\s*1\s*\+\s*level\s*2\b/i.test(text)) return "combined"
+  // Markers are bounded by anything but a letter or digit, so an underscore separates them as it does for the scope.
+  if (/(?<![a-z0-9])l1\s*\+\s*l2(?![a-z0-9])/i.test(text) || /(?<![a-z0-9])level[\s_]*1\s*\+\s*level[\s_]*2(?![a-z0-9])/i.test(text)) return "combined"
   const levels = new Set<KitLevel>()
-  for (const match of text.matchAll(/\blevel\s*[- ]?([12])\b|\bl([12])\b/gi)) {
+  for (const match of text.matchAll(/(?<![a-z0-9])level\s*[-_ ]?([12])(?![a-z0-9])|(?<![a-z0-9])l([12])(?![a-z0-9])/gi)) {
     levels.add(Number(match[1] ?? match[2]) as KitLevel)
   }
   if (levels.size === 1) return [...levels][0]!

@@ -25,6 +25,16 @@ describe("build kit conversion", () => {
     expect(classifyKitFile("Policies/Fakebook General.json")).toBe("unknown")
   })
 
+  it("accepts underscores as separators around the Level marker", () => {
+    expect(classifyKitFile("CIS_Win11_v3.0.1_L1_Device.json")).toBe(1)
+    expect(classifyKitFile("CIS_Win11_v3.0.1_L2_User.json")).toBe(2)
+    expect(classifyKitFile("Level_2/Device.json")).toBe(2)
+    expect(classifyKitFile("Fakebook_L1+L2_v9.9.9.json")).toBe("combined")
+    expect(classifyKitFile("Fakebook_Level_1+Level_2.json")).toBe("combined")
+    // A marker inside a longer word still does not count.
+    expect(classifyKitFile("Policies/Fakebook_XL1_General.json")).toBe("unknown")
+  })
+
   it("groups Device and User split files by their L1 or L2 marker", () => {
     const result = kit([
       { path: "Device-L1/Fakebook Device.json", content: policy("Fakebook Device", ["fakebook_setting_device"]) },
