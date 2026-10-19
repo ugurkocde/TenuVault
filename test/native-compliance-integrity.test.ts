@@ -664,3 +664,35 @@ describe("compound detectors and legacy representations", () => {
     },
   );
 });
+
+describe("enum settings left at their Graph default", () => {
+  const collected = (...policies: any[]) => ({
+    ...data(...policies),
+    collectedAt: "2026-10-12T10:00:00Z",
+  });
+  it.each([
+    [
+      "windows-firewall",
+      "windows10EndpointProtectionConfiguration",
+      {
+        firewallProfileDomain: { firewallEnabled: "notConfigured" },
+        firewallProfilePrivate: { firewallEnabled: "notConfigured" },
+        firewallProfilePublic: { firewallEnabled: "notConfigured" },
+      },
+    ],
+    [
+      "windows-telemetry-minimized",
+      "windows10GeneralConfiguration",
+      { diagnosticsDataSubmissionMode: "userDefined" },
+    ],
+    [
+      "windows-office-child-process-block",
+      "windows10EndpointProtectionConfiguration",
+      { defenderOfficeAppsLaunchChildProcessType: "userDefined" },
+    ],
+  ])("reads %s as missing, not different", (id, type, settings) => {
+    const result = capability(collected(policy(type, settings)), id);
+    expect(result.status).toBe("noEvidence");
+    expect(capabilityComparison(result)).toBe("missing");
+  });
+});

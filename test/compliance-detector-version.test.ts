@@ -10,6 +10,7 @@ const fingerprints: Record<number, string> = {
   4: "05cdbc32a1d40eed6fa8e8427cd0479ad6cebddcb0fdcca8fa313d00262c6c36",
   5: "12276622cd7d852a5e446343d4a31868ca2292fc8158e2a765b2eb9d21536a3a",
   6: "1015193732c5102c30d13a09b553a69f5c413e5cda613dd10e9c48da6a69e3ba",
+  7: "e4eadd27736e472e60efff37e9c853a20c45c0b471c20788f5fbeb27e0917232",
 };
 const detectorFiles = [
   "src/main/features/scores/formula.ts",
