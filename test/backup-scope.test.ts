@@ -9,7 +9,7 @@ import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { localStorageAccountName } from "../src/shared/constants"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
-import { coveredFolders, DEFAULT_SCOPE, describeScope, EVERYTHING, includedTypes, normalizeScope, presetOf } from "../src/shared/intune/scope"
+import { coveredFolders, DEFAULT_SCOPE, describeScope, EVERYTHING, includedTypes, LEGACY_FOLDERS, normalizeScope, presetOf } from "../src/shared/intune/scope"
 import { compareBackups, summarize } from "../src/shared/intune/backup-changes"
 import { comparableSnapshot, sameSnapshot } from "../src/shared/intune/compare"
 import { memoryStore } from "./helpers"
@@ -34,6 +34,20 @@ describe("backup scope", () => {
     const covered = coveredFolders({ Scope: { Excluded: ["Apps"] }, SkippedTypes: ["PowerShellScripts"], FailedTypes: ["Branding"] })
     expect(["Apps", "PowerShellScripts", "Branding"].some((folder) => covered.has(folder))).toBe(false)
     expect(covered.size).toBe(ALL.length - 3)
+  })
+
+  it("counts only the types a backup recorded as attempted as covered", () => {
+    const included = ALL.filter((folder) => folder !== "Branding")
+    expect(coveredFolders({ Scope: { Excluded: [], Included: included } }).has("Branding")).toBe(false)
+    // A type the older backup never attempted is not reported as added in the newer one.
+    const older = { Scope: { Excluded: [], Included: included }, Items: { "DeviceConfigurations/1": { file: "A.json", hash: "a" } } }
+    const newer = { Scope: { Excluded: [], Included: ALL }, Items: { "DeviceConfigurations/1": { file: "A.json", hash: "a" }, "Branding/1": { file: "B.json", hash: "b" } } }
+    expect(summarize(compareBackups(older, newer))).toEqual({ added: 0, modified: 0, removed: 0 })
+  })
+
+  it("reads backups without a recorded list as covering only the types known before it was recorded", () => {
+    expect(LEGACY_FOLDERS.every((folder) => ALL.includes(folder))).toBe(true)
+    expect([...coveredFolders({ Scope: { Excluded: ["Apps"] } })].sort()).toEqual(LEGACY_FOLDERS.filter((folder) => folder !== "Apps").sort())
   })
 })
 

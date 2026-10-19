@@ -72,7 +72,7 @@ describe("failed backup manifest", () => {
       TenantId: TENANT,
       Trigger: "scheduled",
       Source: "TenuVault Desktop",
-      Scope: { Excluded: scope.excluded },
+      Scope: { Excluded: scope.excluded, Included: ["DeviceConfigurations"] },
       ItemCounts: { DeviceConfigurations: 2, TotalPolicies: 2 },
       Error: job.exception,
     })

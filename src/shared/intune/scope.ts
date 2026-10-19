@@ -62,7 +62,8 @@ export function describeScope(scope: BackupScope): string {
 }
 
 export interface ScopeMetadata {
-  Scope?: { Excluded?: unknown }
+  /** Included lists the type folders the backup attempted; absent on backups made before it was recorded. */
+  Scope?: { Excluded?: unknown; Included?: unknown }
   SkippedTypes?: unknown
   FailedTypes?: unknown
 }
@@ -70,10 +71,28 @@ export interface ScopeMetadata {
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [])
 
 /**
- * The folders a backup holds a complete copy of, from its metadata: its scope, minus types it could not
- * read. Backups made before scopes existed covered every type the app knew about.
+ * Every type folder the app knew about before backups recorded Scope.Included. A backup without that
+ * list never held a type added to the registry later, so this list must not grow with the registry.
+ */
+export const LEGACY_FOLDERS: readonly string[] = [
+  "DeviceConfigurations", "ConfigurationPolicies", "GroupPolicyConfigurations", "ReusablePolicySettings", "HardwareConfigurations",
+  "CompliancePolicies", "ComplianceSettingsPolicies", "ComplianceScripts", "EndpointSecurityIntents", "PowerShellScripts", "ShellScripts",
+  "CustomAttributeScripts", "Remediations", "FeatureUpdateProfiles", "QualityUpdateProfiles", "QualityUpdatePolicies", "DriverUpdateProfiles",
+  "AppCategories", "Apps", "AppConfigurationPolicies", "ManagedAppConfigurations", "AppProtectionIOS", "AppProtectionAndroid",
+  "AppProtectionWindows", "PolicySets", "EnrollmentConfigurations", "AutopilotProfiles", "AppleEnrollmentProfiles", "AppleAutomatedEnrollment",
+  "AndroidEnrollmentProfiles", "DeviceCategories", "TermsAndConditions", "AssignmentFilters", "ScopeTags", "RoleDefinitions",
+  "NotificationTemplates", "Branding", "DeviceCleanupRules", "MultiAdminApprovalPolicies",
+]
+
+/**
+ * The folders a backup holds a complete copy of, from its metadata: the types it recorded as attempted,
+ * minus those left out or that it could not read. Backups that did not record the attempted types
+ * covered the types the app knew about then (LEGACY_FOLDERS), so a type added later is never counted
+ * as covered by them.
  */
 export function coveredFolders(metadata: ScopeMetadata | null | undefined): Set<string> {
+  const recorded = metadata?.Scope?.Included
+  const attempted = new Set(Array.isArray(recorded) ? strings(recorded) : LEGACY_FOLDERS)
   const missing = new Set([...strings(metadata?.Scope?.Excluded), ...strings(metadata?.SkippedTypes), ...strings(metadata?.FailedTypes)])
-  return new Set(INTUNE_TYPES.map((type) => type.folder).filter((folder) => !missing.has(folder)))
+  return new Set(INTUNE_TYPES.map((type) => type.folder).filter((folder) => attempted.has(folder) && !missing.has(folder)))
 }
