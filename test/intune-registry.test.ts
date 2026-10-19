@@ -117,7 +117,32 @@ describe("Restore plans", () => {
     const update = buildUpdatePlan(type("PolicySets"), snapshot, "p1", { includeAssignments: true, current: { items: [{ id: "old-item", payloadId: "removed-app" }] } })
     expect(update.map((step) => `${step.method} ${step.path}`)).toEqual(["PATCH deviceAppManagement/policySets/p1", "POST deviceAppManagement/policySets/p1/update", "POST deviceAppManagement/policySets/p1/update"])
     expect(update[0]!.body).not.toHaveProperty("items")
-    expect(update[1]!.body).toEqual({ addedPolicySetItems: [{ "@odata.type": "#microsoft.graph.mobileAppPolicySetItem", payloadId: "app1", intent: "required" }], deletedPolicySetItems: ["old-item"] })
+    expect(update[1]!.body).toEqual({ addedPolicySetItems: [{ "@odata.type": "#microsoft.graph.mobileAppPolicySetItem", payloadId: "app1", intent: "required" }], updatedPolicySetItems: [], deletedPolicySetItems: ["old-item"] })
+  })
+
+  it("adds only missing policy set items, updates changed ones and deletes removed ones", () => {
+    const app = "#microsoft.graph.mobileAppPolicySetItem"
+    const settings = { "@odata.type": "#microsoft.graph.iosStoreAppAssignmentSettings", vpnConfigurationId: null, uninstallOnDeviceRemoval: true }
+    const snapshot: Item = { displayName: "Set", items: [
+      { id: "s1", "@odata.type": app, payloadId: "kept", intent: "required", settings },
+      { id: "s2", "@odata.type": app, payloadId: "changed", intent: "required" },
+      { id: "s3", "@odata.type": app, payloadId: "missing", intent: "available" },
+    ] }
+    const current: { items: Item[] } = { items: [
+      // Same content read back with another key order.
+      { id: "live-kept", "@odata.type": app, payloadId: "kept", settings: { uninstallOnDeviceRemoval: true, vpnConfigurationId: null, "@odata.type": "#microsoft.graph.iosStoreAppAssignmentSettings" }, intent: "required", status: "validated" },
+      { id: "live-changed", "@odata.type": app, payloadId: "changed", intent: "uninstall" },
+      { id: "live-extra", "@odata.type": app, payloadId: "extra", intent: "required" },
+    ] }
+    const update = buildUpdatePlan(type("PolicySets"), snapshot, "p1", { current })
+    expect(update[1]!.body).toEqual({
+      addedPolicySetItems: [{ "@odata.type": app, payloadId: "missing", intent: "available" }],
+      updatedPolicySetItems: [{ "@odata.type": app, payloadId: "changed", intent: "required", id: "live-changed" }],
+      deletedPolicySetItems: ["live-extra"],
+    })
+    // A set that already matches the backup needs no item update.
+    const same = buildUpdatePlan(type("PolicySets"), snapshot, "p1", { current: { items: [current.items[0]!, { ...current.items[1]!, intent: "required" }, { id: "live-missing", "@odata.type": app, payloadId: "missing", intent: "available" }] } })
+    expect(same.map((step) => step.method)).toEqual(["PATCH"])
   })
 
   it("leaves assignments out unless requested", () => {

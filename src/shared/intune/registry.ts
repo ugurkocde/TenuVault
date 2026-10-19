@@ -253,6 +253,11 @@ const localizedMessages = (snapshot: Item): Item[] =>
     return body
   })
 
+/** JSON with object keys sorted at every depth, so two reads of one value compare equal. */
+const sortedJson = (value: Json | undefined): string =>
+  JSON.stringify(value ?? null, (_key, entry: Json) =>
+    entry && typeof entry === "object" && !Array.isArray(entry) ? Object.fromEntries(Object.keys(entry).sort().map((key) => [key, (entry as Item)[key]])) : entry,
+  )
 const patch = (body: Item): Step => ({ method: "PATCH", path: "{collection}/{id}", body, kind: "content" })
 
 export const INTUNE_TYPES: IntuneType[] = [
@@ -743,16 +748,29 @@ export const INTUNE_TYPES: IntuneType[] = [
       })
       return payload
     },
-    // items cannot be patched; /update adds (by payloadId) and deletes (by live item ID), and rejects an empty body.
+    // items cannot be patched; /update adds missing items (by payloadId), updates changed ones and deletes
+    // removed ones (both by live item ID), and rejects an empty body.
     update: (payload, _snapshot, current) => {
       const { items, ...body } = payload
-      const added = collection(items)
-      const wanted = new Set(added.map((item) => str(item.payloadId)))
-      const deleted = collection(current.items).filter((item) => !wanted.has(str(item.payloadId))).map((item) => str(item.id))
+      const live = collection(current.items)
+      const matched = new Set<Item>()
+      const added: Item[] = []
+      const updated: Item[] = []
+      for (const item of collection(items)) {
+        const existing = live.find((entry) => !matched.has(entry) && str(entry.payloadId) === str(item.payloadId))
+        if (!existing) {
+          added.push(item)
+          continue
+        }
+        matched.add(existing)
+        const changed = ["intent", "settings", "guidedDeploymentTags"].some((key) => key in item && sortedJson(item[key]) !== sortedJson(existing[key]))
+        if (changed) updated.push({ ...item, id: str(existing.id) })
+      }
+      const deleted = live.filter((entry) => !matched.has(entry)).map((entry) => str(entry.id))
       return [
         patch(body),
-        ...(added.length || deleted.length
-          ? [{ method: "POST", path: "{collection}/{id}/update", body: { addedPolicySetItems: added, deletedPolicySetItems: deleted }, kind: "content" } as Step]
+        ...(added.length || updated.length || deleted.length
+          ? [{ method: "POST", path: "{collection}/{id}/update", body: { addedPolicySetItems: added, updatedPolicySetItems: updated, deletedPolicySetItems: deleted }, kind: "content" } as Step]
           : []),
       ]
     },
