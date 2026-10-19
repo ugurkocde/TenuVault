@@ -84,3 +84,13 @@ export async function importArchive(store: LocalBlobStore, archive: ReviewedArch
     }
   } catch (error) { for (const name of written) await store.delete(account, container, name).catch(() => undefined); throw error }
 }
+/**
+ * Imports a reviewed archive once the admin confirms it. The archive's tenant uses a license slot
+ * (`license`) only after that confirmation, so reviewing or cancelling an import never claims one.
+ */
+export async function importConfirmedArchive(store: LocalBlobStore, archive: ReviewedArchive, confirm: () => Promise<boolean>, license: (tenantId: string) => Promise<unknown>): Promise<boolean> {
+  if (!(await confirm())) return false
+  await license(archive.tenantId)
+  await importArchive(store, archive)
+  return true
+}

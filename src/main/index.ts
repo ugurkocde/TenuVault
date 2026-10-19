@@ -1,6 +1,6 @@
 import { CommunityLimitError, withPlanError } from "../shared/plan-errors"
 import { licenseBuyUrl } from "./license/buy-url"
-import { reviewArchive, importArchive } from "./backup/archive"
+import { importConfirmedArchive, reviewArchive } from "./backup/archive"
 import { readFile, stat } from "node:fs/promises"
 import { pathToFileURL } from "node:url"
 import { isGuid, isMicrosoftLoginUrl, sameRendererDocument } from "../shared/security"
@@ -778,10 +778,9 @@ async function bootstrap(): Promise<void> {
       if (selected.canceled || !selected.filePaths[0]) return { imported: false }
       if ((await stat(selected.filePaths[0])).size > 32 * 1024 * 1024) throw new Error("Choose an archive smaller than 32 MiB")
       const archive = await reviewArchive(await readFile(selected.filePaths[0]))
-      await license.checkNewTenant(archive.tenantId, { retry: false })
-      const review = await dialog.showMessageBox(mainWindow!, { type: "warning", title: "Review backup archive", message: `Import ${archive.count} policy snapshots?`, detail: `Source tenant: ${archive.tenantId}\nBackup: ${archive.backupId}\nSHA-256: ${archive.digest}\n\nThe archive declares its source identity; it is not signed. Use files supplied by a source you trust. Snapshots will be encrypted on this device. Import does not change Intune. Use the tenant's local backup storage and the existing restore preview to restore later.`, buttons: ["Cancel", "Import locally"], defaultId: 0, cancelId: 0 })
-      if (review.response !== 1) return { imported: false }
-      await importArchive(getLocalStore(), archive)
+      const confirm = async () => (await dialog.showMessageBox(mainWindow!, { type: "warning", title: "Review backup archive", message: `Import ${archive.count} policy snapshots?`, detail: `Source tenant: ${archive.tenantId}\nBackup: ${archive.backupId}\nSHA-256: ${archive.digest}\n\nThe archive declares its source identity; it is not signed. Use files supplied by a source you trust. Snapshots will be encrypted on this device. Import does not change Intune. Use the tenant's local backup storage and the existing restore preview to restore later.`, buttons: ["Cancel", "Import locally"], defaultId: 0, cancelId: 0 })).response === 1
+      // The license check can claim a slot for the archive's tenant, so it runs only once the import is confirmed.
+      if (!(await importConfirmedArchive(getLocalStore(), archive, confirm, (tenantId) => license.checkNewTenant(tenantId, { retry: false })))) return { imported: false }
       return { imported: true, tenantId: archive.tenantId, backupId: archive.backupId }
     } finally { importingArchive = false }
   })
