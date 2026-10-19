@@ -72,8 +72,10 @@ function AuditPageContent() {
   const [pagination, setPagination] = useState({
     page: 1,
     pageSize: 50,
-    totalCount: 0
   })
+  // The logs route reads only as far as a page needs, so there is no total. One extra
+  // entry per request tells whether a next page exists.
+  const [hasMore, setHasMore] = useState(false)
 
   // Fetch audit logs
   const fetchLogs = async () => {
@@ -108,7 +110,7 @@ function AuditPageContent() {
             eventTypes: filters.eventTypes.length > 0 ? filters.eventTypes : undefined,
             severities: filters.severities.length > 0 ? filters.severities : undefined,
             results: filters.results.length > 0 ? filters.results : undefined,
-            limit: pagination.pageSize,
+            limit: pagination.pageSize + 1,
             offset: (pagination.page - 1) * pagination.pageSize,
             sortBy: 'timestamp',
             sortOrder: 'desc'
@@ -124,15 +126,11 @@ function AuditPageContent() {
       }
 
       const data = await response.json()
-      setLogs(data.data || [])
+      const entries: AuditLogEntry[] = data.data || []
+      setLogs(entries.slice(0, pagination.pageSize))
+      setHasMore(entries.length > pagination.pageSize)
       setPendingCount(data.pendingCount ?? 0)
       setPendingDurable(data.pendingDurable === true)
-      
-      // Update pagination total count (this would need backend support)
-      // For now, we'll estimate based on whether we got a full page
-      if (data.data && data.data.length === pagination.pageSize) {
-        setPagination(prev => ({ ...prev, totalCount: prev.totalCount || 1000 }))
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred")
     } finally {
@@ -701,8 +699,8 @@ function AuditPageContent() {
                 <div className="flex flex-col sm:flex-row items-center justify-between px-4 sm:px-6 py-4 border-t border-gray-100 gap-4">
                   <div className="text-xs sm:text-sm text-gray-700 text-center sm:text-left">
                     Showing {((pagination.page - 1) * pagination.pageSize) + 1} to{' '}
-                    {Math.min(pagination.page * pagination.pageSize, pagination.totalCount || logs.length)} of{' '}
-                    {pagination.totalCount || 'many'} entries
+                    {(pagination.page - 1) * pagination.pageSize + logs.length}
+                    {hasMore ? ', more available' : ` of ${(pagination.page - 1) * pagination.pageSize + logs.length} entries`}
                   </div>
                   <div className="flex items-center gap-2">
                     <Button
@@ -726,15 +724,17 @@ function AuditPageContent() {
                         }}
                         className="h-8 w-12 sm:w-16 px-1 sm:px-2 text-center border border-gray-200 rounded-full text-xs sm:text-sm"
                       />
-                      <span className="text-xs sm:text-sm text-gray-600">
-                        of {Math.ceil((pagination.totalCount || 1000) / pagination.pageSize)}
-                      </span>
+                      {!hasMore && (
+                        <span className="text-xs sm:text-sm text-gray-600">
+                          of {pagination.page}
+                        </span>
+                      )}
                     </div>
                     <Button
                       variant="outline"
                       size="sm"
                       onClick={() => setPagination(prev => ({ ...prev, page: prev.page + 1 }))}
-                      disabled={logs.length < pagination.pageSize || loading}
+                      disabled={!hasMore || loading}
                       className="text-xs sm:text-sm"
                     >
                       Next
