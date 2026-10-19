@@ -314,7 +314,7 @@ export class LocalBlobStore {
       else {
         // Keep the replacement's authenticated filename and metadata for the next mutation.
         const replacement = await this.readEntry(dir, account, container, file)
-        if (replacement?.name === name) this.updateEntry(dir, entries, name, replacement)
+        if (replacement !== VANISHED && replacement?.name === name) this.updateEntry(dir, entries, name, replacement)
         else this.index.delete(dir)
         this.changed(dir)
       }
@@ -461,7 +461,8 @@ export class LocalBlobStore {
     }
   }
 
-  private async readEntry(dir: string, account: string, container: string, file: string): Promise<Entry | null> {
+  /** Returns null for a file that cannot be read, and VANISHED for one removed since it was listed. */
+  private async readEntry(dir: string, account: string, container: string, file: string): Promise<Entry | null | typeof VANISHED> {
     const path = join(dir, file)
     let handle: Awaited<ReturnType<typeof open>> | undefined
     try {
@@ -497,8 +498,8 @@ export class LocalBlobStore {
         etag: `"${fileStamp(info)}"`,
         ...(header.metadata ? { metadata: header.metadata } : {}),
       }
-    } catch {
-      return null
+    } catch (error) {
+      return isMissing(error) ? VANISHED : null
     } finally {
       await handle?.close()
     }
@@ -510,17 +511,19 @@ export class LocalBlobStore {
     const cached = await Promise.resolve(previous).catch(() => undefined)
     const byFile = new Map([...(cached?.values() ?? [])].map(entry => [entry.file, entry]))
     // Headers are read a few at a time and added in directory order, so duplicates are found as before.
-    const read = await mapLimit(files, HEADER_CONCURRENCY, async (file): Promise<Entry | null> => {
+    const read = await mapLimit(files, HEADER_CONCURRENCY, async (file): Promise<Entry | null | typeof VANISHED> => {
       try {
         const cached = byFile.get(file)
         if (cached && fileStamp(await stat(join(dir, file), { bigint: true })) === cached.stamp) return cached
         return this.readEntry(dir, account, container, file)
-      } catch {
-        return null
+      } catch (error) {
+        return isMissing(error) ? VANISHED : null
       }
     })
     let unreadable = 0
     for (const entry of read) {
+      // A file removed since the listing (retention, another device) is simply gone.
+      if (entry === VANISHED) continue
       // A file that cannot be read, or a second file for the same blob, is unreadable.
       if (!entry || entries.has(entry.name)) unreadable++
       else entries.set(entry.name, entry)
@@ -530,7 +533,14 @@ export class LocalBlobStore {
     // exposing any inventory to downloads or restores, including selective reads.
     for (const entry of entries.values()) {
       if (container !== "intune-backups" || !/^backup-[^/]+\/metadata\.json$/.test(entry.name)) continue
-      const raw = await readFile(join(dir, entry.file))
+      let raw: Buffer
+      try {
+        raw = await readFile(join(dir, entry.file))
+      } catch (error) {
+        // A manifest removed since the listing no longer describes a backup.
+        if (isMissing(error)) { entries.delete(entry.name); continue }
+        throw error
+      }
       const body = raw.subarray(MAGIC_LENGTH + 2 + raw.readUInt16BE(MAGIC_LENGTH))
       const metadata = JSON.parse(this.decrypt(body, bodyAad(entry.version, account, container, entry.name)).toString())
       if (metadata.Items === undefined) continue // Legacy backups have no inventory manifest.
@@ -558,6 +568,13 @@ export class LocalBlobStore {
     }
     throw new Error("This backup was encrypted with a key this device does not have. Import its recovery key.")
   }
+}
+
+/** Marks a listed file that was removed before it could be read. */
+const VANISHED = Symbol("vanished")
+
+function isMissing(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException)?.code === "ENOENT"
 }
 
 /** Keeps account and container names inside the root folder. */
