@@ -227,6 +227,36 @@ function validateAssignments(value: unknown): Item[] | null {
   return structuredClone(value as Item[])
 }
 
+/** Change sets kept before the oldest ones that never wrote and nothing refers to are dropped. */
+export const KEPT_CHANGE_SETS = 1000
+/** Workflow records that name change sets (pending, adopted, batches, deployments, rollbacks). */
+const REFERENCING_DOMAINS = [DOMAINS.adoptions, DOMAINS.baselineUpgrades, DOMAINS.promotions, DOMAINS.customBaselineDeployments, DOMAINS.cisRemediations]
+
+/** Every ID a current workflow record of the tenant names, without its history. */
+function referencedIds(deps: FeatureDeps, tenantId: string): Set<string> {
+  const ids = new Set<string>()
+  for (const domain of REFERENCING_DOMAINS) {
+    for (const { history: _history, ...record } of deps.records.list<object>(domain, tenantId)) {
+      for (const id of JSON.stringify(record).match(/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/gi) ?? []) ids.add(id.toLowerCase())
+    }
+  }
+  return ids
+}
+
+/**
+ * Retention before a new change set is stored. Only change sets that never wrote (rejected or
+ * stale, without a pre-change capture) and that no workflow record or rollback names are
+ * dropped, then frozen content no remaining change set uses. Applied change sets and their
+ * captures stay as rollback evidence.
+ */
+function retain(deps: FeatureDeps, tenantId: string): void {
+  const referenced = referencedIds(deps, tenantId)
+  for (const record of listChangeSets(deps, tenantId)) if (record.rollbackOf) referenced.add(record.rollbackOf.toLowerCase())
+  deps.records.prune<ChangeSetRecord>(DOMAINS.changeSets, tenantId, KEPT_CHANGE_SETS, (record) => (record.status === "rejected" || record.status === "stale") && !record.preChange && !referenced.has(record.id.toLowerCase()))
+  const used = new Set(listChangeSets(deps, tenantId).flatMap((record) => [record.proposalId, ...(record.preChange ? [record.preChange.captureId] : [])]))
+  deps.records.prune<ChangeSetContent>(CONTENT_DOMAIN, tenantId, KEPT_CHANGE_SETS, (record) => !used.has(record.id))
+}
+
 /**
  * Freezes operations into a new change set in review. Reads the target once to name delete
  * targets and to compute the proposed diff; refuses unsupported types and actions, missing
@@ -290,6 +320,7 @@ export async function createChangeSet(deps: FeatureDeps, tenantId: string, input
     })
     entries[key] = { body, assignments }
   }
+  retain(deps, tenant)
   const proposal = deps.records.create<ChangeSetContent>(CONTENT_DOMAIN, tenant, { title: input.title, status: "frozen", summary: "Frozen proposal of a change set.", kind: "proposal", changeSetId: null, entries }, { actor, reason: "Froze the proposed content" })
   const base: Omit<ChangeSetRecord, "contentHash"> = {
     title: input.title.trim(),

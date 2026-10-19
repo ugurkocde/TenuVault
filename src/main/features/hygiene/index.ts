@@ -8,6 +8,10 @@ import { collectFromBackup, resolveGroups, type NotCollected } from "./inventory
 import { detectHygiene, filterFindings, RULES, type Classification, type DetectedFinding, type FindingFilter, type FindingStatus, type PolicyRef, type RuleId, type SettingEvidence, type Severity, type UnknownCheck } from "./rules"
 
 const DOMAIN = DOMAINS.hygieneFindings
+/** Records kept before the oldest resolved findings are dropped; open and reviewed findings always stay. */
+export const KEPT_RECORDS = 1000
+/** Newest scans kept; an older scan stays while a finding still refers to it. */
+export const KEPT_SCANS = 100
 
 /** One hygiene scan: which backup, when it was collected and what it covered. */
 export interface ScanRecord extends ListedRecord {
@@ -95,6 +99,15 @@ function findingId(body: Body): string {
   return id
 }
 
+/** Retention before a scan stores new records, so long-term use never reaches the record cap. */
+function retain(deps: FeatureDeps, tenantId: string): void {
+  deps.records.prune<HygieneRecord>(DOMAIN, tenantId, KEPT_RECORDS, (record) => record.kind === "finding" && record.status === "resolved")
+  const records = all(deps, tenantId)
+  const recent = new Set(scansOf(records).slice(0, KEPT_SCANS - 1).map((record) => record.id))
+  const referenced = new Set(findingsOf(records).map((finding) => finding.scanId))
+  deps.records.prune<HygieneRecord>(DOMAIN, tenantId, 0, (record) => record.kind === "scan" && !recent.has(record.id) && !referenced.has(record.id))
+}
+
 /** Whether a scan could have seen a finding again; otherwise its absence proves nothing. */
 function couldDetect(scan: ScanRecord, finding: FindingRecord): boolean {
   const covered = new Set(scan.covered)
@@ -116,6 +129,7 @@ async function scan({ tenantId, body, deps, actor }: ActionContext) {
   const meta = { actor, reason: `Hygiene scan of backup ${inventory.backupId}` }
 
   deps.records.batch(() => {
+    retain(deps, tenantId)
     const scanRecord = deps.records.create<ScanRecord>(DOMAIN, tenantId, {
       kind: "scan",
       title: `Hygiene scan of ${inventory.backupId}`,

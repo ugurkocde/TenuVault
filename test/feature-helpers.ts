@@ -65,3 +65,16 @@ export async function call(routes: Record<string, RouteModule>, path: string, bo
   const response = await handler(new NextRequest(new Request(`http://tenuvault.internal${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })))
   return { status: response.status, body: await response.json() }
 }
+
+/**
+ * Stores records of one domain directly, as `TenantRecords` saves them, so a test can start at
+ * the record cap without creating thousands of records one by one.
+ */
+export function seedRecords(deps: { store: { set: (key: string, value: string) => void } }, domain: string, tenantId: string, values: Array<Record<string, unknown>>, at = "2026-01-01T00:00:00.000Z"): Array<{ id: string }> {
+  const records = values.map((value, index) => {
+    const base = { id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`, tenantId: tenantId.toLowerCase(), createdAt: at, updatedAt: at, ...value }
+    return { ...base, history: [{ at, actor: null, reason: "Seeded", snapshot: base }] }
+  })
+  deps.store.set(`records.v1.${domain}.${tenantId.toLowerCase()}`, JSON.stringify(records))
+  return records
+}

@@ -96,6 +96,8 @@ export interface EndpointRecord {
 
 /** Review runs kept per tenant; the oldest runs are dropped first. */
 export const MAX_RUNS = 300
+/** Findings kept before the oldest resolved ones are dropped; open and unknown findings always stay. */
+export const KEPT_FINDINGS = 1000
 const MAX_DELIVERY_LOG = 20
 const DELIVERY_TIMEOUT_MS = 10_000
 
@@ -240,6 +242,9 @@ export async function runReview(deps: FeatureDeps, tenantId: string, trigger: Ru
     const now = deps.now()
     const results: CheckResult[] = [checkBackups(tenant, listing, now), checkSignals(tenant, collected.signals, collected.evaluated, collected.unreadable)]
 
+    // Retention: a finding key exists per signal, so resolved findings would otherwise grow
+    // forever. A dropped finding that is seen again starts as a new finding.
+    deps.records.prune<HealthFinding>(DOMAINS.healthFindings, tenant, KEPT_FINDINGS, (finding) => finding.state === "resolved")
     // Without history: the reconciled values become new revisions and must not nest old ones.
     const existing = findingsOf(deps, tenant).map(({ history: _history, ...plain }) => plain)
     deps.records.batch(() => {
