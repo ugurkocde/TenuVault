@@ -80,7 +80,8 @@ export class BlobWriter {
       const decode = (value: string) => value.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
       for (const m of xml.matchAll(/<BlobPrefix><Name>([^<]*)<\/Name><\/BlobPrefix>/g)) prefixes.push(decode(m[1]!))
       for (const m of xml.matchAll(/<Blob><Name>([^<]*)<\/Name>/g)) blobs.push(decode(m[1]!))
-      marker = /<NextMarker>([^<]+)<\/NextMarker>/.exec(xml)?.[1] ?? ""
+      // The marker is XML-escaped like the names; send back the name it stands for.
+      marker = decode(/<NextMarker>([^<]+)<\/NextMarker>/.exec(xml)?.[1] ?? "")
       if (marker && seen.has(marker)) throw new Error("Storage returned a repeated continuation marker")
       seen.add(marker)
     } while (marker)
