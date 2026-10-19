@@ -155,3 +155,24 @@ describe("createBridgedFetch", () => {
     expect(storage).toHaveBeenCalledTimes(registered ? 1 : 0)
   })
 })
+
+describe("createBridgedFetch token URLs", () => {
+  it("refuses a token URL whose tenant path URL parsing would rewrite, before licensing or signing in", async () => {
+    const realFetch = vi.fn<typeof fetch>()
+    const authorizeTenant = vi.fn()
+    const getDelegatedToken = vi.fn(async () => ({ accessToken: "delegated-token", expiresOn: null }))
+    const bridged = createBridgedFetch({ dispatch: vi.fn(), getDelegatedToken, authorizeTenant, fetch: realFetch })
+    for (const tenant of [`x/../${TENANT}`, `x/./../${TENANT}`, `x/%2e%2e/${TENANT}`]) {
+      const response = await bridged(`https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`, {
+        method: "POST",
+        body: new URLSearchParams({ client_id: CLIENT, client_secret: DELEGATED_CLIENT_SECRET, scope: "https://graph.microsoft.com/.default", grant_type: "client_credentials" }),
+      })
+      expect(response.status).toBe(400)
+    }
+    expect(authorizeTenant).not.toHaveBeenCalled()
+    expect(getDelegatedToken).not.toHaveBeenCalled()
+    expect(realFetch).not.toHaveBeenCalled()
+    // A plain tenant ID still works.
+    expect((await routeTokenRequest(bridged, DELEGATED_CLIENT_SECRET)).ok).toBe(true)
+  })
+})

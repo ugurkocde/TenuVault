@@ -405,7 +405,7 @@ function signedInTenant(body: RecordJson): { tenantId: string; appId: string } {
 
 export async function tokenFor(body: RecordJson, forceRefresh = false): Promise<{ tenant: string; token: string }> {
   const { tenantId, appId } = signedInTenant(body)
-  const token = await jsonFetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
+  const token = await jsonFetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`, {
     method: "POST", body: new URLSearchParams({ client_id: appId, client_secret: DELEGATED_CLIENT_SECRET,
       grant_type: "client_credentials", force_refresh: String(forceRefresh), scope: "https://graph.microsoft.com/.default" }),
   })

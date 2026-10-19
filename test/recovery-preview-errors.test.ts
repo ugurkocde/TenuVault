@@ -26,7 +26,9 @@ it('keeps healthy preview items available when another snapshot is malformed', a
 })
 
 it.each([[404, 400], [403, 500]])('reports mapped-target status %s as HTTP %s before any writes', async (status, expected) => {
-  const fetcher = vi.fn(async (input: string | URL | Request) => String(input).includes('login.microsoftonline.com') ? Response.json({ access_token: 'token' }) : Response.json({ error: { message: 'Target unavailable' } }, { status }))
+  const fetcher = vi.fn(async (input: string | URL | Request) => String(input).includes('login.microsoftonline.com') ? Response.json({ access_token: 'token' })
+    : String(input).includes('.blob.core.windows.net') ? new Response('', { status: 404 })
+    : Response.json({ error: { message: 'Target unavailable' } }, { status }))
   vi.stubGlobal('fetch', fetcher)
   const response = await restore(new NextRequest('https://tenuvault.internal/api/restore-backup', { method: 'POST', body: JSON.stringify({
     ...credentials, restoreType: 'selective', selectedPolicies: [{ path: 'backup-1/Apps/app.json' }],

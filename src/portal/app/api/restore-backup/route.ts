@@ -1,6 +1,7 @@
 import { parseDependencyMappings } from "../../../../shared/intune/recovery"
 import { randomUUID } from "node:crypto"
 import { backupManifest, incompleteReason, snapshotHash, type ManifestEntry } from "~/lib/policies/backup-manifest"
+import { readOwnedBackup } from "~/lib/policies/backup-owner"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { graphCaller, Restorer, DependencyMappingError, type RestoreOutcome } from "~/lib/policies/graph-restore"
 import { PROGRESS_ID, startProgress } from "~/lib/policies/restore-progress"
@@ -8,7 +9,7 @@ import { restoreOrder, type Item } from "../../../../shared/intune/registry"
 import { type NextRequest, NextResponse } from "next/server"
 async function getAccessToken(tenantId: string, appId: string, clientSecret: string, scope: string, forceRefresh = false) {
   const tokenResponse = await fetch(
-    `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`,
+    `https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`,
     {
       method: "POST",
       headers: {
@@ -42,13 +43,6 @@ async function readSnapshot(policyPath: string, storageAccountName: string, stor
   const snapshot = await response.json() as Item
   if (expected && (snapshot.id !== expected.id || snapshotHash(snapshot) !== expected.hash)) throw new Error("This backup file does not match its recorded fingerprint. It was not restored.")
   return snapshot
-}
-
-async function readBackupMetadata(storageAccountName: string, storageToken: string, backupId: string): Promise<{ data: Record<string, any>; authenticated: boolean } | null> {
-  const response = await fetch(blobUrl(storageAccountName, `${backupId}/metadata.json`), { headers: storageHeaders(storageToken) })
-  if (response.status === 404) return null
-  if (!response.ok) throw new Error("Failed to read backup metadata")
-  return { data: await response.json() as Record<string, any>, authenticated: response.headers.get("x-tenuvault-authenticated") === "true" }
 }
 
 async function restoreSinglePolicy(restorer: Restorer, policyPath: string, storageAccountName: string, storageToken: string, requireAuthenticated: boolean, expected?: ManifestEntry, repairToken?: string): Promise<RestoreOutcome> {
@@ -120,6 +114,11 @@ export async function POST(request: NextRequest) {
       getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
     ])
 
+    // A shared container can hold other tenants' backups; never restore one of those.
+    const owned = await readOwnedBackup((name) => fetch(blobUrl(storageAccountName, name), { headers: storageHeaders(storageToken) }), backupId, tenantId)
+    if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
+    const readMetadata = owned.metadata ? { data: owned.metadata, authenticated: owned.authenticated } : null
+
     // Correlate the completed operation with its desktop audit event.
     const jobId = randomUUID()
 
@@ -173,7 +172,6 @@ export async function POST(request: NextRequest) {
     }
 
     const requireAuthenticated = mode === "replace" || assignments
-    const readMetadata = await readBackupMetadata(storageAccountName, storageToken, backupId)
     // An unauthenticated metadata record cannot vouch for completeness or fingerprints in a
     // restore that requires authenticated snapshots.
     const metadata = readMetadata && (!requireAuthenticated || readMetadata.authenticated) ? readMetadata.data : null

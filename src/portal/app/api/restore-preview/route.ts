@@ -1,6 +1,7 @@
 import { recoveryReadiness, type RecoveryReadiness } from "../../../../shared/intune/recovery"
 import { type NextRequest, NextResponse } from "next/server"
 import { validPolicyPath } from "~/lib/policies/restore"
+import { readOwnedBackup } from "~/lib/policies/backup-owner"
 import { graphCaller, readLive } from "~/lib/policies/graph-restore"
 import { itemName, typeForFolder, type Item } from "../../../../shared/intune/registry"
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
@@ -28,7 +29,7 @@ export interface PreviewItem {
 }
 
 async function token(tenantId: string, appId: string, clientSecret: string, scope: string, forceRefresh = false): Promise<string> {
-  const response = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
+  const response = await fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ client_id: appId, client_secret: clientSecret, scope, force_refresh: String(forceRefresh), grant_type: "client_credentials" }),
@@ -59,6 +60,10 @@ export async function POST(request: NextRequest) {
       token(tenantId, appId, clientSecret, "https://storage.azure.com/.default"),
       live === true ? token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default") : Promise.resolve(""),
     ])
+    const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`, {
+      headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${storageToken}` },
+    }), backupId, tenantId)
+    if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
     const graph = graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) })
 
     const preview = async (path: string): Promise<PreviewItem> => {

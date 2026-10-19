@@ -1,6 +1,7 @@
 import { isLocalAccount } from "../storage/blob-emulator"
 import { allows, CIS_FRAMEWORKS, upgradeMessage, type Feature, type Plan } from "../../shared/plans"
 import { featureRouteFeatures, isFeatureRoute } from "../../shared/feature-routes"
+import { isGuid } from "../../shared/security"
 
 // Framework report exports: native comparisons and saved policy pack assessments.
 const FRAMEWORK_EXPORTS = new Set(["native-pdf", "native-csv", "native-json", "workspace-pdf", "workspace-csv", "workspace-json", "workspace-cis-pdf"])
@@ -106,6 +107,12 @@ export function planGuard(planOf: (tenantId: string) => Promise<Plan | null>) {
     const targets = Array.isArray(body.targetTenants)
       ? body.targetTenants.map((target: { tenantId?: unknown }) => target?.tenantId).filter((id): id is string => typeof id === "string")
       : []
+    // Tenants are licensed by ID. Anything else (for example `x/../<id>`, which a token URL
+    // resolves to <id>) would resolve to no plan and must not pass as an unusable tenant.
+    const namedTargets = Array.isArray(body.targetTenants) ? body.targetTenants.map((target: { tenantId?: unknown }) => target?.tenantId) : []
+    if (!isGuid(body.tenantId) || !namedTargets.every(isGuid)) {
+      return Response.json({ error: "tenantId must be a tenant ID" }, { status: 400 })
+    }
     for (const tenantId of [body.tenantId, ...targets]) {
       const plan = await planOf(tenantId)
       // Single tenant calls leave an unusable tenant to the request itself. A bulk run must be
