@@ -101,7 +101,8 @@ function couldDetect(scan: ScanRecord, finding: FindingRecord): boolean {
   if (!finding.policies.every((policy) => covered.has(policy.folder))) return false
   if (finding.ruleId === "missing-filter") return covered.has("AssignmentFilters")
   if (finding.ruleId === "missing-scope-tag") return covered.has("ScopeTags")
-  if (finding.ruleId === "missing-group") return scan.groupResolution.state === "resolved"
+  // "none" means no assignment references a group any more, so no group can be missing.
+  if (finding.ruleId === "missing-group") return scan.groupResolution.state === "resolved" || scan.groupResolution.state === "none"
   return true
 }
 

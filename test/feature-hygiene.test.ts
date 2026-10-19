@@ -225,6 +225,21 @@ describe("/api/hygiene", () => {
     expect(found.body.findings.some((f: { ruleId: string }) => f.ruleId === "missing-group")).toBe(true)
   })
 
+  it("resolves a missing group finding once no assignment references a group", async () => {
+    let policies: Item[] = [{ id: "p1", name: "A", platforms: "windows10", settings: [], assignments: [group(G1)], roleScopeTagIds: ["0"] }]
+    let clock = Date.parse("2026-09-30T12:00:00Z")
+    const deps = fakeDeps({ api: (path, tenant, body) => backupApi({ policies }).api(path, tenant, body), graph: graphOf(async () => ({ status: 404, body: {} })), now: () => new Date(clock) })
+    const r = routes(deps)
+    const first = await call(r, "/api/hygiene", { tenantId: TENANT_A, action: "scan" })
+    const missing = first.body.findings.find((f: { ruleId: string }) => f.ruleId === "missing-group")
+    expect(missing.status).toBe("open")
+    policies = [{ ...policies[0]!, assignments: [allDevices()] }]
+    clock += 60_000
+    const second = await call(r, "/api/hygiene", { tenantId: TENANT_A, action: "scan" })
+    expect(second.body.scans[0].groupResolution.state).toBe("none")
+    expect((await call(r, "/api/hygiene", { tenantId: TENANT_A, action: "get", findingId: missing.id })).body.finding.status).toBe("resolved")
+  })
+
   it("explains the Group.Read.All opt-in where the unresolved groups rule reports unknown", async () => {
     const policies = [{ id: "p1", name: "A", platforms: "windows10", settings: [], assignments: [group(G1)], roleScopeTagIds: ["0"] }]
     const { api } = backupApi({ policies })
