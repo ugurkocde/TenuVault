@@ -144,6 +144,9 @@ export interface RollbackPreview {
   notice: string
 }
 
+/** Why a stale change set is refused; the same wording on every route and screen. */
+export const STALE = "This change set is stale and can no longer be approved or applied. Preview the change again to create a new change set."
+
 const NOTICE = "Applying writes operations one by one. There is no atomic tenant transaction and no guaranteed reversal: a failure leaves earlier operations in place, and rollback is a new reviewed change set."
 
 type Actor = string | null
@@ -318,7 +321,8 @@ export async function createChangeSet(deps: FeatureDeps, tenantId: string, input
 export async function reviseChangeSet(deps: FeatureDeps, tenantId: string, id: string, removeKeys: string[], actor: Actor): Promise<Stored_> {
   const record = getChangeSet(deps, tenantId, id)
   requireCisChangeSetEnabled(record.origin.workflow)
-  if (!["in-review", "approved", "stale", "rejected"].includes(record.status)) throw new FeatureError("Only change sets that were not applied can be revised.", 409)
+  if (record.status === "stale") throw new FeatureError(STALE, 409)
+  if (!["in-review", "approved", "rejected"].includes(record.status)) throw new FeatureError("Only change sets that were not applied can be revised.", 409)
   const operations = record.operations.filter((operation) => !removeKeys.includes(operation.key))
   if (operations.length === record.operations.length) throw new FeatureError("Select operations to remove.")
   if (!operations.length) throw new FeatureError("A change set keeps at least one operation. Reject it instead.")
@@ -429,7 +433,8 @@ export async function previewChangeSet(deps: FeatureDeps, tenantId: string, id: 
 export async function approveChangeSet(deps: FeatureDeps, tenantId: string, id: string, input: { contentHash: string; targetFingerprint: string; reviewer?: string | null; note?: string | null }, actor: Actor): Promise<Stored_> {
   const record = getChangeSet(deps, tenantId, id)
   requireCisChangeSetEnabled(record.origin.workflow)
-  if (!["in-review", "stale", "approved"].includes(record.status)) throw new FeatureError("Only change sets in review can be approved.", 409)
+  if (record.status === "stale") throw new FeatureError(STALE, 409)
+  if (!["in-review", "approved"].includes(record.status)) throw new FeatureError("Only change sets in review can be approved.", 409)
   const preview = await previewChangeSet(deps, tenantId, id)
   requireCisChangeSetEnabled(record.origin.workflow)
   if (preview.blockers.length) throw new FeatureError(`This change set cannot be approved: ${preview.blockers.join(" ")}`, 409)
@@ -471,9 +476,14 @@ export function rejectChangeSet(deps: FeatureDeps, tenantId: string, id: string,
 // ---------------------------------------------------------------------------------------------
 // Apply
 
+/**
+ * Invalidates the approval of a change set that never wrote. A stale change set is finished:
+ * the workflows release its objects, so it is never approved or applied again and the change
+ * is previewed anew. A change set that already wrote keeps its status so it can be retried.
+ */
 function markStale(deps: FeatureDeps, tenantId: string, id: string, reason: string, actor: Actor): never {
-  deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenantId, id, (current) => ({ ...current, status: current.preChange ? current.status : "stale", review: current.preChange ? current.review : null, lastError: reason, summary: `${reason} A fresh review is required.` }), { actor, reason: `Approval invalidated: ${reason}` })
-  throw new FeatureError(`${reason} A fresh review is required before anything is written.`, 409)
+  const updated = deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenantId, id, (current) => ({ ...current, status: current.preChange ? current.status : "stale", review: current.preChange ? current.review : null, lastError: reason, summary: current.preChange ? `${reason} Nothing was written in this attempt.` : `${reason} ${STALE}` }), { actor, reason: `Approval invalidated: ${reason}` })
+  throw new FeatureError(updated?.status === "stale" ? `${reason} Nothing was written. ${STALE}` : `${reason} Nothing was written in this attempt.`, 409)
 }
 
 /**
@@ -589,7 +599,8 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     return await withTenantWrite(tenant, "Change set apply", async () => {
     const record = getChangeSet(deps, tenant, id)
     requireCisChangeSetEnabled(record.origin.workflow)
-    if (["in-review", "rejected", "stale"].includes(record.status)) throw new FeatureError("This change set needs an approval of its current content and target state.", 409)
+    if (record.status === "stale") throw new FeatureError(STALE, 409)
+    if (["in-review", "rejected"].includes(record.status)) throw new FeatureError("This change set needs an approval of its current content and target state.", 409)
     if (record.status === "applied") throw new FeatureError("This change set was already applied and verified.", 409)
     const review = record.review
     if (!review || review.decision !== "approved") throw new FeatureError("This change set is not approved.", 409)

@@ -432,7 +432,7 @@ export function syncAdoption(deps: FeatureDeps, tenantId: string, id: string): S
   })
   const mappings = (current: AdoptionRecord) => current.mappings.map((mapping) => created.find((entry) => entry.policyKey === mapping.policyKey) ?? mapping)
   if (changeSet.status === "rejected" || changeSet.status === "stale") {
-    return deps.records.update<AdoptionRecord>(ADOPTIONS, tenantId, id, (current) => ({ ...current, status: current.adoptedVersionId ? "adopted" : "draft", pending: null, summary: `Change set was ${changeSet.status}; nothing was written. Preview again.` }), { actor: null, reason: `Change set ${changeSet.status}` })!
+    return deps.records.update<AdoptionRecord>(ADOPTIONS, tenantId, id, (current) => ({ ...current, status: current.adoptedVersionId ? "adopted" : "draft", pending: null, summary: `Change set was ${changeSet.status}; nothing was written. Preview again to create a new change set.` }), { actor: null, reason: `Change set ${changeSet.status}` })!
   }
   if (changeSet.status === "applied") {
     return deps.records.update<AdoptionRecord>(ADOPTIONS, tenantId, id, (current) => ({ ...current, status: "adopted", adoptedVersionId: pending.versionId, adoptedVersion: pending.version, adoptedAt: changeSet.updatedAt, adoptedChangeSetId: changeSet.id, adoptedParameters: pending.parameters, adoptedOverlay: pending.overlay, previousAdopted: { versionId: current.adoptedVersionId, version: current.adoptedVersion, mappings: current.mappings, parameters: current.adoptedParameters, overlay: current.adoptedOverlay }, mappings: mappings(current), migrationNotes: [], pending: null, summary: `Adopted v${pending.version}; verified by read-back.` }), { actor: null, reason: `Adopted version ${pending.version}` })!

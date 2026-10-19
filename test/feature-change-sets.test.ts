@@ -172,6 +172,28 @@ describe("change-set engine", () => {
     expect(stored.review).toBeNull()
   })
 
+  it("never approves, revises or applies a stale change set again", async () => {
+    const context = setup()
+    const { record, existing } = await threeOperations(context)
+    const first = await approve(context, record.id)
+    context.tenant.policies.get(existing.id as string)!.description = "Edited by someone else"
+    const stale = await context.post({ action: "apply", id: record.id, contentHash: first.contentHash, confirm: true })
+    expect(stale.status).toBe(409)
+    expect(stale.body.error).toContain("Preview the change again to create a new change set.")
+    expect((await context.post({ action: "get", id: record.id })).body.changeSet.summary).toContain("can no longer be approved or applied")
+
+    const preview = await context.post({ action: "preview", id: record.id })
+    const approved = await context.post({ action: "approve", id: record.id, contentHash: preview.body.contentHash, targetFingerprint: preview.body.targetFingerprint })
+    expect(approved.status).toBe(409)
+    expect(approved.body.error).toContain("stale")
+    expect((await context.post({ action: "revise", id: record.id, removeKeys: ["op-3"] })).status).toBe(409)
+    expect((await context.post({ action: "apply", id: record.id, contentHash: preview.body.contentHash, confirm: true })).status).toBe(409)
+    expect((await context.post({ action: "get", id: record.id })).body.changeSet.status).toBe("stale")
+    expect(context.tenant.writeCount()).toBe(0)
+    // It can still be dismissed.
+    expect((await context.post({ action: "reject", id: record.id })).status).toBe(200)
+  })
+
   it("requires a fresh review after the content changes", async () => {
     const context = setup()
     const { record } = await threeOperations(context)
