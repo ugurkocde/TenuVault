@@ -98,7 +98,7 @@ describe('Restore results', () => {
       }
       throw new Error(`Unexpected request ${url}`)
     }))
-    const response = await restorePrevious(request({ ...body, action: 'revert', policyId: 'original', policyType: 'Device Configuration', backupPath: path }))
+    const response = await restorePrevious(request({ ...body, tenantId: '11111111-1111-1111-1111-111111111111', action: 'revert', policyId: 'original', policyType: 'Device Configuration', backupPath: path }))
     expect(response.status).toBe(200)
     expect(graph.map(call => `${call.method} ${call.path}`)).toEqual([
       'GET /beta/deviceManagement/deviceConfigurations/original',
@@ -233,7 +233,7 @@ it('allows legacy snapshot copies through the drift restore action', async () =>
     }
     writes.push(init?.method ?? 'GET'); return Response.json({ id: 'copy' }, { status: 201 })
   }))
-  const response = await restorePrevious(request({ ...body, action: 'restore', policyId: 'original', policyType: 'deviceConfigurations', backupPath: path }))
+  const response = await restorePrevious(request({ ...body, tenantId: '11111111-1111-1111-1111-111111111111', action: 'restore', policyId: 'original', policyType: 'deviceConfigurations', backupPath: path }))
   expect(response.status).toBe(200)
   expect(writes).toContain('POST')
   expect(writes).not.toContain('PATCH')

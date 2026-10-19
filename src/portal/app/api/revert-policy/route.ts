@@ -1,6 +1,6 @@
 import { readOwnedBackup } from "~/lib/policies/backup-owner"
 import { validPolicyPath } from "~/lib/policies/restore"
-import { isGraphId } from "../../../../shared/security"
+import { isGraphId, isGuid } from "../../../../shared/security"
 import { graphCaller, Restorer } from "~/lib/policies/graph-restore"
 import { readLegacyRevertHistory, revertHistoryPath } from "~/lib/policies/revert-history"
 import { type NextRequest, NextResponse } from "next/server"
@@ -72,6 +72,10 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // The revert history is kept per tenant ID, so refuse anything else before changing the tenant.
+    if (!isGuid(tenantId)) {
+      return NextResponse.json({ error: 'Invalid tenant ID' }, { status: 400 })
+    }
     if (action !== 'restore' && action !== 'revert') {
       return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
     }

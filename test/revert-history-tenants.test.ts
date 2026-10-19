@@ -135,3 +135,19 @@ describe('Revert drift detection', () => {
     expect(drift).toMatchObject({ isRevertDrift: true, revertTimestamp: '2026-09-22T18:00:00.000Z' })
   })
 })
+
+describe("revert-policy tenant IDs", () => {
+  it("refuses a tenant ID that is not a GUID before any request", async () => {
+    const { POST } = await import("../src/portal/app/api/revert-policy/route")
+    const { NextRequest } = await import("../src/main/api/next-server-shim")
+    const fetcher = vi.fn()
+    vi.stubGlobal("fetch", fetcher)
+    const response = await POST(new NextRequest("http://tenuvault.internal/api/revert-policy", { method: "POST", body: JSON.stringify({
+      tenantId: "contoso.onmicrosoft.com", appId: "app", clientSecret: "secret", storageAccountName: "store", action: "restore",
+      policyId: "11111111-1111-1111-1111-111111111111", policyType: "DeviceConfigurations", backupPath: "backup-2026-09-25-120000/DeviceConfigurations/A.json",
+    }) }) as never)
+    expect(response.status).toBe(400)
+    expect(fetcher).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+})
