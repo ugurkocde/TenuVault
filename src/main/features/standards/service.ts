@@ -443,25 +443,33 @@ export function syncAdoption(deps: FeatureDeps, tenantId: string, id: string): S
   return deps.records.update<AdoptionRecord>(ADOPTIONS, tenantId, id, (current) => ({ ...current, status, mappings: mappings(current), summary: `Change set ${changeSet.status}: ${changeSet.summary} Retry or roll it back under Standards.` }), { actor: null, reason: `Change set ${changeSet.status}` })!
 }
 
-/** An applied rollback of the adopting change set returns the adoption to what was adopted before. */
+/**
+ * An applied rollback of the adopting change set returns the adoption to what was adopted before.
+ * A partial rollback keeps the adopting change set and the previous state, so a retry that
+ * reaches applied still finishes the rollback.
+ */
 function syncRollback(deps: FeatureDeps, tenantId: string, adoption: Stored<AdoptionRecord>): Stored<AdoptionRecord> {
   if (!adoption.adoptedChangeSetId || !adoption.previousAdopted) return adoption
-  const rollback = listChangeSets(deps, tenantId).find((entry) => entry.kind === "rollback" && entry.rollbackOf === adoption.adoptedChangeSetId && (entry.status === "applied" || entry.status === "partial"))
+  const rollbacks = listChangeSets(deps, tenantId).filter((entry) => entry.kind === "rollback" && entry.rollbackOf === adoption.adoptedChangeSetId)
+  const rollback = rollbacks.find((entry) => entry.status === "applied") ?? rollbacks.find((entry) => entry.status === "partial")
   if (!rollback) return adoption
   const previous = adoption.previousAdopted
-  const complete = rollback.status === "applied"
+  if (rollback.status === "partial") {
+    if (adoption.status === "partial") return adoption
+    return deps.records.update<AdoptionRecord>(ADOPTIONS, tenantId, adoption.id, (current) => ({ ...current, status: "partial", summary: "The rollback was applied only partially; retry it or assess the tenant." }), { actor: null, reason: "Adoption rollback partial" })!
+  }
   return deps.records.update<AdoptionRecord>(ADOPTIONS, tenantId, adoption.id, (current) => ({
     ...current,
-    status: complete ? (previous.versionId ? "adopted" : "draft") : "partial",
-    adoptedVersionId: complete ? previous.versionId : current.adoptedVersionId,
-    adoptedVersion: complete ? previous.version : current.adoptedVersion,
-    mappings: complete ? previous.mappings : current.mappings,
-    adoptedParameters: complete ? previous.parameters : current.adoptedParameters,
-    adoptedOverlay: complete ? previous.overlay : current.adoptedOverlay,
+    status: previous.versionId ? "adopted" : "draft",
+    adoptedVersionId: previous.versionId,
+    adoptedVersion: previous.version,
+    mappings: previous.mappings,
+    adoptedParameters: previous.parameters,
+    adoptedOverlay: previous.overlay,
     adoptedChangeSetId: null,
     previousAdopted: null,
-    summary: complete ? `Rolled back to ${previous.version ? `v${previous.version}` : "the state before adoption"}.` : "The rollback was applied only partially; assess the tenant.",
-  }), { actor: null, reason: complete ? "Adoption rolled back" : "Adoption rollback partial" })!
+    summary: `Rolled back to ${previous.version ? `v${previous.version}` : "the state before adoption"}.`,
+  }), { actor: null, reason: "Adoption rolled back" })!
 }
 
 /**
