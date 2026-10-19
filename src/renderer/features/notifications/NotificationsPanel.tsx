@@ -449,14 +449,25 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
   const [includeActor, setIncludeActor] = useState(false)
   const [externalWatcher, setExternalWatcher] = useState(false)
 
+  // Reset the form only when the stored settings change. A poll refreshes lastPollAt and
+  // the watermark, which must not discard unsaved edits.
+  const stored = JSON.stringify({
+    enabled: auditWatch?.enabled ?? false,
+    intervalMinutes: auditWatch?.intervalMinutes ?? 60,
+    categories: (auditWatch?.categories ?? []).join(", "),
+    ignoreOwnChanges: auditWatch?.ignoreOwnChanges ?? true,
+    includeActor: auditWatch?.includeActor ?? false,
+    externalWatcher: auditWatch?.externalWatcher ?? false,
+  })
   useEffect(() => {
-    setEnabled(auditWatch?.enabled ?? false)
-    setIntervalMinutes(auditWatch?.intervalMinutes ?? 60)
-    setCategories((auditWatch?.categories ?? []).join(", "))
-    setIgnoreOwnChanges(auditWatch?.ignoreOwnChanges ?? true)
-    setIncludeActor(auditWatch?.includeActor ?? false)
-    setExternalWatcher(auditWatch?.externalWatcher ?? false)
-  }, [auditWatch])
+    const next = JSON.parse(stored) as { enabled: boolean; intervalMinutes: number; categories: string; ignoreOwnChanges: boolean; includeActor: boolean; externalWatcher: boolean }
+    setEnabled(next.enabled)
+    setIntervalMinutes(next.intervalMinutes)
+    setCategories(next.categories)
+    setIgnoreOwnChanges(next.ignoreOwnChanges)
+    setIncludeActor(next.includeActor)
+    setExternalWatcher(next.externalWatcher)
+  }, [stored])
 
   // Without entitlement the only save allowed is turning watching off, through the free revoke action.
   const turningOff = !licensed && Boolean(auditWatch?.enabled) && !enabled
