@@ -268,7 +268,8 @@ export interface OibRun {
 
 export interface UndoResult {
   run: OibRun | null
-  results: { name: string; id: string; action: "removed" | "restored"; done: boolean; error?: string }[]
+  /** note replaces the usual done text, for example when the policy was already deleted. */
+  results: { name: string; id: string; action: "removed" | "restored"; done: boolean; error?: string; note?: string }[]
 }
 
 /** What a deployment or Fix drift does before it writes: back up now, reuse a recent backup, or skip. */

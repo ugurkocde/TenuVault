@@ -34,6 +34,11 @@ export interface RestoreOptions {
    * never copied, because those IDs only exist in the source tenant.
    */
   crossTenant?: boolean
+  /**
+   * Replace mode only: false leaves an object that no longer exists live deleted and reports it as
+   * missing instead of creating a new object from the snapshot. Defaults to true.
+   */
+  recreateMissing?: boolean
 }
 
 export interface RestoreOutcome {
@@ -49,6 +54,8 @@ export interface RestoreOutcome {
   retryable?: boolean
   partial?: boolean
   repairToken?: string
+  /** Replace with recreateMissing false found the object deleted and left it so. */
+  missing?: boolean
 }
 
 export interface GraphCallOptions {
@@ -230,6 +237,7 @@ export class Restorer {
         return withNote({ success: true, path, policyId: snapshot.id as string, policyName: typeof name === "string" ? name : undefined, action: "unchanged" })
       }
       if (current) return withNote(await this.update(type, path, source, snapshot.id as string, current, assignments))
+      if (this.options.mode === "replace" && this.options.recreateMissing === false) return { success: false, path, policyId: typeof snapshot.id === "string" ? snapshot.id : undefined, action: "skipped", missing: true, retryable: false, error: "The object no longer exists in Intune, so it was not recreated." }
       const blocker = restoreBlocker(type, source)
       if (blocker) return { success: false, path, action: "skipped", error: blocker }
       return withNote(await this.create(type, path, source, snapshot, assignments))

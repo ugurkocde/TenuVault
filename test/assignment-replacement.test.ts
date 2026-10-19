@@ -46,3 +46,22 @@ describe('RoleDefinitions restore with assignments', () => {
     expect(result.warnings).toBeUndefined()
   })
 })
+
+describe('replace restore of a deleted object', () => {
+  const snapshot = { id: 'gone', displayName: 'Deleted', omaSettings: [] }
+  const graph = () => vi.fn<GraphCall>(async (method) => (method === 'GET'
+    ? { status: 404, body: { error: { code: 'ResourceNotFound', message: 'Not found' } } }
+    : { status: 201, body: { id: 'new-object' } }) as Awaited<ReturnType<GraphCall>>)
+
+  it('recreates it by default, reporting the new ID', async () => {
+    const result = await new Restorer(graph(), { mode: 'replace', assignments: false }).restore('backup/DeviceConfigurations/Deleted.json', snapshot)
+    expect(result).toMatchObject({ success: true, action: 'created', policyId: 'new-object' })
+  })
+
+  it('leaves it deleted and reports it as missing when recreateMissing is false', async () => {
+    const calls = graph()
+    const result = await new Restorer(calls, { mode: 'replace', assignments: false, recreateMissing: false }).restore('backup/DeviceConfigurations/Deleted.json', snapshot)
+    expect(result).toMatchObject({ success: false, missing: true, action: 'skipped', policyId: 'gone' })
+    expect(calls.mock.calls.every(([method]) => method === 'GET')).toBe(true)
+  })
+})

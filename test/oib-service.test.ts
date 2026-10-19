@@ -239,6 +239,35 @@ describe("deployments", () => {
     expect(await handleOib({ action: "oib-runs", tenantId })).toEqual({ runs: [] })
   })
 
+  it("undo leaves a policy the admin deleted since the run deleted and reports it, instead of recreating it", async () => {
+    const writes: string[] = []
+    const state: Tenant = { policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.1", value: 7 }] }
+    vi.stubGlobal("fetch", world(state, writes))
+    await source()
+    const run = await handleOib({ ...base, storageAccountName: null, action: "oib-deploy", commit, backup: { mode: "none" }, items: [{ source: SC, mode: "update", targetId: EXISTING }] }) as OibRun
+    state.policies = []
+    writes.length = 0
+    const undone = await handleOib({ action: "oib-undo", tenantId, appId, runId: run.runId }) as UndoResult
+    expect(writes).toEqual([])
+    expect(undone).toMatchObject({ run: null, results: [{ action: "restored", done: true, note: "already deleted in Intune, so the previous version was not recreated" }] })
+  })
+
+  it("does not recreate a policy deleted between reading it and updating it", async () => {
+    const writes: string[] = []
+    const state: Tenant = { policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.1", value: 7 }] }
+    const tenant = world(state, writes)
+    let reads = 0
+    // The deploy's own read finds the policy; it is deleted before the restore reads it again.
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method ?? "GET") === "GET" && new RegExp(`configurationPolicies/${EXISTING}(\\?|$)`).test(String(input)) && ++reads === 2) state.policies = []
+      return tenant(input, init)
+    }))
+    await source()
+    const run = await handleOib({ ...base, storageAccountName: null, action: "oib-deploy", commit, backup: { mode: "none" }, items: [{ source: SC, mode: "update", targetId: EXISTING }] }) as OibRun
+    expect(writes).toEqual([])
+    expect(run).toMatchObject({ created: [], updated: [], failed: [{ error: "The tenant policy no longer exists. Compare again." }] })
+  })
+
   it("undo deletes created objects, keeps what could not be deleted, and rejects unknown runs", async () => {
     const run: OibRun = { runId: "run-1", tenantId, createdAt: "2026-09-26T00:00:00Z", kind: "deploy", platform: "windows", reference: "r",
       created: [{ folder: "ConfigurationPolicies", id: "77777777-7777-7777-7777-777777777777", name: "A" }, { folder: "CompliancePolicies", id: "88888888-8888-8888-8888-888888888888", name: "B" }], updated: [], failed: [] }

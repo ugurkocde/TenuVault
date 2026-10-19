@@ -373,7 +373,8 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
       const creates = chosen.filter((item) => item.mode === "create")
       const existing = creates.length ? await inventory(graphCaller(token), creates.map((item) => item.policy.folder)) : []
       const creator = new Restorer(graph, { mode: "copy", prefix: "", assignments: !!pilot })
-      const replacer = new Restorer(graph, { mode: "replace", assignments: false })
+      // A policy deleted after it was read is reported, never recreated under an ID the run would not record.
+      const replacer = new Restorer(graph, { mode: "replace", assignments: false, recreateMissing: false })
       const assignments = pilot ? [{ target: { "@odata.type": "#microsoft.graph.groupAssignmentTarget", groupId: pilot } }] : []
       for (const [index, item] of chosen.entries()) {
         const { policy } = item
@@ -420,7 +421,8 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
               ...(outcome.partial ? { partial: true } : {}), ...(outcome.warnings ? { warnings: outcome.warnings } : {}) })
             saveRun(run)
           }
-          if (!outcome.success) run.failed.push({ name: policy.name, error: outcome.error ?? "The update failed; check Intune before retrying." })
+          if (outcome.missing) run.failed.push({ name: policy.name, error: "The tenant policy no longer exists. Compare again." })
+          else if (!outcome.success) run.failed.push({ name: policy.name, error: outcome.error ?? "The update failed; check Intune before retrying." })
         }
       }
       saveRun(run)
@@ -465,7 +467,8 @@ async function undo(body: RecordJson): Promise<UndoResult> {
           created.push(item)
         }
       }
-      const restorer = new Restorer(graph, { mode: "replace", assignments: false })
+      // A policy the admin deleted since the run stays deleted: undo does not recreate it as a new, untracked policy.
+      const restorer = new Restorer(graph, { mode: "replace", assignments: false, recreateMissing: false })
       for (const item of run.updated) {
         report({ stage: `Restoring ${item.previousName}`, done: results.length, total })
         if (!item.before) {
@@ -475,6 +478,7 @@ async function undo(body: RecordJson): Promise<UndoResult> {
         }
         const outcome = await restorer.restore(`oib/${item.folder}/${item.id}.json`, item.before)
         if (outcome.success) results.push({ name: item.previousName, id: item.id, action: "restored", done: true })
+        else if (outcome.missing) results.push({ name: item.previousName, id: item.id, action: "restored", done: true, note: "already deleted in Intune, so the previous version was not recreated" })
         else {
           results.push({ name: item.previousName, id: item.id, action: "restored", done: false, error: outcome.error ?? "The previous version could not be put back." })
           updated.push(item)
