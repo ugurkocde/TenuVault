@@ -712,6 +712,12 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     if (fingerprint(current) !== run.fingerprint) throw new FrameworkError("The tenant policy landscape changed. Compare again before creating policies.", 409)
     run.consumed = true // A network failure may hide a successful write. Never blindly repeat it.
     const results: { name: string; id?: string; error?: string }[] = []
+    // A failed workspace save is reported, never allowed to stop the remaining creations or hide created IDs.
+    let saveError: string | undefined
+    const save = () => {
+      try { recordCreation(run.assessment, { success: results.every(r => !r.error), results }); saveError = undefined }
+      catch (error) { saveError = error instanceof Error ? error.message : String(error) }
+    }
     for (const policyIndex of new Set(selected.map(f => f.policyIndex))) {
       requireEnabledFramework(run.assessment.frameworkId)
       const policy = run.policies[policyIndex]!
@@ -723,10 +729,9 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       } catch (error) {
         results.push({ name: payload.name, error: error instanceof Error ? error.message : "Creation failed; check Intune before retrying." })
       }
-      recordCreation(run.assessment, { success: results.every(r => !r.error), results })
+      save()
     }
-    const outcome = { success: results.every(r => !r.error), results }
-    recordCreation(run.assessment, outcome)
-    return outcome
+    save()
+    return { success: results.every(r => !r.error), results, ...(saveError ? { warning: `The results could not be saved to the workspace, so note the created policy IDs: ${saveError}` } : {}) }
   })
 }
