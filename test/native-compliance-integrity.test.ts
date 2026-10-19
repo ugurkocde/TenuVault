@@ -695,4 +695,21 @@ describe("enum settings left at their Graph default", () => {
     expect(result.status).toBe("noEvidence");
     expect(capabilityComparison(result)).toBe("missing");
   });
+  it.each([null, "02:00:00"])(
+    "reads an untouched scheduled scan with time %s as missing",
+    (time) => {
+      const result = capability(
+        collected(
+          policy("windows10GeneralConfiguration", {
+            defenderScanType: "userDefined",
+            defenderSystemScanSchedule: "userDefined",
+            defenderScheduledScanTime: time,
+          }),
+        ),
+        "windows-periodic-antimalware-scan",
+      );
+      expect(result.status).toBe("noEvidence");
+      expect(capabilityComparison(result)).toBe("missing");
+    },
+  );
 });

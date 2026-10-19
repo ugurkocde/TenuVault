@@ -90,7 +90,17 @@ export function policyCheckObservation(
         null,
       time: config.defenderScheduledScanTime ?? null,
     };
-    if (Object.values(fields).every((value) => value === null)) return;
+    // An untouched device restrictions profile returns "userDefined" for the
+    // scan type and day; a scan time alone schedules nothing.
+    if (
+      [fields.scan, fields.day].every(
+        (value) =>
+          value === null ||
+          (typeof value === "string" &&
+            ["userdefined", "notconfigured"].includes(value.toLowerCase())),
+      )
+    )
+      return;
     complete = Object.values(fields).every(
       (value) => typeof value === "string",
     );
