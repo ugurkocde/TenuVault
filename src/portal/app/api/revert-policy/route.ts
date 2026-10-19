@@ -233,6 +233,9 @@ async function getAccessToken(tenantId: string, appId: string, clientSecret: str
   return tokenData.access_token
 }
 
+/** Reads and conditional writes of the revert history before giving up on concurrent writers. */
+const REVERT_HISTORY_ATTEMPTS = 5
+
 async function writeRevertMetadata(
   storageAccountName: string,
   accessToken: string,
@@ -243,51 +246,69 @@ async function writeRevertMetadata(
   const metadataUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups/${metadataPath}`
   
   try {
-    // First, try to fetch existing metadata
-    const getResponse = await fetch(metadataUrl, {
-      headers: {
-        'x-ms-version': '2021-12-02',
-        'x-ms-date': new Date().toUTCString(),
-        'Authorization': `Bearer ${accessToken}`,
-      },
-    })
-    
-    let existingData: { reverts: { [key: string]: RevertMetadata[] } } = { reverts: {} }
-    
-    if (getResponse.ok) {
-      try {
-        existingData = await getResponse.json()
-      } catch {
-        console.log("No existing metadata or invalid JSON, creating new")
+    // Each attempt reads the history and writes it back only if nobody changed it
+    // in between (If-Match, or If-None-Match for a new file); a 412 starts over.
+    let putResponse: Response | undefined
+    for (let attempt = 0; attempt < REVERT_HISTORY_ATTEMPTS; attempt++) {
+      const getResponse = await fetch(metadataUrl, {
+        headers: {
+          'x-ms-version': '2021-12-02',
+          'x-ms-date': new Date().toUTCString(),
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      })
+
+      let existingData: { reverts: { [key: string]: RevertMetadata[] } } = { reverts: {} }
+      const etag = getResponse.ok ? getResponse.headers.get('etag') : null
+      if (getResponse.ok) {
+        try {
+          existingData = await getResponse.json()
+        } catch {
+          // Never replace a history we could not read with one holding only this entry.
+          console.error("Revert history is not valid JSON; leaving it unchanged")
+          return
+        }
+        if (!etag) {
+          console.error("Revert history has no ETag; leaving it unchanged")
+          return
+        }
+      } else if (getResponse.status !== 404) {
+        // Only a missing file starts a new history. Any other failure would erase it.
+        console.error("Failed to read revert history:", getResponse.status, getResponse.statusText)
+        return
       }
+
+      // Ensure structure exists
+      if (!existingData.reverts) {
+        existingData.reverts = {}
+      }
+
+      // Add new metadata entry
+      if (!existingData.reverts[policyId]) {
+        existingData.reverts[policyId] = []
+      }
+
+      existingData.reverts[policyId].push(metadata)
+
+      // Write back to storage
+      putResponse = await fetch(metadataUrl, {
+        method: 'PUT',
+        headers: {
+          'x-ms-version': '2021-12-02',
+          'x-ms-date': new Date().toUTCString(),
+          'Authorization': `Bearer ${accessToken}`,
+          'x-ms-blob-type': 'BlockBlob',
+          'Content-Type': 'application/json',
+          'x-ms-blob-content-type': 'application/json',
+          ...(etag ? { 'If-Match': etag } : { 'If-None-Match': '*' }),
+        },
+        body: JSON.stringify(existingData, null, 2),
+      })
+      // 412: another revert wrote the history first (409 when both created it). Read it again.
+      if (putResponse.status !== 412 && putResponse.status !== 409) break
     }
-    
-    // Ensure structure exists
-    if (!existingData.reverts) {
-      existingData.reverts = {}
-    }
-    
-    // Add new metadata entry
-    if (!existingData.reverts[policyId]) {
-      existingData.reverts[policyId] = []
-    }
-    
-    existingData.reverts[policyId].push(metadata)
-    
-    // Write back to storage
-    const putResponse = await fetch(metadataUrl, {
-      method: 'PUT',
-      headers: {
-        'x-ms-version': '2021-12-02',
-        'x-ms-date': new Date().toUTCString(),
-        'Authorization': `Bearer ${accessToken}`,
-        'x-ms-blob-type': 'BlockBlob',
-        'Content-Type': 'application/json',
-        'x-ms-blob-content-type': 'application/json'
-      },
-      body: JSON.stringify(existingData, null, 2),
-    })
-    
+
+    if (!putResponse) return
     if (!putResponse.ok) {
       const errorBody = await putResponse.text()
       console.error("Failed to write revert metadata:", putResponse.status, putResponse.statusText, errorBody)
