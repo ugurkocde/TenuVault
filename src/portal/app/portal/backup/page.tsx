@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import { AlertCircle, AlertTriangle, Calendar, CheckCircle, Download, GitBranch, Loader2, Play, RefreshCw, Upload } from "lucide-react"
-import { useSelectedTenant, useTenantOperations, useTenants } from "~/contexts/TenantContext"
+import { useSelectedTenant, useTenants, type Tenant } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { Button } from "~/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select"
@@ -61,7 +61,6 @@ export default function BackupRestorePage() {
 
   const tenants = useTenants()
   const { selectedTenantId, selectedTenant, setSelectedTenantId } = useSelectedTenant()
-  const { updateTenant } = useTenantOperations()
   const requestedTenant = searchParams.get("tenant")?.toLowerCase()
   // Notification links select the affected tenant and keep the requested tab.
   useEffect(() => {
@@ -89,7 +88,8 @@ export default function BackupRestorePage() {
   // A failed refresh leaves the kept list (and its Refresh button) shown below the error.
   const blockingError = setupError || (backupList.backups === null ? backupList.error : "")
   const [runOpen, setRunOpen] = useState(false)
-  const [jobId, setJobId] = useState<string | null>(null)
+  // The running job keeps the tenant it started on, so switching tenants never moves its progress or completion.
+  const [job, setJob] = useState<{ id: string; tenant: Tenant } | null>(null)
   const [showProgress, setShowProgress] = useState(false)
   const [completedBackup, setCompletedBackup] = useState<{ jobId: string; tenantId: string } | null>(null)
   const [changesOpen, setChangesOpen] = useState(false)
@@ -131,8 +131,9 @@ export default function BackupRestorePage() {
   }, [selectedTenant?.id, !!selectedTenant?.credentials, selectedTenant?.resources?.storageAccountName])
 
   const backupStarted = (id: string) => {
+    if (!selectedTenant) return
     setCompletedBackup(null)
-    setJobId(id)
+    setJob({ id, tenant: selectedTenant })
     setShowProgress(true)
   }
 
@@ -140,11 +141,11 @@ export default function BackupRestorePage() {
     // Keep failures and cancellations open so their reason can be read.
     if (success) {
       setShowProgress(false)
-      setJobId(null)
+      setJob(null)
     }
-    if (success && selectedTenant) {
-      if (jobId && selectedTenant.credentials) setCompletedBackup({ jobId, tenantId: selectedTenant.credentials.tenantId.toLowerCase() })
-      updateTenant(selectedTenant.id, { lastBackup: new Date().toISOString(), lastSync: new Date().toISOString() })
+    // The backup progress provider records lastBackup on the tenant the job ran for.
+    if (success && job) {
+      if (job.tenant.credentials) setCompletedBackup({ jobId: job.id, tenantId: job.tenant.credentials.tenantId.toLowerCase() })
       // Show the new backup, the newest in the list.
       setSelectedId(null)
       void fetchBackups()
@@ -383,18 +384,18 @@ export default function BackupRestorePage() {
 
       <RunBackupDialog open={runOpen} onOpenChange={setRunOpen} tenant={tenant} counts={latest?.counts} uncounted={latest ? [...(latest.scope?.excluded ?? []), ...(latest.skippedTypes ?? [])] : undefined} onStarted={backupStarted} />
 
-      {selectedTenant && jobId && (
+      {job && (
         <BackupProgressModal
           open={showProgress}
           onOpenChange={setShowProgress}
-          tenantName={selectedTenant.name}
-          credentials={selectedTenant.credentials ? { tenantId: selectedTenant.credentials.tenantId, appId: selectedTenant.credentials.appId, clientSecret: selectedTenant.credentials.clientSecret } : null}
+          tenantName={job.tenant.name}
+          credentials={job.tenant.credentials ? { tenantId: job.tenant.credentials.tenantId, appId: job.tenant.credentials.appId, clientSecret: job.tenant.credentials.clientSecret } : null}
           resources={
-            selectedTenant.resources
-              ? { subscriptionId: selectedTenant.resources.subscriptionId, resourceGroupName: selectedTenant.resources.resourceGroupName, automationAccountName: selectedTenant.resources.automationAccountName, storageAccountName: selectedTenant.resources.storageAccountName }
+            job.tenant.resources
+              ? { subscriptionId: job.tenant.resources.subscriptionId, resourceGroupName: job.tenant.resources.resourceGroupName, automationAccountName: job.tenant.resources.automationAccountName, storageAccountName: job.tenant.resources.storageAccountName }
               : null
           }
-          jobId={jobId}
+          jobId={job.id}
           onComplete={backupFinished}
         />
       )}
