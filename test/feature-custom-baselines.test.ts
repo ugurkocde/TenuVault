@@ -371,6 +371,19 @@ describe("/api/custom-baselines", () => {
     expect((await context.post({ action: "from-snapshot", backupId: "backup-x" })).status).toBe(409)
   })
 
+  it("accepts a backup reported as Succeeded and finds one older than the newest 100", async () => {
+    const context = setup()
+    const newer = Array.from({ length: 100 }, (_, index) => ({ id: `backup-newer-${index}`, timestamp: "2026-09-30T10:00:00Z", status: "Success" }))
+    context.setBackups([...newer, { id: "backup-old", timestamp: "2026-09-01T10:00:00Z", status: "Succeeded" }], { "backup-old": [policy("Company - Old", [setting("a", "a_1")])] })
+    const options = await context.post({ action: "snapshots" })
+    expect(options.body.snapshots).toHaveLength(100)
+    const created = await context.post({ action: "from-snapshot", backupId: "backup-old", name: "Old standard" })
+    expect(created.status).toBe(200)
+    expect(created.body.baseline).toMatchObject({ origin: "snapshot", provenance: { backupFolder: "backup-old" } })
+    context.setBackups([{ id: "backup-new", timestamp: "2026-09-30T10:00:00Z", status: "Succeeded" }], { "backup-new": [policy("Company - New", [setting("a", "a_1")])] })
+    expect((await context.post({ action: "snapshots" })).body.snapshots[0].usable).toBe(true)
+  })
+
   it("compares a baseline with pack frameworks using the baseline as the policy set", async () => {
     const context = setup()
     const baseline = await customize(context)
