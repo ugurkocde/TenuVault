@@ -124,3 +124,30 @@ describe("Audit log paging", () => {
     expect(button("Next").disabled).toBe(true)
   })
 })
+
+describe("Audit log after switching tenants", () => {
+  it("ignores a slower response for the previous tenant", async () => {
+    const a = tenant(1, "11111111-1111-1111-1111-111111111111")
+    const b = tenant(2, "22222222-2222-2222-2222-222222222222")
+    state.selected = a
+    const pending: Array<{ tenantId: string; resolve: () => void }> = []
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((resolve) => {
+      const body = JSON.parse(String(init?.body))
+      const tag = body.tenantId === a.credentials.tenantId ? "a-" : "b-"
+      const stats = String(input) === "/api/audit/stats"
+      pending.push({ tenantId: body.tenantId, resolve: () => resolve(stats
+        ? Response.json({ data: { summary: { totalEvents: tag === "a-" ? 111 : 222, successRate: "100%" } } })
+        : Response.json({ data: [entry(1, tag)], pendingCount: 0 })) })
+    })))
+    const root = await render()
+    state.selected = b
+    await act(async () => root.render(createElement(AuditPage)))
+    // Tenant B answers first, then tenant A's slow query arrives.
+    for (const request of pending.filter((item) => item.tenantId === b.credentials.tenantId)) await act(async () => request.resolve())
+    for (const request of pending.filter((item) => item.tenantId === a.credentials.tenantId)) await act(async () => request.resolve())
+    expect(text()).toContain("b-action 1")
+    expect(text()).not.toContain("a-action 1")
+    expect(text()).toContain("222")
+    expect(text()).not.toContain("111")
+  })
+})

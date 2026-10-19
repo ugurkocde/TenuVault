@@ -81,15 +81,35 @@ function AuditPageContent() {
   // entry per request tells whether a next page exists.
   const [hasMore, setHasMore] = useState(false)
 
+  // Each fetch abandons the previous one of its kind, so a slow response for an earlier
+  // tenant or query never overwrites a newer one.
+  const logsRequest = useRef<AbortController | null>(null)
+  const statsRequest = useRef<AbortController | null>(null)
+  const startRequest = (slot: { current: AbortController | null }) => {
+    slot.current?.abort()
+    slot.current = new AbortController()
+    return slot.current
+  }
+  useEffect(() => () => {
+    logsRequest.current?.abort()
+    statsRequest.current?.abort()
+  }, [])
+
   // Fetch audit logs
   const fetchLogs = async () => {
-    if (!allowed) return
+    const request = startRequest(logsRequest)
+    if (!allowed) {
+      setLoading(false)
+      return
+    }
     if (!selectedTenant) {
+      setLoading(false)
       setError("No tenant selected")
       return
     }
 
     if (!selectedTenant.credentials?.tenantId || !selectedTenant.credentials?.appId || !selectedTenant.credentials?.clientSecret || !selectedTenant.resources?.storageAccountName) {
+      setLoading(false)
       setError("Selected tenant is missing required credentials or resources. Please reconfigure the tenant.")
       return
     }
@@ -99,6 +119,7 @@ function AuditPageContent() {
 
     try {
       const response = await fetch("/api/audit/logs", {
+        signal: request.signal,
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -124,34 +145,39 @@ function AuditPageContent() {
 
       if (!response.ok) {
         const error = await response.json()
+        if (request.signal.aborted) return
         setPendingCount(typeof error.pendingCount === "number" ? error.pendingCount : null)
         setPendingDurable(error.pendingDurable === true)
         throw new Error(error.error || "Failed to fetch audit logs")
       }
 
       const data = await response.json()
+      if (request.signal.aborted) return
       const entries: AuditLogEntry[] = data.data || []
       setLogs(entries.slice(0, pagination.pageSize))
       setHasMore(entries.length > pagination.pageSize)
       setPendingCount(data.pendingCount ?? 0)
       setPendingDurable(data.pendingDurable === true)
     } catch (err) {
+      if (request.signal.aborted) return
       setError(err instanceof Error ? err.message : "An error occurred")
     } finally {
-      setLoading(false)
+      if (!request.signal.aborted) setLoading(false)
     }
   }
 
   // Fetch stats
   const fetchStats = async () => {
+    const request = startRequest(statsRequest)
     if (!selectedTenant || !allowed) return
-    
+
     if (!selectedTenant.credentials?.tenantId || !selectedTenant.credentials?.appId || !selectedTenant.credentials?.clientSecret || !selectedTenant.resources?.storageAccountName) {
       return
     }
 
     try {
       const response = await fetch("/api/audit/stats", {
+        signal: request.signal,
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -169,13 +195,25 @@ function AuditPageContent() {
 
       if (!response.ok) throw new Error("Audit statistics are unavailable. Retry when storage access is restored.")
       const data = await response.json()
+      if (request.signal.aborted) return
       setStats(data.data)
       setStatsError(null)
     } catch (err) {
+      if (request.signal.aborted) return
       setStats(null)
       setStatsError(err instanceof Error ? err.message : "Audit statistics are unavailable.")
     }
   }
+
+  // Another tenant's logs and statistics are never shown under this tenant while it loads.
+  const shownTenant = useRef(tenantKey)
+  useEffect(() => {
+    if (shownTenant.current === tenantKey) return
+    shownTenant.current = tenantKey
+    setLogs([])
+    setHasMore(false)
+    setStats(null)
+  }, [tenantKey])
 
   // Load logs for the current query and page. Keyed by the tenant's identity, not the
   // tenant object, so a background update (such as a finished backup) keeps the page.
