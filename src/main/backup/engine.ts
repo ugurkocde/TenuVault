@@ -231,6 +231,11 @@ export class BackupEngine {
     return active ? [active.job.id] : []
   }
 
+  /** Whether a backup to storage on this device is queued, running or still writing its manifest. */
+  hasLocalWork(): boolean {
+    return [...this.executions.keys()].some((id) => isLocalAccount(this.jobs.get(id)?.storageAccountName))
+  }
+
   /** Waits for the same bounded execution used by manual and scheduled jobs. */
   waitForJob(job: BackupJob): Promise<BackupJob> {
     return this.executions.get(job.id)?.done ?? Promise.resolve(job)

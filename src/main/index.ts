@@ -1,6 +1,6 @@
 import { CommunityLimitError, withPlanError } from "../shared/plan-errors"
 import { licenseBuyUrl } from "./license/buy-url"
-import { reviewArchive, importArchive } from "./backup/archive"
+import { importConfirmedArchive, reviewArchive } from "./backup/archive"
 import { readFile, stat } from "node:fs/promises"
 import { pathToFileURL } from "node:url"
 import { isGuid, isMicrosoftLoginUrl, sameRendererDocument } from "../shared/security"
@@ -21,7 +21,7 @@ import { ApiHost } from "./api/host"
 import { routes } from "./api/routes"
 import { AuthManager, SignInRequiredError } from "./auth/msal"
 import { BackupEngine, verifyStorageAccess, type BackupJob } from "./backup/engine"
-import { BackupScheduler, reportsResult, scheduledResult } from "./backup/scheduler"
+import { BackupScheduler, reportsResult, runUnattended, scheduledResult } from "./backup/scheduler"
 import { runTrayBackups } from "./backup/tray-backup"
 import { prepareScheduleInput } from "./backup/schedule-input"
 import { BackgroundLaunch } from "./backup/background-launch"
@@ -34,7 +34,7 @@ import { BackupKeys } from "./backup/keys"
 import { readBackupSettings } from "./backup/settings"
 import { localInventoryProblem } from "./backup/local-inventory"
 import { encryptedAzureFetch, registerStorageToken } from "./storage/azure-seal"
-import { handleLocalBlobRequest, isLocalAccount } from "./storage/blob-emulator"
+import { handleLocalBlobRequest, isLocalAccount, localRoutesRunning } from "./storage/blob-emulator"
 import { LocalBlobStore } from "./storage/local-blob-store"
 import { setRestoreJournalStore, setRestoreJournalAuthorization } from "./storage/restore-journal"
 import { accountStore, secureCachePlugin } from "./auth/stores"
@@ -528,10 +528,12 @@ async function bootstrap(): Promise<void> {
       failedAttempts.record({ tenantId, trigger, slot, message: refused })
       return { status: "Failed" as const, message: refused }
     }
-    const job = engine.start({ tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, scope: scopes.get(tenantId).scope, trigger, slot })
-    const origin = unattendedBackupTriggers.get(job) ?? { trigger, notified: false }
-    unattendedBackupTriggers.set(job, origin)
-    await waitForJob(job)
+    let origin = { trigger, notified: false }
+    const job = await runUnattended(engine, { tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, scope: scopes.get(tenantId).scope, trigger, slot }, (started) => {
+      origin = unattendedBackupTriggers.get(started) ?? { trigger, notified: false }
+      unattendedBackupTriggers.set(started, origin)
+      return waitForJob(started)
+    })
     const result = scheduledResult(job)
     // A repeated failure to reach Microsoft or storage in the same slot was already reported.
     if (!reportsResult(afterFailure, result)) return result
@@ -776,10 +778,9 @@ async function bootstrap(): Promise<void> {
       if (selected.canceled || !selected.filePaths[0]) return { imported: false }
       if ((await stat(selected.filePaths[0])).size > 32 * 1024 * 1024) throw new Error("Choose an archive smaller than 32 MiB")
       const archive = await reviewArchive(await readFile(selected.filePaths[0]))
-      await license.checkNewTenant(archive.tenantId, { retry: false })
-      const review = await dialog.showMessageBox(mainWindow!, { type: "warning", title: "Review backup archive", message: `Import ${archive.count} policy snapshots?`, detail: `Source tenant: ${archive.tenantId}\nBackup: ${archive.backupId}\nSHA-256: ${archive.digest}\n\nThe archive declares its source identity; it is not signed. Use files supplied by a source you trust. Snapshots will be encrypted on this device. Import does not change Intune. Use the tenant's local backup storage and the existing restore preview to restore later.`, buttons: ["Cancel", "Import locally"], defaultId: 0, cancelId: 0 })
-      if (review.response !== 1) return { imported: false }
-      await importArchive(getLocalStore(), archive)
+      const confirm = async () => (await dialog.showMessageBox(mainWindow!, { type: "warning", title: "Review backup archive", message: `Import ${archive.count} policy snapshots?`, detail: `Source tenant: ${archive.tenantId}\nBackup: ${archive.backupId}\nSHA-256: ${archive.digest}\n\nThe archive declares its source identity; it is not signed. Use files supplied by a source you trust. Snapshots will be encrypted on this device. Import does not change Intune. Use the tenant's local backup storage and the existing restore preview to restore later.`, buttons: ["Cancel", "Import locally"], defaultId: 0, cancelId: 0 })).response === 1
+      // The license check can claim a slot for the archive's tenant, so it runs only once the import is confirmed.
+      if (!(await importConfirmedArchive(getLocalStore(), archive, confirm, (tenantId) => license.checkNewTenant(tenantId, { retry: false })))) return { imported: false }
       return { imported: true, tenantId: archive.tenantId, backupId: archive.backupId }
     } finally { importingArchive = false }
   })
@@ -806,7 +807,15 @@ async function bootstrap(): Promise<void> {
     if (includedTypes(normalized).length === 0) throw new Error("Choose at least one type to back up.")
     return scopes.set(tenantId, normalized)
   })
+  // Every local storage request resolves the folder when it is made, so a change while a backup,
+  // restore or import uses it would split that work across two folders.
+  const assertLocalFolderIdle = () => {
+    if (importingArchive || engine.hasLocalWork() || localRoutesRunning()) {
+      throw new Error("A backup, restore or archive import is using the backup folder. Wait for it to finish, then change the folder.")
+    }
+  }
   handleTrusted("backups:chooseFolder", async () => {
+    assertLocalFolderIdle()
     const result = await dialog.showOpenDialog(mainWindow!, {
       title: "Choose where TenuVault stores backups",
       defaultPath: localFolder(),
@@ -814,6 +823,8 @@ async function bootstrap(): Promise<void> {
     })
     const folder = result.filePaths[0]
     if (!result.canceled && folder) {
+      // Work may have started while the dialog was open.
+      assertLocalFolderIdle()
       appStore.set(LOCAL_FOLDER_KEY, folder)
       localStore = null
       checkStore = null

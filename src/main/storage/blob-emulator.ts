@@ -27,9 +27,34 @@ const routeContext = new AsyncLocalStorage<{ tenant: string | null; storageAccou
 
 const text = (value: unknown) => (typeof value === "string" && value ? value : null)
 
+/** Routes running now that name storage on this device, such as a restore reading a local backup. */
+let localRoutes = 0
+
+/** Whether a route that names storage on this device is still running. */
+export function localRoutesRunning(): boolean {
+  return localRoutes > 0
+}
+
 /** Runs a route handler so local storage only serves the tenant named in its request. */
 export function withRouteTenant<T>(tenantId: unknown, run: () => T, storageAccountName?: unknown): T {
-  return routeContext.run({ tenant: text(tenantId), storageAccount: text(storageAccountName)?.toLowerCase() ?? null }, run)
+  const storageAccount = text(storageAccountName)?.toLowerCase() ?? null
+  return routeContext.run({ tenant: text(tenantId), storageAccount }, () => isLocalAccount(storageAccount ?? undefined) ? counted(run) : run())
+}
+
+function counted<T>(run: () => T): T {
+  localRoutes++
+  let result: T
+  try {
+    result = run()
+  } catch (error) {
+    localRoutes--
+    throw error
+  }
+  if (!(result instanceof Promise)) {
+    localRoutes--
+    return result
+  }
+  return result.finally(() => { localRoutes-- }) as T
 }
 
 /**

@@ -7,7 +7,7 @@ import { NetworkUnreachableError } from "../src/main/api/network-error"
 import { BackupEngine, type BackupJob } from "../src/main/backup/engine"
 import { backupTenantLabel, notifyBackupFailure } from "../src/main/backup/notifications"
 import { RefusalLog, refuseUnlicensedBackup } from "../src/main/backup/refusals"
-import { BackupScheduler, reportsResult, scheduledResult, type ScheduledRunResult } from "../src/main/backup/scheduler"
+import { BackupScheduler, reportsResult, runUnattended, scheduledResult, type ScheduledRunResult } from "../src/main/backup/scheduler"
 import { isLocalAccount } from "../src/main/storage/blob-emulator"
 import { localStorageAccountName } from "../src/shared/constants"
 import type { BackupRefusal } from "../src/shared/ipc"
@@ -71,6 +71,7 @@ function unattendedFixture(getToken: () => Promise<string>) {
     },
     engine,
     scheduledResult,
+    runUnattended,
     reportsResult,
     scopes: { get: () => ({ scope: { excluded: [] } }) },
     accounts: { get: () => undefined },
@@ -186,6 +187,21 @@ describe("unattended backup notifications", () => {
     expect(dispatch).toHaveBeenCalledOnce()
     const request = dispatch.mock.calls[0]![0] as Request
     expect((await request.json()).logEntry).toMatchObject({ eventType: "BACKUP_CANCELLED", result: "PARTIAL", severity: "INFO" })
+  })
+
+  it("runs a scheduled backup of its own when the manual backup it joined is cancelled", async () => {
+    const getToken = vi.fn().mockReturnValueOnce(new Promise<string>(() => {})).mockRejectedValue(new Error("Sign in to this tenant first."))
+    const { run, start, engine } = unattendedFixture(getToken)
+    const manual = engine.start({ tenantId: tenant.tenantId, clientId: "app", storageAccountName: localStorageAccountName(tenant.tenantId), trigger: "manual" })
+    await vi.waitFor(() => expect(getToken).toHaveBeenCalled())
+    const scheduled = run(tenant.tenantId, "scheduled")
+    await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(2))
+    expect(start.mock.results[1]!.value).toBe(manual)
+    engine.cancel(manual.id)
+    // The slot's own backup ran and failed, so the scheduler retries it instead of recording a cancellation.
+    expect(await scheduled).toEqual({ status: "Failed", message: "Sign in to this tenant first." })
+    expect(start).toHaveBeenCalledTimes(3)
+    expect(start.mock.results[2]!.value).not.toBe(manual)
   })
 
   it.each([["tray", "scheduled"], ["scheduled", "tray"]] as const)("notifies once for the originating %s job when %s joins it", async (original, joining) => {
