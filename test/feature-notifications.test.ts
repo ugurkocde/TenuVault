@@ -257,6 +257,36 @@ describe("review round regressions", () => {
     expect(counts).toEqual([500, 500, 500, 500, 500, 1, 0])
   })
 
+  it("does not resend events already processed on a continuation page after a capped poll", async () => {
+    // 600 events two minutes apart: the cap is hit inside page 3, whose earlier events are
+    // more than the overlap older than the last one processed.
+    const many = Array.from({ length: 600 }, (_, i) => ({
+      id: `spread-${i}`,
+      displayName: "Update policy",
+      componentName: "Policy",
+      activity: "Update",
+      activityOperationType: "Update",
+      activityResult: "Success",
+      activityDateTime: new Date(Date.parse("2026-10-16T13:00:00Z") + i * 120_000).toISOString(),
+      category: "Policy",
+      actor: { applicationId: "app-portal", userPrincipalName: "admin@contoso.test" },
+      resources: [{ displayName: `Policy ${i}`, type: "Policy" }],
+    }))
+    const w = world({ graph: () => async (_method: string, path: string) => {
+      const decoded = decodeURIComponent(path)
+      const since = decoded.match(/activityDateTime gt ([^&]+)/)?.[1]
+      const offset = Number(decoded.match(/\$skiptoken=(\d+)/)?.[1] ?? 0)
+      const filtered = since ? many.filter((event) => event.activityDateTime > since) : many
+      const value = filtered.slice(offset, offset + 200)
+      const next = offset + 200 < filtered.length ? { "@odata.nextLink": `https://graph.microsoft.com/beta/deviceManagement/auditEvents?$skiptoken=${offset + 200}` } : {}
+      return { status: 200, body: { value, ...next } }
+    } })
+    saveAuditWatch(w.deps, TENANT_A, { enabled: true }, { actor: null, reason: "test" })
+    const counts: number[] = []
+    for (let poll = 0; poll < 3; poll++) counts.push((await pollAuditWatch(w.deps, TENANT_A)).changes)
+    expect(counts).toEqual([500, 100, 0])
+  })
+
   it("signed out sessions pause email deliveries without burning attempts", async () => {
     const graphCalls: string[] = []
     const deps = fakeDeps({

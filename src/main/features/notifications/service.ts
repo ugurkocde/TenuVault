@@ -353,6 +353,10 @@ async function pollAuditWatchOnce(deps: FeatureDeps, tenantId: string, options: 
     let path: string | null = watch.continuation ?? freshPath
     let resumed = Boolean(watch.continuation)
     let pages = 0
+    // Events read on the page the poll stopped inside. That page is stored as the
+    // continuation and read again from the top, so its events stay deduped whatever their age.
+    let pageSeen: string[] = []
+    let stoppedInPage = false
     // The cap counts newly collected events, never duplicates inside the overlap, so a
     // busy tenant cannot stall the poller re-reading the same first page forever.
     while (path && pages < 50 && collected.length < MAX_AUDIT_EVENTS_PER_POLL) {
@@ -368,11 +372,13 @@ async function pollAuditWatchOnce(deps: FeatureDeps, tenantId: string, options: 
         throw new Error(graphError(response.body, response.status))
       }
       resumed = false
+      pageSeen = []
       const values = Array.isArray(response.body.value) ? (response.body.value as AuditEventRaw[]) : []
       for (const raw of values) {
         const change = mapAuditEvent(raw)
         if (!change) continue
         seenNow.push({ id: change.auditId, at: change.at })
+        pageSeen.push(change.auditId)
         if (!newestSeenAt || change.at > newestSeenAt) newestSeenAt = change.at
         if (!seen.has(change.auditId)) {
           seen.add(change.auditId)
@@ -380,7 +386,10 @@ async function pollAuditWatchOnce(deps: FeatureDeps, tenantId: string, options: 
         }
         if (collected.length >= MAX_AUDIT_EVENTS_PER_POLL) break
       }
-      if (collected.length >= MAX_AUDIT_EVENTS_PER_POLL) break
+      if (collected.length >= MAX_AUDIT_EVENTS_PER_POLL) {
+        stoppedInPage = true
+        break
+      }
       path = nextPath(response.body)
     }
     const profile = deps.tenant(tenant)
@@ -403,8 +412,9 @@ async function pollAuditWatchOnce(deps: FeatureDeps, tenantId: string, options: 
     }
     const newWatermark = newestSeenAt && (!watch.watermark || newestSeenAt > watch.watermark) ? newestSeenAt : watch.watermark ?? now.toISOString()
     const pruneBefore = Date.parse(newWatermark) - AUDIT_OVERLAP_MS
+    const keep = new Set(stoppedInPage ? pageSeen : [])
     const byId = new Map<string, { id: string; at: string }>()
-    for (const entry of [...watch.recent, ...seenNow]) if (Date.parse(entry.at) > pruneBefore) byId.set(entry.id, entry)
+    for (const entry of [...watch.recent, ...seenNow]) if (Date.parse(entry.at) > pruneBefore || keep.has(entry.id)) byId.set(entry.id, entry)
     const recent = [...byId.values()].sort((a, b) => (a.at < b.at ? -1 : 1)).slice(-MAX_RECENT_AUDIT_IDS)
     saveAuditWatch(deps, tenant, {
       watermark: newWatermark,

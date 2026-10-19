@@ -296,6 +296,32 @@ describe("/api/standards", () => {
     expect(record.state.freshness).toBe("stale")
   })
 
+  it("finishes the adoption rollback when a partial rollback is retried", async () => {
+    const context = setup()
+    const v1 = await publish(context)
+    const existing = context.customer.addPolicy({ name: "Customer Defender", settings: [setting("scan", "scan_0")] })
+    const id = (await context.post({ action: "standard-adopt", versionId: v1.id }, TENANT_B)).body.adoption.id
+    await context.post({ action: "standard-configure", id, parameters: { banner: "Contoso" }, mappings: [{ policyKey: "std - device lock", objectId: null }, { policyKey: "std - defender", objectId: existing.id }] }, TENANT_B)
+    const planned = await context.post({ action: "standard-plan", id }, TENANT_B)
+    const adopting = planned.body.changeSet.id
+    expect((await applyAdoption(context, id, adopting)).body.changeSet.status).toBe("applied")
+
+    const rollback = await context.post({ action: "standard-change-rollback-create", id, changeSetId: adopting }, TENANT_B)
+    expect(rollback.status).toBe(200)
+    context.customer.failWrite = (method) => (method === "DELETE" ? 400 : undefined)
+    expect((await applyAdoption(context, id, rollback.body.changeSet.id)).body.changeSet.status).toBe("partial")
+    let record = (await context.post({ action: "get-adoption", id }, TENANT_B)).body.adoption
+    expect(record.status).toBe("partial")
+    expect(record.adoptedVersion).toBe(1)
+
+    context.customer.failWrite = undefined
+    const preview = await context.post({ action: "standard-change-preview", id, changeSetId: rollback.body.changeSet.id }, TENANT_B)
+    const retried = await context.post({ action: "standard-change-apply", id, changeSetId: rollback.body.changeSet.id, contentHash: preview.body.contentHash, confirm: true }, TENANT_B)
+    expect(retried.body.changeSet.status).toBe("applied")
+    record = (await context.post({ action: "get-adoption", id }, TENANT_B)).body.adoption
+    expect(record).toMatchObject({ status: "draft", adoptedVersionId: null, adoptedParameters: null, adoptedChangeSetId: null, previousAdopted: null })
+  })
+
   it("isolates customers strictly and reports portfolios only for named tenants", async () => {
     const context = setup()
     const v1 = await publish(context)

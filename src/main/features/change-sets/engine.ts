@@ -144,6 +144,9 @@ export interface RollbackPreview {
   notice: string
 }
 
+/** Why a stale change set is refused; the same wording on every route and screen. */
+export const STALE = "This change set is stale and can no longer be approved or applied. Preview the change again to create a new change set."
+
 const NOTICE = "Applying writes operations one by one. There is no atomic tenant transaction and no guaranteed reversal: a failure leaves earlier operations in place, and rollback is a new reviewed change set."
 
 type Actor = string | null
@@ -224,6 +227,36 @@ function validateAssignments(value: unknown): Item[] | null {
   return structuredClone(value as Item[])
 }
 
+/** Change sets kept before the oldest ones that never wrote and nothing refers to are dropped. */
+export const KEPT_CHANGE_SETS = 1000
+/** Workflow records that name change sets (pending, adopted, batches, deployments, rollbacks). */
+const REFERENCING_DOMAINS = [DOMAINS.adoptions, DOMAINS.baselineUpgrades, DOMAINS.promotions, DOMAINS.customBaselineDeployments, DOMAINS.cisRemediations]
+
+/** Every ID a current workflow record of the tenant names, without its history. */
+function referencedIds(deps: FeatureDeps, tenantId: string): Set<string> {
+  const ids = new Set<string>()
+  for (const domain of REFERENCING_DOMAINS) {
+    for (const { history: _history, ...record } of deps.records.list<object>(domain, tenantId)) {
+      for (const id of JSON.stringify(record).match(/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/gi) ?? []) ids.add(id.toLowerCase())
+    }
+  }
+  return ids
+}
+
+/**
+ * Retention before a new change set is stored. Only change sets that never wrote (rejected or
+ * stale, without a pre-change capture) and that no workflow record or rollback names are
+ * dropped, then frozen content no remaining change set uses. Applied change sets and their
+ * captures stay as rollback evidence.
+ */
+function retain(deps: FeatureDeps, tenantId: string): void {
+  const referenced = referencedIds(deps, tenantId)
+  for (const record of listChangeSets(deps, tenantId)) if (record.rollbackOf) referenced.add(record.rollbackOf.toLowerCase())
+  deps.records.prune<ChangeSetRecord>(DOMAINS.changeSets, tenantId, KEPT_CHANGE_SETS, (record) => (record.status === "rejected" || record.status === "stale") && !record.preChange && !referenced.has(record.id.toLowerCase()))
+  const used = new Set(listChangeSets(deps, tenantId).flatMap((record) => [record.proposalId, ...(record.preChange ? [record.preChange.captureId] : [])]))
+  deps.records.prune<ChangeSetContent>(CONTENT_DOMAIN, tenantId, KEPT_CHANGE_SETS, (record) => !used.has(record.id))
+}
+
 /**
  * Freezes operations into a new change set in review. Reads the target once to name delete
  * targets and to compute the proposed diff; refuses unsupported types and actions, missing
@@ -287,6 +320,7 @@ export async function createChangeSet(deps: FeatureDeps, tenantId: string, input
     })
     entries[key] = { body, assignments }
   }
+  retain(deps, tenant)
   const proposal = deps.records.create<ChangeSetContent>(CONTENT_DOMAIN, tenant, { title: input.title, status: "frozen", summary: "Frozen proposal of a change set.", kind: "proposal", changeSetId: null, entries }, { actor, reason: "Froze the proposed content" })
   const base: Omit<ChangeSetRecord, "contentHash"> = {
     title: input.title.trim(),
@@ -318,7 +352,8 @@ export async function createChangeSet(deps: FeatureDeps, tenantId: string, input
 export async function reviseChangeSet(deps: FeatureDeps, tenantId: string, id: string, removeKeys: string[], actor: Actor): Promise<Stored_> {
   const record = getChangeSet(deps, tenantId, id)
   requireCisChangeSetEnabled(record.origin.workflow)
-  if (!["in-review", "approved", "stale", "rejected"].includes(record.status)) throw new FeatureError("Only change sets that were not applied can be revised.", 409)
+  if (record.status === "stale") throw new FeatureError(STALE, 409)
+  if (!["in-review", "approved", "rejected"].includes(record.status)) throw new FeatureError("Only change sets that were not applied can be revised.", 409)
   const operations = record.operations.filter((operation) => !removeKeys.includes(operation.key))
   if (operations.length === record.operations.length) throw new FeatureError("Select operations to remove.")
   if (!operations.length) throw new FeatureError("A change set keeps at least one operation. Reject it instead.")
@@ -429,7 +464,8 @@ export async function previewChangeSet(deps: FeatureDeps, tenantId: string, id: 
 export async function approveChangeSet(deps: FeatureDeps, tenantId: string, id: string, input: { contentHash: string; targetFingerprint: string; reviewer?: string | null; note?: string | null }, actor: Actor): Promise<Stored_> {
   const record = getChangeSet(deps, tenantId, id)
   requireCisChangeSetEnabled(record.origin.workflow)
-  if (!["in-review", "stale", "approved"].includes(record.status)) throw new FeatureError("Only change sets in review can be approved.", 409)
+  if (record.status === "stale") throw new FeatureError(STALE, 409)
+  if (!["in-review", "approved"].includes(record.status)) throw new FeatureError("Only change sets in review can be approved.", 409)
   const preview = await previewChangeSet(deps, tenantId, id)
   requireCisChangeSetEnabled(record.origin.workflow)
   if (preview.blockers.length) throw new FeatureError(`This change set cannot be approved: ${preview.blockers.join(" ")}`, 409)
@@ -471,9 +507,14 @@ export function rejectChangeSet(deps: FeatureDeps, tenantId: string, id: string,
 // ---------------------------------------------------------------------------------------------
 // Apply
 
+/**
+ * Invalidates the approval of a change set that never wrote. A stale change set is finished:
+ * the workflows release its objects, so it is never approved or applied again and the change
+ * is previewed anew. A change set that already wrote keeps its status so it can be retried.
+ */
 function markStale(deps: FeatureDeps, tenantId: string, id: string, reason: string, actor: Actor): never {
-  deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenantId, id, (current) => ({ ...current, status: current.preChange ? current.status : "stale", review: current.preChange ? current.review : null, lastError: reason, summary: `${reason} A fresh review is required.` }), { actor, reason: `Approval invalidated: ${reason}` })
-  throw new FeatureError(`${reason} A fresh review is required before anything is written.`, 409)
+  const updated = deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenantId, id, (current) => ({ ...current, status: current.preChange ? current.status : "stale", review: current.preChange ? current.review : null, lastError: reason, summary: current.preChange ? `${reason} Nothing was written in this attempt.` : `${reason} ${STALE}` }), { actor, reason: `Approval invalidated: ${reason}` })
+  throw new FeatureError(updated?.status === "stale" ? `${reason} Nothing was written. ${STALE}` : `${reason} Nothing was written in this attempt.`, 409)
 }
 
 /**
@@ -535,7 +576,9 @@ type Reconciled = { decision: "verified"; objectId: string; readBack: OperationR
 /**
  * Settles an operation whose previous write may or may not have happened, by reading live
  * state first. Verified results are recorded without writing again; only an operation whose
- * target still holds the captured pre-change state is written again.
+ * target still holds the captured pre-change state is written again. A target that holds
+ * neither state may have been partly written (for example the configuration but not the
+ * assignments), so it stays uncertain and rollback restores it from the capture.
  */
 async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOperation, result: OperationResult, entry: { body: Item | null; assignments: Item[] | null }, captured: { body: Item | null; sameNameIds: string[] }): Promise<Reconciled> {
   try {
@@ -557,12 +600,13 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
     if (operation.action === "delete") {
       if (!live) return { decision: "verified", objectId: operation.targetId!, readBack: "missing" }
     } else {
-      if (!live) return { decision: "stop", status: "failed", message: "The object was deleted after the review. Nothing was written.", objectId: operation.targetId }
+      if (!live) return { decision: "stop", status: "failed", message: "The object no longer exists in the tenant. An earlier attempt may have written to it before it was deleted; check Intune.", objectId: operation.targetId }
       if (matchesProposed(type, entry.body ?? {}, live) && (entry.assignments === null || sameAssignments(entry.assignments, live.assignments))) return { decision: "verified", objectId: operation.targetId!, readBack: "match" }
     }
     const sanitized = sanitizeSnapshot(type, live!).snapshot
     const before = captured.body ? operationFingerprint(operation.action, { snapshot: captured.body, sameNameIds: [] }) : "missing"
     if (operationFingerprint(operation.action, { snapshot: sanitized, sameNameIds: [] }) === before) return { decision: "write" }
+    if (operation.action === "update") return { decision: "stop", status: "uncertain", message: "The object holds neither the captured nor the proposed state, so an earlier attempt may have written part of the update. It is not written again; review it in Intune or roll it back to the captured state.", objectId: operation.targetId }
     return { decision: "stop", status: "failed", message: "The object changed after the review and holds neither the captured nor the proposed state. Create a fresh review.", objectId: operation.targetId }
   } catch (error) {
     return { decision: "stop", status: "uncertain", message: `Live state could not be read to reconcile: ${error instanceof Error ? error.message : String(error)}`, objectId: result.objectId }
@@ -589,7 +633,8 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     return await withTenantWrite(tenant, "Change set apply", async () => {
     const record = getChangeSet(deps, tenant, id)
     requireCisChangeSetEnabled(record.origin.workflow)
-    if (["in-review", "rejected", "stale"].includes(record.status)) throw new FeatureError("This change set needs an approval of its current content and target state.", 409)
+    if (record.status === "stale") throw new FeatureError(STALE, 409)
+    if (["in-review", "rejected"].includes(record.status)) throw new FeatureError("This change set needs an approval of its current content and target state.", 409)
     if (record.status === "applied") throw new FeatureError("This change set was already applied and verified.", 409)
     const review = record.review
     if (!review || review.decision !== "approved") throw new FeatureError("This change set is not approved.", 409)
@@ -721,7 +766,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
         }
         if (stopIfCisRevoked()) break operations
         if (observed.fingerprint !== review.operationFingerprints[operation.key]) {
-          saveResult(deps, tenant, id, operation.key, { ...current, status: "failed", message: "The object changed after approval. Nothing was written; create a fresh review.", at: at() }, actor, `${operation.name} changed after approval`)
+          saveResult(deps, tenant, id, operation.key, { ...current, status: "failed", message: "The object changed after approval. Nothing was written in this attempt; create a fresh review.", at: at() }, actor, `${operation.name} changed after approval`)
           continue
         }
       }

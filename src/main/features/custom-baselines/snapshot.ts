@@ -1,3 +1,4 @@
+import { normalizeBackupStatus } from "../../../portal/lib/backup-health"
 import type { Item } from "../../../shared/intune/registry"
 import type { FeatureDeps } from "../deps"
 import { FeatureError } from "../route"
@@ -37,18 +38,24 @@ async function json(response: Response, what: string): Promise<Record<string, un
 
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [])
 
+type BackupEntry = { id?: unknown; timestamp?: unknown; status?: unknown }
+
+async function listBackups(deps: FeatureDeps, tenantId: string): Promise<Array<BackupEntry & { id: string }>> {
+  const listing = await json(await deps.api("/api/list-backups", tenantId), "The backup list")
+  const backups = (Array.isArray(listing.backups) ? listing.backups : []) as BackupEntry[]
+  return backups.filter((backup): backup is BackupEntry & { id: string } => typeof backup.id === "string")
+}
+
+/** Complete backups count with any status the backup health view treats as success, such as "Succeeded". */
+function snapshotOption(backup: BackupEntry & { id: string }): SnapshotOption {
+  const status = typeof backup.status === "string" ? backup.status : "unknown"
+  const usable = normalizeBackupStatus(backup) === "success"
+  return { id: backup.id, timestamp: typeof backup.timestamp === "string" ? backup.timestamp : "", status, usable, reason: usable ? null : "Only complete backups (status Success) can become a company baseline." }
+}
+
 /** Backups of the tenant, newest first as the route lists them, with whether each can be used. */
 export async function listSnapshots(deps: FeatureDeps, tenantId: string): Promise<SnapshotOption[]> {
-  const listing = await json(await deps.api("/api/list-backups", tenantId), "The backup list")
-  const backups = (Array.isArray(listing.backups) ? listing.backups : []) as Array<{ id?: unknown; timestamp?: unknown; status?: unknown }>
-  return backups
-    .filter((backup) => typeof backup.id === "string")
-    .slice(0, 100)
-    .map((backup) => {
-      const status = typeof backup.status === "string" ? backup.status : "unknown"
-      const usable = status === "Success"
-      return { id: backup.id as string, timestamp: typeof backup.timestamp === "string" ? backup.timestamp : "", status, usable, reason: usable ? null : "Only complete backups (status Success) can become a company baseline." }
-    })
+  return (await listBackups(deps, tenantId)).slice(0, 100).map(snapshotOption)
 }
 
 /**
@@ -57,7 +64,9 @@ export async function listSnapshots(deps: FeatureDeps, tenantId: string): Promis
  * could not all be read: a company baseline never silently misses policies.
  */
 export async function readSnapshot(deps: FeatureDeps, tenantId: string, backupId: string): Promise<SnapshotPolicies> {
-  const chosen = (await listSnapshots(deps, tenantId)).find((backup) => backup.id === backupId)
+  // Looked up in the full list, not only the newest 100 the picker shows.
+  const found = (await listBackups(deps, tenantId)).find((backup) => backup.id === backupId)
+  const chosen = found ? snapshotOption(found) : null
   if (!chosen) throw new FeatureError("That backup was not found for this tenant.", 404)
   if (!chosen.usable) throw new FeatureError(chosen.reason ?? "This backup is not complete.", 409)
   const contents = await json(await deps.api("/api/list-backup-contents", tenantId, { backupId }), "The backup contents")
