@@ -232,6 +232,22 @@ describe("comparable CIS trends", () => {
     expect(cisDriftSignals(decline)).toMatchObject([{ benchmark: "windows-os", level: 1, previousRate: 1, currentRate: 0.5, kind: "below-bar" }])
   })
 
+  it("compares a Level with the previous run that measured it when a recommendation list names other Levels", () => {
+    const windowsL2 = pack("windows-os", "5.0.0", 2, ["win_l2"])
+    const list = { benchmark: "windows-os", version: "5.0.0", items: [{ identifier: "1.1", level: 1 as const, automated: true }, { identifier: "2.1", level: 2 as const, automated: true }] }
+    const excluded: CisException = { id: "exc-l2", benchmark: "windows-os", version: "5.0.0", level: 2, policyName: windowsL2[0]!.name, settingId: "win_l2", owner: "Owner", reason: "Accepted", expiresOn: "2099-01-01", createdAt: "2026-10-01T12:00:00.000Z" }
+    const points = cisReadinessTrend([
+      run("win-1", "2026-10-01T09:00:00.000Z", windows, ["Present", "Present"], "windows-os 5.0.0 Level 1"),
+      run("win-l2", "2026-10-02T09:00:00.000Z", windowsL2, ["Missing"], "windows-os 5.0.0 Level 2"),
+      run("win-2", "2026-10-03T09:00:00.000Z", windows, ["Missing", "Missing"], "windows-os 5.0.0 Level 1"),
+    ], list, [excluded], "2026-10-16")
+    const level1 = points.find(point => point.runId === "win-2")!.levels.find(level => level.level === 1)!
+    expect(level1).toMatchObject({ comparison: "compared", previousRunId: "win-1" })
+    expect(cisDriftSignals(points)).toMatchObject([{ benchmark: "windows-os", level: 1, previousRate: 1, currentRate: 0, kind: "below-bar" }])
+    // The Level 2 exclusion is used by the Level 2 run, not dropped for the Level 1 run listing Level 2.
+    expect(exclusionUse(points).get("exc-l2")).toEqual([{ benchmark: "windows-os", benchmarkName: null, version: "5.0.0", level: 2 }])
+  })
+
   it("keeps drift in the Health review on raw rates, so exclusions neither raise nor hide it", () => {
     const seed = (exceptions: CisException[]) => {
       const workspace = loadWorkspace(tenantId, "cis-benchmarks")

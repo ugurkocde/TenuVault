@@ -415,7 +415,7 @@ export function compareAssessments(a: CisReadinessEntry, b: CisReadinessEntry): 
 }
 
 /** The Levels a saved assessment measures: those of its pack policies and of the recommendations they carry. */
-function packLevels(policies: BaselinePolicy[]): Set<KitLevel> {
+export function packLevels(policies: BaselinePolicy[]): Set<KitLevel> {
   return new Set([...policies.map(levelOf), ...policies.flatMap(policy => (policy.recommendations ?? []).map(item => item.level))])
 }
 
