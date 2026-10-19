@@ -2,6 +2,7 @@ import { decodeXml } from "~/lib/storage/list"
 import { blobPath, isSafeArchivePath } from "../../../../shared/security"
 import { BACKUP_OWNER_FILE, MAX_BACKUP_ARCHIVE_BYTES, MAX_BACKUP_ARCHIVE_FILES } from "../../../../shared/constants"
 import { type NextRequest, NextResponse } from "next/server"
+import { OTHER_TENANT_BACKUP, ownedBy } from "~/lib/policies/backup-owner"
 
 interface ListedFile {
   path: string
@@ -181,8 +182,15 @@ export async function POST(request: NextRequest) {
     const results: Array<{success: boolean, path: string}> = []
     let processedFiles = 0
 
-    for (let i = 0; i < filePaths.length; i += batchSize) {
-      const batch = filePaths.slice(i, i + batchSize)
+    // The backup's metadata is read first, on its own: a shared container can hold other
+    // tenants' backups, and those are refused before any other file is read.
+    const metadataPath = `${backupId}/metadata.json`
+    const others = filePaths.filter((path) => path !== metadataPath)
+    const batches: string[][] = others.length === filePaths.length ? [] : [[metadataPath]]
+    for (let i = 0; i < others.length; i += batchSize) batches.push(others.slice(i, i + batchSize))
+    let foreign = false
+
+    for (const batch of batches) {
       const batchPromises = batch.map(async (filePath) => {
         try {
           const fileUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(filePath)}`
@@ -196,6 +204,11 @@ export async function POST(request: NextRequest) {
 
           if (fileResponse.ok) {
             const content = await fileResponse.arrayBuffer()
+            if (filePath === metadataPath) {
+              let metadata: unknown = null
+              try { metadata = JSON.parse(new TextDecoder().decode(content)) } catch { /* unreadable metadata names no owner */ }
+              if (!ownedBy(metadata, tenantId)) foreign = true
+            }
             // Remove the backup folder prefix from the path in the zip
             const zipPath = filePath.replace(`${backupId}/`, '')
 
@@ -220,6 +233,7 @@ export async function POST(request: NextRequest) {
 
       const batchResults = await Promise.all(batchPromises)
       results.push(...batchResults)
+      if (foreign) return NextResponse.json({ error: OTHER_TENANT_BACKUP }, { status: 403 })
     }
 
     const successCount = results.filter(r => r.success).length

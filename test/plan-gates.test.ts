@@ -317,3 +317,20 @@ describe("bulk backup and drift plan gates", () => {
     expect(drift).toHaveBeenCalledTimes(2)
   })
 })
+
+describe("planGuard tenant IDs", () => {
+  const request = (body: object) => new Request("http://tenuvault.internal/api/restore-backup", { method: "POST", body: JSON.stringify(body) })
+
+  it("answers 400 to a tenantId that is not a tenant ID instead of leaving it to the request", async () => {
+    const planOf = vi.fn(async () => null)
+    for (const tenantId of [`x/../${TENANT}`, `${TENANT}/..`, "contoso.onmicrosoft.com", ""]) {
+      expect((await planGuard(planOf)(request({ tenantId, restoreType: "full" })))?.status).toBe(400)
+    }
+    expect(planOf).not.toHaveBeenCalled()
+  })
+
+  it("answers 400 to a target tenant that is not a tenant ID", async () => {
+    const copy = request({ tenantId: TENANT, restoreType: "selective", selectedPolicies: [{}], targetTenants: [{ tenantId: `x/../${TENANT}`, appId: TENANT }] })
+    expect((await planGuard(async () => "msp")(copy))?.status).toBe(400)
+  })
+})

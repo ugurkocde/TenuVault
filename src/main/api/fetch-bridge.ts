@@ -76,6 +76,12 @@ export function createBridgedFetch(options: FetchBridgeOptions): typeof fetch {
 
       const tokenPath = url.hostname === "login.microsoftonline.com" ? TOKEN_PATH.exec(url.pathname) : null
       if (tokenPath?.[1]) {
+        // The tenant must be named as written: a path that URL parsing rewrites (such as
+        // `x/../<tenant>/...`) could otherwise be licensed and signed in as another tenant
+        // than the one the route checked.
+        if (typeof input === "string" && rawPath(input) !== url.pathname) {
+          return Response.json({ error: "invalid_request", error_description: "The tenant in the token URL is not a plain tenant ID." }, { status: 400 })
+        }
         const request = new Request(input, init)
         if (request.method === "POST") {
           const tenant = decodeURIComponent(tokenPath[1])
@@ -141,6 +147,11 @@ async function delegatedTokenResponse(
     console.error(`[auth] Delegated token for ${tenant} (${scope}) failed:`, error)
     return tokenError(401, "interaction_required", error)
   }
+}
+
+/** The path of an absolute URL exactly as written, before URL parsing resolves dot segments. */
+function rawPath(href: string): string {
+  return /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*([^?#]*)/i.exec(href)?.[1] || "/"
 }
 
 /** An error in the shape of a Microsoft identity platform token response. */

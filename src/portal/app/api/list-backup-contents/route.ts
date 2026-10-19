@@ -2,6 +2,7 @@ import { decodeXml, listBlobPages } from "~/lib/storage/list"
 import { INTUNE_TYPES, typeForFolder } from "../../../../shared/intune/registry"
 import { blobPath, isSafeArchivePath } from "../../../../shared/security"
 import { type NextRequest, NextResponse } from "next/server"
+import { OTHER_TENANT_BACKUP, ownedBy } from "~/lib/policies/backup-owner"
 
 interface PolicyFile {
   name: string
@@ -109,6 +110,8 @@ export async function POST(request: NextRequest) {
     } catch (err) {
       console.error("Failed to fetch metadata:", err)
     }
+
+    if (!ownedBy(metadata, tenantId)) return NextResponse.json({ error: OTHER_TENANT_BACKUP }, { status: 403 })
 
     const ordered = INTUNE_TYPES.map((type) => groups.get(type.folder)).filter((group): group is BackupGroup => !!group)
     for (const group of ordered) group.policies.sort((a, b) => (a.displayName || "").localeCompare(b.displayName || ""))

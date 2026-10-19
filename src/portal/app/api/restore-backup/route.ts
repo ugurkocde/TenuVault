@@ -1,6 +1,7 @@
 import { parseDependencyMappings } from "../../../../shared/intune/recovery"
 import { randomUUID } from "node:crypto"
 import { backupManifest, incompleteReason, snapshotHash, type ManifestEntry } from "~/lib/policies/backup-manifest"
+import { OTHER_TENANT_BACKUP, ownedBy } from "~/lib/policies/backup-owner"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { graphCaller, Restorer, DependencyMappingError, type RestoreOutcome } from "~/lib/policies/graph-restore"
 import { PROGRESS_ID, startProgress } from "~/lib/policies/restore-progress"
@@ -8,7 +9,7 @@ import { restoreOrder, type Item } from "../../../../shared/intune/registry"
 import { type NextRequest, NextResponse } from "next/server"
 async function getAccessToken(tenantId: string, appId: string, clientSecret: string, scope: string, forceRefresh = false) {
   const tokenResponse = await fetch(
-    `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`,
+    `https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`,
     {
       method: "POST",
       headers: {
@@ -120,6 +121,10 @@ export async function POST(request: NextRequest) {
       getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
     ])
 
+    // A shared container can hold other tenants' backups; never restore one of those.
+    const readMetadata = await readBackupMetadata(storageAccountName, storageToken, backupId)
+    if (readMetadata && !ownedBy(readMetadata.data, tenantId)) return NextResponse.json({ error: OTHER_TENANT_BACKUP }, { status: 403 })
+
     // Correlate the completed operation with its desktop audit event.
     const jobId = randomUUID()
 
@@ -173,7 +178,6 @@ export async function POST(request: NextRequest) {
     }
 
     const requireAuthenticated = mode === "replace" || assignments
-    const readMetadata = await readBackupMetadata(storageAccountName, storageToken, backupId)
     // An unauthenticated metadata record cannot vouch for completeness or fingerprints in a
     // restore that requires authenticated snapshots.
     const metadata = readMetadata && (!requireAuthenticated || readMetadata.authenticated) ? readMetadata.data : null

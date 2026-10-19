@@ -203,7 +203,7 @@ export async function POST(request: NextRequest) {
 
 async function getAccessToken(tenantId: string, appId: string, clientSecret: string, scope: string, forceRefresh = false): Promise<string> {
   const tokenResponse = await fetch(
-    `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`,
+    `https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`,
     {
       method: "POST",
       headers: {

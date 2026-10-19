@@ -4,6 +4,7 @@ import { typeForFolder } from "../../../../shared/intune/registry"
 import { comparable, compareBackups, type BackupFingerprint } from "../../../../shared/intune/backup-changes"
 import { compareObjects } from "../detect-drifts/route"
 import { withoutUnreadAssignments } from "../../../../shared/intune/read"
+import { OTHER_TENANT_BACKUP, ownedBy } from "~/lib/policies/backup-owner"
 
 /** Changed items that also get a field by field comparison; the rest are listed without one. */
 const MAX_DETAILED = 100
@@ -21,7 +22,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Missing required parameters" }, { status: 400 })
   }
 
-  const tokenResponse = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
+  const tokenResponse = await fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ client_id: appId, client_secret: clientSecret, scope: "https://storage.azure.com/.default", grant_type: "client_credentials" }),
@@ -41,6 +42,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const current = (await read(`${backupId}/metadata.json`)) as BackupFingerprint | null
+    if (!ownedBy(current, tenantId)) return NextResponse.json({ error: OTHER_TENANT_BACKUP }, { status: 403 })
     if (!current || !comparable(current)) {
       return NextResponse.json({ error: "This backup was made by an older version of TenuVault or did not finish, so its changes cannot be listed.", code: "NOT_COMPARABLE" }, { status: 409 })
     }
@@ -55,7 +57,8 @@ export async function POST(request: NextRequest) {
     let previous: { id: string; metadata: BackupFingerprint } | null = null
     for (const id of older) {
       const metadata = (await read(`${id}/metadata.json`)) as BackupFingerprint | null
-      if (metadata && comparable(metadata)) {
+      // A shared container also holds other tenants' backups; only this tenant's are compared.
+      if (metadata && ownedBy(metadata, tenantId) && comparable(metadata)) {
         previous = { id, metadata }
         break
       }
