@@ -18,9 +18,9 @@ async function setup() {
   const root = mkdtempSync(join(tmpdir(), 'tv-emulator-cond-')); roots.push(root)
   const store = new LocalBlobStore(root, [randomBytes(32)])
   await store.createContainer(account, container)
-  const send = (method: string, headers: Record<string, string> = {}, body?: string) =>
-    handleLocalBlobRequest(store, new Request(url, { method, headers: { 'x-ms-blob-type': 'BlockBlob', ...headers }, ...(body === undefined ? {} : { body }) }))
-  return { send }
+  const sendTo = (target: string) => (method: string, headers: Record<string, string> = {}, body?: string) =>
+    handleLocalBlobRequest(store, new Request(target, { method, headers: { 'x-ms-blob-type': 'BlockBlob', ...headers }, ...(body === undefined ? {} : { body }) }))
+  return { send: sendTo(url), sendTo }
 }
 
 it('writes with If-Match only while the ETag from the last read is current', async () => {
@@ -57,4 +57,14 @@ it('lets only one of two concurrent writes with the same If-Match succeed', asyn
   const tag = (await send('GET')).headers.get('etag')!
   const results = await Promise.all([send('PUT', { 'If-Match': tag }, '{"v":"a"}'), send('PUT', { 'If-Match': tag }, '{"v":"b"}')])
   expect(results.map(response => response.status).sort()).toEqual([201, 412])
+})
+
+it('keeps a tenant revert history under its nested path apart from the shared one', async () => {
+  const { send, sendTo } = await setup()
+  const tenant = sendTo(url.replace('/metadata/', '/metadata/11111111-1111-4111-8111-111111111111/'))
+  expect((await send('PUT', {}, '{"shared":true}')).status).toBe(201)
+  expect((await tenant('GET')).status).toBe(404)
+  expect((await tenant('PUT', { 'If-None-Match': '*' }, '{"tenant":true}')).status).toBe(201)
+  expect(await (await tenant('GET')).json()).toEqual({ tenant: true })
+  expect(await (await send('GET')).json()).toEqual({ shared: true })
 })
