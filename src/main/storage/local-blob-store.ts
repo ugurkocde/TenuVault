@@ -137,6 +137,8 @@ function versionOf(magic: Buffer): Version | null {
 
 export class BlobNotFoundError extends Error {}
 export class BlobAlreadyExistsError extends Error {}
+/** An If-Match ETag no longer matches the stored blob. */
+export class BlobConditionNotMetError extends Error {}
 
 export class IncompleteInventoryError extends Error {
   constructor(readonly unreadableFiles: number) {
@@ -186,6 +188,7 @@ export class LocalBlobStore {
   private readonly checks = new Map<string, { generation: number; started: boolean; entries: Promise<Map<string, Entry>> }>()
   /** Cleared once the folder's file system refuses a hard link. */
   private hardLinks = true
+  private readonly blobWrites = new Map<string, Promise<void>>()
 
   /**
    * @param root   Folder that holds the encrypted backups.
@@ -263,12 +266,35 @@ export class LocalBlobStore {
     return { blob, data: this.decrypt(body, bodyAad(version, account, container, name)) }
   }
 
-  async put(account: string, container: string, name: string, data: Uint8Array, contentType: string, createOnly = false, metadata?: Record<string, string>): Promise<StoredBlob> {
+  /**
+   * Writes one blob. Conditional writes (`ifMatch` with an ETag, or `*` for any
+   * existing blob) to the same blob run one at a time, so the check holds until the
+   * write is published. Unconditional writes are not ordered against them.
+   */
+  put(account: string, container: string, name: string, data: Uint8Array, contentType: string, createOnly = false, metadata?: Record<string, string>, ifMatch?: string): Promise<StoredBlob> {
+    if (ifMatch === undefined) return this.putNow(account, container, name, data, contentType, createOnly, metadata, undefined)
+    const key = `${this.dir(account, container)}\0${name}`
+    const run = (this.blobWrites.get(key) ?? Promise.resolve()).then(() => this.putNow(account, container, name, data, contentType, createOnly, metadata, ifMatch))
+    const tail = run.then(() => undefined, () => undefined)
+    this.blobWrites.set(key, tail)
+    void tail.then(() => { if (this.blobWrites.get(key) === tail) this.blobWrites.delete(key) })
+    return run
+  }
+
+  private async putNow(account: string, container: string, name: string, data: Uint8Array, contentType: string, createOnly: boolean, metadata: Record<string, string> | undefined, ifMatch: string | undefined): Promise<StoredBlob> {
     if (!(await this.containerExists(account, container))) throw new BlobNotFoundError(container)
     const entries = await this.entries(account, container)
     const current = this.keyring[0]!
     const existing = entries.get(name)
     if (createOnly && existing) throw new BlobAlreadyExistsError(name)
+    if (ifMatch !== undefined) {
+      // Compare with the file on disk, which is what a GET returns as the ETag.
+      let tag: string | null = null
+      if (existing) {
+        try { tag = `"${fileStamp(await stat(join(this.dir(account, container), existing.file), { bigint: true }))}"` } catch { /* Removed since listed. */ }
+      }
+      if (!tag || (ifMatch !== "*" && ifMatch !== tag)) throw new BlobConditionNotMetError(name)
+    }
     // A version 1 file keeps its name when overwritten, so the blob never has two files.
     const version = this.writeFormat
     const file = existing?.file ?? fileName(version, current.naming, account, container, name)
