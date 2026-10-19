@@ -33,6 +33,16 @@ afterEach(() => {
 
 const flush = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
 
+/** Flushes until `find` returns something; the panel renders once its query resolves. */
+async function waitFor<T>(find: () => T | null | undefined | false): Promise<T> {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const found = find()
+    if (found) return found
+    await flush()
+  }
+  throw new Error("Timed out waiting for the panel")
+}
+
 describe("Intune change watching form", () => {
   it("keeps unsaved edits through Poll now", async () => {
     state.auditWatch = { enabled: true, intervalMinutes: 60, categories: [], ignoreOwnChanges: true, includeActor: false, externalWatcher: false, lastPollAt: null, lastError: null, watermark: null }
@@ -43,9 +53,7 @@ describe("Intune change watching form", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const tenant = { id: 1, name: "Contoso", credentials: { tenantId: "tenant" } } as unknown as Tenant
     act(() => root.render(createElement(QueryClientProvider, { client }, createElement(NotificationsPanel, { tenant }))))
-    await flush()
-
-    const tile = container.querySelector('[aria-labelledby="notifications-audit-heading"]')!
+    const tile = await waitFor(() => container.querySelector('[aria-labelledby="notifications-audit-heading"]'))
     const interval = tile.querySelector("select")!
     act(() => {
       interval.value = "15"
@@ -55,9 +63,7 @@ describe("Intune change watching form", () => {
 
     const pollNow = [...tile.querySelectorAll("button")].find((button) => button.textContent === "Poll now")!
     await act(async () => { pollNow.click() })
-    await flush()
-    await flush()
-    expect(tile.textContent).not.toContain("Last poll: Never")
+    await waitFor(() => !tile.textContent?.includes("Last poll: Never"))
     expect(tile.querySelector("select")!.value).toBe("15")
   })
 })
