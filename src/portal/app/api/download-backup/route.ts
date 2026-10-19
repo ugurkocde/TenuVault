@@ -195,7 +195,8 @@ export async function POST(request: NextRequest) {
     const others = filePaths.filter((path) => path !== metadataPath)
     const batches: string[][] = others.length === filePaths.length ? [] : [[metadataPath]]
     for (let i = 0; i < others.length; i += batchSize) batches.push(others.slice(i, i + batchSize))
-    let foreign = false
+    let ownership: string | null = null
+    let untagged = false
 
     for (const batch of batches) {
       const batchPromises = batch.map(async (filePath) => {
@@ -212,9 +213,10 @@ export async function POST(request: NextRequest) {
           if (fileResponse.ok) {
             const content = await fileResponse.arrayBuffer()
             if (filePath === metadataPath) {
-              let metadata: unknown = null
-              try { metadata = JSON.parse(new TextDecoder().decode(content)) } catch { /* unreadable metadata names no owner */ }
-              if (!ownedBy(metadata, tenantId)) foreign = true
+              let metadata: unknown
+              try { metadata = JSON.parse(new TextDecoder().decode(content)) } catch { ownership = "The backup metadata could not be read." }
+              if (!ownership && !ownedBy(metadata, tenantId)) ownership = OTHER_TENANT_BACKUP
+              untagged = !ownership && typeof (metadata as { TenantId?: unknown } | null)?.TenantId !== "string"
             }
             // Remove the backup folder prefix from the path in the zip
             const zipPath = filePath.replace(`${backupId}/`, '')
@@ -240,7 +242,16 @@ export async function POST(request: NextRequest) {
 
       const batchResults = await Promise.all(batchPromises)
       results.push(...batchResults)
-      if (foreign) return NextResponse.json({ error: OTHER_TENANT_BACKUP }, { status: 403 })
+      // Ownership is settled by the metadata batch before any other file is read.
+      if (batch[0] === metadataPath && !ownership && !batchResults[0]?.success) ownership = "The backup metadata could not be read."
+      if (ownership) return NextResponse.json({ error: ownership }, { status: ownership === OTHER_TENANT_BACKUP ? 403 : 502 })
+      // Metadata that records no tenant is placed by the ownership marker, as the backup list does.
+      if (batch[0] === metadataPath && untagged) {
+        const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}`, {
+          headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${accessToken}` },
+        }), backupId, tenantId)
+        if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
+      }
     }
 
     const successCount = results.filter(r => r.success).length

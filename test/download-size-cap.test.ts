@@ -17,7 +17,7 @@ function stubListing(listing: string) {
     bodyFetches.push(url.pathname)
     // Blobs that are not listed do not exist.
     if (!listing.includes(`<Name>${decodeURIComponent(url.pathname.replace('/intune-backups/', ''))}</Name>`)) return new Response('', { status: 404 })
-    return Response.json({ policy: 'x' })
+    return Response.json(url.pathname.endsWith('/metadata.json') ? { TenantId: args.tenantId } : { policy: 'x' })
   }))
   return bodyFetches
 }

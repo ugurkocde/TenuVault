@@ -114,3 +114,34 @@ describe("backups without metadata and unreadable metadata", () => {
     expect(graph).toEqual([])
   })
 })
+
+describe("ownership is settled before other files are read", () => {
+  it("download refuses unreadable metadata without reading other files", async () => {
+    const reads: string[] = []
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input))
+      if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "test" })
+      if (url.searchParams.get("comp") === "list") return new Response(`<Blobs><Blob><Name>${backupId}/metadata.json</Name></Blob><Blob><Name>${policyPath}</Name></Blob></Blobs>`)
+      reads.push(url.pathname)
+      return url.pathname.endsWith("metadata.json") ? new Response("not json") : Response.json(snapshot)
+    }))
+    const response = await downloadBackup(request("/api/download-backup", base))
+    expect(response.status).toBe(502)
+    expect(reads).toEqual([`/intune-backups/${backupId}/metadata.json`])
+  })
+
+  it("backup changes places an older backup that records no tenant by its ownership marker", async () => {
+    const untagged = "backup-2026-09-24-120000"
+    const legacy = "backup-2026-09-23-120000"
+    const fingerprint = (tenantId?: string) => ({ ...(tenantId ? { TenantId: tenantId } : {}), Status: "Success", Items: {}, SkippedTypes: [], FailedTypes: [], ExcludedTypes: [] })
+    stubStorage({
+      [`${backupId}/metadata.json`]: fingerprint(OWN),
+      [`${untagged}/metadata.json`]: fingerprint(),
+      [`${untagged}/.tenuvault-owner.json`]: { TenantId: OTHER },
+      [`${legacy}/metadata.json`]: fingerprint(),
+    })
+    const response = await backupChanges(request("/api/backup-changes", base))
+    expect(response.status).toBe(200)
+    expect((await response.json()).comparedWith).toBe(legacy)
+  })
+})

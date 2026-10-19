@@ -4,7 +4,7 @@ import { typeForFolder } from "../../../../shared/intune/registry"
 import { comparable, compareBackups, type BackupFingerprint } from "../../../../shared/intune/backup-changes"
 import { compareObjects } from "../detect-drifts/route"
 import { withoutUnreadAssignments } from "../../../../shared/intune/read"
-import { ownedBy, readOwnedBackup } from "~/lib/policies/backup-owner"
+import { readOwnedBackup } from "~/lib/policies/backup-owner"
 
 /** Changed items that also get a field by field comparison; the rest are listed without one. */
 const MAX_DETAILED = 100
@@ -41,9 +41,10 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const owned = await readOwnedBackup((name) => fetch(`${container}/${name.split("/").map(encodeURIComponent).join("/")}`, {
+    const readBlob = (name: string) => fetch(`${container}/${name.split("/").map(encodeURIComponent).join("/")}`, {
       headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${accessToken}` },
-    }), backupId, tenantId)
+    })
+    const owned = await readOwnedBackup(readBlob, backupId, tenantId)
     if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
     const current = owned.metadata as BackupFingerprint | null
     if (!current || !comparable(current)) {
@@ -59,9 +60,11 @@ export async function POST(request: NextRequest) {
 
     let previous: { id: string; metadata: BackupFingerprint } | null = null
     for (const id of older) {
-      const metadata = (await read(`${id}/metadata.json`)) as BackupFingerprint | null
-      // A shared container also holds other tenants' backups; only this tenant's are compared.
-      if (metadata && ownedBy(metadata, tenantId) && comparable(metadata)) {
+      // A shared container also holds other tenants' backups; only this tenant's are compared,
+      // placed as the backup list places them. A backup that cannot be placed is skipped.
+      const candidate = await readOwnedBackup(readBlob, id, tenantId)
+      const metadata = candidate.ok ? candidate.metadata as BackupFingerprint | null : null
+      if (metadata && comparable(metadata)) {
         previous = { id, metadata }
         break
       }

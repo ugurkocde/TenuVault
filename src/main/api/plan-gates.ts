@@ -109,7 +109,8 @@ export function planGuard(planOf: (tenantId: string) => Promise<Plan | null>) {
       : []
     // Tenants are licensed by ID. Anything else (for example `x/../<id>`, which a token URL
     // resolves to <id>) would resolve to no plan and must not pass as an unusable tenant.
-    if (!isGuid(body.tenantId) || !targets.every(isGuid)) {
+    const namedTargets = Array.isArray(body.targetTenants) ? body.targetTenants.map((target: { tenantId?: unknown }) => target?.tenantId) : []
+    if (!isGuid(body.tenantId) || !namedTargets.every(isGuid)) {
       return Response.json({ error: "tenantId must be a tenant ID" }, { status: 400 })
     }
     for (const tenantId of [body.tenantId, ...targets]) {

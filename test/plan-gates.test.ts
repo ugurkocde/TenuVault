@@ -332,5 +332,9 @@ describe("planGuard tenant IDs", () => {
   it("answers 400 to a target tenant that is not a tenant ID", async () => {
     const copy = request({ tenantId: TENANT, restoreType: "selective", selectedPolicies: [{}], targetTenants: [{ tenantId: `x/../${TENANT}`, appId: TENANT }] })
     expect((await planGuard(async () => "msp")(copy))?.status).toBe(400)
+    for (const tenantId of [null, 1, undefined]) {
+      const malformed = request({ tenantId: TENANT, restoreType: "selective", selectedPolicies: [{}], targetTenants: [{ tenantId, appId: TENANT }] })
+      expect((await planGuard(async () => "msp")(malformed))?.status).toBe(400)
+    }
   })
 })

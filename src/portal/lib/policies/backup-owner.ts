@@ -21,10 +21,10 @@ export type BackupOwnerRead =
 const sealedElsewhere = (error: unknown) => error instanceof Error && error.name === "FetchApplicationError"
 
 /**
- * Reads a backup's metadata and checks that it belongs to `tenantId`. A backup without metadata
- * (still running, stopped, or from an older version) is placed by its ownership marker, as the
- * backup list does. Read failures are errors, never a pass. `read` fetches a blob of the
- * backup container by name.
+ * Reads a backup's metadata and checks that it belongs to `tenantId`. A backup whose metadata
+ * records no tenant, or that has none (still running, stopped, or from an older version), is
+ * placed by its ownership marker, as the backup list does; without a marker it is allowed. Read
+ * failures are errors, never a pass. `read` fetches a blob of the backup container by name.
  */
 export async function readOwnedBackup(read: (name: string) => Promise<Response>, backupId: string, tenantId: string): Promise<BackupOwnerRead> {
   let response: Response
@@ -39,10 +39,17 @@ export async function readOwnedBackup(read: (name: string) => Promise<Response>,
     try { metadata = await response.json() } catch { return { ok: false, status: 500, error: "The backup metadata could not be read." } }
     if (!ownedBy(metadata, tenantId)) return { ok: false, status: 403, error: OTHER_TENANT_BACKUP }
     const record = metadata && typeof metadata === "object" && !Array.isArray(metadata) ? metadata as Record<string, any> : null
-    return { ok: true, metadata: record, authenticated: response.headers.get("x-tenuvault-authenticated") === "true" }
+    const owned = { ok: true as const, metadata: record, authenticated: response.headers.get("x-tenuvault-authenticated") === "true" }
+    if (typeof record?.TenantId === "string") return owned
+    const owner = await readMarker(read, backupId, tenantId)
+    return owner.ok ? owned : owner
   }
   if (response.status !== 404) return { ok: false, status: 500, error: "Failed to read backup metadata" }
+  return readMarker(read, backupId, tenantId)
+}
 
+/** Places a backup whose metadata names no tenant by its ownership marker; no marker allows it. */
+async function readMarker(read: (name: string) => Promise<Response>, backupId: string, tenantId: string): Promise<BackupOwnerRead> {
   let marker: Response
   try {
     marker = await read(`${backupId}/${BACKUP_OWNER_FILE}`)
