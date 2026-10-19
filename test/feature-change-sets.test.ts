@@ -345,6 +345,37 @@ describe("change-set engine", () => {
     expect(context.backups).toEqual([TENANT_A])
   })
 
+  it("keeps a partly written update uncertain on retry and includes it in rollback", async () => {
+    const context = setup()
+    const existing = context.tenant.addPolicy({ name: "Defender baseline" })
+    const assignments = [{ target: { "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget", deviceAndAppManagementAssignmentFilterId: null, deviceAndAppManagementAssignmentFilterType: "none" } }]
+    const proposed: Item = { ...structuredClone(existing), description: "Hardened" }
+    const record = await createChangeSet(context.deps, TENANT_A, { title: "Harden and assign", operations: [{ folder: "ConfigurationPolicies", action: "update", targetId: existing.id as string, proposed, assignments }] }, "Admin")
+    const preview = await approve(context, record.id)
+    // The configuration is written; the assignment call never reaches Graph.
+    context.tenant.failWrite = (_method, path) => (path.endsWith("/assign") ? "throw" : undefined)
+    const first = (await context.post({ action: "apply", id: record.id, contentHash: preview.contentHash, confirm: true })).body.changeSet as ChangeSetRecord
+    expect(first.results["op-1"]!.status).toBe("uncertain")
+    expect(context.tenant.policies.get(existing.id as string)?.description).toBe("Hardened")
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const retried = (await context.post({ action: "retry", id: record.id, contentHash: preview.contentHash, confirm: true })).body.changeSet as ChangeSetRecord
+      expect(retried.status).toBe("uncertain")
+      expect(retried.results["op-1"]!.status).toBe("uncertain")
+      expect(retried.results["op-1"]!.message).toContain("may have written part of the update")
+      expect(retried.results["op-1"]!.message).not.toContain("Nothing was written")
+    }
+
+    const rollbackPreview = await context.post({ action: "rollback-preview", id: record.id })
+    expect(rollbackPreview.body.operations.map((operation: { key: string; action: string }) => [operation.key, operation.action])).toEqual([["op-1", "update"]])
+    context.tenant.failWrite = undefined
+    const rollback = (await context.post({ action: "rollback-create", id: record.id })).body.changeSet as ChangeSetRecord & { id: string }
+    const rollbackReview = await approve(context, rollback.id)
+    const applied = (await context.post({ action: "apply", id: rollback.id, contentHash: rollbackReview.contentHash, confirm: true })).body.changeSet as ChangeSetRecord
+    expect(applied.status).toBe("applied")
+    expect(context.tenant.policies.get(existing.id as string)?.description).toBe("")
+  })
+
   it("records a denied read-back as uncertain, not verified", async () => {
     const context = setup()
     const { record } = await threeOperations(context)

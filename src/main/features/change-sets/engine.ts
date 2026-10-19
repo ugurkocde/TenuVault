@@ -545,7 +545,9 @@ type Reconciled = { decision: "verified"; objectId: string; readBack: OperationR
 /**
  * Settles an operation whose previous write may or may not have happened, by reading live
  * state first. Verified results are recorded without writing again; only an operation whose
- * target still holds the captured pre-change state is written again.
+ * target still holds the captured pre-change state is written again. A target that holds
+ * neither state may have been partly written (for example the configuration but not the
+ * assignments), so it stays uncertain and rollback restores it from the capture.
  */
 async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOperation, result: OperationResult, entry: { body: Item | null; assignments: Item[] | null }, captured: { body: Item | null; sameNameIds: string[] }): Promise<Reconciled> {
   try {
@@ -567,12 +569,13 @@ async function reconcile(graph: GraphCall, type: IntuneType, operation: ChangeOp
     if (operation.action === "delete") {
       if (!live) return { decision: "verified", objectId: operation.targetId!, readBack: "missing" }
     } else {
-      if (!live) return { decision: "stop", status: "failed", message: "The object was deleted after the review. Nothing was written.", objectId: operation.targetId }
+      if (!live) return { decision: "stop", status: "failed", message: "The object no longer exists in the tenant. An earlier attempt may have written to it before it was deleted; check Intune.", objectId: operation.targetId }
       if (matchesProposed(type, entry.body ?? {}, live) && (entry.assignments === null || sameAssignments(entry.assignments, live.assignments))) return { decision: "verified", objectId: operation.targetId!, readBack: "match" }
     }
     const sanitized = sanitizeSnapshot(type, live!).snapshot
     const before = captured.body ? operationFingerprint(operation.action, { snapshot: captured.body, sameNameIds: [] }) : "missing"
     if (operationFingerprint(operation.action, { snapshot: sanitized, sameNameIds: [] }) === before) return { decision: "write" }
+    if (operation.action === "update") return { decision: "stop", status: "uncertain", message: "The object holds neither the captured nor the proposed state, so an earlier attempt may have written part of the update. It is not written again; review it in Intune or roll it back to the captured state.", objectId: operation.targetId }
     return { decision: "stop", status: "failed", message: "The object changed after the review and holds neither the captured nor the proposed state. Create a fresh review.", objectId: operation.targetId }
   } catch (error) {
     return { decision: "stop", status: "uncertain", message: `Live state could not be read to reconcile: ${error instanceof Error ? error.message : String(error)}`, objectId: result.objectId }
@@ -732,7 +735,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
         }
         if (stopIfCisRevoked()) break operations
         if (observed.fingerprint !== review.operationFingerprints[operation.key]) {
-          saveResult(deps, tenant, id, operation.key, { ...current, status: "failed", message: "The object changed after approval. Nothing was written; create a fresh review.", at: at() }, actor, `${operation.name} changed after approval`)
+          saveResult(deps, tenant, id, operation.key, { ...current, status: "failed", message: "The object changed after approval. Nothing was written in this attempt; create a fresh review.", at: at() }, actor, `${operation.name} changed after approval`)
           continue
         }
       }
