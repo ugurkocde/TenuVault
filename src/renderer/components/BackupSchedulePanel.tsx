@@ -151,7 +151,7 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
         {dailyExplained && <UpgradeNote feature="dailySchedule" />}
         {weeklyMessage && <p className="text-sm text-gray-500">{weeklyMessage}</p>}
 
-        {license && !license.entitled && (
+        {license && !tenantPlan(license) && (
           <div className="flex gap-3 rounded-3xl bg-amber-50 px-5 py-4 text-sm text-amber-900">
             <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
             <p>
