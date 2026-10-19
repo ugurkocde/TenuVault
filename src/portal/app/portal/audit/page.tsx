@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, Suspense } from "react"
+import { useState, useEffect, useRef, Suspense } from "react"
 import { useSelectedTenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
 import { 
@@ -69,10 +69,14 @@ function AuditPageContent() {
   const [stats, setStats] = useState<any>(null)
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [lastRefresh, setLastRefresh] = useState(new Date())
-  const [pagination, setPagination] = useState({
-    page: 1,
-    pageSize: 50,
-  })
+  // The page belongs to one query: any change to the tenant, dates, filters or applied
+  // search starts again at page 1 without a separate reset that could race the fetch.
+  const tenantKey = selectedTenant ? `${selectedTenant.id}:${selectedTenant.credentials?.tenantId ?? ""}:${selectedTenant.resources?.storageAccountName ?? ""}` : ""
+  const [appliedSearch, setAppliedSearch] = useState("")
+  const queryKey = JSON.stringify([tenantKey, dateRange, filters, appliedSearch])
+  const [pageState, setPageState] = useState({ key: queryKey, page: 1 })
+  const pagination = { page: pageState.key === queryKey ? pageState.page : 1, pageSize: 50 }
+  const setPage = (page: number) => setPageState({ key: queryKey, page })
   // The logs route reads only as far as a page needs, so there is no total. One extra
   // entry per request tells whether a next page exists.
   const [hasMore, setHasMore] = useState(false)
@@ -106,7 +110,7 @@ function AuditPageContent() {
           storageAccountName: selectedTenant.resources?.storageAccountName,
           filter: {
             ...dateFilter,
-            searchQuery: searchQuery || undefined,
+            searchQuery: appliedSearch || undefined,
             eventTypes: filters.eventTypes.length > 0 ? filters.eventTypes : undefined,
             severities: filters.severities.length > 0 ? filters.severities : undefined,
             results: filters.results.length > 0 ? filters.results : undefined,
@@ -173,36 +177,37 @@ function AuditPageContent() {
     }
   }
 
-  // Load logs on mount and when filters change
+  // Load logs for the current query and page. Keyed by the tenant's identity, not the
+  // tenant object, so a background update (such as a finished backup) keeps the page.
   useEffect(() => {
-    // Reset to page 1 when filters change
-    setPagination(prev => ({ ...prev, page: 1 }))
+    fetchLogs()
+  }, [queryKey, pagination.page, allowed])
+
+  useEffect(() => {
+    fetchStats()
+  }, [tenantKey, allowed, dateRange])
+
+  // Auto-refresh every 30 seconds with the query and page shown at that moment.
+  const refresh = useRef(() => {})
+  refresh.current = () => {
     fetchLogs()
     fetchStats()
-  }, [selectedTenant, allowed, dateRange, filters])
-
-  // Load logs when page changes
+    setLastRefresh(new Date())
+  }
   useEffect(() => {
-    fetchLogs()
-  }, [pagination.page])
+    if (!autoRefresh || !tenantKey || !allowed) return
 
-  // Auto-refresh every 30 seconds
-  useEffect(() => {
-    if (!autoRefresh || !selectedTenant || !allowed) return
-
-    const interval = setInterval(() => {
-      fetchLogs()
-      fetchStats()
-      setLastRefresh(new Date())
-    }, 30000) // 30 seconds
+    const interval = setInterval(() => refresh.current(), 30000) // 30 seconds
 
     return () => clearInterval(interval)
-  }, [autoRefresh, selectedTenant, allowed, dateRange, filters])
+  }, [autoRefresh, tenantKey, allowed])
 
-  // Handle search
+  // Handle search: a new search starts at page 1; the same search again reloads.
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
-    fetchLogs()
+    if (searchQuery !== appliedSearch) setAppliedSearch(searchQuery)
+    else if (pagination.page !== 1) setPage(1)
+    else fetchLogs()
   }
 
   // Export logs
@@ -706,7 +711,7 @@ function AuditPageContent() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setPagination(prev => ({ ...prev, page: Math.max(1, prev.page - 1) }))}
+                      onClick={() => setPage(Math.max(1, pagination.page - 1))}
                       disabled={pagination.page === 1 || loading}
                       className="text-xs sm:text-sm"
                     >
@@ -720,7 +725,7 @@ function AuditPageContent() {
                         value={pagination.page}
                         onChange={(e) => {
                           const page = parseInt(e.target.value) || 1
-                          setPagination(prev => ({ ...prev, page: Math.max(1, page) }))
+                          setPage(Math.max(1, page))
                         }}
                         className="h-8 w-12 sm:w-16 px-1 sm:px-2 text-center border border-gray-200 rounded-full text-xs sm:text-sm"
                       />
@@ -733,7 +738,7 @@ function AuditPageContent() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setPagination(prev => ({ ...prev, page: prev.page + 1 }))}
+                      onClick={() => setPage(pagination.page + 1)}
                       disabled={!hasMore || loading}
                       className="text-xs sm:text-sm"
                     >

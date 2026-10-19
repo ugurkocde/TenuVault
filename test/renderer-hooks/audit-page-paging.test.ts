@@ -69,6 +69,53 @@ describe("Audit log paging", () => {
     expect(button("Next").disabled).toBe(true)
   })
 
+  it("fetches only page 1 after a filter changes on a later page", async () => {
+    state.selected = tenant(1, "11111111-1111-1111-1111-111111111111")
+    const calls = stubApi((call) => Math.min(call.filter.limit, 200 - call.filter.offset))
+    await render()
+    await act(async () => button("Next").click())
+    await act(async () => button("Next").click())
+    expect(calls.at(-1)!.filter.offset).toBe(100)
+
+    await act(async () => button("Filters").click())
+    const before = calls.length
+    const select = document.querySelector("select")!
+    await act(async () => {
+      ;[...select.options].find((option) => option.value === "BACKUP_FAILED")!.selected = true
+      select.dispatchEvent(new Event("change", { bubbles: true }))
+    })
+    expect(calls.slice(before).map((call) => call.filter)).toEqual([expect.objectContaining({ offset: 0, eventTypes: ["BACKUP_FAILED"] })])
+    expect(text()).toContain("Showing 1 to 50")
+  })
+
+  it("starts a search at page 1", async () => {
+    state.selected = tenant(1, "11111111-1111-1111-1111-111111111111")
+    const calls = stubApi((call) => Math.min(call.filter.limit, 200 - call.filter.offset))
+    await render()
+    await act(async () => button("Next").click())
+    const input = document.querySelector<HTMLInputElement>('input[type="search"]')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "firewall")
+      input.dispatchEvent(new Event("input", { bubbles: true }))
+    })
+    const before = calls.length
+    await act(async () => input.form!.requestSubmit())
+    expect(calls.slice(before).map((call) => call.filter)).toEqual([expect.objectContaining({ offset: 0, searchQuery: "firewall" })])
+    expect(text()).toContain("Showing 1 to 50")
+  })
+
+  it("keeps the page when the selected tenant object is replaced by a background update", async () => {
+    state.selected = tenant(1, "11111111-1111-1111-1111-111111111111")
+    const calls = stubApi((call) => Math.min(call.filter.limit, 200 - call.filter.offset))
+    const root = await render()
+    await act(async () => button("Next").click())
+    const before = calls.length
+    state.selected = { ...state.selected, name: "Tenant 1 after backup" }
+    await act(async () => root.render(createElement(AuditPage)))
+    expect(calls.length).toBe(before)
+    expect(text()).toContain("Showing 51 to 100")
+  })
+
   it("shows the real count when everything fits on one page", async () => {
     state.selected = tenant(1, "11111111-1111-1111-1111-111111111111")
     stubApi(() => 3)
