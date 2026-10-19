@@ -47,11 +47,17 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
   const [weekday, setWeekday] = useState(0)
   const [saving, setSaving] = useState(false)
   const [prefs, setPrefs] = useState<AppPreferences | null>(null)
+  const [prefsError, setPrefsError] = useState<string | null>(null)
+  const [prefsSaveError, setPrefsSaveError] = useState<string | null>(null)
   const [runner, setRunner] = useState<{ installed: boolean } | null>(null)
   const [timeError, setTimeError] = useState(false)
   const timeInput = useRef<HTMLInputElement>(null)
 
-  useEffect(() => void bridge.preferences.get().then(setPrefs), [])
+  const loadPrefs = () => {
+    setPrefsError(null)
+    bridge.preferences.get().then(setPrefs, (error: unknown) => setPrefsError(error instanceof Error ? error.message : String(error)))
+  }
+  useEffect(loadPrefs, [])
   useEffect(() => void bridge.backgroundLaunch.status().then(setRunner).catch(() => undefined), [])
   useEffect(() => {
     const draft = drafts.get(tenantId)
@@ -87,7 +93,14 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
     }
   }
 
-  const setPreference = async (changes: Partial<AppPreferences>) => setPrefs(await bridge.preferences.set(changes))
+  const setPreference = async (changes: Partial<AppPreferences>) => {
+    setPrefsSaveError(null)
+    try {
+      setPrefs(await bridge.preferences.set(changes))
+    } catch (error) {
+      setPrefsSaveError(error instanceof Error ? error.message : String(error))
+    }
+  }
 
   const weeklyMessage = weeklyScheduleNote(plan, !!(current?.enabled && current.frequency === "weekly") || (enabled && frequency === "weekly"))
   const select = "h-10 rounded-full border border-gray-300 bg-white px-4 text-sm"
@@ -188,7 +201,14 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
               />
               Keep running in the tray when I close the window
             </label>
+            {prefsSaveError && <p role="alert" className="text-xs text-red-600">Could not save the background runner setting: {prefsSaveError}</p>}
           </>}
+          {prefsError && (
+            <div className="flex flex-wrap items-center gap-3">
+              <p role="alert" className="text-xs text-red-600">Could not load the background runner settings: {prefsError}</p>
+              <Button variant="outline" size="sm" onClick={loadPrefs}>Try again</Button>
+            </div>
+          )}
         </div>
       </div>
       <BackupScopeSettings tenantId={tenantId} tenantName={tenantName} />
