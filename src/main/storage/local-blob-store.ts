@@ -184,6 +184,8 @@ export class LocalBlobStore {
   private readonly writes = new Map<string, number>()
   private readonly rebuilding = new Map<string, Promise<Map<string, Entry>>>()
   private readonly checks = new Map<string, { generation: number; started: boolean; entries: Promise<Map<string, Entry>> }>()
+  /** Cleared once the folder's file system refuses a hard link. */
+  private hardLinks = true
 
   /**
    * @param root   Folder that holds the encrypted backups.
@@ -291,7 +293,7 @@ export class LocalBlobStore {
         } finally {
           await handle.close()
         }
-        if (createOnly) await link(tmp, path) // Atomic creation across store/process instances.
+        if (createOnly) await this.publishNew(tmp, path)
         else await rename(tmp, path)
         this.changed(dir)
         if (process.platform !== "win32") await syncDirectory(dir)
@@ -332,6 +334,32 @@ export class LocalBlobStore {
       this.changed(dir)
       this.updateEntry(dir, entries, name)
     })
+  }
+
+  /**
+   * Publishes a complete temporary file under a name that must not exist yet. A hard link does
+   * both atomically across store and process instances. File systems without hard links (exFAT,
+   * FAT32, some network shares) claim the name with an exclusive create instead, so a second
+   * writer still fails with EEXIST, then rename the complete file over the empty claim. Readers
+   * can see the empty claim only for that moment.
+   */
+  private async publishNew(tmp: string, path: string): Promise<void> {
+    if (this.hardLinks) {
+      try {
+        await link(tmp, path)
+        return
+      } catch (error) {
+        if (!NO_HARD_LINKS.has((error as NodeJS.ErrnoException).code ?? "")) throw error
+        this.hardLinks = false
+      }
+    }
+    await (await open(path, "wx", 0o600)).close()
+    try {
+      await rename(tmp, path)
+    } catch (error) {
+      await rm(path, { force: true })
+      throw error
+    }
   }
 
   /** Own directory mutations update the cache without making the next put rebuild it. */
@@ -569,6 +597,9 @@ export class LocalBlobStore {
     throw new Error("This backup was encrypted with a key this device does not have. Import its recovery key.")
   }
 }
+
+/** Errors of a file system that has no hard links. */
+const NO_HARD_LINKS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"])
 
 /** Marks a listed file that was removed before it could be read. */
 const VANISHED = Symbol("vanished")
