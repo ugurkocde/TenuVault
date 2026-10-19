@@ -341,9 +341,19 @@ export class LocalBlobStore {
    * both atomically across store and process instances. File systems without hard links (exFAT,
    * FAT32, some network shares) claim the name with an exclusive create instead, so a second
    * writer still fails with EEXIST, then rename the complete file over the empty claim. Readers
-   * can see the empty claim only for that moment.
+   * skip an empty file, so the claim is never reported as unreadable. A claim left behind by a
+   * crash is taken over once it is older than STALE_CLAIM_MS.
    */
   private async publishNew(tmp: string, path: string): Promise<void> {
+    try {
+      await this.createNew(tmp, path)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || !(await this.removeStaleClaim(path))) throw error
+      await this.createNew(tmp, path)
+    }
+  }
+
+  private async createNew(tmp: string, path: string): Promise<void> {
     if (this.hardLinks) {
       try {
         await link(tmp, path)
@@ -359,6 +369,29 @@ export class LocalBlobStore {
     } catch (error) {
       await rm(path, { force: true })
       throw error
+    }
+  }
+
+  /**
+   * Removes an empty claim that no writer finished, and returns whether it did. The claim is moved
+   * aside first, so of several writers taking over the same claim only one moves it; a file that
+   * turns out not to be that claim is put back.
+   */
+  private async removeStaleClaim(path: string): Promise<boolean> {
+    try {
+      const claim = await stat(path, { bigint: true })
+      if (claim.size !== 0n || Date.now() - Number(claim.mtimeMs) < STALE_CLAIM_MS) return false
+      const aside = `${path}.${randomBytes(4).toString("hex")}.stale`
+      await rename(path, aside)
+      const moved = await stat(aside, { bigint: true })
+      if (moved.ino !== claim.ino || moved.size !== 0n) {
+        await rename(aside, path)
+        return false
+      }
+      await rm(aside, { force: true })
+      return true
+    } catch {
+      return false
     }
   }
 
@@ -489,7 +522,11 @@ export class LocalBlobStore {
     }
   }
 
-  /** Returns null for a file that cannot be read, and VANISHED for one removed since it was listed. */
+  /**
+   * Returns null for a file that cannot be read, and VANISHED for one removed since it was listed
+   * or an empty file. Every blob file has a header, so an empty one is a create-only claim that a
+   * writer is about to fill or never finished (see publishNew), not a damaged blob.
+   */
   private async readEntry(dir: string, account: string, container: string, file: string): Promise<Entry | null | typeof VANISHED> {
     const path = join(dir, file)
     let handle: Awaited<ReturnType<typeof open>> | undefined
@@ -497,6 +534,7 @@ export class LocalBlobStore {
       handle = await open(path, "r")
       const prefix = Buffer.alloc(MAGIC_LENGTH + 2)
       const prefixRead = await handle.read(prefix, 0, prefix.length, 0)
+      if (prefixRead.bytesRead === 0 && (await handle.stat()).size === 0) return VANISHED
       const version = prefixRead.bytesRead === prefix.length ? versionOf(prefix.subarray(0, MAGIC_LENGTH)) : null
       if (!version) throw new Error("Invalid backup header")
       const headerLength = prefix.readUInt16BE(MAGIC_LENGTH)
@@ -550,7 +588,7 @@ export class LocalBlobStore {
     })
     let unreadable = 0
     for (const entry of read) {
-      // A file removed since the listing (retention, another device) is simply gone.
+      // A file removed since the listing (retention, another device) is simply gone, and an empty claim holds no blob yet.
       if (entry === VANISHED) continue
       // A file that cannot be read, or a second file for the same blob, is unreadable.
       if (!entry || entries.has(entry.name)) unreadable++
@@ -601,7 +639,10 @@ export class LocalBlobStore {
 /** Errors of a file system that has no hard links. */
 const NO_HARD_LINKS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"])
 
-/** Marks a listed file that was removed before it could be read. */
+/** Age after which an empty create-only claim counts as left behind by a writer that stopped. */
+const STALE_CLAIM_MS = 60_000
+
+/** Marks a listed file that was removed before it could be read, or an empty claim. */
 const VANISHED = Symbol("vanished")
 
 function isMissing(error: unknown): boolean {
