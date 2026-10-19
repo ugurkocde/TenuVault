@@ -2,11 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { POST } from '../src/portal/app/api/revert-policy/route'
 import { NextRequest } from '../src/main/api/next-server-shim'
 
+const TENANT = '11111111-1111-4111-8111-111111111111'
 const backupPath = 'backup-2026-09-25-120000/DeviceConfigurations/Example.json'
 const snapshot = { id: 'p1', displayName: 'Firewall', '@odata.type': '#microsoft.graph.windows10CustomConfiguration', omaSettings: [] }
 const restore = (policyId: string) => POST(new NextRequest('http://tenuvault.internal/api/revert-policy', {
   method: 'POST',
-  body: JSON.stringify({ tenantId: 'tenant', appId: 'app', clientSecret: 'placeholder', storageAccountName: 'storage', action: 'restore', policyId, policyType: 'deviceConfiguration', backupPath }),
+  body: JSON.stringify({ tenantId: TENANT, appId: 'app', clientSecret: 'placeholder', storageAccountName: 'storage', action: 'restore', policyId, policyType: 'deviceConfiguration', backupPath }),
 }))
 
 type History = { reverts: Record<string, Array<{ action: string }>> }
@@ -19,7 +20,8 @@ function stubStorage(options: { history?: History; readStatus?: number; beforeWr
     const url = new URL(String(input))
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'token' })
     if (url.hostname === 'graph.microsoft.com') return Response.json({ id: 'copy' }, { status: 201 })
-    if (!url.pathname.endsWith('/metadata/revert-history.json')) return Response.json(snapshot)
+    if (url.pathname.endsWith('/metadata/revert-history.json')) return new Response('missing', { status: 404 })
+    if (!url.pathname.endsWith(`/metadata/${TENANT}/revert-history.json`)) return Response.json(snapshot)
     if ((init?.method ?? 'GET') === 'GET') {
       if (options.readStatus) return new Response('busy', { status: options.readStatus })
       return blob.body ? Response.json(blob.body, { headers: { etag: `"${blob.etag}"` } }) : new Response('missing', { status: 404 })

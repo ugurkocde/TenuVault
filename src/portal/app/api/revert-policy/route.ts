@@ -1,7 +1,8 @@
 import { readOwnedBackup } from "~/lib/policies/backup-owner"
 import { validPolicyPath } from "~/lib/policies/restore"
-import { isGraphId } from "../../../../shared/security"
+import { isGraphId, isGuid } from "../../../../shared/security"
 import { graphCaller, Restorer } from "~/lib/policies/graph-restore"
+import { readLegacyRevertHistory, revertHistoryPath } from "~/lib/policies/revert-history"
 import { type NextRequest, NextResponse } from "next/server"
 interface RevertPolicyRequest {
   tenantId: string
@@ -71,6 +72,10 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // The revert history is kept per tenant ID, so refuse anything else before changing the tenant.
+    if (!isGuid(tenantId)) {
+      return NextResponse.json({ error: 'Invalid tenant ID' }, { status: 400 })
+    }
     if (action !== 'restore' && action !== 'revert') {
       return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
     }
@@ -148,6 +153,7 @@ export async function POST(request: NextRequest) {
       await writeRevertMetadata(
         storageAccountName,
         storageToken,
+        tenantId,
         policyId,
         {
           timestamp: new Date().toISOString(),
@@ -190,7 +196,7 @@ export async function POST(request: NextRequest) {
       metadata.newPolicyId = result.policyId
     }
     
-    await writeRevertMetadata(storageAccountName, storageToken, policyId, metadata)
+    await writeRevertMetadata(storageAccountName, storageToken, tenantId, policyId, metadata)
 
     return NextResponse.json({
       success: true,
@@ -239,12 +245,19 @@ const REVERT_HISTORY_ATTEMPTS = 5
 async function writeRevertMetadata(
   storageAccountName: string,
   accessToken: string,
+  tenantId: string,
   policyId: string,
   metadata: RevertMetadata
 ): Promise<void> {
-  const metadataPath = "metadata/revert-history.json"
-  const metadataUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups/${metadataPath}`
-  
+  // Each tenant keeps its own history: a container can be shared by several tenants.
+  const metadataPath = revertHistoryPath(tenantId)
+  if (!metadataPath) {
+    console.error("Invalid tenant ID; not recording revert history")
+    return
+  }
+  const blobUrl = (name: string) => `https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`
+  const metadataUrl = blobUrl(metadataPath)
+
   try {
     // Each attempt reads the history and writes it back only if nobody changed it
     // in between (If-Match, or If-None-Match for a new file); a 412 starts over.
@@ -276,6 +289,17 @@ async function writeRevertMetadata(
         // Only a missing file starts a new history. Any other failure would erase it.
         console.error("Failed to read revert history:", getResponse.status, getResponse.statusText)
         return
+      } else {
+        // A new history starts with this tenant's entries from the old shared file, which stays as it is.
+        try {
+          existingData = await readLegacyRevertHistory((name) => fetch(blobUrl(name), {
+            headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${accessToken}` },
+          }), tenantId) as typeof existingData
+        } catch (error) {
+          // Starting without them would hide those entries from this tenant for good.
+          console.error("Failed to read the legacy revert history:", error)
+          return
+        }
       }
 
       // Ensure structure exists
