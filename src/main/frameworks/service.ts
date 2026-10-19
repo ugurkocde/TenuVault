@@ -19,6 +19,7 @@ import { CisContentError, fetchCisCatalog, fetchCisPack } from "./cis-content"
 import { BENCHMARK_ID_PATTERN, MAX_CIS_BENCHMARK_ID_LENGTH, VERSION_PATTERN, type CisLevel } from "../../shared/frameworks/cis-content"
 import { retryableStatus, retryDelay, sleep } from "../graph-retry"
 import { cisExportFileName, knownBenchmarkName } from "../../shared/frameworks/cis-display"
+import { kitLevelForPolicy } from "../../shared/frameworks/cis-flow"
 import { MAX_DEFINITIONS } from "../../shared/intune/drift-format"
 import { readSettingNames } from "../../portal/lib/drift/setting-names"
 import { graphCaller } from "../../portal/lib/policies/graph-restore"
@@ -490,7 +491,7 @@ function addCisException(workspace: FrameworkWorkspace, body: RecordJson, today:
     const provenance = policy.provenance ?? {}
     const bench = typeof provenance.benchmark === "string" ? provenance.benchmark : ""
     const ver = typeof provenance.version === "string" ? provenance.version : ""
-    const lvl = typeof provenance.level === "string" && provenance.level.includes("2") ? 2 : 1
+    const lvl = kitLevelForPolicy(policy)
     return bench === input.benchmark && ver === input.version && lvl === input.level && finding.policyName === input.policyName && finding.settingId === input.settingId
   }))
   if (!matchesFinding) throw new FrameworkError("No saved assessment finding matches this exception. Run an assessment for this benchmark first.")
@@ -618,9 +619,9 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       let policies: BaselinePolicy[]
       try { policies = parsePolicies(pack.policies); if (pack.recommendations) policies = attachRecommendations(policies, pack.recommendations) }
       catch (error) { throw new FrameworkError(error instanceof Error ? error.message : "The CIS pack is invalid.") }
-      // The catalog display name travels in the provenance, so saved assessments keep it.
+      // The validated benchmark, version, Level and catalog display name travel in the provenance, so saved assessments keep them.
       const benchmarkName = cisBenchmarkNames.get(`${pack.benchmark}@${pack.version}`) ?? knownBenchmarkName(pack.benchmark)
-      if (benchmarkName) policies = policies.map(policy => ({ ...policy, provenance: { ...policy.provenance, benchmarkName } }))
+      policies = policies.map(policy => ({ ...policy, provenance: { ...policy.provenance, benchmark: pack.benchmark, version: pack.version, level: `Level ${pack.level}`, ...(benchmarkName ? { benchmarkName } : {}) } }))
       const reference = `${pack.benchmark} ${pack.version} Level ${pack.level}`
       const workspace = loadWorkspace(body.tenantId, body.frameworkId)
       workspace.policies = policies
