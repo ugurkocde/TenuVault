@@ -21,7 +21,7 @@ import { ApiHost } from "./api/host"
 import { routes } from "./api/routes"
 import { AuthManager, SignInRequiredError } from "./auth/msal"
 import { BackupEngine, verifyStorageAccess, type BackupJob } from "./backup/engine"
-import { BackupScheduler, reportsResult, scheduledResult } from "./backup/scheduler"
+import { BackupScheduler, reportsResult, runUnattended, scheduledResult } from "./backup/scheduler"
 import { runTrayBackups } from "./backup/tray-backup"
 import { prepareScheduleInput } from "./backup/schedule-input"
 import { BackgroundLaunch } from "./backup/background-launch"
@@ -528,10 +528,12 @@ async function bootstrap(): Promise<void> {
       failedAttempts.record({ tenantId, trigger, slot, message: refused })
       return { status: "Failed" as const, message: refused }
     }
-    const job = engine.start({ tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, scope: scopes.get(tenantId).scope, trigger, slot })
-    const origin = unattendedBackupTriggers.get(job) ?? { trigger, notified: false }
-    unattendedBackupTriggers.set(job, origin)
-    await waitForJob(job)
+    let origin = { trigger, notified: false }
+    const job = await runUnattended(engine, { tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, scope: scopes.get(tenantId).scope, trigger, slot }, (started) => {
+      origin = unattendedBackupTriggers.get(started) ?? { trigger, notified: false }
+      unattendedBackupTriggers.set(started, origin)
+      return waitForJob(started)
+    })
     const result = scheduledResult(job)
     // A repeated failure to reach Microsoft or storage in the same slot was already reported.
     if (!reportsResult(afterFailure, result)) return result
