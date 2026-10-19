@@ -34,7 +34,7 @@ import { BackupKeys } from "./backup/keys"
 import { readBackupSettings } from "./backup/settings"
 import { localInventoryProblem } from "./backup/local-inventory"
 import { encryptedAzureFetch, registerStorageToken } from "./storage/azure-seal"
-import { handleLocalBlobRequest, isLocalAccount } from "./storage/blob-emulator"
+import { handleLocalBlobRequest, isLocalAccount, localRoutesRunning } from "./storage/blob-emulator"
 import { LocalBlobStore } from "./storage/local-blob-store"
 import { setRestoreJournalStore, setRestoreJournalAuthorization } from "./storage/restore-journal"
 import { accountStore, secureCachePlugin } from "./auth/stores"
@@ -806,7 +806,15 @@ async function bootstrap(): Promise<void> {
     if (includedTypes(normalized).length === 0) throw new Error("Choose at least one type to back up.")
     return scopes.set(tenantId, normalized)
   })
+  // Every local storage request resolves the folder when it is made, so a change while a backup,
+  // restore or import uses it would split that work across two folders.
+  const assertLocalFolderIdle = () => {
+    if (importingArchive || engine.hasLocalWork() || localRoutesRunning()) {
+      throw new Error("A backup, restore or archive import is using the backup folder. Wait for it to finish, then change the folder.")
+    }
+  }
   handleTrusted("backups:chooseFolder", async () => {
+    assertLocalFolderIdle()
     const result = await dialog.showOpenDialog(mainWindow!, {
       title: "Choose where TenuVault stores backups",
       defaultPath: localFolder(),
@@ -814,6 +822,8 @@ async function bootstrap(): Promise<void> {
     })
     const folder = result.filePaths[0]
     if (!result.canceled && folder) {
+      // Work may have started while the dialog was open.
+      assertLocalFolderIdle()
       appStore.set(LOCAL_FOLDER_KEY, folder)
       localStore = null
       checkStore = null
