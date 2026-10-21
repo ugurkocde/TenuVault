@@ -179,7 +179,7 @@ For screenshots and a walkthrough of switching from stable to nightly, see [Try 
 | Control | What it does |
 | --- | --- |
 | **Download and install updates automatically** | On by default. TenuVault checks 15 seconds after start and every 6 hours, downloads updates in the background and installs them when it restarts. Turning it off prevents installation of a pending update. |
-| **Get nightly builds** | Opt into previews between stable releases. Turn it off to return to the current stable release, even if it is older than the installed nightly. |
+| **Get nightly builds** | Opt into previews between stable releases. A stable release newer than the latest nightly is offered too. Turn it off to return to the current stable release, even if it is older than the installed nightly. |
 | **Check now** | Checks immediately. Disabled while automatic updates are off. |
 | **Restart and update** | Appears when an update has downloaded. Restarts TenuVault and installs it. |
 
@@ -197,7 +197,7 @@ The status line shows the current state:
 | **Automatic updates are off.** | You turned automatic updates off. |
 | **Your organization manages updates for TenuVault.** | An administrator turned updates off by policy. The checkbox is locked. See [Deploy TenuVault in your organization](/deploy/#control-automatic-updates). |
 
-Stable installs follow stable by default. Enable **Get nightly builds** to receive previews between stable releases. Turn it off to download the current stable release, even if it is older than your installed nightly. Changing channels replaces a pending update and checks the selected channel immediately. See [Install and update TenuVault](/getting-started/install/#updates).
+Stable installs follow stable by default. Enable **Get nightly builds** to receive previews between stable releases, plus any stable release that is newer than the latest nightly. Turn it off to download the current stable release, even if it is older than your installed nightly. Changing channels replaces a pending update and checks the selected channel immediately. See [Install and update TenuVault](/getting-started/install/#updates).
 
 ## About
 

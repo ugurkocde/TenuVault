@@ -5,6 +5,7 @@ import { promisify } from "node:util"
 import { app, systemPreferences } from "electron"
 import electronUpdater, { CancellationToken } from "electron-updater"
 import type { UpdateStatus } from "../shared/ipc"
+import { RELEASE_FEED, ReleaseProvider } from "./update-provider"
 
 const { autoUpdater } = electronUpdater
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000
@@ -94,6 +95,8 @@ export class Updates {
     // from staging an update before the user has finished choosing the channel.
     autoUpdater.autoInstallOnAppQuit = false
     autoUpdater.logger = null
+    // The GitHub feed of app-update.yml, but nightly checks also offer a newer stable release.
+    autoUpdater.setFeedURL({ ...RELEASE_FEED, provider: "custom", updateProvider: ReleaseProvider })
     autoUpdater.on("checking-for-update", () => {
       if (this.currentActivity()) this.set({ state: "checking" })
     })

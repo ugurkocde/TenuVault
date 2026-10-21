@@ -682,8 +682,9 @@ export function Updates() {
         </label>
         {saveError && <p role="alert" className="text-red-700">Could not save the update setting: {saveError}</p>}
         <p className="text-xs text-gray-500">
-          Enable this to try preview builds between stable releases. Turn it off to download the current stable
-          release, even if its version is older than your installed nightly. Changing channels replaces any pending
+          Enable this to try preview builds between stable releases. A stable release newer than the latest nightly
+          is offered too. Turn it off to download the current stable release, even if its version is older than your
+          installed nightly. Changing channels replaces any pending
           update. Nightly builds may contain bugs.
         </p>
         <p className="text-gray-600">{describe()}</p>
