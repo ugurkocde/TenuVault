@@ -29,22 +29,7 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 Put these in the next stable release's notes, then remove them here.
 
-- Internal benchmark deployments (local opt-in only, not in shipped customer builds) can deploy imported benchmark policies and remediate deviating findings through reviewed change sets. New policies are created unassigned, a pre-change backup runs before any write, and rollback is a separate reviewed change set.
-- Audit queries and exports accept date ranges of up to 90 days. Export longer history in separate ranges. Read-only drift scans no longer create audit events; existing drift events stay readable.
-
-- Local backup file format. New and overwritten local backup files are written in the TVB2
-  format, which binds each file to its tenant folder. Every released version since 0.2.0 reads
-  TVB2, and files written earlier stay readable. Reading the older TVB1 format is kept until at
-  least 0.5.0.
-- Restores now check backup completeness and recorded item fingerprints before writing, and unverified legacy snapshots can no longer restore assignments. Restores from an incomplete backup, or of a file that no longer matches its recorded fingerprint, are refused. Restore an unassigned copy from a legacy backup, or restore from a complete backup instead.
-
-- The restore wizard can validate a backup without restoring it. Validate backup (no changes) checks manifest completeness, decryptability, recorded fingerprints, policy payloads and assignment references for every item, and reports pass and fail counts per policy type. Nothing is written to the tenant.
-
-- Promotion keeps the destination policy's scope tags on update and blocks promotion of redacted policies without acknowledgement. Acknowledged promotions omit secrets, which must be set again in the destination.
-
-- Framework, policy pack and CIS PDF reports have a new design: cover, contents and bookmarks, status pills and page numbers. OpenIntuneBaseline PDF reports (Existing Deployment comparison and Policy Validation) share that design and still print through the app's built-in Chromium engine, so tenant and policy names in any script print as recorded. Framework, policy pack and CIS reports keep their built-in PDF font, which prints Western European characters only. Pro and MSP can brand every PDF report with their own name, logo and colors under Settings > PDF branding.
-
-- Compliance scores are now per capability and only count assigned policies. Scheduled actions are evaluated, so scores change and trend history before this version is not comparable. Older comparisons remain readable; collect a new comparison to start current scores and trends.
+None yet.
 
 ## Cutting a stable release
 
