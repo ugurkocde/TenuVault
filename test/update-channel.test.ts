@@ -26,6 +26,7 @@ const autoUpdater = vi.hoisted(() => ({
   checkForUpdates: vi.fn(),
   downloadUpdate: vi.fn((_token?: unknown) => Promise.resolve<string[]>([])),
   quitAndInstall: vi.fn(),
+  setFeedURL: vi.fn(),
   // NsisUpdater internals the signature check before installing uses.
   installerPath: "C:\\Users\\admin\\AppData\\Local\\tenuvault-updater\\pending\\TenuVault-Setup.exe" as string | null,
   verifySignature: vi.fn(async (_file: string): Promise<string | null> => null),
