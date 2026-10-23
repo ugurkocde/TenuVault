@@ -740,7 +740,7 @@ function determineImpact(
 
   // Tenant-wide settings have no assignments: they decide how Intune evaluates compliance for every device.
   if (policyType === "Compliance policy settings" && changes && changes.length > 0) {
-    return `${changes.length} tenant-wide ${changes.length === 1 ? 'change affects' : 'changes affect'} the compliance status of every enrolled device`
+    return `${changes.length} tenant-wide ${changes.length === 1 ? 'change' : 'changes'} can affect the compliance status of enrolled devices`
   }
   
   if (changes && changes.length > 0) {

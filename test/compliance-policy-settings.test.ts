@@ -234,7 +234,7 @@ describe("Compliance policy settings in a drift scan", () => {
       changeType: "modified",
       severity: "critical",
       description: "Mark devices with no compliance policy assigned as: Not compliant to Compliant",
-      impact: "1 tenant-wide change affects the compliance status of every enrolled device",
+      impact: "1 tenant-wide change can affect the compliance status of enrolled devices",
       changes: [{ field: "secureByDefault", oldValue: true, newValue: false }],
       createBlocker: expect.stringContaining("cannot be created as a copy"),
     })
