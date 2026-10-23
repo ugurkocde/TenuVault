@@ -1,4 +1,6 @@
 import type { DriftChange, SettingNames } from "./drift"
+import { complianceSettingLabel, complianceSettingValue } from "./compliance-settings"
+import type { Json } from "./registry"
 
 /**
  * Readable names and values for drift changes. compareObjects reports raw property paths such as
@@ -15,6 +17,8 @@ export interface SettingLabel {
   path: string
   /** The Settings Catalog setting the change belongs to, used to shorten its choice values. */
   definitionId?: string
+  /** The tenant-wide compliance policy setting the change belongs to, used to show its values as the admin center does. */
+  property?: string
 }
 
 const ACRONYMS: Record<string, string> = {
@@ -155,6 +159,9 @@ export function settingLabel(change: Pick<DriftChange, "field" | "displayName">,
     return { label: property && property !== "value" ? `${name}: ${humanize(property.split(".").pop()!)}` : name, path }
   }
   if (change.displayName) return { label: change.displayName, path }
+  // Tenant-wide compliance policy settings are top-level properties named as in the Intune admin center.
+  const compliance = complianceSettingLabel(path)
+  if (compliance) return { label: compliance, path, property: path }
 
   // Settings Catalog: the deepest bracketed definition ID names the setting (a child setting inside a group).
   const definitions = [...path.matchAll(/\[([^\]"]*[_.][^\]"]*)\]/g)]
@@ -205,7 +212,9 @@ function choiceText(value: string, definitionId?: string): string {
 /** A choice value of some Settings Catalog setting, recognized without knowing which. */
 const CHOICE_VALUE = /^(?:device|user)_vendor_msft_[a-z0-9_.]+_([a-z0-9]+)$|^com\.apple\.[a-z0-9_.]+_([a-z0-9]+)$/i
 
-export function formatValue(value: unknown, definitionId?: string, names?: SettingNames): FormattedValue {
+export function formatValue(value: unknown, definitionId?: string, names?: SettingNames, property?: string): FormattedValue {
+  const compliance = property !== undefined && (value === null || typeof value !== "object") ? complianceSettingValue(property, value as Json | undefined) : undefined
+  if (compliance !== undefined) return { kind: "text", text: compliance, ...(value === undefined || value === null ? {} : { raw: String(value) }) }
   if (value === null || value === undefined || value === "") return { kind: "empty", text: "Not set" }
   if (typeof value === "boolean" || typeof value === "number") return { kind: "text", text: String(value) }
   if (typeof value === "string") {

@@ -23,6 +23,8 @@ function graphFor(displayName: string, id: string) {
       return Response.json({ id, displayName, detail: true })
     }
     if (url.pathname.endsWith("/assignments")) return Response.json({ value: [] })
+    // Tenant-wide settings are left out (denied, so skipped) to keep each run to one policy.
+    if (INTUNE_TYPES.some((type) => type.singleton && url.pathname === `/beta/${type.path}`)) return Response.json({ error: { message: "Forbidden" } }, { status: 403 })
     if (INTUNE_TYPES.some((type) => url.pathname === `/beta/${type.path}`)) return Response.json({ value: [] })
     return Response.json({ id: url.pathname.split("/").pop(), detail: true })
   }

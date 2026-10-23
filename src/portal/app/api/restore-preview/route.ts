@@ -3,7 +3,7 @@ import { type NextRequest, NextResponse } from "next/server"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { readOwnedBackup } from "~/lib/policies/backup-owner"
 import { graphCaller, readLive } from "~/lib/policies/graph-restore"
-import { itemName, typeForFolder, type Item } from "../../../../shared/intune/registry"
+import { itemName, typeForFolder, type Item, type ReviewChange } from "../../../../shared/intune/registry"
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
 import { sameSnapshot } from "../../../../shared/intune/compare"
 import { assignmentsUnread } from "../../../../shared/intune/read"
@@ -25,6 +25,8 @@ export interface PreviewItem {
   /** Only the assignments differ from the backup. */
   assignmentsOnly?: boolean
   liveName?: string
+  /** For types that describe it (IntuneType.review): what replacing the live item changes, setting by setting. */
+  changes?: ReviewChange[]
   error?: string
 }
 
@@ -92,7 +94,8 @@ export async function POST(request: NextRequest) {
         // A snapshot without assignments and an item with none mean the same. A backup that could not read
         // the assignments says nothing about them, and restore leaves them alone.
         const same = settingsSame && (assignmentsUnread(type, snapshot) || sameSnapshot(snapshot.assignments ?? [], current.assignments ?? []))
-        return { ...item, live: same ? "same" : "changed", ...(settingsSame && !same ? { assignmentsOnly: true } : {}), liveName: typeof name === "string" ? name : undefined }
+        const changes = !settingsSame ? type.review?.(snapshot, current) : undefined
+        return { ...item, live: same ? "same" : "changed", ...(settingsSame && !same ? { assignmentsOnly: true } : {}), ...(changes ? { changes } : {}), liveName: typeof name === "string" ? name : undefined }
       } catch (error) {
         return { ...item, live: "error", error: error instanceof Error ? error.message : String(error) }
       }

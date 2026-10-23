@@ -7,9 +7,9 @@ import type { DriftChange, SettingNames } from "../../../shared/intune/drift"
 import { formatValue, LONG_VALUE, settingLabel } from "../../../shared/intune/drift-format"
 
 /** One before or after value: plain text cut at LONG_VALUE with "Show more", objects as collapsible JSON. */
-function ValueView({ value, definitionId, names, tone }: { value: unknown; definitionId?: string; names?: SettingNames; tone: "before" | "after" }) {
+function ValueView({ value, definitionId, property, names, tone }: { value: unknown; definitionId?: string; property?: string; names?: SettingNames; tone: "before" | "after" }) {
   const [open, setOpen] = useState(false)
-  const formatted = formatValue(value, definitionId, names)
+  const formatted = formatValue(value, definitionId, names, property)
   const color = tone === "before" ? "bg-red-50 text-red-800" : "bg-green-50 text-green-800"
   if (formatted.kind === "empty") return <span className="rounded-md bg-gray-100 px-2 py-0.5 text-xs italic text-gray-500">{formatted.text}</span>
   if (formatted.kind === "json") {
@@ -41,7 +41,7 @@ export function ChangeList({ changes, names }: { changes: DriftChange[]; names?:
   return (
     <div className="space-y-3">
       {changes.map((change, index) => {
-        const { label, path, definitionId } = settingLabel(change, names)
+        const { label, path, definitionId, property } = settingLabel(change, names)
         return (
           <div key={`${change.field}-${index}`} className="border-l-2 border-gray-300 pl-3">
             <p className="text-sm font-medium text-gray-800">{label}</p>
@@ -49,11 +49,11 @@ export function ChangeList({ changes, names }: { changes: DriftChange[]; names?:
             <div className="space-y-1">
               <div className="flex items-start gap-2">
                 <span className="w-12 shrink-0 pt-0.5 text-xs text-gray-500">Before</span>
-                <ValueView value={change.oldValue} definitionId={definitionId} names={names} tone="before" />
+                <ValueView value={change.oldValue} definitionId={definitionId} property={property} names={names} tone="before" />
               </div>
               <div className="flex items-start gap-2">
                 <span className="w-12 shrink-0 pt-0.5 text-xs text-gray-500">After</span>
-                <ValueView value={change.newValue} definitionId={definitionId} names={names} tone="after" />
+                <ValueView value={change.newValue} definitionId={definitionId} property={property} names={names} tone="after" />
               </div>
             </div>
           </div>

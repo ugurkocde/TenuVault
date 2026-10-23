@@ -1,11 +1,11 @@
 ---
 title: "Intune backup: run a backup"
-description: "Run an Intune backup with TenuVault: back up 39 Microsoft Intune object types with assignments, encrypted on your device or in your own Azure storage."
+description: "Run an Intune backup with TenuVault: back up 40 Microsoft Intune object types with assignments, encrypted on your device or in your own Azure storage."
 faq:
   - question: "How do I back up Microsoft Intune policies?"
     answer: "In TenuVault, select the tenant, open Backup & Restore and click Run Backup. Keep the saved backup choice or change it, then click Start backup. TenuVault reads the Intune configuration through Microsoft Graph with your own delegated sign-in and saves the objects in your backup choice, with their assignments where Intune has them."
   - question: "What does an Intune backup include?"
-    answer: "A full backup covers 39 Intune object types in nine areas, including Settings Catalog and device configuration policies, compliance policies, scripts, Administrative Templates, enrollment and tenant settings, plus app details and assignments. App installer files, Apple tokens and private keys cannot be exported by Microsoft Graph and are never included."
+    answer: "A full backup covers 40 Intune object types in nine areas, including Settings Catalog and device configuration policies, compliance policies, scripts, Administrative Templates, enrollment and tenant settings, plus app details and assignments. App installer files, Apple tokens and private keys cannot be exported by Microsoft Graph and are never included."
   - question: "Does Microsoft Intune have a built-in backup?"
     answer: "No. Intune has no native backup, point-in-time restore or recycle bin for policies, so a deleted or changed policy cannot be recovered from the Intune portal. A backup tool such as TenuVault saves the configuration through Microsoft Graph before something goes wrong."
   - question: "Where are Intune backups stored?"
@@ -60,12 +60,12 @@ The **Back up** dialog offers three choices:
 | Choice | What it covers |
 | --- | --- |
 | **Everything except apps** | "Policies, scripts, updates, enrollment and tenant settings." Every type except apps. App categories, policy sets, app configuration and app protection policies are still included. |
-| **Everything** | "Also app details and assignments. Installer files are never included." All 39 types. |
+| **Everything** | "Also app details and assignments. Installer files are never included." All 40 types. |
 | **Custom** | "Choose areas and individual types." |
 
 With **Custom**, TenuVault lists the areas (for example **Device configuration** or **Enrollment**). Tick an area to include all of its types, or expand it to tick individual types. When the tenant has an earlier backup, each area and type shows how many items it held last time, and the dialog estimates the total number of items.
 
-The line under the choices shows how many of the 39 types the backup covers. **Start backup** is unavailable until at least one type is ticked ("Choose at least one type.").
+The line under the choices shows how many of the 40 types the backup covers. **Start backup** is unavailable until at least one type is ticked ("Choose at least one type.").
 
 When apps are included, a note explains that apps are saved as their Intune details and assignments, which makes them the slowest type to back up, and that installer files are never downloaded.
 
@@ -100,7 +100,7 @@ The log lists what TenuVault did, with a time stamp per line. Typical lines:
 
 | Log line | Meaning |
 | --- | --- |
-| "Leaving out N of 39 types: ..." | The backup choice excludes these types |
+| "Leaving out N of 40 types: ..." | The backup choice excludes these types |
 | "Found N ... (N built-in skipped)." | Items found for a type. Built-in objects Intune recreates itself are skipped. |
 | "Backed up N ..." | All items of a type are saved |
 | "Skipped ...: access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it." | Microsoft Graph refused access to this type: a permission or its admin consent is missing, or your Intune role does not cover it. The backup continues without it. |
@@ -143,7 +143,7 @@ The **Backup History** tab of **Backup & Restore** shows the **Backup Timeline**
 Each entry shows:
 
 * the date and time
-* what the backup covered: **Everything**, **Everything except apps**, or the number of types, for example "12 of 39 types"
+* what the backup covered: **Everything**, **Everything except apps**, or the number of types, for example "12 of 40 types"
 * how it started: **Manual**, **Scheduled** or **From tray**
 * the result, when it is not **Complete**
 * **Items**, **Size**, **Duration** and **Changes** since the previous backup (see [Compare backups](/backups/compare/))

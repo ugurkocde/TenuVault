@@ -1,5 +1,5 @@
 import { reviewedDependencyMappings, type RecoveryReadiness } from "../../../shared/intune/recovery"
-import { typeForFolder } from "../../../shared/intune/registry"
+import { typeForFolder, type ReviewChange } from "../../../shared/intune/registry"
 import { passwordResetWarning } from "../../../shared/intune/restore-plan"
 import { ACKNOWLEDGEMENT_REQUIRED } from "../../../shared/disclaimer"
 "use client"
@@ -75,6 +75,8 @@ interface LiveState {
   live?: "missing" | "same" | "changed" | "error"
   assignmentsOnly?: boolean
   liveName?: string
+  /** What overwriting changes, setting by setting, for types that describe it. */
+  changes?: ReviewChange[]
   error?: string
   blocker?: string
   replaceBlocker?: string
@@ -847,6 +849,19 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                           {reason && <span className="block text-xs text-gray-500">{reason}</span>}
                           {assignmentWarning && <span className="block text-xs text-amber-800">{assignmentWarning}</span>}
                           {passwordWarning && <span className="block text-xs text-amber-800">{passwordWarning}</span>}
+                          {plan === "overwrite" && !!state?.changes?.length && (
+                            <ul className="mt-2 space-y-1.5 text-xs">
+                              {state.changes.map((change) => (
+                                <li key={change.label}>
+                                  <span className="text-gray-900">{change.label}: </span>
+                                  {change.restored
+                                    ? <span className="text-gray-700">{change.from} in {tenant.name} now, {change.to} after the restore</span>
+                                    : <span className="text-gray-500">stays {change.from}, because the backup holds no value Intune accepts</span>}
+                                  {change.warning && <span className="block text-amber-800">{change.warning}</span>}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
                         </span>
                         <span className={cn("flex-shrink-0 text-right text-xs font-medium", PLAN_TONE[plan])}>{PLAN_TEXT[plan]}</span>
                       </li>

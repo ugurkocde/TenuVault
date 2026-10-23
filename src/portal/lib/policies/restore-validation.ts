@@ -2,7 +2,7 @@ import { backupManifest, incompleteReason, snapshotHash } from "./backup-manifes
 import { dependencyReferences } from "../../../shared/intune/dependencies"
 import { assignmentsUnread } from "../../../shared/intune/read"
 import { INTUNE_TYPES, itemName, typeForFolder, type Item } from "../../../shared/intune/registry"
-import { buildRestorePlan, restoreBlocker } from "../../../shared/intune/restore-plan"
+import { buildRestorePlan, buildUpdatePlan, restoreBlocker } from "../../../shared/intune/restore-plan"
 
 /**
  * A restore dry run: reads a whole backup back and checks every item without writing to the
@@ -151,14 +151,17 @@ export async function validateBackup(input: ValidateBackupInput): Promise<Backup
       checks.push(check("payload", false, "This backup file is not an Intune type TenuVault can restore."))
       checks.push(check("assignments", false, "Not checked: the policy payload cannot be used."))
     } else {
-      const blocker = restoreBlocker(type, snapshot)
+      // A tenant-wide setting is never created, only replaced in place, so its update is what is checked.
+      const singleton = type.restore === "singleton"
+      const blocker = singleton ? undefined : restoreBlocker(type, snapshot)
       if (blocker) {
         checks.push(check("payload", false, blocker))
         checks.push(check("assignments", false, "Not checked: the policy payload cannot be restored."))
       } else {
         try {
-          buildRestorePlan(type, snapshot, { includeAssignments: false })
-          checks.push(check("payload", true))
+          if (singleton) buildUpdatePlan(type, snapshot, String(snapshot.id ?? ""), { current: {} })
+          else buildRestorePlan(type, snapshot, { includeAssignments: false })
+          checks.push(check("payload", true, singleton ? "Tenant-wide setting: restore replaces it in place." : undefined))
         } catch (error) {
           checks.push(check("payload", false, error instanceof Error ? error.message : String(error)))
         }
