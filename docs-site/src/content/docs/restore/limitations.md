@@ -25,6 +25,7 @@ The restore wizard marks these items as **Cannot be restored** (or greys them ou
 | Device configuration profiles with a masked OMA-URI secret | "This backup holds a masked OMA-URI value (****). Create a new backup to restore it; restoring would send **** to devices." | Run a new backup, then restore from it. |
 | The tenant default enrollment configuration | "This is the tenant default. Restore updates it in place." | Use **Replace in place**. The default cannot be copied. |
 | The default Company Portal branding | "This is the default branding. Restore updates it in place." | Use **Replace in place**. |
+| Compliance policy settings, with **Create copies** or **Copy to other tenants instead** | "This is a tenant-wide setting, not a policy. Restore replaces it in place in the same tenant; it cannot be created as a copy or copied to another tenant." | Use **Replace in place** in the same tenant. For another tenant, set them in that tenant's Intune admin center under **Endpoint security** > **Device compliance** > **Compliance policy settings**, using the backed-up values as a reference. |
 | Compliance policies whose snapshot has no block action | "This compliance snapshot is missing its required block action. Create a new complete backup before restoring." | Run a new, complete backup and restore from it. |
 | Unverified legacy snapshots | "This snapshot is not authenticated. Review its content and restore a copy; replacement is blocked." | Review the snapshot content and restore an unassigned copy instead of replacing. Unverified snapshots cannot restore assignments. |
 | A file in the backup that is not a known Intune type | "This backup file is not an Intune type TenuVault can restore." | Recreate the object manually in Intune. |
@@ -62,6 +63,7 @@ Built-in scope tags and built-in Intune roles are not backed up, because they ex
 * **Types with limited assignment restore.** Windows Autopilot deployment profiles, Apple user enrollment profiles, terms and conditions and Intune roles cannot have their assignments replaced in place. See [Restore modes and assignments](/restore/modes/#types-that-need-assignments-reconciled-in-intune).
 * **Exclusions.** Enrollment configurations and terms and conditions do not accept exclusion assignments, so exclusions are left out when their assignments are restored.
 * **Cross-tenant copies** are always unassigned and get the Default scope tag. See [Restore to another tenant](/restore/cross-tenant/).
+* **Compliance policy settings.** Replace in place writes only the settings that differ from the tenant. A compliance status validity period the backup holds as 0 (never set) or outside 1 to 120 days is never written; the tenant keeps its value and the review says so. See [Compliance policy settings](/restore/modes/#compliance-policy-settings).
 * **Password policies.** Restoring an assigned macOS or Windows policy with password settings can make users on targeted devices set a new local password. See [Password policies can force a password change](/restore/modes/#password-policies-can-force-a-password-change).
 
 ## Backup completeness checks

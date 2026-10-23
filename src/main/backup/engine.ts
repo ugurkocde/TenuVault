@@ -407,7 +407,8 @@ export class BackupEngine {
     }
     await pool(types.map((type, index) => ({ type, index })), concurrency, async ({ type, index }) => {
       try {
-        const all = await graph.list(listUrl(type))
+        // A tenant-wide object has no list; reading it here skips the type on a denied read, like a denied list.
+        const all = type.singleton ? [{ ...(await graph.get(listUrl(type))), id: type.singleton.id }] : await graph.list(listUrl(type))
         const items = all.filter((item) => !type.skip?.(item as never))
         const skipped = all.length - items.length
         this.write(job, `Found ${items.length} ${type.label}${skipped ? ` (${skipped} built-in skipped)` : ""}.`)

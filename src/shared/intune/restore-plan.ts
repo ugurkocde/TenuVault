@@ -24,9 +24,12 @@ export interface PlanOptions {
 
 export class NotRestorableError extends Error {}
 
+const SINGLETON = "This is a tenant-wide setting, not a policy. Restore replaces it in place in the same tenant; it cannot be created as a copy or copied to another tenant."
+
 /** Why a snapshot cannot be recreated, or undefined when it can. */
 export function restoreBlocker(type: IntuneType, snapshot: Item): string | undefined {
   if (type.restore === "metadata") return type.limitation ?? "This type is backed up for reference only."
+  if (type.restore === "singleton") return SINGLETON
   return type.restorable?.(snapshot)
 }
 

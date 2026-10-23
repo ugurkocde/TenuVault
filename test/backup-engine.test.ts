@@ -23,6 +23,18 @@ function fakeGraph(overrides: Record<string, Response | (() => Response)> = {}) 
     "/beta/deviceManagement/deviceConfigurations?page=2": { value: [{ id: "dc2", displayName: "Win: BitLocker/Encryption" }] },
     "/beta/deviceManagement/deviceCompliancePolicies": { value: [{ id: "cp1", displayName: "Compliance" }] },
     "/beta/deviceManagement/configurationPolicies": { value: [{ id: "sc1", name: "Settings catalog" }] },
+    // The tenant-wide settings singleton, as a lab tenant returned it: compliance settings next to unrelated features.
+    "/beta/deviceManagement/settings": {
+      "@odata.context": "https://graph.microsoft.com/beta/$metadata#deviceManagement/settings",
+      deviceComplianceCheckinThresholdDays: 0,
+      isScheduledActionEnabled: true,
+      secureByDefault: false,
+      enhancedJailBreak: false,
+      deviceInactivityBeforeRetirementInDay: 0,
+      derivedCredentialProvider: "notConfigured",
+      androidDeviceAdministratorEnrollmentEnabled: false,
+      enableLogCollection: true,
+    },
   }
   return (url: URL) => {
     const key = url.pathname.replace(/^\//, "/") + url.search
@@ -80,11 +92,13 @@ describe("BackupEngine", () => {
       "/beta/deviceManagement/deviceConfigurations/dc2?$expand=assignments": denied,
       "/beta/deviceManagement/deviceCompliancePolicies/cp1?$expand=scheduledActionsForRule($expand=scheduledActionConfigurations),assignments": denied,
       "/beta/deviceManagement/configurationPolicies/sc1?$expand=settings": denied,
+      // A denied tenant-wide setting is skipped like a denied list, not counted as a failure.
+      "/beta/deviceManagement/settings": denied,
     }))
     const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
     expect(job.status).toBe("Failed")
     const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
-    expect(metadata).toMatchObject({ Status: "Failed", Failures: 4 })
+    expect(metadata).toMatchObject({ Status: "Failed", Failures: 4, SkippedTypes: ["CompliancePolicySettings"] })
   })
 
   it("writes the runbook's backup layout to local encrypted storage", async () => {
@@ -96,6 +110,7 @@ describe("BackupEngine", () => {
     expect(names.sort()).toEqual([
       ".tenuvault-owner.json",
       "CompliancePolicies/Compliance.json",
+      "CompliancePolicySettings/Compliance policy settings.json",
       "ConfigurationPolicies/Settings catalog.json",
       "DeviceConfigurations/Win_ BitLocker_Encryption (dc2).json",
       "DeviceConfigurations/Win_ BitLocker_Encryption.json",
@@ -108,12 +123,16 @@ describe("BackupEngine", () => {
       ...Object.fromEntries(INTUNE_TYPES.map((type) => [type.folder, 0])),
       DeviceConfigurations: 2,
       CompliancePolicies: 1,
+      CompliancePolicySettings: 1,
       ConfigurationPolicies: 1,
-      TotalPolicies: 4,
+      TotalPolicies: 5,
     })
     expect(metadata.Status).toBe("Success")
     const detail = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/CompliancePolicies/Compliance.json`)).data.toString())
     expect(detail).toEqual({ id: "cp1", detail: true })
+    // Only the compliance settings are kept from the tenant-wide settings, under a fixed ID.
+    const settings = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/CompliancePolicySettings/Compliance policy settings.json`)).data.toString())
+    expect(settings).toEqual({ id: "CompliancePolicySettings", secureByDefault: false, deviceComplianceCheckinThresholdDays: 0, isScheduledActionEnabled: true, enhancedJailBreak: false })
     // Local storage needs no Azure Storage token.
     expect(getToken.mock.calls.every((call) => (call as string[])[2] !== "https://storage.azure.com/.default")).toBe(true)
   })

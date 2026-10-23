@@ -14,12 +14,14 @@ export interface GraphReader {
 }
 
 export function detailPath(type: IntuneType, id: string): string {
+  if (type.singleton) return type.path
   const query = [type.expand && `$expand=${type.expand}`, type.select && `$select=${type.select}`].filter(Boolean).join("&")
   return `${type.path}/${encodeURIComponent(id)}${query ? `?${query}` : ""}`
 }
 
 export async function readObject(type: IntuneType, id: string, graph: GraphReader): Promise<Item> {
   const detail = await graph.get(detailPath(type, id))
+  if (type.singleton) return singletonSnapshot(type.singleton, detail)
   // Large expanded collections (such as Settings Catalog settings) page like lists.
   for (const [key, value] of Object.entries(detail)) {
     if (key.endsWith("@odata.nextLink") && typeof value === "string") {
@@ -56,6 +58,13 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
   }
   delete detail["@odata.context"]
   return detail
+}
+
+/** A tenant-wide object under its stored ID, with only the properties its type keeps (see IntuneType.singleton). */
+function singletonSnapshot(singleton: NonNullable<IntuneType["singleton"]>, detail: Item): Item {
+  const snapshot: Item = { id: singleton.id }
+  for (const key of singleton.properties) if (key in detail) snapshot[key] = detail[key] ?? null
+  return snapshot
 }
 
 /**

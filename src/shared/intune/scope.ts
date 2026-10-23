@@ -53,7 +53,7 @@ export const AREAS: Array<{ area: Area; types: IntuneType[] }> = INTUNE_TYPES.re
   return areas
 }, [])
 
-/** A short description such as "Everything", "Everything except apps" or "12 of 39 types". */
+/** A short description such as "Everything", "Everything except apps" or "12 of 40 types". */
 export function describeScope(scope: BackupScope): string {
   const preset = presetOf(scope)
   if (preset === "everything") return "Everything"

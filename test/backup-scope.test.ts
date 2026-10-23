@@ -30,10 +30,12 @@ describe("backup scope", () => {
   })
 
   it("treats backups without a scope as complete, minus types they could not read", () => {
-    expect(coveredFolders({}).size).toBe(ALL.length)
+    expect(coveredFolders({}).size).toBe(LEGACY_FOLDERS.length)
+    // Types added since backups recorded their scope were never read by those backups.
+    expect(coveredFolders({}).has("CompliancePolicySettings")).toBe(false)
     const covered = coveredFolders({ Scope: { Excluded: ["Apps"] }, SkippedTypes: ["PowerShellScripts"], FailedTypes: ["Branding"] })
     expect(["Apps", "PowerShellScripts", "Branding"].some((folder) => covered.has(folder))).toBe(false)
-    expect(covered.size).toBe(ALL.length - 3)
+    expect(covered.size).toBe(LEGACY_FOLDERS.length - 3)
   })
 
   it("counts only the types a backup recorded as attempted as covered", () => {
@@ -141,11 +143,11 @@ describe("BackupEngine with a scope", () => {
     expect(requested.some((path) => path.includes("mobileApps"))).toBe(false)
     const names = (await store.list(account, "intune-backups")).map((blob) => blob.name.replace(/^backup-[\d-]+\//, "")).sort()
     // Names are chosen in list order, so parallel reads never swap which duplicate gets the suffix.
-    expect(names).toEqual([".tenuvault-owner.json", "DeviceConfigurations/Other.json", "DeviceConfigurations/Same (dc2).json", "DeviceConfigurations/Same.json", "metadata.json"])
+    expect(names).toEqual([".tenuvault-owner.json", "CompliancePolicySettings/Compliance policy settings.json", "DeviceConfigurations/Other.json", "DeviceConfigurations/Same (dc2).json", "DeviceConfigurations/Same.json", "metadata.json"])
     const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
     expect(metadata).toMatchObject({ Trigger: "scheduled", Scope: { Excluded: ["Apps"] }, FailedTypes: [] })
     expect(metadata.ItemCounts.Apps).toBeUndefined()
-    expect(Object.keys(metadata.Items)).toEqual(["DeviceConfigurations/dc1", "DeviceConfigurations/dc2", "DeviceConfigurations/dc3"])
+    expect(Object.keys(metadata.Items)).toEqual(["CompliancePolicySettings/CompliancePolicySettings", "DeviceConfigurations/dc1", "DeviceConfigurations/dc2", "DeviceConfigurations/dc3"])
     expect(metadata.Items["DeviceConfigurations/dc2"].file).toBe("Same (dc2).json")
   })
 

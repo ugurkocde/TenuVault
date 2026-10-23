@@ -233,7 +233,7 @@ export class Restorer {
     try {
       const current = this.options.mode === "replace" && typeof snapshot.id === "string" ? await this.current(type, snapshot.id) : undefined
       if (current && this.matches(snapshot, current, assignments)) {
-        const name = current[type.nameKey] ?? current.displayName ?? current.name
+        const name = type.singleton?.name ?? current[type.nameKey] ?? current.displayName ?? current.name
         return withNote({ success: true, path, policyId: snapshot.id as string, policyName: typeof name === "string" ? name : undefined, action: "unchanged" })
       }
       if (current) return withNote(await this.update(type, path, source, snapshot.id as string, current, assignments))
@@ -322,6 +322,8 @@ export class Restorer {
 
   private async update(type: IntuneType, path: string, source: Item, id: string, current: Item, assignments: boolean): Promise<RestoreOutcome> {
     const plan = buildUpdatePlan(type, source, id, { includeAssignments: assignments, current })
+    // A type that writes only what differs may find nothing it can write, such as a value Intune would reject.
+    if (!plan.length) return { success: true, path, policyId: id, policyName: type.singleton?.name, action: "unchanged", warnings: ["Nothing was written: what differs from the backup cannot be restored. Review it in Intune."] }
     return this.complete(type, path, id, source, "updated", plan)
   }
 
@@ -353,7 +355,7 @@ export class Restorer {
   }
 
   private async complete(type: IntuneType, path: string, id: string, body: Item, action: "created" | "updated", steps: Step[]): Promise<RestoreOutcome> {
-    const name = body[type.nameKey] ?? body.displayName ?? body.name
+    const name = type.singleton?.name ?? body[type.nameKey] ?? body.displayName ?? body.name
     const base = { path, policyId: id, policyName: typeof name === "string" ? name : undefined, action }
     const resolved = steps.map((step) => resolveStep(step, id))
     for (const [index, step] of resolved.entries()) {
