@@ -3,12 +3,12 @@ import { NextRequest } from "../src/main/api/next-server-shim"
 import { POST as restorePreview } from "../src/portal/app/api/restore-preview/route"
 import { validateBackup } from "../src/portal/lib/policies/restore-validation"
 import { complianceSettingChanges } from "../src/shared/intune/compliance-settings"
-import { itemName, typeForFolder, type Item } from "../src/shared/intune/registry"
+import { INTUNE_TYPES, itemName, typeForFolder, type Item } from "../src/shared/intune/registry"
 import { readObject } from "../src/shared/intune/read"
 import { buildRestorePlan, buildUpdatePlan, NotRestorableError, restoreCapabilities } from "../src/shared/intune/restore-plan"
 import { formatValue, settingLabel } from "../src/shared/intune/drift-format"
 import { Restorer } from "../src/portal/lib/policies/graph-restore"
-import { compareObjects } from "../src/portal/app/api/detect-drifts/route"
+import { compareObjects, POST as detectDrifts } from "../src/portal/app/api/detect-drifts/route"
 
 const type = typeForFolder("CompliancePolicySettings")!
 const ID = "CompliancePolicySettings"
@@ -199,5 +199,45 @@ describe("Compliance policy settings backup validation", () => {
     const report = await validateBackup({ backupId, metadata: { Status: "Success", Failures: 0, FailedTypes: [] }, listedPaths: [path], readSnapshot: async () => ({ ok: true, snapshot: snapshot() }) })
     expect(report).toMatchObject({ total: 1, passed: 1, failed: 0 })
     expect(report.items[0]!.checks.find((check) => check.id === "payload")).toMatchObject({ ok: true, detail: expect.stringContaining("replaces it in place") })
+  })
+})
+
+describe("Compliance policy settings in a drift scan", () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it("reports a secureByDefault flip as a critical tenant-wide change that can be reverted but not copied", async () => {
+    const older = "backup-2026-10-22-020000"
+    const newer = "backup-2026-10-23-020000"
+    const file = "CompliancePolicySettings/Compliance policy settings.json"
+    const contents: Record<string, Item> = { [older]: snapshot({ secureByDefault: true }), [newer]: snapshot({ secureByDefault: false }) }
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input))
+      if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "test" })
+      if (url.pathname === "/api/revert-metadata") return Response.json({ reverts: {} })
+      if (url.searchParams.get("delimiter")) return new Response([newer, older].map((name) => `<BlobPrefix><Name>${name}/</Name></BlobPrefix>`).join(""))
+      const prefix = url.searchParams.get("prefix")
+      if (prefix) return new Response(`<Blob><Name>${prefix.split("/")[0]}/${file}</Name></Blob>`)
+      // Backups that recorded the types they attempted, including this one.
+      if (url.pathname.endsWith("/metadata.json")) return Response.json({ Status: "Success", Scope: { Excluded: [], Included: INTUNE_TYPES.map((type) => type.folder) } })
+      const backup = decodeURIComponent(url.pathname).split("/")[2]!
+      return Response.json(contents[backup])
+    }))
+    const body = { tenantId: "tenant", appId: "app", clientSecret: "test", storageAccountName: "store", subscriptionId: "local", resourceGroupName: "local" }
+    const response = await detectDrifts(new NextRequest("http://tenuvault.internal/api/test", { method: "POST", body: JSON.stringify(body) }))
+    expect(response.status).toBe(200)
+    const { drifts } = await response.json()
+    expect(drifts).toHaveLength(1)
+    expect(drifts[0]).toMatchObject({
+      type: "Compliance policy settings",
+      configName: "Compliance policy settings",
+      configId: ID,
+      changeType: "modified",
+      severity: "critical",
+      description: "Mark devices with no compliance policy assigned as: Not compliant to Compliant",
+      impact: "1 tenant-wide change affects the compliance status of every enrolled device",
+      changes: [{ field: "secureByDefault", oldValue: true, newValue: false }],
+      createBlocker: expect.stringContaining("cannot be created as a copy"),
+    })
+    expect(drifts[0].replaceBlocker).toBeUndefined()
   })
 })

@@ -737,6 +737,11 @@ function determineImpact(
   if (changeType === "added") {
     return `New ${policyType} will be applied to assigned devices`
   }
+
+  // Tenant-wide settings have no assignments: they decide how Intune evaluates compliance for every device.
+  if (policyType === "Compliance policy settings" && changes && changes.length > 0) {
+    return `${changes.length} tenant-wide ${changes.length === 1 ? 'change affects' : 'changes affect'} the compliance status of every enrolled device`
+  }
   
   if (changes && changes.length > 0) {
     return `${changes.length} configuration ${changes.length === 1 ? 'change' : 'changes'} will affect assigned devices`
