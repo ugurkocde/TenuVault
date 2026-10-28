@@ -1,8 +1,9 @@
 import { recoveryReadiness, type RecoveryReadiness } from "../../../../shared/intune/recovery"
 import { type NextRequest, NextResponse } from "next/server"
 import { validPolicyPath } from "~/lib/policies/restore"
+import { readOwnedBackup } from "~/lib/policies/backup-owner"
 import { graphCaller, readLive } from "~/lib/policies/graph-restore"
-import { itemName, typeForFolder, type Item } from "../../../../shared/intune/registry"
+import { itemName, typeForFolder, type Item, type ReviewChange } from "../../../../shared/intune/registry"
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
 import { sameSnapshot } from "../../../../shared/intune/compare"
 import { assignmentsUnread } from "../../../../shared/intune/read"
@@ -24,11 +25,13 @@ export interface PreviewItem {
   /** Only the assignments differ from the backup. */
   assignmentsOnly?: boolean
   liveName?: string
+  /** For types that describe it (IntuneType.review): what replacing the live item changes, setting by setting. */
+  changes?: ReviewChange[]
   error?: string
 }
 
 async function token(tenantId: string, appId: string, clientSecret: string, scope: string, forceRefresh = false): Promise<string> {
-  const response = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
+  const response = await fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ client_id: appId, client_secret: clientSecret, scope, force_refresh: String(forceRefresh), grant_type: "client_credentials" }),
@@ -59,6 +62,10 @@ export async function POST(request: NextRequest) {
       token(tenantId, appId, clientSecret, "https://storage.azure.com/.default"),
       live === true ? token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default") : Promise.resolve(""),
     ])
+    const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`, {
+      headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${storageToken}` },
+    }), backupId, tenantId)
+    if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
     const graph = graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) })
 
     const preview = async (path: string): Promise<PreviewItem> => {
@@ -87,7 +94,8 @@ export async function POST(request: NextRequest) {
         // A snapshot without assignments and an item with none mean the same. A backup that could not read
         // the assignments says nothing about them, and restore leaves them alone.
         const same = settingsSame && (assignmentsUnread(type, snapshot) || sameSnapshot(snapshot.assignments ?? [], current.assignments ?? []))
-        return { ...item, live: same ? "same" : "changed", ...(settingsSame && !same ? { assignmentsOnly: true } : {}), liveName: typeof name === "string" ? name : undefined }
+        const changes = !settingsSame ? type.review?.(snapshot, current) : undefined
+        return { ...item, live: same ? "same" : "changed", ...(settingsSame && !same ? { assignmentsOnly: true } : {}), ...(changes ? { changes } : {}), liveName: typeof name === "string" ? name : undefined }
       } catch (error) {
         return { ...item, live: "error", error: error instanceof Error ? error.message : String(error) }
       }

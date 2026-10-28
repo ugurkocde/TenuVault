@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, Suspense } from "react"
+import { useState, useEffect, useRef, Suspense } from "react"
 import { useSelectedTenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
 import { 
@@ -69,21 +69,47 @@ function AuditPageContent() {
   const [stats, setStats] = useState<any>(null)
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [lastRefresh, setLastRefresh] = useState(new Date())
-  const [pagination, setPagination] = useState({
-    page: 1,
-    pageSize: 50,
-    totalCount: 0
-  })
+  // The page belongs to one query: any change to the tenant, dates, filters or applied
+  // search starts again at page 1 without a separate reset that could race the fetch.
+  const tenantKey = selectedTenant ? `${selectedTenant.id}:${selectedTenant.credentials?.tenantId ?? ""}:${selectedTenant.resources?.storageAccountName ?? ""}` : ""
+  const [appliedSearch, setAppliedSearch] = useState("")
+  const queryKey = JSON.stringify([tenantKey, dateRange, filters, appliedSearch])
+  const [pageState, setPageState] = useState({ key: queryKey, page: 1 })
+  const pagination = { page: pageState.key === queryKey ? pageState.page : 1, pageSize: 50 }
+  const setPage = (page: number) => setPageState({ key: queryKey, page })
+  // The logs route reads only as far as a page needs, so there is no total. One extra
+  // entry per request tells whether a next page exists.
+  const [hasMore, setHasMore] = useState(false)
+
+  // Each fetch abandons the previous one of its kind, so a slow response for an earlier
+  // tenant or query never overwrites a newer one.
+  const logsRequest = useRef<AbortController | null>(null)
+  const statsRequest = useRef<AbortController | null>(null)
+  const startRequest = (slot: { current: AbortController | null }) => {
+    slot.current?.abort()
+    slot.current = new AbortController()
+    return slot.current
+  }
+  useEffect(() => () => {
+    logsRequest.current?.abort()
+    statsRequest.current?.abort()
+  }, [])
 
   // Fetch audit logs
   const fetchLogs = async () => {
-    if (!allowed) return
+    const request = startRequest(logsRequest)
+    if (!allowed) {
+      setLoading(false)
+      return
+    }
     if (!selectedTenant) {
+      setLoading(false)
       setError("No tenant selected")
       return
     }
 
     if (!selectedTenant.credentials?.tenantId || !selectedTenant.credentials?.appId || !selectedTenant.credentials?.clientSecret || !selectedTenant.resources?.storageAccountName) {
+      setLoading(false)
       setError("Selected tenant is missing required credentials or resources. Please reconfigure the tenant.")
       return
     }
@@ -93,6 +119,7 @@ function AuditPageContent() {
 
     try {
       const response = await fetch("/api/audit/logs", {
+        signal: request.signal,
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -104,11 +131,11 @@ function AuditPageContent() {
           storageAccountName: selectedTenant.resources?.storageAccountName,
           filter: {
             ...dateFilter,
-            searchQuery: searchQuery || undefined,
+            searchQuery: appliedSearch || undefined,
             eventTypes: filters.eventTypes.length > 0 ? filters.eventTypes : undefined,
             severities: filters.severities.length > 0 ? filters.severities : undefined,
             results: filters.results.length > 0 ? filters.results : undefined,
-            limit: pagination.pageSize,
+            limit: pagination.pageSize + 1,
             offset: (pagination.page - 1) * pagination.pageSize,
             sortBy: 'timestamp',
             sortOrder: 'desc'
@@ -118,38 +145,39 @@ function AuditPageContent() {
 
       if (!response.ok) {
         const error = await response.json()
+        if (request.signal.aborted) return
         setPendingCount(typeof error.pendingCount === "number" ? error.pendingCount : null)
         setPendingDurable(error.pendingDurable === true)
         throw new Error(error.error || "Failed to fetch audit logs")
       }
 
       const data = await response.json()
-      setLogs(data.data || [])
+      if (request.signal.aborted) return
+      const entries: AuditLogEntry[] = data.data || []
+      setLogs(entries.slice(0, pagination.pageSize))
+      setHasMore(entries.length > pagination.pageSize)
       setPendingCount(data.pendingCount ?? 0)
       setPendingDurable(data.pendingDurable === true)
-      
-      // Update pagination total count (this would need backend support)
-      // For now, we'll estimate based on whether we got a full page
-      if (data.data && data.data.length === pagination.pageSize) {
-        setPagination(prev => ({ ...prev, totalCount: prev.totalCount || 1000 }))
-      }
     } catch (err) {
+      if (request.signal.aborted) return
       setError(err instanceof Error ? err.message : "An error occurred")
     } finally {
-      setLoading(false)
+      if (!request.signal.aborted) setLoading(false)
     }
   }
 
   // Fetch stats
   const fetchStats = async () => {
+    const request = startRequest(statsRequest)
     if (!selectedTenant || !allowed) return
-    
+
     if (!selectedTenant.credentials?.tenantId || !selectedTenant.credentials?.appId || !selectedTenant.credentials?.clientSecret || !selectedTenant.resources?.storageAccountName) {
       return
     }
 
     try {
       const response = await fetch("/api/audit/stats", {
+        signal: request.signal,
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -167,44 +195,57 @@ function AuditPageContent() {
 
       if (!response.ok) throw new Error("Audit statistics are unavailable. Retry when storage access is restored.")
       const data = await response.json()
+      if (request.signal.aborted) return
       setStats(data.data)
       setStatsError(null)
     } catch (err) {
+      if (request.signal.aborted) return
       setStats(null)
       setStatsError(err instanceof Error ? err.message : "Audit statistics are unavailable.")
     }
   }
 
-  // Load logs on mount and when filters change
+  // Another tenant's logs and statistics are never shown under this tenant while it loads.
+  const shownTenant = useRef(tenantKey)
   useEffect(() => {
-    // Reset to page 1 when filters change
-    setPagination(prev => ({ ...prev, page: 1 }))
+    if (shownTenant.current === tenantKey) return
+    shownTenant.current = tenantKey
+    setLogs([])
+    setHasMore(false)
+    setStats(null)
+  }, [tenantKey])
+
+  // Load logs for the current query and page. Keyed by the tenant's identity, not the
+  // tenant object, so a background update (such as a finished backup) keeps the page.
+  useEffect(() => {
+    fetchLogs()
+  }, [queryKey, pagination.page, allowed])
+
+  useEffect(() => {
+    fetchStats()
+  }, [tenantKey, allowed, dateRange])
+
+  // Auto-refresh every 30 seconds with the query and page shown at that moment.
+  const refresh = useRef(() => {})
+  refresh.current = () => {
     fetchLogs()
     fetchStats()
-  }, [selectedTenant, allowed, dateRange, filters])
-
-  // Load logs when page changes
+    setLastRefresh(new Date())
+  }
   useEffect(() => {
-    fetchLogs()
-  }, [pagination.page])
+    if (!autoRefresh || !tenantKey || !allowed) return
 
-  // Auto-refresh every 30 seconds
-  useEffect(() => {
-    if (!autoRefresh || !selectedTenant || !allowed) return
-
-    const interval = setInterval(() => {
-      fetchLogs()
-      fetchStats()
-      setLastRefresh(new Date())
-    }, 30000) // 30 seconds
+    const interval = setInterval(() => refresh.current(), 30000) // 30 seconds
 
     return () => clearInterval(interval)
-  }, [autoRefresh, selectedTenant, allowed, dateRange, filters])
+  }, [autoRefresh, tenantKey, allowed])
 
-  // Handle search
+  // Handle search: a new search starts at page 1; the same search again reloads.
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
-    fetchLogs()
+    if (searchQuery !== appliedSearch) setAppliedSearch(searchQuery)
+    else if (pagination.page !== 1) setPage(1)
+    else fetchLogs()
   }
 
   // Export logs
@@ -701,14 +742,14 @@ function AuditPageContent() {
                 <div className="flex flex-col sm:flex-row items-center justify-between px-4 sm:px-6 py-4 border-t border-gray-100 gap-4">
                   <div className="text-xs sm:text-sm text-gray-700 text-center sm:text-left">
                     Showing {((pagination.page - 1) * pagination.pageSize) + 1} to{' '}
-                    {Math.min(pagination.page * pagination.pageSize, pagination.totalCount || logs.length)} of{' '}
-                    {pagination.totalCount || 'many'} entries
+                    {(pagination.page - 1) * pagination.pageSize + logs.length}
+                    {hasMore ? ', more available' : ` of ${(pagination.page - 1) * pagination.pageSize + logs.length} entries`}
                   </div>
                   <div className="flex items-center gap-2">
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setPagination(prev => ({ ...prev, page: Math.max(1, prev.page - 1) }))}
+                      onClick={() => setPage(Math.max(1, pagination.page - 1))}
                       disabled={pagination.page === 1 || loading}
                       className="text-xs sm:text-sm"
                     >
@@ -722,19 +763,21 @@ function AuditPageContent() {
                         value={pagination.page}
                         onChange={(e) => {
                           const page = parseInt(e.target.value) || 1
-                          setPagination(prev => ({ ...prev, page: Math.max(1, page) }))
+                          setPage(Math.max(1, page))
                         }}
                         className="h-8 w-12 sm:w-16 px-1 sm:px-2 text-center border border-gray-200 rounded-full text-xs sm:text-sm"
                       />
-                      <span className="text-xs sm:text-sm text-gray-600">
-                        of {Math.ceil((pagination.totalCount || 1000) / pagination.pageSize)}
-                      </span>
+                      {!hasMore && (
+                        <span className="text-xs sm:text-sm text-gray-600">
+                          of {pagination.page}
+                        </span>
+                      )}
                     </div>
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setPagination(prev => ({ ...prev, page: prev.page + 1 }))}
-                      disabled={logs.length < pagination.pageSize || loading}
+                      onClick={() => setPage(pagination.page + 1)}
+                      disabled={!hasMore || loading}
                       className="text-xs sm:text-sm"
                     >
                       Next

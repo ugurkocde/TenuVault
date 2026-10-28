@@ -12,7 +12,7 @@ import { RunBackupDialog } from "../components/RunBackupDialog"
 import { UnreadableBackupsNotice } from "../components/UnreadableBackupsNotice"
 import { RecoveryKeyNotice } from "../components/RecoveryKeyNotice"
 import { bridge } from "../lib/bridge"
-import { formatDate, planName, tenantLicense, useLicense } from "../lib/license"
+import { formatDate, planName, tenantLicense, tenantPlan, useLicense } from "../lib/license"
 import { localTenantIds, useBackupSettings, useLocalInventoryProblems } from "../lib/local-inventory"
 import { describeSchedule, formatWhen, useSchedules } from "../lib/schedules"
 import { toast } from "../lib/toast"
@@ -49,7 +49,7 @@ export default function OverviewPage() {
 
   const tenantIds = tenants.map((t) => t.credentials?.tenantId?.toLowerCase() ?? "")
   const signedInCount = tenantIds.filter((id) => accounts.some((a) => a.tenantId === id)).length
-  const licensedCount = tenantIds.filter((id) => tenantLicense(status, id)?.entitled).length
+  const licensedCount = tenantIds.filter((id) => tenantPlan(tenantLicense(status, id))).length
   const scheduledCount = tenantIds.filter((id) => schedules.some((s) => s.tenantId === id && s.enabled)).length
 
   return (
@@ -208,12 +208,12 @@ export default function OverviewPage() {
                     Sign in
                   </Button>
                 )}
-                {account && !license?.entitled && (
+                {account && !tenantPlan(license) && (
                   <Button size="sm" className="bg-blue-600 text-white hover:bg-blue-700" onClick={() => open(tenant, "/license")}>
                     Check license
                   </Button>
                 )}
-                <Button size="sm" onClick={() => backUp(tenant)} disabled={!account || !license?.entitled}>
+                <Button size="sm" onClick={() => backUp(tenant)} disabled={!account || !tenantPlan(license)}>
                   <Play className="h-4 w-4" />
                   Back up now
                 </Button>

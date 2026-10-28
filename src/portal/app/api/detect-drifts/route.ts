@@ -1,6 +1,7 @@
 import { decodeXml, listBlobPages } from "~/lib/storage/list"
 import { typeForFolder, type Item } from "../../../../shared/intune/registry"
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
+import { complianceSettingLabel, complianceSettingValue } from "../../../../shared/intune/compliance-settings"
 import { withoutUnreadAssignments } from "../../../../shared/intune/read"
 import { coveredFolders, type ScopeMetadata } from "../../../../shared/intune/scope"
 import { itemsOf, sameItem, type BackupFingerprint, type BackupItems } from "../../../../shared/intune/backup-changes"
@@ -666,7 +667,8 @@ function determineSeverity(
   
   // Check for security-related field changes
   if (changes) {
-    const criticalFields = ['passwordRequired', 'encryption', 'jailbreak', 'firewall', 'antivirus', 'bitLocker']
+    // secureByDefault decides whether devices without a compliance policy pass Conditional Access.
+    const criticalFields = ['passwordRequired', 'encryption', 'jailbreak', 'firewall', 'antivirus', 'bitLocker', 'secureByDefault']
     const hasCriticalChange = changes.some(c => 
       criticalFields.some(f => c.field.toLowerCase().includes(f.toLowerCase()))
     )
@@ -675,7 +677,7 @@ function determineSeverity(
   
   // Warning level changes
   if (changeType === "deleted") return "warning"
-  if (changeType === "modified" && (policyType === "Compliance Policy" || policyType === "Device Configuration")) return "warning"
+  if (changeType === "modified" && (policyType === "Compliance Policy" || policyType === "Device Configuration" || policyType === "Compliance policy settings")) return "warning"
   
   // Everything else is info
   return "info"
@@ -706,6 +708,10 @@ function generateChangeDescription(policyType: string, changes: { field: string;
   }
   
   const field = significantChange.field.split('.').pop() || significantChange.field
+
+  // Tenant-wide compliance policy settings, named and valued as the Intune admin center shows them.
+  const complianceLabel = complianceSettingLabel(significantChange.field)
+  if (complianceLabel) return `${complianceLabel}: ${complianceSettingValue(field, significantChange.oldValue)} to ${complianceSettingValue(field, significantChange.newValue)}`
   
   if (typeof significantChange.oldValue === 'boolean') {
     return `${field} ${significantChange.newValue ? 'enabled' : 'disabled'}`
@@ -730,6 +736,11 @@ function determineImpact(
   
   if (changeType === "added") {
     return `New ${policyType} will be applied to assigned devices`
+  }
+
+  // Tenant-wide settings have no assignments: they decide how Intune evaluates compliance for every device.
+  if (policyType === "Compliance policy settings" && changes && changes.length > 0) {
+    return `${changes.length} tenant-wide ${changes.length === 1 ? 'change' : 'changes'} can affect the compliance status of enrolled devices`
   }
   
   if (changes && changes.length > 0) {

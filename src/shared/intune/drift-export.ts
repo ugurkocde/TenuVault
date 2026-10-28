@@ -14,8 +14,8 @@ export function driftExportName(result: Pick<DriftResult, "baseline" | "comparis
 }
 
 /** A value as one line of text: readable for scalars and choices, compact JSON for objects. */
-function valueText(value: unknown, definitionId: string | undefined, names: DriftResult["settingNames"]): string {
-  const formatted = formatValue(value, definitionId, names)
+function valueText(value: unknown, definitionId: string | undefined, names: DriftResult["settingNames"], property?: string): string {
+  const formatted = formatValue(value, definitionId, names, property)
   if (formatted.kind === "empty") return ""
   if (formatted.kind === "json") return JSON.stringify(value)
   return formatted.text
@@ -23,12 +23,12 @@ function valueText(value: unknown, definitionId: string | undefined, names: Drif
 
 function settingRows(drift: Drift, names: DriftResult["settingNames"]) {
   return (drift.changes ?? []).map((change) => {
-    const { label, path, definitionId } = settingLabel(change, names)
+    const { label, path, definitionId, property } = settingLabel(change, names)
     return {
       setting: label,
       path,
-      before: valueText(change.oldValue, definitionId, names),
-      after: valueText(change.newValue, definitionId, names),
+      before: valueText(change.oldValue, definitionId, names, property),
+      after: valueText(change.newValue, definitionId, names, property),
       beforeRaw: change.oldValue,
       afterRaw: change.newValue,
     }

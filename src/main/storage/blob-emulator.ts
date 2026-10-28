@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { LOCAL_STORAGE_PREFIX, localStorageAccountName } from "../../shared/constants"
-import { BlobAlreadyExistsError, BlobNotFoundError, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
+import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobNotFoundError, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
 
 /**
  * Serves the subset of the Azure Blob REST API that the shared API routes use
@@ -27,9 +27,34 @@ const routeContext = new AsyncLocalStorage<{ tenant: string | null; storageAccou
 
 const text = (value: unknown) => (typeof value === "string" && value ? value : null)
 
+/** Routes running now that name storage on this device, such as a restore reading a local backup. */
+let localRoutes = 0
+
+/** Whether a route that names storage on this device is still running. */
+export function localRoutesRunning(): boolean {
+  return localRoutes > 0
+}
+
 /** Runs a route handler so local storage only serves the tenant named in its request. */
 export function withRouteTenant<T>(tenantId: unknown, run: () => T, storageAccountName?: unknown): T {
-  return routeContext.run({ tenant: text(tenantId), storageAccount: text(storageAccountName)?.toLowerCase() ?? null }, run)
+  const storageAccount = text(storageAccountName)?.toLowerCase() ?? null
+  return routeContext.run({ tenant: text(tenantId), storageAccount }, () => isLocalAccount(storageAccount ?? undefined) ? counted(run) : run())
+}
+
+function counted<T>(run: () => T): T {
+  localRoutes++
+  let result: T
+  try {
+    result = run()
+  } catch (error) {
+    localRoutes--
+    throw error
+  }
+  if (!(result instanceof Promise)) {
+    localRoutes--
+    return result
+  }
+  return result.finally(() => { localRoutes-- }) as T
 }
 
 /**
@@ -164,7 +189,7 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
     if (method === "PUT") {
       const data = new Uint8Array(await request.arrayBuffer())
       const metadata = Object.fromEntries([...request.headers].filter(([key]) => key.startsWith("x-ms-meta-")).map(([key, value]) => [key.slice("x-ms-meta-".length), value]))
-      const blob = await store.put(account, container, blobName, data, request.headers.get("content-type") ?? "application/octet-stream", request.headers.get("if-none-match") === "*", Object.keys(metadata).length ? metadata : undefined)
+      const blob = await store.put(account, container, blobName, data, request.headers.get("content-type") ?? "application/octet-stream", request.headers.get("if-none-match") === "*", Object.keys(metadata).length ? metadata : undefined, request.headers.get("if-match") ?? undefined)
       return new Response(null, { status: 201, headers: { etag: etag(blob), "last-modified": blob.lastModified.toUTCString() } })
     }
     if (method === "GET" || method === "HEAD") {
@@ -187,6 +212,7 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
     return error(400, "UnsupportedHttpVerb", `${method} is not supported on blobs.`)
   } catch (caught) {
     if (caught instanceof BlobAlreadyExistsError) return error(412, "ConditionNotMet", "The blob already exists.")
+    if (caught instanceof BlobConditionNotMetError) return error(412, "ConditionNotMet", "The condition specified using HTTP conditional header(s) is not met.")
     if (caught instanceof BlobNotFoundError) {
       return (await store.containerExists(account, container))
         ? error(404, "BlobNotFound", "The specified blob does not exist.")

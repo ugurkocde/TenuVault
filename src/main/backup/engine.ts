@@ -231,6 +231,11 @@ export class BackupEngine {
     return active ? [active.job.id] : []
   }
 
+  /** Whether a backup to storage on this device is queued, running or still writing its manifest. */
+  hasLocalWork(): boolean {
+    return [...this.executions.keys()].some((id) => isLocalAccount(this.jobs.get(id)?.storageAccountName))
+  }
+
   /** Waits for the same bounded execution used by manual and scheduled jobs. */
   waitForJob(job: BackupJob): Promise<BackupJob> {
     return this.executions.get(job.id)?.done ?? Promise.resolve(job)
@@ -402,7 +407,8 @@ export class BackupEngine {
     }
     await pool(types.map((type, index) => ({ type, index })), concurrency, async ({ type, index }) => {
       try {
-        const all = await graph.list(listUrl(type))
+        // A tenant-wide object has no list; reading it here skips the type on a denied read, like a denied list.
+        const all = type.singleton ? [{ ...(await graph.get(listUrl(type))), id: type.singleton.id }] : await graph.list(listUrl(type))
         const items = all.filter((item) => !type.skip?.(item as never))
         const skipped = all.length - items.length
         this.write(job, `Found ${items.length} ${type.label}${skipped ? ` (${skipped} built-in skipped)` : ""}.`)
@@ -473,7 +479,8 @@ export class BackupEngine {
         TenantId: request.tenantId.toLowerCase(),
         Trigger: request.trigger ?? "manual",
         RunId: job.id,
-        Scope: { Excluded: scope.excluded },
+        // Included records the types this run attempted, so later app versions do not count types added since as covered.
+        Scope: { Excluded: scope.excluded, Included: types.map((type) => type.folder) },
         Failures: failures,
         SkippedTypes: skippedTypes,
         FailedTypes: failedTypes,

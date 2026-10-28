@@ -5,6 +5,8 @@
  * is the only change needed to cover it. All paths are relative to https://graph.microsoft.com/beta/.
  */
 
+import { COMPLIANCE_SETTING_KEYS, COMPLIANCE_SETTINGS_ID, complianceSettingChanges, complianceSettingsUpdate } from "./compliance-settings"
+
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 export type Item = { [key: string]: Json }
 
@@ -46,6 +48,11 @@ export interface IntuneType {
   label: string
   area: Area
   path: string
+  /**
+   * A tenant-wide object read from `path` itself rather than a collection. Graph gives it no ID, so backups
+   * store it under `id`, named `name`, with only `properties` kept from the read.
+   */
+  singleton?: { id: string; name: string; properties: string[] }
   /** Property holding the object's name. */
   nameKey: "displayName" | "name" | "profileName" | "tokenName"
   /** $expand for the detail GET. */
@@ -95,6 +102,20 @@ export interface IntuneType {
    * `current` is the live object, read the same way a backup reads it.
    */
   update?: (payload: Item, snapshot: Item, current: Item) => Step[]
+  /** What replacing the live object with the snapshot changes, setting by setting, for the restore review. */
+  review?: (snapshot: Item, current: Item) => ReviewChange[]
+}
+
+export interface ReviewChange {
+  label: string
+  /** The live value. */
+  from: string
+  /** The backed-up value. */
+  to: string
+  /** False when restore leaves this setting as it is (the review says why). */
+  restored: boolean
+  /** What the change does to users or devices. */
+  warning?: string
 }
 
 export interface Step {
@@ -253,6 +274,11 @@ const localizedMessages = (snapshot: Item): Item[] =>
     return body
   })
 
+/** JSON with object keys sorted at every depth, so two reads of one value compare equal. */
+const sortedJson = (value: Json | undefined): string =>
+  JSON.stringify(value ?? null, (_key, entry: Json) =>
+    entry && typeof entry === "object" && !Array.isArray(entry) ? Object.fromEntries(Object.keys(entry).sort().map((key) => [key, (entry as Item)[key]])) : entry,
+  )
 const patch = (body: Item): Step => ({ method: "PATCH", path: "{collection}/{id}", body, kind: "content" })
 
 export const INTUNE_TYPES: IntuneType[] = [
@@ -446,6 +472,18 @@ export const INTUNE_TYPES: IntuneType[] = [
     expand: "assignments",
     restore: "create",
     assign: { key: "deviceHealthScriptAssignments" },
+  },
+  {
+    folder: "CompliancePolicySettings",
+    label: "compliance policy settings",
+    area: "Compliance",
+    path: "deviceManagement/settings",
+    nameKey: "displayName",
+    singleton: { id: COMPLIANCE_SETTINGS_ID, name: "Compliance policy settings", properties: COMPLIANCE_SETTING_KEYS },
+    restore: "singleton",
+    // Writes go to deviceManagement itself; only the compliance settings that differ from the live tenant are sent.
+    update: (_payload, snapshot, current) => complianceSettingsUpdate(snapshot, current),
+    review: complianceSettingChanges,
   },
 
   // Endpoint security (template based profiles and security baselines)
@@ -743,16 +781,29 @@ export const INTUNE_TYPES: IntuneType[] = [
       })
       return payload
     },
-    // items cannot be patched; /update adds (by payloadId) and deletes (by live item ID), and rejects an empty body.
+    // items cannot be patched; /update adds missing items (by payloadId), updates changed ones and deletes
+    // removed ones (both by live item ID), and rejects an empty body.
     update: (payload, _snapshot, current) => {
       const { items, ...body } = payload
-      const added = collection(items)
-      const wanted = new Set(added.map((item) => str(item.payloadId)))
-      const deleted = collection(current.items).filter((item) => !wanted.has(str(item.payloadId))).map((item) => str(item.id))
+      const live = collection(current.items)
+      const matched = new Set<Item>()
+      const added: Item[] = []
+      const updated: Item[] = []
+      for (const item of collection(items)) {
+        const existing = live.find((entry) => !matched.has(entry) && str(entry.payloadId) === str(item.payloadId))
+        if (!existing) {
+          added.push(item)
+          continue
+        }
+        matched.add(existing)
+        const changed = ["intent", "settings", "guidedDeploymentTags"].some((key) => key in item && sortedJson(item[key]) !== sortedJson(existing[key]))
+        if (changed) updated.push({ ...item, id: str(existing.id) })
+      }
+      const deleted = live.filter((entry) => !matched.has(entry)).map((entry) => str(entry.id))
       return [
         patch(body),
-        ...(added.length || deleted.length
-          ? [{ method: "POST", path: "{collection}/{id}/update", body: { addedPolicySetItems: added, deletedPolicySetItems: deleted }, kind: "content" } as Step]
+        ...(added.length || updated.length || deleted.length
+          ? [{ method: "POST", path: "{collection}/{id}/update", body: { addedPolicySetItems: added, updatedPolicySetItems: updated, deletedPolicySetItems: deleted }, kind: "content" } as Step]
           : []),
       ]
     },
@@ -1010,6 +1061,7 @@ export function typeForFolder(folder: string): IntuneType | undefined {
 }
 
 export function itemName(type: IntuneType, item: Item): string {
+  if (type.singleton) return type.singleton.name
   return String(item[type.nameKey] ?? item.displayName ?? item.name ?? item.id ?? "unnamed")
 }
 

@@ -137,6 +137,8 @@ function versionOf(magic: Buffer): Version | null {
 
 export class BlobNotFoundError extends Error {}
 export class BlobAlreadyExistsError extends Error {}
+/** An If-Match ETag no longer matches the stored blob. */
+export class BlobConditionNotMetError extends Error {}
 
 export class IncompleteInventoryError extends Error {
   constructor(readonly unreadableFiles: number) {
@@ -184,6 +186,9 @@ export class LocalBlobStore {
   private readonly writes = new Map<string, number>()
   private readonly rebuilding = new Map<string, Promise<Map<string, Entry>>>()
   private readonly checks = new Map<string, { generation: number; started: boolean; entries: Promise<Map<string, Entry>> }>()
+  /** Cleared once the folder's file system refuses a hard link. */
+  private hardLinks = true
+  private readonly blobWrites = new Map<string, Promise<void>>()
 
   /**
    * @param root   Folder that holds the encrypted backups.
@@ -261,12 +266,35 @@ export class LocalBlobStore {
     return { blob, data: this.decrypt(body, bodyAad(version, account, container, name)) }
   }
 
-  async put(account: string, container: string, name: string, data: Uint8Array, contentType: string, createOnly = false, metadata?: Record<string, string>): Promise<StoredBlob> {
+  /**
+   * Writes one blob. Conditional writes (`ifMatch` with an ETag, or `*` for any
+   * existing blob) to the same blob run one at a time, so the check holds until the
+   * write is published. Unconditional writes are not ordered against them.
+   */
+  put(account: string, container: string, name: string, data: Uint8Array, contentType: string, createOnly = false, metadata?: Record<string, string>, ifMatch?: string): Promise<StoredBlob> {
+    if (ifMatch === undefined) return this.putNow(account, container, name, data, contentType, createOnly, metadata, undefined)
+    const key = `${this.dir(account, container)}\0${name}`
+    const run = (this.blobWrites.get(key) ?? Promise.resolve()).then(() => this.putNow(account, container, name, data, contentType, createOnly, metadata, ifMatch))
+    const tail = run.then(() => undefined, () => undefined)
+    this.blobWrites.set(key, tail)
+    void tail.then(() => { if (this.blobWrites.get(key) === tail) this.blobWrites.delete(key) })
+    return run
+  }
+
+  private async putNow(account: string, container: string, name: string, data: Uint8Array, contentType: string, createOnly: boolean, metadata: Record<string, string> | undefined, ifMatch: string | undefined): Promise<StoredBlob> {
     if (!(await this.containerExists(account, container))) throw new BlobNotFoundError(container)
     const entries = await this.entries(account, container)
     const current = this.keyring[0]!
     const existing = entries.get(name)
     if (createOnly && existing) throw new BlobAlreadyExistsError(name)
+    if (ifMatch !== undefined) {
+      // Compare with the file on disk, which is what a GET returns as the ETag.
+      let tag: string | null = null
+      if (existing) {
+        try { tag = `"${fileStamp(await stat(join(this.dir(account, container), existing.file), { bigint: true }))}"` } catch { /* Removed since listed. */ }
+      }
+      if (!tag || (ifMatch !== "*" && ifMatch !== tag)) throw new BlobConditionNotMetError(name)
+    }
     // A version 1 file keeps its name when overwritten, so the blob never has two files.
     const version = this.writeFormat
     const file = existing?.file ?? fileName(version, current.naming, account, container, name)
@@ -291,7 +319,7 @@ export class LocalBlobStore {
         } finally {
           await handle.close()
         }
-        if (createOnly) await link(tmp, path) // Atomic creation across store/process instances.
+        if (createOnly) await this.publishNew(tmp, path)
         else await rename(tmp, path)
         this.changed(dir)
         if (process.platform !== "win32") await syncDirectory(dir)
@@ -314,7 +342,7 @@ export class LocalBlobStore {
       else {
         // Keep the replacement's authenticated filename and metadata for the next mutation.
         const replacement = await this.readEntry(dir, account, container, file)
-        if (replacement?.name === name) this.updateEntry(dir, entries, name, replacement)
+        if (replacement !== VANISHED && replacement?.name === name) this.updateEntry(dir, entries, name, replacement)
         else this.index.delete(dir)
         this.changed(dir)
       }
@@ -332,6 +360,65 @@ export class LocalBlobStore {
       this.changed(dir)
       this.updateEntry(dir, entries, name)
     })
+  }
+
+  /**
+   * Publishes a complete temporary file under a name that must not exist yet. A hard link does
+   * both atomically across store and process instances. File systems without hard links (exFAT,
+   * FAT32, some network shares) claim the name with an exclusive create instead, so a second
+   * writer still fails with EEXIST, then rename the complete file over the empty claim. Readers
+   * skip an empty file, so the claim is never reported as unreadable. A claim left behind by a
+   * crash is taken over once it is older than STALE_CLAIM_MS.
+   */
+  private async publishNew(tmp: string, path: string): Promise<void> {
+    try {
+      await this.createNew(tmp, path)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || !(await this.removeStaleClaim(path))) throw error
+      await this.createNew(tmp, path)
+    }
+  }
+
+  private async createNew(tmp: string, path: string): Promise<void> {
+    if (this.hardLinks) {
+      try {
+        await link(tmp, path)
+        return
+      } catch (error) {
+        if (!NO_HARD_LINKS.has((error as NodeJS.ErrnoException).code ?? "")) throw error
+        this.hardLinks = false
+      }
+    }
+    await (await open(path, "wx", 0o600)).close()
+    try {
+      await rename(tmp, path)
+    } catch (error) {
+      await rm(path, { force: true })
+      throw error
+    }
+  }
+
+  /**
+   * Removes an empty claim that no writer finished, and returns whether it did. The claim is moved
+   * aside first, so of several writers taking over the same claim only one moves it; a file that
+   * turns out not to be that claim is put back.
+   */
+  private async removeStaleClaim(path: string): Promise<boolean> {
+    try {
+      const claim = await stat(path, { bigint: true })
+      if (claim.size !== 0n || Date.now() - Number(claim.mtimeMs) < STALE_CLAIM_MS) return false
+      const aside = `${path}.${randomBytes(4).toString("hex")}.stale`
+      await rename(path, aside)
+      const moved = await stat(aside, { bigint: true })
+      if (moved.ino !== claim.ino || moved.size !== 0n) {
+        await rename(aside, path)
+        return false
+      }
+      await rm(aside, { force: true })
+      return true
+    } catch {
+      return false
+    }
   }
 
   /** Own directory mutations update the cache without making the next put rebuild it. */
@@ -461,13 +548,19 @@ export class LocalBlobStore {
     }
   }
 
-  private async readEntry(dir: string, account: string, container: string, file: string): Promise<Entry | null> {
+  /**
+   * Returns null for a file that cannot be read, and VANISHED for one removed since it was listed
+   * or an empty file. Every blob file has a header, so an empty one is a create-only claim that a
+   * writer is about to fill or never finished (see publishNew), not a damaged blob.
+   */
+  private async readEntry(dir: string, account: string, container: string, file: string): Promise<Entry | null | typeof VANISHED> {
     const path = join(dir, file)
     let handle: Awaited<ReturnType<typeof open>> | undefined
     try {
       handle = await open(path, "r")
       const prefix = Buffer.alloc(MAGIC_LENGTH + 2)
       const prefixRead = await handle.read(prefix, 0, prefix.length, 0)
+      if (prefixRead.bytesRead === 0 && (await handle.stat()).size === 0) return VANISHED
       const version = prefixRead.bytesRead === prefix.length ? versionOf(prefix.subarray(0, MAGIC_LENGTH)) : null
       if (!version) throw new Error("Invalid backup header")
       const headerLength = prefix.readUInt16BE(MAGIC_LENGTH)
@@ -497,8 +590,8 @@ export class LocalBlobStore {
         etag: `"${fileStamp(info)}"`,
         ...(header.metadata ? { metadata: header.metadata } : {}),
       }
-    } catch {
-      return null
+    } catch (error) {
+      return isMissing(error) ? VANISHED : null
     } finally {
       await handle?.close()
     }
@@ -510,17 +603,19 @@ export class LocalBlobStore {
     const cached = await Promise.resolve(previous).catch(() => undefined)
     const byFile = new Map([...(cached?.values() ?? [])].map(entry => [entry.file, entry]))
     // Headers are read a few at a time and added in directory order, so duplicates are found as before.
-    const read = await mapLimit(files, HEADER_CONCURRENCY, async (file): Promise<Entry | null> => {
+    const read = await mapLimit(files, HEADER_CONCURRENCY, async (file): Promise<Entry | null | typeof VANISHED> => {
       try {
         const cached = byFile.get(file)
         if (cached && fileStamp(await stat(join(dir, file), { bigint: true })) === cached.stamp) return cached
         return this.readEntry(dir, account, container, file)
-      } catch {
-        return null
+      } catch (error) {
+        return isMissing(error) ? VANISHED : null
       }
     })
     let unreadable = 0
     for (const entry of read) {
+      // A file removed since the listing (retention, another device) is simply gone, and an empty claim holds no blob yet.
+      if (entry === VANISHED) continue
       // A file that cannot be read, or a second file for the same blob, is unreadable.
       if (!entry || entries.has(entry.name)) unreadable++
       else entries.set(entry.name, entry)
@@ -530,7 +625,14 @@ export class LocalBlobStore {
     // exposing any inventory to downloads or restores, including selective reads.
     for (const entry of entries.values()) {
       if (container !== "intune-backups" || !/^backup-[^/]+\/metadata\.json$/.test(entry.name)) continue
-      const raw = await readFile(join(dir, entry.file))
+      let raw: Buffer
+      try {
+        raw = await readFile(join(dir, entry.file))
+      } catch (error) {
+        // A manifest removed since the listing no longer describes a backup.
+        if (isMissing(error)) { entries.delete(entry.name); continue }
+        throw error
+      }
       const body = raw.subarray(MAGIC_LENGTH + 2 + raw.readUInt16BE(MAGIC_LENGTH))
       const metadata = JSON.parse(this.decrypt(body, bodyAad(entry.version, account, container, entry.name)).toString())
       if (metadata.Items === undefined) continue // Legacy backups have no inventory manifest.
@@ -558,6 +660,19 @@ export class LocalBlobStore {
     }
     throw new Error("This backup was encrypted with a key this device does not have. Import its recovery key.")
   }
+}
+
+/** Errors of a file system that has no hard links. */
+const NO_HARD_LINKS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"])
+
+/** Age after which an empty create-only claim counts as left behind by a writer that stopped. */
+const STALE_CLAIM_MS = 60_000
+
+/** Marks a listed file that was removed before it could be read, or an empty claim. */
+const VANISHED = Symbol("vanished")
+
+function isMissing(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException)?.code === "ENOENT"
 }
 
 /** Keeps account and container names inside the root folder. */

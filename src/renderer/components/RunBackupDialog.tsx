@@ -32,18 +32,30 @@ export function RunBackupDialog({ open, onOpenChange, tenant, counts, uncounted,
   const [remember, setRemember] = useState(false)
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState("")
+  const [loadError, setLoadError] = useState("")
+  const [attempt, setAttempt] = useState(0)
   const tenantId = tenant?.credentials.tenantId
 
   useEffect(() => {
     if (!open || !tenantId) return
+    // A read that finishes after the dialog closed or moved to another tenant is ignored.
+    let current = true
     setScope(null)
+    setSaved(null)
     setRemember(false)
     setError("")
-    void bridge.backups.scope(tenantId).then((setting) => {
+    setLoadError("")
+    bridge.backups.scope(tenantId).then((setting) => {
+      if (!current) return
       setScope(setting.scope)
       setSaved(setting.scope)
+    }, (failure: unknown) => {
+      if (current) setLoadError(failure instanceof Error ? failure.message : String(failure))
     })
-  }, [open, tenantId])
+    return () => {
+      current = false
+    }
+  }, [open, tenantId, attempt])
 
   const start = async () => {
     if (!tenant || !scope) return
@@ -80,6 +92,13 @@ export function RunBackupDialog({ open, onOpenChange, tenant, counts, uncounted,
 
         {scope ? (
           <BackupScopePicker value={scope} onChange={setScope} counts={counts} uncounted={uncounted} disabled={starting} />
+        ) : loadError ? (
+          <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
+            <p className="min-w-0 flex-1">This tenant's backup settings could not be loaded: {loadError}</p>
+            <Button variant="outline" size="sm" onClick={() => setAttempt((count) => count + 1)}>
+              Try again
+            </Button>
+          </div>
         ) : (
           <div className="flex items-center gap-2 py-8 text-sm text-gray-500">
             <Loader2 className="h-4 w-4 animate-spin" /> Loading this tenant's backup settings...

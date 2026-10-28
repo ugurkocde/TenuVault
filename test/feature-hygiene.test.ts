@@ -1,10 +1,11 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it, vi } from "vitest"
 import { detectHygiene, overlap, RULES, type GroupState, type InventoryItem } from "../src/main/features/hygiene/rules"
-import { routes, signals } from "../src/main/features/hygiene"
+import { KEPT_RECORDS, KEPT_SCANS, routes, signals } from "../src/main/features/hygiene"
 import type { Item } from "../src/shared/intune/registry"
 import type { GraphCall } from "../src/portal/lib/policies/graph-restore"
-import { call, fakeDeps, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
+import { MAX_RECORDS } from "../src/main/features/records"
+import { call, fakeDeps, seedRecords, TENANT_A, TENANT_B, TENANT_C } from "./feature-helpers"
 
 /** fakeDeps assigns `graph` directly, so the fake returns the caller itself. */
 const graphOf = (fn: GraphCall) => (() => fn) as never
@@ -225,6 +226,21 @@ describe("/api/hygiene", () => {
     expect(found.body.findings.some((f: { ruleId: string }) => f.ruleId === "missing-group")).toBe(true)
   })
 
+  it("resolves a missing group finding once no assignment references a group", async () => {
+    let policies: Item[] = [{ id: "p1", name: "A", platforms: "windows10", settings: [], assignments: [group(G1)], roleScopeTagIds: ["0"] }]
+    let clock = Date.parse("2026-09-30T12:00:00Z")
+    const deps = fakeDeps({ api: (path, tenant, body) => backupApi({ policies }).api(path, tenant, body), graph: graphOf(async () => ({ status: 404, body: {} })), now: () => new Date(clock) })
+    const r = routes(deps)
+    const first = await call(r, "/api/hygiene", { tenantId: TENANT_A, action: "scan" })
+    const missing = first.body.findings.find((f: { ruleId: string }) => f.ruleId === "missing-group")
+    expect(missing.status).toBe("open")
+    policies = [{ ...policies[0]!, assignments: [allDevices()] }]
+    clock += 60_000
+    const second = await call(r, "/api/hygiene", { tenantId: TENANT_A, action: "scan" })
+    expect(second.body.scans[0].groupResolution.state).toBe("none")
+    expect((await call(r, "/api/hygiene", { tenantId: TENANT_A, action: "get", findingId: missing.id })).body.finding.status).toBe("resolved")
+  })
+
   it("explains the Group.Read.All opt-in where the unresolved groups rule reports unknown", async () => {
     const policies = [{ id: "p1", name: "A", platforms: "windows10", settings: [], assignments: [group(G1)], roleScopeTagIds: ["0"] }]
     const { api } = backupApi({ policies })
@@ -274,6 +290,25 @@ describe("/api/hygiene", () => {
     const open = (await call(r, "/api/hygiene", { tenantId: TENANT_A, action: "list", status: ["open"], classification: ["definite"] })).body.findings as Array<{ fingerprint: string }>
     expect(open.some((f) => f.fingerprint.includes("conflicting-setting"))).toBe(false)
     expect(open.some((f) => f.fingerprint.includes("duplicate-profile"))).toBe(true)
+  })
+
+  it("drops resolved findings and old unreferenced scans instead of failing at the record cap", async () => {
+    const { api } = backupApi()
+    const deps = fakeDeps({ api })
+    const scan = (index: number) => ({ kind: "scan", title: `Scan ${index}`, status: "complete", summary: "", backupId: "b", collectedAt: "2026-01-01T00:00:00Z", completeness: "complete", partialReason: null, covered: [], notCollected: [], itemCount: 0, unreadableItems: 0, unknowns: [], groupResolution: { state: "none", reason: null }, counts: { definite: 0, possible: 0 } })
+    const finding = (index: number, status: string, scanId: string) => ({ kind: "finding", title: `Finding ${index}`, summary: "", status, ruleId: "unassigned-policy", fingerprint: `unassigned-policy:old-${index}`, classification: "definite", severity: "low", explanation: "", policies: [{ folder: "Apps", id: `old-${index}`, name: "Old" }], settings: [], details: {}, evidenceSha256: "x", backupId: "b", collectedAt: "2026-01-01T00:00:00Z", scanId, firstSeenAt: "2026-01-01T00:00:00Z", lastSeenAt: "2026-01-01T00:00:00Z", review: status === "false-positive" ? { action: "false-positive", by: null, at: "2026-01-01T00:00:00Z", note: "By design" } : null })
+    const scans = Array.from({ length: 300 }, (_, index) => scan(index))
+    const ids = (index: number) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`
+    // The first scan is still referenced by a false positive and must survive.
+    const findings = Array.from({ length: MAX_RECORDS - scans.length }, (_, index) => finding(index, index === 0 ? "false-positive" : "resolved", ids(index === 0 ? 0 : 1)))
+    seedRecords(deps, "hygiene-findings", TENANT_A, [...scans, ...findings])
+    const result = await call(routes(deps), "/api/hygiene", { tenantId: TENANT_A, action: "scan" })
+    expect(result.status).toBe(200)
+    const stored = deps.records.list<{ kind: string; status?: string }>("hygiene-findings", TENANT_A)
+    expect(stored.length).toBeLessThanOrEqual(KEPT_RECORDS + result.body.findings.length + 1)
+    expect(stored.filter((record) => record.kind === "scan").length).toBeLessThanOrEqual(KEPT_SCANS + 1)
+    expect(stored.some((record) => record.id === ids(0))).toBe(true)
+    expect(stored.filter((record) => record.status === "false-positive")).toHaveLength(1)
   })
 
   it("filters stored findings", async () => {

@@ -67,7 +67,8 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
 
   const loadPreview = () => run("preview", async () => { setPreview(await actions!.preview()) })
   const step = stepOf(changeSet, preview)
-  const canReview = !!actions && ["in-review", "stale", "approved"].includes(changeSet.status)
+  // A stale change set is finished; only a new preview of the change creates a reviewable one.
+  const canReview = !!actions && ["in-review", "approved"].includes(changeSet.status)
   const canApply = !!actions && changeSet.status === "approved"
   const canRetry = !!actions && ["partial", "failed", "uncertain", "applying"].includes(changeSet.status)
   const canRollback = !!actions && changeSet.kind === "change" && !!changeSet.preChange
@@ -95,6 +96,7 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
         ))}
       </ol>
 
+      {changeSet.status === "stale" && <p className="rounded-2xl bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">This change set is stale and can no longer be approved or applied. Preview the change again to create a new change set.</p>}
       {changeSet.lastError && <p className="rounded-2xl bg-red-50 p-3 text-sm text-red-800 dark:bg-red-950/40 dark:text-red-300">{changeSet.lastError}</p>}
 
       <section aria-label="Operations" className="space-y-2">

@@ -213,6 +213,48 @@ describe("localInventoryProblem", () => {
     expect(await inventoryProblem(check, TENANT_A)).toBeNull()
   }, 20_000)
 
+  it("treats a file removed between listing and reading as removed, not unreadable", async () => {
+    const root = folder()
+    const key = [randomBytes(32)]
+    await backups(root, key, TENANT_A, ["backup-1/policy-0.json", "backup-1/policy-1.json", "backup-1/policy-2.json"])
+    const [gone] = files(root)
+    const path = join(containerDir(root), gone!)
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    // Retention deletes the file after the folder was listed, before its header is opened.
+    vi.mocked(fileSystem.open).mockImplementation(async (file, ...rest) => {
+      if (file === path) rmSync(path, { force: true })
+      return actual.open(file, ...rest)
+    })
+    try {
+      const listed = await new LocalBlobStore(root, key).list(account(TENANT_A), CONTAINER)
+      expect(listed).toHaveLength(2)
+    } finally {
+      vi.mocked(fileSystem.open).mockImplementation(actual.open)
+    }
+  })
+
+  it("does not report a manifest removed between listing and reading", async () => {
+    const root = folder()
+    const key = [randomBytes(32)]
+    const store = await backups(root, key, TENANT_A, ["backup-1/policies/one.json"])
+    await store.put(account(TENANT_A), CONTAINER, "backup-1/metadata.json", Buffer.from(JSON.stringify({ Items: { "policies/one": { file: "one.json" } } })), "application/json")
+    const check = new LocalBlobStore(root, key)
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")
+    // Retention removes the manifest and its item once every header has been read.
+    let opened = 0
+    vi.mocked(fileSystem.open).mockImplementation(async (file, ...rest) => {
+      const handle = await actual.open(file, ...rest)
+      if (String(file).endsWith(".tvb") && ++opened === 2) for (const name of files(root)) rmSync(join(containerDir(root), name))
+      return handle
+    })
+    try {
+      // The second read of the folder finds it empty.
+      expect(await check.list(account(TENANT_A), CONTAINER)).toEqual([])
+    } finally {
+      vi.mocked(fileSystem.open).mockImplementation(actual.open)
+    }
+  })
+
   it("does not report a failed read while the folder keeps changing", async () => {
     const root = folder()
     mkdirSync(containerDir(root), { recursive: true })

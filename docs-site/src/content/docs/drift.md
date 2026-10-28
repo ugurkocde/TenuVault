@@ -102,8 +102,8 @@ Every change also has a severity. It appears in the exported report and in **Che
 
 | Severity | When |
 | --- | --- |
-| Critical | A compliance policy was deleted, or a changed setting's name contains passwordRequired, encryption, jailbreak, firewall, antivirus or bitLocker |
-| Warning | Any other deleted item, or a changed compliance policy or device configuration profile |
+| Critical | A compliance policy was deleted, or a changed setting's name contains passwordRequired, encryption, jailbreak, firewall, antivirus, bitLocker or secureByDefault (**Mark devices with no compliance policy assigned as** in the compliance policy settings) |
+| Warning | Any other deleted item, or a changed compliance policy, device configuration profile or compliance policy settings |
 | Info | Everything else |
 
 On Community, a completed comparison shows a note only when at least one changed or deleted policy still has a Revert or Recreate action. Added policies, policies already reverted and changes caused by a revert are excluded from the count. The note says: **Pro reverts these {N} changed or deleted policies with one click and records the change in the audit log.** A **See plans** link appears beside it.

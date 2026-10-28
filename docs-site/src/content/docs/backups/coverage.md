@@ -3,7 +3,7 @@ title: "What gets backed up"
 description: Every Intune object type TenuVault backs up, grouped by area, and what is not covered.
 faq:
   - question: "Which Intune objects does TenuVault back up?"
-    answer: "39 Intune object types in nine areas: device configuration, compliance, endpoint security, scripts and remediations, Windows updates, apps, app protection and configuration, enrollment, and tenant administration. Each object is saved as it is in Microsoft Graph (beta), with its settings and, where Intune has them, its assignments."
+    answer: "40 Intune object types in nine areas: device configuration, compliance, endpoint security, scripts and remediations, Windows updates, apps, app protection and configuration, enrollment, and tenant administration. Each object is saved as it is in Microsoft Graph (beta), with its settings and, where Intune has them, its assignments."
   - question: "Does TenuVault back up app installer files?"
     answer: "No. Apps are saved as their Intune details, assignments, categories, and dependency and supersedence links. Installer files are never downloaded, so Win32 and line-of-business apps cannot be recreated from a backup; store, web and Microsoft 365 apps can."
   - question: "Are the groups that assignments target backed up?"
@@ -14,14 +14,14 @@ faq:
     answer: "TenuVault skips types it is denied access to, for example when the app registration lacks a permission or its admin consent, or when your Intune role excludes the type. The backup log and Backup Details say which types were skipped."
 ---
 
-TenuVault backs up 39 Intune object types in nine areas. Each object is saved as it is in Microsoft Graph (beta), with its settings and, where Intune has them, its assignments.
+TenuVault backs up 40 Intune object types in nine areas. Each object is saved as it is in Microsoft Graph (beta), with its settings and, where Intune has them, its assignments.
 
 The area and type names below are the ones the **Back up** dialog shows under **Custom**. See [Choose what to back up](/backups/#choose-what-to-back-up).
 
 ## How to read the tables
 
 * **Assignments**: whether the backup holds the object's assignments (the groups and filters it targets). Restoring assignments is a separate choice. See [Restore modes and assignments](/restore/modes/).
-* **Everything except apps**: every type is included in this choice except **Apps**. **Everything** includes all 39 types.
+* **Everything except apps**: every type is included in this choice except **Apps**. **Everything** includes all 40 types.
 * Built-in objects that Intune creates itself are skipped. The backup log reports how many were skipped.
 
 ## Device configuration
@@ -41,6 +41,9 @@ The area and type names below are the ones the **Back up** dialog shows under **
 | Compliance policies | Yes | With their actions for noncompliance |
 | Settings catalog compliance policies | Yes | With settings and actions for noncompliance |
 | Compliance scripts | Yes | |
+| Compliance policy settings | No | The tenant-wide settings under **Endpoint security** > **Device compliance** > **Compliance policy settings**: **Mark devices with no compliance policy assigned as** and **Compliance status validity period (days)**, plus the switches for scheduled actions for noncompliance and enhanced jailbreak detection. One per tenant. Restore replaces them in place; they cannot be copied. See [Compliance policy settings](/restore/modes/#compliance-policy-settings). |
+
+Microsoft Graph returns the compliance policy settings together with unrelated tenant features, such as log collection, Autopilot diagnostics, Android device administrator enrollment and derived credentials. Those other features are not part of the backup.
 
 ## Endpoint security
 
@@ -119,6 +122,7 @@ Apps are the slowest type to back up. Because installer files are never download
 * **The Apple automated device enrollment token.** Its details and profiles are kept for reference, but the token has to be uploaded again in Intune.
 * **Android Enterprise enrollment tokens.** A restored profile gets a new token.
 * **The groups that assignments target.** Assignments are saved as references to groups; the groups themselves are not part of the backup.
+* **Other tenant-wide Intune settings** that Microsoft Graph returns with the compliance policy settings, such as log collection, Autopilot diagnostics, Android device administrator enrollment and derived credentials.
 * **Anything not listed on this page**, such as enrolled devices and their inventory.
 * **Types you leave out** with **Everything except apps** or **Custom**.
 * **Types TenuVault is denied access to.** The app registration may lack the permission, for example when it was created with an older version of the setup script, or the permission may not have admin consent. Your Intune role can also exclude a type. The backup skips those types and says so in the log and in **Backup Details**. Open the app registration in Microsoft Entra, go to **API permissions** and select **Grant admin consent for &lt;your tenant&gt;**, or run the setup script again. Then sign out of the tenant in TenuVault and sign in again. If every permission already shows **Granted**, check that your Intune role covers these items. See [Create the app registration](/getting-started/app-registration/#3-add-the-delegated-permissions).

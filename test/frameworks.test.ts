@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { comparePolicies, parsePolicies, remediationPayload } from "../src/shared/frameworks/policies"
 import { frameworks, searchFrameworks } from "../src/shared/frameworks/catalog"
 import { collectGraph, handleFramework } from "../src/main/frameworks/service"
+import { setFrameworkStore } from "../src/main/frameworks/workspaces"
 
 const type = "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance"
 const policy = (value = "enabled") => ({ name: "Workstation baseline", platforms: "windows10", technologies: "mdm", description: "Approved profile",
@@ -168,6 +169,25 @@ describe("Graph reads and tenant-bound remediation", () => {
   it("fails the assessment when Graph denies access instead of inventing gaps", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(Response.json({ access_token: "test" })).mockResolvedValueOnce(Response.json({}, { status: 403 })))
     await expect(handleFramework({ action: "assess", tenantId, appId, frameworkId: "custom", reference: "r1", policies: [policy()] })).rejects.toThrow("permissions")
+  })
+  it("keeps creating the selected policies when saving the workspace fails, and reports the failure", async () => {
+    const data = new Map<string, string>()
+    let failSaves = false
+    setFrameworkStore({ get: k => data.get(k) ?? null, set: (k, v) => { if (failSaves) throw new Error("Workspace storage is full"); data.set(k, v) }, delete: k => { data.delete(k) } })
+    let created = 0
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("oauth2")) return Response.json({ access_token: "test" })
+      if (init?.method === "POST") return Response.json({ id: `${liveId.slice(0, -1)}${++created}` })
+      return Response.json({ value: [] })
+    }))
+    const policies = [policy(), { ...policy(), name: "Second baseline", settings: [{ ...policy().settings[0]!, settingInstance: { ...policy().settings[0]!.settingInstance, settingDefinitionId: "second" } }] }]
+    const assessment = await handleFramework({ action: "assess", tenantId, appId, frameworkId: "custom", reference: "r1", policies }) as { runId: string }
+    failSaves = true
+    const result = await handleFramework({ action: "create", tenantId, appId, runId: assessment.runId, keys: ["0:0", "1:0"], confirmUnassigned: true })
+      .finally(() => { failSaves = false }) as { success: boolean; results: { id?: string }[]; warning?: string }
+    expect(created).toBe(2)
+    expect(result).toMatchObject({ success: true, results: [{ id: expect.any(String) }, { id: expect.any(String) }] })
+    expect(result.warning).toContain("Workspace storage is full")
   })
   it("creates only approved missing settings, rejects cross-tenant use and replay", async () => {
     const writes: Record<string, unknown>[] = []

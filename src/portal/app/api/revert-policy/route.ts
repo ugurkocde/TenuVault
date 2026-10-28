@@ -1,6 +1,8 @@
+import { readOwnedBackup } from "~/lib/policies/backup-owner"
 import { validPolicyPath } from "~/lib/policies/restore"
-import { isGraphId } from "../../../../shared/security"
+import { isGraphId, isGuid } from "../../../../shared/security"
 import { graphCaller, Restorer } from "~/lib/policies/graph-restore"
+import { readLegacyRevertHistory, revertHistoryPath } from "~/lib/policies/revert-history"
 import { type NextRequest, NextResponse } from "next/server"
 interface RevertPolicyRequest {
   tenantId: string
@@ -70,6 +72,10 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // The revert history is kept per tenant ID, so refuse anything else before changing the tenant.
+    if (!isGuid(tenantId)) {
+      return NextResponse.json({ error: 'Invalid tenant ID' }, { status: 400 })
+    }
     if (action !== 'restore' && action !== 'revert') {
       return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
     }
@@ -85,6 +91,12 @@ export async function POST(request: NextRequest) {
       getAccessToken(tenantId, appId, clientSecret, "https://storage.azure.com/.default"),
       getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
     ])
+
+    // A shared container can hold other tenants' backups; never restore from one of those.
+    const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`, {
+      headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${storageToken}` },
+    }), backupPath.split('/')[0] ?? '', tenantId)
+    if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
 
     // Fetch the policy content from the backup
     const policyUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups/${backupPath.split("/").map(encodeURIComponent).join("/")}`
@@ -141,6 +153,7 @@ export async function POST(request: NextRequest) {
       await writeRevertMetadata(
         storageAccountName,
         storageToken,
+        tenantId,
         policyId,
         {
           timestamp: new Date().toISOString(),
@@ -183,7 +196,7 @@ export async function POST(request: NextRequest) {
       metadata.newPolicyId = result.policyId
     }
     
-    await writeRevertMetadata(storageAccountName, storageToken, policyId, metadata)
+    await writeRevertMetadata(storageAccountName, storageToken, tenantId, policyId, metadata)
 
     return NextResponse.json({
       success: true,
@@ -203,7 +216,7 @@ export async function POST(request: NextRequest) {
 
 async function getAccessToken(tenantId: string, appId: string, clientSecret: string, scope: string, forceRefresh = false): Promise<string> {
   const tokenResponse = await fetch(
-    `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`,
+    `https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`,
     {
       method: "POST",
       headers: {
@@ -226,61 +239,100 @@ async function getAccessToken(tenantId: string, appId: string, clientSecret: str
   return tokenData.access_token
 }
 
+/** Reads and conditional writes of the revert history before giving up on concurrent writers. */
+const REVERT_HISTORY_ATTEMPTS = 5
+
 async function writeRevertMetadata(
   storageAccountName: string,
   accessToken: string,
+  tenantId: string,
   policyId: string,
   metadata: RevertMetadata
 ): Promise<void> {
-  const metadataPath = "metadata/revert-history.json"
-  const metadataUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups/${metadataPath}`
-  
+  // Each tenant keeps its own history: a container can be shared by several tenants.
+  const metadataPath = revertHistoryPath(tenantId)
+  if (!metadataPath) {
+    console.error("Invalid tenant ID; not recording revert history")
+    return
+  }
+  const blobUrl = (name: string) => `https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`
+  const metadataUrl = blobUrl(metadataPath)
+
   try {
-    // First, try to fetch existing metadata
-    const getResponse = await fetch(metadataUrl, {
-      headers: {
-        'x-ms-version': '2021-12-02',
-        'x-ms-date': new Date().toUTCString(),
-        'Authorization': `Bearer ${accessToken}`,
-      },
-    })
-    
-    let existingData: { reverts: { [key: string]: RevertMetadata[] } } = { reverts: {} }
-    
-    if (getResponse.ok) {
-      try {
-        existingData = await getResponse.json()
-      } catch {
-        console.log("No existing metadata or invalid JSON, creating new")
+    // Each attempt reads the history and writes it back only if nobody changed it
+    // in between (If-Match, or If-None-Match for a new file); a 412 starts over.
+    let putResponse: Response | undefined
+    for (let attempt = 0; attempt < REVERT_HISTORY_ATTEMPTS; attempt++) {
+      const getResponse = await fetch(metadataUrl, {
+        headers: {
+          'x-ms-version': '2021-12-02',
+          'x-ms-date': new Date().toUTCString(),
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      })
+
+      let existingData: { reverts: { [key: string]: RevertMetadata[] } } = { reverts: {} }
+      const etag = getResponse.ok ? getResponse.headers.get('etag') : null
+      if (getResponse.ok) {
+        try {
+          existingData = await getResponse.json()
+        } catch {
+          // Never replace a history we could not read with one holding only this entry.
+          console.error("Revert history is not valid JSON; leaving it unchanged")
+          return
+        }
+        if (!etag) {
+          console.error("Revert history has no ETag; leaving it unchanged")
+          return
+        }
+      } else if (getResponse.status !== 404) {
+        // Only a missing file starts a new history. Any other failure would erase it.
+        console.error("Failed to read revert history:", getResponse.status, getResponse.statusText)
+        return
+      } else {
+        // A new history starts with this tenant's entries from the old shared file, which stays as it is.
+        try {
+          existingData = await readLegacyRevertHistory((name) => fetch(blobUrl(name), {
+            headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${accessToken}` },
+          }), tenantId) as typeof existingData
+        } catch (error) {
+          // Starting without them would hide those entries from this tenant for good.
+          console.error("Failed to read the legacy revert history:", error)
+          return
+        }
       }
+
+      // Ensure structure exists
+      if (!existingData.reverts) {
+        existingData.reverts = {}
+      }
+
+      // Add new metadata entry
+      if (!existingData.reverts[policyId]) {
+        existingData.reverts[policyId] = []
+      }
+
+      existingData.reverts[policyId].push(metadata)
+
+      // Write back to storage
+      putResponse = await fetch(metadataUrl, {
+        method: 'PUT',
+        headers: {
+          'x-ms-version': '2021-12-02',
+          'x-ms-date': new Date().toUTCString(),
+          'Authorization': `Bearer ${accessToken}`,
+          'x-ms-blob-type': 'BlockBlob',
+          'Content-Type': 'application/json',
+          'x-ms-blob-content-type': 'application/json',
+          ...(etag ? { 'If-Match': etag } : { 'If-None-Match': '*' }),
+        },
+        body: JSON.stringify(existingData, null, 2),
+      })
+      // 412: another revert wrote the history first (409 when both created it). Read it again.
+      if (putResponse.status !== 412 && putResponse.status !== 409) break
     }
-    
-    // Ensure structure exists
-    if (!existingData.reverts) {
-      existingData.reverts = {}
-    }
-    
-    // Add new metadata entry
-    if (!existingData.reverts[policyId]) {
-      existingData.reverts[policyId] = []
-    }
-    
-    existingData.reverts[policyId].push(metadata)
-    
-    // Write back to storage
-    const putResponse = await fetch(metadataUrl, {
-      method: 'PUT',
-      headers: {
-        'x-ms-version': '2021-12-02',
-        'x-ms-date': new Date().toUTCString(),
-        'Authorization': `Bearer ${accessToken}`,
-        'x-ms-blob-type': 'BlockBlob',
-        'Content-Type': 'application/json',
-        'x-ms-blob-content-type': 'application/json'
-      },
-      body: JSON.stringify(existingData, null, 2),
-    })
-    
+
+    if (!putResponse) return
     if (!putResponse.ok) {
       const errorBody = await putResponse.text()
       console.error("Failed to write revert metadata:", putResponse.status, putResponse.statusText, errorBody)

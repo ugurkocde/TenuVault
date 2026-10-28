@@ -144,6 +144,14 @@ export class AuthManager {
     const stored = this.host.accountStore.get(tenantId)
     this.host.accountStore.delete(tenantId)
     if (!stored) return
+    // MSAL signs an account out of every tenant at once, and the refresh token is shared across
+    // tenants, so it cannot sign out of one alone. Keep the cache while another connected tenant
+    // uses the same account and app registration; the removed tenant has no profile left to use it.
+    const shared = this.host.accountStore.list().some((other) => {
+      const profile = this.host.accountStore.get(other.tenantId)
+      return profile?.clientId === stored.clientId && profile.homeAccountId === stored.homeAccountId
+    })
+    if (shared) return
     const app = this.app(stored.clientId)
     const account = await this.findAccount(app, stored.homeAccountId)
     if (account) await app.signOut({ account })

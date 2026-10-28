@@ -2,7 +2,7 @@ import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
 import { useEffect, useId, useRef, useState, type ReactNode } from "react"
 import { Link, useLocation, useSearchParams } from "react-router-dom"
-import { Bell, Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, Palette, RefreshCw, Save, SunMoon, Upload } from "lucide-react"
+import { Bell, Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, Palette, RefreshCw, Save, SunMoon, Upload, type LucideIcon } from "lucide-react"
 import { cn } from "~/lib/utils"
 import { useTenantOperations, useTenants, type Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
@@ -478,11 +478,12 @@ function allowsCustomRetention(days: number): boolean {
   return days !== 0 && days <= COMMUNITY_RETENTION_DAYS
 }
 
-function BackgroundAndRetention() {
+export function BackgroundAndRetention() {
   const tenants = useTenants()
   const { status: licenseStatus } = useLicense()
   const [prefs, setPrefs] = useState<AppPreferences | null>(null)
   const [info, setInfo] = useState<AppInfo | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [launcher, setLauncher] = useState<{ supported: boolean; installed: boolean } | null>(null)
   const [launchBusy, setLaunchBusy] = useState<"install" | "remove" | null>(null)
   const [checkBusy, setCheckBusy] = useState(true)
@@ -517,9 +518,15 @@ function BackgroundAndRetention() {
       setLaunchBusy(null)
     }
   }
+  const load = () => {
+    setLoadError(null)
+    Promise.all([bridge.app.info(), bridge.preferences.get()]).then(([nextInfo, nextPrefs]) => {
+      setInfo(nextInfo)
+      setPrefs(nextPrefs)
+    }, (error: unknown) => setLoadError(error instanceof Error ? error.message : String(error)))
+  }
   useEffect(() => { void checkLauncher() }, [])
-  useEffect(() => void bridge.app.info().then(setInfo), [])
-  useEffect(() => void bridge.preferences.get().then(setPrefs), [])
+  useEffect(load, [])
   const set = async (changes: Partial<AppPreferences>) => {
     try {
       setPrefs(await bridge.preferences.set(changes))
@@ -527,6 +534,7 @@ function BackgroundAndRetention() {
       toast(error instanceof Error ? error.message : String(error), "error")
     }
   }
+  if (loadError) return <SectionLoadError title="Background runner" icon={MonitorCog} message={loadError} onRetry={load} />
   if (!prefs || !info) return null
   const iconLocation = info.platform === "darwin" ? "menu bar" : "tray"
   return (
@@ -601,14 +609,30 @@ function BackgroundAndRetention() {
   )
 }
 
-function Updates() {
+export function Updates() {
   const [prefs, setPrefs] = useState<AppPreferences | null>(null)
   const [status, setStatus] = useState<UpdateStatus>({ state: "idle" })
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const failed = (error: unknown): UpdateStatus => ({ state: "error", message: error instanceof Error ? error.message : String(error) })
+  const load = () => {
+    setLoadError(null)
+    bridge.preferences.get().then(setPrefs, (error: unknown) => setLoadError(error instanceof Error ? error.message : String(error)))
+  }
   useEffect(() => {
-    void bridge.preferences.get().then(setPrefs)
-    void bridge.updates.status().then(setStatus)
+    load()
+    bridge.updates.status().then(setStatus, (error: unknown) => setStatus(failed(error)))
     return bridge.updates.onChanged(setStatus)
   }, [])
+  const set = async (changes: Partial<AppPreferences>) => {
+    setSaveError(null)
+    try {
+      setPrefs(await bridge.preferences.set(changes))
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : String(error))
+    }
+  }
+  if (loadError) return <SectionLoadError title="Updates" icon={Download} message={loadError} onRetry={load} />
   if (!prefs) return null
   const describe = () => {
     switch (status.state) {
@@ -642,7 +666,7 @@ function Updates() {
             className="h-4 w-4"
             checked={prefs.autoUpdate}
             disabled={prefs.autoUpdateManaged}
-            onChange={(e) => void bridge.preferences.set({ autoUpdate: e.target.checked }).then(setPrefs)}
+            onChange={(e) => void set({ autoUpdate: e.target.checked })}
           />
           Download and install updates automatically
         </label>
@@ -652,13 +676,15 @@ function Updates() {
             className="h-4 w-4"
             checked={prefs.nightlyUpdates}
             disabled={prefs.autoUpdateManaged || !prefs.autoUpdate}
-            onChange={(e) => void bridge.preferences.set({ nightlyUpdates: e.target.checked }).then(setPrefs)}
+            onChange={(e) => void set({ nightlyUpdates: e.target.checked })}
           />
           Get nightly builds
         </label>
+        {saveError && <p role="alert" className="text-red-700">Could not save the update setting: {saveError}</p>}
         <p className="text-xs text-gray-500">
-          Enable this to try preview builds between stable releases. Turn it off to download the current stable
-          release, even if its version is older than your installed nightly. Changing channels replaces any pending
+          Enable this to try preview builds between stable releases. A stable release newer than the latest nightly
+          is offered too. Turn it off to download the current stable release, even if its version is older than your
+          installed nightly. Changing channels replaces any pending
           update. Nightly builds may contain bugs.
         </p>
         <p className="text-gray-600">{describe()}</p>
@@ -668,7 +694,7 @@ function Updates() {
               Restart and update
             </Button>
           ) : (
-            <Button size="sm" variant="outline" disabled={!prefs.autoUpdate || status.state === "checking"} onClick={() => void bridge.updates.check().then(setStatus)}>
+            <Button size="sm" variant="outline" disabled={!prefs.autoUpdate || status.state === "checking"} onClick={() => void bridge.updates.check().then(setStatus, (error: unknown) => setStatus(failed(error)))}>
               <RefreshCw className="mr-2 h-4 w-4" /> Check now
             </Button>
           )}
@@ -678,9 +704,27 @@ function Updates() {
   )
 }
 
+/** A settings section whose saved state could not be read, with a retry. */
+function SectionLoadError({ title, icon: Icon, message, onRetry }: { title: string; icon: LucideIcon; message: string; onRetry: () => void }) {
+  return (
+    <Card>
+      <CardHeader className="p-7 pb-4">
+        <CardTitle className="flex items-center gap-3 text-xl font-medium">
+          <span className="flex size-10 items-center justify-center rounded-full bg-secondary" aria-hidden="true"><Icon className="h-[18px] w-[18px]" /></span> {title}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-wrap items-center gap-3 px-7 pb-7 text-sm">
+        <p role="alert" className="text-red-700">These settings could not be loaded: {message}</p>
+        <Button variant="outline" size="sm" onClick={onRetry}>Try again</Button>
+      </CardContent>
+    </Card>
+  )
+}
+
 function About({ active }: { active: boolean }) {
   const [info, setInfo] = useState<AppInfo | null>(null)
-  useEffect(() => void bridge.app.info().then(setInfo), [])
+  // Without the app info only the version number is left out.
+  useEffect(() => void bridge.app.info().then(setInfo, () => undefined), [])
   return (
     <Card>
       <CardHeader className="p-7 pb-4">

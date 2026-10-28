@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
 
     // Get access token for Microsoft Graph API
     const tokenResponse = await fetch(
-      `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`,
+      `https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`,
       {
         method: "POST",
         headers: {

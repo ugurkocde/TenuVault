@@ -168,7 +168,7 @@ More on licenses: [Activate and manage your license](/licensing/manage/).
 | Automatic updates are off. | **Download and install updates automatically** is off in **Settings** > **Updates**. | Tick the setting to turn updates back on. |
 | Green **Update available** label at the bottom of the sidebar. | An update is downloading or ready to install. | Select the label. It installs and restarts TenuVault when the download finishes. Or use **Restart and update** in **Settings** > **Updates**. |
 
-A stable install follows stable releases by default. Enable **Settings** > **Updates** > **Get nightly builds** to receive previews. Turn it off to return to the current stable release, even if that version is older than the installed nightly. See [Install and update TenuVault](/getting-started/install/).
+A stable install follows stable releases by default. Enable **Settings** > **Updates** > **Get nightly builds** to receive previews, plus any stable release that is newer than the latest nightly. Turn it off to return to the current stable release, even if that version is older than the installed nightly. See [Install and update TenuVault](/getting-started/install/).
 
 ## Background backups
 

@@ -664,3 +664,52 @@ describe("compound detectors and legacy representations", () => {
     },
   );
 });
+
+describe("enum settings left at their Graph default", () => {
+  const collected = (...policies: any[]) => ({
+    ...data(...policies),
+    collectedAt: "2026-10-12T10:00:00Z",
+  });
+  it.each([
+    [
+      "windows-firewall",
+      "windows10EndpointProtectionConfiguration",
+      {
+        firewallProfileDomain: { firewallEnabled: "notConfigured" },
+        firewallProfilePrivate: { firewallEnabled: "notConfigured" },
+        firewallProfilePublic: { firewallEnabled: "notConfigured" },
+      },
+    ],
+    [
+      "windows-telemetry-minimized",
+      "windows10GeneralConfiguration",
+      { diagnosticsDataSubmissionMode: "userDefined" },
+    ],
+    [
+      "windows-office-child-process-block",
+      "windows10EndpointProtectionConfiguration",
+      { defenderOfficeAppsLaunchChildProcessType: "userDefined" },
+    ],
+  ])("reads %s as missing, not different", (id, type, settings) => {
+    const result = capability(collected(policy(type, settings)), id);
+    expect(result.status).toBe("noEvidence");
+    expect(capabilityComparison(result)).toBe("missing");
+  });
+  it.each([null, "02:00:00"])(
+    "reads an untouched scheduled scan with time %s as missing",
+    (time) => {
+      const result = capability(
+        collected(
+          policy("windows10GeneralConfiguration", {
+            defenderScanType: "userDefined",
+            defenderSystemScanSchedule: "userDefined",
+            defenderScheduledScanTime: time,
+          }),
+        ),
+        "windows-periodic-antimalware-scan",
+      );
+      expect(result.status).toBe("noEvidence");
+      expect(capabilityComparison(result)).toBe("missing");
+    },
+  );
+});

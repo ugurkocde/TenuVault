@@ -79,10 +79,10 @@ admin centers.
 
 ### What does TenuVault back up?
 
-39 Intune object types in nine areas, from device configuration, compliance and endpoint security
-to scripts, Windows updates, apps, app protection, enrollment and tenant administration, with their
-assignments where Intune has them. App installer files, Apple tokens and private keys cannot be
-exported by Microsoft Graph. See [What gets backed up](https://docs.tenuvault.com/backups/coverage/).
+40 Intune object types in nine areas, from device configuration, compliance (including the tenant-wide
+compliance policy settings) and endpoint security to scripts, Windows updates, apps, app protection,
+enrollment and tenant administration, with their assignments where Intune has them. App installer
+files, Apple tokens and private keys cannot be exported by Microsoft Graph. See [What gets backed up](https://docs.tenuvault.com/backups/coverage/).
 
 ### Where is my data stored?
 
@@ -108,7 +108,7 @@ backups. Check the backup log and your Intune permissions if this category is mi
 backup scope can also exclude it. See [Administrative Templates verification](docs/administrative-templates.md)
 for the verified API coverage and its limits.
 
-Copy creates separate policies; replacement updates supported existing policies or recreates missing ones. Assignments are explicit and have type-specific limits. Cross-tenant copies remain unassigned and require reviewed target dependencies. Partial operations retain created IDs for repair, and ambiguous writes require reconciliation.
+Copy creates separate policies; replacement updates supported existing policies or recreates missing ones. The tenant-wide compliance policy settings are only replaced in place in the same tenant, writing just the settings that differ, and are never copied. Assignments are explicit and have type-specific limits. Cross-tenant copies remain unassigned and require reviewed target dependencies. Partial operations retain created IDs for repair, and ambiguous writes require reconciliation.
 
 The OpenIntuneBaseline section deploys, compares and validates OIB policies (the OIBDeployer workflows); Frameworks compares Settings Catalog configuration with separate assignment evidence. Neither claims device enforcement or framework certification. See the [framework guide](docs/frameworks.md), [coverage metadata](docs/framework-coverage.md) and [reliability scope](docs/reliability-review.md).
 

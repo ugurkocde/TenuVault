@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest"
-import { applyChangeSet, approveChangeSet, CONTENT_DOMAIN, createChangeSet, createRollbackChangeSet, getChangeSet, listChangeSets, previewChangeSet, previewRollback, rejectChangeSet, reviseChangeSet } from "../src/main/features/change-sets/engine"
+import { applyChangeSet, approveChangeSet, CONTENT_DOMAIN, createChangeSet, KEPT_CHANGE_SETS, createRollbackChangeSet, getChangeSet, listChangeSets, previewChangeSet, previewRollback, rejectChangeSet, reviseChangeSet } from "../src/main/features/change-sets/engine"
 import type { FeatureDeps } from "../src/main/features/deps"
 import { FeatureError } from "../src/main/features/route"
 import { containsExpected, contentHashOf, diffConfigurations, REDACTED, sanitizeSnapshot, statusFromResults, type ChangeSetContent, type ChangeSetRecord } from "../src/main/features/change-sets/model"
 import { typeForFolder, type Item } from "../src/shared/intune/registry"
 import { DOMAINS } from "../src/main/features/domains"
-import { fakeDeps, TENANT_A, TENANT_B } from "./feature-helpers"
+import { MAX_RECORDS } from "../src/main/features/records"
+import { fakeDeps, seedRecords, TENANT_A, TENANT_B } from "./feature-helpers"
 import { COMPLETE_BACKUP_METADATA, FakeTenant, setting, wire } from "./feature-change-sets-fakes"
 import { writeOperation } from "../src/main/features/change-sets/graph"
 
@@ -172,6 +173,28 @@ describe("change-set engine", () => {
     expect(stored.review).toBeNull()
   })
 
+  it("never approves, revises or applies a stale change set again", async () => {
+    const context = setup()
+    const { record, existing } = await threeOperations(context)
+    const first = await approve(context, record.id)
+    context.tenant.policies.get(existing.id as string)!.description = "Edited by someone else"
+    const stale = await context.post({ action: "apply", id: record.id, contentHash: first.contentHash, confirm: true })
+    expect(stale.status).toBe(409)
+    expect(stale.body.error).toContain("Preview the change again to create a new change set.")
+    expect((await context.post({ action: "get", id: record.id })).body.changeSet.summary).toContain("can no longer be approved or applied")
+
+    const preview = await context.post({ action: "preview", id: record.id })
+    const approved = await context.post({ action: "approve", id: record.id, contentHash: preview.body.contentHash, targetFingerprint: preview.body.targetFingerprint })
+    expect(approved.status).toBe(409)
+    expect(approved.body.error).toContain("stale")
+    expect((await context.post({ action: "revise", id: record.id, removeKeys: ["op-3"] })).status).toBe(409)
+    expect((await context.post({ action: "apply", id: record.id, contentHash: preview.body.contentHash, confirm: true })).status).toBe(409)
+    expect((await context.post({ action: "get", id: record.id })).body.changeSet.status).toBe("stale")
+    expect(context.tenant.writeCount()).toBe(0)
+    // It can still be dismissed.
+    expect((await context.post({ action: "reject", id: record.id })).status).toBe(200)
+  })
+
   it("requires a fresh review after the content changes", async () => {
     const context = setup()
     const { record } = await threeOperations(context)
@@ -323,6 +346,37 @@ describe("change-set engine", () => {
     expect(context.backups).toEqual([TENANT_A])
   })
 
+  it("keeps a partly written update uncertain on retry and includes it in rollback", async () => {
+    const context = setup()
+    const existing = context.tenant.addPolicy({ name: "Defender baseline" })
+    const assignments = [{ target: { "@odata.type": "#microsoft.graph.allDevicesAssignmentTarget", deviceAndAppManagementAssignmentFilterId: null, deviceAndAppManagementAssignmentFilterType: "none" } }]
+    const proposed: Item = { ...structuredClone(existing), description: "Hardened" }
+    const record = await createChangeSet(context.deps, TENANT_A, { title: "Harden and assign", operations: [{ folder: "ConfigurationPolicies", action: "update", targetId: existing.id as string, proposed, assignments }] }, "Admin")
+    const preview = await approve(context, record.id)
+    // The configuration is written; the assignment call never reaches Graph.
+    context.tenant.failWrite = (_method, path) => (path.endsWith("/assign") ? "throw" : undefined)
+    const first = (await context.post({ action: "apply", id: record.id, contentHash: preview.contentHash, confirm: true })).body.changeSet as ChangeSetRecord
+    expect(first.results["op-1"]!.status).toBe("uncertain")
+    expect(context.tenant.policies.get(existing.id as string)?.description).toBe("Hardened")
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const retried = (await context.post({ action: "retry", id: record.id, contentHash: preview.contentHash, confirm: true })).body.changeSet as ChangeSetRecord
+      expect(retried.status).toBe("uncertain")
+      expect(retried.results["op-1"]!.status).toBe("uncertain")
+      expect(retried.results["op-1"]!.message).toContain("may have written part of the update")
+      expect(retried.results["op-1"]!.message).not.toContain("Nothing was written")
+    }
+
+    const rollbackPreview = await context.post({ action: "rollback-preview", id: record.id })
+    expect(rollbackPreview.body.operations.map((operation: { key: string; action: string }) => [operation.key, operation.action])).toEqual([["op-1", "update"]])
+    context.tenant.failWrite = undefined
+    const rollback = (await context.post({ action: "rollback-create", id: record.id })).body.changeSet as ChangeSetRecord & { id: string }
+    const rollbackReview = await approve(context, rollback.id)
+    const applied = (await context.post({ action: "apply", id: rollback.id, contentHash: rollbackReview.contentHash, confirm: true })).body.changeSet as ChangeSetRecord
+    expect(applied.status).toBe("applied")
+    expect(context.tenant.policies.get(existing.id as string)?.description).toBe("")
+  })
+
   it("records a denied read-back as uncertain, not verified", async () => {
     const context = setup()
     const { record } = await threeOperations(context)
@@ -342,6 +396,29 @@ describe("change-set engine", () => {
     expect(applied.results["op-1"]!.status).toBe("uncertain")
     expect(applied.results["op-1"]!.readBack).toBe("denied")
     expect(applied.status).toBe("uncertain")
+  })
+
+  it("drops old change sets that never wrote and nothing refers to instead of failing at the record cap", async () => {
+    const context = setup()
+    const ids = (index: number) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`
+    const contentIds = (index: number) => `00000000-0000-4000-9000-${String(index).padStart(12, "0")}`
+    const changeSet = (index: number, status: string, extra: Record<string, unknown> = {}) => ({ id: ids(index), title: `Old ${index}`, status, summary: "", kind: "change", origin: { workflow: "standard-adoption", recordId: null }, targetTenantId: TENANT_A, sourceTenantId: null, sourceVersion: null, ticket: null, operations: [], dependencies: [], proposalId: contentIds(index), review: null, preChange: null, results: {}, rollbackOf: null, attempts: 0, lastError: null, contentHash: "x", ...extra })
+    const sets = Array.from({ length: MAX_RECORDS }, (_, index) => index === 0 ? changeSet(0, "applied", { preChange: { capturedAt: "2026-01-01T00:00:00Z", backupFolder: "b", captureId: contentIds(MAX_RECORDS), objects: [] } }) : index === 1 ? changeSet(1, "in-review") : changeSet(index, index % 2 ? "rejected" : "stale"))
+    seedRecords(context.deps, DOMAINS.changeSets, TENANT_A, sets)
+    seedRecords(context.deps, CONTENT_DOMAIN, TENANT_A, [...sets.map((entry) => ({ id: entry.proposalId, title: "", status: "frozen", summary: "", kind: "proposal", changeSetId: null, entries: {} })), { id: contentIds(MAX_RECORDS), title: "", status: "frozen", summary: "", kind: "capture", changeSetId: ids(0), entries: {} }].slice(0, MAX_RECORDS))
+    // A workflow still names this stale change set as pending.
+    seedRecords(context.deps, DOMAINS.adoptions, TENANT_A, [{ id: "aaaaaaaa-0000-4000-8000-000000000001", title: "Adoption", status: "change-set", summary: "", pending: { changeSetId: ids(2) } }])
+
+    const { record } = await threeOperations(context)
+    expect(record.status).toBe("in-review")
+    const kept = new Set(listChangeSets(context.deps, TENANT_A).map((entry) => entry.id))
+    expect(kept.size).toBeLessThanOrEqual(KEPT_CHANGE_SETS + 1)
+    for (const id of [ids(0), ids(1), ids(2), record.id]) expect(kept.has(id)).toBe(true)
+    const content = new Set(context.deps.records.list(CONTENT_DOMAIN, TENANT_A).map((entry) => entry.id))
+    expect(content.has(record.proposalId)).toBe(true)
+    expect(content.has(contentIds(1))).toBe(true)
+    expect(content.has(contentIds(2))).toBe(true)
+    expect(content.has(contentIds(3))).toBe(false)
   })
 
   it("isolates tenants: another tenant cannot read or apply a change set", async () => {

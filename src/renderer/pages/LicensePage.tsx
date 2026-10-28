@@ -160,7 +160,7 @@ function TenantRow({
 
 export default function LicensePage() {
   const { confirm, confirmDialog } = useConfirm()
-  const { status, refresh } = useLicense()
+  const { status, error: statusError, refresh } = useLicense()
   const tenants = useTenants()
   const [key, setKey] = useState("")
   const keyInput = useRef<HTMLInputElement>(null)
@@ -169,7 +169,8 @@ export default function LicensePage() {
   const checkedOnOpen = useRef(false)
 
   useEffect(() => {
-    void refresh()
+    // A failed read is shown below through the provider's error.
+    void refresh().catch(() => undefined)
     if (checkedOnOpen.current) return
     checkedOnOpen.current = true
     // A plan or tenant quantity changed in the customer portal under the same key only
@@ -177,6 +178,21 @@ export default function LicensePage() {
     // this page asks the service now; failures keep the cached status shown above.
     void bridge.license.refresh().then(() => refresh()).catch(() => undefined)
   }, [refresh])
+
+  if (!status && statusError) {
+    return (
+      <div className="flex min-h-[50vh] flex-col items-center justify-center gap-4 p-6">
+        <Alert variant="destructive" className="max-w-md">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>The license status could not be read: {statusError}</AlertDescription>
+        </Alert>
+        <Button variant="outline" onClick={() => void refresh().catch(() => undefined)}>
+          <RefreshCw className="h-4 w-4" />
+          Try again
+        </Button>
+      </div>
+    )
+  }
 
   if (!status) {
     return (

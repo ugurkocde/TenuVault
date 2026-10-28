@@ -1,6 +1,6 @@
 import type { BackupSchedule, ScheduleInput } from "../../shared/ipc"
 import type { KeyValueStore } from "../storage/secure-store"
-import type { BackupJob } from "./engine"
+import type { BackupEngine, BackupJob, BackupRequest } from "./engine"
 
 const KEY = "backup.schedules"
 const TICK_MS = 60 * 1000
@@ -25,6 +25,21 @@ export function scheduledResult(job: BackupJob): ScheduledRunResult {
   if (job.status === "Cancelled") return { status: "Cancelled", message }
   if (job.status === "Completed" && !job.failures) return { status: "Completed", message }
   return job.unreachable ? { status: "Failed", message, unreachable: true } : { status: "Failed", message }
+}
+
+/**
+ * Starts an unattended (scheduled or tray) backup and waits for it to end. A run that joins a
+ * backup already running for the tenant adopts its outcome, but a cancellation of that backup was
+ * not a cancellation of this run, so the run then starts a backup of its own. `wait` sees every
+ * job the run waits for.
+ */
+export async function runUnattended(engine: Pick<BackupEngine, "start" | "liveRuns">, request: BackupRequest, wait: (job: BackupJob) => Promise<unknown>): Promise<BackupJob> {
+  for (;;) {
+    const running = engine.liveRuns(request.tenantId)
+    const job = engine.start(request)
+    await wait(job)
+    if (job.status !== "Cancelled" || !running.includes(job.id)) return job
+  }
 }
 
 /**

@@ -1,6 +1,7 @@
 import { computeCoverage, type DenominatorEntry, type DenominatorSource } from "./cis-coverage"
 import { manualItemsForLevel, MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDATIONS_URL, type ManualItemView, type RecommendationList } from "./cis-manual"
 import type { KitLevel, KitPack } from "./cis-kit"
+import { kitLevelForPolicy } from "./cis-flow"
 import type { Assessment, BaselinePolicy } from "./policies"
 import { appliesOn, exceptionKey, isActive, localDate, type CisException } from "./cis-exceptions"
 import { recommendationResults, type RecommendationResult } from "./cis-recommendations"
@@ -252,8 +253,7 @@ function recommendationRates(results: RecommendationResult[], excepted: (result:
 }
 
 function levelOf(policy: BaselinePolicy): KitLevel {
-  const level = policy.provenance?.level
-  return typeof level === "string" && level.includes("2") ? 2 : 1
+  return kitLevelForPolicy(policy)
 }
 
 function textOf(policy: BaselinePolicy, key: string): string {
@@ -415,7 +415,7 @@ export function compareAssessments(a: CisReadinessEntry, b: CisReadinessEntry): 
 }
 
 /** The Levels a saved assessment measures: those of its pack policies and of the recommendations they carry. */
-function packLevels(policies: BaselinePolicy[]): Set<KitLevel> {
+export function packLevels(policies: BaselinePolicy[]): Set<KitLevel> {
   return new Set([...policies.map(levelOf), ...policies.flatMap(policy => (policy.recommendations ?? []).map(item => item.level))])
 }
 

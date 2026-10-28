@@ -4,14 +4,15 @@ import { apiBody } from "../src/main/features/deps"
 import { routes } from "../src/main/features/health-review"
 import { POST as listBackupsRoute } from "../src/portal/app/api/list-backups/route"
 import { checkBackups, checkSignals, isDue, missedWindows, redactIdentifiers, validateWebhookUrl } from "../src/main/features/health-review/rules"
-import { collectSignals, notifyEndpoints, runReview, tick } from "../src/main/features/health-review/service"
+import { collectSignals, KEPT_FINDINGS, notifyEndpoints, runReview, tick } from "../src/main/features/health-review/service"
 import { DOMAINS } from "../src/main/features/domains"
 import { setInternalCisBenchmarksEnabled } from "../src/main/frameworks/service"
 import { loadWorkspace, saveWorkspace, setFrameworkStore } from "../src/main/frameworks/workspaces"
 import { convertKit, type KitFile } from "../src/shared/frameworks/cis-kit"
 import type { Assessment, BaselinePolicy, Finding } from "../src/shared/frameworks/policies"
 import type { Plan } from "../src/shared/plans"
-import { call, fakeDeps, TENANT_A, TENANT_B } from "./feature-helpers"
+import { MAX_RECORDS } from "../src/main/features/records"
+import { call, fakeDeps, seedRecords, TENANT_A, TENANT_B } from "./feature-helpers"
 
 const PATH = "/api/health-review"
 const NOW = new Date("2026-09-30T12:00:00Z")
@@ -123,6 +124,20 @@ describe("health review runs and findings", () => {
     const reopened = findings.find((finding: any) => finding.key === `backup-stale:${TENANT_A}`)
     expect(reopened).toMatchObject({ state: "open", occurrence: 2, resolvedAt: null })
     expect(reopened.history.map((entry: any) => entry.reason)).toContain("Reopened: fresh evidence shows the problem again")
+  })
+
+  it("drops the oldest resolved findings instead of failing at the record cap", async () => {
+    const w = world()
+    w.setBackupAge(50)
+    const finding = (key: string, state: string, at: string) => ({ key, family: "signals", check: "signal", severity: "low", state, status: state, title: key, summary: "", reason: "", observedAt: null, evidenceAt: null, firstSeenAt: at, lastSeenAt: at, resolvedAt: state === "resolved" ? at : null, occurrence: 1, owner: null, acknowledgedAt: null, acknowledgedBy: null, link: "/", evidence: [] })
+    const seeded = Array.from({ length: MAX_RECORDS }, (_, index) => index < 5 ? finding(`kept-${index}`, "open", "2026-01-01T00:00:00.000Z") : finding(`old-${index}`, "resolved", "2026-01-01T00:00:00.000Z"))
+    seedRecords(w.deps, DOMAINS.healthFindings, TENANT_A, seeded)
+    const { run } = await runReview(w.deps, TENANT_A, "scheduled", null, { sleep: noSleep })
+    expect(run.status).not.toBe("failed")
+    const stored = w.deps.records.list<{ key: string; state: string }>(DOMAINS.healthFindings, TENANT_A)
+    expect(stored.length).toBeLessThanOrEqual(KEPT_FINDINGS + 1)
+    expect(stored.find((entry) => entry.key === `backup-stale:${TENANT_A}`)?.state).toBe("open")
+    expect(stored.filter((entry) => entry.key.startsWith("kept-"))).toHaveLength(5)
   })
 
   it("keeps stored findings from nesting history on repeated reviews", async () => {

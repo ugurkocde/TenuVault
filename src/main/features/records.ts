@@ -74,8 +74,9 @@ export const MAX_REVISIONS = 200
  * working on another: every call names its tenant and a record ID from another tenant is
  * simply not found. Updates never rewrite history, they append a revision with the actor
  * and reason. The first revision holds the whole record; later ones hold only the fields they
- * changed, so frequent progress updates of a large record do not copy it again each time. Nothing here is deleted by a plan change; only `remove` deletes, and callers
- * use it only for records the admin explicitly discards.
+ * changed, so frequent progress updates of a large record do not copy it again each time. Nothing here is deleted by a plan change; only `remove` and `prune` delete:
+ * `remove` for records the admin explicitly discards, `prune` for retention of finished
+ * records nothing refers to any more.
  */
 export class TenantRecords {
   private staged: Map<string, Stored<unknown>[]> | null = null
@@ -158,6 +159,21 @@ export class TenantRecords {
     if (kept.length === records.length) return false
     this.save(domain, tenantId, kept)
     return true
+  }
+
+  /**
+   * Retention: removes the oldest records (by last update) that `removable` allows until at
+   * most `keep` records of the domain remain, in one write. Records `removable` refuses are
+   * always kept, even above `keep`. Returns how many were removed.
+   */
+  prune<T>(domain: string, tenantId: string, keep: number, removable: (record: Stored<T>) => boolean): number {
+    const records = this.readRecords<T>(domain, tenantId)
+    if (records.length <= keep) return 0
+    const candidates = records.filter((record) => removable(record)).sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
+    const drop = new Set(candidates.slice(0, records.length - keep).map((record) => record.id))
+    if (!drop.size) return 0
+    this.save(domain, tenantId, records.filter((record) => !drop.has(record.id)))
+    return drop.size
   }
 
   /** Synchronous scan writes share one durable flush. Failed batches leave no staged changes. */

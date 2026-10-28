@@ -26,7 +26,7 @@ Use copies when you want to inspect an old configuration next to the current one
 * The copy's name is the original name with a `[Restored]` prefix, for example `[Restored] Contoso Defender Antivirus`.
 * Without **Restore assignments**, copies are created unassigned, so they do not reach any device until you assign them in Intune.
 * With **Restore assignments** (Pro and MSP), copies get the same groups and filters as in the backup. The review step then warns: "Assigned copies reach devices at their next check-in."
-* Some objects cannot be copied, only updated in place. Examples are the tenant default enrollment configuration ("This is the tenant default. Restore updates it in place.") and the default Company Portal branding ("This is the default branding. Restore updates it in place."). Use **Replace in place** for those.
+* Some objects cannot be copied, only updated in place. Examples are the tenant default enrollment configuration ("This is the tenant default. Restore updates it in place."), the default Company Portal branding ("This is the default branding. Restore updates it in place.") and the tenant-wide compliance policy settings. Use **Replace in place** for those.
 
 Community restores exactly one item at a time, always as an unassigned copy.
 
@@ -118,6 +118,23 @@ On the **Review** step, TenuVault shows a warning under each item that would tri
 3. If the targeted Macs use LAPS or Platform SSO accounts, restore to a small pilot group first and confirm those accounts can still sign in.
 
 To avoid this on macOS, Microsoft recommends setting password rules in a settings catalog policy with **Change At Next Auth** set to **False**, and leaving password settings out of compliance policies and device restrictions profiles.
+
+## Compliance policy settings
+
+The compliance policy settings (**Endpoint security** > **Device compliance** > **Compliance policy settings** in the Intune admin center) apply to the whole tenant, so they are restored differently from policies:
+
+* Only **Replace in place** restores them, which needs Pro or MSP, like any other replace. They are never created as a copy and never copied to another tenant.
+* They have no assignments, so **Restore assignments** does not change them.
+* TenuVault writes only the settings that differ from the tenant. The other tenant settings that Microsoft Graph keeps in the same object, such as log collection and Android device administrator enrollment, are never sent.
+* A **Compliance status validity period (days)** that the backup holds as 0 (never set, Intune uses 30 days) or outside 1 to 120 days is never written. The tenant keeps its value.
+
+On the **Review** step, an item labelled **Overwrite the current version** lists each setting that changes, with the value in the tenant now and the value after the restore, for example **Mark devices with no compliance policy assigned as: Compliant in Contoso now, Not compliant after the restore**. A warning under the setting says what the change does:
+
+* Changing **Mark devices with no compliance policy assigned as** to **Not compliant** makes devices without an assigned compliance policy noncompliant. Conditional Access policies that require a compliant device then block their users.
+* Changing it to **Compliant** lets devices without an assigned compliance policy count as compliant without any check, so those Conditional Access policies let them in.
+* A shorter **Compliance status validity period** makes devices that have not reported their compliance status within that period noncompliant.
+
+Check which devices have no compliance policy assigned before you restore a change to these settings.
 
 ## Where restored items go
 

@@ -5,7 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { comparableSnapshot } from '../src/shared/intune/compare'
-import { importArchive, reviewArchive } from '../src/main/backup/archive'
+import { importArchive, importConfirmedArchive, reviewArchive } from '../src/main/backup/archive'
 import { LocalBlobStore } from '../src/main/storage/local-blob-store'
 const tenant = '11111111-1111-1111-1111-111111111111'
 const id = 'backup-2026-09-26-120000'
@@ -48,4 +48,27 @@ it('attempts all rollback deletions and preserves the original write failure', a
   reviewed.files.set('DeviceConfigurations/second.json', Buffer.from('{}'))
   await expect(importArchive(store, reviewed)).rejects.toThrow('original failure')
   expect(cleanup).toHaveBeenCalledTimes(2)
+})
+
+it('claims a license slot for the archive tenant only after the import is confirmed', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'archive-'))
+  try {
+    const store = new LocalBlobStore(root, [Buffer.alloc(32, 4)]), reviewed = await reviewArchive(await archive())
+    const list = async () => (await store.list(`tvlocal-${tenant}`, 'intune-backups')).map(blob => blob.name)
+    // Cancelling the review leaves the license untouched and imports nothing.
+    const license = vi.fn(async () => 'community')
+    expect(await importConfirmedArchive(store, reviewed, async () => false, license)).toBe(false)
+    expect(license).not.toHaveBeenCalled()
+    expect(await list()).toEqual([])
+    // A refused license stops a confirmed import before anything is written.
+    const refused = vi.fn(async () => { throw new Error('Community covers one tenant') })
+    await expect(importConfirmedArchive(store, reviewed, async () => true, refused)).rejects.toThrow('Community covers one tenant')
+    expect(refused).toHaveBeenCalledWith(tenant)
+    expect(await list()).toEqual([])
+    // A confirmed import checks the license after the confirmation, then imports.
+    const order: string[] = []
+    expect(await importConfirmedArchive(store, reviewed, async () => { order.push('confirm'); return true }, async (id) => { order.push(`license ${id}`) })).toBe(true)
+    expect(order).toEqual(['confirm', `license ${tenant}`])
+    expect(await list()).toContain(`${id}/metadata.json`)
+  } finally { await rm(root, { recursive: true, force: true }) }
 })

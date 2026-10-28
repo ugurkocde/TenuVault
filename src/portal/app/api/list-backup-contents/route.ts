@@ -2,6 +2,7 @@ import { decodeXml, listBlobPages } from "~/lib/storage/list"
 import { INTUNE_TYPES, typeForFolder } from "../../../../shared/intune/registry"
 import { blobPath, isSafeArchivePath } from "../../../../shared/security"
 import { type NextRequest, NextResponse } from "next/server"
+import { readOwnedBackup } from "~/lib/policies/backup-owner"
 
 interface PolicyFile {
   name: string
@@ -80,7 +81,6 @@ export async function POST(request: NextRequest) {
 
     const groups = new Map<string, BackupGroup>()
     const blobPattern = /<Blob>[\s\S]*?<Name>(.*?)<\/Name>[\s\S]*?<Content-Length>(\d+)<\/Content-Length>[\s\S]*?<\/Blob>/g
-    let metadata: any
     for (const match of xmlText.matchAll(blobPattern)) {
       const blobName = decodeXml(match[1] ?? "")
       const [, folder = "", fileName = ""] = blobName.split("/")
@@ -92,23 +92,12 @@ export async function POST(request: NextRequest) {
       groups.set(type.folder, group)
     }
 
-    // Try to fetch metadata
-    try {
-      const metadataUrl = `https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(backupId)}/metadata.json`
-      const metadataResponse = await fetch(metadataUrl, {
-        headers: {
-          'x-ms-version': '2021-12-02',
-          'x-ms-date': new Date().toUTCString(),
-          'Authorization': `Bearer ${accessToken}`,
-        },
-      })
-
-      if (metadataResponse.ok) {
-        metadata = await metadataResponse.json()
-      }
-    } catch (err) {
-      console.error("Failed to fetch metadata:", err)
-    }
+    // The backup's metadata, refused when the backup belongs to another tenant.
+    const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${blobPath(name)}`, {
+      headers: { 'x-ms-version': '2021-12-02', 'Authorization': `Bearer ${accessToken}` },
+    }), backupId, tenantId)
+    if (!owned.ok) return NextResponse.json({ error: owned.error }, { status: owned.status })
+    const metadata = owned.metadata ?? undefined
 
     const ordered = INTUNE_TYPES.map((type) => groups.get(type.folder)).filter((group): group is BackupGroup => !!group)
     for (const group of ordered) group.policies.sort((a, b) => (a.displayName || "").localeCompare(b.displayName || ""))
