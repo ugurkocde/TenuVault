@@ -214,6 +214,9 @@ foreach ($assignment in $assigned) {
     $keep = $assignment.ResourceId -eq $graph.Id -and ($wanted.Id -contains $assignment.AppRoleId)
     if (-not $keep -and $PSCmdlet.ShouldProcess($app.AppId, "Remove permission $($assignment.AppRoleId) on $($assignment.ResourceDisplayName)")) {
         $name = ($graph.AppRoles | Where-Object Id -eq $assignment.AppRoleId).Value
+        if ($name -eq "DeviceManagementManagedDevices.Read.All") {
+            Write-Warning "Removing DeviceManagementManagedDevices.Read.All because -IncludeDeviceCategories was not given. Every computer using this reader must verify it again in TenuVault. Run the script again with -IncludeDeviceCategories to keep it."
+        }
         Write-Host "Removing permission $(if ($name) { $name } else { $assignment.AppRoleId }) on $($assignment.ResourceDisplayName): the Backup Reader stays read-only."
         Remove-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $sp.Id -AppRoleAssignmentId $assignment.Id
     }
@@ -238,7 +241,7 @@ Write-Host "  Certificate thumbprint:   $thumbprint"
 Write-Host ""
 Write-Host "New permissions and certificates can take a few minutes to apply."
 Write-Host "Backups in an Azure storage account: an Azure administrator also runs"
-Write-Host "  ./New-TenuVaultStorage.ps1 ... -BackupReaderAppId $($app.AppId)"
+Write-Host "  ./New-TenuVaultStorage.ps1 -AdminGroupId <group> -SubscriptionId <subscription> -ResourceGroupName <resource group> -StorageAccountName <backup storage account> -BackupReaderAppId $($app.AppId)"
 Write-Host "which lets the Backup Reader write backups but not delete them."
 Write-Host ""
 Write-Host "Recommended: watch the Backup Reader in Entra ID > Sign-in logs > Service principal sign-ins." -ForegroundColor Yellow

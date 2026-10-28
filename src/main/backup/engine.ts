@@ -236,7 +236,7 @@ async function tokenOrStop(get: () => Promise<string>, outcome: RunOutcome): Pro
 
 export class BackupEngine {
   private readonly jobs = new Map<string, BackupJob>()
-  private readonly running = new Map<string, { job: BackupJob; key: string }>()
+  private readonly running = new Map<string, { job: BackupJob; key: string; mode: BackupAuthMode }>()
   private readonly executions = new Map<string, { controller: AbortController; done: Promise<BackupJob> }>()
   /** Backups run one at a time, in start order, like the scheduler and the tray: each run reads with its own concurrency, so running tenants at once would multiply Graph requests and invite throttling. */
   private queueTail: Promise<void> = Promise.resolve()
@@ -273,17 +273,19 @@ export class BackupEngine {
 
   /**
    * Starts a backup in the background. One backup per tenant runs at a time. A request joins the
-   * running backup only when tenant, storage account, scope and auth mode all match; any other
-   * request gets a failed job of its own, so a scheduled full backup can never ride on a narrower
-   * manual one, and a manual backup is never served by a Backup Reader run.
+   * running backup only when tenant, storage account and scope match, and never a Backup Reader run
+   * with the admin's sign-in: a manual backup is never served by the Backup Reader. A scheduled
+   * request may join a run with the admin's sign-in, which reads at least as much. Any other request
+   * gets a failed job of its own, so a scheduled full backup can never ride on a narrower manual one.
    */
   start(request: BackupRequest): BackupJob {
     const tenantKey = request.tenantId.toLowerCase()
     const tokens = this.runTokens(request)
-    const key = `${request.storageAccountName.toLowerCase()}\n${normalizeScope(request.scope ?? EVERYTHING).excluded.join(",")}\n${tokens.mode}`
+    const key = `${request.storageAccountName.toLowerCase()}\n${normalizeScope(request.scope ?? EVERYTHING).excluded.join(",")}`
     const active = this.running.get(tenantKey)
     if (active) {
-      if (active.key === key) return active.job
+      const joinable = active.mode === "delegated" || tokens.mode === "app-only"
+      if (active.key === key && joinable) return active.job
       const conflict: BackupJob = {
         id: `desktop-${randomUUID()}`,
         tenantId: request.tenantId,
@@ -293,7 +295,9 @@ export class BackupEngine {
         progressMessage: "Backup failed",
         startTime: this.now().toISOString(),
         endTime: this.now().toISOString(),
-        exception: "A different backup is already running for this tenant. Wait for it to finish, then try again.",
+        exception: active.key === key
+          ? "A scheduled backup with the Backup Reader is running for this tenant. Wait for it to finish, then try again."
+          : "A different backup is already running for this tenant. Wait for it to finish, then try again.",
         log: [],
       }
       this.write(conflict, `Backup failed: ${conflict.exception}`)
@@ -318,7 +322,7 @@ export class BackupEngine {
       log: [],
     }
     this.jobs.set(job.id, job)
-    this.running.set(tenantKey, { job, key })
+    this.running.set(tenantKey, { job, key, mode: tokens.mode })
     this.prune()
     if (queued) this.write(job, "Queued behind another tenant's backup; backups run one at a time.")
 
@@ -606,9 +610,9 @@ export class BackupEngine {
     // The Backup Reader cannot delete from Azure Storage. The next backup with an admin's sign-in applies
     // retention to every backup of the tenant, Backup Reader backups included, with the same protections.
     const deletesAllowed = local || tokens.mode === "delegated"
-    if (!deletesAllowed && failures === 0) {
+    if (!deletesAllowed && failures === 0 && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
       this.write(job, "Older backups were kept: the Backup Reader cannot delete from Azure Storage. The next backup made with an admin's sign-in removes expired ones.")
-    } else if (failures === 0 && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
+    } else if (deletesAllowed && failures === 0 && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
       const retentionNetwork = new NetworkCircuit(3 * concurrency, signal, deadline)
       const retentionStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, retentionNetwork)
       try {

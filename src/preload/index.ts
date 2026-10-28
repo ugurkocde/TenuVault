@@ -85,7 +85,8 @@ const bridge: TenuVaultPreloadBridge = {
     status: (tenantId) => invoke("backupReader:status", tenantId),
     prepare: (tenantId) => invoke("backupReader:prepare", tenantId),
     exportCertificate: (tenantId) => invoke("backupReader:exportCertificate", tenantId),
-    verify: (tenantId, clientId) => invoke("backupReader:verify", tenantId, clientId),
+    verify: (tenantId, clientId, renewal) => invoke("backupReader:verify", tenantId, clientId, renewal === true),
+    cancelRenewal: (tenantId) => invoke("backupReader:cancelRenewal", tenantId),
     remove: (tenantId) => invoke("backupReader:remove", tenantId),
   },
   updates: {

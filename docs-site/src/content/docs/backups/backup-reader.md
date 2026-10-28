@@ -21,7 +21,7 @@ Before you add it, check whether a policy change is simpler: see [Conditional Ac
 | Read Intune configuration | Yes, all of it in the tenant, including script contents. Intune role scope tags do not limit it. |
 | Change Intune | No. TenuVault refuses a reader with any permission beyond the read list below, and stops using it when its permissions change. |
 | Write backups to Azure Storage | Yes, into the backup container only. |
-| Delete or overwrite backups for good | No. It has no delete permission. Blob versioning keeps any blob it overwrites. |
+| Delete backups | No. It has no delete permission. If it overwrites a blob, blob versioning keeps the previous version for 30 days (`-VersionRetentionDays`), long enough to notice and recover it. |
 | Read encrypted OMA-URI values in plain text | No. Microsoft only returns those with a write permission. Scheduled backups store them masked (`****`) and mark those profiles as not restorable from that backup; a manual backup captures them. |
 | Read device categories and device clean-up rules | Only with the optional device inventory permission (see below). Otherwise scheduled backups leave them out and manual backups include them. |
 | Bypass licensing | No. Scheduled backups still need a license that covers the tenant. |
@@ -62,11 +62,11 @@ For Azure Storage, the custom role **TenuVault Backup Writer** allows reading an
 4. **Backups in Azure Storage only:** an Azure administrator runs the storage script with the reader's application ID:
 
    ```powershell
-   ./New-TenuVaultStorage.ps1 -AdminGroupId <group object ID> -BackupReaderAppId <application ID>
+   ./New-TenuVaultStorage.ps1 -AdminGroupId <group object ID> -SubscriptionId <subscription ID> -ResourceGroupName <resource group> -StorageAccountName <storage account> -BackupReaderAppId <application ID>
    ```
 
    It creates the backup container, the **TenuVault Backup Writer** role and its assignment on the container, turns on blob versioning, and adds a lifecycle rule that removes previous blob versions after 30 days (change it with `-VersionRetentionDays`). Current backups are never removed by that rule.
-5. Back in TenuVault, enter the application ID and select **Verify**. TenuVault asks Microsoft for a token with the certificate, checks the tenant, the app and its permissions, and records them. New certificates and permissions can take a few minutes to apply.
+5. Back in TenuVault, enter the application ID and select **Verify**. TenuVault asks Microsoft for a token with the certificate, checks the tenant, the app and its permissions, and records them. For backups in Azure Storage it also checks that the backup container exists and the reader may use it, and shows a warning if the storage script has not run yet. New certificates and permissions can take a few minutes to apply.
 
 From the next scheduled backup on, the backup log shows "Reading as the tenant's Backup Reader (app-only, read-only)."
 
@@ -89,18 +89,20 @@ The certificate is valid for one year. From 30 days before it expires, TenuVault
    ./New-TenuVaultBackupReader.ps1 -CertificatePath ./renewal.cer -AppId <application ID>
    ```
 
-3. Select **Verify**. TenuVault switches to the new certificate once Microsoft accepts it; until then it keeps using the old one.
+   If the reader has the device inventory permission, add `-IncludeDeviceCategories` again: the script sets exactly the permissions you ask for, and every computer using the reader would otherwise stop until it is verified again. The command on the **Backup Reader** card already includes it.
+
+3. Select **Verify**. TenuVault switches to the new certificate once Microsoft accepts it; until then it keeps using the old one, and the expiry reminder stays on. **Verify again** keeps checking the certificate in use, and **Cancel renewal** discards a renewal certificate you did not upload.
 
 Remove the old certificate from the app registration afterwards, in Entra ID > **App registrations** > **TenuVault Backup Reader** > **Certificates & secrets**.
 
 ## More than one computer
 
-Each computer that runs scheduled backups has its own certificate. Set up the Backup Reader on each computer, and run the setup script with `-AppId` so all certificates go onto the same app registration. The certificate name shows the computer it belongs to.
+Each computer that runs scheduled backups has its own certificate. Set up the Backup Reader on each computer, and run the setup script with `-AppId` so all certificates go onto the same app registration, with `-IncludeDeviceCategories` if the reader uses it. The certificate name shows the computer it belongs to.
 
 ## Remove it
 
-* **On one computer:** select **Remove** on the **Backup Reader** card. The private key is deleted and scheduled backups use your sign-in again. Remove the computer's certificate from the app registration too.
-* **Everywhere:** delete the **TenuVault Backup Reader** app registration in Entra ID, and the **TenuVault Backup Writer** role assignment on the storage account.
+* **On one computer:** select **Remove** on the **Backup Reader** card. The private key is deleted and scheduled backups use your sign-in again. Signing out of the tenant or removing it from TenuVault deletes the key too. Remove the computer's certificate from the app registration as well.
+* **Everywhere:** delete the **TenuVault Backup Reader** app registration in Entra ID, and the **TenuVault Backup Writer** role assignment on the storage account. Then select **Remove** on each computer: until you do, its scheduled backups keep trying the reader and fail with a refusal instead of using your sign-in.
 
 When a computer is retired or lost, remove its certificate from the app registration right away.
 
@@ -116,7 +118,7 @@ When a computer is retired or lost, remove its certificate from the app registra
 | The Backup Reader's Microsoft Graph permissions changed since they were verified | The permissions differ from the last verification, even by a read permission. | Check the change, then select **Verify again**. |
 | Container not found or access denied when writing to Azure Storage | The storage script has not run with `-BackupReaderAppId`, or the role assignment has not applied yet. | Run the storage script with `-BackupReaderAppId` and wait a few minutes. |
 
-A refused Backup Reader stops that night's backup without retries, notifies you once and tries again at the next scheduled time. A network failure is retried like any other scheduled backup.
+A refusal that retrying cannot fix (an unknown or expired certificate, a missing or disabled app registration, or a workload identity policy) stops that night's backup without retries, notifies you once and tries again at the next scheduled time. Network failures and transient refusals from Microsoft are retried like any other failed scheduled backup.
 
 ## Related pages
 

@@ -8,6 +8,7 @@ import { useConfirm } from "~/components/ConfirmDialog"
 import readerScript from "../../../resources/New-TenuVaultBackupReader.ps1?raw"
 import type { BackupReaderState } from "../../shared/ipc"
 import { readerView } from "../lib/backup-reader-view"
+import { isGuid } from "../../shared/security"
 import { bridge } from "../lib/bridge"
 import { showFeaturePlanError } from "../lib/plan-dialog"
 import { toast } from "../lib/toast"
@@ -15,7 +16,6 @@ import { PlanBadge, UpgradeNote } from "./UpgradeNote"
 
 const GUIDE_URL = "https://docs.tenuvault.com/backups/backup-reader/"
 const CA_GUIDE_URL = "https://docs.tenuvault.com/security/conditional-access/"
-const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const day = (iso: string) => new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
 
@@ -39,12 +39,16 @@ export function BackupReaderSettings() {
   }, [tenants, tenantId])
   useEffect(() => {
     if (!tenantId) return
+    // A slow answer for the tenant selected before must not replace this tenant's state.
+    let current = true
     setState(null)
     setError(null)
     bridge.backupReader.status(tenantId).then((next) => {
+      if (!current) return
       setState(next)
       setAppId(next.reader?.clientId ?? "")
-    }, (failure: unknown) => setError(failure instanceof Error ? failure.message : String(failure)))
+    }, (failure: unknown) => { if (current) setError(failure instanceof Error ? failure.message : String(failure)) })
+    return () => { current = false }
   }, [tenantId])
 
   const run = async (action: NonNullable<typeof busy>, work: () => Promise<BackupReaderState | void>) => {
@@ -133,7 +137,10 @@ export function BackupReaderSettings() {
             </dl>
             {excluded.length > 0 && <p className="text-xs">Scheduled backups leave out {excluded.join(" and ")}; manual backups include them.</p>}
             {expiry && (
-              <p role="alert" className="text-xs text-coral-700">{expiry === "soon" ? "The certificate expires soon." : "The certificate has expired, so scheduled backups use your sign-in again."} Renew it to keep scheduled backups independent of your sign-in.</p>
+              <p role="alert" className="text-xs text-coral-700">
+                {expiry === "soon" ? "The certificate expires soon." : "The certificate has expired, so scheduled backups use your sign-in again."}{" "}
+                {reader.renewalPending ? "Upload the renewal certificate below and verify it." : "Renew it to keep scheduled backups independent of your sign-in."}
+              </p>
             )}
             <div className="flex flex-wrap gap-2 pt-2">
               {!reader.renewalPending && (
@@ -141,7 +148,7 @@ export function BackupReaderSettings() {
                   <RefreshCw className="mr-2 h-4 w-4" /> Renew certificate
                 </Button>
               )}
-              <Button variant="outline" size="sm" disabled={!!busy} onClick={() => void run("verify", () => bridge.backupReader.verify(tenantId, reader.clientId))}>
+              <Button variant="outline" size="sm" disabled={!!busy} onClick={() => void run("verify", () => bridge.backupReader.verify(tenantId, reader.clientId, false))}>
                 {busy === "verify" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />} Verify again
               </Button>
               <Button variant="ghost" size="sm" disabled={!!busy} onClick={() => void remove()}>
@@ -175,7 +182,7 @@ export function BackupReaderSettings() {
                   <ExternalLink className="mr-2 h-4 w-4" /> Setup guide
                 </Button>
               </div>
-              <p className="mt-2 text-xs">Backups in Azure Storage: an Azure administrator also runs New-TenuVaultStorage.ps1 with -BackupReaderAppId, which lets the reader write backups but not delete them.</p>
+              <p className="mt-2 text-xs">Backups in Azure Storage: an Azure administrator also runs New-TenuVaultStorage.ps1 with -BackupReaderAppId and the -SubscriptionId, -ResourceGroupName and -StorageAccountName of this tenant's backup storage account. It lets the reader write backups but not delete them.</p>
             </li>
             <li>
               <p className="font-medium">Verify</p>
@@ -188,9 +195,14 @@ export function BackupReaderSettings() {
                 </div>
               )}
               <div className="mt-2 flex flex-wrap gap-2">
-                <Button size="sm" disabled={disabled || !GUID.test(reader.renewalPending ? reader.clientId : appId)} onClick={() => void run("verify", () => bridge.backupReader.verify(tenantId, reader.renewalPending ? reader.clientId : appId))}>
+                <Button size="sm" disabled={disabled || !isGuid(reader.renewalPending ? reader.clientId : appId)} onClick={() => void run("verify", () => bridge.backupReader.verify(tenantId, reader.renewalPending ? reader.clientId : appId, reader.renewalPending))}>
                   {busy === "verify" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />} Verify
                 </Button>
+                {reader.renewalPending && (
+                  <Button variant="ghost" size="sm" disabled={!!busy} onClick={() => void run("remove", () => bridge.backupReader.cancelRenewal(tenantId))}>
+                    <Trash2 className="mr-2 h-4 w-4" /> Cancel renewal
+                  </Button>
+                )}
                 {!verified && (
                   <Button variant="ghost" size="sm" disabled={!!busy} onClick={() => void remove()}>
                     <Trash2 className="mr-2 h-4 w-4" /> Cancel setup
@@ -202,6 +214,7 @@ export function BackupReaderSettings() {
           </ol>
         )}
 
+        {state?.warning && !error && <p role="alert" className="rounded-xl bg-amber-50 px-4 py-3 text-amber-900">{state.warning}</p>}
         {error && <p role="alert" className="rounded-xl bg-coral-50 px-4 py-3 text-coral-800">{error}</p>}
         {confirmDialog}
       </CardContent>

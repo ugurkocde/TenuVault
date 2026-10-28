@@ -164,11 +164,60 @@ describe("BackupReaderService", () => {
     await reader.tokens(scheduled)!.graph()
     expect(acquire.mock.calls.at(-1)![0].certificate.thumbprintSha256).toBe(first.thumbprintSha256)
 
-    const renewed = await reader.verify(TENANT, READER)
+    const renewed = await reader.verify(TENANT, READER, { renewal: true })
     expect(renewed.renewalPending).toBe(false)
     expect(renewed.thumbprintSha256).toBe(renewal.thumbprintSha256)
     await reader.tokens(scheduled)!.graph()
     expect(acquire.mock.calls.at(-1)![0].certificate.thumbprintSha256).toBe(renewal.thumbprintSha256)
+  })
+
+  it("verifies the active certificate again while a renewal waits, and keeps the renewal", async () => {
+    const { reader, acquire } = service()
+    reader.prepare(TENANT, "LAPTOP-1")
+    const first = await reader.verify(TENANT, READER)
+    reader.prepare(TENANT, "LAPTOP-1")
+    const again = await reader.verify(TENANT, READER)
+    expect(acquire.mock.calls.at(-1)![0].certificate.thumbprintSha256).toBe(first.thumbprintSha256)
+    expect(again.renewalPending).toBe(true)
+  })
+
+  it("asks Microsoft for a new token on every verification, so new permissions show at once", async () => {
+    const { reader, acquire } = service()
+    reader.prepare(TENANT, "LAPTOP-1")
+    await reader.verify(TENANT, READER)
+    expect(acquire.mock.calls.at(-1)![2]).toEqual({ fresh: true })
+    await reader.tokens(scheduled)!.graph()
+    expect(acquire.mock.calls.at(-1)![2]).toBeUndefined()
+  })
+
+  it("discards a renewal that was not uploaded and keeps the active certificate", async () => {
+    const { reader } = service()
+    reader.prepare(TENANT, "LAPTOP-1")
+    const first = await reader.verify(TENANT, READER)
+    reader.prepare(TENANT, "LAPTOP-1")
+    const cancelled = reader.cancelRenewal(TENANT)!
+    expect(cancelled).toMatchObject({ state: "verified", renewalPending: false, thumbprintSha256: first.thumbprintSha256 })
+    await expect(reader.verify(TENANT, READER, { renewal: true })).rejects.toThrow(/No renewal certificate is waiting/)
+  })
+
+  it("stops a scheduled backup only for refusals a retry cannot fix", async () => {
+    const backing = store()
+    const working = new BackupReaderService(backing, { acquire: async () => ({ accessToken: graphToken() }) })
+    working.prepare(TENANT, "LAPTOP-1")
+    await working.verify(TENANT, READER)
+    const transient = new Error("AADSTS90033: A transient error has occurred. Please try again.")
+    const retried = new BackupReaderService(backing, { acquire: async () => { throw transient } })
+    await expect(retried.tokens(scheduled)!.graph()).rejects.toBe(transient)
+    const disabled = new BackupReaderService(backing, { acquire: async () => { throw new Error("AADSTS7000112: Application is disabled.") } })
+    await expect(disabled.tokens(scheduled)!.graph()).rejects.toThrow(/AADSTS7000112.*disabled/)
+    await expect(disabled.tokens(scheduled)!.graph()).rejects.toBeInstanceOf(BackupReaderError)
+  })
+
+  it("still explains a transient refusal when the admin verifies", async () => {
+    const acquire: AcquireToken = async () => { throw new Error("AADSTS90033: A transient error has occurred.") }
+    const reader = new BackupReaderService(store(), { acquire })
+    reader.prepare(TENANT, "LAPTOP-1")
+    await expect(reader.verify(TENANT, READER)).rejects.toThrow("Microsoft refused the Backup Reader (AADSTS90033). Try again in a few minutes")
   })
 
   it("refuses to switch an active reader to another application ID", async () => {

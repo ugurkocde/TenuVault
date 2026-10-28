@@ -25,7 +25,7 @@ TenuVault is a desktop app, not a hosted service. Everything it does with your t
 
 1. **Your app registration.** You create the app registration with the TenuVault setup script. It lives in your tenant, is single-tenant, and is a public client: it has no client secret and no certificate. See [App registration and delegated permissions](/security/permissions/).
 2. **You sign in as yourself.** When you add a tenant, you sign in with your own admin account. The sign-in opens in your system browser on Windows and macOS, so you can use a separate admin account rather than the one signed in to the computer.
-3. **Delegated access only.** Every call to Microsoft Graph and Azure uses a token issued to you through that app registration. TenuVault holds no permission of its own. The effective access is the overlap of the delegated permissions and your own roles, such as Intune Administrator.
+3. **Delegated access by default.** Every call to Microsoft Graph and Azure uses a token issued to you through that app registration; the only exception is the optional Backup Reader in step 6. TenuVault holds no permission of its own. The effective access is the overlap of the delegated permissions and your own roles, such as Intune Administrator.
 4. **Your policies apply.** Because you sign in interactively, MFA, Conditional Access, sign-in frequency and device compliance requirements apply as they do in the Intune admin center. When Microsoft asks for a new sign-in, TenuVault stops and asks you to sign in again. Background work never opens a sign-in window on its own.
 5. **Changes are attributed to you.** Restores and other writes are made with your token, so they appear under your name in the Intune and Entra audit logs, just like changes you make in the portal.
 6. **Optional: a read-only Backup Reader.** When session controls such as sign-in frequency stop scheduled backups at night, you can add the [Backup Reader](/backups/backup-reader/) on Pro and MSP. It is a second app registration with read-only Intune permissions and a certificate. Only scheduled backups use it; every change still uses your own token. It cannot change Intune or delete backups.
@@ -82,7 +82,7 @@ You stay in control of the app registration at all times, because it lives in yo
 * **Revoke access.** Delete the app registration, or remove the admin consent for it in the Microsoft Entra admin center. TenuVault then cannot obtain new tokens for your tenant.
 * **Sign out on one machine.** Remove the tenant from TenuVault on the **Tenants** page. This signs you out of the tenant on that machine, stops its scheduled backups and frees its license slot. Existing backups are kept and nothing in the tenant changes.
 * **Apply your own policies.** Conditional Access, sign-in frequency and device compliance policies that target the app registration or your admins apply to TenuVault too.
-* **Revoke the Backup Reader.** Remove a computer's certificate from the Backup Reader app registration, or delete the app registration. Scheduled backups then use the admin's sign-in again.
+* **Revoke the Backup Reader.** Remove a computer's certificate from the Backup Reader app registration, or delete the app registration; Microsoft then refuses it. To switch that computer's scheduled backups back to your sign-in, select **Remove** on its **Backup Reader** card, which also deletes the private key.
 
 ## Review the source
 

@@ -103,19 +103,19 @@ describe("backup auth mode", () => {
 
     expect(manual.id).not.toBe(scheduled.id)
     expect(manual.status).toBe("Failed")
-    expect(manual.exception).toMatch(/different backup is already running/)
+    expect(manual.exception).toBe("A scheduled backup with the Backup Reader is running for this tenant. Wait for it to finish, then try again.")
     release()
     await engine.waitForJob(scheduled)
   })
 
-  it("does not let a scheduled Backup Reader backup join a running manual backup", async () => {
+  it("lets a scheduled Backup Reader request join a running backup with the admin's sign-in, as before", async () => {
     const { engine, start, release } = setup()
     const manual = start("manual")
     await tick()
     const scheduled = start("scheduled")
 
-    expect(scheduled.id).not.toBe(manual.id)
-    expect(scheduled.status).toBe("Failed")
+    expect(scheduled.id).toBe(manual.id)
+    expect(scheduled.authMode).toBe("delegated")
     release()
     await engine.waitForJob(manual)
   })
@@ -145,6 +145,14 @@ describe("backup auth mode", () => {
     expect(done.log.join("\n")).toContain("The next backup made with an admin's sign-in removes expired ones.")
     // The Backup Reader cannot create containers, so it does not try.
     expect(blobMethods.some((call) => call.includes("restype=container"))).toBe(false)
+  })
+
+  it("says nothing about retention in a Backup Reader backup when retention keeps everything", async () => {
+    const { engine, start, release } = setup({ storageAccountName: "contoso", retentionDays: 0 })
+    const job = start("scheduled")
+    release()
+    const done = await engine.waitForJob(job)
+    expect(done.log.join("\n")).not.toContain("Older backups were kept")
   })
 
   it("still applies retention in Azure Storage for a backup with the admin's sign-in", async () => {

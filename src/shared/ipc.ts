@@ -33,6 +33,8 @@ export interface BackupReaderState {
   /** The tenant's plan includes the Backup Reader. */
   available: boolean
   reader: BackupReaderStatus | null
+  /** After a verification: the reader works for Microsoft Graph but cannot write backups to the tenant's Azure storage. */
+  warning?: string
 }
 
 /** Serialized request forwarded from the renderer `fetch` bridge to the main-process API host. */
@@ -316,8 +318,10 @@ export interface TenuVaultBridge {
     prepare: (tenantId: string) => Promise<BackupReaderState>
     /** Saves the public certificate for the setup script. */
     exportCertificate: (tenantId: string) => Promise<{ saved: boolean }>
-    /** Checks the reader with Microsoft and records its permissions. Rejects with the reason. */
-    verify: (tenantId: string, clientId: string) => Promise<BackupReaderState>
+    /** Checks the reader with Microsoft and records its permissions; `renewal` checks the waiting certificate. Rejects with the reason. */
+    verify: (tenantId: string, clientId: string, renewal?: boolean) => Promise<BackupReaderState>
+    /** Discards a renewal certificate that was not uploaded. */
+    cancelRenewal: (tenantId: string) => Promise<BackupReaderState>
     /** Forgets the reader and its private key on this computer. */
     remove: (tenantId: string) => Promise<BackupReaderState>
   }
@@ -354,7 +358,7 @@ export interface TenuVaultBridge {
 export type TenuVaultPreloadBridge = Omit<TenuVaultBridge, "auth" | "license" | "schedules" | "pdfBranding" | "backupReader"> & {
   backupReader: Omit<TenuVaultBridge["backupReader"], "prepare" | "verify"> & {
     prepare: (tenantId: string) => Promise<BackupReaderState | PlanIpcError>
-    verify: (tenantId: string, clientId: string) => Promise<BackupReaderState | PlanIpcError>
+    verify: (tenantId: string, clientId: string, renewal?: boolean) => Promise<BackupReaderState | PlanIpcError>
   }
   pdfBranding: Omit<TenuVaultBridge["pdfBranding"], "set"> & {
     set: (branding: PdfBranding) => Promise<PdfBrandingState | PlanIpcError>

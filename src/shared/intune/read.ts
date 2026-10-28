@@ -86,7 +86,8 @@ export const MASKED_VALUE = "****"
  * compare as the same object.
  */
 export function withMaskedSecrets(type: IntuneType, snapshot: Item): Item | null {
-  if (!type.secrets) return null
+  // Only objects with encrypted values are copied; finding them does not change the snapshot.
+  if (!type.secrets?.(snapshot).length) return null
   const copy = structuredClone(snapshot)
   const secrets = type.secrets(copy)
   if (!secrets.length) return null

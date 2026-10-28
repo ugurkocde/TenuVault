@@ -3,6 +3,7 @@ import type { BackupRequest, RunTokens } from "../backup/engine"
 import type { BackupReaderStatus } from "../../shared/ipc"
 import type { SecureStore } from "../storage/secure-store"
 import { RESOURCE_SCOPES } from "../../shared/constants"
+import { isGuid } from "../../shared/security"
 import { createSelfSignedCertificate, type GeneratedCertificate } from "./certificate"
 
 /**
@@ -67,8 +68,11 @@ export interface AcquiredToken {
   accessToken: string
 }
 
-/** Requests an app-only token for `scope` with the certificate; replaced in tests. */
-export type AcquireToken = (credential: { tenantId: string; clientId: string; certificate: Certificate }, scope: string) => Promise<AcquiredToken>
+/**
+ * Requests an app-only token for `scope` with the certificate; replaced in tests. `fresh` skips the
+ * token cache, so a verification sees permission changes made since the last token.
+ */
+export type AcquireToken = (credential: { tenantId: string; clientId: string; certificate: Certificate }, scope: string, options?: { fresh?: boolean }) => Promise<AcquiredToken>
 
 const KEY = "backupReader."
 
@@ -118,30 +122,44 @@ export class BackupReaderService {
   }
 
   /**
-   * Checks the Backup Reader with Microsoft: the pending certificate when there is one (setup or
-   * renewal), otherwise the active one. Records the exact roles it has, so later runs refuse it when
-   * they change. Throws BackupReaderError with the reason when Microsoft or the checks refuse it.
+   * Checks the Backup Reader with Microsoft and records the exact roles it has, so later runs refuse it
+   * when they change. Checks the active certificate, or the waiting one at the first setup or when
+   * `renewal` asks for it; a verified renewal replaces the active certificate. Always asks Microsoft for
+   * a new token. Throws BackupReaderError with the reason when Microsoft or the checks refuse it.
    */
-  async verify(tenantId: string, clientId: string): Promise<BackupReaderStatus> {
+  async verify(tenantId: string, clientId: string, options: { renewal?: boolean } = {}): Promise<BackupReaderStatus> {
     const credential = this.read(tenantId)
     if (!credential) throw new BackupReaderError("Create the Backup Reader certificate first.")
-    if (!GUID.test(clientId)) throw new BackupReaderError("Enter the Backup Reader's application (client) ID that the setup script printed.")
+    if (!isGuid(clientId)) throw new BackupReaderError("Enter the Backup Reader's application (client) ID that the setup script printed.")
     if (credential.active && credential.clientId && credential.clientId.toLowerCase() !== clientId.toLowerCase()) {
       throw new BackupReaderError("This tenant already has a Backup Reader with a different application ID. Remove it first to switch.")
     }
-    const certificate = credential.pending ?? credential.active!
+    if (options.renewal && !credential.pending) throw new BackupReaderError("No renewal certificate is waiting. Create one with Renew certificate.")
+    const certificate = options.renewal || !credential.active ? credential.pending! : credential.active
     const app = { tenantId: credential.tenantId, clientId: clientId.toLowerCase(), certificate }
-    const token = await this.acquire(app, RESOURCE_SCOPES.graph).catch((error: unknown) => {
+    const token = await this.acquire(app, RESOURCE_SCOPES.graph, { fresh: true }).catch((error: unknown) => {
       throw refused(error) ?? error
     })
     const roles = checkReaderToken(token.accessToken, app, "graph")
     credential.clientId = app.clientId
-    credential.active = certificate
-    credential.pending = null
+    if (certificate === credential.pending) {
+      credential.active = certificate
+      credential.pending = null
+    }
     credential.verifiedRoles = roles
     credential.verifiedAt = this.now().toISOString()
     this.write(credential)
     return this.status(credential.tenantId)!
+  }
+
+  /** Discards a renewal certificate that was not uploaded; the active certificate stays in use. */
+  cancelRenewal(tenantId: string): BackupReaderStatus | null {
+    const credential = this.read(tenantId)
+    if (credential?.active && credential.pending) {
+      credential.pending = null
+      this.write(credential)
+    }
+    return this.status(tenantId)
   }
 
   remove(tenantId: string): void {
@@ -161,8 +179,8 @@ export class BackupReaderService {
     const verified = credential.verifiedRoles
     const token = async (resource: "graph" | "storage") => {
       const acquired = await this.acquire(app, RESOURCE_SCOPES[resource]).catch((error: unknown) => {
-        // A network failure stays as it is, so the backup counts as unreachable and is retried.
-        throw refused(error) ?? error
+        // A network failure or a transient refusal stays as it is, so the backup is retried.
+        throw refused(error, { permanentOnly: true }) ?? error
       })
       const roles = checkReaderToken(acquired.accessToken, app, resource)
       if (resource === "graph" && !sameRoles(roles, verified)) {
@@ -184,8 +202,6 @@ export class BackupReaderService {
     this.store.set(KEY + credential.tenantId.toLowerCase(), JSON.stringify(credential))
   }
 }
-
-const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 function excludedTypes(roles: string[] | null): string[] {
   return roles?.includes(DEVICE_INVENTORY_ROLE) ? [] : DEVICE_INVENTORY_TYPES
@@ -229,27 +245,37 @@ export function checkReaderToken(token: string, app: { tenantId: string; clientI
 }
 
 /**
- * Microsoft's refusal of the certificate as a BackupReaderError naming the AADSTS code, without token or
- * key material; null for any other failure, such as a network error.
+ * Refusals that retrying cannot fix, with what to do. Other codes, such as AADSTS90033 (a transient
+ * service error) or AADSTS700024 (an assertion outside its time window, for example after a clock
+ * correction), may succeed on a retry.
  */
-function refused(error: unknown): BackupReaderError | null {
+const PERMANENT_REFUSALS: Record<string, string> = {
+  AADSTS700027: "Microsoft does not know this certificate. Upload the exported certificate with the setup script, then verify again.",
+  AADSTS7000222: "The certificate has expired. Create a renewal certificate in Settings and upload it.",
+  AADSTS700016: "No app registration with this application ID exists in the tenant.",
+  AADSTS7000112: "The Backup Reader app registration is disabled.",
+  AADSTS7000229: "The Backup Reader app registration has no service principal in the tenant. Run the setup script again.",
+  AADSTS53003: "Conditional Access for workload identities blocked the Backup Reader from this location.",
+}
+
+/**
+ * Microsoft's refusal of the certificate as a BackupReaderError naming the AADSTS code, without token or
+ * key material; null for any other failure, such as a network error. With `permanentOnly`, a refusal
+ * that may pass on a retry is also null, so a scheduled backup retries it like a network failure.
+ */
+function refused(error: unknown, options: { permanentOnly?: boolean } = {}): BackupReaderError | null {
   const message = error instanceof Error ? error.message : String(error)
   const code = /AADSTS\d+/.exec(message)?.[0]
   if (!code) return null
-  const hints: Record<string, string> = {
-    AADSTS700027: "Microsoft does not know this certificate. Upload the exported certificate with the setup script, then verify again.",
-    AADSTS7000222: "The certificate has expired. Create a renewal certificate in Settings and upload it.",
-    AADSTS700016: "No app registration with this application ID exists in the tenant.",
-    AADSTS7000112: "The Backup Reader app registration is disabled.",
-    AADSTS53003: "Conditional Access for workload identities blocked the Backup Reader from this location.",
-  }
-  return new BackupReaderError(`Microsoft refused the Backup Reader (${code}). ${hints[code] ?? "Check the app registration and its certificate."}`, { cause: error })
+  const hint = PERMANENT_REFUSALS[code]
+  if (!hint && options.permanentOnly) return null
+  return new BackupReaderError(`Microsoft refused the Backup Reader (${code}). ${hint ?? "Try again in a few minutes, then check the app registration and its certificate."}`, { cause: error })
 }
 
 /** MSAL confidential clients per certificate, with MSAL's in-memory token cache only. */
 function msalAcquire(): AcquireToken {
   const apps = new Map<string, ConfidentialClientApplication>()
-  return async ({ tenantId, clientId, certificate }, scope) => {
+  return async ({ tenantId, clientId, certificate }, scope, options) => {
     const key = `${tenantId}|${clientId}|${certificate.thumbprintSha256}`
     let app = apps.get(key)
     if (!app) {
@@ -263,7 +289,7 @@ function msalAcquire(): AcquireToken {
       })
       apps.set(key, app)
     }
-    const result = await app.acquireTokenByClientCredential({ scopes: [scope] })
+    const result = await app.acquireTokenByClientCredential({ scopes: [scope], skipCache: options?.fresh === true })
     if (!result?.accessToken) throw new Error("Microsoft returned no token for the Backup Reader.")
     return { accessToken: result.accessToken }
   }

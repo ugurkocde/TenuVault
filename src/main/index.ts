@@ -531,7 +531,7 @@ async function bootstrap(): Promise<void> {
   // runs remind once a week from 30 days before expiry. After it, backups use the admin's sign-in again.
   const remindBackupReaderRenewal = (tenantId: string, name: string) => {
     const reader = backupReader.status(tenantId)
-    if (reader?.state !== "verified" || reader.renewalPending) return
+    if (reader?.state !== "verified") return
     const daysLeft = Math.ceil((Date.parse(reader.notAfter) - Date.now()) / 86_400_000)
     const key = `backupReader.reminded.${tenantId.toLowerCase()}`
     if (daysLeft > 30 || Date.now() - Number(appStore.get(key) ?? 0) < 7 * 86_400_000) return
@@ -539,7 +539,9 @@ async function bootstrap(): Promise<void> {
     if (Notification.isSupported()) {
       new Notification({
         title: `Backup Reader certificate of ${name} expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`,
-        body: "Renew it in Settings > Background so scheduled backups keep running without your sign-in.",
+        body: reader.renewalPending
+          ? "A renewal certificate is waiting: upload it with the setup script, then verify it in Settings > Background."
+          : "Renew it in Settings > Background so scheduled backups keep running without your sign-in.",
       }).show()
     }
   }
@@ -707,6 +709,29 @@ async function bootstrap(): Promise<void> {
     if (typeof tenantId !== "string" || !tenantProfile(tenantId)) throw new Error("Connect this tenant first.")
     return tenantId
   }
+  // Verify also checks what scheduled backups to Azure need: the container exists and the reader may
+  // list it (the TenuVault Backup Writer role from New-TenuVaultStorage.ps1 -BackupReaderAppId). A
+  // problem is a warning, not a failed verification, since the Graph part works.
+  const checkReaderStorage = async (tenantId: string): Promise<string | undefined> => {
+    const profile = tenantProfile(tenantId)
+    if (!profile || isLocalAccount(profile.storageAccountName)) return undefined
+    const tokens = backupReader.tokens({ tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, trigger: "scheduled" })
+    if (!tokens) return undefined
+    const setup = `Run New-TenuVaultStorage.ps1 with -BackupReaderAppId ${backupReader.status(tenantId)?.clientId ?? ""} for storage account ${profile.storageAccountName}, wait a few minutes, then verify again.`
+    try {
+      const response = await chromiumFetch(`https://${profile.storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&maxresults=1`, {
+        headers: { Authorization: `Bearer ${await tokens.storage()}`, "x-ms-version": "2023-11-03" },
+        signal: AbortSignal.timeout(15_000),
+      })
+      void response.body?.cancel().catch(() => undefined)
+      if (response.ok) return undefined
+      if (response.status === 404) return `The Backup Reader works for Microsoft Graph, but the backup container does not exist in ${profile.storageAccountName}. ${setup}`
+      if (response.status === 403) return `The Backup Reader works for Microsoft Graph, but cannot write backups to ${profile.storageAccountName}. ${setup}`
+      return `The Backup Reader works for Microsoft Graph, but Azure Storage answered ${response.status}. ${setup}`
+    } catch (error) {
+      return `The Backup Reader works for Microsoft Graph, but its access to ${profile.storageAccountName} could not be checked: ${error instanceof Error ? error.message : String(error)}`
+    }
+  }
   const requireReaderPlan = async (tenantId: string) => {
     if (!readerSupported) throw new Error("The Backup Reader is available in the installed Windows and macOS apps.")
     const plan = await license.requireEntitlement(tenantId)
@@ -719,12 +744,18 @@ async function bootstrap(): Promise<void> {
     backupReader.prepare(tenant, hostname())
     return readerState(tenant)
   }))
-  handleTrusted("backupReader:verify", (_event, tenantId: unknown, clientId: unknown) => withPlanError(async () => {
+  handleTrusted("backupReader:verify", (_event, tenantId: unknown, clientId: unknown, renewal: unknown) => withPlanError(async () => {
     const tenant = readerTenant(tenantId)
     await requireReaderPlan(tenant)
-    await backupReader.verify(tenant, typeof clientId === "string" ? clientId.trim() : "")
-    return readerState(tenant)
+    await backupReader.verify(tenant, typeof clientId === "string" ? clientId.trim() : "", { renewal: renewal === true })
+    const warning = await checkReaderStorage(tenant)
+    return { ...readerState(tenant), ...(warning ? { warning } : {}) }
   }))
+  handleTrusted("backupReader:cancelRenewal", (_event, tenantId: unknown) => {
+    const tenant = readerTenant(tenantId)
+    backupReader.cancelRenewal(tenant)
+    return readerState(tenant)
+  })
   handleTrusted("backupReader:exportCertificate", async (_event, tenantId: unknown) => {
     const tenant = readerTenant(tenantId)
     const reader = backupReader.status(tenant)
@@ -800,6 +831,8 @@ async function bootstrap(): Promise<void> {
   })
   handleTrusted("auth:signOut", async (_event, tenantId: string) => {
     await auth.signOut(tenantId)
+    // The Backup Reader's private key goes with the tenant's sign-in on this computer.
+    backupReader.remove(tenantId)
     pushLicense()
   })
   handleTrusted("auth:accounts", () => auth.accounts())
@@ -845,6 +878,7 @@ async function bootstrap(): Promise<void> {
         .releaseTenant(tenantId)
         .catch((error: unknown) => console.warn(`[license] Could not release ${tenantId}:`, error))
       await auth.signOut(tenantId)
+      backupReader.remove(tenantId)
     })
   })
   handleTrusted("license:open", async (_event, target: unknown, options?: { source?: unknown }) => {

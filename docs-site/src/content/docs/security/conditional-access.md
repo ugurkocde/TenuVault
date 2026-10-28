@@ -29,7 +29,7 @@ Pick the option that fits your policies. They are listed from least to most chan
 
 ### 1. Sign in when TenuVault asks
 
-If backups only need to run on working days and someone opens TenuVault daily, signing in again in the morning may be enough. A missed slot runs once after you sign in, so at most one night is skipped.
+If backups only need to run on working days and someone opens TenuVault daily, signing in again in the morning may be enough. A night whose attempts are used up is not repeated: the next backup runs at the next scheduled time, so start a backup yourself if you need one sooner.
 
 ### 2. A dedicated backup admin account
 
