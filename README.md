@@ -34,7 +34,7 @@ to third-party web apps, or whose Conditional Access policies block them.
 </p>
 
 The buttons download the latest stable Windows `.exe` setup or macOS `.dmg` for Apple silicon directly.
-On Windows you can also install TenuVault from the Microsoft Store, which ships the same signed installer and picks the x64 or Arm64 build for your PC.
+On Windows you can also install TenuVault from the Microsoft Store, which ships the same signed installer.
 For Intel Macs, use the [Intel download](https://www.tenuvault.com/download/mac-x64).
 A Windows x64 `.msi` is also available on the [release page](https://github.com/ugurkocde/TenuVault/releases/latest) for managed deployment.
 See the [installation guide](https://docs.tenuvault.com/getting-started/install/) for help choosing.
