@@ -81,6 +81,13 @@ const bridge: TenuVaultPreloadBridge = {
     set: (branding) => invoke("pdfBranding:set", branding),
     clear: () => invoke("pdfBranding:clear"),
   },
+  backupReader: {
+    status: (tenantId) => invoke("backupReader:status", tenantId),
+    prepare: (tenantId) => invoke("backupReader:prepare", tenantId),
+    exportCertificate: (tenantId) => invoke("backupReader:exportCertificate", tenantId),
+    verify: (tenantId, clientId) => invoke("backupReader:verify", tenantId, clientId),
+    remove: (tenantId) => invoke("backupReader:remove", tenantId),
+  },
   updates: {
     status: () => invoke("updates:status"),
     check: () => invoke("updates:check"),

@@ -31,6 +31,7 @@ export type Feature =
   | "goldenStandards"
   | "customBaselines"
   | "pdfBranding"
+  | "backupReader"
 
 /** The lowest plan that includes a feature. */
 export const FEATURE_PLAN: Record<Feature, Exclude<Plan, "community">> = {
@@ -56,6 +57,7 @@ export const FEATURE_PLAN: Record<Feature, Exclude<Plan, "community">> = {
   goldenStandards: "msp",
   customBaselines: "pro",
   pdfBranding: "pro",
+  backupReader: "pro",
 }
 
 const FEATURE_NAMES: Record<Feature, string> = {
@@ -81,6 +83,7 @@ const FEATURE_NAMES: Record<Feature, string> = {
   goldenStandards: "Reusable golden standards for customers",
   customBaselines: "Custom baselines from OpenIntuneBaseline or a tenant snapshot",
   pdfBranding: "Full white-label PDF reports with your logo and colors",
+  backupReader: "Scheduled backups with a read-only Backup Reader that Conditional Access sign-in frequency does not interrupt",
 }
 
 /** Licensed CIS content: its assessments and reports need baselineAllPlatforms; other frameworks are free. */

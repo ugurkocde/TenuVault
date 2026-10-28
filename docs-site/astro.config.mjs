@@ -132,6 +132,7 @@ export default defineConfig({
 						{ label: 'App registration and delegated permissions', slug: 'security/permissions' },
 						{ label: 'Network connections and data flows', slug: 'security/data-flows' },
 						{ label: 'Encryption and recovery key', slug: 'security/encryption' },
+						{ label: 'Conditional Access and TenuVault', slug: 'security/conditional-access' },
 					],
 				},
 				{
@@ -146,6 +147,7 @@ export default defineConfig({
 								{ label: 'What gets backed up', slug: 'backups/coverage' },
 								{ label: 'Schedule backups', slug: 'backups/schedules' },
 								{ label: 'Backup storage and retention', slug: 'backups/storage' },
+								{ label: 'Backup Reader for scheduled backups', slug: 'backups/backup-reader' },
 								{ label: 'Compare backups', slug: 'backups/compare' },
 							],
 						},

@@ -13,6 +13,8 @@ export interface ScheduledRunResult {
   message: string
   /** Failed only: Microsoft or the storage account could not be reached, so the attempt is not counted. */
   unreachable?: boolean
+  /** Failed only: the Backup Reader could not be used. Retrying cannot fix it, so the slot is not retried. */
+  credential?: boolean
 }
 
 /**
@@ -24,6 +26,7 @@ export function scheduledResult(job: BackupJob): ScheduledRunResult {
   const message = job.exception ?? job.progressMessage
   if (job.status === "Cancelled") return { status: "Cancelled", message }
   if (job.status === "Completed" && !job.failures) return { status: "Completed", message }
+  if (job.credentialError) return { status: "Failed", message, credential: true }
   return job.unreachable ? { status: "Failed", message, unreachable: true } : { status: "Failed", message }
 }
 
@@ -190,7 +193,9 @@ export class BackupScheduler {
             attemptSlot: current.since === schedule.since ? slot.toISOString() : current.attemptSlot,
             // Edits made during a backup start a new schedule with a fresh attempt budget.
             attempts: result.status === "Completed" || current.since !== schedule.since ? 0
-              : result.status === "Cancelled" || (result.status === "Failed" && result.unreachable) ? attempts - 1 : attempts,
+              : result.status === "Cancelled" || (result.status === "Failed" && result.unreachable) ? attempts - 1
+              // A Backup Reader that cannot be used fails every retry the same way; the next slot tries again.
+              : result.status === "Failed" && result.credential ? MAX_ATTEMPTS : attempts,
             lastStatus: result.status,
             lastMessage: result.message,
           }

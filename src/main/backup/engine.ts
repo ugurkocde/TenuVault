@@ -8,10 +8,10 @@ import { GRAPH, BlobClaimError, GraphError, ProtectedBlobError, RequestTimeoutEr
 import { isLocalAccount } from "../storage/blob-emulator"
 import { FetchApplicationError } from "../api/network-error"
 import { INTUNE_TYPES, itemName, type IntuneType, type Item } from "../../shared/intune/registry"
-import { readObject } from "../../shared/intune/read"
+import { readObject, withMaskedSecrets } from "../../shared/intune/read"
 import { comparableSnapshot } from "../../shared/intune/compare"
 import type { BackupItems } from "../../shared/intune/backup-changes"
-import { coveredFolders, EVERYTHING, includedTypes, normalizeScope, type BackupScope } from "../../shared/intune/scope"
+import { EVERYTHING, includedTypes, normalizeScope, restorableFolders, type BackupScope } from "../../shared/intune/scope"
 
 /**
  * Runs Intune backups from the desktop app as the signed-in admin.
@@ -38,12 +38,31 @@ export interface BackupJob {
   backupFolder?: string
   /** Policies and types that could not be read; above zero the backup on disk is partial. */
   failures?: number
+  /** Whose tokens the run reads and writes with: the signed-in admin's, or the tenant's Backup Reader. */
+  authMode?: BackupAuthMode
+  /** Failed because the Backup Reader could not be used; retrying or signing in cannot fix that. */
+  credentialError?: true
   /** Set when the job failed because Microsoft or the storage account could not be reached, including timeouts. */
   unreachable?: boolean
   log: string[]
 }
 
 export type BackupTrigger = "manual" | "scheduled" | "tray"
+
+/**
+ * - delegated: the signed-in admin's tokens, so MFA and Conditional Access apply.
+ * - app-only: the tenant's read-only Backup Reader app registration, for scheduled backups only.
+ */
+export type BackupAuthMode = "delegated" | "app-only"
+
+/** The tokens one backup run uses for Microsoft Graph and Azure Storage, chosen once when it starts. */
+export interface RunTokens {
+  mode: BackupAuthMode
+  graph: () => Promise<string>
+  storage: () => Promise<string>
+  /** Type folders these tokens have no permission for by design; the run leaves them out and records why. */
+  excludedTypes?: string[]
+}
 
 export interface BackupRequest {
   tenantId: string
@@ -60,6 +79,11 @@ export interface BackupEngineDeps {
   /** The main-process fetch (bridged, so local storage accounts are served from disk). */
   fetch: typeof fetch
   getToken: (tenantId: string, clientId: string, scope: string) => Promise<string>
+  /**
+   * The tenant's Backup Reader tokens, or null when it has none. Asked only for scheduled backups:
+   * manual and tray backups, where an admin is present, always use the admin's own sign-in.
+   */
+  unattendedTokens?: (request: BackupRequest) => RunTokens | null
   /** Backups older than this many days are deleted after each backup; 0 keeps everything. */
   retentionDays?: (tenantId: string) => number
   now?: () => Date
@@ -249,12 +273,14 @@ export class BackupEngine {
 
   /**
    * Starts a backup in the background. One backup per tenant runs at a time. A request joins the
-   * running backup only when tenant, storage account and scope all match; any other request gets
-   * a failed job of its own, so a scheduled full backup can never ride on a narrower manual one.
+   * running backup only when tenant, storage account, scope and auth mode all match; any other
+   * request gets a failed job of its own, so a scheduled full backup can never ride on a narrower
+   * manual one, and a manual backup is never served by a Backup Reader run.
    */
   start(request: BackupRequest): BackupJob {
     const tenantKey = request.tenantId.toLowerCase()
-    const key = `${request.storageAccountName.toLowerCase()}\n${normalizeScope(request.scope ?? EVERYTHING).excluded.join(",")}`
+    const tokens = this.runTokens(request)
+    const key = `${request.storageAccountName.toLowerCase()}\n${normalizeScope(request.scope ?? EVERYTHING).excluded.join(",")}\n${tokens.mode}`
     const active = this.running.get(tenantKey)
     if (active) {
       if (active.key === key) return active.job
@@ -288,6 +314,7 @@ export class BackupEngine {
       progress: queued ? 0 : 5,
       progressMessage: queued ? "Waiting for another backup to finish..." : "Starting backup...",
       startTime: this.now().toISOString(),
+      authMode: tokens.mode,
       log: [],
     }
     this.jobs.set(job.id, job)
@@ -308,7 +335,7 @@ export class BackupEngine {
       const deadline = Date.now() + JOB_DEADLINE_MS
       timer = setTimeout(() => controller.abort(jobDeadlineError()), JOB_DEADLINE_MS)
       timer.unref?.()
-      await this.run(job, request, controller.signal, deadline, outcome, stopped)
+      await this.run(job, request, tokens, controller.signal, deadline, outcome, stopped)
     }
     // A queued backup cancelled before its turn settles at once instead of holding its tenant
     // until every backup ahead of it has finished. Its place in the chain still waits for those
@@ -330,13 +357,14 @@ export class BackupEngine {
         job.exception = error instanceof Error ? error.message : String(error)
         // Classified before the failed manifest is written, which goes around the run's fetch and cannot change it.
         if (job.status === "Failed" && isUnreachable(error) && !outcome.saved && !outcome.answered && !outcome.otherFailures) job.unreachable = true
+        if (job.status === "Failed" && tokens.mode === "app-only" && causedBy(error, "BackupReaderError")) job.credentialError = true
         job.progressMessage = job.status === "Cancelled" ? "Backup cancelled" : "Backup failed"
         this.write(job, `${job.progressMessage}: ${job.exception}`)
         // A storage that stopped answering or refused access would not take the manifest either.
         if (!stopped.manifest || stopped.committing || stopped.stoppedBy?.() === "backup storage") return
         // The run is over, so a backup started while the manifest is written gets its own job instead of joining this one.
         if (this.running.get(tenantKey)?.job === job) this.running.delete(tenantKey)
-        await this.recordStopped(job, request, stopped.manifest(job.status, job.exception))
+        await this.recordStopped(job, request, tokens, stopped.manifest(job.status, job.exception))
       })
       .finally(() => {
         if (timer) clearTimeout(timer)
@@ -356,6 +384,17 @@ export class BackupEngine {
     return job
   }
 
+  /** Backup Reader tokens for a scheduled backup of a tenant that has one, otherwise the admin's. */
+  private runTokens(request: BackupRequest): RunTokens {
+    const unattended = request.trigger === "scheduled" ? this.deps.unattendedTokens?.(request) : null
+    if (unattended) return unattended
+    return {
+      mode: "delegated",
+      graph: () => this.deps.getToken(request.tenantId, request.clientId, `${GRAPH}/.default`),
+      storage: () => this.deps.getToken(request.tenantId, request.clientId, "https://storage.azure.com/.default"),
+    }
+  }
+
   /** A failing listener must not change how the job ended. */
   private finished(job: BackupJob, request: BackupRequest): void {
     try {
@@ -365,7 +404,7 @@ export class BackupEngine {
     }
   }
 
-  private async run(job: BackupJob, request: BackupRequest, signal: AbortSignal, deadline: number, outcome: RunOutcome, stopped: StoppedRun): Promise<void> {
+  private async run(job: BackupJob, request: BackupRequest, tokens: RunTokens, signal: AbortSignal, deadline: number, outcome: RunOutcome, stopped: StoppedRun): Promise<void> {
     const started = this.now()
     const local = isLocalAccount(request.storageAccountName)
     const fetchImpl = answeredFetch(this.deps.fetch, outcome, local ? `${request.storageAccountName.toLowerCase()}.blob.core.windows.net` : null)
@@ -373,20 +412,26 @@ export class BackupEngine {
     job.backupFolder = backupFolder
     this.write(job, `Backing up tenant ${request.tenantId} to ${local ? "this device (encrypted)" : `storage account ${request.storageAccountName}`}.`)
     this.write(job, `Backup folder: ${backupFolder}`)
+    if (tokens.mode === "app-only") this.write(job, "Reading as the tenant's Backup Reader (app-only, read-only).")
 
-    const graphToken = () => tokenOrStop(() => this.deps.getToken(request.tenantId, request.clientId, `${GRAPH}/.default`), outcome)
-    const storageToken = local
-      ? async () => ""
-      : () => tokenOrStop(() => this.deps.getToken(request.tenantId, request.clientId, "https://storage.azure.com/.default"), outcome)
+    const graphToken = () => tokenOrStop(tokens.graph, outcome)
+    const storageToken = local ? async () => "" : () => tokenOrStop(tokens.storage, outcome)
 
     const concurrency = this.deps.concurrency ?? CONCURRENCY
     const network = new NetworkCircuit(3 * concurrency, signal, deadline)
     const storage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, network)
-    await storage.ensureContainer()
+    // The Backup Reader cannot create containers; New-TenuVaultStorage.ps1 creates the backup container for it.
+    if (local || tokens.mode === "delegated") await storage.ensureContainer()
 
     const scope = normalizeScope(request.scope ?? EVERYTHING)
-    const types = includedTypes(scope)
+    const readerExcluded = new Set(tokens.excludedTypes ?? [])
+    const notReadable = includedTypes(scope).filter((type) => readerExcluded.has(type.folder)).map((type) => type.folder)
+    const types = includedTypes(scope).filter((type) => !readerExcluded.has(type.folder))
     if (scope.excluded.length) this.write(job, `Leaving out ${scope.excluded.length} of ${INTUNE_TYPES.length} types: ${scope.excluded.join(", ")}.`)
+    if (notReadable.length) this.write(job, `Leaving out ${notReadable.length} type${notReadable.length === 1 ? "" : "s"} the Backup Reader has no permission for: ${notReadable.join(", ")}. Manual backups include them.`)
+    // Only a Backup Reader run keeps a value it cannot decrypt masked; with the admin's sign-in a refused read fails the object as before.
+    const keepMasked = tokens.mode === "app-only" ? (error: unknown) => error instanceof GraphError && error.status === 403 : undefined
+    const maskedItems: Array<{ Folder: string; Id: string; Name: string }> = []
     const graph = new GraphSession(fetchImpl, graphToken, network)
     const reader = {
       get: (path: string) => graph.get<Item>(`${GRAPH}/beta/${path}`),
@@ -484,6 +529,9 @@ export class BackupEngine {
         Failures: failures,
         SkippedTypes: skippedTypes,
         FailedTypes: failedTypes,
+        AuthMode: tokens.mode,
+        ...(notReadable.length ? { AppOnlyExcludedTypes: notReadable } : {}),
+        ...(maskedItems.length ? { MaskedSecretItems: maskedItems } : {}),
         // Per item fingerprints (by type folder and Intune ID), so backups can be compared without reading every file.
         Items: sortKeys(items),
         ...(itemTimeoutWarnings.length ? { Warnings: itemTimeoutWarnings } : {}),
@@ -497,15 +545,20 @@ export class BackupEngine {
     await pool(work, concurrency, async ({ type, item, displayName, fileName }) => {
       job.progressMessage = `Backing up ${type.label}`
       try {
-        const detail = await readObject(type, item.id, reader)
+        let masked = false
+        const detail = await readObject(type, item.id, reader, keepMasked ? { keepMasked: (error) => (masked = keepMasked(error)) } : {})
         const body = JSON.stringify(detail, null, 2)
         await storage.put(`${backupFolder}/${type.folder}/${fileName}.json`, body)
+        const maskedView = withMaskedSecrets(type, detail)
         items[`${type.folder}/${item.id}`] = {
           file: `${fileName}.json`,
           hash: snapshotHash(detail),
           // What versions that could not read this type's assignments recorded, to compare with their backups.
           ...(type.assignmentsFormerlyExpanded ? { hashWithEmptyAssignments: snapshotHash({ ...detail, assignments: [] }) } : {}),
+          ...(maskedView ? { hashWithMaskedSecrets: snapshotHash(maskedView) } : {}),
+          ...(masked ? { secretsMasked: true as const } : {}),
         }
+        if (masked) maskedItems.push({ Folder: type.folder, Id: item.id, Name: displayName })
         counts[type.folder]!++
         outcome.saved++
       } catch (error) {
@@ -550,11 +603,16 @@ export class BackupEngine {
     // Only a complete backup may replace older ones: if policies could not be read (for
     // example after a permission change), keep every existing backup.
     let retentionWarnings = 0
-    if (failures === 0 && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
+    // The Backup Reader cannot delete from Azure Storage. The next backup with an admin's sign-in applies
+    // retention to every backup of the tenant, Backup Reader backups included, with the same protections.
+    const deletesAllowed = local || tokens.mode === "delegated"
+    if (!deletesAllowed && failures === 0) {
+      this.write(job, "Older backups were kept: the Backup Reader cannot delete from Azure Storage. The next backup made with an admin's sign-in removes expired ones.")
+    } else if (failures === 0 && (this.deps.retentionDays?.(job.tenantId) ?? 0) > 0) {
       const retentionNetwork = new NetworkCircuit(3 * concurrency, signal, deadline)
       const retentionStorage = new BlobWriter(fetchImpl, request.storageAccountName, storageToken, retentionNetwork)
       try {
-        const result = await this.applyRetention(job, retentionStorage, backupFolder, coveredFolders(metadata), retentionNetwork.signal)
+        const result = await this.applyRetention(job, retentionStorage, backupFolder, restorableFolders(metadata), retentionNetwork.signal)
         if (result > 0) retentionWarnings++
       } catch (error) {
         retentionWarnings++
@@ -573,7 +631,10 @@ export class BackupEngine {
     job.failures = failures
     job.status = failures > 0 && totalPolicies === 0 ? "Failed" : "Completed"
     if (job.status === "Failed" && !outcome.answered && !outcome.otherFailures) job.unreachable = true
-    const warnings = failures + retentionWarnings
+    if (maskedItems.length) {
+      this.write(job, `Saved ${maskedItems.length} object${maskedItems.length === 1 ? "" : "s"} with encrypted OMA-URI values masked (****): the Backup Reader cannot read them in plain text, so these copies cannot be restored. A manual backup captures them.`)
+    }
+    const warnings = failures + retentionWarnings + (maskedItems.length ? 1 : 0)
     job.progressMessage =
       job.status === "Failed" ? "Backup failed: no policies could be saved" : warnings > 0 ? `Backup completed with ${warnings} warning${warnings === 1 ? "" : "s"}` : "Backup completed successfully"
     this.write(job, `Backup completed: ${totalPolicies} policies in ${metadata.Duration}.`)
@@ -587,13 +648,13 @@ export class BackupEngine {
    * never replaces a manifest that is already there. It goes around the run's fetch, so it cannot
    * change how the failure was classified, and it gives up after FAILED_MANIFEST_GRACE_MS.
    */
-  private async recordStopped(job: BackupJob, request: BackupRequest, metadata: Record<string, unknown>): Promise<void> {
+  private async recordStopped(job: BackupJob, request: BackupRequest, tokens: RunTokens, metadata: Record<string, unknown>): Promise<void> {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(new RequestTimeoutError("The storage did not answer in time.")), FAILED_MANIFEST_GRACE_MS)
     timer.unref?.()
     const deadline = Date.now() + FAILED_MANIFEST_GRACE_MS
     const network = new NetworkCircuit(3, controller.signal, deadline)
-    const token = isLocalAccount(request.storageAccountName) ? async () => "" : () => this.deps.getToken(request.tenantId, request.clientId, "https://storage.azure.com/.default")
+    const token = isLocalAccount(request.storageAccountName) ? async () => "" : tokens.storage
     const storage = new BlobWriter(this.deps.fetch, request.storageAccountName, token, network)
     const recorded = metadata.Status === "Cancelled" ? "cancelled" : "failed"
     try {
@@ -680,7 +741,8 @@ export class BackupEngine {
       // failures were counted carry no Failures value and count by their status alone.
       const status = String(metadata.Status ?? "").toLowerCase()
       const complete = (status === "success" || status === "succeeded") && (metadata.Failures === undefined || metadata.Failures === 0)
-      for (const folder of complete ? coveredFolders(metadata) : []) {
+      // A folder with masked values does not satisfy coverage, so the newest backup with the plain values stays.
+      for (const folder of complete ? restorableFolders(metadata) : []) {
         if (uncovered.delete(folder)) holdsUncovered = true
       }
       if (backup.time >= cutoff) continue
@@ -758,6 +820,14 @@ async function pool<T>(entries: T[], limit: number, task: (entry: T) => Promise<
   await Promise.all(Array.from({ length: Math.min(limit, entries.length) }, worker))
   signal?.throwIfAborted()
   if (failure) throw (failure as { error: unknown }).error
+}
+
+/** Whether `error` or one of its causes has the given name. */
+function causedBy(error: unknown, name: string): boolean {
+  for (let current = error, depth = 0; current instanceof Error && depth < 5; current = current.cause, depth++) {
+    if (current.name === name) return true
+  }
+  return false
 }
 
 /** Fingerprint of a snapshot without the fields Intune changes on every read or write. */

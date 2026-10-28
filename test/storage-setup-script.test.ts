@@ -32,7 +32,8 @@ describe("New-TenuVaultStorage.ps1", () => {
     }
     expect(createStoragePage).toContain("New-TenuVaultStorage.ps1")
     // Update-AzStorageBlobServiceProperty has no retention parameters; the Enable cmdlets are the supported call.
-    expect(storageScript).not.toContain("Update-AzStorageBlobServiceProperty")
+    // It is only used to turn on versioning for the Backup Reader.
+    expect(storageScript).not.toMatch(/Update-AzStorageBlobServiceProperty(?![^\n]*-IsVersioningEnabled \$true)/)
   })
 
   it("adds firewall addresses before switching the default action to deny", () => {

@@ -190,7 +190,7 @@ Overlapping tray and scheduled requests for one tenant share the running backup 
 Scheduled backups also stop when:
 
 * **The machine is asleep, off, or you are signed out.** The background runner only runs in your own signed-in session and does not wake the machine. Locking the screen does not sign you out; closing a laptop lid may put it to sleep. A missed slot runs once at the next start.
-* **The sign-in needs interaction.** A background backup cannot complete MFA or Conditional Access prompts. Sign in again when TenuVault shows the banner.
+* **The sign-in needs interaction.** A background backup cannot complete MFA or Conditional Access prompts. Sign in again when TenuVault shows the banner. If this happens every night, a sign-in frequency policy ends your session (`AADSTS70044`); see [Conditional Access and TenuVault](/security/conditional-access/) for ways to keep scheduled backups running, including the optional [Backup Reader](/backups/backup-reader/).
 * **The backup storage is unavailable.** Check the storage messages above.
 
 See [Schedule backups](/backups/schedules/).

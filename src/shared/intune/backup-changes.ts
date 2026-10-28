@@ -10,6 +10,10 @@ export type BackupItems = Record<string, {
    * with `assignments: []`, as those versions recorded it.
    */
   hashWithEmptyAssignments?: string
+  /** For objects with encrypted values: the hash with every encrypted value masked (****). */
+  hashWithMaskedSecrets?: string
+  /** The encrypted values could not be read in plain text, so the file holds ****. */
+  secretsMasked?: true
 }>
 
 export interface BackupFingerprint extends ScopeMetadata {
@@ -71,12 +75,15 @@ export function compareBackups(older: BackupFingerprint, newer: BackupFingerprin
 }
 
 /**
+ * A backup with masked values counts as the same object when only the values it could not read differ.
  * An older backup without hashWithEmptyAssignments was made by a version that could not read the item's
  * assignments, so the newer item is compared as that version would have recorded it: reading the
  * assignments now is not a change.
  */
 export function sameItem(previous: BackupItems[string], item: BackupItems[string]): boolean {
   if (previous.hash === item.hash) return true
+  // A backup that could not decrypt a value is compared with the value masked on both sides.
+  if ((previous.secretsMasked || item.secretsMasked) && previous.hashWithMaskedSecrets !== undefined) return previous.hashWithMaskedSecrets === item.hashWithMaskedSecrets
   return previous.hashWithEmptyAssignments === undefined && item.hashWithEmptyAssignments !== undefined && previous.hash === item.hashWithEmptyAssignments
 }
 

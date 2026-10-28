@@ -9,6 +9,32 @@ export interface PdfBrandingState {
   available: boolean
 }
 
+/** A tenant's Backup Reader, the optional read-only identity for scheduled backups. Never includes a private key. */
+export interface BackupReaderStatus {
+  tenantId: string
+  /** The Backup Reader app registration's application (client) ID; empty until verified. */
+  clientId: string
+  state: "pending" | "verified"
+  /** The certificate to upload (pending or renewal) or in use (verified). */
+  certificatePem: string
+  thumbprintSha256: string
+  /** Expiry of the certificate in use, or of the pending one before the first verification. */
+  notAfter: string
+  verifiedRoles: string[] | null
+  /** Types scheduled backups leave out because the reader has no permission for them. */
+  excludedTypes: string[]
+  /** A renewal certificate is waiting to be uploaded and verified. */
+  renewalPending: boolean
+}
+
+export interface BackupReaderState {
+  /** Installed Windows and macOS builds; scheduled backups do not run elsewhere. */
+  supported: boolean
+  /** The tenant's plan includes the Backup Reader. */
+  available: boolean
+  reader: BackupReaderStatus | null
+}
+
 /** Serialized request forwarded from the renderer `fetch` bridge to the main-process API host. */
 export interface ApiRequest {
   method: string
@@ -283,6 +309,18 @@ export interface TenuVaultBridge {
     /** Back to the TenuVault design. */
     clear: () => Promise<PdfBrandingState>
   }
+  /** The optional read-only Backup Reader for scheduled backups, per tenant. */
+  backupReader: {
+    status: (tenantId: string) => Promise<BackupReaderState>
+    /** Creates the certificate to upload (setup or renewal). Rejects with a plan error without Pro or MSP. */
+    prepare: (tenantId: string) => Promise<BackupReaderState>
+    /** Saves the public certificate for the setup script. */
+    exportCertificate: (tenantId: string) => Promise<{ saved: boolean }>
+    /** Checks the reader with Microsoft and records its permissions. Rejects with the reason. */
+    verify: (tenantId: string, clientId: string) => Promise<BackupReaderState>
+    /** Forgets the reader and its private key on this computer. */
+    remove: (tenantId: string) => Promise<BackupReaderState>
+  }
   updates: {
     status: () => Promise<UpdateStatus>
     check: () => Promise<UpdateStatus>
@@ -313,7 +351,11 @@ export interface TenuVaultBridge {
 }
 
 /** Plan failures cross the preload boundary as data, then become renderer errors. */
-export type TenuVaultPreloadBridge = Omit<TenuVaultBridge, "auth" | "license" | "schedules" | "pdfBranding"> & {
+export type TenuVaultPreloadBridge = Omit<TenuVaultBridge, "auth" | "license" | "schedules" | "pdfBranding" | "backupReader"> & {
+  backupReader: Omit<TenuVaultBridge["backupReader"], "prepare" | "verify"> & {
+    prepare: (tenantId: string) => Promise<BackupReaderState | PlanIpcError>
+    verify: (tenantId: string, clientId: string) => Promise<BackupReaderState | PlanIpcError>
+  }
   pdfBranding: Omit<TenuVaultBridge["pdfBranding"], "set"> & {
     set: (branding: PdfBranding) => Promise<PdfBrandingState | PlanIpcError>
   }

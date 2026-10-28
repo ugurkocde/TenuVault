@@ -34,6 +34,8 @@ import { BackupKeys } from "./backup/keys"
 import { readBackupSettings } from "./backup/settings"
 import { localInventoryProblem } from "./backup/local-inventory"
 import { encryptedAzureFetch, registerStorageToken } from "./storage/azure-seal"
+import { BackupReaderService } from "./auth/backup-reader"
+import { hostname } from "node:os"
 import { handleLocalBlobRequest, isLocalAccount, localRoutesRunning } from "./storage/blob-emulator"
 import { LocalBlobStore } from "./storage/local-blob-store"
 import { setRestoreJournalStore, setRestoreJournalAuthorization } from "./storage/restore-journal"
@@ -271,11 +273,34 @@ async function bootstrap(): Promise<void> {
   const records = new TenantRecords(workspaceStore)
   // Backups that failed before saving anything, counted on the Dashboard on every plan.
   const failedAttempts = new FailedAttemptLog(appStore)
+  // The Backup Reader's tokens reach only the backup engine: never the fetch bridge, tokenFor or a
+  // portal route, so no restore, revert or other change can ever run with them.
+  const backupReader = new BackupReaderService(tokenStore)
   const engine = new BackupEngine({
     fetch: bridgedFetch,
     getToken: async (tenantId, clientId, scope) => {
       await license.requireEntitlement(tenantId)
       return (await tokenFor(tenantId, clientId, scope)).accessToken
+    },
+    unattendedTokens: (request) => {
+      const plan = license.plan(request.tenantId)
+      if (!plan || !allows(plan, "backupReader")) return null
+      const reader = backupReader.tokens(request)
+      if (!reader) return null
+      return {
+        ...reader,
+        graph: async () => {
+          await license.requireEntitlement(request.tenantId)
+          return reader.graph()
+        },
+        storage: async () => {
+          await license.requireEntitlement(request.tenantId)
+          const token = await reader.storage()
+          // The encrypted Azure fetch only seals requests for tenants with a registered storage token.
+          registerStorageToken(token, request.tenantId)
+          return token
+        },
+      }
     },
     // Community keeps 30 days of history; Pro and MSP keep what the admin chooses (0 keeps everything).
     retentionDays: (tenantId) => effectiveRetentionDays(preferences.get().retentionDays, license.plan(tenantId)),
@@ -502,6 +527,23 @@ async function bootstrap(): Promise<void> {
     return result.localCreated
   }
 
+  // An expiring Backup Reader certificate is easy to miss when nobody opens TenuVault, so scheduled
+  // runs remind once a week from 30 days before expiry. After it, backups use the admin's sign-in again.
+  const remindBackupReaderRenewal = (tenantId: string, name: string) => {
+    const reader = backupReader.status(tenantId)
+    if (reader?.state !== "verified" || reader.renewalPending) return
+    const daysLeft = Math.ceil((Date.parse(reader.notAfter) - Date.now()) / 86_400_000)
+    const key = `backupReader.reminded.${tenantId.toLowerCase()}`
+    if (daysLeft > 30 || Date.now() - Number(appStore.get(key) ?? 0) < 7 * 86_400_000) return
+    appStore.set(key, String(Date.now()))
+    if (Notification.isSupported()) {
+      new Notification({
+        title: `Backup Reader certificate of ${name} expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`,
+        body: "Renew it in Settings > Background so scheduled backups keep running without your sign-in.",
+      }).show()
+    }
+  }
+
   const runScheduledBackup = async (tenantId: string, trigger: "scheduled" | "tray", afterFailure = false, slot?: string) => {
     const profile = tenantProfile(tenantId)
     if (!profile) {
@@ -541,8 +583,11 @@ async function bootstrap(): Promise<void> {
     const cancelled = result.status === "Cancelled"
     const localNotified = cancelled ? false : await notifyBackupOutcome(job, trigger)
     const account = accounts.get(tenantId)
-    // Record scheduled backups in the tenant's audit log, attributed to the signed-in admin.
-    void host
+    // Record scheduled backups in the tenant's audit log, attributed to the signed-in admin. A Backup
+    // Reader run skips it: the audit route signs in as the admin, which is exactly what the reader
+    // replaces, so it would ask for a sign-in after a backup that worked. Its metadata.json records
+    // the run (Trigger, AuthMode, RunId) in the backup itself.
+    if (job.authMode !== "app-only") void host
       .dispatch(
         new Request(`${INTERNAL_API_ORIGIN}/api/audit/log`, {
           method: "POST",
@@ -565,6 +610,7 @@ async function bootstrap(): Promise<void> {
         }),
       )
       .catch(() => undefined)
+    if (job.authMode === "app-only") remindBackupReaderRenewal(tenantId, profile.name)
     if (!ok && !cancelled && !origin.notified) {
       origin.notified = true
       // The channel delivery above already toasted this failure when a local intent was queued.
@@ -649,6 +695,55 @@ async function bootstrap(): Promise<void> {
     const { autoUpdateManaged: _managed, ...rest } = changes
     applyPreferences(preferences.set(rest))
     return currentPreferences()
+  })
+  // The Backup Reader is set up per tenant in Settings > Background. Scheduled backups only run in the
+  // installed Windows and macOS apps, so it is not offered elsewhere.
+  const readerSupported = process.platform === "win32" || process.platform === "darwin"
+  const readerState = (tenantId: string) => {
+    const plan = license.plan(tenantId)
+    return { supported: readerSupported, available: !!plan && allows(plan, "backupReader"), reader: backupReader.status(tenantId) }
+  }
+  const readerTenant = (tenantId: unknown) => {
+    if (typeof tenantId !== "string" || !tenantProfile(tenantId)) throw new Error("Connect this tenant first.")
+    return tenantId
+  }
+  const requireReaderPlan = async (tenantId: string) => {
+    if (!readerSupported) throw new Error("The Backup Reader is available in the installed Windows and macOS apps.")
+    const plan = await license.requireEntitlement(tenantId)
+    if (!allows(plan, "backupReader")) throw new PlanRequired("backupReader")
+  }
+  handleTrusted("backupReader:status", (_event, tenantId: unknown) => readerState(readerTenant(tenantId)))
+  handleTrusted("backupReader:prepare", (_event, tenantId: unknown) => withPlanError(async () => {
+    const tenant = readerTenant(tenantId)
+    await requireReaderPlan(tenant)
+    backupReader.prepare(tenant, hostname())
+    return readerState(tenant)
+  }))
+  handleTrusted("backupReader:verify", (_event, tenantId: unknown, clientId: unknown) => withPlanError(async () => {
+    const tenant = readerTenant(tenantId)
+    await requireReaderPlan(tenant)
+    await backupReader.verify(tenant, typeof clientId === "string" ? clientId.trim() : "")
+    return readerState(tenant)
+  }))
+  handleTrusted("backupReader:exportCertificate", async (_event, tenantId: unknown) => {
+    const tenant = readerTenant(tenantId)
+    const reader = backupReader.status(tenant)
+    if (!reader) throw new Error("Create the Backup Reader certificate first.")
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      title: "Save Backup Reader certificate",
+      defaultPath: join(app.getPath("documents"), `TenuVault Backup Reader ${reader.thumbprintSha256.slice(0, 8)}.cer`),
+      filters: [{ name: "Certificate", extensions: ["cer"] }],
+    })
+    if (result.canceled || !result.filePath) return { saved: false }
+    const { writeFile } = await import("node:fs/promises")
+    // Only the public certificate: the private key never leaves the encrypted store.
+    await writeFile(result.filePath, reader.certificatePem, "utf8")
+    return { saved: true }
+  })
+  handleTrusted("backupReader:remove", (_event, tenantId: unknown) => {
+    const tenant = readerTenant(tenantId)
+    backupReader.remove(tenant)
+    return readerState(tenant)
   })
   handleTrusted("pdfBranding:get", () => ({ branding: pdfBranding.get(), available: pdfBranding.available() }))
   handleTrusted("pdfBranding:set", (_event, branding: unknown) => withPlanError(() => ({ branding: pdfBranding.set(branding), available: true })))

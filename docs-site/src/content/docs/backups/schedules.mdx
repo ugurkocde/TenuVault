@@ -97,7 +97,7 @@ To stop a backup you started or joined, select **Cancel backup** beside its runn
 
 When Microsoft Graph or backup storage stops responding during a backup, the backup stops within a few minutes and is retried under the schedule rules above. Successful requests to one service do not reset repeated failures from the other. If removing old backups fails, cleanup stops and the saved backup remains completed with a warning. Old backups that were not removed are reconsidered on the next run.
 
-If your sign-in has expired or Conditional Access requires you to sign in again, the backup fails and a banner at the top of the TenuVault window asks you to **Sign in**. Scheduled backups never open a sign-in window by themselves.
+If your sign-in has expired or Conditional Access requires you to sign in again, the backup fails and a banner at the top of the TenuVault window asks you to **Sign in**. Scheduled backups never open a sign-in window by themselves. When a sign-in frequency policy ends your session every night, see [Conditional Access and TenuVault](/security/conditional-access/), or add the optional [Backup Reader](/backups/backup-reader/) on Pro and MSP.
 
 ## Keep TenuVault running
 

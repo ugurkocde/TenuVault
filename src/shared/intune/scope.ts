@@ -66,6 +66,10 @@ export interface ScopeMetadata {
   Scope?: { Excluded?: unknown; Included?: unknown }
   SkippedTypes?: unknown
   FailedTypes?: unknown
+  /** Types a Backup Reader backup left out because the reader has no permission for them by design. */
+  AppOnlyExcludedTypes?: unknown
+  /** Objects saved with encrypted values masked (****), as { Folder, Id, Name }. */
+  MaskedSecretItems?: unknown
 }
 
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [])
@@ -93,6 +97,21 @@ export const LEGACY_FOLDERS: readonly string[] = [
 export function coveredFolders(metadata: ScopeMetadata | null | undefined): Set<string> {
   const recorded = metadata?.Scope?.Included
   const attempted = new Set(Array.isArray(recorded) ? strings(recorded) : LEGACY_FOLDERS)
-  const missing = new Set([...strings(metadata?.Scope?.Excluded), ...strings(metadata?.SkippedTypes), ...strings(metadata?.FailedTypes)])
+  const missing = new Set([...strings(metadata?.Scope?.Excluded), ...strings(metadata?.SkippedTypes), ...strings(metadata?.FailedTypes), ...strings(metadata?.AppOnlyExcludedTypes)])
   return new Set(INTUNE_TYPES.map((type) => type.folder).filter((folder) => attempted.has(folder) && !missing.has(folder)))
+}
+
+/** Type folders of the objects a backup saved with masked values. */
+export function maskedFolders(metadata: ScopeMetadata | null | undefined): Set<string> {
+  const entries = Array.isArray(metadata?.MaskedSecretItems) ? metadata.MaskedSecretItems : []
+  return new Set(entries.map((entry) => (entry && typeof entry === "object" ? (entry as { Folder?: unknown }).Folder : undefined)).filter((folder): folder is string => typeof folder === "string"))
+}
+
+/**
+ * The covered folders a backup can restore in full: a folder with masked values holds objects that
+ * cannot be restored, so retention keeps an older backup that has them in plain text.
+ */
+export function restorableFolders(metadata: ScopeMetadata | null | undefined): Set<string> {
+  const masked = maskedFolders(metadata)
+  return new Set([...coveredFolders(metadata)].filter((folder) => !masked.has(folder)))
 }

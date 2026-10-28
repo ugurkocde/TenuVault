@@ -40,7 +40,7 @@ The script connects to Microsoft Graph with the delegated scopes `Application.Re
 Delegated permissions let an app act on behalf of a signed-in user. They never grant access on their own:
 
 * **TenuVault can never do more than you can.** The effective access is the overlap between the delegated permissions and the roles of the admin who signs in. An admin with a read-only Intune role cannot restore or change anything through TenuVault, even though the app registration requests write permissions.
-* **There is no background identity.** Without application permissions and without a secret, the app registration cannot get a token by itself. Every token belongs to a person who signed in.
+* **There is no background identity.** Without application permissions and without a secret, the app registration cannot get a token by itself. Every token belongs to a person who signed in. The only exception is the optional [Backup Reader](#optional-the-backup-reader), a separate app registration you add yourself.
 * **Your sign-in controls apply.** MFA, Conditional Access and sign-in frequency apply to every TenuVault session.
 * **Changes are traceable.** Writes appear under the signed-in admin's name in the Intune and Entra audit logs.
 
@@ -113,6 +113,10 @@ Email notification channels send as the signed-in admin and can resolve Entra gr
 
 See [Notifications](/notifications/) for what is sent. The Azure watcher has its own managed identity and its own application roles (`DeviceManagementApps.Read.All`, and only when used, `Mail.Send` restricted to one mailbox in Exchange); the watcher setup script prints exactly what it granted.
 
+## Optional: the Backup Reader
+
+The app registration above never changes. If Conditional Access session controls stop scheduled backups at night, you can add a second, separate app registration, the **TenuVault Backup Reader**, with `New-TenuVaultBackupReader.ps1`. It has read-only Microsoft Graph application permissions (`DeviceManagementConfiguration.Read.All`, `DeviceManagementApps.Read.All`, `DeviceManagementServiceConfig.Read.All`, `DeviceManagementScripts.Read.All`, `DeviceManagementRBAC.Read.All`, and optionally `DeviceManagementManagedDevices.Read.All`) and a certificate credential, never a secret. Only scheduled backups use it, and TenuVault refuses it when it has any other permission. See [Backup Reader for scheduled backups](/backups/backup-reader/) for what it can and cannot do, and [Conditional Access and TenuVault](/security/conditional-access/) for options that need no application permissions.
+
 ## Restrict sign-in to a group
 
 By default, tenant-wide admin consent lets any user in the tenant sign in to the app registration. Access is still limited by each user's own Intune role, but you can narrow it further.
@@ -142,7 +146,7 @@ Revoking access affects every admin who uses TenuVault with this app registratio
 You can target the app registration with your own controls, for example:
 
 * A Conditional Access policy that requires a compliant device or phishing-resistant MFA for TenuVault sign-ins. TenuVault signs in through your system browser, so device-based conditions are checked there. See [Conditional Access](/getting-started/requirements/#conditional-access) for the supported browsers.
-* Sign-in frequency to control how long a TenuVault session lasts before you sign in again.
+* Sign-in frequency to control how long a TenuVault session lasts before you sign in again. Scheduled backups stop when the session ends; see [Conditional Access and TenuVault](/security/conditional-access/) for ways to keep them running.
 
 ## Related pages
 
