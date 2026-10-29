@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react"
 import { KeyRound, Loader2, X } from "lucide-react"
+import { Link } from "react-router-dom"
 import { useTenants } from "~/contexts/TenantContext"
+import { suggestsBackupReader } from "../lib/backup-reader-view"
+import { settingsHref } from "../lib/settings-section"
 import { Button } from "~/components/ui/button"
 import type { SignInRequiredEvent } from "../../shared/ipc"
 import { bridge } from "../lib/bridge"
@@ -56,6 +59,11 @@ export function SignInBanner() {
         <span className="font-medium">{tenant?.name ?? pending.tenantId}: </span>
         {pending.message}
         {others > 0 && <span className="block text-xs text-amber-800">{others === 1 ? "1 more sign-in is waiting." : `${others} more sign-ins are waiting.`}</span>}
+        {suggestsBackupReader(pending.message) && (
+          <span className="block text-xs text-amber-800">
+            If this keeps stopping scheduled backups, the optional <Link to={settingsHref("background")} className="font-medium underline">Backup Reader</Link> runs them without your sign-in.
+          </span>
+        )}
       </p>
       <Button size="sm" onClick={() => void signIn()} disabled={busy}>
         {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}

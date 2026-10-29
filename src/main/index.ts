@@ -9,7 +9,7 @@ import { prepareGeneratedFile, prepareSaveFile, type PreparedFile } from "./save
 import { PdfBrandingPolicy, PdfBrandingStore, setPdfBrandingPolicy } from "./pdf-branding"
 import { prepareOibReportFile, printHtmlToPdf } from "./report-export"
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, Notification, safeStorage, shell } from "electron"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import type { ApiRequest, AppPreferences, ScheduleInput } from "../shared/ipc"
 import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN } from "../shared/constants"
 import { createAuditRecorder } from "./api/audit"
@@ -35,6 +35,8 @@ import { readBackupSettings } from "./backup/settings"
 import { localInventoryProblem } from "./backup/local-inventory"
 import { encryptedAzureFetch, registerStorageToken } from "./storage/azure-seal"
 import { BackupReaderService } from "./auth/backup-reader"
+// The same setup script the docs site downloads and the card copies, bundled so Save writes it exactly.
+import readerSetupScript from "../../resources/New-TenuVaultBackupReader.ps1?raw"
 import { assertStorageAccountName } from "../shared/storage-account"
 import { hostname } from "node:os"
 import { handleLocalBlobRequest, isLocalAccount, localRoutesRunning } from "./storage/blob-emulator"
@@ -613,7 +615,10 @@ async function bootstrap(): Promise<void> {
         }),
       )
       .catch(() => undefined)
-    if (job.authMode === "app-only") remindBackupReaderRenewal(tenantId, profile.name)
+    if (job.authMode === "app-only") {
+      backupReader.recordRun(tenantId, result.status)
+      remindBackupReaderRenewal(tenantId, profile.name)
+    }
     if (!ok && !cancelled && !origin.notified) {
       origin.notified = true
       // The channel delivery above already toasted this failure when a local intent was queued.
@@ -704,41 +709,82 @@ async function bootstrap(): Promise<void> {
   const readerSupported = process.platform === "win32" || process.platform === "darwin"
   const readerState = (tenantId: string) => {
     const plan = license.plan(tenantId)
-    return { supported: readerSupported, available: !!plan && allows(plan, "backupReader"), reader: backupReader.status(tenantId) }
+    const profile = tenantProfile(tenantId)
+    const azureStorage = profile && !isLocalAccount(profile.storageAccountName) ? profile.storageAccountName : undefined
+    return {
+      supported: readerSupported,
+      available: !!plan && allows(plan, "backupReader"),
+      reader: backupReader.status(tenantId),
+      ...(azureStorage ? { storageAccountName: azureStorage } : {}),
+    }
   }
   const readerTenant = (tenantId: unknown) => {
     if (typeof tenantId !== "string" || !tenantProfile(tenantId)) throw new Error("Connect this tenant first.")
     return tenantId
   }
-  // Verify also checks what scheduled backups to Azure need: the container exists and the reader may
-  // list it (the TenuVault Backup Writer role from New-TenuVaultStorage.ps1 -BackupReaderAppId). A
-  // problem is a warning, not a failed verification, since the Graph part works.
-  const checkReaderStorage = async (tenantId: string): Promise<string | undefined> => {
+  // The confidence test behind Verify and the card's Test button: one small Intune read with the
+  // reader's token (so a green verification is not just token claims), and for Azure tenants the
+  // container check scheduled backups need (the TenuVault Backup Writer role from
+  // New-TenuVaultStorage.ps1 -BackupReaderAppId). The result is recorded for the card's checklist;
+  // a storage problem stays a warning, since the Graph part can still work.
+  const testReader = async (tenantId: string): Promise<{ warning?: string }> => {
     const profile = tenantProfile(tenantId)
-    if (!profile || isLocalAccount(profile.storageAccountName)) return undefined
-    // The account name becomes the host of a request that carries the reader's storage token, so a
-    // name that is not a plain Azure account name must never reach the URL.
-    try {
-      assertStorageAccountName(profile.storageAccountName)
-    } catch {
-      return "The Backup Reader works for Microsoft Graph, but its Azure Storage access was not checked: the tenant's storage account name is not a valid Azure storage account name."
-    }
+    if (!profile) return {}
+    const azure = !isLocalAccount(profile.storageAccountName)
     const tokens = backupReader.tokens({ tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, trigger: "scheduled" })
-    if (!tokens) return undefined
-    const setup = `Run New-TenuVaultStorage.ps1 with -BackupReaderAppId ${backupReader.status(tenantId)?.clientId ?? ""} for storage account ${profile.storageAccountName}, wait a few minutes, then verify again.`
+    if (!tokens) {
+      const message = "No verified Backup Reader is available for this tenant, or its certificate has expired."
+      backupReader.recordTest(tenantId, { graph: false, storage: azure ? false : null, message })
+      return { warning: message }
+    }
+    let graph = false
+    let graphMessage: string | undefined
     try {
-      const response = await chromiumFetch(`https://${profile.storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&maxresults=1`, {
-        headers: { Authorization: `Bearer ${await tokens.storage()}`, "x-ms-version": "2023-11-03" },
+      const response = await chromiumFetch("https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies?$top=1&$select=id", {
+        headers: { Authorization: `Bearer ${await tokens.graph()}` },
         signal: AbortSignal.timeout(15_000),
       })
       void response.body?.cancel().catch(() => undefined)
-      if (response.ok) return undefined
-      if (response.status === 404) return `The Backup Reader works for Microsoft Graph, but the backup container does not exist in ${profile.storageAccountName}. ${setup}`
-      if (response.status === 403) return `The Backup Reader works for Microsoft Graph, but cannot write backups to ${profile.storageAccountName}. ${setup}`
-      return `The Backup Reader works for Microsoft Graph, but Azure Storage answered ${response.status}. ${setup}`
+      graph = response.ok
+      if (!graph) graphMessage = `Microsoft Graph answered ${response.status} for a Backup Reader read.`
     } catch (error) {
-      return `The Backup Reader works for Microsoft Graph, but its access to ${profile.storageAccountName} could not be checked: ${error instanceof Error ? error.message : String(error)}`
+      graphMessage = error instanceof Error ? error.message : String(error)
     }
+    let storage: boolean | null = null
+    let warning: string | undefined
+    if (azure) {
+      const setup = `Run New-TenuVaultStorage.ps1 with -BackupReaderAppId ${backupReader.status(tenantId)?.clientId ?? ""} for storage account ${profile.storageAccountName}, wait a few minutes, then test again.`
+      // The account name becomes the host of a request that carries the reader's storage token, so a
+      // name that is not a plain Azure account name must never reach the URL.
+      let nameValid = true
+      try {
+        assertStorageAccountName(profile.storageAccountName)
+      } catch {
+        nameValid = false
+      }
+      if (!nameValid) {
+        storage = false
+        warning = "Its Azure Storage access was not checked: the tenant's storage account name is not a valid Azure storage account name."
+      } else {
+        try {
+          const response = await chromiumFetch(`https://${profile.storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&maxresults=1`, {
+            headers: { Authorization: `Bearer ${await tokens.storage()}`, "x-ms-version": "2023-11-03" },
+            signal: AbortSignal.timeout(15_000),
+          })
+          void response.body?.cancel().catch(() => undefined)
+          storage = response.ok
+          if (response.status === 404) warning = `The Backup Reader works for Microsoft Graph, but the backup container does not exist in ${profile.storageAccountName}. ${setup}`
+          else if (response.status === 403) warning = `The Backup Reader works for Microsoft Graph, but cannot write backups to ${profile.storageAccountName}. ${setup}`
+          else if (!response.ok) warning = `The Backup Reader works for Microsoft Graph, but Azure Storage answered ${response.status}. ${setup}`
+        } catch (error) {
+          storage = false
+          warning = `Its access to ${profile.storageAccountName} could not be checked: ${error instanceof Error ? error.message : String(error)}`
+        }
+      }
+    }
+    const message = [graph ? undefined : graphMessage, warning].filter(Boolean).join(" ") || undefined
+    backupReader.recordTest(tenantId, { graph, storage, ...(message ? { message } : {}) })
+    return message ? { warning: message } : {}
   }
   const requireReaderPlan = async (tenantId: string) => {
     if (!readerSupported) throw new Error("The Backup Reader is available in the installed Windows and macOS apps.")
@@ -756,7 +802,13 @@ async function bootstrap(): Promise<void> {
     const tenant = readerTenant(tenantId)
     await requireReaderPlan(tenant)
     await backupReader.verify(tenant, typeof clientId === "string" ? clientId.trim() : "", { renewal: renewal === true })
-    const warning = await checkReaderStorage(tenant)
+    const { warning } = await testReader(tenant)
+    return { ...readerState(tenant), ...(warning ? { warning } : {}) }
+  }))
+  handleTrusted("backupReader:test", (_event, tenantId: unknown) => withPlanError(async () => {
+    const tenant = readerTenant(tenantId)
+    await requireReaderPlan(tenant)
+    const { warning } = await testReader(tenant)
     return { ...readerState(tenant), ...(warning ? { warning } : {}) }
   }))
   handleTrusted("backupReader:cancelRenewal", (_event, tenantId: unknown) => {
@@ -777,6 +829,19 @@ async function bootstrap(): Promise<void> {
     const { writeFile } = await import("node:fs/promises")
     // Only the public certificate: the private key never leaves the encrypted store.
     await writeFile(result.filePath, reader.certificatePem, "utf8")
+    backupReader.recordExport(tenant, basename(result.filePath))
+    return { saved: true, fileName: basename(result.filePath) }
+  })
+  handleTrusted("backupReader:exportScript", async (_event, tenantId: unknown) => {
+    readerTenant(tenantId)
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      title: "Save Backup Reader setup script",
+      defaultPath: join(app.getPath("documents"), "New-TenuVaultBackupReader.ps1"),
+      filters: [{ name: "PowerShell script", extensions: ["ps1"] }],
+    })
+    if (result.canceled || !result.filePath) return { saved: false }
+    const { writeFile } = await import("node:fs/promises")
+    await writeFile(result.filePath, readerSetupScript, "utf8")
     return { saved: true }
   })
   handleTrusted("backupReader:remove", (_event, tenantId: unknown) => {

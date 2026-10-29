@@ -1,4 +1,4 @@
-import { createHash, generateKeyPairSync, randomBytes, sign } from "node:crypto"
+import { X509Certificate, createHash, generateKeyPairSync, randomBytes, sign } from "node:crypto"
 
 /**
  * A self-signed certificate and its private key, for the Backup Reader's certificate credential.
@@ -42,6 +42,21 @@ export function createSelfSignedCertificate(subject: string, validDays: number, 
     thumbprintSha256: createHash("sha256").update(der).digest("hex").toUpperCase(),
     notBefore: notBefore.toISOString(),
     notAfter: notAfter.toISOString(),
+  }
+}
+
+/**
+ * How Entra ID identifies a certificate: its SHA-1 thumbprint (the setup script prints the same
+ * value) and its subject name, which names the computer the certificate belongs to. MSAL uses the
+ * SHA-256 thumbprint instead, so the app shows this one wherever an admin compares with the portal.
+ */
+export function certificateIdentity(certificatePem: string): { thumbprint: string; name: string } {
+  try {
+    const certificate = new X509Certificate(certificatePem)
+    const name = /(?:^|\n)CN=([^\n]+)/.exec(certificate.subject)?.[1]?.trim() ?? certificate.subject
+    return { thumbprint: certificate.fingerprint.replaceAll(":", ""), name }
+  } catch {
+    return { thumbprint: "", name: "" }
   }
 }
 

@@ -83,7 +83,7 @@ describe('storage account names in credential-bearing URLs', () => {
   })
   it('validates the account name in the Backup Reader storage check before the reader token is used', () => {
     const main = readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8')
-    const check = main.slice(main.indexOf('const checkReaderStorage'), main.indexOf('const requireReaderPlan'))
+    const check = main.slice(main.indexOf('const testReader'), main.indexOf('const requireReaderPlan'))
     expect(check.indexOf('assertStorageAccountName(profile.storageAccountName)')).toBeGreaterThan(-1)
     expect(check.indexOf('assertStorageAccountName(profile.storageAccountName)')).toBeLessThan(check.indexOf('await tokens.storage()'))
     expect(check.indexOf('assertStorageAccountName(profile.storageAccountName)')).toBeLessThan(check.indexOf('blob.core.windows.net'))

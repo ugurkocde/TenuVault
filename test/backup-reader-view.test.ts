@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { readerView } from "../src/renderer/lib/backup-reader-view"
+import { readerAzureRequest, readerEntraRequest, readerErrorGuidance, readerStorageCommand, readerView, scheduledIdentity, suggestsBackupReader } from "../src/renderer/lib/backup-reader-view"
 import type { BackupReaderState, BackupReaderStatus } from "../src/shared/ipc"
 
 const NOW = Date.parse("2026-10-26T12:00:00Z")
@@ -9,6 +9,12 @@ const status = (overrides: Partial<BackupReaderStatus> = {}): BackupReaderStatus
   state: "verified",
   certificatePem: "-----BEGIN CERTIFICATE-----",
   thumbprintSha256: "AB".repeat(32),
+  thumbprint: "CD".repeat(20),
+  certificateName: "TenuVault Backup Reader (LAPTOP-1)",
+  verifiedAt: "2026-10-26T12:00:00Z",
+  exportedCertificate: null,
+  lastTest: null,
+  lastRun: null,
   notAfter: "2027-10-26T12:00:00Z",
   verifiedRoles: ["DeviceManagementConfiguration.Read.All"],
   excludedTypes: ["DeviceCategories", "DeviceCleanupRules"],
@@ -50,5 +56,48 @@ describe("Backup Reader card", () => {
     const view = readerView(state(status({ renewalPending: true })), NOW)
     expect(view).toMatchObject({ verified: true, waiting: true })
     expect(view.command).toBe("./New-TenuVaultBackupReader.ps1 -CertificatePath <exported .cer> -AppId 44444444-4444-4444-4444-444444444444")
+  })
+})
+
+describe("scheduled identity", () => {
+  it("names only a verified, unexpired reader as the identity scheduled backups run as", () => {
+    expect(scheduledIdentity(status(), NOW)).toBe("reader")
+    expect(scheduledIdentity(status({ notAfter: "2026-10-20T12:00:00Z" }), NOW)).toBe("expired")
+    expect(scheduledIdentity(status({ state: "pending" }), NOW)).toBe("waiting")
+    expect(scheduledIdentity(null, NOW)).toBe("you")
+  })
+})
+
+describe("Backup Reader handoffs and guidance", () => {
+  it("fills the storage command with the tenant's account and the reader's application ID", () => {
+    const command = readerStorageCommand("contosobackups", "44444444-4444-4444-4444-444444444444")
+    expect(command).toContain("-StorageAccountName contosobackups")
+    expect(command).toContain("-BackupReaderAppId 44444444-4444-4444-4444-444444444444")
+    expect(readerStorageCommand(undefined, "")).toContain("-BackupReaderAppId <application ID from the setup script>")
+  })
+
+  it("gives copyable requests naming what each administrator runs and sends back", () => {
+    const entra = readerEntraRequest("./New-TenuVaultBackupReader.ps1 -CertificatePath <exported .cer>", false)
+    expect(entra).toContain("public certificate only")
+    expect(entra).toContain("application (client) ID and certificate thumbprint")
+    expect(entra).toContain("https://docs.tenuvault.com/backups/backup-reader/")
+    expect(readerEntraRequest("x", true)).toContain("renewal certificate")
+    const azure = readerAzureRequest("./New-TenuVaultStorage.ps1 -X", "contosobackups")
+    expect(azure).toContain("storage account contosobackups")
+    expect(azure).toContain("without delete access")
+  })
+
+  it("maps known failures to the right colleague and docs page, and defaults to wait and retry", () => {
+    expect(readerErrorGuidance("Microsoft refused the Backup Reader (AADSTS700027).").hint).toContain("Entra administrator")
+    expect(readerErrorGuidance("Microsoft refused the Backup Reader (AADSTS7000222).").url).toContain("#renew-the-certificate")
+    expect(readerErrorGuidance("The Backup Reader's Microsoft Graph permissions changed since they were verified.").hint).toContain("Do not verify a change nobody recognizes")
+    expect(readerErrorGuidance("The Backup Reader works for Microsoft Graph, but cannot write backups to x.").hint).toContain("Azure administrator")
+    expect(readerErrorGuidance("Something else.").url).toContain("#troubleshooting")
+  })
+
+  it("suggests the reader only for session-control sign-in endings, not ordinary prompts", () => {
+    expect(suggestsBackupReader("Microsoft needs you to sign in again (AADSTS70044).")).toBe(true)
+    expect(suggestsBackupReader("You are not signed in to this tenant.")).toBe(false)
+    expect(suggestsBackupReader("Grant consent to continue.")).toBe(false)
   })
 })
