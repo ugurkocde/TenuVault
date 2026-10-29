@@ -14,6 +14,8 @@
         account to one security group, so every admin in that group can pick the account
         in TenuVault and store backups in it
       * optionally restricts the storage firewall to named public IP addresses
+      * optionally lets the read-only Backup Reader (New-TenuVaultBackupReader.ps1) write
+        scheduled backups, without permission to delete or create containers
 
     Running the script again with the same parameters changes nothing that already
     matches. The script needs Az.Accounts, Az.Resources and Az.Storage and an account
@@ -57,8 +59,27 @@
     are left unchanged: a new account then accepts all networks, with Entra sign-in
     plus the roles above as the only gate.
 
+.PARAMETER BackupReaderAppId
+    Application (client) ID of the TenuVault Backup Reader. When set, the script also:
+      * creates the backup container "intune-backups" (the reader cannot create it)
+      * creates the custom role "TenuVault Backup Writer" (read and write blobs, no delete)
+        and assigns it to the Backup Reader on that container only
+      * turns on blob versioning, so a blob the reader overwrites keeps its previous version,
+        and adds a lifecycle rule that removes previous versions after -VersionRetentionDays
+    The reader never deletes backups. Retention runs on the next backup made with an admin's
+    sign-in. This needs Owner, or Contributor plus User Access Administrator, on the resource
+    group: User Access Administrator covers the custom role and its assignment, Contributor
+    covers the container, versioning and lifecycle rule.
+
+.PARAMETER VersionRetentionDays
+    Days previous blob versions are kept before the lifecycle rule removes them. Only with
+    -BackupReaderAppId. Default: 30.
+
 .EXAMPLE
     ./New-TenuVaultStorage.ps1 -AdminGroupId 5f0c... -Location westeurope
+
+.EXAMPLE
+    ./New-TenuVaultStorage.ps1 -AdminGroupId 5f0c... -BackupReaderAppId 4f1e...
 
 .EXAMPLE
     ./New-TenuVaultStorage.ps1 -AdminGroupId 5f0c... -Location westeurope -Sku Standard_GRS -AllowIpAddresses 203.0.113.10
@@ -72,7 +93,9 @@ param(
     [string]$StorageAccountName,
     [ValidateSet("Standard_LRS", "Standard_GRS", "Standard_RAGRS", "Standard_ZRS", "Standard_GZRS")]
     [string]$Sku = "Standard_LRS",
-    [string[]]$AllowIpAddresses
+    [string[]]$AllowIpAddresses,
+    [string]$BackupReaderAppId,
+    [ValidateRange(1, 3650)][int]$VersionRetentionDays = 30
 )
 
 $ErrorActionPreference = "Stop"
@@ -81,6 +104,9 @@ $ErrorActionPreference = "Stop"
 # half configured account behind (for example a deny-all firewall with no rules).
 if ($AdminGroupId -notmatch '^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$') {
     throw "'$AdminGroupId' is not a group object id. Pass the object (principal) id of the Intune admin security group."
+}
+if ($BackupReaderAppId -and $BackupReaderAppId -notmatch '^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') {
+    throw "'$BackupReaderAppId' is not an application (client) id. Pass the id New-TenuVaultBackupReader.ps1 printed."
 }
 # Storage firewall rules accept public IPv4 addresses only: no IPv6, no private
 # (RFC 1918) ranges, and no /31 or /32 CIDR (use the individual address instead).
@@ -228,6 +254,83 @@ foreach ($role in "Reader", "Storage Blob Data Contributor") {
     }
 }
 
+$readerText = $null
+if ($BackupReaderAppId) {
+    $reader = Get-AzADServicePrincipal -ApplicationId $BackupReaderAppId
+    if (-not $reader) { throw "No service principal for application $BackupReaderAppId exists in this tenant. Run New-TenuVaultBackupReader.ps1 first." }
+    $container = "intune-backups"
+    if (-not (Get-AzRmStorageContainer -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -Name $container -ErrorAction SilentlyContinue)) {
+        Write-Host "Creating the backup container '$container'..."
+        if ($PSCmdlet.ShouldProcess($StorageAccountName, "Create container $container")) {
+            New-AzRmStorageContainer -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -Name $container | Out-Null
+        }
+    }
+
+    # Write without delete: a stolen Backup Reader certificate cannot remove backups, and versioning
+    # keeps what it overwrites. Custom roles are assignable at resource group scope at the narrowest.
+    $roleName = "TenuVault Backup Writer"
+    $groupScope = $resourceGroup.ResourceId
+    $dataActions = @(
+        "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+        "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
+        "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/add/action"
+    )
+    $role = Get-AzRoleDefinition -Name $roleName -ErrorAction SilentlyContinue
+    if (-not $role) {
+        Write-Host "Creating the custom role '$roleName' (read and write blobs, no delete)..."
+        if ($PSCmdlet.ShouldProcess($groupScope, "Create custom role $roleName")) {
+            $definition = [Microsoft.Azure.Commands.Resources.Models.Authorization.PSRoleDefinition]::new()
+            $definition.Name = $roleName
+            $definition.Description = "TenuVault Backup Reader: writes scheduled backups. Cannot delete blobs, blob versions or containers."
+            $definition.IsCustom = $true
+            $definition.Actions = @()
+            $definition.DataActions = $dataActions
+            $definition.AssignableScopes = @($groupScope)
+            $role = New-AzRoleDefinition -Role $definition
+        }
+    } else {
+        $extra = @($role.DataActions | Where-Object { $dataActions -notcontains $_ }) + @($role.Actions)
+        if ($extra) { throw "The existing role '$roleName' allows more than writing backups ($($extra -join ', ')). Remove those permissions or delete the role, then run the script again." }
+        if ($role.AssignableScopes -notcontains $groupScope -and $PSCmdlet.ShouldProcess($roleName, "Allow assignments in $ResourceGroupName")) {
+            $role.AssignableScopes.Add($groupScope)
+            $role = Set-AzRoleDefinition -Role $role
+        }
+    }
+
+    $containerScope = "$($account.Id)/blobServices/default/containers/$container"
+    if ($role) {
+        $existing = Get-AzRoleAssignment -ObjectId $reader.Id -RoleDefinitionName $roleName -Scope $containerScope -ErrorAction SilentlyContinue | Where-Object { $_.Scope -eq $containerScope }
+        if (-not $existing -and $PSCmdlet.ShouldProcess($containerScope, "Assign '$roleName' to the Backup Reader")) {
+            Write-Host "Assigning '$roleName' to the Backup Reader on the container..."
+            New-AzRoleAssignment -ObjectId $reader.Id -RoleDefinitionName $roleName -Scope $containerScope | Out-Null
+        }
+    }
+    # Broader roles would let a stolen certificate delete backups; they are reported, not removed.
+    $broader = Get-AzRoleAssignment -ObjectId $reader.Id -Scope $account.Id -ErrorAction SilentlyContinue | Where-Object { $_.RoleDefinitionName -ne $roleName }
+    foreach ($assignment in $broader) {
+        Write-Warning "The Backup Reader also has '$($assignment.RoleDefinitionName)' at $($assignment.Scope). Remove it so the reader cannot delete backups."
+    }
+
+    $blobService = Get-AzStorageBlobServiceProperty -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName
+    if (-not $blobService.IsVersioningEnabled -and $PSCmdlet.ShouldProcess($StorageAccountName, "Enable blob versioning")) {
+        Write-Host "Turning on blob versioning..."
+        Update-AzStorageBlobServiceProperty -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -IsVersioningEnabled $true | Out-Null
+    }
+    # Only previous versions age out; current backups are never deleted by the lifecycle rule.
+    $ruleName = "tenuvault-previous-versions"
+    $policy = Get-AzStorageAccountManagementPolicy -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -ErrorAction SilentlyContinue
+    $rules = @($policy.Rules | Where-Object { $_.Name -ne $ruleName })
+    $current = $policy.Rules | Where-Object { $_.Name -eq $ruleName }
+    if ((-not $current -or $current.Definition.Actions.Version.Delete.DaysAfterCreationGreaterThan -ne $VersionRetentionDays) -and
+        $PSCmdlet.ShouldProcess($StorageAccountName, "Remove previous blob versions after $VersionRetentionDays days")) {
+        $action = Add-AzStorageAccountManagementPolicyAction -BlobVersionAction Delete -DaysAfterCreationGreaterThan $VersionRetentionDays
+        $filter = New-AzStorageAccountManagementPolicyFilter -PrefixMatch "$container/" -BlobType blockBlob
+        $rules += New-AzStorageAccountManagementPolicyRule -Name $ruleName -Action $action -Filter $filter
+        Set-AzStorageAccountManagementPolicy -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -Rule $rules | Out-Null
+    }
+    $readerText = "can write to '$container' but not delete; versioning on, previous versions kept $VersionRetentionDays days"
+}
+
 # Read the final firewall state so a rerun without -AllowIpAddresses still reports a
 # restriction an earlier run put in place.
 $networkRules = Get-AzStorageAccountNetworkRuleSet -ResourceGroupName $ResourceGroupName -Name $StorageAccountName
@@ -252,6 +355,7 @@ Write-Host "  Storage account:  $StorageAccountName"
 Write-Host "  Resource group:   $ResourceGroupName"
 Write-Host "  Region:           $($account.Location)"
 Write-Host "  Firewall:         $firewallText"
+if ($readerText) { Write-Host "  Backup Reader:    $readerText" }
 Write-Host ""
 Write-Host "New role assignments can take a few minutes to apply. The assignments must stay permanently"
 Write-Host "active: a PIM eligible assignment that nobody activated makes scheduled backups fail."

@@ -27,6 +27,7 @@ Eligible nonprofits can use Pro at no cost. Email [support@ugurlabs.com](mailto:
 | Manual backups | Yes | Yes | Yes |
 | Weekly scheduled backups | Yes | Yes | Yes |
 | Daily scheduled backups | | Yes | Yes |
+| [Backup Reader](/backups/backup-reader/): scheduled backups that keep running when sign-in frequency ends your session | | Yes | Yes |
 | Backups encrypted on this device | Yes | Yes | Yes |
 | Backups in your own Azure storage account | | Yes | Yes |
 | Backup history | Up to 30 days | 7 days to 365 days, or forever | 7 days to 365 days, or forever |
@@ -69,7 +70,7 @@ Actions across several tenants need the MSP plan on every tenant they touch.
 
 ## What Pro adds
 
-Pro covers two tenants and includes daily scheduled backups, custom backup history, your own Azure storage, restoring several items at once, replacing items in place, restoring assignments, reverting drifted policies and the audit log. It also includes dashboard baseline scores, the policy conflict and hygiene explorer, baseline upgrades that keep your customizations, Dev to Prod settings promotion, scheduled health reviews, organization customizations, custom baselines and full white-label PDF reports with your logo and colors. CIS assessments and reports are included in Pro and MSP when they become available. Community keeps its existing backup, restore, drift, OpenIntuneBaseline and non-CIS framework features.
+Pro covers two tenants and includes daily scheduled backups, the optional [Backup Reader](/backups/backup-reader/) for scheduled backups under strict Conditional Access, custom backup history, your own Azure storage, restoring several items at once, replacing items in place, restoring assignments, reverting drifted policies and the audit log. It also includes dashboard baseline scores, the policy conflict and hygiene explorer, baseline upgrades that keep your customizations, Dev to Prod settings promotion, scheduled health reviews, organization customizations, custom baselines and full white-label PDF reports with your logo and colors. CIS assessments and reports are included in Pro and MSP when they become available. Community keeps its existing backup, restore, drift, OpenIntuneBaseline and non-CIS framework features.
 
 ## How tenants are counted
 

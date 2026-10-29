@@ -40,7 +40,28 @@ The script prints the storage account name when it finishes. Running it again wi
 | Soft delete | 7 days for blobs and containers | Undo window for accidental deletion, separate from TenuVault retention |
 | Roles for the admin group | **Reader** and **Storage Blob Data Contributor** on the storage account | Reader makes the account appear in the TenuVault storage picker; Storage Blob Data Contributor reads and writes the backup files |
 
-TenuVault itself creates the `intune-backups` and `audit-logs` containers on first use. For what they hold, see [What is stored in the storage account](/backups/storage/#what-is-stored-in-the-storage-account).
+TenuVault itself creates the `intune-backups` and `audit-logs` containers on first use, with one exception: the optional Backup Reader cannot create containers, so with `-BackupReaderAppId` the script creates `intune-backups` for it (see below). For what they hold, see [What is stored in the storage account](/backups/storage/#what-is-stored-in-the-storage-account).
+
+## Optional: let the Backup Reader write backups
+
+This section is only for tenants that use the optional [Backup Reader](/backups/backup-reader/) (Pro and MSP): a separate, read-only app registration that keeps scheduled backups running when Conditional Access sign-in frequency ends the admin's session. The Intune administrator will ask you for this after an Entra administrator has created the reader, and will give you its **application (client) ID**. Run the Backup Reader setup first; without the app registration there is nothing to assign the role to, and the script stops with that message.
+
+You need **Owner**, or **Contributor** plus **User Access Administrator**, on the storage account's resource group, the same roles as for the rest of the script. User Access Administrator alone is not enough: it covers creating the custom role definition and assigning it, but creating the container, turning on versioning and setting the lifecycle rule are storage management operations that need Contributor (or Owner, which includes both). If you use PIM, activate the roles before you run the script.
+
+```powershell
+./New-TenuVaultStorage.ps1 -AdminGroupId 00000000-0000-0000-0000-000000000000 -SubscriptionId <subscription ID> -ResourceGroupName <resource group> -StorageAccountName <storage account> -BackupReaderAppId <application ID from the Intune administrator>
+```
+
+With `-BackupReaderAppId`, the script additionally:
+
+* Creates the `intune-backups` container (the reader itself cannot create containers).
+* Creates the custom role **TenuVault Backup Writer** (read and write blobs, no delete, no container management) and assigns it to the Backup Reader on that container only. The assignment is direct and permanent: the reader runs at night with nobody there to activate an eligible assignment.
+* Turns on blob versioning, so a blob the reader overwrites keeps its previous version, and adds a lifecycle rule that removes only those previous versions after 30 days (`-VersionRetentionDays`). Current backups are never removed by that rule. This one rule is the exception to [Settings that conflict with TenuVault](#settings-that-conflict-with-tenuvault); do not add rules that touch current backups.
+* Warns, but does not remove, broader roles the reader may already have on the storage account. A broader role such as Storage Blob Data Contributor would let it delete backups, which defeats the design. Remove such assignments for the reader yourself.
+
+Check afterwards in the portal: the container exists, its **Access Control (IAM)** shows only **TenuVault Backup Writer** for the Backup Reader, **Data protection** shows versioning on, and **Networking** allows the network the TenuVault computers use (the reader connects from the same computers). New role assignments can take a few minutes to apply.
+
+Then tell the Intune administrator you are done. They select **Verify** in TenuVault, which checks the container and the reader's access. Because the reader cannot delete, TenuVault retention for Azure backups runs on the next backup an admin makes with their own sign-in; see [Retention](/backups/storage/#retention). To undo this later, remove the **TenuVault Backup Writer** assignment (and the custom role definition, if you want) and tell the Intune administrator, who removes the reader in TenuVault.
 
 ## Create the storage account manually
 

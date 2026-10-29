@@ -32,6 +32,8 @@ The user is the admin signed in to the tenant when the action ran. Read-only dri
 
 :::note
 Automatic backups that TenuVault refused to run because of the license are not in the audit log, because the tenant's storage is not opened without a license. They are listed on the **Schedule** tab. See [Schedule backups](/backups/schedules/#license-and-plan-checks).
+
+Scheduled backups made by the optional [Backup Reader](/backups/backup-reader/) also add no entry here: the audit log is written with an admin's sign-in, and a Backup Reader run has none. Those runs are recorded in the backup's own metadata (`Trigger`, `AuthMode`, `RunId`). Their token requests can also appear in Entra ID under **Service principal sign-ins**, grouped and not one per backup (a cached token can serve several runs), so use the backup metadata to confirm a specific run.
 :::
 
 ## Where the log is stored

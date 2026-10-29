@@ -13,13 +13,23 @@ export interface GraphReader {
   list: (path: string) => Promise<Item[]>
 }
 
+export interface ReadOptions {
+  /**
+   * Backup only, never restore: whether a refused plain-text read of a masked value keeps it masked
+   * (****) instead of failing the object. The Backup Reader may read encrypted OMA-URI settings but
+   * not decrypt them, which Microsoft allows only with write permission. A masked snapshot is never
+   * restorable (see the registry's restorable checks), so it can only record that the value exists.
+   */
+  keepMasked?: (error: unknown) => boolean
+}
+
 export function detailPath(type: IntuneType, id: string): string {
   if (type.singleton) return type.path
   const query = [type.expand && `$expand=${type.expand}`, type.select && `$select=${type.select}`].filter(Boolean).join("&")
   return `${type.path}/${encodeURIComponent(id)}${query ? `?${query}` : ""}`
 }
 
-export async function readObject(type: IntuneType, id: string, graph: GraphReader): Promise<Item> {
+export async function readObject(type: IntuneType, id: string, graph: GraphReader, options: ReadOptions = {}): Promise<Item> {
   const detail = await graph.get(detailPath(type, id))
   if (type.singleton) return singletonSnapshot(type.singleton, detail)
   // Large expanded collections (such as Settings Catalog settings) page like lists.
@@ -52,12 +62,37 @@ export async function readObject(type: IntuneType, id: string, graph: GraphReade
     detail[extra.property] = entries
   }
   for (const secret of type.secrets?.(detail) ?? []) {
-    const plain = await graph.get(secret.path)
+    let plain: Item
+    try {
+      plain = await graph.get(secret.path)
+    } catch (error) {
+      if (!options.keepMasked?.(error)) throw error
+      secret.apply(MASKED_VALUE)
+      continue
+    }
     if (typeof plain.value !== "string") throw new Error("Microsoft Graph did not return an encrypted setting's value")
     secret.apply(plain.value)
   }
   delete detail["@odata.context"]
   return detail
+}
+
+/** How Microsoft Graph shows an encrypted value it does not return in plain text. */
+export const MASKED_VALUE = "****"
+
+/**
+ * The snapshot as a read that could not decrypt its masked values would store it, or null for a type
+ * without masked values. Backups fingerprint it so a snapshot with **** and one with the plain value
+ * compare as the same object.
+ */
+export function withMaskedSecrets(type: IntuneType, snapshot: Item): Item | null {
+  // Only objects with encrypted values are copied; finding them does not change the snapshot.
+  if (!type.secrets?.(snapshot).length) return null
+  const copy = structuredClone(snapshot)
+  const secrets = type.secrets(copy)
+  if (!secrets.length) return null
+  for (const secret of secrets) secret.apply(MASKED_VALUE)
+  return copy
 }
 
 /** A tenant-wide object under its stored ID, with only the properties its type keeps (see IntuneType.singleton). */

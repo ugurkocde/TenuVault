@@ -19,7 +19,9 @@ runs the scheduler during brief network-upkeep wakes in which every request time
 is notified and audited once per slot. Microsoft
 credentials, current plan entitlement and the configured storage must remain available. Expired
 sessions requiring interaction fail with a sign-in request; no OS task bypasses Conditional Access,
-MFA, licensing, or encryption.
+MFA, licensing, or encryption. A tenant with a verified Backup Reader (Pro and MSP) reads scheduled backups
+app-only instead: a separate read-only app registration with a certificate in the encrypted token store. Only
+`trigger: "scheduled"` uses it; tray, manual and every write stay delegated (src/main/auth/backup-reader.ts).
 
 The launcher does not run while logged off, asleep or powered off. After restart it resumes when the
 same user logs in. It does not provide a headless service identity or guaranteed execution at an exact

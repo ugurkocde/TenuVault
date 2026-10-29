@@ -76,6 +76,8 @@ If the check fails, TenuVault explains why:
 
 Backup file contents are encrypted before upload. Blob names, which include the type and the object's display name, are not encrypted, so anyone who can list the container can see them. Audit log events are stored as plain JSON.
 
+With the optional [Backup Reader](/backups/backup-reader/), scheduled backups write to `intune-backups` as that read-only app instead of as you. An Azure administrator grants it the custom **TenuVault Backup Writer** role on this container only (read and write, no delete, no container creation) and turns on blob versioning; see [Let the Backup Reader write backups](/getting-started/create-storage-account/#optional-let-the-backup-reader-write-backups). Backup Reader runs write nothing to `audit-logs`; see [Audit log](/audit-log/).
+
 ## Change where a tenant's backups go
 
 1. Open **Settings** and go to the **Sign-in** section.
@@ -98,6 +100,7 @@ The default is 30 days. The setting applies to every tenant on this computer. Th
 
 How retention works:
 
+* In Azure storage, a scheduled backup made by the [Backup Reader](/backups/backup-reader/) deletes nothing, because the reader has no delete permission. Expired backups stay until the next backup made with an admin's own sign-in, which then applies retention to all of the tenant's backups with the usual protections. Backups stored on this device are unaffected and follow retention on every run.
 * Old backups are deleted at the end of each backup that saved every selected policy. A backup that failed or left policies unsaved deletes nothing: "Older backups were kept because this backup is incomplete." Cleanup itself can add a warning: if the metadata of an older backup cannot be decrypted, that backup and any backup without a recorded tenant are kept, while other eligible backups are still removed.
 * The backup that just finished is never deleted, so at least the newest backup is always kept.
 * A backup that left out some types never removes the newest complete copy of those types. For example, if your daily backups leave out apps, the newest backup that includes apps and finished without warnings is kept even after it ages out. A backup that finished with warnings may miss items, so it does not count as holding the newest copy. The log says "Kept N older backup(s) because they hold the newest copy of types this backup leaves out."

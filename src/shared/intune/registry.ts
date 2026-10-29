@@ -254,7 +254,7 @@ const CATEGORY_REF = (categoryId: string) => `https://graph.microsoft.com/beta/d
 /** The only properties Graph lets a PATCH change on AOSP profiles; null is rejected for them. */
 const AOSP_PATCHABLE = ["displayName", "description", "wifiSsid", "wifiPassword", "wifiSecurityType", "wifiHidden", "deviceNameTemplate"]
 
-const MASKED_SECRET = "This backup holds a masked OMA-URI value (****). Create a new backup to restore it; restoring would send **** to devices."
+const MASKED_SECRET = "This backup holds a masked OMA-URI value (****). Create a new manual backup to restore it; restoring would send **** to devices."
 const hasMaskedSecret = (item: Item) => collection(item.omaSettings).some((setting) => setting.isEncrypted === true && setting.value === "****")
 
 /** Dependencies and superseded apps an app points to, in the shape updateRelationships expects. */

@@ -120,11 +120,19 @@ The state appears beside the install or remove button:
 
 While a change is running, the button shows **Installing...** or **Removing...** and is disabled.
 
-The background runner only helps while you are signed in to the computer. It does not run while you are signed out, or while the computer is asleep or off, and it does not wake the computer. Backups still need a valid Microsoft sign-in, plan access and available storage. The button is disabled with **Available in installed Windows and macOS builds.** when TenuVault is not an installed build.
+The background runner only helps while you are signed in to the computer. It does not run while you are signed out, or while the computer is asleep or off, and it does not wake the computer. Backups still need a valid Microsoft sign-in (or a verified [Backup Reader](#backup-reader) for scheduled backups), plan access and available storage. The button is disabled with **Available in installed Windows and macOS builds.** when TenuVault is not an installed build.
 
 Backups need an awake computer and a signed in session. Locking the screen does not sign you out; closing a laptop lid may put it to sleep.
 
 To stop automatic restarts completely, select **Remove background launch** and turn off start at login before you quit TenuVault. If you move the app, install the background runner again.
+
+### Backup Reader
+
+Below the background runner card, the **Backup Reader** card sets up the optional read-only identity that keeps scheduled backups running when a Conditional Access sign-in frequency policy ends your Microsoft session. It is available on Pro and MSP in the installed Windows and macOS apps, per tenant and per computer. When several tenants are connected, a **Tenant** selector appears at the top of the card.
+
+Setup cannot be finished in the app alone: an Entra administrator creates the app registration with a script, and for Azure backups an Azure administrator grants the storage role. The card walks through your half in order (**Set up the Backup Reader**, **Save certificate**, **Copy setup script**, enter the application ID, **Verify**) and afterwards shows the application ID, certificate expiry and verified permissions, with **Renew certificate**, **Verify again** and **Remove**. From 30 days before the certificate expires, the card shows a warning.
+
+See [Backup Reader for scheduled backups](/backups/backup-reader/) for who has to do what, the exact permissions, and how these backups differ. For the options that need no application permissions, see [Conditional Access and TenuVault](/security/conditional-access/).
 
 ### Menu bar and tray options
 

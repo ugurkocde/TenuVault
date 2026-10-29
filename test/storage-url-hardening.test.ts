@@ -1,9 +1,10 @@
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { blobPath, isGraphId, isGuid, isSafeArchivePath } from '../src/shared/security'
+import { assertStorageAccountName } from '../src/shared/storage-account'
 import { resolveStep } from '../src/shared/intune/restore-plan'
 import { readObject } from '../src/shared/intune/read'
 import { typeForFolder, type Item, type Step } from '../src/shared/intune/registry'
@@ -72,6 +73,20 @@ describe('shared path helpers', () => {
   it('accepts only relative archive paths without dot segments', () => {
     for (const name of ['DeviceConfigurations/A.json', 'metadata.json', 'Folder/Policy..v2.json']) expect(isSafeArchivePath(name)).toBe(true)
     for (const name of ['../evil.json', 'a/../../evil.json', 'a\\..\\evil.json', '/etc/passwd', '\\\\server\\share', 'C:/Windows/evil.dll', 'c:evil', './a', '']) expect(isSafeArchivePath(name)).toBe(false)
+  })
+})
+
+describe('storage account names in credential-bearing URLs', () => {
+  it.each(['store', 'contoso123'])('accepts the Azure account name %s', (name) => expect(() => assertStorageAccountName(name)).not.toThrow())
+  it.each(['evil.example#', 'evil.example', 'a_b', 'Store', 'ab', '', 'a'.repeat(25), 42, undefined])('rejects %s before it can become a URL host', (name) => {
+    expect(() => assertStorageAccountName(name)).toThrow('Invalid storage account name.')
+  })
+  it('validates the account name in the Backup Reader storage check before the reader token is used', () => {
+    const main = readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8')
+    const check = main.slice(main.indexOf('const checkReaderStorage'), main.indexOf('const requireReaderPlan'))
+    expect(check.indexOf('assertStorageAccountName(profile.storageAccountName)')).toBeGreaterThan(-1)
+    expect(check.indexOf('assertStorageAccountName(profile.storageAccountName)')).toBeLessThan(check.indexOf('await tokens.storage()'))
+    expect(check.indexOf('assertStorageAccountName(profile.storageAccountName)')).toBeLessThan(check.indexOf('blob.core.windows.net'))
   })
 })
 

@@ -26,6 +26,7 @@ import { tenantPlan, useLicense } from "../lib/license"
 import { parseSettingsSection, settingsHref, type SettingsSectionId } from "../lib/settings-section"
 import { PlanBadge } from "../components/UpgradeNote"
 import { PdfBrandingSettings } from "../components/PdfBrandingSettings"
+import { BackupReaderSettings } from "../components/BackupReaderSettings"
 import { NotificationsPanel } from "../features/notifications/NotificationsPanel"
 import { useConfirm } from "~/components/ConfirmDialog"
 
@@ -871,7 +872,7 @@ export default function SettingsPage() {
         <div className="min-w-0 w-full max-w-5xl flex-1">
           {panel("signin", <TenantSettings active={section === "signin"} />)}
           {panel("storage", <div className="space-y-6"><BackupsOnDevice /><RestoreWrites active={section === "storage"} /></div>)}
-          {panel("background", <BackgroundAndRetention />)}
+          {panel("background", <div className="space-y-6"><BackgroundAndRetention /><BackupReaderSettings /></div>)}
           {panel("notifications", <NotificationSettings active={section === "notifications"} />)}
           {panel("branding", <PdfBrandingSettings />)}
           {panel("updates", <Updates />)}

@@ -203,7 +203,8 @@
       <div class="card">
         <h3>Delegated access, admin in control</h3>
         <p>Every call runs as the signed-in admin and is limited by their Intune role. Changes to Intune happen only
-          when an admin starts a restore, a drift revert, a baseline deployment or its undo.</p>
+          when an admin starts a restore, a drift revert, a baseline deployment or its undo. An optional, separate
+          read-only Backup Reader can run scheduled backups only; it cannot change Intune or delete backups.</p>
       </div>
       <div class="card">
         <h3>Backups stay with you</h3>
@@ -358,6 +359,8 @@
       </tbody>
     </table>
     <p class="note">Plus openid, profile and offline_access. No application permissions, no client secret, no certificate.
+      Only if you add the optional Backup Reader for scheduled backups, a second app registration has read-only
+      application permissions and a certificate whose private key stays on the TenuVault computer.
       Consent is tenant-wide and tokens carry all consented scopes. Intune calls use Graph beta; the tenant overview also
       uses v1.0. Write scopes exist for restore; Microsoft enforces the admin's Intune role and scope tags on every call.</p>
 
