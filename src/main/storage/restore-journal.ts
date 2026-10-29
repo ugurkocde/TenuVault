@@ -7,7 +7,20 @@ export function setRestoreJournalStore(value: KeyValueStore): void { store = val
 export function writeKey(tenant: string, method: string, path: string, body: unknown): string {
   return createHash('sha256').update(JSON.stringify([tenant.toLowerCase(), method, path, body])).digest('hex')
 }
-export function writeRecords(): WriteRecord[] { return JSON.parse(store.get('restore.write-journal') ?? '[]') as WriteRecord[] }
+const JOURNAL_KEY = 'restore.write-journal'
+export function writeRecords(): WriteRecord[] {
+  const raw = store.get(JOURNAL_KEY)
+  if (!raw) return []
+  let parsed: unknown
+  try { parsed = JSON.parse(raw) } catch { parsed = null }
+  if (Array.isArray(parsed)) return parsed as WriteRecord[]
+  // An unreadable journal must not throw a raw parse error into every restore, and must not
+  // be silently overwritten either: the raw value is set aside so it can still be recovered.
+  store.set(`${JOURNAL_KEY}.unreadable.${Date.now()}`, raw)
+  store.delete(JOURNAL_KEY)
+  console.warn('[restore-journal] Set aside an unreadable write journal.')
+  return []
+}
 export function saveWrite(record: WriteRecord): void {
   const entries = writeRecords().filter(entry => entry.key !== record.key)
   if (entries.length >= 1000) {
@@ -16,9 +29,9 @@ export function saveWrite(record: WriteRecord): void {
     entries.splice(index, 1)
   }
   entries.push(record)
-  store.set('restore.write-journal', JSON.stringify(entries))
+  store.set(JOURNAL_KEY, JSON.stringify(entries))
 }
-export function removeWrite(key: string): void { store.set('restore.write-journal', JSON.stringify(writeRecords().filter(entry => entry.key !== key))) }
+export function removeWrite(key: string): void { store.set(JOURNAL_KEY, JSON.stringify(writeRecords().filter(entry => entry.key !== key))) }
 
 let authorize: ((tenantId: string) => Promise<void>) | undefined
 export function setRestoreJournalAuthorization(value: (tenantId: string) => Promise<void>): void { authorize = value }

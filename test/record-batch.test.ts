@@ -35,6 +35,32 @@ it('persists a 300-finding batch across domains with one encryption and no delay
   expect(records.list(DOMAINS.healthFindings, TENANT_A)).toHaveLength(300)
 })
 
+it('sets unreadable stored records aside instead of overwriting them on the next write', () => {
+  const store = memoryStore()
+  const key = `records.v1.${DOMAINS.healthFindings}.${TENANT_A.toLowerCase()}`
+  store.set(key, '{truncated')
+  const records = new TenantRecords(store)
+  records.create(DOMAINS.healthFindings, TENANT_A, { number: 1 }, meta)
+  expect(records.list(DOMAINS.healthFindings, TENANT_A)).toHaveLength(1)
+  const aside = [...store.values.entries()].filter(([name]) => name.startsWith(`${key}.unreadable.`))
+  expect(aside).toHaveLength(1)
+  expect(aside[0]![1]).toBe('{truncated')
+})
+
+it('sets a stored value that is not a record list aside', () => {
+  const store = memoryStore()
+  const key = `records.v1.${DOMAINS.healthFindings}.${TENANT_A.toLowerCase()}`
+  store.set(key, '{"not":"a list"}')
+  const records = new TenantRecords(store)
+  expect(records.list(DOMAINS.healthFindings, TENANT_A)).toEqual([])
+  const aside = [...store.values.entries()].filter(([name]) => name.startsWith(`${key}.unreadable.`))
+  expect(aside).toHaveLength(1)
+  expect(aside[0]![1]).toBe('{"not":"a list"}')
+  // Reading again does not set aside another copy.
+  expect(records.list(DOMAINS.healthFindings, TENANT_A)).toEqual([])
+  expect([...store.values.keys()].filter((name) => name.includes('.unreadable.'))).toHaveLength(1)
+})
+
 it('refuses a multi-key batch before writing when the store has no atomic setMany', () => {
   const values = new Map<string, string>()
   const store = { get: (key: string) => values.get(key) ?? null, set: vi.fn((key: string, value: string) => { values.set(key, value) }), delete: (key: string) => { values.delete(key) } }
