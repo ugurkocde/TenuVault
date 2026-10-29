@@ -14,7 +14,7 @@
         given with -AppId or found by name
       * sets its Microsoft Graph application permissions to exactly the read permissions below
         and removes any other permission granted to it, so it can never change Intune
-      * uploads the certificate exported from TenuVault (Settings > Backup Reader); the private
+      * uploads the certificate exported from TenuVault (Settings > Background runner > Backup Reader); the private
         key never leaves the computer that runs TenuVault
       * grants admin consent for those permissions
 
@@ -72,14 +72,14 @@ param(
 $ErrorActionPreference = "Stop"
 
 # Validate the certificate before the first Graph call, so a wrong file changes nothing.
-if (-not (Test-Path -LiteralPath $CertificatePath)) { throw "Certificate file '$CertificatePath' was not found. Export it in TenuVault > Settings > Backup Reader." }
+if (-not (Test-Path -LiteralPath $CertificatePath)) { throw "Certificate file '$CertificatePath' was not found. Export it in TenuVault > Settings > Background runner > Backup Reader." }
 try {
     $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new((Resolve-Path -LiteralPath $CertificatePath).Path)
 } catch {
-    throw "'$CertificatePath' is not a certificate file. Export it in TenuVault > Settings > Backup Reader. $($_.Exception.Message)"
+    throw "'$CertificatePath' is not a certificate file. Export it in TenuVault > Settings > Background runner > Backup Reader. $($_.Exception.Message)"
 }
 if ($certificate.HasPrivateKey) { throw "'$CertificatePath' contains a private key. Upload only the certificate TenuVault exports; the private key must stay on the TenuVault computer." }
-if ($certificate.NotAfter -le (Get-Date)) { throw "The certificate expired on $($certificate.NotAfter). Create a new one in TenuVault > Settings > Backup Reader." }
+if ($certificate.NotAfter -le (Get-Date)) { throw "The certificate expired on $($certificate.NotAfter). Create a new one in TenuVault > Settings > Background runner > Backup Reader." }
 if ($AppId -and $AppId -notmatch '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') { throw "-AppId must be an application (client) ID." }
 $thumbprint = $certificate.Thumbprint
 
@@ -234,7 +234,7 @@ if ($WhatIfPreference) {
     Write-Host "What if: no changes were made." -ForegroundColor Yellow
     return
 }
-Write-Host "Done. In TenuVault > Settings > Backup Reader, enter this application ID and select Verify:" -ForegroundColor Green
+Write-Host "Done. In TenuVault > Settings > Background runner > Backup Reader, enter this application ID and select Verify:" -ForegroundColor Green
 Write-Host "  Tenant id:                $($context.TenantId)"
 Write-Host "  Application (client) id:  $($app.AppId)"
 Write-Host "  Certificate thumbprint:   $thumbprint"

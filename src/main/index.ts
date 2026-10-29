@@ -540,8 +540,8 @@ async function bootstrap(): Promise<void> {
       new Notification({
         title: `Backup Reader certificate of ${name} expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`,
         body: reader.renewalPending
-          ? "A renewal certificate is waiting: upload it with the setup script, then verify it in Settings > Background."
-          : "Renew it in Settings > Background so scheduled backups keep running without your sign-in.",
+          ? "A renewal certificate is waiting: upload it with the setup script, then verify it in Settings > Background runner."
+          : "Renew it in Settings > Background runner so scheduled backups keep running without your sign-in.",
       }).show()
     }
   }
@@ -698,7 +698,7 @@ async function bootstrap(): Promise<void> {
     applyPreferences(preferences.set(rest))
     return currentPreferences()
   })
-  // The Backup Reader is set up per tenant in Settings > Background. Scheduled backups only run in the
+  // The Backup Reader is set up per tenant in Settings > Background runner. Scheduled backups only run in the
   // installed Windows and macOS apps, so it is not offered elsewhere.
   const readerSupported = process.platform === "win32" || process.platform === "darwin"
   const readerState = (tenantId: string) => {

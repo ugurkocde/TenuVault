@@ -11,7 +11,7 @@ faq:
   - question: "Are Windows update rings included?"
     answer: "Yes. Update rings are device configuration profiles, so they are backed up with Device configuration."
   - question: "Why are some types missing from a backup?"
-    answer: "TenuVault skips types it is denied access to, for example when the app registration lacks a permission or its admin consent, or when your Intune role excludes the type. The backup log and Backup Details say which types were skipped."
+    answer: "TenuVault skips types it is denied access to, for example when the app registration lacks a permission or its admin consent, or when your Intune role excludes the type. A scheduled backup made by the optional Backup Reader also leaves out device categories and device clean-up rules unless the reader has the optional device inventory permission. The backup log and Backup Details say which types were skipped."
 ---
 
 TenuVault backs up 40 Intune object types in nine areas. Each object is saved as it is in Microsoft Graph (beta), with its settings and, where Intune has them, its assignments.
@@ -28,7 +28,7 @@ The area and type names below are the ones the **Back up** dialog shows under **
 
 | Type | Assignments | Notes |
 | --- | --- | --- |
-| Device configuration profiles | Yes | Including custom profiles with OMA-URI settings. Windows update rings are device configuration profiles, so they are included here. Encrypted OMA-URI values are read in plain text and stored inside the encrypted backup. |
+| Device configuration profiles | Yes | Including custom profiles with OMA-URI settings. Windows update rings are device configuration profiles, so they are included here. Encrypted OMA-URI values are read in plain text and stored inside the encrypted backup. Exception: in a scheduled backup made by the [Backup Reader](/backups/backup-reader/), these values stay masked (`****`) and the profile cannot be restored from that backup, because Microsoft returns them in plain text only with a write permission. |
 | Settings catalog and endpoint security policies | Yes | With all settings, including settings catalog based endpoint security policies |
 | Administrative templates | Yes | With every configured setting and its values |
 | Reusable settings | No | The reusable setting itself |
@@ -100,7 +100,7 @@ Apps are the slowest type to back up. Because installer files are never download
 | Apple user enrollment profiles | Yes | |
 | Apple automated device enrollment tokens and profiles | No | Token details and enrollment profiles, kept for reference. Restore does not recreate them; upload the Apple token again in Intune. |
 | Android Enterprise enrollment profiles | No | The profile settings. A restored profile gets a new enrollment token that is valid for 90 days. |
-| Device categories | No | |
+| Device categories | No | In a scheduled backup made by the [Backup Reader](/backups/backup-reader/), only with its optional device inventory permission; otherwise left out |
 | Terms and conditions | Yes | |
 
 ## Tenant administration
@@ -112,7 +112,7 @@ Apps are the slowest type to back up. Because installer files are never download
 | Intune roles | Yes | Custom roles with their role assignments, including members and scopes. Built-in roles are skipped. |
 | Compliance notification templates | No | With their messages in every language |
 | Company Portal branding | Yes | With the logos and images |
-| Device clean-up rules | No | |
+| Device clean-up rules | No | In a scheduled backup made by the [Backup Reader](/backups/backup-reader/), only with its optional device inventory permission; otherwise left out |
 | Multi admin approval policies | No | |
 
 ## What is not backed up

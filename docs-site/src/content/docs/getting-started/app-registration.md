@@ -23,6 +23,8 @@ You do this once per tenant. Every admin who uses TenuVault in that tenant signs
 
 Because the app is a public client with delegated permissions, every call runs as the signed-in admin. MFA, Conditional Access and your Intune role apply, and changes are attributed to that admin in the Entra and Intune audit logs.
 
+This page is only about the app registration you sign in with. It never gets application permissions or a credential. The optional [Backup Reader](/backups/backup-reader/) for scheduled backups under strict Conditional Access is a second, separate app registration with its own setup script and its own page; do not add its permissions or certificate to this one.
+
 ### Delegated permissions
 
 | API | Permission |

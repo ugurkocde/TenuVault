@@ -33,7 +33,7 @@ If backups only need to run on working days and someone opens TenuVault daily, s
 
 ### 2. A dedicated backup admin account
 
-Back up with a separate account that only reads Intune:
+This option needs help from whoever assigns Intune roles and owns Conditional Access in your tenant. Back up with a separate account that only reads Intune:
 
 * Assign it a read-only Intune role, for example **Read Only Operator**. Backups only read Intune; restores need a write role, so do those with your own account.
 * Keep the role **permanently active**. With PIM, an eligible assignment that nobody activated makes scheduled backups fail.
@@ -46,7 +46,9 @@ Everything stays delegated: no application permissions, no certificate.
 
 If your policies do not allow either option, add the optional [Backup Reader](/backups/backup-reader/) on Pro and MSP. It is a separate, read-only app registration with a certificate on the TenuVault computer. Only scheduled backups use it; manual backups, restores and every other change keep using your own sign-in, MFA and Conditional Access. Sign-in frequency does not apply to it, because it does not sign in as a user.
 
-The Backup Reader is an application identity, so treat its certificate like an admin credential. You can control it with **Conditional Access for workload identities**, which needs Microsoft Entra Workload ID Premium: for example a policy that blocks it outside the network your TenuVault computers use. Its sign-ins appear in Entra ID under **Sign-in logs** > **Service principal sign-ins**.
+The Backup Reader is an application identity, so treat its certificate like an admin credential. Setting it up is a small project with colleagues: an Entra administrator (Global Administrator or Privileged Role Administrator) creates the app registration, an Azure administrator grants the storage role for Azure backups, and the certificate on each computer is renewed yearly. The Backup Reader page lists [who has to do what](/backups/backup-reader/#who-has-to-do-what), with request texts you can send them.
+
+You can control it with **Conditional Access for workload identities**, which needs Microsoft Entra Workload ID Premium: for example a policy that blocks it outside the network your TenuVault computers use. Its sign-ins appear in Entra ID under **Sign-in logs** > **Service principal sign-ins**.
 
 ## Other policies to check
 

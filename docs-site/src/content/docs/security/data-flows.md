@@ -11,7 +11,7 @@ All connections use HTTPS on TCP port 443. TenuVault opens no inbound ports. Dur
 
 | Destination | Purpose | Carries tenant data? |
 | --- | --- | --- |
-| `login.microsoftonline.com` | Microsoft sign-in and tokens | Your sign-in only |
+| `login.microsoftonline.com` | Microsoft sign-in and tokens | Your sign-in only. With the optional Backup Reader, also its certificate sign-in for scheduled backups (no tenant data) |
 | `graph.microsoft.com` | Read and write your Intune configuration | Yes, between your machine and Microsoft |
 | `management.azure.com` | List subscriptions and storage accounts for the storage picker | No |
 | `<your account>.blob.core.windows.net` | Your own Azure storage account, when you store backups there | Yes, encrypted backups in your account |
@@ -32,9 +32,11 @@ TenuVault signs you in with the Microsoft Authentication Library (MSAL) as a pub
 * **Received:** an access token for the requested resource, a refresh token and an ID token for your account.
 * **Stored:** tokens are kept in an encrypted token cache on your machine, protected by Windows DPAPI or the macOS Keychain.
 
+With the optional [Backup Reader](/backups/backup-reader/), scheduled backups sign in differently, to the same host: TenuVault requests an app-only token for the separate Backup Reader app registration and proves the app's identity with a short-lived assertion signed on your machine with the reader's certificate private key. No browser opens, no person signs in, and Microsoft returns only an access token (no refresh token and no ID token). The private key itself is never sent; it stays in the same encrypted store. Only scheduled backups use these tokens, for the Graph and Azure Storage calls below, and each one is checked to be app-only with only the reader's verified read permissions. No new destination is added, so the firewall allow list below does not change.
+
 ### Intune: `graph.microsoft.com`
 
-All Intune work goes directly from your machine to Microsoft Graph with your delegated token:
+All Intune work goes directly from your machine to Microsoft Graph with your delegated token. The one exception is a scheduled backup of a tenant with a [Backup Reader](/backups/backup-reader/): it reads with the reader's app-only token instead, from the same machine to the same host. Writes never use it.
 
 * Backups read your Intune configuration, including assignments.
 * Restores, drift reverts, the OpenIntuneBaseline section and Framework coverage write the objects you choose to your tenant.
@@ -171,5 +173,6 @@ raw.githubusercontent.com
 
 * [Security and privacy](/security/)
 * [App registration and delegated permissions](/security/permissions/)
+* [Backup Reader for scheduled backups](/backups/backup-reader/): the optional app-only identity and its certificate
 * [Encryption and recovery key](/security/encryption/)
 * [Requirements](/getting-started/requirements/)
