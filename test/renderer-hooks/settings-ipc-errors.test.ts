@@ -20,6 +20,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
     preferences: { get: state.getPrefs, set: state.setPrefs },
     updates: { status: state.updateStatus, check: state.check, onChanged: () => () => undefined },
     backgroundLaunch: { status: async () => ({ supported: true, installed: false }) },
+    backupReader: { status: async () => ({ supported: true, available: false, reader: null }) },
     backups: { scope: () => new Promise(() => undefined) },
   },
 }))
@@ -100,6 +101,8 @@ describe("Settings sections on IPC errors", () => {
     expect(alertText(container)).toContain("prefs failed")
     await act(async () => { button(container, "Try again")!.click() })
     expect(container.textContent).toContain("Keep running in the tray")
+    expect(container.textContent).toContain("Scheduled backups run as")
+    expect(container.textContent).toContain("You (your sign-in)")
 
     state.setPrefs.mockRejectedValueOnce(new Error("refused by policy"))
     const startAtLogin = [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find((input) => input.closest("label")?.textContent?.includes("Start TenuVault"))!

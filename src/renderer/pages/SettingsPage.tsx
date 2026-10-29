@@ -549,7 +549,7 @@ export function BackgroundAndRetention() {
       <CardContent className="space-y-4 px-7 pb-7 text-sm text-gray-700">
         <div className="rounded-xl border border-gray-200 p-4">
           <p className="font-medium">Restart TenuVault for scheduled backups</p>
-          <p className="mt-2 text-sm">{info.platform === "darwin" ? "Adds a LaunchAgent for your user account" : "Adds a scheduled task for your user account"}. The background runner can reopen TenuVault in the {iconLocation} within five minutes while you are signed in. Backups still require valid Microsoft sign-in, plan access and available storage. This does not run while signed out, asleep or powered off.</p>
+          <p className="mt-2 text-sm">{info.platform === "darwin" ? "Adds a LaunchAgent for your user account" : "Adds a scheduled task for your user account"}. The background runner can reopen TenuVault in the {iconLocation} within five minutes while you are signed in. Backups still require valid Microsoft sign-in (or a verified Backup Reader for scheduled backups), plan access and available storage. This does not run while signed out, asleep or powered off.</p>
           <div className="mt-3 flex flex-wrap items-center gap-3">
             <Button variant="outline" disabled={!launcher?.supported || checkBusy || !!launchBusy} onClick={() => void changeLauncher()}>{launchBusy === "install" ? "Installing..." : launchBusy === "remove" ? "Removing..." : launcher?.installed ? "Remove background launch" : "Install background launch"}</Button>
             <p role="status">{checkBusy ? "Checking..." : checkError ? "Unable to check" : launcher?.installed ? "Installed" : "Not installed"}</p>

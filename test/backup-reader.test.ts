@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it, vi } from "vitest"
 import { BackupReaderError, BackupReaderService, DEVICE_INVENTORY_ROLE, DEVICE_INVENTORY_TYPES, READER_REQUIRED_ROLES, checkReaderToken, type AcquireToken } from "../src/main/auth/backup-reader"
-import { createSelfSignedCertificate } from "../src/main/auth/certificate"
+import { certificateIdentity, createSelfSignedCertificate } from "../src/main/auth/certificate"
 import { SecureStore } from "../src/main/storage/secure-store"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
@@ -169,6 +169,37 @@ describe("BackupReaderService", () => {
     expect(renewed.thumbprintSha256).toBe(renewal.thumbprintSha256)
     await reader.tokens(scheduled)!.graph()
     expect(acquire.mock.calls.at(-1)![0].certificate.thumbprintSha256).toBe(renewal.thumbprintSha256)
+  })
+
+  it("shows the portal thumbprint and computer name of the certificate", () => {
+    const generated = createSelfSignedCertificate("TenuVault Backup Reader (LAPTOP-1)", 365, new Date("2026-10-26T00:00:00Z"))
+    const certificate = new X509Certificate(generated.certificatePem)
+    const identity = certificateIdentity(generated.certificatePem)
+    // Entra ID and the setup script print the SHA-1 fingerprint; MSAL uses SHA-256.
+    expect(identity.thumbprint).toBe(certificate.fingerprint.replaceAll(":", ""))
+    expect(identity.thumbprint).not.toBe(generated.thumbprintSha256)
+    expect(identity.name).toBe("TenuVault Backup Reader (LAPTOP-1)")
+    const { reader } = service()
+    expect(reader.prepare(TENANT, "LAPTOP-1")).toMatchObject({ certificateName: "TenuVault Backup Reader (LAPTOP-1)" })
+    expect(reader.status(TENANT)!.thumbprint).toMatch(/^[0-9A-F]{40}$/)
+  })
+
+  it("remembers the saved certificate, tests and app-only runs, and drops a stale test on re-verify", async () => {
+    const { reader } = service()
+    reader.prepare(TENANT, "LAPTOP-1")
+    reader.recordExport(TENANT, "TenuVault Backup Reader ABCD.cer")
+    expect(reader.status(TENANT)!.exportedCertificate?.fileName).toBe("TenuVault Backup Reader ABCD.cer")
+    await reader.verify(TENANT, READER)
+    reader.recordTest(TENANT, { graph: true, storage: false, message: "no container" })
+    reader.recordRun(TENANT, "Completed")
+    expect(reader.status(TENANT)!.lastTest).toMatchObject({ graph: true, storage: false })
+    expect(reader.status(TENANT)!.lastRun?.status).toBe("Completed")
+    expect(reader.status(TENANT)!.verifiedAt).toBeTruthy()
+    await reader.verify(TENANT, READER)
+    expect(reader.status(TENANT)!.lastTest).toBeNull()
+    // A new (renewal) certificate hides the export record of the previous one.
+    reader.prepare(TENANT, "LAPTOP-1")
+    expect(reader.status(TENANT)!.exportedCertificate).toBeNull()
   })
 
   it("verifies the active certificate again while a renewal waits, and keeps the renewal", async () => {

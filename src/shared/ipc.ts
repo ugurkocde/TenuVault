@@ -9,6 +9,17 @@ export interface PdfBrandingState {
   available: boolean
 }
 
+/** The last Backup Reader confidence test: a real Intune read, and for Azure tenants a container check. */
+export interface BackupReaderTestResult {
+  at: string
+  /** A Microsoft Graph read with the reader's token succeeded. */
+  graph: boolean
+  /** The reader could list the backup container; null when backups stay on this device. */
+  storage: boolean | null
+  /** Why a part failed, in words the card can show. */
+  message?: string
+}
+
 /** A tenant's Backup Reader, the optional read-only identity for scheduled backups. Never includes a private key. */
 export interface BackupReaderStatus {
   tenantId: string
@@ -18,9 +29,20 @@ export interface BackupReaderStatus {
   /** The certificate to upload (pending or renewal) or in use (verified). */
   certificatePem: string
   thumbprintSha256: string
+  /** SHA-1 thumbprint, the value Entra ID and the setup script show for this certificate. */
+  thumbprint: string
+  /** The certificate's subject name, which names the computer it belongs to. */
+  certificateName: string
   /** Expiry of the certificate in use, or of the pending one before the first verification. */
   notAfter: string
   verifiedRoles: string[] | null
+  /** When Microsoft last accepted the certificate and roles; null before the first verification. */
+  verifiedAt: string | null
+  /** The public certificate file last saved for the shown certificate, so setup can resume days later. */
+  exportedCertificate: { fileName: string; at: string } | null
+  lastTest: BackupReaderTestResult | null
+  /** The last scheduled backup that actually ran with the reader. */
+  lastRun: { at: string; status: string } | null
   /** Types scheduled backups leave out because the reader has no permission for them. */
   excludedTypes: string[]
   /** A renewal certificate is waiting to be uploaded and verified. */
@@ -33,6 +55,8 @@ export interface BackupReaderState {
   /** The tenant's plan includes the Backup Reader. */
   available: boolean
   reader: BackupReaderStatus | null
+  /** The tenant's Azure backup storage account; omitted when backups stay on this device. */
+  storageAccountName?: string
   /** After a verification: the reader works for Microsoft Graph but cannot write backups to the tenant's Azure storage. */
   warning?: string
 }
@@ -317,9 +341,13 @@ export interface TenuVaultBridge {
     /** Creates the certificate to upload (setup or renewal). Rejects with a plan error without Pro or MSP. */
     prepare: (tenantId: string) => Promise<BackupReaderState>
     /** Saves the public certificate for the setup script. */
-    exportCertificate: (tenantId: string) => Promise<{ saved: boolean }>
+    exportCertificate: (tenantId: string) => Promise<{ saved: boolean; fileName?: string }>
+    /** Saves the setup script itself, so it can be sent to the Entra administrator as a file. */
+    exportScript: (tenantId: string) => Promise<{ saved: boolean }>
     /** Checks the reader with Microsoft and records its permissions; `renewal` checks the waiting certificate. Rejects with the reason. */
     verify: (tenantId: string, clientId: string, renewal?: boolean) => Promise<BackupReaderState>
+    /** Runs the confidence test (Intune read plus Azure container check) and records the result. */
+    test: (tenantId: string) => Promise<BackupReaderState>
     /** Discards a renewal certificate that was not uploaded. */
     cancelRenewal: (tenantId: string) => Promise<BackupReaderState>
     /** Forgets the reader and its private key on this computer. */
@@ -356,9 +384,10 @@ export interface TenuVaultBridge {
 
 /** Plan failures cross the preload boundary as data, then become renderer errors. */
 export type TenuVaultPreloadBridge = Omit<TenuVaultBridge, "auth" | "license" | "schedules" | "pdfBranding" | "backupReader"> & {
-  backupReader: Omit<TenuVaultBridge["backupReader"], "prepare" | "verify"> & {
+  backupReader: Omit<TenuVaultBridge["backupReader"], "prepare" | "verify" | "test"> & {
     prepare: (tenantId: string) => Promise<BackupReaderState | PlanIpcError>
     verify: (tenantId: string, clientId: string, renewal?: boolean) => Promise<BackupReaderState | PlanIpcError>
+    test: (tenantId: string) => Promise<BackupReaderState | PlanIpcError>
   }
   pdfBranding: Omit<TenuVaultBridge["pdfBranding"], "set"> & {
     set: (branding: PdfBranding) => Promise<PdfBrandingState | PlanIpcError>

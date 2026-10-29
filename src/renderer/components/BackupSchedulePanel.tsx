@@ -3,7 +3,7 @@ import { Link } from "react-router-dom"
 import { AlertCircle, AlertTriangle, CalendarClock, CheckCircle2, Info, Layers, Loader2, ShieldAlert } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { Label } from "~/components/ui/label"
-import type { AppPreferences } from "../../shared/ipc"
+import type { AppPreferences, BackupReaderState } from "../../shared/ipc"
 import { COMMUNITY_RETENTION_DAYS } from "../../shared/plans"
 import { bridge } from "../lib/bridge"
 import { tenantLicense, tenantPlan, useLicense } from "../lib/license"
@@ -50,6 +50,7 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
   const [prefsError, setPrefsError] = useState<string | null>(null)
   const [prefsSaveError, setPrefsSaveError] = useState<string | null>(null)
   const [runner, setRunner] = useState<{ installed: boolean } | null>(null)
+  const [readerState, setReaderState] = useState<BackupReaderState | null>(null)
   const [timeError, setTimeError] = useState(false)
   const timeInput = useRef<HTMLInputElement>(null)
 
@@ -59,6 +60,7 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
   }
   useEffect(loadPrefs, [])
   useEffect(() => void bridge.backgroundLaunch.status().then(setRunner).catch(() => undefined), [])
+  useEffect(() => void bridge.backupReader.status(tenantId).then(setReaderState).catch(() => undefined), [tenantId])
   useEffect(() => {
     const draft = drafts.get(tenantId)
     setEnabled(draft?.enabled ?? current?.enabled ?? false)
@@ -217,6 +219,38 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
       <div className="space-y-5 self-start rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
         <h3 className="text-xl font-medium tracking-tight text-gray-900">Status</h3>
         <dl className="space-y-4 text-sm">
+          <div>
+            <dt className="text-xs text-gray-500">Scheduled backups run as</dt>
+            <dd className="mt-0.5 text-base text-gray-900">
+              {readerState?.reader?.state === "verified" ? (
+                <>
+                  Backup Reader (read-only)
+                  <span className="block text-xs text-gray-500">
+                    {readerState.reader.lastRun
+                      ? `Last run with the reader: ${readerState.reader.lastRun.status.toLowerCase()}, ${formatWhen(readerState.reader.lastRun.at)}.`
+                      : `Certificate valid until ${formatWhen(readerState.reader.notAfter)}.`}{" "}
+                    <Link to={settingsHref("background")} className="font-medium underline">Backup Reader settings</Link>
+                  </span>
+                </>
+              ) : readerState?.reader ? (
+                <>
+                  You (your sign-in)
+                  <span className="block text-xs text-gray-500">
+                    Backup Reader setup is waiting. <Link to={settingsHref("background")} className="font-medium underline">Finish it in Settings</Link>
+                  </span>
+                </>
+              ) : (
+                <>
+                  You (your sign-in)
+                  {readerState?.available && (
+                    <span className="block text-xs text-gray-500">
+                      If sign-in frequency ends your session at night, the <Link to={settingsHref("background")} className="font-medium underline">Backup Reader</Link> keeps these backups running.
+                    </span>
+                  )}
+                </>
+              )}
+            </dd>
+          </div>
           <div>
             <dt className="text-xs text-gray-500">Next backup</dt>
             <dd className="mt-0.5 text-base text-gray-900">{formatWhen(current?.nextRunAt)}</dd>

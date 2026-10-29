@@ -1,10 +1,10 @@
 import { ConfidentialClientApplication, LogLevel } from "@azure/msal-node"
 import type { BackupRequest, RunTokens } from "../backup/engine"
-import type { BackupReaderStatus } from "../../shared/ipc"
+import type { BackupReaderStatus, BackupReaderTestResult } from "../../shared/ipc"
 import type { SecureStore } from "../storage/secure-store"
 import { RESOURCE_SCOPES } from "../../shared/constants"
 import { isGuid } from "../../shared/security"
-import { createSelfSignedCertificate, type GeneratedCertificate } from "./certificate"
+import { certificateIdentity, createSelfSignedCertificate, type GeneratedCertificate } from "./certificate"
 
 /**
  * The Backup Reader: an optional, read-only app-only identity a tenant can add so scheduled backups
@@ -62,6 +62,11 @@ export interface BackupReaderCredential {
   /** The exact Graph roles seen at the last verification. Any change stops the reader until verified again. */
   verifiedRoles: string[] | null
   verifiedAt?: string
+  /** The certificate file last saved from the card, tied to its certificate so a new one hides it. */
+  exportedCertificate?: { fileName: string; at: string; thumbprintSha256: string }
+  lastTest?: BackupReaderTestResult
+  /** The last scheduled backup that ran app-only, whatever its outcome. */
+  lastRun?: { at: string; status: string }
 }
 
 export interface AcquiredToken {
@@ -92,14 +97,22 @@ export class BackupReaderService {
     const credential = this.read(tenantId)
     if (!credential) return null
     const shown = credential.pending ?? credential.active!
+    const identity = certificateIdentity(shown.certificatePem)
+    const exported = credential.exportedCertificate
     return {
       tenantId: credential.tenantId,
       clientId: credential.clientId,
       state: credential.active && credential.verifiedRoles ? "verified" : "pending",
       certificatePem: shown.certificatePem,
       thumbprintSha256: shown.thumbprintSha256,
+      thumbprint: identity.thumbprint,
+      certificateName: identity.name,
       notAfter: (credential.active ?? shown).notAfter,
       verifiedRoles: credential.verifiedRoles,
+      verifiedAt: credential.verifiedAt ?? null,
+      exportedCertificate: exported && exported.thumbprintSha256 === shown.thumbprintSha256 ? { fileName: exported.fileName, at: exported.at } : null,
+      lastTest: credential.lastTest ?? null,
+      lastRun: credential.lastRun ?? null,
       excludedTypes: excludedTypes(credential.verifiedRoles),
       renewalPending: !!credential.active && !!credential.pending,
     }
@@ -116,6 +129,7 @@ export class BackupReaderService {
     if (!credential.pending) {
       const subject = `TenuVault Backup Reader (${deviceName.replace(/[^\w .-]/g, "").slice(0, 48) || "device"})`
       credential.pending = createSelfSignedCertificate(subject, CERTIFICATE_DAYS, this.now())
+      delete credential.exportedCertificate
     }
     this.write(credential)
     return this.status(tenant)!
@@ -148,6 +162,8 @@ export class BackupReaderService {
     }
     credential.verifiedRoles = roles
     credential.verifiedAt = this.now().toISOString()
+    // A new certificate or new roles make an earlier confidence test meaningless.
+    delete credential.lastTest
     this.write(credential)
     return this.status(credential.tenantId)!
   }
@@ -160,6 +176,31 @@ export class BackupReaderService {
       this.write(credential)
     }
     return this.status(tenantId)
+  }
+
+  /** Remembers which public certificate file the admin saved, so the card can name it days later. */
+  recordExport(tenantId: string, fileName: string): void {
+    const credential = this.read(tenantId)
+    const shown = credential?.pending ?? credential?.active
+    if (!credential || !shown) return
+    credential.exportedCertificate = { fileName, at: this.now().toISOString(), thumbprintSha256: shown.thumbprintSha256 }
+    this.write(credential)
+  }
+
+  /** Records a confidence test run by the main process (Graph read plus storage check). */
+  recordTest(tenantId: string, result: Omit<BackupReaderTestResult, "at">): void {
+    const credential = this.read(tenantId)
+    if (!credential) return
+    credential.lastTest = { ...result, at: this.now().toISOString() }
+    this.write(credential)
+  }
+
+  /** Records that a scheduled backup actually ran with the reader, for the card and Schedule tab. */
+  recordRun(tenantId: string, status: string): void {
+    const credential = this.read(tenantId)
+    if (!credential) return
+    credential.lastRun = { at: this.now().toISOString(), status }
+    this.write(credential)
   }
 
   remove(tenantId: string): void {

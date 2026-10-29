@@ -659,6 +659,7 @@ await check("policy pack frameworks keep the coverage notice collapsed", async (
 await check("settings show background backups, retention and updates", async () => {
   await go("#/portal/settings?section=background", "Background runner")
   assert(await waitForText("Keep backups for"), "retention setting missing")
+  assert(await evaluate(`document.body.innerText.includes("or a verified Backup Reader for scheduled backups")`), "background runner copy still claims a sign-in is always required")
   await go("#/portal/settings?section=updates", "Download and install updates automatically")
   assert(await waitForText("Get nightly builds"), "nightly update setting missing")
   const prefs = await evaluate(`window.tenuvault.preferences.set({ nightlyUpdates: true })`)
@@ -775,6 +776,17 @@ await check("several tenants get the overview, switcher and schedule tab", async
   await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Schedule")?.click()`)
   assert(await waitForText("Automatic backups"), "schedule panel missing")
   await screenshot("09-schedule")
+})
+
+await check("Backup Reader card offers setup with a guide link, and the schedule says who runs backups", async () => {
+  await go("#/portal/settings?section=background", "Backup Reader")
+  assert(await waitForText("Set up the Backup Reader"), "Backup Reader setup entry missing")
+  assert(await waitForCondition(`[...document.querySelectorAll("button")].some(b => b.textContent.includes("Setup guide"))`), "Backup Reader setup guide link missing")
+  await evaluate(`[...document.querySelectorAll("h3, [data-slot='card-title']")].find(el => el.textContent.trim().startsWith("Backup Reader"))?.scrollIntoView({ block: "start" })`)
+  await disableAnimations()
+  await screenshot("05e-backup-reader")
+  await go("#/portal/backup?tab=schedule", "Automatic backups")
+  assert(await waitForText("Scheduled backups run as"), "schedule tab does not say who scheduled backups run as")
 })
 
 await check("restarting clears interrupted tenant backup and refresh flags", async () => {

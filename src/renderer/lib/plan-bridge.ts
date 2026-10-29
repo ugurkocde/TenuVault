@@ -25,6 +25,7 @@ export function createRendererBridge(raw: TenuVaultPreloadBridge): TenuVaultBrid
       ...raw.backupReader,
       prepare: (...args) => unwrapPlanResult(raw.backupReader.prepare(...args)),
       verify: (...args) => unwrapPlanResult(raw.backupReader.verify(...args)),
+      test: (...args) => unwrapPlanResult(raw.backupReader.test(...args)),
     },
   }
 }
