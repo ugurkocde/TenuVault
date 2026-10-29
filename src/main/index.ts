@@ -35,6 +35,7 @@ import { readBackupSettings } from "./backup/settings"
 import { localInventoryProblem } from "./backup/local-inventory"
 import { encryptedAzureFetch, registerStorageToken } from "./storage/azure-seal"
 import { BackupReaderService } from "./auth/backup-reader"
+import { assertStorageAccountName } from "../shared/storage-account"
 import { hostname } from "node:os"
 import { handleLocalBlobRequest, isLocalAccount, localRoutesRunning } from "./storage/blob-emulator"
 import { LocalBlobStore } from "./storage/local-blob-store"
@@ -715,6 +716,13 @@ async function bootstrap(): Promise<void> {
   const checkReaderStorage = async (tenantId: string): Promise<string | undefined> => {
     const profile = tenantProfile(tenantId)
     if (!profile || isLocalAccount(profile.storageAccountName)) return undefined
+    // The account name becomes the host of a request that carries the reader's storage token, so a
+    // name that is not a plain Azure account name must never reach the URL.
+    try {
+      assertStorageAccountName(profile.storageAccountName)
+    } catch {
+      return "The Backup Reader works for Microsoft Graph, but its Azure Storage access was not checked: the tenant's storage account name is not a valid Azure storage account name."
+    }
     const tokens = backupReader.tokens({ tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, trigger: "scheduled" })
     if (!tokens) return undefined
     const setup = `Run New-TenuVaultStorage.ps1 with -BackupReaderAppId ${backupReader.status(tenantId)?.clientId ?? ""} for storage account ${profile.storageAccountName}, wait a few minutes, then verify again.`

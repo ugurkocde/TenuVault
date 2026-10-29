@@ -48,7 +48,7 @@ If your policies do not allow either option, add the optional [Backup Reader](/b
 
 The Backup Reader is an application identity, so treat its certificate like an admin credential. Setting it up is a small project with colleagues: an Entra administrator (Global Administrator or Privileged Role Administrator) creates the app registration, an Azure administrator grants the storage role for Azure backups, and the certificate on each computer is renewed yearly. The Backup Reader page lists [who has to do what](/backups/backup-reader/#who-has-to-do-what), with request texts you can send them.
 
-You can control it with **Conditional Access for workload identities**, which needs Microsoft Entra Workload ID Premium: for example a policy that blocks it outside the network your TenuVault computers use. Its sign-ins appear in Entra ID under **Sign-in logs** > **Service principal sign-ins**.
+You can control it with **Conditional Access for workload identities**, which needs Microsoft Entra Workload ID Premium: for example a policy that blocks it outside the network your TenuVault computers use. Its token requests appear in Entra ID under **Sign-in logs** > **Service principal sign-ins**, grouped by Microsoft rather than one entry per backup.
 
 ## Other policies to check
 

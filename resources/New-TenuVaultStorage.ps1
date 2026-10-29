@@ -67,8 +67,9 @@
       * turns on blob versioning, so a blob the reader overwrites keeps its previous version,
         and adds a lifecycle rule that removes previous versions after -VersionRetentionDays
     The reader never deletes backups. Retention runs on the next backup made with an admin's
-    sign-in. Creating the custom role needs permission to write role definitions on the
-    resource group (for example Owner or User Access Administrator).
+    sign-in. This needs Owner, or Contributor plus User Access Administrator, on the resource
+    group: User Access Administrator covers the custom role and its assignment, Contributor
+    covers the container, versioning and lifecycle rule.
 
 .PARAMETER VersionRetentionDays
     Days previous blob versions are kept before the lifecycle rule removes them. Only with

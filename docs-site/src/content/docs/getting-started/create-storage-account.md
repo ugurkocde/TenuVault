@@ -46,7 +46,7 @@ TenuVault itself creates the `intune-backups` and `audit-logs` containers on fir
 
 This section is only for tenants that use the optional [Backup Reader](/backups/backup-reader/) (Pro and MSP): a separate, read-only app registration that keeps scheduled backups running when Conditional Access sign-in frequency ends the admin's session. The Intune administrator will ask you for this after an Entra administrator has created the reader, and will give you its **application (client) ID**. Run the Backup Reader setup first; without the app registration there is nothing to assign the role to, and the script stops with that message.
 
-You need **Owner** or **User Access Administrator** on the storage account's resource group, because this creates a custom role definition and assigns it. If you use PIM, activate the role before you run the script.
+You need **Owner**, or **Contributor** plus **User Access Administrator**, on the storage account's resource group, the same roles as for the rest of the script. User Access Administrator alone is not enough: it covers creating the custom role definition and assigning it, but creating the container, turning on versioning and setting the lifecycle rule are storage management operations that need Contributor (or Owner, which includes both). If you use PIM, activate the roles before you run the script.
 
 ```powershell
 ./New-TenuVaultStorage.ps1 -AdminGroupId 00000000-0000-0000-0000-000000000000 -SubscriptionId <subscription ID> -ResourceGroupName <resource group> -StorageAccountName <storage account> -BackupReaderAppId <application ID from the Intune administrator>
