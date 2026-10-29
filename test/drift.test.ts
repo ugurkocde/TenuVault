@@ -45,6 +45,13 @@ describe('Drift comparison', () => {
     expect(compareObjects(before, after)).toEqual([{ field: 'settings[b].settingInstance.choiceSettingValue.value', oldValue: 'b_1', newValue: 'b_2' }])
   })
 
+  it('reports an assignment target flipped from include to exclude for the same group', () => {
+    const target = (type: string) => ({ assignments: [{ id: 'a1', target: { '@odata.type': type, groupId: 'group-1' } }] })
+    const before = target('#microsoft.graph.groupAssignmentTarget')
+    const after = target('#microsoft.graph.exclusionGroupAssignmentTarget')
+    expect(compareObjects(before, after)).toEqual([{ field: 'assignments[0].target.@odata.type', oldValue: '#microsoft.graph.groupAssignmentTarget', newValue: '#microsoft.graph.exclusionGroupAssignmentTarget' }])
+  })
+
   it('reports appended items and changed values in unkeyed arrays', () => {
     expect(compareObjects({ roleScopeTagIds: ['0'] }, { roleScopeTagIds: ['0', '12'] })).toEqual([{ field: 'roleScopeTagIds["12"]', oldValue: undefined, newValue: '12' }])
     expect(compareObjects({ rules: [{ grace: 0 }] }, { rules: [{ grace: 0 }, { grace: 24 }] })).toEqual([{ field: 'rules[1]', oldValue: undefined, newValue: { grace: 24 } }])
