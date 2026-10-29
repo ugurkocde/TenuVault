@@ -1,4 +1,4 @@
-import type { BackupReaderState } from "../../shared/ipc"
+import type { BackupReaderState, BackupReaderStatus } from "../../shared/ipc"
 import { typeForFolder } from "../../shared/intune/registry"
 
 export const READER_GUIDE_URL = "https://docs.tenuvault.com/backups/backup-reader/"
@@ -86,4 +86,15 @@ export function readerErrorGuidance(message: string): { hint: string; url: strin
  */
 export function suggestsBackupReader(message: string): boolean {
   return /AADSTS70044|AADSTS50076|AADSTS50079/i.test(message)
+}
+
+/**
+ * Who a scheduled backup would run as right now. A verified reader whose certificate has expired
+ * does not run them (the engine falls back to the admin), so it gets its own state instead of
+ * still being named as the identity.
+ */
+export function scheduledIdentity(reader: BackupReaderStatus | null, now = Date.now()): "reader" | "expired" | "waiting" | "you" {
+  if (!reader) return "you"
+  if (reader.state !== "verified") return "waiting"
+  return Date.parse(reader.notAfter) > now ? "reader" : "expired"
 }

@@ -185,7 +185,7 @@ export function BackupReaderSettings() {
                   {storageAccountName ? `Azure backup container in ${storageAccountName}` : "Backups stay on this device, so no Azure storage check is needed"}
                   {reader.lastTest?.message ? `: ${reader.lastTest.message}` : ""}
                 </CheckLine>
-                <CheckLine state={reader.lastRun ? (reader.lastRun.status === "Completed" ? "ok" : "fail") : "unknown"}>
+                <CheckLine state={reader.lastRun ? (reader.lastRun.status === "Completed" ? "ok" : reader.lastRun.status === "Cancelled" ? "unknown" : "fail") : "unknown"}>
                   {reader.lastRun ? `Last scheduled backup with the reader: ${reader.lastRun.status.toLowerCase()}, ${day(reader.lastRun.at)}` : "No scheduled backup has run with the reader yet"}
                 </CheckLine>
               </ul>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { readerAzureRequest, readerEntraRequest, readerErrorGuidance, readerStorageCommand, readerView, suggestsBackupReader } from "../src/renderer/lib/backup-reader-view"
+import { readerAzureRequest, readerEntraRequest, readerErrorGuidance, readerStorageCommand, readerView, scheduledIdentity, suggestsBackupReader } from "../src/renderer/lib/backup-reader-view"
 import type { BackupReaderState, BackupReaderStatus } from "../src/shared/ipc"
 
 const NOW = Date.parse("2026-10-26T12:00:00Z")
@@ -56,6 +56,15 @@ describe("Backup Reader card", () => {
     const view = readerView(state(status({ renewalPending: true })), NOW)
     expect(view).toMatchObject({ verified: true, waiting: true })
     expect(view.command).toBe("./New-TenuVaultBackupReader.ps1 -CertificatePath <exported .cer> -AppId 44444444-4444-4444-4444-444444444444")
+  })
+})
+
+describe("scheduled identity", () => {
+  it("names only a verified, unexpired reader as the identity scheduled backups run as", () => {
+    expect(scheduledIdentity(status(), NOW)).toBe("reader")
+    expect(scheduledIdentity(status({ notAfter: "2026-10-20T12:00:00Z" }), NOW)).toBe("expired")
+    expect(scheduledIdentity(status({ state: "pending" }), NOW)).toBe("waiting")
+    expect(scheduledIdentity(null, NOW)).toBe("you")
   })
 })
 

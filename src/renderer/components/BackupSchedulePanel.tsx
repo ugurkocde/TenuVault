@@ -9,6 +9,7 @@ import { bridge } from "../lib/bridge"
 import { tenantLicense, tenantPlan, useLicense } from "../lib/license"
 import { describeSchedule, formatWhen, useRefusals, useSchedules, WEEKDAYS } from "../lib/schedules"
 import { settingsHref } from "../lib/settings-section"
+import { scheduledIdentity } from "../lib/backup-reader-view"
 import { showFeaturePlanError } from "../lib/plan-dialog"
 import { toast } from "../lib/toast"
 import { weeklyScheduleNote } from "../lib/plan-notes"
@@ -222,17 +223,24 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
           <div>
             <dt className="text-xs text-gray-500">Scheduled backups run as</dt>
             <dd className="mt-0.5 text-base text-gray-900">
-              {readerState?.reader?.state === "verified" ? (
+              {scheduledIdentity(readerState?.reader ?? null) === "reader" ? (
                 <>
                   Backup Reader (read-only)
                   <span className="block text-xs text-gray-500">
-                    {readerState.reader.lastRun
+                    {readerState?.reader?.lastRun
                       ? `Last run with the reader: ${readerState.reader.lastRun.status.toLowerCase()}, ${formatWhen(readerState.reader.lastRun.at)}.`
-                      : `Certificate valid until ${formatWhen(readerState.reader.notAfter)}.`}{" "}
+                      : `Certificate valid until ${formatWhen(readerState?.reader?.notAfter)}.`}{" "}
                     <Link to={settingsHref("background")} className="font-medium underline">Backup Reader settings</Link>
                   </span>
                 </>
-              ) : readerState?.reader ? (
+              ) : scheduledIdentity(readerState?.reader ?? null) === "expired" ? (
+                <>
+                  You (your sign-in)
+                  <span className="block text-xs text-gray-500">
+                    The Backup Reader certificate expired. <Link to={settingsHref("background")} className="font-medium underline">Renew it in Settings</Link>
+                  </span>
+                </>
+              ) : scheduledIdentity(readerState?.reader ?? null) === "waiting" ? (
                 <>
                   You (your sign-in)
                   <span className="block text-xs text-gray-500">
