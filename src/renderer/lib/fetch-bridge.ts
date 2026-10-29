@@ -31,20 +31,36 @@ export function installFetchBridge(bridge: TenuVaultBridge): void {
     const path = resolveApiPath(raw, window.location.href)
     if (!path) return nativeFetch(input, init)
 
+    // The IPC call itself cannot be cancelled, but aborting must still reject the fetch and
+    // discard the answer, as a native fetch would. Callers rely on that to drop stale results.
+    const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined)
+    signal?.throwIfAborted()
+
     // Normalise every body type (string, FormData, Blob, ...) through Request.
     const request = new Request(`http://tenuvault.internal${path}`, {
       method: init?.method ?? (input instanceof Request ? input.method : "GET"),
       headers: init?.headers ?? (input instanceof Request ? input.headers : undefined),
       body: init?.body ?? (input instanceof Request ? await input.clone().arrayBuffer() : undefined),
+      signal,
     })
     const body = request.method === "GET" || request.method === "HEAD" ? undefined : new Uint8Array(await request.arrayBuffer())
 
-    const send = () => bridge.api({
-      method: request.method,
-      path,
-      headers: Object.fromEntries(request.headers.entries()),
-      body,
-    })
+    const send = async (): Promise<ApiResponse> => {
+      signal?.throwIfAborted()
+      if (!signal) return bridge.api({ method: request.method, path, headers: Object.fromEntries(request.headers.entries()), body })
+      let onAbort: (() => void) | undefined
+      try {
+        return await Promise.race([
+          bridge.api({ method: request.method, path, headers: Object.fromEntries(request.headers.entries()), body }),
+          new Promise<never>((_resolve, reject) => {
+            onAbort = () => reject(signal.reason)
+            signal.addEventListener("abort", onAbort, { once: true })
+          }),
+        ])
+      } finally {
+        if (onAbort) signal.removeEventListener("abort", onAbort)
+      }
+    }
     let response = await send()
     // A write to a tenant that has not accepted the disclaimer: ask, then send it again.
     for (let attempt = 0; attempt < 2 && response.status === ACKNOWLEDGEMENT_REQUIRED; attempt++) {

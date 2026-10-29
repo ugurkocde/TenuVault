@@ -196,7 +196,9 @@ describe("deployments", () => {
     await source()
     const run = await handleOib({ ...base, action: "oib-deploy", commit, items: [{ source: SC, mode: "create" }], pilotGroupId: pilot }) as OibRun
     expect(run).toMatchObject({ kind: "deploy", commit, backupFolder: "backup-1", pilotGroupId: pilot, failed: [], created: [{ folder: "ConfigurationPolicies", id: CREATED, name: "Win - OIB - SC - Test - v3.8" }] })
-    const [create, assign] = writes
+    // The pilot group is checked live before anything is created.
+    expect(writes[0]).toBe(`GET groups/${pilot}`)
+    const [create, assign] = writes.filter(write => !write.startsWith("GET "))
     expect(create).toContain('"name":"Win - OIB - SC - Test - v3.8"')
     expect(create).toContain(`Tenant ${tenantId}`)
     expect(create).not.toContain("author-group")

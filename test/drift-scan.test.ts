@@ -209,6 +209,18 @@ describe('Drift scan', () => {
     expect(progress[7]).toMatchObject({ phase: 'comparing', done: 0, total: 3 })
   })
 
+  it('passes the scan signal to the revert history request', async () => {
+    const storage = fakeStorage(twoBackups(false))
+    const controller = new AbortController()
+    const unregister = registerDriftScan('scan-signal', { tenantId: TENANT_A, signal: controller.signal, onProgress: () => {} })
+    const response = await drift(request({ scanId: 'scan-signal' }))
+    unregister()
+    expect(response.status).toBe(200)
+    const historyCall = storage.stub.mock.calls.find(([input]) => new URL(String(input)).pathname === '/api/revert-metadata')
+    expect(historyCall).toBeDefined()
+    expect(historyCall![1]?.signal).toBe(controller.signal)
+  })
+
   it('requests no further listing pages once the scan is cancelled', async () => {
     const controller = new AbortController()
     const stub = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {

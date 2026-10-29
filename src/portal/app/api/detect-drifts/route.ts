@@ -143,6 +143,7 @@ export async function POST(request: NextRequest) {
               storageAccountName,
               policyIds
             }),
+            signal,
           }
         )
         
@@ -550,10 +551,11 @@ export function compareObjects(
     return JSON.stringify(oldObj) === JSON.stringify(newObj) ? [] : [{ field: path, oldValue: oldObj, newValue: newObj }]
   }
 
-  // Skip metadata fields and fields that should not be considered as drifts
+  // Skip metadata fields and fields that should not be considered as drifts.
+  // '@odata.type' is not skipped: it is the discriminator, so flipping an assignment target
+  // from groupAssignmentTarget to exclusionGroupAssignmentTarget is a real change.
   const skipFields = [
     '@odata.context', 
-    '@odata.type', 
     'lastModifiedDateTime', 
     'createdDateTime',
     'modifiedDateTime',  // Changes on every write, like lastModifiedDateTime; backup fingerprints leave it out too
