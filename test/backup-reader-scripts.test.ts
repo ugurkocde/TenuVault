@@ -30,6 +30,9 @@ describe("New-TenuVaultBackupReader.ps1", () => {
   })
 
   it("keeps existing certificates when adding one, for renewals and further computers", () => {
+    // First setup has no existing certificates: the mapping must stay an empty array, never a
+    // one-element list holding an empty entry, or Graph can reject the KeyCredentials list.
+    expect(readerScript).toContain("$existing = @($keys | ForEach-Object {")
     expect(readerScript).toContain("Update-MgApplication -ApplicationId $app.Id -KeyCredentials @(@($existing) + $new)")
     // Graph refuses a list that changes an existing certificate (KeyNotUpdatable), and only a read that
     // selects keyCredentials returns their key bytes. Verified against a lab tenant.

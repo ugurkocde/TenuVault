@@ -180,7 +180,9 @@ if ($keys | Where-Object { $_.Key -and [Convert]::ToBase64String($_.Key) -eq $ra
         throw "Microsoft Graph did not return the existing certificates of '$($app.DisplayName)', so adding one could remove them. Add '$CertificatePath' in Entra ID > App registrations > '$($app.DisplayName)' > Certificates & secrets instead."
     }
     Write-Host "Adding certificate $thumbprint ($($certificate.Subject), valid until $($certificate.NotAfter.ToString('yyyy-MM-dd')))..."
-    $existing = $keys | ForEach-Object {
+    # @(...) keeps this an empty list (never a single empty entry) on first setup, when there are
+    # no existing certificates yet.
+    $existing = @($keys | ForEach-Object {
         @{
             CustomKeyIdentifier = $_.CustomKeyIdentifier
             DisplayName         = $_.DisplayName
@@ -191,7 +193,7 @@ if ($keys | Where-Object { $_.Key -and [Convert]::ToBase64String($_.Key) -eq $ra
             Type                = $_.Type
             Usage               = $_.Usage
         }
-    }
+    })
     $new = @{
         Type        = "AsymmetricX509Cert"
         Usage       = "Verify"
