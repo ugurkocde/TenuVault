@@ -788,6 +788,7 @@ await checkBackupCancel({ check, evaluate, waitForCondition, screenshot, assert,
 
 await check("Community is a neutral plan state and its Overview notice remembers dismissal for 30 days", async () => {
   const banner = `document.querySelector('a[href="#/license"].bg-gray-100')`
+  const dismiss = `[...document.querySelectorAll('button')].find(button => button.textContent === 'Dismiss')`
   const chip = `document.querySelector('aside a[href="#/license"] span.ml-auto')`
   assert(await waitForCondition(`${chip}?.textContent === "Community" && ${chip}.classList.contains("bg-gray-100")`), "healthy Community sidebar chip missing")
   assert(await evaluate(`!${banner}`), "Community notice appeared on the tenants page")
@@ -798,7 +799,8 @@ await check("Community is a neutral plan state and its Overview notice remembers
   await go("#/license", "Add your license")
   assert(await evaluate(`!${banner}`), "Community notice appeared on the License page")
   await go("#/portal/overview", "All tenants")
-  await evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent === 'Dismiss').click()`)
+  assert(await waitForCondition(`Boolean(${dismiss})`), "Community notice Dismiss button missing")
+  await evaluate(`${dismiss}.click()`)
   assert(await waitForCondition(`!${banner}`), "dismissed Community notice stayed visible")
   const preferences = await evaluate(`window.tenuvault.preferences.get()`)
   assert(Number.isFinite(Date.parse(preferences.communityBannerDismissedAt)), "dismissal timestamp was not stored")
@@ -811,7 +813,8 @@ await check("Community is a neutral plan state and its Overview notice remembers
   await send("Page.reload")
   assert(await waitForCondition(`Boolean(${banner})`), "Community notice did not return after 30 days")
   await disableAnimations()
-  await evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent === 'Dismiss').click()`)
+  assert(await waitForCondition(`Boolean(${dismiss})`), "Community notice Dismiss button missing after 30 days")
+  await evaluate(`${dismiss}.click()`)
   assert(await waitForCondition(`!${banner}`), "Community notice could not be dismissed again")
 })
 
