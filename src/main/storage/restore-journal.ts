@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { KeyValueStore } from './secure-store'
-export interface WriteRecord { key: string; tenant: string; method: string; path: string; at: string; state: 'uncertain' | 'complete' | 'reconciled'; objectId?: string; label?: string }
+export interface WriteRecord { key: string; tenant: string; method: string; path: string; at: string; state: 'uncertain' | 'complete' | 'reconciled'; objectId?: string; label?: string; /** Snapshot object ID this creation restores, when known. Binds a recreation to its source. */ sourceId?: string }
 const memory = new Map<string, string>()
 let store: KeyValueStore = { get: key => memory.get(key) ?? null, set: (key, value) => { memory.set(key, value) }, delete: key => { memory.delete(key) } }
 export function setRestoreJournalStore(value: KeyValueStore): void { store = value }

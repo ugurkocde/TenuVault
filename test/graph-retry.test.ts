@@ -40,6 +40,11 @@ describe('bounded Graph retries', () => {
     expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1)
     expect(JSON.stringify(writeRecords())).not.toContain('new-token')
   })
+  it('records the source snapshot ID on completed creations', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json({ id: 'created' }, { status: 201 }))
+    await graphCaller('token', fetcher, { tenant })('POST', 'deviceManagement/deviceCategories', { displayName: 'A' }, { sourceId: 'snapshot-object' })
+    expect(writeRecords()[0]).toMatchObject({ state: 'complete', objectId: 'created', sourceId: 'snapshot-object' })
+  })
   it('checks authorization before retrying a throttled write', async () => {
     let allowed = true
     const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response('', { status: 429, headers: { 'Retry-After': '0' } })).mockResolvedValueOnce(Response.json({ id: 'created' }, { status: 201 }))

@@ -9,7 +9,9 @@ describe('cross-tenant dependency mapping', () => {
     const restore = new Restorer(graph, { mode: 'copy', assignments: false, crossTenant: true })
     expect((await restore.restore('backup/AppCategories/category.json', { id: 'source-category', displayName: 'Category' })).success).toBe(true)
     expect((await restore.restore('backup/Apps/app.json', app)).success).toBe(true)
-    const calls = JSON.stringify(graph.mock.calls)
+    // Only what is sent to Graph (method, path, body) must be free of source tenant IDs.
+    // Call options stay local: they carry the source ID for the write journal.
+    const calls = JSON.stringify(graph.mock.calls.map(([method, path, body]) => [method, path, body]))
     expect(calls).toContain('mobileAppCategories/target-category')
     expect(calls).not.toContain('source-category')
     expect(calls).not.toContain('source-group')

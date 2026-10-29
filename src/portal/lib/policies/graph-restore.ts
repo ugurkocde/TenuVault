@@ -61,6 +61,8 @@ export interface RestoreOutcome {
 export interface GraphCallOptions {
   /** Checked immediately before every network attempt, including retries and token refresh. */
   beforeAttempt?: () => void
+  /** Snapshot object ID a creation restores. Recorded in the write journal for later replace runs. */
+  sourceId?: string
 }
 
 export type GraphCall = (method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE", path: string, body?: Item, options?: GraphCallOptions) => Promise<{ status: number; body: Item }>
@@ -115,7 +117,7 @@ export function graphCaller(token: string, fetchImpl: typeof fetch = fetch, opti
     let refreshed = false
     for (let attempt = 0; attempt < 4; attempt++) {
       beforeAttempt?.()
-      if (key) saveWrite({ key, tenant: options.tenant!, method, path, at: new Date().toISOString(), state: "uncertain", label })
+      if (key) saveWrite({ key, tenant: options.tenant!, method, path, at: new Date().toISOString(), state: "uncertain", label, ...(callOptions.sourceId ? { sourceId: callOptions.sourceId } : {}) })
       let response: Response
       try {
         response = await fetchImpl(`${GRAPH}${path}`, {
@@ -146,7 +148,7 @@ export function graphCaller(token: string, fetchImpl: typeof fetch = fetch, opti
         // Do not retry earlier than a server delay that exceeds our bounded retry window.
         if (delay <= 30_000) { await sleep(delay); continue }
       }
-      if (key && response.ok && (!createsObject || typeof parsed.id === "string")) saveWrite({ key, tenant: options.tenant!, method, path, at: new Date().toISOString(), state: "complete", label, ...(typeof parsed.id === "string" ? { objectId: parsed.id } : {}) })
+      if (key && response.ok && (!createsObject || typeof parsed.id === "string")) saveWrite({ key, tenant: options.tenant!, method, path, at: new Date().toISOString(), state: "complete", label, ...(callOptions.sourceId ? { sourceId: callOptions.sourceId } : {}), ...(typeof parsed.id === "string" ? { objectId: parsed.id } : {}) })
       return { status: response.status, body: parsed }
     }
     throw new Error("Microsoft Graph retry limit reached")
@@ -270,14 +272,18 @@ export class Restorer {
     const label = name.replace(/[\r\n\t]/g, " ").slice(0, 240)
     let records: ReturnType<typeof writeRecords>
     try { records = writeRecords() } catch { return undefined }
+    // Only creations recorded for this exact snapshot qualify. A name match alone could bind
+    // two different policies that share a display name, and legacy records have no source ID.
     const candidates = records.filter(record =>
       (record.state === "complete" || record.state === "reconciled") && record.method === "POST" &&
+      record.sourceId === snapshot.id &&
       typeof record.objectId === "string" && record.objectId && record.objectId !== snapshot.id &&
       (record.path === type.path || record.path.startsWith(`${type.path}/`)) &&
       (!record.label || record.label === label))
     for (const record of candidates.reverse()) {
-      let object: Item | undefined
-      try { object = await this.current(type, record.objectId!) } catch { continue }
+      // An inconclusive read (anything other than a confirmed deletion, which reads back as
+      // undefined) must stop the restore instead of falling through to a duplicate create.
+      const object = await this.current(type, record.objectId!)
       if (!object) continue
       const liveName = object[type.nameKey] ?? object.displayName ?? object.name
       if (liveName === name) return { id: record.objectId!, object }
@@ -295,7 +301,7 @@ export class Restorer {
     if (unresolved.length) return { success: false, path, retryable: false, error: this.options.crossTenant
       ? `Unresolved target dependencies (${unresolved.join(", ")}). Copy the dependencies first or reconcile this object in the target tenant.`
       : `Unresolved dependencies (${unresolved.join(", ")}). Restore the dependencies first or reconcile this object in Intune.` }
-    const created = await this.graph("POST", plan.create.path, plan.create.body)
+    const created = await this.graph("POST", plan.create.path, plan.create.body, { sourceId: typeof snapshot.id === "string" ? snapshot.id : undefined })
     if (created.status >= 300) return { success: false, path, retryable: created.status < 500 && created.status !== 408, error: errorMessage(created.body, created.status) }
     const id = String(created.body.id ?? "")
     if (!id) return { success: false, path, retryable: false, error: "Microsoft Graph did not return an ID. Check Intune before retrying." }

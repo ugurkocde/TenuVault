@@ -65,11 +65,11 @@ describe('create with assignments to a deleted group', () => {
 
 describe('replace restore after an earlier recreation', () => {
   const snapshot = { id: 'gone', displayName: 'Deleted', omaSettings: [] }
-  const seedJournal = () => {
+  const seedJournal = (sourceId: string | null = 'gone') => {
     const data = new Map<string, string>()
     setRestoreJournalStore({ get: k => data.get(k) ?? null, set: (k, v) => { data.set(k, v) }, delete: k => { data.delete(k) } })
     const type = typeForFolder('DeviceConfigurations')!
-    saveWrite({ key: writeKey('tenant', 'POST', type.path, { displayName: 'Deleted' }), tenant: 'tenant', method: 'POST', path: type.path, at: new Date().toISOString(), state: 'complete', objectId: 'recreated-id', label: 'Deleted' })
+    saveWrite({ key: writeKey('tenant', 'POST', type.path, { displayName: 'Deleted' }), tenant: 'tenant', method: 'POST', path: type.path, at: new Date().toISOString(), state: 'complete', objectId: 'recreated-id', label: 'Deleted', ...(sourceId ? { sourceId } : {}) })
   }
   const graph = (recreatedLive: boolean) => vi.fn<GraphCall>(async (method, path) => {
     if (method === 'POST') return { status: 201, body: { id: 'duplicate' } } as Awaited<ReturnType<GraphCall>>
@@ -90,6 +90,38 @@ describe('replace restore after an earlier recreation', () => {
     seedJournal()
     const result = await new Restorer(graph(false), { mode: 'replace', assignments: false }).restore('backup/DeviceConfigurations/Deleted.json', snapshot)
     expect(result).toMatchObject({ success: true, action: 'created', policyId: 'duplicate' })
+  })
+
+  it('does not reuse a legacy creation recorded without a source snapshot ID', async () => {
+    seedJournal(null)
+    const result = await new Restorer(graph(true), { mode: 'replace', assignments: false }).restore('backup/DeviceConfigurations/Deleted.json', snapshot)
+    expect(result).toMatchObject({ success: true, action: 'created', policyId: 'duplicate' })
+  })
+
+  it('does not reuse a creation recorded for another snapshot with the same name', async () => {
+    seedJournal('another-original')
+    const result = await new Restorer(graph(true), { mode: 'replace', assignments: false }).restore('backup/DeviceConfigurations/Deleted.json', snapshot)
+    expect(result).toMatchObject({ success: true, action: 'created', policyId: 'duplicate' })
+  })
+
+  it('stops without creating when the recreated object cannot be read back conclusively', async () => {
+    seedJournal()
+    const calls = vi.fn<GraphCall>(async (method, path) => {
+      if (method === 'POST') return { status: 201, body: { id: 'duplicate' } } as Awaited<ReturnType<GraphCall>>
+      if (path.includes('recreated-id')) return { status: 503, body: { error: { message: 'Unavailable' } } } as Awaited<ReturnType<GraphCall>>
+      return { status: 404, body: { error: { code: 'ResourceNotFound', message: 'Not found' } } } as Awaited<ReturnType<GraphCall>>
+    })
+    const result = await new Restorer(calls, { mode: 'replace', assignments: false }).restore('backup/DeviceConfigurations/Deleted.json', snapshot)
+    expect(result.success).toBe(false)
+    expect(calls.mock.calls.every(([method]) => method === 'GET')).toBe(true)
+  })
+
+  it('records the source snapshot ID on the creation write', async () => {
+    seedJournal()
+    const calls = graph(false)
+    await new Restorer(calls, { mode: 'replace', assignments: false }).restore('backup/DeviceConfigurations/Deleted.json', snapshot)
+    const post = calls.mock.calls.find(([method]) => method === 'POST')
+    expect(post?.[3]).toMatchObject({ sourceId: 'gone' })
   })
 
   it('still creates another copy in copy mode', async () => {

@@ -45,13 +45,14 @@ export function installFetchBridge(bridge: TenuVaultBridge): void {
     })
     const body = request.method === "GET" || request.method === "HEAD" ? undefined : new Uint8Array(await request.arrayBuffer())
 
-    const send = async (): Promise<ApiResponse> => {
+    // Waits that aborting must interrupt, including the disclaimer dialog below.
+    const awaitWithAbort = async <T,>(pending: Promise<T>): Promise<T> => {
       signal?.throwIfAborted()
-      if (!signal) return bridge.api({ method: request.method, path, headers: Object.fromEntries(request.headers.entries()), body })
+      if (!signal) return pending
       let onAbort: (() => void) | undefined
       try {
         return await Promise.race([
-          bridge.api({ method: request.method, path, headers: Object.fromEntries(request.headers.entries()), body }),
+          pending,
           new Promise<never>((_resolve, reject) => {
             onAbort = () => reject(signal.reason)
             signal.addEventListener("abort", onAbort, { once: true })
@@ -61,14 +62,16 @@ export function installFetchBridge(bridge: TenuVaultBridge): void {
         if (onAbort) signal.removeEventListener("abort", onAbort)
       }
     }
+    const send = () => awaitWithAbort(bridge.api({ method: request.method, path, headers: Object.fromEntries(request.headers.entries()), body }))
     let response = await send()
     // A write to a tenant that has not accepted the disclaimer: ask, then send it again.
     for (let attempt = 0; attempt < 2 && response.status === ACKNOWLEDGEMENT_REQUIRED; attempt++) {
       const tenantIds = acknowledgementTenants(response)
-      if (!tenantIds || !(await requestAcknowledgement(tenantIds))) break
+      if (!tenantIds || !(await awaitWithAbort(requestAcknowledgement(tenantIds)))) break
       response = await send()
     }
 
+    signal?.throwIfAborted()
     return new Response(NULL_BODY_STATUSES.has(response.status) ? null : new Uint8Array(response.body), {
       status: response.status,
       statusText: response.statusText,
