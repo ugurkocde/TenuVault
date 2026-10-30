@@ -48,10 +48,15 @@ export function clean(value: Json): Json {
     .map(([key, v]) => [key, clean(v)]))
 }
 
-export function parsePolicies(input: unknown): BaselinePolicy[] {
+/**
+ * Parses Settings Catalog exports or stored baseline policies. Imports are capped at
+ * 8 MB; reparsing policies a workspace already saved passes the larger workspace limit,
+ * so anything saveWorkspace accepted stays loadable.
+ */
+export function parsePolicies(input: unknown, options: { maxBytes?: number } = {}): BaselinePolicy[] {
   const values = Array.isArray(input) ? input : [input]
   if (!values.length || values.length > 200) throw new Error("Import between 1 and 200 Settings Catalog policies.")
-  if (JSON.stringify(values).length > 8_000_000) throw new Error("The policy pack exceeds 8 MB.")
+  if (JSON.stringify(values).length > (options.maxBytes ?? 8_000_000)) throw new Error("The policy pack exceeds 8 MB.")
   return values.map((value, index) => {
     if (!record(value) || typeof value.name !== "string" || !value.name.trim() || value.name.length > 200 ||
         typeof value.platforms !== "string" || !value.platforms || typeof value.technologies !== "string" || !value.technologies ||

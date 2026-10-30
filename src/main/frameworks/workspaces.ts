@@ -38,10 +38,12 @@ export function loadWorkspace(tenant: string, framework: string): FrameworkWorks
     if (!record(value) || value.version !== 1 || value.tenantId !== tenant.toLowerCase() || value.frameworkId !== framework || typeof value.reference !== "string" || typeof value.updatedAt !== "string" || !Array.isArray(value.policies) || !Array.isArray(value.history) || value.history.length > MAX_WORKSPACE_HISTORY) throw new Error()
     const storedList = value.recommendationList !== undefined ? validateRecommendationList(value.recommendationList) : undefined
     const storedExceptions = value.exceptions !== undefined ? validateExceptions(value.exceptions) : undefined
-    const policies = value.policies.length ? parsePolicies(value.policies) : []
+    // Stored policies reparse under the workspace limit saveWorkspace enforced, not the
+    // smaller import limit, so a saved workspace can never become unreadable by size.
+    const policies = value.policies.length ? parsePolicies(value.policies, { maxBytes: MAX_WORKSPACE_BYTES }) : []
     for (const entry of value.history) {
       if (!record(entry) || !Array.isArray(entry.policies) || !record(entry.assessment)) throw new Error()
-      const pack = entry.policies.length ? parsePolicies(entry.policies) : []
+      const pack = entry.policies.length ? parsePolicies(entry.policies, { maxBytes: MAX_WORKSPACE_BYTES }) : []
       const assessment = entry.assessment
       if (assessment.tenantId !== tenant.toLowerCase() || assessment.frameworkId !== framework || typeof assessment.runId !== "string" || typeof assessment.reference !== "string" || typeof assessment.assessedAt !== "string" || !Number.isFinite(Date.parse(assessment.assessedAt)) || typeof assessment.policyCount !== "number" || !Array.isArray(assessment.findings)) throw new Error()
       for (const finding of assessment.findings) {

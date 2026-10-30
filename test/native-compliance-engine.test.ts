@@ -454,6 +454,40 @@ describe("compliance engine", () => {
     expect(coverage).toMatchObject({ collectedPolicies: 1, recognizedPolicies: 1, unsupportedPolicies: 0 });
   });
 
+  it("does not turn extra entries of a collection setting into counter-evidence beside its wildcard", () => {
+    const data = emptyExportData();
+    data.collectedAt = "2026-10-12T10:00:00Z";
+    data.settingsCatalog = [
+      {
+        id: "module-logging",
+        name: "Module logging",
+        configType: "Settings Catalog",
+        assignments: allDevicesAssignment,
+        settings: [
+          {
+            id: "0",
+            settingInstance: {
+              "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance",
+              settingDefinitionId: "device_vendor_msft_policy_config_admx_powershellexecutionpolicy_enablemodulelogging",
+              choiceSettingValue: { value: "device_vendor_msft_policy_config_admx_powershellexecutionpolicy_enablemodulelogging_1" },
+            },
+          },
+          {
+            id: "1",
+            settingInstance: {
+              "@odata.type": "#microsoft.graph.deviceManagementConfigurationSimpleSettingCollectionInstance",
+              settingDefinitionId: "device_vendor_msft_policy_config_admx_powershellexecutionpolicy_enablemodulelogging_listbox_modulenames",
+              simpleSettingCollectionValue: [{ value: "*" }, { value: "Contoso.Module" }],
+            },
+          },
+        ],
+      },
+    ];
+    const result = capabilityResult(data, "windows-powershell-module-logging");
+    expect(result.status).toBe("enforced");
+    expect(result.evidence.map((item) => item.verdict)).toEqual(["enforced"]);
+  });
+
   it("finds settings nested inside group and choice children", () => {
     const data = emptyExportData();
     data.settingsCatalog = [
