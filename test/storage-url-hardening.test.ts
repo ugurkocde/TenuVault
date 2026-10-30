@@ -121,7 +121,7 @@ describe('tenant GUID validation', () => {
 })
 
 describe('backup routes', () => {
-  it.each(['../tenant-metadata', 'backup-1/../../x', '/backup-1', ''])('rejects backup ID %s', async (backupId) => {
+  it.each(['../tenant-metadata', 'backup-1/../../x', '/backup-1', '', 'metadata', `metadata/${TENANT}`, 'imported backup#1', 'backup-1'])('rejects backup ID %s', async (backupId) => {
     const calls = stubFetch()
     for (const route of [listBackupContents, downloadBackup]) {
       const response = await route(post('/api/x', { tenantId: TENANT, ...credentials, subscriptionId: 's', resourceGroupName: 'r', backupId }))
@@ -129,18 +129,11 @@ describe('backup routes', () => {
     }
     expect(calls).toEqual([])
   })
-  it('encodes the backup ID in listing prefixes and blob paths', async () => {
-    const calls = stubFetch((url) => url.searchParams.get('comp') === 'list' ? new Response('<EnumerationResults><Blobs></Blobs></EnumerationResults>') : new Response(null, { status: 404 }))
-    await listBackupContents(post('/api/list-backup-contents', { tenantId: TENANT, ...credentials, subscriptionId: 's', resourceGroupName: 'r', backupId: 'imported backup#1' }))
-    const storage = calls.filter((call) => call.url.includes('blob.core.windows.net'))
-    expect(new URL(storage[0]!.url).searchParams.get('prefix')).toBe('imported backup#1/')
-    expect(storage[1]!.url).toBe('https://store.blob.core.windows.net/intune-backups/imported%20backup%231/metadata.json')
-  })
   it('refuses to build an archive with entries that escape the extraction folder', async () => {
     const calls = stubFetch((url) => url.searchParams.get('comp') === 'list'
-      ? new Response('<Blobs><Blob><Name>backup-1/DeviceConfigurations/A.json</Name></Blob><Blob><Name>backup-1/../../evil.json</Name></Blob></Blobs>')
+      ? new Response('<Blobs><Blob><Name>backup-2026-09-01-020000/DeviceConfigurations/A.json</Name></Blob><Blob><Name>backup-2026-09-01-020000/../../evil.json</Name></Blob></Blobs>')
       : Response.json({}))
-    const response = await downloadBackup(post('/api/download-backup', { tenantId: TENANT, ...credentials, backupId: 'backup-1' }))
+    const response = await downloadBackup(post('/api/download-backup', { tenantId: TENANT, ...credentials, backupId: 'backup-2026-09-01-020000' }))
     expect(response.status).toBe(502)
     expect((await response.json()).error).toContain('not a safe archive path')
     expect(calls.some((call) => call.url.includes('evil'))).toBe(false)

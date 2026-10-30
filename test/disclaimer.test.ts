@@ -28,6 +28,9 @@ describe("tenantWriteTargets", () => {
       ["/api/baseline-upgrades", { action: "change-apply" }],
       ["/api/custom-baselines", { action: "change-apply" }],
       ["/api/standards", { action: "standard-change-apply" }],
+      ["/api/cis-remediation", { action: "apply" }],
+      ["/api/cis-remediation", { action: "retry" }],
+      ["/api/cis-remediation", { action: "rollback-apply" }],
     ]
     for (const [path, body] of writes) expect(tenantWriteTargets(path, { ...body, tenantId: A }), `${path} ${String(body.action ?? body.mode)}`).toEqual([A])
   })
@@ -54,6 +57,11 @@ describe("tenantWriteTargets", () => {
       ["/api/baseline-upgrades", { action: "change-preview" }],
       ["/api/custom-baselines", { action: "deploy" }],
       ["/api/standards", { action: "standard-adopt" }],
+      ["/api/cis-remediation", { action: "plan" }],
+      ["/api/cis-remediation", { action: "preview" }],
+      ["/api/cis-remediation", { action: "approve" }],
+      ["/api/cis-remediation", { action: "rollback-create" }],
+      ["/api/cis-remediation", { action: "rollback-approve" }],
       ["/api/scores", { action: "compute" }],
       ["/api/health-review", { action: "run" }],
     ]
