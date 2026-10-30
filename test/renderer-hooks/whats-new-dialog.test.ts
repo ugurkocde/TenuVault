@@ -59,6 +59,16 @@ async function render(state: WhatsNewState) {
 }
 
 describe("What's new announcement", () => {
+  it("opens without the shared dialog entrance animation", async () => {
+    await render(stateWith(true))
+    const dialog = document.body.querySelector('[role="dialog"]')!
+    expect(dialog).not.toBeNull()
+    expect(dialog.className).not.toContain("animate-in")
+    expect(dialog.className).not.toContain("zoom-in-95")
+    expect(dialog.className).not.toContain("slide-in-from-left-1/2")
+    expect(document.body.innerHTML).not.toContain("animate-in")
+  })
+
   it("opens once for an unseen stable release and marks it seen on close", async () => {
     await render(stateWith(true))
     expect(document.body.textContent).toContain("What's new")
