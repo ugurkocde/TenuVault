@@ -13,6 +13,7 @@ import { ActivationScreen } from "./components/ActivationScreen"
 import { PlanDialogs } from "./components/PlanDialogs"
 import { DisclaimerHost } from "./components/DisclaimerHost"
 import { isUnlicensed, LicenseProvider, useLicense } from "./lib/license"
+import { WhatsNewProvider } from "./lib/whats-new"
 import LicensePage from "./pages/LicensePage"
 
 // Desktop pages.
@@ -81,6 +82,7 @@ export function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <LicenseProvider>
+        <WhatsNewProvider>
         <TenantProvider>
           <BackupProgressProvider>
             <DisclaimerHost />
@@ -122,6 +124,7 @@ export function App() {
             </ErrorBoundary>
           </BackupProgressProvider>
         </TenantProvider>
+        </WhatsNewProvider>
       </LicenseProvider>
     </QueryClientProvider>
   )

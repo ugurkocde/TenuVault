@@ -238,6 +238,48 @@ export type UpdateStatus =
   | { state: "ready"; version: string }
   | { state: "error"; message: string }
 
+/** One line of a release's notes, with its pull request or issue link when it has one. */
+export interface WhatsNewChange {
+  text: string
+  url: string | null
+  /** The link label as written in the notes, such as "#123". */
+  reference: string | null
+}
+
+/** One published release in the What's new list, newest first in the state. */
+export interface WhatsNewEntry {
+  version: string
+  channel: "stable" | "nightly"
+  title: string
+  /** ISO publication time, or an empty string when GitHub did not report one. */
+  publishedAt: string
+  /** The release page on GitHub. */
+  url: string
+  changes: WhatsNewChange[]
+  issues: WhatsNewChange[]
+  /** Newer than the newest release the admin has already seen notes for. */
+  unseen: boolean
+  /**
+   * This release or an older one is what runs here. Newer entries are only
+   * listed so the update card can show the notes of a pending update.
+   */
+  installed: boolean
+}
+
+export interface WhatsNewState {
+  currentVersion: string
+  /** The newest version whose notes the admin has seen. Seeded to the installed version on first run. */
+  lastSeenVersion: string | null
+  /** Recent releases of the channel the installed build follows, newest first. */
+  entries: WhatsNewEntry[]
+  /** Any unseen entry: the What's new entry point shows its dot. */
+  hasUnseen: boolean
+  /** An unseen stable release on a stable build: the one-time dialog applies. */
+  announceStable: boolean
+  /** Why the notes could not be loaded, when there is nothing cached either. */
+  error: string | null
+}
+
 export interface AppInfo {
   version: string
   platform: NodeJS.Platform
@@ -359,6 +401,10 @@ export interface TenuVaultBridge {
     /** Restarts TenuVault to install a downloaded update. */
     install: () => Promise<void>
     onChanged: (listener: (status: UpdateStatus) => void) => () => void
+    /** Recent release notes for the installed build's channel, with what is still unseen. */
+    whatsNew: () => Promise<WhatsNewState>
+    /** Records the installed version as the newest one whose notes were seen. */
+    markWhatsNewSeen: () => Promise<WhatsNewState>
   }
   storage: {
     /** Synchronous so React state can be hydrated before the first render. */
