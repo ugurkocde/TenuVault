@@ -6,6 +6,7 @@ import { catalogPolicies, parseManifest, type Manifest } from "../../shared/oib/
 import { OIB_LICENSE, OIB_MANIFEST_IDS, OIB_PLATFORMS, OIB_REPO, type OibCatalog, type OibChannel, type OibPlatform, type OibPlatformInfo, type OibPlatformStatus, type OibPublishedRelease, type OibVersions } from "../../shared/oib/types"
 import { defaultSelection, isShippedPlatform, oibReference, platformStatus, RELEASE_TAG, selectionLabel, tagPlatform, tagVersion } from "../../shared/oib/versions"
 import { FrameworkError } from "../frameworks/service"
+import { readTextCapped } from "../../shared/capped-body"
 
 /**
  * OpenIntuneBaseline content from GitHub. The versions a session may load are resolved here: the
@@ -98,8 +99,10 @@ async function download(url: string): Promise<string> {
     console.warn(`[oib] GitHub returned ${response.status} for ${new URL(url).pathname}`)
     throw new FrameworkError(`GitHub returned ${response.status}.${response.status === 403 || response.status === 429 ? " GitHub limits requests per network; retry later." : ""}`, 502)
   }
-  const text = await response.text()
-  if (text.length > MAX_FILE_BYTES) throw new FrameworkError("An OIB source file is larger than expected.", 502)
+  // Capped while reading, so an oversized or endless body is refused without
+  // first buffering it whole.
+  const text = await readTextCapped(response, MAX_FILE_BYTES)
+  if (text === null) throw new FrameworkError("An OIB source file is larger than expected.", 502)
   return text
 }
 

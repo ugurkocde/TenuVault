@@ -204,6 +204,25 @@ describe("update channel", () => {
     emit("update-available", { version: "0.2.0" })
     expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled()
   })
+
+  it("cancels an in-flight download when updates are turned off without a channel change", async () => {
+    const updates = new Updates(() => {})
+    updates.configure(true, false)
+    let finish!: () => void
+    autoUpdater.downloadUpdate.mockImplementationOnce(() => new Promise<never[]>((resolve) => {
+      finish = () => resolve([])
+    }))
+    autoUpdater.checkForUpdates.mockImplementationOnce(async () => {
+      emit("update-available", { version: "0.2.1" })
+    })
+    await updates.check()
+    const token = autoUpdater.downloadUpdate.mock.calls[0]?.[0] as unknown as { cancelled: boolean }
+    expect(token.cancelled).toBe(false)
+    updates.configure(false, false)
+    expect(token.cancelled).toBe(true)
+    expect(updates.current().state).toBe("disabled")
+    finish()
+  })
 })
 
 describe("installing an update on Windows", () => {

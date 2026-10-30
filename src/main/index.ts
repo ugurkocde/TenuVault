@@ -58,7 +58,7 @@ import { migrateLegacyOibRuns, setOibStore } from "./oib/service"
 import { setOibCacheDir } from "./oib/source"
 import { setFrameworkStore } from "./frameworks/workspaces"
 import { internalCisBenchmarksEnabled, isAdmittedAssessStatus, setCisEntitlementProvider, setFrameworkExportSaver, setInternalCisBenchmarksProvider } from "./frameworks/service"
-import { setCisContentFallbackBaseUrl } from "./frameworks/cis-content"
+import { setCisContentEnvOverrideAllowed, setCisContentFallbackBaseUrl } from "./frameworks/cis-content"
 import { setNativeFrameworkStore, setNativeFrameworkAuthorization, setNativeFrameworkNotifier } from "./frameworks/native"
 import { allows, effectiveRetentionDays, PlanRequired } from "../shared/plans"
 import { APP_STATE_START_OVER_BUTTON, APP_STATE_START_OVER_DETAIL, SecureStore, UnreadableStoreError, type Cipher } from "./storage/secure-store"
@@ -375,6 +375,8 @@ async function bootstrap(): Promise<void> {
   // Framework exports the main process built are saved here directly, so they never round-trip through the renderer.
   setFrameworkExportSaver((file) => saveFileWithDialog(prepareGeneratedFile(file.data, file.name, file.encoding)))
   setCisContentFallbackBaseUrl(LICENSE_API_BASE)
+  // A packaged build sends the CIS entitlement token only to the built-in origin above.
+  setCisContentEnvOverrideAllowed(!app.isPackaged)
   const checkCis = cisInternalGuard(() => internalCisBenchmarksEnabled(), (tenantId) => license.entitlementToken(tenantId))
   const planGate = planGuard((tenantId) => license.requireEntitlement(tenantId).catch(() => null))
   // Progress polls of an assessment the plan guard admitted at start read only that job, bound to

@@ -89,6 +89,11 @@ export class BackgroundLaunch {
     if (this.options.platform === 'win32') await this.windows('install')
     else {
       const domain = `gui/${this.options.uid}`
+      // A loaded legacy direct-launch agent also reads as installed, but it is not the
+      // current agent: reach unload() so its remove-first guidance surfaces instead of
+      // silently keeping the old agent.
+      const service = await this.service()
+      if (service !== null && !service.includes('/usr/bin/open')) await this.unload()
       if ((await this.status()).installed) return { supported: true, installed: true }
       await this.unload()
       await mkdir(join(this.options.home, 'Library', 'LaunchAgents'), { recursive: true, mode: 0o700 })

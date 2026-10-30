@@ -10,10 +10,11 @@ const expected = {
   EnableNodeCliInspectArguments: FuseState.DISABLE,
   EnableEmbeddedAsarIntegrityValidation: FuseState.ENABLE,
   OnlyLoadAppFromAsar: FuseState.ENABLE,
+  GrantFileProtocolExtraPrivileges: FuseState.DISABLE,
 }
 getCurrentFuseWire(app).then(wire => {
   for (const [name, value] of Object.entries(expected)) {
     if (wire[FuseV1Options[name]] !== value) throw new Error(`Unexpected fuse: ${name}`)
   }
-  console.log('All five security fuses verified')
+  console.log('All six security fuses verified')
 }).catch(error => { console.error(error); process.exitCode = 1 })

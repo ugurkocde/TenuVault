@@ -27,6 +27,7 @@ module.exports = {
     enableNodeCliInspectArguments: false,
     enableEmbeddedAsarIntegrityValidation: true,
     onlyLoadAppFromAsar: true,
+    grantFileProtocolExtraPrivileges: false,
   },
   appId: "com.tenuvault.desktop",
   productName: "TenuVault",

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { convertKit, type KitFile } from "../src/shared/frameworks/cis-kit"
-import { handleFramework, setInternalCisBenchmarksEnabled } from "../src/main/frameworks/service"
+import { ASSESS_JOB_LIMITS, handleFramework, setInternalCisBenchmarksEnabled } from "../src/main/frameworks/service"
 import { loadWorkspace, setFrameworkStore } from "../src/main/frameworks/workspaces"
 import type { Assessment, Finding, Json } from "../src/shared/frameworks/policies"
 
@@ -122,6 +122,29 @@ describe("streamed CIS assessment", () => {
     const sync = await handleFramework({ action: "assess", frameworkId: "cis-benchmarks", tenantId, appId, reference: item.reference, policies: item.policies }) as Assessment
     expect(done.assessment!.findings).toEqual(sync.findings)
     expect(done.findings).toEqual(sync.findings)
+  })
+
+  it("fails a job that runs past its deadline and stops blocking the tenant", async () => {
+    const previous = ASSESS_JOB_LIMITS.maxMs
+    ASSESS_JOB_LIMITS.maxMs = 1
+    try {
+      let release!: () => void
+      const gate = new Promise<void>(resolve => { release = resolve })
+      vi.stubGlobal("fetch", graphFetch({ gate }))
+      const jobId = await startJob()
+      await new Promise(resolve => setTimeout(resolve, 20))
+      release()
+      const done = await pollDone(jobId)
+      expect(done.phase).toBe("failed")
+      expect(done.error).toMatch(/deadline|too long|timed out/i)
+      // A different assessment for the same tenant can start at once.
+      ASSESS_JOB_LIMITS.maxMs = previous
+      vi.stubGlobal("fetch", graphFetch())
+      const next = await startJob()
+      expect((await pollDone(next)).phase).toBe("done")
+    } finally {
+      ASSESS_JOB_LIMITS.maxMs = previous
+    }
   })
 
   it("advances reading progress while tenant policies are read", async () => {

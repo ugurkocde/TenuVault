@@ -2,6 +2,7 @@ import { decodeXml } from "~/lib/storage/list"
 import { blobPath, isSafeArchivePath } from "../../../../shared/security"
 import { isBackupName } from "../../../../shared/intune/backup-names"
 import { BACKUP_OWNER_FILE, MAX_BACKUP_ARCHIVE_BYTES, MAX_BACKUP_ARCHIVE_FILES } from "../../../../shared/constants"
+import { readBytesCapped } from "../../../../shared/capped-body"
 import { type NextRequest, NextResponse } from "next/server"
 import { OTHER_TENANT_BACKUP, ownedBy, readOwnedBackup } from "~/lib/policies/backup-owner"
 
@@ -200,6 +201,10 @@ export async function POST(request: NextRequest) {
     for (let i = 0; i < others.length; i += batchSize) batches.push(others.slice(i, i + batchSize))
     let ownership: string | null = null
     let untagged = false
+    // Actual fetched bytes, rechecked against the cap: listed lengths can be
+    // missing or understated, and the archive is built in memory.
+    let fetchedBytes = 0
+    let oversized = false
 
     for (const batch of batches) {
       const batchPromises = batch.map(async (filePath) => {
@@ -214,7 +219,13 @@ export async function POST(request: NextRequest) {
           })
 
           if (fileResponse.ok) {
-            const content = await fileResponse.arrayBuffer()
+            const content = await readBytesCapped(fileResponse, Math.max(0, MAX_BACKUP_ARCHIVE_BYTES - fetchedBytes))
+            if (content === null) {
+              oversized = true
+              return { success: false, path: filePath }
+            }
+            fetchedBytes += content.byteLength
+            if (fetchedBytes > MAX_BACKUP_ARCHIVE_BYTES) oversized = true
             if (filePath === metadataPath) {
               let metadata: unknown
               try { metadata = JSON.parse(new TextDecoder().decode(content)) } catch { ownership = "The backup metadata could not be read." }
@@ -245,6 +256,12 @@ export async function POST(request: NextRequest) {
 
       const batchResults = await Promise.all(batchPromises)
       results.push(...batchResults)
+      if (oversized) {
+        return NextResponse.json(
+          { error: `Download refused: this backup's files total more than the 32 MiB limit for a backup download, although the listing reported less. Restore the backup from Backup Details instead of downloading it, or choose a smaller backup.` },
+          { status: 413 }
+        )
+      }
       // Ownership is settled by the metadata batch before any other file is read.
       if (batch[0] === metadataPath && !ownership && !batchResults[0]?.success) ownership = "The backup metadata could not be read."
       if (ownership) return NextResponse.json({ error: ownership }, { status: ownership === OTHER_TENANT_BACKUP ? 403 : 502 })

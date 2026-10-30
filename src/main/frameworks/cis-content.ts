@@ -14,6 +14,15 @@ let fallbackBaseUrl: string | null = null
 /** Bootstrap hook: the license API origin injected at build time, used when the env override is unset. */
 export function setCisContentFallbackBaseUrl(value: string | null): void { fallbackBaseUrl = value }
 
+let envOverrideAllowed = true
+/**
+ * Bootstrap hook: whether the TENUVAULT_CIS_CONTENT_BASE_URL environment override is honored.
+ * The app bootstrap disables it in packaged builds, where the entitlement token must only
+ * ever be sent to the built-in license origin; whoever controls a development launch
+ * environment may still point the client at a local delivery service.
+ */
+export function setCisContentEnvOverrideAllowed(allowed: boolean): void { envOverrideAllowed = allowed }
+
 export class CisContentError extends Error {
   constructor(message: string, public status = 502) { super(message) }
 }
@@ -24,7 +33,7 @@ function isTimeoutError(error: unknown): boolean {
 
 /** The configured delivery base URL without a trailing slash, or null when not configured. */
 export function cisContentBaseUrl(): string | null {
-  const raw = process.env[CIS_CONTENT_BASE_URL_ENV] ?? fallbackBaseUrl ?? undefined
+  const raw = (envOverrideAllowed ? process.env[CIS_CONTENT_BASE_URL_ENV] : undefined) ?? fallbackBaseUrl ?? undefined
   if (typeof raw !== "string") return null
   const trimmed = raw.trim()
   if (!trimmed) return null

@@ -31,9 +31,31 @@ export const EXPORT_LIMITATIONS = exportLimitations('TenuVault')
 /** The usage notice of a native comparison naming `product`; FRAMEWORK_USAGE_NOTICE itself names TenuVault. */
 export const frameworkUsageNotice = (product: string) => FRAMEWORK_USAGE_NOTICE.replace(/^Independent TenuVault /, () => `Independent ${product} `)
 
-// Property names whose values are secrets. Matched on the whole name so settings such as
-// passwordMinimumLength keep their values.
-const SECRET_KEY = /^(?:.*secret.*|password|passphrase|pre-?shared-?key|shared-?key|psk|private-?key|api-?key|recovery-?key|.*credential.*|access_?token|refresh_?token|id_?token|token|.*valuetoken|client_?secret|certificate-?password)$/i
+// Property names whose values are secrets, classified by meaning rather than by a whole-name
+// list: real secrets arrive under compound and spelled-out names (wifiPassword, authToken,
+// encryptionKey) that an enumeration misses, so a name built around a secret word is redacted
+// unless what follows the word is a known configuration modifier (passwordMinimumLength,
+// tokenLifetimeMinutes), which describes policy about secrets rather than holding one.
+const KEY_STEMS = ["apikey", "privatekey", "presharedkey", "sharedkey", "recoverykey", "encryptionkey", "accesskey", "masterkey", "signingkey", "secretkey", "connectionstring"]
+const PASSWORD_MODIFIERS = ["minimum", "maximum", "required", "expiration", "history", "previous", "block", "minutes", "lockout", "agedays", "complexity", "length", "enabled", "encryptionenabled", "encryptionprincipal", "reset", "warning", "quality", "signin", "inactivity"]
+const TOKEN_MODIFIERS = ["lifetime", "expiration", "creation", "expiry", "usagecount", "name", "type"]
+function isSecretKey(key: string): boolean {
+  const name = key.toLowerCase().replace(/[^a-z0-9]/g, "")
+  if (name.includes("secret") || name.includes("credential")) return true
+  if (KEY_STEMS.some((stem) => name.includes(stem))) return true
+  if (name === "psk" || name.endsWith("psk") || name.startsWith("psk")) return true
+  const passwordAt = Math.max(name.indexOf("password"), name.indexOf("passphrase"))
+  if (passwordAt >= 0) {
+    const after = name.slice(passwordAt + (name.startsWith("passphrase", passwordAt) ? "passphrase" : "password").length)
+    if (!PASSWORD_MODIFIERS.some((modifier) => after.startsWith(modifier))) return true
+  }
+  const tokenAt = name.indexOf("token")
+  if (tokenAt >= 0) {
+    const after = name.slice(tokenAt + "token".length)
+    if (!TOKEN_MODIFIERS.some((modifier) => after.startsWith(modifier))) return true
+  }
+  return false
+}
 // Strings that look like bearer tokens or JWTs wherever they appear.
 const SECRET_TEXT = /(?:\bBearer\s+[A-Za-z0-9._~+/=-]{8,})|(?:\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,})/g
 
@@ -54,7 +76,7 @@ export function redactSecrets<T>(value: T): T {
     if (!item || typeof item !== 'object') return item
     const source = item as Record<string, unknown>
     const secretValue = typeof source['@odata.type'] === 'string' && /SecretSettingValue$/i.test(source['@odata.type'])
-    return Object.fromEntries(Object.entries(source).map(([key, child]) => [key, (secretValue && key === 'value') || (SECRET_KEY.test(key) && child !== null && typeof child !== 'boolean') ? REDACTED : visit(child)]))
+    return Object.fromEntries(Object.entries(source).map(([key, child]) => [key, (secretValue && key === 'value') || (isSecretKey(key) && child !== null && typeof child !== 'boolean') ? REDACTED : visit(child)]))
   }
   return visit(value) as T
 }

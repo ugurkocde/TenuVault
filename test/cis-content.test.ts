@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { validateCisCatalog, validateCisPack } from "../src/shared/frameworks/cis-content"
 import { handleFramework, setCisEntitlementProvider, setInternalCisBenchmarksEnabled } from "../src/main/frameworks/service"
+import { cisContentBaseUrl, setCisContentEnvOverrideAllowed, setCisContentFallbackBaseUrl } from "../src/main/frameworks/cis-content"
 import { loadWorkspace, setFrameworkStore } from "../src/main/frameworks/workspaces"
 import { kitLevelForPolicy } from "../src/shared/frameworks/cis-flow"
 import { readinessFor } from "../src/shared/frameworks/cis-readiness"
@@ -96,6 +97,19 @@ describe("CIS content delivery service", () => {
     setCisEntitlementProvider(null)
     if (originalBase === undefined) delete process.env.TENUVAULT_CIS_CONTENT_BASE_URL
     else process.env.TENUVAULT_CIS_CONTENT_BASE_URL = originalBase
+  })
+
+  it("ignores the environment override when overrides are not allowed (packaged builds)", () => {
+    setCisContentFallbackBaseUrl("https://license.example.test")
+    try {
+      expect(cisContentBaseUrl()).toBe("https://content.example.test")
+      setCisContentEnvOverrideAllowed(false)
+      // The entitlement token only ever goes to the built-in origin now.
+      expect(cisContentBaseUrl()).toBe("https://license.example.test")
+    } finally {
+      setCisContentFallbackBaseUrl(null)
+      setCisContentEnvOverrideAllowed(true)
+    }
   })
 
   it("returns the validated catalog", async () => {

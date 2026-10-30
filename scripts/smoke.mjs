@@ -65,6 +65,9 @@ const ws = new WebSocket(await connect())
 await new Promise((r) => ws.addEventListener("open", r, { once: true }))
 let nextId = 1
 let renderFailures = 0
+// Render failures the error-boundary check provokes on purpose; any beyond
+// this count fail the run at the end.
+let expectedRenderFailures = 0
 let unhandledRejections = 0
 const pending = new Map()
 ws.addEventListener("message", (event) => {
@@ -137,6 +140,13 @@ function assert(condition, message) {
 async function go(hash, text) {
   await evaluate(`location.hash = ${JSON.stringify(hash)}`)
   assert(await waitForText(text), `"${text}" did not appear on ${hash}`)
+}
+
+// Text the sidebar always shows (a page's own nav label) also matches waitForText on a
+// crashed page, so nav-named pages assert their content inside <main> and no error alert.
+async function assertPageInMain(text, message) {
+  assert(await waitForCondition(`document.querySelector('main')?.innerText.includes(${JSON.stringify(text)})`), `${message}: "${text}" did not appear in the page`)
+  assert(!(await evaluate(`Boolean(document.querySelector('main [role="alert"]'))`)), `${message}: the page failed behind the error boundary`)
 }
 
 await send("Page.enable")
@@ -328,6 +338,7 @@ await check("Community users can reach the tenant sign-in without a key", async 
 await check("dashboard renders in the desktop shell", async () => {
   await disableAnimations()
   await go("#/portal/dashboard", "Dashboard")
+  await assertPageInMain("Protect your Intune policies", "dashboard")
   await sleep(1000)
   await screenshot("01-dashboard")
 })
@@ -357,6 +368,8 @@ await check("a failed page keeps the sidebar and offers recovery", async () => {
     assert(await waitForCondition(`Boolean(document.querySelector('main h1')?.textContent.includes('All tenants'))`), "Reload did not recover the page")
     await go("#/portal/dashboard", "Dashboard")
     await disableAnimations()
+    // The failures above were provoked on purpose; later ones are real.
+    expectedRenderFailures = renderFailures
   } finally {
     await send("Network.setBlockedURLs", { urls: [] })
   }
@@ -602,6 +615,7 @@ await check("native alert dialogs are replaced by toasts", async () => {
 
 await check("drift detection page loads", async () => {
   await go("#/portal/drift", "Drift Detection")
+  await assertPageInMain("Drift Detection", "drift detection page")
   await sleep(800)
   await screenshot("06-drift")
 })
@@ -1536,6 +1550,7 @@ await check("switching tenants cannot show an older tenant's drift results", asy
   })()`)
   try {
     await go("#/portal/drift", "Drift Detection")
+    await assertPageInMain("Drift Detection", "drift detection page")
     await sleep(300)
     // The page may have scanned this tenant already, so start one explicitly when it did not.
     if (!(await evaluate(`typeof window.__oldScanResolve === 'function'`))) {
@@ -1711,6 +1726,10 @@ async function finish() {
     console.warn(`Could not remove smoke profile ${profile}: ${error.message}`)
   }
 
+  if (renderFailures > expectedRenderFailures) {
+    failures++
+    console.log(`FAIL ${renderFailures - expectedRenderFailures} unexpected page render failure(s) were logged during the run`)
+  }
   if (failures > 0) {
     console.log(`\n${failures} smoke check(s) failed. App log:\n${appLog.slice(-4000)}`)
     process.exit(1)

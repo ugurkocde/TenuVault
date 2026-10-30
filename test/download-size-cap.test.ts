@@ -41,6 +41,21 @@ it('refuses a listing over the file count cap when lengths are unavailable', asy
   expect(bodyFetches).toEqual([])
 })
 
+it('refuses when a fetched body exceeds the limit its listing size understated', async () => {
+  const listing = blob(`${args.backupId}/metadata.json`, 20) + blob(`${args.backupId}/DeviceConfigurations/A.json`)
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(String(input))
+    if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
+    if (url.searchParams.get('comp') === 'list') return new Response(`<Blobs>${listing}</Blobs>`)
+    if (url.pathname.endsWith('/metadata.json')) return Response.json({ TenantId: args.tenantId })
+    // No content length in the listing, and the body itself is over the cap.
+    return new Response(new Uint8Array(MAX + 1))
+  }))
+  const response = await download(request())
+  expect(response.status).toBe(413)
+  expect((await response.json()).error).toContain('32 MiB')
+})
+
 it('downloads a listing that is exactly at the limit', async () => {
   const bodyFetches = stubListing(blob(`${args.backupId}/DeviceConfigurations/A.json`, MAX / 2) + blob(`${args.backupId}/metadata.json`, MAX / 2))
   const response = await download(request())
