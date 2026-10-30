@@ -69,6 +69,17 @@ describe('bounded Graph retries', () => {
   })
 })
 
+it('sets an unreadable write journal aside instead of throwing or losing it silently', () => {
+  const data = new Map<string, string>([['restore.write-journal', '{corrupt']])
+  setRestoreJournalStore({ get: k => data.get(k) ?? null, set: (k, v) => { data.set(k, v) }, delete: k => { data.delete(k) } })
+  expect(writeRecords()).toEqual([])
+  const aside = [...data.entries()].filter(([key]) => key.startsWith('restore.write-journal.unreadable.'))
+  expect(aside).toHaveLength(1)
+  expect(aside[0]![1]).toBe('{corrupt')
+  saveWrite({ key: 'k1', tenant, method: 'POST', path: 'deviceManagement/deviceCategories', at: new Date().toISOString(), state: 'complete', objectId: 'created' })
+  expect(writeRecords()).toMatchObject([{ key: 'k1', state: 'complete' }])
+})
+
 it('keeps reconciled retries reusable until an explicit new operation is confirmed', async () => {
   const fetcher = vi.fn<typeof fetch>().mockRejectedValueOnce(new Error('dropped')).mockImplementation(async (_url, init) => init?.method === 'GET' ? Response.json({ id: 'existing', displayName: 'A' }) : Response.json({ id: 'new-object' }, { status: 201 }))
   const caller = graphCaller('token', fetcher, { tenant })

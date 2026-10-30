@@ -799,11 +799,20 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     })
   } catch (error) {
     // A throw from the write loop or the final update: writes may have happened, so the
-    // claimed attempt still gets its failure entry, with the results recorded so far.
+    // claimed attempt still gets its failure entry, with the results recorded so far. The
+    // change set itself must not stay in "applying" either, or it looks still running and
+    // rollback, approval, rejection and revision all refuse it.
     if (claimed && !auditRecorded) {
+      const message = error instanceof Error ? error.message : String(error)
       let latest: Stored_ = claimed
       try { latest = getChangeSet(deps, tenant, id) } catch { /* keep the claimed snapshot */ }
-      await recordApplyAudit(deps, tenant, latest, "failed", actor, error instanceof Error ? error.message : String(error), claimedAttempt!)
+      try {
+        const results = latest.operations.map((operation) => latest.results[operation.key] ?? emptyResult())
+        const status = statusFromResults(results)
+        const settled = deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenant, id, (current) => current.status === "applying" ? { ...current, status, lastError: message, summary: `${resultSummary(results)} Apply failed: ${message}` } : current, { actor, reason: `Apply failed after writing started: ${message}` })
+        if (settled) latest = settled
+      } catch { /* The record store itself failed; the audit entry below still records the attempt. */ }
+      await recordApplyAudit(deps, tenant, latest, "failed", actor, message, claimedAttempt!)
     }
     throw error
   }

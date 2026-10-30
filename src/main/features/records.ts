@@ -96,12 +96,16 @@ export class TenantRecords {
     if (staged) return [...staged] as Stored<T>[]
     const raw = this.store.get(key)
     if (!raw) return []
-    try {
-      const parsed: unknown = JSON.parse(raw)
-      return Array.isArray(parsed) ? (parsed as Stored<T>[]) : []
-    } catch {
-      return []
-    }
+    let parsed: unknown
+    try { parsed = JSON.parse(raw) } catch { parsed = null }
+    if (Array.isArray(parsed)) return parsed as Stored<T>[]
+    // Unreadable records would otherwise be silently overwritten by the next write built on
+    // an empty list. The raw value is set aside under its own key, not deleted, so it can
+    // still be recovered from the store (the native framework history does the same).
+    this.store.set(`${key}.unreadable.${this.now().getTime()}`, raw)
+    this.store.delete(key)
+    console.warn(`[records] Set aside unreadable stored records for ${key}.`)
+    return []
   }
 
   get<T>(domain: string, tenantId: string, id: string): Stored<T> | null {

@@ -276,4 +276,24 @@ describe("BackupReaderService", () => {
     expect(reader.status(TENANT)).toBeNull()
     expect(reader.tokens(scheduled)).toBeNull()
   })
+
+  it("sets a corrupt stored credential aside and falls back to the admin's sign-in", () => {
+    const backing = store()
+    backing.set(`backupReader.${TENANT}`, "{corrupt")
+    const reader = new BackupReaderService(backing, { acquire: async () => ({ accessToken: graphToken() }), now: () => new Date("2026-10-26T12:00:00Z") })
+    expect(reader.status(TENANT)).toBeNull()
+    expect(reader.tokens(scheduled)).toBeNull()
+    const aside = backing.keys().filter((key) => key.startsWith(`backupReader.${TENANT}.unreadable.`))
+    expect(aside).toHaveLength(1)
+    expect(backing.get(aside[0]!)).toBe("{corrupt")
+  })
+
+  it("treats a legacy-shaped credential without certificates as not set up", () => {
+    const backing = store()
+    backing.set(`backupReader.${TENANT}`, JSON.stringify({ tenantId: TENANT }))
+    const reader = new BackupReaderService(backing, { acquire: async () => ({ accessToken: graphToken() }), now: () => new Date("2026-10-26T12:00:00Z") })
+    expect(reader.status(TENANT)).toBeNull()
+    expect(reader.tokens(scheduled)).toBeNull()
+    expect(reader.prepare(TENANT, "LAPTOP-1").state).toBe("pending")
+  })
 })

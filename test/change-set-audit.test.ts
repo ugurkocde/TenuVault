@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { applyChangeSet, approveChangeSet, createChangeSet, createRollbackChangeSet, previewChangeSet } from "../src/main/features/change-sets/engine"
 import type { ChangeSetRecord } from "../src/main/features/change-sets/model"
+import { DOMAINS } from "../src/main/features/domains"
 import { fakeDeps, TENANT_A, TENANT_B } from "./feature-helpers"
 import { FakeTenant, setting, wire } from "./feature-change-sets-fakes"
 import { createAuditLogger } from "../src/portal/lib/audit/logger"
@@ -183,6 +184,9 @@ describe("change set audit entries", () => {
       details: { status: "failed", attempt: 1, operations: 1, verified: 1, created: 1 },
     })
     expect(context.audit[0]!.logEntry.details?.error?.message).toContain("Record store unavailable")
+    const stored = context.deps.records.get<ChangeSetRecord>(DOMAINS.changeSets, TENANT_A, record.id)!
+    expect(stored.status).not.toBe("applying")
+    expect(stored.lastError).toContain("Record store unavailable")
   })
 
   it("keeps the apply outcome when the audit write itself fails", async () => {

@@ -235,13 +235,44 @@ export class BackupReaderService {
   }
 
   private read(tenantId: string): BackupReaderCredential | null {
-    const raw = this.store.get(KEY + tenantId.toLowerCase())
-    return raw ? (JSON.parse(raw) as BackupReaderCredential) : null
+    const tenant = tenantId.toLowerCase()
+    const raw = this.store.get(KEY + tenant)
+    if (!raw) return null
+    let parsed: unknown
+    try { parsed = JSON.parse(raw) } catch { parsed = null }
+    if (isCredential(parsed, tenant)) { parsed.verifiedRoles ??= null; return parsed }
+    // A corrupt or old-schema credential must not throw into every scheduled backup: it reads
+    // as "no Backup Reader", so backups fall back to the admin's sign-in as documented. The
+    // raw value (which holds the private key) is set aside in the same encrypted store, not
+    // deleted, so it can still be recovered.
+    this.store.set(`${KEY}${tenant}.unreadable.${this.now().getTime()}`, raw)
+    this.store.delete(KEY + tenant)
+    console.warn(`[backup-reader] Set aside an unreadable stored credential for tenant ${tenant}.`)
+    return null
   }
 
   private write(credential: BackupReaderCredential): void {
     this.store.set(KEY + credential.tenantId.toLowerCase(), JSON.stringify(credential))
   }
+}
+
+function isCertificate(value: unknown): value is Certificate {
+  if (!value || typeof value !== "object") return false
+  const certificate = value as Partial<Certificate>
+  return ["certificatePem", "privateKeyPem", "thumbprintSha256", "notBefore", "notAfter"].every((field) => typeof certificate[field as keyof Certificate] === "string" && certificate[field as keyof Certificate] !== "")
+}
+
+/** Whether a stored value has the credential shape every reader of it dereferences. */
+function isCredential(value: unknown, tenant: string): value is BackupReaderCredential {
+  if (!value || typeof value !== "object") return false
+  const credential = value as Partial<BackupReaderCredential>
+  if (typeof credential.tenantId !== "string" || credential.tenantId.toLowerCase() !== tenant) return false
+  if (typeof credential.clientId !== "string") return false
+  if (credential.active !== null && !isCertificate(credential.active)) return false
+  if (credential.pending !== null && !isCertificate(credential.pending)) return false
+  if (!credential.active && !credential.pending) return false
+  if (credential.verifiedRoles !== undefined && credential.verifiedRoles !== null && (!Array.isArray(credential.verifiedRoles) || credential.verifiedRoles.some((role) => typeof role !== "string"))) return false
+  return true
 }
 
 function excludedTypes(roles: string[] | null): string[] {
