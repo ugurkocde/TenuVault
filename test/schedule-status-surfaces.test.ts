@@ -40,7 +40,7 @@ vi.mock("@desktop/lib/bridge", () => ({ bridge: {
     liveRuns: async (tenantId: string) => tenantId === "tenant" ? state.liveRuns : [],
   },
 } }))
-vi.mock("@desktop/lib/schedules", async (original) => ({ ...await original<typeof import("../src/renderer/lib/schedules")>(), useSchedules: () => state.schedules }))
+vi.mock("@desktop/lib/schedules", async (original) => ({ ...await original<typeof import("../src/renderer/lib/schedules")>(), useSchedules: () => ({ schedules: state.schedules, error: null, loading: false, reload: () => undefined }) }))
 vi.mock("@desktop/lib/license", () => ({ useLicense: () => ({ status: null }), tenantLicense: () => null, tenantPlan: () => state.plan, planName: () => "Community" }))
 vi.mock("@desktop/components/RunBackupDialog", () => ({ RunBackupDialog: () => null }))
 vi.mock("@desktop/components/RecoveryKeyNotice", () => ({ RecoveryKeyNotice: () => null }))

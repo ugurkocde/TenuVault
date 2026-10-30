@@ -30,7 +30,7 @@ vi.mock("~/contexts/TenantContext", () => ({
 }))
 vi.mock("~/contexts/BackupProgressContext", () => ({ useBackupProgress: () => ({ addJob: vi.fn() }) }))
 vi.mock("@desktop/lib/bridge", () => ({ bridge: { auth: { accounts: async () => [] } } }))
-vi.mock("@desktop/lib/schedules", async (original) => ({ ...await original<typeof import("../src/renderer/lib/schedules")>(), useSchedules: () => [] }))
+vi.mock("@desktop/lib/schedules", async (original) => ({ ...await original<typeof import("../src/renderer/lib/schedules")>(), useSchedules: () => ({ schedules: [], error: null, loading: false, reload: () => undefined }) }))
 vi.mock("@desktop/lib/license", () => ({
   useLicense: () => ({ status: state.status }),
   tenantLicense: () => null,

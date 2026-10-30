@@ -8,7 +8,7 @@ vi.mock("../../src/portal/contexts/TenantContext", () => ({
   useSelectedTenant: () => ({ selectedTenant: undefined, selectedTenantId: undefined, setSelectedTenantId: () => undefined }),
 }))
 
-import { refreshCisJobs, useCisJobs } from "../../src/renderer/lib/cis-jobs"
+import { noteCisJobStarted, onCisJobFinished, refreshCisJobs, useCisJobs, type CisJob } from "../../src/renderer/lib/cis-jobs"
 
 const job = {
   jobId: "cis-race-1",
@@ -77,5 +77,22 @@ describe("cis jobs store", () => {
     await act(async () => { deferred[0]!(Response.json({ jobs: [] })) })
     await act(async () => { deferred[1]!(Response.json({ jobs: [job] })) })
     await waitFor(() => container.textContent.includes("cis-race-1"))
+  })
+
+  it("keeps a noted started job across a failed refresh and announces its finish", async () => {
+    const noted = { ...job, jobId: "cis-noted-1" } as CisJob
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("offline") }))
+    const finished: string[] = []
+    const unsubscribe = onCisJobFinished((item) => finished.push(item.jobId))
+    const container = mount()
+    await act(async () => noteCisJobStarted(noted))
+    await act(async () => { await refreshCisJobs() })
+    expect(container.textContent).toContain("cis-noted-1")
+    expect(finished).toEqual([])
+
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ jobs: [{ ...noted, phase: "done", status: "done" }] })))
+    await act(async () => { await refreshCisJobs() })
+    expect(finished).toEqual(["cis-noted-1"])
+    unsubscribe()
   })
 })

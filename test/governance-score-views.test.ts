@@ -8,8 +8,9 @@ import { checkSignals } from "../src/main/features/health-review/rules"
 import { FindingsList, emptyFindingsText } from "../src/renderer/features/health-review/FindingsList"
 import type { Finding, Run } from "../src/renderer/features/health-review/api"
 import { formatPercent, formatScore, groupUnavailable, namesLabel } from "../src/renderer/features/scores/api"
-import { invalidateScores, invalidateScoresOnComparison, SCORE_QUERY_KEYS } from "../src/renderer/features/scores/invalidate"
+import { invalidateScores, invalidateScoresOnCisAssessment, invalidateScoresOnComparison, SCORE_QUERY_KEYS } from "../src/renderer/features/scores/invalidate"
 import type { FrameworkJob } from "../src/renderer/lib/framework-jobs"
+import type { CisJob } from "../src/renderer/lib/cis-jobs"
 import { deviationLabel } from "../src/renderer/features/standards/state"
 import { TENANT_A } from "./feature-helpers"
 
@@ -57,6 +58,22 @@ describe("score invalidation", () => {
     emit!({ status: "failed" } as FrameworkJob)
     expect(SCORE_QUERY_KEYS.some((key) => invalidated(client, key))).toBe(false)
     emit!({ status: "completed" } as FrameworkJob)
+    for (const key of SCORE_QUERY_KEYS) expect(invalidated(client, key)).toBe(true)
+    expect(client.getQueryState(["health-status", TENANT_A])?.isInvalidated).toBe(false)
+    unsubscribe()
+    expect(emit).toBeNull()
+  })
+
+  it("invalidates the scores when a CIS assessment finishes, so the dashboard tile is not stale", () => {
+    const client = seeded()
+    let emit: ((job: CisJob) => void) | null = null
+    const unsubscribe = invalidateScoresOnCisAssessment(client, (listener) => {
+      emit = listener
+      return () => { emit = null }
+    })
+    emit!({ status: "failed" } as CisJob)
+    expect(SCORE_QUERY_KEYS.some((key) => invalidated(client, key))).toBe(false)
+    emit!({ status: "done" } as CisJob)
     for (const key of SCORE_QUERY_KEYS) expect(invalidated(client, key)).toBe(true)
     expect(client.getQueryState(["health-status", TENANT_A])?.isInvalidated).toBe(false)
     unsubscribe()

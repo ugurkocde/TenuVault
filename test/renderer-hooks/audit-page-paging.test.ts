@@ -104,6 +104,39 @@ describe("Audit log paging", () => {
     expect(text()).toContain("Showing 1 to 50")
   })
 
+  it("exports with the submitted search, not the text typed after it", async () => {
+    state.selected = tenant(1, "11111111-1111-1111-1111-111111111111")
+    const exported: Array<{ searchQuery?: string }> = []
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body))
+      if (String(input) === "/api/audit/stats") return Response.json({ data: { summary: { totalEvents: 0, successRate: "0%" } } })
+      if (String(input) === "/api/audit/export") {
+        exported.push(body.exportOptions.filter)
+        return new Response("[]", { headers: { "content-type": "application/json" } })
+      }
+      return Response.json({ data: [entry(0)], pendingCount: 0 })
+    }))
+    Object.assign(URL, { createObjectURL: vi.fn(() => "blob:export"), revokeObjectURL: vi.fn() })
+    await render()
+    const input = document.querySelector<HTMLInputElement>('input[type="search"]')!
+    const type = async (value: string) => {
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value)
+        input.dispatchEvent(new Event("input", { bubbles: true }))
+      })
+    }
+    await type("alpha")
+    await act(async () => input.form!.requestSubmit())
+    await type("beta")
+
+    const trigger = [...document.querySelectorAll("button")].find((item) => item.textContent?.includes("Export"))!
+    await act(async () => { trigger.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })); trigger.click() })
+    const item = [...document.querySelectorAll("[role=menuitem]")].find((entry) => entry.textContent?.includes("Export as JSON")) as HTMLElement
+    await act(async () => { item.dispatchEvent(new MouseEvent("pointerup", { bubbles: true })); item.click() })
+    expect(exported.length).toBeGreaterThan(0)
+    for (const filter of exported) expect(filter).toMatchObject({ searchQuery: "alpha" })
+  })
+
   it("keeps the page when the selected tenant object is replaced by a background update", async () => {
     state.selected = tenant(1, "11111111-1111-1111-1111-111111111111")
     const calls = stubApi((call) => Math.min(call.filter.limit, 200 - call.filter.offset))

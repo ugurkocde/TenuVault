@@ -49,6 +49,16 @@ function schedule() {
   else poller.untrack("jobs")
 }
 
+/**
+ * Records a just-started assessment as running, so its finish is announced even when the
+ * first refresh afterwards fails: the poller keeps running while a job it knows is running,
+ * and the entry survives read failures because a failed refresh never clears the list.
+ */
+export function noteCisJobStarted(summary: CisJob): void {
+  loaded = true
+  apply([summary, ...jobs.filter((job) => job.jobId !== summary.jobId)])
+}
+
 export async function refreshCisJobs(): Promise<void> {
   const sent = revision
   try {

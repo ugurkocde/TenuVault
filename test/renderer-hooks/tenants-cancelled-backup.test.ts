@@ -23,7 +23,7 @@ vi.mock("~/contexts/TenantContext", () => ({
   useTenantAzureSync: () => ({ loadTenantFromAzure: vi.fn(), syncTenantToAzureDirect: vi.fn() }),
 }))
 vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams() }))
-vi.mock("@desktop/lib/schedules", () => ({ useSchedules: () => [], formatWhen: () => "" }))
+vi.mock("@desktop/lib/schedules", () => ({ useSchedules: () => ({ schedules: [], error: null, loading: false, reload: () => undefined }), formatWhen: () => "" }))
 vi.mock("@desktop/lib/license", () => ({ useLicense: () => ({ status: null }), tenantLicense: () => null, tenantPlan: () => null, planName: () => "Community" }))
 vi.mock("@desktop/components/PlanGate", () => ({ GatedButton: () => null }))
 // Choosing what to back up starts the job at once.

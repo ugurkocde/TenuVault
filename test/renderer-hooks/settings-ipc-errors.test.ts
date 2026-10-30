@@ -12,6 +12,8 @@ const state = vi.hoisted(() => ({
   setPrefs: vi.fn(),
   updateStatus: vi.fn(),
   check: vi.fn(),
+  scope: vi.fn(),
+  schedulesResult: { schedules: [] as unknown[], error: null as string | null, loading: false, reload: vi.fn() },
 }))
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
@@ -21,7 +23,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
     updates: { status: state.updateStatus, check: state.check, onChanged: () => () => undefined },
     backgroundLaunch: { status: async () => ({ supported: true, installed: false }) },
     backupReader: { status: async () => ({ supported: true, available: false, reader: null }) },
-    backups: { scope: () => new Promise(() => undefined) },
+    backups: { scope: state.scope },
   },
 }))
 vi.mock("../../src/renderer/lib/license", async (original) => ({
@@ -30,8 +32,8 @@ vi.mock("../../src/renderer/lib/license", async (original) => ({
 }))
 vi.mock("../../src/renderer/lib/schedules", async (original) => ({
   ...(await original<typeof import("../../src/renderer/lib/schedules")>()),
-  useSchedules: () => [],
-  useRefusals: () => [],
+  useSchedules: () => state.schedulesResult,
+  useRefusals: () => ({ refusals: [], error: null, loading: false, reload: () => undefined }),
 }))
 vi.mock("../../src/renderer/lib/appearance", () => ({ getAppearance: () => "light", setAppearance: () => undefined }))
 vi.mock("~/contexts/TenantContext", () => ({ useTenants: () => [], useTenantOperations: () => ({}) }))
@@ -46,7 +48,8 @@ const roots: Root[] = []
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount())
   document.body.innerHTML = ""
-  for (const mock of Object.values(state)) mock.mockReset()
+  for (const [name, mock] of Object.entries(state)) if (name !== "schedulesResult") (mock as ReturnType<typeof vi.fn>).mockReset()
+  state.schedulesResult = { schedules: [], error: null, loading: false, reload: vi.fn() }
 })
 
 async function render(element: ReturnType<typeof createElement>): Promise<HTMLDivElement> {
@@ -95,8 +98,31 @@ describe("Settings sections on IPC errors", () => {
     expect(container.textContent).toContain("Could not check for updates: feed unreachable")
   })
 
+  it("shows a schedule load failure on the panel and blocks saving over the saved schedule", async () => {
+    state.schedulesResult = { schedules: [], error: "schedule IPC down", loading: false, reload: vi.fn() }
+    state.getPrefs.mockResolvedValue(prefs)
+    state.scope.mockImplementation(() => new Promise(() => undefined))
+    const container = await render(createElement(BackupSchedulePanel, { tenantId: "tenant", tenantName: "Contoso" }))
+    expect(alertText(container)).toContain("schedule IPC down")
+    const enable = [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find((input) => input.closest("label")?.textContent?.includes("automatically"))!
+    await act(async () => { enable.click() })
+    expect(button(container, "Save")!.disabled).toBe(true)
+  })
+
+  it("shows a backup scope load failure with a retry instead of hiding the section", async () => {
+    state.getPrefs.mockResolvedValue(prefs)
+    state.scope.mockRejectedValueOnce(new Error("scope IPC down")).mockResolvedValue({ scope: { excluded: [] }, saved: true })
+    const container = await render(createElement(BackupSchedulePanel, { tenantId: "tenant", tenantName: "Contoso" }))
+    expect(container.textContent).toContain("What to back up")
+    expect(alertText(container)).toContain("scope IPC down")
+    await act(async () => { button(container, "Try again")!.click() })
+    expect(alertText(container)).toBe("")
+    expect(state.scope).toHaveBeenCalledTimes(2)
+  })
+
   it("shows background runner preference errors on the schedule panel", async () => {
     state.getPrefs.mockRejectedValueOnce(new Error("prefs failed")).mockResolvedValue(prefs)
+    state.scope.mockImplementation(() => new Promise(() => undefined))
     const container = await render(createElement(BackupSchedulePanel, { tenantId: "tenant", tenantName: "Contoso" }))
     expect(alertText(container)).toContain("prefs failed")
     await act(async () => { button(container, "Try again")!.click() })

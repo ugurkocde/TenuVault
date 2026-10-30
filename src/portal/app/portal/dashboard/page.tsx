@@ -176,18 +176,20 @@ function DashboardContent() {
   const [selectedPeriod, setSelectedPeriod] = useState("7d")
   const [relativeNow, setRelativeNow] = useState(() => Date.now())
   const [accounts, setAccounts] = useState<SignedInAccount[] | null>(null)
+  const [accountsError, setAccountsError] = useState<string | null>(null)
   useEffect(() => {
     const interval = window.setInterval(() => setRelativeNow(Date.now()), 1000)
     return () => window.clearInterval(interval)
   }, [])
-  useEffect(() => void bridge.auth.accounts().then(setAccounts), [])
+  const loadAccounts = () => bridge.auth.accounts().then((next) => { setAccounts(next); setAccountsError(null) }, (error: unknown) => setAccountsError(error instanceof Error ? error.message : String(error)))
+  useEffect(() => void loadAccounts(), [])
 
   const tenants = useTenants()
   const { selectedTenant } = useSelectedTenant()
   // The dashboard follows the tenant switcher; before a choice is stored it shows the first tenant.
   const tenant = selectedTenant ?? tenants[0]
   const tenantGuid = tenant?.credentials?.tenantId?.toLowerCase() ?? ""
-  const schedules = useSchedules()
+  const { schedules, error: schedulesError, reload: reloadSchedules } = useSchedules()
   const { status: licenseStatus } = useLicense()
   const { activeJobs } = useBackupProgress()
   const {
@@ -294,7 +296,7 @@ function DashboardContent() {
           <Button
             variant="outline"
             size="icon"
-            aria-label="Refresh dashboard" onClick={() => refetchStats()}
+            aria-label="Refresh dashboard" onClick={() => { void loadAccounts(); reloadSchedules(); void refetchStats() }}
             disabled={statsLoading || isFetching}
           >
             {isFetching ? (
@@ -413,10 +415,15 @@ function DashboardContent() {
         <Tile aria-label="Next Backup">
           <div className="flex items-start justify-between gap-3">
             <TileIcon icon={CalendarClock} />
-            {schedule?.enabled ? <Chip tone="success">On</Chip> : <Chip>Off</Chip>}
+            {schedulesError ? <Chip tone="warning">Unknown</Chip> : schedule?.enabled ? <Chip tone="success">On</Chip> : <Chip>Off</Chip>}
           </div>
           <TileLabel className="mt-6">Next Backup</TileLabel>
-          {schedule?.enabled ? (
+          {schedulesError ? (
+            <>
+              <BigValue className="mt-1">Unavailable</BigValue>
+              <p className="mt-1 text-sm text-gray-500" title={schedulesError}>Schedules could not be loaded. Refresh the dashboard to try again.</p>
+            </>
+          ) : schedule?.enabled ? (
             <>
               <BigValue className="mt-1">{nextIn ?? "Not scheduled"}</BigValue>
               <p className="mt-1 text-sm text-gray-500">{describeSchedule(schedule)}</p>
@@ -596,7 +603,7 @@ function DashboardContent() {
           <BigValue className="mt-1 truncate text-2xl" >{isLocal ? "This device" : storageLabel(tenant.resources?.storageAccountName)}</BigValue>
           <dl className="mt-auto grid gap-3 pt-5">
             <Fact label="Signed in as">
-              {account ? account.username : accounts === null ? "Checking" : <span className="text-amber-800">Not signed in</span>}
+              {account ? account.username : accountsError ? <span className="text-red-600" title={accountsError}>Could not be checked</span> : accounts === null ? "Checking" : <span className="text-amber-800">Not signed in</span>}
             </Fact>
           </dl>
         </Tile>
