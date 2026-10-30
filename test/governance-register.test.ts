@@ -39,6 +39,25 @@ describe("accepted deviations register", () => {
     expect(missing.standardDeviations).toBe(0)
   })
 
+  it("counts open deprecated settings once per setting and per affected policy, dated by the catalog check", () => {
+    const summary = summarizeGovernance({
+      frameworks: [],
+      findings: [
+        { status: "open", classification: "definite", ruleId: "deprecated-setting", policies: [{ folder: "ConfigurationPolicies", id: "p1", name: "A" }, { folder: "ConfigurationPolicies", id: "p2", name: "B" }] },
+        { status: "open", classification: "possible", ruleId: "deprecated-setting", policies: [{ folder: "ConfigurationPolicies", id: "p1", name: "A" }] },
+        { status: "acknowledged", classification: "definite", ruleId: "deprecated-setting", policies: [{ folder: "ConfigurationPolicies", id: "p3", name: "C" }] },
+        { status: "open", classification: "definite", ruleId: "unassigned-policy", policies: [{ folder: "ConfigurationPolicies", id: "p4", name: "D" }] },
+      ] as never,
+      scans: [
+        { collectedAt: "2026-10-30T00:00:00Z", backupId: "b2", catalog: { state: "unavailable", checkedAt: null, total: null, reason: "denied" } },
+        { collectedAt: "2026-10-29T00:00:00Z", backupId: "b1", catalog: { state: "checked", checkedAt: "2026-10-29T06:00:00Z", total: 18620, reason: null } },
+      ] as never,
+      customizations: [],
+      adoptions: [],
+    })
+    expect(summary.deprecatedSettings).toEqual({ settings: 2, policies: 2, catalogCheckedAt: "2026-10-29T06:00:00Z" })
+  })
+
   it("builds an evidence pack with the notice, tenant and freshness per section", () => {
     const pack = JSON.parse(evidencePackJson({ tenant: "Contoso", exportedAt: "2026-10-30T12:00:00Z", frameworks: [], findings: [], ruleName: (id) => id, adoptions: [], customizations: [], deviations: [], freshness: { scoresAssessedAt: "2026-10-01T00:00:00Z", hygieneCollectedAt: null, standardsAssessedAt: null } }))
     expect(pack.notice).toBe(GOVERNANCE_EVIDENCE_NOTICE)

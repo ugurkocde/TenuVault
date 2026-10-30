@@ -51,8 +51,8 @@ export const HUBS: Hub[] = [
         label: "Conflicts and hygiene",
         feature: "hygieneExplorer",
         path: "/api/hygiene",
-        summary: "Finds candidate conflicting settings, duplicate profiles, unassigned policies and broken references.",
-        points: ["Separates definite configuration problems from possible overlaps that need group or device context.", "Acknowledge findings or mark false positives with a documented reason.", "Never deletes or changes a policy."],
+        summary: "Finds candidate conflicting settings, duplicate profiles, unassigned policies, broken references and settings Microsoft lists as deprecated in the current Settings Catalog.",
+        points: ["Separates definite configuration problems from possible ones that need more context to confirm.", "Deprecated settings are checked against the current Settings Catalog during the scan; if the catalog cannot be read, the check is shown as not made.", "Acknowledge findings or mark false positives with a documented reason. Never deletes or changes a policy."],
         Component: lazy(() => import("./hygiene/HygieneTab")),
       },
       {

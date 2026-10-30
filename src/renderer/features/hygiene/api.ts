@@ -30,6 +30,8 @@ export interface Scan {
   unreadableItems: number
   unknowns: Array<{ ruleId: string; reason: string; count: number; policies: PolicyRef[] }>
   groupResolution: { state: string; reason: string | null }
+  /** Absent on scans from before the deprecated settings rule. */
+  catalog?: { state: string; checkedAt: string | null; total: number | null; reason: string | null }
   counts: { definite: number; possible: number }
 }
 
@@ -71,7 +73,7 @@ export interface FleetTenant {
 
 export const GROUP_READ_OPT_IN_HINT = "To let this check run, add Group.Read.All to the app registration and grant admin consent (run New-TenuVaultDesktopApp.ps1 with -IncludeGroupRead), then sign in again and rescan."
 export const STATUS_LABELS: Record<FindingStatus, string> = { open: "Open", acknowledged: "Acknowledged", "false-positive": "False positive", resolved: "Not detected" }
-export const CLASSIFICATION_LABELS: Record<Classification, string> = { definite: "Definite", possible: "Possible overlap" }
+export const CLASSIFICATION_LABELS: Record<Classification, string> = { definite: "Definite", possible: "Possible" }
 
 export const loadList = (tenant: Tenant) => featureCall<HygieneList>("/api/hygiene", tenant, "list")
 export const loadFinding = (tenant: Tenant, findingId: string) => featureCall<{ finding: Finding; rule: Rule; scan: Scan | null }>("/api/hygiene", tenant, "get", { findingId })

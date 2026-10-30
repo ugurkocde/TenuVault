@@ -60,6 +60,7 @@ export default function OverviewTab({ tenant, plan, allowed }: FeatureTabProps) 
   const attention: Array<{ text: string; link: string; label: string }> = []
   if (expired.length) attention.push({ text: `${expired.length} accepted ${expired.length === 1 ? "deviation has" : "deviations have"} expired and ${expired.length === 1 ? "needs" : "need"} re-review.`, link: "/portal/governance/deviations", label: "Open accepted deviations" })
   if (summary.openDefinite) attention.push({ text: `${summary.openDefinite} open definite hygiene ${summary.openDefinite === 1 ? "finding" : "findings"} from ${summary.latestScanAt ? formatDate(summary.latestScanAt) : "the latest scan"}.`, link: "/portal/governance/hygiene", label: "Review findings" })
+  if (summary.deprecatedSettings.settings) attention.push({ text: `${summary.deprecatedSettings.policies} ${summary.deprecatedSettings.policies === 1 ? "policy contains" : "policies contain"} deprecated settings (${summary.deprecatedSettings.settings} ${summary.deprecatedSettings.settings === 1 ? "setting" : "settings"}${summary.deprecatedSettings.catalogCheckedAt ? `, Settings Catalog checked ${formatDate(summary.deprecatedSettings.catalogCheckedAt)}` : ""}).`, link: "/portal/governance/hygiene?rule=deprecated-setting", label: "Review deprecated settings" })
   if (summary.staleScores) attention.push({ text: `${summary.staleScores} baseline ${summary.staleScores === 1 ? "score is" : "scores are"} stale. Run a new framework comparison to refresh.`, link: "/portal/governance/scores", label: "Open baseline scores" })
   if (summary.pendingUpgrades) attention.push({ text: `${summary.pendingUpgrades} standard ${summary.pendingUpgrades === 1 ? "adoption has" : "adoptions have"} an upgrade available.`, link: "/portal/governance/standards", label: "Open golden standards" })
   if (summary.totalGaps) attention.push({ text: `${summary.totalGaps} counted ${summary.totalGaps === 1 ? "gap" : "gaps"} across saved comparisons.`, link: "/portal/governance/scores", label: "See top gaps" })
@@ -99,7 +100,7 @@ export default function OverviewTab({ tenant, plan, allowed }: FeatureTabProps) 
         <Tile>
           <TileLabel>Open hygiene findings</TileLabel>
           <BigValue>{hygiene.data ? summary.openDefinite + summary.openPossible : "Unknown"}</BigValue>
-          <p className="mt-2 text-sm text-gray-600">{summary.openDefinite} definite, {summary.openPossible} possible overlaps. Source: {summary.latestScanBackup ? `backup ${summary.latestScanBackup}, collected ${formatDate(summary.latestScanAt)}` : "no scan yet"}.</p>
+          <p className="mt-2 text-sm text-gray-600">{summary.openDefinite} definite, {summary.openPossible} possible. Source: {summary.latestScanBackup ? `backup ${summary.latestScanBackup}, collected ${formatDate(summary.latestScanAt)}` : "no scan yet"}.</p>
           <p className="mt-3 text-sm"><Link to="/portal/governance/hygiene" className={linkClass}>Open conflicts and hygiene</Link></p>
         </Tile>
         <Tile>

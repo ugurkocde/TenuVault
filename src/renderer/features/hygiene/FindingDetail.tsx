@@ -25,7 +25,7 @@ export function FindingDetail({ tenant, findingId, readOnly, onChanged }: { tena
 
   if (detail.isLoading) return <div className="h-20 animate-pulse rounded-2xl bg-gray-100 dark:bg-gray-800" />
   if (detail.error || !detail.data) return <p className="text-sm text-red-700 dark:text-red-400">{detail.error instanceof Error ? detail.error.message : "The finding could not be loaded."}</p>
-  const { finding, rule } = detail.data
+  const { finding, rule, scan } = detail.data
   const reviewed = finding.status === "acknowledged" || finding.status === "false-positive"
   const nameOf = (id: string) => finding.policies.find((policy) => policy.id === id)?.name ?? id
 
@@ -35,10 +35,10 @@ export function FindingDetail({ tenant, findingId, readOnly, onChanged }: { tena
         <p className="text-gray-800">{finding.explanation}</p>
         <p className="text-gray-600">
           <span className="font-medium text-gray-700">{CLASSIFICATION_LABELS[finding.classification]}.</span>{" "}
-          {finding.classification === "definite" ? "A configuration problem in the collected data." : "Needs group, filter or device context to confirm; unknown membership is not proof either way."}
+          {finding.classification === "definite" ? "A configuration problem in the collected data." : finding.ruleId === "conflicting-setting" ? "Needs group, filter or device context to confirm; unknown membership is not proof either way." : "Needs review; the collected data alone does not confirm it."}
         </p>
         <p className="text-xs text-gray-500">Rule {rule.id}: {rule.description} Limits: {rule.limits}</p>
-        <p className="text-xs text-gray-500">Evidence from backup {finding.backupId}, collected {formatDate(finding.collectedAt)}. First seen {formatDate(finding.firstSeenAt)}. Evidence hash {finding.evidenceSha256.slice(0, 16)}.</p>
+        <p className="text-xs text-gray-500">Evidence from backup {finding.backupId}, collected {formatDate(finding.collectedAt)}. First seen {formatDate(finding.firstSeenAt)}. Evidence hash {finding.evidenceSha256.slice(0, 16)}.{finding.ruleId === "deprecated-setting" && scan?.catalog?.state === "checked" ? ` Settings Catalog checked ${formatDate(scan.catalog.checkedAt)} (${scan.catalog.total} definitions).` : ""}</p>
       </div>
 
       <div>

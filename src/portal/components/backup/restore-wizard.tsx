@@ -1,4 +1,5 @@
 import { reviewedDependencyMappings, type RecoveryReadiness } from "../../../shared/intune/recovery"
+import { settingDefinitionIds, type DeprecatedSettingHit } from "../../../shared/intune/settings-catalog"
 import { typeForFolder, type ReviewChange } from "../../../shared/intune/registry"
 import { passwordResetWarning } from "../../../shared/intune/restore-plan"
 import { ACKNOWLEDGEMENT_REQUIRED } from "../../../shared/disclaimer"
@@ -69,6 +70,15 @@ interface BackupItem {
   replaceBlocker?: string
   readiness?: RecoveryReadiness
   snapshot?: unknown
+}
+
+/** The deprecated-settings check for the chosen backup, against the Settings Catalog as read now. */
+interface CatalogCheckState {
+  state: "checking" | "checked" | "unavailable"
+  checkedAt: string | null
+  total: number | null
+  reason: string | null
+  settings: Record<string, { displayName: string | null; state: DeprecatedSettingHit["state"] }>
 }
 
 interface LiveState {
@@ -156,6 +166,15 @@ const PLAN_TONE: Record<Plan, string> = {
   unchecked: "text-amber-800",
 }
 
+/** One readable line naming an item's deprecated settings, naming at most three. */
+function deprecatedLabel(hits: DeprecatedSettingHit[]): string {
+  const names = hits.map((hit) => hit.displayName ?? hit.definitionId)
+  const shown = `${names.slice(0, 3).join(", ")}${names.length > 3 ? ` and ${names.length - 3} more` : ""}`
+  if (hits.every((hit) => hit.state === "not in catalog")) return `No longer in the Settings Catalog: ${shown}`
+  if (hits.every((hit) => hit.state === "to be deprecated")) return `To be deprecated: ${shown}`
+  return `Deprecated settings: ${shown}`
+}
+
 const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1)
 
 const items = (count: number) => `${count} item${count === 1 ? "" : "s"}`
@@ -198,6 +217,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
 
   const [items, setItems] = useState<BackupItem[] | null>(null)
   const [itemsError, setItemsError] = useState("")
+  const [catalogCheck, setCatalogCheck] = useState<CatalogCheckState | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [query, setQuery] = useState("")
   const [openTypes, setOpenTypes] = useState<Set<string>>(new Set())
@@ -248,6 +268,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     if (!backupId) return
     setItems(null)
     setItemsError("")
+    setCatalogCheck(null)
     setSelected(new Set())
     setReview(null)
     setValidation(null)
@@ -291,6 +312,42 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
   }, [items, mode, community, copying])
 
   const itemByPath = useMemo(() => new Map((items ?? []).map((item) => [item.path, item])), [items])
+
+  // Deprecated settings in this backup, checked once against the Settings Catalog as it is now.
+  // The IDs come from the snapshots already loaded above; a failed check never blocks a restore.
+  useEffect(() => {
+    if (!items || !backupId) return
+    const definitionIds = [...new Set(items.filter((item) => item.folder === "ConfigurationPolicies").flatMap((item) => settingDefinitionIds(item.snapshot)))]
+    if (!definitionIds.length) return
+    setCatalogCheck({ state: "checking", checkedAt: null, total: null, reason: null, settings: {} })
+    const controller = new AbortController()
+    void post<{ catalog: Omit<CatalogCheckState, "settings">; settings: CatalogCheckState["settings"] }>(
+      "/api/settings-catalog-check",
+      { ...tenant.credentials, storageAccountName: tenant.storageAccountName, definitionIds },
+      controller.signal,
+    )
+      .then((result) => setCatalogCheck({ ...result.catalog, settings: result.settings }))
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return
+        setCatalogCheck({ state: "unavailable", checkedAt: null, total: null, reason: `The Settings Catalog could not be read (${error instanceof Error ? error.message : String(error)}), so deprecated settings could not be checked.`, settings: {} })
+      })
+    return () => controller.abort()
+  }, [items, backupId, tenant])
+
+  const deprecatedByPath = useMemo(() => {
+    const byPath = new Map<string, DeprecatedSettingHit[]>()
+    if (catalogCheck?.state !== "checked" || !items) return byPath
+    for (const item of items) {
+      if (item.folder !== "ConfigurationPolicies") continue
+      const hits = settingDefinitionIds(item.snapshot).flatMap((definitionId) => {
+        const known = catalogCheck.settings[definitionId]
+        return known ? [{ definitionId, displayName: known.displayName, state: known.state }] : []
+      })
+      if (hits.length) byPath.set(item.path, hits)
+    }
+    return byPath
+  }, [items, catalogCheck])
+  const catalogPolicyCount = (items ?? []).filter((item) => item.folder === "ConfigurationPolicies").length
   const visible = useMemo(() => {
     const text = query.trim().toLowerCase()
     return (items ?? []).filter((item) => !text || item.name.toLowerCase().includes(text) || item.label.toLowerCase().includes(text))
@@ -328,6 +385,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
     return "overwrite"
   }
   const selectedPaths = [...selected]
+  const deprecatedSelected = selectedPaths.filter((path) => deprecatedByPath.has(path))
   const plans = review ? selectedPaths.map((path) => ({ path, plan: planFor(path) })) : []
   const actionable = plans.filter((entry) => !["skip", "cannot"].includes(entry.plan)).map((entry) => entry.path)
   const changesTenant = plans.some((entry) => entry.plan === "overwrite" || entry.plan === "recreate" || entry.plan === "unchecked")
@@ -593,6 +651,27 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
             </p>
           )}
           {itemsError && <p className="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{itemsError}</p>}
+          {catalogCheck?.state === "checking" && (
+            <p className="mt-4 flex items-center gap-2 text-sm text-gray-500">
+              <Loader2 className="h-4 w-4 animate-spin" /> Checking the current Settings Catalog for deprecated settings...
+            </p>
+          )}
+          {catalogCheck?.state === "unavailable" && (
+            <p className="mt-4 flex gap-2 rounded-2xl bg-gray-100 px-4 py-3 text-sm text-gray-800">
+              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              Deprecated settings not checked: {catalogCheck.reason}
+            </p>
+          )}
+          {catalogCheck?.state === "checked" && deprecatedByPath.size > 0 && (
+            <p className="mt-4 flex gap-2 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              <span>
+                Deprecated settings: {deprecatedByPath.size} of {catalogPolicyCount} Settings Catalog {catalogPolicyCount === 1 ? "policy" : "policies"} in this backup {deprecatedByPath.size === 1 ? "contains" : "contain"} settings Microsoft lists as deprecated
+                (Settings Catalog checked {formatDate(catalogCheck.checkedAt ?? "")}, {catalogCheck.total} definitions). They restore exactly as backed up and may be ignored by current versions.
+                {deprecatedSelected.length > 0 && ` ${deprecatedSelected.length} of them ${deprecatedSelected.length === 1 ? "is" : "are"} selected.`}
+              </span>
+            </p>
+          )}
           {!items && !itemsError && (
             <div className="flex items-center gap-2 py-10 text-sm text-gray-500">
               <Loader2 className="h-4 w-4 animate-spin" /> Reading the backup...
@@ -677,6 +756,12 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                                     <span className="min-w-0">
                                       <span className={cn("block break-words", selectionBlocker(item) ? "text-gray-500" : "text-gray-900")}>{item.name}</span>
                                       {(selectionBlocker(item) || item.blocker) && <span className="block text-xs text-gray-500">{selectionBlocker(item) || "Replace only: this object cannot be copied."}</span>}
+                                      {deprecatedByPath.get(item.path) && (
+                                        <span className="mt-0.5 flex items-start gap-1 text-xs text-amber-800">
+                                          <AlertTriangle className="mt-px h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
+                                          <span>{deprecatedLabel(deprecatedByPath.get(item.path)!)} (Settings Catalog checked {formatDate(catalogCheck?.checkedAt ?? "")})</span>
+                                        </span>
+                                      )}
                                     </span>
                                   </label>
                                 </li>
@@ -816,6 +901,15 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
 
           {review && (
             <>
+              {deprecatedSelected.length > 0 && (
+                <p className="mt-5 flex gap-2 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                  <span>
+                    {deprecatedSelected.length} of the selected {deprecatedSelected.length === 1 ? "item contains" : "items contain"} deprecated settings as of the Settings Catalog checked {formatDate(catalogCheck?.checkedAt ?? "")}.
+                    They will restore exactly as backed up; deprecated settings may be ignored by current versions. Review them in Intune after restoring.
+                  </span>
+                </p>
+              )}
               <div className="mt-5 flex flex-wrap gap-2">
                 {PLAN_ORDER.map((plan) => {
                   const count = plans.filter((entry) => entry.plan === plan).length
@@ -847,6 +941,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                           </span>
                           {state?.snapshot !== undefined && <details className="mt-2"><summary className="cursor-pointer text-xs text-blue-700">Review snapshot content (may contain secrets)</summary><pre className="max-h-64 max-w-xl overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(state.snapshot, null, 2)}</pre></details>}
                           {reason && <span className="block text-xs text-gray-500">{reason}</span>}
+                          {deprecatedByPath.get(path) && <span className="block text-xs text-amber-800">{deprecatedLabel(deprecatedByPath.get(path)!)}</span>}
                           {assignmentWarning && <span className="block text-xs text-amber-800">{assignmentWarning}</span>}
                           {passwordWarning && <span className="block text-xs text-amber-800">{passwordWarning}</span>}
                           {plan === "overwrite" && !!state?.changes?.length && (

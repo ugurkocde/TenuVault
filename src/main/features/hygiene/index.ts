@@ -6,6 +6,7 @@ import { recordGovernanceAudit } from "../governance-audit"
 import { DOMAINS } from "../domains"
 import { resolveHistory, type Stored } from "../records"
 import { featureRoute, FeatureError, optionalText, text, type ActionContext, type Body } from "../route"
+import { fetchSettingsCatalog, type CatalogCheck } from "./catalog"
 import { collectFromBackup, resolveGroups, type NotCollected } from "./inventory"
 import { detectHygiene, filterFindings, RULES, type Classification, type DetectedFinding, type FindingFilter, type FindingStatus, type PolicyRef, type RuleId, type SettingEvidence, type Severity, type UnknownCheck } from "./rules"
 
@@ -28,6 +29,8 @@ export interface ScanRecord extends ListedRecord {
   unreadableItems: number
   unknowns: UnknownCheck[]
   groupResolution: { state: string; reason: string | null }
+  /** The Settings Catalog read of this scan; absent on scans from before the deprecated settings rule. */
+  catalog?: Omit<CatalogCheck, "catalog">
   counts: { definite: number; possible: number }
 }
 
@@ -73,7 +76,8 @@ function scansOf(records: Stored<HygieneRecord>[]): Stored<ScanRecord>[] {
 }
 
 function summaryOf(finding: DetectedFinding): string {
-  return `${RULES[finding.ruleId].name}: ${finding.policies.length} affected ${finding.policies.length === 1 ? "object" : "objects"}, ${finding.classification === "definite" ? "definite configuration problem" : "possible overlap that needs group, filter or device context"}.`
+  const possible = finding.ruleId === "conflicting-setting" ? "possible overlap that needs group, filter or device context" : "possible problem that needs review; the collected data alone does not confirm it"
+  return `${RULES[finding.ruleId].name}: ${finding.policies.length} affected ${finding.policies.length === 1 ? "object" : "objects"}, ${finding.classification === "definite" ? "definite configuration problem" : possible}.`
 }
 
 const STATUSES: FindingStatus[] = ["open", "acknowledged", "false-positive", "resolved"]
@@ -118,6 +122,8 @@ function couldDetect(scan: ScanRecord, finding: FindingRecord): boolean {
   if (finding.ruleId === "missing-scope-tag") return covered.has("ScopeTags")
   // "none" means no assignment references a group any more, so no group can be missing.
   if (finding.ruleId === "missing-group") return scan.groupResolution.state === "resolved" || scan.groupResolution.state === "none"
+  // Without a checked catalog the scan could not see deprecation, so absence proves nothing.
+  if (finding.ruleId === "deprecated-setting") return scan.catalog?.state === "checked"
   return true
 }
 
@@ -126,7 +132,9 @@ async function scan({ tenantId, body, deps, actor }: ActionContext) {
   if (backupId !== null && !/^[a-zA-Z0-9_-]+$/.test(backupId)) throw new FeatureError("backupId is invalid")
   const inventory = await collectFromBackup(deps, tenantId, backupId)
   const groups = await resolveGroups(deps, tenantId, inventory.items)
-  const result = detectHygiene({ items: inventory.items, covered: new Set(inventory.covered), groups: groups.groups, groupReason: groups.reason })
+  const catalogCheck = await fetchSettingsCatalog(deps, tenantId)
+  const { catalog: settingsCatalog, ...catalogRecord } = catalogCheck
+  const result = detectHygiene({ items: inventory.items, covered: new Set(inventory.covered), groups: groups.groups, groupReason: groups.reason, catalog: settingsCatalog, catalogReason: catalogCheck.reason ?? undefined })
   const definite = result.findings.filter((finding) => finding.classification === "definite").length
   const meta = { actor, reason: `Hygiene scan of backup ${inventory.backupId}` }
 
@@ -136,7 +144,7 @@ async function scan({ tenantId, body, deps, actor }: ActionContext) {
       kind: "scan",
       title: `Hygiene scan of ${inventory.backupId}`,
       status: inventory.completeness,
-      summary: `${result.findings.length} findings (${definite} definite) from the backup collected ${inventory.collectedAt}; ${inventory.notCollected.length} types not collected.`,
+      summary: `${result.findings.length} findings (${definite} definite) from the backup collected ${inventory.collectedAt}; ${inventory.notCollected.length} types not collected. Settings Catalog ${catalogCheck.state === "checked" ? `checked (${catalogCheck.total} definitions)` : "not checked"}.`,
       backupId: inventory.backupId,
       collectedAt: inventory.collectedAt,
       completeness: inventory.completeness,
@@ -147,6 +155,7 @@ async function scan({ tenantId, body, deps, actor }: ActionContext) {
       unreadableItems: inventory.unreadableItems,
       unknowns: result.unknowns,
       groupResolution: { state: groups.state, reason: groups.reason ?? null },
+      catalog: catalogRecord,
       counts: { definite, possible: result.findings.length - definite },
     }, meta)
 
