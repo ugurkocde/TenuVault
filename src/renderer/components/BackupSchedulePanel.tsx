@@ -416,10 +416,10 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
                   {tenant?.resources?.storageAccountName && cloud.config.storageAccount &&
                   tenant.resources.storageAccountName.toLowerCase() !== cloud.config.storageAccount.toLowerCase()
                     ? `Writes to ${cloud.config.storageAccount}, not this tenant's current storage. Run cloud setup again for the new account.`
-                    : cloud.status
-                      ? `Last run ${formatWhen(cloud.status.lastRunAt)}: ${cloud.status.lastMessage}`
-                      : cloud.statusError
-                        ? "Last run could not be read from storage"
+                    : cloud.statusError
+                      ? "Last run could not be read from storage"
+                      : cloud.status
+                        ? `Last run ${formatWhen(cloud.status.lastRunAt)}: ${cloud.status.lastMessage}`
                         : "No cloud run reported yet"}
                 </span>
               </dd>

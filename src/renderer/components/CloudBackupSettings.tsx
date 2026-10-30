@@ -125,6 +125,7 @@ export function CloudBackupSettings({ tenant, community, cloud }: { tenant: Tena
       scope: preset === "everything" ? "everything" : "policies",
       resourceGroup: tenant?.resources?.resourceGroupName || undefined,
       location: tenant?.resources?.resourceGroupLocation || undefined,
+      subscriptionId: tenant?.resources?.subscriptionId || undefined,
     })
     return preset === "custom" ? `${base} -ExcludedFolders "${excluded.join(",")}"` : base
   }, [tenantId, storageAccount, frequency, time, weekday, timeZone, preset, excluded, tenant])
@@ -200,7 +201,9 @@ export function CloudBackupSettings({ tenant, community, cloud }: { tenant: Tena
               <div>
                 <dt className="text-xs text-gray-500">Last cloud backup</dt>
                 <dd className="mt-0.5 flex items-start gap-2 text-base text-gray-900">
-                  {cloud.status ? (
+                  {cloud.statusError ? (
+                    <span role="alert" className="text-sm text-red-600">Could not read the last cloud run: {cloud.statusError}</span>
+                  ) : cloud.status ? (
                     <>
                       <CheckCircle2 className={`mt-0.5 h-4 w-4 flex-shrink-0 ${cloud.status.lastStatus === "Failed" ? "text-red-600" : "text-green-600"}`} />
                       <span>
@@ -210,8 +213,6 @@ export function CloudBackupSettings({ tenant, community, cloud }: { tenant: Tena
                         </span>
                       </span>
                     </>
-                  ) : cloud.statusError ? (
-                    <span role="alert" className="text-sm text-red-600">Could not read the last cloud run: {cloud.statusError}</span>
                   ) : (
                     "None reported yet"
                   )}
@@ -306,8 +307,8 @@ export function CloudBackupSettings({ tenant, community, cloud }: { tenant: Tena
               Create the Azure resources, in whichever way fits whoever owns Azure. The script also grants the Graph
               roles (as a Global Administrator) and creates the failure alert; the template deploys everything ARM
               can and lists the roles in its outputs. The Deploy to Azure link cannot carry the choices above with
-              it: enter frequency, day, time, timezone and scope in the template as well (its defaults are daily,
-              everything except apps).
+              it: enter frequency, day, time, timezone, scope and, for a custom choice, the excluded folders
+              (excludedFolders) in the template as well (its defaults are daily, everything except apps).
               <div className="mt-3 flex flex-wrap gap-2">
                 <Button size="sm" disabled={community || localStorage} onClick={() => void bridge.app.openExternal(deployToAzureUrl())}>
                   <Cloud className="mr-2 h-4 w-4" /> Deploy to Azure

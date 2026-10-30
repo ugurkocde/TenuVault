@@ -140,6 +140,7 @@ export function cloudSetupCommand(options: {
   /** The tenant's known Azure placement, when the app has it; first setup needs one of these. */
   resourceGroup?: string
   location?: string
+  subscriptionId?: string
 }): string {
   const parts = [
     "./New-TenuVaultCloudBackup.ps1",
@@ -150,6 +151,7 @@ export function cloudSetupCommand(options: {
   ]
   if (options.resourceGroup) parts.push(`-ResourceGroupName ${options.resourceGroup}`)
   if (options.location) parts.push(`-Location ${options.location}`)
+  if (options.subscriptionId) parts.push(`-SubscriptionId ${options.subscriptionId}`)
   if (options.frequency === "weekly") parts.push(`-WeekDay ${WEEKDAYS[options.weekday] ?? "Sunday"}`)
   parts.push(`-TimeZone ${options.timeZone}`, `-Scope ${options.scope}`, "-GrantGraphRoles")
   return parts.join(" ")
