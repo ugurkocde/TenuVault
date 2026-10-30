@@ -132,13 +132,13 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
   const bothRunners = !!(current?.enabled && cloud.config?.linked)
 
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-      <div className="space-y-6 lg:col-span-2">
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+      <div className="space-y-4 lg:col-span-2">
       <TenantStorageSettings tenant={tenant} tenantName={tenantName} prefs={prefs} community={community} onStorageChange={onStorageChange} />
       <BackupScopeSettings tenantId={tenantId} tenantName={tenantName} />
-      <div className="space-y-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+      <div className="space-y-4 rounded-3xl bg-white px-6 py-5 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
         <div className="flex items-center gap-3">
-          <span className="flex size-10 flex-shrink-0 items-center justify-center rounded-full bg-coral-500 text-white" aria-hidden="true">
+          <span className="flex size-8 flex-shrink-0 items-center justify-center rounded-full bg-coral-500 text-white" aria-hidden="true">
             <CalendarClock className="h-[18px] w-[18px]" />
           </span>
           <div>
@@ -470,6 +470,7 @@ function BackupScopeSettings({ tenantId, tenantName }: BackupSchedulePanelProps)
   const [scope, setScope] = useState<BackupScope | null>(null)
   const [saving, setSaving] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [editingScope, setEditingScope] = useState(false)
 
   const load = () => {
     setLoadError(null)
@@ -484,8 +485,8 @@ function BackupScopeSettings({ tenantId, tenantName }: BackupSchedulePanelProps)
   if (!scope || !saved) {
     if (!loadError) return null
     return (
-      <div className="space-y-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
-        <h2 className="text-2xl font-medium tracking-tight text-gray-900">What to back up</h2>
+      <div className="space-y-3 rounded-3xl bg-white px-6 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+        <h2 className="text-base font-medium text-gray-900">2 · What to back up</h2>
         <div className="flex flex-wrap items-center gap-3">
           <p role="alert" className="text-sm text-red-600">Could not load what {tenantName} backs up: {loadError}</p>
           <Button variant="outline" size="sm" onClick={load}>Try again</Button>
@@ -502,6 +503,7 @@ function BackupScopeSettings({ tenantId, tenantName }: BackupSchedulePanelProps)
       const setting = await bridge.backups.setScope(tenantId, scope)
       setSaved(setting.scope)
       setIsSaved(true)
+      setEditingScope(false)
       toast(`${tenantName} now backs up: ${describeScope(setting.scope).toLowerCase()}.`, "success")
     } catch (error) {
       toast(error instanceof Error ? error.message : String(error), "error")
@@ -511,28 +513,37 @@ function BackupScopeSettings({ tenantId, tenantName }: BackupSchedulePanelProps)
   }
 
   return (
-    <div className="space-y-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
-      <div className="flex items-center gap-3">
-        <span className="flex size-10 flex-shrink-0 items-center justify-center rounded-full bg-coral-500 text-white" aria-hidden="true">
-          <Layers className="h-[18px] w-[18px]" />
+    <div className="rounded-3xl bg-white px-6 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="flex size-8 flex-shrink-0 items-center justify-center rounded-full bg-coral-500 text-white" aria-hidden="true">
+          <Layers className="h-4 w-4" />
         </span>
-        <div>
-          <p className="text-xs font-medium tracking-wide text-gray-400 uppercase">Step 2 · What</p>
-          <h2 className="text-2xl font-medium tracking-tight text-gray-900">What to back up</h2>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-base font-medium text-gray-900">2 · What to back up</h2>
+          <p className="truncate text-sm text-gray-500">
+            {describeScope(saved)}{isSaved ? "" : " (default)"}, used by automatic backups and "Back up all tenants now"
+          </p>
+        </div>
+        {!editingScope && (
+          <Button variant="outline" size="sm" onClick={() => setEditingScope(true)}>Edit</Button>
+        )}
+      </div>
+      {editingScope && (
+        <div className="mt-4 space-y-4 border-t border-gray-100 pt-4">
           <p className="text-sm text-gray-500">
             Used by automatic backups (on this computer and in Azure) and "Back up all tenants now", and preselected when you run a backup by hand.
           </p>
+          <BackupScopePicker value={scope} onChange={setScope} disabled={saving} />
+          <div className="flex items-center gap-3">
+            <Button disabled={!dirty || empty || saving} onClick={() => void save()}>
+              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Save
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => { setScope(saved); setEditingScope(false) }}>Done</Button>
+            {empty && <span className="text-sm text-red-600">Choose at least one type.</span>}
+          </div>
         </div>
-      </div>
-      <BackupScopePicker value={scope} onChange={setScope} disabled={saving} />
-      <div className="flex items-center gap-3">
-        <Button disabled={!dirty || empty || saving} onClick={() => void save()}>
-          {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-          Save
-        </Button>
-        {!dirty && <span className="text-sm text-gray-500">{isSaved ? describeScope(saved) : `${describeScope(saved)} (default)`}</span>}
-        {empty && <span className="text-sm text-red-600">Choose at least one type.</span>}
-      </div>
+      )}
     </div>
   )
 }
@@ -571,41 +582,37 @@ function TenantStorageSettings({ tenant, tenantName, prefs, community, onStorage
   }
 
   return (
-    <div className="space-y-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
-      <div className="flex items-center gap-3">
-        <span className="flex size-10 flex-shrink-0 items-center justify-center rounded-full bg-coral-500 text-white" aria-hidden="true">
-          <Database className="h-[18px] w-[18px]" />
+    <div className="rounded-3xl bg-white px-6 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="flex size-8 flex-shrink-0 items-center justify-center rounded-full bg-coral-500 text-white" aria-hidden="true">
+          <Database className="h-4 w-4" />
         </span>
-        <div>
-          <p className="text-xs font-medium tracking-wide text-gray-400 uppercase">Step 1 · Where backups are stored</p>
-          <h2 className="text-2xl font-medium tracking-tight text-gray-900">Backup storage</h2>
-        </div>
-      </div>
-      <dl className="space-y-3 text-sm">
-        <div>
-          <dt className="text-xs text-gray-500">Backups for {tenantName} go to</dt>
-          <dd className="mt-0.5 flex items-center gap-2 text-base text-gray-900">
-            {local ? <HardDrive className="h-4 w-4 flex-shrink-0" aria-hidden="true" /> : <Cloud className="h-4 w-4 flex-shrink-0" aria-hidden="true" />}
-            {storageLabel(account || undefined)}
-          </dd>
-          <dd className="text-xs text-gray-500">
+        <div className="min-w-0 flex-1">
+          <h2 className="flex items-center gap-2 text-base font-medium text-gray-900">
+            1 · Backup storage
+            <span className="flex items-center gap-1.5 text-sm font-normal text-gray-700">
+              {local ? <HardDrive className="h-4 w-4 flex-shrink-0" aria-hidden="true" /> : <Cloud className="h-4 w-4 flex-shrink-0" aria-hidden="true" />}
+              {storageLabel(account || undefined)}
+            </span>
+          </h2>
+          <p className="text-xs break-all text-gray-500">
             {local
-              ? `Encrypted in ${settings?.localFolder ?? "the TenuVault Backups folder"} on this device${settings ? `, recovery key ${settings.keyFingerprint}${settings.recoveryExported ? " saved" : " not saved yet"}` : ""}. Only this computer can make and see these backups until the recovery key is imported elsewhere. Available on every plan.`
-              : `Encrypted before upload to your storage account${tenant?.resources?.resourceGroupName ? ` (${tenant.resources.resourceGroupName})` : ""}, container intune-backups. Every admin with access and the recovery key sees the same backups, and it is the storage cloud backups write to.`}
+              ? `Backups for ${tenantName} go to ${settings?.localFolder ?? "the TenuVault Backups folder"}${settings ? `, recovery key ${settings.keyFingerprint}${settings.recoveryExported ? " saved" : " not saved yet"}` : ""}.`
+              : `Backups for ${tenantName} go to container intune-backups${tenant?.resources?.resourceGroupName ? `, ${tenant.resources.resourceGroupName}` : ""}.`}
             {prefs ? ` Kept for ${community ? `${prefs.retentionDays === 0 ? COMMUNITY_RETENTION_DAYS : Math.min(prefs.retentionDays, COMMUNITY_RETENTION_DAYS)} days (Community)` : prefs.retentionDays === 0 ? "forever" : `${prefs.retentionDays} days`}.` : ""}
             {" "}Backups never go to a TenuVault server.
-          </dd>
+          </p>
         </div>
-      </dl>
-      {community && local && <UpgradeNote feature="azureStorage" />}
-      <div className="flex flex-wrap gap-2">
-        <Button variant="outline" size="sm" disabled={!tenant?.credentials || !onStorageChange} onClick={() => { setChoice(null); setEditing(true) }}>
-          Change storage
-        </Button>
-        <Link to={settingsHref("storage")} className="inline-flex items-center rounded-full px-3 py-1.5 text-sm font-medium underline">
-          Folder and recovery key in Settings
-        </Link>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" disabled={!tenant?.credentials || !onStorageChange} onClick={() => { setChoice(null); setEditing(true) }}>
+            Change storage
+          </Button>
+          <Link to={settingsHref("storage")} className="inline-flex items-center rounded-full px-2 py-1.5 text-xs font-medium underline">
+            Folder and recovery key
+          </Link>
+        </div>
       </div>
+      {community && local && <div className="mt-3"><UpgradeNote feature="azureStorage" /></div>}
 
       <Dialog open={editing} onOpenChange={(open) => { if (!open) { setDraft(null); setEditing(false) } }}>
         <DialogContent className="sm:max-w-[620px]">
