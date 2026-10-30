@@ -153,7 +153,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
             role="radio"
             aria-checked={runnerKind === "computer"}
             onClick={() => setRunnerChoice("computer")}
-            className={`flex items-start gap-3 rounded-3xl border-2 p-4 text-left ${runnerKind === "computer" ? "border-coral-500 bg-coral-50" : "border-gray-200 bg-white"}`}
+            className={`flex items-start gap-3 rounded-3xl border-2 p-4 text-left ${runnerKind === "computer" ? "border-coral-500 bg-coral-500/10" : "border-gray-200 bg-white"}`}
           >
             <Monitor className="mt-0.5 h-5 w-5 flex-shrink-0" aria-hidden="true" />
             <span>
@@ -169,7 +169,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
             role="radio"
             aria-checked={runnerKind === "azure"}
             onClick={() => setRunnerChoice("azure")}
-            className={`flex items-start gap-3 rounded-3xl border-2 p-4 text-left ${runnerKind === "azure" ? "border-coral-500 bg-coral-50" : "border-gray-200 bg-white"}`}
+            className={`flex items-start gap-3 rounded-3xl border-2 p-4 text-left ${runnerKind === "azure" ? "border-coral-500 bg-coral-500/10" : "border-gray-200 bg-white"}`}
           >
             <Cloud className="mt-0.5 h-5 w-5 flex-shrink-0" aria-hidden="true" />
             <span>

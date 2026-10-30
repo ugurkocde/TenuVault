@@ -792,6 +792,14 @@ await check("several tenants get the overview, switcher and schedule tab", async
   await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Schedule")?.click()`)
   assert(await waitForText("Automatic backups"), "schedule panel missing")
   await screenshot("09-schedule")
+  await evaluate(`[...document.querySelectorAll("h2")].find(h => h.textContent === "Automatic backups")?.scrollIntoView({ block: "start" })`)
+  await sleep(300)
+  await screenshot("09-schedule-runner")
+  await evaluate(`[...document.querySelectorAll('[role="radio"]')].find(b => b.textContent.includes("In Azure"))?.click()`)
+  assert(await waitForText("Deploy to Azure"), "cloud backup setup missing")
+  await evaluate(`[...document.querySelectorAll("h2")].find(h => h.textContent === "Automatic backups")?.scrollIntoView({ block: "start" })`)
+  await sleep(300)
+  await screenshot("09-schedule-cloud")
 })
 
 await check("Backup Reader card offers setup with a guide link, and the schedule says who runs backups", async () => {
