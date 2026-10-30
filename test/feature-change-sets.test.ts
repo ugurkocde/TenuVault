@@ -34,7 +34,7 @@ async function engine(deps: FeatureDeps, tenantId: string, body: Record<string, 
       case "get": return { changeSet: getChangeSet(deps, tenantId, id) }
       case "preview": return previewChangeSet(deps, tenantId, id)
       case "approve": return { changeSet: await approveChangeSet(deps, tenantId, id, { contentHash: body.contentHash as string, targetFingerprint: body.targetFingerprint as string, reviewer: (body.reviewer as string | undefined) ?? null }, "Admin") }
-      case "reject": return { changeSet: rejectChangeSet(deps, tenantId, id, {}, "Admin") }
+      case "reject": return { changeSet: await rejectChangeSet(deps, tenantId, id, {}, "Admin") }
       case "revise": return { changeSet: await reviseChangeSet(deps, tenantId, id, body.removeKeys as string[], "Admin") }
       case "apply":
       case "retry":

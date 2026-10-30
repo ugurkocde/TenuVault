@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef, Suspense } from "react"
+import { Link, useSearchParams } from "react-router-dom"
 import { useSelectedTenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
 import { 
@@ -28,7 +29,7 @@ import { toast } from "@desktop/lib/toast"
 import { OWN_OPERATION_NOTICE } from "~/lib/audit/export"
 import { useConfirm } from "~/components/ConfirmDialog"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "~/components/ui/dropdown-menu"
-import { auditDateFilter, defaultAuditDateRange } from "~/lib/audit/date-range"
+import { auditDateFilter, defaultAuditDateRange, wideAuditDateRange } from "~/lib/audit/date-range"
 
 function CleanupButton({ plan, cleaning, loading, onCleanup }: { plan: ReturnType<typeof useTenantPlan>; cleaning: boolean; loading: boolean; onCleanup: () => void }) {
   const { confirm, confirmDialog } = useConfirm()
@@ -47,6 +48,11 @@ function CleanupButton({ plan, cleaning, loading, onCleanup }: { plan: ReturnTyp
 
 function AuditPageContent() {
   const { selectedTenant } = useSelectedTenant()
+  // Links from Governance and Changes land here with what to look for: `q` seeds the
+  // applied search (for example a change set title) and `event` one event type filter.
+  const [linkParams] = useSearchParams()
+  const linkQuery = linkParams.get("q") ?? ""
+  const linkEvent = linkParams.get("event")
   // The audit log is Pro and MSP; other plans see a preview and never call the audit routes.
   const plan = useTenantPlan(selectedTenant?.credentials?.tenantId)
   const allowed = canUse(plan, "auditLog")
@@ -57,11 +63,11 @@ function AuditPageContent() {
   const [logs, setLogs] = useState<AuditLogEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [searchQuery, setSearchQuery] = useState("")
-  const [dateRange, setDateRange] = useState(defaultAuditDateRange)
+  const [searchQuery, setSearchQuery] = useState(linkQuery)
+  const [dateRange, setDateRange] = useState(() => (linkQuery || linkEvent ? wideAuditDateRange() : defaultAuditDateRange()))
   const dateFilter = auditDateFilter(dateRange)
   const [filters, setFilters] = useState({
-    eventTypes: [] as AuditEventType[],
+    eventTypes: (linkEvent && (Object.values(AuditEventType) as string[]).includes(linkEvent) ? [linkEvent as AuditEventType] : []) as AuditEventType[],
     severities: [] as AuditSeverity[],
     results: [] as AuditResult[],
   })
@@ -72,7 +78,7 @@ function AuditPageContent() {
   // The page belongs to one query: any change to the tenant, dates, filters or applied
   // search starts again at page 1 without a separate reset that could race the fetch.
   const tenantKey = selectedTenant ? `${selectedTenant.id}:${selectedTenant.credentials?.tenantId ?? ""}:${selectedTenant.resources?.storageAccountName ?? ""}` : ""
-  const [appliedSearch, setAppliedSearch] = useState("")
+  const [appliedSearch, setAppliedSearch] = useState(linkQuery)
   const queryKey = JSON.stringify([tenantKey, dateRange, filters, appliedSearch])
   const [pageState, setPageState] = useState({ key: queryKey, page: 1 })
   const pagination = { page: pageState.key === queryKey ? pageState.page : 1, pageSize: 50 }
@@ -393,7 +399,7 @@ function AuditPageContent() {
             feature="auditLog"
             summary="A searchable history of the operations TenuVault runs for this tenant, kept in the tenant's own storage."
             points={[
-              "Backups, restores, schedules, drift checks and policy changes run by this installation, with result and severity.",
+              "Backups, restores, policy changes and change set applies run by this installation, plus Governance and Changes decisions (approvals, rejections, hygiene reviews, customizations and standard adoptions), with result and severity.",
               "Filters by date, event type, severity and result, with statistics for the selected period.",
               "CSV and JSON exports with tokens and secrets removed, and cleanup of entries older than 90 days.",
             ]}
@@ -503,10 +509,11 @@ function AuditPageContent() {
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                 <input
                   type="search"
-                  placeholder="Search by user, action, or resource..."
+                  aria-label="Search by user, action, or resource"
+                  placeholder="Search by user, action, or resource…"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="h-11 w-full rounded-full border border-gray-200 bg-white pl-11 pr-4 text-sm placeholder:text-gray-400 focus:outline-none focus:border-blue-500"
+                  className="h-11 w-full rounded-full border border-gray-200 bg-white pl-11 pr-4 text-sm placeholder:text-gray-400 focus-visible:border-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 />
               </div>
               <Button type="submit" size="lg" disabled={loading}>
@@ -687,6 +694,9 @@ function AuditPageContent() {
                         <div>
                           <div className="font-medium">{log.resource.name}</div>
                           <div className="text-xs text-gray-500">{log.resource.type}</div>
+                          {typeof log.details?.link === "string" && log.details.link.startsWith("/portal/") && (
+                            <Link to={log.details.link} className="text-xs font-medium text-gray-900 underline underline-offset-2">Open deciding screen</Link>
+                          )}
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">

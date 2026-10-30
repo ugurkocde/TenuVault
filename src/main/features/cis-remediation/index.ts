@@ -48,7 +48,7 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     },
     reject: async (context) => {
       const changeSet = cisChangeSet(deps, context.tenantId, idOf(context.body))
-      rejectChangeSet(deps, context.tenantId, changeSet.id, { reviewer: optionalText(context.body, "reviewer", 200), note: optionalText(context.body, "note", 2000) }, context.actor)
+      await rejectChangeSet(deps, context.tenantId, changeSet.id, { reviewer: optionalText(context.body, "reviewer", 200), note: optionalText(context.body, "note", 2000) }, context.actor)
       return { deployment: syncCisRemediationOutcome(deps, context.tenantId, idOf(context.body)) }
     },
     apply: async (context) => applyCisRemediation(deps, context.tenantId, idOf(context.body), { contentHash: hashField(context.body, "contentHash"), confirmed: context.body.confirm === true }, context.actor),
@@ -61,7 +61,7 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     },
     "rollback-review": ({ tenantId, body }) => previewChangeSet(deps, tenantId, cisRollback(deps, tenantId, idOf(body)).id),
     "rollback-approve": async ({ tenantId, body, actor }) => ({ changeSet: await approveChangeSet(deps, tenantId, cisRollback(deps, tenantId, idOf(body)).id, { contentHash: hashField(body, "contentHash"), targetFingerprint: hashField(body, "targetFingerprint"), reviewer: optionalText(body, "reviewer", 200), note: optionalText(body, "note", 2000) }, actor) }),
-    "rollback-reject": ({ tenantId, body, actor }) => ({ changeSet: rejectChangeSet(deps, tenantId, cisRollback(deps, tenantId, idOf(body)).id, { reviewer: optionalText(body, "reviewer", 200), note: optionalText(body, "note", 2000) }, actor) }),
+    "rollback-reject": async ({ tenantId, body, actor }) => ({ changeSet: await rejectChangeSet(deps, tenantId, cisRollback(deps, tenantId, idOf(body)).id, { reviewer: optionalText(body, "reviewer", 200), note: optionalText(body, "note", 2000) }, actor) }),
     "rollback-apply": async ({ tenantId, body, actor }) => ({ changeSet: await applyChangeSet(deps, tenantId, cisRollback(deps, tenantId, idOf(body)).id, { contentHash: hashField(body, "contentHash"), confirmed: body.confirm === true }, actor) }),
   })
 }

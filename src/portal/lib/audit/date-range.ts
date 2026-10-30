@@ -16,6 +16,13 @@ export function defaultAuditDateRange(now = new Date()): AuditDateRange {
   return { startDate: localDateValue(start), endDate: localDateValue(now) }
 }
 
+/** The widest single audit read (90 days), for links that name one recorded decision. */
+export function wideAuditDateRange(now = new Date()): AuditDateRange {
+  const start = new Date(now)
+  start.setDate(start.getDate() - 89)
+  return { startDate: localDateValue(start), endDate: localDateValue(now) }
+}
+
 /** Convert picker days in the user's time zone to instants shared by all audit routes. */
 export function auditDateFilter(range: AuditDateRange) {
   return {
