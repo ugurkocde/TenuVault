@@ -76,7 +76,10 @@ export function parseCloudSetup(text: string): CloudBackupConfig | null {
   if (!GUID.test(tenantId) || !/^[a-z0-9]{3,24}$/.test(storageAccount) || !automationAccount || !resourceGroup) return null
   const frequency = get("frequency").toLowerCase() === "weekly" || get("frequency").toLowerCase() === "week" ? "weekly" : "daily"
   const weekdayName = get("weekday")
-  const weekdayIndex = WEEKDAYS.findIndex((day) => day.toLowerCase() === weekdayName.toLowerCase())
+  // The stored configuration round trips through this parser with a numeric weekday.
+  const weekdayIndex = /^[0-6]$/.test(weekdayName)
+    ? Number(weekdayName)
+    : WEEKDAYS.findIndex((day) => day.toLowerCase() === weekdayName.toLowerCase())
   const time = /^([01]\d|2[0-3]):[0-5]\d$/.test(get("time")) ? get("time") : ""
   return {
     tenantId: tenantId.toLowerCase(),
@@ -134,6 +137,9 @@ export function cloudSetupCommand(options: {
   weekday: number
   timeZone: string
   scope: "everything" | "policies"
+  /** The tenant's known Azure placement, when the app has it; first setup needs one of these. */
+  resourceGroup?: string
+  location?: string
 }): string {
   const parts = [
     "./New-TenuVaultCloudBackup.ps1",
@@ -142,6 +148,8 @@ export function cloudSetupCommand(options: {
     `-Frequency ${options.frequency === "weekly" ? "Weekly" : "Daily"}`,
     `-Time ${options.time}`,
   ]
+  if (options.resourceGroup) parts.push(`-ResourceGroupName ${options.resourceGroup}`)
+  if (options.location) parts.push(`-Location ${options.location}`)
   if (options.frequency === "weekly") parts.push(`-WeekDay ${WEEKDAYS[options.weekday] ?? "Sunday"}`)
   parts.push(`-TimeZone ${options.timeZone}`, `-Scope ${options.scope}`, "-GrantGraphRoles")
   return parts.join(" ")

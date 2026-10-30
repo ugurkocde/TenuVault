@@ -28,7 +28,7 @@
     "automationAccountName": {
       "type": "string",
       "defaultValue": "aa-tenuvault",
-      "metadata": { "description": "Automation account name. Automation accounts are quota limited per region; reuse one account for several tenants." }
+      "metadata": { "description": "Automation account name. One account serves the one Entra tenant its managed identity belongs to." }
     },
     "keyVaultName": {
       "type": "string",

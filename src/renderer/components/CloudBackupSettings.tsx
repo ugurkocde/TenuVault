@@ -98,9 +98,13 @@ export function CloudBackupSettings({ tenant, community, cloud }: { tenant: Tena
   }, [tenantId])
 
   const copy = async (key: string, text: string) => {
-    await navigator.clipboard.writeText(text)
-    setCopied(key)
-    setTimeout(() => setCopied((current) => (current === key ? null : current)), 2000)
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(key)
+      setTimeout(() => setCopied((current) => (current === key ? null : current)), 2000)
+    } catch (error) {
+      toast(`Copying failed: ${error instanceof Error ? error.message : String(error)}`, "error")
+    }
   }
   const copyButton = (key: string, label: string, text: string) => (
     <Button variant="outline" size="sm" onClick={() => void copy(key, text)}>
@@ -119,9 +123,11 @@ export function CloudBackupSettings({ tenant, community, cloud }: { tenant: Tena
       weekday,
       timeZone,
       scope: preset === "everything" ? "everything" : "policies",
+      resourceGroup: tenant?.resources?.resourceGroupName || undefined,
+      location: tenant?.resources?.resourceGroupLocation || undefined,
     })
     return preset === "custom" ? `${base} -ExcludedFolders "${excluded.join(",")}"` : base
-  }, [tenantId, storageAccount, frequency, time, weekday, timeZone, preset, excluded])
+  }, [tenantId, storageAccount, frequency, time, weekday, timeZone, preset, excluded, tenant])
 
   const applyPaste = async () => {
     const config = parseCloudSetup(pasted)
@@ -134,10 +140,23 @@ export function CloudBackupSettings({ tenant, community, cloud }: { tenant: Tena
       return
     }
     setPasteError(null)
-    await cloud.save(config)
+    try {
+      await cloud.save(config)
+    } catch (error) {
+      setPasteError(`The setup could not be saved on this computer: ${error instanceof Error ? error.message : String(error)}`)
+      return
+    }
     setReplacing(false)
     setPasted("")
     toast(config.linked ? "Cloud backups recorded for this tenant." : "Cloud setup recorded. Its schedule is not linked yet.", "success")
+  }
+
+  const forget = async () => {
+    try {
+      await cloud.clear()
+    } catch (error) {
+      toast(`The cloud setup could not be removed: ${error instanceof Error ? error.message : String(error)}`, "error")
+    }
   }
 
   const config = cloud.config
@@ -199,6 +218,13 @@ export function CloudBackupSettings({ tenant, community, cloud }: { tenant: Tena
                 </dd>
               </div>
             </dl>
+            {storageAccount && config.storageAccount && storageAccount.toLowerCase() !== config.storageAccount.toLowerCase() && (
+              <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                This tenant's storage is now {storageAccount}, but the cloud runner still writes to {config.storageAccount},
+                so its backups and status do not appear here. Run the setup again for the new account and paste its
+                output, or change the storage back in step 1.
+              </p>
+            )}
             {!config.linked && (
               <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
                 The Azure resources exist, but the schedule is not linked: the managed identity is still missing its
@@ -217,7 +243,7 @@ export function CloudBackupSettings({ tenant, community, cloud }: { tenant: Tena
                 <RefreshCw className="mr-2 h-4 w-4" /> Refresh status
               </Button>
               <Button variant="ghost" size="sm" onClick={() => setReplacing(true)}>Update from setup output</Button>
-              <Button variant="ghost" size="sm" onClick={() => void cloud.clear()}>
+              <Button variant="ghost" size="sm" onClick={() => void forget()}>
                 <Trash2 className="mr-2 h-4 w-4" /> Forget on this computer
               </Button>
             </div>
@@ -279,7 +305,9 @@ export function CloudBackupSettings({ tenant, community, cloud }: { tenant: Tena
             <li>
               Create the Azure resources, in whichever way fits whoever owns Azure. The script also grants the Graph
               roles (as a Global Administrator) and creates the failure alert; the template deploys everything ARM
-              can and lists the roles in its outputs.
+              can and lists the roles in its outputs. The Deploy to Azure link cannot carry the choices above with
+              it: enter frequency, day, time, timezone and scope in the template as well (its defaults are daily,
+              everything except apps).
               <div className="mt-3 flex flex-wrap gap-2">
                 <Button size="sm" disabled={community || localStorage} onClick={() => void bridge.app.openExternal(deployToAzureUrl())}>
                   <Cloud className="mr-2 h-4 w-4" /> Deploy to Azure

@@ -27,7 +27,7 @@ Setup creates or reuses, in your subscription:
 | Resource | Purpose |
 | --- | --- |
 | Resource group `rg-tenuvault-backups` | Holds the cloud backup resources. Reuse the storage account's group. |
-| Automation account `aa-tenuvault` with a system assigned managed identity | Runs the runbook. One account can serve several tenants. |
+| Automation account `aa-tenuvault` with a system assigned managed identity | Runs the runbook. One account serves one Entra tenant: a managed identity belongs to its own tenant and cannot read Intune in another, so an MSP sets up an account in each customer tenant's subscription. |
 | Runbook `Invoke-TenuVaultBackup` (PowerShell 7.2) | Reads Intune and writes one backup per run, in the desktop backup format. 7.2 is required: the default 5.1 runtime lacks the cryptography types the sealing uses. |
 | Automation variables with a per-tenant suffix | Tenant id, storage account, Key Vault, scope. No secrets in variables. |
 | Key Vault `kv-tenuvault-<suffix>` (RBAC) | Holds the recovery key as the secret `tenuvault-recovery-key`. The identity only reads secrets. |
@@ -45,13 +45,13 @@ Without the optional device inventory role, cloud backups leave out device categ
 
 Desktop backups to Azure are sealed with your backup recovery key before upload. The runbook seals exactly the same way, which is why cloud backups decrypt in the app without any conversion. It needs the current recovery key, read from Key Vault at the start of every run.
 
-Treat that secret like the recovery key it is: **anyone who can read it can read every backup in the storage account.** Setup gives only you (Secrets Officer) and the managed identity (Secrets User) access to the vault. Keep it that way, keep the exported key where you already keep it, and when you rotate recovery keys by importing a new one in the app, update the Key Vault secret too, or cloud backups keep sealing with the old key (still readable while that key stays in your keyring, and listed as sealed with an older key).
+Treat that secret like the recovery key it is: **anyone who can read it can read every backup in the storage account.** Setup adds you (Secrets Officer) and the managed identity (Secrets User) on the vault it creates. Effective access is wider than those two assignments when roles are inherited from the resource group or subscription, or when an existing vault is reused, so review who can actually read secrets on the vault (Access control, Check access) instead of trusting the list setup printed. Keep it tight, keep the exported key where you already keep it, and when you rotate recovery keys by importing a new one in the app, update the Key Vault secret too, or cloud backups keep sealing with the old key (still readable while that key stays in your keyring, and listed as sealed with an older key).
 
 The key is pasted at the setup script's hidden prompt or into the template's secure parameter. It is never a command line argument, never printed, and never stored in an Automation variable.
 
 ## Set it up
 
-You need: the tenant on Pro or MSP with backups in your Azure storage account (Schedule tab, step 1), the recovery key saved, an Azure administrator who can create Automation accounts and role assignments (Owner, or Contributor plus User Access Administrator, on the resource group), and a Global Administrator for the Graph roles. One person can hold all of these.
+You need: the tenant on Pro or MSP with backups in your Azure storage account (Schedule tab, step 1), the recovery key saved, an Azure administrator who can create Automation accounts and role assignments (Owner, or Contributor plus User Access Administrator, on the resource group) and who also holds a blob data role such as Storage Blob Data Contributor on the storage account, because setup checks and creates the backup container with that signed-in account (management roles alone do not include data access), and a Global Administrator for the Graph roles. One person can hold all of these.
 
 ### In the app: choose the time, hand off, paste the result
 
@@ -65,7 +65,7 @@ You need: the tenant on Pro or MSP with backups in your Azure storage account (S
 Download [`New-TenuVaultCloudBackup.ps1`](/downloads/New-TenuVaultCloudBackup.ps1) and [`Invoke-TenuVaultBackup.ps1`](/downloads/Invoke-TenuVaultBackup.ps1), keep the runbook in a `runbooks` folder next to the script, and run for example:
 
 ```powershell
-./New-TenuVaultCloudBackup.ps1 -TenantId 11111111-1111-1111-1111-111111111111 -StorageAccountName tvbkp1234567890ab -Frequency Daily -Time 02:00 -TimeZone Europe/Berlin -Scope policies -GrantGraphRoles -AlertEmail ops@contoso.com
+./New-TenuVaultCloudBackup.ps1 -TenantId 11111111-1111-1111-1111-111111111111 -ResourceGroupName rg-tenuvault-backups -Location westeurope -StorageAccountName tvbkp1234567890ab -Frequency Daily -Time 02:00 -TimeZone Europe/Berlin -Scope policies -GrantGraphRoles -AlertEmail ops@contoso.com
 ```
 
 Send a colleague this request if Azure and Entra are not yours:
@@ -76,7 +76,7 @@ Running the script again with new values updates the variables, republishes the 
 
 ### Deploy to Azure
 
-The **Deploy to Azure** button in the app opens the template `resources/cloud-backup/azuredeploy.json` from the TenuVault repository in the Azure portal. Deploy it into the storage account's resource group and fill in tenant, storage account, recovery key and the first run time (its time of day becomes the schedule). The outputs name the managed identity and list the Graph roles a Global Administrator still has to assign: until then every run fails with access denied, on purpose, and the failure alert is up to you. The setup script remains the fuller path.
+The **Deploy to Azure** button in the app opens the template `resources/cloud-backup/azuredeploy.json` from the TenuVault repository in the Azure portal. The link cannot carry the choices made in the app with it: fill in tenant, storage account, recovery key, frequency, day, timezone, scope and the first run time in the template as well (its defaults are daily and everything except apps, and the first run's time of day becomes the schedule), and deploy it into the storage account's resource group. The outputs name the managed identity and list the Graph roles a Global Administrator still has to assign: until then every run fails with access denied, on purpose, and the failure alert is up to you. The setup script remains the fuller path.
 
 ### Test it now
 
@@ -85,10 +85,10 @@ Do not wait for the first night. In the portal, open the Automation account, **R
 ## How cloud backups show up in TenuVault
 
 * **Backup History** lists them like any backup: same folders, same sealed files, same compare, drift and restore. Profiles with encrypted OMA-URI values are marked not restorable from that backup (masked), like Backup Reader backups.
-* The **Schedule** tab status shows the Azure schedule and the last cloud run. The runbook writes a sealed `cloud-backup-status-<tenant>.json` into the backup container after every run; that is all the app reads. Job output and errors stay in the Automation account.
-* The **audit log** gets no entries from cloud runs: they never open the audit container. The Automation job list and the Entra service principal sign-in log are the record.
+* The **Schedule** tab status shows the Azure schedule and the last cloud run the runbook recorded. The runbook writes a sealed `cloud-backup-status-<tenant>.json` into the backup container as each run ends, including runs that stop while reading or claiming their folder; that is all the app reads. A run that fails before it could read the recovery key (no managed identity token, Key Vault unreachable or the secret missing) cannot record anything sealed, so the tab can still show the previous result. The Automation job list and the failure alert are the record for those, and job output and errors stay in the Automation account.
+* The **audit log** gets no entries from cloud runs: they never open the audit container. The Automation job list and the Entra managed identity sign-in log are the record.
 * **Notifications**: the [Azure watcher](/notifications/) sees cloud backups when it checks backup age. Failed jobs are reported by the Azure Monitor alert from setup, not by TenuVault.
-* **Retention** does not run in Azure, because the identity cannot delete. The next backup a desktop makes with an admin's sign-in applies retention to every backup of the tenant, cloud ones included. If a tenant backs up only from the cloud, add a storage lifecycle rule, or run a desktop backup now and then.
+* **Retention** does not run in Azure, because the identity cannot delete. The next backup a desktop makes with an admin's sign-in applies retention to every backup of the tenant, cloud ones included. If a tenant backs up only from the cloud, run a desktop backup now and then. Do not substitute an age-based storage lifecycle rule: it has none of the desktop protections (newest backup kept, failed runs never counted, a hold for unlicensed runs) and deletes every backup once cloud runs have been stopped longer than its threshold, which is exactly when the backups matter.
 
 ## License note
 

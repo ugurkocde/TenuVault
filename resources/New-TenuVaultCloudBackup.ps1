@@ -10,8 +10,8 @@
       * creates or reuses a resource group and an Azure Automation account with a system assigned
         managed identity, imports the sibling runbook runbooks/Invoke-TenuVaultBackup.ps1 and
         publishes it (running the script again upgrades the published runbook)
-      * writes the tenant's configuration as Automation variables with a per tenant suffix, so one
-        Automation account can back up several tenants, each with its own schedule
+      * writes the tenant's configuration as Automation variables with a per tenant suffix. One
+        Automation account serves the one Entra tenant its managed identity belongs to
       * creates an Azure Key Vault (RBAC), stores the TenuVault backup recovery key as the secret
         "tenuvault-recovery-key" (you paste it at a hidden prompt; it is never printed or taken as
         a parameter), and lets the managed identity read only that vault's secrets
@@ -42,7 +42,9 @@
 
     Needs Az.Accounts, Az.Resources, Az.Automation, Az.Storage and Az.KeyVault, plus an account
     that can create Automation accounts, Key Vaults and role assignments (Owner, or Contributor
-    plus User Access Administrator, on the resource group).
+    plus User Access Administrator, on the resource group) and that holds a blob data role such
+    as Storage Blob Data Contributor on the storage account, because the container check and
+    creation below use the signed-in account (management roles alone include no data access).
 
 .PARAMETER TenantId
     Entra tenant id (GUID) to back up. The storage account and Automation account do not have to
@@ -80,7 +82,7 @@
     Remove this tenant's schedule link, schedule and variables, then list the rest.
 
 .EXAMPLE
-    ./New-TenuVaultCloudBackup.ps1 -TenantId 11111111-1111-1111-1111-111111111111 -StorageAccountName tvbkp1234567890ab -Location westeurope -TimeZone Europe/Berlin -Time 02:00 -AlertEmail ops@contoso.com -GrantGraphRoles
+    ./New-TenuVaultCloudBackup.ps1 -TenantId 11111111-1111-1111-1111-111111111111 -ResourceGroupName rg-tenuvault-backups -StorageAccountName tvbkp1234567890ab -Location westeurope -TimeZone Europe/Berlin -Time 02:00 -AlertEmail ops@contoso.com -GrantGraphRoles
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(

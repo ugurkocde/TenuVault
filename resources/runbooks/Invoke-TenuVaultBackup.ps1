@@ -45,15 +45,16 @@
 [CmdletBinding()]
 param(
     [switch]$LibraryOnly,
-    # Which tenant's Automation variables to read, when one Automation account backs up several
-    # tenants: variables are read with this suffix first (TenuVaultTenantId-<key>), then plain.
+    # Which tenant's Automation variables to read: variables are read with this suffix first
+    # (TenuVaultTenantId-<key>), then plain. One account serves the Entra tenant its managed
+    # identity belongs to; the suffix keeps that tenant's variable set distinctly named.
     [string]$TenantKey = ""
 )
 
 $script:RunbookVersion = "1.0.0"
 $script:GraphBeta = "https://graph.microsoft.com/beta"
 $script:Container = "intune-backups"
-# One status blob per tenant, so several tenants can share one storage account.
+# One status blob per tenant, so status blobs never collide when tenants share tooling.
 $script:StatusBlobPrefix = "cloud-backup-status-"
 $script:OriginalFolders = @("DeviceConfigurations", "CompliancePolicies", "ConfigurationPolicies", "GroupPolicyConfigurations")
 
@@ -742,6 +743,9 @@ function Invoke-TvBackup {
     if ($notReadable.Count) { Write-Output "Leaving out $($notReadable.Count) type(s) the cloud identity has no permission for: $($notReadable -join ', '). Desktop backups include them." }
 
     # List everything first, like the desktop engine, so a denied list is reported per type.
+    # A run that stops anywhere before the write phase still records why, now that the key and
+    # tokens exist; failures before the key was read cannot be recorded anywhere sealed.
+    try {
     $counts = [ordered]@{}
     foreach ($type in $types) { $counts[$type.Folder] = 0 }
     $lists = @{}
@@ -796,6 +800,10 @@ function Invoke-TvBackup {
         if ($_.Exception.Status -in @(409, 412)) {
             throw "Backup folder $backupFolder is already in use by another backup for this tenant and storage. Nothing from this backup was written. Wait for the other backup to finish, then try again."
         }
+        throw
+    }
+    } catch {
+        Set-TvCloudStatus $context "Failed" (Get-TvSafeError $_.Exception.Message) $null
         throw
     }
 

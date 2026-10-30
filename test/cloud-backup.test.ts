@@ -48,7 +48,8 @@ describe("parseCloudSetup", () => {
   it("round trips the stored JSON form and refuses half a setup", () => {
     const config = parseCloudSetup(SETUP_BLOCK)!
     const stored = Object.entries(config).map(([k, v]) => `${k}=${String(v)}`).join("\n")
-    expect(parseCloudSetup(stored)?.automationAccount).toBe("aa-tenuvault")
+    expect(parseCloudSetup(stored)).toEqual(config)
+    expect(parseCloudSetup(stored)?.weekday).toBe(3)
     expect(parseCloudSetup("hello world")).toBeNull()
     expect(parseCloudSetup(SETUP_BLOCK.replace(TENANT, "not-a-guid"))).toBeNull()
     expect(parseCloudSetup(SETUP_BLOCK.replace("tvbkp1234567890ab", "Bad Account!"))).toBeNull()
@@ -119,6 +120,9 @@ describe("cloudSetupCommand", () => {
     expect(command).toContain("-WeekDay Monday")
     expect(command).toContain("-Scope policies")
     expect(command).toContain("-GrantGraphRoles")
+    const placed = cloudSetupCommand({ tenantId: TENANT, storageAccount: "tvbkp1", frequency: "daily", time: "02:00", weekday: 0, timeZone: "UTC", scope: "policies", resourceGroup: "rg-tenuvault-backups", location: "westeurope" })
+    expect(placed).toContain("-ResourceGroupName rg-tenuvault-backups")
+    expect(placed).toContain("-Location westeurope")
     expect(command.toLowerCase()).not.toContain("recovery")
     expect(command.toLowerCase()).not.toContain("secret")
   })
