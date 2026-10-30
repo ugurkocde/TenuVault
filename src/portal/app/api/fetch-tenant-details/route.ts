@@ -92,13 +92,21 @@ export async function POST(request: NextRequest) {
     };
 
     // Counts come from $count with $top=1, so they stay correct above one Graph page and
-    // no collection is enumerated just to be counted. All reads run in parallel.
-    const countOf = (data: GraphApiResponse | null): number => {
-      const count = data?.["@odata.count"];
-      return typeof count === "number" ? count : data?.value?.length || 0;
+    // no collection is enumerated just to be counted. All reads run in parallel. A failed
+    // read stays null: reporting it as zero would show a tenant with no users, no policies
+    // or 0 percent compliant devices when the truth is that the count could not be read.
+    const countOf = (data: GraphApiResponse | null): number | null => {
+      if (!data) return null;
+      const count = data["@odata.count"];
+      return typeof count === "number" ? count : data.value?.length || 0;
     };
-    const countEndpoint = (endpoint: string, useBeta: boolean = false): Promise<number> =>
-      callGraphApi(`${endpoint}${endpoint.includes("?") ? "&" : "?"}$count=true&$top=1`, useBeta).then(countOf);
+    const failed: string[] = [];
+    const countEndpoint = (endpoint: string, label: string, useBeta: boolean = false): Promise<number | null> =>
+      callGraphApi(`${endpoint}${endpoint.includes("?") ? "&" : "?"}$count=true&$top=1`, useBeta).then((data) => {
+        const count = countOf(data);
+        if (count === null) failed.push(label);
+        return count;
+      });
 
     const [
       orgData,
@@ -114,21 +122,29 @@ export async function POST(request: NextRequest) {
       userCount,
     ] = await Promise.all([
       callGraphApi("/organization"),
-      countEndpoint("/deviceManagement/deviceConfigurations"),
-      countEndpoint("/deviceManagement/deviceCompliancePolicies"),
+      countEndpoint("/deviceManagement/deviceConfigurations", "device configurations"),
+      countEndpoint("/deviceManagement/deviceCompliancePolicies", "compliance policies"),
       // Settings Catalog policies need the beta API for full results.
-      countEndpoint("/deviceManagement/configurationPolicies", true),
-      countEndpoint("/deviceAppManagement/iosManagedAppProtections"),
-      countEndpoint("/deviceAppManagement/androidManagedAppProtections"),
-      countEndpoint("/deviceAppManagement/windowsInformationProtectionPolicies"),
-      countEndpoint("/deviceAppManagement/mdmWindowsInformationProtectionPolicies"),
-      countEndpoint("/deviceManagement/managedDevices"),
-      countEndpoint("/deviceManagement/managedDevices?$filter=complianceState%20eq%20'compliant'"),
-      countEndpoint("/users"),
+      countEndpoint("/deviceManagement/configurationPolicies", "configuration policies", true),
+      countEndpoint("/deviceAppManagement/iosManagedAppProtections", "iOS app protection policies"),
+      countEndpoint("/deviceAppManagement/androidManagedAppProtections", "Android app protection policies"),
+      countEndpoint("/deviceAppManagement/windowsInformationProtectionPolicies", "Windows information protection policies"),
+      countEndpoint("/deviceAppManagement/mdmWindowsInformationProtectionPolicies", "MDM Windows information protection policies"),
+      countEndpoint("/deviceManagement/managedDevices", "devices"),
+      countEndpoint("/deviceManagement/managedDevices?$filter=complianceState%20eq%20'compliant'", "compliant devices"),
+      countEndpoint("/users", "users"),
     ]);
-    const organization = orgData?.value?.[0] || {};
-    const appPolicyCount = iosAppPolicyCount + androidAppPolicyCount + windowsInfoPolicyCount + mdmWindowsInfoPolicyCount;
-    const complianceRate = totalDevices > 0 ? Math.round((compliantDevices / totalDevices) * 100) : 0;
+    if (!orgData?.value?.[0]) failed.unshift("organization");
+    if (failed.length > 0) {
+      return NextResponse.json(
+        { error: `Some tenant details could not be read from Microsoft Graph: ${failed.join(", ")}. Check the app registration permissions and try again.` },
+        { status: 502 }
+      );
+    }
+    const organization = orgData!.value![0];
+    // Every count is present here: a failed read returned 502 above.
+    const appPolicyCount = iosAppPolicyCount! + androidAppPolicyCount! + windowsInfoPolicyCount! + mdmWindowsInfoPolicyCount!;
+    const complianceRate = totalDevices! > 0 ? Math.round((compliantDevices! / totalDevices!) * 100) : 0;
 
     // Prepare tenant details
     const tenantDetails = {
@@ -149,7 +165,7 @@ export async function POST(request: NextRequest) {
           compliancePolicies: compliancePolicyCount,
           configurationPolicies: configPolicyCount,
           appProtectionPolicies: appPolicyCount,
-          total: deviceConfigCount + compliancePolicyCount + configPolicyCount + appPolicyCount,
+          total: deviceConfigCount! + compliancePolicyCount! + configPolicyCount! + appPolicyCount,
         },
       },
     };
