@@ -143,10 +143,12 @@ async function go(hash, text) {
 }
 
 // Text the sidebar always shows (a page's own nav label) also matches waitForText on a
-// crashed page, so nav-named pages assert their content inside <main> and no error alert.
+// crashed page, so nav-named pages assert their content inside <main> and no error
+// boundary. Pages show ordinary alert banners too, so the crash signature is the
+// boundary title itself.
 async function assertPageInMain(text, message) {
   assert(await waitForCondition(`document.querySelector('main')?.innerText.includes(${JSON.stringify(text)})`), `${message}: "${text}" did not appear in the page`)
-  assert(!(await evaluate(`Boolean(document.querySelector('main [role="alert"]'))`)), `${message}: the page failed behind the error boundary`)
+  assert(!(await evaluate(`document.querySelector('main')?.innerText.includes("This screen could not be loaded")`)), `${message}: the page failed behind the error boundary`)
 }
 
 await send("Page.enable")
