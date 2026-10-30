@@ -247,6 +247,13 @@ function verdictsFor(
       return [{ verdict: "enforced" as const, observed: value }];
     if (signal.disabledWhen && satisfies(value, signal.disabledWhen))
       return [{ verdict: "disabled" as const, observed: value }];
+    // A readable value in neither set is still a configured, non-enforcing
+    // value (a third enum choice, a number below the required minimum): the
+    // per-value check already counts it as checked and different, so the
+    // evidence, capability status and coverage must recognize it too.
+    // Unreadable shapes stay without evidence, like their checks.
+    if (comparableValue(value, signal.enforcedWhen))
+      return [{ verdict: "disabled" as const, observed: value }];
     return [];
   });
 }
@@ -440,6 +447,13 @@ function evaluateConfiguration(
           // Enum properties default to "notConfigured" or "userDefined" in the
           // same way.
           if (isNotConfiguredEnum(value, signal.enforcedWhen)) continue;
+          // An empty string where a non-empty one is expected is the same
+          // "Not configured" default (an unset minimum OS version, for one).
+          if (
+            value === "" &&
+            signal.enforcedWhen.kind === "nonEmptyString"
+          )
+            continue;
           values = [value];
         } else {
           settingId = signal.presentationId

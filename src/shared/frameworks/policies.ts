@@ -72,7 +72,10 @@ export function parsePolicies(input: unknown): BaselinePolicy[] {
     if (value.provenance !== undefined && (!record(value.provenance) || Object.values(value.provenance).some(item => typeof item !== 'string' && typeof item !== 'number'))) throw new Error('Invalid pack provenance')
     const recommendations = value.recommendations === undefined ? undefined : validatePackRecommendations(value.recommendations, `Policy ${index + 1} recommendations`)
     return { ...(record(value.provenance) ? { provenance: value.provenance } : {}), name: value.name.trim(), platforms: value.platforms, technologies: value.technologies,
-      description: typeof value.description === "string" ? value.description.slice(0, 1500) : "", settings, ...(template ? { templateReference: template } : {}), ...(recommendations?.length ? { recommendations } : {}) }
+      // Kept whole: CIS coverage enumerates the recommendation IDs named in the
+      // description, so truncating it here would silently drop late IDs. The
+      // Graph length limit is applied where a policy is created, not on import.
+      description: typeof value.description === "string" ? value.description : "", settings, ...(template ? { templateReference: template } : {}), ...(recommendations?.length ? { recommendations } : {}) }
   })
 }
 

@@ -7,7 +7,7 @@ export interface AssignmentEvidence {
 export function assignmentEvidence(assignments: RecordJson[]): AssignmentEvidence {
   const targets: AssignmentEvidence['targets'] = assignments.map(assignment => {
     const target = record(assignment.target) ? assignment.target : {}
-    const kinds = { '#microsoft.graph.allDevicesAssignmentTarget': 'allDevices', '#microsoft.graph.allLicensedUsersAssignmentTarget': 'allUsers', '#microsoft.graph.groupAssignmentTarget': 'group', '#microsoft.graph.exclusionGroupAssignmentTarget': 'exclusion' } as const
+    const kinds = { '#microsoft.graph.allDevicesAssignmentTarget': 'allDevices', '#microsoft.graph.allLicensedUsersAssignmentTarget': 'allUsers', '#microsoft.graph.allUsersAssignmentTarget': 'allUsers', '#microsoft.graph.groupAssignmentTarget': 'group', '#microsoft.graph.exclusionGroupAssignmentTarget': 'exclusion' } as const
     const kind = kinds[String(target['@odata.type']) as keyof typeof kinds] ?? 'unknown'
     return { kind, ...(typeof target.groupId === 'string' ? { groupId: target.groupId } : {}),
       ...(typeof target.deviceAndAppManagementAssignmentFilterId === 'string' && target.deviceAndAppManagementAssignmentFilterId ? { filterId: target.deviceAndAppManagementAssignmentFilterId } : {}),

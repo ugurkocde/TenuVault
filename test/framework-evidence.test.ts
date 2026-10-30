@@ -4,6 +4,11 @@ it('distinguishes an unassigned policy from an all-device configuration', () => 
   expect(assignmentEvidence([]).state).toBe('unassigned')
   expect(assignmentEvidence([{ target: { '@odata.type': '#microsoft.graph.allDevicesAssignmentTarget' } }])).toMatchObject({ state: 'configured', targets: [{ kind: 'allDevices' }] })
 })
+it('recognizes the all users target as configured, like the licensed users one', () => {
+  for (const type of ['#microsoft.graph.allUsersAssignmentTarget', '#microsoft.graph.allLicensedUsersAssignmentTarget']) {
+    expect(assignmentEvidence([{ target: { '@odata.type': type } }])).toMatchObject({ state: 'configured', targets: [{ kind: 'allUsers' }] })
+  }
+})
 it('preserves inclusions, exclusions and filters without claiming effective applicability', () => {
   const evidence = assignmentEvidence([
     { target: { '@odata.type': '#microsoft.graph.groupAssignmentTarget', groupId: 'include', deviceAndAppManagementAssignmentFilterId: 'filter', deviceAndAppManagementAssignmentFilterType: 'include' } },

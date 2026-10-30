@@ -65,10 +65,22 @@ export function packSettingCount(pack: Pick<KitPack, "policies">): number {
   return pack.policies.reduce((total, policy) => total + policy.settings.length, 0)
 }
 
-/** The CIS Level a policy belongs to, from its kit provenance ("Level 2" or 2). Defaults to Level 1. */
+/**
+ * The CIS Level a policy belongs to, from its kit provenance ("Level 2" or 2). Defaults to Level 1.
+ * Markers are parsed the way classifyKitFile parses them, so a stray digit in a
+ * versioned Level 1 label ("Level 1 (v2)") is not read as Level 2.
+ */
 export function kitLevelForPolicy(policy: BaselinePolicy | undefined): KitLevel {
   const level = policy?.provenance?.level
-  return level === 2 || (typeof level === "string" && level.includes("2")) ? 2 : 1
+  if (level === 2) return 2
+  if (typeof level !== "string") return 1
+  const exact = /^\s*([12])\s*$/.exec(level)
+  if (exact) return Number(exact[1]) as KitLevel
+  const levels = new Set<KitLevel>()
+  for (const match of level.matchAll(/(?<![a-z0-9])level\s*[-_ ]?([12])(?![a-z0-9])|(?<![a-z0-9])l([12])(?![a-z0-9])/gi)) {
+    levels.add(Number(match[1] ?? match[2]) as KitLevel)
+  }
+  return levels.size === 1 && levels.has(2) ? 2 : 1
 }
 
 function provenanceText(policy: BaselinePolicy, key: string): string {
