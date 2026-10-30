@@ -458,8 +458,19 @@ export class BackupEngine {
       try {
         // A tenant-wide object has no list; reading it here skips the type on a denied read, like a denied list.
         const all = type.singleton ? [{ ...(await graph.get(listUrl(type))), id: type.singleton.id }] : await graph.list(listUrl(type))
-        const items = all.filter((item) => !type.skip?.(item as never))
-        const skipped = all.length - items.length
+        const filtered = all.filter((item) => !type.skip?.(item as never))
+        // A list that repeats an ID (an item seen on two pages) keeps only its first copy:
+        // saving both would inflate the counts past the per-ID manifest inventory.
+        const seen = new Set<string>()
+        const items = filtered.filter((item) => {
+          const key = item.id.toLowerCase()
+          if (seen.has(key)) return false
+          seen.add(key)
+          return true
+        })
+        const duplicates = filtered.length - items.length
+        if (duplicates) this.write(job, `Ignored ${duplicates} repeated ${type.label} entr${duplicates === 1 ? "y" : "ies"} in the listing.`)
+        const skipped = all.length - filtered.length
         this.write(job, `Found ${items.length} ${type.label}${skipped ? ` (${skipped} built-in skipped)` : ""}.`)
         lists[index] = { type, items }
       } catch (error) {
@@ -879,15 +890,16 @@ function displayTime(date: Date): string {
 
 /** Same rules as Get-SafeFileName in the runbook. */
 export function safeFileName(name: string): string {
-  return (
-    name
-      // Control characters are intentionally replaced in safe filenames.
-      // oxlint-disable-next-line no-control-regex
-      .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 200) || "unnamed"
-  )
+  const cleaned = name
+    // Control characters are intentionally replaced in safe filenames.
+    // oxlint-disable-next-line no-control-regex
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
+    .replace(/\s+/g, " ")
+    .trim()
+  // Truncate without splitting a surrogate pair: a lone surrogate makes
+  // encodeURIComponent throw when the file name is written to storage.
+  const truncated = cleaned.slice(0, 200).replace(/[\ud800-\udbff]$/, "").replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, "_")
+  return truncated || "unnamed"
 }
 
 /** Policies can share a display name; keep both instead of overwriting one. */

@@ -22,6 +22,15 @@ const scope = (platform: OibPlatform): CompliancePlatform[] => {
     default: return ["windows"]
   }
 }
+/** The platform a gap belongs to: app protection folders name theirs, so a BYOD run does not label every gap with its first scoped platform. */
+const gapPlatform = (run: ValidationRun, folder: string): CompliancePlatform => {
+  switch (folder) {
+    case "AppProtectionIOS": return "ios"
+    case "AppProtectionAndroid": return "android"
+    case "AppProtectionWindows": return "windows"
+    default: return scope(run.platform)[0]!
+  }
+}
 const NOTE = "Selected deployed policies only, not the whole baseline. Undeployed and unselected policies, targeting and device enforcement are not assessed. Tenant-only settings are shown by Policy Validation but do not count against the expected OIB settings score. Coverage is unavailable when a failed or unsupported policy has no saved expected-setting count; its unknown entry represents a policy, not a setting."
 
 function validPolicy(value: unknown): value is PolicyValidation {
@@ -123,7 +132,7 @@ function project(run: ValidationRun, now: Date): { latest: LatestScore; gaps: Ra
       ...result.oibOnly.map((entry) => ({ settingId: entry.settingDefinitionId, result: "missing" as const, expected: entry.oibValue ?? "Unknown", observed: null, policyId: policy.tenantPolicyId, reason: null })),
     ]
     if (different + missing === 0) continue
-    gaps.push({ key: `${policy.source}:${policy.tenantPolicyId}`, capabilityId: policy.source, capabilityName: policy.name, platform: policy.folder === "AppProtectionAndroid" ? "android" : scope(run.platform)[0]!, capabilityStatus: "assignmentUnknown", result: different ? "different" : "missing", countedAs: different ? "The deployed policy sets a different value." : "The deployed policy does not set the expected value.", mixed: false, settings: settings.slice(0, 25), settingIds: [...new Set(settings.map((setting) => setting.settingId))], policies: [{ policyId: policy.tenantPolicyId, policyName: policy.tenantPolicyName, assignment: "unknown" }], controls: [], unknownChecks: unknown, limitations: ["Saved configuration comparison; assignment and device enforcement are unverified."] })
+    gaps.push({ key: `${policy.source}:${policy.tenantPolicyId}`, capabilityId: policy.source, capabilityName: policy.name, platform: gapPlatform(run, policy.folder), capabilityStatus: "assignmentUnknown", result: different ? "different" : "missing", countedAs: different ? "The deployed policy sets a different value." : "The deployed policy does not set the expected value.", mixed: false, settings: settings.slice(0, 25), settingIds: [...new Set(settings.map((setting) => setting.settingId))], policies: [{ policyId: policy.tenantPolicyId, policyName: policy.tenantPolicyName, assignment: "unknown" }], controls: [], unknownChecks: unknown, limitations: ["Saved configuration comparison; assignment and device enforcement are unverified."] })
   }
   const score: BaselineScore = scoreFromCounts(counts)
   if (unknownSize) score.coverage = null

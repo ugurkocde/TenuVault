@@ -187,6 +187,26 @@ describe("BackupEngine", () => {
     expect(safeFileName('  Win: "Edge" <policy>  ')).toBe("Win_ _Edge_ _policy_")
     expect(safeFileName("a".repeat(250))).toHaveLength(200)
   })
+
+  it("never truncates a file name in the middle of a surrogate pair", () => {
+    // 199 letters plus an emoji puts the 200-unit cut inside the emoji's surrogate pair.
+    const name = safeFileName(`${"a".repeat(199)}\u{1F600}${"b".repeat(10)}`)
+    expect(() => encodeURIComponent(name)).not.toThrow()
+  })
+
+  it("keeps only the first copy when a list page repeats an item ID", async () => {
+    const { engine, store, account } = setup(fakeGraph({
+      "/beta/deviceManagement/deviceConfigurations?page=2": Response.json({ value: [{ id: "dc1", displayName: "Win: BitLocker/Encryption" }] }),
+    }))
+    const job = await finished(engine, engine.start({ tenantId: TENANT, clientId: CLIENT, storageAccountName: account }).id)
+    expect(job.status).toBe("Completed")
+    const files = (await store.list(account, "intune-backups")).filter((b) => b.name.includes("/DeviceConfigurations/"))
+    expect(files).toHaveLength(1)
+    const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
+    expect(metadata.ItemCounts.DeviceConfigurations).toBe(1)
+    expect(Object.keys(metadata.Items).filter((key) => key.startsWith("DeviceConfigurations/"))).toHaveLength(1)
+    expect(metadata.ItemCounts.TotalPolicies).toBe(Object.keys(metadata.Items).length)
+  })
 })
 
 describe("backup routes", () => {

@@ -140,7 +140,10 @@ async function inventory(graph: GraphCall, folders: string[]): Promise<TenantPol
         if (typeof entry.id === "string" && typeof name === "string") result.push({ id: entry.id, name, folder, oibId: extractOibId(entry.description) })
       }
       const link = response.body["@odata.nextLink"]
-      next = typeof link === "string" && link.startsWith(GRAPH_BETA) ? link.slice(GRAPH_BETA.length) : undefined
+      // A continuation link this reader cannot follow means the inventory is incomplete:
+      // fail the read instead of reporting the policies past this page as missing.
+      if (link != null && link !== "" && !(typeof link === "string" && link.startsWith(GRAPH_BETA))) throw new FrameworkError(`Tenant ${type.label} could not be read completely (unexpected continuation link).`, 502)
+      next = typeof link === "string" && link ? link.slice(GRAPH_BETA.length) : undefined
     }
   }
   return result
@@ -371,7 +374,8 @@ async function deploy(body: RecordJson, kind: OibRun["kind"]): Promise<OibRun> {
       }
       report({ stage: "Checking existing policies" })
       const creates = chosen.filter((item) => item.mode === "create")
-      const existing = creates.length ? await inventory(graphCaller(token), creates.map((item) => item.policy.folder)) : []
+      // The refresh-capable caller: the token from before a long pre-deploy backup may have expired since.
+      const existing = creates.length ? await inventory(graph, creates.map((item) => item.policy.folder)) : []
       const creator = new Restorer(graph, { mode: "copy", prefix: "", assignments: !!pilot })
       // A policy deleted after it was read is reported, never recreated under an ID the run would not record.
       const replacer = new Restorer(graph, { mode: "replace", assignments: false, recreateMissing: false })
