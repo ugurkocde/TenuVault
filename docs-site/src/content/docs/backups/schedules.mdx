@@ -5,7 +5,13 @@ description: Back up each tenant automatically, keep TenuVault running in the me
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-TenuVault can back up each tenant automatically, daily or weekly, at a time you choose. Scheduled backups run inside the TenuVault app on your computer, as you, with no cloud service involved. This page explains how to set up a schedule and how to keep TenuVault running so the schedule is met.
+TenuVault can back up each tenant automatically, daily or weekly, at a time you choose. The **Schedule** tab walks through the three decisions in order:
+
+1. **Where backups are stored**: encrypted on this device, or encrypted in your own Azure storage account (Pro and MSP). Backups never go to a TenuVault server. See [Backup storage and retention](/backups/storage/).
+2. **What to back up**: the tenant's saved backup choice.
+3. **Where backups run**: on this computer, inside the TenuVault app as you (this page), or in Azure, as a runbook in your own Automation account with a managed identity, so no computer has to be on or signed in (see [Cloud backups in Azure](/backups/cloud/)). Both runners can be on at once; the tab says so when they are, because each then makes its own backups into the same storage.
+
+This page covers backups on this computer: how to set up the schedule and how to keep TenuVault running so the schedule is met.
 
 ## How scheduled backups run
 
@@ -23,10 +29,10 @@ TenuVault can back up each tenant automatically, daily or weekly, at a time you 
 
 1. Select the tenant in the tenant switcher.
 2. Open **Backup & Restore** and click the **Schedule** tab. You can also click **Set up automatic backups** or **Edit schedule** on the Dashboard.
-3. Under **Automatic backups**, tick **Back up** *tenant name* **automatically**.
-4. In **Repeat**, choose **Every day** or **Every week**.
-5. For a weekly backup, choose the day in **Day**.
-6. In **Time**, choose the time. The label shows your computer's timezone.
+3. In step 1, check **Backups for** *tenant name* **go to** and use **Change storage** when the backups should land somewhere else. The same choice exists in **Settings**; both open the same chooser.
+4. In step 3, choose **On this computer**. Under **Automatic backups**, tick **Back up** *tenant name* **automatically**.
+5. In **Repeat**, choose **Every day** or **Every week**. For a weekly backup, pick the day.
+6. In **Time**, choose the time. The label shows your computer's timezone, and **Upcoming backups on this computer** lists the next runs so you can check them before saving.
 7. Click **Save**.
 
 TenuVault confirms with **Schedule saved**. The new schedule starts at 02:00 by default, and a weekly schedule starts on Sunday.
@@ -50,14 +56,16 @@ Next to the schedule, **Status** shows:
 | Field | What it shows |
 | --- | --- |
 | **Scheduled backups run as** | You (your sign-in), or the read-only [Backup Reader](/backups/backup-reader/) when one is verified for the tenant, with its last reader run or certificate expiry and a link to its settings |
-| **Next backup** | When the next automatic backup runs, or **Not scheduled** |
-| **Last automatic backup** | When the last successful attempt ran and its result message. After a failure, the label changes to **Last automatic backup attempt failed** and shows the failed attempt's time and message. After a cancelled attempt, it changes to **Last automatic backup cancelled**, in a neutral tone. |
+| **Next backup** | When the next automatic backup on this computer runs, or **Not scheduled** |
+| **Last automatic backup** | When the last successful attempt on this computer ran and its result message. After a failure, the label changes to **Last automatic backup attempt failed** and shows the failed attempt's time and message. After a cancelled attempt, it changes to **Last automatic backup cancelled**, in a neutral tone. |
+| **Backups are stored** | The tenant's storage location from step 1. |
+| **Cloud backups (Azure)** | When [cloud backups](/backups/cloud/) are set up: their Azure schedule and how the last cloud run ended, reported by the runbook into the backup container. |
 | **Kept for** | How long backups are kept. See [Retention](/backups/storage/#retention). |
 | **Not backed up because of the license** | Recent automatic backups TenuVault refused to run, with the time, whether they were scheduled or started from the menu bar or tray icon, and the reason |
 
 ## Choose what automatic backups cover
 
-Below the schedule, **What to back up** holds the tenant's saved backup choice: **Everything except apps**, **Everything** or **Custom**. It is "Used by automatic backups and "Back up all tenants now", and preselected when you run a backup by hand."
+In step 2, **What to back up** holds the tenant's saved backup choice: **Everything except apps**, **Everything** or **Custom**. It is "Used by automatic backups (on this computer and in Azure) and "Back up all tenants now", and preselected when you run a backup by hand." For cloud backups it is copied into the setup command, so run the cloud setup again after changing it.
 
 1. Choose the option, or with **Custom** tick the areas and types to include.
 2. Click **Save**.
@@ -98,7 +106,7 @@ To stop a backup you started or joined, select **Cancel backup** beside its runn
 
 When Microsoft Graph or backup storage stops responding during a backup, the backup stops within a few minutes and is retried under the schedule rules above. Successful requests to one service do not reset repeated failures from the other. If removing old backups fails, cleanup stops and the saved backup remains completed with a warning. Old backups that were not removed are reconsidered on the next run.
 
-If your sign-in has expired or Conditional Access requires you to sign in again, the backup fails and a banner at the top of the TenuVault window asks you to **Sign in**. Scheduled backups never open a sign-in window by themselves. When a sign-in frequency policy ends your session every night, see [Conditional Access and TenuVault](/security/conditional-access/), or add the optional [Backup Reader](/backups/backup-reader/) on Pro and MSP.
+If your sign-in has expired or Conditional Access requires you to sign in again, the backup fails and a banner at the top of the TenuVault window asks you to **Sign in**. Scheduled backups never open a sign-in window by themselves. When a sign-in frequency policy ends your session every night, see [Conditional Access and TenuVault](/security/conditional-access/), add the optional [Backup Reader](/backups/backup-reader/) on Pro and MSP, or move the schedule to [cloud backups](/backups/cloud/) in Azure. The **Sign-in at night** section of the computer runner says which of these this tenant uses.
 
 ## Keep TenuVault running
 
@@ -170,6 +178,7 @@ To stop automatic restarts, open **Settings** > **Background runner**, click **R
 | Weekly automatic backups | Yes | Yes | Yes |
 | Daily automatic backups | No | Yes | Yes |
 | Automatic backups to your Azure storage account | No | Yes | Yes |
+| [Cloud backups](/backups/cloud/) in your own Azure Automation account | No | Yes | Yes |
 | Menu bar or tray, start at login, background launch | Yes | Yes | Yes |
 
 ## Related pages

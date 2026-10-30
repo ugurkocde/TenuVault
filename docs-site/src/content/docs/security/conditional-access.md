@@ -50,6 +50,10 @@ The Backup Reader is an application identity, so treat its certificate like an a
 
 You can control it with **Conditional Access for workload identities**, which needs Microsoft Entra Workload ID Premium: for example a policy that blocks it outside the network your TenuVault computers use. Its token requests appear in Entra ID under **Sign-in logs** > **Service principal sign-ins**, grouped by Microsoft rather than one entry per backup.
 
+### 4. Cloud backups in Azure
+
+If no computer should be part of the schedule at all, move it to [cloud backups](/backups/cloud/) on Pro and MSP: a runbook in your own Azure Automation account reads Intune with a managed identity and the same read-only roles as the Backup Reader, seals each backup with your recovery key from Key Vault, and writes it to your storage account. No user signs in, so sign-in frequency, MFA and device conditions do not apply to it. Conditional Access for workload identities can restrict it the same way as the Backup Reader. In return it needs its own Azure resources, a failure alert you own, and the recovery key in Key Vault, and it applies no retention.
+
 ## Other policies to check
 
 * **Azure Storage roles with PIM.** For backups in Azure, the admin, or the Backup Reader, needs its storage role permanently active. See [Create a storage account](/getting-started/create-storage-account/).
@@ -58,6 +62,7 @@ You can control it with **Conditional Access for workload identities**, which ne
 ## Related pages
 
 * [Backup Reader for scheduled backups](/backups/backup-reader/)
+* [Cloud backups in Azure](/backups/cloud/)
 * [Schedule backups](/backups/schedules/)
 * [App registration and delegated permissions](/security/permissions/)
 * [Troubleshooting](/troubleshooting/#background-backups)

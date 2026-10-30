@@ -78,12 +78,15 @@ Backup file contents are encrypted before upload. Blob names, which include the 
 
 With the optional [Backup Reader](/backups/backup-reader/), scheduled backups write to `intune-backups` as that read-only app instead of as you. An Azure administrator grants it the custom **TenuVault Backup Writer** role on this container only (read and write, no delete, no container creation) and turns on blob versioning; see [Let the Backup Reader write backups](/getting-started/create-storage-account/#optional-let-the-backup-reader-write-backups). Backup Reader runs write nothing to `audit-logs`; see [Audit log](/audit-log/).
 
+With [cloud backups](/backups/cloud/), a runbook in your own Azure Automation account writes to `intune-backups` as its managed identity with the same writer role and the same sealing, and records each run in a `cloud-backup-status-<tenant>.json` blob in the same container. Cloud runs also write nothing to `audit-logs`.
+
 ## Change where a tenant's backups go
 
-1. Open **Settings** and go to the **Sign-in** section.
-2. In the **Tenants** card, click **Change storage** next to the tenant.
-3. In **Backup storage for** *tenant*, choose the new location. For Azure, choose the storage account and click **Check access**.
-4. Click **Save**.
+The Schedule tab shows the current location in step 1 and changes it there; the same chooser exists in Settings.
+
+1. Open **Backup & Restore**, then **Schedule**, and click **Change storage** in step 1. Or open **Settings**, go to the **Sign-in** section, and click **Change storage** next to the tenant in the **Tenants** card.
+2. In **Backup storage for** *tenant*, choose the new location. For Azure, choose the storage account and click **Check access**.
+3. Click **Save**.
 
 New backups go to the new location. Existing backups stay where they are, and TenuVault lists them only while their location is selected for the tenant.
 
@@ -100,7 +103,7 @@ The default is 30 days. The setting applies to every tenant on this computer. Th
 
 How retention works:
 
-* In Azure storage, a scheduled backup made by the [Backup Reader](/backups/backup-reader/) deletes nothing, because the reader has no delete permission. Expired backups stay until the next backup made with an admin's own sign-in, which then applies retention to all of the tenant's backups with the usual protections. Backups stored on this device are unaffected and follow retention on every run.
+* In Azure storage, a scheduled backup made by the [Backup Reader](/backups/backup-reader/) or by [cloud backups](/backups/cloud/) deletes nothing, because those identities have no delete permission. Expired backups stay until the next backup made with an admin's own sign-in, which then applies retention to all of the tenant's backups with the usual protections. Backups stored on this device are unaffected and follow retention on every run.
 * Old backups are deleted at the end of each backup that saved every selected policy. A backup that failed or left policies unsaved deletes nothing: "Older backups were kept because this backup is incomplete." Cleanup itself can add a warning: if the metadata of an older backup cannot be decrypted, that backup and any backup without a recorded tenant are kept, while other eligible backups are still removed.
 * The backup that just finished is never deleted, so at least the newest backup is always kept.
 * A backup that left out some types never removes the newest complete copy of those types. For example, if your daily backups leave out apps, the newest backup that includes apps and finished without warnings is kept even after it ages out. A backup that finished with warnings may miss items, so it does not count as holding the newest copy. The log says "Kept N older backup(s) because they hold the newest copy of types this backup leaves out."

@@ -43,7 +43,9 @@ See the [installation guide](https://docs.tenuvault.com/getting-started/install/
 
 - **[Intune backup](https://www.tenuvault.com/intune-backup).** Settings Catalog, device configurations, compliance, scripts, Administrative Templates
   and more, with their assignments. On demand or on a daily or weekly schedule, encrypted on this
-  device or in your own Azure storage account. See [what gets backed up](https://docs.tenuvault.com/backups/coverage/).
+  device or in your own Azure storage account. Schedules run on the admin's computer, or as
+  [cloud backups](https://docs.tenuvault.com/backups/cloud/) in an Azure Automation runbook in your
+  own subscription (Pro and MSP), so no computer has to be on or signed in. See [what gets backed up](https://docs.tenuvault.com/backups/coverage/).
 - **[Intune restore](https://www.tenuvault.com/intune-restore).** Bring back single policies or whole sets of policies from any backup, including deleted policies. Copies are created as separate
   policies; cross-tenant copies arrive unassigned and need reviewed target dependencies. For tenant-wide loss, see the [Intune disaster recovery plan](https://www.tenuvault.com/intune-disaster-recovery) and the [disaster recovery runbook](https://docs.tenuvault.com/restore/disaster-recovery/).
 - **[Drift detection](https://www.tenuvault.com/intune-drift-detection).** See what changed between backups, down to the setting, and export the result
@@ -194,7 +196,11 @@ Electron with a React renderer (Vite) and a Node main process.
 - **Schedules** (`src/main/backup/scheduler.ts`): daily or weekly per tenant, run by the app while
   it is open or in the system tray; slots missed while the computer was off run once at the next
   start. Optional start at login. After each backup, backups older than the retention period
-  (default 30 days) are deleted, always keeping the newest.
+  (default 30 days) are deleted, always keeping the newest. On Pro and MSP the schedule can
+  instead run in Azure: `resources/runbooks/Invoke-TenuVaultBackup.ps1` is an Automation runbook
+  with a managed identity that writes the same sealed format (setup:
+  `resources/New-TenuVaultCloudBackup.ps1` or `resources/cloud-backup/azuredeploy.json`); the app
+  only records the setup and reads the runbook's status blob.
 - **Local storage** (`src/main/storage`): one AES-256-GCM file per blob, named by an HMAC of the
   blob name, in a folder the admin chooses. The master key is random; admins save a recovery key
   (`TVK2.` bundle containing all key generations) from Settings to read backups on another device.

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import { AlertCircle, AlertTriangle, Calendar, CheckCircle, Download, GitBranch, Loader2, Play, RefreshCw, Upload } from "lucide-react"
-import { useSelectedTenant, useTenants, type Tenant } from "~/contexts/TenantContext"
+import { useSelectedTenant, useTenantOperations, useTenants, type Tenant } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { Button } from "~/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select"
@@ -24,6 +24,7 @@ import { allows } from "../../../../shared/plans"
 import { AREAS } from "../../../../shared/intune/scope"
 import { typeForFolder } from "../../../../shared/intune/registry"
 import { storageLabel } from "~/lib/storage-label"
+import { storageResources, type StorageChoice } from "@desktop/lib/storage"
 
 type Tab = "backup" | "restore" | "schedule"
 
@@ -61,6 +62,13 @@ export default function BackupRestorePage() {
 
   const tenants = useTenants()
   const { selectedTenantId, selectedTenant, setSelectedTenantId } = useSelectedTenant()
+  const { updateTenant } = useTenantOperations()
+  const changeStorage = (tenant: Tenant, choice: StorageChoice) => {
+    const resources = storageResources(tenant.credentials!.tenantId, choice)
+    updateTenant(tenant.id, {
+      resources: { ...tenant.resources, ...resources, subscriptionName: tenant.resources?.subscriptionName ?? "", automationAccountName: tenant.resources?.automationAccountName ?? "" },
+    })
+  }
   const requestedTenant = searchParams.get("tenant")?.toLowerCase()
   // Notification links select the affected tenant and keep the requested tab.
   useEffect(() => {
@@ -380,7 +388,7 @@ export default function BackupRestorePage() {
         />
       )}
 
-      {activeTab === "schedule" && selectedTenant?.credentials && <BackupSchedulePanel tenantId={selectedTenant.credentials.tenantId} tenantName={selectedTenant.name} />}
+      {activeTab === "schedule" && selectedTenant?.credentials && <BackupSchedulePanel tenantId={selectedTenant.credentials.tenantId} tenantName={selectedTenant.name} tenant={selectedTenant} onStorageChange={changeStorage} />}
 
       <RunBackupDialog open={runOpen} onOpenChange={setRunOpen} tenant={tenant} counts={latest?.counts} uncounted={latest ? [...(latest.scope?.excluded ?? []), ...(latest.skippedTypes ?? [])] : undefined} onStarted={backupStarted} />
 
