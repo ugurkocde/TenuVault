@@ -51,6 +51,7 @@ export default function StandardsTab({ tenant, plan, allowed, section = "standar
   }
   return (
     <div className="space-y-6">
+      {!msp && <CustomizationsPanel tenant={tenant} allowed={canUse(plan, "customizations")} />}
 
       {view === "loading" && (
         <div aria-label="Loading standards" className="space-y-4">

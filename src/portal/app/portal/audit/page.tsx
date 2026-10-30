@@ -79,6 +79,17 @@ function AuditPageContent() {
   // search starts again at page 1 without a separate reset that could race the fetch.
   const tenantKey = selectedTenant ? `${selectedTenant.id}:${selectedTenant.credentials?.tenantId ?? ""}:${selectedTenant.resources?.storageAccountName ?? ""}` : ""
   const [appliedSearch, setAppliedSearch] = useState(linkQuery)
+  // A later decision link (or a plain sidebar visit) re-seeds the query without a remount.
+  const seededLink = useRef(`${linkQuery}|${linkEvent ?? ""}`)
+  useEffect(() => {
+    const key = `${linkQuery}|${linkEvent ?? ""}`
+    if (seededLink.current === key) return
+    seededLink.current = key
+    setSearchQuery(linkQuery)
+    setAppliedSearch(linkQuery)
+    setFilters((current) => ({ ...current, eventTypes: linkEvent && (Object.values(AuditEventType) as string[]).includes(linkEvent) ? [linkEvent as AuditEventType] : [] }))
+    if (linkQuery || linkEvent) setDateRange(wideAuditDateRange())
+  }, [linkQuery, linkEvent])
   const queryKey = JSON.stringify([tenantKey, dateRange, filters, appliedSearch])
   const [pageState, setPageState] = useState({ key: queryKey, page: 1 })
   const pagination = { page: pageState.key === queryKey ? pageState.page : 1, pageSize: 50 }
@@ -733,6 +744,9 @@ function AuditPageContent() {
                           <p className="font-medium text-sm text-gray-900">{log.action}</p>
                           <p className="text-xs text-gray-600 mt-0.5">
                             {log.resource.type}: {log.resource.name}
+                            {typeof log.details?.link === "string" && log.details.link.startsWith("/portal/") && (
+                              <> <Link to={log.details.link} className="font-medium text-gray-900 underline underline-offset-2">Open deciding screen</Link></>
+                            )}
                           </p>
                         </div>
                         

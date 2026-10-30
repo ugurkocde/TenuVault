@@ -42,7 +42,7 @@ export default function DeviationsTab({ tenant }: FeatureTabProps) {
             <p className="max-w-3xl text-sm text-gray-500">One register of what this tenant knowingly does differently: documented customizations, hygiene findings a reviewer accepted or marked false positive, and approved standard exceptions. Expired entries need a new decision on their owning screen. Decisions are recorded in the <Link to="/portal/audit" className="font-medium text-gray-900 underline underline-offset-2">Audit Log</Link>.</p>
             <FreshnessStrip source="stored customization, hygiene review and adoption records" at={hygiene.data?.scans[0]?.collectedAt ?? null} />
           </div>
-          <GovernanceExportButtons kind="deviations" tenantName={tenant.name} disabled={shown.length === 0} buildCsv={() => deviationsCsv(shown)} buildJson={(exportedAt) => deviationsJson(shown, tenant.name, exportedAt)} />
+          <GovernanceExportButtons kind="deviations" tenantName={tenant.name} disabled={shown.length === 0 || loading || !!error} buildCsv={() => deviationsCsv(shown)} buildJson={(exportedAt) => deviationsJson(shown, tenant.name, exportedAt)} />
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <label className="flex flex-col gap-1 text-xs text-gray-500">

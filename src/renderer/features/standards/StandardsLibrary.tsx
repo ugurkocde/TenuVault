@@ -147,7 +147,7 @@ export function StandardsLibrary({ tenant, standards, adoptedKeys, canWrite, onC
               <label className="block space-y-1 text-xs text-gray-600 dark:text-gray-400"><span>Or load the policies from an export file</span><input type="file" accept=".json,application/json" className={input} onChange={(event) => { const file = event.target.files?.[0]; if (file) void file.text().then((text) => setForm((current) => ({ ...current, policies: text }))).catch(() => toast("The file could not be read.", "error")) }} /></label>
             </>
           )}
-          <fieldset className="space-y-2">
+          <fieldset className="space-y-2" onKeyDown={(event) => { if (event.key === "Enter") event.preventDefault() }}>
             <legend className="text-xs font-medium text-gray-600 dark:text-gray-400">Add a parameter</legend>
             <div className="grid gap-3 md:grid-cols-4">
               <label className="space-y-1 text-xs text-gray-600 dark:text-gray-400"><span>Name</span><input className={input} value={parameter.name} onChange={(event) => setParameter({ ...parameter, name: event.target.value })} /></label>
@@ -160,7 +160,7 @@ export function StandardsLibrary({ tenant, standards, adoptedKeys, canWrite, onC
             <Button type="button" size="sm" variant="outline" disabled={!parameter.name.trim() || !parameter.label.trim() || (parameter.type === "choice" && !parameter.options.trim())} onClick={() => { try { const options = parameter.options.split(",").map((value) => value.trim()).filter(Boolean); const entry: Record<string, unknown> = { name: parameter.name.trim(), label: parameter.label.trim(), type: parameter.type, required: parameter.required }; if (parameter.type === "choice") entry.options = options; if (parameter.defaultValue.trim()) entry.default = parameter.type === "integer" && Number.isSafeInteger(Number(parameter.defaultValue)) ? Number(parameter.defaultValue) : parameter.defaultValue.trim(); setForm((current) => ({ ...current, parameters: appendJsonEntry(current.parameters, entry, "Parameters") })); setParameter({ name: "", label: "", type: "string", required: false, options: "", defaultValue: "" }) } catch (error) { toast(error instanceof Error ? error.message : "The parameter could not be added.", "error") } }}>Add parameter to the JSON below</Button>
           </fieldset>
           <label className="block space-y-1 text-xs text-gray-600 dark:text-gray-400"><span>Parameters (JSON array: name, label, type string, integer, choice or reference, required, default, min, max, options, renamedFrom)</span><textarea className={area} value={form.parameters} onChange={(event) => setForm({ ...form, parameters: event.target.value })} /></label>
-          <fieldset className="space-y-2">
+          <fieldset className="space-y-2" onKeyDown={(event) => { if (event.key === "Enter") event.preventDefault() }}>
             <legend className="text-xs font-medium text-gray-600 dark:text-gray-400">Add a binding</legend>
             <div className="grid gap-3 md:grid-cols-3">
               <label className="space-y-1 text-xs text-gray-600 dark:text-gray-400"><span>Policy key</span><input className={input} value={binding.policyKey} onChange={(event) => setBinding({ ...binding, policyKey: event.target.value })} /></label>

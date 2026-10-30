@@ -177,7 +177,7 @@ export function routes(deps: FeatureDeps, sources: BaselineSources = defaultSour
       if (body.owner !== undefined) change.owner = text(body, "owner", 200)
       const why = text(body, "why", 2000)
       const customization = reviseCustomization(deps, tenantId, idOf(body), change, why, actor)
-      await recordGovernanceAudit(deps, tenantId, actor, { eventType: AuditEventType.GOVERNANCE_CUSTOMIZATION_RECORDED, action: "Revise customization", resourceId: customization.id, resourceName: customization.title, link: "/portal/governance/customizations", details: { settingKey: customization.settingKey, owner: customization.owner, decision: "revised", note: why } })
+      await recordGovernanceAudit(deps, tenantId, actor, { eventType: AuditEventType.GOVERNANCE_CUSTOMIZATION_RECORDED, action: "Revise customization", resourceId: customization.id, resourceName: customization.title, link: "/portal/governance/customizations", details: { settingKey: customization.settingKey, owner: customization.owner, expiresAt: customization.expiresAt ?? null, decision: "revised", note: why } })
       return { customization }
     },
     "retire-customization": async ({ tenantId, body, actor }) => {
@@ -221,7 +221,11 @@ export function routes(deps: FeatureDeps, sources: BaselineSources = defaultSour
       if (before) {
         const stateOf = (list: Overlay["exceptions"]) => new Map(list.map((entry) => [`${entry.policyKey}:${entry.settingDefinitionId}`, entry.status]))
         const was = stateOf(before)
-        const decided = adoption.overlay.exceptions.filter((entry) => was.get(`${entry.policyKey}:${entry.settingDefinitionId}`) !== entry.status)
+        const after = stateOf(adoption.overlay.exceptions)
+        const decided = [
+          ...adoption.overlay.exceptions.filter((entry) => was.get(`${entry.policyKey}:${entry.settingDefinitionId}`) !== entry.status),
+          ...before.filter((entry) => !after.has(`${entry.policyKey}:${entry.settingDefinitionId}`)).map((entry) => ({ ...entry, status: "removed" as const })),
+        ]
         if (decided.length) {
           await recordGovernanceAudit(deps, tenantId, actor, { eventType: AuditEventType.GOVERNANCE_STANDARD_ADOPTED, action: "Decide standard exceptions", resourceId: adoption.id, resourceName: adoption.title, link: "/portal/governance/standards", details: { adoptionId: adoption.id, decisions: decided.map((entry) => `${entry.policyKey}:${entry.settingDefinitionId}=${entry.status}`).join(", ") } })
         }
