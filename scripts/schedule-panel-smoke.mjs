@@ -4,8 +4,10 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
   const weeklyNote = "A weekly schedule can leave up to six days of changes unprotected. Daily backups are included in Pro."
   const doc = "window.__scheduleFrame.contentDocument"
   const body = `${doc}.body`
-  const save = `[...${body}.querySelectorAll("button")].find(button => button.textContent.trim() === "Save")`
-  const automatic = `${body}.querySelector('input[type="checkbox"]')`
+  // The Schedule tab has a Save button per card (storage dialog, "What to back up", the schedule
+  // itself); pick the one inside the Automatic backups card, not the first on the page.
+  const save = `[...${body}.querySelectorAll("button")].find(button => button.textContent.trim() === "Save" && button.closest("div.rounded-3xl")?.querySelector("h2")?.textContent === "Automatic backups")`
+  const automatic = `[...${body}.querySelectorAll("label")].find(label => label.textContent.includes("automatically"))?.querySelector('input[type="checkbox"]')`
 
   async function open(current = null, installed = false) {
     await evaluate(`(async () => {
