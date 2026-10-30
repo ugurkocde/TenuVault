@@ -94,7 +94,7 @@ export function WhatsNewDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   const close = (next: boolean) => {
     // Only a dialog that actually showed notes counts as seeing them. Closing
     // a load error must keep the unseen state for when the notes load again.
-    if (!next && state?.entries.some((entry) => entry.installed)) void markSeen()
+    if (!next && state && !state.error && state.entries.some((entry) => entry.installed)) void markSeen()
     onOpenChange(next)
   }
   return (

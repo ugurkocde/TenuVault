@@ -92,7 +92,7 @@ describe("What's new announcement", () => {
     mocks.whatsNew.mockResolvedValue({
       currentVersion: "0.3.1",
       lastSeenVersion: "0.3.0",
-      entries: [],
+      entries: [entry(true)],
       hasUnseen: false,
       announceStable: false,
       error: "The release notes could not be loaded. GitHub answered 503.",
