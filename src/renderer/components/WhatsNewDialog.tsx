@@ -99,7 +99,8 @@ export function WhatsNewDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   }
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="max-w-2xl">
+      {/* No entrance animation: the dialog announces an update, it should simply be there. */}
+      <DialogContent className="max-w-2xl" disableAnimation>
         <DialogHeader>
           <DialogTitle>What&apos;s new</DialogTitle>
           <DialogDescription>
