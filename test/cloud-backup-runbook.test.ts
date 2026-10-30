@@ -134,6 +134,9 @@ describe("azuredeploy.json", () => {
     expect(runbookResource.properties.runbookType).toBe("PowerShell72")
     expect((template.parameters.recoveryKey as { type: string }).type).toBe("securestring")
     expect(Object.keys(template.outputs)).toContain("pasteIntoTenuVault")
+    const paste = (template.outputs.pasteIntoTenuVault as { value: string }).value
+    expect(paste).toContain("time=")
+    expect(paste).toContain("substring(parameters('scheduleStartTime'), 11, 5)")
     expect(Object.keys(template.outputs)).toContain("graphRolesToAssign")
   })
 })

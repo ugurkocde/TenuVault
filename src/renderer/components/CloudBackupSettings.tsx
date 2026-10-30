@@ -77,7 +77,7 @@ function RunsCalendar({ runs }: { runs: Date[] }) {
  * the printed result back), then the recorded schedule, its next runs and the runbook's last
  * reported result. The app itself never creates or edits the Azure resources.
  */
-export function CloudBackupSettings({ tenant, community, cloud }: { tenant: Tenant | null | undefined; community: boolean; cloud: CloudBackupState }) {
+export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0 }: { tenant: Tenant | null | undefined; community: boolean; cloud: CloudBackupState; scopeVersion?: number }) {
   const tenantId = tenant?.credentials?.tenantId ?? ""
   const tenantName = tenant?.name ?? "this tenant"
   const storageAccount = tenant?.resources?.storageAccountName ?? ""
@@ -95,7 +95,7 @@ export function CloudBackupSettings({ tenant, community, cloud }: { tenant: Tena
   useEffect(() => {
     if (!tenantId) return
     void bridge.backups.scope(tenantId).then((setting) => setExcluded(normalizeScope(setting.scope).excluded)).catch(() => undefined)
-  }, [tenantId])
+  }, [tenantId, scopeVersion])
 
   const copy = async (key: string, text: string) => {
     try {

@@ -259,7 +259,7 @@
     },
     "pasteIntoTenuVault": {
       "type": "string",
-      "value": "[concat('tenantId=', parameters('tenantId'), '\nsubscriptionId=', subscription().subscriptionId, '\nresourceGroup=', resourceGroup().name, '\nautomationAccount=', parameters('automationAccountName'), '\nstorageAccount=', parameters('storageAccountName'), '\nkeyVault=', parameters('keyVaultName'), '\nscheduleName=', variables('scheduleName'), '\nfrequency=', if(equals(parameters('frequency'), 'Week'), 'weekly', 'daily'), '\nweekDay=', parameters('weekDay'), '\ntimeZone=', parameters('timeZone'), '\ntenantKey=', variables('tenantKey'), '\nlinked=true')]",
+      "value": "[concat('tenantId=', parameters('tenantId'), '\nsubscriptionId=', subscription().subscriptionId, '\nresourceGroup=', resourceGroup().name, '\nautomationAccount=', parameters('automationAccountName'), '\nstorageAccount=', parameters('storageAccountName'), '\nkeyVault=', parameters('keyVaultName'), '\nscheduleName=', variables('scheduleName'), '\nfrequency=', if(equals(parameters('frequency'), 'Week'), 'weekly', 'daily'), '\ntime=', substring(parameters('scheduleStartTime'), 11, 5), '\nweekDay=', parameters('weekDay'), '\ntimeZone=', parameters('timeZone'), '\ntenantKey=', variables('tenantKey'), '\nlinked=true')]",
       "metadata": { "description": "Paste this block into TenuVault (Backup and Restore > Schedule > Where backups run > In Azure) so the app can show the cloud runner and its status." }
     }
   }

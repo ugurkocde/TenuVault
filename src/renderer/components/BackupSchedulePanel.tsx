@@ -48,6 +48,7 @@ export function BackupSchedulePanel(props: BackupSchedulePanelProps) {
 function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageChange }: BackupSchedulePanelProps) {
   const tenant = tenantProp ?? null
   const cloud = useCloudBackup(tenant, tenantId)
+  const [scopeVersion, setScopeVersion] = useState(0)
   const [runnerChoice, setRunnerChoice] = useState<"computer" | "azure" | null>(null)
   const runnerKind = runnerChoice ?? (cloud.config?.linked ? "azure" : "computer")
   const { schedules, error: schedulesError, loading: schedulesLoading, reload: reloadSchedules } = useSchedules()
@@ -134,8 +135,8 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
       <div className="space-y-4 lg:col-span-2">
-      <TenantStorageSettings tenant={tenant} tenantName={tenantName} prefs={prefs} community={community} onStorageChange={onStorageChange} />
-      <BackupScopeSettings tenantId={tenantId} tenantName={tenantName} />
+      <TenantStorageSettings tenant={tenant} tenantName={tenantName} prefs={prefs} community={community} onStorageChange={onStorageChange} cloudOnly={!!cloud.config?.linked && !current?.enabled} />
+      <BackupScopeSettings tenantId={tenantId} tenantName={tenantName} hasCloud={!!cloud.config} onSaved={() => setScopeVersion((version) => version + 1)} />
       <div className="space-y-4 rounded-3xl bg-white px-6 py-5 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
         <div className="flex items-center gap-3">
           <span className="flex size-8 flex-shrink-0 items-center justify-center rounded-full bg-coral-500 text-white" aria-hidden="true">
@@ -191,7 +192,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
         )}
 
         {runnerKind === "azure" ? (
-          <CloudBackupSettings tenant={tenant} community={community} cloud={cloud} />
+          <CloudBackupSettings tenant={tenant} community={community} cloud={cloud} scopeVersion={scopeVersion} />
         ) : (
         <>
 
@@ -464,7 +465,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
 }
 
 /** What the tenant backs up automatically, and the starting point of manual backups. */
-function BackupScopeSettings({ tenantId, tenantName }: BackupSchedulePanelProps) {
+function BackupScopeSettings({ tenantId, tenantName, hasCloud, onSaved }: BackupSchedulePanelProps & { hasCloud?: boolean; onSaved?: () => void }) {
   const [saved, setSaved] = useState<BackupScope | null>(null)
   const [isSaved, setIsSaved] = useState(false)
   const [scope, setScope] = useState<BackupScope | null>(null)
@@ -502,9 +503,16 @@ function BackupScopeSettings({ tenantId, tenantName }: BackupSchedulePanelProps)
     try {
       const setting = await bridge.backups.setScope(tenantId, scope)
       setSaved(setting.scope)
+      setScope(setting.scope)
       setIsSaved(true)
       setEditingScope(false)
-      toast(`${tenantName} now backs up: ${describeScope(setting.scope).toLowerCase()}.`, "success")
+      onSaved?.()
+      toast(
+        hasCloud
+          ? `${tenantName} now backs up on this computer: ${describeScope(setting.scope).toLowerCase()}. Cloud backups keep the scope from their Azure setup. Run cloud setup again to change theirs.`
+          : `${tenantName} now backs up: ${describeScope(setting.scope).toLowerCase()}.`,
+        "success",
+      )
     } catch (error) {
       toast(error instanceof Error ? error.message : String(error), "error")
     } finally {
@@ -521,7 +529,7 @@ function BackupScopeSettings({ tenantId, tenantName }: BackupSchedulePanelProps)
         <div className="min-w-0 flex-1">
           <h2 className="text-base font-medium text-gray-900">2 · What to back up</h2>
           <p className="truncate text-sm text-gray-500">
-            {describeScope(saved)}{isSaved ? "" : " (default)"}, used by automatic backups and "Back up all tenants now"
+            {describeScope(saved)}{isSaved ? "" : " (default)"}, used by backups on this computer and "Back up all tenants now"
           </p>
         </div>
         {!editingScope && (
@@ -531,7 +539,8 @@ function BackupScopeSettings({ tenantId, tenantName }: BackupSchedulePanelProps)
       {editingScope && (
         <div className="mt-4 space-y-4 border-t border-gray-100 pt-4">
           <p className="text-sm text-gray-500">
-            Used by automatic backups (on this computer and in Azure) and "Back up all tenants now", and preselected when you run a backup by hand.
+            Used by backups on this computer and "Back up all tenants now", preselected when you run a backup by hand, and
+            copied into cloud setup. Existing cloud backups keep the scope from their Azure setup: run cloud setup again after changing this.
           </p>
           <BackupScopePicker value={scope} onChange={setScope} disabled={saving} />
           <div className="flex items-center gap-3">
@@ -539,7 +548,7 @@ function BackupScopeSettings({ tenantId, tenantName }: BackupSchedulePanelProps)
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Save
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => { setScope(saved); setEditingScope(false) }}>Done</Button>
+            <Button variant="ghost" size="sm" disabled={saving} onClick={() => { setScope(saved); setEditingScope(false) }}>Done</Button>
             {empty && <span className="text-sm text-red-600">Choose at least one type.</span>}
           </div>
         </div>
@@ -549,7 +558,7 @@ function BackupScopeSettings({ tenantId, tenantName }: BackupSchedulePanelProps)
 }
 
 /** The tenant's storage choice, edited here and in Settings through the same chooser. */
-function TenantStorageSettings({ tenant, tenantName, prefs, community, onStorageChange }: { tenant: Tenant | null; tenantName: string; prefs: AppPreferences | null; community: boolean; onStorageChange?: (tenant: Tenant, choice: StorageChoice) => void }) {
+function TenantStorageSettings({ tenant, tenantName, prefs, community, onStorageChange, cloudOnly }: { tenant: Tenant | null; tenantName: string; prefs: AppPreferences | null; community: boolean; onStorageChange?: (tenant: Tenant, choice: StorageChoice) => void; cloudOnly?: boolean }) {
   const [editing, setEditing] = useState(false)
   const [choice, setChoice] = useState<StorageChoice | null>(null)
   const [draft, setDraft] = useState<StorageChooserDraft | null>(null)
@@ -599,7 +608,7 @@ function TenantStorageSettings({ tenant, tenantName, prefs, community, onStorage
             {local
               ? `Backups for ${tenantName} go to ${settings?.localFolder ?? "the TenuVault Backups folder"}${settings ? `, recovery key ${settings.keyFingerprint}${settings.recoveryExported ? " saved" : " not saved yet"}` : ""}.`
               : `Backups for ${tenantName} go to container intune-backups${tenant?.resources?.resourceGroupName ? `, ${tenant.resources.resourceGroupName}` : ""}.`}
-            {prefs ? ` Kept for ${community ? `${prefs.retentionDays === 0 ? COMMUNITY_RETENTION_DAYS : Math.min(prefs.retentionDays, COMMUNITY_RETENTION_DAYS)} days (Community)` : prefs.retentionDays === 0 ? "forever" : `${prefs.retentionDays} days`}.` : ""}
+            {prefs ? ` Kept for ${community ? `${prefs.retentionDays === 0 ? COMMUNITY_RETENTION_DAYS : Math.min(prefs.retentionDays, COMMUNITY_RETENTION_DAYS)} days (Community)` : prefs.retentionDays === 0 ? "forever" : `${prefs.retentionDays} days`}${cloudOnly && !local ? ", applied on the next desktop backup with an admin's sign-in (the cloud runbook cannot delete, so cloud backups stay longer until then)" : ""}.` : ""}
             {" "}Backups never go to a TenuVault server.
           </p>
         </div>
