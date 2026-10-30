@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { NCSC_COMMIT, NCSC_REPOSITORY } from "../../shared/frameworks/catalog"
 import { parsePolicies, type BaselinePolicy } from "../../shared/frameworks/policies"
+import { readBytesCapped } from "../../shared/capped-body"
 
 /**
  * UK NCSC Device Security Guidance configuration packs, loaded for comparison only.
@@ -83,8 +84,10 @@ export async function loadNcsc(fetcher: typeof fetch = fetch): Promise<NcscPack>
     const chunk = await Promise.all(files.slice(i, i + 4).map(async file => {
       const response = await fetcher(`${RAW}${FOLDER}${encodeURIComponent(file)}`, { signal: AbortSignal.timeout(60_000) })
       if (!response.ok) throw new NcscSourceError(`Request failed (${response.status}) for ${file}. No pack was loaded.`)
-      if (Number(response.headers.get("content-length") ?? 0) > MAX_FILE_BYTES) throw new NcscSourceError("An NCSC pack file exceeds the size limit.")
-      return parseNcscFile(file, new Uint8Array(await response.arrayBuffer()))
+      // Capped while reading: a declared length can be absent or understated.
+      const bytes = await readBytesCapped(response, MAX_FILE_BYTES)
+      if (bytes === null) throw new NcscSourceError("An NCSC pack file exceeds the size limit.")
+      return parseNcscFile(file, bytes)
     }))
     policies.push(...chunk.flat())
   }

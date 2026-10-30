@@ -27,6 +27,11 @@ module.exports = {
     enableNodeCliInspectArguments: false,
     enableEmbeddedAsarIntegrityValidation: true,
     onlyLoadAppFromAsar: true,
+    // Deliberately enabled: the packaged renderer is served with loadFile, and
+    // disabling this fuse leaves the packaged app unable to boot (the welcome
+    // screen never renders, proven by the packaged smoke test in CI). Turn it
+    // off only together with moving the renderer to a custom protocol.
+    grantFileProtocolExtraPrivileges: true,
   },
   appId: "com.tenuvault.desktop",
   productName: "TenuVault",

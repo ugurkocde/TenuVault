@@ -53,6 +53,7 @@ type Call = { action: string; body: Record<string, unknown> }
 
 let store: Store
 let calls: Call[]
+let fetchInits: Array<RequestInit | undefined>
 let answer: (call: Call) => Response | Promise<Response>
 
 const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
@@ -61,6 +62,7 @@ const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) 
     body: JSON.parse(init?.body as string) as Record<string, unknown>,
   }
   calls.push(call)
+  fetchInits.push(init)
   return answer(call)
 }) as unknown as typeof fetch
 
@@ -120,6 +122,7 @@ beforeEach(() => {
   store = memoryStore()
   store.set("license.installId", INSTALL)
   calls = []
+  fetchInits = []
   answer = () => Response.json({ reason: "unexpected" }, { status: 500 })
 })
 
@@ -395,6 +398,10 @@ describe("LicenseService key activations", () => {
       clientId: APP_ID,
       idToken: "id.token.value",
     })
+    // Requests carrying the license key or an ID token must never follow a
+    // redirect: a 307 or 308 would replay the body to another origin.
+    expect(fetchInits.length).toBeGreaterThan(0)
+    expect(fetchInits.every((init) => init?.redirect === "error")).toBe(true)
 
     // Survives a restart.
     const status = service().status([TENANT, TENANT_B])

@@ -87,6 +87,22 @@ afterEach(() => {
 })
 const useCache = () => { dir = mkdtempSync(join(tmpdir(), "oib-cache-")); setOibCacheDir(dir); return dir }
 
+it("stops reading an oversized GitHub body at the limit instead of buffering it whole", async () => {
+  const state = { pulled: 0, cancelled: false }
+  const chunk = new Uint8Array(200_000).fill(120)
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+    pull(controller) {
+      state.pulled += chunk.byteLength
+      if (state.pulled >= 12_000_000) controller.close()
+      else controller.enqueue(chunk)
+    },
+    cancel() { state.cancelled = true },
+  }))))
+  await expect(resolveMain()).rejects.toThrow("larger than expected")
+  expect(state.cancelled).toBe(true)
+  expect(state.pulled).toBeLessThanOrEqual(6_000_000)
+})
+
 it("maps manifest platform ids and keeps only well-formed releases", () => {
   const { platforms } = parseReleaseManifest({
     platforms: [

@@ -34,10 +34,12 @@ describe('packaged security fuse check', () => {
     expect(result.stderr).toContain('Usage: node scripts/check-fuses.cjs')
   })
 
-  it('accepts a binary with all five security fuses configured', () => {
-    const result = check(fixture(Buffer.from('00001100')))
+  it('accepts a binary with all six security fuses configured', () => {
+    // GrantFileProtocolExtraPrivileges (index 7) is enabled on purpose: the
+    // packaged renderer loads over file:// and cannot boot without it.
+    const result = check(fixture(Buffer.from('00001101')))
     expect(result.status).toBe(0)
-    expect(result.stdout).toContain('All five security fuses verified')
+    expect(result.stdout).toContain('All six security fuses verified')
   })
 
   it.each([
@@ -46,8 +48,9 @@ describe('packaged security fuse check', () => {
     ['EnableNodeCliInspectArguments', 3],
     ['EnableEmbeddedAsarIntegrityValidation', 4],
     ['OnlyLoadAppFromAsar', 5],
+    ['GrantFileProtocolExtraPrivileges', 7],
   ] as const)('rejects an unexpected state for %s', (name, index) => {
-    const wire = Buffer.from('00001100')
+    const wire = Buffer.from('00001101')
     wire[index] = wire[index] === 48 ? 49 : 48
     const result = check(fixture(wire))
     expect(result.status).toBe(1)

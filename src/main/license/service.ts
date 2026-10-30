@@ -403,6 +403,9 @@ export class LicenseService {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        // The body carries the license key or a Microsoft ID token: a 307 or
+        // 308 redirect would replay it to whatever origin the response names.
+        redirect: "error",
         signal: AbortSignal.timeout(20_000),
       })
       this.assertCurrent(current)

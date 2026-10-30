@@ -74,6 +74,9 @@ it('removes a legacy direct-launch agent without terminating its running app', a
     await mkdir(join(root, 'Library/LaunchAgents'), { recursive: true })
     await writeFile(plist, 'legacy direct-launch definition')
     expect((await launcher.status()).installed).toBe(true)
+    // Installing over the still-loaded legacy agent surfaces the remove-first
+    // guidance instead of silently reporting the old agent as installed.
+    await expect(launcher.install()).rejects.toThrow('before reinstalling')
     expect((await launcher.remove()).installed).toBe(false)
     await expect(readFile(plist)).rejects.toMatchObject({ code: 'ENOENT' })
     expect(exec.mock.calls).toContainEqual(['/bin/launchctl', ['disable', 'gui/501/com.tenuvault.desktop.background']])

@@ -158,6 +158,9 @@ export class Updates {
     this.startupTimer = null
     this.enabled = enabled && app.isPackaged
     if (!this.enabled) {
+      // Turning updates off also stops a download already running, like a
+      // channel change does; it must not keep downloading for the session.
+      this.downloading?.token.cancel()
       this.set({ state: "disabled" })
       return
     }

@@ -41,6 +41,43 @@ describe('redaction', () => {
     expect(value.note).not.toContain(JWT)
   })
 
+  it('redacts secrets under compound and spelled-out names the enumeration did not list', () => {
+    const value = redactSecrets({
+      wifiPassword: 'corp-wifi-psk',
+      passwordValue: 'hunter2',
+      authToken: 'auth-value',
+      sessionToken: 'session-value',
+      connectionString: 'Server=db;Password=x',
+      encryptionKey: 'key-material',
+      wirelessPreSharedKey: 'psk-value',
+      nested: { vpnPsk: 'vpn-psk', apiToken: 'api-token' },
+    })
+    expect(value.wifiPassword).toBe(REDACTED)
+    expect(value.passwordValue).toBe(REDACTED)
+    expect(value.authToken).toBe(REDACTED)
+    expect(value.sessionToken).toBe(REDACTED)
+    expect(value.connectionString).toBe(REDACTED)
+    expect(value.encryptionKey).toBe(REDACTED)
+    expect(value.wirelessPreSharedKey).toBe(REDACTED)
+    expect(value.nested.vpnPsk).toBe(REDACTED)
+    expect(value.nested.apiToken).toBe(REDACTED)
+    // Ordinary configuration whose names only mention those words stays readable.
+    const kept = redactSecrets({
+      passwordMinimumLength: 14,
+      passwordRequired: true,
+      passwordBlockSimple: true,
+      passwordHistoryCount: 5,
+      tokenLifetimeMinutes: 60,
+      keyRotationEnabled: false,
+    })
+    expect(kept.passwordMinimumLength).toBe(14)
+    expect(kept.passwordRequired).toBe(true)
+    expect(kept.passwordBlockSimple).toBe(true)
+    expect(kept.passwordHistoryCount).toBe(5)
+    expect(kept.tokenLifetimeMinutes).toBe(60)
+    expect(kept.keyRotationEnabled).toBe(false)
+  })
+
   it('accepts only a short single-line tenant label', () => {
     expect(tenantLabel('Contoso\nLtd')).toBe('Contoso Ltd')
     expect(tenantLabel(42)).toBeUndefined()

@@ -105,6 +105,26 @@ describe("NCSC loader", () => {
     await expect(loadNcsc(substituted)).rejects.toThrow("does not match")
   })
 
+  it("stops reading an oversized body at the limit instead of buffering it whole", async () => {
+    const states: Array<{ pulled: number; cancelled: boolean }> = []
+    const chunk = new Uint8Array(100_000).fill(120)
+    const endless = vi.fn(async () => {
+      const state = { pulled: 0, cancelled: false }
+      states.push(state)
+      return new Response(new ReadableStream<Uint8Array>({
+        pull(controller) {
+          state.pulled += chunk.byteLength
+          if (state.pulled >= 5_000_000) controller.close()
+          else controller.enqueue(chunk)
+        },
+        cancel() { state.cancelled = true },
+      }))
+    }) as unknown as typeof fetch
+    await expect(loadNcsc(endless)).rejects.toThrow("size limit")
+    expect(states.some((state) => state.cancelled)).toBe(true)
+    for (const state of states) expect(state.pulled).toBeLessThanOrEqual(2_000_000)
+  })
+
   it("maps a failed load to a 502 through the framework route handler, ignoring request input", async () => {
     const fetch = vi.fn(async () => new Response("down", { status: 503 }))
     vi.stubGlobal("fetch", fetch)

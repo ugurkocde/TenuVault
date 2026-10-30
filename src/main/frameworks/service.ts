@@ -231,6 +231,8 @@ interface AssessJob {
   expiresAt: number | null
   startedAt: string
   finishedAt: string | null
+  /** Wall-clock deadline; a job still running past it is failed instead of blocking its tenant forever. */
+  deadlineAt: number
 }
 
 /** One assessment job without its findings, for the background activity panel on every page. */
@@ -258,13 +260,33 @@ const jobs = new Map<string, AssessJob>()
 const JOB_TTL_MS = 10 * 60_000
 const MAX_JOBS = 10
 const COMPARE_PACE_MS = 50
+/** Longest a pack assessment may run before it is failed; tests shorten it. */
+export const ASSESS_JOB_LIMITS = { maxMs: 30 * 60_000 }
+const JOB_DEADLINE_MESSAGE = "The assessment timed out and was stopped. Run it again; if reading the tenant keeps timing out, check the connection and the app registration permissions."
 
 function isFinished(job: AssessJob): boolean {
   return job.phase === "done" || job.phase === "failed"
 }
 
+/** Fails a running job that is past its deadline, so a hung read cannot block its tenant and framework until the app restarts. */
+function failPastDeadline(job: AssessJob, now: number): void {
+  if (isFinished(job) || now <= job.deadlineAt) return
+  job.phase = "failed"
+  job.error = JOB_DEADLINE_MESSAGE
+  job.assessment = null
+  job.finishedAt = new Date(now).toISOString()
+  job.expiresAt = now + JOB_TTL_MS
+}
+
+/** The per-attempt guard of a running job: framework still enabled and deadline not yet passed. */
+function requireJobCurrent(job: AssessJob): void {
+  requireEnabledFramework(job.frameworkId)
+  if (Date.now() > job.deadlineAt) throw new FrameworkError(JOB_DEADLINE_MESSAGE, 504)
+}
+
 function pruneJobs(): void {
   const now = Date.now()
+  for (const job of jobs.values()) failPastDeadline(job, now)
   for (const [id, job] of jobs) if (job.expiresAt !== null && job.expiresAt <= now) jobs.delete(id)
   while (jobs.size > MAX_JOBS) {
     const oldestFinished = [...jobs].find(([, job]) => isFinished(job))
@@ -322,21 +344,21 @@ function activeJob(tenant: string, frameworkId: string): { jobId: string; refere
 async function runAssessJob(job: AssessJob, connect: () => Promise<{ token: string }>, policies: BaselinePolicy[]): Promise<void> {
   try {
     const { token } = await connect()
-    requireEnabledFramework(job.frameworkId)
+    requireJobCurrent(job)
     job.phase = "reading"
-    requireEnabledFramework(job.frameworkId)
+    requireJobCurrent(job)
     const current = await landscape(token, progress => {
       job.read = progress.read
       job.total = progress.total
       job.currentPolicy = progress.policyName
-    }, () => requireEnabledFramework(job.frameworkId))
-    requireEnabledFramework(job.frameworkId)
+    }, () => requireJobCurrent(job))
+    requireJobCurrent(job)
     job.phase = "comparing"
     job.packPolicies = policies.length
     const allFindings = comparePolicies(policies, current)
     let offset = 0
     for (let index = 0; index < policies.length; index += 1) {
-      requireEnabledFramework(job.frameworkId)
+      requireJobCurrent(job)
       if (index > 0) await new Promise(resolve => setTimeout(resolve, COMPARE_PACE_MS))
       const policy = policies[index]!
       job.currentPackPolicy = policy.name
@@ -345,7 +367,7 @@ async function runAssessJob(job: AssessJob, connect: () => Promise<{ token: stri
       offset += count
       job.comparedPolicies = index + 1
     }
-    requireEnabledFramework(job.frameworkId)
+    requireJobCurrent(job)
     job.phase = "saving"
     const assessment: Assessment = {
       runId: randomUUID(), tenantId: job.tenantId, frameworkId: job.frameworkId, reference: job.reference,
@@ -667,6 +689,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       comparedPolicies: 0, packPolicies: policies.length, currentPackPolicy: "",
       findings: [], error: null, assessment: null, expiresAt: null,
       startedAt: new Date().toISOString(), finishedAt: null,
+      deadlineAt: Date.now() + ASSESS_JOB_LIMITS.maxMs,
     }
     jobs.set(job.id, job)
     nextJobGeneration(tenant, job.frameworkId)
