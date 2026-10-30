@@ -29,8 +29,8 @@ vi.mock("~/contexts/BackupProgressContext", () => ({ useBackupProgress: () => ({
 vi.mock("@desktop/lib/bridge", () => ({ bridge: {} }))
 vi.mock("@desktop/lib/schedules", async (original) => ({
   ...await original<typeof import("../src/renderer/lib/schedules")>(),
-  useSchedules: () => [],
-  useRefusals: () => [],
+  useSchedules: () => ({ schedules: [], error: null, reload: () => undefined }),
+  useRefusals: () => ({ refusals: [], error: null, reload: () => undefined }),
 }))
 vi.mock("@desktop/lib/license", async (original) => ({
   ...await original<typeof import("../src/renderer/lib/license")>(),

@@ -20,16 +20,21 @@ import { toast } from "../lib/toast"
 /** All connected tenants at a glance: sign-in, license, storage, schedule and last backup. */
 export default function OverviewPage() {
   const tenants = useTenants()
-  const schedules = useSchedules()
+  const { schedules, error: schedulesError } = useSchedules()
   const { status } = useLicense()
   const { setSelectedTenantId } = useSelectedTenant()
   const { addJob } = useBackupProgress()
   const navigate = useNavigate()
   const [accounts, setAccounts] = useState<SignedInAccount[]>([])
+  const [accountsError, setAccountsError] = useState<string | null>(null)
   const [backingUp, setBackingUp] = useState<Tenant | null>(null)
   const [backupSettings, setBackupSettings] = useBackupSettings((error) => toast(String(error), "error"))
 
-  useEffect(() => void bridge.auth.accounts().then(setAccounts), [])
+  const loadAccounts = () => {
+    setAccountsError(null)
+    bridge.auth.accounts().then(setAccounts, (error: unknown) => setAccountsError(error instanceof Error ? error.message : String(error)))
+  }
+  useEffect(loadAccounts, [])
   // A shared folder can hold tenants another device backs up with its own key; only this device's tenants matter.
   const inventory = useLocalInventoryProblems(backupSettings, localTenantIds(tenants))
 
@@ -66,6 +71,12 @@ export default function OverviewPage() {
         </Button>
       </div>
 
+      {accountsError && (
+        <div className="flex flex-wrap items-center gap-3 rounded-3xl bg-red-50 px-5 py-4">
+          <p role="alert" className="text-sm text-red-700">Could not load who is signed in: {accountsError} Sign-in state below is unknown, not signed out.</p>
+          <Button variant="outline" size="sm" onClick={loadAccounts}>Try again</Button>
+        </div>
+      )}
       <UnreadableBackupsNotice settings={backupSettings} affected={inventory.affected.length > 0} checking={inventory.checking} onChange={setBackupSettings} />
       <RecoveryKeyNotice settings={backupSettings} />
 
@@ -110,7 +121,7 @@ export default function OverviewPage() {
                   <p className="truncate text-sm text-gray-500">{tenant.domain || tenantId}</p>
                 </button>
                 <div className="flex shrink-0 items-center gap-2">
-                  {account ? <Chip tone="success">Signed in</Chip> : <Chip tone="warning">Not signed in</Chip>}
+                  {account ? <Chip tone="success">Signed in</Chip> : accountsError ? <Chip tone="warning">Sign-in unknown</Chip> : <Chip tone="warning">Not signed in</Chip>}
                   <RoundIconButton icon={ArrowUpRight} label={`Open the dashboard of ${tenant.name}`} onClick={() => open(tenant)} />
                 </div>
               </div>
@@ -118,7 +129,7 @@ export default function OverviewPage() {
                 <Fact label="Account">
                   <span className="flex items-center gap-2">
                     <KeyRound className="h-4 w-4 shrink-0 text-gray-400" />
-                    {account ? <span className="truncate">{account.username}</span> : <span className="text-gray-500">No administrator signed in</span>}
+                    {account ? <span className="truncate">{account.username}</span> : accountsError ? <span className="text-gray-500">Sign-in could not be checked</span> : <span className="text-gray-500">No administrator signed in</span>}
                   </span>
                 </Fact>
                 <Fact label="License">
@@ -166,7 +177,7 @@ export default function OverviewPage() {
                   <span className="flex items-start gap-2">
                     <CalendarClock className="h-4 w-4 shrink-0 text-gray-400" />
                     <span className="min-w-0">
-                      {schedule?.enabled ? (
+                      {schedulesError ? "Could not be loaded" : schedule?.enabled ? (
                         <>
                           <span className="block break-words">{describeSchedule(schedule)}</span>
                           <span className="mt-1 block break-words text-gray-500">Next {formatWhen(schedule.nextRunAt)}</span>

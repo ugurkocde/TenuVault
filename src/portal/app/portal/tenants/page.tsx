@@ -37,6 +37,7 @@ import { backupButtonLabel } from "~/lib/backup-job-display"
 import { BackupProgressModal } from "~/components/tenants/backup-progress-modal"
 import { TagManagementModal } from "~/components/tenants/tag-management-modal"
 import { useTenants, useTenantOperations, useTenantAzureSync, type Tenant } from "~/contexts/TenantContext"
+import { nameAfterRefresh } from "~/lib/tenant-refresh"
 import { useSchedules, formatWhen } from "@desktop/lib/schedules"
 import { planName, tenantLicense, tenantPlan, useLicense } from "@desktop/lib/license"
 import { GatedButton } from "@desktop/components/PlanGate"
@@ -56,7 +57,7 @@ import {
 // Inner component that uses useSearchParams
 function TenantsPageContent() {
   const { confirm, confirmDialog } = useConfirm()
-  const schedules = useSchedules()
+  const { schedules } = useSchedules()
   const { status: licenseStatus } = useLicense()
   // Cross tenant views and bulk actions are part of MSP.
   // The highest plan among licensed tenants decides whether these buttons act or explain here; the main process then checks MSP on every tenant a bulk run touches.
@@ -75,6 +76,10 @@ function TenantsPageContent() {
 
   // Use context hooks
   const tenants = useTenants()
+  // The name a refresh must preserve is the one the tenant has when it finishes, which may
+  // be a rename made while the fetch was in flight.
+  const tenantsRef = useRef(tenants)
+  tenantsRef.current = tenants
   const { addJob, activeJobs } = useBackupProgress()
   const backupJobFor = (tenant: Tenant) => activeJobs.find((job) => !job.isComplete && tenant.credentials && job.tenantId.toLowerCase() === tenant.credentials.tenantId.toLowerCase())
   // A tracked backup started from another page counts too, even before this tenant's sync status catches up.
@@ -543,12 +548,11 @@ function TenantsPageContent() {
       if (response.ok) {
         const details = await response.json()
 
-        // Update tenant with fresh data
-        const currentName = tenant.name
+        // Update tenant with fresh data. The name is decided from the latest state, so a
+        // rename made while this fetch was in flight is kept instead of reverted.
+        const latestName = tenantsRef.current.find((entry) => entry.id === tenant.id)?.name ?? tenant.name
         updateTenant(tenant.id, {
-          name: currentName === "Loading..." || currentName === "New Tenant"
-            ? details.organization.displayName
-            : currentName, // Keep custom name if user renamed it
+          name: nameAfterRefresh(latestName, details.organization.displayName),
           domain: details.organization.primaryDomain,
           organizationId: details.organization.id,
           users: details.statistics.userCount,

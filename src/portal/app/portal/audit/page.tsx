@@ -267,7 +267,9 @@ function AuditPageContent() {
             format,
             filter: {
               ...dateFilter,
-              searchQuery: searchQuery || undefined,
+              // The export must match the list on screen, which was fetched with the submitted
+              // search, not text typed into the box since then.
+              searchQuery: appliedSearch || undefined,
               eventTypes: filters.eventTypes.length > 0 ? filters.eventTypes : undefined,
               severities: filters.severities.length > 0 ? filters.severities : undefined,
               results: filters.results.length > 0 ? filters.results : undefined,

@@ -176,18 +176,19 @@ function DashboardContent() {
   const [selectedPeriod, setSelectedPeriod] = useState("7d")
   const [relativeNow, setRelativeNow] = useState(() => Date.now())
   const [accounts, setAccounts] = useState<SignedInAccount[] | null>(null)
+  const [accountsError, setAccountsError] = useState<string | null>(null)
   useEffect(() => {
     const interval = window.setInterval(() => setRelativeNow(Date.now()), 1000)
     return () => window.clearInterval(interval)
   }, [])
-  useEffect(() => void bridge.auth.accounts().then(setAccounts), [])
+  useEffect(() => void bridge.auth.accounts().then(setAccounts, (error: unknown) => setAccountsError(error instanceof Error ? error.message : String(error))), [])
 
   const tenants = useTenants()
   const { selectedTenant } = useSelectedTenant()
   // The dashboard follows the tenant switcher; before a choice is stored it shows the first tenant.
   const tenant = selectedTenant ?? tenants[0]
   const tenantGuid = tenant?.credentials?.tenantId?.toLowerCase() ?? ""
-  const schedules = useSchedules()
+  const { schedules } = useSchedules()
   const { status: licenseStatus } = useLicense()
   const { activeJobs } = useBackupProgress()
   const {
@@ -596,7 +597,7 @@ function DashboardContent() {
           <BigValue className="mt-1 truncate text-2xl" >{isLocal ? "This device" : storageLabel(tenant.resources?.storageAccountName)}</BigValue>
           <dl className="mt-auto grid gap-3 pt-5">
             <Fact label="Signed in as">
-              {account ? account.username : accounts === null ? "Checking" : <span className="text-amber-800">Not signed in</span>}
+              {account ? account.username : accountsError ? <span className="text-red-600" title={accountsError}>Could not be checked</span> : accounts === null ? "Checking" : <span className="text-amber-800">Not signed in</span>}
             </Fact>
           </dl>
         </Tile>

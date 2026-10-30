@@ -2,25 +2,59 @@ import { useEffect, useState } from "react"
 import type { BackupRefusal, BackupSchedule } from "../../shared/ipc"
 import { bridge } from "./bridge"
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+export interface SchedulesState {
+  schedules: BackupSchedule[]
+  /** The last read failure. While set, `schedules` may be stale or empty, never "no schedules". */
+  error: string | null
+  reload: () => void
+}
+
 /** Live list of backup schedules from the main process. */
-export function useSchedules(): BackupSchedule[] {
+export function useSchedules(): SchedulesState {
   const [schedules, setSchedules] = useState<BackupSchedule[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const [reloads, setReloads] = useState(0)
   useEffect(() => {
-    void bridge.schedules.list().then(setSchedules)
-    return bridge.schedules.onChanged(setSchedules)
-  }, [])
-  return schedules
+    let cancelled = false
+    bridge.schedules.list().then(
+      (next) => { if (!cancelled) { setSchedules(next); setError(null) } },
+      (failure: unknown) => { if (!cancelled) setError(errorMessage(failure)) },
+    )
+    const unsubscribe = bridge.schedules.onChanged((next) => { setSchedules(next); setError(null) })
+    return () => { cancelled = true; unsubscribe() }
+  }, [reloads])
+  return { schedules, error, reload: () => setReloads((count) => count + 1) }
+}
+
+export interface RefusalsState {
+  refusals: BackupRefusal[]
+  /** The last read failure. While set, `refusals` may be stale or empty, never "none". */
+  error: string | null
+  reload: () => void
 }
 
 /** Backups refused for the tenant's license, newest first, kept on this device. */
-export function useRefusals(tenantId: string): BackupRefusal[] {
+export function useRefusals(tenantId: string): RefusalsState {
   const [refusals, setRefusals] = useState<BackupRefusal[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const [reloads, setReloads] = useState(0)
   useEffect(() => {
-    const load = () => void bridge.schedules.refusals(tenantId).then(setRefusals)
+    let cancelled = false
+    const load = () => {
+      bridge.schedules.refusals(tenantId).then(
+        (next) => { if (!cancelled) { setRefusals(next); setError(null) } },
+        (failure: unknown) => { if (!cancelled) setError(errorMessage(failure)) },
+      )
+    }
     load()
-    return bridge.schedules.onRefusalsChanged(load)
-  }, [tenantId])
-  return refusals
+    const unsubscribe = bridge.schedules.onRefusalsChanged(load)
+    return () => { cancelled = true; unsubscribe() }
+  }, [tenantId, reloads])
+  return { refusals, error, reload: () => setReloads((count) => count + 1) }
 }
 
 export const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]

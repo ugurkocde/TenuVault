@@ -33,7 +33,7 @@ export function BackupSchedulePanel(props: BackupSchedulePanelProps) {
 }
 
 function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
-  const schedules = useSchedules()
+  const { schedules, error: schedulesError, reload: reloadSchedules } = useSchedules()
   const { status } = useLicense()
   const license = tenantLicense(status, tenantId)
   const plan = tenantPlan(license)
@@ -41,7 +41,7 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
   // Community schedules weekly backups only and keeps 30 days of history.
   const community = plan === "community"
   const current = schedules.find((s) => s.tenantId === tenantId.toLowerCase())
-  const refusals = useRefusals(tenantId)
+  const { refusals, error: refusalsError } = useRefusals(tenantId)
   const [enabled, setEnabled] = useState(false)
   const [frequency, setFrequency] = useState<"daily" | "weekly">("weekly")
   const [time, setTime] = useState("02:00")
@@ -119,6 +119,13 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
           <h2 className="text-2xl font-medium tracking-tight text-gray-900">Automatic backups</h2>
         </div>
 
+        {schedulesError && (
+          <div className="flex flex-wrap items-center gap-3 rounded-3xl bg-red-50 px-5 py-4">
+            <p role="alert" className="text-sm text-red-700">Could not load the saved schedule: {schedulesError} Saving is paused so the saved schedule is not overwritten.</p>
+            <Button variant="outline" size="sm" onClick={reloadSchedules}>Try again</Button>
+          </div>
+        )}
+
         <label className="flex items-center gap-3 text-sm text-gray-800">
           <input type="checkbox" className="h-4 w-4" checked={enabled} onChange={(e) => (drafts.set(tenantId, { enabled: e.target.checked, frequency, time, weekday }), setEnabled(e.target.checked))} />
           Back up {tenantName} automatically
@@ -155,7 +162,7 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
 
         <div className="space-y-2">
           <div className="flex items-center gap-3">
-            <Button disabled={!dirty || saving || (enabled && frequency === "daily" && !planKnown)} onClick={() => void save()}>
+            <Button disabled={!dirty || saving || !!schedulesError || (enabled && frequency === "daily" && !planKnown)} onClick={() => void save()}>
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Save
             </Button>
@@ -293,6 +300,7 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
               </dd>
             </div>
           )}
+          {refusalsError && <p role="alert" className="text-xs text-red-600">Could not load the refused backups: {refusalsError}</p>}
           {refusals.length > 0 && (
             <div>
               <dt className="text-xs text-gray-500">Not backed up because of the license</dt>
@@ -326,16 +334,30 @@ function BackupScopeSettings({ tenantId, tenantName }: BackupSchedulePanelProps)
   const [isSaved, setIsSaved] = useState(false)
   const [scope, setScope] = useState<BackupScope | null>(null)
   const [saving, setSaving] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
-  useEffect(() => {
-    void bridge.backups.scope(tenantId).then((setting) => {
+  const load = () => {
+    setLoadError(null)
+    bridge.backups.scope(tenantId).then((setting) => {
       setSaved(setting.scope)
       setScope(setting.scope)
       setIsSaved(setting.saved)
-    })
-  }, [tenantId])
+    }, (error: unknown) => setLoadError(error instanceof Error ? error.message : String(error)))
+  }
+  useEffect(load, [tenantId])
 
-  if (!scope || !saved) return null
+  if (!scope || !saved) {
+    if (!loadError) return null
+    return (
+      <div className="space-y-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+        <h2 className="text-2xl font-medium tracking-tight text-gray-900">What to back up</h2>
+        <div className="flex flex-wrap items-center gap-3">
+          <p role="alert" className="text-sm text-red-600">Could not load what {tenantName} backs up: {loadError}</p>
+          <Button variant="outline" size="sm" onClick={load}>Try again</Button>
+        </div>
+      </div>
+    )
+  }
   const dirty = normalizeScope(scope).excluded.join() !== normalizeScope(saved).excluded.join()
   const empty = includedTypes(scope).length === 0
 
