@@ -1,5 +1,6 @@
 import { decodeXml } from "~/lib/storage/list"
 import { blobPath, isSafeArchivePath } from "../../../../shared/security"
+import { isBackupName } from "../../../../shared/intune/backup-names"
 import { BACKUP_OWNER_FILE, MAX_BACKUP_ARCHIVE_BYTES, MAX_BACKUP_ARCHIVE_FILES } from "../../../../shared/constants"
 import { type NextRequest, NextResponse } from "next/server"
 import { OTHER_TENANT_BACKUP, ownedBy, readOwnedBackup } from "~/lib/policies/backup-owner"
@@ -52,7 +53,9 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       )
     }
-    if (typeof backupId !== "string" || !isSafeArchivePath(backupId)) {
+    // Only a real backup folder name may be listed: a multi-segment or reserved prefix such
+    // as "metadata/<tenant-guid>" would otherwise zip another tenant's revert history.
+    if (!isBackupName(backupId)) {
       return NextResponse.json({ error: "Invalid backup ID" }, { status: 400 })
     }
 

@@ -29,6 +29,8 @@ export function tenantWriteTargets(pathname: string, body: Record<string, unknow
       return action === "change-apply" ? tenant : []
     case "/api/standards":
       return action === "standard-change-apply" ? tenant : []
+    case "/api/cis-remediation":
+      return WRITE_ACTIONS.cisRemediation.has(action) ? tenant : []
     default:
       return []
   }
@@ -37,4 +39,5 @@ export function tenantWriteTargets(pathname: string, body: Record<string, unknow
 const WRITE_ACTIONS = {
   oib: new Set(["oib-deploy", "oib-fix", "oib-undo"]),
   promotion: new Set(["apply", "retry", "rollback-apply"]),
+  cisRemediation: new Set(["apply", "retry", "rollback-apply"]),
 }

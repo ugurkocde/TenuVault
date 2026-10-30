@@ -1,6 +1,7 @@
 import { decodeXml, listBlobPages } from "~/lib/storage/list"
 import { INTUNE_TYPES, typeForFolder } from "../../../../shared/intune/registry"
-import { blobPath, isSafeArchivePath } from "../../../../shared/security"
+import { isBackupName } from "../../../../shared/intune/backup-names"
+import { blobPath } from "../../../../shared/security"
 import { type NextRequest, NextResponse } from "next/server"
 import { readOwnedBackup } from "~/lib/policies/backup-owner"
 
@@ -41,7 +42,8 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       )
     }
-    if (typeof backupId !== "string" || !isSafeArchivePath(backupId)) {
+    // Only a real backup folder name may be listed, never a shared prefix such as "metadata".
+    if (!isBackupName(backupId)) {
       return NextResponse.json({ error: "Invalid backup ID" }, { status: 400 })
     }
 
