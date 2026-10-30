@@ -512,8 +512,8 @@ async function bootstrap(): Promise<void> {
 
   const refusals = new RefusalLog(appStore, () => mainWindow?.webContents.send("schedules:refusalsChanged"))
 
-  // Joined requests share one notification and the trigger that started the job.
-  const unattendedBackupTriggers = new WeakMap<BackupJob, { trigger: "scheduled" | "tray"; notified: boolean }>()
+  // Joined requests share one notification, one audit entry and the trigger that started the job.
+  const unattendedBackupTriggers = new WeakMap<BackupJob, { trigger: "scheduled" | "tray"; notified: boolean; audited: boolean }>()
 
   // Best-effort notification event for one finished backup job, with fixed summary text
   // only. Resolves true when a local channel intent was queued for this outcome.
@@ -575,9 +575,9 @@ async function bootstrap(): Promise<void> {
       failedAttempts.record({ tenantId, trigger, slot, message: refused })
       return { status: "Failed" as const, message: refused }
     }
-    let origin = { trigger, notified: false }
+    let origin = { trigger, notified: false, audited: false }
     const job = await runUnattended(engine, { tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, scope: scopes.get(tenantId).scope, trigger, slot }, (started) => {
-      origin = unattendedBackupTriggers.get(started) ?? { trigger, notified: false }
+      origin = unattendedBackupTriggers.get(started) ?? { trigger, notified: false, audited: false }
       unattendedBackupTriggers.set(started, origin)
       return waitForJob(started)
     })
@@ -592,7 +592,11 @@ async function bootstrap(): Promise<void> {
     // Reader run skips it: the audit route signs in as the admin, which is exactly what the reader
     // replaces, so it would ask for a sign-in after a backup that worked. Its metadata.json records
     // the run (Trigger, AuthMode, RunId) in the backup itself.
-    if (job.authMode !== "app-only") void host
+    // Callers that joined one shared job share this entry: only the first to claim it writes it,
+    // claimed synchronously before dispatching, so one backup never produces duplicate entries.
+    if (job.authMode !== "app-only" && !origin.audited) {
+      origin.audited = true
+      void host
       .dispatch(
         new Request(`${INTERNAL_API_ORIGIN}/api/audit/log`, {
           method: "POST",
@@ -614,7 +618,9 @@ async function bootstrap(): Promise<void> {
           }),
         }),
       )
-      .catch(() => undefined)
+      .then((logged) => { if (!logged.ok) console.warn(`[audit] Scheduled backup audit write failed (${logged.status})`) })
+      .catch((error: unknown) => console.warn("[audit] Scheduled backup audit write failed:", error instanceof Error ? error.message : String(error)))
+    }
     if (job.authMode === "app-only") {
       backupReader.recordRun(tenantId, result.status)
       remindBackupReaderRenewal(tenantId, profile.name)

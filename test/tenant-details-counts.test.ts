@@ -72,6 +72,47 @@ describe("fetch-tenant-details counts", () => {
     }
     expect(graphUrls.filter((entry) => entry.pathname.endsWith("/managedDevices"))).toHaveLength(2)
   })
+
+  it("fails instead of reporting failed counts as zeros", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input instanceof Request ? input.url : input)
+      if (url.includes("login.microsoftonline.com")) return Response.json({ access_token: "token" })
+      const parsed = new URL(url)
+      if (parsed.pathname === "/v1.0/organization") return Response.json({ value: [{ id: "org-1", displayName: "Contoso" }] })
+      if (parsed.pathname === "/v1.0/users") return Response.json({ error: { code: "Authorization_RequestDenied" } }, { status: 403 })
+      if (parsed.searchParams.get("$filter")) return Response.json({ error: { code: "BadRequest" } }, { status: 400 })
+      return Response.json({ "@odata.count": 5, value: [{}] })
+    })
+    vi.spyOn(console, "error").mockImplementation(() => undefined)
+
+    const response = await POST(new NextRequest("http://tenuvault.internal/api/fetch-tenant-details", {
+      method: "POST",
+      body: JSON.stringify({ tenantId: "tenant", appId: "app", clientSecret: "secret" }),
+    }))
+    expect(response.status).toBe(502)
+    const body = await response.json()
+    expect(body).not.toHaveProperty("statistics")
+    expect(String(body.error)).toContain("users")
+    expect(String(body.error)).toContain("compliant devices")
+  })
+
+  it("fails when the organization cannot be read", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input instanceof Request ? input.url : input)
+      if (url.includes("login.microsoftonline.com")) return Response.json({ access_token: "token" })
+      if (new URL(url).pathname === "/v1.0/organization") return Response.json({ error: {} }, { status: 503 })
+      return Response.json({ "@odata.count": 5, value: [{}] })
+    })
+    vi.spyOn(console, "error").mockImplementation(() => undefined)
+
+    const response = await POST(new NextRequest("http://tenuvault.internal/api/fetch-tenant-details", {
+      method: "POST",
+      body: JSON.stringify({ tenantId: "tenant", appId: "app", clientSecret: "secret" }),
+    }))
+    expect(response.status).toBe(502)
+    const body = await response.json()
+    expect(body).not.toHaveProperty("statistics")
+  })
 })
 
 describe("hygiene group resolution", () => {

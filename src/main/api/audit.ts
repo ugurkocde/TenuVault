@@ -107,7 +107,11 @@ export function createAuditRecorder(
           logEntry,
         }),
       }),
-    ).catch((error: unknown) => console.error("[audit] Failed to write audit entry:", error))
+    ).then((logged) => {
+      // ApiHost.dispatch resolves with error responses instead of rejecting, so a failed
+      // audit write must be checked here or the entry is dropped with no trace.
+      if (!logged.ok) console.error(`[audit] Failed to write audit entry (${logged.status})`)
+    }).catch((error: unknown) => console.error("[audit] Failed to write audit entry:", error))
   }
 }
 
@@ -174,7 +178,9 @@ async function recordFrameworkCreation(bodyText: string, response: Response, dis
     const logged = await dispatch(new Request(`${INTERNAL_API_ORIGIN}/api/audit/log`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
         tenantId: body.tenantId, appId: body.appId, clientSecret: DELEGATED_CLIENT_SECRET,
-        storageAccountName: localStorageAccountName(body.tenantId),
+        // The Audit page reads the tenant's configured account, so entries must land there:
+        // writing to the local account would hide creations for Azure storage tenants.
+        storageAccountName: body.storageAccountName ?? localStorageAccountName(body.tenantId),
         user: { id: account?.username ?? "unknown", email: account?.username ?? "unknown", name: account?.name ?? "Unknown user" }, logEntry,
       }),
     }))

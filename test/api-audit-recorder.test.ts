@@ -53,6 +53,38 @@ describe("audit callbacks cannot replace a completed route response", () => {
     expect(dispatch).not.toHaveBeenCalled()
   })
 
+  it("writes framework creation entries to the tenant's configured storage account", async () => {
+    const entries: Array<{ storageAccountName?: string }> = []
+    const record = createAuditRecorder(async (request) => { entries.push(await request.json()); return Response.json({ success: true }) }, () => null)
+    record(
+      new Request("http://tenuvault.internal/api/frameworks", { method: "POST" }),
+      JSON.stringify({ tenantId: TENANT, appId: "fixture-app", action: "create", runId: "run-1", storageAccountName: "tenantazure" }),
+      Response.json({ success: true, results: [{ id: "policy-1", name: "Baseline policy" }] }),
+    )
+    await vi.waitFor(() => expect(entries).toHaveLength(1))
+    expect(entries[0]!.storageAccountName).toBe("tenantazure")
+  })
+
+  it("falls back to local storage for framework creations without a storage account", async () => {
+    const entries: Array<{ storageAccountName?: string }> = []
+    const record = createAuditRecorder(async (request) => { entries.push(await request.json()); return Response.json({ success: true }) }, () => null)
+    record(
+      new Request("http://tenuvault.internal/api/frameworks", { method: "POST" }),
+      JSON.stringify({ tenantId: TENANT, appId: "fixture-app", action: "create", runId: "run-1" }),
+      Response.json({ success: true, results: [{ id: "policy-1", name: "Baseline policy" }] }),
+    )
+    await vi.waitFor(() => expect(entries).toHaveLength(1))
+    expect(entries[0]!.storageAccountName).toBe(`tvlocal-${TENANT}`)
+  })
+
+  it("logs when the audit write itself fails instead of dropping the entry silently", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    const record = createAuditRecorder(async () => new Response("no", { status: 503 }), () => null)
+    record(new Request("http://tenuvault.internal/api/backup/start", { method: "POST" }), JSON.stringify(credentials), Response.json({ jobId: "fixture-job" }))
+    await vi.waitFor(() => expect(log).toHaveBeenCalled())
+    expect(log.mock.calls.flat().join(" ")).toContain("503")
+  })
+
   it("still attributes and records a valid handled request", async () => {
     const entries: unknown[] = []
     const accountFor = vi.fn(() => ({ tenantId: TENANT, clientId: "fixture-app", username: "admin@example.test", name: "Fixture admin", homeAccountId: "fixture-account" }))
