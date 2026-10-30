@@ -62,7 +62,7 @@ describe("New-TenuVaultStorage.ps1 -BackupReaderAppId", () => {
 
   it("assigns the role on the backup container only", () => {
     expect(storageScript).toContain('$containerScope = "$($account.Id)/blobServices/default/containers/$container"')
-    expect(storageScript).toContain("New-AzRoleAssignment -ObjectId $reader.Id -RoleDefinitionName $roleName -Scope $containerScope")
+    expect(storageScript).toContain("New-AzRoleAssignment -ObjectId $reader.Id -RoleDefinitionId $role.Id -Scope $containerScope")
   })
 
   it("creates the container, since the reader cannot", () => {

@@ -220,7 +220,13 @@ function Add-TenuVaultRoleAssignment {
         Write-Host "$Target already has '$RoleName'."
     } elseif ($PSCmdlet.ShouldProcess($Scope, "Assign '$RoleName' to $Target")) {
         Write-Host "Assigning '$RoleName' to $Target..."
-        New-AzRoleAssignment -ObjectId $ObjectId -RoleDefinitionName $RoleName -Scope $Scope | Out-Null
+        # Custom role names do not reliably resolve in New-AzRoleAssignment; assign by id when known.
+        $definition = Get-AzRoleDefinition -Name $RoleName -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($definition) {
+            New-AzRoleAssignment -ObjectId $ObjectId -RoleDefinitionId $definition.Id -Scope $Scope | Out-Null
+        } else {
+            New-AzRoleAssignment -ObjectId $ObjectId -RoleDefinitionName $RoleName -Scope $Scope | Out-Null
+        }
     }
 }
 
@@ -346,7 +352,9 @@ if (-not $container) {
 }
 
 if ($principalId) {
-    $groupScope = $resourceGroup.ResourceId
+    # The container assignment lives under the storage account, which may be in another
+    # resource group than the Automation account. The role must be assignable there.
+    $groupScope = ($storageAccount.Id -split '/providers/')[0]
     $dataActions = @(
         "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
         "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
@@ -360,15 +368,39 @@ if ($principalId) {
             $definition.Name = $writerRoleName
             $definition.Description = "TenuVault Backup Writer: writes backups. Cannot delete blobs, blob versions or containers."
             $definition.IsCustom = $true
-            $definition.Actions = @()
-            $definition.DataActions = $dataActions
-            $definition.AssignableScopes = @($groupScope)
+            # Az.Resources 10 replaced the flattened Actions/DataActions properties with Permissions.
+            if ($definition.PSObject.Properties.Name -contains 'Permissions') {
+                $permission = [Microsoft.Azure.Commands.Resources.Models.Authorization.PSPermission]::new()
+                $permission.Actions = [System.Collections.Generic.List[string]]::new()
+                $permission.NotActions = [System.Collections.Generic.List[string]]::new()
+                $permission.DataActions = [System.Collections.Generic.List[string]]::new()
+                foreach ($action in $dataActions) { $permission.DataActions.Add($action) }
+                $permission.NotDataActions = [System.Collections.Generic.List[string]]::new()
+                $definition.Permissions = [System.Collections.Generic.List[Microsoft.Azure.Commands.Resources.Models.Authorization.PSPermission]]::new()
+                $definition.Permissions.Add($permission)
+            } else {
+                $definition.Actions = @()
+                $definition.DataActions = $dataActions
+            }
+            $definition.AssignableScopes = [System.Collections.Generic.List[string]]::new()
+            $definition.AssignableScopes.Add($groupScope)
             $role = New-AzRoleDefinition -Role $definition
         }
     } else {
-        $extra = @($role.DataActions | Where-Object { $dataActions -notcontains $_ }) + @($role.Actions)
+        $existingActions = @()
+        $existingDataActions = @()
+        if ($role.PSObject.Properties.Name -contains 'Permissions' -and $role.Permissions) {
+            foreach ($permission in $role.Permissions) {
+                $existingActions += @($permission.Actions)
+                $existingDataActions += @($permission.DataActions)
+            }
+        } else {
+            $existingActions = @($role.Actions)
+            $existingDataActions = @($role.DataActions)
+        }
+        $extra = @($existingDataActions | Where-Object { $dataActions -notcontains $_ }) + @($existingActions)
         if ($extra) { throw "The existing role '$writerRoleName' allows more than writing backups ($($extra -join ', ')). Remove those permissions or delete the role, then run the script again." }
-        if ($role.AssignableScopes -notcontains $groupScope -and $PSCmdlet.ShouldProcess($writerRoleName, "Allow assignments in $ResourceGroupName")) {
+        if ($role.AssignableScopes -notcontains $groupScope -and $PSCmdlet.ShouldProcess($writerRoleName, "Allow assignments in $groupScope")) {
             $role.AssignableScopes.Add($groupScope)
             $role = Set-AzRoleDefinition -Role $role
         }
@@ -393,8 +425,15 @@ $vault = Get-AzKeyVault -VaultName $KeyVaultName -ResourceGroupName $ResourceGro
 if (-not $vault) {
     Write-Host "Creating Key Vault '$KeyVaultName' (RBAC authorization, soft delete)..."
     if ($PSCmdlet.ShouldProcess($KeyVaultName, "Create Key Vault")) {
-        $vault = New-AzKeyVault -VaultName $KeyVaultName -ResourceGroupName $ResourceGroupName `
-            -Location $Location -EnableRbacAuthorization -SoftDeleteRetentionInDays 30
+        # Newer Az.KeyVault enables RBAC by default and exposes only -DisableRbacAuthorization.
+        $vaultParams = @{
+            VaultName = $KeyVaultName; ResourceGroupName = $ResourceGroupName
+            Location = $Location; SoftDeleteRetentionInDays = 30
+        }
+        if ((Get-Command New-AzKeyVault).Parameters.ContainsKey('EnableRbacAuthorization')) {
+            $vaultParams.EnableRbacAuthorization = $true
+        }
+        $vault = New-AzKeyVault @vaultParams
     }
 }
 if ($vault) {

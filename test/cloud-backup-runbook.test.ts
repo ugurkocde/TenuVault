@@ -108,10 +108,19 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
 
   it("scopes the writer role to the container without delete and prints the paste block", () => {
     expect(setup).toContain('"TenuVault Backup Writer"')
+    // Az.Resources 10 exposes Permissions instead of flattened role Actions/DataActions.
+    expect(setup).toContain("PSObject.Properties.Name -contains 'Permissions'")
+    expect(setup).toContain("$definition.Permissions.Add($permission)")
+    expect(setup).toContain("foreach ($permission in $role.Permissions)")
+    expect(setup).not.toMatch(/\$extra = @\(\$role\.DataActions/)
+    expect(setup).toContain("New-AzRoleAssignment -ObjectId $ObjectId -RoleDefinitionId $definition.Id")
+    // Storage may live outside the Automation resource group; the role must be assignable there.
+    expect(setup).toContain("$groupScope = ($storageAccount.Id -split '/providers/')[0]")
     expect(setup).not.toContain("blobs/delete")
     expect(setup).toContain("containers/$backupContainer")
     // The runbook needs the .NET HKDF and AesGcm types, which the default 5.1 runtime lacks.
     expect(setup).toContain("-Type PowerShell72")
+    expect(setup).toContain("Parameters.ContainsKey('EnableRbacAuthorization')")
     expect(setup).toContain("Key Vault Secrets User")
     expect(setup).toContain("--- TenuVault cloud backup setup (paste into TenuVault) ---")
     expect(setup).toContain("tenantKey=$tenantKey")
