@@ -2,6 +2,7 @@ import JSZip from "jszip"
 import { describe, expect, it } from "vitest"
 import { computeCoverage, extractRecommendationIds, parseBreakoutWorkbook, parseDenominatorList, type BreakoutRow } from "../src/shared/frameworks/cis-coverage"
 import { convertKit, type KitFile } from "../src/shared/frameworks/cis-kit"
+import { parsePolicies } from "../src/shared/frameworks/policies"
 
 const type = "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance"
 const policy = (name: string, description: string) => JSON.stringify({
@@ -55,6 +56,13 @@ describe("recommendation identifier extraction", () => {
     expect(extractRecommendationIds("Converted from the synthetic benchmark v9.9.9.\n\nSettings only.", { kitVersion: "9.9.9" })).toEqual([])
     expect(extractRecommendationIds("Build 7.1.1a and rule L2.3.4, covers 7.1.2.", { kitVersion: "9.9.9" })).toEqual(["7.1.2"])
     expect(extractRecommendationIds("(7.1.1), 7.1.3: and 8.2.", { kitVersion: "9.9.9" })).toEqual(["7.1.1", "7.1.3", "8.2"])
+  })
+
+  it("keeps identifiers named past character 1500 of a pack policy description", () => {
+    const description = `${"Background text. ".repeat(120)}Covers 7.4.1`
+    expect(description.indexOf("7.4.1")).toBeGreaterThan(1500)
+    const [parsed] = parsePolicies(JSON.parse(policy("Fakebook Long", description)))
+    expect(extractRecommendationIds(parsed!.description, { kitVersion: "9.9.9" })).toEqual(["7.4.1"])
   })
 })
 

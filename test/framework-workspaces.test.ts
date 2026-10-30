@@ -17,6 +17,17 @@ it('restores tenant-bound source versions, assessments and outcomes after reopen
   expect(loadWorkspace(tenant, 'oib').history).toEqual([])
   expect([...data.values()].join('')).not.toContain('access_token')
 })
+it('reloads stored policies past the import size limit, within the workspace limit', () => {
+  const workspace = loadWorkspace(tenant, 'custom')
+  const setting = { settingInstance: { '@odata.type': '#microsoft.graph.deviceManagementConfigurationSimpleSettingInstance', settingDefinitionId: 'password', simpleSettingValue: { value: 8 } } }
+  // One policy whose long description puts the stored policies over the 8 MB
+  // import cap while the workspace stays far under its own 32 MB limit.
+  workspace.policies = [{ name: 'Baseline', platforms: 'windows10', technologies: 'mdm', description: 'x'.repeat(9_000_000), settings: [setting] }] as never
+  saveWorkspace(workspace)
+  const loaded = loadWorkspace(tenant, 'custom')
+  expect(loaded.policies).toHaveLength(1)
+  expect(loaded.policies[0]!.description).toHaveLength(9_000_000)
+})
 it('exports a complete record and deletes individual history or the workspace without Graph access', async () => {
   const workspace = loadWorkspace(tenant, 'custom')
   workspace.reference = 'Draft v3'

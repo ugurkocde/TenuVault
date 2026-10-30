@@ -106,6 +106,20 @@ describe("compliance engine", () => {
     expect(capabilityComparison(capabilityResult(data, "windows-disk-encryption"))).toBe("different");
   });
 
+  it("documents the intentional split between status and comparison for mixed assigned evidence", () => {
+    // native.ts documents capabilityComparison as one vote from the best assigned
+    // evidence, while the capability status reports the same mix as conflicting.
+    const data = emptyExportData();
+    data.collectedAt = "2026-10-12T10:00:00Z";
+    data.settingsCatalog = [
+      { ...bitLockerCatalogPolicy("_1", allDevicesAssignment), id: "enforcing" },
+      { ...bitLockerCatalogPolicy("_0", allDevicesAssignment), id: "disabling" },
+    ];
+    const result = capabilityResult(data, "windows-disk-encryption");
+    expect(result.status).toBe("conflictingEvidence");
+    expect(capabilityComparison(result)).toBe("matches");
+  });
+
   it("excludes tenant and other platform capabilities from windows-only scope", () => {
     const data = emptyExportData();
     data.collectedAt = "2026-10-12T10:00:00Z";
@@ -417,7 +431,7 @@ describe("compliance engine", () => {
     ).toBe(false);
   });
 
-  it("ignores present values that match neither enforced nor disabled expectations", () => {
+  it("records a present value that matches neither enforced nor disabled expectations as non-enforcing evidence", () => {
     const data = emptyExportData();
     data.windowsUpdatePolicies = [
       {
@@ -430,8 +444,48 @@ describe("compliance engine", () => {
     ];
 
     const result = capabilityResult(data, "windows-automatic-updates");
-    expect(result.status).toBe("noEvidence");
-    expect(result.evidence).toHaveLength(0);
+    // The check already counts this policy as checked and different; the capability
+    // status and the collected-policy coverage must agree that it was recognized.
+    expect(result.checks).toContainEqual(expect.objectContaining({ assessmentStatus: "checked", result: "different", policyId: "update-ring" }));
+    expect(capabilityComparison(result)).toBe("different");
+    expect(result.status).toBe("disabledByPolicy");
+    expect(result.evidence).toMatchObject([{ policyId: "update-ring", verdict: "disabled", observedValue: "notifyDownload" }]);
+    const coverage = assessCompliance(data).collectionCoverage.find((row) => row.family === "windowsUpdatePolicies");
+    expect(coverage).toMatchObject({ collectedPolicies: 1, recognizedPolicies: 1, unsupportedPolicies: 0 });
+  });
+
+  it("does not turn extra entries of a collection setting into counter-evidence beside its wildcard", () => {
+    const data = emptyExportData();
+    data.collectedAt = "2026-10-12T10:00:00Z";
+    data.settingsCatalog = [
+      {
+        id: "module-logging",
+        name: "Module logging",
+        configType: "Settings Catalog",
+        assignments: allDevicesAssignment,
+        settings: [
+          {
+            id: "0",
+            settingInstance: {
+              "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance",
+              settingDefinitionId: "device_vendor_msft_policy_config_admx_powershellexecutionpolicy_enablemodulelogging",
+              choiceSettingValue: { value: "device_vendor_msft_policy_config_admx_powershellexecutionpolicy_enablemodulelogging_1" },
+            },
+          },
+          {
+            id: "1",
+            settingInstance: {
+              "@odata.type": "#microsoft.graph.deviceManagementConfigurationSimpleSettingCollectionInstance",
+              settingDefinitionId: "device_vendor_msft_policy_config_admx_powershellexecutionpolicy_enablemodulelogging_listbox_modulenames",
+              simpleSettingCollectionValue: [{ value: "*" }, { value: "Contoso.Module" }],
+            },
+          },
+        ],
+      },
+    ];
+    const result = capabilityResult(data, "windows-powershell-module-logging");
+    expect(result.status).toBe("enforced");
+    expect(result.evidence.map((item) => item.verdict)).toEqual(["enforced"]);
   });
 
   it("finds settings nested inside group and choice children", () => {

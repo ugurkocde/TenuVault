@@ -98,6 +98,13 @@ describe("kitLevelForPolicy", () => {
     expect(kitLevelForPolicy(policy())).toBe(1)
     expect(kitLevelForPolicy(undefined)).toBe(1)
   })
+
+  it("does not read a stray 2 in a Level 1 label as Level 2", () => {
+    expect(kitLevelForPolicy(policy({ provenance: { level: "Level 1 (v2)" } }))).toBe(1)
+    expect(kitLevelForPolicy(policy({ provenance: { level: "Level 1" } }))).toBe(1)
+    expect(kitLevelForPolicy(policy({ provenance: { level: "L2" } }))).toBe(2)
+    expect(kitLevelForPolicy(policy({ provenance: { level: "2" } }))).toBe(2)
+  })
 })
 
 describe("isKitPackReference", () => {

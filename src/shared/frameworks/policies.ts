@@ -48,10 +48,15 @@ export function clean(value: Json): Json {
     .map(([key, v]) => [key, clean(v)]))
 }
 
-export function parsePolicies(input: unknown): BaselinePolicy[] {
+/**
+ * Parses Settings Catalog exports or stored baseline policies. Imports are capped at
+ * 8 MB; reparsing policies a workspace already saved passes the larger workspace limit,
+ * so anything saveWorkspace accepted stays loadable.
+ */
+export function parsePolicies(input: unknown, options: { maxBytes?: number } = {}): BaselinePolicy[] {
   const values = Array.isArray(input) ? input : [input]
   if (!values.length || values.length > 200) throw new Error("Import between 1 and 200 Settings Catalog policies.")
-  if (JSON.stringify(values).length > 8_000_000) throw new Error("The policy pack exceeds 8 MB.")
+  if (JSON.stringify(values).length > (options.maxBytes ?? 8_000_000)) throw new Error("The policy pack exceeds 8 MB.")
   return values.map((value, index) => {
     if (!record(value) || typeof value.name !== "string" || !value.name.trim() || value.name.length > 200 ||
         typeof value.platforms !== "string" || !value.platforms || typeof value.technologies !== "string" || !value.technologies ||
@@ -72,7 +77,10 @@ export function parsePolicies(input: unknown): BaselinePolicy[] {
     if (value.provenance !== undefined && (!record(value.provenance) || Object.values(value.provenance).some(item => typeof item !== 'string' && typeof item !== 'number'))) throw new Error('Invalid pack provenance')
     const recommendations = value.recommendations === undefined ? undefined : validatePackRecommendations(value.recommendations, `Policy ${index + 1} recommendations`)
     return { ...(record(value.provenance) ? { provenance: value.provenance } : {}), name: value.name.trim(), platforms: value.platforms, technologies: value.technologies,
-      description: typeof value.description === "string" ? value.description.slice(0, 1500) : "", settings, ...(template ? { templateReference: template } : {}), ...(recommendations?.length ? { recommendations } : {}) }
+      // Kept whole: CIS coverage enumerates the recommendation IDs named in the
+      // description, so truncating it here would silently drop late IDs. The
+      // Graph length limit is applied where a policy is created, not on import.
+      description: typeof value.description === "string" ? value.description : "", settings, ...(template ? { templateReference: template } : {}), ...(recommendations?.length ? { recommendations } : {}) }
   })
 }
 
