@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { Link } from "react-router-dom"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import type { Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
@@ -65,7 +66,15 @@ export function FindingDetail({ tenant, findingId, readOnly, onChanged }: { tena
 
       {finding.review && (
         <p className="rounded-2xl bg-gray-50 p-3 text-gray-700 dark:bg-gray-800 dark:text-gray-200">
-          {finding.review.action === "false-positive" ? "Marked as false positive" : "Acknowledged"} by {finding.review.by ?? "unknown admin"} on {formatDate(finding.review.at)}{finding.review.note ? `: ${finding.review.note}` : "."}
+          {finding.review.action === "false-positive" ? "Marked as false positive" : "Acknowledged"} by {finding.review.by ?? "unknown admin"} on {formatDate(finding.review.at)}{finding.review.note ? `: ${finding.review.note}` : "."}{" "}
+          <Link to={`/portal/audit?q=${encodeURIComponent(finding.title)}`} className="font-medium text-gray-900 underline underline-offset-2">View decision in Audit Log</Link>
+        </p>
+      )}
+
+      {finding.settings[0] && (
+        <p className="text-sm">
+          <Link to={`/portal/governance/customizations?setting=${encodeURIComponent(finding.settings[0].definitionId)}${finding.policies[0] ? `&policy=${encodeURIComponent(finding.policies[0].name)}` : ""}`} className="font-medium text-gray-900 underline underline-offset-2">Document this setting as a customization</Link>
+          <span className="text-gray-500"> when the difference is deliberate; it then appears in Accepted deviations.</span>
         </p>
       )}
 
@@ -80,7 +89,7 @@ export function FindingDetail({ tenant, findingId, readOnly, onChanged }: { tena
             {finding.status !== "false-positive" && <Button type="button" size="sm" variant="outline" disabled={review.isPending || !note.trim()} title={note.trim() ? undefined : "Enter the reason first"} onClick={() => review.mutate("mark-false-positive")}>Mark as false positive</Button>}
             {reviewed && <Button type="button" size="sm" variant="outline" disabled={review.isPending} onClick={() => review.mutate("reopen")}>Reopen</Button>}
           </div>
-          <p className="text-xs text-gray-500">Reviews never change or delete a policy. A review is reopened automatically when the evidence changes.</p>
+          <p className="text-xs text-gray-500">Reviews never change or delete a policy. A review is reopened automatically when the evidence changes. The decision is recorded in the Audit Log.</p>
         </div>
       )}
 

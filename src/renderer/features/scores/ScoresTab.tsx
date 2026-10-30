@@ -16,6 +16,7 @@ import { useInternalCisBenchmarks } from "../../lib/internal-cis"
 import { invalidateScores } from "./invalidate"
 import { cisScoreCards } from "./cis"
 import { CisCard } from "./CisCard"
+import { FreshnessStrip } from "../governance/FreshnessStrip"
 
 /**
  * Baseline scores (#137), projected from the comparisons saved on the Frameworks page. Scores
@@ -59,13 +60,19 @@ export default function ScoresTab({ tenant, plan, allowed }: FeatureTabProps) {
       <ComplianceScoringNotice key={tenantId} changed={summary?.scoringChanged === true} />
       <section aria-label="How scores work" className="flex flex-wrap items-start justify-between gap-4 rounded-3xl bg-card p-6 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
         <div className="max-w-3xl space-y-2 text-sm text-gray-600">
-          <p>{summary?.formula ?? "Scores come from saved native framework comparisons."}</p>
-          <p>
-            The score is shown with its coverage, the share of counted capabilities that could be evaluated. Gaps are the capabilities counted different or missing. OpenIntuneBaseline scores count expected settings instead of capabilities, from full validations only.
-          </p>
-          <p>
-            A score compares Intune and Conditional Access configuration with a technical mapping. It does not prove enforcement on devices or compliance with the full framework. Comparisons older than {summary?.staleAfterDays ?? 30} days are marked stale.
-          </p>
+          <FreshnessStrip source="saved framework comparisons and OpenIntuneBaseline validations" at={assessed[0]?.latest?.freshness.assessedAt ?? null} stale={assessed.some((framework) => framework.latest!.freshness.stale)} staleLabel="Some scores stale" />
+          <details>
+            <summary className="cursor-pointer font-medium text-gray-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">How scores work</summary>
+            <div className="mt-2 space-y-2">
+              <p>{summary?.formula ?? "Scores come from saved native framework comparisons."}</p>
+              <p>
+                The score is shown with its coverage, the share of counted capabilities that could be evaluated. Gaps are the capabilities counted different or missing. OpenIntuneBaseline scores count expected settings instead of capabilities, from full validations only.
+              </p>
+              <p>
+                A score compares Intune and Conditional Access configuration with a technical mapping. It does not prove enforcement on devices or compliance with the full framework. Comparisons older than {summary?.staleAfterDays ?? 30} days are marked stale.
+              </p>
+            </div>
+          </details>
         </div>
         <div className="flex flex-wrap items-start gap-2">
           <GovernanceExportButtons kind="scores" tenantName={summary?.tenantName ?? tenant.name} disabled={frameworks.length === 0} buildCsv={() => scoresCsv(frameworks)} buildJson={(exportedAt) => scoresJson(frameworks, summary?.tenantName ?? tenant.name, exportedAt)} />

@@ -60,6 +60,8 @@ export interface CustomizationRecord extends ListedRecord {
   value: string | null
   reason: string
   owner: string
+  /** When the accepted deviation must be re-reviewed, or null when no expiry was recorded. Records stored before expiry existed read as null. */
+  expiresAt?: string | null
   version: number
 }
 

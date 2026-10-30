@@ -4,6 +4,8 @@ import { isGraphId } from "../../../shared/security"
 import { OIB_PLATFORMS, type OibPlatform } from "../../../shared/oib/types"
 import type { SignalProvider } from "../contracts"
 import type { FeatureDeps } from "../deps"
+import { AuditEventType } from "../../../portal/lib/audit/types"
+import { recordGovernanceAudit } from "../governance-audit"
 import { featureRoute, FeatureError, optionalText, text, type Body } from "../route"
 import { listChangeSets } from "../change-sets/engine"
 import { changeSetActions } from "../baseline-upgrades/change-actions"
@@ -146,8 +148,10 @@ export function routes(deps: FeatureDeps, sources: BaselineSources = defaultSour
     },
 
     // Organization customizations (Pro).
-    "create-customization": ({ tenantId, body, actor }) => ({
-      customization: createCustomization(deps, tenantId, {
+    "create-customization": async ({ tenantId, body, actor }) => {
+      const expiresAt = optionalText(body, "expiresAt", 40)
+      if (expiresAt !== null && !Number.isFinite(Date.parse(expiresAt))) throw new FeatureError("An expiry must be a date.")
+      const customization = createCustomization(deps, tenantId, {
         title: text(body, "title", 200),
         installId: optionalText(body, "installId", 100),
         baselineReference: optionalText(body, "baselineReference", 300),
@@ -156,28 +160,47 @@ export function routes(deps: FeatureDeps, sources: BaselineSources = defaultSour
         value: optionalText(body, "value", 2000),
         reason: text(body, "reason", 2000),
         owner: text(body, "owner", 200),
-      }, actor),
-    }),
-    "revise-customization": ({ tenantId, body, actor }) => {
+        expiresAt,
+      }, actor)
+      await recordGovernanceAudit(deps, tenantId, actor, { eventType: AuditEventType.GOVERNANCE_CUSTOMIZATION_RECORDED, action: "Document customization", resourceId: customization.id, resourceName: customization.title, link: "/portal/governance/customizations", details: { settingKey: customization.settingKey, owner: customization.owner, expiresAt, decision: "created" } })
+      return { customization }
+    },
+    "revise-customization": async ({ tenantId, body, actor }) => {
       const change: { value?: string | null; reason?: string; owner?: string } = {}
       if (body.value !== undefined) change.value = optionalText(body, "value", 2000)
       if (body.reason !== undefined) change.reason = text(body, "reason", 2000)
       if (body.owner !== undefined) change.owner = text(body, "owner", 200)
-      return { customization: reviseCustomization(deps, tenantId, idOf(body), change, text(body, "why", 2000), actor) }
+      const why = text(body, "why", 2000)
+      const customization = reviseCustomization(deps, tenantId, idOf(body), change, why, actor)
+      await recordGovernanceAudit(deps, tenantId, actor, { eventType: AuditEventType.GOVERNANCE_CUSTOMIZATION_RECORDED, action: "Revise customization", resourceId: customization.id, resourceName: customization.title, link: "/portal/governance/customizations", details: { settingKey: customization.settingKey, owner: customization.owner, decision: "revised", note: why } })
+      return { customization }
     },
-    "retire-customization": ({ tenantId, body, actor }) => ({ customization: retireCustomization(deps, tenantId, idOf(body), text(body, "why", 2000), actor) }),
+    "retire-customization": async ({ tenantId, body, actor }) => {
+      const why = text(body, "why", 2000)
+      const customization = retireCustomization(deps, tenantId, idOf(body), why, actor)
+      await recordGovernanceAudit(deps, tenantId, actor, { eventType: AuditEventType.GOVERNANCE_CUSTOMIZATION_RETIRED, action: "Retire customization", resourceId: customization.id, resourceName: customization.title, link: "/portal/governance/customizations", details: { settingKey: customization.settingKey, note: why } })
+      return { customization }
+    },
 
     // Reusable standards (MSP, shared scope). The tenantId is the MSP's working tenant for plan checks only.
-    "standard-create": async ({ body, actor }) => ({
-      standard: publishVersion(deps, { ...(await versionInput(body, sources)), standardKey: text(body, "standardKey", 41), previousVersionId: null }, deps.tenants(), actor),
-    }),
-    "standard-publish-version": async ({ body, actor }) => ({
-      standard: publishVersion(deps, { ...(await versionInput(body, sources)), standardKey: null, previousVersionId: idOf(body, "previousVersionId") }, deps.tenants(), actor),
-    }),
+    "standard-create": async ({ tenantId, body, actor }) => {
+      const standard = publishVersion(deps, { ...(await versionInput(body, sources)), standardKey: text(body, "standardKey", 41), previousVersionId: null }, deps.tenants(), actor)
+      await recordGovernanceAudit(deps, tenantId, actor, { eventType: AuditEventType.GOVERNANCE_STANDARD_PUBLISHED, action: "Publish golden standard", resourceId: standard.id, resourceName: standard.title, link: "/portal/governance/standards", details: { standardKey: standard.standardKey, version: standard.version } })
+      return { standard }
+    },
+    "standard-publish-version": async ({ tenantId, body, actor }) => {
+      const standard = publishVersion(deps, { ...(await versionInput(body, sources)), standardKey: null, previousVersionId: idOf(body, "previousVersionId") }, deps.tenants(), actor)
+      await recordGovernanceAudit(deps, tenantId, actor, { eventType: AuditEventType.GOVERNANCE_STANDARD_PUBLISHED, action: "Publish golden standard version", resourceId: standard.id, resourceName: standard.title, link: "/portal/governance/standards", details: { standardKey: standard.standardKey, version: standard.version } })
+      return { standard }
+    },
     "get-standard-diff": ({ body }) => ({ diff: diffVersions(getStandardVersion(deps, idOf(body, "fromId")), getStandardVersion(deps, idOf(body, "toId"))) }),
 
     // Customer adoptions (MSP). The tenantId is the customer tenant.
-    "standard-adopt": ({ tenantId, body, actor }) => ({ adoption: startAdoption(deps, tenantId, idOf(body, "versionId"), actor) }),
+    "standard-adopt": async ({ tenantId, body, actor }) => {
+      const adoption = startAdoption(deps, tenantId, idOf(body, "versionId"), actor)
+      await recordGovernanceAudit(deps, tenantId, actor, { eventType: AuditEventType.GOVERNANCE_STANDARD_ADOPTED, action: "Start standard adoption", resourceId: adoption.id, resourceName: adoption.title, link: "/portal/governance/standards", details: { adoptionId: adoption.id } })
+      return { adoption }
+    },
     "standard-configure": ({ tenantId, body, actor }) => {
       const change: Parameters<typeof configureAdoption>[3] = {}
       if (body.versionId !== undefined) change.versionId = idOf(body, "versionId")

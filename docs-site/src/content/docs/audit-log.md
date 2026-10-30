@@ -25,6 +25,13 @@ The audit log records the actions TenuVault performs for a tenant: backups, down
 | Undo OpenIntuneBaseline run | POLICY REVERTED | An OpenIntuneBaseline deployment or drift fix is undone |
 | Apply change set | CHANGE_SET_APPLIED | An apply of a reviewed change set ends in promotion, a baseline upgrade, a custom baseline deployment or standard adoption, with the counts of verified, failed, uncertain and not attempted operations |
 | Roll back change set | CHANGE_SET_ROLLED_BACK | An apply of a rollback change set ends, with the same operation counts |
+| Approve change set | CHANGE_SET_APPROVED | A reviewer approves a change set's reviewed content and target state, with the reviewer and decision note. Nothing is written to the tenant |
+| Reject change set | CHANGE_SET_REJECTED | A reviewer rejects a change set that was not applied, with the reviewer and decision note |
+| Review hygiene finding | GOVERNANCE_FINDING_REVIEWED | A finding in Conflicts and hygiene is acknowledged, marked false positive, or reopened, with the decision and note |
+| Document or revise customization | GOVERNANCE_CUSTOMIZATION_RECORDED | An organization customization is documented or revised in Governance, with its setting, owner and re-review date where set |
+| Retire customization | GOVERNANCE_CUSTOMIZATION_RETIRED | An organization customization is retired, with the stated reason |
+| Publish golden standard | GOVERNANCE_STANDARD_PUBLISHED | A golden standard or a new version of one is published. Recorded under the MSP's working tenant; the standard itself holds no tenant evidence |
+| Start standard adoption | GOVERNANCE_STANDARD_ADOPTED | An adoption of a golden standard is started for this customer tenant. Applying it later is recorded as a change set apply |
 
 Each entry has a result: **SUCCESS**, **FAILURE**, or **PARTIAL** for a cancelled backup or when a restore, deployment or change set apply worked for some items and not for others, or left an operation uncertain. It also has a severity: **INFO** for success and cancellation, **WARNING** for partial restores, deployments and change set applies, and **ERROR** for failures. A **BACKUP_CANCELLED** event records **PARTIAL** with **INFO**.
 
@@ -70,7 +77,7 @@ The page shows, for the selected dates:
 | **Total Events** | Number of events |
 | **Success Rate** | Share of events with the result SUCCESS |
 
-Below the cards, the table lists the events, newest first, with **Timestamp**, **Event** (type icon and severity), **User**, **Action**, **Resource** and **Result**. The table shows 50 events per page; use **Previous** and **Next**, or type a page number.
+Below the cards, the table lists the events, newest first, with **Timestamp**, **Event** (type icon and severity), **User**, **Action**, **Resource** and **Result**. Change set and Governance decision entries link back to their deciding screen under the resource (**Open deciding screen**). Links from those screens (**View in Audit Log**) open this page with the search or event filter already applied. The table shows 50 events per page; use **Previous** and **Next**, or type a page number.
 
 **Auto-refresh** is on by default and reloads the page every 30 seconds; the time of the last reload is shown next to it. **Refresh** reloads right away.
 

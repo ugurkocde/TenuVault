@@ -3,18 +3,22 @@ title: "Governance"
 description: Read baseline scores, review policy conflicts and hygiene findings, and record organization customizations and golden standards.
 ---
 
-The **Governance** hub groups three screens for the tenant selected in the tenant switcher: **Baseline scores**, **Conflicts and hygiene**, and **Standards and customizations**. It helps you see how the tenant compares with frameworks, find candidate policy problems, and document where your organization deliberately differs from a baseline.
+Governance answers three questions for the tenant selected in the tenant switcher: are we compliant, where do we deviate on purpose, and who accepted it? It groups six screens: **Overview**, **Baseline scores**, **Conflicts and hygiene**, **Accepted deviations**, **Customizations**, and **Golden standards**. Decisions made on these screens (hygiene reviews, customizations, standard publications and adoptions) are recorded in the [audit log](/audit-log/). Applying changes happens in [Changes](/changes/), never here.
 
 Open **Governance** in the sidebar, then choose a screen at the top of the page. Without a connected tenant the page says "Connect or select a tenant to use governance." and no screen runs.
+
+## Overview
+
+The **Overview** is the landing screen. It reads only what the other Governance screens already show (saved comparisons, the latest hygiene scan, stored standards records), so every figure names its source and age: the latest baseline score with coverage, open definite and possible hygiene findings, accepted deviations with expired ones marked, and standard deviations and pending upgrades. **Needs attention** lists what waits first, each with a link to its owning screen. **Export evidence pack** saves one dated JSON with the scores, hygiene findings, adoption states, customizations and the accepted deviations register, headed by a notice that states what the evidence is and is not, and how fresh each section is. Each screen also names its own source and age in a "Source:" line, because scores, hygiene and standards are snapshots of different ages, not one live truth.
 
 ## What your plan includes
 
 | Screen | Community | Pro | MSP |
 | --- | --- | --- | --- |
-| Baseline scores | No | Yes | Yes |
+| Overview and Baseline scores | No | Yes | Yes |
 | Conflicts and hygiene | No | Yes | Yes |
-| Standards and customizations: organization customizations | No | Yes | Yes |
-| Standards and customizations: golden standards, adoption and portfolio | No | No | Yes |
+| Accepted deviations and Customizations | No | Yes | Yes |
+| Golden standards, adoption and portfolio | No | No | Yes |
 
 On a plan that does not include a screen, the tab shows a plan badge and a locked preview that describes what the screen does, with **See plans**. Records that were already created and stored on an earlier plan stay readable after a downgrade; only creating new records needs the plan. Baseline scores are the exception: scores are computed on request and never stored, so after a downgrade there is no stored score to read and the tab shows only its locked preview. See [Plans and features](/licensing/).
 
@@ -120,7 +124,7 @@ Click **Export CSV** or **Export JSON** to save the findings currently shown wit
 3. To mark a finding that does not apply, write the reason first, then click **Mark as false positive**. The button stays disabled until a reason is entered.
 4. To return an acknowledged or false positive finding to the open list, write a reason for reopening if you want one, then click **Reopen**.
 
-Reviews never change or delete a policy. A review is reopened automatically when the evidence changes. The **History** section of a finding lists earlier reviews.
+Reviews never change or delete a policy. A review is reopened automatically when the evidence changes. The **History** section of a finding lists earlier reviews, and each review decision is recorded in the [audit log](/audit-log/) and listed in [Accepted deviations](#accepted-deviations). **Document this setting as a customization** records a deliberate difference with the setting and policy prefilled.
 
 ### Fleet summary (MSP)
 
@@ -131,14 +135,18 @@ With MSP, the **Fleet summary** section shows stored findings per customer tenan
 * Only the latest complete backup is scanned. Backups that failed or stopped early are not used.
 * A finding marked possible needs group, filter or device context to confirm. Unknown membership is not proof either way.
 
-## Standards and customizations
+## Accepted deviations
 
-This screen has two parts. **Organization customizations** (Pro and MSP) records where this tenant deliberately differs from its installed baseline. **Golden standards** (MSP) keeps reusable, versioned standards that you adopt per customer tenant through reviewed change sets.
+**Accepted deviations** is one read-only register of what this tenant knowingly does differently: active customizations, hygiene findings a reviewer acknowledged or marked false positive, and approved standard exceptions. Each entry shows its setting, policy, owner or approver, reason, when it was decided, the age of its evidence, and its expiry where one is recorded. Expired entries sort first and are marked **Expired**; they need a new decision on their owning screen. Filter by **Kind** or **Expired only**, and use **Export CSV** or **Export JSON** to save the register as shown. The register changes nothing itself.
+
+## Customizations and golden standards
+
+These are two screens. **Customizations** (Pro and MSP) records where this tenant deliberately differs from its installed baseline. **Golden standards** (MSP) keeps reusable, versioned standards that you adopt per customer tenant through reviewed change sets.
 
 ### Document a customization
 
-1. Open **Governance** in the sidebar and choose **Standards and customizations**.
-2. In **Organization customizations**, fill in **Title**, **Setting definition ID**, **Reason** and **Owner**. **Policy name (optional)** and **Organization value (optional)** can be left empty.
+1. Open **Governance** in the sidebar and choose **Customizations**. Links from a score gap (**Document as customization**) or a hygiene finding open this screen with the setting and policy already filled in.
+2. In **Organization customizations**, fill in **Title**, **Setting definition ID**, **Reason** and **Owner**. The setting and policy fields suggest values from the hygiene evidence already collected, so an ID can be picked instead of typed. **Policy name (optional)**, **Organization value (optional)** and **Re-review by (optional)** can be left empty. A re-review date makes the customization expire in the Accepted deviations register.
 3. Click **Document customization**.
 
 Records are versioned and nothing here changes the tenant. For an active record, click **Change owner** to save a new owner as a new version, or **Retire** and enter why it is retired, then click **Save**. Click **Cancel** to leave a record unchanged.
@@ -147,7 +155,7 @@ Records are versioned and nothing here changes the tenant. For an active record,
 
 1. In **Golden standards**, fill in the **New standard** form: **Key (lowercase, hyphens)**, **Name** and **Change notes**.
 2. Choose the **Source**: **Settings Catalog exports**, then enter a **Source reference** and paste **Policies (JSON array of Settings Catalog exports)**, or **OpenIntuneBaseline (latest release)**, then choose the **Platform**. The exact commit is recorded with the standard.
-3. Add **Parameters (JSON array: name, label, type string, integer, choice or reference, required, default, min, max, options, renamedFrom)** and **Bindings (JSON array: policyKey, settingDefinitionId, parameter)** as needed.
+3. Add parameters and bindings with the **Add a parameter** and **Add a binding** fields (each appends one entry to the JSON below, which stays editable), or edit **Parameters (JSON array: name, label, type string, integer, choice or reference, required, default, min, max, options, renamedFrom)** and **Bindings (JSON array: policyKey, settingDefinitionId, parameter)** directly. Binding setting IDs are suggested from the pasted policy exports, and the policies themselves can be loaded from an export file instead of pasted.
 4. Click **Publish standard**.
 
 Versions are immutable and stored without tenant evidence. Tenant specific values are parameters, and tenant references must be bound to a reference parameter. On a published version, click **What changed** to compare it with the previous version, or **New version** to publish the next version from the latest one. A new base version never changes a customer tenant by itself.

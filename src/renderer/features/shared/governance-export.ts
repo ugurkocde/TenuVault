@@ -3,7 +3,8 @@ import { redactSecrets, redactText } from "../../../shared/compliance/export"
 import type { FrameworkScore } from "../scores/api"
 import { CLASSIFICATION_LABELS, STATUS_LABELS, type Finding as HygieneFinding } from "../hygiene/api"
 import type { Finding as HealthFinding } from "../health-review/api"
-import type { AdoptionState } from "../standards/api"
+import type { AdoptionState, Customization } from "../standards/api"
+import type { DeviationEntry } from "../governance/model"
 import { levelHeadline, ratePercent, type CisReadinessSummary } from "../../../shared/frameworks/cis-readiness"
 import { recommendationTotals } from "../../../shared/frameworks/cis-recommendations"
 
@@ -14,7 +15,10 @@ import { recommendationTotals } from "../../../shared/frameworks/cis-recommendat
  * an export, and every string passes the same redaction as the framework exports.
  */
 
-export type GovernanceExportKind = "scores" | "hygiene" | "health" | "standards" | "cis-readiness"
+export type GovernanceExportKind = "scores" | "hygiene" | "health" | "standards" | "cis-readiness" | "evidence-pack" | "deviations"
+
+/** Shown at the top of every evidence pack, so a reader knows what the files are and are not. */
+export const GOVERNANCE_EVIDENCE_NOTICE = "TenuVault governance evidence for one tenant, built from saved framework comparisons, the latest hygiene scan of a backup, and stored standards records. Scores compare Intune and Conditional Access configuration with a technical mapping; they do not prove enforcement on devices or compliance with a full framework. Changes made outside TenuVault are not shown; use the Microsoft Entra and Intune audit logs for those."
 
 /** "scores-contoso-2026-10-13", without an extension, following driftExportName. */
 export function governanceExportName(kind: GovernanceExportKind, tenantName: string | null | undefined, exportedAt: string): string {
@@ -197,6 +201,46 @@ export function standardsCsv(states: AdoptionState[]): string {
 
 export function standardsJson(states: AdoptionState[], tenantName: string | null, exportedAt: string): string {
   return toJson({ exportedAt, tenant: tenantName, adoptions: states.map(standardRow) })
+}
+
+const DEVIATION_HEADERS = ["Deviation", "Kind", "Setting", "Policy", "Owner or approver", "Reason", "Status", "Decided", "Evidence", "Expires", "Expired"]
+
+export function deviationsCsv(entries: DeviationEntry[]): string {
+  return toCsv([DEVIATION_HEADERS, ...entries.map((entry) => [entry.title, entry.kind, entry.settingKey ?? "", entry.policyName ?? "", entry.owner ?? "", entry.reason, entry.status, entry.decidedAt ?? "", entry.evidenceAt ?? "", entry.expiresAt ?? "", entry.expired ? "yes" : "no"])])
+}
+
+export function deviationsJson(entries: DeviationEntry[], tenantName: string | null, exportedAt: string): string {
+  return toJson({ exportedAt, tenant: tenantName, deviations: entries })
+}
+
+/**
+ * One dated evidence pack for an auditor or customer review: the notice, the tenant,
+ * how fresh each section is, then scores, hygiene findings, adoption states,
+ * customizations and the accepted deviations register. Built only from the rows the
+ * Governance screens already export, with the same redaction.
+ */
+export function evidencePackJson(pack: {
+  tenant: string | null
+  exportedAt: string
+  frameworks: FrameworkScore[]
+  findings: HygieneFinding[]
+  ruleName: (id: string) => string
+  adoptions: AdoptionState[]
+  customizations: Customization[]
+  deviations: DeviationEntry[]
+  freshness: { scoresAssessedAt: string | null; hygieneCollectedAt: string | null; standardsAssessedAt: string | null }
+}): string {
+  return toJson({
+    notice: GOVERNANCE_EVIDENCE_NOTICE,
+    tenant: pack.tenant,
+    exportedAt: pack.exportedAt,
+    freshness: pack.freshness,
+    scores: pack.frameworks.map(scoreRow),
+    hygiene: pack.findings.map((finding) => hygieneRow(finding, pack.ruleName)),
+    adoptions: pack.adoptions.map(standardRow),
+    customizations: pack.customizations.map((record) => ({ title: record.title, settingKey: record.settingKey, policyName: record.policyName, value: record.value, reason: record.reason, owner: record.owner, status: record.status, expiresAt: record.expiresAt ?? null, version: record.version })),
+    deviations: pack.deviations,
+  })
 }
 
 // --------------------------------------------------------------------------- cis readiness

@@ -1,6 +1,8 @@
 import type { RouteModule } from "../../api/host"
 import type { ListedRecord, SignalProvider, WorkSignal } from "../contracts"
 import type { FeatureDeps } from "../deps"
+import { AuditEventType } from "../../../portal/lib/audit/types"
+import { recordGovernanceAudit } from "../governance-audit"
 import { DOMAINS } from "../domains"
 import { resolveHistory, type Stored } from "../records"
 import { featureRoute, FeatureError, optionalText, text, type ActionContext, type Body } from "../route"
@@ -209,7 +211,7 @@ function get({ tenantId, body, deps }: ActionContext) {
 }
 
 function review(action: "acknowledged" | "false-positive") {
-  return ({ tenantId, body, deps, actor }: ActionContext) => {
+  return async ({ tenantId, body, deps, actor }: ActionContext) => {
     const id = findingId(body)
     const note = action === "false-positive" ? text(body, "reason", 2000) : optionalText(body, "note", 2000) ?? ""
     const current = deps.records.get<HygieneRecord>(DOMAIN, tenantId, id)
@@ -220,17 +222,20 @@ function review(action: "acknowledged" | "false-positive") {
       actor,
       reason: action === "false-positive" ? `Marked as false positive: ${note}` : note ? `Acknowledged: ${note}` : "Acknowledged",
     })
+    await recordGovernanceAudit(deps, tenantId, actor, { eventType: AuditEventType.GOVERNANCE_FINDING_REVIEWED, action: action === "false-positive" ? "Mark hygiene finding as false positive" : "Acknowledge hygiene finding", resourceId: id, resourceName: current.title, link: "/portal/governance/hygiene", details: { decision: action, note: note || null, ruleId: current.ruleId } })
     return { finding: updated }
   }
 }
 
-function reopen({ tenantId, body, deps, actor }: ActionContext) {
+async function reopen({ tenantId, body, deps, actor }: ActionContext) {
   const id = findingId(body)
   const current = deps.records.get<HygieneRecord>(DOMAIN, tenantId, id)
   if (!current || current.kind !== "finding") throw new FeatureError("Finding not found.", 404)
   if (current.status !== "acknowledged" && current.status !== "false-positive") throw new FeatureError("Only reviewed findings can be reopened.", 409)
   const reason = optionalText(body, "reason", 2000) ?? "Reopened"
-  return { finding: deps.records.update<FindingRecord>(DOMAIN, tenantId, id, (value) => ({ ...value, status: "open", review: null }), { actor, reason }) }
+  const finding = deps.records.update<FindingRecord>(DOMAIN, tenantId, id, (value) => ({ ...value, status: "open", review: null }), { actor, reason })
+  await recordGovernanceAudit(deps, tenantId, actor, { eventType: AuditEventType.GOVERNANCE_FINDING_REVIEWED, action: "Reopen hygiene finding", resourceId: id, resourceName: current.title, link: "/portal/governance/hygiene", details: { decision: "reopened", note: reason, ruleId: current.ruleId } })
+  return { finding }
 }
 
 /** Per customer counts and the open definite queue, each read only from that customer's records. */
