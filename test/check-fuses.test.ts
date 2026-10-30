@@ -35,7 +35,9 @@ describe('packaged security fuse check', () => {
   })
 
   it('accepts a binary with all six security fuses configured', () => {
-    const result = check(fixture(Buffer.from('00001100')))
+    // GrantFileProtocolExtraPrivileges (index 7) is enabled on purpose: the
+    // packaged renderer loads over file:// and cannot boot without it.
+    const result = check(fixture(Buffer.from('00001101')))
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('All six security fuses verified')
   })
@@ -48,7 +50,7 @@ describe('packaged security fuse check', () => {
     ['OnlyLoadAppFromAsar', 5],
     ['GrantFileProtocolExtraPrivileges', 7],
   ] as const)('rejects an unexpected state for %s', (name, index) => {
-    const wire = Buffer.from('00001100')
+    const wire = Buffer.from('00001101')
     wire[index] = wire[index] === 48 ? 49 : 48
     const result = check(fixture(wire))
     expect(result.status).toBe(1)

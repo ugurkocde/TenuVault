@@ -10,7 +10,9 @@ const expected = {
   EnableNodeCliInspectArguments: FuseState.DISABLE,
   EnableEmbeddedAsarIntegrityValidation: FuseState.ENABLE,
   OnlyLoadAppFromAsar: FuseState.ENABLE,
-  GrantFileProtocolExtraPrivileges: FuseState.DISABLE,
+  // Enabled on purpose: the renderer loads over file:// in the packaged app.
+  // Asserted so the state is a recorded decision, not an overlooked default.
+  GrantFileProtocolExtraPrivileges: FuseState.ENABLE,
 }
 getCurrentFuseWire(app).then(wire => {
   for (const [name, value] of Object.entries(expected)) {
