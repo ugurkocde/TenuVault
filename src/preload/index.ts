@@ -96,6 +96,8 @@ const bridge: TenuVaultPreloadBridge = {
     check: () => invoke("updates:check"),
     install: () => invoke("updates:install"),
     onChanged: (listener) => subscribe<UpdateStatus>("updates:changed", listener),
+    whatsNew: () => invoke("updates:whatsNew"),
+    markWhatsNewSeen: () => invoke("updates:markWhatsNewSeen"),
   },
   storage: {
     getItemSync: (key) => ipcRenderer.sendSync("storage:getSync", key) as string | null,

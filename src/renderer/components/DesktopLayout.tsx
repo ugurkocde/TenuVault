@@ -36,6 +36,8 @@ import { SignInBanner } from "./SignInBanner"
 import { SupportDialog } from "./SupportDialog"
 import { TenantSwitcher } from "./TenantSwitcher"
 import { UpdateSidebarLabel } from "./UpdateSidebarLabel"
+import { WhatsNewAnnouncement, WhatsNewDialog } from "./WhatsNewDialog"
+import { useWhatsNew } from "../lib/whats-new"
 import { TenantAccessNotice } from "./TenantAccessNotice"
 import { CisBenchmarksNavigation } from "./CisBenchmarksNavigation"
 import { FrameworkNavigation } from "./FrameworkNavigation"
@@ -166,6 +168,22 @@ function LicenseBanner() {
   return null
 }
 
+/** Sidebar entry for the release notes, with a dot while an installed build is unseen. */
+function WhatsNewNav({ linkClass }: { linkClass: (active: boolean) => string }) {
+  const { state } = useWhatsNew()
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)} className={cn(linkClass(false), "w-full")}>
+        <Sparkles className="h-[18px] w-[18px]" />
+        What&apos;s new
+        {state?.hasUnseen && <span aria-label="New changes since you last looked" className="ml-auto size-2 rounded-full bg-blue-600" />}
+      </button>
+      <WhatsNewDialog open={open} onOpenChange={setOpen} />
+    </>
+  )
+}
+
 function LicenseNavBadge() {
   const { status } = useLicense()
   if (!status) return null
@@ -259,6 +277,7 @@ export function DesktopLayout() {
         <OibJobIndicator />
         <div className="space-y-1 p-3">
           <UpdateSidebarLabel />
+          <WhatsNewNav linkClass={linkClass} />
           <Link to="/portal/settings" className={linkClass(pathname.startsWith("/portal/settings"))}>
             <Settings className="h-[18px] w-[18px]" />
             Settings
@@ -294,6 +313,7 @@ export function DesktopLayout() {
       <CisJobNotifier />
       <DriftScanNotifier />
       <SupportDialog open={supportOpen} onOpenChange={setSupportOpen} />
+      <WhatsNewAnnouncement />
     </div>
   )
 }

@@ -65,6 +65,7 @@ import { APP_STATE_START_OVER_BUTTON, APP_STATE_START_OVER_DETAIL, SecureStore, 
 import { Preferences } from "./preferences"
 import { AppTray } from "./tray"
 import { installedBySetup, isNightly, Updates, updatesDisabledByPolicy } from "./updates"
+import { WhatsNew } from "./whats-new"
 import { featureRoutes, startFeatures } from "./features"
 import { emitBackupOutcome, emitDriftOutcome, emitRestoreOutcome } from "./features/notifications/producers"
 import { apiBody, type FeatureDeps } from "./features/deps"
@@ -870,6 +871,9 @@ async function bootstrap(): Promise<void> {
     quitting = true
     if (!(await updates.install())) quitting = false
   })
+  const whatsNew = new WhatsNew(appStore, { currentVersion: () => app.getVersion() })
+  handleTrusted("updates:whatsNew", () => whatsNew.state())
+  handleTrusted("updates:markWhatsNewSeen", () => whatsNew.markSeen())
 
   handleTrusted("api", (_event, request: ApiRequest) => host.handleIpc(request))
   handleTrusted("disclaimer:accept", (_event, tenantIds: unknown) => {

@@ -28,6 +28,8 @@ import { PlanBadge } from "../components/UpgradeNote"
 import { PdfBrandingSettings } from "../components/PdfBrandingSettings"
 import { BackupReaderSettings } from "../components/BackupReaderSettings"
 import { NotificationsPanel } from "../features/notifications/NotificationsPanel"
+import { WhatsNewDialog, WhatsNewEntryNotes } from "../components/WhatsNewDialog"
+import { useWhatsNew } from "../lib/whats-new"
 import { useConfirm } from "~/components/ConfirmDialog"
 
 function RestoreWrites({ active }: { active: boolean }) {
@@ -613,6 +615,9 @@ export function BackgroundAndRetention() {
 export function Updates() {
   const [prefs, setPrefs] = useState<AppPreferences | null>(null)
   const [status, setStatus] = useState<UpdateStatus>({ state: "idle" })
+  const { state: whatsNewState } = useWhatsNew()
+  const [whatsNewOpen, setWhatsNewOpen] = useState(false)
+  const [pendingNotesOpen, setPendingNotesOpen] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const failed = (error: unknown): UpdateStatus => ({ state: "error", message: error instanceof Error ? error.message : String(error) })
@@ -699,7 +704,24 @@ export function Updates() {
               <RefreshCw className="mr-2 h-4 w-4" /> Check now
             </Button>
           )}
+          <Button size="sm" variant="ghost" onClick={() => setWhatsNewOpen(true)}>
+            What&apos;s new{whatsNewState?.hasUnseen ? " in your version" : ""}
+          </Button>
         </div>
+        {(() => {
+          const pendingVersion = status.state === "downloading" || status.state === "ready" ? status.version : null
+          const pending = pendingVersion ? whatsNewState?.entries.find((entry) => entry.version === pendingVersion) : undefined
+          if (!pending) return null
+          return (
+            <div className="space-y-2">
+              <button type="button" className="text-sm font-medium text-blue-600 hover:underline" aria-expanded={pendingNotesOpen} onClick={() => setPendingNotesOpen((current) => !current)}>
+                {pendingNotesOpen ? "Hide" : "Show"} what is new in {pendingVersion}
+              </button>
+              {pendingNotesOpen && <WhatsNewEntryNotes entry={pending} />}
+            </div>
+          )
+        })()}
+        <WhatsNewDialog open={whatsNewOpen} onOpenChange={setWhatsNewOpen} />
       </CardContent>
     </Card>
   )

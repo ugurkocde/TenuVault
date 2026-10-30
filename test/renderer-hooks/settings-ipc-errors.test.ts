@@ -38,6 +38,9 @@ vi.mock("../../src/renderer/lib/schedules", async (original) => ({
 vi.mock("../../src/renderer/lib/appearance", () => ({ getAppearance: () => "light", setAppearance: () => undefined }))
 vi.mock("~/contexts/TenantContext", () => ({ useTenants: () => [], useTenantOperations: () => ({}) }))
 vi.mock("~/components/ConfirmDialog", () => ({ useConfirm: () => ({ confirm: async () => true, confirmDialog: null }) }))
+vi.mock("../../src/renderer/lib/whats-new", () => ({
+  useWhatsNew: () => ({ state: null, refresh: async () => undefined, markSeen: async () => undefined }),
+}))
 
 import { BackgroundAndRetention, Updates } from "../../src/renderer/pages/SettingsPage"
 import { BackupSchedulePanel } from "../../src/renderer/components/BackupSchedulePanel"
