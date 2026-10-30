@@ -23,7 +23,11 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
     updates: { status: state.updateStatus, check: state.check, onChanged: () => () => undefined },
     backgroundLaunch: { status: async () => ({ supported: true, installed: false }) },
     backupReader: { status: async () => ({ supported: true, available: false, reader: null }) },
-    backups: { scope: state.scope },
+    backups: {
+      scope: state.scope,
+      settings: async () => ({ localFolder: "/tmp/backups", keyFingerprint: "AAAA-BBBB-CCCC", recoveryExported: true, hasLocalBackups: false }),
+    },
+    storage: { getItemSync: () => null, setItem: async () => undefined, removeItem: async () => undefined },
   },
 }))
 vi.mock("../../src/renderer/lib/license", async (original) => ({

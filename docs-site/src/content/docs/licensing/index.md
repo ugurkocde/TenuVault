@@ -28,6 +28,7 @@ Eligible nonprofits can use Pro at no cost. Email [support@ugurlabs.com](mailto:
 | Weekly scheduled backups | Yes | Yes | Yes |
 | Daily scheduled backups | | Yes | Yes |
 | [Backup Reader](/backups/backup-reader/): scheduled backups that keep running when sign-in frequency ends your session | | Yes | Yes |
+| [Cloud backups](/backups/cloud/): scheduled backups that run in your own Azure Automation account | | Yes | Yes |
 | Backups encrypted on this device | Yes | Yes | Yes |
 | Backups in your own Azure storage account | | Yes | Yes |
 | Backup history | Up to 30 days | 7 days to 365 days, or forever | 7 days to 365 days, or forever |

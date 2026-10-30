@@ -1,20 +1,29 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
-import { AlertCircle, AlertTriangle, CalendarClock, CheckCircle2, Info, Layers, Loader2, ShieldAlert } from "lucide-react"
+import { AlertCircle, AlertTriangle, CalendarClock, CheckCircle2, Cloud, Database, HardDrive, Info, Layers, Loader2, Monitor, ShieldAlert } from "lucide-react"
 import { Button } from "~/components/ui/button"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import { Label } from "~/components/ui/label"
-import type { AppPreferences, BackupReaderState } from "../../shared/ipc"
+import type { Tenant } from "~/contexts/TenantContext"
+import { storageLabel } from "~/lib/storage-label"
+import type { AppPreferences, BackupReaderState, BackupSettings } from "../../shared/ipc"
+import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
+import { describeCloudSchedule, nextRunsInZone } from "../../shared/cloud-backup"
 import { COMMUNITY_RETENTION_DAYS } from "../../shared/plans"
 import { bridge } from "../lib/bridge"
+import { useCloudBackup } from "../lib/cloud-backup"
 import { tenantLicense, tenantPlan, useLicense } from "../lib/license"
 import { describeSchedule, formatWhen, useRefusals, useSchedules, WEEKDAYS } from "../lib/schedules"
 import { settingsHref } from "../lib/settings-section"
 import { scheduledIdentity } from "../lib/backup-reader-view"
 import { showFeaturePlanError } from "../lib/plan-dialog"
+import type { StorageChoice } from "../lib/storage"
 import { toast } from "../lib/toast"
 import { weeklyScheduleNote } from "../lib/plan-notes"
 import { PlanBadge, UpgradeNote } from "./UpgradeNote"
 import { BackupScopePicker } from "./BackupScopePicker"
+import { CloudBackupSettings } from "./CloudBackupSettings"
+import { StorageChooser, type StorageChooserDraft } from "./StorageChooser"
 import { describeScope, includedTypes, normalizeScope, type BackupScope } from "../../shared/intune/scope"
 
 const REFUSALS_SHOWN = 5
@@ -22,6 +31,10 @@ const REFUSALS_SHOWN = 5
 interface BackupSchedulePanelProps {
   tenantId: string
   tenantName: string
+  /** The tenant profile, for its storage choice and cloud status reads. */
+  tenant?: Tenant | null
+  /** Persists a new storage choice on the tenant profile (the page owns tenant state). */
+  onStorageChange?: (tenant: Tenant, choice: StorageChoice) => void
 }
 
 /** Automatic backups for one tenant, run by TenuVault itself (window or tray). */
@@ -32,7 +45,12 @@ export function BackupSchedulePanel(props: BackupSchedulePanelProps) {
   return <TenantSchedule key={props.tenantId.toLowerCase()} {...props} />
 }
 
-function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
+function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageChange }: BackupSchedulePanelProps) {
+  const tenant = tenantProp ?? null
+  const cloud = useCloudBackup(tenant, tenantId)
+  const [scopeVersion, setScopeVersion] = useState(0)
+  const [runnerChoice, setRunnerChoice] = useState<"computer" | "azure" | null>(null)
+  const runnerKind = runnerChoice ?? (cloud.config?.linked ? "azure" : "computer")
   const { schedules, error: schedulesError, loading: schedulesLoading, reload: reloadSchedules } = useSchedules()
   const { status } = useLicense()
   const license = tenantLicense(status, tenantId)
@@ -107,17 +125,76 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
 
   const weeklyMessage = weeklyScheduleNote(plan, !!(current?.enabled && current.frequency === "weekly") || (enabled && frequency === "weekly"))
   const select = "h-10 rounded-full border border-gray-300 bg-white px-4 text-sm"
+  const localTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const nextComputerRuns = useMemo(
+    () => (enabled ? nextRunsInZone({ frequency, time, weekday }, localTimeZone, new Date(), 4) : []),
+    [enabled, frequency, time, weekday, localTimeZone],
+  )
+  const bothRunners = !!(current?.enabled && cloud.config?.linked)
 
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-      <div className="space-y-6 lg:col-span-2">
-      <div className="space-y-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+      <div className="space-y-4 lg:col-span-2">
+      <TenantStorageSettings tenant={tenant} tenantName={tenantName} prefs={prefs} community={community} onStorageChange={onStorageChange} cloudOnly={!!cloud.config?.linked && !current?.enabled} />
+      <BackupScopeSettings tenantId={tenantId} tenantName={tenantName} hasCloud={!!cloud.config} onSaved={() => setScopeVersion((version) => version + 1)} />
+      <div className="space-y-4 rounded-3xl bg-white px-6 py-5 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
         <div className="flex items-center gap-3">
-          <span className="flex size-10 flex-shrink-0 items-center justify-center rounded-full bg-coral-500 text-white" aria-hidden="true">
+          <span className="flex size-8 flex-shrink-0 items-center justify-center rounded-full bg-coral-500 text-white" aria-hidden="true">
             <CalendarClock className="h-[18px] w-[18px]" />
           </span>
-          <h2 className="text-2xl font-medium tracking-tight text-gray-900">Automatic backups</h2>
+          <div>
+            <p className="text-xs font-medium tracking-wide text-gray-400 uppercase">Step 3 · Where backups run</p>
+            <h2 className="text-2xl font-medium tracking-tight text-gray-900">Automatic backups</h2>
+          </div>
         </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Where automatic backups run">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={runnerKind === "computer"}
+            onClick={() => setRunnerChoice("computer")}
+            className={`flex items-start gap-3 rounded-3xl border-2 p-4 text-left ${runnerKind === "computer" ? "border-coral-500 bg-coral-500/10" : "border-gray-200 bg-white"}`}
+          >
+            <Monitor className="mt-0.5 h-5 w-5 flex-shrink-0" aria-hidden="true" />
+            <span>
+              <span className="block font-medium text-gray-900">On this computer</span>
+              <span className="block text-xs text-gray-500">
+                TenuVault runs the backup itself, in the window or the tray, signed in as you.
+                {current?.enabled ? ` ${describeSchedule(current)}.` : ""}
+              </span>
+            </span>
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={runnerKind === "azure"}
+            onClick={() => setRunnerChoice("azure")}
+            className={`flex items-start gap-3 rounded-3xl border-2 p-4 text-left ${runnerKind === "azure" ? "border-coral-500 bg-coral-500/10" : "border-gray-200 bg-white"}`}
+          >
+            <Cloud className="mt-0.5 h-5 w-5 flex-shrink-0" aria-hidden="true" />
+            <span>
+              <span className="block font-medium text-gray-900">In Azure, no computer needed</span>
+              <span className="block text-xs text-gray-500">
+                A runbook in your own Azure Automation account, with a read-only managed identity.
+                {cloud.config ? ` ${describeCloudSchedule(cloud.config)}.` : " Needs Pro or MSP and Azure storage."}
+              </span>
+            </span>
+          </button>
+        </div>
+
+        {bothRunners && (
+          <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            Both runners are on: this computer ({describeSchedule(current!)}) and Azure
+            {cloud.config ? ` (${describeCloudSchedule(cloud.config)})` : ""} each make their own backups into the same
+            storage. That is safe, but usually one is enough. Pause the one you do not want.
+          </p>
+        )}
+
+        {runnerKind === "azure" ? (
+          <CloudBackupSettings tenant={tenant} community={community} cloud={cloud} scopeVersion={scopeVersion} />
+        ) : (
+        <>
 
         {schedulesError && (
           <div className="flex flex-wrap items-center gap-3 rounded-3xl bg-red-50 px-5 py-4">
@@ -143,7 +220,21 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
             {frequency === "weekly" && (
               <div className="space-y-1.5">
                 <Label htmlFor="schedule-weekday" className="block">Day</Label>
-                <select id="schedule-weekday" className={select} value={weekday} onChange={(e) => (drafts.set(tenantId, { enabled, frequency, time, weekday: Number(e.target.value) }), setWeekday(Number(e.target.value)))}>
+                <div className="flex gap-1" role="group" aria-label="Day of the week">
+                  {WEEKDAYS.map((day, index) => (
+                    <button
+                      key={day}
+                      type="button"
+                      aria-pressed={weekday === index}
+                      aria-label={day}
+                      onClick={() => (drafts.set(tenantId, { enabled, frequency, time, weekday: index }), setWeekday(index))}
+                      className={`flex size-10 items-center justify-center rounded-full border text-sm ${weekday === index ? "border-coral-500 bg-coral-500 text-white" : "border-gray-300 bg-white text-gray-700"}`}
+                    >
+                      {day.slice(0, 2)}
+                    </button>
+                  ))}
+                </div>
+                <select id="schedule-weekday" className="sr-only" value={weekday} onChange={(e) => (drafts.set(tenantId, { enabled, frequency, time, weekday: Number(e.target.value) }), setWeekday(Number(e.target.value)))} tabIndex={-1} aria-hidden="true">
                   {WEEKDAYS.map((day, index) => (
                     <option key={day} value={index}>
                       {day}
@@ -186,11 +277,33 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
           </div>
         )}
 
+        {nextComputerRuns.length > 0 && (
+          <div className="rounded-3xl bg-gray-50 px-5 py-4 text-sm text-gray-700">
+            <p className="font-medium text-gray-900">Upcoming backups on this computer</p>
+            <ul className="mt-1 space-y-0.5">
+              {nextComputerRuns.map((run) => (
+                <li key={run.toISOString()}>
+                  {run.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <div className="flex gap-3 rounded-3xl bg-gray-50 px-5 py-4 text-sm text-gray-700">
           <Info className="mt-0.5 h-4 w-4 flex-shrink-0" />
           <p>
             Backups run while TenuVault is running: in the window or in the system tray after you close it. A backup missed
             while the computer was off runs as soon as TenuVault starts again. Times follow this computer’s local timezone, including daylight saving and timezone changes.
+          </p>
+        </div>
+        <div className="space-y-2 border-t border-gray-100 pt-5 text-sm text-gray-700">
+          <h3 className="font-medium text-gray-900">Sign-in at night</h3>
+          <p>
+            {scheduledIdentity(readerState?.reader ?? null) === "reader"
+              ? "Scheduled backups on this computer read Intune as the read-only Backup Reader, so Conditional Access sign-in frequency cannot stop them. Manual backups, restores and every change still use your own sign-in."
+              : "Scheduled backups on this computer run as you. When a Conditional Access sign-in frequency policy ends your session at night, they stop until you sign in again. The optional Backup Reader (Pro and MSP) reads Intune for scheduled backups only, with its own read-only app registration and a certificate on this computer."}{" "}
+            <Link to={settingsHref("background")} className="font-medium underline">Backup Reader settings</Link>
           </p>
         </div>
         <div className="space-y-2 border-t border-gray-100 pt-5 text-sm text-gray-700">
@@ -220,8 +333,9 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
             </div>
           )}
         </div>
+        </>
+        )}
       </div>
-      <BackupScopeSettings tenantId={tenantId} tenantName={tenantName} />
       </div>
 
       <div className="space-y-5 self-start rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
@@ -290,6 +404,28 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
               )}
             </dd>
           </div>
+          <div>
+            <dt className="text-xs text-gray-500">Backups are stored</dt>
+            <dd className="mt-0.5 text-base text-gray-900">{storageLabel(tenant?.resources?.storageAccountName)}</dd>
+          </div>
+          {cloud.config && (
+            <div>
+              <dt className="text-xs text-gray-500">Cloud backups (Azure)</dt>
+              <dd className="mt-0.5 text-base text-gray-900">
+                {describeCloudSchedule(cloud.config)}
+                <span className="block text-xs text-gray-500">
+                  {tenant?.resources?.storageAccountName && cloud.config.storageAccount &&
+                  tenant.resources.storageAccountName.toLowerCase() !== cloud.config.storageAccount.toLowerCase()
+                    ? `Writes to ${cloud.config.storageAccount}, not this tenant's current storage. Run cloud setup again for the new account.`
+                    : cloud.statusError
+                      ? "Last run could not be read from storage"
+                      : cloud.status
+                        ? `Last run ${formatWhen(cloud.status.lastRunAt)}: ${cloud.status.lastMessage}`
+                        : "No cloud run reported yet"}
+                </span>
+              </dd>
+            </div>
+          )}
           {prefs && (
             <div>
               <dt className="text-xs text-gray-500">Kept for</dt>
@@ -329,12 +465,13 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
 }
 
 /** What the tenant backs up automatically, and the starting point of manual backups. */
-function BackupScopeSettings({ tenantId, tenantName }: BackupSchedulePanelProps) {
+function BackupScopeSettings({ tenantId, tenantName, hasCloud, onSaved }: BackupSchedulePanelProps & { hasCloud?: boolean; onSaved?: () => void }) {
   const [saved, setSaved] = useState<BackupScope | null>(null)
   const [isSaved, setIsSaved] = useState(false)
   const [scope, setScope] = useState<BackupScope | null>(null)
   const [saving, setSaving] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [editingScope, setEditingScope] = useState(false)
 
   const load = () => {
     setLoadError(null)
@@ -349,8 +486,8 @@ function BackupScopeSettings({ tenantId, tenantName }: BackupSchedulePanelProps)
   if (!scope || !saved) {
     if (!loadError) return null
     return (
-      <div className="space-y-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
-        <h2 className="text-2xl font-medium tracking-tight text-gray-900">What to back up</h2>
+      <div className="space-y-3 rounded-3xl bg-white px-6 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+        <h2 className="text-base font-medium text-gray-900">2 · What to back up</h2>
         <div className="flex flex-wrap items-center gap-3">
           <p role="alert" className="text-sm text-red-600">Could not load what {tenantName} backs up: {loadError}</p>
           <Button variant="outline" size="sm" onClick={load}>Try again</Button>
@@ -366,8 +503,16 @@ function BackupScopeSettings({ tenantId, tenantName }: BackupSchedulePanelProps)
     try {
       const setting = await bridge.backups.setScope(tenantId, scope)
       setSaved(setting.scope)
+      setScope(setting.scope)
       setIsSaved(true)
-      toast(`${tenantName} now backs up: ${describeScope(setting.scope).toLowerCase()}.`, "success")
+      setEditingScope(false)
+      onSaved?.()
+      toast(
+        hasCloud
+          ? `${tenantName} now backs up on this computer: ${describeScope(setting.scope).toLowerCase()}. Cloud backups keep the scope from their Azure setup. Run cloud setup again to change theirs.`
+          : `${tenantName} now backs up: ${describeScope(setting.scope).toLowerCase()}.`,
+        "success",
+      )
     } catch (error) {
       toast(error instanceof Error ? error.message : String(error), "error")
     } finally {
@@ -376,27 +521,133 @@ function BackupScopeSettings({ tenantId, tenantName }: BackupSchedulePanelProps)
   }
 
   return (
-    <div className="space-y-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
-      <div className="flex items-center gap-3">
-        <span className="flex size-10 flex-shrink-0 items-center justify-center rounded-full bg-coral-500 text-white" aria-hidden="true">
-          <Layers className="h-[18px] w-[18px]" />
+    <div className="rounded-3xl bg-white px-6 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="flex size-8 flex-shrink-0 items-center justify-center rounded-full bg-coral-500 text-white" aria-hidden="true">
+          <Layers className="h-4 w-4" />
         </span>
-        <div>
-          <h2 className="text-2xl font-medium tracking-tight text-gray-900">What to back up</h2>
-          <p className="text-sm text-gray-500">
-            Used by automatic backups and "Back up all tenants now", and preselected when you run a backup by hand.
+        <div className="min-w-0 flex-1">
+          <h2 className="text-base font-medium text-gray-900">2 · What to back up</h2>
+          <p className="truncate text-sm text-gray-500">
+            {describeScope(saved)}{isSaved ? "" : " (default)"}, used by backups on this computer and "Back up all tenants now"
           </p>
         </div>
+        {!editingScope && (
+          <Button variant="outline" size="sm" onClick={() => setEditingScope(true)}>Edit</Button>
+        )}
       </div>
-      <BackupScopePicker value={scope} onChange={setScope} disabled={saving} />
-      <div className="flex items-center gap-3">
-        <Button disabled={!dirty || empty || saving} onClick={() => void save()}>
-          {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-          Save
-        </Button>
-        {!dirty && <span className="text-sm text-gray-500">{isSaved ? describeScope(saved) : `${describeScope(saved)} (default)`}</span>}
-        {empty && <span className="text-sm text-red-600">Choose at least one type.</span>}
+      {editingScope && (
+        <div className="mt-4 space-y-4 border-t border-gray-100 pt-4">
+          <p className="text-sm text-gray-500">
+            Used by backups on this computer and "Back up all tenants now", preselected when you run a backup by hand, and
+            copied into cloud setup. Existing cloud backups keep the scope from their Azure setup: run cloud setup again after changing this.
+          </p>
+          <BackupScopePicker value={scope} onChange={setScope} disabled={saving} />
+          <div className="flex items-center gap-3">
+            <Button disabled={!dirty || empty || saving} onClick={() => void save()}>
+              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Save
+            </Button>
+            <Button variant="ghost" size="sm" disabled={saving} onClick={() => { setScope(saved); setEditingScope(false) }}>Done</Button>
+            {empty && <span className="text-sm text-red-600">Choose at least one type.</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** The tenant's storage choice, edited here and in Settings through the same chooser. */
+function TenantStorageSettings({ tenant, tenantName, prefs, community, onStorageChange, cloudOnly }: { tenant: Tenant | null; tenantName: string; prefs: AppPreferences | null; community: boolean; onStorageChange?: (tenant: Tenant, choice: StorageChoice) => void; cloudOnly?: boolean }) {
+  const [editing, setEditing] = useState(false)
+  const [choice, setChoice] = useState<StorageChoice | null>(null)
+  const [draft, setDraft] = useState<StorageChooserDraft | null>(null)
+  const [settings, setSettings] = useState<BackupSettings | null>(null)
+
+  useEffect(() => {
+    void bridge.backups.settings().then(setSettings).catch(() => undefined)
+  }, [])
+
+  const account = tenant?.resources?.storageAccountName ?? ""
+  const local = !account || account.startsWith(LOCAL_STORAGE_PREFIX)
+  const current: StorageChoice | undefined = !account
+    ? undefined
+    : local
+      ? { kind: "local" }
+      : {
+          kind: "azure",
+          storageAccountName: account,
+          subscriptionId: tenant?.resources?.subscriptionId ?? "",
+          resourceGroupName: tenant?.resources?.resourceGroupName ?? "",
+          location: tenant?.resources?.resourceGroupLocation ?? "",
+        }
+
+  const save = () => {
+    if (!tenant?.credentials || !choice || !onStorageChange) return
+    onStorageChange(tenant, choice)
+    toast(`Backups for ${tenantName} now go to ${choice.kind === "local" ? "this device" : choice.storageAccountName}.`, "success")
+    setDraft(null)
+    setEditing(false)
+  }
+
+  return (
+    <div className="rounded-3xl bg-white px-6 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="flex size-8 flex-shrink-0 items-center justify-center rounded-full bg-coral-500 text-white" aria-hidden="true">
+          <Database className="h-4 w-4" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="flex items-center gap-2 text-base font-medium text-gray-900">
+            1 · Backup storage
+            <span className="flex items-center gap-1.5 text-sm font-normal text-gray-700">
+              {local ? <HardDrive className="h-4 w-4 flex-shrink-0" aria-hidden="true" /> : <Cloud className="h-4 w-4 flex-shrink-0" aria-hidden="true" />}
+              {storageLabel(account || undefined)}
+            </span>
+          </h2>
+          <p className="text-xs break-all text-gray-500">
+            {local
+              ? `Backups for ${tenantName} go to ${settings?.localFolder ?? "the TenuVault Backups folder"}${settings ? `, recovery key ${settings.keyFingerprint}${settings.recoveryExported ? " saved" : " not saved yet"}` : ""}.`
+              : `Backups for ${tenantName} go to container intune-backups${tenant?.resources?.resourceGroupName ? `, ${tenant.resources.resourceGroupName}` : ""}.`}
+            {prefs ? ` Kept for ${community ? `${prefs.retentionDays === 0 ? COMMUNITY_RETENTION_DAYS : Math.min(prefs.retentionDays, COMMUNITY_RETENTION_DAYS)} days (Community)` : prefs.retentionDays === 0 ? "forever" : `${prefs.retentionDays} days`}${cloudOnly && !local ? ", applied on the next desktop backup with an admin's sign-in (the cloud runbook cannot delete, so cloud backups stay longer until then)" : ""}.` : ""}
+            {" "}Backups never go to a TenuVault server.
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" disabled={!tenant?.credentials || !onStorageChange} onClick={() => { setChoice(null); setEditing(true) }}>
+            Change storage
+          </Button>
+          <Link to={settingsHref("storage")} className="inline-flex items-center rounded-full px-2 py-1.5 text-xs font-medium underline">
+            Folder and recovery key
+          </Link>
+        </div>
       </div>
+      {community && local && <div className="mt-3"><UpgradeNote feature="azureStorage" /></div>}
+
+      <Dialog open={editing} onOpenChange={(open) => { if (!open) { setDraft(null); setEditing(false) } }}>
+        <DialogContent className="sm:max-w-[620px]">
+          <DialogHeader>
+            <DialogTitle>Backup storage for {tenantName}</DialogTitle>
+            <DialogDescription>
+              New backups go to the location you choose. Existing backups stay where they are and are only listed
+              while that location is selected.
+            </DialogDescription>
+          </DialogHeader>
+          {tenant?.credentials && (
+            <StorageChooser
+              tenantId={tenant.credentials.tenantId}
+              clientId={tenant.credentials.appId}
+              initial={current}
+              initialDraft={draft ?? undefined}
+              onChange={setChoice}
+              onDraftChange={setDraft}
+            />
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setDraft(null); setEditing(false) }}>Cancel</Button>
+            <Button disabled={!choice} onClick={save}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

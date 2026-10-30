@@ -50,3 +50,13 @@ work continues. Reinstall detects a moved application bundle and replaces its st
 helper definition. Removing a pre-release direct-process agent disables future loads
 and deletes its definition without unloading the running app. After removal, sign out
 and back in before reinstalling to clear that obsolete session definition safely.
+
+Cloud backups (`resources/runbooks/Invoke-TenuVaultBackup.ps1`, set up by
+`resources/New-TenuVaultCloudBackup.ps1` or `resources/cloud-backup/azuredeploy.json`) are the
+server-side counterpart: an Azure Automation runbook in the customer's subscription with a managed
+identity, the same read-only Graph roles as the Backup Reader, the container scoped Backup Writer
+role, and the recovery key in Key Vault. It writes the same sealed TVAZ1 backup format and a
+`cloud-backup-status-<tenant>.json` status blob per run, reads nothing from the desktop app, and
+deletes nothing, so desktop retention still governs expiry. The desktop only records the pasted
+setup output (`src/renderer/lib/cloud-backup.ts`) and reads the status blob
+(`src/portal/app/api/cloud-backup-status/route.ts`); it never creates or edits Azure resources.

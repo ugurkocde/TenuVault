@@ -5,7 +5,7 @@ description: An optional read-only identity that keeps scheduled backups running
 
 TenuVault normally works only as you, the signed-in admin. When a Conditional Access policy ends your session at night, for example with sign-in frequency, scheduled backups stop until you sign in again. The **Backup Reader** is an optional, read-only identity that only scheduled backups use, so they keep running.
 
-Before you add it, check whether a policy change is simpler: see [Conditional Access and TenuVault](/security/conditional-access/).
+Before you add it, check whether a policy change is simpler: see [Conditional Access and TenuVault](/security/conditional-access/). When the real problem is that no computer is reliably on at backup time, [cloud backups](/backups/cloud/) move the schedule into your own Azure Automation account instead: same read-only roles, no certificate to renew per computer, but Azure resources and a recovery key in Key Vault to own.
 
 ## What it is
 
