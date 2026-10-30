@@ -92,7 +92,9 @@ export function WhatsNewDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   const { state, markSeen, refresh } = useWhatsNew()
   useEffect(() => { if (open) void refresh() }, [open, refresh])
   const close = (next: boolean) => {
-    if (!next) void markSeen()
+    // Only a dialog that actually showed notes counts as seeing them. Closing
+    // a load error must keep the unseen state for when the notes load again.
+    if (!next && state?.entries.some((entry) => entry.installed)) void markSeen()
     onOpenChange(next)
   }
   return (

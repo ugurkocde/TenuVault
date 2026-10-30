@@ -68,23 +68,35 @@ describe("WhatsNew", () => {
     expect(store.get("app.whatsNewSeenVersion")).toBe("0.3.1")
   })
 
-  it("lists a newer release for the pending update notes without calling it news", async () => {
+  it("lists newer releases of both channels for the pending update notes without calling them news", async () => {
     const { whatsNew } = service("0.3.0", "0.3.0")
     const state = await whatsNew.state()
     expect(state.entries.map((entry) => [entry.version, entry.installed, entry.unseen])).toEqual([
+      ["0.3.2-nightly.20261030031217", false, false],
+      ["0.3.2-nightly.20261030010752", false, false],
       ["0.3.1", false, false],
       ["0.3.0", true, false],
     ])
+    // A stable build downloading a nightly update finds that version's notes.
+    expect(state.entries.find((entry) => entry.version === "0.3.2-nightly.20261030010752")).toMatchObject({ channel: "nightly" })
     expect(state.hasUnseen).toBe(false)
     expect(state.announceStable).toBe(false)
   })
 
-  it("shows stable users only stable entries and announces a new stable release", async () => {
+  it("keeps installed releases listed when many newer releases precede them", async () => {
+    const newer = Array.from({ length: 12 }, (_, index) => release(`v0.3.2-nightly.202610${String(index + 10)}010000`, "2026-10-30T03:24:50Z"))
+    const { whatsNew } = service("0.3.0", "0.3.0", (async () => Response.json([...newer, release("v0.3.0", "2026-10-01T10:00:00Z")])) as unknown as typeof fetch)
+    const state = await whatsNew.state()
+    expect(state.entries.filter((entry) => entry.installed).map((entry) => entry.version)).toEqual(["0.3.0"])
+  })
+
+  it("shows stable users only stable installed entries and announces a new stable release", async () => {
     const { whatsNew } = service("0.3.1", "0.3.0")
     const state = await whatsNew.state()
-    expect(state.entries.map((entry) => entry.version)).toEqual(["0.3.1", "0.3.0"])
-    expect(state.entries[0]).toMatchObject({ channel: "stable", unseen: true })
-    expect(state.entries[1]!.unseen).toBe(false)
+    const installed = state.entries.filter((entry) => entry.installed)
+    expect(installed.map((entry) => entry.version)).toEqual(["0.3.1", "0.3.0"])
+    expect(installed[0]).toMatchObject({ channel: "stable", unseen: true })
+    expect(installed[1]!.unseen).toBe(false)
     expect(state.hasUnseen).toBe(true)
     expect(state.announceStable).toBe(true)
   })
@@ -125,7 +137,7 @@ describe("WhatsNew", () => {
       fetchImpl: (async () => { throw new Error("offline") }) as unknown as typeof fetch,
     })
     const state = await offline.state()
-    expect(state.entries.map((entry) => entry.version)).toEqual(["0.3.1", "0.3.0"])
+    expect(state.entries.filter((entry) => entry.installed).map((entry) => entry.version)).toEqual(["0.3.1", "0.3.0"])
     expect(state.error).toBeNull()
   })
 

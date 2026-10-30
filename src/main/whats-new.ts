@@ -110,15 +110,21 @@ export class WhatsNew {
     const seen = this.seenVersion(currentVersion)
     const { releases, error } = await this.releases()
     const nightlyBuild = currentVersion.includes("-nightly.")
-    const entries: WhatsNewEntry[] = releases
-      .filter((release) => nightlyBuild || release.channel === "stable")
-      .slice(0, MAX_ENTRIES)
-      .map((release) => {
-        const installed = compareVersions(release.version, currentVersion) <= 0
-        // A release newer than the build is a pending update, not news about
-        // this install: it stays listed for the update card but never unseen.
-        return { ...release, installed, unseen: installed && compareVersions(release.version, seen) > 0 }
-      })
+    const mapped: WhatsNewEntry[] = releases.map((release) => {
+      const installed = compareVersions(release.version, currentVersion) <= 0
+      // A release newer than the build is a pending update, not news about
+      // this install: it stays listed for the update card but never unseen.
+      return { ...release, installed, unseen: installed && compareVersions(release.version, seen) > 0 }
+    })
+    // The dialog lists installed releases of this build's channel. Newer
+    // releases of either channel ride along so the update card can show a
+    // pending update's notes, also when it comes from the other channel.
+    // The limit applies to the installed group alone, so a run of newer
+    // releases can never push the installed ones out of the list.
+    const entries: WhatsNewEntry[] = [
+      ...mapped.filter((entry) => !entry.installed),
+      ...mapped.filter((entry) => entry.installed && (nightlyBuild || entry.channel === "stable")).slice(0, MAX_ENTRIES),
+    ]
     return {
       currentVersion,
       lastSeenVersion: seen,

@@ -14,7 +14,7 @@ vi.mock("@desktop/lib/bridge", () => ({
   },
 }))
 
-import { WhatsNewAnnouncement, WhatsNewEntries } from "../../src/renderer/components/WhatsNewDialog"
+import { WhatsNewAnnouncement, WhatsNewDialog, WhatsNewEntries } from "../../src/renderer/components/WhatsNewDialog"
 import { WhatsNewProvider } from "../../src/renderer/lib/whats-new"
 
 const entry = (seen: boolean) => ({
@@ -86,6 +86,29 @@ describe("What's new announcement", () => {
     act(() => root.render(createElement(WhatsNewEntries, { state })))
     expect(container.textContent).toContain("Version 0.3.0")
     expect(container.textContent).not.toContain("Version 0.3.2")
+  })
+
+  it("does not mark the version seen when the notes failed to load", async () => {
+    mocks.whatsNew.mockResolvedValue({
+      currentVersion: "0.3.1",
+      lastSeenVersion: "0.3.0",
+      entries: [],
+      hasUnseen: false,
+      announceStable: false,
+      error: "The release notes could not be loaded. GitHub answered 503.",
+    } satisfies WhatsNewState)
+    mocks.markSeen.mockResolvedValue(stateWith(false))
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
+    act(() => root.render(createElement(WhatsNewProvider, null, createElement(WhatsNewDialog, { open: true, onOpenChange: () => undefined }))))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(document.body.textContent).toContain("could not be loaded")
+
+    const done = [...document.body.querySelectorAll("button")].find((button) => button.textContent === "Done")!
+    await act(async () => { done.click() })
+    expect(mocks.markSeen).not.toHaveBeenCalled()
   })
 
   it("stays closed when nothing stable is unseen", async () => {
