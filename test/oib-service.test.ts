@@ -179,6 +179,19 @@ describe("Existing Deployment comparison", () => {
       { source: COMPLIANCE, status: "missing" },
     ])
   })
+
+  it("fails the comparison when a continuation link is not a beta Graph link", async () => {
+    const inner = world({ policies: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.1", description: `OIBID:${OIB_OLD}` }] }, [])
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if ((init?.method ?? "GET") === "GET" && url.includes("deviceManagement/configurationPolicies?")) {
+        return Response.json({ value: [{ id: EXISTING, name: "Win - OIB - SC - Test - v3.1", description: `OIBID:${OIB_OLD}` }], "@odata.nextLink": "https://graph.microsoft.com/v1.0/deviceManagement/configurationPolicies?$skiptoken=x" })
+      }
+      return inner(input, init)
+    }))
+    await source()
+    await expect(handleOib({ ...base, action: "oib-compare", commit })).rejects.toThrow(/could not be read completely/)
+  })
 })
 
 describe("deployments", () => {
@@ -188,6 +201,23 @@ describe("deployments", () => {
     await source()
     await expect(handleOib({ ...base, action: "oib-deploy", commit, items: [{ source: SC, mode: "create" }] })).rejects.toThrow("The backup failed, so nothing was changed. Storage unavailable")
     expect(writes).toEqual([])
+  })
+
+  it("refreshes the token when the pre-deploy inventory read gets a 401", async () => {
+    const writes: string[] = []
+    const inner = world({ policies: [] }, writes)
+    let expired = true
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (expired && (init?.method ?? "GET") === "GET" && url.includes("deviceManagement/configurationPolicies?")) {
+        expired = false
+        return Response.json({ error: { code: "InvalidAuthenticationToken", message: "Access token has expired" } }, { status: 401 })
+      }
+      return inner(input, init)
+    }))
+    await source()
+    const run = await handleOib({ ...base, action: "oib-deploy", commit, items: [{ source: SC, mode: "create" }] }) as OibRun
+    expect(run).toMatchObject({ failed: [], created: [{ id: CREATED }] })
   })
 
   it("creates policies under their OIB names with the tenant ID filled in, assigns only the pilot group and records the run", async () => {

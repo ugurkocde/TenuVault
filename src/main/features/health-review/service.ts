@@ -261,12 +261,13 @@ export async function runReview(deps: FeatureDeps, tenantId: string, trigger: Ru
     const counts = countFindings(open)
     const status = listing.outcome === "auth" ? "could-not-authenticate" : results.every((result) => result.evaluated) ? "completed" : "partial"
 
-    const deliveries = await notifyEndpoints(deps, tenant, findings, { reviewedAt: now.toISOString(), status }, options)
     const finishedAt = deps.now().toISOString()
     const summary = status === "could-not-authenticate"
       ? "Could not authenticate: backups were not read. Sign in to this tenant and review again."
       : `${open.length} open or unknown findings${status === "partial" ? "; some evidence could not be read" : ""}.`
-    const run = deps.records.create<ReviewRecord>(DOMAINS.healthReviews, tenant, {
+    // The run is stored and the schedule advanced before delivery: an exit during slow
+    // webhook retries must not leave the review unrecorded and still due, resending on launch.
+    const stored = deps.records.create<ReviewRecord>(DOMAINS.healthReviews, tenant, {
       kind: "run",
       title: `Health review ${trigger === "manual" ? "(manual)" : trigger === "catch-up" ? "(catch-up)" : "(scheduled)"}`,
       status,
@@ -278,7 +279,7 @@ export async function runReview(deps: FeatureDeps, tenantId: string, trigger: Ru
       checks: results.map((result) => ({ family: result.family, evaluated: result.evaluated, detail: result.detail })),
       counts,
       openFindingKeys: open.map((finding) => finding.key),
-      deliveries,
+      deliveries: [],
     }, { actor, reason: `Health review ${trigger}` }) as Stored<RunRecord>
     pruneRuns(deps, tenant)
 
@@ -286,6 +287,11 @@ export async function runReview(deps: FeatureDeps, tenantId: string, trigger: Ru
     // A sign-in problem is retried within the hour instead of waiting a whole interval.
     const nextDueAt = status === "could-not-authenticate" ? nextDueAfter(now, Math.min(interval, 1)) : nextDueAfter(now, interval)
     saveSchedule(deps, tenant, { lastReviewAt: finishedAt, lastAttemptAt: finishedAt, lastOutcome: status, nextDueAt }, { actor, reason: `Review ${status}` })
+
+    const deliveries = await notifyEndpoints(deps, tenant, findings, { reviewedAt: now.toISOString(), status }, options)
+    const run = deliveries.length
+      ? deps.records.update<ReviewRecord>(DOMAINS.healthReviews, tenant, stored.id, (value) => ({ ...(value as RunRecord), deliveries }), { actor: null, reason: "Recorded notification deliveries" }) as Stored<RunRecord>
+      : stored
     return { run, findings }
   } finally {
     active.delete(tenant)

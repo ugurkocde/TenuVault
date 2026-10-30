@@ -28,6 +28,13 @@ describe("saved OIB score projections", () => {
     expect(detail.unassessedNote).toContain("Selected deployed policies only")
   })
 
+  it("labels BYOD gaps with the platform of the policy folder", () => {
+    const ios = oibFrameworkDetail(run({ platform: "byod", results: [policy({ folder: "AppProtectionIOS" })] }), NOW)
+    expect(ios.gaps[0]?.platform).toBe("ios")
+    const android = oibFrameworkDetail(run({ platform: "byod", results: [policy({ folder: "AppProtectionAndroid" })] }), NOW)
+    expect(android.gaps[0]?.platform).toBe("android")
+  })
+
   it("keeps failed expected settings unknown and withholds coverage when their size is unknown", () => {
     const failed = policy({ source: "other", status: "error", result: undefined, expectedSettings: 4 })
     expect(oibFrameworkDetail(run({ results: [policy(), failed] }), NOW).score).toMatchObject({ score: 50, coverage: 50, counts: { unknown: 4 } })

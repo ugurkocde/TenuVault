@@ -157,8 +157,10 @@ export class DriftJobs {
     const tenant = tenantId.toLowerCase()
     const storage = this.deps.tenant(tenant)?.storageAccountName.toLowerCase()
     const current = (value: SavedDriftResult | null | undefined) => (value && value.storageAccountName?.toLowerCase() === storage ? value : null)
-    const memory = this.unsaved.get(tenant)
-    if (memory) return current(memory)
+    const memory = current(this.unsaved.get(tenant))
+    // An oversized result kept only in memory for another storage account must not
+    // hide the saved result of the account the tenant uses now.
+    if (memory) return memory
     const raw = this.deps.store.get(resultKey(tenant))
     if (!raw) return null
     try {

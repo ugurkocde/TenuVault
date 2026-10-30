@@ -4,7 +4,7 @@ import { apiBody } from "../src/main/features/deps"
 import { routes } from "../src/main/features/health-review"
 import { POST as listBackupsRoute } from "../src/portal/app/api/list-backups/route"
 import { checkBackups, checkSignals, isDue, missedWindows, redactIdentifiers, validateWebhookUrl } from "../src/main/features/health-review/rules"
-import { collectSignals, KEPT_FINDINGS, notifyEndpoints, runReview, tick } from "../src/main/features/health-review/service"
+import { collectSignals, KEPT_FINDINGS, notifyEndpoints, runReview, runsOf, scheduleOf, tick } from "../src/main/features/health-review/service"
 import { DOMAINS } from "../src/main/features/domains"
 import { setInternalCisBenchmarksEnabled } from "../src/main/frameworks/service"
 import { loadWorkspace, saveWorkspace, setFrameworkStore } from "../src/main/frameworks/workspaces"
@@ -258,6 +258,21 @@ describe("health review notifications", () => {
     await runReview(w.deps, TENANT_A, "manual", null, { sleep: noSleep })
     await runReview(w.deps, TENANT_A, "manual", null, { sleep: noSleep })
     expect(w.posts).toHaveLength(5)
+  })
+
+  it("stores the run and advances the schedule before delivering notifications", async () => {
+    const w = world()
+    w.setBackupAge(50)
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-schedule", enabled: true, intervalHours: 24 })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-endpoint", kind: "webhook", url: "https://hooks.example.com/tv" })
+    const seen: Array<{ runs: number; lastOutcome: string | null }> = []
+    w.deps.externalFetch = (async () => {
+      seen.push({ runs: runsOf(w.deps, TENANT_A).length, lastOutcome: scheduleOf(w.deps, TENANT_A)?.lastOutcome ?? null })
+      return new Response(null, { status: 204 })
+    }) as unknown as typeof fetch
+    const { run } = await runReview(w.deps, TENANT_A, "manual", null, { sleep: noSleep })
+    expect(seen).toEqual([{ runs: 1, lastOutcome: "completed" }])
+    expect(run.deliveries).toMatchObject([{ ok: true, attempts: 1 }])
   })
 
   it("stops on network errors after the retry cap and on disabled or removed endpoints", async () => {

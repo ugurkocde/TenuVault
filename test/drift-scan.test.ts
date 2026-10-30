@@ -441,6 +441,23 @@ describe('Drift scan jobs', () => {
     expect(jobs.result(TENANT_A)).toBeNull()
   })
 
+  it('falls back to the saved result when an oversized in-memory result belongs to another storage account', async () => {
+    const store = memoryStore()
+    const profile = { tenantId: TENANT_A, name: 'Contoso', clientId: 'app', storageAccountName: 'store-b' }
+    store.set(`drift.result.v1.${TENANT_A}`, JSON.stringify({ schemaVersion: 1, tenantId: TENANT_A, jobId: 'earlier-a', storageAccountName: 'store-a', drifts: [], baseline: { id: OLD }, comparison: { id: NEW } }))
+    const jobs = new DriftJobs({
+      store,
+      tenant: (id) => (id.toLowerCase() === TENANT_A ? profile : null),
+      plan: async () => 'community',
+      api: async () => Response.json({ drifts: [{ blob: 'x'.repeat(4_100_000) }], baseline: { id: OLD }, comparison: { id: NEW }, summary: { total: 1 } }),
+    })
+    const job = await jobs.start(TENANT_A)
+    await jobs.settled(job.jobId)
+    expect(jobs.result(TENANT_A)?.jobId).toBe(job.jobId)
+    profile.storageAccountName = 'store-a'
+    expect(jobs.result(TENANT_A)?.jobId).toBe('earlier-a')
+  })
+
   it('does not audit read-only drift scans, including cancelled scans', async () => {
     const dispatch = vi.fn(async () => new Response('{}'))
     const record = createAuditRecorder(dispatch, () => null)
