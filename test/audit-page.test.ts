@@ -15,6 +15,10 @@ vi.mock('react', async original => ({
     return [typeof initial === 'function' ? initial() : initial, vi.fn()]
   },
 }))
+vi.mock('react-router-dom', () => ({
+  useSearchParams: () => [new URLSearchParams(), vi.fn()],
+  Link: ({ children, to }: { children: ReactNode; to: string }) => createElement('a', { href: to }, children),
+}))
 vi.mock('~/contexts/TenantContext', () => ({
   useSelectedTenant: () => ({ selectedTenant: { credentials: { tenantId: 'tenant' } } }),
 }))
@@ -44,7 +48,7 @@ it('offers recorded desktop event types, including cancelled backups, and severi
   const options = [...html.matchAll(/<select\b[^>]*>(.*?)<\/select>/gs)]
     .map(select => [...select[1]!.matchAll(/<option value="([^"]*)"/g)].map(option => option[1]))
   expect(options).toEqual([
-    ['', 'BACKUP_STARTED', 'BACKUP_COMPLETED', 'BACKUP_FAILED', 'BACKUP_CANCELLED', 'BACKUP_DOWNLOADED', 'RESTORE_COMPLETED', 'RESTORE_FAILED', 'POLICY_CREATED', 'POLICY_REVERTED', 'POLICY_RESTORED', 'POLICY_DRIFT_DETECTED', 'CHANGE_SET_APPLIED', 'CHANGE_SET_ROLLED_BACK'],
+    ['', 'BACKUP_STARTED', 'BACKUP_COMPLETED', 'BACKUP_FAILED', 'BACKUP_CANCELLED', 'BACKUP_DOWNLOADED', 'RESTORE_COMPLETED', 'RESTORE_FAILED', 'POLICY_CREATED', 'POLICY_REVERTED', 'POLICY_RESTORED', 'POLICY_DRIFT_DETECTED', 'CHANGE_SET_APPLIED', 'CHANGE_SET_ROLLED_BACK', 'CHANGE_SET_APPROVED', 'CHANGE_SET_REJECTED', 'GOVERNANCE_FINDING_REVIEWED', 'GOVERNANCE_CUSTOMIZATION_RECORDED', 'GOVERNANCE_CUSTOMIZATION_RETIRED', 'GOVERNANCE_STANDARD_ADOPTED'],
     ['', 'INFO', 'WARNING', 'ERROR'],
     ['', 'SUCCESS', 'FAILURE', 'PARTIAL'],
   ])

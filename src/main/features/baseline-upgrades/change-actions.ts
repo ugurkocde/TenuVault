@@ -41,9 +41,9 @@ export function changeSetActions(deps: FeatureDeps, options: { prefix: string; w
       await approveChangeSet(deps, tenantId, changeSet.id, { contentHash: hashField(body, "contentHash"), targetFingerprint: hashField(body, "targetFingerprint"), reviewer: optionalText(body, "reviewer", 200), note: optionalText(body, "note", 2000) }, actor)
       return done(tenantId, id, changeSet.id)
     },
-    [`${p}change-reject`]: ({ tenantId, body, actor }) => {
+    [`${p}change-reject`]: async ({ tenantId, body, actor }) => {
       const { id, changeSet } = owned(tenantId, body)
-      rejectChangeSet(deps, tenantId, changeSet.id, { reviewer: optionalText(body, "reviewer", 200), note: optionalText(body, "note", 2000) }, actor)
+      await rejectChangeSet(deps, tenantId, changeSet.id, { reviewer: optionalText(body, "reviewer", 200), note: optionalText(body, "note", 2000) }, actor)
       return done(tenantId, id, changeSet.id)
     },
     /** Applies an approved change set (or a rollback), or retries one that ended partial, failed or uncertain. */

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { applyChangeSet, approveChangeSet, createChangeSet, createRollbackChangeSet, previewChangeSet } from "../src/main/features/change-sets/engine"
+import { applyChangeSet, approveChangeSet, createChangeSet, createRollbackChangeSet, previewChangeSet, rejectChangeSet } from "../src/main/features/change-sets/engine"
 import type { ChangeSetRecord } from "../src/main/features/change-sets/model"
 import { DOMAINS } from "../src/main/features/domains"
 import { fakeDeps, TENANT_A, TENANT_B } from "./feature-helpers"
@@ -21,16 +21,20 @@ function setup(options: { backup?: "ok" | "fail" | "no-start" } = {}) {
   const deps = fakeDeps({ plans: { [TENANT_A]: "pro", [TENANT_B]: "pro" } })
   const tenant = new FakeTenant(TENANT_A)
   wire(deps, [tenant, new FakeTenant(TENANT_B)], options)
+  // Apply entries (audit) and approval decision entries (decisions) are kept apart so
+  // the one-entry-per-apply assertions below still count applies exactly.
   const audit: AuditCall[] = []
+  const decisions: AuditCall[] = []
   const api = deps.api
   deps.api = async (path, tenantId, body = {}) => {
     if (path === "/api/audit/log") {
-      audit.push({ tenantId, user: body.user as AuditCall["user"], logEntry: body.logEntry as CreateAuditLogInput })
+      const call = { tenantId, user: body.user as AuditCall["user"], logEntry: body.logEntry as CreateAuditLogInput }
+      ;(call.logEntry.eventType === AuditEventType.CHANGE_SET_APPROVED || call.logEntry.eventType === AuditEventType.CHANGE_SET_REJECTED ? decisions : audit).push(call)
       return Response.json({ success: true })
     }
     return api(path, tenantId, body)
   }
-  return { deps, tenant, audit }
+  return { deps, tenant, audit, decisions }
 }
 
 /** One create operation from the promotion workflow, approved and ready to apply. */
@@ -252,5 +256,29 @@ describe("change set audit entries", () => {
     const csv = await (await exportLogs(new NextRequest("http://tenuvault.internal/api/audit/export", { method: "POST", body: body({ exportOptions: { format: "csv", filter } }) }))).text()
     expect(csv).toContain("Apply change set")
     expect(csv).toContain("CHANGE_SET_APPLIED")
+  })
+
+  it("records approvals and rejections as governance decisions, separate from applies", async () => {
+    const context = setup()
+    const { record } = await approvedCreate(context)
+    expect(context.decisions).toHaveLength(1)
+    expect(context.decisions[0]!.logEntry).toMatchObject({
+      eventType: AuditEventType.CHANGE_SET_APPROVED,
+      action: "Approve change set",
+      resource: { type: "configuration", id: record.id, name: "Promote firewall policy" },
+      result: AuditResult.SUCCESS,
+      details: { workflow: "promotion", changeSetId: record.id, reviewer: "Reviewer", link: "/portal/changes/promotion" },
+    })
+    expect(context.audit).toHaveLength(0)
+
+    const rejected = await createChangeSet(context.deps, TENANT_A, {
+      title: "Promote other policy",
+      origin: { workflow: "promotion", recordId: "promotion-2" },
+      operations: [{ folder: "ConfigurationPolicies", action: "create", proposed: { name: "Other policy", platforms: "windows10", technologies: "mdm", roleScopeTagIds: ["0"], settings: [setting("vendor_msft_firewall_enable", "vendor_msft_firewall_enable_true")] } }],
+    }, "Admin")
+    await rejectChangeSet(context.deps, TENANT_A, rejected.id, { reviewer: "Reviewer", note: "Not this quarter" }, "Admin")
+    expect(context.decisions).toHaveLength(2)
+    expect(context.decisions[1]!.logEntry).toMatchObject({ eventType: AuditEventType.CHANGE_SET_REJECTED, action: "Reject change set", details: { changeSetId: rejected.id, reviewer: "Reviewer", note: "Not this quarter" } })
+    expect(context.audit).toHaveLength(0)
   })
 })

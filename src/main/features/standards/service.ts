@@ -60,6 +60,8 @@ export interface CustomizationRecord extends ListedRecord {
   value: string | null
   reason: string
   owner: string
+  /** When the accepted deviation must be re-reviewed, or null when no expiry was recorded. Records stored before expiry existed read as null. */
+  expiresAt?: string | null
   version: number
 }
 
@@ -78,7 +80,7 @@ export function createCustomization(deps: FeatureDeps, tenantId: string, input: 
 }
 
 /** A new version of a customization; the previous one stays in its history. */
-export function reviseCustomization(deps: FeatureDeps, tenantId: string, id: string, change: { value?: string | null; reason?: string; owner?: string }, why: string, actor: Actor): Stored<CustomizationRecord> {
+export function reviseCustomization(deps: FeatureDeps, tenantId: string, id: string, change: { value?: string | null; reason?: string; owner?: string; expiresAt?: string | null }, why: string, actor: Actor): Stored<CustomizationRecord> {
   const current = getCustomization(deps, tenantId, id)
   if (current.status !== "active") throw new FeatureError("A retired customization cannot be revised. Document a new one.", 409)
   return deps.records.update<CustomizationRecord>(CUSTOMIZATIONS, tenantId, id, (record) => ({ ...record, ...change, version: record.version + 1, summary: `Deviation of ${record.settingKey} owned by ${change.owner ?? record.owner}, version ${record.version + 1}.` }), { actor, reason: why })!

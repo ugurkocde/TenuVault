@@ -20,19 +20,19 @@ const card = "space-y-4 rounded-3xl bg-card p-6 shadow-[0_1px_2px_rgba(22,21,20,
 const freshness = (state: AdoptionState) => deviationLabel(state).text
 
 /**
- * Standards and customizations (#148). Pro: the organization's documented customizations. MSP:
- * reusable golden standards (shared, no tenant evidence), this customer's adoption with
- * parameters, overlay and exceptions, and a portfolio of adoptions. Without a plan it shows
- * stored records read-only.
+ * Standards and customizations (#148), shown as two hub tabs since the Governance
+ * split: `customizations` (Pro, the organization's documented deviations) and
+ * `standards` (MSP golden standards with adoptions and portfolio). Without a plan
+ * each shows stored records read-only. `allowed` follows the tab's own feature.
  */
-export default function StandardsTab({ tenant, plan, allowed }: FeatureTabProps) {
+export default function StandardsTab({ tenant, plan, allowed, section = "standards" }: FeatureTabProps & { section?: "customizations" | "standards" }) {
   const tenantId = tenant.credentials?.tenantId
   const msp = canUse(plan, "goldenStandards")
   const [selected, setSelected] = useState<string | null>(null)
   const [portfolio, setPortfolio] = useState<Awaited<ReturnType<typeof portfolioAdoptions>> | null>(null)
   const targets = usePortfolioTargets(tenant)
-  const standards = useQuery({ queryKey: ["standards", "library", tenantId], queryFn: () => listStandards(tenant), enabled: !!tenantId })
-  const adoptions = useQuery({ queryKey: ["standards", "adoptions", tenantId], queryFn: () => listAdoptions(tenant), enabled: !!tenantId })
+  const standards = useQuery({ queryKey: ["standards", "library", tenantId], queryFn: () => listStandards(tenant), enabled: !!tenantId && section === "standards" })
+  const adoptions = useQuery({ queryKey: ["standards", "adoptions", tenantId], queryFn: () => listAdoptions(tenant), enabled: !!tenantId && section === "standards" })
   const versions = standards.data?.standards ?? []
   const records = adoptions.data?.adoptions ?? []
   const refresh = () => {
@@ -42,9 +42,16 @@ export default function StandardsTab({ tenant, plan, allowed }: FeatureTabProps)
   const view = standardsViewState({ isLoading: standards.isLoading || adoptions.isLoading, hasError: !!(standards.error ?? adoptions.error), standardsCount: versions.length, adoptionsCount: records.length })
   const loadError = standards.error ?? adoptions.error
 
+  if (section === "customizations") {
+    return (
+      <div className="space-y-6">
+        <CustomizationsPanel tenant={tenant} allowed={allowed} />
+      </div>
+    )
+  }
   return (
     <div className="space-y-6">
-      <CustomizationsPanel tenant={tenant} allowed={allowed} />
+      {!msp && <CustomizationsPanel tenant={tenant} allowed={canUse(plan, "customizations")} />}
 
       {view === "loading" && (
         <div aria-label="Loading standards" className="space-y-4">
@@ -75,13 +82,6 @@ export default function StandardsTab({ tenant, plan, allowed }: FeatureTabProps)
       )}
 
       {(msp || versions.length > 0) && <StandardsLibrary tenant={tenant} standards={versions} adoptedKeys={records.map((record) => record.standardKey)} canWrite={msp} onChanged={refresh} />}
-      {!msp && allowed && (
-        <section aria-label="Golden standards" className={card}>
-          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">Golden standards for customers</h3>
-          <p className="max-w-3xl text-sm text-gray-500">Reusable versioned standards with parameters, customer overlays and approved exceptions, adopted per customer through reviewed change sets.</p>
-          <GatedButton feature="goldenStandards" plan={plan} type="button">Create a golden standard</GatedButton>
-        </section>
-      )}
 
       {records.length > 0 && (
         <section aria-label="Adoptions" className={card}>

@@ -26,8 +26,17 @@ export const HUBS: Hub[] = [
   {
     id: "governance",
     title: "Governance",
-    description: "Scores, hygiene findings and standards for the selected tenant.",
+    description: "Are we compliant, where do we deviate on purpose, who accepted it? Posture, findings and standards for the selected tenant.",
     tabs: [
+      {
+        id: "overview",
+        label: "Overview",
+        feature: "baselineScores",
+        path: "/api/scores",
+        summary: "Posture at a glance: the latest baseline score, open hygiene findings, accepted deviations and standard upgrades, each with its source and age, plus a one-file evidence pack.",
+        points: ["Built only from what the other Governance screens already show; nothing is read live.", "Every figure names its evidence and how old it is, so a stale snapshot never reads as current.", "Decisions made in Governance are recorded in the Audit Log."],
+        Component: lazy(() => import("./governance/OverviewTab")),
+      },
       {
         id: "scores",
         label: "Baseline scores",
@@ -47,20 +56,38 @@ export const HUBS: Hub[] = [
         Component: lazy(() => import("./hygiene/HygieneTab")),
       },
       {
-        id: "standards",
-        label: "Standards and customizations",
+        id: "deviations",
+        label: "Accepted deviations",
         feature: "customizations",
         path: "/api/standards",
-        summary: "Records your organization's baseline customizations, and for MSPs reusable versioned golden standards with customer overlays.",
+        summary: "One register of what this tenant knowingly does differently: documented customizations, accepted hygiene findings and approved standard exceptions, with owner, reason and expiry.",
+        points: ["Expired deviations sort first, so re-review is obvious.", "Read-only by design: changing a decision happens on its owning screen.", "Decisions behind the register are recorded in the Audit Log."],
+        Component: lazy(() => import("./governance/DeviationsTab")),
+      },
+      {
+        id: "customizations",
+        label: "Customizations",
+        feature: "customizations",
+        path: "/api/standards",
+        summary: "Records where your organization deliberately differs from its installed baseline, with reason, owner and an optional re-review date.",
+        points: ["Versioned records; retiring one keeps its history.", "Baseline upgrades mark settings documented here.", "Nothing here changes the tenant."],
+        Component: lazy(() => import("./standards/CustomizationsTab")),
+      },
+      {
+        id: "standards",
+        label: "Golden standards",
+        feature: "goldenStandards",
+        path: "/api/standards",
+        summary: "Reusable versioned golden standards for MSP customers, adopted per tenant through reviewed change sets.",
         points: ["Immutable standard versions with provenance and change notes.", "Customer overlays, parameters and exceptions kept separate from the base.", "A new base version never changes a customer tenant by itself."],
-        Component: lazy(() => import("./standards/StandardsTab")),
+        Component: lazy(() => import("./standards/GoldenStandardsTab")),
       },
     ],
   },
   {
     id: "changes",
     title: "Changes",
-    description: "Dev to Prod promotion and baseline upgrades.",
+    description: "What will we change, and who reviewed and approved it? Dev to Prod promotion and baseline upgrades, applied only through reviewed change sets.",
     tabs: [
       {
         id: "promotion",

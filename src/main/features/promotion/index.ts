@@ -110,7 +110,7 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     reject: async (context) => {
       const promotion = getPromotion(deps, context.tenantId, idOf(context.body))
       const changeSet = promotionChangeSet(deps, context.tenantId, promotion.id)
-      rejectChangeSet(deps, context.tenantId, changeSet.id, { reviewer: optionalText(context.body, "reviewer", 200), note: optionalText(context.body, "note", 2000) }, context.actor)
+      await rejectChangeSet(deps, context.tenantId, changeSet.id, { reviewer: optionalText(context.body, "reviewer", 200), note: optionalText(context.body, "note", 2000) }, context.actor)
       return { promotion: syncPromotion(deps, context.tenantId, promotion.id) }
     },
     apply: async (context) => {
@@ -139,7 +139,7 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     // a lapsed development tenant never blocks undoing a promotion in production.
     "rollback-review": ({ tenantId, body }) => previewChangeSet(deps, tenantId, promotionRollback(deps, tenantId, idOf(body)).id),
     "rollback-approve": async ({ tenantId, body, actor }) => ({ changeSet: await approveChangeSet(deps, tenantId, promotionRollback(deps, tenantId, idOf(body)).id, { contentHash: hashField(body, "contentHash"), targetFingerprint: hashField(body, "targetFingerprint"), reviewer: optionalText(body, "reviewer", 200), note: optionalText(body, "note", 2000) }, actor) }),
-    "rollback-reject": ({ tenantId, body, actor }) => ({ changeSet: rejectChangeSet(deps, tenantId, promotionRollback(deps, tenantId, idOf(body)).id, { reviewer: optionalText(body, "reviewer", 200), note: optionalText(body, "note", 2000) }, actor) }),
+    "rollback-reject": async ({ tenantId, body, actor }) => ({ changeSet: await rejectChangeSet(deps, tenantId, promotionRollback(deps, tenantId, idOf(body)).id, { reviewer: optionalText(body, "reviewer", 200), note: optionalText(body, "note", 2000) }, actor) }),
     "rollback-apply": async ({ tenantId, body, actor }) => ({ changeSet: await applyChangeSet(deps, tenantId, promotionRollback(deps, tenantId, idOf(body)).id, { contentHash: hashField(body, "contentHash"), confirmed: body.confirm === true }, actor) }),
   })
 }

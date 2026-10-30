@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
+import { Link } from "react-router-dom"
 import { X } from "lucide-react"
 import type { Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
@@ -182,7 +183,8 @@ function GapEvidence({ gap }: { gap: RankedGap }) {
             return (
               <li key={`${setting.settingId}:${setting.policyId ?? index}`} className="break-words">
                 <span className="font-mono text-gray-800">{setting.settingId}</span>: {setting.result === "missing" ? "missing" : `observed ${setting.observed ?? "no value"}`}, expected {setting.expected}
-                {setting.policyId ? ` (policy ${policy?.policyName ?? setting.policyId}${assignment})` : ""}
+                {setting.policyId ? ` (policy ${policy?.policyName ?? setting.policyId}${assignment})` : ""}{" "}
+                <Link to={`/portal/governance/customizations?setting=${encodeURIComponent(setting.settingId)}${policy?.policyName ? `&policy=${encodeURIComponent(policy.policyName)}` : ""}`} className="font-medium text-gray-900 underline underline-offset-2">Document as customization</Link>
               </li>
             )
           })}

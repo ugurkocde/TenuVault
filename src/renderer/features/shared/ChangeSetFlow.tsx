@@ -1,5 +1,6 @@
 import { showFeaturePlanError } from "../../lib/plan-dialog"
 import { useState, type ReactNode } from "react"
+import { Link } from "react-router-dom"
 import { CheckCircle2, ChevronDown, ChevronRight, Eye, History, RotateCcw, ShieldCheck, XCircle } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { Chip } from "~/components/dashboard/tiles"
@@ -176,7 +177,8 @@ export function ChangeSetFlow({ changeSet, actions, tenantName, onChanged, rollb
 
       {changeSet.review && (
         <p className="text-sm text-gray-600 dark:text-gray-400">
-          {changeSet.review.decision === "approved" ? "Approved" : "Rejected"} by {changeSet.review.reviewer ?? "unknown"} on {formatDate(changeSet.review.decidedAt)}{changeSet.review.note ? `: ${changeSet.review.note}` : "."}
+          {changeSet.review.decision === "approved" ? "Approved" : "Rejected"} by {changeSet.review.reviewer ?? "unknown"} on {formatDate(changeSet.review.decidedAt)}{changeSet.review.note ? `: ${changeSet.review.note}` : "."}{" "}
+          <Link to={`/portal/audit?q=${encodeURIComponent(changeSet.id)}`} className="font-medium text-gray-900 underline underline-offset-2 dark:text-gray-100">View in Audit Log</Link>
         </p>
       )}
 

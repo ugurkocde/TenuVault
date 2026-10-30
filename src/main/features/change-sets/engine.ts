@@ -5,6 +5,7 @@ import { isGraphId } from "../../../shared/security"
 import { replaceTenantVariables } from "../../../shared/oib/variables"
 import { PlanRequired } from "../../../shared/plans"
 import type { FeatureDeps } from "../deps"
+import { recordGovernanceAudit } from "../governance-audit"
 import { DOMAINS } from "../domains"
 import type { Stored } from "../records"
 import { FeatureError } from "../route"
@@ -473,7 +474,7 @@ export async function approveChangeSet(deps: FeatureDeps, tenantId: string, id: 
   if (input.targetFingerprint !== preview.targetFingerprint) throw new FeatureError("The target tenant changed since your preview. Preview again before approving.", 409)
   requireCisChangeSetEnabled(record.origin.workflow)
   const at = deps.now().toISOString()
-  return deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenantId, id, (current) => ({
+  const approved = deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenantId, id, (current) => ({
     ...current,
     status: "approved",
     summary: `Approved by ${input.reviewer?.trim() || actor || "an administrator"}; not applied yet.`,
@@ -489,19 +490,23 @@ export async function approveChangeSet(deps: FeatureDeps, tenantId: string, id: 
       decidedAt: at,
     },
   }), { actor, reason: "Approved the reviewed content and target state" })!
+  await recordGovernanceAudit(deps, tenantId, actor, { eventType: AuditEventType.CHANGE_SET_APPROVED, action: "Approve change set", resourceId: record.id, resourceName: record.title, link: decidingLink(record.origin.workflow), details: { workflow: record.origin.workflow, originRecordId: record.origin.recordId, changeSetId: record.id, reviewer: input.reviewer?.trim() || actor, note: input.note?.trim() || null, operations: record.operations.length } })
+  return approved
 }
 
 /** Records a rejection. A rejected change set is never applied. */
-export function rejectChangeSet(deps: FeatureDeps, tenantId: string, id: string, input: { reviewer?: string | null; note?: string | null }, actor: Actor): Stored_ {
+export async function rejectChangeSet(deps: FeatureDeps, tenantId: string, id: string, input: { reviewer?: string | null; note?: string | null }, actor: Actor): Promise<Stored_> {
   const record = getChangeSet(deps, tenantId, id)
   if (!["in-review", "stale", "approved"].includes(record.status)) throw new FeatureError("Only change sets that were not applied can be rejected.", 409)
   const at = deps.now().toISOString()
-  return deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenantId, id, (current) => ({
+  const rejected = deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenantId, id, (current) => ({
     ...current,
     status: "rejected",
     summary: `Rejected by ${input.reviewer?.trim() || actor || "an administrator"}.`,
     review: { decision: "rejected", contentHash: current.contentHash, targetFingerprint: "", operationFingerprints: {}, observedAt: at, reviewer: input.reviewer?.trim() || actor, actor, note: input.note?.trim() || null, decidedAt: at },
   }), { actor, reason: "Rejected" })!
+  await recordGovernanceAudit(deps, tenantId, actor, { eventType: AuditEventType.CHANGE_SET_REJECTED, action: "Reject change set", resourceId: record.id, resourceName: record.title, link: decidingLink(record.origin.workflow), details: { workflow: record.origin.workflow, originRecordId: record.origin.recordId, changeSetId: record.id, reviewer: input.reviewer?.trim() || actor, note: input.note?.trim() || null, operations: record.operations.length } })
+  return rejected
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -523,6 +528,18 @@ function markStale(deps: FeatureDeps, tenantId: string, id: string, reason: stri
  * its apply is recorded as a rollback. Recording never changes the apply outcome: a failed
  * audit write is logged and the result stands (the audit route queues the event for retry).
  */
+/** The screen that decides a workflow's change sets, for audit log links. */
+export function decidingLink(workflow: string): string {
+  switch (workflow) {
+    case "promotion": return "/portal/changes/promotion"
+    case "baseline-upgrade": return "/portal/changes/baseline-upgrades"
+    case "standard-adoption": return "/portal/governance/standards"
+    case "custom-baseline": return "/portal/baselines"
+    case "cis-remediation": return "/portal/frameworks"
+    default: return "/portal/changes"
+  }
+}
+
 async function recordApplyAudit(deps: FeatureDeps, tenant: string, record: Stored_, status: ChangeSetStatus, actor: Actor, errorMessage?: string, attempt?: number): Promise<void> {
   try {
     const results = record.operations.map((operation) => ({ operation, result: record.results[operation.key] ?? emptyResult() }))
@@ -538,6 +555,7 @@ async function recordApplyAudit(deps: FeatureDeps, tenant: string, record: Store
       severity: status === "applied" ? AuditSeverity.INFO : status === "failed" ? AuditSeverity.ERROR : AuditSeverity.WARNING,
       details: {
         source: "desktop-change-sets",
+        link: decidingLink(record.origin.workflow),
         workflow: record.origin.workflow,
         originRecordId: record.origin.recordId,
         changeSetId: record.id,

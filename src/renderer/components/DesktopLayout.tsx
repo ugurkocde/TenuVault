@@ -46,6 +46,8 @@ import { OibJobIndicator } from "./oib/JobIndicator"
 interface NavItem {
   name: string
   href?: string
+  /** One-line job of the screen, shown as the link title where names alone blur together. */
+  hint?: string
   icon?: ComponentType<{ className?: string }>
   children?: NavItem[]
 }
@@ -56,9 +58,9 @@ const allNavigation: NavItem[] = [
   { name: "Backup & Restore", href: "/portal/backup", icon: Database },
   { name: "Drift Detection", href: "/portal/drift", icon: GitCompare },
   { name: "OpenIntuneBaseline", href: "/portal/oib", icon: Layers },
-  { name: "Audit Log", href: "/portal/audit", icon: Shield },
-  { name: "Governance", href: "/portal/governance", icon: ClipboardCheck },
-  { name: "Changes", href: "/portal/changes", icon: GitPullRequest },
+  { name: "Audit Log", href: "/portal/audit", icon: Shield, hint: "What TenuVault did, when, and did it work" },
+  { name: "Governance", href: "/portal/governance", icon: ClipboardCheck, hint: "Posture, accepted deviations and standards" },
+  { name: "Changes", href: "/portal/changes", icon: GitPullRequest, hint: "Reviewed and approved tenant writes" },
   { name: "Operations", href: "/portal/operations", icon: Activity },
 ]
 
@@ -241,7 +243,7 @@ export function DesktopLayout() {
     }
 
     return (
-      <Link key={item.name} to={item.href!} className={cn(linkClass(active, depth > 0), depth > 0 && "ml-4")}>
+      <Link key={item.name} to={item.href!} title={item.hint} className={cn(linkClass(active, depth > 0), depth > 0 && "ml-4")}>
         {item.icon ? (
           <item.icon className="h-[18px] w-[18px]" />
         ) : (

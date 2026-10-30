@@ -1,5 +1,6 @@
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
+import { MemoryRouter } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -46,7 +47,7 @@ function stubApi(count: (call: LogsCall) => number) {
 async function render() {
   const root = createRoot(document.body.appendChild(document.createElement("div")))
   roots.push(root)
-  await act(async () => root.render(createElement(AuditPage)))
+  await act(async () => root.render(createElement(MemoryRouter, null, createElement(AuditPage))))
   return root
 }
 
@@ -144,7 +145,7 @@ describe("Audit log paging", () => {
     await act(async () => button("Next").click())
     const before = calls.length
     state.selected = { ...state.selected, name: "Tenant 1 after backup" }
-    await act(async () => root.render(createElement(AuditPage)))
+    await act(async () => root.render(createElement(MemoryRouter, null, createElement(AuditPage))))
     expect(calls.length).toBe(before)
     expect(text()).toContain("Showing 51 to 100")
   })
@@ -174,7 +175,7 @@ describe("Audit log after switching tenants", () => {
     })))
     const root = await render()
     state.selected = b
-    await act(async () => root.render(createElement(AuditPage)))
+    await act(async () => root.render(createElement(MemoryRouter, null, createElement(AuditPage))))
     // Tenant B answers first, then tenant A's slow query arrives.
     for (const request of pending.filter((item) => item.tenantId === b.credentials.tenantId)) await act(async () => request.resolve())
     for (const request of pending.filter((item) => item.tenantId === a.credentials.tenantId)) await act(async () => request.resolve())

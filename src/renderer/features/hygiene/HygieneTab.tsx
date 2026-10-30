@@ -12,6 +12,7 @@ import { ScanSummary } from "./ScanSummary"
 import { STALE_EVIDENCE_DAYS } from "../health-review/api"
 import { GovernanceExportButtons } from "../shared/GovernanceExportButtons"
 import { hygieneCsv, hygieneJson } from "../shared/governance-export"
+import { FreshnessStrip } from "../governance/FreshnessStrip"
 
 const STATUS_TONE: Record<FindingStatus, "danger" | "neutral" | "warning" | "success"> = { open: "danger", acknowledged: "warning", "false-positive": "neutral", resolved: "success" }
 const SEVERITY_TONE = { high: "danger", medium: "warning", low: "neutral" } as const
@@ -68,6 +69,7 @@ export default function HygieneTab({ tenant, plan, allowed }: FeatureTabProps) {
           <div>
             <h3 className="text-lg font-medium text-gray-900">{allowed ? "Policy conflicts and hygiene" : "Stored hygiene findings (read-only)"}</h3>
             <p className="max-w-3xl text-sm text-gray-500">Built from the backup named below when the scan ran; a newer backup is used only after Scan latest backup. Types that were not collected are shown as not collected, not as clean. Group membership, filters and device state are not collected, so overlaps that depend on them stay possible, never proven.</p>
+            <FreshnessStrip source={latest ? `backup ${latest.backupId} scanned for hygiene` : "latest complete backup, not scanned yet"} at={latest?.collectedAt ?? null} stale={!!latest && Date.now() - Date.parse(latest.collectedAt) > STALE_EVIDENCE_DAYS * 24 * 60 * 60 * 1000} />
           </div>
           {allowed && (
             <Button type="button" size="sm" disabled={scanning} onClick={startScan}>

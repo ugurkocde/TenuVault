@@ -1,5 +1,5 @@
 import { showFeaturePlanError } from "../../lib/plan-dialog"
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import type { Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
 import { Chip } from "~/components/dashboard/tiles"
@@ -21,6 +21,31 @@ function parseJson(text: string, what: string): unknown {
   }
 }
 
+/** Appends one structured entry to a JSON array field; the field stays the source of truth. */
+export function appendJsonEntry(text: string, entry: Record<string, unknown>, what: string): string {
+  const parsed = parseJson(text, what)
+  if (!Array.isArray(parsed)) throw new Error(`${what} must be a JSON array.`)
+  return JSON.stringify([...parsed, entry], null, 2)
+}
+
+/** Setting IDs named by pasted policy exports, for binding suggestions; invalid JSON suggests nothing. */
+export function settingIdsOf(text: string): string[] {
+  try {
+    const parsed = JSON.parse(text) as unknown
+    if (!Array.isArray(parsed)) return []
+    const ids = new Set<string>()
+    for (const policy of parsed as Array<{ settings?: Array<{ settingInstance?: { settingDefinitionId?: unknown }; settingDefinitionId?: unknown }> }>) {
+      for (const setting of policy?.settings ?? []) {
+        const id = setting?.settingInstance?.settingDefinitionId ?? setting?.settingDefinitionId
+        if (typeof id === "string") ids.add(id)
+      }
+    }
+    return [...ids].sort()
+  } catch {
+    return []
+  }
+}
+
 /**
  * The MSP's reusable standards (shared by all customers, no tenant evidence): immutable versions
  * with provenance, parameters and change notes. A new version is published from the latest one;
@@ -31,6 +56,11 @@ export function StandardsLibrary({ tenant, standards, adoptedKeys, canWrite, onC
   const [from, setFrom] = useState<Standard | null>(null)
   const [diff, setDiff] = useState<{ id: string; entries: VersionDiffEntry[] } | null>(null)
   const [form, setForm] = useState({ standardKey: "", name: "", changeNotes: "", sourceType: "manual", reference: "", platform: "windows", policies: "", parameters: "", bindings: "" })
+  // Structured builders for the JSON fields below: one entry at a time, appended to the
+  // JSON, which stays editable and remains what is submitted.
+  const [parameter, setParameter] = useState({ name: "", label: "", type: "string", required: false, options: "", defaultValue: "" })
+  const [binding, setBinding] = useState({ policyKey: "", settingDefinitionId: "", parameter: "" })
+  const settingSuggestions = useMemo(() => settingIdsOf(form.policies), [form.policies])
   // The OpenIntuneBaseline versions the main process resolved; the only ones it loads.
   const [oibVersions, setOibVersions] = useState<OibVersions | null>(null)
   const oibPlatform = Object.hasOwn(OIB_PLATFORMS, form.platform) ? form.platform as OibPlatform : null
@@ -114,9 +144,32 @@ export function StandardsLibrary({ tenant, standards, adoptedKeys, canWrite, onC
             <>
               <label className="block space-y-1 text-xs text-gray-600 dark:text-gray-400"><span>Source reference</span><input className={input} value={form.reference} onChange={(event) => setForm({ ...form, reference: event.target.value })} /></label>
               <label className="block space-y-1 text-xs text-gray-600 dark:text-gray-400"><span>Policies (JSON array of Settings Catalog exports)</span><textarea className={area} value={form.policies} onChange={(event) => setForm({ ...form, policies: event.target.value })} /></label>
+              <label className="block space-y-1 text-xs text-gray-600 dark:text-gray-400"><span>Or load the policies from an export file</span><input type="file" accept=".json,application/json" className={input} onChange={(event) => { const file = event.target.files?.[0]; if (file) void file.text().then((text) => setForm((current) => ({ ...current, policies: text }))).catch(() => toast("The file could not be read.", "error")) }} /></label>
             </>
           )}
+          <fieldset className="space-y-2" onKeyDown={(event) => { if (event.key === "Enter") event.preventDefault() }}>
+            <legend className="text-xs font-medium text-gray-600 dark:text-gray-400">Add a parameter</legend>
+            <div className="grid gap-3 md:grid-cols-4">
+              <label className="space-y-1 text-xs text-gray-600 dark:text-gray-400"><span>Name</span><input className={input} value={parameter.name} onChange={(event) => setParameter({ ...parameter, name: event.target.value })} /></label>
+              <label className="space-y-1 text-xs text-gray-600 dark:text-gray-400"><span>Label</span><input className={input} value={parameter.label} onChange={(event) => setParameter({ ...parameter, label: event.target.value })} /></label>
+              <label className="space-y-1 text-xs text-gray-600 dark:text-gray-400"><span>Type</span><select className={input} value={parameter.type} onChange={(event) => setParameter({ ...parameter, type: event.target.value })}><option value="string">string</option><option value="integer">integer</option><option value="choice">choice</option><option value="reference">reference</option></select></label>
+              <label className="flex items-center gap-2 pt-5 text-sm text-gray-700"><input type="checkbox" className="size-4" checked={parameter.required} onChange={(event) => setParameter({ ...parameter, required: event.target.checked })} />Required</label>
+              {parameter.type === "choice" && <label className="space-y-1 text-xs text-gray-600 dark:text-gray-400"><span>Options (comma separated, required for choice)</span><input className={input} value={parameter.options} onChange={(event) => setParameter({ ...parameter, options: event.target.value })} /></label>}
+              <label className="space-y-1 text-xs text-gray-600 dark:text-gray-400"><span>Default (optional)</span><input className={input} value={parameter.defaultValue} onChange={(event) => setParameter({ ...parameter, defaultValue: event.target.value })} /></label>
+            </div>
+            <Button type="button" size="sm" variant="outline" disabled={!parameter.name.trim() || !parameter.label.trim() || (parameter.type === "choice" && !parameter.options.trim())} onClick={() => { try { const options = parameter.options.split(",").map((value) => value.trim()).filter(Boolean); const entry: Record<string, unknown> = { name: parameter.name.trim(), label: parameter.label.trim(), type: parameter.type, required: parameter.required }; if (parameter.type === "choice") entry.options = options; if (parameter.defaultValue.trim()) entry.default = parameter.type === "integer" && Number.isSafeInteger(Number(parameter.defaultValue)) ? Number(parameter.defaultValue) : parameter.defaultValue.trim(); setForm((current) => ({ ...current, parameters: appendJsonEntry(current.parameters, entry, "Parameters") })); setParameter({ name: "", label: "", type: "string", required: false, options: "", defaultValue: "" }) } catch (error) { toast(error instanceof Error ? error.message : "The parameter could not be added.", "error") } }}>Add parameter to the JSON below</Button>
+          </fieldset>
           <label className="block space-y-1 text-xs text-gray-600 dark:text-gray-400"><span>Parameters (JSON array: name, label, type string, integer, choice or reference, required, default, min, max, options, renamedFrom)</span><textarea className={area} value={form.parameters} onChange={(event) => setForm({ ...form, parameters: event.target.value })} /></label>
+          <fieldset className="space-y-2" onKeyDown={(event) => { if (event.key === "Enter") event.preventDefault() }}>
+            <legend className="text-xs font-medium text-gray-600 dark:text-gray-400">Add a binding</legend>
+            <div className="grid gap-3 md:grid-cols-3">
+              <label className="space-y-1 text-xs text-gray-600 dark:text-gray-400"><span>Policy key</span><input className={input} value={binding.policyKey} onChange={(event) => setBinding({ ...binding, policyKey: event.target.value })} /></label>
+              <label className="space-y-1 text-xs text-gray-600 dark:text-gray-400"><span>Setting definition ID</span><input className={input} list="standard-setting-ids" autoComplete="off" spellCheck={false} value={binding.settingDefinitionId} onChange={(event) => setBinding({ ...binding, settingDefinitionId: event.target.value })} /></label>
+              <label className="space-y-1 text-xs text-gray-600 dark:text-gray-400"><span>Parameter</span><input className={input} value={binding.parameter} onChange={(event) => setBinding({ ...binding, parameter: event.target.value })} /></label>
+            </div>
+            <datalist id="standard-setting-ids">{settingSuggestions.map((value) => <option key={value} value={value} />)}</datalist>
+            <Button type="button" size="sm" variant="outline" disabled={!binding.policyKey.trim() || !binding.settingDefinitionId.trim() || !binding.parameter.trim()} onClick={() => { try { setForm((current) => ({ ...current, bindings: appendJsonEntry(current.bindings, { policyKey: binding.policyKey.trim(), settingDefinitionId: binding.settingDefinitionId.trim(), parameter: binding.parameter.trim() }, "Bindings") })); setBinding({ policyKey: "", settingDefinitionId: "", parameter: "" }) } catch (error) { toast(error instanceof Error ? error.message : "The binding could not be added.", "error") } }}>Add binding to the JSON below</Button>
+          </fieldset>
           <label className="block space-y-1 text-xs text-gray-600 dark:text-gray-400"><span>Bindings (JSON array: policyKey, settingDefinitionId, parameter)</span><textarea className={area} value={form.bindings} onChange={(event) => setForm({ ...form, bindings: event.target.value })} /></label>
           <label className="block space-y-1 text-xs text-gray-600 dark:text-gray-400"><span>Change notes</span><input className={input} value={form.changeNotes} onChange={(event) => setForm({ ...form, changeNotes: event.target.value })} /></label>
           <div className="flex gap-2">

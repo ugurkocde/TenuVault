@@ -28,7 +28,7 @@ export interface AdoptionState {
 const PATH = "/api/standards"
 
 export const listCustomizations = (tenant: Tenant) => featureCall<{ customizations: Customization[] }>(PATH, tenant, "list-customizations")
-export const createCustomization = (tenant: Tenant, input: { title: string; settingKey: string; policyName: string; value: string; reason: string; owner: string }) => featureCall<{ customization: Customization }>(PATH, tenant, "create-customization", input)
+export const createCustomization = (tenant: Tenant, input: { title: string; settingKey: string; policyName: string; value: string; reason: string; owner: string; expiresAt?: string }) => featureCall<{ customization: Customization }>(PATH, tenant, "create-customization", input)
 export const reviseCustomization = (tenant: Tenant, id: string, input: { value?: string; owner?: string; why: string }) => featureCall<{ customization: Customization }>(PATH, tenant, "revise-customization", { id, ...input })
 export const retireCustomization = (tenant: Tenant, id: string, why: string) => featureCall<{ customization: Customization }>(PATH, tenant, "retire-customization", { id, why })
 
