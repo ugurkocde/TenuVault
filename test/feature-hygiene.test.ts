@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it, vi } from "vitest"
-import { detectHygiene, overlap, RULES, type GroupState, type InventoryItem } from "../src/main/features/hygiene/rules"
+import { catalogSetting, detectHygiene, overlap, RULES, type GroupState, type InventoryItem, type SettingsCatalog } from "../src/main/features/hygiene/rules"
 import { KEPT_RECORDS, KEPT_SCANS, routes, signals } from "../src/main/features/hygiene"
 import type { Item } from "../src/shared/intune/registry"
 import type { GraphCall } from "../src/portal/lib/policies/graph-restore"
@@ -27,7 +27,12 @@ function catalog(id: string, name: string, settings: Item[], assignments: Item[]
 }
 
 const COVERED = new Set(["ConfigurationPolicies", "AssignmentFilters", "ScopeTags", "DeviceConfigurations"])
-const detect = (items: InventoryItem[], covered = COVERED, groups = new Map<string, GroupState>()) => detectHygiene({ items, covered, groups })
+const detect = (items: InventoryItem[], covered = COVERED, groups = new Map<string, GroupState>(), catalogInput?: SettingsCatalog, catalogReason?: string) => detectHygiene({ items, covered, groups, catalog: catalogInput, catalogReason })
+
+const CATALOG_CHECKED_AT = "2026-10-30T12:00:00Z"
+function settingsCatalog(definitions: Array<{ id: string; displayName?: string; description?: string }>): SettingsCatalog {
+  return { checkedAt: CATALOG_CHECKED_AT, total: definitions.length, settings: new Map(definitions.map((entry) => [entry.id, catalogSetting(entry)])) }
+}
 
 describe("hygiene rules", () => {
   it("finds a definite conflict when two policies include the same target without filters or exclusions", () => {
@@ -92,7 +97,8 @@ describe("hygiene rules", () => {
 
     const partial = detect([item, tag], new Set(["ConfigurationPolicies"]))
     expect(partial.findings.some((f) => f.ruleId === "missing-filter" || f.ruleId === "missing-scope-tag")).toBe(false)
-    expect(partial.unknowns.map((u) => u.ruleId).sort()).toEqual(["missing-filter", "missing-scope-tag"])
+    // Without a checked catalog the deprecated settings of the same policies are unknown too.
+    expect(partial.unknowns.map((u) => u.ruleId).sort()).toEqual(["deprecated-setting", "missing-filter", "missing-scope-tag"])
   })
 
   it("keeps unreadable groups unknown and reports only groups Graph says do not exist", () => {
@@ -130,6 +136,67 @@ describe("hygiene rules", () => {
   it("skips types that were not collected", () => {
     const a = catalog("p1", "A", [choice("s", "on")], [])
     expect(detect([a], new Set()).findings).toHaveLength(0)
+  })
+
+  it("classifies catalog definitions by the verified deprecation wording", () => {
+    expect(catalogSetting({ displayName: "[Deprecated] Disable Internet Explorer 11", description: "" })).toMatchObject({ mark: "deprecated", markedBy: "name" })
+    expect(catalogSetting({ displayName: "Allow Writing Tools (Deprecated)", description: "" })).toMatchObject({ mark: "deprecated", markedBy: "name" })
+    expect(catalogSetting({ displayName: "Enhance the security state in Microsoft Edge (obsolete)", description: "" })).toMatchObject({ mark: "deprecated", markedBy: "name" })
+    expect(catalogSetting({ displayName: "Use Windows proxy resolver", description: "This policy is deprecated. Its usage is discouraged." })).toMatchObject({ mark: "deprecated", markedBy: "description" })
+    expect(catalogSetting({ displayName: "Engine Updates Channel", description: "[to be deprecated] Enable this policy to specify when devices receive updates." })).toMatchObject({ mark: "to-be-deprecated", markedBy: "description" })
+    // Mentions of deprecated technologies are not a deprecated setting (verified risky bucket).
+    expect(catalogSetting({ displayName: "View XFA-based PDF files", description: "XFA is a legacy technology that's deprecated by its original creators." }).mark).toBeNull()
+    expect(catalogSetting({ displayName: "Control Manifest v2 extension availability", description: "Manifest v2 extensions support will be deprecated and all extensions need to migrate." }).mark).toBeNull()
+    expect(catalogSetting({ displayName: "Allow software WebGL fallback using SwiftShader", description: "SwiftShader was deprecated. When enabled, Edge uses it as a fallback." }).mark).toBeNull()
+    expect(catalogSetting({ displayName: "A normal setting", description: "Controls a current feature." }).mark).toBeNull()
+  })
+
+  it("flags deprecated, to-be-deprecated and missing settings from a checked catalog, including nested children", () => {
+    const grouped: Item = {
+      id: "0",
+      settingInstance: {
+        "@odata.type": "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance",
+        settingDefinitionId: "group_root",
+        groupSettingCollectionValue: [{ children: [{ "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance", settingDefinitionId: "old_child", choiceSettingValue: { value: "on", children: [] } }] }],
+      },
+    }
+    const a = catalog("p1", "A", [choice("old_top", "on"), choice("future_top", "beta"), grouped], [allDevices()])
+    const b = catalog("p2", "B", [choice("old_top", "off"), choice("gone", "x"), choice("fine", "y"), choice("risky", "z")], [allDevices()])
+    const reference = settingsCatalog([
+      { id: "old_top", displayName: "Old Thing (deprecated)" },
+      { id: "old_child", displayName: "[Deprecated] Child Thing" },
+      { id: "group_root", displayName: "Group Root" },
+      { id: "future_top", displayName: "Future Thing", description: "[to be deprecated] Scheduled for removal." },
+      { id: "fine", displayName: "Fine Thing" },
+      { id: "risky", displayName: "Risky Thing", description: "The underlying protocol is deprecated by its creators." },
+    ])
+    const { findings, unknowns } = detect([a, b], COVERED, new Map(), reference)
+    const byFingerprint = new Map(findings.filter((f) => f.ruleId === "deprecated-setting").map((f) => [f.fingerprint, f]))
+    expect([...byFingerprint.keys()].sort()).toEqual(["deprecated-setting:future_top", "deprecated-setting:gone", "deprecated-setting:old_child", "deprecated-setting:old_top"])
+    const top = byFingerprint.get("deprecated-setting:old_top")!
+    expect(top.classification).toBe("definite")
+    expect(top.severity).toBe("medium")
+    expect(top.policies.map((p) => p.id)).toEqual(["p1", "p2"])
+    expect(top.title).toContain("Old Thing (deprecated)")
+    expect(top.details).toMatchObject({ catalogState: "deprecated", matchedBy: "name" })
+    // The volatile catalog check date stays out of the evidence, so a rescan alone never reopens a review.
+    expect(top.details.catalogCheckedAt).toBeUndefined()
+    expect(top.settings[0]?.values.map((v) => v.display).sort()).toEqual(["off", "on"])
+    const future = byFingerprint.get("deprecated-setting:future_top")!
+    expect(future).toMatchObject({ classification: "definite", severity: "low" })
+    expect(future.details.catalogState).toBe("to be deprecated")
+    const missing = byFingerprint.get("deprecated-setting:gone")!
+    expect(missing.classification).toBe("possible")
+    expect(missing.details.catalogState).toBe("not in catalog")
+    expect(missing.title).toContain("gone")
+    expect(unknowns.some((u) => u.ruleId === "deprecated-setting")).toBe(false)
+  })
+
+  it("leaves deprecated settings unknown, never clean, when the catalog could not be checked", () => {
+    const a = catalog("p1", "A", [choice("old_top", "on")], [allDevices()])
+    const { findings, unknowns } = detect([a], COVERED, new Map(), undefined, "The Settings Catalog could not be read in this scan.")
+    expect(findings.some((f) => f.ruleId === "deprecated-setting")).toBe(false)
+    expect(unknowns.find((u) => u.ruleId === "deprecated-setting")).toMatchObject({ count: 1, reason: "The Settings Catalog could not be read in this scan." })
   })
 })
 
@@ -252,6 +319,43 @@ describe("/api/hygiene", () => {
     expect(unknown.reason).toContain("Group.Read.All")
     expect(unknown.reason).toContain("-IncludeGroupRead")
     expect(res.body.findings.some((f: { ruleId: string }) => f.ruleId === "missing-group")).toBe(false)
+  })
+
+  it("checks the Settings Catalog in a scan and keeps deprecated findings open while the catalog is unreadable", async () => {
+    let policies: Item[] = [{ id: "p1", name: "A", platforms: "windows10", settings: [choice("old_top", "on")], assignments: [allDevices()], roleScopeTagIds: ["0"] }]
+    let catalogOk = true
+    const paths: string[] = []
+    const graph = graphOf(async (_method, path) => {
+      paths.push(path)
+      if (path.startsWith("deviceManagement/configurationSettings")) {
+        return catalogOk
+          ? { status: 200, body: { value: [{ id: "old_top", displayName: "Old Thing (deprecated)", description: "" }, { id: "fine", displayName: "Fine Thing", description: "" }] } as Item }
+          : { status: 403, body: { error: { message: "Insufficient privileges" } } as Item }
+      }
+      return { status: 404, body: {} as Item }
+    })
+    let clock = Date.parse("2026-10-30T12:00:00Z")
+    const deps = fakeDeps({ api: (path, tenant, body) => backupApi({ policies }).api(path, tenant, body), graph, now: () => new Date(clock) })
+    const r = routes(deps)
+    const first = await call(r, "/api/hygiene", { tenantId: TENANT_A, action: "scan" })
+    expect(paths[0]).toBe("deviceManagement/configurationSettings?$select=id,displayName,description")
+    expect(first.body.scans[0].catalog).toMatchObject({ state: "checked", total: 2 })
+    const found = first.body.findings.find((f: { ruleId: string }) => f.ruleId === "deprecated-setting")
+    expect(found).toMatchObject({ classification: "definite", status: "open" })
+    expect(found.details).toMatchObject({ catalogState: "deprecated", catalogDisplayName: "Old Thing (deprecated)" })
+
+    catalogOk = false
+    clock += 60_000
+    const second = await call(r, "/api/hygiene", { tenantId: TENANT_A, action: "scan" })
+    expect(second.body.scans[0].catalog.state).toBe("unavailable")
+    expect(second.body.scans[0].unknowns.some((u: { ruleId: string }) => u.ruleId === "deprecated-setting")).toBe(true)
+    expect((await call(r, "/api/hygiene", { tenantId: TENANT_A, action: "get", findingId: found.id })).body.finding.status).toBe("open")
+
+    catalogOk = true
+    clock += 60_000
+    policies = [{ ...policies[0]!, settings: [choice("fine", "on")] }]
+    await call(r, "/api/hygiene", { tenantId: TENANT_A, action: "scan" })
+    expect((await call(r, "/api/hygiene", { tenantId: TENANT_A, action: "get", findingId: found.id })).body.finding.status).toBe("resolved")
   })
 
   it("acknowledges, records false positives with a reason and reopens on changed evidence", async () => {

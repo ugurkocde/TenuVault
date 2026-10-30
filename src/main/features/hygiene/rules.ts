@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto"
 import { comparableSnapshot } from "../../../shared/intune/compare"
 import { typeForFolder, type Item, type Json } from "../../../shared/intune/registry"
+import type { CatalogSetting } from "../../../shared/intune/settings-catalog"
+
+export { catalogSetting, type CatalogMark, type CatalogSetting } from "../../../shared/intune/settings-catalog"
 
 /**
  * Hygiene detection rules (#139). Pure: the input is a collected inventory (the latest
@@ -18,7 +21,7 @@ import { typeForFolder, type Item, type Json } from "../../../shared/intune/regi
  *   secret values inside the encrypted backup) never leaves this module.
  */
 
-export type RuleId = "conflicting-setting" | "duplicate-profile" | "unassigned-policy" | "missing-filter" | "missing-scope-tag" | "missing-group"
+export type RuleId = "conflicting-setting" | "duplicate-profile" | "unassigned-policy" | "missing-filter" | "missing-scope-tag" | "missing-group" | "deprecated-setting"
 export type Classification = "definite" | "possible"
 export type Severity = "high" | "medium" | "low"
 
@@ -67,6 +70,12 @@ export const RULES: Record<RuleId, RuleInfo> = {
     description: "An assignment targets or excludes a group that Microsoft Graph reports as not existing.",
     limits: "Group reads need Group.Read.All. The setup script does not request it by default: run New-TenuVaultDesktopApp.ps1 with -IncludeGroupRead to add it. Without it every group is unknown, not missing.",
   },
+  "deprecated-setting": {
+    id: "deprecated-setting",
+    name: "Deprecated settings",
+    description: "A Settings Catalog policy configures a setting that Microsoft's current Settings Catalog names or describes as deprecated, obsolete or to be deprecated, or whose definition is no longer in the catalog.",
+    limits: "Microsoft Graph has no deprecation flag, so only verified catalog wording counts: the setting name says deprecated or obsolete, the description says this policy or setting is deprecated, or it starts with \"[to be deprecated]\". A definition missing from a completely read catalog is possible only, never definite. Deprecated does not prove the setting no longer applies, and the catalog names no replacement. Checked only when the catalog could be read in the same scan; otherwise unknown, not clean.",
+  },
 }
 
 /** One collected object. */
@@ -80,6 +89,14 @@ export interface InventoryItem {
 /** Whether each referenced group exists, as far as Graph could tell. */
 export type GroupState = "exists" | "missing" | "unknown"
 
+/** The current Settings Catalog as read in the same scan: every definition ID with its mark. */
+export interface SettingsCatalog {
+  checkedAt: string
+  /** Definitions the catalog returned. */
+  total: number
+  settings: ReadonlyMap<string, CatalogSetting>
+}
+
 export interface Inventory {
   items: InventoryItem[]
   /** Registry folders whose objects were fully listed in this collection. */
@@ -88,6 +105,10 @@ export interface Inventory {
   groups: ReadonlyMap<string, GroupState>
   /** Why group state is unknown, shown with the unknowns. */
   groupReason?: string
+  /** The Settings Catalog read in this scan; absent when it could not be read. */
+  catalog?: SettingsCatalog
+  /** Why the catalog could not be read, shown with the unknowns. */
+  catalogReason?: string
 }
 
 export interface PolicyRef {
@@ -459,6 +480,88 @@ function references(inventory: Inventory): DetectionResult {
   return { findings, unknowns }
 }
 
+/** Every setting instance in a snapshot subtree, at any nesting level (group and choice children included). */
+function collectInstances(node: unknown, out: Item[]): void {
+  if (Array.isArray(node)) {
+    for (const entry of node) collectInstances(entry, out)
+    return
+  }
+  if (!isObject(node)) return
+  if (str(node.settingDefinitionId)) out.push(node)
+  for (const entry of Object.values(node)) collectInstances(entry, out)
+}
+
+/**
+ * Settings the current catalog marks deprecated, plus definition IDs that are no longer in a
+ * completely read catalog (possible: the definition may have been removed after the policy was
+ * created; see the verification doc). Without a catalog the rule reports the collected Settings
+ * Catalog policies as an unknown, never as clean. The catalog check date is kept out of the
+ * evidence details, so a rescan alone never reopens a reviewed finding.
+ */
+function deprecatedSettings(items: InventoryItem[], catalog: SettingsCatalog | undefined, catalogReason: string | undefined): DetectionResult {
+  const policies = items.filter((item) => item.folder === "ConfigurationPolicies")
+  if (!catalog) {
+    if (!policies.length) return { findings: [], unknowns: [] }
+    return { findings: [], unknowns: [{ ruleId: "deprecated-setting", reason: catalogReason ?? "The Settings Catalog could not be read, so deprecated settings could not be checked.", count: policies.length, policies: policies.slice(0, 50).map(ref) }] }
+  }
+  const bySetting = new Map<string, Array<{ item: InventoryItem; hash: string; display: string }>>()
+  for (const item of policies) {
+    const instances: Item[] = []
+    collectInstances(Array.isArray(item.snapshot.settings) ? item.snapshot.settings : [], instances)
+    const seen = new Set<string>()
+    for (const instance of instances) {
+      const definitionId = str(instance.settingDefinitionId)!
+      if (seen.has(definitionId)) continue
+      seen.add(definitionId)
+      const value = settingValue(instance) ?? { hash: sha256(JSON.stringify(stripTemplates(instance))), display: "Configured" }
+      bySetting.set(definitionId, [...(bySetting.get(definitionId) ?? []), { item, ...value }])
+    }
+  }
+  const findings: DetectedFinding[] = []
+  for (const [definitionId, entries] of bySetting) {
+    const known = catalog.settings.get(definitionId)
+    if (known && !known.mark) continue
+    const affected = [...entries].sort((a, b) => a.item.id.localeCompare(b.item.id))
+    const count = affected.length
+    const noun = count === 1 ? "policy" : "policies"
+    const platforms = [...new Set(affected.map((entry) => str(entry.item.snapshot.platforms) ?? "unknown"))].sort()
+    const evidence = {
+      policies: affected.map((entry) => ref(entry.item)),
+      settings: [{ definitionId, values: affected.map((entry) => ({ policyId: entry.item.id, display: entry.display, valueSha256: entry.hash })) }],
+    }
+    if (!known) {
+      findings.push(finding({
+        ruleId: "deprecated-setting",
+        fingerprint: `deprecated-setting:${definitionId}`,
+        classification: "possible",
+        severity: "medium",
+        title: `Setting ${definitionId} is no longer in the Settings Catalog, in ${count} ${noun}`,
+        explanation: `This setting is configured in the collected ${noun}, but its definition ID is not in the Settings Catalog read on ${catalog.checkedAt} (${catalog.total} definitions). It may have been removed by Microsoft after the ${noun} ${count === 1 ? "was" : "were"} created; a single catalog read cannot confirm that. Review for replacement or removal in Intune. TenuVault does not change the policy.`,
+        ...evidence,
+        details: { catalogState: "not in catalog", platform: platforms },
+      }))
+      continue
+    }
+    const name = known.displayName ?? definitionId
+    const future = known.mark === "to-be-deprecated"
+    findings.push(finding({
+      ruleId: "deprecated-setting",
+      fingerprint: `deprecated-setting:${definitionId}`,
+      classification: "definite",
+      severity: future ? "low" : "medium",
+      title: future ? `Setting "${name}" is to be deprecated, in ${count} ${noun}` : `Deprecated setting "${name}" in ${count} ${noun}`,
+      explanation: future
+        ? `Microsoft's Settings Catalog describes "${name}" as to be deprecated (catalog checked ${catalog.checkedAt}). The setting still applies as far as the catalog states; plan its replacement or removal. TenuVault does not change the policy.`
+        : known.markedBy === "name"
+          ? `Microsoft's Settings Catalog names this setting "${name}" (catalog checked ${catalog.checkedAt}). Deprecated settings may be ignored by current platform or app versions, or removed in a future release. That does not prove the setting no longer applies. Review for replacement or removal in Intune. TenuVault does not change the policy.`
+          : `Microsoft's Settings Catalog describes "${name}" as deprecated (catalog checked ${catalog.checkedAt}). Deprecated settings may be ignored by current platform or app versions, or removed in a future release. That does not prove the setting no longer applies. Review for replacement or removal in Intune. TenuVault does not change the policy.`,
+      ...evidence,
+      details: { catalogState: future ? "to be deprecated" : "deprecated", catalogDisplayName: name, matchedBy: known.markedBy ?? "name", platform: platforms },
+    }))
+  }
+  return { findings, unknowns: [] }
+}
+
 /**
  * Runs every rule over one collected inventory. Findings are sorted by classification and
  * severity; unknowns list the checks that could not be made and why.
@@ -467,8 +570,9 @@ export function detectHygiene(inventory: Inventory): DetectionResult {
   const items = inventory.items.filter((item) => inventory.covered.has(item.folder))
   const refs = references({ ...inventory, items })
   const assigned = unassigned(items)
-  const findings = [...conflicts(items), ...duplicates(items), ...assigned.findings, ...refs.findings]
-  const unknowns = [...refs.unknowns]
+  const deprecated = deprecatedSettings(items, inventory.catalog, inventory.catalogReason)
+  const findings = [...conflicts(items), ...duplicates(items), ...assigned.findings, ...refs.findings, ...deprecated.findings]
+  const unknowns = [...refs.unknowns, ...deprecated.unknowns]
   if (assigned.unknown.length) unknowns.push({ ruleId: "unassigned-policy", reason: "Assignments were not collected with these objects.", count: assigned.unknown.length, policies: assigned.unknown.slice(0, 50).map(ref) })
   const rank = { definite: 0, possible: 1 }
   const severity = { high: 0, medium: 1, low: 2 }

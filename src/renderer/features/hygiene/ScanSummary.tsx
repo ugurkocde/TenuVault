@@ -17,6 +17,7 @@ export function ScanSummary({ scan, ruleName }: { scan: Scan; ruleName: (id: str
         <Chip tone={scan.completeness === "complete" ? "success" : "warning"}>{scan.completeness === "complete" ? "Complete collection" : "Partial collection"}</Chip>
         <Chip tone={scan.notCollected.length ? "warning" : "neutral"}>{scan.covered.length} types collected, {scan.notCollected.length} not collected</Chip>
         <Chip tone={scan.groupResolution.state === "resolved" || scan.groupResolution.state === "none" ? "neutral" : "warning"}>Groups: {scan.groupResolution.state === "resolved" ? "checked" : scan.groupResolution.state === "none" ? "none referenced" : "unknown"}</Chip>
+        {scan.catalog && <Chip tone={scan.catalog.state === "checked" ? "neutral" : "warning"}>Settings Catalog: {scan.catalog.state === "checked" ? `checked ${formatDate(scan.catalog.checkedAt)}, ${scan.catalog.total} definitions` : "not checked"}</Chip>}
       </div>
       {scan.partialReason && <p className="text-sm text-amber-800 dark:text-amber-300">{scan.partialReason}</p>}
       {scan.notCollected.length > 0 && (

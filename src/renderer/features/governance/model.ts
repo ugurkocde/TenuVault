@@ -15,6 +15,8 @@ export interface GovernanceSummary {
   totalGaps: number
   openDefinite: number
   openPossible: number
+  /** Open deprecated-setting findings: distinct settings, affected policies, latest catalog check. */
+  deprecatedSettings: { settings: number; policies: number; catalogCheckedAt: string | null }
   reviewedFindings: number
   latestScanAt: string | null
   latestScanBackup: string | null
@@ -25,6 +27,14 @@ export interface GovernanceSummary {
   /** Adoptions whose deviation was never assessed, so a zero above must not read as clean. */
   unassessedAdoptions: number
   standardsAssessedAt: string | null
+}
+
+/** Open deprecated-setting findings as settings and affected policies, dated by the newest checked catalog. */
+function deprecatedOf(findings: Finding[], scans: Scan[]): GovernanceSummary["deprecatedSettings"] {
+  const open = findings.filter((finding) => finding.status === "open" && finding.ruleId === "deprecated-setting")
+  const policies = new Set(open.flatMap((finding) => (finding.policies ?? []).map((policy) => `${policy.folder}/${policy.id}`)))
+  const checked = scans.find((scan) => scan.catalog?.state === "checked")
+  return { settings: open.length, policies: policies.size, catalogCheckedAt: checked?.catalog?.checkedAt ?? null }
 }
 
 export function summarizeGovernance(input: {
@@ -45,6 +55,7 @@ export function summarizeGovernance(input: {
     totalGaps: assessed.reduce((sum, framework) => sum + framework.latest!.gapCount, 0),
     openDefinite: input.findings.filter((finding) => finding.status === "open" && finding.classification === "definite").length,
     openPossible: input.findings.filter((finding) => finding.status === "open" && finding.classification === "possible").length,
+    deprecatedSettings: deprecatedOf(input.findings, input.scans),
     reviewedFindings: input.findings.filter((finding) => finding.status === "acknowledged" || finding.status === "false-positive").length,
     latestScanAt: input.scans[0]?.collectedAt ?? null,
     latestScanBackup: input.scans[0]?.backupId ?? null,

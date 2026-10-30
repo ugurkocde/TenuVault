@@ -67,6 +67,8 @@ The counter shows how many items are selected, for example "3 of 120 selected".
 
 Items that cannot be restored with the current method are greyed out and show the reason under their name. For example, an app that needs an installer file shows "Intune does not let apps download installer files. Upload the installer again to restore this app." An item that can only be updated in place, such as a tenant default, shows "Replace only: this object cannot be copied." when you create copies. See [What cannot be restored](/restore/limitations/) for the full list.
 
+Settings Catalog policies are also checked against the current Settings Catalog. A policy containing settings Microsoft now lists as deprecated shows a warning under its name naming those settings, and a banner above the list counts the affected policies with the catalog check date. The same warning appears again for the selected items in step 4. The check never blocks a restore: deprecated settings restore exactly as backed up, and deprecated does not prove a setting no longer applies. Review them in Intune after restoring. When the catalog cannot be read, the wizard says deprecated settings were not checked instead of showing the backup as clean. The check reads the catalog in the tenant you restore from; for copies to other tenants, their catalogs may differ.
+
 :::note
 Community restores one item at a time. Selecting a second item replaces the first, and the **Restore method** list and **Select all** are not shown.
 :::

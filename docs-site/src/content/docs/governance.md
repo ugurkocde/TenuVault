@@ -92,7 +92,7 @@ Tenants without an MSP license or without sign-in are listed as not included and
 
 ## Conflicts and hygiene
 
-Conflicts and hygiene finds candidate conflicting settings, duplicate profiles, unassigned policies and broken references in the selected tenant. Findings are built from the latest complete backup, not from the live tenant.
+Conflicts and hygiene finds candidate conflicting settings, duplicate profiles, unassigned policies, broken references and settings Microsoft lists as deprecated in the current Settings Catalog in the selected tenant. Findings are built from the latest complete backup, not from the live tenant.
 
 ### Run a scan
 
@@ -100,22 +100,28 @@ Conflicts and hygiene finds candidate conflicting settings, duplicate profiles, 
 2. Open **Governance** in the sidebar and choose **Conflicts and hygiene**.
 3. Click **Scan latest backup**. While it runs the button shows "Scanning backup".
 
-A scan reads the latest complete backup. It does not read or change the tenant apart from checking whether referenced groups exist, and it never deletes or changes a policy. If no scan has run yet, the screen says so and offers the same button.
+A scan reads the latest complete backup. It does not change the tenant. Apart from the backup it only reads whether referenced groups exist and the current Settings Catalog definitions, and it never deletes or changes a policy. If no scan has run yet, the screen says so and offers the same button.
 
 The findings stay those of the last scan until you scan again: a newer backup does not update them on its own. The screen names the source backup and its collection date, and warns when that backup was collected more than 7 days ago.
 
 ### Read a scan
 
-The latest scan shows when it was collected, the source backup, how many objects were inspected, and how many findings are definite and possible. Types that were not collected are shown as not collected, not as clean. Group membership, filters and device state are not collected, so overlaps that depend on them stay possible, never proven.
+The latest scan shows when it was collected, the source backup, how many objects were inspected, how many findings are definite and possible, and when the Settings Catalog was checked. Types that were not collected are shown as not collected, not as clean. Group membership, filters and device state are not collected, so overlaps that depend on them stay possible, never proven. When the Settings Catalog cannot be read during a scan, deprecated settings are shown as a check that could not be made, never as clean.
 
 Use the filters above the findings to narrow the list:
 
 * **Status**: open and acknowledged, all, or one status.
-* **Classification**: all, **Definite** or **Possible overlap**.
+* **Classification**: all, **Definite** or **Possible**.
 * **Rule**: all rules or one rule.
 * **Search**: type a finding or policy name in "Finding or policy name".
 
 Click **Export CSV** or **Export JSON** to save the findings currently shown with the filters applied.
+
+#### Deprecated settings
+
+A **Deprecated settings** finding names one setting and every collected policy that configures it. The scan compares the settings in the backup with the current Settings Catalog read during the same scan. Microsoft Graph has no deprecation flag, so only the catalog's own wording counts: the setting name says deprecated or obsolete, or its description says the policy or setting is deprecated. Settings announced as "[to be deprecated]" are reported separately at low severity. A setting whose definition is no longer in a completely read catalog is reported as **Possible** only.
+
+Deprecated does not prove a setting no longer applies on devices, and the catalog does not name a replacement setting. Treat each finding as a prompt to review the policy in Intune and replace or remove the setting there. TenuVault never changes the policy for you. Each finding shows two dates: when the backup was collected and when the Settings Catalog was checked.
 
 ### Review a finding
 

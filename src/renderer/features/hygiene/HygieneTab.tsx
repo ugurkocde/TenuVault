@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { useSearchParams } from "react-router-dom"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { ChevronDown, ChevronRight, ScanSearch } from "lucide-react"
 import { Button } from "~/components/ui/button"
@@ -25,9 +26,11 @@ const selectClass = "h-9 rounded-full border border-gray-200 bg-white px-3 text-
  * renders nothing when there are none. Nothing here changes or deletes a policy.
  */
 export default function HygieneTab({ tenant, plan, allowed }: FeatureTabProps) {
+  const [searchParams] = useSearchParams()
   const [status, setStatus] = useState<FindingStatus | "active" | "all">("active")
   const [classification, setClassification] = useState<Classification | "all">("all")
-  const [ruleId, setRuleId] = useState("all")
+  // Deep links (for example the Governance overview attention list) preselect a rule.
+  const [ruleId, setRuleId] = useState(searchParams.get("rule") ?? "all")
   const [search, setSearch] = useState("")
   const [expanded, setExpanded] = useState<string | null>(null)
   const list = useQuery({ queryKey: ["hygiene", tenant.credentials?.tenantId], queryFn: () => loadList(tenant) })
@@ -48,6 +51,9 @@ export default function HygieneTab({ tenant, plan, allowed }: FeatureTabProps) {
 
   const findings = list.data?.findings ?? []
   const rules = list.data?.rules ?? []
+  useEffect(() => {
+    if (rules.length && ruleId !== "all" && !rules.some((rule) => rule.id === ruleId)) setRuleId("all")
+  }, [rules, ruleId])
   const latest = list.data?.scans[0]
   const shown = useMemo(() => {
     const text = search.trim().toLowerCase()
@@ -105,7 +111,7 @@ export default function HygieneTab({ tenant, plan, allowed }: FeatureTabProps) {
               <select className={selectClass} value={classification} onChange={(event) => setClassification(event.target.value as typeof classification)}>
                 <option value="all">All</option>
                 <option value="definite">Definite</option>
-                <option value="possible">Possible overlap</option>
+                <option value="possible">Possible</option>
               </select>
             </label>
             <label className="flex flex-col gap-1 text-xs text-gray-500">
