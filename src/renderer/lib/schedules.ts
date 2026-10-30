@@ -10,6 +10,8 @@ export interface SchedulesState {
   schedules: BackupSchedule[]
   /** The last read failure. While set, `schedules` may be stale or empty, never "no schedules". */
   error: string | null
+  /** True until the first read (or change event) settles. Callers must not save over unknown state. */
+  loading: boolean
   reload: () => void
 }
 
@@ -17,17 +19,22 @@ export interface SchedulesState {
 export function useSchedules(): SchedulesState {
   const [schedules, setSchedules] = useState<BackupSchedule[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
   const [reloads, setReloads] = useState(0)
   useEffect(() => {
     let cancelled = false
+    // A change event carries fresher data than a read still in flight, so it supersedes it:
+    // the older read must then neither overwrite the list nor resurrect an error.
+    let generation = 0
+    const mine = ++generation
     bridge.schedules.list().then(
-      (next) => { if (!cancelled) { setSchedules(next); setError(null) } },
-      (failure: unknown) => { if (!cancelled) setError(errorMessage(failure)) },
+      (next) => { if (!cancelled && generation === mine) { setSchedules(next); setError(null); setLoading(false) } },
+      (failure: unknown) => { if (!cancelled && generation === mine) { setError(errorMessage(failure)); setLoading(false) } },
     )
-    const unsubscribe = bridge.schedules.onChanged((next) => { setSchedules(next); setError(null) })
+    const unsubscribe = bridge.schedules.onChanged((next) => { generation++; setSchedules(next); setError(null); setLoading(false) })
     return () => { cancelled = true; unsubscribe() }
   }, [reloads])
-  return { schedules, error, reload: () => setReloads((count) => count + 1) }
+  return { schedules, error, loading, reload: () => setReloads((count) => count + 1) }
 }
 
 export interface RefusalsState {
@@ -44,10 +51,14 @@ export function useRefusals(tenantId: string): RefusalsState {
   const [reloads, setReloads] = useState(0)
   useEffect(() => {
     let cancelled = false
+    // Only the newest read may settle state: an older read finishing after a change-triggered
+    // one must neither overwrite its result nor resurrect its error.
+    let generation = 0
     const load = () => {
+      const mine = ++generation
       bridge.schedules.refusals(tenantId).then(
-        (next) => { if (!cancelled) { setRefusals(next); setError(null) } },
-        (failure: unknown) => { if (!cancelled) setError(errorMessage(failure)) },
+        (next) => { if (!cancelled && generation === mine) { setRefusals(next); setError(null) } },
+        (failure: unknown) => { if (!cancelled && generation === mine) setError(errorMessage(failure)) },
       )
     }
     load()

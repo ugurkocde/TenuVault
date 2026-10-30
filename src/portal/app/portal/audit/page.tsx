@@ -513,6 +513,9 @@ function AuditPageContent() {
                 Search
               </Button>
             </form>
+            {appliedSearch && appliedSearch !== searchQuery && (
+              <p className="text-xs text-gray-500">Showing results for &ldquo;{appliedSearch}&rdquo;. Press Search to use the edited text.</p>
+            )}
 
             {/* Date Range and Filter Toggle */}
             <div className="flex flex-wrap gap-2 items-center">

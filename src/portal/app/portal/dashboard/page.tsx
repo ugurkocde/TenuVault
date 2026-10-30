@@ -181,14 +181,15 @@ function DashboardContent() {
     const interval = window.setInterval(() => setRelativeNow(Date.now()), 1000)
     return () => window.clearInterval(interval)
   }, [])
-  useEffect(() => void bridge.auth.accounts().then(setAccounts, (error: unknown) => setAccountsError(error instanceof Error ? error.message : String(error))), [])
+  const loadAccounts = () => bridge.auth.accounts().then((next) => { setAccounts(next); setAccountsError(null) }, (error: unknown) => setAccountsError(error instanceof Error ? error.message : String(error)))
+  useEffect(() => void loadAccounts(), [])
 
   const tenants = useTenants()
   const { selectedTenant } = useSelectedTenant()
   // The dashboard follows the tenant switcher; before a choice is stored it shows the first tenant.
   const tenant = selectedTenant ?? tenants[0]
   const tenantGuid = tenant?.credentials?.tenantId?.toLowerCase() ?? ""
-  const { schedules } = useSchedules()
+  const { schedules, error: schedulesError, reload: reloadSchedules } = useSchedules()
   const { status: licenseStatus } = useLicense()
   const { activeJobs } = useBackupProgress()
   const {
@@ -295,7 +296,7 @@ function DashboardContent() {
           <Button
             variant="outline"
             size="icon"
-            aria-label="Refresh dashboard" onClick={() => refetchStats()}
+            aria-label="Refresh dashboard" onClick={() => { void loadAccounts(); reloadSchedules(); void refetchStats() }}
             disabled={statsLoading || isFetching}
           >
             {isFetching ? (
@@ -414,10 +415,15 @@ function DashboardContent() {
         <Tile aria-label="Next Backup">
           <div className="flex items-start justify-between gap-3">
             <TileIcon icon={CalendarClock} />
-            {schedule?.enabled ? <Chip tone="success">On</Chip> : <Chip>Off</Chip>}
+            {schedulesError ? <Chip tone="warning">Unknown</Chip> : schedule?.enabled ? <Chip tone="success">On</Chip> : <Chip>Off</Chip>}
           </div>
           <TileLabel className="mt-6">Next Backup</TileLabel>
-          {schedule?.enabled ? (
+          {schedulesError ? (
+            <>
+              <BigValue className="mt-1">Unavailable</BigValue>
+              <p className="mt-1 text-sm text-gray-500" title={schedulesError}>Schedules could not be loaded. Refresh the dashboard to try again.</p>
+            </>
+          ) : schedule?.enabled ? (
             <>
               <BigValue className="mt-1">{nextIn ?? "Not scheduled"}</BigValue>
               <p className="mt-1 text-sm text-gray-500">{describeSchedule(schedule)}</p>

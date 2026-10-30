@@ -57,7 +57,7 @@ import {
 // Inner component that uses useSearchParams
 function TenantsPageContent() {
   const { confirm, confirmDialog } = useConfirm()
-  const { schedules } = useSchedules()
+  const { schedules, error: schedulesError } = useSchedules()
   const { status: licenseStatus } = useLicense()
   // Cross tenant views and bulk actions are part of MSP.
   // The highest plan among licensed tenants decides whether these buttons act or explain here; the main process then checks MSP on every tenant a bulk run touches.
@@ -79,7 +79,7 @@ function TenantsPageContent() {
   // The name a refresh must preserve is the one the tenant has when it finishes, which may
   // be a rename made while the fetch was in flight.
   const tenantsRef = useRef(tenants)
-  tenantsRef.current = tenants
+  useEffect(() => { tenantsRef.current = tenants }, [tenants])
   const { addJob, activeJobs } = useBackupProgress()
   const backupJobFor = (tenant: Tenant) => activeJobs.find((job) => !job.isComplete && tenant.credentials && job.tenantId.toLowerCase() === tenant.credentials.tenantId.toLowerCase())
   // A tracked backup started from another page counts too, even before this tenant's sync status catches up.
@@ -1075,7 +1075,7 @@ function TenantsPageContent() {
                       {tenant.isLoading ? "Syncing..." : `Last sync ${getRelativeTime(tenant.lastSync)}`}
                     </p>
                     <p className="text-xs text-gray-500">
-                      {tenant.isLoading ? "Fetching latest data..." : (() => { const schedule = schedules.find(s => s.tenantId === tenant.credentials?.tenantId.toLowerCase()); return schedule?.enabled ? `Next backup: ${formatWhen(schedule.nextRunAt)}` : "Automatic backups off" })()}
+                      {tenant.isLoading ? "Fetching latest data..." : schedulesError ? "Automatic backups could not be loaded" : (() => { const schedule = schedules.find(s => s.tenantId === tenant.credentials?.tenantId.toLowerCase()); return schedule?.enabled ? `Next backup: ${formatWhen(schedule.nextRunAt)}` : "Automatic backups off" })()}
                     </p>
                   </div>
                 </div>

@@ -33,7 +33,7 @@ export function BackupSchedulePanel(props: BackupSchedulePanelProps) {
 }
 
 function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
-  const { schedules, error: schedulesError, reload: reloadSchedules } = useSchedules()
+  const { schedules, error: schedulesError, loading: schedulesLoading, reload: reloadSchedules } = useSchedules()
   const { status } = useLicense()
   const license = tenantLicense(status, tenantId)
   const plan = tenantPlan(license)
@@ -162,7 +162,7 @@ function TenantSchedule({ tenantId, tenantName }: BackupSchedulePanelProps) {
 
         <div className="space-y-2">
           <div className="flex items-center gap-3">
-            <Button disabled={!dirty || saving || !!schedulesError || (enabled && frequency === "daily" && !planKnown)} onClick={() => void save()}>
+            <Button disabled={!dirty || saving || schedulesLoading || !!schedulesError || (enabled && frequency === "daily" && !planKnown)} onClick={() => void save()}>
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Save
             </Button>

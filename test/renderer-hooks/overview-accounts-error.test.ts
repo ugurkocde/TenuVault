@@ -16,7 +16,7 @@ vi.mock("~/contexts/TenantContext", () => ({
 vi.mock("~/contexts/BackupProgressContext", () => ({ useBackupProgress: () => ({ addJob: vi.fn() }) }))
 vi.mock("@desktop/lib/schedules", async (original) => ({
   ...(await original<typeof import("../../src/renderer/lib/schedules")>()),
-  useSchedules: () => ({ schedules: [], error: null, reload: () => undefined }),
+  useSchedules: () => ({ schedules: [], error: null, loading: false, reload: () => undefined }),
 }))
 vi.mock("@desktop/lib/license", () => ({
   useLicense: () => ({ status: null }),
@@ -58,6 +58,8 @@ describe("Overview sign-in load failure", () => {
     const alerts = [...container.querySelectorAll('[role="alert"]')].map((node) => node.textContent).join(" ")
     expect(alerts).toContain("accounts IPC down")
     expect(container.textContent).toContain("Sign-in unknown")
+    // The Signed in summary tile withholds its count instead of showing zero.
+    expect(container.textContent).toContain("Signed inUnknown")
     expect(container.textContent).not.toContain("Not signed in")
     expect(container.textContent).not.toContain("No administrator signed in")
 

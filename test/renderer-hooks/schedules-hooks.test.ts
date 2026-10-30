@@ -5,14 +5,14 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
-const state = vi.hoisted(() => ({ list: vi.fn(), refusals: vi.fn() }))
+const state = vi.hoisted(() => ({ list: vi.fn(), refusals: vi.fn(), changed: null as null | ((next: unknown[]) => void) }))
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
   bridge: {
     schedules: {
       list: state.list,
       refusals: state.refusals,
-      onChanged: () => () => undefined,
+      onChanged: (listener: (next: unknown[]) => void) => { state.changed = listener; return () => undefined },
       onRefusalsChanged: () => () => undefined,
     },
   },
@@ -39,10 +39,11 @@ async function renderProbe(element: ReturnType<typeof createElement>): Promise<H
 }
 
 function SchedulesProbe() {
-  const { schedules, error, reload } = useSchedules()
+  const { schedules, error, loading, reload } = useSchedules()
   return createElement("div", null,
     createElement("p", { "data-schedules": "" }, String(schedules.length)),
     createElement("p", { "data-error": "" }, error ?? ""),
+    createElement("p", { "data-loading": "" }, String(loading)),
     createElement("button", { onClick: reload }, "Reload schedules"))
 }
 
@@ -63,6 +64,26 @@ describe("schedule hooks on IPC failure", () => {
     await act(async () => { button.click() })
     expect(container.querySelector("[data-schedules]")?.textContent).toBe("1")
     expect(container.querySelector("[data-error]")?.textContent).toBe("")
+  })
+
+  it("reports loading until the first read settles", async () => {
+    let resolveList: ((value: unknown[]) => void) | undefined
+    state.list.mockImplementationOnce(() => new Promise((resolve) => { resolveList = resolve }))
+    const container = await renderProbe(createElement(SchedulesProbe))
+    expect(container.querySelector("[data-loading]")?.textContent).toBe("true")
+    await act(async () => resolveList!([]))
+    expect(container.querySelector("[data-loading]")?.textContent).toBe("false")
+  })
+
+  it("ignores a read that a change event superseded, whether it resolves or rejects", async () => {
+    let rejectList: ((error: Error) => void) | undefined
+    state.list.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectList = reject }))
+    const container = await renderProbe(createElement(SchedulesProbe))
+    await act(async () => state.changed!([{ tenantId: TENANT, enabled: true }]))
+    expect(container.querySelector("[data-schedules]")?.textContent).toBe("1")
+    await act(async () => rejectList!(new Error("stale failure")))
+    expect(container.querySelector("[data-error]")?.textContent).toBe("")
+    expect(container.querySelector("[data-schedules]")?.textContent).toBe("1")
   })
 
   it("exposes a refusals failure instead of reporting none", async () => {

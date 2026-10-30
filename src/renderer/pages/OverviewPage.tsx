@@ -53,9 +53,10 @@ export default function OverviewPage() {
   }
 
   const tenantIds = tenants.map((t) => t.credentials?.tenantId?.toLowerCase() ?? "")
-  const signedInCount = tenantIds.filter((id) => accounts.some((a) => a.tenantId === id)).length
+  // A failed read leaves its count unknown, never zero.
+  const signedInCount = accountsError ? null : tenantIds.filter((id) => accounts.some((a) => a.tenantId === id)).length
   const licensedCount = tenantIds.filter((id) => tenantPlan(tenantLicense(status, id))).length
-  const scheduledCount = tenantIds.filter((id) => schedules.some((s) => s.tenantId === id && s.enabled)).length
+  const scheduledCount = schedulesError ? null : tenantIds.filter((id) => schedules.some((s) => s.tenantId === id && s.enabled)).length
 
   return (
     <div className="mx-auto max-w-[1600px] space-y-6 p-6 lg:p-8">
@@ -91,16 +92,15 @@ export default function OverviewPage() {
             )}
           </div>
         </Tile>
-        {[
+        {([
           ["Signed in", signedInCount],
           ["Licensed", licensedCount],
           ["Automatic backups on", scheduledCount],
-        ].map(([label, count]) => (
+        ] as Array<[string, number | null]>).map(([label, count]) => (
           <Tile key={label} className="justify-between">
             <TileLabel>{label}</TileLabel>
             <p className="mt-3 text-4xl font-light text-gray-900 tabular-nums">
-              {count}
-              <span className="text-lg text-gray-400"> of {tenants.length} connected</span>
+              {count === null ? "Unknown" : (<>{count}<span className="text-lg text-gray-400"> of {tenants.length} connected</span></>)}
             </p>
           </Tile>
         ))}

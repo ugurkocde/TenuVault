@@ -13,8 +13,8 @@ vi.mock("react", async (original) => ({
 vi.mock("@desktop/lib/bridge", () => ({ bridge: {} }))
 vi.mock("@desktop/lib/schedules", async (original) => ({
   ...await original<typeof import("../src/renderer/lib/schedules")>(),
-  useSchedules: () => ({ schedules: state.schedules, error: null, reload: () => undefined }),
-  useRefusals: () => ({ refusals: [], error: null, reload: () => undefined }),
+  useSchedules: () => ({ schedules: state.schedules, error: null, loading: false, reload: () => undefined }),
+  useRefusals: () => ({ refusals: [], error: null, loading: false, reload: () => undefined }),
 }))
 vi.mock("@desktop/lib/license", () => ({ useLicense: () => ({ status: null }), tenantLicense: () => null, tenantPlan: () => null }))
 

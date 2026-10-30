@@ -27,7 +27,7 @@ import { accumulateCisFindings, CIS_OPEN_PARAMS, cisOpenRequest, cisRunDisplayPh
 import { refreshInternalCisBenchmarks, useInternalCisBenchmarks, useInternalCisBenchmarksAnswer } from "../lib/internal-cis"
 import { bridge } from "../lib/bridge"
 import { startBackgroundTask, useBackgroundTask } from "../lib/background-tasks"
-import { refreshCisJobs } from "../lib/cis-jobs"
+import { noteCisJobStarted, refreshCisJobs } from "../lib/cis-jobs"
 import { cachedCisCatalog, rememberCisCatalog } from "../lib/cis-catalog-cache"
 import { parsePolicies, remediationPayload, rootMatches, type Assessment, type BaselinePolicy, type Finding, type Observation } from "../../shared/frameworks/policies"
 import { summarizeSetting } from "../../shared/frameworks/setting-summary"
@@ -682,7 +682,9 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     setCisRun({ jobId: "", phase: "connecting", status: "running", state: "running", tenantId, frameworkId: framework.id, read: 0, total: 0, currentPolicy: "", comparedPolicies: 0, packPolicies: capturedPack.policies.length, currentPackPolicy: "", findings: [], nextSince: 0, error: null, assessment: null })
     try {
       const jobId = await jobFor()
-      // The activity panel mirrors this run from assess-jobs, so it stays visible on other pages.
+      // Record the run in the shared store first, so its finish is announced (and scores are
+      // invalidated) even if the refresh below fails. The refresh then fills in live progress.
+      noteCisJobStarted({ jobId, tenantId, frameworkId: framework.id, reference: capturedPack.reference, phase: "connecting", status: "running", read: 0, total: 0, currentPolicy: "", comparedPolicies: 0, packPolicies: capturedPack.policies.length, currentPackPolicy: "", findingsCount: 0, error: null, runId: null, startedAt: new Date().toISOString(), finishedAt: null })
       void refreshCisJobs()
       if (!current()) return
       let accumulation = emptyCisRunAccumulation()

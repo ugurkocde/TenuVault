@@ -13,7 +13,7 @@ const state = vi.hoisted(() => ({
   updateStatus: vi.fn(),
   check: vi.fn(),
   scope: vi.fn(),
-  schedulesResult: { schedules: [] as unknown[], error: null as string | null, reload: vi.fn() },
+  schedulesResult: { schedules: [] as unknown[], error: null as string | null, loading: false, reload: vi.fn() },
 }))
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
@@ -33,7 +33,7 @@ vi.mock("../../src/renderer/lib/license", async (original) => ({
 vi.mock("../../src/renderer/lib/schedules", async (original) => ({
   ...(await original<typeof import("../../src/renderer/lib/schedules")>()),
   useSchedules: () => state.schedulesResult,
-  useRefusals: () => ({ refusals: [], error: null, reload: () => undefined }),
+  useRefusals: () => ({ refusals: [], error: null, loading: false, reload: () => undefined }),
 }))
 vi.mock("../../src/renderer/lib/appearance", () => ({ getAppearance: () => "light", setAppearance: () => undefined }))
 vi.mock("~/contexts/TenantContext", () => ({ useTenants: () => [], useTenantOperations: () => ({}) }))
@@ -49,7 +49,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount())
   document.body.innerHTML = ""
   for (const [name, mock] of Object.entries(state)) if (name !== "schedulesResult") (mock as ReturnType<typeof vi.fn>).mockReset()
-  state.schedulesResult = { schedules: [], error: null, reload: vi.fn() }
+  state.schedulesResult = { schedules: [], error: null, loading: false, reload: vi.fn() }
 })
 
 async function render(element: ReturnType<typeof createElement>): Promise<HTMLDivElement> {
@@ -99,7 +99,7 @@ describe("Settings sections on IPC errors", () => {
   })
 
   it("shows a schedule load failure on the panel and blocks saving over the saved schedule", async () => {
-    state.schedulesResult = { schedules: [], error: "schedule IPC down", reload: vi.fn() }
+    state.schedulesResult = { schedules: [], error: "schedule IPC down", loading: false, reload: vi.fn() }
     state.getPrefs.mockResolvedValue(prefs)
     state.scope.mockImplementation(() => new Promise(() => undefined))
     const container = await render(createElement(BackupSchedulePanel, { tenantId: "tenant", tenantName: "Contoso" }))
