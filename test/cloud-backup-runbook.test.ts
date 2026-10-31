@@ -113,9 +113,14 @@ describe("New-TenuVaultCloudBackup.ps1", () => {
     expect(setup).toContain("$definition.Permissions.Add($permission)")
     expect(setup).toContain("foreach ($permission in $role.Permissions)")
     expect(setup).not.toMatch(/\$extra = @\(\$role\.DataActions/)
-    expect(setup).toContain("New-AzRoleAssignment -ObjectId $ObjectId -RoleDefinitionId $definition.Id")
-    // Storage may live outside the Automation resource group; the role must be assignable there.
-    expect(setup).toContain("$groupScope = ($storageAccount.Id -split '/providers/')[0]")
+    expect(setup).toContain("New-AzRoleAssignment -ObjectId $ObjectId -RoleDefinitionId $RoleDefinitionId")
+    expect(setup).toContain("-RoleDefinitionId ([string]$role.Id)")
+    // Storage may live outside the Automation resource group; check role access there before writes.
+    expect(setup).toContain("$storageGroupScope = ($storageAccount.Id -split '/providers/')[0]")
+    expect(setup).toContain("Assert-TenuVaultAuthorizationActions -Scope $storageGroupScope")
+    expect(setup.indexOf("Assert-TenuVaultAuthorizationActions -Scope $storageGroupScope")).toBeLessThan(setup.indexOf("New-AzResourceGroup"))
+    expect(setup).toContain("Microsoft.Authorization/roleAssignments/write")
+    expect(setup).toContain("Microsoft.Authorization/roleDefinitions/write")
     expect(setup).not.toContain("blobs/delete")
     expect(setup).toContain("containers/$backupContainer")
     // The runbook needs the .NET HKDF and AesGcm types, which the default 5.1 runtime lacks.
