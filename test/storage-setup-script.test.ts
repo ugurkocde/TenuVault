@@ -54,6 +54,14 @@ describe("New-TenuVaultStorage.ps1", () => {
     expect(storageScript).toContain("open to all networks")
   })
 
+  it("uses the Permissions role model Az.Resources 10 exposes", () => {
+    expect(storageScript).toContain("PSObject.Properties.Name -contains 'Permissions'")
+    expect(storageScript).toContain("$definition.Permissions.Add($permission)")
+    expect(storageScript).toContain("foreach ($permission in $role.Permissions)")
+    expect(storageScript).toContain("New-AzRoleAssignment -ObjectId $reader.Id -RoleDefinitionId $role.Id")
+    expect(storageScript).not.toMatch(/\$extra = @\(\$role\.DataActions/)
+  })
+
   it("derives the default account name with APIs that exist in Windows PowerShell 5.1", () => {
     expect(storageScript).not.toContain("HashData")
     expect(storageScript).not.toContain("ToHexString")

@@ -42,9 +42,13 @@
 
     Needs Az.Accounts, Az.Resources, Az.Automation, Az.Storage and Az.KeyVault, plus an account
     that can create Automation accounts, Key Vaults and role assignments (Owner, or Contributor
-    plus User Access Administrator, on the resource group) and that holds a blob data role such
-    as Storage Blob Data Contributor on the storage account, because the container check and
-    creation below use the signed-in account (management roles alone include no data access).
+    plus User Access Administrator, on the Automation resource group and, when it differs, on
+    the storage account's resource group). The storage resource group access must include
+    Microsoft.Authorization/roleAssignments/write and, when the writer role is created or its
+    assignable scopes are updated, Microsoft.Authorization/roleDefinitions/write. The account
+    must also hold a blob data role such as Storage Blob Data Contributor on the storage account,
+    because the container check and creation below use the signed-in account (management roles
+    alone include no data access).
 
 .PARAMETER TenantId
     Entra tenant id (GUID) to back up. The storage account and Automation account do not have to
@@ -211,6 +215,7 @@ function Add-TenuVaultRoleAssignment {
     param(
         [Parameter(Mandatory)][string]$ObjectId,
         [Parameter(Mandatory)][string]$RoleName,
+        [string]$RoleDefinitionId,
         [Parameter(Mandatory)][string]$Scope,
         [Parameter(Mandatory)][string]$Target
     )
@@ -220,8 +225,64 @@ function Add-TenuVaultRoleAssignment {
         Write-Host "$Target already has '$RoleName'."
     } elseif ($PSCmdlet.ShouldProcess($Scope, "Assign '$RoleName' to $Target")) {
         Write-Host "Assigning '$RoleName' to $Target..."
-        New-AzRoleAssignment -ObjectId $ObjectId -RoleDefinitionName $RoleName -Scope $Scope | Out-Null
+        # Custom role names do not reliably resolve in New-AzRoleAssignment; use a known id
+        # directly so a just-created role does not depend on a second name lookup.
+        if ($RoleDefinitionId) {
+            New-AzRoleAssignment -ObjectId $ObjectId -RoleDefinitionId $RoleDefinitionId -Scope $Scope | Out-Null
+        } else {
+            $definition = Get-AzRoleDefinition -Name $RoleName -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($definition) {
+                New-AzRoleAssignment -ObjectId $ObjectId -RoleDefinitionId $definition.Id -Scope $Scope | Out-Null
+            } else {
+                New-AzRoleAssignment -ObjectId $ObjectId -RoleDefinitionName $RoleName -Scope $Scope | Out-Null
+            }
+        }
     }
+}
+
+function Assert-TenuVaultAuthorizationActions {
+    param(
+        [Parameter(Mandatory)][string]$Scope,
+        [Parameter(Mandatory)][string[]]$RequiredActions
+    )
+    if (-not (Get-Command Invoke-AzRestMethod -ErrorAction SilentlyContinue)) {
+        throw "Invoke-AzRestMethod is not available, so setup cannot verify role-management access in the storage resource group. Install or update Az.Accounts. Nothing was written."
+    }
+    $response = Invoke-AzRestMethod -Method Get -Path "$Scope/providers/Microsoft.Authorization/permissions?api-version=2015-07-01"
+    $permissions = @(($response.Content | ConvertFrom-Json).value)
+    $missing = @()
+    foreach ($requiredAction in $RequiredActions) {
+        $allowed = $false
+        foreach ($permission in $permissions) {
+            $granted = @($permission.actions | Where-Object { $requiredAction -like $_ }).Count -gt 0
+            $denied = @($permission.notActions | Where-Object { $requiredAction -like $_ }).Count -gt 0
+            if ($granted -and -not $denied) { $allowed = $true; break }
+        }
+        if (-not $allowed) { $missing += $requiredAction }
+    }
+    if ($missing) {
+        throw "The signed-in account cannot manage the TenuVault Backup Writer role in the storage resource group ($Scope). Missing: $($missing -join ', '). Use Owner, or Contributor plus User Access Administrator, on that resource group as well as on the Automation resource group. Nothing was written."
+    }
+}
+
+# Check storage role-management access before the first Azure resource write. The role
+# definition write is only needed when the shared writer role does not yet allow this scope.
+$storageAccount = $null
+if (-not $Remove) {
+    $storageAccount = Get-AzStorageAccount -ResourceGroupName $ResourceGroupName -Name $StorageAccountName -ErrorAction SilentlyContinue
+    if (-not $storageAccount) {
+        $storageAccount = Get-AzStorageAccount -ErrorAction SilentlyContinue | Where-Object { $_.StorageAccountName -eq $StorageAccountName } | Select-Object -First 1
+    }
+    if (-not $storageAccount) {
+        throw "Storage account '$StorageAccountName' was not found in this subscription. Create it first, for example with New-TenuVaultStorage.ps1. Nothing was written."
+    }
+    $storageGroupScope = ($storageAccount.Id -split '/providers/')[0]
+    $requiredStorageActions = @("Microsoft.Authorization/roleAssignments/write")
+    $existingWriterRole = Get-AzRoleDefinition -Name $writerRoleName -ErrorAction SilentlyContinue
+    if (-not $existingWriterRole -or $existingWriterRole.AssignableScopes -notcontains $storageGroupScope) {
+        $requiredStorageActions += "Microsoft.Authorization/roleDefinitions/write"
+    }
+    Assert-TenuVaultAuthorizationActions -Scope $storageGroupScope -RequiredActions $requiredStorageActions
 }
 
 # ---------------------------------------------------------------------------
@@ -328,14 +389,6 @@ if ($principalId) { Write-Host "Managed identity object (principal) id: $princip
 # Storage: container and the container scoped writer role (no delete)
 # ---------------------------------------------------------------------------
 
-$storageAccount = Get-AzStorageAccount -ResourceGroupName $ResourceGroupName -Name $StorageAccountName -ErrorAction SilentlyContinue
-if (-not $storageAccount) {
-    $storageAccount = Get-AzStorageAccount -ErrorAction SilentlyContinue | Where-Object { $_.StorageAccountName -eq $StorageAccountName } | Select-Object -First 1
-}
-if (-not $storageAccount) {
-    throw "Storage account '$StorageAccountName' was not found in this subscription. Create it first, for example with New-TenuVaultStorage.ps1."
-}
-
 $storageContext = New-AzStorageContext -StorageAccountName $StorageAccountName -UseConnectedAccount
 $container = Get-AzStorageContainer -Name $backupContainer -Context $storageContext -ErrorAction SilentlyContinue
 if (-not $container) {
@@ -346,7 +399,9 @@ if (-not $container) {
 }
 
 if ($principalId) {
-    $groupScope = $resourceGroup.ResourceId
+    # The container assignment lives under the storage account, which may be in another
+    # resource group than the Automation account. The role must be assignable there.
+    $groupScope = $storageGroupScope
     $dataActions = @(
         "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
         "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
@@ -360,21 +415,46 @@ if ($principalId) {
             $definition.Name = $writerRoleName
             $definition.Description = "TenuVault Backup Writer: writes backups. Cannot delete blobs, blob versions or containers."
             $definition.IsCustom = $true
-            $definition.Actions = @()
-            $definition.DataActions = $dataActions
-            $definition.AssignableScopes = @($groupScope)
+            # Az.Resources 10 replaced the flattened Actions/DataActions properties with Permissions.
+            if ($definition.PSObject.Properties.Name -contains 'Permissions') {
+                $permission = [Microsoft.Azure.Commands.Resources.Models.Authorization.PSPermission]::new()
+                $permission.Actions = [System.Collections.Generic.List[string]]::new()
+                $permission.NotActions = [System.Collections.Generic.List[string]]::new()
+                $permission.DataActions = [System.Collections.Generic.List[string]]::new()
+                foreach ($action in $dataActions) { $permission.DataActions.Add($action) }
+                $permission.NotDataActions = [System.Collections.Generic.List[string]]::new()
+                $definition.Permissions = [System.Collections.Generic.List[Microsoft.Azure.Commands.Resources.Models.Authorization.PSPermission]]::new()
+                $definition.Permissions.Add($permission)
+            } else {
+                $definition.Actions = @()
+                $definition.DataActions = $dataActions
+            }
+            $definition.AssignableScopes = [System.Collections.Generic.List[string]]::new()
+            $definition.AssignableScopes.Add($groupScope)
             $role = New-AzRoleDefinition -Role $definition
         }
     } else {
-        $extra = @($role.DataActions | Where-Object { $dataActions -notcontains $_ }) + @($role.Actions)
+        $existingActions = @()
+        $existingDataActions = @()
+        if ($role.PSObject.Properties.Name -contains 'Permissions' -and $role.Permissions) {
+            foreach ($permission in $role.Permissions) {
+                $existingActions += @($permission.Actions)
+                $existingDataActions += @($permission.DataActions)
+            }
+        } else {
+            $existingActions = @($role.Actions)
+            $existingDataActions = @($role.DataActions)
+        }
+        $extra = @($existingDataActions | Where-Object { $dataActions -notcontains $_ }) + @($existingActions)
         if ($extra) { throw "The existing role '$writerRoleName' allows more than writing backups ($($extra -join ', ')). Remove those permissions or delete the role, then run the script again." }
-        if ($role.AssignableScopes -notcontains $groupScope -and $PSCmdlet.ShouldProcess($writerRoleName, "Allow assignments in $ResourceGroupName")) {
+        if ($role.AssignableScopes -notcontains $groupScope -and $PSCmdlet.ShouldProcess($writerRoleName, "Allow assignments in $groupScope")) {
             $role.AssignableScopes.Add($groupScope)
             $role = Set-AzRoleDefinition -Role $role
         }
     }
     if ($role) {
         Add-TenuVaultRoleAssignment -ObjectId $principalId -RoleName $writerRoleName `
+            -RoleDefinitionId ([string]$role.Id) `
             -Scope "$($storageAccount.Id)/blobServices/default/containers/$backupContainer" -Target "the cloud backup identity"
     }
 }
@@ -393,8 +473,15 @@ $vault = Get-AzKeyVault -VaultName $KeyVaultName -ResourceGroupName $ResourceGro
 if (-not $vault) {
     Write-Host "Creating Key Vault '$KeyVaultName' (RBAC authorization, soft delete)..."
     if ($PSCmdlet.ShouldProcess($KeyVaultName, "Create Key Vault")) {
-        $vault = New-AzKeyVault -VaultName $KeyVaultName -ResourceGroupName $ResourceGroupName `
-            -Location $Location -EnableRbacAuthorization -SoftDeleteRetentionInDays 30
+        # Newer Az.KeyVault enables RBAC by default and exposes only -DisableRbacAuthorization.
+        $vaultParams = @{
+            VaultName = $KeyVaultName; ResourceGroupName = $ResourceGroupName
+            Location = $Location; SoftDeleteRetentionInDays = 30
+        }
+        if ((Get-Command New-AzKeyVault).Parameters.ContainsKey('EnableRbacAuthorization')) {
+            $vaultParams.EnableRbacAuthorization = $true
+        }
+        $vault = New-AzKeyVault @vaultParams
     }
 }
 if ($vault) {

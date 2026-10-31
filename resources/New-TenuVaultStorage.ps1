@@ -283,13 +283,37 @@ if ($BackupReaderAppId) {
             $definition.Name = $roleName
             $definition.Description = "TenuVault Backup Reader: writes scheduled backups. Cannot delete blobs, blob versions or containers."
             $definition.IsCustom = $true
-            $definition.Actions = @()
-            $definition.DataActions = $dataActions
-            $definition.AssignableScopes = @($groupScope)
+            # Az.Resources 10 replaced the flattened Actions/DataActions properties with Permissions.
+            if ($definition.PSObject.Properties.Name -contains 'Permissions') {
+                $permission = [Microsoft.Azure.Commands.Resources.Models.Authorization.PSPermission]::new()
+                $permission.Actions = [System.Collections.Generic.List[string]]::new()
+                $permission.NotActions = [System.Collections.Generic.List[string]]::new()
+                $permission.DataActions = [System.Collections.Generic.List[string]]::new()
+                foreach ($action in $dataActions) { $permission.DataActions.Add($action) }
+                $permission.NotDataActions = [System.Collections.Generic.List[string]]::new()
+                $definition.Permissions = [System.Collections.Generic.List[Microsoft.Azure.Commands.Resources.Models.Authorization.PSPermission]]::new()
+                $definition.Permissions.Add($permission)
+            } else {
+                $definition.Actions = @()
+                $definition.DataActions = $dataActions
+            }
+            $definition.AssignableScopes = [System.Collections.Generic.List[string]]::new()
+            $definition.AssignableScopes.Add($groupScope)
             $role = New-AzRoleDefinition -Role $definition
         }
     } else {
-        $extra = @($role.DataActions | Where-Object { $dataActions -notcontains $_ }) + @($role.Actions)
+        $existingActions = @()
+        $existingDataActions = @()
+        if ($role.PSObject.Properties.Name -contains 'Permissions' -and $role.Permissions) {
+            foreach ($permission in $role.Permissions) {
+                $existingActions += @($permission.Actions)
+                $existingDataActions += @($permission.DataActions)
+            }
+        } else {
+            $existingActions = @($role.Actions)
+            $existingDataActions = @($role.DataActions)
+        }
+        $extra = @($existingDataActions | Where-Object { $dataActions -notcontains $_ }) + @($existingActions)
         if ($extra) { throw "The existing role '$roleName' allows more than writing backups ($($extra -join ', ')). Remove those permissions or delete the role, then run the script again." }
         if ($role.AssignableScopes -notcontains $groupScope -and $PSCmdlet.ShouldProcess($roleName, "Allow assignments in $ResourceGroupName")) {
             $role.AssignableScopes.Add($groupScope)
@@ -302,7 +326,7 @@ if ($BackupReaderAppId) {
         $existing = Get-AzRoleAssignment -ObjectId $reader.Id -RoleDefinitionName $roleName -Scope $containerScope -ErrorAction SilentlyContinue | Where-Object { $_.Scope -eq $containerScope }
         if (-not $existing -and $PSCmdlet.ShouldProcess($containerScope, "Assign '$roleName' to the Backup Reader")) {
             Write-Host "Assigning '$roleName' to the Backup Reader on the container..."
-            New-AzRoleAssignment -ObjectId $reader.Id -RoleDefinitionName $roleName -Scope $containerScope | Out-Null
+            New-AzRoleAssignment -ObjectId $reader.Id -RoleDefinitionId $role.Id -Scope $containerScope | Out-Null
         }
     }
     # Broader roles would let a stolen certificate delete backups; they are reported, not removed.
