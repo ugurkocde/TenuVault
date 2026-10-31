@@ -114,6 +114,7 @@ To stop cloud backups for a tenant, run the setup script with `-Remove`: it dele
 ## Related pages
 
 * [Schedule backups](/backups/schedules/)
+* [Intune backup without a server](https://www.tenuvault.com/guides/intune-backup-without-a-server)
 * [Backup storage and retention](/backups/storage/)
 * [Backup Reader for scheduled backups](/backups/backup-reader/)
 * [Conditional Access and TenuVault](/security/conditional-access/)

@@ -31,6 +31,11 @@ This is the anti-cannibalization contract. www owns commercial intent, docs own 
 | Intune disaster recovery | https://www.tenuvault.com/intune-disaster-recovery | docs /restore/disaster-recovery/; www /guides/intune-restore-drill |
 | Does Intune have backup | https://www.tenuvault.com/guides/does-intune-have-backup | docs /backups/ FAQ |
 | Intune backup github / open source | https://github.com/ugurkocde/TenuVault | README pillar links |
+| Find deprecated Intune settings | https://www.tenuvault.com/guides/find-deprecated-intune-settings | docs /governance/ (deprecated settings), README feature list |
+| Intune backup without a server | https://www.tenuvault.com/guides/intune-backup-without-a-server | docs /backups/cloud/, /security/data-flows/ |
+| Compare Intune with security frameworks | https://www.tenuvault.com/guides/compare-intune-with-security-frameworks | docs /baselines/frameworks/, README feature list |
+
+Rows added on 2026-10-31 after an AI answer audit (three assistants, twelve admin questions, with and without web search). None of the assistants knew TenuVault from training data. With web search, the deprecated settings question returned no tool at all, and the framework and native backup questions rarely surfaced TenuVault, so these phrases got dedicated guides. Public pages name no competing products.
 
 Search intent warning: "Intune backup" also matches Windows Backup for Organizations (end-user settings backup) in Microsoft documentation. The existing www guide /guides/intune-backup-vs-windows-backup-for-organizations is the right disambiguation asset. Keep it linked from the backup pillar.
 

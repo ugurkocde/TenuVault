@@ -53,7 +53,10 @@ See the [installation guide](https://docs.tenuvault.com/getting-started/install/
 - **OpenIntuneBaseline.** Deploy, compare and validate OpenIntuneBaseline policies from the latest
   upstream version, with a backup first and undo per run. New policies are created unassigned.
 - **Frameworks.** Compare your Intune configuration with framework controls such as NIST, ISO 27001
-  and UK NCSC Device Security Guidance.
+  and UK NCSC Device Security Guidance. See how to [compare Intune with security frameworks](https://www.tenuvault.com/guides/compare-intune-with-security-frameworks).
+- **Deprecated settings.** Find Settings Catalog policies that still use settings Microsoft marks
+  as deprecated or obsolete, in the hygiene scan (Pro and MSP), and get a warning in the restore
+  wizard before restoring one. See how to [find deprecated Intune settings](https://www.tenuvault.com/guides/find-deprecated-intune-settings).
 
 ## How it keeps your data yours
 
@@ -193,11 +196,13 @@ Electron with a React renderer (Vite) and a Node main process.
   `backup-<timestamp>/<type>/<name>.json` plus `metadata.json`. Restore uses the same registry to
   create copies or replace objects in place. App installer files, Apple tokens and certificates
   cannot be exported by Microsoft Graph; those items are kept for reference.
-- **Schedules** (`src/main/backup/scheduler.ts`): daily or weekly per tenant, run by the app while
-  it is open or in the system tray; slots missed while the computer was off run once at the next
-  start. Optional start at login. After each backup, backups older than the retention period
-  (default 30 days) are deleted, always keeping the newest. On Pro and MSP the schedule can
-  instead run in Azure: `resources/runbooks/Invoke-TenuVaultBackup.ps1` is an Automation runbook
+- **Schedules** (`src/main/backup/scheduler.ts`): daily or weekly per tenant, run either on the
+  admin's computer or, on Pro and MSP, in Azure with no computer on. On the computer the app runs
+  them while it is open or in the system tray; slots missed while the computer was off or
+  TenuVault was not running run once at the next start. Optional start at login. After each
+  backup, backups older than the retention period (default 30 days) are deleted, always keeping
+  the newest. In Azure,
+  `resources/runbooks/Invoke-TenuVaultBackup.ps1` is an Automation runbook
   with a managed identity that writes the same sealed format (setup:
   `resources/New-TenuVaultCloudBackup.ps1` or `resources/cloud-backup/azuredeploy.json`); the app
   only records the setup and reads the runbook's status blob.

@@ -8,7 +8,7 @@ description: Compare Intune configuration evidence with native framework mapping
 * **Native comparisons** check your tenant against ten built-in technical mappings: NIST CSF 2.0, NIST SP 800-53 Rev. 5, NIST SP 800-171 Rev. 3 and Rev. 2, ASD Essential Eight, Cyber Essentials, ISO/IEC 27001:2022, SOC 2, BSI IT-Grundschutz and UK MOD Def Stan 05-138. They are read-only: nothing is imported and nothing is created in your tenant.
 * **Policy-pack comparisons** check your Settings Catalog policies against a versioned pack: the UK NCSC Device Security Guidance Windows pack, or a pack you import for Microsoft Security Baselines, DISA STIG or Custom Baselines. Except for the NCSC pack, which is comparison only, this workflow can also create the missing settings as new, unassigned policies.
 
-The results are configuration findings, not an audit, a certification, an achieved maturity level or proof of compliance with the full framework.
+The results are configuration findings, not an audit, a certification, an achieved maturity level or proof of compliance with the full framework. For how this differs from deploying Intune security baselines, see how to [compare Intune with security frameworks](https://www.tenuvault.com/guides/compare-intune-with-security-frameworks).
 
 OpenIntuneBaseline is not part of the framework catalog. It has its own **OpenIntuneBaseline** section in the sidebar, which deploys, compares and validates OIB policies. See [OpenIntuneBaseline](/baselines/quick-start/).
 
