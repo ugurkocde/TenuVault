@@ -1,11 +1,11 @@
 import type { KitLevel } from "./cis-kit"
 
 /**
- * A locally imported recommendation list for one benchmark. The file is
- * supplied by the user on their own machine and is never bundled. Its shape:
- * a JSON object with benchmark, version and items. Each item has identifier,
- * level (1 or 2) and automated, plus optional title, description, impact,
- * audit and remediation text fields carried only when the user file has them.
+ * A recommendation list for one benchmark: imported locally by internal
+ * certification tooling, or downloaded with a pack from the delivery service
+ * for one Level. It is never bundled. Its shape: a JSON object with benchmark,
+ * version and items. Each item has identifier, level (1 or 2) and automated,
+ * plus optional title, description, impact, audit and remediation text fields.
  */
 
 export const MANUAL_RECOMMENDATIONS_FALLBACK = "Not all recommendations from the CIS Benchmarks are included in this tool. Please refer to the CIS website to access the free CIS Benchmarks PDFs for manual assessment instructions."
@@ -29,6 +29,13 @@ export interface RecommendationList {
 }
 
 const TEXT_FIELDS = ["title", "description", "impact", "audit", "remediation"] as const
+export const MAX_LIST_ITEMS = 5000
+export const MAX_LIST_TITLE_LENGTH = 1000
+export const MAX_LIST_TEXT_LENGTH = 50_000
+
+/** Limits a downloaded list must meet. Stored lists are read without them, so no saved workspace becomes unreadable. */
+export interface RecommendationListLimits { maxItems: number; maxTitleLength: number; maxTextLength: number }
+export const DELIVERED_LIST_LIMITS: RecommendationListLimits = { maxItems: MAX_LIST_ITEMS, maxTitleLength: MAX_LIST_TITLE_LENGTH, maxTextLength: MAX_LIST_TEXT_LENGTH }
 const ITEM_FIELDS = new Set(["identifier", "level", "automated", ...TEXT_FIELDS])
 const LIST_FIELDS = new Set(["benchmark", "version", "items"])
 
@@ -37,7 +44,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Validates one decoded recommendation list value, naming the first problem. */
-export function validateRecommendationList(value: unknown): RecommendationList {
+export function validateRecommendationList(value: unknown, limits?: RecommendationListLimits): RecommendationList {
   if (!isRecord(value)) throw new Error("The recommendation list must be a JSON object with benchmark, version and items.")
   for (const key of Object.keys(value)) {
     if (!LIST_FIELDS.has(key)) throw new Error(`The recommendation list has an unknown field: ${key}. Expected benchmark, version and items.`)
@@ -51,6 +58,7 @@ export function validateRecommendationList(value: unknown): RecommendationList {
   }
   if (!Array.isArray(value.items)) throw new Error("The recommendation list items must be an array.")
   if (!value.items.length) throw new Error("The recommendation list items must contain at least one item.")
+  if (limits && value.items.length > limits.maxItems) throw new Error(`The recommendation list items must contain at most ${limits.maxItems} items.`)
   const seen = new Set<string>()
   const items: RecommendationListItem[] = value.items.map((entry, index) => {
     const label = `Recommendation list item ${index + 1}`
@@ -68,6 +76,8 @@ export function validateRecommendationList(value: unknown): RecommendationList {
       const fieldValue = entry[field]
       if (fieldValue === undefined) continue
       if (typeof fieldValue !== "string") throw new Error(`${label}: ${field} must be a string when present.`)
+      const limit = limits ? (field === "title" ? limits.maxTitleLength : limits.maxTextLength) : Infinity
+      if (fieldValue.length > limit) throw new Error(`${label}: ${field} must be at most ${limit} characters.`)
       if (fieldValue.trim()) item[field] = fieldValue.trim()
     }
     const key = `${item.level}:${item.identifier}`
@@ -121,7 +131,10 @@ export function serializeRecommendationList(list: RecommendationList): string {
   return `${JSON.stringify(validateRecommendationList(list), null, 2)}\n`
 }
 
-/** One manual item as shown in the readiness Manual section. */
+/**
+ * One item of the readiness Manual section. Manual: CIS classifies it as a manual check.
+ * Not assessed: CIS classifies it as automated, but the pack does not cover it.
+ */
 export interface ManualItemView {
   identifier: string
   level: KitLevel
@@ -133,10 +146,10 @@ export interface ManualItemView {
   hasText: boolean
   fallback: string
   fallbackUrl: string
-  state: "Manual"
+  state: "Manual" | "Not assessed"
 }
 
-function toManualView(item: RecommendationListItem): ManualItemView {
+function toManualView(item: RecommendationListItem, state: ManualItemView["state"]): ManualItemView {
   const hasText = Boolean(item.description?.trim() || item.impact?.trim() || item.audit?.trim() || item.remediation?.trim())
   return {
     identifier: item.identifier, level: item.level,
@@ -145,23 +158,24 @@ function toManualView(item: RecommendationListItem): ManualItemView {
     ...(item.impact ? { impact: item.impact } : {}),
     ...(item.audit ? { audit: item.audit } : {}),
     ...(item.remediation ? { remediation: item.remediation } : {}),
-    hasText, fallback: MANUAL_RECOMMENDATIONS_FALLBACK, fallbackUrl: MANUAL_RECOMMENDATIONS_URL, state: "Manual",
+    hasText, fallback: MANUAL_RECOMMENDATIONS_FALLBACK, fallbackUrl: MANUAL_RECOMMENDATIONS_URL, state,
   }
 }
 
 /**
- * Manual items for one Level: imported items marked automated false, plus
- * denominator identifiers that were not assessed, deduplicated by identifier.
- * Imported items win because they may carry a title and text fields.
+ * Items for one Level that TenuVault does not check: list items marked automated false and
+ * denominator identifiers marked manual (state Manual), and automated identifiers the pack did
+ * not assess (state Not assessed). Deduplicated by identifier, Manual first, and each carries the
+ * title and text of its list item when the list has one.
  */
-export function manualItemsForLevel(list: RecommendationList | undefined, level: KitLevel, notAssessed: string[] = []): ManualItemView[] {
+export function manualItemsForLevel(list: RecommendationList | undefined, level: KitLevel, notAssessed: string[] = [], manual: string[] = []): ManualItemView[] {
+  const fromList = new Map((list?.items ?? []).filter(item => item.level === level).map(item => [item.identifier, item] as const))
   const byId = new Map<string, ManualItemView>()
-  for (const identifier of notAssessed) {
-    if (!byId.has(identifier)) byId.set(identifier, toManualView({ identifier, level, automated: false }))
+  const add = (identifier: string, state: ManualItemView["state"]) => {
+    if (!byId.has(identifier)) byId.set(identifier, toManualView({ ...(fromList.get(identifier) ?? { level, automated: state !== "Manual" }), identifier }, state))
   }
-  for (const item of list?.items ?? []) {
-    if (item.level !== level || item.automated) continue
-    byId.set(item.identifier, toManualView(item))
-  }
+  for (const item of fromList.values()) if (!item.automated) add(item.identifier, "Manual")
+  for (const identifier of manual) add(identifier, "Manual")
+  for (const identifier of notAssessed) add(identifier, "Not assessed")
   return [...byId.values()].sort((a, b) => a.identifier.localeCompare(b.identifier, undefined, { numeric: true }))
 }

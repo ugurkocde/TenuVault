@@ -1,5 +1,5 @@
 import { assignmentEvidence, type AssignmentEvidence } from "../../shared/frameworks/evidence"
-import { loadWorkspace, saveWorkspace, deleteWorkspace, pruneHistory, recordAssessment, recordCreation, workspaceCapacity, workspaceView, type FrameworkWorkspace } from "./workspaces"
+import { loadWorkspace, saveWorkspace, deleteWorkspace, keepReadLists, pruneHistory, recordAssessment, recordCreation, workspaceCapacity, workspaceView, type FrameworkWorkspace } from "./workspaces"
 import { HISTORY_FULL_MESSAGE, KEEP_NEWEST_ASSESSMENTS, MAX_WORKSPACE_HISTORY } from "../../shared/frameworks/workspace-history"
 import { tenantLabel, workspaceExportCSV, workspaceExportJSON, workspaceHistoryJSON } from "../../shared/compliance/export"
 import { createHash, randomUUID } from "node:crypto"
@@ -15,7 +15,7 @@ import { readinessFor } from "../../shared/frameworks/cis-readiness"
 import { attachRecommendations } from "../../shared/frameworks/cis-recommendations"
 import { exceptionKey, isActive, isDateOnly, localDate, MAX_EXCEPTIONS, validateNewException, type CisException } from "../../shared/frameworks/cis-exceptions"
 import { tenantWriteLabel, withTenantWrite } from "../features/write-lock"
-import { CisContentError, fetchCisCatalog, fetchCisPack } from "./cis-content"
+import { CisContentError, fetchCisCatalog, fetchCisList, fetchCisPack } from "./cis-content"
 import { BENCHMARK_ID_PATTERN, MAX_CIS_BENCHMARK_ID_LENGTH, VERSION_PATTERN, type CisLevel } from "../../shared/frameworks/cis-content"
 import { retryableStatus, retryDelay, sleep } from "../graph-retry"
 import { cisExportFileName, knownBenchmarkName } from "../../shared/frameworks/cis-display"
@@ -23,6 +23,7 @@ import { kitLevelForPolicy } from "../../shared/frameworks/cis-flow"
 import { MAX_DEFINITIONS } from "../../shared/intune/drift-format"
 import { readSettingNames } from "../../portal/lib/drift/setting-names"
 import { graphCaller } from "../../portal/lib/policies/graph-restore"
+
 
 const GRAPH = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies"
 interface Run { assessment: Assessment; policies: BaselinePolicy[]; fingerprint: string; expires: number; consumed: boolean }
@@ -637,6 +638,8 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       // A pack that could not be saved is not fetched: an unreadable workspace fails before any download.
       loadWorkspace(body.tenantId, body.frameworkId)
       const pack = await fetchCisPack({ benchmark, version, level }, cisEntitlementToken(body.tenantId))
+      // The list is optional: without one the readiness view shows the CIS notice only, as before.
+      const list = await fetchCisList({ benchmark, version, level }, cisEntitlementToken(body.tenantId))
       requireEnabledFramework(body.frameworkId)
       let policies: BaselinePolicy[]
       try { policies = parsePolicies(pack.policies); if (pack.recommendations) policies = attachRecommendations(policies, pack.recommendations) }
@@ -648,6 +651,14 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       const workspace = loadWorkspace(body.tenantId, body.frameworkId)
       workspace.policies = policies
       workspace.reference = reference
+      // One delivered list per benchmark, version and Level replaces the earlier one for that Level, so saved
+      // assessments of another Level keep theirs. A Level the service has no list for drops its old one.
+      const lists = (workspace.recommendationLists ?? []).filter(item => !(item.benchmark === pack.benchmark && item.version === pack.version && item.items.every(entry => entry.level === pack.level)))
+      if (list) lists.push(list)
+      if (lists.length) workspace.recommendationLists = lists
+      else delete workspace.recommendationLists
+      // Lists that neither this pack nor a saved assessment reads are dropped here, never on other saves.
+      keepReadLists(workspace)
       saveWorkspace(workspace)
       return { benchmark: pack.benchmark, version: pack.version, level: pack.level, reference, policyCount: policies.length, settingCount: policies.reduce((total, policy) => total + policy.settings.length, 0) }
     } catch (error) {

@@ -810,12 +810,6 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     setLoadedKitLevel(null)
     setKitConversion(conversion); setKitDetected({ id: conversion.summary.benchmark, version: conversion.summary.version }); setKitBenchmark(conversion.summary.benchmark); setKitVersion(conversion.summary.version)
   }
-  useEffect(() => {
-    if (!workspace || !recommendationList) return
-    let active = true
-    void workspaceRequest("workspace-save", { policies, reference, recommendationList }).then(saved => { if (active) setWorkspace(saved) }).catch(e => { if (active) { setError(`Workspace was not saved: ${errorText(e)}`); setErrorAt("compare") } })
-    return () => { active = false }
-  }, [recommendationList])
   // Search and level narrow the findings first; the status chips count and filter within them.
   const findingText = useMemo(() => {
     const cache = new WeakMap<Finding, string>()
@@ -838,15 +832,16 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   const allDeviatingSelected = deviatingKeys.every(key => selected.has(key))
   function selectAllDeviating() { setSelected(old => new Set([...old, ...deviatingKeys])); setPreview(false); setConfirmed(false) }
   const exceptions = workspace?.exceptions
+  const recommendationLists = workspace?.recommendationLists
   // Exception dates are local dates; today is read once per render.
   const today = localDate()
   // readinessFor holds the one exclusion rule that the trend, portfolio, Governance card, exports and PDF also use.
-  const readiness = useMemo(() => assessment && isCis ? readinessFor({ assessment, policies }, { history: workspace?.history ?? [], ...(recommendationList ? { recommendationList } : {}), ...(exceptions ? { exceptions } : {}) }, today, denominator) : null, [assessment, isCis, policies, denominator, recommendationList, exceptions, workspace?.history, today])
+  const readiness = useMemo(() => assessment && isCis ? readinessFor({ assessment, policies }, { history: workspace?.history ?? [], ...(recommendationList ? { recommendationList } : {}), ...(recommendationLists ? { recommendationLists } : {}), ...(exceptions ? { exceptions } : {}) }, today, denominator) : null, [assessment, isCis, policies, denominator, recommendationList, recommendationLists, exceptions, workspace?.history, today])
   const excludedKeys = useMemo(() => readiness && assessment ? excludedFindingKeys(readiness, assessment, policies) : new Set<string>(), [readiness, assessment, policies])
   // Identifier coverage stays for Build Kit imports and for packs without a recommendation list.
   const coverageShown = (level: { recommendations: unknown[] }) => !!kitConversion || !level.recommendations.length
   const history = workspace?.history
-  const trend = useMemo(() => isCis && history ? cisReadinessTrend(history, recommendationList, exceptions, today) : [], [isCis, history, recommendationList, exceptions, today])
+  const trend = useMemo(() => isCis && history ? cisReadinessTrend(history, recommendationList, exceptions, today, recommendationLists) : [], [isCis, history, recommendationList, exceptions, today, recommendationLists])
   const drift = cisDriftSignals(trend)
   const groups = trendGroups(trend)
   // The trend summary follows the benchmark and version of the results on screen.
@@ -1117,7 +1112,15 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
             <div className="flex flex-wrap items-center gap-3"><label className={cn(button, "focus-within:ring-2 focus-within:ring-primary focus-within:ring-offset-2")}>Select recommendation list JSON<input type="file" accept=".json,application/json" disabled={!!busy} className="sr-only" onChange={e => {
               const file = e.target.files?.[0]; e.target.value = ""
               if (!file) return
-              void perform("Reading recommendation list…", async () => { await requireCurrentKitImport(); setRecommendationList(parseRecommendationList(await file.text())) })
+              // Saved here, when it is imported: restoring a saved list or opening history never saves.
+              void perform("Reading recommendation list…", async () => {
+                await requireCurrentKitImport()
+                // A read-only saved assessment shows older policies; saving them would replace the current pack.
+                if (historical) throw new Error("Open the current assessment before importing a recommendation list.")
+                const list = parseRecommendationList(await file.text())
+                const saved = await workspaceRequest("workspace-save", { policies, reference, recommendationList: list })
+                setWorkspace(saved); setRecommendationList(list)
+              })
             }} /></label><p className="text-sm text-gray-600">Adds manual recommendations that appear in the readiness Manual section.</p></div>
             {recommendationList && <p className="text-sm text-gray-600">{recommendationList.benchmark} {recommendationList.version}: {recommendationList.items.length} recommendations loaded, {recommendationList.items.filter(item => !item.automated).length} manual. Manual items appear in the readiness Manual section after a comparison.</p>}
             {denominator && <p className="text-sm text-gray-600">{denominator.length} denominator entries loaded. Coverage uses the automated entries per Level.</p>}
@@ -1283,11 +1286,14 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
             <p className="text-xs text-gray-500">Each mapped setting is judged on its own value across every tenant policy that holds it. A recommendation passes only when every setting it names is in the pack and Present, and fails when any is Different or Missing. Not assessed means the pack does not hold every setting it names.</p>
             <RecommendationResultList level={level.level} items={level.recommendations} names={settingNames} />
           </details>)}
-          {readiness.levels.map(level => level.manual.length > 0 && <div key={`manual-${level.level}`} className="mt-4">
-            <h4 className="font-medium text-gray-900">Manual, Level {level.level}</h4>
-            <p className="mt-1 text-xs text-gray-500">{benchmarkTitle(readiness.benchmark, readiness.benchmarkName)} {readiness.version}, Level {level.level}. These items are not assessed automatically.</p>
-            <ManualList level={level.level} items={level.manual} fallback={readiness.manualFallback} fallbackUrl={readiness.manualFallbackUrl} />
-          </div>)}
+          {readiness.levels.flatMap(level => MANUAL_SECTIONS.map(section => {
+            const items = level.manual.filter(item => item.state === section.state)
+            return items.length > 0 && <div key={`${section.state}-${level.level}`} className="mt-4">
+              <h4 className="font-medium text-gray-900">{section.heading}, Level {level.level}</h4>
+              <p className="mt-1 text-xs text-gray-500">{benchmarkTitle(readiness.benchmark, readiness.benchmarkName)} {readiness.version}, Level {level.level}. {section.note}</p>
+              <ManualList level={level.level} label={section.heading} items={items} fallback={readiness.manualFallback} fallbackUrl={readiness.manualFallbackUrl} />
+            </div>
+          }))}
           <details ref={exclusionsPanel} open={cisExceptionsOpen} onToggle={e => setCisExceptionsOpen((e.target as HTMLDetailsElement).open)} className="mt-2 scroll-mt-6 border-t border-gray-100">
             <summary id="cis-exclusions" className="cursor-pointer py-3 text-sm font-medium text-gray-800">{(() => {
               // One exclusion can count toward two Levels; the total counts it once.
@@ -1427,18 +1433,25 @@ function RecommendationResultList({ level, items, names }: { level: number; item
   </>
 }
 
-/** One Level's manual items with search over identifier, title and benchmark text. */
-function ManualList({ level, items, fallback, fallbackUrl }: { level: number; items: ManualItemView[]; fallback: string; fallbackUrl: string }) {
+/** The readiness sections for recommendations TenuVault does not check, in display order. */
+const MANUAL_SECTIONS: { state: ManualItemView["state"]; heading: string; note: string }[] = [
+  { state: "Manual", heading: "Manual", note: "CIS classifies these recommendations as manual, so they are not assessed automatically. Check each one as its audit describes." },
+  { state: "Not assessed", heading: "Not assessed by this tool", note: "CIS classifies these recommendations as automated, but this benchmark pack does not cover them, so TenuVault does not check them. Check each one as its audit describes." },
+]
+
+/** One Level's items of one section with search over identifier, title and benchmark text. */
+function ManualList({ level, label, items, fallback, fallbackUrl }: { level: number; label: string; items: ManualItemView[]; fallback: string; fallbackUrl: string }) {
   const [query, setQuery] = useState("")
   const shown = filterManualItems(items, query)
+  const noun = label === "Manual" ? "manual items" : "items"
   return <>
     <div className="mt-2 flex flex-wrap items-center gap-2">
-      <SearchInput label={`Search Level ${level} manual items`} value={query} onChange={setQuery} placeholder="Search ID, title or text" />
-      <span aria-live="polite" className="ml-auto text-xs text-gray-500">{shown !== items ? `${shown.length} of ${items.length} manual items` : ""}</span>
+      <SearchInput label={`Search Level ${level} ${label === "Manual" ? "manual items" : "items not assessed by this tool"}`} value={query} onChange={setQuery} placeholder="Search ID, title or text" />
+      <span aria-live="polite" className="ml-auto text-xs text-gray-500">{shown !== items ? `${shown.length} of ${items.length} ${noun}` : `${items.length} ${noun}`}</span>
     </div>
     <div className="mt-2 divide-y divide-gray-100 border-y border-gray-100">{shown.map(item => <details key={item.identifier} className="py-3">
-      <summary className="cursor-pointer text-sm"><span className="font-medium text-gray-800">{item.identifier}</span>{item.title && <span className="ml-2 text-gray-700">{item.title}</span>}<span className="ml-2 inline-block rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-700">Manual</span></summary>
-      <div className="mt-3 space-y-2 text-sm text-gray-700">
+      <summary className="cursor-pointer text-sm"><span className="font-medium text-gray-800">{item.identifier}</span>{item.title && <span className="ml-2 text-gray-700">{item.title}</span>}<span className="ml-2 inline-block rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-700">{item.state}</span></summary>
+      <div className="mt-3 space-y-2 whitespace-pre-wrap text-sm text-gray-700">
         {item.hasText ? <>
           {item.description && <p><strong className="font-medium text-gray-900">Description:</strong> {item.description}</p>}
           {item.impact && <p><strong className="font-medium text-gray-900">Impact:</strong> {item.impact}</p>}
@@ -1447,7 +1460,7 @@ function ManualList({ level, items, fallback, fallbackUrl }: { level: number; it
         </> : <p><a href={fallbackUrl} className="text-blue-700 hover:underline" onClick={event => { event.preventDefault(); void bridge.app.openExternal(fallbackUrl) }}>{fallback}</a></p>}
       </div>
     </details>)}
-      {!shown.length && <p className="py-3 text-center text-sm text-gray-500">No manual items match the search.</p>}</div>
+      {!shown.length && <p className="py-3 text-center text-sm text-gray-500">No {noun} match the search.</p>}</div>
   </>
 }
 

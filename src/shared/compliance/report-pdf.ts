@@ -786,9 +786,11 @@ function levelSection(layout: Layout, summary: CisReadinessSummary, level: CisLe
       })) }],
     }, `Recommendation results, Level ${level.level}`)
   }
-  if (level.manual.length) {
-    layout.heading(`Manual recommendations, Level ${level.level}`, { toc: true, keep: 26 })
-    for (const manual of level.manual) {
+  for (const [state, heading] of [["Manual", "Manual recommendations"], ["Not assessed", "Not assessed by this tool"]] as const) {
+    const items = level.manual.filter(manual => manual.state === state)
+    if (!items.length) continue
+    layout.heading(`${heading}, Level ${level.level}`, { toc: true, keep: 26 })
+    for (const manual of items) {
       const blocks: FlowBlock[] = manualHeading(layout, manual.identifier, manual.title)
       if (manual.hasText) {
         for (const [label, value] of [['Description', manual.description], ['Impact', manual.impact], ['Audit', manual.audit], ['Remediation', manual.remediation]] as const) {

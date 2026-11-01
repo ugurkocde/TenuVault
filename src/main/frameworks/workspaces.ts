@@ -2,6 +2,7 @@ import type { KeyValueStore } from '../storage/secure-store'
 import { parsePolicies, record, type Assessment, type BaselinePolicy } from '../../shared/frameworks/policies'
 import { validateRecommendationList, type RecommendationList } from '../../shared/frameworks/cis-manual'
 import { validateExceptions, type CisException } from '../../shared/frameworks/cis-exceptions'
+import { packLevels } from '../../shared/frameworks/cis-readiness'
 import { HISTORY_FULL_MESSAGE, KEEP_NEWEST_ASSESSMENTS, MAX_WORKSPACE_BYTES, MAX_WORKSPACE_HISTORY, WORKSPACE_UNREADABLE_MESSAGE, type WorkspaceCapacity } from '../../shared/frameworks/workspace-history'
 
 export interface AssessmentRecord {
@@ -18,6 +19,8 @@ export interface FrameworkWorkspace {
   updatedAt: string
   history: AssessmentRecord[]
   recommendationList?: RecommendationList
+  /** Lists downloaded with delivered packs, one per benchmark, version and Level, held once and never copied into history. */
+  recommendationLists?: RecommendationList[]
   exceptions?: CisException[]
 }
 /** A workspace as the framework service returns it, with how full its history is. */
@@ -37,6 +40,8 @@ export function loadWorkspace(tenant: string, framework: string): FrameworkWorks
     const value: unknown = JSON.parse(data)
     if (!record(value) || value.version !== 1 || value.tenantId !== tenant.toLowerCase() || value.frameworkId !== framework || typeof value.reference !== "string" || typeof value.updatedAt !== "string" || !Array.isArray(value.policies) || !Array.isArray(value.history) || value.history.length > MAX_WORKSPACE_HISTORY) throw new Error()
     const storedList = value.recommendationList !== undefined ? validateRecommendationList(value.recommendationList) : undefined
+    if (value.recommendationLists !== undefined && !Array.isArray(value.recommendationLists)) throw new Error()
+    const storedLists = Array.isArray(value.recommendationLists) ? value.recommendationLists.map(list => validateRecommendationList(list)) : undefined
     const storedExceptions = value.exceptions !== undefined ? validateExceptions(value.exceptions) : undefined
     // Stored policies reparse under the workspace limit saveWorkspace enforced, not the
     // smaller import limit, so a saved workspace can never become unreadable by size.
@@ -51,11 +56,35 @@ export function loadWorkspace(tenant: string, framework: string): FrameworkWorks
       }
       if (entry.creation !== undefined && (!record(entry.creation) || typeof entry.creation.success !== "boolean" || !Array.isArray(entry.creation.results) || entry.creation.results.some(item => !record(item) || typeof item.name !== "string" || (item.id !== undefined && typeof item.id !== "string") || (item.error !== undefined && typeof item.error !== "string")))) throw new Error()
     }
-    workspace = { ...value, policies, ...(storedList ? { recommendationList: storedList } : {}), ...(storedExceptions ? { exceptions: storedExceptions } : {}) } as unknown as FrameworkWorkspace
+    workspace = { ...value, policies, ...(storedList ? { recommendationList: storedList } : {}), ...(storedLists?.length ? { recommendationLists: storedLists } : {}), ...(storedExceptions ? { exceptions: storedExceptions } : {}) } as unknown as FrameworkWorkspace
   } catch { throw new Error(WORKSPACE_UNREADABLE_MESSAGE) }
 
   return workspace
 }
+/** Delivered recommendation lists a workspace keeps at most, newest last. */
+export const MAX_DELIVERED_LISTS = 12
+
+/** Whether a pack reads a delivered list: same benchmark and version, and a Level the pack measures. */
+function readsList(policies: BaselinePolicy[], list: RecommendationList): boolean {
+  const provenance = (key: string) => policies.map(policy => policy.provenance?.[key]).find(value => typeof value === 'string' && value)
+  const levels = packLevels(policies)
+  return provenance('benchmark') === list.benchmark && provenance('version') === list.version && list.items.every(item => levels.has(item.level))
+}
+
+/**
+ * Drops delivered lists that neither the current pack nor a saved assessment reads, then keeps the newest
+ * MAX_DELIVERED_LISTS, so lists of benchmarks and versions no longer used never fill the workspace. Called
+ * when a delivered pack is saved, the one moment the current pack is known to be the one the list came
+ * with; an ordinary save (a draft of other policies) never drops a list.
+ */
+export function keepReadLists(workspace: FrameworkWorkspace): void {
+  if (!workspace.recommendationLists) return
+  const packs = [workspace.policies, ...workspace.history.map(entry => entry.policies)]
+  const lists = workspace.recommendationLists.filter(list => packs.some(policies => readsList(policies, list))).slice(-MAX_DELIVERED_LISTS)
+  if (lists.length) workspace.recommendationLists = lists
+  else delete workspace.recommendationLists
+}
+
 export function saveWorkspace(workspace: FrameworkWorkspace): void {
   const json = JSON.stringify({ ...workspace, updatedAt: new Date().toISOString() })
   if (json.length > MAX_WORKSPACE_BYTES || workspace.history.length > MAX_WORKSPACE_HISTORY) throw new Error(HISTORY_FULL_MESSAGE)
