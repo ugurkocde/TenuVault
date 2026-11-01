@@ -245,6 +245,9 @@ describe("CIS coverage wording", () => {
     expect(coverageStatement({ ...level, denominator: 0, coverageSource: "authoritative" })).toBe("Coverage of the full benchmark is not shown because the list of its recommendations marks none of Level 1 as automated.")
     expect(coverageStatement({ ...level, coverage: 0.75, assessedAutomated: 72, denominator: 96, coverageSource: "authoritative", enumerated: 80 })).toBe("Coverage: 75% (72 of 96 automated recommendations), source: CIS list of automated recommendations.")
     for (const text of [coverageStatement(level), coverageStatement({ ...level, denominator: 0, coverageSource: "authoritative" })]) expect(text).not.toMatch(/denominator|enumerated|identifier/i)
+    // Mapped pack recommendations count even when no description names a number.
+    expect(coverageStatement({ ...level, coverage: 1, assessedAutomated: 3, denominator: 3, coverageSource: "authoritative", enumerated: 0 })).toBe("Coverage: 100% (3 of 3 automated recommendations), source: CIS list of automated recommendations.")
+    expect(coverageStatement({ ...level, coverage: 0, assessedAutomated: 0, denominator: 3, coverageSource: "authoritative", enumerated: 0 })).toMatch(/so none of them count\.$/)
   })
 
   it("tells a Level without an assessed pack apart from a missing list", () => {

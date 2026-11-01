@@ -219,7 +219,8 @@ export function coverageStatement(level: Pick<CisLevelReadiness, "level" | "cove
   if (level.denominator === null && (level.denominatorIdentifiers ?? []).length) return `No policy pack for Level ${level.level} was assessed, so coverage of the full benchmark is not shown for it.`
   if (level.denominator === null) return "Coverage of the full benchmark is not shown because the list of all its automated recommendations is not available."
   if (level.coverage === null) return `Coverage of the full benchmark is not shown because the list of its recommendations marks none of Level ${level.level} as automated.`
-  const named = level.enumerated === 0 ? " The pack policies do not name the recommendation numbers they implement, so none of them count." : ""
+  // Mapped pack recommendations count without numbers in the descriptions; the note is for packs with neither.
+  const named = level.enumerated === 0 && !level.assessedAutomated ? " The pack policies do not name the recommendation numbers they implement, so none of them count." : ""
   return `Coverage: ${formatRate(level.coverage)} (${level.assessedAutomated} of ${level.denominator} automated recommendations), source: ${coverageSourceLabel(level.coverageSource)}.${named}`
 }
 
