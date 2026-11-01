@@ -210,8 +210,9 @@ export function coverageSourceLabel(source: DenominatorSource): string {
 /**
  * Coverage of the full benchmark in plain words, for the CIS page and the PDF. Coverage needs the
  * list of every automated recommendation CIS defines for a Level. That list is separate from the
- * recommendations a pack maps to its settings, and delivered packs do not include it, so a pack can
- * list hundreds of recommendation results while coverage of the full benchmark stays unknown.
+ * recommendations a pack maps to its settings and comes with a delivered pack only when the service
+ * publishes a recommendation list for it; without one a pack can list hundreds of recommendation
+ * results while coverage of the full benchmark stays unknown.
  */
 export function coverageStatement(level: Pick<CisLevelReadiness, "level" | "coverage" | "assessedAutomated" | "denominator" | "coverageSource" | "enumerated" | "denominatorIdentifiers">): string {
   // A Level the list names but no policy pack of which was assessed has no coverage to compute.
@@ -331,6 +332,10 @@ function measure(assessment: Assessment, policies: BaselinePolicy[], denominator
     const notAssessed = effectiveDenominator ? [...new Set(effectiveDenominator.filter(entry => entry.level === level && entry.automated && !described.has(entry.identifier)).map(entry => entry.identifier))] : []
     const manualNotAssessed = effectiveDenominator ? effectiveDenominator.filter(entry => entry.level === level && !entry.automated).map(entry => entry.identifier) : []
     const manual = manualItemsForLevel(effectiveList, level, notAssessed, manualNotAssessed)
+    // With the CIS list, coverage counts what the Level sentence counts: automated identifiers that an
+    // assessed pack recommendation or a pack description names, not pack descriptions alone.
+    const authoritative = cov?.denominatorSource === "authoritative"
+    const checkedAutomated = authoritative ? new Set(effectiveDenominator!.filter(entry => entry.level === level && entry.automated && described.has(entry.identifier)).map(entry => entry.identifier)).size : null
     // Exceptions never change the raw status counts. The excepted count is the
     // number of non-Present findings covered by an active exception for this
     // level, and adjustedPassRate counts those findings as passed.
@@ -366,14 +371,14 @@ function measure(assessment: Assessment, policies: BaselinePolicy[], denominator
       presentInUnassigned: withTargeting ? presentFindings.filter(finding => finding.observed.length > 0 && finding.observed.every(observation => observation.targeting?.state === "unassigned")).length : null,
       // Without a denominator list an enumerated identifier cannot be told apart from a manual
       // recommendation or one of another profile, so no automated count is claimed.
-      assessedAutomated: cov && cov.denominatorSource !== "none" ? cov.numerator : null,
+      assessedAutomated: authoritative ? checkedAutomated : cov && cov.denominatorSource !== "none" ? cov.numerator : null,
       enumerated: cov?.enumeratedIds.length ?? 0,
       // A description identifier that the recommendation metadata assigns to another Level belongs there.
       enumeratedIds: enumeratedHere,
       denominatorIdentifiers: [...new Set((effectiveDenominator ?? []).filter(entry => entry.level === level).map(entry => entry.identifier))],
       automatedIdentifiers: [...new Set((effectiveDenominator ?? []).filter(entry => entry.level === level && entry.automated).map(entry => entry.identifier))],
       denominator: cov?.denominator ?? null,
-      coverage: cov?.coverage ?? null,
+      coverage: authoritative ? (cov!.denominator ? checkedAutomated! / cov!.denominator : null) : cov?.coverage ?? null,
       coverageSource: cov?.denominatorSource ?? "none",
       notAssessed,
       manual,
@@ -403,7 +408,21 @@ export interface CisReadinessEntry {
 export interface CisReadinessWorkspace {
   history: CisReadinessEntry[]
   recommendationList?: RecommendationList
+  recommendationLists?: RecommendationList[]
   exceptions?: CisException[]
+}
+
+/**
+ * The recommendation list for one saved assessment: the delivered lists of its benchmark, version and
+ * Levels merged, so an assessment never takes text or a total from another Level's list. Without one,
+ * the imported list, read as before.
+ */
+export function applicableRecommendationList(policies: BaselinePolicy[], workspace: Pick<CisReadinessWorkspace, "recommendationList" | "recommendationLists">): RecommendationList | undefined {
+  const benchmark = policies.map(policy => textOf(policy, "benchmark")).find(Boolean)
+  const version = policies.map(policy => textOf(policy, "version")).find(Boolean)
+  const levels = packLevels(policies)
+  const delivered = benchmark && version ? (workspace.recommendationLists ?? []).filter(list => list.benchmark === benchmark && list.version === version && list.items.every(item => levels.has(item.level))) : []
+  return delivered.length ? { benchmark: benchmark!, version: version!, items: delivered.flatMap(list => list.items) } : workspace.recommendationList
 }
 
 function timeOf(entry: CisReadinessEntry): number {
@@ -469,7 +488,7 @@ export function readinessFor(entry: CisReadinessEntry, workspace: CisReadinessWo
     if (date === undefined) dates.set(level, date = exclusionsAsOf(entry, workspace, level, todayISO))
     return date
   }
-  return measure(entry.assessment, entry.policies, denominator, workspace.recommendationList, workspace.exceptions ?? [], asOf)
+  return measure(entry.assessment, entry.policies, denominator, applicableRecommendationList(entry.policies, workspace), workspace.exceptions ?? [], asOf)
 }
 
 export type ListedExceptionState = "in-use" | "expired" | "later" | "present" | "unscored" | "absent" | "version" | "benchmark"

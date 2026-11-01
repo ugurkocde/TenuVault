@@ -793,7 +793,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       reset()
       setLoadedKitLevel(null)
       const saved = await workspaceRequest("workspace-load")
-      setWorkspace(saved); setPolicies(saved.policies); setReference(saved.reference || result.reference); setRecommendationList(saved.recommendationList)
+      setWorkspace(saved); setPolicies(saved.policies); setReference(saved.reference || result.reference)
       setPackRetry(null)
     }, "load")
   }
@@ -810,12 +810,6 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     setLoadedKitLevel(null)
     setKitConversion(conversion); setKitDetected({ id: conversion.summary.benchmark, version: conversion.summary.version }); setKitBenchmark(conversion.summary.benchmark); setKitVersion(conversion.summary.version)
   }
-  useEffect(() => {
-    if (!workspace || !recommendationList) return
-    let active = true
-    void workspaceRequest("workspace-save", { policies, reference, recommendationList }).then(saved => { if (active) setWorkspace(saved) }).catch(e => { if (active) { setError(`Workspace was not saved: ${errorText(e)}`); setErrorAt("compare") } })
-    return () => { active = false }
-  }, [recommendationList])
   // Search and level narrow the findings first; the status chips count and filter within them.
   const findingText = useMemo(() => {
     const cache = new WeakMap<Finding, string>()
@@ -838,15 +832,16 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   const allDeviatingSelected = deviatingKeys.every(key => selected.has(key))
   function selectAllDeviating() { setSelected(old => new Set([...old, ...deviatingKeys])); setPreview(false); setConfirmed(false) }
   const exceptions = workspace?.exceptions
+  const recommendationLists = workspace?.recommendationLists
   // Exception dates are local dates; today is read once per render.
   const today = localDate()
   // readinessFor holds the one exclusion rule that the trend, portfolio, Governance card, exports and PDF also use.
-  const readiness = useMemo(() => assessment && isCis ? readinessFor({ assessment, policies }, { history: workspace?.history ?? [], ...(recommendationList ? { recommendationList } : {}), ...(exceptions ? { exceptions } : {}) }, today, denominator) : null, [assessment, isCis, policies, denominator, recommendationList, exceptions, workspace?.history, today])
+  const readiness = useMemo(() => assessment && isCis ? readinessFor({ assessment, policies }, { history: workspace?.history ?? [], ...(recommendationList ? { recommendationList } : {}), ...(recommendationLists ? { recommendationLists } : {}), ...(exceptions ? { exceptions } : {}) }, today, denominator) : null, [assessment, isCis, policies, denominator, recommendationList, recommendationLists, exceptions, workspace?.history, today])
   const excludedKeys = useMemo(() => readiness && assessment ? excludedFindingKeys(readiness, assessment, policies) : new Set<string>(), [readiness, assessment, policies])
   // Identifier coverage stays for Build Kit imports and for packs without a recommendation list.
   const coverageShown = (level: { recommendations: unknown[] }) => !!kitConversion || !level.recommendations.length
   const history = workspace?.history
-  const trend = useMemo(() => isCis && history ? cisReadinessTrend(history, recommendationList, exceptions, today) : [], [isCis, history, recommendationList, exceptions, today])
+  const trend = useMemo(() => isCis && history ? cisReadinessTrend(history, recommendationList, exceptions, today, recommendationLists) : [], [isCis, history, recommendationList, exceptions, today, recommendationLists])
   const drift = cisDriftSignals(trend)
   const groups = trendGroups(trend)
   // The trend summary follows the benchmark and version of the results on screen.
@@ -1117,7 +1112,13 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
             <div className="flex flex-wrap items-center gap-3"><label className={cn(button, "focus-within:ring-2 focus-within:ring-primary focus-within:ring-offset-2")}>Select recommendation list JSON<input type="file" accept=".json,application/json" disabled={!!busy} className="sr-only" onChange={e => {
               const file = e.target.files?.[0]; e.target.value = ""
               if (!file) return
-              void perform("Reading recommendation list…", async () => { await requireCurrentKitImport(); setRecommendationList(parseRecommendationList(await file.text())) })
+              // Saved here, when it is imported: restoring a saved list or opening history never saves.
+              void perform("Reading recommendation list…", async () => {
+                await requireCurrentKitImport()
+                const list = parseRecommendationList(await file.text())
+                const saved = await workspaceRequest("workspace-save", { policies, reference, recommendationList: list })
+                setWorkspace(saved); setRecommendationList(list)
+              })
             }} /></label><p className="text-sm text-gray-600">Adds manual recommendations that appear in the readiness Manual section.</p></div>
             {recommendationList && <p className="text-sm text-gray-600">{recommendationList.benchmark} {recommendationList.version}: {recommendationList.items.length} recommendations loaded, {recommendationList.items.filter(item => !item.automated).length} manual. Manual items appear in the readiness Manual section after a comparison.</p>}
             {denominator && <p className="text-sm text-gray-600">{denominator.length} denominator entries loaded. Coverage uses the automated entries per Level.</p>}
@@ -1430,20 +1431,20 @@ function RecommendationResultList({ level, items, names }: { level: number; item
   </>
 }
 
-/** One Level's manual items with search over identifier, title and benchmark text. */
 /** The readiness sections for recommendations TenuVault does not check, in display order. */
 const MANUAL_SECTIONS: { state: ManualItemView["state"]; heading: string; note: string }[] = [
   { state: "Manual", heading: "Manual", note: "CIS classifies these recommendations as manual, so they are not assessed automatically. Check each one as its audit describes." },
   { state: "Not assessed", heading: "Not assessed by this tool", note: "CIS classifies these recommendations as automated, but this benchmark pack does not cover them, so TenuVault does not check them. Check each one as its audit describes." },
 ]
 
+/** One Level's items of one section with search over identifier, title and benchmark text. */
 function ManualList({ level, label, items, fallback, fallbackUrl }: { level: number; label: string; items: ManualItemView[]; fallback: string; fallbackUrl: string }) {
   const [query, setQuery] = useState("")
   const shown = filterManualItems(items, query)
   const noun = label === "Manual" ? "manual items" : "items"
   return <>
     <div className="mt-2 flex flex-wrap items-center gap-2">
-      <SearchInput label={`Search Level ${level} ${label.toLowerCase()} items`} value={query} onChange={setQuery} placeholder="Search ID, title or text" />
+      <SearchInput label={`Search Level ${level} ${label === "Manual" ? "manual items" : "items not assessed by this tool"}`} value={query} onChange={setQuery} placeholder="Search ID, title or text" />
       <span aria-live="polite" className="ml-auto text-xs text-gray-500">{shown !== items ? `${shown.length} of ${items.length} ${noun}` : `${items.length} ${noun}`}</span>
     </div>
     <div className="mt-2 divide-y divide-gray-100 border-y border-gray-100">{shown.map(item => <details key={item.identifier} className="py-3">

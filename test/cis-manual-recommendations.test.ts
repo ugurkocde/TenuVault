@@ -6,7 +6,7 @@ import { promisify } from "node:util"
 import JSZip from "jszip"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { parseBreakoutWorkbook, recommendationListFromWorkbook } from "../src/shared/frameworks/cis-coverage"
-import { MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDATIONS_URL, MAX_LIST_ITEMS, MAX_LIST_TEXT_LENGTH, MAX_LIST_TITLE_LENGTH, manualItemsForLevel, parseRecommendationList, recommendationListFromBreakout, serializeRecommendationList, validateRecommendationList } from "../src/shared/frameworks/cis-manual"
+import { DELIVERED_LIST_LIMITS, MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDATIONS_URL, MAX_LIST_ITEMS, MAX_LIST_TEXT_LENGTH, MAX_LIST_TITLE_LENGTH, manualItemsForLevel, parseRecommendationList, recommendationListFromBreakout, serializeRecommendationList, validateRecommendationList } from "../src/shared/frameworks/cis-manual"
 import { cisReadiness, levelCheckCounts, levelCheckSummary } from "../src/shared/frameworks/cis-readiness"
 import { convertKit, type KitFile } from "../src/shared/frameworks/cis-kit"
 import { cisReadinessCsv, cisReadinessJson } from "../src/renderer/features/shared/governance-export"
@@ -90,11 +90,14 @@ async function syntheticWorkbook(): Promise<Uint8Array> {
 describe("delivered recommendation list limits and states", () => {
   const item = (identifier: string, extra: Record<string, unknown> = {}) => ({ identifier, level: 1, automated: true, ...extra })
 
-  it("bounds the item count, titles and text fields", () => {
-    expect(() => validateRecommendationList({ benchmark: "synthetic-os", version: "1.0.0", items: Array.from({ length: MAX_LIST_ITEMS + 1 }, (_, index) => item(`1.${index}`)) })).toThrow(`at most ${MAX_LIST_ITEMS} items`)
-    expect(() => validateRecommendationList({ benchmark: "synthetic-os", version: "1.0.0", items: [item("1.1", { title: "t".repeat(MAX_LIST_TITLE_LENGTH + 1) })] })).toThrow("title must be at most")
-    expect(() => validateRecommendationList({ benchmark: "synthetic-os", version: "1.0.0", items: [item("1.1", { audit: "a".repeat(MAX_LIST_TEXT_LENGTH + 1) })] })).toThrow("audit must be at most")
-    expect(validateRecommendationList({ benchmark: "synthetic-os", version: "1.0.0", items: [item("1.1", { audit: "a".repeat(MAX_LIST_TEXT_LENGTH) })] }).items[0]!.audit).toHaveLength(MAX_LIST_TEXT_LENGTH)
+  it("bounds the item count, titles and text fields of a downloaded list, but reads stored lists without limits", () => {
+    const over = { benchmark: "synthetic-os", version: "1.0.0", items: [item("1.1", { audit: "a".repeat(MAX_LIST_TEXT_LENGTH + 1) })] }
+    expect(() => validateRecommendationList({ benchmark: "synthetic-os", version: "1.0.0", items: Array.from({ length: MAX_LIST_ITEMS + 1 }, (_, index) => item(`1.${index}`)) }, DELIVERED_LIST_LIMITS)).toThrow(`at most ${MAX_LIST_ITEMS} items`)
+    expect(() => validateRecommendationList({ benchmark: "synthetic-os", version: "1.0.0", items: [item("1.1", { title: "t".repeat(MAX_LIST_TITLE_LENGTH + 1) })] }, DELIVERED_LIST_LIMITS)).toThrow("title must be at most")
+    expect(() => validateRecommendationList(over, DELIVERED_LIST_LIMITS)).toThrow("audit must be at most")
+    expect(validateRecommendationList({ benchmark: "synthetic-os", version: "1.0.0", items: [item("1.1", { audit: "a".repeat(MAX_LIST_TEXT_LENGTH) })] }, DELIVERED_LIST_LIMITS).items[0]!.audit).toHaveLength(MAX_LIST_TEXT_LENGTH)
+    // A list saved before the limits existed stays readable.
+    expect(validateRecommendationList(over).items[0]!.audit).toHaveLength(MAX_LIST_TEXT_LENGTH + 1)
   })
 
   it("marks manual items Manual and unassessed automated items Not assessed, each with its list text", () => {

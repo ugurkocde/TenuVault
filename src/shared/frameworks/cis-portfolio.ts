@@ -13,6 +13,7 @@ export interface CisPortfolioHistoryEntry {
 export interface CisPortfolioWorkspace {
   history: CisPortfolioHistoryEntry[]
   recommendationList?: RecommendationList
+  recommendationLists?: RecommendationList[]
   exceptions?: CisException[]
 }
 

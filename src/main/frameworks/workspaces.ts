@@ -18,6 +18,8 @@ export interface FrameworkWorkspace {
   updatedAt: string
   history: AssessmentRecord[]
   recommendationList?: RecommendationList
+  /** Lists downloaded with delivered packs, one per benchmark, version and Level, held once and never copied into history. */
+  recommendationLists?: RecommendationList[]
   exceptions?: CisException[]
 }
 /** A workspace as the framework service returns it, with how full its history is. */
@@ -37,6 +39,8 @@ export function loadWorkspace(tenant: string, framework: string): FrameworkWorks
     const value: unknown = JSON.parse(data)
     if (!record(value) || value.version !== 1 || value.tenantId !== tenant.toLowerCase() || value.frameworkId !== framework || typeof value.reference !== "string" || typeof value.updatedAt !== "string" || !Array.isArray(value.policies) || !Array.isArray(value.history) || value.history.length > MAX_WORKSPACE_HISTORY) throw new Error()
     const storedList = value.recommendationList !== undefined ? validateRecommendationList(value.recommendationList) : undefined
+    if (value.recommendationLists !== undefined && !Array.isArray(value.recommendationLists)) throw new Error()
+    const storedLists = Array.isArray(value.recommendationLists) ? value.recommendationLists.map(list => validateRecommendationList(list)) : undefined
     const storedExceptions = value.exceptions !== undefined ? validateExceptions(value.exceptions) : undefined
     // Stored policies reparse under the workspace limit saveWorkspace enforced, not the
     // smaller import limit, so a saved workspace can never become unreadable by size.
@@ -51,7 +55,7 @@ export function loadWorkspace(tenant: string, framework: string): FrameworkWorks
       }
       if (entry.creation !== undefined && (!record(entry.creation) || typeof entry.creation.success !== "boolean" || !Array.isArray(entry.creation.results) || entry.creation.results.some(item => !record(item) || typeof item.name !== "string" || (item.id !== undefined && typeof item.id !== "string") || (item.error !== undefined && typeof item.error !== "string")))) throw new Error()
     }
-    workspace = { ...value, policies, ...(storedList ? { recommendationList: storedList } : {}), ...(storedExceptions ? { exceptions: storedExceptions } : {}) } as unknown as FrameworkWorkspace
+    workspace = { ...value, policies, ...(storedList ? { recommendationList: storedList } : {}), ...(storedLists?.length ? { recommendationLists: storedLists } : {}), ...(storedExceptions ? { exceptions: storedExceptions } : {}) } as unknown as FrameworkWorkspace
   } catch { throw new Error(WORKSPACE_UNREADABLE_MESSAGE) }
 
   return workspace

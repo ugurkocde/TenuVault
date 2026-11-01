@@ -32,6 +32,10 @@ const TEXT_FIELDS = ["title", "description", "impact", "audit", "remediation"] a
 export const MAX_LIST_ITEMS = 5000
 export const MAX_LIST_TITLE_LENGTH = 1000
 export const MAX_LIST_TEXT_LENGTH = 50_000
+
+/** Limits a downloaded list must meet. Stored lists are read without them, so no saved workspace becomes unreadable. */
+export interface RecommendationListLimits { maxItems: number; maxTitleLength: number; maxTextLength: number }
+export const DELIVERED_LIST_LIMITS: RecommendationListLimits = { maxItems: MAX_LIST_ITEMS, maxTitleLength: MAX_LIST_TITLE_LENGTH, maxTextLength: MAX_LIST_TEXT_LENGTH }
 const ITEM_FIELDS = new Set(["identifier", "level", "automated", ...TEXT_FIELDS])
 const LIST_FIELDS = new Set(["benchmark", "version", "items"])
 
@@ -40,7 +44,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Validates one decoded recommendation list value, naming the first problem. */
-export function validateRecommendationList(value: unknown): RecommendationList {
+export function validateRecommendationList(value: unknown, limits?: RecommendationListLimits): RecommendationList {
   if (!isRecord(value)) throw new Error("The recommendation list must be a JSON object with benchmark, version and items.")
   for (const key of Object.keys(value)) {
     if (!LIST_FIELDS.has(key)) throw new Error(`The recommendation list has an unknown field: ${key}. Expected benchmark, version and items.`)
@@ -54,7 +58,7 @@ export function validateRecommendationList(value: unknown): RecommendationList {
   }
   if (!Array.isArray(value.items)) throw new Error("The recommendation list items must be an array.")
   if (!value.items.length) throw new Error("The recommendation list items must contain at least one item.")
-  if (value.items.length > MAX_LIST_ITEMS) throw new Error(`The recommendation list items must contain at most ${MAX_LIST_ITEMS} items.`)
+  if (limits && value.items.length > limits.maxItems) throw new Error(`The recommendation list items must contain at most ${limits.maxItems} items.`)
   const seen = new Set<string>()
   const items: RecommendationListItem[] = value.items.map((entry, index) => {
     const label = `Recommendation list item ${index + 1}`
@@ -72,7 +76,7 @@ export function validateRecommendationList(value: unknown): RecommendationList {
       const fieldValue = entry[field]
       if (fieldValue === undefined) continue
       if (typeof fieldValue !== "string") throw new Error(`${label}: ${field} must be a string when present.`)
-      const limit = field === "title" ? MAX_LIST_TITLE_LENGTH : MAX_LIST_TEXT_LENGTH
+      const limit = limits ? (field === "title" ? limits.maxTitleLength : limits.maxTextLength) : Infinity
       if (fieldValue.length > limit) throw new Error(`${label}: ${field} must be at most ${limit} characters.`)
       if (fieldValue.trim()) item[field] = fieldValue.trim()
     }

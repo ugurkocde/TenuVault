@@ -1,5 +1,5 @@
 import { BENCHMARK_ID_PATTERN, MAX_CIS_BENCHMARK_ID_LENGTH, VERSION_PATTERN, validateCisCatalog, validateCisPack, type CisCatalog, type CisLevel, type CisPack } from "../../shared/frameworks/cis-content"
-import { validateRecommendationList, type RecommendationList } from "../../shared/frameworks/cis-manual"
+import { DELIVERED_LIST_LIMITS, validateRecommendationList, type RecommendationList } from "../../shared/frameworks/cis-manual"
 
 export const CIS_CONTENT_BASE_URL_ENV = "TENUVAULT_CIS_CONTENT_BASE_URL"
 export const CIS_CONTENT_TIMEOUT_MS = 15_000
@@ -193,7 +193,7 @@ export async function fetchCisList(expected: { benchmark: string; version: strin
   const base = requireBaseUrl()
   const url = `${base}/cis/v1/lists/${encodeURIComponent(expected.benchmark)}/${encodeURIComponent(expected.version)}/${expected.level}`
   try {
-    const list = validateRecommendationList(await fetchJson(url, CIS_LIST_MAX_BYTES, token))
+    const list = validateRecommendationList(await fetchJson(url, CIS_LIST_MAX_BYTES, token), DELIVERED_LIST_LIMITS)
     if (list.benchmark !== expected.benchmark || list.version !== expected.version || list.items.some(item => item.level !== expected.level)) {
       throw new CisContentError("The CIS recommendation list does not match the requested benchmark, version and level.", 502)
     }

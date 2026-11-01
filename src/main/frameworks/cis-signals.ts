@@ -23,7 +23,7 @@ export function cisSignals(tenantId: string): WorkSignal[] {
   const tenant = tenantId.toLowerCase()
   const workspace = loadWorkspace(tenant, "cis-benchmarks")
   if (!workspace.history.length) return []
-  const points = cisReadinessTrend(workspace.history, workspace.recommendationList, workspace.exceptions)
+  const points = cisReadinessTrend(workspace.history, workspace.recommendationList, workspace.exceptions, undefined, workspace.recommendationLists)
   const drifts = cisDriftSignals(points)
   return drifts.map((drift): WorkSignal => {
     const belowBar = drift.kind === "below-bar"

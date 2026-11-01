@@ -172,7 +172,7 @@ function packFingerprint(entry: CisTrendHistoryEntry): string {
  * benchmark, version and Level, and only when that run assessed the same pack (same reference
  * and policies); otherwise it is "first" or "pack-changed" with no change.
  */
-export function cisReadinessTrend(history: CisTrendHistoryEntry[], recommendationList?: RecommendationList, exceptions?: CisException[], todayISO: string = localDate()): CisTrendPoint[] {
+export function cisReadinessTrend(history: CisTrendHistoryEntry[], recommendationList?: RecommendationList, exceptions?: CisException[], todayISO: string = localDate(), recommendationLists?: RecommendationList[]): CisTrendPoint[] {
   // Stored history is newest first (workspaces unshift new assessments), so
   // keeping the first occurrence of a runId keeps the newest copy.
   const seen = new Set<string>()
@@ -184,7 +184,7 @@ export function cisReadinessTrend(history: CisTrendHistoryEntry[], recommendatio
     deduped.push(entry)
   }
   const sorted = [...deduped].sort(compareAssessments)
-  const workspace = { history: deduped, ...(recommendationList ? { recommendationList } : {}), ...(exceptions ? { exceptions } : {}) }
+  const workspace = { history: deduped, ...(recommendationList ? { recommendationList } : {}), ...(recommendationLists ? { recommendationLists } : {}), ...(exceptions ? { exceptions } : {}) }
   const summaries = sorted.map(entry => readinessFor(entry, workspace, todayISO))
   const fingerprints = sorted.map(packFingerprint)
   // A summary lists every Level of a loaded recommendation list, so the Levels a run measured come from its pack.

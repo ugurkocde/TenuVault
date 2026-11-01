@@ -3,9 +3,9 @@ import { validateCisCatalog, validateCisPack } from "../src/shared/frameworks/ci
 import { assessPolicySet, handleFramework, setCisEntitlementProvider, setInternalCisBenchmarksEnabled } from "../src/main/frameworks/service"
 import { parsePolicies } from "../src/shared/frameworks/policies"
 import { cisContentBaseUrl, setCisContentEnvOverrideAllowed, setCisContentFallbackBaseUrl } from "../src/main/frameworks/cis-content"
-import { loadWorkspace, setFrameworkStore } from "../src/main/frameworks/workspaces"
+import { loadWorkspace, saveWorkspace, setFrameworkStore } from "../src/main/frameworks/workspaces"
 import { kitLevelForPolicy } from "../src/shared/frameworks/cis-flow"
-import { levelCheckSummary, readinessFor } from "../src/shared/frameworks/cis-readiness"
+import { applicableRecommendationList, levelCheckSummary, readinessFor } from "../src/shared/frameworks/cis-readiness"
 
 /** The delivery service answer for a Level without a published recommendation list. */
 const noList = () => Response.json({ ok: false, error: "The requested CIS benchmark content is not published." }, { status: 404 })
@@ -205,15 +205,18 @@ describe("CIS content delivery service", () => {
       vi.stubGlobal("fetch", serve(() => Response.json(list)))
       await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })
       const workspace = loadWorkspace(tenantId, "cis-benchmarks")
-      expect(workspace.recommendationList).toEqual(list)
+      expect(workspace.recommendationLists).toEqual([list])
+      expect(workspace).not.toHaveProperty("recommendationList")
       // The tenant holds the pack policy as it is, so the covered recommendation is assessed and passes.
       const current = parsePolicies([policy()]).map(item => ({ ...item, id: "33333333-3333-3333-3333-333333333330" }))
       const assessment = assessPolicySet({ tenantId, frameworkId: "cis-benchmarks", reference: workspace.reference, policies: workspace.policies, current, runId: "run-1", assessedAt: "2026-10-10T12:00:00.000Z" })
       const entry = { assessment, policies: workspace.policies }
-      const level1 = readinessFor(entry, { history: [entry], recommendationList: workspace.recommendationList }).levels[0]!
+      const level1 = readinessFor(entry, { history: [entry], recommendationLists: workspace.recommendationLists }).levels[0]!
       expect(level1.manual.map(item => [item.identifier, item.state, item.hasText])).toEqual([["7.1.2", "Not assessed", true], ["7.1.3", "Manual", true]])
       expect(level1.manual[0]).toMatchObject({ title: "Synthetic uncovered recommendation", audit: "Synthetic audit\nsecond line." })
       expect(levelCheckSummary(level1)).toBe("Level 1: TenuVault checks 1 of 3 recommendations automatically. The other 2 need a manual check.")
+      // Coverage counts what the sentence counts: one of the two automated recommendations.
+      expect(level1).toMatchObject({ assessedAutomated: 1, denominator: 2, coverage: 0.5 })
     })
 
     it("drops a list from an earlier pack when the service has none for the new one", async () => {
@@ -221,7 +224,36 @@ describe("CIS content delivery service", () => {
       await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })
       vi.stubGlobal("fetch", serve(noList))
       await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })
-      expect(loadWorkspace(tenantId, "cis-benchmarks")).not.toHaveProperty("recommendationList")
+      expect(loadWorkspace(tenantId, "cis-benchmarks")).not.toHaveProperty("recommendationLists")
+    })
+
+    it("keeps one list per Level, so a saved assessment of one Level never reads another Level's list", async () => {
+      const level2 = { ...list, items: [{ identifier: "8.1.1", level: 2, automated: true, title: "Synthetic Level 2 recommendation", audit: "Synthetic Level 2 audit." }] }
+      vi.stubGlobal("fetch", serve(() => Response.json(list)))
+      await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })
+      const level1Policies = loadWorkspace(tenantId, "cis-benchmarks").policies
+      vi.stubGlobal("fetch", vi.fn(async (url: string) => url.includes("/cis/v1/lists/") ? Response.json(level2) : Response.json({ ...validPack, level: 2 })))
+      await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 2 })
+      const workspace = loadWorkspace(tenantId, "cis-benchmarks")
+      expect(workspace.recommendationLists).toEqual([list, level2])
+      const entry = { assessment: assessPolicySet({ tenantId, frameworkId: "cis-benchmarks", reference: "fakebook-os 9.9.9 Level 1", policies: level1Policies, current: parsePolicies([policy()]).map(item => ({ ...item, id: "33333333-3333-3333-3333-333333333330" })), runId: "run-1", assessedAt: "2026-10-10T12:00:00.000Z" }), policies: level1Policies }
+      const summary = readinessFor(entry, { history: [entry], recommendationLists: workspace.recommendationLists })
+      expect(summary.levels.map(level => level.level)).toEqual([1])
+      expect(summary.levels[0]!.manual.map(item => item.identifier)).toEqual(["7.1.2", "7.1.3"])
+    })
+
+    it("leaves an imported list alone and prefers the delivered list for the Levels it covers", async () => {
+      const imported = { benchmark: "fakebook-os", version: "9.9.9", items: [{ identifier: "7.1.9", level: 1 as const, automated: false, title: "Synthetic imported manual" }] }
+      const saved = loadWorkspace(tenantId, "cis-benchmarks")
+      saved.recommendationList = imported
+      saveWorkspace(saved)
+      vi.stubGlobal("fetch", serve(() => Response.json(list)))
+      await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })
+      const workspace = loadWorkspace(tenantId, "cis-benchmarks")
+      expect(workspace.recommendationList).toEqual(imported)
+      expect(applicableRecommendationList(workspace.policies, workspace)?.items.map(item => item.identifier)).toEqual(["7.1.1", "7.1.2", "7.1.3"])
+      // A pack of a Level without a delivered list reads the imported list, as before.
+      expect(applicableRecommendationList(workspace.policies.map(({ recommendations: _carried, ...item }) => ({ ...item, provenance: { ...item.provenance, level: "Level 2" } })), workspace)).toEqual(imported)
     })
 
     it.each([

@@ -650,9 +650,12 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       const workspace = loadWorkspace(body.tenantId, body.frameworkId)
       workspace.policies = policies
       workspace.reference = reference
-      // A list belongs to the pack it came with; a list from an earlier pack or import never stays.
-      if (list) workspace.recommendationList = list
-      else delete workspace.recommendationList
+      // One delivered list per benchmark, version and Level replaces the earlier one for that Level, so saved
+      // assessments of another Level keep theirs. A Level the service has no list for drops its old one.
+      const lists = (workspace.recommendationLists ?? []).filter(item => !(item.benchmark === pack.benchmark && item.version === pack.version && item.items.every(entry => entry.level === pack.level)))
+      if (list) lists.push(list)
+      if (lists.length) workspace.recommendationLists = lists
+      else delete workspace.recommendationLists
       saveWorkspace(workspace)
       return { benchmark: pack.benchmark, version: pack.version, level: pack.level, reference, policyCount: policies.length, settingCount: policies.reduce((total, policy) => total + policy.settings.length, 0) }
     } catch (error) {
