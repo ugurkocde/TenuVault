@@ -101,7 +101,7 @@ Mapping errors you may see:
 
 ## Scope tags and secrets
 
-For Dev to Prod promotion, select the production tenant and open **Changes** > **Dev to Prod**. These rules apply to promotion from the next release:
+For Dev to Prod promotion, select the production tenant and open **Changes** > **Dev to Prod**. These rules apply to promotion:
 
 * **Update an existing policy:** the policy keeps its current destination scope tags. Source tags and their mappings do not replace them. When the tags differ, the preview names both sets where their display names are available.
 * **Create a new policy:** confirmed, usable scope tag mappings are copied. Each source tag without a usable mapping uses the destination's **Default** tag (`0`) instead, with a warning naming that source tag. The built-in Default tag is portable between tenants.
