@@ -242,6 +242,23 @@ describe("CIS content delivery service", () => {
       expect(summary.levels[0]!.manual.map(item => item.identifier)).toEqual(["7.1.2", "7.1.3"])
     })
 
+    it("resolves each Level on its own: delivered where published, imported items elsewhere", () => {
+      const pack = (level: 1 | 2) => parsePolicies([policy()]).map(item => ({ ...item, provenance: { benchmark: "fakebook-os", version: "9.9.9", level: `Level ${level}` } }))
+      const imported = { benchmark: "fakebook-os", version: "9.9.9", items: [
+        { identifier: "7.1.8", level: 1 as const, automated: false, title: "Synthetic imported L1" },
+        { identifier: "8.1.8", level: 2 as const, automated: false, title: "Synthetic imported L2" },
+      ] }
+      const deliveredL1 = { benchmark: "fakebook-os", version: "9.9.9", items: [{ identifier: "7.1.1", level: 1 as const, automated: true, title: "Synthetic delivered L1" }] }
+      const workspace = { recommendationList: imported, recommendationLists: [deliveredL1] }
+      const ids = (policies: ReturnType<typeof pack>) => applicableRecommendationList(policies, workspace)?.items.map(item => item.identifier)
+      // An assessment of both Levels: delivered for Level 1, the imported items for Level 2.
+      expect(ids([...pack(1), ...pack(2)])).toEqual(["7.1.1", "8.1.8"])
+      // A Level 1 assessment takes only Level 1, from the delivered list.
+      expect(ids(pack(1))).toEqual(["7.1.1"])
+      // A Level 2 assessment with no delivered list for its Level reads the imported list as before.
+      expect(applicableRecommendationList(pack(2), workspace)).toEqual(imported)
+    })
+
     it("leaves an imported list alone and prefers the delivered list for the Levels it covers", async () => {
       const imported = { benchmark: "fakebook-os", version: "9.9.9", items: [{ identifier: "7.1.9", level: 1 as const, automated: false, title: "Synthetic imported manual" }] }
       const saved = loadWorkspace(tenantId, "cis-benchmarks")

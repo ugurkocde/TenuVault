@@ -413,16 +413,25 @@ export interface CisReadinessWorkspace {
 }
 
 /**
- * The recommendation list for one saved assessment: the delivered lists of its benchmark, version and
- * Levels merged, so an assessment never takes text or a total from another Level's list. Without one,
- * the imported list, read as before.
+ * The recommendation list for one saved assessment, Level by Level: each Level of its pack takes the
+ * delivered list of its benchmark, version and Level, or else the imported list's items of that Level,
+ * so an assessment never takes text or a total from another Level's delivered list and a delivered
+ * list never hides imported items of a Level it does not cover. Without any delivered list for the
+ * benchmark and version, the imported list is read as before.
  */
 export function applicableRecommendationList(policies: BaselinePolicy[], workspace: Pick<CisReadinessWorkspace, "recommendationList" | "recommendationLists">): RecommendationList | undefined {
   const benchmark = policies.map(policy => textOf(policy, "benchmark")).find(Boolean)
   const version = policies.map(policy => textOf(policy, "version")).find(Boolean)
   const levels = packLevels(policies)
-  const delivered = benchmark && version ? (workspace.recommendationLists ?? []).filter(list => list.benchmark === benchmark && list.version === version && list.items.every(item => levels.has(item.level))) : []
-  return delivered.length ? { benchmark: benchmark!, version: version!, items: delivered.flatMap(list => list.items) } : workspace.recommendationList
+  const delivered = benchmark && version ? (workspace.recommendationLists ?? []).filter(list => list.benchmark === benchmark && list.version === version) : []
+  const deliveredFor = (level: KitLevel) => delivered.filter(list => list.items.length > 0 && list.items.every(item => item.level === level))
+  if (![...levels].some(level => deliveredFor(level).length)) return workspace.recommendationList
+  const imported = workspace.recommendationList && workspace.recommendationList.benchmark === benchmark && workspace.recommendationList.version === version ? workspace.recommendationList : undefined
+  const items = [...levels].sort((a, b) => a - b).flatMap(level => {
+    const lists = deliveredFor(level)
+    return lists.length ? lists[lists.length - 1]!.items : (imported?.items ?? []).filter(item => item.level === level)
+  })
+  return { benchmark: benchmark!, version: version!, items }
 }
 
 function timeOf(entry: CisReadinessEntry): number {
