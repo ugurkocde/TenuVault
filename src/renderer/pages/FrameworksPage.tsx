@@ -1115,6 +1115,8 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
               // Saved here, when it is imported: restoring a saved list or opening history never saves.
               void perform("Reading recommendation list…", async () => {
                 await requireCurrentKitImport()
+                // A read-only saved assessment shows older policies; saving them would replace the current pack.
+                if (historical) throw new Error("Open the current assessment before importing a recommendation list.")
                 const list = parseRecommendationList(await file.text())
                 const saved = await workspaceRequest("workspace-save", { policies, reference, recommendationList: list })
                 setWorkspace(saved); setRecommendationList(list)

@@ -6,6 +6,7 @@ import { cisContentBaseUrl, setCisContentEnvOverrideAllowed, setCisContentFallba
 import { loadWorkspace, saveWorkspace, setFrameworkStore } from "../src/main/frameworks/workspaces"
 import { kitLevelForPolicy } from "../src/shared/frameworks/cis-flow"
 import { applicableRecommendationList, levelCheckSummary, readinessFor } from "../src/shared/frameworks/cis-readiness"
+import { cisReadinessTrend } from "../src/shared/frameworks/cis-trend"
 
 /** The delivery service answer for a Level without a published recommendation list. */
 const noList = () => Response.json({ ok: false, error: "The requested CIS benchmark content is not published." }, { status: 404 })
@@ -240,6 +241,19 @@ describe("CIS content delivery service", () => {
       const summary = readinessFor(entry, { history: [entry], recommendationLists: workspace.recommendationLists })
       expect(summary.levels.map(level => level.level)).toEqual([1])
       expect(summary.levels[0]!.manual.map(item => item.identifier)).toEqual(["7.1.2", "7.1.3"])
+      // The trend reads the same lists: the Level 1 run has only its own Level.
+      expect(cisReadinessTrend([entry], undefined, undefined, "2026-10-16", workspace.recommendationLists)[0]!.levels.map(level => level.level)).toEqual([1])
+    })
+
+    it("keeps the twelve newest delivered lists", async () => {
+      const saved = loadWorkspace(tenantId, "cis-benchmarks")
+      saved.recommendationLists = Array.from({ length: 12 }, (_, index) => ({ benchmark: "other-os", version: `1.0.${index}`, items: [{ identifier: "1.1", level: 1 as const, automated: true }] }))
+      saveWorkspace(saved)
+      vi.stubGlobal("fetch", serve(() => Response.json(list)))
+      await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })
+      const lists = loadWorkspace(tenantId, "cis-benchmarks").recommendationLists!
+      expect(lists).toHaveLength(12)
+      expect(lists.map(item => item.version)).toEqual([...Array.from({ length: 11 }, (_, index) => `1.0.${index + 1}`), "9.9.9"])
     })
 
     it("resolves each Level on its own: delivered where published, imported items elsewhere", () => {
