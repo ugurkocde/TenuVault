@@ -1,9 +1,11 @@
 import { BENCHMARK_ID_PATTERN, MAX_CIS_BENCHMARK_ID_LENGTH, VERSION_PATTERN, validateCisCatalog, validateCisPack, type CisCatalog, type CisLevel, type CisPack } from "../../shared/frameworks/cis-content"
+import { validateRecommendationList, type RecommendationList } from "../../shared/frameworks/cis-manual"
 
 export const CIS_CONTENT_BASE_URL_ENV = "TENUVAULT_CIS_CONTENT_BASE_URL"
 export const CIS_CONTENT_TIMEOUT_MS = 15_000
 export const CIS_CATALOG_MAX_BYTES = 1_000_000
 export const CIS_PACK_MAX_BYTES = 8_000_000
+export const CIS_LIST_MAX_BYTES = 8_000_000
 export const CIS_CONTENT_NOT_CONFIGURED_MESSAGE = "The CIS content delivery service is not configured. Set TENUVAULT_CIS_CONTENT_BASE_URL in the main process environment to load benchmarks from TenuVault."
 const CIS_CONTENT_INVALID_BASE_URL_MESSAGE = "The CIS content delivery service base URL is invalid. Set TENUVAULT_CIS_CONTENT_BASE_URL to an https URL without credentials, a query string or a fragment."
 const CIS_CONTENT_UNREACHABLE_MESSAGE = "The CIS content delivery service could not be reached."
@@ -175,6 +177,29 @@ export async function fetchCisPack(expected: { benchmark: string; version: strin
     const json = await fetchJson(url, CIS_PACK_MAX_BYTES, token)
     return validateCisPack(json, expected)
   } catch (error) {
+    throw toCisContentError(error)
+  }
+}
+
+/**
+ * Loads the recommendation list of one benchmark Level: every recommendation with its text and
+ * whether the pack assesses it. Null when the service has none published for that Level (404),
+ * so a pack without a list loads as before. The list must name exactly the requested benchmark,
+ * version and Level.
+ */
+export async function fetchCisList(expected: { benchmark: string; version: string; level: CisLevel }, entitlementToken: string | null): Promise<RecommendationList | null> {
+  validatePackIdentity(expected)
+  const token = requireEntitlementToken(entitlementToken)
+  const base = requireBaseUrl()
+  const url = `${base}/cis/v1/lists/${encodeURIComponent(expected.benchmark)}/${encodeURIComponent(expected.version)}/${expected.level}`
+  try {
+    const list = validateRecommendationList(await fetchJson(url, CIS_LIST_MAX_BYTES, token))
+    if (list.benchmark !== expected.benchmark || list.version !== expected.version || list.items.some(item => item.level !== expected.level)) {
+      throw new CisContentError("The CIS recommendation list does not match the requested benchmark, version and level.", 502)
+    }
+    return list
+  } catch (error) {
+    if (error instanceof CisContentError && error.status === 404) return null
     throw toCisContentError(error)
   }
 }

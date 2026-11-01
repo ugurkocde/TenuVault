@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { validateCisCatalog, validateCisPack } from "../src/shared/frameworks/cis-content"
-import { handleFramework, setCisEntitlementProvider, setInternalCisBenchmarksEnabled } from "../src/main/frameworks/service"
+import { assessPolicySet, handleFramework, setCisEntitlementProvider, setInternalCisBenchmarksEnabled } from "../src/main/frameworks/service"
+import { parsePolicies } from "../src/shared/frameworks/policies"
 import { cisContentBaseUrl, setCisContentEnvOverrideAllowed, setCisContentFallbackBaseUrl } from "../src/main/frameworks/cis-content"
 import { loadWorkspace, setFrameworkStore } from "../src/main/frameworks/workspaces"
 import { kitLevelForPolicy } from "../src/shared/frameworks/cis-flow"
-import { readinessFor } from "../src/shared/frameworks/cis-readiness"
+import { levelCheckSummary, readinessFor } from "../src/shared/frameworks/cis-readiness"
+
+/** The delivery service answer for a Level without a published recommendation list. */
+const noList = () => Response.json({ ok: false, error: "The requested CIS benchmark content is not published." }, { status: 404 })
 
 const tenantId = "11111111-1111-1111-1111-111111111111"
 const type = "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance"
@@ -134,6 +138,7 @@ describe("CIS content delivery service", () => {
 
   it("saves the workspace pack with the right reference on pack success", async () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url.includes("/cis/v1/lists/")) return noList()
       expect(url).toBe("https://content.example.test/cis/v1/packs/fakebook-os/9.9.9/1")
       return Response.json(validPack)
     }))
@@ -147,14 +152,14 @@ describe("CIS content delivery service", () => {
   })
 
   it("stamps the catalog display name on a pack loaded after the catalog", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (url: string) => Response.json(url.endsWith("/catalog") ? validCatalog : validPack)))
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => url.includes("/cis/v1/lists/") ? noList() : Response.json(url.endsWith("/catalog") ? validCatalog : validPack)))
     await handleFramework({ action: "cis-catalog", tenantId, frameworkId: "cis-benchmarks" })
     await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })
     expect(loadWorkspace(tenantId, "cis-benchmarks").policies[0]?.provenance).toEqual({ benchmark: "fakebook-os", version: "9.9.9", level: "Level 1", benchmarkName: "Fakebook OS" })
   })
 
   it("keeps the benchmark, version and Level of a delivered Level 2 pack, so it scores as Level 2", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ...validPack, level: 2, policies: [{ ...policy(), provenance: { level: 1, benchmark: "other-os" } }] })))
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => url.includes("/cis/v1/lists/") ? noList() : Response.json({ ...validPack, level: 2, policies: [{ ...policy(), provenance: { level: 1, benchmark: "other-os" } }] })))
     await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 2 })
     const policies = loadWorkspace(tenantId, "cis-benchmarks").policies
     expect(policies[0]?.provenance).toMatchObject({ benchmark: "fakebook-os", version: "9.9.9", level: "Level 2" })
@@ -173,9 +178,62 @@ describe("CIS content delivery service", () => {
       { id: "7.1.1", title: "Synthetic leaf recommendation", level: 1, settings: ["minlength"] },
       { id: "7.1.2", title: "Synthetic unrelated recommendation", level: 1, settings: ["not_in_pack"] },
     ]
-    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ...validPack, recommendations })))
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => url.includes("/cis/v1/lists/") ? noList() : Response.json({ ...validPack, recommendations })))
     await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })
     expect(loadWorkspace(tenantId, "cis-benchmarks").policies[0]?.recommendations).toEqual(recommendations)
+  })
+
+  describe("recommendation lists", () => {
+    const list = {
+      benchmark: "fakebook-os", version: "9.9.9",
+      items: [
+        { identifier: "7.1.1", level: 1, automated: true, title: "Synthetic covered recommendation" },
+        { identifier: "7.1.2", level: 1, automated: true, title: "Synthetic uncovered recommendation", description: "Synthetic description.", audit: "Synthetic audit\nsecond line.", remediation: "Synthetic remediation." },
+        { identifier: "7.1.3", level: 1, automated: false, title: "Synthetic manual recommendation", impact: "Synthetic impact." },
+      ],
+    }
+    const recommendations = [{ id: "7.1.1", title: "Synthetic covered recommendation", level: 1, settings: ["minlength"] }]
+    const serve = (listResponse: () => Response) => vi.fn(async (url: string) => {
+      if (url.includes("/cis/v1/lists/")) {
+        expect(url).toBe("https://content.example.test/cis/v1/lists/fakebook-os/9.9.9/1")
+        return listResponse()
+      }
+      return Response.json({ ...validPack, recommendations })
+    })
+
+    it("keeps the delivered list with the pack and lists Manual and Not assessed items with their text", async () => {
+      vi.stubGlobal("fetch", serve(() => Response.json(list)))
+      await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })
+      const workspace = loadWorkspace(tenantId, "cis-benchmarks")
+      expect(workspace.recommendationList).toEqual(list)
+      // The tenant holds the pack policy as it is, so the covered recommendation is assessed and passes.
+      const current = parsePolicies([policy()]).map(item => ({ ...item, id: "33333333-3333-3333-3333-333333333330" }))
+      const assessment = assessPolicySet({ tenantId, frameworkId: "cis-benchmarks", reference: workspace.reference, policies: workspace.policies, current, runId: "run-1", assessedAt: "2026-10-10T12:00:00.000Z" })
+      const entry = { assessment, policies: workspace.policies }
+      const level1 = readinessFor(entry, { history: [entry], recommendationList: workspace.recommendationList }).levels[0]!
+      expect(level1.manual.map(item => [item.identifier, item.state, item.hasText])).toEqual([["7.1.2", "Not assessed", true], ["7.1.3", "Manual", true]])
+      expect(level1.manual[0]).toMatchObject({ title: "Synthetic uncovered recommendation", audit: "Synthetic audit\nsecond line." })
+      expect(levelCheckSummary(level1)).toBe("Level 1: TenuVault checks 1 of 3 recommendations automatically. The other 2 need a manual check.")
+    })
+
+    it("drops a list from an earlier pack when the service has none for the new one", async () => {
+      vi.stubGlobal("fetch", serve(() => Response.json(list)))
+      await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })
+      vi.stubGlobal("fetch", serve(noList))
+      await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })
+      expect(loadWorkspace(tenantId, "cis-benchmarks")).not.toHaveProperty("recommendationList")
+    })
+
+    it.each([
+      ["another Level", () => Response.json({ ...list, items: [{ ...list.items[0], level: 2 }] })],
+      ["another version", () => Response.json({ ...list, version: "9.9.8" })],
+      ["an invalid list", () => Response.json({ ...list, extra: true })],
+      ["a server error", () => Response.json({ error: "boom" }, { status: 500 })],
+    ])("refuses %s and saves nothing", async (_label, listResponse) => {
+      vi.stubGlobal("fetch", serve(listResponse))
+      await expect(handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })).rejects.toBeInstanceOf(Error)
+      expect(loadWorkspace(tenantId, "cis-benchmarks").policies).toHaveLength(0)
+    })
   })
 
   it("errors when the base URL is not configured and saves nothing", async () => {

@@ -793,7 +793,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       reset()
       setLoadedKitLevel(null)
       const saved = await workspaceRequest("workspace-load")
-      setWorkspace(saved); setPolicies(saved.policies); setReference(saved.reference || result.reference)
+      setWorkspace(saved); setPolicies(saved.policies); setReference(saved.reference || result.reference); setRecommendationList(saved.recommendationList)
       setPackRetry(null)
     }, "load")
   }
@@ -1283,11 +1283,14 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
             <p className="text-xs text-gray-500">Each mapped setting is judged on its own value across every tenant policy that holds it. A recommendation passes only when every setting it names is in the pack and Present, and fails when any is Different or Missing. Not assessed means the pack does not hold every setting it names.</p>
             <RecommendationResultList level={level.level} items={level.recommendations} names={settingNames} />
           </details>)}
-          {readiness.levels.map(level => level.manual.length > 0 && <div key={`manual-${level.level}`} className="mt-4">
-            <h4 className="font-medium text-gray-900">Manual, Level {level.level}</h4>
-            <p className="mt-1 text-xs text-gray-500">{benchmarkTitle(readiness.benchmark, readiness.benchmarkName)} {readiness.version}, Level {level.level}. These items are not assessed automatically.</p>
-            <ManualList level={level.level} items={level.manual} fallback={readiness.manualFallback} fallbackUrl={readiness.manualFallbackUrl} />
-          </div>)}
+          {readiness.levels.flatMap(level => MANUAL_SECTIONS.map(section => {
+            const items = level.manual.filter(item => item.state === section.state)
+            return items.length > 0 && <div key={`${section.state}-${level.level}`} className="mt-4">
+              <h4 className="font-medium text-gray-900">{section.heading}, Level {level.level}</h4>
+              <p className="mt-1 text-xs text-gray-500">{benchmarkTitle(readiness.benchmark, readiness.benchmarkName)} {readiness.version}, Level {level.level}. {section.note}</p>
+              <ManualList level={level.level} label={section.heading} items={items} fallback={readiness.manualFallback} fallbackUrl={readiness.manualFallbackUrl} />
+            </div>
+          }))}
           <details ref={exclusionsPanel} open={cisExceptionsOpen} onToggle={e => setCisExceptionsOpen((e.target as HTMLDetailsElement).open)} className="mt-2 scroll-mt-6 border-t border-gray-100">
             <summary id="cis-exclusions" className="cursor-pointer py-3 text-sm font-medium text-gray-800">{(() => {
               // One exclusion can count toward two Levels; the total counts it once.
@@ -1428,17 +1431,24 @@ function RecommendationResultList({ level, items, names }: { level: number; item
 }
 
 /** One Level's manual items with search over identifier, title and benchmark text. */
-function ManualList({ level, items, fallback, fallbackUrl }: { level: number; items: ManualItemView[]; fallback: string; fallbackUrl: string }) {
+/** The readiness sections for recommendations TenuVault does not check, in display order. */
+const MANUAL_SECTIONS: { state: ManualItemView["state"]; heading: string; note: string }[] = [
+  { state: "Manual", heading: "Manual", note: "CIS classifies these recommendations as manual, so they are not assessed automatically. Check each one as its audit describes." },
+  { state: "Not assessed", heading: "Not assessed by this tool", note: "CIS classifies these recommendations as automated, but this benchmark pack does not cover them, so TenuVault does not check them. Check each one as its audit describes." },
+]
+
+function ManualList({ level, label, items, fallback, fallbackUrl }: { level: number; label: string; items: ManualItemView[]; fallback: string; fallbackUrl: string }) {
   const [query, setQuery] = useState("")
   const shown = filterManualItems(items, query)
+  const noun = label === "Manual" ? "manual items" : "items"
   return <>
     <div className="mt-2 flex flex-wrap items-center gap-2">
-      <SearchInput label={`Search Level ${level} manual items`} value={query} onChange={setQuery} placeholder="Search ID, title or text" />
-      <span aria-live="polite" className="ml-auto text-xs text-gray-500">{shown !== items ? `${shown.length} of ${items.length} manual items` : ""}</span>
+      <SearchInput label={`Search Level ${level} ${label.toLowerCase()} items`} value={query} onChange={setQuery} placeholder="Search ID, title or text" />
+      <span aria-live="polite" className="ml-auto text-xs text-gray-500">{shown !== items ? `${shown.length} of ${items.length} ${noun}` : `${items.length} ${noun}`}</span>
     </div>
     <div className="mt-2 divide-y divide-gray-100 border-y border-gray-100">{shown.map(item => <details key={item.identifier} className="py-3">
-      <summary className="cursor-pointer text-sm"><span className="font-medium text-gray-800">{item.identifier}</span>{item.title && <span className="ml-2 text-gray-700">{item.title}</span>}<span className="ml-2 inline-block rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-700">Manual</span></summary>
-      <div className="mt-3 space-y-2 text-sm text-gray-700">
+      <summary className="cursor-pointer text-sm"><span className="font-medium text-gray-800">{item.identifier}</span>{item.title && <span className="ml-2 text-gray-700">{item.title}</span>}<span className="ml-2 inline-block rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-700">{item.state}</span></summary>
+      <div className="mt-3 space-y-2 whitespace-pre-wrap text-sm text-gray-700">
         {item.hasText ? <>
           {item.description && <p><strong className="font-medium text-gray-900">Description:</strong> {item.description}</p>}
           {item.impact && <p><strong className="font-medium text-gray-900">Impact:</strong> {item.impact}</p>}
@@ -1447,7 +1457,7 @@ function ManualList({ level, items, fallback, fallbackUrl }: { level: number; it
         </> : <p><a href={fallbackUrl} className="text-blue-700 hover:underline" onClick={event => { event.preventDefault(); void bridge.app.openExternal(fallbackUrl) }}>{fallback}</a></p>}
       </div>
     </details>)}
-      {!shown.length && <p className="py-3 text-center text-sm text-gray-500">No manual items match the search.</p>}</div>
+      {!shown.length && <p className="py-3 text-center text-sm text-gray-500">No {noun} match the search.</p>}</div>
   </>
 }
 

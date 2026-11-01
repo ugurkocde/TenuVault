@@ -15,7 +15,7 @@ import { readinessFor } from "../../shared/frameworks/cis-readiness"
 import { attachRecommendations } from "../../shared/frameworks/cis-recommendations"
 import { exceptionKey, isActive, isDateOnly, localDate, MAX_EXCEPTIONS, validateNewException, type CisException } from "../../shared/frameworks/cis-exceptions"
 import { tenantWriteLabel, withTenantWrite } from "../features/write-lock"
-import { CisContentError, fetchCisCatalog, fetchCisPack } from "./cis-content"
+import { CisContentError, fetchCisCatalog, fetchCisList, fetchCisPack } from "./cis-content"
 import { BENCHMARK_ID_PATTERN, MAX_CIS_BENCHMARK_ID_LENGTH, VERSION_PATTERN, type CisLevel } from "../../shared/frameworks/cis-content"
 import { retryableStatus, retryDelay, sleep } from "../graph-retry"
 import { cisExportFileName, knownBenchmarkName } from "../../shared/frameworks/cis-display"
@@ -637,6 +637,8 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       // A pack that could not be saved is not fetched: an unreadable workspace fails before any download.
       loadWorkspace(body.tenantId, body.frameworkId)
       const pack = await fetchCisPack({ benchmark, version, level }, cisEntitlementToken(body.tenantId))
+      // The list is optional: without one the readiness view shows the CIS notice only, as before.
+      const list = await fetchCisList({ benchmark, version, level }, cisEntitlementToken(body.tenantId))
       requireEnabledFramework(body.frameworkId)
       let policies: BaselinePolicy[]
       try { policies = parsePolicies(pack.policies); if (pack.recommendations) policies = attachRecommendations(policies, pack.recommendations) }
@@ -648,6 +650,9 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       const workspace = loadWorkspace(body.tenantId, body.frameworkId)
       workspace.policies = policies
       workspace.reference = reference
+      // A list belongs to the pack it came with; a list from an earlier pack or import never stays.
+      if (list) workspace.recommendationList = list
+      else delete workspace.recommendationList
       saveWorkspace(workspace)
       return { benchmark: pack.benchmark, version: pack.version, level: pack.level, reference, policyCount: policies.length, settingCount: policies.reduce((total, policy) => total + policy.settings.length, 0) }
     } catch (error) {

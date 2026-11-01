@@ -284,7 +284,7 @@ function cisReadinessRow(summary: CisReadinessSummary, level: CisReadinessSummar
     } : {}),
     manualNote: summary.manualNote,
     manual: (level.manual ?? []).map(item => ({
-      identifier: item.identifier, level: item.level, title: item.title ?? null, state: "Manual" as const,
+      identifier: item.identifier, level: item.level, title: item.title ?? null, state: item.state,
       description: item.description ?? null, impact: item.impact ?? null, audit: item.audit ?? null, remediation: item.remediation ?? null,
       fallback: item.hasText ? null : summary.manualFallback, fallbackUrl: item.hasText ? null : summary.manualFallbackUrl,
     })),
@@ -293,7 +293,7 @@ function cisReadinessRow(summary: CisReadinessSummary, level: CisReadinessSummar
 
 function cisManualRow(summary: CisReadinessSummary, level: CisReadinessSummary["levels"][number], item: NonNullable<CisReadinessSummary["levels"][number]["manual"]>[number]) {
   return {
-    benchmark: summary.benchmark, version: summary.version, level: level.level, state: "Manual" as const,
+    benchmark: summary.benchmark, version: summary.version, level: level.level, state: item.state,
     identifier: item.identifier, title: item.title ?? "",
     description: item.description ?? "", impact: item.impact ?? "", audit: item.audit ?? "", remediation: item.remediation ?? "",
     fallback: item.hasText ? "" : summary.manualFallback,

@@ -322,9 +322,15 @@ function measure(assessment: Assessment, policies: BaselinePolicy[], denominator
     const findings = assessment.findings.filter(finding => indexes.has(finding.policyIndex))
     const count = (status: string) => findings.filter(finding => finding.status === status).length
     const cov = coverageByLevel.get(level)
-    const notAssessed = effectiveDenominator && cov ? cov.denominatorIds.filter(id => !cov.numeratorIds.includes(id)) : []
+    const levelRecommendations = recommendations.filter(result => result.level === level)
+    // Not assessed: automated identifiers of the list that no assessed pack recommendation or pack
+    // description names, as levelCheckCounts counts them, so the listed items match its sentence.
+    const unassessed = new Set(levelRecommendations.filter(result => result.result === "Not assessed").map(result => result.id))
+    const enumeratedHere = (cov?.enumeratedIds ?? []).filter(id => (recommendationLevel.get(id) ?? level) === level)
+    const described = new Set([...levelRecommendations.filter(result => result.result !== "Not assessed").map(result => result.id), ...enumeratedHere].filter(id => !unassessed.has(id)))
+    const notAssessed = effectiveDenominator ? [...new Set(effectiveDenominator.filter(entry => entry.level === level && entry.automated && !described.has(entry.identifier)).map(entry => entry.identifier))] : []
     const manualNotAssessed = effectiveDenominator ? effectiveDenominator.filter(entry => entry.level === level && !entry.automated).map(entry => entry.identifier) : []
-    const manual = manualItemsForLevel(effectiveList, level, [...new Set([...notAssessed, ...manualNotAssessed])])
+    const manual = manualItemsForLevel(effectiveList, level, notAssessed, manualNotAssessed)
     // Exceptions never change the raw status counts. The excepted count is the
     // number of non-Present findings covered by an active exception for this
     // level, and adjustedPassRate counts those findings as passed.
@@ -335,7 +341,6 @@ function measure(assessment: Assessment, policies: BaselinePolicy[], denominator
     const findingKeys = new Set(findings.filter(finding => finding.status !== "Present").map(finding => exceptionKey(benchmark, version, level, finding.policyName, finding.settingId)))
     const levelExceptions = [...applicableByKey.values()].filter(exception => exception.level === level && findingKeys.has(keyOf(exception)))
     const exceptedKeys = new Set(levelExceptions.map(keyOf))
-    const levelRecommendations = recommendations.filter(result => result.level === level)
     // On the recommendation basis the exclusions on the open findings of the failing settings of this
     // Level's recommendations count, wherever those findings sit. A setting a recommendation names
     // that passes contributes none, even when a sibling in its shared root fails for another Level.
@@ -364,7 +369,7 @@ function measure(assessment: Assessment, policies: BaselinePolicy[], denominator
       assessedAutomated: cov && cov.denominatorSource !== "none" ? cov.numerator : null,
       enumerated: cov?.enumeratedIds.length ?? 0,
       // A description identifier that the recommendation metadata assigns to another Level belongs there.
-      enumeratedIds: (cov?.enumeratedIds ?? []).filter(id => (recommendationLevel.get(id) ?? level) === level),
+      enumeratedIds: enumeratedHere,
       denominatorIdentifiers: [...new Set((effectiveDenominator ?? []).filter(entry => entry.level === level).map(entry => entry.identifier))],
       automatedIdentifiers: [...new Set((effectiveDenominator ?? []).filter(entry => entry.level === level && entry.automated).map(entry => entry.identifier))],
       denominator: cov?.denominator ?? null,

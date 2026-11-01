@@ -6,7 +6,7 @@ import { promisify } from "node:util"
 import JSZip from "jszip"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { parseBreakoutWorkbook, recommendationListFromWorkbook } from "../src/shared/frameworks/cis-coverage"
-import { MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDATIONS_URL, parseRecommendationList, recommendationListFromBreakout, serializeRecommendationList, validateRecommendationList } from "../src/shared/frameworks/cis-manual"
+import { MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDATIONS_URL, MAX_LIST_ITEMS, MAX_LIST_TEXT_LENGTH, MAX_LIST_TITLE_LENGTH, manualItemsForLevel, parseRecommendationList, recommendationListFromBreakout, serializeRecommendationList, validateRecommendationList } from "../src/shared/frameworks/cis-manual"
 import { cisReadiness, levelCheckCounts, levelCheckSummary } from "../src/shared/frameworks/cis-readiness"
 import { convertKit, type KitFile } from "../src/shared/frameworks/cis-kit"
 import { cisReadinessCsv, cisReadinessJson } from "../src/renderer/features/shared/governance-export"
@@ -87,6 +87,31 @@ async function syntheticWorkbook(): Promise<Uint8Array> {
   return zip.generateAsync({ type: "uint8array" })
 }
 
+describe("delivered recommendation list limits and states", () => {
+  const item = (identifier: string, extra: Record<string, unknown> = {}) => ({ identifier, level: 1, automated: true, ...extra })
+
+  it("bounds the item count, titles and text fields", () => {
+    expect(() => validateRecommendationList({ benchmark: "synthetic-os", version: "1.0.0", items: Array.from({ length: MAX_LIST_ITEMS + 1 }, (_, index) => item(`1.${index}`)) })).toThrow(`at most ${MAX_LIST_ITEMS} items`)
+    expect(() => validateRecommendationList({ benchmark: "synthetic-os", version: "1.0.0", items: [item("1.1", { title: "t".repeat(MAX_LIST_TITLE_LENGTH + 1) })] })).toThrow("title must be at most")
+    expect(() => validateRecommendationList({ benchmark: "synthetic-os", version: "1.0.0", items: [item("1.1", { audit: "a".repeat(MAX_LIST_TEXT_LENGTH + 1) })] })).toThrow("audit must be at most")
+    expect(validateRecommendationList({ benchmark: "synthetic-os", version: "1.0.0", items: [item("1.1", { audit: "a".repeat(MAX_LIST_TEXT_LENGTH) })] }).items[0]!.audit).toHaveLength(MAX_LIST_TEXT_LENGTH)
+  })
+
+  it("marks manual items Manual and unassessed automated items Not assessed, each with its list text", () => {
+    const list = validateRecommendationList({ benchmark: "synthetic-os", version: "1.0.0", items: [
+      item("1.1", { title: "Synthetic covered" }),
+      item("1.2", { title: "Synthetic uncovered", description: "Synthetic description.", audit: "Synthetic audit." }),
+      item("1.3", { automated: false, title: "Synthetic manual", remediation: "Synthetic remediation." }),
+      item("2.1", { level: 2, automated: false, title: "Other Level" }),
+    ] })
+    const items = manualItemsForLevel(list, 1, ["1.2", "1.9"], ["1.4"])
+    expect(items.map(entry => [entry.identifier, entry.state, entry.hasText])).toEqual([["1.2", "Not assessed", true], ["1.3", "Manual", true], ["1.4", "Manual", false], ["1.9", "Not assessed", false]])
+    expect(items[0]).toMatchObject({ title: "Synthetic uncovered", description: "Synthetic description.", audit: "Synthetic audit.", level: 1 })
+    // A manual list item stays Manual even when an unassessed list names it too.
+    expect(manualItemsForLevel(list, 1, ["1.3"]).find(entry => entry.identifier === "1.3")?.state).toBe("Manual")
+  })
+})
+
 describe("workbook to recommendation list conversion", () => {
   it("marks the manual bucket automated false, carries titles, and keeps the default parser title free", async () => {
     const bytes = await syntheticWorkbook()
@@ -161,7 +186,7 @@ describe("manual readiness data", () => {
     expect(summary.recommendationList).toBeUndefined()
   })
 
-  it("adds denominator identifiers that were not assessed to the Manual section", () => {
+  it("lists automated denominator identifiers the pack did not assess as Not assessed", () => {
     const { policies, assessment } = assessed()
     const denominator = [
       { identifier: "7.1.1", level: 1 as const, automated: true },
@@ -170,7 +195,7 @@ describe("manual readiness data", () => {
     const summary = cisReadiness(assessment, policies, denominator)
     const level1 = summary.levels.find(level => level.level === 1)!
     expect(level1.notAssessed).toContain("7.1.9")
-    expect(level1.manual.find(item => item.identifier === "7.1.9")).toMatchObject({ hasText: false, state: "Manual", fallback: MANUAL_RECOMMENDATIONS_FALLBACK })
+    expect(level1.manual.find(item => item.identifier === "7.1.9")).toMatchObject({ hasText: false, state: "Not assessed", fallback: MANUAL_RECOMMENDATIONS_FALLBACK })
     // The total is exactly the denominator identifiers of the Level: 7.1.1 is covered, 7.1.9 is not.
     expect(levelCheckCounts(level1)).toEqual({ checked: 1, manual: 1, total: 2 })
   })
