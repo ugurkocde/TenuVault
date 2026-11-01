@@ -6,9 +6,10 @@ import { filterManualItems, recommendationResultView, searchRecommendationResult
 const result = (id: string, title: string, state: RecommendationResult["result"], settings: string[]): RecommendationResult =>
   ({ id, title, level: 1, result: state, settings: settings.map(setting => ({ id: setting, status: "Present", findingKeys: [] })), findingKeys: [] })
 const results = [
-  result("18.10.43.5", "Ensure 'Turn on cloud protection' is set to 'Enabled'", "Pass", ["device_vendor_msft_policy_config_defender_allowcloudprotection"]),
-  result("18.10.9.1.1", "Ensure 'Require additional authentication at startup' is set to 'Enabled'", "Fail", ["device_vendor_msft_policy_config_bitlocker_requireadditionalauthentication"]),
-  result("45.1", "Ensure 'Enable Domain Network Firewall' is set to 'True'", "Not assessed", ["vendor_msft_firewall_mdmstore_domainprofile_enablefirewall"]),
+  // Synthetic recommendations only: no benchmark text belongs in this repository.
+  result("7.1.4.2", "Synthetic cloud check is enabled", "Pass", ["synthetic_policy_cloudcheck"]),
+  result("7.1.2.1.1", "Synthetic startup check asks for a second factor", "Fail", ["synthetic_policy_startup_secondfactor"]),
+  result("9.1", "Synthetic domain wall is on", "Not assessed", ["synthetic_wall_domainprofile_on"]),
 ]
 const ids = (list: Array<{ id?: string; identifier?: string }>) => list.map(item => item.id ?? item.identifier)
 
@@ -19,22 +20,22 @@ describe("CIS recommendation result filter", () => {
   })
 
   it("searches IDs, titles and setting IDs with every term", () => {
-    expect(ids(searchRecommendationResults(results, "18.10"))).toEqual(["18.10.43.5", "18.10.9.1.1"])
-    expect(ids(searchRecommendationResults(results, "CLOUD enabled"))).toEqual(["18.10.43.5"])
-    expect(ids(searchRecommendationResults(results, "bitlocker"))).toEqual(["18.10.9.1.1"])
-    expect(ids(searchRecommendationResults(results, "firewall domainprofile"))).toEqual(["45.1"])
+    expect(ids(searchRecommendationResults(results, "7.1"))).toEqual(["7.1.4.2", "7.1.2.1.1"])
+    expect(ids(searchRecommendationResults(results, "CLOUD enabled"))).toEqual(["7.1.4.2"])
+    expect(ids(searchRecommendationResults(results, "secondfactor"))).toEqual(["7.1.2.1.1"])
+    expect(ids(searchRecommendationResults(results, "wall domainprofile"))).toEqual(["9.1"])
   })
 
   it("combines search and result", () => {
-    expect(ids(recommendationResultView(results, "", "Fail").shown)).toEqual(["18.10.9.1.1"])
-    expect(ids(recommendationResultView(results, "18.10", "Pass").shown)).toEqual(["18.10.43.5"])
-    expect(recommendationResultView(results, "firewall", "Pass").shown).toEqual([])
+    expect(ids(recommendationResultView(results, "", "Fail").shown)).toEqual(["7.1.2.1.1"])
+    expect(ids(recommendationResultView(results, "7.1", "Pass").shown)).toEqual(["7.1.4.2"])
+    expect(recommendationResultView(results, "wall", "Pass").shown).toEqual([])
   })
 })
 
 describe("CIS recommendation result chips", () => {
   it("offers Review only when the Level has Review items, with counts that follow the search", () => {
-    expect(recommendationResultView(results, "18.10", "All").options.map(option => `${option.value} ${option.count}`)).toEqual(["All 2", "Pass 1", "Fail 1", "Not assessed 0"])
+    expect(recommendationResultView(results, "7.1", "All").options.map(option => `${option.value} ${option.count}`)).toEqual(["All 2", "Pass 1", "Fail 1", "Not assessed 0"])
     const withReview = [...results, result("1.1", "Ensure a reviewed setting", "Review", ["synthetic_review"])]
     expect(recommendationResultView(withReview, "", "Review").options.map(option => option.value)).toContain("Review")
     expect(ids(recommendationResultView(withReview, "", "Review").shown)).toEqual(["1.1"])
