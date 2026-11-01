@@ -144,7 +144,7 @@ function level(levelNumber: 1 | 2, extreme: boolean): CisLevelReadiness {
     const result = (["Pass", "Pass", "Fail", "Pass", "Review", "Not assessed", "Pass", "Fail"] as const)[index % 8]!
     const id = `${levelNumber === 1 ? 18 : 19}.${(index % 9) + 1}.${index + 1}`
     return {
-      id, title: `Ensure synthetic recommendation ${id} is configured as recommended${index === 2 ? " for every domain, private and public network profile of the device" : ""}`,
+      id, title: `Synthetic recommendation ${id} is configured as recommended${index === 2 ? " for every domain, private and public network profile of the device" : ""}`,
       level: levelNumber, result,
       settings: [{ id: extreme && index % 10 === 0 ? LONG_ID : `device_vendor_msft_policy_config_synthetic_${index}`, status: result === "Fail" ? "Missing" as const : result === "Review" ? "Review" as const : result === "Not assessed" ? "Unmapped" as const : "Present" as const, findingKeys: [`0:${index}`] }],
       findingKeys: [`0:${index}`],
@@ -165,7 +165,7 @@ function level(levelNumber: 1 | 2, extreme: boolean): CisLevelReadiness {
     denominator: levelNumber === 1 ? 96 : 38, coverage: levelNumber === 1 ? 72 / 96 : 26 / 38, coverageSource: "authoritative",
     notAssessed: levelNumber === 1 ? ["18.4.1", "18.4.2", "18.9.7", "18.10.3"] : ["19.5.1"],
     manual: [
-      { identifier: `${levelNumber === 1 ? 1 : 2}.1.1`, level: levelNumber, title: "Ensure the account lockout threshold is reviewed", description: "Review the lockout threshold against the password policy.", impact: "Users locked out after repeated failures need a recovery path.", audit: "Check the account policy in the domain or Entra configuration.", remediation: "Set the threshold to 5 or fewer invalid attempts.", hasText: true, fallback: MANUAL_RECOMMENDATIONS_FALLBACK, fallbackUrl: MANUAL_RECOMMENDATIONS_URL, state: "Manual" },
+      { identifier: `${levelNumber === 1 ? 1 : 2}.1.1`, level: levelNumber, title: "Synthetic lockout threshold check", description: "Review the lockout threshold against the password policy.", impact: "Users locked out after repeated failures need a recovery path.", audit: "Check the account policy in the domain or Entra configuration.", remediation: "Set the threshold to 5 or fewer invalid attempts.", hasText: true, fallback: MANUAL_RECOMMENDATIONS_FALLBACK, fallbackUrl: MANUAL_RECOMMENDATIONS_URL, state: "Manual" },
       { identifier: `${levelNumber === 1 ? 1 : 2}.1.2`, level: levelNumber, hasText: false, fallback: MANUAL_RECOMMENDATIONS_FALLBACK, fallbackUrl: MANUAL_RECOMMENDATIONS_URL, state: "Manual" },
       ...(extreme ? [{ identifier: `${levelNumber}.${LONG_ID}`, level: levelNumber, title: `${LONG_MANUAL_TITLE} ${levelNumber}`, description: "Review this synthetic manual recommendation.", hasText: true, fallback: MANUAL_RECOMMENDATIONS_FALLBACK, fallbackUrl: MANUAL_RECOMMENDATIONS_URL, state: "Manual" as const }] : []),
     ],

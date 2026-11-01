@@ -108,7 +108,7 @@ describe("macOS setting group names in the views", () => {
   })
 
   it("keeps the generic name out of the recommendation search text", () => {
-    const items: RecommendationResult[] = [{ id: "2.3.1", title: "Ensure Gatekeeper is enabled", level: 1, result: "Fail", settings: [{ id: GATEKEEPER, status: "Different", findingKeys: [] }], findingKeys: [] }]
+    const items: RecommendationResult[] = [{ id: "2.3.1", title: "Synthetic gate check is enabled", level: 1, result: "Fail", settings: [{ id: GATEKEEPER, status: "Different", findingKeys: [] }], findingKeys: [] }]
     expect(searchRecommendationResults(items, "top level setting group", staleNames)).toHaveLength(0)
     expect(searchRecommendationResults(items, "systempolicy", staleNames)).toHaveLength(1)
   })

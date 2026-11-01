@@ -194,7 +194,7 @@ describe("report PDF layout", () => {
   it("prints the CIS notice, coverage, exceptions and manual recommendations", () => {
     const text = pdfText(generateCisReadinessPDF(cisSummary(), CIS_CONTEXT))
     for (const expected of [MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDATIONS_URL, "Coverage: 75% (72 of 96 automated recommendations), source: CIS list of automated recommendations.", "18.4.1, 18.4.2, 18.9.7, 18.10.3",
-      "Grace Hopper", "Ensure the account lockout threshold is reviewed", "Set the threshold to 5 or fewer invalid attempts.", "With exclusions 70% with 2 exclusions", "Recommendation pass rate 60%", "Not assessed"]) expect(text).toContain(expected)
+      "Grace Hopper", "Synthetic lockout threshold check", "Set the threshold to 5 or fewer invalid attempts.", "With exclusions 70% with 2 exclusions", "Recommendation pass rate 60%", "Not assessed"]) expect(text).toContain(expected)
   })
 })
 

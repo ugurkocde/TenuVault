@@ -322,7 +322,7 @@ describe("review round 3 of the flow polish", () => {
   })
 
   it("finds a recommendation by the readable name of its setting as well as by the raw id", () => {
-    const items = [{ id: "46.7", title: "Ensure SMB signing", level: 1 as const, result: "Fail" as const, settings: [{ id: ENCRYPTION, status: "Different" as const, findingKeys: [] }], findingKeys: [] }]
+    const items = [{ id: "46.7", title: "Synthetic signing check", level: 1 as const, result: "Fail" as const, settings: [{ id: ENCRYPTION, status: "Different" as const, findingKeys: [] }], findingKeys: [] }]
     expect(searchRecommendationResults(items, "require encryption", names)).toHaveLength(1)
     expect(searchRecommendationResults(items, "lanmanworkstation_requireencryption", names)).toHaveLength(1)
     expect(searchRecommendationResults(items, "require encryption")).toHaveLength(1)
