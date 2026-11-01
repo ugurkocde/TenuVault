@@ -24,8 +24,6 @@ import { MAX_DEFINITIONS } from "../../shared/intune/drift-format"
 import { readSettingNames } from "../../portal/lib/drift/setting-names"
 import { graphCaller } from "../../portal/lib/policies/graph-restore"
 
-/** Delivered recommendation lists a workspace keeps: one per benchmark, version and Level, newest last. */
-const MAX_DELIVERED_LISTS = 12
 
 const GRAPH = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies"
 interface Run { assessment: Assessment; policies: BaselinePolicy[]; fingerprint: string; expires: number; consumed: boolean }
@@ -657,8 +655,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       // assessments of another Level keep theirs. A Level the service has no list for drops its old one.
       const lists = (workspace.recommendationLists ?? []).filter(item => !(item.benchmark === pack.benchmark && item.version === pack.version && item.items.every(entry => entry.level === pack.level)))
       if (list) lists.push(list)
-      // The newest lists stay, so lists of benchmarks or versions no longer used cannot fill the workspace.
-      lists.splice(0, Math.max(0, lists.length - MAX_DELIVERED_LISTS))
+      // saveWorkspace drops delivered lists that neither this pack nor a saved assessment reads.
       if (lists.length) workspace.recommendationLists = lists
       else delete workspace.recommendationLists
       saveWorkspace(workspace)

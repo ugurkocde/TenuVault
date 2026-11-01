@@ -232,12 +232,16 @@ describe("CIS content delivery service", () => {
       const level2 = { ...list, items: [{ identifier: "8.1.1", level: 2, automated: true, title: "Synthetic Level 2 recommendation", audit: "Synthetic Level 2 audit." }] }
       vi.stubGlobal("fetch", serve(() => Response.json(list)))
       await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })
-      const level1Policies = loadWorkspace(tenantId, "cis-benchmarks").policies
+      // A saved Level 1 assessment keeps the Level 1 list in use after the Level 2 pack loads.
+      const withLevel1 = loadWorkspace(tenantId, "cis-benchmarks")
+      const level1Policies = withLevel1.policies
+      const entry = { assessment: assessPolicySet({ tenantId, frameworkId: "cis-benchmarks", reference: "fakebook-os 9.9.9 Level 1", policies: level1Policies, current: parsePolicies([policy()]).map(item => ({ ...item, id: "33333333-3333-3333-3333-333333333330" })), runId: "run-1", assessedAt: "2026-10-10T12:00:00.000Z" }), policies: level1Policies }
+      withLevel1.history.unshift(entry)
+      saveWorkspace(withLevel1)
       vi.stubGlobal("fetch", vi.fn(async (url: string) => url.includes("/cis/v1/lists/") ? Response.json(level2) : Response.json({ ...validPack, level: 2 })))
       await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 2 })
       const workspace = loadWorkspace(tenantId, "cis-benchmarks")
       expect(workspace.recommendationLists).toEqual([list, level2])
-      const entry = { assessment: assessPolicySet({ tenantId, frameworkId: "cis-benchmarks", reference: "fakebook-os 9.9.9 Level 1", policies: level1Policies, current: parsePolicies([policy()]).map(item => ({ ...item, id: "33333333-3333-3333-3333-333333333330" })), runId: "run-1", assessedAt: "2026-10-10T12:00:00.000Z" }), policies: level1Policies }
       const summary = readinessFor(entry, { history: [entry], recommendationLists: workspace.recommendationLists })
       expect(summary.levels.map(level => level.level)).toEqual([1])
       expect(summary.levels[0]!.manual.map(item => item.identifier)).toEqual(["7.1.2", "7.1.3"])
@@ -245,15 +249,24 @@ describe("CIS content delivery service", () => {
       expect(cisReadinessTrend([entry], undefined, undefined, "2026-10-16", workspace.recommendationLists)[0]!.levels.map(level => level.level)).toEqual([1])
     })
 
-    it("keeps the twelve newest delivered lists", async () => {
+    it("keeps only delivered lists the current pack or a saved assessment reads, at most twelve", async () => {
+      const otherPolicies = (index: number) => parsePolicies([policy()]).map(item => ({ ...item, provenance: { benchmark: "other-os", version: `1.0.${index}`, level: "Level 1" } }))
+      const otherList = (index: number) => ({ benchmark: "other-os", version: `1.0.${index}`, items: [{ identifier: "1.1", level: 1 as const, automated: true }] })
       const saved = loadWorkspace(tenantId, "cis-benchmarks")
-      saved.recommendationLists = Array.from({ length: 12 }, (_, index) => ({ benchmark: "other-os", version: `1.0.${index}`, items: [{ identifier: "1.1", level: 1 as const, automated: true }] }))
+      // Thirteen lists: twelve read by saved assessments, one read by nothing.
+      saved.recommendationLists = [...Array.from({ length: 12 }, (_, index) => otherList(index)), otherList(99)]
+      saved.history = Array.from({ length: 12 }, (_, index) => ({ assessment: { runId: `run-${index}`, tenantId, frameworkId: "cis-benchmarks", reference: `other-os 1.0.${index} Level 1`, assessedAt: "2026-10-10T12:00:00.000Z", policyCount: 1, findings: [] }, policies: otherPolicies(index) }))
       saveWorkspace(saved)
+      expect(loadWorkspace(tenantId, "cis-benchmarks").recommendationLists!.map(item => item.version)).toEqual(Array.from({ length: 12 }, (_, index) => `1.0.${index}`))
       vi.stubGlobal("fetch", serve(() => Response.json(list)))
       await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })
-      const lists = loadWorkspace(tenantId, "cis-benchmarks").recommendationLists!
-      expect(lists).toHaveLength(12)
-      expect(lists.map(item => item.version)).toEqual([...Array.from({ length: 11 }, (_, index) => `1.0.${index + 1}`), "9.9.9"])
+      // The new pack's list is kept and the oldest read list gives way to stay at twelve.
+      expect(loadWorkspace(tenantId, "cis-benchmarks").recommendationLists!.map(item => item.version)).toEqual([...Array.from({ length: 11 }, (_, index) => `1.0.${index + 1}`), "9.9.9"])
+      // Deleting the assessments frees their lists on the next save.
+      const pruned = loadWorkspace(tenantId, "cis-benchmarks")
+      pruned.history = []
+      saveWorkspace(pruned)
+      expect(loadWorkspace(tenantId, "cis-benchmarks").recommendationLists!.map(item => item.version)).toEqual(["9.9.9"])
     })
 
     it("resolves each Level on its own: delivered where published, imported items elsewhere", () => {

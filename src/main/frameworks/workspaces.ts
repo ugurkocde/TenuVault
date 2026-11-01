@@ -2,6 +2,7 @@ import type { KeyValueStore } from '../storage/secure-store'
 import { parsePolicies, record, type Assessment, type BaselinePolicy } from '../../shared/frameworks/policies'
 import { validateRecommendationList, type RecommendationList } from '../../shared/frameworks/cis-manual'
 import { validateExceptions, type CisException } from '../../shared/frameworks/cis-exceptions'
+import { packLevels } from '../../shared/frameworks/cis-readiness'
 import { HISTORY_FULL_MESSAGE, KEEP_NEWEST_ASSESSMENTS, MAX_WORKSPACE_BYTES, MAX_WORKSPACE_HISTORY, WORKSPACE_UNREADABLE_MESSAGE, type WorkspaceCapacity } from '../../shared/frameworks/workspace-history'
 
 export interface AssessmentRecord {
@@ -60,7 +61,31 @@ export function loadWorkspace(tenant: string, framework: string): FrameworkWorks
 
   return workspace
 }
+/** Delivered recommendation lists a workspace keeps at most, newest last. */
+export const MAX_DELIVERED_LISTS = 12
+
+/** Whether a pack reads a delivered list: same benchmark and version, and a Level the pack measures. */
+function readsList(policies: BaselinePolicy[], list: RecommendationList): boolean {
+  const provenance = (key: string) => policies.map(policy => policy.provenance?.[key]).find(value => typeof value === 'string' && value)
+  const levels = packLevels(policies)
+  return provenance('benchmark') === list.benchmark && provenance('version') === list.version && list.items.every(item => levels.has(item.level))
+}
+
+/**
+ * Drops delivered lists that neither the current pack nor a saved assessment reads, then keeps the newest
+ * MAX_DELIVERED_LISTS, so lists of benchmarks and versions no longer used never fill the workspace and
+ * deleting assessments frees their lists too.
+ */
+function keepReadLists(workspace: FrameworkWorkspace): void {
+  if (!workspace.recommendationLists) return
+  const packs = [workspace.policies, ...workspace.history.map(entry => entry.policies)]
+  const lists = workspace.recommendationLists.filter(list => packs.some(policies => readsList(policies, list))).slice(-MAX_DELIVERED_LISTS)
+  if (lists.length) workspace.recommendationLists = lists
+  else delete workspace.recommendationLists
+}
+
 export function saveWorkspace(workspace: FrameworkWorkspace): void {
+  keepReadLists(workspace)
   const json = JSON.stringify({ ...workspace, updatedAt: new Date().toISOString() })
   if (json.length > MAX_WORKSPACE_BYTES || workspace.history.length > MAX_WORKSPACE_HISTORY) throw new Error(HISTORY_FULL_MESSAGE)
   store.set(key(workspace.tenantId, workspace.frameworkId), json)
