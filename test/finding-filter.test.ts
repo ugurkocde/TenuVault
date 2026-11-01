@@ -11,8 +11,8 @@ const policies: BaselinePolicy[] = attachRecommendations(parsePolicies([
   { name: `Defender - ${reference}`, platforms: "windows10", technologies: "mdm", description: "", provenance: provenance("Level 1"), settings: [flat("device_vendor_msft_policy_config_defender_allowcloudprotection"), flat("synthetic_beta")] },
   { name: `BitLocker - ${reference}`, platforms: "windows10", technologies: "mdm", description: "", provenance: provenance("Level 2"), settings: [flat("synthetic_bitlocker")] },
 ]), [
-  { id: "18.10.1", title: "Ensure cloud protection is enabled", level: 1, settings: ["device_vendor_msft_policy_config_defender_allowcloudprotection"] },
-  { id: "18.9.4", title: "Ensure drive encryption is required", level: 2, settings: ["synthetic_bitlocker"] },
+  { id: "18.10.1", title: "Synthetic cloud check is enabled", level: 1, settings: ["device_vendor_msft_policy_config_defender_allowcloudprotection"] },
+  { id: "18.9.4", title: "Synthetic drive encryption check is required", level: 2, settings: ["synthetic_bitlocker"] },
 ])
 
 const finding = (policyIndex: number, settingIndex: number, status: Finding["status"]): Finding => {
