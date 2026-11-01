@@ -73,10 +73,11 @@ function readsList(policies: BaselinePolicy[], list: RecommendationList): boolea
 
 /**
  * Drops delivered lists that neither the current pack nor a saved assessment reads, then keeps the newest
- * MAX_DELIVERED_LISTS, so lists of benchmarks and versions no longer used never fill the workspace and
- * deleting assessments frees their lists too.
+ * MAX_DELIVERED_LISTS, so lists of benchmarks and versions no longer used never fill the workspace. Called
+ * when a delivered pack is saved, the one moment the current pack is known to be the one the list came
+ * with; an ordinary save (a draft of other policies) never drops a list.
  */
-function keepReadLists(workspace: FrameworkWorkspace): void {
+export function keepReadLists(workspace: FrameworkWorkspace): void {
   if (!workspace.recommendationLists) return
   const packs = [workspace.policies, ...workspace.history.map(entry => entry.policies)]
   const lists = workspace.recommendationLists.filter(list => packs.some(policies => readsList(policies, list))).slice(-MAX_DELIVERED_LISTS)
@@ -85,7 +86,6 @@ function keepReadLists(workspace: FrameworkWorkspace): void {
 }
 
 export function saveWorkspace(workspace: FrameworkWorkspace): void {
-  keepReadLists(workspace)
   const json = JSON.stringify({ ...workspace, updatedAt: new Date().toISOString() })
   if (json.length > MAX_WORKSPACE_BYTES || workspace.history.length > MAX_WORKSPACE_HISTORY) throw new Error(HISTORY_FULL_MESSAGE)
   store.set(key(workspace.tenantId, workspace.frameworkId), json)

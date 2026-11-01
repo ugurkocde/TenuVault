@@ -249,7 +249,7 @@ describe("CIS content delivery service", () => {
       expect(cisReadinessTrend([entry], undefined, undefined, "2026-10-16", workspace.recommendationLists)[0]!.levels.map(level => level.level)).toEqual([1])
     })
 
-    it("keeps only delivered lists the current pack or a saved assessment reads, at most twelve", async () => {
+    it("keeps only delivered lists the current pack or a saved assessment reads, at most twelve, pruned on pack load", async () => {
       const otherPolicies = (index: number) => parsePolicies([policy()]).map(item => ({ ...item, provenance: { benchmark: "other-os", version: `1.0.${index}`, level: "Level 1" } }))
       const otherList = (index: number) => ({ benchmark: "other-os", version: `1.0.${index}`, items: [{ identifier: "1.1", level: 1 as const, automated: true }] })
       const saved = loadWorkspace(tenantId, "cis-benchmarks")
@@ -257,15 +257,20 @@ describe("CIS content delivery service", () => {
       saved.recommendationLists = [...Array.from({ length: 12 }, (_, index) => otherList(index)), otherList(99)]
       saved.history = Array.from({ length: 12 }, (_, index) => ({ assessment: { runId: `run-${index}`, tenantId, frameworkId: "cis-benchmarks", reference: `other-os 1.0.${index} Level 1`, assessedAt: "2026-10-10T12:00:00.000Z", policyCount: 1, findings: [] }, policies: otherPolicies(index) }))
       saveWorkspace(saved)
-      expect(loadWorkspace(tenantId, "cis-benchmarks").recommendationLists!.map(item => item.version)).toEqual(Array.from({ length: 12 }, (_, index) => `1.0.${index}`))
+      // An ordinary save drops nothing.
+      expect(loadWorkspace(tenantId, "cis-benchmarks").recommendationLists).toHaveLength(13)
       vi.stubGlobal("fetch", serve(() => Response.json(list)))
       await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })
-      // The new pack's list is kept and the oldest read list gives way to stay at twelve.
+      // Loading a pack drops the unread list, keeps the new pack's list, and the oldest read list gives way to stay at twelve.
       expect(loadWorkspace(tenantId, "cis-benchmarks").recommendationLists!.map(item => item.version)).toEqual([...Array.from({ length: 11 }, (_, index) => `1.0.${index + 1}`), "9.9.9"])
-      // Deleting the assessments frees their lists on the next save.
-      const pruned = loadWorkspace(tenantId, "cis-benchmarks")
-      pruned.history = []
-      saveWorkspace(pruned)
+      // A draft save of other policies, as the page makes while it reloads, never drops the new pack's list.
+      const draft = loadWorkspace(tenantId, "cis-benchmarks")
+      draft.policies = otherPolicies(3)
+      draft.history = []
+      saveWorkspace(draft)
+      expect(loadWorkspace(tenantId, "cis-benchmarks").recommendationLists!.map(item => item.version)).toContain("9.9.9")
+      // With the assessments deleted, the next pack load frees their lists.
+      await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })
       expect(loadWorkspace(tenantId, "cis-benchmarks").recommendationLists!.map(item => item.version)).toEqual(["9.9.9"])
     })
 

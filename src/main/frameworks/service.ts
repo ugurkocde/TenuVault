@@ -1,5 +1,5 @@
 import { assignmentEvidence, type AssignmentEvidence } from "../../shared/frameworks/evidence"
-import { loadWorkspace, saveWorkspace, deleteWorkspace, pruneHistory, recordAssessment, recordCreation, workspaceCapacity, workspaceView, type FrameworkWorkspace } from "./workspaces"
+import { loadWorkspace, saveWorkspace, deleteWorkspace, keepReadLists, pruneHistory, recordAssessment, recordCreation, workspaceCapacity, workspaceView, type FrameworkWorkspace } from "./workspaces"
 import { HISTORY_FULL_MESSAGE, KEEP_NEWEST_ASSESSMENTS, MAX_WORKSPACE_HISTORY } from "../../shared/frameworks/workspace-history"
 import { tenantLabel, workspaceExportCSV, workspaceExportJSON, workspaceHistoryJSON } from "../../shared/compliance/export"
 import { createHash, randomUUID } from "node:crypto"
@@ -655,9 +655,10 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       // assessments of another Level keep theirs. A Level the service has no list for drops its old one.
       const lists = (workspace.recommendationLists ?? []).filter(item => !(item.benchmark === pack.benchmark && item.version === pack.version && item.items.every(entry => entry.level === pack.level)))
       if (list) lists.push(list)
-      // saveWorkspace drops delivered lists that neither this pack nor a saved assessment reads.
       if (lists.length) workspace.recommendationLists = lists
       else delete workspace.recommendationLists
+      // Lists that neither this pack nor a saved assessment reads are dropped here, never on other saves.
+      keepReadLists(workspace)
       saveWorkspace(workspace)
       return { benchmark: pack.benchmark, version: pack.version, level: pack.level, reference, policyCount: policies.length, settingCount: policies.reduce((total, policy) => total + policy.settings.length, 0) }
     } catch (error) {
