@@ -3,6 +3,7 @@ import { frameworks } from '../frameworks/catalog'
 import { UNSUPPORTED } from '../frameworks/coverage'
 import type { Assessment, BaselinePolicy } from '../frameworks/policies'
 import { recommendationsForFinding } from '../frameworks/cis-recommendations'
+import { cisCertificationStatement, cisRemediationLimits, CIS_TENANT_NOT_CERTIFIED_NOTE } from '../frameworks/cis-certification'
 import { comparisonCounts, FRAMEWORK_USAGE_NOTICE, type NativeAssessment } from './native'
 import { COLLECTION_FAMILY_LABELS, COLLECTION_STATUS_LABELS, PLATFORM_LABELS, frameworkCoverageLabel } from './presentation'
 
@@ -23,6 +24,16 @@ export const exportLimitations = (product: string): string[] => [
   'A configuration match does not prove that a setting is assigned to the right devices or enforced on them. Device state and effective access were not collected.',
   'Results reflect the tenant at the collection date shown and were not collected again for this export.',
   'Secret values, tokens and credentials are redacted from this export.',
+]
+
+/**
+ * The limitations of CIS Benchmarks exports. TenuVault holds a CIS certification for a set
+ * of benchmarks (cis-certification.ts), so a CIS report must not read as uncertified; what it
+ * does not do is certify the tenant.
+ */
+export const cisExportLimitations = (product: string): string[] => [
+  `Independent ${product} configuration comparison of the recorded Intune data with the benchmark pack. It is not an audit opinion or a complete benchmark assessment, and it does not certify the tenant's compliance.`,
+  ...exportLimitations(product).slice(1),
 ]
 
 /** The limitations of the CSV and JSON exports, which always name TenuVault. */
@@ -108,6 +119,8 @@ export interface ReportHeader {
   unknowns: string[]
   limitations: string[]
   notice: string
+  /** CIS Benchmarks only: what TenuVault can and cannot remediate. */
+  remediationLimits?: string[]
 }
 
 // Frameworks that left the catalog but whose saved assessments can still be exported.
@@ -202,6 +215,7 @@ export function workspaceReportHeader(saved: SavedAssessment, context: ExportCon
   const { assessment } = saved
   const count = (status: string) => assessment.findings.filter(f => f.status === status).length
   const unavailable = assessment.findings.filter(f => f.observed.some(o => o.targeting?.state === 'unavailable')).length
+  const cis = assessment.frameworkId === 'cis-benchmarks'
   return {
     kind: 'policy-pack-assessment',
     tenant: { id: assessment.tenantId, ...(context.tenantName ? { name: context.tenantName } : {}) },
@@ -220,9 +234,13 @@ export function workspaceReportHeader(saved: SavedAssessment, context: ExportCon
       `Not assessed: ${UNSUPPORTED.join('; ')}.`,
       assessment.organizationalEvidence?.note ?? 'Organizational evidence requires a separate assessment.',
     ],
-    limitations: [...exportLimitations(product), '"Present" means a matching configuration exists; it does not mean the setting is assigned or enforced.'],
-    notice: ['Framework names are factual references. No publisher affiliation, endorsement or certification is implied. The source version and profile are as entered by the administrator.',
-      frameworks.find(f => f.id === assessment.frameworkId)?.licenseNotice].filter(Boolean).join(' '),
+    limitations: [...(cis ? cisExportLimitations(product) : exportLimitations(product)), '"Present" means a matching configuration exists; it does not mean the setting is assigned or enforced.'],
+    // CIS Benchmarks names the certified scope instead of the generic no-certification line.
+    notice: (cis
+      ? [cisCertificationStatement(product), CIS_TENANT_NOT_CERTIFIED_NOTE]
+      : ['Framework names are factual references. No publisher affiliation, endorsement or certification is implied. The source version and profile are as entered by the administrator.',
+        frameworks.find(f => f.id === assessment.frameworkId)?.licenseNotice]).filter(Boolean).join(' '),
+    ...(cis ? { remediationLimits: cisRemediationLimits(product) } : {}),
   }
 }
 
@@ -239,7 +257,8 @@ export function workspaceExportJSON(saved: SavedAssessment, context: ExportConte
 
 /** JSON export of every saved assessment of a workspace, each with its own report header. */
 export function workspaceHistoryJSON(history: SavedAssessment[], context: ExportContext): string {
-  return JSON.stringify({ exportedAt: context.exportedAt, limitations: EXPORT_LIMITATIONS,
+  const cis = history.some(saved => saved.assessment.frameworkId === 'cis-benchmarks')
+  return JSON.stringify({ exportedAt: context.exportedAt, limitations: cis ? cisExportLimitations('TenuVault') : EXPORT_LIMITATIONS,
     assessments: history.map(saved => ({ report: workspaceReportHeader(saved, context), result: redactSecrets(withRecommendations(saved)) })) }, null, 2)
 }
 

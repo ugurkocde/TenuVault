@@ -10,7 +10,7 @@ import { DELIVERED_LIST_LIMITS, MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMEN
 import { cisReadiness, levelCheckCounts, levelCheckSummary } from "../src/shared/frameworks/cis-readiness"
 import { convertKit, type KitFile } from "../src/shared/frameworks/cis-kit"
 import { cisReadinessCsv, cisReadinessJson } from "../src/renderer/features/shared/governance-export"
-import { handleFramework, setInternalCisBenchmarksEnabled, assessPolicySet } from "../src/main/frameworks/service"
+import { handleFramework, KIT_IMPORT_REFUSED, setInternalCisBenchmarksEnabled, assessPolicySet } from "../src/main/frameworks/service"
 import { loadWorkspace, saveWorkspace, setFrameworkStore } from "../src/main/frameworks/workspaces"
 import { parsePolicies } from "../src/shared/frameworks/policies"
 
@@ -256,15 +256,20 @@ describe("recommendation list storage and flag gate", () => {
     expect(loadWorkspace(tenantId, "cis-benchmarks").recommendationList).toEqual(list)
   })
 
-  it("refuses the recommendation list import when the flag is off, identical to the kit import refusal", async () => {
+  it("refuses the recommendation list import without the internal claim, like the Build Kit import, and still allows removing a list", async () => {
     setInternalCisBenchmarksEnabled(false)
     const fetch = vi.fn()
     vi.stubGlobal("fetch", fetch)
+    const data = new Map<string, string>()
+    setFrameworkStore({ get: k => data.get(k) ?? null, set: (k, v) => { data.set(k, v) }, delete: k => { data.delete(k) } })
     const list = parseRecommendationList(JSON.stringify(validList()))
     await expect(handleFramework({ action: "workspace-save", tenantId, frameworkId: "cis-benchmarks", reference: "fakebook-os 9.9.9 Level 1", policies: [], recommendationList: JSON.parse(JSON.stringify(list)) }))
-      .rejects.toMatchObject({ status: 403, message: "CIS comparisons are coming soon." })
+      .rejects.toMatchObject({ status: 403, message: KIT_IMPORT_REFUSED })
+    expect(loadWorkspace(tenantId, "cis-benchmarks").recommendationList).toBeUndefined()
+    await expect(handleFramework({ action: "workspace-save", tenantId, frameworkId: "cis-benchmarks", reference: "fakebook-os 9.9.9 Level 1", policies: [], recommendationList: null }))
+      .resolves.toMatchObject({ frameworkId: "cis-benchmarks" })
     await expect(handleFramework({ action: "workspace-load", tenantId, frameworkId: "cis-benchmarks" }))
-      .rejects.toMatchObject({ status: 403, message: "CIS comparisons are coming soon." })
+      .resolves.toMatchObject({ frameworkId: "cis-benchmarks" })
     expect(fetch).not.toHaveBeenCalled()
   })
 

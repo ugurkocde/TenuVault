@@ -5,9 +5,8 @@ import { Building2 } from "lucide-react"
 import { useTenants, type Tenant } from "~/contexts/TenantContext"
 import { Chip } from "~/components/dashboard/tiles"
 import type { Plan } from "../../../shared/plans"
-import { GatedButton } from "../../components/PlanGate"
+import { canUse, GatedButton } from "../../components/PlanGate"
 import { tenantLicense, tenantPlan, useLicense } from "../../lib/license"
-import { useInternalCisBenchmarks } from "../../lib/internal-cis"
 import { formatDate, formatPercent, groupUnavailable, loadPortfolio, namesLabel, type PortfolioTenant } from "./api"
 import { cisCardPath, loadPortfolioCis } from "./cis"
 
@@ -27,7 +26,8 @@ export function PortfolioScores({ tenant, plan, onDrill }: { tenant: Tenant; pla
     const licensed = (candidate: Tenant) => tenantPlan(tenantLicense(status, candidate.credentials?.tenantId)) === "msp"
     return { included: others.filter(licensed), excluded: others.filter((candidate) => !licensed(candidate)) }
   }, [tenants, status, selectedId])
-  const cisAccess = useInternalCisBenchmarks()
+  // CIS Benchmarks cards follow the plan, like the CIS page: Pro and MSP include them.
+  const cisAccess = canUse(plan, "baselineAllPlatforms")
   const load = useMutation({
     mutationFn: async () => {
       const targets = included.map((candidate) => candidate.credentials!.tenantId!)

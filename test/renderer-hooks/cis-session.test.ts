@@ -152,29 +152,23 @@ describe("CIS Benchmarks results across navigation", () => {
     expect(container.textContent).not.toContain("Loading saved assessments")
   })
 
-  it("waits for the first access answer after a reload instead of showing Coming soon", async () => {
-    let answer!: (value: unknown) => void
-    appInfo.mockImplementation(() => new Promise(resolve => { answer = resolve }))
+  it("opens the saved results without waiting for the internal claim, which only Build Kit import needs", async () => {
+    appInfo.mockImplementation(() => new Promise(() => undefined))
     stubService({})
     const { container } = render()
     await flush()
     expect(container.textContent).not.toContain("Coming soon")
-    expect(container.textContent).toContain("Checking access")
-    await act(async () => { answer({ internalCisBenchmarks: true }) })
-    await flush()
+    expect(container.textContent).not.toContain("Checking access")
     expect(results(container)).not.toBeNull()
   })
 
-  it("offers Retry when the first access read fails instead of loading forever", async () => {
+  it("opens the CIS page when the internal claim read fails", async () => {
     appInfo.mockRejectedValue(new Error("bridge unavailable"))
     stubService({})
     const { container } = render()
     await flush()
-    expect(container.textContent).toContain("CIS Benchmarks access could not be checked.")
     expect(container.textContent).not.toContain("Coming soon")
-    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
-    await act(async () => { buttonNamed(container, "Retry")!.click() })
-    await flush()
+    expect(container.textContent).not.toContain("could not be checked")
     expect(results(container)).not.toBeNull()
   })
 

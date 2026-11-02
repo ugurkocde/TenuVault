@@ -9,7 +9,8 @@ import { FeatureError } from "../route"
 import { applyChangeSet, approveChangeSet, createChangeSet, getChangeSet, previewChangeSet, previewRollback, createRollbackChangeSet, type ChangeSetPreview, type OperationInput, type RollbackPreview } from "../change-sets/engine"
 import { readCurrent } from "../change-sets/graph"
 import { MAX_OPERATIONS, type ChangeSetRecord } from "../change-sets/model"
-import { internalCisBenchmarksEnabled } from "../../frameworks/service"
+import { cisBenchmarksAllowed } from "../../frameworks/service"
+import { PlanRequired } from "../../../shared/plans"
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
 
 /**
@@ -63,8 +64,9 @@ export interface PlanCisInput {
   selectedPolicyIndexes?: number[]
 }
 
-export function requireCisBenchmarksEnabled(): void {
-  if (!internalCisBenchmarksEnabled()) throw new FeatureError("CIS comparisons are coming soon.", 403)
+/** Refuses CIS Benchmarks work for a tenant whose current plan does not include it (Pro and MSP do). */
+export function requireCisBenchmarksEnabled(tenantId: string): void {
+  if (!cisBenchmarksAllowed(tenantId)) throw new PlanRequired("baselineAllPlatforms")
 }
 
 function loadCisRemediation(deps: FeatureDeps, tenantId: string, id: string): Stored<CisRemediationRecord> {
@@ -78,7 +80,6 @@ export type ListedCisRemediation = Omit<Stored<CisRemediationRecord>, "history">
 
 /** Every deployment of a tenant, newest first, without record history. */
 export function listCisRemediations(deps: FeatureDeps, tenantId: string): ListedCisRemediation[] {
-  requireCisBenchmarksEnabled()
   return deps.records.list<CisRemediationRecord>(DOMAINS.cisRemediations, tenantId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(({ history: _history, ...record }) => ({
     ...record,
     rollbackStatus: record.rollbackChangeSetId ? deps.records.get<ChangeSetRecord>(DOMAINS.changeSets, tenantId, record.rollbackChangeSetId)?.status ?? null : null,
@@ -86,15 +87,14 @@ export function listCisRemediations(deps: FeatureDeps, tenantId: string): Listed
 }
 
 export function getCisRemediation(deps: FeatureDeps, tenantId: string, id: string): Stored<CisRemediationRecord> {
-  requireCisBenchmarksEnabled()
   return loadCisRemediation(deps, tenantId, id)
 }
 
 /**
  * Local status bookkeeping after a completed approve, reject, or apply outcome.
  * It performs no tenant or CIS content operation, so it deliberately does not
- * recheck current authorization: revocation after the local outcome must not mask
- * what was already recorded. Public reads use syncCisRemediation below, gated.
+ * recheck the plan: a plan change after the local outcome must not mask what was
+ * already recorded. Stored deployments stay readable on every plan.
  */
 export function syncCisRemediationOutcome(deps: FeatureDeps, tenantId: string, id: string): Stored<CisRemediationRecord> {
   const record = loadCisRemediation(deps, tenantId, id)
@@ -105,7 +105,6 @@ export function syncCisRemediationOutcome(deps: FeatureDeps, tenantId: string, i
 }
 
 export function syncCisRemediation(deps: FeatureDeps, tenantId: string, id: string): Stored<CisRemediationRecord> {
-  requireCisBenchmarksEnabled()
   return syncCisRemediationOutcome(deps, tenantId, id)
 }
 
@@ -178,7 +177,7 @@ function createdBody(policy: BaselinePolicy, settings: BaselinePolicy["settings"
 }
 
 export async function planCisRemediation(deps: FeatureDeps, tenantId: string, input: PlanCisInput, actor: string | null): Promise<Stored<CisRemediationRecord>> {
-  requireCisBenchmarksEnabled()
+  requireCisBenchmarksEnabled(tenantId)
   const tenant = tenantId.toLowerCase()
   if (!input.title.trim() || input.title.length > 200) throw new FeatureError("A title of at most 200 characters is required.")
   if (!input.reference.trim() || input.reference.length > 200) throw new FeatureError("Provide a source version up to 200 characters.")
@@ -223,14 +222,14 @@ export async function planCisRemediation(deps: FeatureDeps, tenantId: string, in
   }
 
   const rawGraph = await deps.graph(tenant)
-  requireCisBenchmarksEnabled()
+  requireCisBenchmarksEnabled(tenantId)
   const graph: GraphCall = async (method, path, body, callOptions) => {
-    requireCisBenchmarksEnabled()
+    requireCisBenchmarksEnabled(tenantId)
     return rawGraph(method, path, body, {
       ...callOptions,
       beforeAttempt: () => {
         callOptions?.beforeAttempt?.()
-        requireCisBenchmarksEnabled()
+        requireCisBenchmarksEnabled(tenantId)
       },
     })
   }
@@ -248,10 +247,10 @@ export async function planCisRemediation(deps: FeatureDeps, tenantId: string, in
   // Every tenant policy holding a selected Different setting with another value is updated,
   // so conflicting policies converge. A policy already holding the recommended value is left alone.
   for (const [targetId, candidates] of updates) {
-    requireCisBenchmarksEnabled()
+    requireCisBenchmarksEnabled(tenantId)
     let live: Item | null
-    try { live = await readCurrent(graph, type, targetId) } catch (error) { requireCisBenchmarksEnabled(); throw new FeatureError(`A tenant policy could not be read. ${error instanceof Error ? error.message : String(error)}`, 502) }
-    requireCisBenchmarksEnabled()
+    try { live = await readCurrent(graph, type, targetId) } catch (error) { requireCisBenchmarksEnabled(tenantId); throw new FeatureError(`A tenant policy could not be read. ${error instanceof Error ? error.message : String(error)}`, 502) }
+    requireCisBenchmarksEnabled(tenantId)
     if (!live) throw new FeatureError(`The tenant policy of a selected finding no longer exists. Compare again.`, 409)
     const liveSettings = Array.isArray(live.settings) ? (live.settings as Item[]) : []
     const selected = candidates.filter((finding) => {
@@ -282,7 +281,7 @@ export async function planCisRemediation(deps: FeatureDeps, tenantId: string, in
   }, { actor, reason: "Planned a benchmark deployment" })
   let changeSet: Stored<ChangeSetRecord>
   try {
-    requireCisBenchmarksEnabled()
+    requireCisBenchmarksEnabled(tenantId)
     changeSet = await createChangeSet(deps, tenant, { title: input.title, origin: { workflow: "cis-remediation", recordId: record.id }, sourceVersion: input.reference.slice(0, 2000), operations }, actor)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -303,11 +302,11 @@ export interface CisRemediationPreview {
 }
 
 export async function previewCisRemediation(deps: FeatureDeps, tenantId: string, id: string): Promise<CisRemediationPreview> {
-  requireCisBenchmarksEnabled()
+  requireCisBenchmarksEnabled(tenantId)
   const deployment = syncCisRemediation(deps, tenantId, id)
   if (!deployment.changeSetId) throw new FeatureError("This benchmark deployment is blocked. Resolve its findings and plan again.", 409)
   const preview = await previewChangeSet(deps, tenantId, deployment.changeSetId)
-  requireCisBenchmarksEnabled()
+  requireCisBenchmarksEnabled(tenantId)
   const policies = preview.operations.map((operation) => {
     const item = deployment.items.find((entry) => entry.policyName && operation.name && (entry.action === operation.action))
     const inPlace = operation.action === "update"
@@ -327,14 +326,14 @@ export async function previewCisRemediation(deps: FeatureDeps, tenantId: string,
 }
 
 export async function approveCisRemediation(deps: FeatureDeps, tenantId: string, id: string, input: { contentHash: string; targetFingerprint: string; reviewer?: string | null; note?: string | null }, actor: string | null): Promise<Stored<ChangeSetRecord>> {
-  requireCisBenchmarksEnabled()
+  requireCisBenchmarksEnabled(tenantId)
   const deployment = getCisRemediation(deps, tenantId, id)
   if (!deployment.changeSetId) throw new FeatureError("This benchmark deployment is blocked. Resolve its findings and plan again.", 409)
   return approveChangeSet(deps, tenantId, deployment.changeSetId, input, actor)
 }
 
 export async function applyCisRemediation(deps: FeatureDeps, tenantId: string, id: string, input: { contentHash: string; confirmed: boolean }, actor: string | null): Promise<{ deployment: Stored<CisRemediationRecord>; changeSet: Stored<ChangeSetRecord> }> {
-  requireCisBenchmarksEnabled()
+  requireCisBenchmarksEnabled(tenantId)
   const deployment = getCisRemediation(deps, tenantId, id)
   if (!deployment.changeSetId) throw new FeatureError("This benchmark deployment is blocked. Resolve its findings and plan again.", 409)
   // Assignments are never copied in this flow: refuse a frozen change set that would set any.
@@ -347,14 +346,14 @@ export async function applyCisRemediation(deps: FeatureDeps, tenantId: string, i
 }
 
 export function cisChangeSet(deps: FeatureDeps, tenantId: string, id: string): Stored<ChangeSetRecord> {
-  requireCisBenchmarksEnabled()
+  requireCisBenchmarksEnabled(tenantId)
   const deployment = getCisRemediation(deps, tenantId, id)
   if (!deployment.changeSetId) throw new FeatureError("This benchmark deployment is blocked and has no change set.", 409)
   return getChangeSet(deps, tenantId, deployment.changeSetId)
 }
 
 export function cisRollback(deps: FeatureDeps, tenantId: string, id: string): Stored<ChangeSetRecord> {
-  requireCisBenchmarksEnabled()
+  requireCisBenchmarksEnabled(tenantId)
   const deployment = getCisRemediation(deps, tenantId, id)
   if (!deployment.rollbackChangeSetId) throw new FeatureError("No rollback was created for this benchmark deployment. Preview and create one first.", 409)
   const rollback = getChangeSet(deps, tenantId, deployment.rollbackChangeSetId)

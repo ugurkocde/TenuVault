@@ -7,6 +7,7 @@ import type { AdoptionState, Customization } from "../standards/api"
 import type { DeviationEntry } from "../governance/model"
 import { levelHeadline, ratePercent, type CisReadinessSummary } from "../../../shared/frameworks/cis-readiness"
 import { recommendationTotals } from "../../../shared/frameworks/cis-recommendations"
+import { CIS_CERTIFICATION_STATEMENT, CIS_CERTIFIED_SEGMENTS, CIS_REMEDIATION_LIMITS, CIS_TENANT_NOT_CERTIFIED_NOTE, isCisCertified } from "../../../shared/frameworks/cis-certification"
 
 /**
  * CSV and JSON exports for the governance tabs (scores, hygiene, health review and
@@ -320,6 +321,9 @@ export function cisReadinessCsv(summary: CisReadinessSummary): string {
   }
   // The CIS notice for recommendations this tool does not include, on every export.
   rows.push(cisLineRow(benchmark, summary.version, "", [`${summary.manualFallback} ${summary.manualFallbackUrl}`, "Notice", "", "", ""]))
+  // The certified scope and the limits of remediation, on every export.
+  rows.push(cisLineRow(benchmark, summary.version, "", [`${CIS_CERTIFICATION_STATEMENT} ${CIS_TENANT_NOT_CERTIFIED_NOTE}`, "Certification", "", "", ""]))
+  rows.push(cisLineRow(benchmark, summary.version, "", [CIS_REMEDIATION_LIMITS.join(" "), "Remediation limits", "", "", ""]))
   // Packs that list their recommendations add one row per recommendation and a Mapped settings column.
   const recommendations = summary.levels.flatMap(level => level.recommendations ?? [])
   if (!recommendations.length) return toCsv([CIS_READINESS_HEADERS, ...rows])
@@ -327,7 +331,17 @@ export function cisReadinessCsv(summary: CisReadinessSummary): string {
   return toCsv([[...CIS_READINESS_HEADERS, "Mapped settings"], ...rows.map(row => [...row, ""]), ...recommendationRows])
 }
 
+/** The certified scope in a readiness JSON export, with whether each Level of this export is inside it. */
+function cisCertificationJson(summary: CisReadinessSummary) {
+  return {
+    statement: CIS_CERTIFICATION_STATEMENT,
+    certifiedScope: CIS_CERTIFIED_SEGMENTS.map(segment => ({ benchmark: segment.benchmark, version: segment.version, levels: [...segment.levels], name: segment.name })),
+    levels: summary.levels.map(level => ({ level: level.level, certified: isCisCertified(summary.benchmark, summary.version, level.level) })),
+    note: CIS_TENANT_NOT_CERTIFIED_NOTE,
+  }
+}
+
 export function cisReadinessJson(summary: CisReadinessSummary, tenantName: string | null, exportedAt: string): string {
   const manualItems = summary.levels.flatMap(level => (level.manual ?? []).map(item => cisManualRow(summary, level, item)))
-  return toJson({ exportedAt, tenant: tenantName, benchmark: summary.benchmark, ...(summary.benchmarkName ? { benchmarkName: summary.benchmarkName } : {}), version: summary.version, manualNote: summary.manualNote, manualFallback: summary.manualFallback, manualFallbackUrl: summary.manualFallbackUrl, levels: summary.levels.map((level) => cisReadinessRow(summary, level)), manualItems })
+  return toJson({ exportedAt, tenant: tenantName, benchmark: summary.benchmark, ...(summary.benchmarkName ? { benchmarkName: summary.benchmarkName } : {}), version: summary.version, manualNote: summary.manualNote, manualFallback: summary.manualFallback, manualFallbackUrl: summary.manualFallbackUrl, certification: cisCertificationJson(summary), remediationLimits: [...CIS_REMEDIATION_LIMITS], levels: summary.levels.map((level) => cisReadinessRow(summary, level)), manualItems })
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { generateCisReadinessPDF, generateNativeFrameworkPDF, generateWorkspaceAssessmentPDF } from "../src/shared/compliance/report-pdf"
-import { EXPORT_LIMITATIONS, exportLimitations, frameworkUsageNotice, nativeExportCSV, workspaceExportCSV } from "../src/shared/compliance/export"
+import { cisExportLimitations, EXPORT_LIMITATIONS, exportLimitations, frameworkUsageNotice, nativeExportCSV, workspaceExportCSV } from "../src/shared/compliance/export"
+import { cisCertificationHeadline, CIS_CERTIFICATION_HEADLINE } from "../src/shared/frameworks/cis-certification"
 import { FRAMEWORK_USAGE_NOTICE } from "../src/shared/compliance/native"
 import { COMPLIANCE_RULESET_VERSION } from "../src/shared/compliance/engine"
 import { frameworkCoverageLabel } from "../src/shared/compliance/presentation"
@@ -23,7 +24,7 @@ const COVER_FOOTER = "Configuration comparison, not a certification"
 const GRID = {
   native: (name = "NIST SP 800-53") => ({ header: [name, "Contoso Ltd"], footer: "TenuVault | Independent configuration comparison", coverFooter: ["TenuVault | Independent configuration comparison", COVER_FOOTER] as [string, string] }),
   workspace: (name = "Custom Baselines") => ({ header: [name, "Contoso Ltd"], footer: "TenuVault | Policy pack assessment", coverFooter: ["TenuVault | Policy pack assessment", COVER_FOOTER] as [string, string] }),
-  cis: (footer = "TenuVault | CIS readiness report") => ({ header: ["CIS Microsoft Windows 11 Enterprise Benchmark", "Contoso Ltd"], footer, coverFooter: [footer, "Readiness comparison, not a certification"] as [string, string] }),
+  cis: (footer = "TenuVault | CIS readiness report") => ({ header: ["CIS Microsoft Windows 11 Enterprise Benchmark", "Contoso Ltd"], footer, coverFooter: [footer, "Readiness comparison, not a tenant certification"] as [string, string] }),
 }
 
 const reports = () => ({
@@ -287,10 +288,15 @@ describe("report PDF branding", () => {
     const cis = pdfText(generateCisReadinessPDF(summary, CIS_CONTEXT, BRANDING))
     expectTenantTextKept(cis)
     expect(cis).toContain(`Level 1: ${COMPANY} checks`)
-    expect(cis).toContain(exportLimitations(COMPANY)[0]!)
+    expect(cis).toContain(cisExportLimitations(COMPANY)[0]!)
+    // A white label report names the certified software without naming the customer as certified.
+    expect(cis).toContain(cisCertificationHeadline(COMPANY))
+    expect(cis).toContain(`${COMPANY} remediates only recommendations it assesses automatically`)
     const cisPlain = pdfText(generateCisReadinessPDF(summary, CIS_CONTEXT))
     expect(cisPlain).toContain("Level 1: TenuVault checks")
-    expect(cisPlain).toContain(EXPORT_LIMITATIONS[0]!)
+    expect(cisPlain).toContain(cisExportLimitations("TenuVault")[0]!)
+    expect(cisPlain).toContain(CIS_CERTIFICATION_HEADLINE)
+    expect(cisPlain).not.toContain(EXPORT_LIMITATIONS[0]!)
 
     // CSV exports keep naming TenuVault.
     expect(nativeExportCSV(run, context)).toContain("TenuVault independent configuration comparison")

@@ -33,7 +33,7 @@ interface Entitlement {
   exp: number
   /** Version 2: license key expiry in Unix seconds, absent for renewing subscriptions. */
   keyExp?: number
-  /** Server-issued internal CIS Benchmarks access for a validated internal license on an allowlisted installation, pre-certification only. */
+  /** Server-issued internal CIS claim for a validated internal license on an allowlisted installation. It enables Build Kit import only. */
   cis?: "internal"
 }
 
@@ -970,7 +970,8 @@ export class LicenseService {
   /**
    * Whether any currently valid entitlement on this machine carries the server-issued
    * internal CIS claim. The licensing service issues the claim only to allowlisted
-   * internal installations, so this is the pre-certification CIS Benchmarks gate.
+   * internal installations. It enables Build Kit import, internal testing tooling;
+   * CIS Benchmarks itself follows the tenant's plan.
    */
   cisInternal(): boolean {
     this.load()

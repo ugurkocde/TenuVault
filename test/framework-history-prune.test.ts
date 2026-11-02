@@ -114,8 +114,7 @@ describe("workspace-prune-history", () => {
   })
 
   it("is refused for disabled and read-only legacy frameworks", async () => {
-    setInternalCisBenchmarksEnabled(false)
-    await expect(handleFramework({ action: "workspace-prune-history", tenantId: tenant, frameworkId: "cis-benchmarks", keep: 10 })).rejects.toMatchObject({ status: 403 })
+    await expect(handleFramework({ action: "workspace-prune-history", tenantId: tenant, frameworkId: "cis-controls", keep: 10 })).rejects.toMatchObject({ status: 403 })
     await expect(handleFramework({ action: "workspace-prune-history", tenantId: tenant, frameworkId: "oib", keep: 10 })).rejects.toMatchObject({ status: 403 })
   })
 

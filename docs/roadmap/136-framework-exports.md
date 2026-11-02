@@ -36,7 +36,7 @@ Backup, drift and audit exports keep their own rules.
 
 ## Limits
 
-- CIS stays disabled on every plan until its commercial-use agreement is signed.
+- CIS Benchmarks is available on Pro and MSP (see [frameworks](../frameworks.md#cis-benchmarks)); CIS Controls stays Coming soon on every plan.
 - Exports cover what the saved result recorded; a result saved before this release exports with
   the same facts, computed from the stored run.
 - Tenant name in a report is a label from the renderer, validated to a short single line.

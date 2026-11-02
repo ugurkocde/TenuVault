@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { cisSignals } from "../src/main/frameworks/cis-signals"
-import { setInternalCisBenchmarksEnabled, setInternalCisBenchmarksProvider } from "../src/main/frameworks/service"
+import { setInternalCisBenchmarksEnabled } from "../src/main/frameworks/service"
 import { loadWorkspace, saveWorkspace, setFrameworkStore } from "../src/main/frameworks/workspaces"
 import { convertKit, type KitFile } from "../src/shared/frameworks/cis-kit"
 import type { Assessment, BaselinePolicy, Finding } from "../src/shared/frameworks/policies"
@@ -50,15 +50,14 @@ let data: Map<string, string>
 beforeEach(() => {
   data = new Map<string, string>()
   setFrameworkStore({ get: k => data.get(k) ?? null, set: (k, v) => { data.set(k, v) }, delete: k => { data.delete(k) } })
-  setInternalCisBenchmarksEnabled(true)
 })
-afterEach(() => { setInternalCisBenchmarksEnabled(null); setInternalCisBenchmarksProvider(null) })
+afterEach(() => { setInternalCisBenchmarksEnabled(null) })
 
 describe("cisSignals", () => {
-  it("returns no signals when the internal flag is off", () => {
+  it("does not depend on the internal CIS claim", () => {
     seed([historyEntry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"]), historyEntry("run-2", "2026-02-01T00:00:00.000Z", ["Missing", "Missing", "Missing"])])
     setInternalCisBenchmarksEnabled(false)
-    expect(cisSignals(tenantId)).toEqual([])
+    expect(cisSignals(tenantId).length).toBeGreaterThan(0)
   })
 
   it("returns no signals when there is no history or a single point", () => {
@@ -109,26 +108,6 @@ describe("cisSignals", () => {
       historyEntry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"]),
     ])
     expect(cisSignals(tenantId)).toEqual([])
-  })
-
-  it("produces a signal when CIS is enabled through the established flag with the env var unset", () => {
-    seed([historyEntry("run-2", "2026-02-01T00:00:00.000Z", ["Missing", "Missing", "Missing"]), historyEntry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"])])
-    setInternalCisBenchmarksEnabled(true)
-    expect(cisSignals(tenantId).length).toBeGreaterThan(0)
-  })
-
-  it("ignores the legacy environment variable and follows the server-issued provider", () => {
-    seed([historyEntry("run-2", "2026-02-01T00:00:00.000Z", ["Missing", "Missing", "Missing"]), historyEntry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"])])
-    setInternalCisBenchmarksEnabled(null)
-    process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS = "1"
-    try {
-      expect(cisSignals(tenantId)).toEqual([])
-      setInternalCisBenchmarksProvider(() => true)
-      expect(cisSignals(tenantId).length).toBeGreaterThan(0)
-    } finally {
-      delete process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS
-      setInternalCisBenchmarksProvider(null)
-    }
   })
 
   it("names the benchmark by its catalog display name in titles and reasons, with the id as fallback", () => {

@@ -52,12 +52,12 @@ import {
 } from "./license/config"
 import { LicenseService } from "./license/service"
 import { planGuard } from "./api/plan-gates"
-import { cisInternalGuard } from "./api/cis-gate"
+import { cisGuard } from "./api/cis-gate"
 import { DisclaimerAcknowledgements, disclaimerGuard } from "./disclaimer"
 import { migrateLegacyOibRuns, setOibStore } from "./oib/service"
 import { setOibCacheDir } from "./oib/source"
 import { setFrameworkStore } from "./frameworks/workspaces"
-import { internalCisBenchmarksEnabled, isAdmittedAssessStatus, setCisEntitlementProvider, setFrameworkExportSaver, setInternalCisBenchmarksProvider } from "./frameworks/service"
+import { internalCisBenchmarksEnabled, isAdmittedAssessStatus, setCisBenchmarksPlanProvider, setCisEntitlementProvider, setFrameworkExportSaver, setInternalCisBenchmarksProvider } from "./frameworks/service"
 import { setCisContentEnvOverrideAllowed, setCisContentFallbackBaseUrl } from "./frameworks/cis-content"
 import { setNativeFrameworkStore, setNativeFrameworkAuthorization, setNativeFrameworkNotifier } from "./frameworks/native"
 import { allows, effectiveRetentionDays, PlanRequired } from "../shared/plans"
@@ -371,14 +371,16 @@ async function bootstrap(): Promise<void> {
   // Every change to a tenant waits until the admin accepted the disclaimer for that tenant.
   const disclaimer = new DisclaimerAcknowledgements(appStore)
   const checkDisclaimer = disclaimerGuard(disclaimer)
+  // The internal CIS claim enables Build Kit import only; CIS Benchmarks follows the tenant's plan.
   setInternalCisBenchmarksProvider(() => license.cisInternal())
+  setCisBenchmarksPlanProvider((tenantId) => license.plan(tenantId))
   setCisEntitlementProvider((tenantId) => license.entitlementToken(tenantId))
   // Framework exports the main process built are saved here directly, so they never round-trip through the renderer.
   setFrameworkExportSaver((file) => saveFileWithDialog(prepareGeneratedFile(file.data, file.name, file.encoding)))
   setCisContentFallbackBaseUrl(LICENSE_API_BASE)
   // A packaged build sends the CIS entitlement token only to the built-in origin above.
   setCisContentEnvOverrideAllowed(!app.isPackaged)
-  const checkCis = cisInternalGuard(() => internalCisBenchmarksEnabled(), (tenantId) => license.entitlementToken(tenantId))
+  const checkCis = cisGuard((tenantId) => license.entitlementToken(tenantId))
   const planGate = planGuard((tenantId) => license.requireEntitlement(tenantId).catch(() => null))
   // Progress polls of an assessment the plan guard admitted at start read only that job, bound to
   // its tenant, so they do not stall behind a slow license refresh.

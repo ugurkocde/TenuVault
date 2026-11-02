@@ -1,8 +1,9 @@
 import { CAPABILITY_STATUS_COLORS, CAPABILITY_STATUS_LABELS, CHECK_RESULT_COLORS, CHECK_RESULT_LABELS, COLLECTION_FAMILY_LABELS, COLLECTION_STATUS_LABELS, CONTROL_STATUS_COLORS, CONTROL_STATUS_LABELS, PLATFORM_LABELS, formatReportDate, frameworkCoverageLabel } from './presentation'
 import { capabilityComparison, comparisonCounts, type NativeAssessment } from './native'
-import { exportLimitations, nativeReportHeader, redactSecrets, redactText, workspaceReportHeader, type ExportContext, type ReportHeader, type SavedAssessment } from './export'
+import { cisExportLimitations, nativeReportHeader, redactSecrets, redactText, workspaceReportHeader, type ExportContext, type ReportHeader, type SavedAssessment } from './export'
 import { coverageStatement, exclusionsText, formatRate, headlineBasisNote, levelCheckSummary, levelHeadline, unassignedText, type CisLevelReadiness, type CisReadinessSummary } from '../frameworks/cis-readiness'
 import { recommendationTotals, type RecommendationResult } from '../frameworks/cis-recommendations'
+import { certifiedScopeLines, cisCertificationHeadline, cisRemediationLimits, CIS_CERTIFICATION_SCOPE_INTRO, CIS_NOT_CERTIFIED_NOTE, CIS_TENANT_NOT_CERTIFIED_NOTE, isCisCertified } from '../frameworks/cis-certification'
 import { displayCheckValue } from './check-results'
 import type { CapabilityResult, CapabilityStatus, ControlAssessment, ControlStatus, TechnicalCheck } from './types'
 import { PALETTE, TONES, ascii, capHeight, chipWidth, drawCard, drawChip, drawPill, drawStackedBar, mixColor, pillMetrics, setFont, textWidth, type MarkerKind, type PillOptions, type RgbColor, type Tone } from '../pdf/kit'
@@ -548,7 +549,7 @@ export function generateWorkspaceAssessmentPDF(saved: SavedAssessment, context: 
       { label: 'Assessed', value: formatReportDate(header.collectedAt) },
       { label: 'Exported', value: formatReportDate(header.exportedAt) },
     ],
-    footerRight: 'Configuration comparison, not a certification',
+    footerRight: saved.assessment.frameworkId === 'cis-benchmarks' ? 'Configuration comparison, not a tenant certification' : 'Configuration comparison, not a certification',
   })
   layout.contentsPage(aboutPanel(layout, [header.notice]))
 
@@ -681,9 +682,9 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
       { label: 'Assessed', value: formatReportDate(context.assessedAt) },
       { label: 'Exported', value: formatReportDate(context.exportedAt) },
     ],
-    footerRight: 'Readiness comparison, not a certification',
+    footerRight: 'Readiness comparison, not a tenant certification',
   })
-  layout.contentsPage(aboutPanel(layout, ['Readiness figures come from a saved assessment of the recorded Intune configuration and were not collected again for this export. They are not an audit opinion or a CIS certification.']))
+  layout.contentsPage(aboutPanel(layout, [`Readiness figures come from a saved assessment of the recorded Intune configuration and were not collected again for this export. They are not an audit opinion. ${CIS_TENANT_NOT_CERTIFIED_NOTE}`]))
 
   layout.pageTitle('Executive summary', 'Summary')
   facts(layout, [
@@ -709,8 +710,19 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
   })
   // The CIS notice for recommendations this tool does not include, printed on every report.
   callout(layout, { title: 'Manual recommendations', tone: 'accent', body: [{ text: summary.manualNote, style: 'bold' }, { text: summary.manualFallback }, { text: summary.manualFallbackUrl, color: layout.theme.accentText, technical: true }], link: { url: summary.manualFallbackUrl, text: summary.manualFallbackUrl } })
+  // The certified scope, stated on every CIS report, and whether the Levels of this report are inside it.
+  const inScope = (level: number) => isCisCertified(summary.benchmark, summary.version, level)
+  callout(layout, { title: 'CIS certification', tone: 'accent', body: [
+    { text: cisCertificationHeadline(product), style: 'bold' },
+    { text: CIS_CERTIFICATION_SCOPE_INTRO },
+    ...certifiedScopeLines().map(line => ({ text: line })),
+    { text: CIS_NOT_CERTIFIED_NOTE },
+    { text: `This report: ${summary.levels.map(level => `Level ${level.level} ${inScope(level.level) ? 'is within the certified scope' : 'is not certified'}`).join('; ') || 'no Level assessed'}.` },
+  ] })
   layout.heading('Limitations', { keep: 20 })
-  bullets(layout, exportLimitations(product), 'Limitations')
+  bullets(layout, cisExportLimitations(product), 'Limitations')
+  layout.heading('Limits of remediation', { keep: 20 })
+  bullets(layout, cisRemediationLimits(product), 'Limits of remediation')
 
   for (const level of summary.levels) levelSection(layout, summary, level)
   return layout.finish()

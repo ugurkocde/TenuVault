@@ -6,8 +6,9 @@ import { Link, useParams, useSearchParams } from "react-router-dom"
 import { ArrowRight, Check, ChevronDown, Download, ExternalLink, FileJson, FileSpreadsheet, FileText, Info } from "lucide-react"
 import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
-import { NCSC_COMMIT, NCSC_REPOSITORY, type Framework } from "../../shared/frameworks/catalog"
-import { CIS_BENCHMARKS_ID, effectiveFrameworks, internalKitImportEnabled, searchEffectiveFrameworks } from "../../shared/frameworks/cis-internal"
+import { frameworks as catalog, NCSC_COMMIT, NCSC_REPOSITORY, type Framework } from "../../shared/frameworks/catalog"
+import { CIS_BENCHMARKS_ID, internalKitImportEnabled, searchEffectiveFrameworks } from "../../shared/frameworks/cis-internal"
+import { certifiedScopeLines, CIS_CERTIFICATION_HEADLINE, CIS_CERTIFICATION_SCOPE_INTRO, CIS_CERTIFIED_LABEL, CIS_NOT_CERTIFIED_LABEL, CIS_NOT_CERTIFIED_NOTE, CIS_TENANT_NOT_CERTIFIED_NOTE, isCisCertified } from "../../shared/frameworks/cis-certification"
 import { convertKit, readKitZip, suggestedKitBenchmark, type KitConversion, type KitFile, type KitLevel } from "../../shared/frameworks/cis-kit"
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
 import { coverageStatement, distinctExclusions, excludedFindingKeys, exceptionsByHeadline, exclusionsText, formatRate, headlineBasisNote, headlineLabel, levelCheckSummary, levelHeadline, listedExceptions, readinessFor, unassignedText } from "../../shared/frameworks/cis-readiness"
@@ -24,21 +25,22 @@ import { Notice, saveFile, useSaveNotice } from "../components/oib/notices"
 import { cachedCisSettingNames, loadCisSettingNames, settingDefinitionIdsIn } from "../lib/cis-setting-names"
 import type { SettingNames } from "../../shared/intune/drift"
 import { accumulateCisFindings, CIS_OPEN_PARAMS, cisOpenRequest, cisRunDisplayPhase, cisRunHeading, cisRunProgress, cisRunReceivedLabel, cisRunSteps, cisRunTallies, currentSavedAssessment, emptyCisRunAccumulation, pollCisStatus, resolveCisRunCompletion, type CisRunPack } from "../../shared/frameworks/cis-run"
-import { refreshInternalCisBenchmarks, useInternalCisBenchmarks, useInternalCisBenchmarksAnswer } from "../lib/internal-cis"
+import { refreshInternalCisBenchmarks, useInternalCisBenchmarks } from "../lib/internal-cis"
 import { bridge } from "../lib/bridge"
 import { startBackgroundTask, useBackgroundTask } from "../lib/background-tasks"
 import { noteCisJobStarted, refreshCisJobs } from "../lib/cis-jobs"
 import { cachedCisCatalog, rememberCisCatalog } from "../lib/cis-catalog-cache"
 import { parsePolicies, remediationPayload, rootMatches, type Assessment, type BaselinePolicy, type Finding, type Observation } from "../../shared/frameworks/policies"
 import { summarizeSetting } from "../../shared/frameworks/setting-summary"
-import { CIS_FRAMEWORKS, type Plan } from "../../shared/plans"
+import { CIS_FRAMEWORKS, upgradeMessage, type Plan } from "../../shared/plans"
 import type { AssessJobSnapshot, ExportFile } from "../../main/frameworks/service"
 import type { NcscPack } from "../../main/frameworks/ncsc"
 import { tenantLicense, tenantPlan, useLicense, useTenantPlan } from "../lib/license"
 import { RunOverlay } from "../components/RunOverlay"
 import { CisRemediationPanel } from "../features/cis-remediation/CisRemediationPanel"
+import { CisRemediationLimits } from "../features/cis-remediation/CisRemediationLimits"
 import { CisRemediationHistory } from "../features/cis-remediation/CisRemediationHistory"
-import { GatedButton } from "../components/PlanGate"
+import { canUse, GatedButton, LockedPreview } from "../components/PlanGate"
 import { FilterChips, FilterSelect, SearchInput } from "../components/FilterControls"
 import { filterFindings, findingLevels, findingSearchText, hiddenSelectedKeys, NO_FINDING_FILTER, type FindingFilter } from "../../shared/frameworks/finding-filter"
 import { useConfirm } from "~/components/ConfirmDialog"
@@ -72,6 +74,7 @@ function clearBackgroundCompare(tenantId: string | undefined, frameworkId: strin
 }
 
 type ActionArea = "load" | "compare" | "export"
+const KIT_IMPORT_ONLY = "Build Kit import is available to internal TenuVault installations only."
 /** Where a CIS export was started: the results header, the saved assessments block, the full history alert or the pack coverage button. */
 type ExportOrigin = "header" | "saved" | "alert" | "coverage"
 
@@ -147,15 +150,9 @@ function saveExport(file: ExportFile) {
 }
 
 export default function FrameworksPage() {
+  // The internal CIS claim only adds Build Kit import; CIS Benchmarks itself follows the tenant's plan.
   const internalCis = useInternalCisBenchmarks()
-  const internalCisAnswer = useInternalCisBenchmarksAnswer()
   const { frameworkId } = useParams()
-  // Once the CIS page is open, a later revocation does not swap it for the Coming soon card and
-  // lose a run in progress: the main process refuses CIS requests on its own. Leaving the page ends this.
-  const [cisOpen, setCisOpen] = useState(false)
-  const onCis = frameworkId === CIS_BENCHMARKS_ID
-  if (cisOpen !== (onCis && (internalCis || cisOpen))) setCisOpen(onCis && (internalCis || cisOpen))
-  const catalog = effectiveFrameworks(internalCis || (onCis && cisOpen))
   const { selectedTenant, setSelectedTenantId } = useSelectedTenant()
   const tenants = useTenants()
   // Links from comparison notifications name the tenant the comparison ran for.
@@ -172,10 +169,6 @@ export default function FrameworksPage() {
   const [query, setQuery] = useState("")
   const framework = catalog.find(f => f.id === frameworkId)
   if (frameworkId && !framework) return <div className="p-8"><h1 className="text-2xl font-semibold">Framework not found</h1><Link className="mt-4 inline-block text-blue-700" to="/portal/frameworks">Browse frameworks</Link></div>
-  // Right after a reload the CIS gate has not answered yet: wait for it instead of showing Coming soon.
-  if (framework?.disabledReason && onCis && internalCisAnswer !== "answered") return <div role="status" className="p-8 text-sm text-gray-500">
-    {internalCisAnswer === "failed" ? <>CIS Benchmarks access could not be checked. <button type="button" className="font-medium text-blue-700 hover:underline" onClick={() => void refreshInternalCisBenchmarks()}>Retry</button></> : "Checking access…"}
-  </div>
   if (framework?.disabledReason) return <div className="mx-auto max-w-6xl p-6 lg:p-8">
     <Link to="/portal/frameworks" className="text-sm text-blue-700 hover:underline">Frameworks</Link>
     <h1 className="mt-4 text-3xl font-semibold tracking-tight text-gray-950">{framework.name}</h1>
@@ -227,7 +220,7 @@ function FrameworkCatalogItem({ framework: f }: { framework: Framework }) {
     <h3 className="mt-4 text-base font-medium text-gray-900">{f.name}</h3>
     <p className="mt-0.5 text-xs text-gray-500">{f.publisher}</p>
     <p className="mt-3 flex-1 text-sm text-gray-600">{f.description}</p>
-    <p className="mt-4 text-xs text-gray-500">{f.disabledReason ? f.kind : f.nativeId ? "Community · PDF, CSV and JSON reports" : f.id === "ncsc-dsg" ? "Windows pack included · PDF, CSV and JSON reports" : "Bring your reviewed policy mappings"}</p>
+    <p className="mt-4 text-xs text-gray-500">{f.disabledReason ? f.kind : f.nativeId ? "Community · PDF, CSV and JSON reports" : f.id === "ncsc-dsg" ? "Windows pack included · PDF, CSV and JSON reports" : f.id === CIS_BENCHMARKS_ID ? "Pro and MSP · Delivered benchmark packs" : "Bring your reviewed policy mappings"}</p>
   </>
   const shell = "flex h-full flex-col rounded-3xl bg-white p-6 shadow-[0_1px_2px_rgba(22,21,20,0.04)]"
   return f.disabledReason
@@ -385,17 +378,26 @@ function CisExportMenu({ plan, disabled, readinessDisabled, onPdf, onFindingsCsv
   onReadinessJson: () => void
 }) {
   const close = (event: React.SyntheticEvent) => { event.currentTarget.closest("details")?.removeAttribute("open") }
-  const itemClass = "flex w-full items-center justify-start gap-2 rounded-xl px-3 py-2 text-left text-sm text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
   return <details className="relative">
     <summary className={cn(button, "cursor-pointer list-none [&::-webkit-details-marker]:hidden")}>Export <ChevronDown className="h-4 w-4" aria-hidden="true" /></summary>
     <div className="absolute right-0 z-10 mt-2 w-56 rounded-2xl border border-gray-200 bg-white p-2 shadow-lg">
       <GatedButton feature="baselineAllPlatforms" plan={plan} variant="ghost" size="sm" disabled={disabled} className="w-full justify-start gap-2" onClick={event => { close(event); onPdf() }}><FileText className="h-4 w-4" aria-hidden="true" />PDF report</GatedButton>
       <GatedButton feature="baselineAllPlatforms" plan={plan} variant="ghost" size="sm" disabled={disabled} className="w-full justify-start gap-2" onClick={event => { close(event); onFindingsCsv() }}><FileSpreadsheet className="h-4 w-4" aria-hidden="true" />Findings CSV</GatedButton>
       <GatedButton feature="baselineAllPlatforms" plan={plan} variant="ghost" size="sm" disabled={disabled} className="w-full justify-start gap-2" onClick={event => { close(event); onFindingsJson() }}><FileJson className="h-4 w-4" aria-hidden="true" />Findings JSON</GatedButton>
-      <button type="button" className={itemClass} disabled={disabled || readinessDisabled} onClick={event => { close(event); onReadinessCsv() }}><FileSpreadsheet className="h-4 w-4" aria-hidden="true" />Readiness CSV</button>
-      <button type="button" className={itemClass} disabled={disabled || readinessDisabled} onClick={event => { close(event); onReadinessJson() }}><FileJson className="h-4 w-4" aria-hidden="true" />Readiness JSON</button>
+      <GatedButton feature="baselineAllPlatforms" plan={plan} variant="ghost" size="sm" disabled={disabled || readinessDisabled} className="w-full justify-start gap-2" onClick={event => { close(event); onReadinessCsv() }}><FileSpreadsheet className="h-4 w-4" aria-hidden="true" />Readiness CSV</GatedButton>
+      <GatedButton feature="baselineAllPlatforms" plan={plan} variant="ghost" size="sm" disabled={disabled || readinessDisabled} className="w-full justify-start gap-2" onClick={event => { close(event); onReadinessJson() }}><FileJson className="h-4 w-4" aria-hidden="true" />Readiness JSON</GatedButton>
     </div>
   </details>
+}
+
+/** The certification and its exact scope, from the shared statement so the page and every export agree. */
+function CisCertificationNote() {
+  return <section aria-label="CIS certification" className="mt-5 rounded-3xl bg-white px-6 py-5 text-sm text-gray-700 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+    <p className="font-medium text-gray-900">{CIS_CERTIFICATION_HEADLINE}</p>
+    <p className="mt-1">{CIS_CERTIFICATION_SCOPE_INTRO}</p>
+    <ul className="mt-1 list-disc space-y-0.5 pl-5">{certifiedScopeLines().map(line => <li key={line}>{line}</li>)}</ul>
+    <p className="mt-2 text-gray-600">{CIS_NOT_CERTIFIED_NOTE} {CIS_TENANT_NOT_CERTIFIED_NOTE}</p>
+  </section>
 }
 
 function FrameworkDetail({ framework, standalone = false, kitImport = false }: { framework: Framework; standalone?: boolean; kitImport?: boolean }) {
@@ -479,6 +481,9 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   const comparing = compareTask?.status === "running"
   // Reports of licensed CIS content are Pro and MSP; the main process checks the same plan.
   const plan = useTenantPlan(credentials?.tenantId)
+  // CIS Benchmarks is Pro and MSP. A known plan without it shows the plan preview instead of the
+  // benchmark picker; saved assessments from an earlier plan stay readable.
+  const cisLocked = isCis && plan !== null && !canUse(plan, "baselineAllPlatforms")
   const { confirm, confirmDialog } = useConfirm()
   // CIS exports open the Save dialog like the Governance exports; the notice shows next to the button used.
   const [exportOrigin, setExportOrigin] = useState<ExportOrigin>("header")
@@ -766,8 +771,8 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   }
   // The catalog loads when the page opens, so a benchmark can be chosen without a click first,
   // and again on the way back to setup when a run made the first answer stale.
-  useEffect(() => { if (isCis && credentials?.tenantId) void loadCisCatalog() }, [isCis, credentials?.tenantId])
-  useEffect(() => { if (stage === "setup" && !cisCatalog && !cisCatalogLoading && !cisCatalogMessage) void loadCisCatalog() }, [stage])
+  useEffect(() => { if (isCis && !cisLocked && credentials?.tenantId) void loadCisCatalog() }, [isCis, cisLocked, credentials?.tenantId])
+  useEffect(() => { if (stage === "setup" && !cisLocked && !cisCatalog && !cisCatalogLoading && !cisCatalogMessage) void loadCisCatalog() }, [stage])
   // Display names of the settings and choices on screen, read once per definition; the same
   // stale-response rule as a run applies, and without names the raw values stay.
   const shownFindings = cisRun?.findings.length ? cisRun.findings : assessment?.findings
@@ -797,12 +802,13 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       setPackRetry(null)
     }, "load")
   }
-  async function requireCurrentCisAccess(): Promise<void> {
-    if (!(await refreshInternalCisBenchmarks())) throw new Error("CIS comparisons are coming soon.")
+  /** CIS content exports built in the renderer follow the same plan rule as the main process. */
+  function requireCurrentCisAccess(): void {
+    if (!canUse(plan, "baselineAllPlatforms")) throw new Error(upgradeMessage("baselineAllPlatforms"))
   }
+  /** Build Kit import needs the internal CIS claim, read again from the main process before acting. */
   async function requireCurrentKitImport(): Promise<void> {
-    if (!kitImport) throw new Error("CIS comparisons are coming soon.")
-    await requireCurrentCisAccess()
+    if (!kitImport || !(await refreshInternalCisBenchmarks())) throw new Error(KIT_IMPORT_ONLY)
   }
   function clearKit() { setKitConversion(null); setKitDetected({ id: "" }); setKitFiles([]); setKitBenchmark(""); setKitVersion(""); setLoadedKitLevel(null); setPolicies([]); setReference(""); reset() }
   function applyKitConversion(files: KitFile[], id: string, version?: string) {
@@ -926,7 +932,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     const shown = assessment
     setExportOrigin("header")
     void perform("Checking CIS access…", async () => {
-      await requireCurrentCisAccess()
+      requireCurrentCisAccess()
       const exportedAt = new Date().toISOString()
       const name = cisExportFileName({ reference: shown.reference, benchmarkName: current.benchmarkName, part: "readiness", tenantName: selectedTenant?.name ?? null, date: localDate(), extension: format })
       await saveCisFile(format === "csv" ? `\uFEFF${cisReadinessCsv(current)}` : cisReadinessJson(current, selectedTenant?.name ?? null, exportedAt), name)
@@ -939,7 +945,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     }
     setExportOrigin("coverage")
     void perform("Checking CIS access…", async () => {
-      await requireCurrentCisAccess()
+      requireCurrentCisAccess()
       await saveCisFile(JSON.stringify({ reference, ...packCoverage(policies) }, null, 2), cisExportFileName({ reference, benchmarkName: packBenchmarkName(policies), part: "coverage", tenantName: selectedTenant?.name ?? null, date: localDate(), extension: "json" }))
     }, "export")
   }
@@ -966,6 +972,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       <div><p className="text-xs uppercase tracking-widest text-gray-500">{framework.publisher} · {framework.kind}</p><h1 className={standalone ? "mt-2 text-4xl font-light tracking-tight text-gray-900" : "mt-2 text-3xl font-semibold tracking-tight text-gray-950"}>{framework.name}</h1><p className="mt-2 text-gray-600">{framework.description}</p></div>
       {framework.source && <a href={framework.source} target="_blank" rel="noreferrer" className={button}>Source <ExternalLink className="h-4 w-4" aria-hidden="true" /></a>}
     </div>
+    {isCis && <CisCertificationNote />}
     {isCis && <nav aria-label="CIS Benchmarks progress" className="mt-6">
       <ol className="flex flex-wrap gap-2">
         {cisFlowSteps(policies.length > 0, !!assessment, !!cisRun).map(item => {
@@ -1021,7 +1028,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
         <span className="flex items-center gap-3 text-sm"><Info className="size-4 shrink-0 text-blue-700" aria-hidden="true" /><span><strong className="font-medium text-gray-900">Assessment coverage</strong><span className="text-gray-600"> · What is compared, content sources and limits.</span></span></span>
         <ChevronDown className="chevron size-4 shrink-0 text-gray-500 transition-transform" aria-hidden="true" />
       </summary>
-      <div className="mt-4 space-y-2 border-t border-blue-100 pt-4 text-sm leading-6 text-gray-700"><p>Mapping format v1. Automatic content: NCSC Device Security Guidance 2025 Windows Settings Catalog only. Other frameworks use administrator-supplied mappings. No certification or complete framework assessment is implied.</p><p>{framework.coverage}</p>{framework.licenseNotice && <p>{framework.licenseNotice}</p>}<p>Comparison covers Settings Catalog root settings and their nested values. Assignment targets, exclusions and filter references are reported separately from configuration. Group membership, device applicability, enforcement and other policy families remain unavailable. “Present” means a matching configuration exists; it does not mean the setting is assigned or enforced.</p></div>
+      <div className="mt-4 space-y-2 border-t border-blue-100 pt-4 text-sm leading-6 text-gray-700"><p>{isCis ? `Benchmark packs come from the TenuVault delivery service. ${CIS_TENANT_NOT_CERTIFIED_NOTE}` : "Mapping format v1. Automatic content: NCSC Device Security Guidance 2025 Windows Settings Catalog only. Other frameworks use administrator-supplied mappings. No certification or complete framework assessment is implied."}</p><p>{framework.coverage}</p>{framework.licenseNotice && <p>{framework.licenseNotice}</p>}<p>Comparison covers Settings Catalog root settings and their nested values. Assignment targets, exclusions and filter references are reported separately from configuration. Group membership, device applicability, enforcement and other policy families remain unavailable. “Present” means a matching configuration exists; it does not mean the setting is assigned or enforced.</p></div>
     </details>}
     {(!isCis || contentStage === "setup") && savedBlock}
     {framework.id === CIS_BENCHMARKS_ID && contentStage === "setup" && <details className="mb-5"><summary className="inline-flex h-10 cursor-pointer list-none items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 [&::-webkit-details-marker]:hidden">Portfolio</summary><div className="mt-3"><CisPortfolio plan={plan} selectedTenantId={credentials?.tenantId} /></div></details>}
@@ -1029,6 +1036,8 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="cis-delivered-title" className="text-xl font-medium tracking-tight">1. Load benchmark</h2><span className="text-sm text-gray-500">{cisCatalog ? `${cisCatalog.length} benchmarks available` : "Delivery service"}</span></div>
       <p className="mt-2 text-sm text-gray-600">Load a benchmark pack from the TenuVault delivery service. The pack is saved in encrypted storage on this device for the selected tenant.</p>
       {policies.length > 0 && reference && <p className="mt-2 text-sm text-gray-800">Loaded: {referenceDisplayName(reference, packBenchmarkName(policies))}, {policies.length} {policies.length === 1 ? "policy" : "policies"}. Compare it with the tenant in step 2.</p>}
+      {cisLocked && <LockedPreview feature="baselineAllPlatforms" className="mt-4 bg-secondary/40 shadow-none" summary="Load CIS Benchmark packs from the TenuVault delivery service, assess your tenant per Level, remediate deviating settings with review, backup and rollback, and export readiness reports." points={["Benchmark packs and recommendation lists are delivered to licensed installations and stored encrypted on this device.", "Readiness per Level with Manual and Not assessed recommendations listed for manual action.", "PDF, CSV and JSON exports of findings and readiness."]} />}
+      {!cisLocked && <>
       {!credentials && <p className="mt-3 text-sm text-amber-800">Sign in to {selectedTenant?.name ?? "a tenant"} from the sidebar to load benchmarks and run an assessment.</p>}
       <div className="mt-4 flex flex-wrap items-center gap-3"><button type="button" className={button} disabled={!!busy || cisCatalogLoading || !credentials} onClick={() => void loadCisCatalog()}>{cisCatalogLoading ? "Loading available benchmarks…" : "Refresh available benchmarks"}</button>
         {cisCatalogLoading && <span role="status" className="text-sm text-blue-700">{cisCatalog ? "Checking for updated benchmarks…" : "Loading available benchmarks…"}</span>}</div>
@@ -1040,7 +1049,11 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
         <p className="text-sm font-medium text-gray-900">{benchmark.name}</p>
         <p className="mt-1 text-sm text-gray-600">Version {benchmark.version}<span className="ml-2 font-mono text-[11px] text-gray-400">{benchmark.id}</span></p>
         <div className="mt-3 flex flex-wrap gap-2">{benchmark.levels.map(level => { const loaded = reference === `${benchmark.id} ${benchmark.version} Level ${level}`; return <button key={level} type="button" aria-pressed={loaded} className={loaded ? primary : button} disabled={!!busy || !credentials} onClick={() => void loadDeliveredPack(benchmark, level)}>{loaded && <Check className="h-4 w-4" aria-hidden="true" />}Level {level}</button> })}</div>
+        <ul aria-label={`Certification of ${benchmark.name}`} className="mt-2 flex flex-wrap gap-1.5">{benchmark.levels.map(level => isCisCertified(benchmark.id, benchmark.version, level)
+          ? <li key={level} className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-800"><Check className="h-3 w-3" aria-hidden="true" />Level {level}: {CIS_CERTIFIED_LABEL}</li>
+          : <li key={level} className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-600">Level {level}: {CIS_NOT_CERTIFIED_LABEL}</li>)}</ul>
       </div>)}</div>}
+      </>}
     </section>}
     {(!isCis || (contentStage === "setup" && (kitImport || (policies.length > 0 && !fromKit)))) && <section {...(isCis ? { "aria-label": "Other benchmark sources" } : { "aria-labelledby": "pack-title" })} className="rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
       {!isCis && <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="pack-title" className="text-xl font-medium tracking-tight">1. Choose your policy pack</h2><span className="text-sm text-gray-500">{policies.length ? `${policies.length} policies loaded` : "No pack loaded"}</span></div>}
@@ -1294,6 +1307,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
               <ManualList level={level.level} label={section.heading} items={items} fallback={readiness.manualFallback} fallbackUrl={readiness.manualFallbackUrl} />
             </div>
           }))}
+          <CisRemediationLimits className="mt-4 border-t border-gray-100 pt-3" />
           <details ref={exclusionsPanel} open={cisExceptionsOpen} onToggle={e => setCisExceptionsOpen((e.target as HTMLDetailsElement).open)} className="mt-2 scroll-mt-6 border-t border-gray-100">
             <summary id="cis-exclusions" className="cursor-pointer py-3 text-sm font-medium text-gray-800">{(() => {
               // One exclusion can count toward two Levels; the total counts it once.

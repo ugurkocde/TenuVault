@@ -157,8 +157,7 @@ describe("CIS main process actions", () => {
       { id: "1", method: "GET", url: "/deviceManagement/configurationSettings/unknown_setting" },
     ])
     await expect(handleFramework({ action: "cis-setting-names", frameworkId: "ncsc-dsg", tenantId, appId, ids: [ENCRYPTION] })).rejects.toMatchObject({ status: 400 })
-    setInternalCisBenchmarksEnabled(false)
-    await expect(handleFramework({ action: "cis-setting-names", frameworkId: "cis-benchmarks", tenantId, appId, ids: [ENCRYPTION] })).rejects.toMatchObject({ status: 403 })
+    await expect(handleFramework({ action: "cis-setting-names", frameworkId: "cis-controls", tenantId, appId, ids: [ENCRYPTION] })).rejects.toMatchObject({ status: 403 })
   })
 })
 

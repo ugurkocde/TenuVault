@@ -112,18 +112,18 @@ describe("grouped payload comparison", () => {
 })
 
 describe("Graph reads and tenant-bound remediation", () => {
-  it.each(["cis-benchmarks", "cis-controls"])("blocks %s operations before network or workspace access", async frameworkId => {
+  it("blocks CIS Controls operations before network or workspace access", async () => {
     const fetch = vi.fn()
     vi.stubGlobal("fetch", fetch)
     for (const action of ["workspace-load", "workspace-save", "workspace-delete", "workspace-delete-assessment", "assess", "create"]) {
-      await expect(handleFramework({ action, frameworkId, tenantId, appId, reference: "r1", policies: [policy()] }))
+      await expect(handleFramework({ action, frameworkId: "cis-controls", tenantId, appId, reference: "r1", policies: [policy()] }))
         .rejects.toMatchObject({ status: 403, message: expect.stringContaining("coming soon") })
     }
     expect(fetch).not.toHaveBeenCalled()
     expect(searchFrameworks("cis").map(f => f.id)).toEqual(["cis-benchmarks", "cis-controls"])
   })
   it("blocks a disabled assessment's creation even with a different or omitted framework ID", async () => {
-    const framework = frameworks.find(f => f.id === "cis-benchmarks")!
+    const framework = frameworks.find(f => f.id === "cis-controls")!
     const disabledReason = framework.disabledReason
     const fetch = vi.fn().mockImplementation(async (url: string) => url.includes("oauth2")
       ? Response.json({ access_token: "test" }) : Response.json({ value: [] }))

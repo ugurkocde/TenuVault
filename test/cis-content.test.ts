@@ -137,6 +137,19 @@ describe("CIS content delivery service", () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it("explains a refusal (403) and switched-off delivery (503) of the service in plain words, without the internal claim", async () => {
+    setInternalCisBenchmarksEnabled(false)
+    for (const [status, message] of [[403, "CIS Benchmarks content is not available for this license yet."], [503, "CIS Benchmarks content delivery is unavailable right now. Try again later."]] as const) {
+      vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ok: false, error: "refused" }, { status })))
+      await expect(handleFramework({ action: "cis-catalog", tenantId, frameworkId: "cis-benchmarks" })).rejects.toMatchObject({ status, message })
+      await expect(handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })).rejects.toMatchObject({ status, message })
+      // A refused recommendation list fails the pack load too; only a missing list (404) is optional.
+      vi.stubGlobal("fetch", vi.fn(async (url: string) => url.includes("/cis/v1/lists/") ? Response.json({ ok: false }, { status }) : Response.json(validPack)))
+      await expect(handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })).rejects.toMatchObject({ status, message })
+    }
+    expect(loadWorkspace(tenantId, "cis-benchmarks").policies).toEqual([])
+  })
+
   it("saves the workspace pack with the right reference on pack success", async () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
       if (url.includes("/cis/v1/lists/")) return noList()
