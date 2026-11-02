@@ -107,6 +107,8 @@
   }
   td { padding: 1mm 2mm 1mm 0; border-bottom: 1px solid var(--line); vertical-align: top; }
   table.perms td { padding: 0.6mm 2mm 0.6mm 0; }
+  table.flows td { padding: 0.6mm 2mm 0.6mm 0; font-size: 7.5pt; line-height: 1.3; }
+  table.flows code { font-size: 7.1pt; }
   td.purpose { font-weight: 600; color: var(--ink); white-space: nowrap; }
   code, .mono { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 7.6pt; color: var(--ink); }
   td.dest { white-space: nowrap; }
@@ -185,7 +187,7 @@
           <div class="sub">Security and architecture overview</div>
         </div>
       </div>
-      <div class="meta">Describes version 0.1.0<br>Revision 1, 29 September 2026</div>
+      <div class="meta">Describes version 0.3.3<br>Revision 2, 2 November 2026</div>
     </div>
     <h1>Runs locally. Your app registration. Your storage.</h1>
     <p>TenuVault Desktop backs up, compares and restores Intune configuration from the admin's computer. It signs in
@@ -277,7 +279,7 @@
     </div>
 
     <h2>Everything that leaves the computer (no Intune data goes to the vendor)</h2>
-    <table>
+    <table class="flows">
       <thead>
         <tr><th style="width:25mm">Purpose</th><th style="width:47mm">Destination</th><th>What is sent</th></tr>
       </thead>
@@ -305,11 +307,13 @@
             Not used when backups are stored locally</td>
         </tr>
         <tr>
-          <td class="purpose">License check</td>
+          <td class="purpose">License and CIS</td>
           <td class="dest"><code>www.tenuvault.com</code></td>
           <td>License key (if any), tenant ID, random install ID, OS, app version and, when signed in, your client ID and a
             short-lived Microsoft ID token. The service reads only the tenant and client ID from the token; name and UPN
-            are not stored. Runs at start, every 6 hours, on first use of a tenant and on license changes</td>
+            are not stored. Runs at start, every 6 hours, on first use of a tenant and on license changes. Pro and MSP
+            download CIS Benchmarks content with the signed entitlement; each download is logged with tenant, install and
+            license key ID</td>
         </tr>
         <tr>
           <td class="purpose">Updates</td>
@@ -335,7 +339,7 @@
 <section class="page page2">
   <header class="strip">
     <span><b>TenuVault Desktop</b> &nbsp;Security and architecture overview</span>
-    <span>Describes version 0.1.0 &nbsp;|&nbsp; Revision 1, 29 September 2026</span>
+    <span>Describes version 0.3.3 &nbsp;|&nbsp; Revision 2, 2 November 2026</span>
   </header>
 
   <div class="content">
