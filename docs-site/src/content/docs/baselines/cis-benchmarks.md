@@ -1,0 +1,113 @@
+---
+title: "CIS Benchmarks"
+description: Assess and remediate Intune against delivered CIS Benchmark packs, with the certified scope, readiness per Level, reviewed remediation and PDF, CSV and JSON exports.
+---
+
+**CIS Benchmarks** compares your tenant's Intune Settings Catalog policies with a CIS Benchmark pack, Level by Level, shows how ready the tenant is, and remediates deviating settings through a reviewed change set. It has its own entry in the sidebar.
+
+## Certification and scope
+
+TenuVault is CIS Benchmarks Certified for Assessment and Remediation. CIS awarded the "CIS Benchmark Assessment Certified" and "CIS Benchmark Remediation Certified" status on 2 November 2026. The certification covers only these benchmarks and Levels:
+
+| Benchmark | Version | Certified Levels |
+| --- | --- | --- |
+| CIS Microsoft Intune for Windows 11 Benchmark | v5.0.0 | Level 1 |
+| CIS Microsoft Intune for Microsoft Defender Antivirus Benchmark | v1.0.0 | Level 1 and Level 2 |
+| CIS Apple macOS 26 Tahoe Intune Benchmark | v1.0.0 | Level 1 and Level 2 |
+
+Other CIS Benchmarks, versions and Levels are not certified. The CIS Benchmarks page, the benchmark picker and every CIS report and export state this scope.
+
+The certification belongs to TenuVault, not to your tenant. Assessment results compare the recorded Intune configuration with the benchmark pack. They do not certify your tenant's compliance with a CIS Benchmark.
+
+## Plans
+
+CIS Benchmarks is included in **Pro** and **MSP**. On Community, the sidebar entry shows a plan badge and explains which plans include it, and the page shows a preview instead of the benchmark picker. Assessments saved on an earlier plan stay readable. See [Plans and features](/licensing/).
+
+CIS Controls is not available yet and stays marked **Coming soon**.
+
+## How benchmark content is delivered
+
+Benchmark packs and their recommendation lists are not part of the TenuVault installer. TenuVault downloads them at runtime from its delivery service, for licensed installations only, using the license of the selected tenant. A loaded pack is stored in encrypted storage on this device for that tenant. CIS content is licensed for use within TenuVault only.
+
+If the delivery service refuses the license, the page shows "CIS Benchmarks content is not available for this license yet." If delivery is switched off or unavailable, it shows "CIS Benchmarks content delivery is unavailable right now. Try again later." Click **Retry** to try again.
+
+## 1. Load a benchmark
+
+Select the tenant in the sidebar and open **CIS Benchmarks**. Under **1. Load benchmark**, TenuVault lists the benchmarks available to your license, each with its version and Levels. Every Level is marked **CIS Certified** or **Not certified**.
+
+1. Click the Level you want to assess, for example **Level 1**. TenuVault loads the pack and saves it for the selected tenant.
+2. Click **Refresh available benchmarks** to check for updated benchmarks later.
+
+Loading a pack does not change your tenant.
+
+## 2. Compare with your tenant
+
+Click **Start Assessment** (**Run again** for later runs). TenuVault reads every Settings Catalog policy of the tenant, its settings and its assignments, and compares them with the pack. The assessment is read-only. Its progress shows the current step and partial tallies; the assessment keeps running in the background if you leave the page.
+
+Each pack setting gets one result:
+
+| Result | Meaning |
+| --- | --- |
+| **Present** | Every occurrence of the setting in your tenant has the recommended value. |
+| **Different** | At least one occurrence has another value. |
+| **Missing** | No Settings Catalog policy configures the setting. |
+| **Review** | The pack holds alternative values for the setting. Choose the profile that applies to you. |
+
+## 3. Read the results
+
+The readiness view shows each Level of the benchmark:
+
+* **Pass rate.** When the pack lists its recommendations, the headline is the recommendation pass rate: a recommendation passes only when every setting it names is in the pack and **Present**, and fails when any of them is **Different** or **Missing**. Otherwise the headline is the settings pass rate.
+* **Coverage.** A line in plain words says how much of the full benchmark the pack covers, when the list of all its automated recommendations is available, and that pass rates do not depend on it.
+* **Recommendation results** list each recommendation with its settings and result.
+* **Manual recommendations** and **Not assessed by this tool** list the recommendations TenuVault does not check. Manual recommendations need a manual check by design. Not assessed recommendations are automated in CIS terms but not covered by the pack. Both show their CIS description, impact, audit and remediation text when the delivered list includes it, for you to check them yourself.
+* **Exclusions.** Select findings and click **Exclude from score** to record an accepted exception with an owner, a reason and an expiry date. The pass rate with exclusions is shown next to the raw rate.
+
+Every readiness view and report carries the CIS notice: "Not all recommendations from the CIS Benchmarks are included in this tool. Please refer to the CIS website to access the free CIS Benchmarks PDFs for manual assessment instructions." with a link to [https://www.cisecurity.org/cis-benchmarks](https://www.cisecurity.org/cis-benchmarks).
+
+A configuration match is evidence for review. It does not prove that the setting is assigned to the right devices or enforced on them.
+
+## 4. Remediate
+
+Under **Remediate or deploy from these results**, select **Different** or **Missing** findings, then:
+
+* Click **Plan remediation for *N* selected findings** to change only those settings, or
+* Click **Deploy whole benchmark policies** to create the pack policies that hold the selected findings.
+
+The planned deployment opens in **Remediation history**, where it goes through the same reviewed flow as every change set in TenuVault:
+
+1. **Review** the preview: every policy that would be created or updated, the exact settings, and whether an updated policy is assigned. The preview is an offline comparison against the assessment, not a tenant dry run.
+2. **Approve** it. Approval reads the tenant again; a changed tenant stops the deployment before anything is written.
+3. **Apply** it. TenuVault runs a backup of the tenant first and captures the current state of every policy it changes; if the backup fails, nothing is written. Then it writes the changes and reads each one back to verify it.
+4. **Roll back** if needed. The rollback removes the policies the deployment created and puts back the previous settings of the policies it updated, again through review and approval.
+
+Run the assessment again after an apply or a rollback to confirm which findings closed.
+
+### Limits of remediation
+
+* TenuVault remediates only recommendations it assesses automatically: the settings in the delivered benchmark pack, written to Intune Settings Catalog policies.
+* Manual recommendations and recommendations marked **Not assessed by this tool** cannot be remediated by TenuVault. They are listed for manual action, with their CIS text when the delivered list includes it.
+* **Review** findings hold alternative values in the pack. They cannot be selected for remediation until the profile is chosen.
+* **Missing** settings are created in new policies with no assignments. Nothing in them takes effect until an administrator assigns them in Intune.
+* **Different** settings are updated in place in the tenant policies that hold them. Those policies keep their assignments, so the change reaches their assigned devices.
+* Remediation changes Intune configuration only. It does not confirm that devices apply the settings.
+
+## Export results
+
+Open **Export** in the results header:
+
+| Export | Content |
+| --- | --- |
+| **PDF report** | Readiness per Level, recommendation results, Manual and Not assessed recommendations, exceptions, the certified scope, the limitations and the limits of remediation. |
+| **Findings CSV** and **Findings JSON** | One row per pack setting with its result, the observed tenant policies and their assignment evidence. The JSON names the certified scope and the limits of remediation. |
+| **Readiness CSV** and **Readiness JSON** | The readiness figures per Level, the Manual and Not assessed recommendations, the CIS notice, the certified scope and the limits of remediation. |
+
+Exports are built on this device from the saved assessment, without reading the tenant again, and saved where you choose. Pro and MSP can brand the PDF in [Settings](/settings/#pdf-branding). Under **Saved assessments** you can view earlier assessments read-only, export them as JSON or delete them. On MSP, **Portfolio** compares the readiness of your customer tenants on one benchmark.
+
+## Related pages
+
+* [Framework coverage](/baselines/frameworks/)
+* [Plans and features](/licensing/)
+* [Changes](/changes/)
+
+CIS, CIS Benchmarks and CIS Controls are trademarks of the Center for Internet Security, Inc.

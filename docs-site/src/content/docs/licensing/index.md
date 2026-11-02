@@ -43,10 +43,10 @@ Eligible nonprofits can use Pro at no cost. Email [support@ugurlabs.com](mailto:
 | OpenIntuneBaseline: deploy new policies, with undo | Yes | Yes | Yes |
 | OpenIntuneBaseline: update outdated policies in place and **Fix drift** | | Yes | Yes |
 | OpenIntuneBaseline: **Customize** your own baseline under My baselines | | Yes | Yes |
-| Native non-CIS framework comparisons | Yes | Yes | Yes |
-| Framework PDF reports and CSV or JSON exports (except CIS) | Yes | Yes | Yes |
+| Native framework comparisons | Yes | Yes | Yes |
+| Framework PDF reports and CSV or JSON exports (except CIS Benchmarks) | Yes | Yes | Yes |
 | Administrator-imported Microsoft, STIG and Custom comparisons | Yes | Yes | Yes |
-| CIS comparisons and their reports (coming soon) | No | Yes | Yes |
+| [CIS Benchmarks](/baselines/cis-benchmarks/) assessments, remediation and reports | | Yes | Yes |
 | Dashboard baseline scores | | Yes | Yes |
 | Policy conflict and hygiene explorer | | Yes | Yes |
 | Baseline upgrades that keep your customizations | | Yes | Yes |
@@ -62,7 +62,7 @@ Eligible nonprofits can use Pro at no cost. Email [support@ugurlabs.com](mailto:
 | Actions across several tenants: **Backup Selected**, **Copy to other tenants instead** when restoring, **Also deploy to** in OpenIntuneBaseline | | | Yes |
 
 :::note[Included in 0.2.0]
-Community includes New Deployment, Existing Deployment comparison, Policy Validation and deployment of new policies for every OpenIntuneBaseline platform, and framework PDF, CSV and JSON reports for every framework except CIS. Audit-log access requires Pro or MSP. CIS remains unavailable on every plan while its commercial-use agreement is pending.
+Community includes New Deployment, Existing Deployment comparison, Policy Validation and deployment of new policies for every OpenIntuneBaseline platform, and framework PDF, CSV and JSON reports for every framework except CIS Benchmarks. Audit-log access requires Pro or MSP. CIS Controls is not available yet on any plan.
 :::
 
 TenuVault enforces these limits in the app itself, not just in the interface. When you try a feature your plan does not include, the app shows which plan includes it, for example: "Replacing items in place: included in TenuVault Pro and MSP. Upgrade on the License page." Features that need a higher plan are marked with a plan badge in the app.
@@ -71,7 +71,7 @@ Actions across several tenants need the MSP plan on every tenant they touch.
 
 ## What Pro adds
 
-Pro covers two tenants and includes daily scheduled backups, the optional [Backup Reader](/backups/backup-reader/) for scheduled backups under strict Conditional Access, custom backup history, your own Azure storage, restoring several items at once, replacing items in place, restoring assignments, reverting drifted policies and the audit log. It also includes dashboard baseline scores, the policy conflict and hygiene explorer, baseline upgrades that keep your customizations, Dev to Prod settings promotion, scheduled health reviews, organization customizations, custom baselines and full white-label PDF reports with your logo and colors. CIS assessments and reports are included in Pro and MSP when they become available. Community keeps its existing backup, restore, drift, OpenIntuneBaseline and non-CIS framework features.
+Pro covers two tenants and includes daily scheduled backups, the optional [Backup Reader](/backups/backup-reader/) for scheduled backups under strict Conditional Access, custom backup history, your own Azure storage, restoring several items at once, replacing items in place, restoring assignments, reverting drifted policies and the audit log. It also includes dashboard baseline scores, the policy conflict and hygiene explorer, baseline upgrades that keep your customizations, Dev to Prod settings promotion, scheduled health reviews, organization customizations, custom baselines and full white-label PDF reports with your logo and colors. It includes [CIS Benchmarks](/baselines/cis-benchmarks/): assessments, remediation and reports against benchmark packs delivered to licensed installations. Community keeps its existing backup, restore, drift, OpenIntuneBaseline and non-CIS framework features.
 
 ## How tenants are counted
 

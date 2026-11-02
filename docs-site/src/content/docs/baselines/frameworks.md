@@ -14,14 +14,14 @@ OpenIntuneBaseline is not part of the framework catalog. It has its own **OpenIn
 
 ## The framework catalog
 
-Select **Frameworks** in the sidebar to open the catalog. It shows every framework as a card, grouped into framework comparisons, baselines and policy packs, and frameworks that are coming soon. The search box on the catalog filters by name, publisher or type. The sidebar lists each framework by name beneath **Frameworks**, except CIS Benchmarks, which is not part of that list; use the arrow next to it to fold the list away. The catalog has sixteen entries:
+Select **Frameworks** in the sidebar to open the catalog. It shows every framework as a card, grouped into framework comparisons, baselines and policy packs, and frameworks that are coming soon. The search box on the catalog filters by name, publisher or type. The sidebar lists each framework by name beneath **Frameworks**, except CIS Benchmarks, which has its own entry in the sidebar; use the arrow next to **Frameworks** to fold the list away. The catalog has sixteen entries:
 
 | Framework | Publisher | Type | Comparison source |
 | --- | --- | --- | --- |
 | Microsoft Security Baselines | Microsoft | Baseline | Import your own policy JSON |
 | UK NCSC Device Security Guidance | UK National Cyber Security Centre | Baseline | 2025 Windows Settings Catalog pack loads directly; comparison and reports only |
-| CIS Benchmarks | Center for Internet Security | Benchmark | Coming soon, pending commercial-use contract |
-| CIS Controls | Center for Internet Security | Control framework | Coming soon, pending commercial-use contract |
+| CIS Benchmarks | Center for Internet Security | Benchmark | Delivered benchmark packs, Pro and MSP. See [CIS Benchmarks](/baselines/cis-benchmarks/) |
+| CIS Controls | Center for Internet Security | Control framework | Coming soon |
 | NIST CSF 2.0 | NIST | Control framework | Native comparison |
 | NIST SP 800-53 Rev. 5 | NIST | Control framework | Native comparison |
 | NIST SP 800-171 Rev. 3 | NIST | Control framework | Native comparison |
@@ -35,10 +35,10 @@ Select **Frameworks** in the sidebar to open the catalog. It shows every framewo
 | Cyber Essentials | NCSC | Control framework | Native comparison of v3.3 |
 | Custom Baselines | Your organization | Custom | Import your own policy JSON |
 
-Only UK NCSC Device Security Guidance loads automatic policy-pack content. For Microsoft Security Baselines, DISA STIG and Custom Baselines you supply reviewed Settings Catalog policy exports that map the framework to Intune. Native comparisons do not accept policy imports or create policies. TenuVault does not bundle CIS benchmark text, CIS Build Kits or other restricted publisher content. Selecting a framework does not certify your mappings as official.
+UK NCSC Device Security Guidance loads its policy pack directly, and CIS Benchmarks loads benchmark packs from the TenuVault delivery service. For Microsoft Security Baselines, DISA STIG and Custom Baselines you supply reviewed Settings Catalog policy exports that map the framework to Intune. Native comparisons do not accept policy imports or create policies. The TenuVault installer does not include CIS benchmark text, CIS Build Kits or other restricted publisher content. Selecting a framework does not certify your mappings as official.
 
 :::note
-CIS Benchmarks and CIS Controls remain visible with **Coming soon** labels. Their workflows are temporarily disabled while TenuVault's commercial-use contract is being finalized, including direct page and API access. Saved workspaces are retained. Upgrading to Pro or MSP does not enable CIS during this pause.
+CIS Benchmarks is available on Pro and MSP. TenuVault is CIS Benchmarks Certified for Assessment and Remediation for CIS Microsoft Intune for Windows 11 Benchmark v5.0.0 Level 1, CIS Microsoft Intune for Microsoft Defender Antivirus Benchmark v1.0.0 Level 1 and Level 2, and CIS Apple macOS 26 Tahoe Intune Benchmark v1.0.0 Level 1 and Level 2. Other benchmarks, versions and Levels are not certified. See [CIS Benchmarks](/baselines/cis-benchmarks/). CIS Controls remains **Coming soon** on every plan.
 :::
 
 Native framework pages link to the publisher with **Publisher reference**. Policy-pack framework pages describe their source and coverage, and link to the publisher with **Source**.
@@ -49,14 +49,14 @@ Native framework pages link to the publisher with **Publisher reference**. Polic
 | --- | --- | --- | --- |
 | Compare with the UK NCSC Device Security Guidance Windows pack | Yes | Yes | Yes |
 | Native framework comparisons | Yes | Yes | Yes |
-| PDF reports and CSV or JSON exports (every framework except CIS) | Yes | Yes | Yes |
+| PDF reports and CSV or JSON exports (every framework except CIS Benchmarks) | Yes | Yes | Yes |
 | Compare administrator-imported Microsoft, STIG or Custom packs | Yes | Yes | Yes |
-| CIS comparisons and their reports (coming soon) | No | Yes | Yes |
+| CIS Benchmarks assessments, remediation and reports | No | Yes | Yes |
 | Create missing settings from a policy-pack comparison | Yes | Yes | Yes |
 
-Non-CIS native comparisons, the UK NCSC Device Security Guidance pack, administrator-imported Microsoft, STIG and Custom comparisons, and their PDF, CSV and JSON reports are free in Community in TenuVault 0.2.0. CIS assessments and CIS reports will need Pro or MSP; CIS stays unavailable on every plan until its commercial-use agreement is signed.
+Non-CIS native comparisons, the UK NCSC Device Security Guidance pack, administrator-imported Microsoft, STIG and Custom comparisons, and their PDF, CSV and JSON reports are free in Community. CIS Benchmarks assessments, remediation and reports need Pro or MSP. CIS Controls is not available yet on any plan.
 
-Every report and export is built on this device from the saved comparison or assessment, without reading the tenant again. It names the tenant, framework, version and profile, the assessed scope, the collection date, the supported coverage, what stayed unknown and the limitations, and states that it is not a certification and does not prove device enforcement. Secrets, tokens and credentials are redacted. You choose where the file is saved; nothing is uploaded.
+Every report and export is built on this device from the saved comparison or assessment, without reading the tenant again. It names the tenant, framework, version and profile, the assessed scope, the collection date, the supported coverage, what stayed unknown and the limitations, and states that it does not certify the tenant and does not prove device enforcement. Secrets, tokens and credentials are redacted. You choose where the file is saved; nothing is uploaded.
 
 ## Compare your tenant with a native framework
 
@@ -283,6 +283,7 @@ Conflicts with other policy families are not evaluated. Profile selection and ap
 
 * [OpenIntuneBaseline](/baselines/quick-start/), to deploy, compare and validate OIB policies
 * [Drift detection](/drift/)
+* [CIS Benchmarks](/baselines/cis-benchmarks/)
 * [Plans and features](/licensing/)
 
 UK NCSC Device Security Guidance content is Crown Copyright, licensed under the [Apache License 2.0](https://github.com/ukncsc/Device-Security-Guidance-Configuration-Packs/blob/681e07584d3f7a84549ff26bda83e4f1480703f6/LICENSE).
