@@ -1027,7 +1027,8 @@ async function bootstrap(): Promise<void> {
   }
   handleTrusted("services:status", (_event, tenantId: unknown, clientId: unknown, refresh: unknown) => servicesFor(tenantId, clientId, refresh === true))
   handleTrusted("services:setEnabled", (_event, tenantId: unknown, clientId: unknown, id: unknown, enabled: unknown) => {
-    if (typeof tenantId !== "string") throw new Error("Choose a tenant.")
+    // Both IDs are checked before saving, so a refused request never changes what backups include.
+    if (typeof tenantId !== "string" || typeof clientId !== "string") throw new Error("Choose a tenant.")
     moduleSettings.set(tenantId, id, enabled)
     return servicesFor(tenantId, clientId, false)
   })
