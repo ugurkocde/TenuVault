@@ -123,7 +123,7 @@ Every recommendation says whether TenuVault can remediate it, in the **Recommend
 | **Remediation: by TenuVault** | Every setting of the recommendation is in the delivered pack. TenuVault remediates its **Different** and **Missing** settings with a reviewed deployment. |
 | **Remediation: by TenuVault after a profile choice** | A setting of the recommendation is a **Review** finding. Choose the profile before it can be remediated. |
 | **Remediation: partly by TenuVault, partly manual action** | Some of its settings are in the pack and some are not. TenuVault remediates the ones in the pack; the others need manual action. |
-| **Remediation: manual action** | None of its settings are in the pack, or it is a Manual, Not assessed or Not covered recommendation. TenuVault does not remediate it. |
+| **Remediation: manual action** | None of its settings are in the pack, or it is a Manual or Not covered recommendation. TenuVault does not remediate it. A **Not assessed** recommendation in the manual list shows this indication for the settings outside the pack; TenuVault still remediates its settings that are in the pack, as its recommendation result shows. |
 
 Findings exports state the same per setting: **Different** and **Missing** findings can be remediated by TenuVault, **Review** findings after a profile choice.
 
