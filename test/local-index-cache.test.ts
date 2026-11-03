@@ -34,7 +34,11 @@ it('retains the decrypted index across sequential and concurrent prefix listings
   expect(readIndex).toHaveBeenCalledTimes(2)
 })
 
-it('checks only the selected file after warming a large inventory', async () => {
+// The bulk tests encrypt and durably write dozens of files, each synced to disk: a fixed amount
+// of work that runs several times slower on a loaded machine, so they get more than 5 seconds.
+const BULK_TIMEOUT = { timeout: 30_000 }
+
+it('checks only the selected file after warming a large inventory', BULK_TIMEOUT, async () => {
   const root = mkdtempSync(join(tmpdir(), 'tv-selective-cache-')); roots.push(root)
   const store = new LocalBlobStore(root, [randomBytes(32)])
   await store.createContainer('account', 'intune-backups')
@@ -195,7 +199,7 @@ it.each(['addition', 'replacement'])('starts a fresh listing check after an exte
 })
 
 
-it.each([[1, false], [8, false], [1, true], [8, true]] as const)('rebuilds once after 64 own puts with %s concurrent writes and one listing (existing backup=%s)', async (concurrency, existing) => {
+it.each([[1, false], [8, false], [1, true], [8, true]] as const)('rebuilds once after 64 own puts with %s concurrent writes and one listing (existing backup=%s)', BULK_TIMEOUT, async (concurrency, existing) => {
   const root = mkdtempSync(join(tmpdir(), 'tv-write-index-')); roots.push(root)
   const store = new LocalBlobStore(root, [randomBytes(32)])
   await store.createContainer('account', 'intune-backups')

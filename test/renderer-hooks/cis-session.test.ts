@@ -14,6 +14,14 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
   bridge: { app: { info: appInfo, openExternal: async () => undefined }, license: { open: async () => undefined } },
 }))
 vi.mock("../../src/renderer/lib/framework-jobs", () => ({ useFrameworkJobs: () => [] }))
+// The shared CIS job store is module state that outlives each test: a run started in one test
+// stays "running" there (the stub fails assess-jobs) and keeps polling assess-jobs every second
+// into later tests. The store has its own tests, so the page here records nothing in it.
+vi.mock("../../src/renderer/lib/cis-jobs", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../src/renderer/lib/cis-jobs")>(),
+  noteCisJobStarted: () => undefined,
+  refreshCisJobs: async () => undefined,
+}))
 vi.mock("../../src/portal/contexts/TenantContext", () => ({
   useSelectedTenant: () => ({ selectedTenant: { id: "local", name: "Synthetic tenant", credentials: { tenantId, appId: "22222222-2222-2222-2222-222222222222" } }, selectedTenantId: "local", setSelectedTenantId: () => undefined }),
   useTenants: () => [],

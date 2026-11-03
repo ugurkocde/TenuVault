@@ -54,7 +54,11 @@ async function render() {
 const text = () => document.body.textContent ?? ""
 const button = (label: string) => [...document.querySelectorAll("button")].find((item) => item.textContent?.trim() === label) as HTMLButtonElement
 
-describe("Audit log paging", () => {
+// Every test renders pages of 50 audit rows in jsdom: fixed CPU bound work that runs several
+// times slower on a loaded machine, so these tests get more than the 5 second default.
+const RENDER_TIMEOUT = { timeout: 30_000 }
+
+describe("Audit log paging", RENDER_TIMEOUT, () => {
   it("shows more available instead of a made-up total while another page exists", async () => {
     state.selected = tenant(1, "11111111-1111-1111-1111-111111111111")
     const calls = stubApi((call) => Math.min(call.filter.limit, 51 - call.filter.offset))
@@ -159,7 +163,7 @@ describe("Audit log paging", () => {
   })
 })
 
-describe("Audit log after switching tenants", () => {
+describe("Audit log after switching tenants", RENDER_TIMEOUT, () => {
   it("ignores a slower response for the previous tenant", async () => {
     const a = tenant(1, "11111111-1111-1111-1111-111111111111")
     const b = tenant(2, "22222222-2222-2222-2222-222222222222")
