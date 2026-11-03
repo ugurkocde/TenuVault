@@ -204,9 +204,9 @@
       </div>
       <div class="card">
         <h3>Delegated access, admin in control</h3>
-        <p>Every call runs as the signed-in admin and is limited by their Intune role. Changes to Intune happen only
-          when an admin starts a restore, a drift revert, a baseline deployment or its undo. An optional, separate
-          read-only Backup Reader can run scheduled backups only; it cannot change Intune or delete backups.</p>
+        <p>Every call runs as the signed-in admin and is limited by their Intune role. Intune changes only when an admin
+          starts a restore, drift revert, baseline deployment, CIS remediation or its undo. An optional read-only
+          Backup Reader can run scheduled backups only; it cannot change Intune or delete backups.</p>
       </div>
       <div class="card">
         <h3>Backups stay with you</h3>
@@ -237,7 +237,7 @@
         <text x="46" y="118" font-size="12" fill="#55504a">Tokens encrypted by the OS (DPAPI or Keychain)</text>
         <text x="46" y="137" font-size="12" fill="#55504a">Backups encrypted before they are written</text>
         <text x="46" y="156" font-size="12" fill="#55504a">Scheduled backups run as the signed-in admin</text>
-        <text x="46" y="175" font-size="12" fill="#55504a">Writes only when an admin starts a restore</text>
+        <text x="46" y="175" font-size="12" fill="#55504a">Writes only when an admin starts a change</text>
         <text x="46" y="194" font-size="12" fill="#55504a">No telemetry or crash reporting</text>
 
         <path d="M210 202 L210 232" stroke="#c94b30" stroke-width="1.8" fill="none" marker-end="url(#arr)"/>
@@ -256,7 +256,7 @@
 
         <rect x="510" y="116" width="360" height="56" rx="8" fill="#fbf1ed" stroke="#e8c3b7"/>
         <text x="526" y="139" font-size="13.5" font-weight="700" fill="#1f1d1b">Microsoft Graph (Intune)</text>
-        <text x="526" y="159" font-size="12" fill="#55504a">Reads for backup and drift, writes for restore</text>
+        <text x="526" y="159" font-size="12" fill="#55504a">Reads for backup and drift, writes for admin changes</text>
 
         <rect x="510" y="182" width="360" height="58" rx="8" fill="#ffffff" stroke="#e8c3b7" stroke-dasharray="5 4"/>
         <text x="526" y="205" font-size="13.5" font-weight="700" fill="#1f1d1b">Your Azure Storage account (optional)</text>
@@ -293,7 +293,7 @@
           <td class="purpose">Intune</td>
           <td class="dest"><code>graph.microsoft.com</code></td>
           <td>Requests with the admin's delegated token. Reads for backups and drift; writes only for restores, drift
-            reverts and baseline deployments an admin starts</td>
+            reverts, baseline deployments and CIS remediations an admin starts</td>
         </tr>
         <tr>
           <td class="purpose">Storage picker</td>
@@ -389,7 +389,7 @@
         <h2>Changes to your tenant</h2>
         <ul class="facts">
           <li><b>Admin-started only.</b> Scheduled jobs read Intune and write to backup storage, never to Intune.
-            Restores, reverts and deployments need an admin to start them.</li>
+            Restores, reverts, deployments and CIS remediations need an admin to start them.</li>
           <li><b>Preview and confirm.</b> The live tenant is compared with the backup, and overwriting requires an
             explicit confirmation. The default restore creates copies, with assignments off.</li>
           <li><b>Cross-tenant copies</b> are always created unassigned; referenced apps need reviewed mappings.</li>

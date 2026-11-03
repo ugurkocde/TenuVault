@@ -29,7 +29,7 @@ CIS Controls is not available yet and stays marked **Coming soon**.
 
 Benchmark packs and their recommendation lists are not part of the TenuVault installer. TenuVault downloads them at runtime from its delivery service, for licensed installations only, using the license of the selected tenant. A loaded pack is stored in encrypted storage on this device for that tenant. You may use CIS content only within TenuVault and in the reports and exports it produces, and share those reports and exports within your organization and with your auditors and advisers. Publishing or redistributing CIS content is not allowed (EULA section 5.3).
 
-If the delivery service refuses the license, the page shows "CIS Benchmarks content is not available for this license yet." If delivery is switched off or unavailable, it shows "CIS Benchmarks content delivery is unavailable right now. Try again later." Click **Retry** to try again.
+If the delivery service refuses the license, the page shows "CIS Benchmarks content is not available for this license yet." If delivery is switched off or temporarily unavailable, it shows "CIS Benchmarks content delivery is unavailable right now. Try again later." If the service cannot be reached at all, for example because a firewall or proxy blocks `https://www.tenuvault.com/cis/v1/` or the request times out, it shows "The CIS content delivery service could not be reached." (see [Network connections and data flows](/security/data-flows/#cis-benchmarks-content)). Click **Retry** to try again.
 
 ## 1. Load a benchmark
 
