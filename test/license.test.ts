@@ -110,7 +110,7 @@ const entitled = (license: LicenseService, tenant = TENANT) =>
   license.status([tenant]).tenants.find((t) => t.tenantId === tenant)?.entitled ?? false
 
 function renderLicensePage(status: LicenseStatus): string {
-  const hook = vi.spyOn(licenseUi, "useLicense").mockReturnValue({ status, error: null, refresh: async () => {} })
+  const hook = vi.spyOn(licenseUi, "useLicense").mockReturnValue({ status, signedInTenantIds: new Set(), error: null, refresh: async () => {} })
   try {
     return renderToStaticMarkup(createElement(MemoryRouter, null, createElement(LicensePage)))
   } finally {

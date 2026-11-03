@@ -8,6 +8,8 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 const appInfo = vi.hoisted(() => vi.fn())
 const licenseStatus = vi.hoisted(() => ({ current: null as unknown }))
 const selectedTenantState = vi.hoisted(() => ({ current: null as unknown }))
+// Tenants the account store has a sign-in for; undefined while it is not read yet.
+const signedInIds = vi.hoisted(() => ({ current: undefined as ReadonlySet<string> | undefined }))
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
   bridge: { app: { info: appInfo }, license: { open: async () => undefined } },
@@ -34,7 +36,7 @@ vi.mock("../../src/renderer/lib/license", () => {
   }
   return {
     useTenantPlan: (tenantId: string | undefined) => tenantPlan(tenantLicense(licenseStatus.current as { tenants: { tenantId: string }[] } | null, tenantId) as { entitled: boolean; plan: string | null } | undefined),
-    useLicense: () => ({ status: licenseStatus.current, error: null, refresh: async () => undefined }),
+    useLicense: () => ({ status: licenseStatus.current, signedInTenantIds: signedInIds.current, error: null, refresh: async () => undefined }),
     isUnlicensed: (status: { hasKey: boolean; tenants: { activated: boolean }[] }) => !status.hasKey && !status.tenants.some((tenant) => tenant.activated),
     tenantLicense,
     tenantPlan,
@@ -77,6 +79,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount())
   for (const container of containers.splice(0)) container.remove()
   licenseStatus.current = null
+  signedInIds.current = undefined
   selectedTenantState.current = null
   vi.clearAllMocks()
 })
@@ -268,11 +271,23 @@ describe("CIS Benchmarks top-level sidebar entry", () => {
   it("renders the normal entry while the status does not list the selected tenant yet", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     licenseStatus.current = communityStatus()
+    signedInIds.current = new Set(["t-community", "t-entitled"])
     selectedTenantState.current = tenantRef("t-entitled")
     const container = render(sidebarHarness("/portal/dashboard"))
     await flush()
     expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).not.toBeNull()
     expect(container.querySelector("button")).toBeNull()
+  })
+
+  it("uses the machine plan for a saved tenant profile that is not signed in, not the activation the status lists for it", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    const status = entitledStatus("msp")
+    licenseStatus.current = { ...status, tenants: [{ ...keyTenant("t-lapsed", "msp", 10), signedIn: false, entitled: false }] }
+    signedInIds.current = new Set()
+    selectedTenantState.current = tenantRef("t-lapsed")
+    const container = render(sidebarHarness("/portal/dashboard"))
+    await flush()
+    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')?.textContent).toBe("CIS Benchmarks")
   })
 })
 
@@ -537,6 +552,22 @@ describe("CIS Benchmarks route", () => {
     vi.unstubAllGlobals()
   })
 
+  it("asks a machine with a Pro key to sign in to a saved profile with a lapsed activation, never the preview", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: false })
+    licenseStatus.current = { ...entitledStatus("pro"), tenants: [{ ...keyTenant("t-lapsed", "pro", 2), signedIn: false, entitled: false }] }
+    signedInIds.current = new Set()
+    selectedTenantState.current = { id: 3, name: "Not signed in", credentials: { tenantId: "t-lapsed", appId: "app-1", clientSecret: "" } }
+    const fetch = sampleFetch()
+    vi.stubGlobal("fetch", fetch)
+    const container = renderCisRoute()
+    await flush()
+    expect(container.querySelector(PREVIEW)).toBeNull()
+    expect(container.textContent).toContain(SIGN_IN_LINE)
+    expect(container.textContent).not.toContain("Checking the plan")
+    expectNoCisContent(container, fetch)
+    vi.unstubAllGlobals()
+  })
+
   it("shows the preview to a Community machine with a selected tenant that is not signed in", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: false })
     licenseStatus.current = communityStatus()
@@ -554,6 +585,7 @@ describe("CIS Benchmarks route", () => {
   it("waits for the plan of a signed-in tenant the license status does not list yet, with no preview and no request", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: false })
     licenseStatus.current = { ...entitledStatus("pro"), tenants: [] }
+    signedInIds.current = new Set(["t-entitled"])
     selectedTenantState.current = tenantRef("t-entitled")
     const fetch = sampleFetch("t-entitled")
     vi.stubGlobal("fetch", fetch)

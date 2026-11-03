@@ -6,6 +6,12 @@ import { refreshInternalCisBenchmarks } from "./internal-cis"
 
 interface LicenseContextValue {
   status: LicenseStatus | null
+  /**
+   * Lowercase ids of the tenants an admin is signed in to in this app, read from the account store,
+   * or undefined until it was read. Saved tenant profiles keep their credentials after a sign-out,
+   * so having credentials does not mean being signed in.
+   */
+  signedInTenantIds: ReadonlySet<string> | undefined
   error: string | null
   refresh: () => Promise<void>
 }
@@ -16,6 +22,7 @@ const LICENSE_STATUS_TIMEOUT_MS = 30 * 1000
 export function LicenseProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<LicenseStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [signedInTenantIds, setSignedInTenantIds] = useState<ReadonlySet<string> | undefined>(undefined)
   const refreshing = useRef(false)
   const attempt = useRef(0)
 
@@ -60,7 +67,22 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
     }
   }, [refresh])
 
-  return <LicenseContext.Provider value={{ status, error, refresh }}>{children}</LicenseContext.Provider>
+  // Main sends a new status after every sign-in and sign-out, so the account store is read again
+  // with each one. A failed read counts no account as signed in, which leaves the status's own
+  // signedIn flags to decide.
+  useEffect(() => {
+    if (!status) return
+    let current = true
+    Promise.resolve()
+      .then(() => bridge.auth.accounts())
+      .then(
+        (accounts) => { if (current) setSignedInTenantIds(new Set(accounts.map((account) => account.tenantId.toLowerCase()))) },
+        () => { if (current) setSignedInTenantIds(new Set()) },
+      )
+    return () => { current = false }
+  }, [status])
+
+  return <LicenseContext.Provider value={{ status, signedInTenantIds, error, refresh }}>{children}</LicenseContext.Provider>
 }
 
 export function useLicense(): LicenseContextValue {

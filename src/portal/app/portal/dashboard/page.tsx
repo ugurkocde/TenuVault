@@ -113,10 +113,6 @@ function TileSkeleton({ className }: { className?: string }) {
   )
 }
 
-/**
- * Newest baseline score of the tenant, linking to the gated scores screen. Community sees a
- * badged teaser and no score: the score is a paid projection and is not computed for it.
- */
 /** Opens the audit log. It always navigates; a known plan without the audit log shows its plan badge, and the page explains the plan. */
 export function ViewAllActivityButton({ plan }: { plan: Plan | null }) {
   const router = useRouter()
@@ -134,6 +130,10 @@ export function ViewAllActivityButton({ plan }: { plan: Plan | null }) {
   )
 }
 
+/**
+ * Newest baseline score of the tenant, linking to the gated scores screen. Community sees a
+ * badged teaser and no score: the score is a paid projection and is not computed for it.
+ */
 export function BaselineScoreTile({ tenant, plan }: { tenant: Tenant; plan: Plan | null }) {
   const router = useRouter()
   const score = useBaselineScore(tenant, plan)

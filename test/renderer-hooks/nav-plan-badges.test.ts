@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const licenseStatus = vi.hoisted(() => ({ current: null as unknown }))
+// Tenants the account store has a sign-in for; undefined while it is not read yet.
+const signedInIds = vi.hoisted(() => ({ current: new Set(["t-1"]) as ReadonlySet<string> | undefined }))
 const selectedTenantState = vi.hoisted(() => ({ current: null as unknown }))
 const routerPush = vi.hoisted(() => vi.fn())
 
@@ -18,7 +20,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
 }))
 vi.mock("../../src/renderer/lib/license", async (original) => ({
   ...(await original<typeof import("../../src/renderer/lib/license")>()),
-  useLicense: () => ({ status: licenseStatus.current, error: null, refresh: async () => undefined }),
+  useLicense: () => ({ status: licenseStatus.current, signedInTenantIds: signedInIds.current, error: null, refresh: async () => undefined }),
 }))
 vi.mock("~/contexts/TenantContext", () => ({
   useSelectedTenant: () => ({ selectedTenant: selectedTenantState.current, selectedTenantId: null, setSelectedTenantId: () => undefined }),
@@ -67,13 +69,14 @@ afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount())
   document.body.replaceChildren()
   licenseStatus.current = null
+  signedInIds.current = new Set(["t-1"])
   selectedTenantState.current = null
   vi.clearAllMocks()
 })
 
-function tenantEntry(tenantId: string, plan: "community" | "pro" | "msp") {
+function tenantEntry(tenantId: string, plan: "community" | "pro" | "msp", signedIn = true) {
   const paid = plan !== "community"
-  return { tenantId, signedIn: true, activated: paid, entitled: paid, source: paid ? "key" : null, plan, tenants: paid ? 2 : null, expiresAt: paid ? "2030-01-01T00:00:00.000Z" : null, validUntil: null, shared: null, shareNeedsSignIn: false, displayKey: null, message: null }
+  return { tenantId, signedIn, activated: paid, entitled: paid, source: paid ? "key" : null, plan, tenants: paid ? 2 : null, expiresAt: paid ? "2030-01-01T00:00:00.000Z" : null, validUntil: null, shared: null, shareNeedsSignIn: false, displayKey: null, message: null }
 }
 
 function statusFor(plan: "community" | "pro" | "msp") {
@@ -132,6 +135,59 @@ describe("sidebar plan badges for paid screens", () => {
     licenseStatus.current = { ...statusFor("pro"), tenants: [] }
     const unlisted = await render(createElement(DesktopLayout))
     for (const [name, href] of PAID_ENTRIES) expect(sidebarLink(unlisted, href).textContent).toBe(name)
+    // So is a tenant the status lists as not signed in while the account store has its sign-in.
+    licenseStatus.current = { ...statusFor("msp"), tenants: [{ ...tenantEntry("t-1", "msp", false), entitled: false }] }
+    const catchingUp = await render(createElement(DesktopLayout))
+    for (const [name, href] of PAID_ENTRIES) expect(sidebarLink(catchingUp, href).textContent).toBe(name)
+    // And a tenant the status does not list as signed in, before the account store is read.
+    signedInIds.current = undefined
+    licenseStatus.current = { ...statusFor("community"), tenants: [] }
+    const unread = await render(createElement(DesktopLayout))
+    for (const [name, href] of PAID_ENTRIES) expect(sidebarLink(unread, href).textContent).toBe(name)
+    expect(sidebarLink(unread, "/portal/frameworks/cis-benchmarks").textContent).toBe("CIS Benchmarks")
+  })
+
+  describe("a saved tenant profile that is not signed in", () => {
+    // The profile keeps its credentials after a sign-out; the account store has no sign-in for it.
+    const notSignedIn = () => {
+      signedInIds.current = new Set()
+      selectTenant()
+    }
+
+    it("uses the MSP machine plan, not the lapsed activation the status lists for it: no badge", async () => {
+      notSignedIn()
+      licenseStatus.current = { ...statusFor("msp"), tenants: [{ ...tenantEntry("t-1", "msp", false), entitled: false }] }
+      const container = await render(createElement(DesktopLayout))
+      for (const [name, href] of PAID_ENTRIES) expect(sidebarLink(container, href).textContent).toBe(name)
+      expect(sidebarLink(container, "/portal/frameworks/cis-benchmarks").textContent).toBe("CIS Benchmarks")
+    })
+
+    it("uses the machine plan when the status does not list it", async () => {
+      notSignedIn()
+      licenseStatus.current = { ...statusFor("msp"), tenants: [] }
+      const msp = await render(createElement(DesktopLayout))
+      for (const [name, href] of PAID_ENTRIES) expect(sidebarLink(msp, href).textContent).toBe(name)
+      document.body.replaceChildren()
+      licenseStatus.current = { ...statusFor("community"), tenants: [] }
+      const community = await render(createElement(DesktopLayout))
+      for (const [name, href] of PAID_ENTRIES) expect(sidebarLink(community, href).textContent).toBe(`${name}Pro`)
+      expect(sidebarLink(community, "/portal/frameworks/cis-benchmarks").textContent).toBe("CIS BenchmarksPro")
+    })
+
+    it("uses the Community machine plan over a paid activation the status lists for it", async () => {
+      notSignedIn()
+      licenseStatus.current = { ...statusFor("community"), tenants: [tenantEntry("t-1", "pro", false)] }
+      const container = await render(createElement(DesktopLayout))
+      for (const [name, href] of PAID_ENTRIES) expect(sidebarLink(container, href).textContent).toBe(`${name}Pro`)
+    })
+  })
+
+  it("marks a signed-in tenant whose activation lapsed on an MSP machine, since its own plan applies", async () => {
+    selectTenant()
+    licenseStatus.current = { ...statusFor("msp"), tenants: [{ ...tenantEntry("t-1", "msp"), entitled: false }] }
+    const container = await render(createElement(DesktopLayout))
+    for (const [name, href] of PAID_ENTRIES) expect(sidebarLink(container, href).textContent).toBe(`${name}Pro`)
+    expect(sidebarLink(container, "/portal/frameworks/cis-benchmarks").textContent).toBe("CIS BenchmarksPro")
   })
 
   it("marks My baselines with Pro for Community only, still as a link", async () => {
@@ -190,6 +246,44 @@ describe("Settings section list", () => {
       expect(Object.values(await rows()).some((text) => text?.endsWith("Pro"))).toBe(false)
       document.body.replaceChildren()
     }
+  })
+
+  it("shows no badge before the account store is read", async () => {
+    licenseStatus.current = statusFor("community")
+    signedInIds.current = undefined
+    expect(Object.values(await rows()).some((text) => text?.endsWith("Pro"))).toBe(false)
+  })
+
+  it("never flashes the badge while a paid tenant just signed in to is not listed yet", async () => {
+    const container = document.body.appendChild(document.createElement("div"))
+    const root = createRoot(container)
+    roots.push(root)
+    // A new element each time, so the mocked license value is read again as after a context change.
+    const badges = async () => {
+      act(() => root.render(createElement(MemoryRouter, { initialEntries: ["/portal/settings"] }, createElement(SettingsSectionNav, { section: "signin" }))))
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+      return [...container.querySelectorAll('nav[aria-label="Settings sections"] a')].map((link) => link.textContent ?? "").filter((text) => text.endsWith("Pro"))
+    }
+    // Community before the sign-in: the badges show.
+    licenseStatus.current = statusFor("community")
+    expect(await badges()).toEqual(["NotificationsPro", "PDF brandingPro"])
+    // Signed in to t-2, which the status does not list yet, then lists as not signed in yet.
+    signedInIds.current = new Set(["t-1", "t-2"])
+    expect(await badges()).toEqual([])
+    licenseStatus.current = { ...statusFor("community"), tenants: [tenantEntry("t-1", "community"), { ...tenantEntry("t-2", "pro", false), entitled: false }] }
+    expect(await badges()).toEqual([])
+    // The status catches up with t-2 on Pro: still no badge.
+    licenseStatus.current = { ...statusFor("community"), tenants: [tenantEntry("t-1", "community"), tenantEntry("t-2", "pro")] }
+    expect(await badges()).toEqual([])
+  })
+
+  it("shows the badges again once a tenant just signed in to is listed on Community", async () => {
+    signedInIds.current = new Set(["t-1", "t-2"])
+    licenseStatus.current = statusFor("community")
+    expect(Object.values(await rows()).some((text) => text?.endsWith("Pro"))).toBe(false)
+    document.body.replaceChildren()
+    licenseStatus.current = { ...statusFor("community"), tenants: [tenantEntry("t-1", "community"), tenantEntry("t-2", "community")] }
+    expect(Object.values(await rows()).filter((text) => text?.endsWith("Pro"))).toEqual(["NotificationsPro", "PDF brandingPro"])
   })
 })
 

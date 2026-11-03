@@ -65,7 +65,7 @@ Eligible nonprofits can use Pro at no cost. Email [support@ugurlabs.com](mailto:
 Community includes New Deployment, Existing Deployment comparison, Policy Validation and deployment of new policies for every OpenIntuneBaseline platform, and framework PDF, CSV and JSON reports for every framework except CIS. Audit-log access requires Pro or MSP. CIS remains unavailable on every plan while its commercial-use agreement is pending.
 :::
 
-TenuVault enforces these limits in the app itself, not just in the interface. When you try a feature your plan does not include, the app shows which plan includes it, for example: "Replacing items in place: included in TenuVault Pro and MSP. Upgrade on the License page." Features that need a higher plan are marked with a plan badge in the app.
+TenuVault enforces these limits in the app itself, not just in the interface. When you try a feature your plan does not include, the app shows which plan includes it, for example: "Replacing items in place: included in TenuVault Pro and MSP. Upgrade on the License page." Features that need a higher plan are marked with a plan badge in the app. The badges in the sidebar follow the plan of the selected tenant once you are signed in to it. With no tenant selected, or a selected tenant you are not signed in to, they follow the license key on this computer, or Community without one. While a plan is still being checked, for example right after you sign in, no badge shows.
 
 Actions across several tenants need the MSP plan on every tenant they touch.
 

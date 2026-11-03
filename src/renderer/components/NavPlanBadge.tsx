@@ -1,7 +1,6 @@
 import type { Feature } from "../../shared/plans"
 import { HUBS } from "../features/hubs"
 import { entryBadgeFeature, useSelectedTenantPlan } from "../lib/selected-plan"
-import { useSelectedTenant } from "~/contexts/TenantContext"
 import { PlanBadge } from "./UpgradeNote"
 
 /** The paid features behind each sidebar entry that opens a paid screen: a hub's tabs, or the audit log. */
@@ -17,7 +16,6 @@ export const NAV_PLAN_FEATURES: Readonly<Record<string, readonly Feature[]>> = {
  * the screen behind it explains the plan.
  */
 export function NavPlanBadge({ features, className }: { features: readonly Feature[]; className?: string }) {
-  const { selectedTenant } = useSelectedTenant()
-  const feature = entryBadgeFeature(useSelectedTenantPlan(selectedTenant?.credentials?.tenantId), features)
+  const feature = entryBadgeFeature(useSelectedTenantPlan(), features)
   return feature ? <PlanBadge feature={feature} className={className} /> : null
 }

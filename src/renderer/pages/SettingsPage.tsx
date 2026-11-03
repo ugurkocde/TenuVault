@@ -23,6 +23,7 @@ import { localTenantIds, useBackupSettings, useLocalInventoryProblems } from "..
 import { storageResources, type StorageChoice } from "../lib/storage"
 import { toast } from "../lib/toast"
 import { tenantPlan, useLicense } from "../lib/license"
+import { anyTenantIncludes } from "../lib/selected-plan"
 import { parseSettingsSection, settingsHref, type SettingsSectionId } from "../lib/settings-section"
 import { PlanBadge } from "../components/UpgradeNote"
 import { PdfBrandingSettings } from "../components/PdfBrandingSettings"
@@ -807,16 +808,13 @@ const SECTIONS: { id: SettingsSectionId; title: string; icon: typeof KeyRound; f
 ]
 
 /**
- * The list of settings sections. A section for a paid feature shows its plan badge once the
- * license status is known and no tenant on this computer has a plan that includes it, the same
- * rule the PDF branding section uses. The section stays open on every plan.
+ * The list of settings sections. A section for a paid feature shows its plan badge once it is known
+ * that no tenant on this computer has a plan that includes it, the rule the PDF branding section
+ * uses. No badge while the license status loads or does not list a signed-in tenant as signed in
+ * yet (`anyTenantIncludes`). The section stays open on every plan.
  */
 export function SettingsSectionNav({ section }: { section: SettingsSectionId }) {
-  const { status } = useLicense()
-  const included = (feature: Feature) => !!status?.tenants.some((tenant) => {
-    const plan = tenantPlan(tenant)
-    return plan !== null && allows(plan, feature)
-  })
+  const { status, signedInTenantIds } = useLicense()
   return (
     <nav aria-label="Settings sections" className="flex gap-1 overflow-x-auto p-1 xl:sticky xl:top-8 xl:w-56 xl:shrink-0 xl:flex-col xl:overflow-visible xl:p-0">
       {SECTIONS.map(({ id, title, icon: Icon, feature }) => (
@@ -833,7 +831,7 @@ export function SettingsSectionNav({ section }: { section: SettingsSectionId }) 
         >
           <Icon className="h-[18px] w-[18px]" />
           <span className="truncate">{title}</span>
-          {feature && status && !included(feature) && <PlanBadge feature={feature} className="ml-auto" />}
+          {feature && anyTenantIncludes(status, signedInTenantIds, feature) === false && <PlanBadge feature={feature} className="ml-auto" />}
         </Link>
       ))}
     </nav>
