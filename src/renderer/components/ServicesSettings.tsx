@@ -7,7 +7,7 @@ import { useTenants } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { DOCS_HOME_URL } from "../../shared/constants"
 import type { ServiceModuleStatus, ServicesStatus } from "../../shared/ipc"
-import { entraApiPermissionsUrl, restoreAccessCommands, type AreaCheck, type Readiness, type Requirement } from "../../shared/services/modules"
+import { entraApiPermissionsUrl, missingPermissions, restoreAccessCommands, type AreaCheck, type Readiness, type Requirement } from "../../shared/services/modules"
 import { bridge } from "../lib/bridge"
 import { toast } from "../lib/toast"
 
@@ -116,13 +116,16 @@ function GapLine({ area }: { area: AreaCheck }) {
 
 /** How to add the missing permissions to the tenant's existing app registration. */
 function FixCallout({ module, tenantId, clientId }: { module: ServiceModuleStatus; tenantId: string; clientId: string }) {
-  const commands = restoreAccessCommands(module, tenantId, clientId)
-  const access = module.restoreAccess
+  // The restore permission and its commands are the whole fix only when backup already works; otherwise
+  // the read permission is missing too (writing Conditional Access policies also needs Policy.Read.All).
+  const access = module.check?.backup === "ready" ? module.restoreAccess : undefined
+  const commands = access ? restoreAccessCommands(module, tenantId, clientId) : undefined
+  const missing = missingPermissions(module)
   return (
     <div className="space-y-2 rounded-2xl bg-gray-50 px-4 py-3 text-sm">
-      <p className="font-medium text-gray-900">{access && module.check?.backup === "ready" ? "Allow restores" : "Add the missing permissions"}</p>
+      <p className="font-medium text-gray-900">{access ? "Allow restores" : "Add the missing permissions"}</p>
       <p className="text-gray-600">
-        Add {access ? <Permissions requirement={[access.permissions.map((permission) => permission.name)]} /> : "the permissions above"} to this tenant's TenuVault app registration as a delegated Microsoft Graph permission, and grant admin consent. That needs a Global Administrator, Privileged Role Administrator or Cloud Application Administrator.
+        Add {access ? <Permissions requirement={[access.permissions.map((permission) => permission.name)]} /> : missing.length ? <Permissions requirement={missing} /> : "the permissions above"} to this tenant's TenuVault app registration as delegated Microsoft Graph permissions, and grant admin consent. That needs a Global Administrator, Privileged Role Administrator or Cloud Application Administrator.
       </p>
       <div className="flex flex-wrap gap-2">
         {commands ? (

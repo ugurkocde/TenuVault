@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
-import { checkModules, disabledFolders, MODULES, moduleForFolder, restorePermissionBlocker, type GrantedPermissions } from "../src/shared/services/modules"
+import { checkModules, disabledFolders, missingPermissions, MODULES, moduleForFolder, restorePermissionBlocker, type GrantedPermissions } from "../src/shared/services/modules"
 import { grantedPermissions } from "../src/shared/services/token"
 import { ModuleSettings } from "../src/main/services/settings"
 import { servicesStatus } from "../src/main/services/status"
@@ -105,5 +105,20 @@ describe("Messages that lead to Services and permissions", () => {
       'Restoring needs a permission. <a class="font-medium underline underline-offset-2" href="/portal/settings?section=signin#services" data-discover="true">Services and permissions</a> shows how to add it.',
     )
     expect(render("Created a [Restored] copy")).toBe("Created a [Restored] copy")
+  })
+})
+
+describe("The fix offered on Services and permissions", () => {
+  it("names the read permission too when backup is not ready, each permission once", async () => {
+    const [, conditionalAccess] = checkModules({ kind: "delegated", permissions: new Set(["Policy.ReadWrite.ConditionalAccess"]) })
+    expect(missingPermissions({ check: conditionalAccess! })).toEqual([["Policy.Read.All"]])
+    const [, readOnly] = checkModules({ kind: "delegated", permissions: new Set() })
+    expect(missingPermissions({ check: readOnly! })).toEqual([
+      ["Policy.Read.All", "Policy.ReadWrite.ConditionalAccess"],
+      ["Policy.Read.All"],
+      ["Policy.ReadWrite.ConditionalAccess"],
+      ["Policy.Read.All", "Policy.Read.AuthenticationMethod", "Policy.ReadWrite.AuthenticationMethod", "Policy.ReadWrite.ConditionalAccess"],
+      ["Policy.ReadWrite.ConditionalAccess", "Policy.ReadWrite.AuthenticationMethod"],
+    ])
   })
 })

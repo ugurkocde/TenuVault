@@ -267,3 +267,15 @@ export function restoreAccessCommands(module: Pick<ServiceModule, "restoreAccess
 export function entraApiPermissionsUrl(clientId: string): string {
   return `https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/CallAnAPI/appId/${encodeURIComponent(clientId)}/isMSAApp~/false`
 }
+
+/** Every permission group a module's areas still miss, for backup and restore, each once. */
+export function missingPermissions(module: { check: Pick<ModuleCheck, "areas"> | null }): Requirement {
+  const groups = module.check?.areas.flatMap((area) => [...(area.missingBackup ?? []), ...(area.missingRestore ?? [])]) ?? []
+  const seen = new Set<string>()
+  return groups.filter((group) => {
+    const key = [...group].sort().join("|")
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
