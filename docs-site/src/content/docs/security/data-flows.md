@@ -3,7 +3,7 @@ title: "Network connections and data flows"
 description: Every outbound connection TenuVault makes, what it sends, and what happens if you block it.
 ---
 
-TenuVault connects to three groups of services: Microsoft (for your tenant and storage), tenuvault.com (for license checks only) and GitHub (for updates and baseline content), plus any notification webhook you configure yourself. This page lists every destination and exactly what is sent to it, so you can review the data flows and configure your firewall or proxy.
+TenuVault connects to three groups of services: Microsoft (for your tenant and storage), tenuvault.com (for license checks and, on Pro and MSP, CIS Benchmarks content) and GitHub (for updates and baseline content), plus any notification webhook you configure yourself. This page lists every destination and exactly what is sent to it, so you can review the data flows and configure your firewall or proxy.
 
 All connections use HTTPS on TCP port 443. TenuVault opens no inbound ports. During browser sign-in, Microsoft redirects your browser to `http://localhost` on your own machine, where TenuVault receives the sign-in result.
 
@@ -15,7 +15,7 @@ All connections use HTTPS on TCP port 443. TenuVault opens no inbound ports. Dur
 | `graph.microsoft.com` | Read and write your Intune configuration | Yes, between your machine and Microsoft |
 | `management.azure.com` | List subscriptions and storage accounts for the storage picker | No |
 | `<your account>.blob.core.windows.net` | Your own Azure storage account, when you store backups there | Yes, encrypted backups in your account |
-| `www.tenuvault.com` | License checks | No |
+| `www.tenuvault.com` | License checks and, on Pro and MSP, CIS Benchmarks content | No |
 | `github.com`, `release-assets.githubusercontent.com`, `objects.githubusercontent.com` | App updates | No |
 | `api.github.com`, `raw.githubusercontent.com` | OpenIntuneBaseline content for the OpenIntuneBaseline section and My baselines | No |
 | A webhook URL you configure (optional) | Health review notifications | Counts, severities, finding keys and timestamps only |
@@ -62,9 +62,9 @@ See [Encryption and recovery key](/security/encryption/) for how backup encrypti
 
 When backups are stored on **This device, encrypted**, TenuVault makes no storage connection at all. Backups, the audit log and tenant metadata are all written encrypted to the folder you choose.
 
-## tenuvault.com: license checks
+## tenuvault.com: license checks and CIS Benchmarks content
 
-The only TenuVault server the app talks to is the licensing service at `https://www.tenuvault.com/api/desktop-license/`. It is used to activate, refresh and release licenses. The app never contacts the payment provider directly.
+The app talks to two TenuVault services, both on `www.tenuvault.com`: the licensing service at `https://www.tenuvault.com/api/desktop-license/`, used to activate, refresh and release licenses, and on Pro and MSP the CIS Benchmarks content service at `https://www.tenuvault.com/cis/v1/` (see [CIS Benchmarks content](#cis-benchmarks-content) below). The app never contacts the payment provider directly.
 
 When you open the pricing page from the app, the link names the screen it was opened from (for example `src=app-license-page`) and carries no identifier.
 
@@ -109,6 +109,15 @@ Tenant configuration, backups, policy names, device or user information, access 
 ### If tenuvault.com is blocked
 
 Tenants that are already active keep working offline for up to 14 days after their last successful check. A new tenant cannot be activated on a paid plan until the service is reachable. On a machine without a license key, the Community tenant works without any connection to tenuvault.com.
+
+### CIS Benchmarks content
+
+On Pro and MSP, the [CIS Benchmarks](/baselines/cis-benchmarks/) page downloads its content from `https://www.tenuvault.com/cis/v1/`: the list of available benchmarks (`/cis/v1/catalog`), and for each benchmark Level you load, its pack (`/cis/v1/packs/...`) and its recommendation list (`/cis/v1/lists/...`). The app only connects when you open the CIS Benchmarks page or load a benchmark.
+
+* **Sent:** the signed entitlement from the last license check, as a bearer token. It contains your license key ID, the activation ID, the tenant ID, the installation ID and your plan. No tenant configuration, assessment results or Microsoft tokens are sent.
+* **Logged:** each download is logged with the tenant ID, installation ID, license key ID, the benchmark, version and Level, and the time.
+* **Stored on your machine:** the downloaded content is saved in the app's encrypted storage for the selected tenant. It is never bundled in the installer.
+* **If blocked:** benchmarks you already loaded stay available on the device; new benchmarks or Levels cannot be loaded. Allow `https://www.tenuvault.com/cis/v1/` alongside `https://www.tenuvault.com/api/desktop-license/` if your proxy filters by path.
 
 ## GitHub
 
