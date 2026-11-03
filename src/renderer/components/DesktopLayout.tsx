@@ -210,17 +210,25 @@ function LicenseBanner() {
       </BannerLink>
     )
   }
-  const reminder = preferencesLoaded ? trialReminder(status, trialDismissedAt) : null
-  if (reminder) return <TrialReminderBanner reminder={reminder} onDismiss={() => void dismissTrial()} dismissing={dismissing} />
+  // validUntil leaves out the trial key, so another license's expiry is shown next to
+  // the trial reminder rather than hidden behind it.
+  let expiry: ReactNode = null
   if (keyExpiry && status.validUntil) {
     const owner = earliestExpiringTenant(status)?.source === "tenant" ? "The license shared by your organization" : "Your license key"
-    return (
+    expiry = (
       <BannerLink tone="amber" icon={<AlertTriangle className="h-4 w-4" />}>
         {owner} {keyExpiry === "expired" ? "expired on" : "expires on"} {formatDate(status.validUntil)}. {status.plan === "msp" ? "MSP" : "Pro"} features stop unless it is renewed.
       </BannerLink>
     )
   }
-  return null
+  const reminder = preferencesLoaded ? trialReminder(status, trialDismissedAt) : null
+  if (!reminder) return expiry
+  return (
+    <>
+      <TrialReminderBanner reminder={reminder} onDismiss={() => void dismissTrial()} dismissing={dismissing} />
+      {expiry}
+    </>
+  )
 }
 
 /** Sidebar entry for the release notes, with a dot while an installed build is unseen. */
