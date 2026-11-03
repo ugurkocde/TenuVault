@@ -108,7 +108,7 @@ See [How change sets work](/changes/#how-change-sets-work) for the review, apply
 ### Limits of remediation
 
 * TenuVault remediates only recommendations it assesses automatically: the settings in the delivered benchmark pack, written to Intune Settings Catalog policies.
-* Manual recommendations and recommendations marked **Not assessed** or **Not covered by the benchmark pack** cannot be remediated by TenuVault. They are listed for manual action, with their CIS text when the delivered list includes it.
+* Manual recommendations and recommendations marked **Not covered by the benchmark pack** cannot be remediated by TenuVault. For recommendations marked **Not assessed**, TenuVault remediates only their settings that are in the delivered benchmark pack. All of them are listed for manual action, with their CIS text when the delivered list includes it.
 * **Review** findings hold alternative values in the pack. They cannot be selected for remediation until the profile is chosen.
 * **Missing** settings are created in new policies with no assignments. Nothing in them takes effect until an administrator assigns them in Intune.
 * **Different** settings are updated in place in the tenant policies that hold them. Those policies keep their assignments, so the change reaches their assigned devices.

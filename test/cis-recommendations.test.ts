@@ -234,7 +234,7 @@ describe("pack recommendations", () => {
     expect(csv).toContain(",Not covered,2.9.9,Synthetic outside the pack")
     const json = JSON.parse(cisReadinessJson(summary, null, "2026-10-15T10:00:00Z")) as { manualItems: { identifier: string; state: string; remediationCapability: { reason: string } }[] }
     expect(json.manualItems.map(item => [item.identifier, item.state])).toEqual([["2.1.1", "Not assessed"], ["2.9.9", "Not covered"], ["2.9.10", "Manual"]])
-    expect(json.manualItems[0]!.remediationCapability.reason).toBe("The delivered benchmark pack does not hold every setting it names. TenuVault does not assess or remediate it.")
+    expect(json.manualItems[0]!.remediationCapability.reason).toBe("The delivered benchmark pack does not hold every setting it names. TenuVault remediates only its settings that are in the pack; the others need manual action.")
   })
 
   it("reports a recommendation under its own Level even when only a policy of another Level carries it", () => {
