@@ -56,12 +56,15 @@ function Permissions({ requirement }: { requirement: Requirement }) {
       {requirement.map((group, groupIndex) => (
         <span key={group.join("|")}>
           {groupIndex > 0 ? " and " : null}
+          {/* Alternatives next to other groups are bracketed, so "A or B and C" cannot be misread. */}
+          {requirement.length > 1 && group.length > 1 ? "(" : null}
           {group.map((name, index) => (
             <span key={name}>
               {index > 0 ? " or " : null}
               <PermissionChip name={name} />
             </span>
           ))}
+          {requirement.length > 1 && group.length > 1 ? ")" : null}
         </span>
       ))}
     </>

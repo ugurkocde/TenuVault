@@ -109,16 +109,14 @@ describe("Messages that lead to Services and permissions", () => {
 })
 
 describe("The fix offered on Services and permissions", () => {
-  it("names the read permission too when backup is not ready, each permission once", async () => {
+  it("names the read permission too when backup is not ready, as the fewest permissions that close every gap", async () => {
     const [, conditionalAccess] = checkModules({ kind: "delegated", permissions: new Set(["Policy.ReadWrite.ConditionalAccess"]) })
     expect(missingPermissions({ check: conditionalAccess! })).toEqual([["Policy.Read.All"]])
     const [, readOnly] = checkModules({ kind: "delegated", permissions: new Set() })
-    expect(missingPermissions({ check: readOnly! })).toEqual([
-      ["Policy.Read.All", "Policy.ReadWrite.ConditionalAccess"],
-      ["Policy.Read.All"],
-      ["Policy.ReadWrite.ConditionalAccess"],
-      ["Policy.Read.All", "Policy.Read.AuthenticationMethod", "Policy.ReadWrite.AuthenticationMethod", "Policy.ReadWrite.ConditionalAccess"],
-      ["Policy.ReadWrite.ConditionalAccess", "Policy.ReadWrite.AuthenticationMethod"],
-    ])
+    // Every other group contains one of these two, so granting both closes every gap.
+    expect(missingPermissions({ check: readOnly! })).toEqual([["Policy.Read.All"], ["Policy.ReadWrite.ConditionalAccess"]])
+    // Alternatives that no smaller group covers are kept as they are.
+    const [, strengthsOnly] = checkModules({ kind: "delegated", permissions: new Set(["Policy.Read.All"]) })
+    expect(missingPermissions({ check: strengthsOnly! })).toEqual([["Policy.ReadWrite.ConditionalAccess"]])
   })
 })

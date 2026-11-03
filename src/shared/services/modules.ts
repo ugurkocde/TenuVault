@@ -268,14 +268,13 @@ export function entraApiPermissionsUrl(clientId: string): string {
   return `https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/CallAnAPI/appId/${encodeURIComponent(clientId)}/isMSAApp~/false`
 }
 
-/** Every permission group a module's areas still miss, for backup and restore, each once. */
+/**
+ * The fewest permission groups that close every gap of a module, for backup and restore. A group is left
+ * out when a smaller missing group lies within it, because granting that one satisfies both: with nothing
+ * granted, Conditional Access needs exactly Policy.Read.All and Policy.ReadWrite.ConditionalAccess.
+ */
 export function missingPermissions(module: { check: Pick<ModuleCheck, "areas"> | null }): Requirement {
   const groups = module.check?.areas.flatMap((area) => [...(area.missingBackup ?? []), ...(area.missingRestore ?? [])]) ?? []
-  const seen = new Set<string>()
-  return groups.filter((group) => {
-    const key = [...group].sort().join("|")
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
+  const unique = [...new Map(groups.map((group) => [[...group].sort().join("|"), group])).values()]
+  return unique.filter((group) => !unique.some((other) => other !== group && other.length < group.length && other.every((permission) => group.includes(permission))))
 }
