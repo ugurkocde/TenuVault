@@ -193,7 +193,9 @@ html:has([data-flow-shell]) {
 .run-overlay { animation: run-fade 0.18s ease-out; }
 .run-panel { animation: run-rise 0.3s ease-out; }
 .run-indeterminate { animation: run-indeterminate 1.3s ease-in-out infinite; }
-.run-results-reveal { animation: run-rise 0.45s ease-out both; }
+/* backwards, not both: a transform left after the animation would make each revealed card its own
+   stacking context, and a later card would then paint over menus opened from an earlier one. */
+.run-results-reveal { animation: run-rise 0.45s ease-out backwards; }
 @media (prefers-reduced-motion: reduce) {
   .run-overlay, .run-panel, .run-indeterminate, .run-results-reveal { animation: none; }
 }
