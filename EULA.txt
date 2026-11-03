@@ -112,8 +112,10 @@ trademarks. All rights not expressly granted are reserved.
     covers. You may not publish, redistribute or sublicense CIS
     content, or extract it from TenuVault for any other use. Assessment and
     remediation results are not a certification of your systems' compliance
-    with a CIS Benchmark. CIS, CIS Benchmarks and CIS Controls are
-    trademarks of the Center for Internet Security, Inc.
+    with a CIS Benchmark. After your plan ends, you may still use TenuVault
+    to roll back CIS remediation changes applied while the plan was active.
+    CIS, CIS Benchmarks and CIS Controls are trademarks of the Center for
+    Internet Security, Inc.
 
 
 6. YOUR RESPONSIBILITIES

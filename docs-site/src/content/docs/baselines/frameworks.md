@@ -51,7 +51,7 @@ Native framework pages link to the publisher with **Publisher reference**. Polic
 | Native framework comparisons | Yes | Yes | Yes |
 | PDF reports and CSV or JSON exports (every framework except CIS Benchmarks) | Yes | Yes | Yes |
 | Compare administrator-imported Microsoft, STIG or Custom packs | Yes | Yes | Yes |
-| CIS Benchmarks assessments, remediation and reports | No | Yes | Yes |
+| CIS Benchmarks assessments, remediation, PDF reports and CSV or JSON exports | No | Yes | Yes |
 | Create missing settings from a policy-pack comparison | Yes | Yes | Yes |
 
 Non-CIS native comparisons, the UK NCSC Device Security Guidance pack, administrator-imported Microsoft, STIG and Custom comparisons, and their PDF, CSV and JSON reports are free in Community. CIS Benchmarks assessments, remediation and reports need Pro or MSP. CIS Controls is not available yet on any plan.

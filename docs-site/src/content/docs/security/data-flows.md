@@ -15,7 +15,7 @@ All connections use HTTPS on TCP port 443. TenuVault opens no inbound ports. Dur
 | `graph.microsoft.com` | Read and write your Intune configuration | Yes, between your machine and Microsoft |
 | `management.azure.com` | List subscriptions and storage accounts for the storage picker | No |
 | `<your account>.blob.core.windows.net` | Your own Azure storage account, when you store backups there | Yes, encrypted backups in your account |
-| `www.tenuvault.com` | License checks and, on Pro and MSP, CIS Benchmarks content | No |
+| `www.tenuvault.com` | License checks and, on Pro and MSP, CIS Benchmarks content | No configuration or backups. Tenant ID, installation ID and license details only |
 | `github.com`, `release-assets.githubusercontent.com`, `objects.githubusercontent.com` | App updates | No |
 | `api.github.com`, `raw.githubusercontent.com` | OpenIntuneBaseline content for the OpenIntuneBaseline section and My baselines | No |
 | A webhook URL you configure (optional) | Health review notifications | Counts, severities, finding keys and timestamps only |

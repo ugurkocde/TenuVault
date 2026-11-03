@@ -46,7 +46,7 @@ Eligible nonprofits can use Pro at no cost. Email [support@ugurlabs.com](mailto:
 | Native framework comparisons | Yes | Yes | Yes |
 | Framework PDF reports and CSV or JSON exports (except CIS Benchmarks) | Yes | Yes | Yes |
 | Administrator-imported Microsoft, STIG and Custom comparisons | Yes | Yes | Yes |
-| [CIS Benchmarks](/baselines/cis-benchmarks/) assessments, remediation and reports | | Yes | Yes |
+| [CIS Benchmarks](/baselines/cis-benchmarks/) assessments, remediation, PDF reports and CSV or JSON exports | | Yes | Yes |
 | Dashboard baseline scores | | Yes | Yes |
 | Policy conflict and hygiene explorer | | Yes | Yes |
 | Baseline upgrades that keep your customizations | | Yes | Yes |
@@ -62,7 +62,7 @@ Eligible nonprofits can use Pro at no cost. Email [support@ugurlabs.com](mailto:
 | Actions across several tenants: **Backup Selected**, **Copy to other tenants instead** when restoring, **Also deploy to** in OpenIntuneBaseline | | | Yes |
 
 :::note[Included in 0.2.0]
-Community includes New Deployment, Existing Deployment comparison, Policy Validation and deployment of new policies for every OpenIntuneBaseline platform, and framework PDF, CSV and JSON reports for every framework except CIS Benchmarks. Audit-log access requires Pro or MSP. CIS Controls is not available yet on any plan.
+Community includes New Deployment, Existing Deployment comparison, Policy Validation and deployment of new policies for every OpenIntuneBaseline platform, and framework PDF, CSV and JSON reports for every framework except CIS Benchmarks. Audit-log access requires Pro or MSP. After a plan ends, saved CIS Benchmarks assessments stay readable and applied CIS deployments can still be rolled back; new CIS assessments, deployments and exports need Pro or MSP. CIS Controls is not available yet on any plan.
 :::
 
 TenuVault enforces these limits in the app itself, not just in the interface. When you try a feature your plan does not include, the app shows which plan includes it, for example: "Replacing items in place: included in TenuVault Pro and MSP. Upgrade on the License page." Features that need a higher plan are marked with a plan badge in the app.

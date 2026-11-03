@@ -311,9 +311,8 @@
           <td class="dest"><code>www.tenuvault.com</code></td>
           <td>License key (if any), tenant ID, random install ID, OS, app version and, when signed in, your client ID and a
             short-lived Microsoft ID token. The service reads only the tenant and client ID from the token; name and UPN
-            are not stored. Runs at start, every 6 hours, on first use of a tenant and on license changes. Pro and MSP
-            download CIS Benchmarks content with the signed entitlement; each download is logged with tenant, install and
-            license key ID</td>
+            are not stored. License checks run at start, every 6 hours, on first use of a tenant and on license changes. On
+            Pro and MSP, opening the CIS page or loading a benchmark downloads CIS content (signed entitlement, logged)</td>
         </tr>
         <tr>
           <td class="purpose">Updates</td>
