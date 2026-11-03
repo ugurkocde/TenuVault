@@ -100,7 +100,7 @@ describe("delivered recommendation list limits and states", () => {
     expect(validateRecommendationList(over).items[0]!.audit).toHaveLength(MAX_LIST_TEXT_LENGTH + 1)
   })
 
-  it("marks manual items Manual and unassessed automated items Not assessed, each with its list text", () => {
+  it("marks manual items Manual and unassessed automated items Not covered, each with its list text", () => {
     const list = validateRecommendationList({ benchmark: "synthetic-os", version: "1.0.0", items: [
       item("1.1", { title: "Synthetic covered" }),
       item("1.2", { title: "Synthetic uncovered", description: "Synthetic description.", audit: "Synthetic audit." }),
@@ -108,7 +108,7 @@ describe("delivered recommendation list limits and states", () => {
       item("2.1", { level: 2, automated: false, title: "Other Level" }),
     ] })
     const items = manualItemsForLevel(list, 1, ["1.2", "1.9"], ["1.4"])
-    expect(items.map(entry => [entry.identifier, entry.state, entry.hasText])).toEqual([["1.2", "Not assessed", true], ["1.3", "Manual", true], ["1.4", "Manual", false], ["1.9", "Not assessed", false]])
+    expect(items.map(entry => [entry.identifier, entry.state, entry.hasText])).toEqual([["1.2", "Not covered", true], ["1.3", "Manual", true], ["1.4", "Manual", false], ["1.9", "Not covered", false]])
     expect(items[0]).toMatchObject({ title: "Synthetic uncovered", description: "Synthetic description.", audit: "Synthetic audit.", level: 1 })
     // A manual list item stays Manual even when an unassessed list names it too.
     expect(manualItemsForLevel(list, 1, ["1.3"]).find(entry => entry.identifier === "1.3")?.state).toBe("Manual")
@@ -189,7 +189,7 @@ describe("manual readiness data", () => {
     expect(summary.recommendationList).toBeUndefined()
   })
 
-  it("lists automated denominator identifiers the pack did not assess as Not assessed", () => {
+  it("lists automated denominator identifiers the pack did not assess as Not covered", () => {
     const { policies, assessment } = assessed()
     const denominator = [
       { identifier: "7.1.1", level: 1 as const, automated: true },
@@ -198,7 +198,7 @@ describe("manual readiness data", () => {
     const summary = cisReadiness(assessment, policies, denominator)
     const level1 = summary.levels.find(level => level.level === 1)!
     expect(level1.notAssessed).toContain("7.1.9")
-    expect(level1.manual.find(item => item.identifier === "7.1.9")).toMatchObject({ hasText: false, state: "Not assessed", fallback: MANUAL_RECOMMENDATIONS_FALLBACK })
+    expect(level1.manual.find(item => item.identifier === "7.1.9")).toMatchObject({ hasText: false, state: "Not covered", fallback: MANUAL_RECOMMENDATIONS_FALLBACK })
     // The total is exactly the denominator identifiers of the Level: 7.1.1 is covered, 7.1.9 is not.
     expect(levelCheckCounts(level1)).toEqual({ checked: 1, manual: 1, total: 2 })
   })

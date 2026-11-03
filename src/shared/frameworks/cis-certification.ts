@@ -68,6 +68,21 @@ export function isCisCertified(benchmark: string, version: string, level: number
   return CIS_CERTIFIED_SEGMENTS.some(segment => segment.benchmark === benchmark && segment.version === version && (segment.levels as readonly number[]).includes(level))
 }
 
+/** The benchmark id, version and Level of a pack reference such as "intune-windows11 5.0.0 Level 1", or null for any other form. */
+export function parsePackReference(reference: string): { benchmark: string; version: string; level: CisLevel } | null {
+  const match = /^([a-z0-9-]+) (\S+) Level ([12])$/.exec(reference.trim())
+  return match ? { benchmark: match[1]!, version: match[2]!, level: Number(match[3]) as CisLevel } : null
+}
+
+/**
+ * Whether an assessment of the pack a reference names is inside the certified scope. A Build Kit
+ * import is never certified, even of a certified benchmark; neither is a reference of another form.
+ */
+export function isCisCertifiedReference(reference: string, { kitImport = false }: { kitImport?: boolean } = {}): boolean {
+  const parsed = kitImport ? null : parsePackReference(reference)
+  return !!parsed && isCisCertified(parsed.benchmark, parsed.version, parsed.level)
+}
+
 function levelsText(levels: readonly CisLevel[]): string {
   return levels.length === 1 ? `Level ${levels[0]}` : `Level ${levels.slice(0, -1).join(", Level ")} and Level ${levels[levels.length - 1]}`
 }
@@ -109,7 +124,7 @@ export const CIS_TENANT_NOT_CERTIFIED_NOTE = "Results compare the recorded Intun
  */
 export const cisRemediationLimits = (product = "TenuVault"): string[] => [
   `${product} remediates only recommendations it assesses automatically: the settings in the delivered benchmark pack, written to Intune Settings Catalog policies.`,
-  `Manual recommendations and recommendations marked Not assessed by this tool cannot be remediated by ${product}. They are listed for manual action, with their CIS text when the delivered list includes it.`,
+  `Manual recommendations and recommendations marked Not covered by the benchmark pack cannot be remediated by ${product}. For recommendations marked Not assessed, ${product} remediates only their settings that are in the delivered benchmark pack. All of them are listed for manual action, with their CIS text when the delivered list includes it.`,
   "Findings to Review hold alternative values in the pack. They cannot be selected for remediation until the profile is chosen.",
   "Missing settings are created in new policies with no assignments. Nothing in them takes effect until an administrator assigns them in Intune.",
   "Different settings are updated in place in the tenant policies that hold them. Those policies keep their assignments, so the change reaches their assigned devices.",
@@ -185,11 +200,13 @@ export function recommendationRemediation(recommendation: Pick<RecommendationRes
   return indication("product", product, `Its settings are in the delivered benchmark pack. ${product} remediates Different and Missing settings with a reviewed deployment.`)
 }
 
-/** Manual and Not assessed recommendations are never remediated by the product. */
+/** Manual and Not covered recommendations are never remediated by the product; of a Not assessed one, only its settings in the pack are. */
 export function manualRemediation(item: Pick<ManualItemView, "state">, product = "TenuVault"): RemediationIndication {
   return indication("manual", product, item.state === "Manual"
     ? `CIS lists it as a manual recommendation. ${product} does not assess or remediate it.`
-    : `The delivered benchmark pack does not cover it. ${product} does not assess or remediate it.`)
+    : item.state === "Not assessed"
+      ? `The delivered benchmark pack does not hold every setting it names. ${product} remediates only its settings that are in the pack; the others need manual action.`
+      : `The delivered benchmark pack does not cover it. ${product} does not assess or remediate it.`)
 }
 
 /** The remediation indication of one finding, for findings exports. */

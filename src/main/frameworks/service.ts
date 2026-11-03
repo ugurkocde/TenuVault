@@ -203,7 +203,7 @@ async function landscape(token: string, onProgress?: (progress: LandscapeProgres
       // A policy edited between the list read and its settings read reports a stale count.
       // Re-read that policy and its settings a bounded number of times before failing.
       for (let reread = 0; typeof policy.settingCount === "number" && settings.length !== policy.settingCount; reread += 1) {
-        if (reread >= SETTINGS_REREADS) throw new FrameworkError("Policy settings changed during the read. Compare again.", 409)
+        if (reread >= SETTINGS_REREADS) throw new FrameworkError("Policy settings changed while they were read. Wait a moment, then try again.", 409)
         beforeNetwork?.()
         policy = await jsonFetch(`${GRAPH}/${id}`, { headers: { Authorization: `Bearer ${token}` } }, beforeNetwork)
         if (policy.id !== id) throw new FrameworkError("Policy ID missing from Graph response.", 502)
@@ -513,7 +513,7 @@ async function exportWorkspace(body: RecordJson, workspace: FrameworkWorkspace):
     // The same exclusion rule as every CIS view, so the PDF matches the page for this run.
     const summary = readinessFor(saved, workspace, localDate(), denominator)
     const { generateCisReadinessPDF } = await import("../../shared/compliance/report-pdf")
-    const pdf = generateCisReadinessPDF(summary, { exportedAt: context.exportedAt, tenantName: context.tenantName, tenantId: workspace.tenantId, assessedAt: saved.assessment.assessedAt, runId: saved.assessment.runId }, await pdfBrandingFor(workspace.tenantId))
+    const pdf = generateCisReadinessPDF(summary, { exportedAt: context.exportedAt, tenantName: context.tenantName, tenantId: workspace.tenantId, assessedAt: saved.assessment.assessedAt, runId: saved.assessment.runId, pack: { reference: saved.assessment.reference, policies: saved.policies } }, await pdfBrandingFor(workspace.tenantId))
     return { file: { name: savedName("readiness report", "pdf"), type: "application/pdf", encoding: "base64", data: Buffer.from(pdf).toString("base64") } }
   }
   if (body.action === "workspace-csv") return { file: { name: savedName("findings", "csv"), type: "text/csv;charset=utf-8", encoding: "utf8", data: `\uFEFF${workspaceExportCSV(saved, context, cis ? { layout: "table" } : {})}` } }

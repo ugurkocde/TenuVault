@@ -271,7 +271,7 @@ Conflicts with other policy families are not evaluated. Profile selection and ap
 | Scope or ruleset changed. These runs cannot be compared as tenant configuration drift. | The two comparisons used different platforms, levels or a different ruleset version. Pick a saved comparison with the same scope, or review them separately. |
 | Choose valid platforms, maturity level and risk level. | Select at least one platform and a valid target level, then compare again. |
 | Request failed (403) at ... Check Intune permissions for this tenant. | Your account or the app registration cannot read Settings Catalog policies. Check your Intune role. |
-| Policy settings changed during the read. Compare again. | A policy changed while TenuVault read it. Run the comparison again. |
+| Policy settings changed while they were read. Wait a moment, then try again. | A policy changed while TenuVault read it. Wait until the change in Intune is finished, then run the comparison or assessment again. |
 | This assessment has expired or was already used. Run comparison again. | More than 15 minutes passed, or policies were already created from it. Compare again. |
 | Another change is being applied to this tenant: *label*. Try again when it finishes. | Another creation, deployment, undo or change set is running for this tenant. Wait for it to finish. See [Troubleshooting](/troubleshooting/). |
 | The selection repeats a setting across multiple policies. Select it from one policy only. | Deselect the duplicate setting in one of the policies. |

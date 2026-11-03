@@ -1,6 +1,6 @@
 import { comparable, rootMatches, type BaselinePolicy, type Finding, type Json, type Observation } from "./policies"
 import { formatRate } from "./cis-readiness"
-import { findingRemediation } from "./cis-certification"
+import { findingRemediation, isCisCertified, isCisCertifiedReference, parsePackReference } from "./cis-certification"
 import { definitionLabel, payloadSettingId, settingNameOf } from "../intune/drift-format"
 import type { SettingNames } from "../intune/drift"
 import { summarizeSetting, type SettingLeaf } from "./setting-summary"
@@ -15,6 +15,35 @@ export function benchmarkDisplayName(id: string): string {
 export function packBenchmarkName(policies: readonly BaselinePolicy[]): string | null {
   for (const policy of policies) if (typeof policy.provenance?.benchmarkName === "string" && policy.provenance.benchmarkName) return policy.provenance.benchmarkName
   return null
+}
+
+/**
+ * Whether an assessment of a pack is inside the certified scope. The reference must name a
+ * certified benchmark, version and Level, and every policy must carry the provenance the delivery
+ * service stamps for exactly that pack (cis-fetch-pack): its benchmark, version, Level and catalog
+ * display name. A Build Kit import has no catalog name, and a pack whose policies name another
+ * benchmark, version or Level than the reference is never shown as certified.
+ */
+export function isCertifiedAssessment(reference: string, policies: readonly BaselinePolicy[]): boolean {
+  const parsed = parsePackReference(reference)
+  if (!parsed || !policies.length || !isCisCertifiedReference(reference)) return false
+  return policies.every(({ provenance }) => provenance?.benchmark === parsed.benchmark && provenance.version === parsed.version
+    && provenance.level === `Level ${parsed.level}` && typeof provenance.benchmarkName === "string" && provenance.benchmarkName.trim() !== "")
+}
+
+/** The pack an assessment compared: its reference and the policies saved with it. */
+export interface AssessedPack { reference: string; policies: readonly BaselinePolicy[] }
+
+/**
+ * Whether one Level of a readiness export is inside the certified scope: the assessed pack passes
+ * the rule of the CIS Certified label (isCertifiedAssessment) and is the pack of exactly this
+ * benchmark, version and Level, so a Level the pack did not assess (for example a Level 2 item in a
+ * Level 1 list) is never claimed and an export never claims more than the page shows.
+ */
+export function isCertifiedReadinessLevel(summary: { benchmark: string; version: string }, level: number, pack: AssessedPack | undefined): boolean {
+  if (!pack || !isCertifiedAssessment(pack.reference, pack.policies)) return false
+  const parsed = parsePackReference(pack.reference)
+  return !!parsed && parsed.benchmark === summary.benchmark && parsed.version === summary.version && parsed.level === level && isCisCertified(summary.benchmark, summary.version, level)
 }
 
 /**

@@ -145,7 +145,7 @@ describe("CIS Benchmarks results across navigation", () => {
     await flush()
     expect(container.textContent).toContain("Loading saved assessments")
     expect(container.querySelector("#cis-delivered-title")).toBeNull()
-    expect(buttonNamed(container, "Start Assessment")).toBeUndefined()
+    expect(buttonNamed(container, "Start assessment")).toBeUndefined()
     release()
     await flush()
     expect(results(container)).not.toBeNull()
@@ -215,7 +215,12 @@ describe("CIS Benchmarks results across navigation", () => {
     await flush()
     await act(async () => { buttonNamed(container, "New assessment")!.click() })
     expect(results(container)).toBeNull()
-    const review = [...container.querySelectorAll('nav[aria-label="CIS Benchmarks progress"] button')].find(item => item.textContent?.includes("Review results"))
+    // Setup over the results: the loaded pack makes Compare with tenant the current step, not Review results.
+    expect(container.querySelector('nav[aria-label="CIS Benchmarks progress"] [aria-current="step"]')?.textContent).toBe("2Step 2: Compare with tenant")
+    // The Assessment coverage panel is information: neutral, not the blue the app remaps to coral.
+    const coverage = [...container.querySelectorAll("details")].find(item => item.querySelector("summary")?.textContent?.includes("Assessment coverage"))
+    for (const element of [coverage!, ...coverage!.querySelectorAll("svg, summary + div")]) expect(element.getAttribute("class")).not.toMatch(/blue/)
+    const review =[...container.querySelectorAll('nav[aria-label="CIS Benchmarks progress"] button')].find(item => item.textContent?.includes("Review results"))
     expect(review).toBeDefined()
     await act(async () => { (review as HTMLButtonElement).click() })
     expect(results(container)).not.toBeNull()
@@ -279,7 +284,7 @@ describe("Run again", () => {
     await waitFor(() => document.activeElement === buttonNamed(container, "Run again"))
   })
 
-  it("returns focus to Start Assessment after a failed first run under Strict Mode", async () => {
+  it("returns focus to Start assessment after a failed first run under Strict Mode", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     stubService({ history: [], answer: body => {
       if (body.action === "running-job") return { body: { jobId: null } }
@@ -289,11 +294,11 @@ describe("Run again", () => {
     } })
     const { container } = render("/portal/frameworks/cis-benchmarks", true)
     await flush()
-    await waitFor(() => !!buttonNamed(container, "Start Assessment") && !buttonNamed(container, "Start Assessment")!.disabled)
-    buttonNamed(container, "Start Assessment")!.focus()
-    await act(async () => { buttonNamed(container, "Start Assessment")!.click() })
+    await waitFor(() => !!buttonNamed(container, "Start assessment") && !buttonNamed(container, "Start assessment")!.disabled)
+    buttonNamed(container, "Start assessment")!.focus()
+    await act(async () => { buttonNamed(container, "Start assessment")!.click() })
     await waitFor(() => container.textContent.includes("Request failed (502)"))
-    await waitFor(() => document.activeElement === buttonNamed(container, "Start Assessment"))
+    await waitFor(() => document.activeElement === buttonNamed(container, "Start assessment"))
   })
 
   it("replaces the previous results when the re-run completes", async () => {
@@ -632,5 +637,67 @@ describe("an unreadable saved workspace", () => {
     expect(container.querySelector('[aria-label="Saved workspace cannot be read"]')).toBeNull()
     expect(container.querySelector("#cis-delivered-title")).not.toBeNull()
     expect(container.querySelector('[aria-label="Saved assessment history"]')).not.toBeNull()
+  })
+})
+
+describe("Run again from a saved assessment of another pack", () => {
+  // An older saved run of pack A, while the workspace holds pack B with the newest run.
+  const olderReference = "synthetic-os 9.9.8 Level 1"
+  const olderPolicy = { ...policy, name: "Older synthetic policy", provenance: { ...policy.provenance, version: "9.9.8" } }
+  const older = { ...assessment("run-older", "Missing", "2026-10-10T10:00:00Z"), reference: olderReference, findings: assessment("run-older", "Missing", "").findings.map(finding => ({ ...finding, policyName: "Older synthetic policy" })) }
+  const rerun = { ...older, runId: "run-rerun", assessedAt: "2026-10-20T10:00:00Z" }
+
+  it("assesses the saved run's pack and makes it the loaded pack openly", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    const { state, actions } = stubService({ answer: body => {
+      if (body.action === "running-job") return { body: { jobId: null } }
+      if (body.action === "assess-start") return { body: { jobId: "job-1" } }
+      if (body.action === "assess-status") {
+        // Main records a finished run and makes its pack the workspace's pack (recordAssessment).
+        state.current = { ...state.current, policies: [olderPolicy], reference: olderReference, history: [{ assessment: rerun, policies: [olderPolicy] }, ...state.current.history] }
+        return { body: snapshot("done", { assessment: rerun }) }
+      }
+      return { status: 500, body: { error: "unexpected" } }
+    } })
+    state.current = { ...state.current, history: [...state.current.history, { assessment: older, policies: [olderPolicy] }] }
+    const { container } = render()
+    await flush()
+    const header = () => container.querySelector('[aria-label="Results header"]')?.textContent ?? ""
+    expect(header()).toContain("9.9.9")
+    const views = [...container.querySelectorAll("button")].filter(item => item.textContent === "View read-only")
+    await act(async () => { views[1]!.click() })
+    await flush()
+    expect(header()).toContain("9.9.8")
+    // Viewing the saved run saves nothing, and the page says before the run which pack Run again
+    // assesses and which loaded pack it replaces, once, in the results header only.
+    expect(actions.some(body => body.action === "workspace-save")).toBe(false)
+    const notice = "Showing a saved assessment. Run again to get current evidence and to select, exclude or remediate findings. Run again assesses the pack of this saved assessment and makes it the loaded pack in place of synthetic-os 9.9.9 Level 1."
+    expect(header()).toContain(notice)
+    expect(container.textContent!.split("Showing a saved assessment").length - 1).toBe(1)
+    await act(async () => { buttonNamed(container, "Run again")!.click() })
+    await waitFor(() => !container.querySelector('[aria-label="Assessment in progress"]') && header().includes("9.9.8") && !header().includes("Showing a saved assessment"))
+    await flush()
+    const start = actions.find(body => body.action === "assess-start")
+    expect(start?.reference).toBe(olderReference)
+    expect((start!.policies as { name: string }[])[0]?.name).toBe("Older synthetic policy")
+    // The step 1 Loaded line names the pack that was assessed, which is now the workspace's pack.
+    await act(async () => { buttonNamed(container, "New assessment")!.click() })
+    expect(container.querySelector('[aria-labelledby="cis-delivered-title"]')?.textContent).toContain("Loaded: synthetic-os 9.9.8 Level 1, 1 policy.")
+    expect(state.current.reference).toBe(olderReference)
+    // The page saves the pack it shows, never one the saved view did not show.
+    expect(actions.filter(body => body.action === "workspace-save").map(body => body.reference)).toEqual([olderReference])
+  })
+
+  it("names no replaced pack for a saved run of the pack that is loaded", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: true })
+    stubService({ history: [fresh, saved] })
+    const { container } = render()
+    await flush()
+    const views = [...container.querySelectorAll("button")].filter(item => item.textContent === "View read-only")
+    await act(async () => { views[1]!.click() })
+    await flush()
+    const header = container.querySelector('[aria-label="Results header"]')?.textContent ?? ""
+    expect(header).toContain("Showing a saved assessment. Run again to get current evidence")
+    expect(header).not.toContain("in place of")
   })
 })

@@ -11,8 +11,12 @@ export interface CisFlowStep {
 
 export const CIS_FLOW_LABELS = ["Load benchmark", "Compare with tenant", "Review results"] as const
 
-/** Stepper state for the CIS page, derived from whether a benchmark pack is loaded, whether an assessment exists, and whether a run is active. While a run is active step 2 is current, even when an older assessment is still loaded for a re-run. */
-export function cisFlowSteps(hasPack: boolean, hasAssessment: boolean, isRunning = false): CisFlowStep[] {
+/**
+ * Stepper state for the CIS page, derived from whether a benchmark pack is loaded, whether an assessment exists, whether a run is active,
+ * and whether setup is shown over existing results after New assessment. While a run is active step 2 is current, even when an older
+ * assessment is still loaded for a re-run. In setup over results, step 1 or 2 is current by what is loaded, as without results.
+ */
+export function cisFlowSteps(hasPack: boolean, hasAssessment: boolean, isRunning = false, inSetup = false): CisFlowStep[] {
   if (isRunning) {
     return [
       { step: 1, label: CIS_FLOW_LABELS[0], state: hasPack ? "complete" : "upcoming" },
@@ -20,7 +24,7 @@ export function cisFlowSteps(hasPack: boolean, hasAssessment: boolean, isRunning
       { step: 3, label: CIS_FLOW_LABELS[2], state: "upcoming" },
     ]
   }
-  if (hasAssessment) {
+  if (hasAssessment && !inSetup) {
     return [
       { step: 1, label: CIS_FLOW_LABELS[0], state: hasPack ? "complete" : "upcoming" },
       { step: 2, label: CIS_FLOW_LABELS[1], state: "complete" },

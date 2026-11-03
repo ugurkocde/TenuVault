@@ -212,6 +212,31 @@ describe("pack recommendations", () => {
     expect(failing.recommendations.map(item => [item.id, item.result])).toEqual([["2.1.1", "Fail"], ["2.1.2", "Fail"]])
   })
 
+  it("lists a pack recommendation it cannot assess as Not assessed and one outside the pack as Not covered, with the same counts", () => {
+    const partial = attachRecommendations(pack, [
+      { id: "2.1.1", title: "Synthetic partly in pack", level: 1, settings: ["synthetic_alpha", "synthetic_not_in_pack"] },
+      { id: "2.1.2", title: "Synthetic fully in pack", level: 1, settings: ["synthetic_alpha"] },
+    ])
+    const list = { benchmark: "synthetic-os", version: "9.9.9", items: [
+      { identifier: "2.1.1", level: 1 as const, automated: true }, { identifier: "2.1.2", level: 1 as const, automated: true },
+      { identifier: "2.9.9", level: 1 as const, automated: true, title: "Synthetic outside the pack" }, { identifier: "2.9.10", level: 1 as const, automated: false },
+    ] }
+    const summary = cisReadiness(assess(tenant), partial, undefined, list)
+    const level = summary.levels[0]!
+    expect(level.recommendations.map(item => [item.id, item.result])).toEqual([["2.1.1", "Not assessed"], ["2.1.2", "Pass"]])
+    expect(level.manual.map(item => [item.identifier, item.state])).toEqual([["2.1.1", "Not assessed"], ["2.9.9", "Not covered"], ["2.9.10", "Manual"]])
+    // Which identifiers are listed and every count stay as they were: only the state of each item says why.
+    expect(level.notAssessed).toEqual(["2.1.1", "2.9.9"])
+    expect(levelCheckCounts(level)).toEqual({ checked: 1, manual: 3, total: 4 })
+    expect(recommendationTotals(level.recommendations)).toEqual({ passed: 1, failed: 0, review: 0, notAssessed: 1 })
+    const csv = cisReadinessCsv(summary)
+    expect(csv).toContain(",Not assessed,2.1.1,")
+    expect(csv).toContain(",Not covered,2.9.9,Synthetic outside the pack")
+    const json = JSON.parse(cisReadinessJson(summary, null, "2026-10-15T10:00:00Z")) as { manualItems: { identifier: string; state: string; remediationCapability: { reason: string } }[] }
+    expect(json.manualItems.map(item => [item.identifier, item.state])).toEqual([["2.1.1", "Not assessed"], ["2.9.9", "Not covered"], ["2.9.10", "Manual"]])
+    expect(json.manualItems[0]!.remediationCapability.reason).toBe("The delivered benchmark pack does not hold every setting it names. TenuVault remediates only its settings that are in the pack; the others need manual action.")
+  })
+
   it("reports a recommendation under its own Level even when only a policy of another Level carries it", () => {
     const level2 = pack.map(policy => ({ ...policy, provenance: { ...policy.provenance, level: "Level 2" } }))
     const carried = attachRecommendations(level2, [{ id: "3.1.1", title: "Synthetic Level 1 recommendation", level: 1, settings: ["synthetic_alpha"] }, { id: "3.1.2", title: "Synthetic Level 2 recommendation", level: 2, settings: ["synthetic_beta"] }])

@@ -201,8 +201,8 @@ describe("CIS flow on the page", () => {
     })
     await refreshInternalCisBenchmarks()
     const container = renderPage()
-    await waitFor(() => !!buttonNamed(container, "Start Assessment") && !buttonNamed(container, "Start Assessment")!.disabled)
-    await click(buttonNamed(container, "Start Assessment"))
+    await waitFor(() => !!buttonNamed(container, "Start assessment") && !buttonNamed(container, "Start assessment")!.disabled)
+    await click(buttonNamed(container, "Start assessment"))
     await waitFor(() => !!container.querySelector('[aria-label="Partial results"]') && container.textContent!.includes("Require Encryption"))
     // The first run overlays the setup page: setup stays mounted (and inert) underneath it.
     expect(container.querySelector("#cis-delivered-title")).not.toBeNull()

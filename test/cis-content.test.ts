@@ -215,7 +215,7 @@ describe("CIS content delivery service", () => {
       return Response.json({ ...validPack, recommendations })
     })
 
-    it("keeps the delivered list with the pack and lists Manual and Not assessed items with their text", async () => {
+    it("keeps the delivered list with the pack and lists Manual and Not covered items with their text", async () => {
       vi.stubGlobal("fetch", serve(() => Response.json(list)))
       await handleFramework({ action: "cis-fetch-pack", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1 })
       const workspace = loadWorkspace(tenantId, "cis-benchmarks")
@@ -226,7 +226,7 @@ describe("CIS content delivery service", () => {
       const assessment = assessPolicySet({ tenantId, frameworkId: "cis-benchmarks", reference: workspace.reference, policies: workspace.policies, current, runId: "run-1", assessedAt: "2026-10-10T12:00:00.000Z" })
       const entry = { assessment, policies: workspace.policies }
       const level1 = readinessFor(entry, { history: [entry], recommendationLists: workspace.recommendationLists }).levels[0]!
-      expect(level1.manual.map(item => [item.identifier, item.state, item.hasText])).toEqual([["7.1.2", "Not assessed", true], ["7.1.3", "Manual", true]])
+      expect(level1.manual.map(item => [item.identifier, item.state, item.hasText])).toEqual([["7.1.2", "Not covered", true], ["7.1.3", "Manual", true]])
       expect(level1.manual[0]).toMatchObject({ title: "Synthetic uncovered recommendation", audit: "Synthetic audit\nsecond line." })
       expect(levelCheckSummary(level1)).toBe("Level 1: TenuVault checks 1 of 3 recommendations automatically. The other 2 need a manual check.")
       // Coverage counts what the sentence counts: one of the two automated recommendations.

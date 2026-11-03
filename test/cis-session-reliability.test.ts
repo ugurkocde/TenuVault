@@ -153,7 +153,7 @@ describe("Graph reads during a CIS assessment", () => {
     })
     const failed = await finish(await start())
     expect(failed.phase).toBe("failed")
-    expect(failed.error).toContain("Policy settings changed during the read")
+    expect(failed.error).toBe("Policy settings changed while they were read. Wait a moment, then try again.")
     expect(calls.filter(url => url === `${GRAPH}/${POLICY_A}/settings`)).toHaveLength(3)
     expect(loadWorkspace(tenantId, "cis-benchmarks").history).toHaveLength(0)
   })

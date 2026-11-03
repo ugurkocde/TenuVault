@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { benchmarkDisplayName, deviatingFindingKeys, groupFindingsByPolicy, groupObservationsByValue, humanSettingLabel, policyDisplayName, statusMixText, trendSummaryText } from "../src/shared/frameworks/cis-display"
-import type { Finding, Json, Observation } from "../src/shared/frameworks/policies"
+import { benchmarkDisplayName, deviatingFindingKeys, isCertifiedAssessment, isCertifiedReadinessLevel, groupFindingsByPolicy, groupObservationsByValue, humanSettingLabel, policyDisplayName, statusMixText, trendSummaryText } from "../src/shared/frameworks/cis-display"
+import type { BaselinePolicy, Finding, Json, Observation } from "../src/shared/frameworks/policies"
 import type { AssignmentEvidence } from "../src/shared/frameworks/evidence"
 
 function finding(policyIndex: number, policyName: string, settingId: string, status: Finding["status"]): Finding {
@@ -15,6 +15,47 @@ describe("benchmarkDisplayName", () => {
     expect(benchmarkDisplayName("fakebook")).toBe("Fakebook")
     expect(benchmarkDisplayName("intune")).toBe("Intune")
     expect(benchmarkDisplayName("")).toBe("")
+  })
+})
+
+describe("isCertifiedAssessment", () => {
+  const policy = (provenance: Record<string, string>): BaselinePolicy => ({ name: "Synthetic policy", platforms: "windows10", technologies: "mdm", description: "", settings: [], provenance: { schemaVersion: 1, ...provenance } })
+  const delivered = [policy({ benchmark: "intune-windows11", version: "5.0.0", level: "Level 1", benchmarkName: "Microsoft Intune for Windows 11" })]
+  const kit = [policy({ benchmark: "intune-windows11", version: "5.0.0", level: "Level 1", sourceFile: "synthetic.json" })]
+  it("marks a delivered pack of a certified Level certified, and a Build Kit import of it not", () => {
+    expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", delivered)).toBe(true)
+    expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 2", delivered)).toBe(false)
+    expect(isCertifiedAssessment("microsoft-intune-edge 1.0.0 Level 1", [policy({ benchmarkName: "Microsoft Intune for Edge" })])).toBe(false)
+    expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", kit)).toBe(false)
+    expect(isCertifiedAssessment("not a pack reference", delivered)).toBe(false)
+  })
+  it("requires every policy to carry the provenance of exactly the certified pack the reference names", () => {
+    const l2 = [policy({ benchmark: "intune-windows11", version: "5.0.0", level: "Level 2", benchmarkName: "Microsoft Intune for Windows 11" })]
+    expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", l2)).toBe(false)
+    const otherBenchmark = [policy({ benchmark: "microsoft-intune-edge", version: "5.0.0", level: "Level 1", benchmarkName: "Microsoft Intune for Edge" })]
+    expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", otherBenchmark)).toBe(false)
+    const otherVersion = [policy({ benchmark: "intune-windows11", version: "4.0.0", level: "Level 1", benchmarkName: "Microsoft Intune for Windows 11" })]
+    expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", otherVersion)).toBe(false)
+    // One policy from another Level, or one without the delivery service's catalog name, is enough to refuse.
+    expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", [...delivered, ...l2])).toBe(false)
+    expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", [...delivered, ...kit])).toBe(false)
+    expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", [...delivered, policy({})])).toBe(false)
+    expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", [])).toBe(false)
+    expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", [...delivered, ...delivered])).toBe(true)
+  })
+})
+
+describe("isCertifiedReadinessLevel", () => {
+  const policy = (level: string): BaselinePolicy => ({ name: "Synthetic policy", platforms: "macOS", technologies: "mdm", description: "", settings: [], provenance: { schemaVersion: 1, benchmark: "mac-os-26", version: "1.0.0", level, benchmarkName: "CIS Apple macOS 26" } })
+  const summary = { benchmark: "mac-os-26", version: "1.0.0" }
+  it("claims only the Level of the assessed pack, even when both Levels are certified", () => {
+    const levelOne = { reference: "mac-os-26 1.0.0 Level 1", policies: [policy("Level 1")] }
+    expect(isCertifiedReadinessLevel(summary, 1, levelOne)).toBe(true)
+    // A Level 2 item in a Level 1 list is reported, but the Level 1 pack did not assess Level 2.
+    expect(isCertifiedReadinessLevel(summary, 2, levelOne)).toBe(false)
+    expect(isCertifiedReadinessLevel({ benchmark: "mac-os-26", version: "2.0.0" }, 1, levelOne)).toBe(false)
+    expect(isCertifiedReadinessLevel({ benchmark: "intune-windows11", version: "5.0.0" }, 1, levelOne)).toBe(false)
+    expect(isCertifiedReadinessLevel(summary, 1, undefined)).toBe(false)
   })
 })
 

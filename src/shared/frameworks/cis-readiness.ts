@@ -332,7 +332,7 @@ function measure(assessment: Assessment, policies: BaselinePolicy[], denominator
     const described = new Set([...levelRecommendations.filter(result => result.result !== "Not assessed").map(result => result.id), ...enumeratedHere].filter(id => !unassessed.has(id)))
     const notAssessed = effectiveDenominator ? [...new Set(effectiveDenominator.filter(entry => entry.level === level && entry.automated && !described.has(entry.identifier)).map(entry => entry.identifier))] : []
     const manualNotAssessed = effectiveDenominator ? effectiveDenominator.filter(entry => entry.level === level && !entry.automated).map(entry => entry.identifier) : []
-    const manual = manualItemsForLevel(effectiveList, level, notAssessed, manualNotAssessed)
+    const manual = manualItemsForLevel(effectiveList, level, notAssessed, manualNotAssessed, unassessed)
     // With the CIS list, coverage counts what the Level sentence counts: automated identifiers that an
     // assessed pack recommendation or a pack description names, not pack descriptions alone.
     const authoritative = cov?.denominatorSource === "authoritative"

@@ -715,6 +715,43 @@ describe("CIS Benchmarks route", () => {
     vi.unstubAllGlobals()
   })
 
+  it("marks the results and each saved assessment CIS Certified or Not certified by benchmark, version and Level", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: false })
+    const tenantId = "11111111-1111-1111-1111-111111111111"
+    licenseStatus.current = { ...entitledStatus("pro"), tenants: [keyTenant(tenantId, "pro", 2)] }
+    selectedTenantState.current = { id: "local", name: "Synthetic tenant", credentials: { tenantId, appId: "22222222-2222-2222-2222-222222222222" } }
+    const policyFor = (level: number) => ({ name: `Synthetic Level ${level} policy`, platforms: "windows10", technologies: "mdm", description: "Synthetic",
+      provenance: { schemaVersion: 1, benchmark: "intune-windows11", version: "5.0.0", level: `Level ${level}`, benchmarkName: "Microsoft Intune for Windows 11" },
+      settings: [{ settingInstance: { "@odata.type": "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance", settingDefinitionId: "synthetic_setting", choiceSettingValue: { value: "synthetic_on", children: [] } } }] })
+    const entry = (level: number, assessedAt: string) => {
+      const policy = policyFor(level)
+      return { policies: [policy], assessment: { runId: `run-${level}`, tenantId, frameworkId: "cis-benchmarks", reference: `intune-windows11 5.0.0 Level ${level}`, assessedAt, policyCount: 1,
+        findings: [{ key: "0:0", policyIndex: 0, settingIndex: 0, policyName: policy.name, settingId: "synthetic_setting", status: "Missing", recommended: policy.settings[0]!.settingInstance, observed: [] }] } }
+    }
+    const history = [entry(1, "2026-11-02T10:00:00Z"), entry(2, "2026-11-01T10:00:00Z")]
+    const workspace = { version: 1, tenantId, frameworkId: "cis-benchmarks", policies: history[0]!.policies, reference: history[0]!.assessment.reference, updatedAt: "2026-11-02T10:00:00Z", history }
+    vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+      const body = String(init?.body)
+      if (path !== "/api/frameworks") return Response.json({ deployments: [] })
+      if (body.includes("cis-catalog")) return Response.json({ benchmarks: [] })
+      return Response.json(body.includes('"workspace-open"') ? { workspace, activeJob: null } : workspace)
+    }))
+    const container = renderCisRoute()
+    await flush()
+    const header = () => container.querySelector('[aria-label="Results header"]')?.textContent ?? ""
+    expect(header()).toContain("Microsoft Intune for Windows 11 5.0.0 Level 1CIS Certified")
+    const rows = () => [...container.querySelectorAll('[aria-label="Saved assessment history"] .border-t')].map((row) => row.textContent ?? "")
+    expect(rows()).toHaveLength(2)
+    expect(rows()[0]).toMatch(/^CIS Certified/)
+    expect(rows()[1]).toMatch(/^Not certified/)
+    const views = [...container.querySelectorAll("button")].filter((item) => item.textContent === "View read-only")
+    await act(async () => { views[1]!.click() })
+    await flush()
+    expect(header()).toContain("Microsoft Intune for Windows 11 5.0.0 Level 2Not certified")
+    expect(header()).not.toContain("CIS Certified")
+    vi.unstubAllGlobals()
+  })
+
   async function renderSavedAssessment(extra: object = {}, findingExtra: (policy: { settings: Array<{ settingInstance: object }> }) => object = () => ({})): Promise<HTMLDivElement> {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     const tenantId = "11111111-1111-1111-1111-111111111111"
@@ -851,6 +888,9 @@ describe("CIS Benchmarks route", () => {
     const container = await renderSavedAssessment()
     const notice = container.querySelector('[aria-label="CIS readiness"] [role="note"]')
     expect(notice?.textContent).toContain("Not all recommendations from the CIS Benchmarks are included in this tool. Please refer to the CIS website to access the free CIS Benchmarks PDFs for manual assessment instructions.")
+    // The notice is information, not an error: neutral colors, which the app does not remap to coral as it does blue.
+    for (const element of [notice!, ...notice!.querySelectorAll("svg")]) expect(element.getAttribute("class")).not.toMatch(/blue|red|amber/)
+    expect(notice?.className).toContain("bg-gray-50")
     const link = notice?.querySelector("a")
     expect(link?.textContent).toBe("https://www.cisecurity.org/cis-benchmarks")
     await act(async () => { link!.click() })

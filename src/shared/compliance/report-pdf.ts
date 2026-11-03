@@ -3,6 +3,7 @@ import { capabilityComparison, comparisonCounts, type NativeAssessment } from '.
 import { cisExportLimitations, nativeReportHeader, redactSecrets, redactText, workspaceReportHeader, type ExportContext, type ReportHeader, type SavedAssessment } from './export'
 import { coverageStatement, exclusionsText, formatRate, headlineBasisNote, levelCheckSummary, levelHeadline, unassignedText, type CisLevelReadiness, type CisReadinessSummary } from '../frameworks/cis-readiness'
 import { recommendationTotals, type RecommendationResult } from '../frameworks/cis-recommendations'
+import { isCertifiedReadinessLevel, type AssessedPack } from '../frameworks/cis-display'
 import { certifiedScopeLines, cisCertificationHeadline, cisRemediationLimits, findingRemediationIndication, manualRemediation, recommendationRemediation, CIS_CERTIFICATION_SCOPE_INTRO, CIS_NOT_CERTIFIED_NOTE, CIS_TENANT_NOT_CERTIFIED_NOTE, isCisCertified, type RemediationIndication } from '../frameworks/cis-certification'
 import { displayCheckValue } from './check-results'
 import type { CapabilityResult, CapabilityStatus, ControlAssessment, ControlStatus, TechnicalCheck } from './types'
@@ -636,6 +637,8 @@ export interface CisReportContext extends ExportContext {
   tenantId: string
   assessedAt: string
   runId?: string
+  /** The pack the assessment compared; without it no Level of the report is presented as certified. */
+  pack?: AssessedPack
 }
 
 const RESULT_STYLE: Record<RecommendationResult['result'], { tone: Tone; marker: MarkerKind; color: RgbColor }> = {
@@ -739,7 +742,9 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
   // The CIS notice for recommendations this tool does not include, printed on every report.
   callout(layout, { title: 'Manual recommendations', tone: 'accent', body: [{ text: summary.manualNote, style: 'bold' }, { text: summary.manualFallback }, { text: summary.manualFallbackUrl, color: layout.theme.accentText, technical: true }], link: { url: summary.manualFallbackUrl, text: summary.manualFallbackUrl } })
   // The certified scope, stated on every CIS report, and whether the Levels of this report are inside it.
-  const inScope = (level: number) => isCisCertified(summary.benchmark, summary.version, level)
+  // A Level is certified by the rule of the CIS Certified label. The sample report holds no
+  // assessed pack and states the scope of its benchmark Levels, as before.
+  const inScope = (level: number) => sample ? isCisCertified(summary.benchmark, summary.version, level) : isCertifiedReadinessLevel(summary, level, context.pack)
   callout(layout, { title: 'CIS certification', tone: 'accent', body: [
     { text: cisCertificationHeadline(product), style: 'bold' },
     { text: CIS_CERTIFICATION_SCOPE_INTRO },
@@ -826,7 +831,7 @@ function levelSection(layout: Layout, summary: CisReadinessSummary, level: CisLe
       })) }],
     }, `Recommendation results, Level ${level.level}`)
   }
-  for (const [state, heading] of [["Manual", "Manual recommendations"], ["Not assessed", "Not assessed by this tool"]] as const) {
+  for (const [state, heading] of [["Manual", "Manual recommendations"], ["Not assessed", "Not assessed, in the benchmark pack"], ["Not covered", "Not covered by the benchmark pack"]] as const) {
     const items = level.manual.filter(manual => manual.state === state)
     if (!items.length) continue
     layout.heading(`${heading}, Level ${level.level}`, { toc: true, keep: 26 })
