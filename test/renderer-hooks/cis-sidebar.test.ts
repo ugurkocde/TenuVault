@@ -446,6 +446,138 @@ describe("CIS Benchmarks route", () => {
     vi.unstubAllGlobals()
   })
 
+  const PREVIEW = '[aria-label="CIS Benchmarks assessments, remediation and reports preview"]'
+  const CIS_CONTENT_ACTION = /^cis-(catalog|fetch|list|pack|content)/
+
+  /** Clicks View sample report and returns every request body sent from then on. */
+  async function requestSample(container: HTMLDivElement, fetch: ReturnType<typeof vi.fn>): Promise<Record<string, unknown>[]> {
+    Element.prototype.scrollIntoView = () => undefined
+    const sample = [...container.querySelector(PREVIEW)!.querySelectorAll("button")].find((item) => item.textContent === "View sample report")!
+    const before = fetch.mock.calls.length
+    await act(async () => { sample.click() })
+    await flush()
+    return fetch.mock.calls.slice(before).map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>)
+  }
+
+  /** The setup stage shows no benchmark picker, and no catalog, pack or list was requested. */
+  function expectNoCisContent(container: HTMLDivElement, fetch: ReturnType<typeof vi.fn>) {
+    expect(container.querySelector("#cis-delivered-title")?.textContent).toBe("1. Load benchmark")
+    expect(container.textContent).not.toContain("Refresh available benchmarks")
+    expect(container.textContent).not.toContain("benchmarks available")
+    expect(container.querySelector('[aria-label="Available benchmarks"]')).toBeNull()
+    expect(actions(fetch).filter((action) => CIS_CONTENT_ACTION.test(action))).toEqual([])
+  }
+
+  function sampleFetch(workspaceFor?: string) {
+    return vi.fn(async (_path: string, init?: RequestInit) => {
+      const body = String(init?.body)
+      if (body.includes("cis-sample-pdf")) return Response.json({ name: "TenuVault sample CIS readiness report (sample data).pdf", saved: true, path: "/Users/admin/Documents/TenuVault sample CIS readiness report (sample data).pdf" })
+      const workspace = { version: 1, tenantId: workspaceFor ?? "", frameworkId: "cis-benchmarks", policies: [], reference: "", updatedAt: "", history: [] }
+      return Response.json(body.includes("workspace-open") ? { workspace, activeJob: null } : workspace)
+    })
+  }
+
+  it("shows the preview with no tenant selected, as on a fresh install, and sends no CIS content request", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: false })
+    licenseStatus.current = { ...communityStatus(), communityTenantId: null, tenants: [] }
+    selectedTenantState.current = null
+    const fetch = sampleFetch()
+    vi.stubGlobal("fetch", fetch)
+    const container = renderCisRoute()
+    await flush()
+    const preview = container.querySelector(PREVIEW)
+    expect(preview).not.toBeNull()
+    expect([...preview!.querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Start 30 day free trial", "Add a license key", "View sample report"])
+    expect(container.querySelectorAll('[aria-label="CIS certification"]')).toHaveLength(1)
+    expectNoCisContent(container, fetch)
+    // The sample names no tenant: the one request carries only the action.
+    expect(await requestSample(container, fetch)).toEqual([{ action: "cis-sample-pdf", save: "dialog" }])
+    expect(preview?.textContent).toContain("TenuVault sample CIS readiness report (sample data).pdf")
+    expectNoCisContent(container, fetch)
+    vi.unstubAllGlobals()
+  })
+
+  it("shows the preview with no tenant selected on a machine with a Pro key, never the picker", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: false })
+    licenseStatus.current = entitledStatus("pro")
+    selectedTenantState.current = null
+    const fetch = sampleFetch()
+    vi.stubGlobal("fetch", fetch)
+    const container = renderCisRoute()
+    await flush()
+    expect([...container.querySelector(PREVIEW)!.querySelectorAll("button")].map((button) => button.textContent)).toEqual(["See plans", "Add a license key", "View sample report"])
+    expectNoCisContent(container, fetch)
+    vi.unstubAllGlobals()
+  })
+
+  it("shows the preview to a tenant whose plan cannot be used, without the catalog it loaded earlier", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: false })
+    // A lapsed Pro tenant: activated, but its entitlement is no longer valid, so its plan is null.
+    licenseStatus.current = { ...entitledStatus("pro"), tenants: [{ ...keyTenant("t-entitled", "pro", 2), entitled: false }] }
+    selectedTenantState.current = tenantRef("t-entitled")
+    const { rememberCisCatalog, forgetCisCatalog } = await import("../../src/renderer/lib/cis-catalog-cache")
+    rememberCisCatalog("t-entitled", [{ id: "synthetic-os", name: "Synthetic cached benchmark", version: "9.9.9", levels: [1] }] as never)
+    const fetch = sampleFetch("t-entitled")
+    vi.stubGlobal("fetch", fetch)
+    const container = renderCisRoute()
+    await flush()
+    expect(container.querySelector(PREVIEW)).not.toBeNull()
+    expect(container.textContent).not.toContain("Synthetic cached benchmark")
+    expectNoCisContent(container, fetch)
+    expect(await requestSample(container, fetch)).toEqual([{ action: "cis-sample-pdf", save: "dialog" }])
+    expectNoCisContent(container, fetch)
+    forgetCisCatalog("t-entitled")
+    vi.unstubAllGlobals()
+  })
+
+  it("shows neither the preview nor the picker while the license loads, then the picker for Pro", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: false })
+    licenseStatus.current = null
+    selectedTenantState.current = tenantRef("t-entitled")
+    const fetch = vi.fn(async (_path: string, init?: RequestInit) => {
+      const body = String(init?.body)
+      if (body.includes("cis-catalog")) return Response.json({ benchmarks: [] })
+      const workspace = { version: 1, tenantId: "t-entitled", frameworkId: "cis-benchmarks", policies: [], reference: "", updatedAt: "", history: [] }
+      return Response.json(body.includes("workspace-open") ? { workspace, activeJob: null } : workspace)
+    })
+    vi.stubGlobal("fetch", fetch)
+    const container = renderCisRoute()
+    await flush()
+    expect(container.querySelector(PREVIEW)).toBeNull()
+    expect(container.textContent).toContain("Checking the plan of the selected tenant")
+    expectNoCisContent(container, fetch)
+    licenseStatus.current = entitledStatus("pro")
+    const root = roots[roots.length - 1]
+    await act(async () => { root?.render(createElement(MemoryRouter, { initialEntries: ["/portal/frameworks/cis-benchmarks"] }, createElement(Routes, null, createElement(Route, { path: "/portal/frameworks/:frameworkId", element: createElement(FrameworksPage) })))) })
+    await flush()
+    expect(container.querySelector(PREVIEW)).toBeNull()
+    expect(container.textContent).toContain("Refresh available benchmarks")
+    expect(actions(fetch)).toContain("cis-catalog")
+    vi.unstubAllGlobals()
+  })
+
+  it("does not show the preview while saved assessments load", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: false })
+    licenseStatus.current = communityStatus()
+    selectedTenantState.current = tenantRef("t-community")
+    let openWorkspace: (response: Response) => void = () => undefined
+    const workspace = { version: 1, tenantId: "t-community", frameworkId: "cis-benchmarks", policies: [], reference: "", updatedAt: "", history: [] }
+    const fetch = vi.fn(async (_path: string, init?: RequestInit) => String(init?.body).includes("workspace-open")
+      ? new Promise<Response>((resolve) => { openWorkspace = resolve })
+      : Response.json(workspace))
+    vi.stubGlobal("fetch", fetch)
+    const container = renderCisRoute()
+    await flush()
+    expect(container.textContent).toContain("Loading saved assessments")
+    expect(container.querySelector(PREVIEW)).toBeNull()
+    expect(container.querySelectorAll('[aria-label="CIS certification"]')).toHaveLength(1)
+    await act(async () => { openWorkspace(Response.json({ workspace, activeJob: null })) })
+    await flush()
+    expect(container.querySelector(PREVIEW)).not.toBeNull()
+    expect(container.querySelectorAll('[aria-label="CIS certification"]')).toHaveLength(1)
+    vi.unstubAllGlobals()
+  })
+
   it("shows Pro the benchmark picker and the certification note, never the preview", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: false })
     licenseStatus.current = entitledStatus("pro")
@@ -552,6 +684,26 @@ describe("CIS Benchmarks route", () => {
     await flush()
     expect(container.querySelector(preview)).not.toBeNull()
     expect(container.querySelectorAll('[aria-label="CIS certification"]')).toHaveLength(1)
+    vi.unstubAllGlobals()
+  })
+
+  it("keeps saved results and the remediation history of a lapsed tenant, with the preview only where a new assessment starts", async () => {
+    const tenantId = "11111111-1111-1111-1111-111111111111"
+    // Activated on Pro, but the entitlement lapsed: the plan resolves to null.
+    licenseStatus.current = { ...entitledStatus("pro"), tenants: [{ ...keyTenant(tenantId, "pro", 2), entitled: false }] }
+    const container = await renderSavedAssessment()
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>
+    expect(container.querySelector('[aria-label="CIS readiness"]')).not.toBeNull()
+    expect(container.textContent).toContain("Saved results stay readable.")
+    // The remediation history, where rollback starts, still loads for the tenant.
+    expect(fetchMock.mock.calls.some(([path]) => path === "/api/cis-remediation")).toBe(true)
+    const preview = '[aria-label="CIS Benchmarks assessments, remediation and reports preview"]'
+    expect(container.querySelector(preview)).toBeNull()
+    await act(async () => { [...container.querySelectorAll("button")].find((item) => item.textContent === "New assessment")!.click() })
+    await flush()
+    expect(container.querySelector(preview)).not.toBeNull()
+    expect(container.textContent).not.toContain("Refresh available benchmarks")
+    expect(actions(fetchMock).filter((action) => /^cis-(catalog|fetch|list|pack|content)/.test(action))).toEqual([])
     vi.unstubAllGlobals()
   })
 

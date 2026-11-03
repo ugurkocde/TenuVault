@@ -2,6 +2,7 @@ import { inflateSync } from "node:zlib"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { CIS_CERTIFIED_CHECK_COUNTS, CIS_CERTIFIED_SEGMENTS, CIS_REMEDIATION_LIMITS, cisCheckCount, cisCheckCountText, certifiedScopeLines, isCisCertified } from "../src/shared/frameworks/cis-certification"
 import { CIS_SAMPLE_FILE_NAME, CIS_SAMPLE_MARKER, CIS_SAMPLE_NOTE, CIS_SAMPLE_TITLE, cisSampleSummary, generateCisSampleReportPDF } from "../src/shared/compliance/cis-sample-report"
+import { levelCheckCounts, levelCheckSummary } from "../src/shared/frameworks/cis-readiness"
 import { MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDATIONS_URL } from "../src/shared/frameworks/cis-manual"
 import { handleFramework, setFrameworkExportSaver, type ExportFile } from "../src/main/frameworks/service"
 import { requiredFeatures } from "../src/main/api/plan-gates"
@@ -72,34 +73,67 @@ describe("sample CIS readiness report", () => {
     expect(Buffer.from(bytes).toString("latin1")).toContain(`/Title (${CIS_SAMPLE_TITLE})`)
   })
 
-  it("shows the real report features: readiness per Level, coverage, recommendation results with remediation labels, manual and not assessed items, certification, limits and the CIS notice", () => {
+  it("shows the real report features: readiness per Level, coverage, recommendation results with remediation labels, manual items, certification, limits and the CIS notice", () => {
     for (const level of [1, 2]) {
       expect(text).toContain(`Level ${level} readiness`)
       expect(text).toContain(`Recommendation results, Level ${level}`)
-      expect(text).toContain(`Manual recommendations, Level ${level}`)
-      expect(text).toContain(`Not assessed by this tool, Level ${level}`)
     }
+    // Level 1 of the benchmark has manual recommendations; Level 2 has none.
+    expect(text).toContain("Manual recommendations, Level 1")
+    expect(text).not.toContain("Manual recommendations, Level 2")
+    // Every pack recommendation is assessed, as in the counts the preview states.
+    expect(text).not.toContain("Not assessed by this tool, Level")
     expect(text).toContain("Coverage:")
     expect(text).toContain("Recommendation pass rate")
     expect(text).toContain("Remediation: by TenuVault")
     expect(text).toContain("Remediation: partly by TenuVault, partly manual action")
-    expect(text).toContain("Remediation: manual action")
+    // Manual recommendations carry their remediation capability: manual action only.
+    expect(text).toContain("Manual action. CIS lists it as a manual recommendation. TenuVault does not assess or remediate it.")
     expect(text).toContain("Accepted exceptions, Level 1")
     expect(text).toContain("TenuVault is CIS Benchmarks Certified for Assessment and Remediation.")
     for (const line of certifiedScopeLines()) expect(text).toContain(line)
-    expect(text).toContain("Level 1 is within the certified scope")
+    expect(text).toContain("Level 1 is within the certified scope; Level 2 is within the certified scope.")
     expect(text).toContain("Limits of remediation")
     expect(text.replace(/\s+/g, "")).toContain(CIS_REMEDIATION_LIMITS[3]!.replace(/\s+/g, ""))
     expect(text.replace(/\s+/g, "")).toContain(MANUAL_RECOMMENDATIONS_FALLBACK.replace(/\s+/g, ""))
     expect(text).toContain(MANUAL_RECOMMENDATIONS_URL)
   })
 
+  it("sizes every Level to the real benchmark: the total and the automatic checks equal the certified counts the preview states", () => {
+    const summary = cisSampleSummary()
+    expect([summary.benchmark, summary.version]).toEqual(["mac-os-26", "1.0.0"])
+    const segment = CIS_CERTIFIED_SEGMENTS.find(item => item.benchmark === summary.benchmark && item.version === summary.version)
+    expect(segment?.name.startsWith(summary.benchmarkName!)).toBe(true)
+    // Both Levels of the benchmark are in the sample, and every Level it shows is certified.
+    expect(summary.levels.map(level => level.level)).toEqual([...segment!.levels])
+    for (const level of summary.levels) {
+      expect(isCisCertified(summary.benchmark, summary.version, level.level), `Level ${level.level}`).toBe(true)
+      const count = cisCheckCount(summary.benchmark, summary.version, level.level)!
+      expect(count, `Level ${level.level}`).toBeDefined()
+      const { checked, total } = levelCheckCounts(level)
+      expect({ checked, total }, `Level ${level.level}`).toEqual({ checked: count.automated, total: count.total })
+      // The rest are the manual recommendations of the Level.
+      expect(level.manual.filter(item => item.state === "Manual")).toHaveLength(count.total - count.automated)
+      expect(level.notAssessed).toEqual([])
+    }
+    expect(text).toContain(levelCheckSummary(summary.levels[0]!))
+    expect(text).toContain("Level 1: TenuVault checks 88 of 90 recommendations automatically. The other 2 need a manual check.")
+    expect(text).toContain("Level 2: TenuVault checks all 10 recommendations automatically.")
+  })
+
+  it("keeps the results fictional but varied: passes, failures, reviews, missing and different settings and one exception", () => {
+    const summary = cisSampleSummary()
+    const results = summary.levels.flatMap(level => level.recommendations.map(result => result.result))
+    for (const result of ["Pass", "Fail", "Review"] as const) expect(results, result).toContain(result)
+    for (const level of summary.levels) {
+      expect(level.missing, `Level ${level.level}`).toBeGreaterThan(0)
+      expect(level.different, `Level ${level.level}`).toBeGreaterThan(0)
+    }
+    expect(summary.levels.flatMap(level => level.exceptions)).toHaveLength(1)
+  })
+
   it("holds only synthetic recommendations: placeholder ids, titles and text", () => {
     const summary = cisSampleSummary()
-    expect(summary.benchmark).toBe("intune-for-defender")
-    // Every Level the sample shows is inside the certified scope, so it never suggests an uncertified Level.
-    for (const level of summary.levels) expect(isCisCertified(summary.benchmark, summary.version, level.level)).toBe(true)
-    expect(summary.version).toBe("1.0.0")
     for (const level of summary.levels) {
       expect(level.recommendations.length).toBeGreaterThan(0)
       for (const result of level.recommendations) {
@@ -107,11 +141,9 @@ describe("sample CIS readiness report", () => {
         expect(result.title).toMatch(/^Sample recommendation: example setting /)
         for (const setting of result.settings) expect(setting.id).toMatch(/^sample_setting_s[12]_/)
       }
-      expect(level.manual.some(item => item.state === "Manual")).toBe(true)
-      expect(level.manual.some(item => item.state === "Not assessed")).toBe(true)
       for (const item of level.manual) {
-        // Pack recommendations that name a setting outside the pack are listed as not assessed too.
-        expect(item.identifier).toMatch(/^S[12]\.[MN]?\d+$/)
+        expect(item.state).toBe("Manual")
+        expect(item.identifier).toMatch(/^S[12]\.M\d+$/)
         if (item.title) expect(item.title).toMatch(/^Sample (manual )?recommendation: example /)
         for (const value of [item.description, item.impact, item.audit, item.remediation]) if (value) expect(value).toMatch(/^Placeholder /)
       }
@@ -150,6 +182,22 @@ describe("sample report request", () => {
     expect(saved[0]!.type).toBe("application/pdf")
     expect(Buffer.from(saved[0]!.data, "base64").subarray(0, 5).toString("latin1")).toBe("%PDF-")
     // Nothing is fetched: no delivery service, no Graph.
+    expect(fetch).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+
+  it("ignores every other field of the request: a tenant, a file name or a path changes nothing", async () => {
+    const fetch = vi.fn()
+    vi.stubGlobal("fetch", fetch)
+    const saved: ExportFile[] = []
+    setFrameworkExportSaver(async file => { saved.push(file); return { saved: true, path: `/tmp/${file.name}` } })
+    const body = { action: "cis-sample-pdf", save: "dialog", tenantId: "11111111-1111-1111-1111-111111111111", frameworkId: "cis-benchmarks", name: "../../other.pdf", path: "/etc/other.pdf", benchmark: "intune-windows11", version: "5.0.0", level: 2 }
+    expect(requiredFeatures("/api/frameworks", body)).toEqual([])
+    const outcome = await handleFramework(body)
+    expect(outcome).toEqual({ name: CIS_SAMPLE_FILE_NAME, saved: true, path: `/tmp/${CIS_SAMPLE_FILE_NAME}` })
+    expect(saved.map(file => file.name)).toEqual([CIS_SAMPLE_FILE_NAME])
+    // The same synthetic report as a request with only the action.
+    expect(saved[0]!.data).toBe(Buffer.from(generateCisSampleReportPDF()).toString("base64"))
     expect(fetch).not.toHaveBeenCalled()
     vi.unstubAllGlobals()
   })
