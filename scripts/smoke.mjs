@@ -1662,6 +1662,10 @@ await check("compliance scoring notice dismisses once on this machine", async ()
 })
 
 await check("paid roadmap screens explain their plan and the server refuses Community", async () => {
+  // The sidebar entries of paid screens stay links; a plan without any of their screens adds the plan badge.
+  for (const [hash, name] of [["#/portal/audit", "Audit Log"], ["#/portal/governance", "Governance"], ["#/portal/changes", "Changes"], ["#/portal/operations", "Operations"]]) {
+    assert(await evaluate(`(() => { const link = document.querySelector('nav[aria-label="Main navigation"] a[href="${hash}"]'); return !!link && [${JSON.stringify(name)}, ${JSON.stringify(name + "Pro")}].includes(link.textContent.trim()) })()`), `${name} sidebar entry is not a link to its screen`)
+  }
   for (const [hash, title] of [["#/portal/governance", "Governance"], ["#/portal/changes", "Changes"], ["#/portal/operations", "Operations"], ["#/portal/baselines", "baselines"]]) {
     await go(hash, title)
     await sleep(300)

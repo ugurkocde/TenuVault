@@ -1,5 +1,5 @@
 import type { LicenseStatus } from "../../shared/ipc"
-import type { Plan } from "../../shared/plans"
+import { allows, FEATURE_PLAN, type Feature, type Plan } from "../../shared/plans"
 import { tenantLicense, tenantPlan, useLicense } from "./license"
 
 /**
@@ -24,4 +24,16 @@ export function selectedTenantPlan(status: LicenseStatus | null, signedInTenantI
 export function useSelectedTenantPlan(signedInTenantId: string | undefined): Plan | null | undefined {
   const { status } = useLicense()
   return selectedTenantPlan(status, signedInTenantId)
+}
+
+/**
+ * The feature whose plan badge an entry for several paid features shows, or null for no badge.
+ * No badge while the plan is not known yet (undefined), or when the plan includes at least one of
+ * the features. Otherwise the feature of the lowest plan that includes any of them, so the badge
+ * names the cheapest way in. A plan that cannot be used (null) includes none of them.
+ */
+export function entryBadgeFeature(plan: Plan | null | undefined, features: readonly Feature[]): Feature | null {
+  if (plan === undefined || features.length === 0) return null
+  if (plan !== null && features.some((feature) => allows(plan, feature))) return null
+  return features.find((feature) => FEATURE_PLAN[feature] === "pro") ?? features[0]!
 }

@@ -9,7 +9,7 @@ import { storageLabel } from "~/lib/storage-label"
 import type { AppPreferences, BackupReaderState, BackupSettings } from "../../shared/ipc"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import { describeCloudSchedule, nextRunsInZone } from "../../shared/cloud-backup"
-import { COMMUNITY_RETENTION_DAYS } from "../../shared/plans"
+import { allows, COMMUNITY_RETENTION_DAYS } from "../../shared/plans"
 import { bridge } from "../lib/bridge"
 import { useCloudBackup } from "../lib/cloud-backup"
 import { tenantLicense, tenantPlan, useLicense } from "../lib/license"
@@ -174,7 +174,7 @@ function TenantSchedule({ tenantId, tenantName, tenant: tenantProp, onStorageCha
           >
             <Cloud className="mt-0.5 h-5 w-5 flex-shrink-0" aria-hidden="true" />
             <span>
-              <span className="block font-medium text-gray-900">In Azure, no computer needed</span>
+              <span className="flex items-center gap-2 font-medium text-gray-900">In Azure, no computer needed{plan !== null && !allows(plan, "azureStorage") && <PlanBadge feature="azureStorage" />}</span>
               <span className="block text-xs text-gray-500">
                 A runbook in your own Azure Automation account, with a read-only managed identity.
                 {cloud.config ? ` ${describeCloudSchedule(cloud.config)}.` : " Needs Pro or MSP and Azure storage."}

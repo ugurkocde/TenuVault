@@ -5,7 +5,7 @@ description: Every control on the Settings page, what it does and when to use it
 
 **Settings** holds sign-in, backup storage, encryption, background backups, notifications, PDF branding and updates for this computer. Open it from the bottom of the sidebar.
 
-Choose a section in the list on the left to open it: **Sign-in**, **Storage and recovery**, **Background runner**, **Notifications**, **PDF branding**, **Updates**, **Appearance** and **About**. One section shows at a time, starting with **Sign-in**. On a narrow window the list becomes a row above the section.
+Choose a section in the list on the left to open it: **Sign-in**, **Storage and recovery**, **Background runner**, **Notifications**, **PDF branding**, **Updates**, **Appearance** and **About**. One section shows at a time, starting with **Sign-in**. When no tenant on this computer is on Pro or MSP, **Notifications** and **PDF branding** carry a **Pro** badge in the list; both sections still open. On a narrow window the list becomes a row above the section.
 
 Settings apply to this computer only. Other admins who use TenuVault have their own settings.
 

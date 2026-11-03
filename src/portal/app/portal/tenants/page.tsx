@@ -41,7 +41,8 @@ import { nameAfterRefresh } from "~/lib/tenant-refresh"
 import { useSchedules, formatWhen } from "@desktop/lib/schedules"
 import { planName, tenantLicense, tenantPlan, useLicense } from "@desktop/lib/license"
 import { GatedButton } from "@desktop/components/PlanGate"
-import type { Plan } from "../../../../shared/plans"
+import { PlanBadge } from "@desktop/components/UpgradeNote"
+import { allows, type Plan } from "../../../../shared/plans"
 import { Badge } from "~/components/ui/badge"
 import { Checkbox } from "~/components/ui/checkbox"
 import {
@@ -783,7 +784,12 @@ function TenantsPageContent() {
                   )}
                 </>
               ) : (
-                <span className="text-gray-500">Select tenants to back up or tag several at once</span>
+                <span className="text-gray-500">
+                  Select tenants to back up or tag several at once
+                  {portfolioPlan !== null && !allows(portfolioPlan, "bulkActions") && (
+                    <span className="ml-2 inline-flex items-center gap-1.5 text-xs">Backing up several at once<PlanBadge feature="bulkActions" /></span>
+                  )}
+                </span>
               )}
             </span>
           </div>
@@ -1173,7 +1179,7 @@ function TenantsPageContent() {
                     <span className="flex items-center gap-2">
                       Drift
                       <GatedButton
-                        feature="crossTenant"
+                        feature="bulkActions"
                         plan={portfolioPlan}
                         size="sm"
                         variant="outline"

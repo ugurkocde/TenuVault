@@ -14,7 +14,7 @@ Open **Changes** in the sidebar, then choose a screen at the top of the page. Wi
 | Dev to Prod | No | Yes | Yes |
 | Baseline upgrades | No | Yes | Yes |
 
-On Pro, Dev to Prod runs between the two tenants of your license. On a plan that does not include a screen, the tab shows a plan badge and a locked preview that describes what the screen does, with **See plans**. Promotions and upgrades that were already created and stored on an earlier plan stay readable after a downgrade; only creating new ones needs the plan. See [Plans and features](/licensing/).
+On Pro, Dev to Prod runs between the two tenants of your license. When the selected tenant's plan includes none of these screens, the **Changes** entry in the sidebar shows a **Pro** badge. It still opens Changes. On a plan that does not include a screen, the tab shows a plan badge and a locked preview that describes what the screen does, with **See plans**. Promotions and upgrades that were already created and stored on an earlier plan stay readable after a downgrade; only creating new ones needs the plan. See [Plans and features](/licensing/).
 
 Every approval, rejection, apply and rollback from this hub is recorded in the [audit log](/audit-log/): approvals and rejections with the reviewer and decision note, applies and rollbacks as applied or rolled back change sets.
 

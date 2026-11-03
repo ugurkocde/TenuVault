@@ -3,6 +3,7 @@ import { Link, NavLink, useLocation } from "react-router-dom"
 import { ChevronDown, LoaderCircle, ShieldCheck } from "lucide-react"
 import { isCisBenchmarksPath, navigationFrameworks } from "../../shared/frameworks/cis-internal"
 import { useFrameworkJobs } from "../lib/framework-jobs"
+import { NavPlanBadge } from "./NavPlanBadge"
 
 /**
  * Frameworks opens the catalog overview and lists every framework by name beneath it.
@@ -27,7 +28,7 @@ export function FrameworkNavigation() {
       </button>
     </div>
     {open && <div id="framework-navigation" className="ml-6 mt-2 space-y-0.5 border-l border-gray-200 pl-2" aria-label="Framework list">
-      <NavLink to="/portal/baselines" className={({ isActive }) => `flex min-h-10 flex-col justify-center rounded-2xl px-3 py-2 text-sm font-medium leading-5 transition-colors ${isActive || pathname.startsWith("/portal/baselines/") ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}>My baselines</NavLink>
+      <NavLink to="/portal/baselines" className={({ isActive }) => `flex min-h-10 flex-col justify-center rounded-2xl px-3 py-2 text-sm font-medium leading-5 transition-colors ${isActive || pathname.startsWith("/portal/baselines/") ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}><span className="flex items-center gap-2">My baselines<NavPlanBadge features={["customBaselines"]} /></span></NavLink>
       {[...catalog.filter(f => !f.disabledReason), ...catalog.filter(f => f.disabledReason)].map(f => f.disabledReason
         ? <span key={f.id} aria-disabled="true" title={f.disabledReason} className="flex min-h-10 cursor-not-allowed flex-col justify-center rounded-2xl px-3 py-2 text-sm leading-5 text-muted-foreground opacity-70">{f.name}<span className="block text-xs">Coming soon</span></span>
         : <NavLink key={f.id} to={`/portal/frameworks/${f.id}`} className={({ isActive }) => `flex min-h-10 flex-col justify-center rounded-2xl px-3 py-2 text-sm leading-5 transition-colors ${isActive ? "bg-secondary font-medium text-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}>

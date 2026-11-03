@@ -39,7 +39,7 @@ import { bridge } from "@desktop/lib/bridge"
 import { planName, tenantLicense, tenantPlan, useLicense, formatDateTime } from "@desktop/lib/license"
 import { PlanBadge } from "@desktop/components/UpgradeNote"
 import type { Tenant } from "~/contexts/TenantContext"
-import type { Plan } from "../../../../shared/plans"
+import { allows, type Plan } from "../../../../shared/plans"
 import { describeSchedule, formatWhen, useSchedules } from "@desktop/lib/schedules"
 import type { SignedInAccount } from "../../../../shared/ipc"
 
@@ -117,6 +117,23 @@ function TileSkeleton({ className }: { className?: string }) {
  * Newest baseline score of the tenant, linking to the gated scores screen. Community sees a
  * badged teaser and no score: the score is a paid projection and is not computed for it.
  */
+/** Opens the audit log. It always navigates; a known plan without the audit log shows its plan badge, and the page explains the plan. */
+export function ViewAllActivityButton({ plan }: { plan: Plan | null }) {
+  const router = useRouter()
+  return (
+    <Button
+      variant="default"
+      size="sm"
+      onClick={() => router.push("/portal/audit")}
+      className="bg-blue-600 hover:bg-blue-700 text-white"
+    >
+      <ArrowUpRight className="h-4 w-4" />
+      View All Activity
+      {plan !== null && !allows(plan, "auditLog") && <PlanBadge feature="auditLog" />}
+    </Button>
+  )
+}
+
 export function BaselineScoreTile({ tenant, plan }: { tenant: Tenant; plan: Plan | null }) {
   const router = useRouter()
   const score = useBaselineScore(tenant, plan)
@@ -615,15 +632,7 @@ function DashboardContent() {
         <Tile className="md:col-span-2 xl:col-span-2" aria-label="Recent Activity">
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-xl font-light tracking-tight text-gray-900">Recent Activity</h2>
-            <Button
-              variant="default"
-              size="sm"
-              onClick={() => router.push("/portal/audit")}
-              className="bg-blue-600 hover:bg-blue-700 text-white"
-            >
-              <ArrowUpRight className="h-4 w-4" />
-              View All Activity
-            </Button>
+            <ViewAllActivityButton plan={plan} />
           </div>
           <div className="mt-4 flex flex-1 flex-col">
             {statsLoading ? (

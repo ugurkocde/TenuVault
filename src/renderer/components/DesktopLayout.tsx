@@ -40,6 +40,7 @@ import { WhatsNewAnnouncement, WhatsNewDialog } from "./WhatsNewDialog"
 import { useWhatsNew } from "../lib/whats-new"
 import { TenantAccessNotice } from "./TenantAccessNotice"
 import { CisBenchmarksNavigation } from "./CisBenchmarksNavigation"
+import { NAV_PLAN_FEATURES, NavPlanBadge } from "./NavPlanBadge"
 import { FrameworkNavigation } from "./FrameworkNavigation"
 import { OibJobIndicator } from "./oib/JobIndicator"
 
@@ -253,6 +254,7 @@ export function DesktopLayout() {
         )}
         <span className="truncate">{item.name}</span>
         {item.href === "/portal/drift" && <DriftScanIndicator />}
+        {NAV_PLAN_FEATURES[item.href!] && <NavPlanBadge features={NAV_PLAN_FEATURES[item.href!]!} className="ml-auto" />}
       </Link>
     )
   }

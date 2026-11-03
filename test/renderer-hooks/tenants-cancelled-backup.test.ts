@@ -26,6 +26,7 @@ vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams()
 vi.mock("@desktop/lib/schedules", () => ({ useSchedules: () => ({ schedules: [], error: null, loading: false, reload: () => undefined }), formatWhen: () => "" }))
 vi.mock("@desktop/lib/license", () => ({ useLicense: () => ({ status: null }), tenantLicense: () => null, tenantPlan: () => null, planName: () => "Community" }))
 vi.mock("@desktop/components/PlanGate", () => ({ GatedButton: () => null }))
+vi.mock("@desktop/components/UpgradeNote", () => ({ PlanBadge: () => null }))
 // Choosing what to back up starts the job at once.
 vi.mock("@desktop/components/RunBackupDialog", () => ({
   RunBackupDialog: ({ open, onStarted }: { open: boolean; onStarted: (jobId: string) => void }) => open ? createElement("button", { type: "button", onClick: () => onStarted("job-1") }, "Start chosen backup") : null,

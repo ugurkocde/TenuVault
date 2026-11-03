@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { selectedTenantPlan } from "../src/renderer/lib/selected-plan"
+import { entryBadgeFeature, selectedTenantPlan } from "../src/renderer/lib/selected-plan"
 import type { LicenseStatus, TenantLicenseStatus } from "../src/shared/ipc"
 
 vi.mock("../src/renderer/lib/bridge", () => ({ bridge: {} }))
@@ -35,5 +35,26 @@ describe("selectedTenantPlan", () => {
   it("falls back to the machine plan with no signed-in tenant", () => {
     expect(selectedTenantPlan(status("msp", []), undefined)).toBe("msp")
     expect(selectedTenantPlan(status(null, []), undefined)).toBeNull()
+  })
+})
+
+describe("entryBadgeFeature", () => {
+  it("shows no badge while the plan is not known", () => {
+    expect(entryBadgeFeature(undefined, ["auditLog"])).toBeNull()
+  })
+
+  it("names the lowest plan among the features when the plan includes none of them", () => {
+    expect(entryBadgeFeature("community", ["goldenStandards", "baselineScores"])).toBe("baselineScores")
+    expect(entryBadgeFeature("community", ["bulkActions", "portfolio"])).toBe("bulkActions")
+    expect(entryBadgeFeature("pro", ["goldenStandards", "portfolio"])).toBe("goldenStandards")
+  })
+
+  it("shows no badge when the plan includes at least one of the features", () => {
+    expect(entryBadgeFeature("pro", ["goldenStandards", "baselineScores"])).toBeNull()
+    expect(entryBadgeFeature("msp", ["goldenStandards"])).toBeNull()
+  })
+
+  it("marks an entry for a tenant whose plan cannot be used", () => {
+    expect(entryBadgeFeature(null, ["customBaselines"])).toBe("customBaselines")
   })
 })
