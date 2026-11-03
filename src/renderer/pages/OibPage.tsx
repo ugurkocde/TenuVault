@@ -5,6 +5,7 @@ import { useSelectedTenant } from "~/contexts/TenantContext"
 import { OIB_PLATFORMS, OIB_REPO, type OibPlatform, type OibSelection, type OibVersions } from "../../shared/oib/types"
 import { defaultSelection, platformStatus, selectionLabel } from "../../shared/oib/versions"
 import { GatedButton } from "../components/PlanGate"
+import { NavPlanBadge } from "../components/NavPlanBadge"
 import { customizeOib } from "../features/custom-baselines/api"
 import { RunsList } from "../components/oib/DeployPanel"
 import { ExistingDeployment } from "../components/oib/ExistingDeployment"
@@ -130,7 +131,7 @@ function TenantJobs({ tenantId }: { tenantId: string }) {
 }
 
 /** Customize an editable baseline from the version selected for a platform (Pro and MSP). */
-function CustomizeCard({ selections, versions }: { selections: Selections | null; versions: OibVersions | null }) {
+export function CustomizeCard({ selections, versions }: { selections: Selections | null; versions: OibVersions | null }) {
   const { selectedTenant } = useSelectedTenant()
   const { plan } = useOibTenant()
   const navigate = useNavigate()
@@ -154,7 +155,7 @@ function CustomizeCard({ selections, versions }: { selections: Selections | null
         const { baseline } = await customizeOib(selectedTenant!, platform, selection!.commit, undefined, selection!.tag)
         navigate(`/portal/baselines/${baseline.id}`)
       })}>Customize</GatedButton>
-      <Link to="/portal/baselines" className={button}>My baselines</Link>
+      <Link to="/portal/baselines" className={button}>My baselines<NavPlanBadge features={["customBaselines"]} /></Link>
     </div>
     <Status busy={task.busy} error={task.error} />
   </section>

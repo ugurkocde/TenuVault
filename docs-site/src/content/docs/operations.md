@@ -14,7 +14,7 @@ Open **Operations** in the sidebar. Without a connected tenant the page says "Co
 | Health review | No | Yes | Yes |
 | Customer triage across tenants | No | No | Yes |
 
-On a plan that does not include the health review, the screen shows a locked preview that describes what it does, with **See plans**, and any stored review results stay readable read only. See [Plans and features](/licensing/).
+On a plan that does not include the health review, the **Operations** entry in the sidebar shows a **Pro** badge and still opens the screen, and the screen shows a locked preview that describes what it does, with **See plans**, and any stored review results stay readable read only. See [Plans and features](/licensing/).
 
 ## What a review checks
 

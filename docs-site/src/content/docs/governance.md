@@ -20,7 +20,7 @@ The **Overview** is the landing screen. It reads only what the other Governance 
 | Accepted deviations and Customizations | No | Yes | Yes |
 | Golden standards, adoption and portfolio | No | No | Yes |
 
-On a plan that does not include a screen, the tab shows a plan badge and a locked preview that describes what the screen does, with **See plans**. Records that were already created and stored on an earlier plan stay readable after a downgrade; only creating new records needs the plan. Baseline scores are the exception: scores are computed on request and never stored, so after a downgrade there is no stored score to read and the tab shows only its locked preview. See [Plans and features](/licensing/).
+When the selected tenant's plan includes none of the Governance screens, the **Governance** entry in the sidebar shows a **Pro** badge. It still opens Governance. On a plan that does not include a screen, the tab shows a plan badge and a locked preview that describes what the screen does, with **See plans**. Records that were already created and stored on an earlier plan stay readable after a downgrade; only creating new records needs the plan. Baseline scores are the exception: scores are computed on request and never stored, so after a downgrade there is no stored score to read and the tab shows only its locked preview. See [Plans and features](/licensing/).
 
 ## Baseline scores
 

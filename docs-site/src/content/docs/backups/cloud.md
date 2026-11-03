@@ -56,7 +56,7 @@ You need: the tenant on Pro or MSP with backups in your Azure storage account (S
 ### In the app: choose the time, hand off, paste the result
 
 1. Open **Backup & Restore**, then **Schedule**. In step 1 confirm the tenant's backups go to your Azure storage account.
-2. In step 3 choose **In Azure, no computer needed**. Pick the frequency, day and time. The calendar shows the coming runs. What is backed up follows step 2.
+2. In step 3 choose **In Azure, no computer needed** (marked **Pro** on Community, where it explains what it needs). Pick the frequency, day and time. The calendar shows the coming runs. What is backed up follows step 2.
 3. Create the resources with **Deploy to Azure** or with the copied setup command and scripts. Add `-AlertEmail you@contoso.com` to the command (or `-NoFailureAlert`), and paste the recovery key when the script asks.
 4. Paste the block printed at the end of setup (or the template's `pasteIntoTenuVault` output) into the app. The Schedule tab then shows the Azure schedule, its next runs, and how the last cloud backup ended.
 

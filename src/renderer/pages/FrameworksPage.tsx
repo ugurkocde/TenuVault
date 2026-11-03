@@ -485,7 +485,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   const plan = useTenantPlan(credentials?.tenantId)
   // The plan the page explains, shared with the sidebar entry: the signed-in tenant's own plan, or the
   // machine plan when no signed-in tenant is selected; undefined while it is not known yet.
-  const selectedPlan = useSelectedTenantPlan(credentials?.tenantId)
+  const selectedPlan = useSelectedTenantPlan()
   // CIS work (catalog, pack loads, runs) starts only once the signed-in tenant's plan is known to include
   // CIS Benchmarks, so an unresolved plan sends nothing the main process would refuse, and a later plan
   // change is followed.

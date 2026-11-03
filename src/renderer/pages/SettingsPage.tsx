@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { storageLabel } from "~/lib/storage-label"
 import type { AppInfo, AppPreferences, SignedInAccount, UpdateStatus } from "../../shared/ipc"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
-import { allows, COMMUNITY_RETENTION_DAYS, effectiveRetentionDays } from "../../shared/plans"
+import { allows, COMMUNITY_RETENTION_DAYS, effectiveRetentionDays, type Feature } from "../../shared/plans"
 import { isGuid } from "../../shared/security"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
 import { StorageChooser, type StorageChooserDraft } from "../components/StorageChooser"
@@ -23,6 +23,7 @@ import { localTenantIds, useBackupSettings, useLocalInventoryProblems } from "..
 import { storageResources, type StorageChoice } from "../lib/storage"
 import { toast } from "../lib/toast"
 import { tenantPlan, useLicense } from "../lib/license"
+import { anyTenantIncludes } from "../lib/selected-plan"
 import { parseSettingsSection, settingsHref, type SettingsSectionId } from "../lib/settings-section"
 import { PlanBadge } from "../components/UpgradeNote"
 import { PdfBrandingSettings } from "../components/PdfBrandingSettings"
@@ -795,16 +796,47 @@ function AppearanceSettings() {
   )
 }
 
-const SECTIONS: { id: SettingsSectionId; title: string; icon: typeof KeyRound }[] = [
+const SECTIONS: { id: SettingsSectionId; title: string; icon: typeof KeyRound; feature?: Feature }[] = [
   { id: "signin", title: "Sign-in", icon: KeyRound },
   { id: "storage", title: "Storage and recovery", icon: HardDrive },
   { id: "background", title: "Background runner", icon: MonitorCog },
-  { id: "notifications", title: "Notifications", icon: Bell },
-  { id: "branding", title: "PDF branding", icon: Palette },
+  { id: "notifications", title: "Notifications", icon: Bell, feature: "notifications" },
+  { id: "branding", title: "PDF branding", icon: Palette, feature: "pdfBranding" },
   { id: "updates", title: "Updates", icon: Download },
   { id: "appearance", title: "Appearance", icon: SunMoon },
   { id: "about", title: "About", icon: Info },
 ]
+
+/**
+ * The list of settings sections. A section for a paid feature shows its plan badge once it is known
+ * that no tenant on this computer has a plan that includes it, the rule the PDF branding section
+ * uses. No badge while the license status loads or does not list a signed-in tenant as signed in
+ * yet (`anyTenantIncludes`). The section stays open on every plan.
+ */
+export function SettingsSectionNav({ section }: { section: SettingsSectionId }) {
+  const { status, signedInTenantIds } = useLicense()
+  return (
+    <nav aria-label="Settings sections" className="flex gap-1 overflow-x-auto p-1 xl:sticky xl:top-8 xl:w-56 xl:shrink-0 xl:flex-col xl:overflow-visible xl:p-0">
+      {SECTIONS.map(({ id, title, icon: Icon, feature }) => (
+        <Link
+          key={id}
+          to={settingsHref(id)}
+          aria-current={section === id ? "page" : undefined}
+          className={cn(
+            "flex min-h-10 shrink-0 items-center gap-3 rounded-full px-4 py-2.5 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring",
+            section === id
+              ? "bg-primary text-primary-foreground"
+              : "text-gray-600 hover:bg-secondary hover:text-foreground dark:text-gray-400",
+          )}
+        >
+          <Icon className="h-[18px] w-[18px]" />
+          <span className="truncate">{title}</span>
+          {feature && anyTenantIncludes(status, signedInTenantIds, feature) === false && <PlanBadge feature={feature} className="ml-auto" />}
+        </Link>
+      ))}
+    </nav>
+  )
+}
 
 export default function SettingsPage() {
   const [searchParams] = useSearchParams()
@@ -873,24 +905,7 @@ export default function SettingsPage() {
         <p className="mt-2 text-lg text-gray-500">Sign-in, backup storage, encryption, background backups, notifications, PDF branding and updates.</p>
       </div>
       <div className="mt-4 flex flex-col gap-6 xl:flex-row xl:items-start">
-        <nav aria-label="Settings sections" className="flex gap-1 overflow-x-auto p-1 xl:sticky xl:top-8 xl:w-56 xl:shrink-0 xl:flex-col xl:overflow-visible xl:p-0">
-          {SECTIONS.map(({ id, title, icon: Icon }) => (
-            <Link
-              key={id}
-              to={settingsHref(id)}
-              aria-current={section === id ? "page" : undefined}
-              className={cn(
-                "flex min-h-10 shrink-0 items-center gap-3 rounded-full px-4 py-2.5 text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring",
-                section === id
-                  ? "bg-primary text-primary-foreground"
-                  : "text-gray-600 hover:bg-secondary hover:text-foreground dark:text-gray-400",
-              )}
-            >
-              <Icon className="h-[18px] w-[18px]" />
-              <span className="truncate">{title}</span>
-            </Link>
-          ))}
-        </nav>
+        <SettingsSectionNav section={section} />
         <div className="min-w-0 w-full max-w-5xl flex-1">
           {panel("signin", <TenantSettings active={section === "signin"} />)}
           {panel("storage", <div className="space-y-6"><BackupsOnDevice /><RestoreWrites active={section === "storage"} /></div>)}

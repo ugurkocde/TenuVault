@@ -1,10 +1,7 @@
 import { Link, useLocation } from "react-router-dom"
 import { ListChecks } from "lucide-react"
 import { CIS_BENCHMARKS_ROUTE, isCisBenchmarksPath } from "../../shared/frameworks/cis-internal"
-import { allows } from "../../shared/plans"
-import { useSelectedTenantPlan } from "../lib/selected-plan"
-import { useSelectedTenant } from "~/contexts/TenantContext"
-import { PlanBadge } from "./UpgradeNote"
+import { NavPlanBadge } from "./NavPlanBadge"
 
 /**
  * Top-level CIS Benchmarks entry. It always opens the CIS page; the page shows a plan without CIS
@@ -13,21 +10,17 @@ import { PlanBadge } from "./UpgradeNote"
  * Benchmarks (Pro or MSP) see the plan badge next to the entry. When no signed-in tenant is
  * selected it falls back to the machine plan. Until the plan is known, while the license status
  * loads or before it lists the selected tenant, no badge shows, so an entitled tenant never
- * flashes it. It resolves the plan with `selectedTenantPlan`, the same helper the CIS page uses. The
- * page and the main process check the plan.
+ * flashes it. It resolves the plan with `selectedTenantPlan`, the same helper the CIS page and the
+ * other sidebar badges use. The page and the main process check the plan.
  */
 export function CisBenchmarksNavigation({ linkClass }: { linkClass: (active: boolean) => string }) {
   const { pathname } = useLocation()
-  const { selectedTenant } = useSelectedTenant()
-  // The same plan the CIS page explains; undefined while it is not known yet.
-  const plan = useSelectedTenantPlan(selectedTenant?.credentials?.tenantId)
-  const badge = plan !== undefined && (plan === null || !allows(plan, "baselineAllPlatforms"))
   const active = isCisBenchmarksPath(pathname)
   return (
     <Link to={CIS_BENCHMARKS_ROUTE} aria-current={active ? "page" : undefined} className={linkClass(active)}>
       <ListChecks className="h-[18px] w-[18px]" aria-hidden="true" />
       <span className="truncate">CIS Benchmarks</span>
-      {badge && <PlanBadge feature="baselineAllPlatforms" className="ml-auto" />}
+      <NavPlanBadge features={["baselineAllPlatforms"]} className="ml-auto" />
     </Link>
   )
 }

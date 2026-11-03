@@ -32,6 +32,7 @@ import { mergeOutcomes, retryBatches } from "~/lib/policies/restore-retry"
 import { FeatureApiError } from "@desktop/lib/feature-api"
 import { showFeaturePlanError } from "@desktop/lib/plan-dialog"
 import { PlanBadge, UpgradeNote } from "@desktop/components/UpgradeNote"
+import { GatedButton } from "@desktop/components/PlanGate"
 import { formatDate, formatSize, statusKind, statusLabel, type BackupSummary, type BackupTenant } from "./types"
 
 interface CopyTarget {
@@ -689,7 +690,12 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                 <span className="text-gray-600">
                   {selected.size} of {items.length} selected
                 </span>
-                {!community && (
+                {community ? (
+                  // Community picks one item; selecting several stays visible and explains its plan.
+                  <GatedButton feature="fullRestore" plan="community" variant="outline" size="sm">
+                    Select all{query ? " shown" : ""}
+                  </GatedButton>
+                ) : (
                   <span className="flex gap-2">
                     <Button variant="outline" size="sm" onClick={() => toggleItems(visible.filter((item) => !selectionBlocker(item)).map((item) => item.path), true)}>
                       Select all{query ? " shown" : ""}
