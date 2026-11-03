@@ -318,6 +318,8 @@ describe("LicenseService key expiry", () => {
     storeLicense(valid)
     expect(service().entitlementToken(TENANT)).toBe(valid)
     expect(service({ tenantPresent: () => false }).entitlementToken(TENANT)).toBeNull()
+    expect(service().plan(TENANT)).not.toBeNull()
+    expect(service({ tenantPresent: () => false }).plan(TENANT)).toBeNull()
     storeLicense(token({ exp: Math.floor(T0 / 1000) - 1 }))
     expect(service().entitlementToken(TENANT)).toBeNull()
   })
@@ -330,6 +332,8 @@ describe("LicenseService key expiry", () => {
     // A fresh service over the same store simulates an app restart.
     expect(service().entitlementToken(TENANT)).toBeNull()
     expect(service().cisInternal()).toBe(false)
+    // The plan follows the same rule, so plan-gated work (CIS Benchmarks among it) ends with the tenant.
+    expect(service().plan(TENANT)).toBeNull()
   })
 
   it("rejects a token whose CIS claim has an unknown value", () => {

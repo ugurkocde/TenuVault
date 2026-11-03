@@ -457,3 +457,34 @@ describe("/api/baseline-upgrades", () => {
     expect((await call(readOnly, PATH, { tenantId: TENANT_A, action: "compare", installId: installed.id, commit: NEW })).status).toBe(402)
   })
 })
+
+describe("/api/baseline-upgrades and CIS workspaces", () => {
+  it.each(["cis-benchmarks", "cis-controls"])("never records or upgrades a %s workspace as a baseline", async (frameworkId) => {
+    const context = setup()
+    let read = 0
+    const synthetic = policy("Synthetic CIS policy", [setting("a", "a_1")])
+    const sources: BaselineSources = { runs: () => [], releases: async () => ({ releases: [] }), pack: async () => { throw new Error("not listed") }, workspace: () => { read++; return { policies: [synthetic as never], reference: "Synthetic benchmark 1.0", creations: [] } } }
+    const api = routes(context.deps, sources)
+    const post = (body: Record<string, unknown>) => call(api, PATH, { tenantId: TENANT_A, ...body })
+    const recorded = await post({ action: "record-install", origin: "workspace", frameworkId, mappings: [] })
+    expect(recorded.status).toBe(403)
+    expect(recorded.body.error).toMatch(/CIS workspaces cannot be tracked or upgraded as baselines/)
+    expect(read).toBe(0)
+    expect(context.deps.records.list(DOMAINS.baselineInstalls, TENANT_A)).toEqual([])
+    // An install recorded by an earlier build cannot be compared, checked or turned into a change set.
+    const legacy = context.deps.records.create(DOMAINS.baselineInstalls, TENANT_A, { kind: "install", title: "Synthetic benchmark 1.0", status: "tracked", summary: "", origin: { type: "workspace", frameworkId }, platform: null, commit: null, reference: "Synthetic benchmark 1.0", sourceId: "source", policies: [], customizationVersion: 1, customizationHash: null, latestKnownRelease: null, lastUpgradeId: null }, { actor: null, reason: "seeded" })
+    expect((await post({ action: "compare", installId: legacy.id })).status).toBe(403)
+    expect((await post({ action: "releases", installId: legacy.id })).status).toBe(403)
+    expect(context.deps.records.list(DOMAINS.baselineUpgrades, TENANT_A)).toEqual([])
+    expect(context.tenant.writeCount()).toBe(0)
+  })
+
+  it("still records other framework workspaces", async () => {
+    const context = setup()
+    const synthetic = policy("Synthetic framework policy", [setting("a", "a_1")])
+    const sources: BaselineSources = { runs: () => [], releases: async () => ({ releases: [] }), pack: async () => { throw new Error("not listed") }, workspace: () => ({ policies: [synthetic as never], reference: "Synthetic framework 1.0", creations: [] }) }
+    const recorded = await call(routes(context.deps, sources), PATH, { tenantId: TENANT_A, action: "record-install", origin: "workspace", frameworkId: "synthetic-framework", mappings: [] })
+    expect(recorded.status).toBe(200)
+    expect(recorded.body.install.origin).toEqual({ type: "workspace", frameworkId: "synthetic-framework" })
+  })
+})

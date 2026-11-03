@@ -13,10 +13,12 @@ inventory of policy/root-setting mappings, supported families, unsupported areas
 and manual evidence requirements. These are configuration mappings, not a claimed
 CIS/NIST/STIG control crosswalk. Imported source declarations are not signatures.
 
-CIS, NIST, STIG, BSI, Essential Eight and Microsoft catalog entries do not ship
+NIST, STIG, BSI, Essential Eight and Microsoft catalog entries do not ship
 complete automated control mappings. Administrators supply their reviewed,
-appropriately licensed content and identify its version and profile. No restricted
-benchmark text or build kit is distributed. Additional mappings need their own
+appropriately licensed content and identify its version and profile. CIS Benchmarks
+packs are delivered at runtime to licensed installations (see
+[frameworks](frameworks.md#cis-benchmarks)). No restricted benchmark text or build kit
+is distributed in the repository or the installer. Additional mappings need their own
 source and content-rights review before inclusion.
 
 Compliance policies, update rings, legacy baseline templates, application deployment,

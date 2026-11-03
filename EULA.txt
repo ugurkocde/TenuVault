@@ -1,6 +1,6 @@
 TENUVAULT DESKTOP END USER LICENSE AGREEMENT
 
-Version 1.0, 1 October 2026
+Version 1.1, 3 November 2026
 
 Ugurlabs UG (haftungsbeschraenkt), Duesseldorf, Germany ("Ugurlabs", "we", "us")
 
@@ -102,6 +102,14 @@ trademarks. All rights not expressly granted are reserved.
     OpenIntuneBaseline and framework control mappings. That content is
     provided by its authors under its own license. We do not author or
     control it and provide it without warranty.
+
+5.3 CIS Benchmark content is delivered at runtime to licensed installations
+    under Ugurlabs' CIS SecureSuite Product Vendor membership. It is
+    licensed to you for use within TenuVault only. You may not redistribute
+    or sublicense CIS content, or extract it from TenuVault for use outside
+    it. Assessment and remediation results are not a certification of your
+    systems' compliance with a CIS Benchmark. CIS, CIS Benchmarks and CIS
+    Controls are trademarks of the Center for Internet Security, Inc.
 
 
 6. YOUR RESPONSIBILITIES

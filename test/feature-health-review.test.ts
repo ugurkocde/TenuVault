@@ -514,9 +514,21 @@ describe("health review CIS signals", () => {
   beforeEach(() => {
     const data = new Map<string, string>()
     setFrameworkStore({ get: (key) => data.get(key) ?? null, set: (key, value) => { data.set(key, value) }, delete: (key) => { data.delete(key) } })
-    setInternalCisBenchmarksEnabled(true)
+    // CIS signals follow the plan, never the internal claim.
+    setInternalCisBenchmarksEnabled(false)
   })
   afterEach(() => { setInternalCisBenchmarksEnabled(null) })
+
+  it("reads CIS signals only for plans that include CIS Benchmarks", async () => {
+    seedCisWorkspace([
+      cisHistoryEntry("run-2", "2026-02-01T00:00:00.000Z", ["Missing", "Missing", "Missing"]),
+      cisHistoryEntry("run-1", "2026-01-01T00:00:00.000Z", ["Present", "Present", "Present"]),
+    ])
+    const community = await collectSignals(world({ plans: { [TENANT_A]: "community" } }).deps, TENANT_A)
+    expect(community.signals.some((signal) => signal.key.startsWith("cis-readiness:"))).toBe(false)
+    const msp = await collectSignals(world({ plans: { [TENANT_A]: "msp" } }).deps, TENANT_A)
+    expect(msp.signals.some((signal) => signal.key === "cis-readiness:1:fakebook-os:9-9-9")).toBe(true)
+  })
 
   it("creates a CIS finding on drift and resolves it when a newer assessment recovers", async () => {
     const w = world({ plans: { [TENANT_A]: "pro" } })

@@ -1,7 +1,6 @@
 import { formatRate, headlineLabel } from "../../shared/frameworks/cis-readiness"
 import { cisDriftSignals, cisReadinessTrend } from "../../shared/frameworks/cis-trend"
 import type { WorkSignal } from "../features/contracts"
-import { internalCisBenchmarksEnabled } from "./service"
 import { loadWorkspace } from "./workspaces"
 
 function slug(value: string): string {
@@ -11,15 +10,14 @@ function slug(value: string): string {
 
 /**
  * CIS readiness drift for one tenant, derived from the saved cis-benchmarks
- * workspace. Returns no signals when the internal CIS flag is off or when
- * there is no saved history. Throws when the workspace cannot be read, so
+ * workspace. Returns no signals when there is no saved history; the health
+ * review runs it only for plans that include CIS Benchmarks. Throws when the workspace cannot be read, so
  * the health review marks the signals family as not evaluated instead of
  * reading missing drift as healthy. Drift follows the trend: a run is only
  * compared with the previous run of the same benchmark, version, Level and
  * pack, on the raw headline rate without exclusions.
  */
 export function cisSignals(tenantId: string): WorkSignal[] {
-  if (!internalCisBenchmarksEnabled()) return []
   const tenant = tenantId.toLowerCase()
   const workspace = loadWorkspace(tenant, "cis-benchmarks")
   if (!workspace.history.length) return []

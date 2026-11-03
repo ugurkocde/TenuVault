@@ -15,7 +15,8 @@ const select = "h-10 rounded-full border border-gray-200 bg-white px-3 text-sm d
 const STATUS_TONE: Record<string, "neutral" | "coral" | "success" | "warning" | "danger"> = { Present: "success", Missing: "warning", Different: "danger", Review: "neutral", matches: "success", different: "danger", missing: "warning" }
 
 /** Pack and native framework options; CIS stays under its own gate and is not offered while disabled. */
-const packFrameworks = frameworks.filter((entry) => !entry.nativeId && !entry.disabledReason && entry.id !== "ncsc-dsg")
+// CIS Benchmarks packs are compared on the CIS Benchmarks page only.
+const packFrameworks = frameworks.filter((entry) => !entry.nativeId && !entry.disabledReason && entry.id !== "ncsc-dsg" && entry.id !== "cis-benchmarks")
 const nativeFrameworks = frameworks.filter((entry) => entry.nativeId && !entry.disabledReason)
 
 /**

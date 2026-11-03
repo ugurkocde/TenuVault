@@ -747,7 +747,8 @@ export type FrameworkTarget =
  * (OIB at any listed release, NCSC, workspace packs) run the existing pack assessment with the
  * baseline's policies as the policy set; native frameworks run the native engine on evidence
  * built from the baseline, where everything a baseline cannot provide stays unknown.
- * CIS content keeps its own paid gate and is not offered while it is disabled.
+ * CIS content keeps its own paid gate. CIS Benchmarks packs are compared with the tenant on
+ * the CIS Benchmarks page only, so they are not offered here.
  */
 export async function compareWithFramework(deps: FeatureDeps, sources: CustomBaselineSources, context: { tenantId: string; plan: Plan }, input: { baselineId: string; version: number | null; target: FrameworkTarget }, actor: Actor): Promise<Stored<ComparisonRecord>> {
   const { tenantId } = context
@@ -760,6 +761,7 @@ export async function compareWithFramework(deps: FeatureDeps, sources: CustomBas
   const framework = target.kind === "oib" ? OIB_FRAMEWORK : frameworks.find((entry) => entry.id === frameworkId)
   if (!framework) throw new FeatureError("Unknown framework.")
   if (framework.disabledReason) throw new FeatureError(framework.disabledReason, 403)
+  if (framework.id === "cis-benchmarks") throw new FeatureError("CIS Benchmarks packs are compared on the CIS Benchmarks page.", 403)
   if (CIS_FRAMEWORKS.has(framework.id) && !allows(context.plan, "baselineAllPlatforms")) throw new PlanRequired("baselineAllPlatforms")
   const title = `${baseline.name} v${version.version} and ${framework.name}`
 

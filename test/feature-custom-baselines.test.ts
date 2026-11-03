@@ -384,6 +384,19 @@ describe("/api/custom-baselines", () => {
     expect((await context.post({ action: "snapshots" })).body.snapshots[0].usable).toBe(true)
   })
 
+  it("refuses a comparison with the CIS Benchmarks workspace pack on Pro and MSP, and CIS Controls as Coming soon", async () => {
+    for (const plan of ["pro", "msp"] as const) {
+      const context = setup({ [TENANT_A]: plan, [TENANT_B]: plan })
+      const baseline = await customize(context)
+      const cis = await context.post({ action: "compare-framework", id: baseline.id, framework: { kind: "workspace", frameworkId: "cis-benchmarks" } })
+      expect(cis).toMatchObject({ status: 403, body: { error: "CIS Benchmarks packs are compared on the CIS Benchmarks page." } })
+      const controls = await context.post({ action: "compare-framework", id: baseline.id, framework: { kind: "workspace", frameworkId: "cis-controls" } })
+      expect(controls).toMatchObject({ status: 403, body: { error: "CIS comparisons are coming soon." } })
+      expect((await context.post({ action: "list" })).body.comparisons).toHaveLength(0)
+      expect(context.tenantA.calls).toHaveLength(0)
+    }
+  })
+
   it("compares a baseline with pack frameworks using the baseline as the policy set", async () => {
     const context = setup()
     const baseline = await customize(context)

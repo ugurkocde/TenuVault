@@ -113,11 +113,14 @@ export function planGuard(planOf: (tenantId: string) => Promise<Plan | null>) {
     if (!isGuid(body.tenantId) || !namedTargets.every(isGuid)) {
       return Response.json({ error: "tenantId must be a tenant ID" }, { status: 400 })
     }
+    // A new CIS assessment reads the tenant against licensed content, so it needs a current plan
+    // here and is never left to the request; saved results stay readable and exportable.
+    const newCisAssessment = pathname === "/api/frameworks" && (body.action === "assess" || body.action === "assess-start") && typeof body.frameworkId === "string" && CIS_FRAMEWORKS.has(body.frameworkId)
     for (const tenantId of [body.tenantId, ...targets]) {
       const plan = await planOf(tenantId)
       // Single tenant calls leave an unusable tenant to the request itself. A bulk run must be
       // refused as a whole before any work starts, so an unusable tenant refuses it here.
-      if (tenantId === body.tenantId && !plan && !((pathname === "/api/backup/start" || pathname === "/api/detect-drifts") && isBulk(body))) return null
+      if (tenantId === body.tenantId && !plan && !newCisAssessment && !((pathname === "/api/backup/start" || pathname === "/api/detect-drifts") && isBulk(body))) return null
       const missing = features.find((feature) => !plan || !allows(plan, feature))
       if (missing) return Response.json({ error: upgradeMessage(missing), upgrade: missing }, { status: 402 })
     }

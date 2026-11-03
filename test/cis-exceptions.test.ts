@@ -292,15 +292,13 @@ describe("CIS exception service actions", () => {
     expect(loadWorkspace(tenantId, "cis-benchmarks").exceptions ?? []).toEqual([])
   })
 
-  it("refuses exception actions for other frameworks and when the flag is off", async () => {
-    setInternalCisBenchmarksEnabled(true)
+  it("refuses exception actions for other frameworks and for CIS Controls", async () => {
     memoryStore()
     await expect(handleFramework({ action: "workspace-cis-exception-add", tenantId, frameworkId: "custom", benchmark: "b", version: "1", level: 1, policyName: "P", settingId: "fakebook_1", owner: "Ada", reason: "r", expiresOn: futureDate() }))
       .rejects.toMatchObject({ status: 400 })
-    setInternalCisBenchmarksEnabled(false)
     const fetch = vi.fn()
     vi.stubGlobal("fetch", fetch)
-    await expect(handleFramework({ action: "workspace-cis-exception-add", tenantId, frameworkId: "cis-benchmarks", benchmark: "fakebook-os", version: "9.9.9", level: 1, policyName: "P", settingId: "fakebook_1", owner: "Ada", reason: "r", expiresOn: futureDate() }))
+    await expect(handleFramework({ action: "workspace-cis-exception-add", tenantId, frameworkId: "cis-controls", benchmark: "fakebook-os", version: "9.9.9", level: 1, policyName: "P", settingId: "fakebook_1", owner: "Ada", reason: "r", expiresOn: futureDate() }))
       .rejects.toMatchObject({ status: 403 })
     expect(fetch).not.toHaveBeenCalled()
   })

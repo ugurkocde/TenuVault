@@ -120,26 +120,6 @@ describe("Graph reads during a CIS assessment", () => {
     expect(calls.filter(url => url === GRAPH)).toHaveLength(3)
   })
 
-  it("checks access again before each retry and stops when it was revoked during the wait", async () => {
-    const calls = tenantFetch(url => {
-      if (url === GRAPH) { setInternalCisBenchmarksEnabled(false); return new Response("{}", { status: 503 }) }
-      return undefined
-    })
-    const jobId = await start()
-    let failed: Snapshot | null = null
-    for (let attempt = 0; attempt < 400 && !failed; attempt += 1) {
-      await new Promise(resolve => setTimeout(resolve, 5))
-      // Access is back only for the moment of this poll, which runs without yielding.
-      setInternalCisBenchmarksEnabled(true)
-      const poll = handleFramework({ action: "assess-status", jobId, tenantId, frameworkId: "cis-benchmarks", since: 0 }) as Promise<Snapshot>
-      setInternalCisBenchmarksEnabled(false)
-      const snapshot = await poll
-      if (snapshot.phase === "failed") failed = snapshot
-    }
-    expect(failed?.error).toContain("CIS comparisons are coming soon")
-    expect(calls.filter(url => url === GRAPH)).toHaveLength(1)
-  })
-
   it("does not repeat a POST: a failed token request is not retried and fails the job", async () => {
     const calls = tenantFetch(url => url.includes("oauth2") ? new Response("{}", { status: 503 }) : undefined)
     const failed = await finish(await start())
