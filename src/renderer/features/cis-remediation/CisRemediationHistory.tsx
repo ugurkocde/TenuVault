@@ -37,6 +37,25 @@ export function deploymentReferenceLabel(reference: string, tenantId: string | u
   return referenceDisplayName(reference.trim(), packName?.trim() || knownBenchmarkName(id) || benchmarkTitle(id, cachedCisCatalog(tenantId)?.find(benchmark => benchmark.id === id)?.name))
 }
 
+/** The deployment title, naming the benchmark by its display name and kept within the 200 character limit. */
+export function remediationTitle(whole: boolean, benchmark: string): string {
+  const [verb, noun] = whole ? ["Deploy", "policies"] : ["Remediate", "findings"]
+  const name = benchmark.trim().slice(0, 200 - verb.length - noun.length - 2).trim()
+  return name ? `${verb} ${name} ${noun}` : `${verb} benchmark ${noun}`
+}
+
+/**
+ * The title a deployment is listed with. A title TenuVault generated ("Remediate ... findings" or
+ * "Deploy ... policies") is built again from the deployment's reference, so deployments saved before
+ * titles named the benchmark read like new ones. Stored records are not changed; any other title
+ * is shown as stored.
+ */
+export function deploymentTitle(deployment: Pick<Deployment, "title" | "reference" | "benchmarkName">, tenantId: string | undefined): string {
+  const generated = /^(Remediate .+ findings|Deploy .+ policies)$/.exec(deployment.title.trim())
+  if (!generated || !deployment.reference.trim()) return deployment.title
+  return remediationTitle(deployment.title.trim().startsWith("Deploy "), deploymentReferenceLabel(deployment.reference, tenantId, deployment.benchmarkName))
+}
+
 /** What a planned deployment does to the tenant, from its planned items: new policies stay unassigned, updates keep the assignments of the policy they change. */
 export function deploymentImpactText(items: Deployment["items"]): string {
   const creates = items.filter(item => item.action === "create").length
@@ -137,7 +156,7 @@ export function CisRemediationHistory({ tenant, focus, onApplied }: { tenant: Te
           <button type="button" aria-expanded={expanded} onClick={() => setOpen(expanded ? null : deployment.id)} className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 text-left focus-visible:outline focus-visible:outline-2">
             {expanded ? <ChevronDown className="h-4 w-4 shrink-0" aria-hidden="true" /> : <ChevronRight className="h-4 w-4 shrink-0" aria-hidden="true" />}
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-medium text-gray-900">{deployment.title}</span>
+              <span className="block truncate text-sm font-medium text-gray-900">{deploymentTitle(deployment, tenantId)}</span>
               <span className="block text-xs text-gray-500">{deploymentReferenceLabel(deployment.reference, tenantId, deployment.benchmarkName)} · {formatDate(deployment.createdAt)} · {deployment.items.length} {deployment.items.length === 1 ? "operation" : "operations"}</span>
             </span>
             {state.rollback && <Chip tone={state.rollback.tone}>{state.rollback.label}</Chip>}

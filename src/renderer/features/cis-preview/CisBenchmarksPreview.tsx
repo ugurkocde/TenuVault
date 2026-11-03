@@ -11,15 +11,15 @@ import { isUnlicensed, useLicense } from "../../lib/license"
 
 /**
  * What Pro and MSP add to the CIS Benchmarks page, each as the app does it: delivered packs per
- * Level (cis-content, saved encrypted), readiness and coverage (cis-readiness), manual and Not
- * assessed items with their list text (cis-manual), remediation through the change-set engine
+ * Level (cis-content, saved encrypted), readiness and coverage (cis-readiness), Manual, Not assessed
+ * and Not covered items with their list text (cis-manual), remediation through the change-set engine
  * (cis-remediation/engine.ts: backup, read-back, rollback, new policies unassigned), the CIS export
  * menu, and the MSP portfolio (cis-portfolio).
  */
 export const CIS_PLAN_ADDITIONS: readonly string[] = [
   "Assessment of the tenant against the delivered benchmark pack, per Level. Packs are delivered to licensed tenants and stored encrypted on this device.",
   "Readiness per Level with the pass rate and the coverage of the benchmark.",
-  "Manual recommendations and recommendations marked Not covered by the benchmark pack, listed with their CIS text for a manual check.",
+  "Manual recommendations and recommendations marked Not assessed or Not covered by the benchmark pack, listed with their CIS text for a manual check.",
   "Remediation per recommendation through a reviewed deployment, with a backup before the change, read-back after it and rollback. New policies are created with no assignments; settings that differ are updated in the policies that hold them, which keep their assignments.",
   "PDF, CSV and JSON exports of findings and readiness.",
   "On MSP, CIS scores across the tenants in your portfolio.",

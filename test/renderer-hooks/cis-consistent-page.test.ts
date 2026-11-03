@@ -46,6 +46,8 @@ vi.mock("../../src/portal/components/ConfirmDialog", () => ({
 
 import FrameworksPage from "../../src/renderer/pages/FrameworksPage"
 import { humanSettingLabel } from "../../src/shared/frameworks/cis-display"
+import { CIS_NOTICE } from "../../src/shared/frameworks/cis-certification"
+import { MANUAL_NOT_ASSESSED_NOTE } from "../../src/shared/frameworks/cis-readiness"
 
 const roots: Root[] = []
 const containers: HTMLDivElement[] = []
@@ -131,11 +133,16 @@ describe("CIS page numbers", () => {
   it("marks the excluded finding, never lets a Review finding be selected and names saved runs by time and rate", async () => {
     const container = await renderSaved()
     // The checkbox is named by the setting, not its raw id.
-    const row = (settingId: string) => container.querySelector(`input[aria-label="Select finding ${humanSettingLabel(settingId)} from Synthetic policy"]`)!.closest("div")!
+    expect(container.querySelector(`input[aria-label="Select finding ${humanSettingLabel("synthetic_alpha")} from Synthetic policy"]`)).not.toBeNull()
+    const row = (settingId: string) => [...container.querySelectorAll('[aria-label="Assessment results"] summary')].find(item => item.textContent?.includes(settingId))!.closest("details")!.parentElement!
     expect(row("synthetic_alpha").textContent).toContain("Excluded")
     expect(row("synthetic_beta").textContent).not.toContain("Excluded")
     expect(row("synthetic_gamma").textContent).not.toContain("Excluded")
-    expect((container.querySelector('input[aria-label="Select finding Synthetic gamma from Synthetic policy"]') as HTMLInputElement).disabled).toBe(true)
+    // A Review finding has no checkbox, only a spacer of the same width, so its title lines up with the others.
+    expect(container.querySelector('input[aria-label="Select finding Synthetic gamma from Synthetic policy"]')).toBeNull()
+    // Present findings never get one either.
+    expect(container.querySelector('input[aria-label="Select finding Synthetic beta from Synthetic policy"]')).toBeNull()
+    for (const id of ["synthetic_beta", "synthetic_gamma"]) expect(row(id).firstElementChild?.matches('span[aria-hidden="true"].w-4.shrink-0')).toBe(true)
     const saved = container.querySelector('[aria-label="Saved assessment history"]')!
     // The reference already names the Level, so the row shows the rate once.
     expect(saved.textContent).toContain("synthetic-os 9.9.9 Level 1 · 33.3% · 3 findings")
@@ -145,5 +152,51 @@ describe("CIS page numbers", () => {
     // The column names the basis of the rate, as the headline does.
     expect(trend?.textContent).toContain("Level 1 settings pass rate")
     expect(trend?.textContent).toContain("66.7% with 1 exclusion")
+  })
+
+  it("gives the benchmark name and the unassigned note full width lines and says once what is not checked", async () => {
+    const container = await renderSaved()
+    const summary = container.querySelector('[aria-label="Level 1 summary"]')!
+    const grid = summary.querySelector(".grid")!
+    // The name is its own line above the score row, not inside the narrow score column.
+    const name = summary.firstElementChild!
+    expect(name.textContent).toContain("Level 1")
+    expect(name.textContent).toContain("9.9.9")
+    expect(grid.contains(name)).toBe(false)
+    // The unassigned caveat keeps its text as a neutral note under the bar row.
+    const note = summary.querySelector('[role="note"]')!
+    expect(note.textContent).toBe("1 of 1 present setting is in unassigned policies. CIS checks configuration; Governance scores count assigned policies only.")
+    expect(grid.contains(note)).toBe(false)
+    expect(note.className).toContain("bg-gray-50")
+    expect(note.className).toContain("text-gray-700")
+    // The readiness block no longer repeats the header note; the CIS notice stays word for word.
+    const readiness = container.querySelector('[aria-label="CIS readiness"]')!
+    expect(readiness.textContent).not.toContain(MANUAL_NOT_ASSESSED_NOTE)
+    expect(readiness.textContent).not.toContain("This view covers the automated settings in the benchmark pack only.")
+    expect(readiness.querySelector('[aria-label="Manual recommendations"]')?.textContent).toBe(`${CIS_NOTICE.text} ${CIS_NOTICE.url}`)
+  })
+
+  it("lines up finding titles, marks the shown saved run and shows Portfolio as a titled card", async () => {
+    const container = await renderSaved()
+    // Every status badge has one fixed width with centered text, so the titles after it start at the same place.
+    const badges = [...container.querySelectorAll('[aria-label="Assessment results"] section summary > span:first-child')]
+    expect(badges.map(badge => badge.textContent)).toEqual(["Missing", "Present", "Review"])
+    for (const badge of badges) expect([badge.classList.contains("w-[5.5rem]"), badge.classList.contains("text-center")]).toEqual([true, true])
+    // The saved run on screen is marked Shown; showing it again is unavailable with the reason, Delete stays.
+    const saved = container.querySelector('[aria-label="Saved assessment history"]')!
+    const row = saved.querySelector(".border-t")!
+    expect([...row.querySelectorAll("span")].some(span => span.textContent === "Shown")).toBe(true)
+    const view = [...row.querySelectorAll("button")].find(item => item.textContent === "View read-only")!
+    expect(view.disabled).toBe(true)
+    expect(view.title).toBe("Already shown")
+    expect(view.getAttribute("aria-label")).toBe("View read-only, already shown")
+    expect([...row.querySelectorAll("button")].find(item => item.textContent === "Delete")?.disabled).toBe(false)
+    // Portfolio is a collapsed card with a heading and one line on what it shows.
+    const portfolio = container.querySelector('details[aria-label="Portfolio"]') as HTMLDetailsElement
+    expect(portfolio.open).toBe(false)
+    expect(portfolio.className).toContain("rounded-3xl")
+    expect(portfolio.querySelector("summary h2")?.textContent).toBe("Portfolio")
+    expect(portfolio.querySelector("summary")?.textContent).toContain("from each tenant's newest saved assessment of one benchmark")
+    expect(portfolio.querySelector('[aria-label="CIS portfolio"] h2')).toBeNull()
   })
 })

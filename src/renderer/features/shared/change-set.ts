@@ -19,8 +19,9 @@ export interface ChangeSetActions {
   rollbackCreate: () => Promise<{ changeSet: ChangeSet }>
 }
 
+// In review is pending, not a failure: amber like the other pending states.
 export const STATUS_TONE: Record<ChangeSetRecord["status"], "neutral" | "coral" | "success" | "warning" | "danger"> = {
-  "in-review": "coral",
+  "in-review": "warning",
   approved: "coral",
   rejected: "neutral",
   stale: "warning",
