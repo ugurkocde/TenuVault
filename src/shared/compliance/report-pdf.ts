@@ -12,6 +12,9 @@ import { bullets, callout, distribution, introCallout, drawCover, facts, hero, k
 import { brandName, resolveBrandTheme, type BrandTheme, type PdfBranding } from '../pdf/theme'
 import rights from './rights.json'
 
+/** A remediation indication as one line: the label and why, so a matching setting never reads as pending work. */
+const remediationLine = ({ label, reason }: RemediationIndication) => `${label}. ${reason}`
+
 export type { PdfBranding } from '../pdf/theme'
 
 const { margin, right, contentWidth } = PAGE
@@ -574,7 +577,6 @@ export function generateWorkspaceAssessmentPDF(saved: SavedAssessment, context: 
   }
   const cis = saved.assessment.frameworkId === 'cis-benchmarks'
   // The reason travels with the label, as in the CSV and JSON, so a Present finding reads as needing no change.
-  const remediationText = (indication: RemediationIndication) => `${indication.label}. ${indication.reason}`
 
   layout.pageTitle('Findings', 'Findings by status', { lead: 'Every pack setting with its status and the tenant policies in which a matching root setting was observed, with their assignment evidence.' })
   const groups: Group[] = []
@@ -585,7 +587,7 @@ export function generateWorkspaceAssessmentPDF(saved: SavedAssessment, context: 
       label: `${status} (${rows.length})`, marker: { kind: WORKSPACE_STYLE[status].marker, color: WORKSPACE_STYLE[status].color },
       rows: rows.map(finding => ({
         cells: [
-          { text: [item(finding.policyName, 7.4, 'bold'), item(finding.settingId, 6.2, 'normal', PALETTE.faint, true), ...(cis ? [item(remediationText(findingRemediationIndication(finding.status, brandName(theme))), 6.4, 'normal', PALETTE.muted)] : [])] },
+          { text: [item(finding.policyName, 7.4, 'bold'), item(finding.settingId, 6.2, 'normal', PALETTE.faint, true), ...(cis ? [item(remediationLine(findingRemediationIndication(finding.status, brandName(theme))), 6.4, 'normal', PALETTE.muted)] : [])] },
           { text: finding.observed.length ? finding.observed.map(o => item(`${o.policyName} (assignment evidence: ${o.targeting?.state ?? 'unknown'})`, 7, 'normal', PALETTE.body, true)) : [item('No matching root setting in the assessed policy family.', 7, 'italic', PALETTE.muted)] },
           { pill: status === 'Review' ? 'To review' : status, options: style(status) },
         ],
@@ -800,7 +802,7 @@ function levelSection(layout: Layout, summary: CisReadinessSummary, level: CisLe
       groups: [{ label: '', rows: level.recommendations.map(result => ({
         wash: result.result === 'Fail' ? mixColor(TONES.bad.fill, PALETTE.white, 0.55) : undefined,
         cells: [
-          { chip: result.id, text: [item(result.title, 7.4), item(recommendationRemediation(result, product).label, 6.4, 'normal', PALETTE.muted)] },
+          { chip: result.id, text: [item(result.title, 7.4), item(remediationLine(recommendationRemediation(result, product)), 6.4, 'normal', PALETTE.muted)] },
           { text: result.settings.length ? result.settings.map(setting => item(`${setting.id} ${setting.status}`, 6.6, 'normal', PALETTE.body, true)) : [item('No settings declared', 6.6, 'italic', PALETTE.muted)] },
           { pill: result.result, options: { tone: RESULT_STYLE[result.result].tone, marker: RESULT_STYLE[result.result].marker, markerColor: RESULT_STYLE[result.result].color } },
         ],
