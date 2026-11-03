@@ -568,6 +568,15 @@ function addCisException(workspace: FrameworkWorkspace, body: RecordJson, today:
 const MAX_EXCEPTION_BATCH = 500
 
 export async function handleFramework(body: RecordJson): Promise<unknown> {
+  // The sample CIS readiness report is built from synthetic data only: no tenant, workspace, plan
+  // or CIS content is involved, so every plan can open it. It names no tenant, so no branding applies.
+  if (body.action === "cis-sample-pdf") {
+    const { generateCisSampleReportPDF, CIS_SAMPLE_FILE_NAME } = await import("../../shared/compliance/cis-sample-report")
+    const file: ExportFile = { name: CIS_SAMPLE_FILE_NAME, type: "application/pdf", encoding: "base64", data: Buffer.from(generateCisSampleReportPDF()).toString("base64") }
+    if (body.save !== "dialog") return { file }
+    if (!exportSaver) throw new FrameworkError("Saving exports is not available.", 500)
+    return { name: file.name, ...(await exportSaver(file)) }
+  }
   const legacy = typeof body.frameworkId === "string" && LEGACY_FRAMEWORKS.has(body.frameworkId)
   if (legacy && !LEGACY_ACTIONS.has(String(body.action))) throw new FrameworkError("Saved OpenIntuneBaseline pack comparisons are read-only. New comparisons use the Existing Deployment and Policy Validation workflows.", 403)
   if (typeof body.frameworkId === "string") requireEnabledFramework(body.frameworkId)

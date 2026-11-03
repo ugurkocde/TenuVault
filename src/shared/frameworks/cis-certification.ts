@@ -25,6 +25,39 @@ export const CIS_CERTIFIED_SEGMENTS: readonly CisCertifiedSegment[] = [
   { benchmark: "mac-os-26", version: "1.0.0", levels: [1, 2], name: "CIS Apple macOS 26 Tahoe Intune Benchmark v1.0.0" },
 ]
 
+/**
+ * How many recommendations of each certified benchmark Level TenuVault checks automatically, out of
+ * all recommendations of that Level. The rest are listed for a manual check. Numbers only, never
+ * recommendation content, so plans without CIS Benchmarks can be shown them.
+ */
+export interface CisLevelCheckCount {
+  benchmark: string
+  version: string
+  level: CisLevel
+  automated: number
+  total: number
+}
+
+export const CIS_CERTIFIED_CHECK_COUNTS: readonly CisLevelCheckCount[] = [
+  { benchmark: "intune-windows11", version: "5.0.0", level: 1, automated: 274, total: 308 },
+  { benchmark: "intune-for-defender", version: "1.0.0", level: 1, automated: 52, total: 52 },
+  { benchmark: "intune-for-defender", version: "1.0.0", level: 2, automated: 3, total: 3 },
+  { benchmark: "mac-os-26", version: "1.0.0", level: 1, automated: 88, total: 90 },
+  { benchmark: "mac-os-26", version: "1.0.0", level: 2, automated: 10, total: 10 },
+]
+
+/** The check count of one certified benchmark Level, or undefined outside the certified scope. */
+export function cisCheckCount(benchmark: string, version: string, level: number): CisLevelCheckCount | undefined {
+  return CIS_CERTIFIED_CHECK_COUNTS.find(count => count.benchmark === benchmark && count.version === version && count.level === level)
+}
+
+/** "TenuVault checks 274 of 308 recommendations automatically; the rest are listed for a manual check." */
+export function cisCheckCountText(count: Pick<CisLevelCheckCount, "automated" | "total">, product = "TenuVault"): string {
+  return count.automated === count.total
+    ? `${product} checks all ${count.total} recommendations automatically.`
+    : `${product} checks ${count.automated} of ${count.total} recommendations automatically; the rest are listed for a manual check.`
+}
+
 /** The short marker shown next to a certified benchmark Level. */
 export const CIS_CERTIFIED_LABEL = "CIS Certified"
 /** The marker shown next to a benchmark Level outside the certification. */

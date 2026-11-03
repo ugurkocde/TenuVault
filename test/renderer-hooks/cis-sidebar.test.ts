@@ -35,6 +35,7 @@ vi.mock("../../src/renderer/lib/license", () => {
   return {
     useTenantPlan: (tenantId: string | undefined) => tenantPlan(tenantLicense(licenseStatus.current as { tenants: { tenantId: string }[] } | null, tenantId) as { entitled: boolean; plan: string | null } | undefined),
     useLicense: () => ({ status: licenseStatus.current, error: null, refresh: async () => undefined }),
+    isUnlicensed: (status: { hasKey: boolean; tenants: { activated: boolean }[] }) => !status.hasKey && !status.tenants.some((tenant) => tenant.activated),
     tenantLicense,
     tenantPlan,
   }
@@ -47,7 +48,8 @@ vi.mock("../../src/portal/components/ConfirmDialog", () => ({
 import { CisBenchmarksNavigation } from "../../src/renderer/components/CisBenchmarksNavigation"
 import { FrameworkNavigation } from "../../src/renderer/components/FrameworkNavigation"
 import FrameworksPage from "../../src/renderer/pages/FrameworksPage"
-import { CIS_CERTIFICATION_HEADLINE, CIS_REMEDIATION_LIMITS, certifiedScopeLines } from "../../src/shared/frameworks/cis-certification"
+import { CIS_CERTIFICATION_HEADLINE, CIS_CERTIFIED_SEGMENTS, CIS_REMEDIATION_LIMITS, certifiedScopeLines, cisCheckCount, cisCheckCountText } from "../../src/shared/frameworks/cis-certification"
+import { CIS_PLAN_ADDITIONS } from "../../src/renderer/features/cis-preview/CisBenchmarksPreview"
 
 const roots: Root[] = []
 const containers: HTMLDivElement[] = []
@@ -127,18 +129,18 @@ describe("CIS Benchmarks top-level sidebar entry", () => {
     expect(link?.getAttribute("aria-current")).toBe("page")
   })
 
-  it("shows the CIS item by plan without the internal claim: a link on Pro, the plan prompt on Community", async () => {
+  it("shows the CIS item by plan without the internal claim: a link on Pro, a link with the plan badge on Community", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: false })
     licenseStatus.current = entitledStatus("pro")
     const pro = render(sidebarHarness("/portal/dashboard"))
     await flush()
-    expect(pro.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')?.textContent).toContain("CIS Benchmarks")
+    expect(pro.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')?.textContent).toBe("CIS Benchmarks")
     licenseStatus.current = communityStatus()
     selectedTenantState.current = tenantRef("t-community")
     const community = render(sidebarHarness("/portal/dashboard"))
     await flush()
-    expect(community.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).toBeNull()
-    expect(community.querySelector("button")?.textContent).toContain("Pro")
+    expect(community.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')?.textContent).toBe("CIS BenchmarksPro")
+    expect(community.querySelector("button")).toBeNull()
     expect(community.textContent).not.toContain("Coming soon")
   })
 
@@ -162,44 +164,42 @@ describe("CIS Benchmarks top-level sidebar entry", () => {
     expect(container.querySelector("button")).toBeNull()
   })
 
-  it("renders a muted Pro entry that opens the upgrade dialog instead of navigating, on Community", async () => {
+  it("opens the CIS page from the Community entry, which keeps its plan badge", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     licenseStatus.current = communityStatus()
     selectedTenantState.current = tenantRef("t-community")
-    const container = render(sidebarHarness("/portal/dashboard"))
+    const container = render(createElement(
+      MemoryRouter,
+      { initialEntries: ["/portal/dashboard"] },
+      createElement(CisBenchmarksNavigation, { linkClass: (active: boolean) => (active ? "sidebar-link active" : "sidebar-link") }),
+      createElement(Routes, null, createElement(Route, { path: "/portal/frameworks/cis-benchmarks", element: createElement("p", null, "CIS page opened") }), createElement(Route, { path: "*", element: null })),
+    ))
     await flush()
-    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).toBeNull()
-    const button = container.querySelector("button")
-    expect(button).not.toBeNull()
-    expect(button?.textContent).toContain("CIS Benchmarks")
-    expect(button?.textContent).toContain("Pro")
-    expect(button?.getAttribute("aria-disabled")).toBe("true")
-    expect(button?.getAttribute("title")).toContain("Pro and MSP")
-    // The tooltip names CIS Benchmarks only: CIS Controls is not offered on any plan.
-    expect(button?.getAttribute("title")).toContain("CIS Benchmarks assessments, remediation and reports")
-    expect(button?.getAttribute("title")).not.toContain("CIS Controls")
-    expect(button?.hasAttribute("disabled")).toBe(false)
-    button?.focus()
-    expect(document.activeElement).toBe(button)
+    expect(container.querySelector("button")).toBeNull()
+    const link = container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')
+    expect(link).not.toBeNull()
+    expect(link?.textContent).toContain("CIS Benchmarks")
+    expect(link?.textContent).toContain("Pro")
+    expect(link?.hasAttribute("aria-disabled")).toBe(false)
+    expect(link?.textContent).not.toContain("CIS Controls")
     await act(async () => {
-      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }))
     })
     await flush()
-    expect(document.body.textContent).toContain("Included in TenuVault Pro and MSP")
-    expect(document.body.textContent).not.toContain("CIS Controls")
+    expect(container.textContent).toContain("CIS page opened")
+    expect(link?.getAttribute("aria-current")).toBe("page")
+    // No dialog: the page itself explains the plan.
+    expect(document.body.textContent).not.toContain("Included in TenuVault Pro and MSP")
   })
 
-  it("shows the locked Pro entry for a selected Community tenant even when the machine is entitled", async () => {
+  it("shows the plan badge for a selected Community tenant even when the machine is entitled", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: true })
     licenseStatus.current = mixedStatus()
     selectedTenantState.current = tenantRef("t-community")
     const container = render(sidebarHarness("/portal/dashboard"))
     await flush()
-    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).toBeNull()
-    const button = container.querySelector("button")
-    expect(button).not.toBeNull()
-    expect(button?.textContent).toContain("CIS Benchmarks")
-    expect(button?.textContent).toContain("Pro")
+    expect(container.querySelector("button")).toBeNull()
+    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')?.textContent).toBe("CIS BenchmarksPro")
   })
 
   it("shows the enabled link after switching the selected tenant to the entitled one", async () => {
@@ -208,15 +208,14 @@ describe("CIS Benchmarks top-level sidebar entry", () => {
     selectedTenantState.current = tenantRef("t-community")
     const container = render(sidebarHarness("/portal/dashboard"))
     await flush()
-    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).toBeNull()
-    expect(container.querySelector("button")).not.toBeNull()
+    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')?.textContent).toBe("CIS BenchmarksPro")
     selectedTenantState.current = tenantRef("t-entitled")
     const root = roots[roots.length - 1]
     await act(async () => {
       root?.render(sidebarHarness("/portal/dashboard"))
     })
     await flush()
-    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).not.toBeNull()
+    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')?.textContent).toBe("CIS Benchmarks")
     expect(container.querySelector("button")).toBeNull()
   })
 
@@ -246,7 +245,8 @@ describe("CIS Benchmarks top-level sidebar entry", () => {
     selectedTenantState.current = tenantRef("t-entitled")
     const container = render(sidebarHarness("/portal/dashboard"))
     await flush()
-    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).not.toBeNull()
+    // No plan badge until the plan is known.
+    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')?.textContent).toBe("CIS Benchmarks")
     expect(container.querySelector("button")).toBeNull()
     licenseStatus.current = entitledStatus("pro")
     const root = roots[roots.length - 1]
@@ -262,8 +262,7 @@ describe("CIS Benchmarks top-level sidebar entry", () => {
     selectedTenantState.current = { id: 3, name: "Not signed in", credentials: undefined }
     const container = render(sidebarHarness("/portal/dashboard"))
     await flush()
-    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')).toBeNull()
-    expect(container.querySelector("button")?.textContent).toContain("Pro")
+    expect(container.querySelector('a[href="/portal/frameworks/cis-benchmarks"]')?.textContent).toBe("CIS BenchmarksPro")
   })
 
   it("renders the normal entry while the status does not list the selected tenant yet", async () => {
@@ -351,23 +350,121 @@ describe("CIS Benchmarks route", () => {
     expect(note?.textContent).toContain("Other CIS Benchmarks, versions and Levels are not certified.")
   })
 
-  it("shows the plan preview instead of the benchmark picker on Community and loads no catalog", async () => {
+  function communityPage(status: unknown = communityStatus()) {
     appInfo.mockResolvedValue({ internalCisBenchmarks: false })
-    licenseStatus.current = communityStatus()
+    licenseStatus.current = status
     selectedTenantState.current = tenantRef("t-community")
     const workspace = { version: 1, tenantId: "t-community", frameworkId: "cis-benchmarks", policies: [], reference: "", updatedAt: "", history: [] }
-    const fetch = vi.fn(async (_path: string, init?: RequestInit) => Response.json(String(init?.body).includes("workspace-open") ? { workspace, activeJob: null } : workspace))
+    const fetch = vi.fn(async (_path: string, init?: RequestInit) => {
+      const body = String(init?.body)
+      if (body.includes("cis-sample-pdf")) return Response.json({ name: "TenuVault sample CIS readiness report (sample data).pdf", saved: true, path: "/Users/admin/Documents/TenuVault sample CIS readiness report (sample data).pdf" })
+      return Response.json(body.includes("workspace-open") ? { workspace, activeJob: null } : workspace)
+    })
     vi.stubGlobal("fetch", fetch)
-    const container = renderCisRoute()
+    return { container: renderCisRoute(), fetch }
+  }
+  /** Every request body the page sent, by action. */
+  const actions = (fetch: ReturnType<typeof vi.fn>) => fetch.mock.calls.map(([, init]) => JSON.parse(String((init as RequestInit | undefined)?.body ?? "{}")).action as string)
+
+  it("shows Community the preview of what Pro and MSP add instead of the benchmark picker, with no CIS content request", async () => {
+    const { container, fetch } = communityPage()
     await flush()
     const preview = container.querySelector('[aria-label="CIS Benchmarks assessments, remediation and reports preview"]')
     expect(preview).not.toBeNull()
     expect(preview?.textContent).toContain("Pro")
+    // The certification statement and every certified benchmark Level with its automatic check count.
+    expect(preview?.textContent).toContain(CIS_CERTIFICATION_HEADLINE)
+    expect(preview?.textContent).toContain("Other CIS Benchmarks, versions and Levels are not certified.")
+    for (const segment of CIS_CERTIFIED_SEGMENTS) {
+      expect(preview?.textContent).toContain(segment.name)
+      for (const level of segment.levels) expect(preview?.textContent).toContain(cisCheckCountText(cisCheckCount(segment.benchmark, segment.version, level)!))
+    }
+    expect(preview?.textContent).toContain("TenuVault checks 274 of 308 recommendations automatically; the rest are listed for a manual check.")
+    expect(preview?.textContent).toContain("TenuVault checks 88 of 90 recommendations automatically; the rest are listed for a manual check.")
+    expect(preview?.textContent).toContain("TenuVault checks all 52 recommendations automatically.")
+    // What the plans add, then the ways to get them.
+    for (const line of CIS_PLAN_ADDITIONS) expect(preview?.textContent).toContain(line)
+    // Plain words: no dashes used as punctuation anywhere in the preview.
+    expect(preview?.textContent).not.toMatch(/[\u2013\u2014]/)
+    expect(preview?.textContent).not.toContain(" - ")
+    const buttons = [...preview!.querySelectorAll("button")].map((button) => button.textContent)
+    expect(buttons).toEqual(["Start 30 day free trial", "Add a license key", "View sample report"])
+    // The certification is stated once on the page: in the preview.
+    expect(container.querySelectorAll('[aria-label="CIS certification"]')).toHaveLength(1)
     // CIS Controls is not offered, so the CIS Benchmarks prompt never promises it.
     expect(preview?.textContent).not.toContain("CIS Controls")
     expect(container.textContent).not.toContain("Coming soon")
     expect(container.textContent).not.toContain("Refresh available benchmarks")
-    expect(fetch.mock.calls.some(([, init]) => String((init as RequestInit | undefined)?.body).includes("cis-catalog"))).toBe(false)
+    expect(container.querySelector("#cis-delivered-title")?.textContent).toBe("1. Load benchmark")
+    // No catalog, pack or recommendation list is requested for Community, and no pack is saved.
+    expect(actions(fetch).filter((action) => /^cis-(catalog|fetch|list)/.test(action))).toEqual([])
+    for (const [, init] of fetch.mock.calls) {
+      const body = JSON.parse(String((init as RequestInit).body)) as { action: string; policies?: unknown[] }
+      if (body.action === "workspace-save") expect(body.policies).toEqual([])
+    }
+    vi.unstubAllGlobals()
+  })
+
+  it("opens the plans and the License page from the Community preview", async () => {
+    const { container } = communityPage()
+    await flush()
+    const preview = container.querySelector('[aria-label="CIS Benchmarks assessments, remediation and reports preview"]')!
+    const button = (label: string) => [...preview.querySelectorAll("button")].find((item) => item.textContent === label)!
+    const { bridge } = await import("../../src/renderer/lib/bridge")
+    const open = vi.spyOn(bridge.license, "open")
+    await act(async () => { button("Start 30 day free trial").click() })
+    expect(open).toHaveBeenCalledWith("buy", { source: "cis-preview" })
+    // Add a license key leaves the CIS page for the License page.
+    await act(async () => { button("Add a license key").click() })
+    await flush()
+    expect(container.querySelector('[aria-label="CIS Benchmarks assessments, remediation and reports preview"]')).toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it("offers See plans instead of the trial when a license key is on this machine", async () => {
+    const { container } = communityPage({ ...communityStatus(), hasKey: true, keyState: "failed" })
+    await flush()
+    const preview = container.querySelector('[aria-label="CIS Benchmarks assessments, remediation and reports preview"]')!
+    expect([...preview.querySelectorAll("button")].map((button) => button.textContent)).toEqual(["See plans", "Add a license key", "View sample report"])
+    vi.unstubAllGlobals()
+  })
+
+  it("saves the sample report on Community through the Save dialog in main, with no CIS content request", async () => {
+    Element.prototype.scrollIntoView = () => undefined
+    const { container, fetch } = communityPage()
+    await flush()
+    const preview = container.querySelector('[aria-label="CIS Benchmarks assessments, remediation and reports preview"]')!
+    const sample = [...preview.querySelectorAll("button")].find((item) => item.textContent === "View sample report")!
+    const before = fetch.mock.calls.length
+    await act(async () => { sample.click() })
+    await flush()
+    const sent = fetch.mock.calls.slice(before).map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>)
+    // One request: the sample, built in main from synthetic data and saved there. No tenant, pack or list.
+    expect(sent).toEqual([{ action: "cis-sample-pdf", save: "dialog" }])
+    expect(preview.textContent).toContain("TenuVault sample CIS readiness report (sample data).pdf")
+    expect(actions(fetch).filter((action) => /^cis-(catalog|fetch|list)/.test(action))).toEqual([])
+    vi.unstubAllGlobals()
+  })
+
+  it("shows Pro the benchmark picker and the certification note, never the preview", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: false })
+    licenseStatus.current = entitledStatus("pro")
+    selectedTenantState.current = tenantRef("t-entitled")
+    const workspace = { version: 1, tenantId: "t-entitled", frameworkId: "cis-benchmarks", policies: [], reference: "", updatedAt: "", history: [] }
+    const fetch = vi.fn(async (_path: string, init?: RequestInit) => {
+      const body = String(init?.body)
+      if (body.includes("cis-catalog")) return Response.json({ benchmarks: [] })
+      return Response.json(body.includes("workspace-open") ? { workspace, activeJob: null } : workspace)
+    })
+    vi.stubGlobal("fetch", fetch)
+    const container = renderCisRoute()
+    await flush()
+    expect(container.querySelector('[aria-label="CIS Benchmarks assessments, remediation and reports preview"]')).toBeNull()
+    expect(container.textContent).not.toContain("View sample report")
+    expect(container.textContent).toContain("Refresh available benchmarks")
+    const note = container.querySelector('[aria-label="CIS certification"]')
+    expect(note?.textContent).toContain(CIS_CERTIFICATION_HEADLINE)
+    for (const line of certifiedScopeLines()) expect(note?.textContent).toContain(line)
     vi.unstubAllGlobals()
   })
 
@@ -446,6 +543,15 @@ describe("CIS Benchmarks route", () => {
     const runAgain = [...container.querySelectorAll("button")].find((item) => item.textContent === "Run again")
     expect(runAgain?.disabled).toBe(true)
     expect(container.textContent).toContain("Saved results stay readable.")
+    // The saved results show without the preview; it shows where a new assessment would start.
+    const preview = '[aria-label="CIS Benchmarks assessments, remediation and reports preview"]'
+    expect(container.querySelector(preview)).toBeNull()
+    expect(container.querySelector('[aria-label="CIS certification"]')).not.toBeNull()
+    const newAssessment = [...container.querySelectorAll("button")].find((item) => item.textContent === "New assessment")!
+    await act(async () => { newAssessment.click() })
+    await flush()
+    expect(container.querySelector(preview)).not.toBeNull()
+    expect(container.querySelectorAll('[aria-label="CIS certification"]')).toHaveLength(1)
     vi.unstubAllGlobals()
   })
 

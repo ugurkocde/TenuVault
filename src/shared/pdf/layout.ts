@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { jsPDF } from 'jspdf'
 import { brandName, type BrandTheme } from './theme'
-import { PALETTE, capHeight, clampLine, drawCard, drawEyebrow, drawMarker, drawRule, setFont, textWidth, wrapLines, type FontStyle, type MarkerKind, type RgbColor } from './kit'
+import { PALETTE, capHeight, clampLine, drawCard, drawEyebrow, drawMarker, drawPill, drawRule, pillMetrics, setFont, textWidth, wrapLines, type FontStyle, type MarkerKind, type RgbColor } from './kit'
 
 /**
  * Paging engine of the TenuVault reports: an A4 grid, top-of-line text drawing, cards that
@@ -68,6 +68,8 @@ export interface LayoutOptions {
    */
   identity: readonly unknown[]
   theme: BrandTheme
+  /** A label drawn at the top of every page, the cover included, such as "SAMPLE DATA". */
+  marker?: string
 }
 
 /** Width factor between jsPDF's rounded Helvetica metrics and the drawn glyphs; exported for the tests. */
@@ -386,6 +388,14 @@ export function createLayout(options: LayoutOptions) {
       for (const child of section.children) doc.outline.add(parent, outlineTitle(child.title), { pageNumber: child.page })
     }
     const pages = doc.getNumberOfPages()
+    if (options.marker) {
+      const pill = { tone: 'warn' as const }
+      const { width } = pillMetrics(doc, options.marker, pill)
+      for (let index = 1; index <= pages; index++) {
+        doc.setPage(index)
+        drawPill(doc, (PAGE.width - width) / 2, 4.6, options.marker, pill)
+      }
+    }
     for (let index = 2; index <= pages; index++) {
       doc.setPage(index)
       setFont(doc, 6.5, 'bold', theme.strong)

@@ -68,10 +68,10 @@ function percent(value: number | null): string {
 }
 
 /** A report layout whose every drawn string is redacted and normalised to WinAnsi. */
-function createReport(options: { shortName: string; tenant?: string; footer: string; title: string; subject: string; keywords: string; exportedAt: string; identity: readonly unknown[]; theme: BrandTheme }): Layout {
+function createReport(options: { shortName: string; tenant?: string; footer: string; title: string; subject: string; keywords: string; exportedAt: string; identity: readonly unknown[]; theme: BrandTheme; marker?: string }): Layout {
   const { theme } = options
   return createLayout({
-    shortName: options.shortName, tenant: options.tenant, footer: options.footer,
+    shortName: options.shortName, tenant: options.tenant, footer: options.footer, ...(options.marker ? { marker: options.marker } : {}),
     sanitize: value => ascii(redactText(value)),
     properties: { title: options.title, subject: options.subject, keywords: options.keywords },
     exportedAt: options.exportedAt,
@@ -414,18 +414,21 @@ function capabilityHead(layout: Layout, cap: CapabilityResult): FlowBlock {
   }
 }
 
+// Width of the label column of a labelled block; fits the longest label, REMEDIATION CAPABILITY.
+const LABEL_COLUMN = 34
+
 /** Full width lines inside a card with a small label on the left, split into page sized blocks. */
 function labelledBlocks(layout: Layout, label: string, items: TextItem[]): FlowBlock[] {
   const { doc } = layout
   const innerX = margin + 4
-  return layout.chunk(layout.measure(items, contentWidth - 8 - 26)).map((part, index) => ({
+  return layout.chunk(layout.measure(items, contentWidth - 8 - LABEL_COLUMN)).map((part, index) => ({
     height: layout.heightOf(part) + 2.2,
     draw: top => {
       if (index === 0) {
         setFont(doc, 5.6, 'bold', PALETTE.muted)
         doc.text(label.toUpperCase(), innerX, top + 1 + capHeight(7), { charSpace: 0.2 })
       }
-      layout.drawLines(part, innerX + 26, top + 1)
+      layout.drawLines(part, innerX + LABEL_COLUMN, top + 1)
     },
   }))
 }
@@ -618,6 +621,16 @@ export function generateWorkspaceAssessmentPDF(saved: SavedAssessment, context: 
   return layout.finish()
 }
 
+/**
+ * How a sample report presents itself: its cover title, the marker printed at the top of every
+ * page and the note that says the data is fictional. A sample is built from synthetic data only.
+ */
+export interface CisSamplePresentation {
+  title: string
+  marker: string
+  note: string
+}
+
 /** Where a CIS readiness report came from; the tenant name is a label only. */
 export interface CisReportContext extends ExportContext {
   tenantId: string
@@ -657,22 +670,24 @@ function levelFigure(level: CisLevelReadiness) {
  * framework reports. Export never re-reads or re-evaluates the tenant. Manual items without
  * imported text carry the same fallback line the readiness view shows.
  */
-export function generateCisReadinessPDF(summary: CisReadinessSummary, context: CisReportContext, branding?: PdfBranding): Uint8Array<ArrayBuffer> {
+export function generateCisReadinessPDF(summary: CisReadinessSummary, context: CisReportContext, branding?: PdfBranding, sample?: CisSamplePresentation): Uint8Array<ArrayBuffer> {
   const title = summary.benchmarkName ?? summary.benchmark
   const theme = resolveBrandTheme(branding)
   const product = brandName(theme)
   const layout = createReport({
-    shortName: title, tenant: context.tenantName ?? context.tenantId, footer: 'CIS readiness report',
-    title: `${summary.benchmark} readiness report`, subject: 'CIS readiness summary from a saved assessment', keywords: 'Intune, configuration, readiness, comparison',
-    exportedAt: context.exportedAt, identity: ['cis', context.runId ?? null, context.tenantId, summary.benchmark, summary.version, context.assessedAt, context.exportedAt], theme,
+    shortName: sample ? `${sample.title}: ${title}` : title, tenant: context.tenantName ?? context.tenantId, footer: sample ? `${sample.title}, ${sample.marker.toLowerCase()}` : 'CIS readiness report',
+    title: sample ? sample.title : `${summary.benchmark} readiness report`, subject: sample ? sample.note : 'CIS readiness summary from a saved assessment', keywords: 'Intune, configuration, readiness, comparison',
+    exportedAt: context.exportedAt, identity: ['cis', sample ? 'sample' : null, context.runId ?? null, context.tenantId, summary.benchmark, summary.version, context.assessedAt, context.exportedAt], theme,
+    ...(sample ? { marker: sample.marker } : {}),
   })
   const tenant = context.tenantName ? `${context.tenantName} (${context.tenantId})` : context.tenantId
   const benchmark = summary.benchmarkName ? `${summary.benchmarkName} (${summary.benchmark})` : summary.benchmark
   const headlines = summary.levels.map(levelFigure)
   const first = headlines[0]
   drawCover(layout, {
-    eyebrow: 'CIS readiness report', title, subtitle: [summary.benchmarkName ? summary.benchmark : '', summary.version ? `Version ${summary.version}` : ''].filter(Boolean).join(' | '),
-    lead: 'Readiness of the recorded Intune configuration against the imported benchmark pack, per Level.',
+    eyebrow: sample ? sample.marker : 'CIS readiness report', title: sample ? sample.title : title,
+    subtitle: (sample ? [title, summary.version ? `Version ${summary.version}` : ''] : [summary.benchmarkName ? summary.benchmark : '', summary.version ? `Version ${summary.version}` : '']).filter(Boolean).join(' | '),
+    lead: sample ? sample.note : 'Readiness of the recorded Intune configuration against the imported benchmark pack, per Level.',
     tenant: context.tenantName ?? context.tenantId,
     facts: [['Assessed', formatReportDate(context.assessedAt)], ['Exported', formatReportDate(context.exportedAt)]],
     ring: first?.rate ?? 0,
@@ -683,7 +698,7 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
       { label: headlines[index]!.label, value: percent(headlines[index]!.rate), marker: 'filled' as MarkerKind, color: CHECK_RESULT_COLORS.matches },
       { label: `Level ${level.level} deviating settings`, value: String(level.different + level.missing + level.review), marker: 'half' as MarkerKind, color: CHECK_RESULT_COLORS.different },
     ]),
-    glanceNote: summary.manualNote,
+    glanceNote: sample ? `${sample.note} ${summary.manualNote}` : summary.manualNote,
     control: [
       { label: 'Benchmark', value: benchmark, span: 2 },
       { label: 'Version', value: summary.version },
@@ -693,9 +708,9 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
       { label: 'Assessed', value: formatReportDate(context.assessedAt) },
       { label: 'Exported', value: formatReportDate(context.exportedAt) },
     ],
-    footerRight: 'Readiness comparison, not a tenant certification',
+    footerRight: sample ? `${sample.marker}: not a real assessment` : 'Readiness comparison, not a tenant certification',
   })
-  layout.contentsPage(aboutPanel(layout, [`Readiness figures come from a saved assessment of the recorded Intune configuration and were not collected again for this export. They are not an audit opinion. ${CIS_TENANT_NOT_CERTIFIED_NOTE}`]))
+  layout.contentsPage(aboutPanel(layout, [...(sample ? [sample.note] : []), `Readiness figures come from a saved assessment of the recorded Intune configuration and were not collected again for this export. They are not an audit opinion. ${CIS_TENANT_NOT_CERTIFIED_NOTE}`]))
 
   layout.pageTitle('Executive summary', 'Summary')
   facts(layout, [

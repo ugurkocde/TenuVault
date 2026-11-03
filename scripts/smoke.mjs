@@ -631,10 +631,10 @@ await check("framework catalog includes native providers, CIS Benchmarks by plan
   // CIS Benchmarks is a Pro and MSP feature: the catalog opens it and names the plans.
   assert(await evaluate(`document.querySelectorAll('main a[href="#/portal/frameworks/cis-benchmarks"]').length > 0`), "CIS Benchmarks catalog entry does not open the CIS page")
   assert(await waitForText("Pro and MSP · Delivered benchmark packs"), "CIS Benchmarks catalog entry does not name the plans")
-  // The sidebar always has the entry; without a Pro or MSP plan it is the muted plan prompt.
+  // The sidebar always has the entry and it always opens the CIS page; without a Pro or MSP plan it carries the plan badge.
   const sidebarCis = `[...document.querySelectorAll('nav[aria-label="Main navigation"] a, nav[aria-label="Main navigation"] button')].find(item => item.textContent.includes("CIS Benchmarks"))`
   assert(await evaluate(`Boolean(${sidebarCis})`), "CIS Benchmarks sidebar entry missing")
-  assert(await evaluate(`(() => { const item = ${sidebarCis}; return item.tagName === "A" || (item.getAttribute("aria-disabled") === "true" && item.title.includes("Pro and MSP") && !item.title.includes("CIS Controls")) })()`), "CIS Benchmarks sidebar entry is neither a link nor the plan prompt")
+  assert(await evaluate(`(() => { const item = ${sidebarCis}; return item.tagName === "A" && item.getAttribute("href") === "#/portal/frameworks/cis-benchmarks" && ["CIS Benchmarks", "CIS BenchmarksPro"].includes(item.textContent.trim()) })()`), "CIS Benchmarks sidebar entry is not a link to the CIS page")
   assert(!(await evaluate(`[...document.querySelectorAll('[aria-label="Framework list"] a, [aria-label="Framework list"] span')].some(a => a.textContent.includes("CIS Benchmarks"))`)), "CIS Benchmarks still listed under Frameworks")
   assert(await evaluate(`[...document.querySelectorAll('[aria-label="Framework list"] a, [aria-label="Framework list"] span')].some(a => a.textContent.includes("CIS Controls"))`), "CIS Controls missing under Frameworks")
   await screenshot("14-framework-catalog")

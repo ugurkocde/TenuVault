@@ -40,7 +40,8 @@ import { RunOverlay } from "../components/RunOverlay"
 import { CisRemediationPanel } from "../features/cis-remediation/CisRemediationPanel"
 import { CisRemediationLimits } from "../features/cis-remediation/CisRemediationLimits"
 import { CisRemediationHistory } from "../features/cis-remediation/CisRemediationHistory"
-import { canUse, GatedButton, LockedPreview } from "../components/PlanGate"
+import { canUse, GatedButton } from "../components/PlanGate"
+import { CisBenchmarksPreview } from "../features/cis-preview/CisBenchmarksPreview"
 import { FilterChips, FilterSelect, SearchInput } from "../components/FilterControls"
 import { filterFindings, findingLevels, findingSearchText, hiddenSelectedKeys, NO_FINDING_FILTER, type FindingFilter } from "../../shared/frameworks/finding-filter"
 import { useConfirm } from "~/components/ConfirmDialog"
@@ -484,6 +485,9 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   // CIS Benchmarks is Pro and MSP. A known plan without it shows the plan preview instead of the
   // benchmark picker; saved assessments from an earlier plan stay readable.
   const cisLocked = isCis && plan !== null && !canUse(plan, "baselineAllPlatforms")
+  // Where a new assessment would start, such a plan sees the preview of what Pro and MSP add; saved
+  // results from an earlier plan keep their read-only view.
+  const cisPreview = cisLocked && contentStage !== "results"
   // CIS work (catalog, pack loads, runs) starts only once the plan is known to include CIS Benchmarks,
   // so an unresolved plan sends nothing the main process would refuse, and a later plan change is followed.
   const cisAllowed = isCis && canUse(plan, "baselineAllPlatforms")
@@ -976,7 +980,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       <div><p className="text-xs uppercase tracking-widest text-gray-500">{framework.publisher} · {framework.kind}</p><h1 className={standalone ? "mt-2 text-4xl font-light tracking-tight text-gray-900" : "mt-2 text-3xl font-semibold tracking-tight text-gray-950"}>{framework.name}</h1><p className="mt-2 text-gray-600">{framework.description}</p></div>
       {framework.source && <a href={framework.source} target="_blank" rel="noreferrer" className={button}>Source <ExternalLink className="h-4 w-4" aria-hidden="true" /></a>}
     </div>
-    {isCis && <CisCertificationNote />}
+    {isCis && (cisPreview ? <CisBenchmarksPreview className="mt-5" /> : <CisCertificationNote />)}
     {isCis && <nav aria-label="CIS Benchmarks progress" className="mt-6">
       <ol className="flex flex-wrap gap-2">
         {cisFlowSteps(policies.length > 0, !!assessment, !!cisRun).map(item => {
@@ -1041,7 +1045,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="cis-delivered-title" className="text-xl font-medium tracking-tight">1. Load benchmark</h2><span className="text-sm text-gray-500">{cisCatalog ? `${cisCatalog.length} benchmarks available` : "Delivery service"}</span></div>
       <p className="mt-2 text-sm text-gray-600">Load a benchmark pack from the TenuVault delivery service. The pack is saved in encrypted storage on this device for the selected tenant.</p>
       {policies.length > 0 && reference && <p className="mt-2 text-sm text-gray-800">Loaded: {referenceDisplayName(reference, packBenchmarkName(policies))}, {policies.length} {policies.length === 1 ? "policy" : "policies"}. Compare it with the tenant in step 2.</p>}
-      {cisLocked && <LockedPreview feature="baselineAllPlatforms" className="mt-4 bg-secondary/40 shadow-none" summary="Load CIS Benchmark packs from the TenuVault delivery service, assess your tenant per Level, remediate deviating settings with review, backup and rollback, and export readiness reports." points={["Benchmark packs and recommendation lists are delivered to licensed installations and stored encrypted on this device.", "Readiness per Level with Manual and Not assessed recommendations listed for manual action.", "PDF, CSV and JSON exports of findings and readiness."]} />}
+      {cisLocked && <p className="mt-3 text-sm text-gray-600">Benchmark packs are delivered to tenants on TenuVault Pro and MSP, as described at the top of this page.</p>}
       {!cisLocked && <>
       {!credentials && <p className="mt-3 text-sm text-amber-800">Sign in to {selectedTenant?.name ?? "a tenant"} from the sidebar to load benchmarks and run an assessment.</p>}
       <div className="mt-4 flex flex-wrap items-center gap-3"><button type="button" className={button} disabled={!!busy || cisCatalogLoading || !cisAllowed || !credentials} onClick={() => void loadCisCatalog()}>{cisCatalogLoading ? "Loading available benchmarks…" : "Refresh available benchmarks"}</button>
