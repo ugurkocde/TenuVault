@@ -24,10 +24,10 @@ export function canUse(plan: Plan | null, feature: Feature): boolean {
 }
 
 /** A short dialog that says which plan includes a feature, with a link to the plans. */
-export function UpgradeDialog({ feature, message, open, onOpenChange }: { feature: Feature; message?: string; open: boolean; onOpenChange: (open: boolean) => void }) {
+export function UpgradeDialog({ feature, message, open, onOpenChange, onCloseAutoFocus }: { feature: Feature; message?: string; open: boolean; onOpenChange: (open: boolean) => void; onCloseAutoFocus?: (event: Event) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent onCloseAutoFocus={onCloseAutoFocus}>
         <DialogHeader className="pr-10">
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-coral-600" aria-hidden="true" />

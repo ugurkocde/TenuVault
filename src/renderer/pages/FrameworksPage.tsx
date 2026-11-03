@@ -1,7 +1,7 @@
 import { packCoverage, UNSUPPORTED } from "../../shared/frameworks/coverage"
 import type { FrameworkWorkspace, WorkspaceView } from "../../main/frameworks/workspaces"
 import { isHistoryFullError, isWorkspaceUnreadableError, KEEP_NEWEST_ASSESSMENTS } from "../../shared/frameworks/workspace-history"
-import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState } from "react"
+import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react"
 import { Link, useParams, useSearchParams } from "react-router-dom"
 import { ArrowRight, Check, ChevronDown, Download, ExternalLink, FileJson, FileSpreadsheet, FileText, Info } from "lucide-react"
 import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
@@ -41,7 +41,9 @@ import { RunOverlay } from "../components/RunOverlay"
 import { CisRemediationPanel } from "../features/cis-remediation/CisRemediationPanel"
 import { CisRemediationLimits } from "../features/cis-remediation/CisRemediationLimits"
 import { CisRemediationHistory } from "../features/cis-remediation/CisRemediationHistory"
-import { canUse, GatedButton } from "../components/PlanGate"
+import { canUse, GatedButton, UpgradeDialog } from "../components/PlanGate"
+import { PlanBadge } from "../components/UpgradeNote"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "~/components/ui/dropdown-menu"
 import { CisBenchmarksPreview } from "../features/cis-preview/CisBenchmarksPreview"
 import { FilterChips, FilterSelect, SearchInput } from "../components/FilterControls"
 import { filterFindings, findingLevels, findingSearchText, hiddenSelectedKeys, NO_FINDING_FILTER, type FindingFilter } from "../../shared/frameworks/finding-filter"
@@ -379,17 +381,31 @@ function CisExportMenu({ plan, disabled, readinessDisabled, onPdf, onFindingsCsv
   onReadinessCsv: () => void
   onReadinessJson: () => void
 }) {
-  const close = (event: React.SyntheticEvent) => { event.currentTarget.closest("details")?.removeAttribute("open") }
-  return <details className="relative">
-    <summary className={cn(button, "cursor-pointer list-none [&::-webkit-details-marker]:hidden")}>Export <ChevronDown className="h-4 w-4" aria-hidden="true" /></summary>
-    <div className="absolute right-0 z-10 mt-2 w-56 rounded-2xl border border-gray-200 bg-white p-2 shadow-lg">
-      <GatedButton feature="baselineAllPlatforms" plan={plan} variant="ghost" size="sm" disabled={disabled} className="w-full justify-start gap-2" onClick={event => { close(event); onPdf() }}><FileText className="h-4 w-4" aria-hidden="true" />PDF report</GatedButton>
-      <GatedButton feature="baselineAllPlatforms" plan={plan} variant="ghost" size="sm" disabled={disabled} className="w-full justify-start gap-2" onClick={event => { close(event); onFindingsCsv() }}><FileSpreadsheet className="h-4 w-4" aria-hidden="true" />Findings CSV</GatedButton>
-      <GatedButton feature="baselineAllPlatforms" plan={plan} variant="ghost" size="sm" disabled={disabled} className="w-full justify-start gap-2" onClick={event => { close(event); onFindingsJson() }}><FileJson className="h-4 w-4" aria-hidden="true" />Findings JSON</GatedButton>
-      <GatedButton feature="baselineAllPlatforms" plan={plan} variant="ghost" size="sm" disabled={disabled || readinessDisabled} className="w-full justify-start gap-2" onClick={event => { close(event); onReadinessCsv() }}><FileSpreadsheet className="h-4 w-4" aria-hidden="true" />Readiness CSV</GatedButton>
-      <GatedButton feature="baselineAllPlatforms" plan={plan} variant="ghost" size="sm" disabled={disabled || readinessDisabled} className="w-full justify-start gap-2" onClick={event => { close(event); onReadinessJson() }}><FileJson className="h-4 w-4" aria-hidden="true" />Readiness JSON</GatedButton>
-    </div>
-  </details>
+  const [explaining, setExplaining] = useState(false)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const allowed = canUse(plan, "baselineAllPlatforms")
+  // The menu renders in a portal, so no card on the page can paint over it. A plan without
+  // CIS exports keeps every item visible with its badge; choosing one explains the plan.
+  const item = (icon: ReactNode, label: string, run: () => void, unavailable = false) => <DropdownMenuItem
+    disabled={plan === null || disabled || unavailable}
+    className="gap-2"
+    title={allowed ? undefined : upgradeMessage("baselineAllPlatforms")}
+    onSelect={() => { if (allowed) run(); else setExplaining(true) }}
+  >{icon}{label}{!allowed && <PlanBadge feature="baselineAllPlatforms" className="ml-auto" />}</DropdownMenuItem>
+  return <>
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild><button ref={trigger} type="button" className={button}>Export <ChevronDown className="h-4 w-4" aria-hidden="true" /></button></DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        {item(<FileText className="h-4 w-4" aria-hidden="true" />, "PDF report", onPdf)}
+        {item(<FileSpreadsheet className="h-4 w-4" aria-hidden="true" />, "Findings CSV", onFindingsCsv)}
+        {item(<FileJson className="h-4 w-4" aria-hidden="true" />, "Findings JSON", onFindingsJson)}
+        {item(<FileSpreadsheet className="h-4 w-4" aria-hidden="true" />, "Readiness CSV", onReadinessCsv, readinessDisabled)}
+        {item(<FileJson className="h-4 w-4" aria-hidden="true" />, "Readiness JSON", onReadinessJson, readinessDisabled)}
+      </DropdownMenuContent>
+    </DropdownMenu>
+    {/* The dialog has no trigger of its own; focus returns to Export when it closes. */}
+    <UpgradeDialog feature="baselineAllPlatforms" open={explaining} onOpenChange={setExplaining} onCloseAutoFocus={event => { event.preventDefault(); trigger.current?.focus() }} />
+  </>
 }
 
 /** The certification and its exact scope, from the shared statement so the page and every export agree. */

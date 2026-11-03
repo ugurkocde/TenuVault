@@ -748,13 +748,19 @@ describe("CIS Benchmarks route", () => {
     const container = await renderSavedAssessment()
     // The saved readiness stays on screen.
     expect(container.querySelector('[aria-label="CIS readiness"]')).not.toBeNull()
+    // The Export menu renders its items in a portal once it opens.
+    const exportTrigger = [...container.querySelectorAll("button")].find((item) => item.textContent?.trim() === "Export")!
+    await act(async () => { exportTrigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })) })
+    await flush()
+    const menuItems = () => [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')]
     for (const label of ["Readiness CSV", "Readiness JSON", "Findings CSV", "Findings JSON", "PDF report"]) {
-      const button = [...container.querySelectorAll("button")].find((item) => item.textContent?.startsWith(label))
-      expect(button, label).toBeDefined()
-      expect(button?.getAttribute("aria-disabled"), label).toBe("true")
-      expect(button?.getAttribute("title"), label).toContain("CIS Benchmarks assessments, remediation and reports")
+      const option = menuItems().find((item) => item.textContent?.startsWith(label))
+      expect(option, label).toBeDefined()
+      // Visible with the plan badge, and choosing it explains the plan instead of exporting.
+      expect(option?.hasAttribute("data-disabled"), label).toBe(false)
+      expect(option?.getAttribute("title"), label).toContain("CIS Benchmarks assessments, remediation and reports")
     }
-    const readinessCsv = [...container.querySelectorAll("button")].find((item) => item.textContent?.startsWith("Readiness CSV"))!
+    const readinessCsv = menuItems().find((item) => item.textContent?.startsWith("Readiness CSV"))!
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>
     const before = fetchMock.mock.calls.length
     await act(async () => { readinessCsv.click() })
@@ -762,6 +768,11 @@ describe("CIS Benchmarks route", () => {
     // The click explains the plan; nothing is exported or sent.
     expect(document.body.textContent).toContain("Included in TenuVault Pro and MSP")
     expect(fetchMock.mock.calls.length).toBe(before)
+    // Closing the plan dialog returns focus to the Export button.
+    await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })) })
+    await flush()
+    expect(document.body.textContent).not.toContain("Included in TenuVault Pro and MSP")
+    expect(document.activeElement).toBe(exportTrigger)
     const runAgain = [...container.querySelectorAll("button")].find((item) => item.textContent === "Run again")
     expect(runAgain?.disabled).toBe(true)
     expect(container.textContent).toContain("Saved results stay readable.")
@@ -774,6 +785,28 @@ describe("CIS Benchmarks route", () => {
     await flush()
     expect(container.querySelector(preview)).not.toBeNull()
     expect(container.querySelectorAll('[aria-label="CIS certification"]')).toHaveLength(1)
+    vi.unstubAllGlobals()
+  })
+
+  it("exports from the Export menu on Pro, with the menu in a portal outside the results cards", async () => {
+    const tenantId = "11111111-1111-1111-1111-111111111111"
+    licenseStatus.current = { ...entitledStatus("pro"), tenants: [keyTenant(tenantId, "pro", 2)] }
+    const container = await renderSavedAssessment()
+    const exportTrigger = [...container.querySelectorAll("button")].find((item) => item.textContent?.trim() === "Export")!
+    await act(async () => { exportTrigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })) })
+    await flush()
+    const menu = document.body.querySelector<HTMLElement>('[role="menu"]')
+    expect(menu).not.toBeNull()
+    // A card's stacking context cannot cover the menu: it is not rendered inside the page.
+    expect(container.contains(menu)).toBe(false)
+    const findingsCsv = [...menu!.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) => item.textContent === "Findings CSV")!
+    expect(findingsCsv.getAttribute("title")).toBeNull()
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>
+    await act(async () => { findingsCsv.click() })
+    await flush()
+    expect(fetchMock.mock.calls.some(([, init]) => String((init as RequestInit | undefined)?.body).includes('"workspace-csv"'))).toBe(true)
+    expect(document.body.textContent).not.toContain("Included in TenuVault Pro and MSP")
+    expect(document.body.querySelector('[role="menu"]')).toBeNull()
     vi.unstubAllGlobals()
   })
 
