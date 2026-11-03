@@ -173,11 +173,18 @@ const LEGACY_KEYS = ["license.key", "license.trialStartedAt", "license.lastSeenA
 const guidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 // Time and status checks for a token whose signature already verified.
-export function entitlementCurrent(payload: Pick<Entitlement, "exp" | "status">, now: number, seen: number): boolean {
+export function entitlementCurrent(
+  payload: Pick<Entitlement, "exp" | "status"> & Partial<Pick<Entitlement, "v" | "keyExp" | "trial">>,
+  now: number,
+  seen: number,
+): boolean {
   return (
     payload.status === "granted" &&
     Number.isFinite(payload.exp) &&
     payload.exp * 1000 > now &&
+    // A trial ends at its key expiry, also offline: a token refreshed in its last 14 days
+    // must not carry Pro past day 30. Paid keys keep the offline grace of their token.
+    !(payload.v === 2 && payload.trial === true && typeof payload.keyExp === "number" && payload.keyExp * 1000 <= now) &&
     seen - now <= CLOCK_TOLERANCE_MS
   )
 }

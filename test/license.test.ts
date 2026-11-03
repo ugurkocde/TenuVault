@@ -308,6 +308,14 @@ describe("LicenseService key expiry", () => {
     expect(licenseExpiryWarning(status)).toBeNull()
   })
 
+  it("ends a trial at its key expiry even while the offline token is current", () => {
+    storeLicense(token({ v: 2, keyExp: (T0 - 60_000) / 1000, trial: true }))
+    expect(entitled(service())).toBe(false)
+    // A paid key that expired keeps the offline grace of its token.
+    storeLicense(token({ v: 2, keyExp: (T0 - 60_000) / 1000 }))
+    expect(entitled(service())).toBe(true)
+  })
+
   it("ignores a trial claim without a key expiry or on a version 1 token", () => {
     storeLicense(token({ v: 2, trial: true }))
     expect(service().status([TENANT]).trial).toBe(false)

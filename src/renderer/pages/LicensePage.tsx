@@ -103,10 +103,74 @@ function TrialCallToAction({ emailRef, onSent }: { emailRef: Ref<HTMLInputElemen
   )
 }
 
+/**
+ * Swaps this machine's key for another one in the main process: the new key is activated
+ * first and the saved key released only once it was accepted, so organization licenses and
+ * the current key survive a refused key.
+ */
+function ReplaceKeyForm({ busy, onReplace }: { busy: Busy; onReplace: (key: string) => void }) {
+  const [newKey, setNewKey] = useState("")
+  return (
+    <form
+      className="space-y-2"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (newKey.trim()) onReplace(newKey.trim())
+      }}
+    >
+      <Label htmlFor="replacement-key">New license key</Label>
+      <div className="flex gap-2">
+        <Input
+          id="replacement-key"
+          autoComplete="off"
+          className="font-mono"
+          placeholder="Paste the key from your purchase email"
+          value={newKey}
+          onChange={(event) => setNewKey(event.target.value)}
+          spellCheck={false}
+          disabled={busy !== null}
+        />
+        <Button type="submit" disabled={busy !== null || !newKey.trim()}>
+          {busy === "replace" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <KeyRound className="mr-2 h-4 w-4" />}
+          Use this key
+        </Button>
+      </div>
+      <p className="text-xs text-gray-500">The new key is activated for your tenants first. Only then is the saved key released from this machine.</p>
+    </form>
+  )
+}
+
+/**
+ * A saved key that no longer licenses anything, such as an ended trial: buy a plan and
+ * swap in the new key without deactivating the machine first.
+ */
+function InactiveKeyReplacement({ busy, onReplace }: { busy: Busy; onReplace: (key: string) => void }) {
+  const [replacing, setReplacing] = useState(false)
+  return (
+    <div className="space-y-3 rounded-3xl bg-gray-50 p-5">
+      <p className="text-sm text-gray-700">
+        Your saved key is not active, for example because your trial ended. Bought a new license? Enter its key here.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" onClick={() => void bridge.license.open("checkout", { source: "license-page-inactive" })}>
+          <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
+          Buy Pro
+        </Button>
+        {!replacing && (
+          <Button type="button" variant="outline" onClick={() => setReplacing(true)}>
+            <KeyRound className="mr-2 h-4 w-4" aria-hidden="true" />
+            Enter a new key
+          </Button>
+        )}
+      </div>
+      {replacing && <ReplaceKeyForm busy={busy} onReplace={onReplace} />}
+    </div>
+  )
+}
+
 /** A running no-card trial: when it ends, buying Pro, and swapping in the paid key. */
 function TrialStatus({ status, busy, onReplace }: { status: LicenseStatus; busy: Busy; onReplace: (key: string) => void }) {
   const [replacing, setReplacing] = useState(false)
-  const [newKey, setNewKey] = useState("")
   const daysLeft = trialDaysLeft(status)
   if (daysLeft === null || !status.trialEndsAt) return null
   return (
@@ -137,34 +201,7 @@ function TrialStatus({ status, busy, onReplace }: { status: LicenseStatus; busy:
           </Button>
         )}
       </div>
-      {replacing && (
-        <form
-          className="space-y-2"
-          onSubmit={(event) => {
-            event.preventDefault()
-            if (newKey.trim()) onReplace(newKey.trim())
-          }}
-        >
-          <Label htmlFor="replacement-key">New license key</Label>
-          <div className="flex gap-2">
-            <Input
-              id="replacement-key"
-              autoComplete="off"
-              className="font-mono"
-              placeholder="Paste the key from your purchase email"
-              value={newKey}
-              onChange={(event) => setNewKey(event.target.value)}
-              spellCheck={false}
-              disabled={busy !== null}
-            />
-            <Button type="submit" disabled={busy !== null || !newKey.trim()}>
-              {busy === "replace" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <KeyRound className="mr-2 h-4 w-4" />}
-              Use this key
-            </Button>
-          </div>
-          <p className="text-xs text-gray-500">The new key is activated for your signed-in tenants first. Only then is the trial key released from this machine.</p>
-        </form>
-      )}
+      {replacing && <ReplaceKeyForm busy={busy} onReplace={onReplace} />}
     </div>
   )
 }
@@ -419,6 +456,7 @@ export default function LicensePage() {
 
           {isUnlicensed(status) && <TrialCallToAction emailRef={trialEmail} onSent={() => setTrialKeyHint(true)} />}
           {status.trial && <TrialStatus status={status} busy={busy} onReplace={replaceKey} />}
+          {status.hasKey && !status.trial && status.keyState !== "active" && <InactiveKeyReplacement busy={busy} onReplace={replaceKey} />}
 
           {status.hasKey ? (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-gray-50 px-5 py-4">

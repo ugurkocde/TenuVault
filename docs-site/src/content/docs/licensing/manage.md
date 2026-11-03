@@ -119,9 +119,9 @@ To keep Pro:
 2. Your new license key arrives by email.
 3. On the **License** page, click **Enter your new key**, paste the key and click **Use this key**. TenuVault activates the new key for every tenant the trial key covers on this machine, and for signed-in tenants that are not licensed yet, and only then releases the trial key. If the new key is refused for a tenant the trial key covers, nothing changes: the trial key stays active and the reason is shown. Tenants licensed through your organization keep that license.
 
-If you do nothing, the trial key expires at the end of day 30. Nothing is charged. One tenant continues on Community, the free plan for one tenant; a second tenant is no longer covered. Pro features turn off, and your backups stay where they are.
+If you do nothing, the trial key expires at the end of day 30, also when TenuVault is offline. Nothing is charged. One tenant continues on Community, the free plan for one tenant; a second tenant is no longer covered. Pro features turn off, and your backups stay where they are.
 
-To use a different key outside a trial, first click **Deactivate this machine**, then enter the new key. Replacing a running trial key with **Enter your new key** is the exception. TenuVault does not accept a new key while the current one is active on this machine and shows "Deactivate this machine before entering a different license key."
+To use a different key outside a trial, first click **Deactivate this machine**, then enter the new key. Replacing a running trial key with **Enter your new key** is the exception, and so is a saved key that is no longer active, for example after the trial ended: the **License** page then shows **Enter a new key**, which swaps the key the same way and leaves licenses shared by your organization in place. TenuVault does not accept a new key while the current one is active on this machine and shows "Deactivate this machine before entering a different license key."
 
 ## Manage your subscription
 

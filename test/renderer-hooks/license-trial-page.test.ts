@@ -100,6 +100,17 @@ describe("License page trial", () => {
     expect(state.open).toHaveBeenCalledWith("checkout", { source: "license-page-trial" })
   })
 
+  it("offers the key swap for a saved key that is no longer active", async () => {
+    const container = await render({ ...community, hasKey: true, keyState: "failed", keyHint: "****ABCD", keyMessage: "This license key has expired." })
+    expect(container.textContent).toContain("Your saved key is not active")
+    await act(async () => { button(container, "Enter a new key")!.click() })
+    type(container.querySelector<HTMLInputElement>("#replacement-key")!, "TENU-PAID-0001")
+    await act(async () => { button(container, "Use this key")!.click() })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(state.replaceKey).toHaveBeenCalledWith("TENU-PAID-0001")
+    expect(state.deactivate).not.toHaveBeenCalled()
+  })
+
   it("swaps the trial key for the paid key", async () => {
     const validUntil = new Date(Date.now() + 3 * 24 * 60 * 60_000).toISOString()
     const container = await render({ ...community, hasKey: true, keyState: "active", keyHint: "****ABCD", plan: "pro", tenantLimit: 2, trialEndsAt: validUntil, trial: true })
