@@ -72,7 +72,12 @@ export async function collectFromBackup(deps: FeatureDeps, tenantId: string, bac
   const contents = await json(await deps.api("/api/list-backup-contents", tenantId, { backupId: chosen.id }), "The backup contents")
   const content = (contents.content ?? {}) as { groups?: Array<{ folder?: string; policies?: Array<{ path?: string }> }>; metadata?: Record<string, unknown> }
   const metadata = content.metadata ?? {}
-  const excluded = new Set(strings((metadata.Scope as Record<string, unknown> | undefined)?.Excluded))
+  const scope = metadata.Scope as Record<string, unknown> | undefined
+  const excluded = new Set(strings(scope?.Excluded))
+  // Backups record the types they attempted; a type left out without being excluded (such as an opt-in
+  // service that is off) was not collected either. Backups from before Included was recorded have none.
+  const included = Array.isArray(scope?.Included) ? new Set(strings(scope.Included)) : null
+  if (included) for (const type of INTUNE_TYPES) if (!included.has(type.folder)) excluded.add(type.folder)
   const skipped = new Set(strings(metadata.SkippedTypes))
   const failed = new Set(strings(metadata.FailedTypes))
   const notCollected: NotCollected[] = []

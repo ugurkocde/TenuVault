@@ -43,6 +43,14 @@
     recipients. Without it, email channels fail with a Graph permission error while
     webhook and Teams channels keep working. Off by default.
 
+.PARAMETER IncludeConditionalAccessRestore
+    When set, also requests the delegated Policy.ReadWrite.ConditionalAccess permission, so
+    TenuVault can restore Entra Conditional Access policies, named locations and authentication
+    strengths. Backing them up only needs Policy.Read.All, which is always requested. A restore
+    still needs an admin with the Conditional Access Administrator or Security Administrator
+    role, and restored policies start in report-only mode. Off by default, so the default
+    permission set cannot change Conditional Access.
+
 .EXAMPLE
     ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -AllowedGroupId 5f0c...
 
@@ -55,7 +63,8 @@ param(
     [string]$DisplayName = "TenuVault Desktop",
     [string]$AllowedGroupId,
     [switch]$IncludeGroupRead,
-    [switch]$IncludeNotifications
+    [switch]$IncludeNotifications,
+    [switch]$IncludeConditionalAccessRestore
 )
 
 $ErrorActionPreference = "Stop"
@@ -140,6 +149,11 @@ $resources = @(
 if ($IncludeGroupRead) {
     # Opt-in only: lets the hygiene unresolved groups check read group existence.
     $resources[0].Scopes += "Group.Read.All"
+}
+
+if ($IncludeConditionalAccessRestore) {
+    # Opt-in only: restores Conditional Access. Microsoft Graph also needs Policy.Read.All for these writes.
+    $resources[0].Scopes += "Policy.ReadWrite.ConditionalAccess"
 }
 
 if ($IncludeNotifications) {

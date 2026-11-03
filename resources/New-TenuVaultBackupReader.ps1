@@ -13,7 +13,7 @@
       * creates a single-tenant app registration "TenuVault Backup Reader", or updates the one
         given with -AppId or found by name
       * sets its Microsoft Graph application permissions to exactly the read permissions below
-        and removes any other permission granted to it, so it can never change Intune
+        and removes any other permission granted to it, so it can never change Intune or Entra
       * uploads the certificate exported from TenuVault (Settings > Background runner > Backup Reader); the private
         key never leaves the computer that runs TenuVault
       * grants admin consent for those permissions
@@ -23,6 +23,7 @@
       DeviceManagementRBAC.Read.All, DeviceManagementScripts.Read.All,
       DeviceManagementServiceConfig.Read.All
     With -IncludeDeviceCategories also DeviceManagementManagedDevices.Read.All.
+    With -IncludeConditionalAccess also Policy.Read.All.
 
     What it can and cannot do: it reads all Intune configuration tenant-wide, including script
     contents, without Intune role scope tags limiting it. It cannot read encrypted OMA-URI values
@@ -54,6 +55,13 @@
     numbers, primary users), so it is off by default; without it scheduled backups leave those
     two types out and manual backups include them.
 
+.PARAMETER IncludeConditionalAccess
+    Also grants Policy.Read.All, so scheduled backups include Entra Conditional Access policies,
+    named locations and authentication strengths (when the Conditional Access service is turned on
+    for the tenant in TenuVault). It is read-only but covers every policy of the organization, so it
+    is off by default; without it scheduled backups leave those types out and manual backups include
+    them. The reader never gets permission to change Conditional Access.
+
 .EXAMPLE
     ./New-TenuVaultBackupReader.ps1 -CertificatePath ./TenuVault-Backup-Reader.cer -TenantId contoso.onmicrosoft.com
 
@@ -66,7 +74,8 @@ param(
     [string]$TenantId,
     [string]$AppId,
     [string]$DisplayName = "TenuVault Backup Reader",
-    [switch]$IncludeDeviceCategories
+    [switch]$IncludeDeviceCategories,
+    [switch]$IncludeConditionalAccess
 )
 
 $ErrorActionPreference = "Stop"
@@ -134,6 +143,7 @@ $roles = @(
     "DeviceManagementServiceConfig.Read.All"
 )
 if ($IncludeDeviceCategories) { $roles += "DeviceManagementManagedDevices.Read.All" }
+if ($IncludeConditionalAccess) { $roles += "Policy.Read.All" }
 
 $graph = Get-MgServicePrincipal -Filter "appId eq '$graphAppId'"
 $wanted = foreach ($role in $roles) {
@@ -218,6 +228,9 @@ foreach ($assignment in $assigned) {
         $name = ($graph.AppRoles | Where-Object Id -eq $assignment.AppRoleId).Value
         if ($name -eq "DeviceManagementManagedDevices.Read.All") {
             Write-Warning "Removing DeviceManagementManagedDevices.Read.All because -IncludeDeviceCategories was not given. Every computer using this reader must verify it again in TenuVault. Run the script again with -IncludeDeviceCategories to keep it."
+        }
+        if ($name -eq "Policy.Read.All") {
+            Write-Warning "Removing Policy.Read.All because -IncludeConditionalAccess was not given. Every computer using this reader must verify it again in TenuVault. Run the script again with -IncludeConditionalAccess to keep it."
         }
         Write-Host "Removing permission $(if ($name) { $name } else { $assignment.AppRoleId }) on $($assignment.ResourceDisplayName): the Backup Reader stays read-only."
         Remove-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $sp.Id -AppRoleAssignmentId $assignment.Id

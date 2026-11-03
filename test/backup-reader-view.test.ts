@@ -29,6 +29,11 @@ describe("Backup Reader card", () => {
     expect(view.command).toBe("./New-TenuVaultBackupReader.ps1 -CertificatePath <exported .cer> -AppId 44444444-4444-4444-4444-444444444444 -IncludeDeviceCategories")
   })
 
+  it("keeps the Conditional Access permission in the renewal command, so a renewal never strips it", () => {
+    const view = readerView(state(status({ verifiedRoles: ["DeviceManagementConfiguration.Read.All", "DeviceManagementManagedDevices.Read.All", "Policy.Read.All"], excludedTypes: [] })), NOW)
+    expect(view.command).toBe("./New-TenuVaultBackupReader.ps1 -CertificatePath <exported .cer> -AppId 44444444-4444-4444-4444-444444444444 -IncludeDeviceCategories -IncludeConditionalAccess")
+  })
+
   it("offers setup without a reader, and nothing to act on without the plan or on an unsupported platform", () => {
     expect(readerView(state(null), NOW)).toMatchObject({ reader: null, verified: false, waiting: false, canAct: true })
     expect(readerView(state(null, { available: false }), NOW).canAct).toBe(false)

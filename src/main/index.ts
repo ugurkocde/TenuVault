@@ -73,6 +73,7 @@ import { backupAuthorization, featureAccess, withRecoveryBackups } from "./featu
 import { TenantRecords } from "./features/records"
 import { DriftJobs, driftScanRoutes } from "./drift/jobs"
 import { ModuleSettings } from "./services/settings"
+import { disabledFolders } from "../shared/services/modules"
 import { servicesStatus } from "./services/status"
 
 const RENDERER_STORAGE_PREFIX = "renderer."
@@ -724,10 +725,13 @@ async function bootstrap(): Promise<void> {
     const plan = license.plan(tenantId)
     const profile = tenantProfile(tenantId)
     const azureStorage = profile && !isLocalAccount(profile.storageAccountName) ? profile.storageAccountName : undefined
+    const reader = backupReader.status(tenantId)
+    // Types of services turned off for the tenant are left out of every backup, so the reader does not miss them.
+    const off = new Set(disabledFolders(moduleSettings.enabled(tenantId)))
     return {
       supported: readerSupported,
       available: !!plan && allows(plan, "backupReader"),
-      reader: backupReader.status(tenantId),
+      reader: reader && { ...reader, excludedTypes: reader.excludedTypes.filter((folder) => !off.has(folder)) },
       ...(azureStorage ? { storageAccountName: azureStorage } : {}),
     }
   }

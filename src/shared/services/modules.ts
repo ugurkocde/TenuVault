@@ -15,12 +15,15 @@ export type ModuleId = "intune" | "conditionalAccess"
 /** At least one of these permissions satisfies the requirement. ReadWrite always also covers Read. */
 export type AnyOf = readonly string[]
 
+/** Every group must be satisfied; within a group any one permission does. */
+export type Requirement = readonly AnyOf[]
+
 /** A part of a module that needs its own permission, such as Intune apps or scripts. */
 export interface PermissionArea {
   label: string
   folders: readonly string[]
-  backup: AnyOf
-  restore: AnyOf
+  backup: Requirement
+  restore: Requirement
 }
 
 /**
@@ -48,8 +51,8 @@ export interface ServiceModule {
   readerRole?: string
 }
 
-const rw = (name: string): AnyOf => [`${name}.ReadWrite.All`]
-const readOrWrite = (name: string): AnyOf => [`${name}.Read.All`, `${name}.ReadWrite.All`]
+const rw = (name: string): Requirement => [[`${name}.ReadWrite.All`]]
+const readOrWrite = (name: string): Requirement => [[`${name}.Read.All`, `${name}.ReadWrite.All`]]
 
 export const MODULES: readonly ServiceModule[] = [
   {
@@ -102,6 +105,37 @@ export const MODULES: readonly ServiceModule[] = [
       },
     ],
   },
+  {
+    id: "conditionalAccess",
+    label: "Entra Conditional Access",
+    description: "Conditional Access policies, named locations and authentication strengths. Restored policies start in report-only mode.",
+    optIn: true,
+    roles: "Security Reader or Global Reader to back up; Conditional Access Administrator or Security Administrator to restore.",
+    restoreSetup:
+      "To restore, run New-TenuVaultDesktopApp.ps1 again with -IncludeConditionalAccessRestore, or add the delegated Microsoft Graph permission Policy.ReadWrite.ConditionalAccess to the app registration and grant admin consent. Then click Check again.",
+    readerRole: "Policy.Read.All",
+    // Writes also need Policy.Read.All (a documented Microsoft Graph requirement for POST and PATCH of policies).
+    areas: [
+      {
+        label: "Named locations",
+        folders: ["NamedLocations"],
+        backup: [["Policy.Read.All", "Policy.ReadWrite.ConditionalAccess"]],
+        restore: [["Policy.Read.All"], ["Policy.ReadWrite.ConditionalAccess"]],
+      },
+      {
+        label: "Authentication strengths",
+        folders: ["AuthenticationStrengths"],
+        backup: [["Policy.Read.All", "Policy.Read.AuthenticationMethod", "Policy.ReadWrite.AuthenticationMethod", "Policy.ReadWrite.ConditionalAccess"]],
+        restore: [["Policy.ReadWrite.ConditionalAccess", "Policy.ReadWrite.AuthenticationMethod"]],
+      },
+      {
+        label: "Policies",
+        folders: ["ConditionalAccessPolicies"],
+        backup: [["Policy.Read.All"]],
+        restore: [["Policy.Read.All"], ["Policy.ReadWrite.ConditionalAccess"]],
+      },
+    ],
+  },
 ]
 
 export const MODULE_BY_ID = new Map(MODULES.map((module) => [module.id, module]))
@@ -131,7 +165,7 @@ export interface GrantedPermissions {
   permissions: ReadonlySet<string>
 }
 
-const satisfied = (needed: AnyOf, granted: ReadonlySet<string>) => needed.some((permission) => granted.has(permission))
+const satisfied = (needed: Requirement, granted: ReadonlySet<string>) => needed.every((group) => group.some((permission) => granted.has(permission)))
 
 export type Readiness = "ready" | "partial" | "missing"
 
@@ -153,7 +187,9 @@ export interface ModuleCheck {
   areas: AreaCheck[]
 }
 
-const describe = (needed: AnyOf) => needed.join(" or ")
+/** "A or B", and groups joined with "and": what to grant for the requirement, missing groups only. */
+export const describeRequirement = (needed: Requirement, granted: ReadonlySet<string> = new Set()) =>
+  needed.filter((group) => !group.some((permission) => granted.has(permission))).map((group) => group.join(" or ")).join(" and ")
 
 /** Whether the granted permissions cover each module's backup and restore, area by area. */
 export function checkModules(granted: GrantedPermissions, modules: readonly ServiceModule[] = MODULES): ModuleCheck[] {
@@ -166,8 +202,8 @@ export function checkModules(granted: GrantedPermissions, modules: readonly Serv
         folders: area.folders,
         backup,
         restore,
-        ...(backup ? {} : { missingBackup: describe(area.backup) }),
-        ...(restore ? {} : { missingRestore: describe(area.restore) }),
+        ...(backup ? {} : { missingBackup: describeRequirement(area.backup, granted.permissions) }),
+        ...(restore ? {} : { missingRestore: describeRequirement(area.restore, granted.permissions) }),
       }
     })
     const readiness = (key: "backup" | "restore"): Readiness => (areas.every((area) => area[key]) ? "ready" : areas.some((area) => area[key]) ? "partial" : "missing")
@@ -188,7 +224,7 @@ export function restorePermissionBlocker(folder: string, granted: GrantedPermiss
   if (!entry || !granted || !entry.module.optIn) return undefined
   if (satisfied(entry.area.restore, granted.permissions)) return undefined
   const setup = entry.module.restoreSetup ? ` ${entry.module.restoreSetup}` : " Add it to the TenuVault app registration and grant admin consent, then sign in again."
-  return `Restoring ${entry.module.label} ${entry.area.label.toLowerCase()} needs the ${describe(entry.area.restore)} permission, which the TenuVault app registration does not have.${setup}`
+  return `Restoring ${entry.module.label} ${entry.area.label.toLowerCase()} needs the ${describeRequirement(entry.area.restore, granted.permissions)} permission, which the TenuVault app registration does not have.${setup}`
 }
 
 /** Whether the granted permissions can read this folder; true for folders that belong to no module. */

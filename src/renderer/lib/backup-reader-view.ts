@@ -19,8 +19,9 @@ export function readerView(state: BackupReaderState | null, now = Date.now()) {
   // A renewal or another computer's certificate goes onto the same app registration. The script sets
   // exactly the permissions it is given, so a reader with the device inventory permission keeps it.
   const inventory = reader?.verifiedRoles?.includes("DeviceManagementManagedDevices.Read.All") ? " -IncludeDeviceCategories" : ""
+  const conditionalAccess = reader?.verifiedRoles?.includes("Policy.Read.All") ? " -IncludeConditionalAccess" : ""
   const command = verified
-    ? `./New-TenuVaultBackupReader.ps1 -CertificatePath <exported .cer> -AppId ${reader.clientId}${inventory}`
+    ? `./New-TenuVaultBackupReader.ps1 -CertificatePath <exported .cer> -AppId ${reader.clientId}${inventory}${conditionalAccess}`
     : "./New-TenuVaultBackupReader.ps1 -CertificatePath <exported .cer>"
   const excluded = (reader?.excludedTypes ?? []).map((folder) => typeForFolder(folder)?.label ?? folder)
   return { reader, verified, waiting, daysLeft, expiry, command, excluded, storageAccountName: state?.storageAccountName, canAct: !!state?.supported && !!state.available }
@@ -38,7 +39,7 @@ export function readerEntraRequest(command: string, renewal: boolean): string {
       ? "Please upload the renewal certificate for the TenuVault Backup Reader app registration."
       : "Please create the TenuVault Backup Reader app registration for scheduled Intune backups.",
     "The attached .cer file is a public certificate only; the private key stays on my computer.",
-    `Run: ${command} (add -IncludeDeviceCategories only if we agreed on it).`,
+    `Run: ${command} (add -IncludeDeviceCategories or -IncludeConditionalAccess only if we agreed on it).`,
     "The script creates a single-tenant app registration with exactly five read-only Graph application permissions, uploads the certificate, removes any other permission on that app, and grants admin consent.",
     `Details and the permission list: ${READER_GUIDE_URL}`,
     "Please send me the application (client) ID and certificate thumbprint it prints.",

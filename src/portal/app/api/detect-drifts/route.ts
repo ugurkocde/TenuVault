@@ -657,6 +657,9 @@ function checkIfRevertDrift(
   return true
 }
 
+/** Drift policy types (registry labels, capitalized) of the Conditional Access service. */
+const CONDITIONAL_ACCESS_TYPES = new Set(['Conditional Access policies', 'Named locations', 'Authentication strengths'])
+
 function determineSeverity(
   policyType: string,
   changeType: string,
@@ -665,7 +668,13 @@ function determineSeverity(
 ): "critical" | "warning" | "info" {
   // Critical changes
   if (changeType === "deleted" && policyType === "Compliance Policy") return "critical"
-  if (changeType === "deleted" && policyType === "Conditional Access") return "critical"
+  // Conditional Access decides who can sign in: a deleted object, or a change to who a policy covers, its
+  // state or its controls, can lock people out or open access.
+  if (CONDITIONAL_ACCESS_TYPES.has(policyType)) {
+    if (changeType === "deleted") return "critical"
+    if (changes?.some(c => /^(state|conditions\.users|grantControls|sessionControls|conditions\.locations|ipRanges|countriesAndRegions|isTrusted|allowedCombinations)/.test(c.field))) return "critical"
+    return "warning"
+  }
   
   // Check for security-related field changes
   if (changes) {

@@ -52,7 +52,7 @@ Delegated permissions let an app act on behalf of a signed-in user. They never g
 | --- | --- |
 | `User.Read` | Signs you in and reads your own basic profile. |
 | `Organization.Read.All` | Reads your organization's name and verified domains for the tenant overview. |
-| `Policy.Read.All` | Requested by the setup script. See the note below the table. |
+| `Policy.Read.All` | Backs up Entra Conditional Access policies, named locations and authentication strengths, when the Conditional Access service is turned on for the tenant. Read only. See [Conditional Access backups](/backups/conditional-access/). |
 | `DeviceManagementConfiguration.ReadWrite.All` | Backs up and restores device configuration profiles, Settings Catalog and endpoint security policies, administrative templates, compliance policies, security baselines, Windows update profiles, assignment filters, policy sets, compliance notification templates and related configuration. Also used by the OpenIntuneBaseline section to read, create and update the OIB policies you choose, and by Framework coverage to read and create Settings Catalog policies. |
 | `DeviceManagementApps.ReadWrite.All` | Backs up and restores apps, app categories, app configuration policies and app protection policies. |
 | `DeviceManagementServiceConfig.ReadWrite.All` | Backs up and restores enrollment configurations, Windows Autopilot deployment profiles, Apple enrollment profiles, terms and conditions and Company Portal branding. |
@@ -60,13 +60,18 @@ Delegated permissions let an app act on behalf of a signed-in user. They never g
 | `DeviceManagementRBAC.ReadWrite.All` | Backs up and restores Intune roles, role assignments, scope tags and multi admin approval policies. |
 | `DeviceManagementManagedDevices.Read.All` | Reads device categories and device clean-up rules for backups, and the managed device count and compliance rate shown in the tenant overview. Read only: TenuVault cannot change or wipe devices. |
 | `Group.Read.All` (optional, only with `-IncludeGroupRead`) | Reads whether a group referenced by a policy assignment exists, so the hygiene unresolved groups check can report missing groups. Not requested by default. Without it that check stays unknown. TenuVault reads group existence only (`GET groups/{id}?$select=id`); it does not list groups or read membership. |
+| `Policy.ReadWrite.ConditionalAccess` (optional, only with `-IncludeConditionalAccessRestore`) | Restores Conditional Access policies, named locations and authentication strengths. Not requested by default, so the default permission set cannot change Conditional Access. A restore also needs the Conditional Access Administrator or Security Administrator role, and restored policies start in report-only mode. |
 | `Mail.Send` (optional, only with `-IncludeNotifications`) | Sends notification email as the signed-in admin (`POST /me/sendMail`). Not requested by default. Only notification channels of kind email use it. |
 | `GroupMember.Read.All` (optional, only with `-IncludeNotifications`) | Resolves the members of an Entra group picked as an email notification recipient, at send time only, guests excluded. Not requested by default. Sending to a list address needs no group permission. |
 | `User.Read.All` (optional, only with `-IncludeNotifications`) | Reads mail address and user type of those group members so they can be addressed and guests excluded. Without it, Graph returns member objects with those fields empty and group recipients resolve to nobody. |
 
 :::note
-**About `Policy.Read.All`:** the setup script requests this permission, but no feature in the current version of TenuVault Desktop calls an API that requires it. TenuVault Desktop does not back up Conditional Access or other Entra policies. If your security review requires it, you can remove this permission from the app registration.
+**About `Policy.Read.All`:** only the opt-in Conditional Access service uses it, to read Conditional Access policies, named locations and authentication strengths. If you do not turn that service on and your security review requires it, you can remove this permission from the app registration.
 :::
+
+### Check what the app registration allows
+
+**Settings** > **Sign-in** > **Services and permissions** lists each service TenuVault covers (Intune, and the opt-in Entra Conditional Access) with whether the tenant's app registration may back it up and restore it, area by area, and which permission is missing. TenuVault reads this from the sign-in it already has, without a new request to Microsoft; after you add a permission and grant consent, select **Check again**. Roles are not part of this check, because roles you can activate with Privileged Identity Management do not show until you activate them.
 
 ### Azure Service Management
 
@@ -115,7 +120,7 @@ See [Notifications](/notifications/) for what is sent. The Azure watcher has its
 
 ## Optional: the Backup Reader
 
-The app registration above never changes. If Conditional Access session controls stop scheduled backups at night, you can add a second, separate app registration, the **TenuVault Backup Reader**, with `New-TenuVaultBackupReader.ps1`. It has read-only Microsoft Graph application permissions (`DeviceManagementConfiguration.Read.All`, `DeviceManagementApps.Read.All`, `DeviceManagementServiceConfig.Read.All`, `DeviceManagementScripts.Read.All`, `DeviceManagementRBAC.Read.All`, and optionally `DeviceManagementManagedDevices.Read.All`) and a certificate credential, never a secret. Only scheduled backups use it, and TenuVault refuses it when its Microsoft Graph token carries any other Graph permission. TenuVault cannot see application permissions for other APIs or Azure role assignments, so review those in Entra ID and on the storage account; `New-TenuVaultStorage.ps1` warns about broader roles on the storage account but does not remove them. See [Backup Reader for scheduled backups](/backups/backup-reader/) for what it can and cannot do, and [Conditional Access and TenuVault](/security/conditional-access/) for options that need no application permissions.
+The app registration above never changes. If Conditional Access session controls stop scheduled backups at night, you can add a second, separate app registration, the **TenuVault Backup Reader**, with `New-TenuVaultBackupReader.ps1`. It has read-only Microsoft Graph application permissions (`DeviceManagementConfiguration.Read.All`, `DeviceManagementApps.Read.All`, `DeviceManagementServiceConfig.Read.All`, `DeviceManagementScripts.Read.All`, `DeviceManagementRBAC.Read.All`, and optionally `DeviceManagementManagedDevices.Read.All` and `Policy.Read.All`) and a certificate credential, never a secret. Only scheduled backups use it, and TenuVault refuses it when its Microsoft Graph token carries any other Graph permission. TenuVault cannot see application permissions for other APIs or Azure role assignments, so review those in Entra ID and on the storage account; `New-TenuVaultStorage.ps1` warns about broader roles on the storage account but does not remove them. See [Backup Reader for scheduled backups](/backups/backup-reader/) for what it can and cannot do, and [Conditional Access and TenuVault](/security/conditional-access/) for options that need no application permissions.
 
 ## Restrict sign-in to a group
 

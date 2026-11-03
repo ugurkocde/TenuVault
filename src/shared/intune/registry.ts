@@ -1,11 +1,14 @@
 /**
- * Every Intune object type TenuVault backs up, and how each one is read and rebuilt.
+ * Every object type TenuVault backs up (Intune, and Entra Conditional Access), and how each one is
+ * read and rebuilt.
  *
  * Backup, restore, backup listings and drift detection all read this list, so adding a type here
- * is the only change needed to cover it. All paths are relative to https://graph.microsoft.com/beta/.
+ * (and to its service module in shared/services/modules) is the only change needed to cover it.
+ * All paths are relative to https://graph.microsoft.com/beta/.
  */
 
 import { COMPLIANCE_SETTING_KEYS, COMPLIANCE_SETTINGS_ID, complianceSettingChanges, complianceSettingsUpdate } from "./compliance-settings"
+import { createState, isMicrosoftManaged, MICROSOFT_MANAGED, policyBody, policyChanges, policyWarnings, replaceState, strengthBody, strengthUpdate } from "./conditional-access"
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 export type Item = { [key: string]: Json }
@@ -20,6 +23,7 @@ export type Area =
   | "App protection and configuration"
   | "Enrollment"
   | "Tenant administration"
+  | "Conditional Access"
 
 /** An extra collection read after the detail GET and stored on the snapshot under `property`. */
 export interface Extra {
@@ -104,6 +108,10 @@ export interface IntuneType {
   update?: (payload: Item, snapshot: Item, current: Item) => Step[]
   /** What replacing the live object with the snapshot changes, setting by setting, for the restore review. */
   review?: (snapshot: Item, current: Item) => ReviewChange[]
+  /** Longest name Graph accepts; a restored copy's prefixed name is shortened to fit. */
+  maxNameLength?: number
+  /** What the restore result should tell the admin about the object as written (`written` is the body sent). */
+  warnings?: (snapshot: Item, written: Item) => string[]
 }
 
 export interface ReviewChange {
@@ -1052,6 +1060,52 @@ export const INTUNE_TYPES: IntuneType[] = [
     nameKey: "displayName",
     restore: "create",
   },
+  // Conditional Access (Entra ID). An opt-in service module: see shared/services/modules.
+  {
+    folder: "NamedLocations",
+    label: "named locations",
+    area: "Conditional Access",
+    path: "identity/conditionalAccess/namedLocations",
+    nameKey: "displayName",
+    restore: "create",
+    readOnly: ["deletedDateTime"],
+  },
+  {
+    folder: "AuthenticationStrengths",
+    label: "authentication strengths",
+    area: "Conditional Access",
+    path: "identity/conditionalAccess/authenticationStrength/policies",
+    nameKey: "displayName",
+    skip: (item) => (item.policyType === "builtIn" ? "Built-in authentication strength" : undefined),
+    restore: "create",
+    readOnly: ["policyType", "requirementsSatisfied", "deletedDateTime"],
+    maxNameLength: 30,
+    prepare: strengthBody,
+    update: strengthUpdate,
+  },
+  {
+    folder: "ConditionalAccessPolicies",
+    label: "Conditional Access policies",
+    area: "Conditional Access",
+    path: "identity/conditionalAccess/policies",
+    nameKey: "displayName",
+    restore: "create",
+    restorable: (item) => (isMicrosoftManaged(item) ? MICROSOFT_MANAGED : undefined),
+    readOnly: ["templateId", "deletedDateTime"],
+    // A created policy is never enforced; see createState.
+    prepare: (payload) => {
+      policyBody(payload)
+      payload.state = createState(payload.state)
+      return payload
+    },
+    update: (payload, snapshot, current) => {
+      if (isMicrosoftManaged(snapshot) || isMicrosoftManaged(current)) throw new Error(MICROSOFT_MANAGED)
+      payload.state = replaceState(snapshot.state, Object.keys(current).length ? current.state : snapshot.state)
+      return [patch(payload)]
+    },
+    review: policyChanges,
+    warnings: policyWarnings,
+  },
 ]
 
 export const TYPE_BY_FOLDER = new Map(INTUNE_TYPES.map((type) => [type.folder.toLowerCase(), type]))
@@ -1066,10 +1120,11 @@ export function itemName(type: IntuneType, item: Item): string {
 }
 
 /**
- * Restores objects other objects refer to first (scope tags, filters, categories, templates),
- * and policy sets last because they list other objects.
+ * Restores objects other objects refer to first (scope tags, filters, categories, templates, and the
+ * named locations and authentication strengths Conditional Access policies use), and policy sets last
+ * because they list other objects. Objects recreated with a new ID are remapped in later snapshots.
  */
-const FIRST = ["ScopeTags", "AssignmentFilters", "RoleDefinitions", "AppCategories", "DeviceCategories", "NotificationTemplates", "ReusablePolicySettings"]
+const FIRST = ["ScopeTags", "AssignmentFilters", "RoleDefinitions", "AppCategories", "DeviceCategories", "NotificationTemplates", "ReusablePolicySettings", "NamedLocations", "AuthenticationStrengths"]
 const LAST = ["PolicySets"]
 
 export function restoreOrder(paths: string[]): string[] {

@@ -43,7 +43,7 @@ This page is only about the app registration you sign in with. It never gets app
 
 The two Azure permissions are only used when backups go to your Azure storage account: Azure Service Management lists your subscriptions and storage accounts in the storage picker, and Azure Storage reads and writes the backup files. For what each permission is used for, see [App registration and delegated permissions](/security/permissions/).
 
-The table above is the default permission set. It does not change unless you opt in. With `-IncludeGroupRead` the script adds one more delegated Microsoft Graph permission, `Group.Read.All`. Only the hygiene unresolved groups check uses it, to tell whether a group referenced by a policy assignment exists. Without it that check stays unknown and no group is reported as missing.
+The table above is the default permission set. It does not change unless you opt in. With `-IncludeGroupRead` the script adds one more delegated Microsoft Graph permission, `Group.Read.All`. Only the hygiene unresolved groups check uses it, to tell whether a group referenced by a policy assignment exists. Without it that check stays unknown and no group is reported as missing. With `-IncludeConditionalAccessRestore` it adds `Policy.ReadWrite.ConditionalAccess`, which restoring [Conditional Access](/backups/conditional-access/) needs; backing Conditional Access up only needs the default `Policy.Read.All`.
 
 ## Before you start
 

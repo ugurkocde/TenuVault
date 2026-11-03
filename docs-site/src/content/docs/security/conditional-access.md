@@ -59,7 +59,13 @@ If no computer should be part of the schedule at all, move it to [cloud backups]
 * **Azure Storage roles with PIM.** For backups in Azure, the admin, or the Backup Reader, needs its storage role permanently active. See [Create a storage account](/getting-started/create-storage-account/).
 * **Token protection and compliant network.** Policies that bind tokens to a device or network apply to TenuVault like to other desktop apps. If sign-in works in your browser but TenuVault cannot renew its token, check the Entra sign-in logs for the failing policy.
 
+## Restoring Conditional Access policies
+
+TenuVault can also back up and restore your Conditional Access policies themselves, as an opt-in service. Restored policies start in report-only mode and a restore never turns on enforcement, so it cannot end your own sign-in. Once you enforce a restored policy with a sign-in frequency, it applies to TenuVault like any other policy. See [Conditional Access backups](/backups/conditional-access/).
+
 ## Related pages
+
+* [Conditional Access backups](/backups/conditional-access/)
 
 * [Backup Reader for scheduled backups](/backups/backup-reader/)
 * [Cloud backups in Azure](/backups/cloud/)

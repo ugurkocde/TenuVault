@@ -12,7 +12,7 @@ import { readObject, withMaskedSecrets } from "../../shared/intune/read"
 import { comparableSnapshot } from "../../shared/intune/compare"
 import type { BackupItems } from "../../shared/intune/backup-changes"
 import { EVERYTHING, includedTypes, normalizeScope, restorableFolders, type BackupScope } from "../../shared/intune/scope"
-import { canBackUp, disabledFolders, moduleForFolder, type ModuleId } from "../../shared/services/modules"
+import { canBackUp, describeRequirement, disabledFolders, moduleForFolder, type ModuleId } from "../../shared/services/modules"
 import { grantedPermissions } from "../../shared/services/token"
 
 /**
@@ -445,7 +445,7 @@ export class BackupEngine {
     const types = includedTypes(scope).filter((type) => !readerExcluded.has(type.folder) && !moduleOff.has(type.folder) && !unpermitted.includes(type))
     for (const type of unpermitted) {
       const entry = moduleForFolder(type.folder)!
-      this.write(job, `Leaving out ${type.label}: the ${tokens.mode === "app-only" ? "Backup Reader" : "TenuVault app registration"} has no ${entry.area.backup.join(" or ")} permission for ${entry.module.label}.`)
+      this.write(job, `Leaving out ${type.label}: the ${tokens.mode === "app-only" ? "Backup Reader" : "TenuVault app registration"} has no ${describeRequirement(entry.area.backup, granted?.permissions)} permission for ${entry.module.label}.`)
     }
     if (scope.excluded.length) this.write(job, `Leaving out ${scope.excluded.length} of ${INTUNE_TYPES.length} types: ${scope.excluded.join(", ")}.`)
     if (notReadable.length) this.write(job, `Leaving out ${notReadable.length} type${notReadable.length === 1 ? "" : "s"} the Backup Reader has no permission for: ${notReadable.join(", ")}. Manual backups include them.`)
@@ -501,7 +501,10 @@ export class BackupEngine {
         if (error instanceof TokenError || (error instanceof GraphError && error.status === 401)) throw error
         if (denied) {
           skippedTypes.push(type.folder)
-          this.write(job, `Skipped ${type.label}: access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it.`)
+          const module = moduleForFolder(type.folder)?.module
+          this.write(job, module?.optIn
+            ? `Skipped ${type.label}: access was denied. The app registration may lack the permission or admin consent, or your account may not have a role that can read ${module.label} (${module.roles.split(";")[0]}).`
+            : `Skipped ${type.label}: access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it.`)
           return
         }
         countAuthFailure(error)

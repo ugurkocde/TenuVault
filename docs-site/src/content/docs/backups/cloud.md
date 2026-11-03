@@ -29,7 +29,7 @@ Setup creates or reuses, in your subscription:
 | Resource group `rg-tenuvault-backups` | Holds the cloud backup resources. Reuse the storage account's group. |
 | Automation account `aa-tenuvault` with a system assigned managed identity | Runs the runbook. One account serves one Entra tenant: a managed identity belongs to its own tenant and cannot read Intune in another, so an MSP sets up an account in each customer tenant's subscription. |
 | Runbook `Invoke-TenuVaultBackup` (PowerShell 7.2) | Reads Intune and writes one backup per run, in the desktop backup format. 7.2 is required: the default 5.1 runtime lacks the cryptography types the sealing uses. |
-| Automation variables with a per-tenant suffix | Tenant id, storage account, Key Vault, scope. No secrets in variables. |
+| Automation variables with a per-tenant suffix | Tenant id, storage account, Key Vault, scope. No secrets in variables. Set `TenuVaultIncludeConditionalAccess` to `true` (and grant the managed identity `Policy.Read.All`) to include [Conditional Access](/backups/conditional-access/). |
 | Key Vault `kv-tenuvault-<suffix>` (RBAC) | Holds the recovery key as the secret `tenuvault-recovery-key`. The identity only reads secrets. |
 | Custom role **TenuVault Backup Writer** on the `intune-backups` container | Read and write blobs, no delete. The runbook cannot remove backups. |
 | Schedule `TenuVaultBackup-<tenant>` and its runbook link | Daily or weekly, in the timezone you choose. |

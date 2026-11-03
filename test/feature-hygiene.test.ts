@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs"
+import { INTUNE_TYPES } from "../src/shared/intune/registry"
 import { describe, expect, it, vi } from "vitest"
 import { catalogSetting, detectHygiene, overlap, RULES, type GroupState, type InventoryItem, type SettingsCatalog } from "../src/main/features/hygiene/rules"
 import { KEPT_RECORDS, KEPT_SCANS, routes, signals } from "../src/main/features/hygiene"
@@ -253,6 +254,15 @@ describe("/api/hygiene", () => {
     // The filtered target makes the conflict only possible.
     expect(res.body.findings.find((f: { ruleId: string }) => f.ruleId === "conflicting-setting")?.classification).toBe("possible")
     expect(scan.groupResolution.state).toBe("none")
+  })
+
+  it("does not count a type the backup never attempted as covered, such as an opt-in service that was off", async () => {
+    const attempted = INTUNE_TYPES.map((type) => type.folder).filter((folder) => folder !== "Apps" && folder !== "ConditionalAccessPolicies")
+    const { api } = backupApi({ metadata: { Status: "Success", Scope: { Excluded: ["Apps"], Included: attempted }, SkippedTypes: [], FailedTypes: [] } })
+    const scan = (await call(routes(fakeDeps({ api })), "/api/hygiene", { tenantId: TENANT_A, action: "scan" })).body.scans[0]
+    expect(scan.notCollected.find((n: { folder: string }) => n.folder === "ConditionalAccessPolicies")?.reason).toBe("excluded")
+    expect(scan.covered).not.toContain("ConditionalAccessPolicies")
+    expect(scan.covered).toContain("ConfigurationPolicies")
   })
 
   it("fails without storing anything when backup storage denies the read", async () => {
