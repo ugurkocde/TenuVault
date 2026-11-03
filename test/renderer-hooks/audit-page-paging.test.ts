@@ -163,7 +163,7 @@ describe("Audit log paging", RENDER_TIMEOUT, () => {
   })
 })
 
-describe("Audit log after switching tenants", RENDER_TIMEOUT, () => {
+describe("Audit log after switching tenants", () => {
   it("ignores a slower response for the previous tenant", async () => {
     const a = tenant(1, "11111111-1111-1111-1111-111111111111")
     const b = tenant(2, "22222222-2222-2222-2222-222222222222")
