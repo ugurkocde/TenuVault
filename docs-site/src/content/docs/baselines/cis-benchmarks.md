@@ -15,13 +15,13 @@ TenuVault is CIS Benchmarks Certified for Assessment and Remediation. CIS awarde
 | CIS Microsoft Intune for Microsoft Defender Antivirus Benchmark | v1.0.0 | Level 1 and Level 2 |
 | CIS Apple macOS 26 Tahoe Intune Benchmark | v1.0.0 | Level 1 and Level 2 |
 
-Other CIS Benchmarks, versions and Levels are not certified. The CIS Benchmarks page, the benchmark picker and every CIS report and export state this scope.
+Other CIS Benchmarks, versions and Levels are not certified. The CIS Benchmarks page and the benchmark picker state this scope, and every CIS export (PDF, CSV and JSON) carries it together with the limits of remediation and the CIS notice with its link.
 
 The certification belongs to TenuVault, not to your tenant. Assessment results compare the recorded Intune configuration with the benchmark pack. They do not certify your tenant's compliance with a CIS Benchmark.
 
 ## Plans
 
-CIS Benchmarks is included in **Pro** and **MSP**. On Community, the sidebar entry shows a plan badge and explains which plans include it, and the page shows a preview instead of the benchmark picker. Assessments saved on an earlier plan stay readable. See [Plans and features](/licensing/).
+CIS Benchmarks is included in **Pro** and **MSP**. On Community, the sidebar entry shows a plan badge and explains which plans include it, and the page shows a preview instead of the benchmark picker. Assessments and deployments saved on an earlier plan stay readable, and changes a deployment applied can still be rolled back after the plan ends (see [Roll back](#roll-back)). See [Plans and features](/licensing/).
 
 CIS Controls is not available yet and stays marked **Coming soon**.
 
@@ -59,8 +59,8 @@ The readiness view shows each Level of the benchmark:
 
 * **Pass rate.** When the pack lists its recommendations, the headline is the recommendation pass rate: a recommendation passes only when every setting it names is in the pack and **Present**, and fails when any of them is **Different** or **Missing**. Otherwise the headline is the settings pass rate.
 * **Coverage.** A line in plain words says how much of the full benchmark the pack covers, when the list of all its automated recommendations is available, and that pass rates do not depend on it.
-* **Recommendation results** list each recommendation with its settings and result.
-* **Manual recommendations** and **Not assessed by this tool** list the recommendations TenuVault does not check. Manual recommendations need a manual check by design. Not assessed recommendations are automated in CIS terms but not covered by the pack. Both show their CIS description, impact, audit and remediation text when the delivered list includes it, for you to check them yourself.
+* **Recommendation results** list each recommendation with its settings and result, and whether TenuVault can remediate it (see [Remediation per recommendation](#remediation-per-recommendation)).
+* **Manual recommendations** and **Not assessed by this tool** list the recommendations TenuVault does not check. Manual recommendations need a manual check by design. Not assessed recommendations are automated in CIS terms but not covered by the pack. Both show their CIS description, impact, audit and remediation text when the delivered list includes it, for you to check them yourself. Each is marked **Remediation: manual action** with the reason.
 * **Exclusions.** Select findings and click **Exclude from score** to record an accepted exception with an owner, a reason and an expiry date. The pass rate with exclusions is shown next to the raw rate.
 
 Every readiness view and report carries the CIS notice: "Not all recommendations from the CIS Benchmarks are included in this tool. Please refer to the CIS website to access the free CIS Benchmarks PDFs for manual assessment instructions." with a link to [https://www.cisecurity.org/cis-benchmarks](https://www.cisecurity.org/cis-benchmarks).
@@ -79,9 +79,22 @@ The planned deployment opens in **Remediation history**, where it goes through t
 1. **Review** the preview: every policy that would be created or updated, the exact settings, and whether an updated policy is assigned. The preview is an offline comparison against the assessment, not a tenant dry run.
 2. **Approve** it. Approval reads the tenant again; a changed tenant stops the deployment before anything is written.
 3. **Apply** it. TenuVault runs a backup of the tenant first and captures the current state of every policy it changes; if the backup fails, nothing is written. Then it writes the changes and reads each one back to verify it.
-4. **Roll back** if needed. The rollback removes the policies the deployment created and puts back the previous settings of the policies it updated, again through review and approval.
+4. **Roll back** if needed, see below.
 
 Run the assessment again after an apply or a rollback to confirm which findings closed.
+
+### Roll back
+
+A rollback is a new change set built from the state TenuVault captured before the apply. It deletes the policies the deployment created and writes back the previous settings of the policies it updated, through the same review, approval, backup and read-back as the deployment. It stays available after your plan ends, so you can always undo a deployment that was applied while the tenant was on Pro or MSP. A new deployment needs Pro or MSP again.
+
+A rollback does not always restore everything automatically:
+
+* **Masked values.** A policy that held values Intune masks was captured without them, so TenuVault cannot write it back. The rollback preview names it; restore it by hand.
+* **Created policy without an ID.** If Intune did not return the ID of a policy the deployment created, TenuVault cannot remove it. The preview asks you to check Intune for a policy with that name and delete it yourself.
+* **Partial results.** An apply or a rollback writes one policy after another and is not a single transaction. Some operations can succeed while others fail or stay uncertain; each result is shown per operation, and **Reconcile and retry** checks the live state before writing again.
+* **Devices.** A rollback changes Intune configuration only. It does not guarantee the previous state on devices.
+
+See [How change sets work](/changes/#how-change-sets-work) for the review, apply, retry and rollback steps every change set shares.
 
 ### Limits of remediation
 
@@ -92,15 +105,30 @@ Run the assessment again after an apply or a rollback to confirm which findings 
 * **Different** settings are updated in place in the tenant policies that hold them. Those policies keep their assignments, so the change reaches their assigned devices.
 * Remediation changes Intune configuration only. It does not confirm that devices apply the settings.
 
+### Remediation per recommendation
+
+Every recommendation says whether TenuVault can remediate it, in the **Recommendation results**, the **Manual** and **Not assessed** lists, and in the PDF, CSV and JSON exports:
+
+| Indication | Meaning |
+| --- | --- |
+| **Remediation: by TenuVault** | Every setting of the recommendation is in the delivered pack. TenuVault remediates its **Different** and **Missing** settings with a reviewed deployment. |
+| **Remediation: by TenuVault after a profile choice** | A setting of the recommendation is a **Review** finding. Choose the profile before it can be remediated. |
+| **Remediation: partly by TenuVault, partly manual action** | Some of its settings are in the pack and some are not. TenuVault remediates the ones in the pack; the others need manual action. |
+| **Remediation: manual action** | None of its settings are in the pack, or it is a Manual or Not assessed recommendation. TenuVault does not remediate it. |
+
+Findings exports state the same per setting: **Different** and **Missing** findings can be remediated by TenuVault, **Review** findings after a profile choice.
+
 ## Export results
 
 Open **Export** in the results header:
 
 | Export | Content |
 | --- | --- |
-| **PDF report** | Readiness per Level, recommendation results, Manual and Not assessed recommendations, exceptions, the certified scope, the limitations and the limits of remediation. |
-| **Findings CSV** and **Findings JSON** | One row per pack setting with its result, the observed tenant policies and their assignment evidence. The JSON names the certified scope and the limits of remediation. |
-| **Readiness CSV** and **Readiness JSON** | The readiness figures per Level, the Manual and Not assessed recommendations, the CIS notice, the certified scope and the limits of remediation. |
+| **PDF report** | Readiness per Level, recommendation results, Manual and Not assessed recommendations, exceptions, and the remediation indication of each recommendation. |
+| **Findings CSV** and **Findings JSON** | One row per pack setting with its result, the observed tenant policies, their assignment evidence and its remediation indication. The CSV starts with the disclosure rows, then an empty row, then the table. |
+| **Readiness CSV** and **Readiness JSON** | The readiness figures per Level, the recommendation results and the Manual and Not assessed recommendations, each with its remediation indication. |
+
+Every CIS export, including the saved assessments JSON and the coverage export, carries the certified scope, the limits of remediation and the CIS notice with its link.
 
 Exports are built on this device from the saved assessment, without reading the tenant again, and saved where you choose. Pro and MSP can brand the PDF in [Settings](/settings/#pdf-branding). Under **Saved assessments** you can view earlier assessments read-only, export them as JSON or delete them. On MSP, **Portfolio** compares the readiness of your customer tenants on one benchmark.
 
