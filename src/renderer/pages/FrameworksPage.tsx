@@ -382,6 +382,7 @@ function CisExportMenu({ plan, disabled, readinessDisabled, onPdf, onFindingsCsv
   onReadinessJson: () => void
 }) {
   const [explaining, setExplaining] = useState(false)
+  const trigger = useRef<HTMLButtonElement>(null)
   const allowed = canUse(plan, "baselineAllPlatforms")
   // The menu renders in a portal, so no card on the page can paint over it. A plan without
   // CIS exports keeps every item visible with its badge; choosing one explains the plan.
@@ -393,7 +394,7 @@ function CisExportMenu({ plan, disabled, readinessDisabled, onPdf, onFindingsCsv
   >{icon}{label}{!allowed && <PlanBadge feature="baselineAllPlatforms" className="ml-auto" />}</DropdownMenuItem>
   return <>
     <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild><button type="button" className={button}>Export <ChevronDown className="h-4 w-4" aria-hidden="true" /></button></DropdownMenuTrigger>
+      <DropdownMenuTrigger asChild><button ref={trigger} type="button" className={button}>Export <ChevronDown className="h-4 w-4" aria-hidden="true" /></button></DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
         {item(<FileText className="h-4 w-4" aria-hidden="true" />, "PDF report", onPdf)}
         {item(<FileSpreadsheet className="h-4 w-4" aria-hidden="true" />, "Findings CSV", onFindingsCsv)}
@@ -402,7 +403,8 @@ function CisExportMenu({ plan, disabled, readinessDisabled, onPdf, onFindingsCsv
         {item(<FileJson className="h-4 w-4" aria-hidden="true" />, "Readiness JSON", onReadinessJson, readinessDisabled)}
       </DropdownMenuContent>
     </DropdownMenu>
-    <UpgradeDialog feature="baselineAllPlatforms" open={explaining} onOpenChange={setExplaining} />
+    {/* The dialog has no trigger of its own; focus returns to Export when it closes. */}
+    <UpgradeDialog feature="baselineAllPlatforms" open={explaining} onOpenChange={setExplaining} onCloseAutoFocus={event => { event.preventDefault(); trigger.current?.focus() }} />
   </>
 }
 

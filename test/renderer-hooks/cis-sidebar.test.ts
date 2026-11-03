@@ -768,6 +768,11 @@ describe("CIS Benchmarks route", () => {
     // The click explains the plan; nothing is exported or sent.
     expect(document.body.textContent).toContain("Included in TenuVault Pro and MSP")
     expect(fetchMock.mock.calls.length).toBe(before)
+    // Closing the plan dialog returns focus to the Export button.
+    await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })) })
+    await flush()
+    expect(document.body.textContent).not.toContain("Included in TenuVault Pro and MSP")
+    expect(document.activeElement).toBe(exportTrigger)
     const runAgain = [...container.querySelectorAll("button")].find((item) => item.textContent === "Run again")
     expect(runAgain?.disabled).toBe(true)
     expect(container.textContent).toContain("Saved results stay readable.")
