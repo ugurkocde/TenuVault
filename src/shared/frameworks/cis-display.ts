@@ -36,11 +36,14 @@ export interface AssessedPack { reference: string; policies: readonly BaselinePo
 
 /**
  * Whether one Level of a readiness export is inside the certified scope: the assessed pack passes
- * the rule of the CIS Certified label (isCertifiedAssessment) and the Level is certified for the
- * benchmark and version, so an export never claims more than the page shows.
+ * the rule of the CIS Certified label (isCertifiedAssessment) and is the pack of exactly this
+ * benchmark, version and Level, so a Level the pack did not assess (for example a Level 2 item in a
+ * Level 1 list) is never claimed and an export never claims more than the page shows.
  */
 export function isCertifiedReadinessLevel(summary: { benchmark: string; version: string }, level: number, pack: AssessedPack | undefined): boolean {
-  return !!pack && isCertifiedAssessment(pack.reference, pack.policies) && isCisCertified(summary.benchmark, summary.version, level)
+  if (!pack || !isCertifiedAssessment(pack.reference, pack.policies)) return false
+  const parsed = parsePackReference(pack.reference)
+  return !!parsed && parsed.benchmark === summary.benchmark && parsed.version === summary.version && parsed.level === level && isCisCertified(summary.benchmark, summary.version, level)
 }
 
 /**

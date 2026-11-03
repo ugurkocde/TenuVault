@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { benchmarkDisplayName, deviatingFindingKeys, isCertifiedAssessment, groupFindingsByPolicy, groupObservationsByValue, humanSettingLabel, policyDisplayName, statusMixText, trendSummaryText } from "../src/shared/frameworks/cis-display"
+import { benchmarkDisplayName, deviatingFindingKeys, isCertifiedAssessment, isCertifiedReadinessLevel, groupFindingsByPolicy, groupObservationsByValue, humanSettingLabel, policyDisplayName, statusMixText, trendSummaryText } from "../src/shared/frameworks/cis-display"
 import type { BaselinePolicy, Finding, Json, Observation } from "../src/shared/frameworks/policies"
 import type { AssignmentEvidence } from "../src/shared/frameworks/evidence"
 
@@ -42,6 +42,20 @@ describe("isCertifiedAssessment", () => {
     expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", [...delivered, policy({})])).toBe(false)
     expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", [])).toBe(false)
     expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", [...delivered, ...delivered])).toBe(true)
+  })
+})
+
+describe("isCertifiedReadinessLevel", () => {
+  const policy = (level: string): BaselinePolicy => ({ name: "Synthetic policy", platforms: "macOS", technologies: "mdm", description: "", settings: [], provenance: { schemaVersion: 1, benchmark: "mac-os-26", version: "1.0.0", level, benchmarkName: "CIS Apple macOS 26" } })
+  const summary = { benchmark: "mac-os-26", version: "1.0.0" }
+  it("claims only the Level of the assessed pack, even when both Levels are certified", () => {
+    const levelOne = { reference: "mac-os-26 1.0.0 Level 1", policies: [policy("Level 1")] }
+    expect(isCertifiedReadinessLevel(summary, 1, levelOne)).toBe(true)
+    // A Level 2 item in a Level 1 list is reported, but the Level 1 pack did not assess Level 2.
+    expect(isCertifiedReadinessLevel(summary, 2, levelOne)).toBe(false)
+    expect(isCertifiedReadinessLevel({ benchmark: "mac-os-26", version: "2.0.0" }, 1, levelOne)).toBe(false)
+    expect(isCertifiedReadinessLevel({ benchmark: "intune-windows11", version: "5.0.0" }, 1, levelOne)).toBe(false)
+    expect(isCertifiedReadinessLevel(summary, 1, undefined)).toBe(false)
   })
 })
 
