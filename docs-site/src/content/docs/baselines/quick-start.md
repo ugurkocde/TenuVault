@@ -174,3 +174,9 @@ If the old OpenIntuneBaseline framework page saved policy pack comparisons for t
 ## License and attribution
 
 OpenIntuneBaseline content is by SkipToTheEndpoint and contributors and licensed under [GPL-3.0](https://github.com/SkipToTheEndpoint/OpenIntuneBaseline/blob/main/LICENSE). Keep that attribution and license when you share policy content from OIB.
+
+## Related pages
+
+* [OpenIntuneBaseline](https://www.tenuvault.com/openintunebaseline): deploy, compare and validate OIB, on the product site
+* [OpenIntuneBaseline by hand or with TenuVault](https://www.tenuvault.com/compare/openintunebaseline-by-hand-vs-automated): when importing by hand is enough, on the product site
+* [My baselines](/baselines/custom-baselines/)

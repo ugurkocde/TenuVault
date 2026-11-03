@@ -132,3 +132,4 @@ Some backed-up items cannot be restored in full, for example apps that need an i
 ## Related pages
 
 * [Intune backup](https://www.tenuvault.com/intune-backup): coverage and plans, on the product site
+* [Your own Intune export script or a backup app](https://www.tenuvault.com/compare/intune-export-script-vs-backup-app): what a Graph script has to read and restore, on the product site

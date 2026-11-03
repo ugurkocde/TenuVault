@@ -149,5 +149,6 @@ Exports are built on this device from the saved assessment, without reading the 
 * [Framework coverage](/baselines/frameworks/)
 * [Plans and features](/licensing/)
 * [Changes](/changes/)
+* [Checking CIS Benchmarks in a spreadsheet or automatically](https://www.tenuvault.com/compare/cis-benchmark-spreadsheet-vs-automated-assessment): when a spreadsheet is enough, on the product site
 
 CIS, CIS Benchmarks and CIS Controls are trademarks of the Center for Internet Security, Inc.

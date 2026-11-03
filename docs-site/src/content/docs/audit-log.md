@@ -112,3 +112,8 @@ Exports never contain tokens, credentials, client secrets or keys. Policy payloa
 | Remove entries older than 90 days | No | Yes | Yes |
 
 On Community, the **Audit Log** entry in the sidebar and **View All Activity** on the dashboard show a **Pro** badge and still open the page. The Audit Log page shows what the audit log includes, marked **Pro**, with **See plans**, instead of the events. Events recorded on Community stay in the tenant's storage and become visible after an upgrade.
+
+## Related pages
+
+* [Intune audit logs or a backup](https://www.tenuvault.com/compare/intune-audit-logs-vs-intune-backup): what Microsoft's audit logs record and what they cannot restore, on the product site
+* [Drift detection](/drift/)

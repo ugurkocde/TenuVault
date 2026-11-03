@@ -182,6 +182,7 @@ If a tenant's plan does not include an action, TenuVault shows which plan does a
 
 * [Intune backup](https://www.tenuvault.com/intune-backup): what TenuVault backs up and why, on the product site
 * [Does Microsoft Intune have a built-in backup?](https://www.tenuvault.com/guides/does-intune-have-backup)
+* [Manual Intune exports or scheduled backups](https://www.tenuvault.com/compare/manual-intune-exports-vs-scheduled-backups): when exporting by hand is enough, on the product site
 * [What gets backed up](/backups/coverage/)
 * [Schedule backups](/backups/schedules/)
 * [Restore Intune policies](/restore/)
