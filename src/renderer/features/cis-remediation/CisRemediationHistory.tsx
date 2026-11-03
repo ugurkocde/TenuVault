@@ -60,7 +60,11 @@ export function deploymentTitle(deployment: Pick<Deployment, "title" | "referenc
   if (!reference) return deployment.title
   const whole = title.startsWith("Deploy ")
   const label = deploymentReferenceLabel(reference, tenantId, deployment.benchmarkName)
-  const generated = LEGACY_TITLES.has(title) || [label, referenceDisplayName(reference, deployment.benchmarkName?.trim() || null)].some(candidate => remediationTitle(whole, candidate) === title)
+  // The labels the planner can have used: the one it makes now, the one before catalog names, and the
+  // prettified id it falls back to while no name is known.
+  const id = reference.split(/\s+/)[0] ?? ""
+  const candidates = [label, referenceDisplayName(reference, deployment.benchmarkName?.trim() || null), referenceDisplayName(reference, benchmarkTitle(id))]
+  const generated = LEGACY_TITLES.has(title) || candidates.some(candidate => remediationTitle(whole, candidate) === title)
   return generated ? remediationTitle(whole, label) : deployment.title
 }
 
