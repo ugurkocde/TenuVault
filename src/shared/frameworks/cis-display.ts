@@ -1,6 +1,6 @@
 import { comparable, rootMatches, type BaselinePolicy, type Finding, type Json, type Observation } from "./policies"
 import { formatRate } from "./cis-readiness"
-import { findingRemediation, isCisCertifiedReference } from "./cis-certification"
+import { findingRemediation, isCisCertifiedReference, parsePackReference } from "./cis-certification"
 import { definitionLabel, payloadSettingId, settingNameOf } from "../intune/drift-format"
 import type { SettingNames } from "../intune/drift"
 import { summarizeSetting, type SettingLeaf } from "./setting-summary"
@@ -18,12 +18,17 @@ export function packBenchmarkName(policies: readonly BaselinePolicy[]): string |
 }
 
 /**
- * Whether an assessment of a pack is inside the certified scope, from its reference. Only the
- * delivery service stamps a catalog display name on the policies it delivers (cis-fetch-pack
- * always does for a certified benchmark), so a pack without one is a Build Kit import.
+ * Whether an assessment of a pack is inside the certified scope. The reference must name a
+ * certified benchmark, version and Level, and every policy must carry the provenance the delivery
+ * service stamps for exactly that pack (cis-fetch-pack): its benchmark, version, Level and catalog
+ * display name. A Build Kit import has no catalog name, and a pack whose policies name another
+ * benchmark, version or Level than the reference is never shown as certified.
  */
 export function isCertifiedAssessment(reference: string, policies: readonly BaselinePolicy[]): boolean {
-  return isCisCertifiedReference(reference, { kitImport: packBenchmarkName(policies) === null })
+  const parsed = parsePackReference(reference)
+  if (!parsed || !policies.length || !isCisCertifiedReference(reference)) return false
+  return policies.every(({ provenance }) => provenance?.benchmark === parsed.benchmark && provenance.version === parsed.version
+    && provenance.level === `Level ${parsed.level}` && typeof provenance.benchmarkName === "string" && provenance.benchmarkName.trim() !== "")
 }
 
 /**

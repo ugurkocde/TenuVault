@@ -29,6 +29,20 @@ describe("isCertifiedAssessment", () => {
     expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", kit)).toBe(false)
     expect(isCertifiedAssessment("not a pack reference", delivered)).toBe(false)
   })
+  it("requires every policy to carry the provenance of exactly the certified pack the reference names", () => {
+    const l2 = [policy({ benchmark: "intune-windows11", version: "5.0.0", level: "Level 2", benchmarkName: "Microsoft Intune for Windows 11" })]
+    expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", l2)).toBe(false)
+    const otherBenchmark = [policy({ benchmark: "microsoft-intune-edge", version: "5.0.0", level: "Level 1", benchmarkName: "Microsoft Intune for Edge" })]
+    expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", otherBenchmark)).toBe(false)
+    const otherVersion = [policy({ benchmark: "intune-windows11", version: "4.0.0", level: "Level 1", benchmarkName: "Microsoft Intune for Windows 11" })]
+    expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", otherVersion)).toBe(false)
+    // One policy from another Level, or one without the delivery service's catalog name, is enough to refuse.
+    expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", [...delivered, ...l2])).toBe(false)
+    expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", [...delivered, ...kit])).toBe(false)
+    expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", [...delivered, policy({})])).toBe(false)
+    expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", [])).toBe(false)
+    expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", [...delivered, ...delivered])).toBe(true)
+  })
 })
 
 describe("humanSettingLabel", () => {

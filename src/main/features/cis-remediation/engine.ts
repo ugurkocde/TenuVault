@@ -255,12 +255,12 @@ export async function planCisRemediation(deps: FeatureDeps, tenantId: string, in
     let live: Item | null
     try { live = await readCurrent(graph, type, targetId) } catch (error) { requireCisBenchmarksEnabled(tenantId); throw new FeatureError(`A tenant policy could not be read. ${error instanceof Error ? error.message : String(error)}`, 502) }
     requireCisBenchmarksEnabled(tenantId)
-    if (!live) throw new FeatureError(`The tenant policy of a selected finding no longer exists. Compare again.`, 409)
+    if (!live) throw new FeatureError(`The tenant policy of a selected finding no longer exists. Run the assessment again.`, 409)
     const liveSettings = Array.isArray(live.settings) ? (live.settings as Item[]) : []
     const selected = candidates.filter((finding) => {
       const recommended = policies[finding.policyIndex]!.settings[finding.settingIndex]!
       const current = liveSettings.find((entry) => settingIdOf(entry) === settingIdOf(recommended))
-      if (!current) throw new FeatureError(`The tenant policy ${String(live![type.nameKey] ?? targetId)} no longer holds a selected setting. Compare again.`, 409)
+      if (!current) throw new FeatureError(`The tenant policy ${String(live![type.nameKey] ?? targetId)} no longer holds a selected setting. Run the assessment again.`, 409)
       return !rootMatches(recommended.settingInstance as Json, current.settingInstance as Json)
     })
     if (!selected.length) continue
@@ -272,7 +272,7 @@ export async function planCisRemediation(deps: FeatureDeps, tenantId: string, in
       operation: { folder: type.folder, action: "update", targetId, proposed: mergedBody(live, selected.map((finding) => policies[finding.policyIndex]!.settings[finding.settingIndex]!)), assignments: null, source: { tenantId: tenant, objectId: targetId, version: typeof live.lastModifiedDateTime === "string" ? live.lastModifiedDateTime : null, label: names.join(", ").slice(0, 200) } },
     })
   }
-  if (!planned.length) throw new FeatureError("The selected findings already match the benchmark in the tenant. Compare again to refresh the results.", 409)
+  if (!planned.length) throw new FeatureError("The selected findings already match the benchmark in the tenant. Run the assessment again to refresh the results.", 409)
   if (planned.length > MAX_OPERATIONS) throw tooMany(planned.length)
   planned.sort((a, b) => a.item.policyIndex - b.item.policyIndex || (a.item.action === b.item.action ? 0 : a.item.action === "update" ? -1 : 1))
   const items = planned.map((entry) => entry.item)
