@@ -77,6 +77,9 @@ describe("CIS remediation history", () => {
     expect(deploymentTitle(record("Remediate benchmark findings", { benchmarkName: "Synthetic OS Benchmark" }), TENANT_ID)).toBe("Remediate Synthetic OS Benchmark 9.9.9 Level 1 findings")
     // Other titles, and records without a reference, are shown as stored.
     expect(deploymentTitle(record("Quarterly hardening"), TENANT_ID)).toBe("Quarterly hardening")
+    // A custom title in the generated shape is not rewritten.
+    expect(deploymentTitle(record("Remediate critical findings"), TENANT_ID)).toBe("Remediate critical findings")
+    expect(deploymentTitle(record("Deploy the pilot ring policies"), TENANT_ID)).toBe("Deploy the pilot ring policies")
     expect(deploymentTitle(record("Remediate benchmark findings", { reference: " " }), TENANT_ID)).toBe("Remediate benchmark findings")
   })
 

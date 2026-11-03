@@ -1020,8 +1020,8 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   const portfolioCard = <details aria-label="Portfolio" className="group mb-5 rounded-3xl bg-white px-6 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)] [&[open]_.chevron]:rotate-180">
     <summary className="grid cursor-pointer list-none grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 [&::-webkit-details-marker]:hidden">
       <h2 className="text-lg font-medium text-gray-900">Portfolio</h2>
-      <ChevronDown className="chevron row-span-2 size-4 text-gray-500 transition-transform" aria-hidden="true" />
-      <span className="mt-1 text-sm text-gray-600">CIS readiness of your signed-in tenants side by side, from each tenant's newest saved assessment of one benchmark.</span>
+      <ChevronDown className="chevron row-span-2 size-4 text-gray-500 motion-safe:transition-transform" aria-hidden="true" />
+      <span className="mt-1 text-sm text-gray-600">CIS readiness of your signed-in tenants side by side, from each tenant's newest saved assessment of each Level of one benchmark.</span>
     </summary>
     <div className="mt-4 border-t border-gray-100 pt-4"><CisPortfolio plan={plan} selectedTenantId={credentials?.tenantId} /></div>
   </details>
@@ -1090,7 +1090,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     {(!isCis || contentStage === "setup") && <details className={cn("group my-6 rounded-3xl px-6 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)] lg:px-7 [&[open]_.chevron]:rotate-180", isCis ? "bg-white" : "bg-blue-50/60")}>
       <summary className="flex cursor-pointer list-none items-center justify-between gap-4 [&::-webkit-details-marker]:hidden">
         <span className="flex items-center gap-3 text-sm"><Info className={cn("size-4 shrink-0", isCis ? "text-gray-500" : "text-blue-700")} aria-hidden="true" /><span><strong className="font-medium text-gray-900">Assessment coverage</strong><span className="text-gray-600"> · What is compared, content sources and limits.</span></span></span>
-        <ChevronDown className="chevron size-4 shrink-0 text-gray-500 transition-transform" aria-hidden="true" />
+        <ChevronDown className="chevron size-4 shrink-0 text-gray-500 motion-safe:transition-transform" aria-hidden="true" />
       </summary>
       <div className={cn("mt-4 space-y-2 border-t pt-4 text-sm leading-6 text-gray-700", isCis ? "border-gray-100" : "border-blue-100")}><p>{isCis ? `Benchmark packs come from the TenuVault delivery service. ${CIS_TENANT_NOT_CERTIFIED_NOTE}` : "Mapping format v1. Automatic content: NCSC Device Security Guidance 2025 Windows Settings Catalog only. Other frameworks use administrator-supplied mappings. No certification or complete framework assessment is implied."}</p><p>{framework.coverage}</p>{framework.licenseNotice && <p>{framework.licenseNotice}</p>}<p>Comparison covers Settings Catalog root settings and their nested values. Assignment targets, exclusions and filter references are reported separately from configuration. Group membership, device applicability, enforcement and other policy families remain unavailable. “Present” means a matching configuration exists; it does not mean the setting is assigned or enforced.</p></div>
     </details>}
@@ -1574,7 +1574,7 @@ function CisFindingRow({ finding, recommendations, checked, disabled, onChange, 
           <span className={recommendation ? "block truncate text-xs text-gray-600" : "block truncate font-medium text-gray-800"}>{settingName}</span>
           <span title={finding.settingId} className="block truncate font-mono text-[11px] leading-4 text-gray-400">{finding.settingId}</span>
         </span>
-        <ChevronDown className="h-4 w-4 shrink-0 text-gray-400 transition-transform group-open:rotate-180" aria-hidden="true" />
+        <ChevronDown className="h-4 w-4 shrink-0 text-gray-400 motion-safe:transition-transform group-open:rotate-180" aria-hidden="true" />
       </summary>
       {recommendations.length > 0 && <div className="mt-3"><p className="mb-1.5 text-xs font-semibold text-gray-600">Recommendations</p><ul className="space-y-0.5 text-xs leading-5 text-gray-700">{recommendations.map(item => <li key={item.id}><span className="font-medium">{item.id}</span> {item.title}</li>)}</ul></div>}
       <div className="mt-3 grid gap-x-6 gap-y-4 pb-2 lg:grid-cols-2">

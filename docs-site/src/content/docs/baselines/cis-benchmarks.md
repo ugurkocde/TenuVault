@@ -77,7 +77,7 @@ Every readiness view and report carries the CIS notice: "Not all recommendations
 
 A configuration match is evidence for review. It does not prove that the setting is assigned to the right devices or enforced on them.
 
-**Saved assessments** lists earlier runs of the tenant, newest first, each with its certification label. The run the results show is marked **Shown** and its **View read-only** button is unavailable; **View read-only** opens any other run. **Portfolio** compares the CIS readiness of your signed-in tenants side by side, from each tenant's newest saved assessment of one benchmark.
+**Saved assessments** lists earlier runs of the tenant, newest first, each with its certification label. The run the results show is marked **Shown** and its **View read-only** button is unavailable; **View read-only** opens any other run. **Portfolio** compares the CIS readiness of your signed-in tenants side by side, from each tenant's newest saved assessment of each Level of one benchmark.
 
 ## 4. Remediate
 

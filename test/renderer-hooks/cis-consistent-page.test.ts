@@ -209,7 +209,7 @@ describe("CIS page numbers", () => {
     expect(portfolio.open).toBe(false)
     expect(portfolio.className).toContain("rounded-3xl")
     expect(portfolio.querySelector("summary h2")?.textContent).toBe("Portfolio")
-    expect(portfolio.querySelector("summary")?.textContent).toContain("from each tenant's newest saved assessment of one benchmark")
+    expect(portfolio.querySelector("summary")?.textContent).toContain("from each tenant's newest saved assessment of each Level of one benchmark")
     expect(portfolio.querySelector('[aria-label="CIS portfolio"] h2')).toBeNull()
   })
 })

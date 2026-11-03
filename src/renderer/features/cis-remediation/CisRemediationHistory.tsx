@@ -44,16 +44,24 @@ export function remediationTitle(whole: boolean, benchmark: string): string {
   return name ? `${verb} ${name} ${noun}` : `${verb} benchmark ${noun}`
 }
 
+/** The titles earlier versions generated before titles named the benchmark. */
+const LEGACY_TITLES = new Set(["Deploy benchmark policies", "Remediate benchmark findings"])
+
 /**
- * The title a deployment is listed with. A title TenuVault generated ("Remediate ... findings" or
- * "Deploy ... policies") is built again from the deployment's reference, so deployments saved before
- * titles named the benchmark read like new ones. Stored records are not changed; any other title
- * is shown as stored.
+ * The title a deployment is listed with. Only a title TenuVault generated is built again from the
+ * deployment's reference: the legacy defaults, or the exact title the planner makes from this
+ * record's reference. A deployment saved before titles named the benchmark then reads like a new
+ * one. Any other title, such as one set through the planning route, is shown as stored, and stored
+ * records are not changed.
  */
 export function deploymentTitle(deployment: Pick<Deployment, "title" | "reference" | "benchmarkName">, tenantId: string | undefined): string {
-  const generated = /^(Remediate .+ findings|Deploy .+ policies)$/.exec(deployment.title.trim())
-  if (!generated || !deployment.reference.trim()) return deployment.title
-  return remediationTitle(deployment.title.trim().startsWith("Deploy "), deploymentReferenceLabel(deployment.reference, tenantId, deployment.benchmarkName))
+  const title = deployment.title.trim()
+  const reference = deployment.reference.trim()
+  if (!reference) return deployment.title
+  const whole = title.startsWith("Deploy ")
+  const label = deploymentReferenceLabel(reference, tenantId, deployment.benchmarkName)
+  const generated = LEGACY_TITLES.has(title) || [label, referenceDisplayName(reference, deployment.benchmarkName?.trim() || null)].some(candidate => remediationTitle(whole, candidate) === title)
+  return generated ? remediationTitle(whole, label) : deployment.title
 }
 
 /** What a planned deployment does to the tenant, from its planned items: new policies stay unassigned, updates keep the assignments of the policy they change. */
