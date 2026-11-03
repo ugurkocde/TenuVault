@@ -52,14 +52,15 @@ describe("basic public OIB on every platform", () => {
   it("maps Windows 365 and BYOD app protection files, and resets the author's scope tags", () => {
     expect(packFolder("win365", "WINDOWS365/IntuneManagement/SettingsCatalog/W365.json")).toBe("ConfigurationPolicies")
     expect(packFolder("win365", "WINDOWS365/IntuneManagement/CompliancePolicies/W365.json")).toBe("CompliancePolicies")
-    expect(packFolder("byod", "BYOD/AppProtection/iOS.json")).toBe("AppProtection")
+    expect(packFolder("byod", "BYOD/IntuneManagement/AppProtection/iOS.json")).toBe("AppProtection")
     expect(packFolder("byod", "BYOD/AppProtection/iOS.json", iosProtection)).toBe("AppProtectionIOS")
-    expect(packFolder("byod", "BYOD/AppProtection/Android.json", androidProtection)).toBe("AppProtectionAndroid")
-    expect(packFolder("byod", "BYOD/AppProtection/Other.json", { "@odata.type": "#microsoft.graph.windowsManagedAppProtection" })).toBeUndefined()
-    const items = packItems("byod", [{ path: "BYOD/AppProtection/iOS.json", json: iosProtection }, { path: "BYOD/AppProtection/Android.json", json: androidProtection }])
+    expect(packFolder("byod", "BYOD/IntuneManagement/AppProtection/iOS.json", iosProtection)).toBe("AppProtectionIOS")
+    expect(packFolder("byod", "BYOD/IntuneManagement/AppProtection/Android.json", androidProtection)).toBe("AppProtectionAndroid")
+    expect(packFolder("byod", "BYOD/IntuneManagement/AppProtection/Other.json", { "@odata.type": "#microsoft.graph.windowsManagedAppProtection" })).toBeUndefined()
+    const items = packItems("byod", [{ path: "BYOD/IntuneManagement/AppProtection/iOS.json", json: iosProtection }, { path: "BYOD/IntuneManagement/AppProtection/Android.json", json: androidProtection }])
     expect(items.map(i => [i.folder, i.name])).toEqual([["AppProtectionAndroid", androidProtection.displayName], ["AppProtectionIOS", iosProtection.displayName]])
     expect(items.find(i => i.folder === "AppProtectionIOS")!.snapshot.roleScopeTagIds).toEqual(["0"])
-    expect(() => packItems("byod", [{ path: "BYOD/AppProtection/Other.json", json: { "@odata.type": "#microsoft.graph.windowsManagedAppProtection", displayName: "x" } }])).toThrow("not a policy type")
+    expect(() => packItems("byod", [{ path: "BYOD/IntuneManagement/AppProtection/Other.json", json: { "@odata.type": "#microsoft.graph.windowsManagedAppProtection", displayName: "x" } }])).toThrow("not a policy type")
   })
 
   it("lets Community load, compare and deploy the macOS pack in its tenant, backup first", async () => {

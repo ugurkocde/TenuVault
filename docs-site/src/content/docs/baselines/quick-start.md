@@ -11,11 +11,11 @@ OpenIntuneBaseline is published by SkipToTheEndpoint and contributors under the 
 
 Select **OpenIntuneBaseline** in the sidebar. The section works on the tenant selected in the sidebar. OpenIntuneBaseline is not part of the [Frameworks](/baselines/frameworks/) catalog.
 
-The header lists the version each platform uses, for example **Versions: Windows v4.0 · macOS v1.0 · Windows 365 v1.0 · BYOD main @ *commit***. If GitHub cannot be reached and no versions are known yet, the header shows the error with **Retry**.
+The header lists the version each platform uses, for example **Versions: Windows v4.0 · macOS v1.0 · Windows 365 v1.0 · BYOD v2.0**. If GitHub cannot be reached and no versions are known yet, the header shows the error with **Retry**.
 
 ## Which OIB version is used
 
-OIB publishes a release per platform, tagged for example `windows-v4.0` or `macos-v1.0`. By default each platform uses its latest published release. A platform without a published release (BYOD today) uses the `main` branch.
+OIB publishes a release per platform, tagged for example `windows-v4.0` or `macos-v1.0`. By default each platform uses its latest published release. A platform without a published release uses the `main` branch and shows **main @ *commit*** instead of a version.
 
 To use another version, click **Change versions** in the header on the OpenIntuneBaseline overview. Each platform offers its published releases, newest first, and `main`, which can hold changes that are not released yet. When a platform uses `main` ahead of its latest release, the header warns you to test in a pilot tenant first. A workflow keeps the versions it started with; change them on the overview.
 
