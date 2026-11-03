@@ -203,7 +203,7 @@ async function landscape(token: string, onProgress?: (progress: LandscapeProgres
       // A policy edited between the list read and its settings read reports a stale count.
       // Re-read that policy and its settings a bounded number of times before failing.
       for (let reread = 0; typeof policy.settingCount === "number" && settings.length !== policy.settingCount; reread += 1) {
-        if (reread >= SETTINGS_REREADS) throw new FrameworkError("Policy settings changed during the read. Compare again.", 409)
+        if (reread >= SETTINGS_REREADS) throw new FrameworkError("Policy settings changed while they were read. Wait a moment, then try again.", 409)
         beforeNetwork?.()
         policy = await jsonFetch(`${GRAPH}/${id}`, { headers: { Authorization: `Bearer ${token}` } }, beforeNetwork)
         if (policy.id !== id) throw new FrameworkError("Policy ID missing from Graph response.", 502)
