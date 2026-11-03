@@ -107,8 +107,9 @@ trademarks. All rights not expressly granted are reserved.
     under Ugurlabs' CIS SecureSuite Product Vendor membership. You may use
     it only within TenuVault and in the reports and exports TenuVault
     produces. You may share those reports and exports within your
-    organization and with your auditors and advisers for your own
-    compliance work. You may not publish, redistribute or sublicense CIS
+    organization, with your auditors and advisers for your own compliance
+    work and, on the MSP plan, with the customer whose tenant a report
+    covers. You may not publish, redistribute or sublicense CIS
     content, or extract it from TenuVault for any other use. Assessment and
     remediation results are not a certification of your systems' compliance
     with a CIS Benchmark. CIS, CIS Benchmarks and CIS Controls are

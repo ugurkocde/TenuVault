@@ -115,7 +115,7 @@ Tenants that are already active keep working offline for up to 14 days after the
 On Pro and MSP, the [CIS Benchmarks](/baselines/cis-benchmarks/) page downloads its content from `https://www.tenuvault.com/cis/v1/`: the list of available benchmarks (`/cis/v1/catalog`), and for each benchmark Level you load, its pack (`/cis/v1/packs/...`) and its recommendation list (`/cis/v1/lists/...`). The app only connects when you open the CIS Benchmarks page or load a benchmark.
 
 * **Sent:** the signed entitlement from the last license check, as a bearer token. It contains your license key ID, the activation ID, the tenant ID, the installation ID and your plan. No tenant configuration, assessment results or Microsoft tokens are sent.
-* **Logged:** each download is logged with the tenant ID, installation ID, license key ID, the benchmark, version and Level, and the time.
+* **Logged:** each download is logged with the tenant ID, installation ID, license key ID and the time, and pack and list downloads also with the benchmark, version and Level.
 * **Stored on your machine:** the downloaded content is saved in the app's encrypted storage for the selected tenant. It is never bundled in the installer.
 * **If blocked:** benchmarks you already loaded stay available on the device; new benchmarks or Levels cannot be loaded. Allow `https://www.tenuvault.com/cis/v1/` alongside `https://www.tenuvault.com/api/desktop-license/` if your proxy filters by path.
 
