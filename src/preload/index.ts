@@ -57,6 +57,7 @@ const bridge: TenuVaultPreloadBridge = {
     checkNewTenant: (tenantId) => invoke("license:checkNewTenant", tenantId),
     releaseTenant: (tenantId) => invoke("license:releaseTenant", tenantId),
     open: (target, options) => invoke("license:open", target, options),
+    startTrial: (email, options) => invoke("license:startTrial", email, options),
     onChanged: (listener) => subscribe<LicenseStatus>("license:changed", listener),
   },
   schedules: {

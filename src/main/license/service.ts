@@ -33,6 +33,8 @@ interface Entitlement {
   exp: number
   /** Version 2: license key expiry in Unix seconds, absent for renewing subscriptions. */
   keyExp?: number
+  /** Version 2: the key is a no-card trial key. */
+  trial?: true
   /** Server-issued internal CIS claim for a validated internal license on an allowlisted installation. It enables Build Kit import only. */
   cis?: "internal"
 }
@@ -192,6 +194,8 @@ function decodeToken(token: string, publicKey: KeyObject): Entitlement | null {
     if (payload.v === 2 && payload.keyExp !== undefined && (
       !Number.isFinite(payload.keyExp) || !Number.isFinite(new Date(payload.keyExp * 1000).getTime())
     )) return null
+    if (payload.v === 2 && payload.trial !== undefined && payload.trial !== true) return null
+    if (payload.v === 1) delete payload.trial
     if (payload.cis !== undefined && payload.cis !== "internal") return null
     return payload
   } catch {
@@ -622,6 +626,8 @@ export class LicenseService {
         activationId: entry.activationId,
         installId: this.installId,
         tenantId,
+        // Lets the service send version 2 tokens to apps that read them.
+        appVersion: this.options.appVersion,
         ...(await this.sharingFields(tenantId, shareWithTenant)),
         ...(shareWithTenant === undefined ? {} : { shareWithTenant }),
       }, current)
@@ -1029,6 +1035,7 @@ export class LicenseService {
       const tenantValidUntil = payload?.v === 2 && typeof payload.keyExp === "number"
         ? new Date(payload.keyExp * 1000).toISOString()
         : null
+      const tenantTrial = payload?.v === 2 && payload.trial === true && tenantValidUntil !== null
       if (tenantValidUntil && (!validUntil || Date.parse(tenantValidUntil) < Date.parse(validUntil))) {
         validUntil = tenantValidUntil
       }
@@ -1042,6 +1049,7 @@ export class LicenseService {
         tenants: payload?.tenants ?? null,
         expiresAt: payload ? new Date(payload.exp * 1000).toISOString() : null,
         validUntil: tenantValidUntil,
+        trial: tenantTrial,
         shared: source === "key" ? (entry?.shared ?? null) : null,
         shareNeedsSignIn: source === "key" && Boolean(entry?.shareNeedsSignIn),
         displayKey: source === "tenant" ? (entry?.displayKey ?? null) : null,
@@ -1067,6 +1075,7 @@ export class LicenseService {
       message: this.message,
       plan: latest?.plan ?? null,
       tenantLimit: latest?.tenants ?? null,
+      trial: latest?.v === 2 && latest.trial === true && typeof latest.keyExp === "number",
       validUntil,
       communityTenantId: communityTenant ?? null,
       tenants,

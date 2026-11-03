@@ -8,7 +8,9 @@ import {
   ArrowRight,
   Building2,
   ChevronDown,
+  Clock,
   Database,
+  ExternalLink,
   GitCompare,
   KeyRound,
   LayoutDashboard,
@@ -24,7 +26,8 @@ import { useTenants } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { BrandMark } from "./BrandMark"
 import { ErrorBoundary } from "./ErrorBoundary"
-import { communityBannerVisible, earliestExpiringTenant, formatDate, formatDateTime, isUnlicensed, licenseChipState, licenseExpiryWarning, offlineDeadline, unlicensedTenants, useLicense } from "../lib/license"
+import { communityBannerVisible, earliestExpiringTenant, formatDate, formatDateTime, isUnlicensed, licenseChipState, licenseExpiryWarning, offlineDeadline, trialReminder, unlicensedTenants, useLicense } from "../lib/license"
+import { Button } from "~/components/ui/button"
 import { toast, Toaster } from "../lib/toast"
 import { bridge } from "../lib/bridge"
 import { FrameworkJobNotifier } from "../lib/framework-jobs"
@@ -100,16 +103,52 @@ function BannerLink({ tone, icon, children, onDismiss, dismissing }: { tone: "co
   )
 }
 
+/** Day 20 and day 27 of the no-card trial: when it ends, and the checkout that keeps Pro. */
+function TrialReminderBanner({ reminder, onDismiss, dismissing }: {
+  reminder: NonNullable<ReturnType<typeof trialReminder>>
+  onDismiss: () => void
+  dismissing: boolean
+}) {
+  const final = reminder.stage === "day-27"
+  const when = reminder.daysLeft === 1 ? "tomorrow" : `in ${reminder.daysLeft} days`
+  return (
+    <div className="px-6 pt-5 lg:px-8">
+      <div role="status" className={cn("flex flex-wrap items-center gap-3 rounded-3xl py-2 pl-2 pr-2 text-sm font-medium", final ? "bg-amber-50 text-amber-900" : "bg-blue-50 text-gray-900")}>
+        <span className={cn("flex size-9 flex-shrink-0 items-center justify-center rounded-full", final ? "bg-card text-amber-700" : "bg-coral-500 text-white")} aria-hidden="true">
+          <Clock className="h-4 w-4" />
+        </span>
+        <span className="min-w-0 flex-1">
+          Your Pro trial ends {when}, on {formatDate(reminder.endsAt)}.{" "}
+          {final
+            ? "Buy Pro now to keep daily backups, full restore and drift revert for both tenants."
+            : "Buy Pro to keep daily backups, full restore and drift revert after the trial."}
+        </span>
+        <Button type="button" size="sm" onClick={() => void bridge.license.open("checkout", { source: `trial-${reminder.stage}` })}>
+          <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
+          Buy Pro
+        </Button>
+        <Link to="/license" className="rounded-full px-3 py-2 text-sm font-medium hover:bg-white/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
+          Details
+        </Link>
+        <button type="button" onClick={onDismiss} disabled={dismissing} className="shrink-0 rounded-full px-3 py-2 text-sm font-medium hover:bg-white/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50">Dismiss</button>
+      </div>
+    </div>
+  )
+}
+
 function LicenseBanner() {
   const { status } = useLicense()
   const { pathname } = useLocation()
   const [dismissedAt, setDismissedAt] = useState<string>()
+  const [trialDismissedAt, setTrialDismissedAt] = useState<string>()
   const [preferencesLoaded, setPreferencesLoaded] = useState(false)
   const [dismissing, setDismissing] = useState(false)
   useEffect(() => {
     let active = true
     void bridge.preferences.get().then((preferences) => {
-      if (active) setDismissedAt(preferences.communityBannerDismissedAt)
+      if (!active) return
+      setDismissedAt(preferences.communityBannerDismissedAt)
+      setTrialDismissedAt(preferences.trialReminderDismissedAt)
     }).catch((error: unknown) => {
       if (active) toast(error instanceof Error ? error.message : "Could not load preferences.", "error")
     }).finally(() => {
@@ -128,6 +167,17 @@ function LicenseBanner() {
       setDismissing(false)
     }
   }
+  const dismissTrial = async () => {
+    setDismissing(true)
+    try {
+      const preferences = await bridge.preferences.set({ trialReminderDismissedAt: new Date().toISOString() })
+      setTrialDismissedAt(preferences.trialReminderDismissedAt)
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Could not dismiss the trial reminder.", "error")
+    } finally {
+      setDismissing(false)
+    }
+  }
   if (!status) return null
   if (isUnlicensed(status) && unlicensedTenants(status).length === 0) {
     // The start pages only: the all-tenants overview, or the dashboard for a single tenant.
@@ -135,7 +185,7 @@ function LicenseBanner() {
     if (!startPage || !preferencesLoaded || !communityBannerVisible(dismissedAt)) return null
     return (
       <BannerLink tone="neutral" icon={<Sparkles className="h-4 w-4" />} onDismiss={() => void dismiss()} dismissing={dismissing}>
-        You are on Community, the free plan. Try Pro or MSP free for 30 days, or add your license key.
+        You are on Community, the free plan. Try Pro free for 30 days with no card, or add your license key.
       </BannerLink>
     )
   }
@@ -160,6 +210,8 @@ function LicenseBanner() {
       </BannerLink>
     )
   }
+  const reminder = preferencesLoaded ? trialReminder(status, trialDismissedAt) : null
+  if (reminder) return <TrialReminderBanner reminder={reminder} onDismiss={() => void dismissTrial()} dismissing={dismissing} />
   if (keyExpiry && status.validUntil) {
     const owner = earliestExpiringTenant(status)?.source === "tenant" ? "The license shared by your organization" : "Your license key"
     return (

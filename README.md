@@ -98,7 +98,8 @@ Azure storage account on Pro and MSP. Backups never reach a TenuVault server. Se
 ### Is TenuVault free?
 
 Community is free for one tenant and needs no license key. Pro covers two tenants and MSP the
-subscribed number of tenants (new subscriptions include five), both with a 30 day free trial. See
+subscribed number of tenants (new subscriptions include five). Pro can be tried free for 30 days
+with just an email address, no card. See
 [Plans and features](https://docs.tenuvault.com/licensing/) and [pricing](https://tenuvault.com/pricing).
 
 ## Restore, recovery and assessment scope
@@ -243,7 +244,9 @@ a real tenant. It needs `TENUVAULT_E2E_TENANT_ID`, `TENUVAULT_E2E_CLIENT_ID` and
 Community is free for one tenant and needs no license key. Pro covers two tenants and MSP the
 subscribed quantity (new subscriptions include five tenants; existing subscriptions keep their quantity, minimum three); the features each plan includes are defined in
 `src/shared/plans.ts`. Pro and MSP are bought on [tenuvault.com/pricing](https://tenuvault.com/pricing)
-(Polar checkout, 30 day free trial). The key holder receives a `TENU` license key by email and pastes
+(Polar checkout) or tried for 30 days without a card: the License page asks
+`www.tenuvault.com/api/desktop-trial` to email a trial key, and trial tokens carry `trial` and
+`keyExp` so the app reminds on day 20 and day 27. The key holder receives a `TENU` license key by email and pastes
 it on the License page; other admins can use a shared organization license without receiving the key.
 
 - **Online activation, offline verification** (`src/main/license/service.ts`). The app never talks to

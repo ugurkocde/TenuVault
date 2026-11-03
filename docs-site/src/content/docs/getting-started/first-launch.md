@@ -3,7 +3,7 @@ title: "Choose a plan on first launch"
 description: What the welcome screen offers and how to pick Community, a trial or a license key.
 ---
 
-The first time you start TenuVault, it shows **Welcome to TenuVault**. Here you choose how to start: free with Community, with a 30 day trial of Pro or MSP, or with a license key you already have.
+The first time you start TenuVault, it shows **Welcome to TenuVault**. Here you choose how to start: free with Community, with a 30 day Pro trial that needs no card, or with a license key you already have.
 
 The welcome screen appears while this computer has no license key and no connected tenant. Once you connect a tenant or save a key, TenuVault opens straight into the app.
 
@@ -12,10 +12,10 @@ The welcome screen appears while this computer has no license key and no connect
 | Option | What it does | Choose it when |
 | --- | --- | --- |
 | **Start free with Community** | Opens the guided setup, **Set up TenuVault**. No key is needed. | You want to try TenuVault on one tenant, or your organization already shares a TenuVault license with your tenant. |
-| **Try Pro or MSP free for 30 days** | Opens the TenuVault pricing page in your browser, where you start a trial. | You want Pro or MSP features, such as daily schedules or Azure storage. |
+| **Try Pro free for 30 days, no card** | Shows a form for your email address. A 30 day Pro trial key arrives by email. | You want Pro features, such as daily schedules or Azure storage. |
 | **Already have a license key?** | Saves the key you paste on this device. | You received a key by email. |
 
-Community is free for one tenant, with manual and weekly backups. You can upgrade any time from the **License** page. For what each plan includes, see [Plans and features](/licensing/).
+Community is free for one tenant, with manual and weekly backups. You can upgrade any time from the **License** page, or click **buy now** under the trial button to open the checkout. For what each plan includes, see [Plans and features](/licensing/).
 
 ## Start with Community
 
@@ -26,9 +26,12 @@ The first tenant you sign in to without a key uses Community. If your organizati
 
 ## Start a trial
 
-1. Select **Try Pro or MSP free for 30 days**. The pricing page opens in your browser.
-2. Complete the checkout for the plan you want. Your license key arrives by email. Keys start with `TENU`.
-3. Return to TenuVault and follow [Enter a license key](#enter-a-license-key).
+1. Select **Try Pro free for 30 days, no card**.
+2. Enter your work email address and select **Start free trial**. No payment card is needed.
+3. Your trial key arrives by email, usually within a minute. Keys start with `TENU`.
+4. Follow [Enter a license key](#enter-a-license-key).
+
+The trial runs for 30 days and ends without a charge. See [Free trial, no card needed](/licensing/#free-trial-no-card-needed).
 
 ## Enter a license key
 

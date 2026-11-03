@@ -132,6 +132,7 @@ export function licenseChipState(status: LicenseStatus): { label: string; tone: 
 
 /** Active paid coverage takes precedence over the saved key's separate outcome. */
 export function licensePageTitle(status: LicenseStatus): string {
+  if (status.plan && status.trial) return "Pro trial active"
   if (status.plan) return `${planName(status.plan)} plan active`
   if (status.tenants.some((tenant) => tenant.entitled && tenant.plan !== "community")) {
     return "Licensed through your organization"
@@ -157,9 +158,12 @@ export function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { dateStyle: "medium" })
 }
 
-/** Warn from 30 days before key expiry, including an expired key with a current offline token. */
-export function licenseExpiryWarning(status: Pick<LicenseStatus, "validUntil">, now = Date.now()): "expiring" | "expired" | null {
-  if (!status.validUntil) return null
+/**
+ * Warn from 30 days before key expiry, including an expired key with a current offline token.
+ * A trial key ends 30 days after it starts, so it gets the trial reminders instead.
+ */
+export function licenseExpiryWarning(status: Pick<LicenseStatus, "validUntil"> & { trial?: boolean }, now = Date.now()): "expiring" | "expired" | null {
+  if (!status.validUntil || status.trial) return null
   const expiry = Date.parse(status.validUntil)
   if (!Number.isFinite(expiry) || expiry > now + 30 * 24 * 60 * 60 * 1000) return null
   return expiry <= now ? "expired" : "expiring"
@@ -193,4 +197,37 @@ export function tenantLicense(status: LicenseStatus | null, tenantId: string | u
 export function useTenantPlan(tenantId: string | undefined): Plan | null {
   const { status } = useLicense()
   return tenantPlan(tenantLicense(status, tenantId))
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/** The in-app trial reminders: day 20 and day 27 of the 30 day trial, 10 and 3 days before it ends. */
+export const TRIAL_REMINDER_DAYS_LEFT = [10, 3] as const
+
+/** Whole days left in the trial, rounded up, or null when this machine has no running trial. */
+export function trialDaysLeft(status: Pick<LicenseStatus, "trial" | "validUntil">, now = Date.now()): number | null {
+  if (!status.trial || !status.validUntil) return null
+  const end = Date.parse(status.validUntil)
+  if (!Number.isFinite(end) || end <= now) return null
+  return Math.ceil((end - now) / DAY_MS)
+}
+
+/**
+ * The trial reminder due now, or null. A reminder shows from its day until the trial ends or
+ * the admin dismisses it; a dismissal before the day-27 reminder does not hide that one.
+ */
+export function trialReminder(
+  status: Pick<LicenseStatus, "trial" | "validUntil">,
+  dismissedAt: string | undefined,
+  now = Date.now(),
+): { stage: "day-20" | "day-27"; daysLeft: number; endsAt: string } | null {
+  const daysLeft = trialDaysLeft(status, now)
+  if (daysLeft === null || !status.validUntil) return null
+  const end = Date.parse(status.validUntil)
+  const started = TRIAL_REMINDER_DAYS_LEFT.filter((days) => end - days * DAY_MS <= now)
+  const days = started[started.length - 1]
+  if (days === undefined) return null
+  const dismissed = dismissedAt ? Date.parse(dismissedAt) : NaN
+  if (Number.isFinite(dismissed) && dismissed >= end - days * DAY_MS && dismissed <= now) return null
+  return { stage: days === 3 ? "day-27" : "day-20", daysLeft, endsAt: status.validUntil }
 }

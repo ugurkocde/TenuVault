@@ -298,6 +298,29 @@ describe("LicenseService key expiry", () => {
     expect(entitled(service())).toBe(false)
   })
 
+  it("reports a version 2 trial key and keeps the generic expiry warning for the trial reminders", () => {
+    const validUntil = new Date(T0 + 20 * DAY).toISOString()
+    storeLicense(token({ v: 2, keyExp: (T0 + 20 * DAY) / 1000, trial: true }))
+    const status = service().status([TENANT])
+    expect(status).toMatchObject({ trial: true, validUntil, plan: "pro" })
+    expect(status.tenants[0]).toMatchObject({ trial: true, validUntil })
+    expect(licenseExpiryWarning(status)).toBeNull()
+  })
+
+  it("ignores a trial claim without a key expiry or on a version 1 token", () => {
+    storeLicense(token({ v: 2, trial: true }))
+    expect(service().status([TENANT]).trial).toBe(false)
+    storeLicense(token({ keyExp: (T0 + 20 * DAY) / 1000, trial: true }))
+    const v1 = service().status([TENANT])
+    expect(v1.trial).toBe(false)
+    expect(v1.tenants[0]?.trial).toBe(false)
+  })
+
+  it.each(["yes", false, 1])("rejects a malformed version 2 trial claim: %s", (trial) => {
+    storeLicense(token({ v: 2, keyExp: (T0 + 20 * DAY) / 1000, trial }))
+    expect(entitled(service())).toBe(false)
+  })
+
   it.each(["1790000000", 1e20, true])("rejects malformed version 2 key expiry: %s", (keyExp) => {
     storeLicense(token({ v: 2, keyExp }))
     expect(entitled(service())).toBe(false)

@@ -408,7 +408,7 @@ describe("CIS Benchmarks route", () => {
     expect(preview?.textContent).not.toContain(" - ")
     expect(previewActions(preview!)).toEqual(["Start 30 day free trial", "Add a license key", "View sample report"])
     // Add a license key is a link to the License page, so it is announced as a destination.
-    expect(preview?.querySelector('a[href="/license"]')?.textContent).toBe("Add a license key")
+    expect([...preview!.querySelectorAll('a[href="/license"]')].map((link) => link.textContent)).toEqual(["Start 30 day free trial", "Add a license key"])
     // The certification is stated once on the page: in the preview.
     expect(container.querySelectorAll('[aria-label="CIS certification"]')).toHaveLength(1)
     // CIS Controls is not offered, so the CIS Benchmarks prompt never promises it.
@@ -425,15 +425,26 @@ describe("CIS Benchmarks route", () => {
     vi.unstubAllGlobals()
   })
 
-  it("opens the plans and the License page from the Community preview", async () => {
+  it("starts the trial on the License page from the Community preview", async () => {
     const { container } = communityPage()
     await flush()
     const preview = container.querySelector('[aria-label="CIS Benchmarks assessments, remediation and reports preview"]')!
     const button = (label: string) => [...preview.querySelectorAll<HTMLElement>("button, a")].find((item) => item.textContent === label)!
     const { bridge } = await import("../../src/renderer/lib/bridge")
     const open = vi.spyOn(bridge.license, "open")
+    // The no-card trial is started on the License page, without a browser.
     await act(async () => { button("Start 30 day free trial").click() })
-    expect(open).toHaveBeenCalledWith("buy", { source: "cis-preview" })
+    await flush()
+    expect(open).not.toHaveBeenCalled()
+    expect(container.querySelector('[aria-label="CIS Benchmarks assessments, remediation and reports preview"]')).toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it("opens the License page from Add a license key in the Community preview", async () => {
+    const { container } = communityPage()
+    await flush()
+    const preview = container.querySelector('[aria-label="CIS Benchmarks assessments, remediation and reports preview"]')!
+    const button = (label: string) => [...preview.querySelectorAll<HTMLElement>("button, a")].find((item) => item.textContent === label)!
     // Add a license key leaves the CIS page for the License page.
     await act(async () => { button("Add a license key").click() })
     await flush()

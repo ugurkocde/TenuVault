@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom"
-import { Check, ExternalLink, FileText, KeyRound, ListChecks } from "lucide-react"
+import { Check, ExternalLink, FileText, KeyRound, ListChecks, Sparkles } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { cn } from "~/lib/utils"
 import { CIS_CERTIFICATION_HEADLINE, CIS_CERTIFICATION_SCOPE_INTRO, CIS_CERTIFIED_LABEL, CIS_CERTIFIED_SEGMENTS, CIS_NOT_CERTIFIED_NOTE, CIS_TENANT_NOT_CERTIFIED_NOTE, cisCheckCount, cisCheckCountText } from "../../../shared/frameworks/cis-certification"
@@ -90,10 +90,19 @@ export function CisBenchmarksPreview({ className }: { className?: string }) {
       </ul>
 
       <div className="mt-6 flex flex-wrap items-center gap-3">
-        <Button type="button" onClick={() => void bridge.license.open("buy", { source: "cis-preview" })}>
-          <ExternalLink className="h-4 w-4" aria-hidden="true" />
-          {trial ? "Start 30 day free trial" : "See plans"}
-        </Button>
+        {trial ? (
+          <Button asChild>
+            <Link to="/license" state={{ startTrial: true }}>
+              <Sparkles className="h-4 w-4" aria-hidden="true" />
+              Start 30 day free trial
+            </Link>
+          </Button>
+        ) : (
+          <Button type="button" onClick={() => void bridge.license.open("buy", { source: "cis-preview" })}>
+            <ExternalLink className="h-4 w-4" aria-hidden="true" />
+            See plans
+          </Button>
+        )}
         <Button asChild variant="outline">
           <Link to="/license">
             <KeyRound className="h-4 w-4" aria-hidden="true" />

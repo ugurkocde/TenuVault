@@ -1,5 +1,5 @@
-import { useState } from "react"
-import { AlertCircle, Building2, ExternalLink, KeyRound, Loader2 } from "lucide-react"
+import { useRef, useState } from "react"
+import { AlertCircle, Building2, KeyRound, Loader2, Sparkles } from "lucide-react"
 import { Alert, AlertDescription } from "~/components/ui/alert"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
@@ -7,6 +7,7 @@ import { Label } from "~/components/ui/label"
 import { bridge } from "../lib/bridge"
 import { useLicense } from "../lib/license"
 import { BrandMark } from "./BrandMark"
+import { TrialSignupForm } from "./TrialSignupForm"
 
 /**
  * First run welcome, shown instead of the app while this machine has no license key, no
@@ -21,6 +22,8 @@ export function ActivationScreen({ onSignIn }: { onSignIn: () => void }) {
   const [key, setKey] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
+  const [trialOpen, setTrialOpen] = useState(false)
+  const keyInput = useRef<HTMLInputElement>(null)
 
   const activate = async () => {
     setBusy(true)
@@ -54,10 +57,23 @@ export function ActivationScreen({ onSignIn }: { onSignIn: () => void }) {
           <Button size="lg" className="w-full bg-blue-600 text-white hover:bg-blue-700" onClick={onSignIn}>
             <Building2 className="mr-2 h-4 w-4" /> Start free with Community
           </Button>
-          <Button variant="outline" size="lg" className="w-full" onClick={() => void bridge.license.open("buy", { source: "welcome" })}>
-            <ExternalLink className="mr-2 h-4 w-4" /> Try Pro or MSP free for 30 days
-          </Button>
-          <p className="text-xs text-gray-600">You can upgrade any time from the License page.</p>
+          {trialOpen ? (
+            <div className="rounded-2xl bg-blue-50/60 p-4">
+              <p className="mb-3 text-sm font-medium text-gray-900">Try Pro free for 30 days</p>
+              <TrialSignupForm source="welcome" onSent={() => keyInput.current?.focus()} />
+            </div>
+          ) : (
+            <Button variant="outline" size="lg" className="w-full" onClick={() => setTrialOpen(true)}>
+              <Sparkles className="mr-2 h-4 w-4" /> Try Pro free for 30 days, no card
+            </Button>
+          )}
+          <p className="text-xs text-gray-600">
+            You can upgrade any time from the License page, or{" "}
+            <button type="button" className="text-blue-600 underline underline-offset-4 hover:text-blue-700" onClick={() => void bridge.license.open("checkout", { source: "welcome" })}>
+              buy now
+            </button>
+            .
+          </p>
         </div>
 
         <form
@@ -71,6 +87,7 @@ export function ActivationScreen({ onSignIn }: { onSignIn: () => void }) {
           <div className="flex gap-2">
             <Input
               id="license-key"
+              ref={keyInput}
               placeholder="Paste the key from your email"
               value={key}
               onChange={(e) => setKey(e.target.value)}
