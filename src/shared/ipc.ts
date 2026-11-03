@@ -2,6 +2,7 @@ import type { PlanIpcError } from "./plan-errors"
 import type { BackupScope } from "./intune/scope"
 import type { ReportPayload } from "./oib/report"
 import type { PdfBranding } from "./pdf/theme"
+import type { ModuleCheck, ModuleId } from "./services/modules"
 
 /** The saved PDF branding and whether any tenant on this machine is on a plan that applies it. */
 export interface PdfBrandingState {
@@ -288,6 +289,29 @@ export interface AppInfo {
   internalCisBenchmarks?: boolean
 }
 
+/** One service module for a tenant: whether it is on, and what the signed-in app registration may do with it. */
+export interface ServiceModuleStatus {
+  id: ModuleId
+  label: string
+  description: string
+  /** Opt-in modules start off for every tenant; the others are always on. */
+  optIn: boolean
+  enabled: boolean
+  roles: string
+  restoreSetup?: string
+  /** Null when the permissions could not be read, for example while signed out. */
+  check: ModuleCheck | null
+}
+
+export interface ServicesStatus {
+  tenantId: string
+  modules: ServiceModuleStatus[]
+  /** When the token behind the check was issued; consent changes made later show after "Check again". */
+  checkedAt: string | null
+  /** Why the permissions could not be checked. */
+  error?: string
+}
+
 /** API exposed to the renderer on `window.tenuvault` by the preload script. */
 export interface TenuVaultBridge {
   api: (request: ApiRequest) => Promise<ApiResponse>
@@ -326,6 +350,12 @@ export interface TenuVaultBridge {
     failedAttempts: (tenantId: string) => Promise<FailedBackupAttempt[]>
     /** Run ids of the tenant's backups still running in this app, manual, scheduled or from the tray. */
     liveRuns: (tenantId: string) => Promise<string[]>
+  }
+  services: {
+    /** The tenant's service modules and what its app registration may do with each. `refresh` gets a new token, so recent consent changes show. */
+    status: (tenantId: string, clientId: string, refresh?: boolean) => Promise<ServicesStatus>
+    /** Turns an opt-in service module on or off for the tenant's backups. */
+    setEnabled: (tenantId: string, clientId: string, id: ModuleId, enabled: boolean) => Promise<ServicesStatus>
   }
   license: {
     status: () => Promise<LicenseStatus>

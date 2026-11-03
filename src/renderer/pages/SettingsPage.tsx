@@ -28,6 +28,7 @@ import { parseSettingsSection, settingsHref, type SettingsSectionId } from "../l
 import { PlanBadge } from "../components/UpgradeNote"
 import { PdfBrandingSettings } from "../components/PdfBrandingSettings"
 import { BackupReaderSettings } from "../components/BackupReaderSettings"
+import { ServicesSettings } from "../components/ServicesSettings"
 import { NotificationsPanel } from "../features/notifications/NotificationsPanel"
 import { WhatsNewDialog, WhatsNewEntryNotes } from "../components/WhatsNewDialog"
 import { useWhatsNew } from "../lib/whats-new"
@@ -907,7 +908,7 @@ export default function SettingsPage() {
       <div className="mt-4 flex flex-col gap-6 xl:flex-row xl:items-start">
         <SettingsSectionNav section={section} />
         <div className="min-w-0 w-full max-w-5xl flex-1">
-          {panel("signin", <TenantSettings active={section === "signin"} />)}
+          {panel("signin", <div className="space-y-6"><TenantSettings active={section === "signin"} /><ServicesSettings /></div>)}
           {panel("storage", <div className="space-y-6"><BackupsOnDevice /><RestoreWrites active={section === "storage"} /></div>)}
           {panel("background", <div className="space-y-6"><BackgroundAndRetention /><BackupReaderSettings /></div>)}
           {panel("notifications", <NotificationSettings active={section === "notifications"} />)}

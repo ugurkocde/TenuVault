@@ -47,6 +47,10 @@ const bridge: TenuVaultPreloadBridge = {
     failedAttempts: (tenantId) => invoke("backups:failedAttempts", tenantId),
     liveRuns: (tenantId) => invoke("backups:liveRuns", tenantId),
   },
+  services: {
+    status: (tenantId, clientId, refresh) => invoke("services:status", tenantId, clientId, refresh === true),
+    setEnabled: (tenantId, clientId, id, enabled) => invoke("services:setEnabled", tenantId, clientId, id, enabled),
+  },
   license: {
     status: () => invoke("license:status"),
     refresh: () => invoke("license:refresh"),

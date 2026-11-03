@@ -11,7 +11,7 @@ import { prepareOibReportFile, printHtmlToPdf } from "./report-export"
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, Notification, safeStorage, shell } from "electron"
 import { basename, join } from "node:path"
 import type { ApiRequest, AppPreferences, ScheduleInput } from "../shared/ipc"
-import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN } from "../shared/constants"
+import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, RESOURCE_SCOPES } from "../shared/constants"
 import { createAuditRecorder } from "./api/audit"
 import { setAuditOutboxStore } from "../portal/lib/audit/outbox"
 import { backupRoutes, surfaceTokenErrors } from "./api/desktop-routes"
@@ -72,6 +72,8 @@ import type { FeatureDeps } from "./features/deps"
 import { backupAuthorization, featureAccess, withRecoveryBackups } from "./features/recovery"
 import { TenantRecords } from "./features/records"
 import { DriftJobs, driftScanRoutes } from "./drift/jobs"
+import { ModuleSettings } from "./services/settings"
+import { servicesStatus } from "./services/status"
 
 const RENDERER_STORAGE_PREFIX = "renderer."
 const LOCAL_FOLDER_KEY = "backup.localFolder"
@@ -290,9 +292,11 @@ async function bootstrap(): Promise<void> {
   // The Backup Reader's tokens reach only the backup engine: never the fetch bridge, tokenFor or a
   // portal route, so no restore, revert or other change can ever run with them.
   const backupReader = new BackupReaderService(tokenStore)
+  const moduleSettings = new ModuleSettings(appStore)
   const engine = new BackupEngine({
     fetch: bridgedFetch,
     getToken: backupAccess.getToken,
+    enabledModules: (tenantId) => moduleSettings.enabled(tenantId),
     unattendedTokens: (request) => {
       const plan = license.plan(request.tenantId)
       if (!plan || !allows(plan, "backupReader")) return null
@@ -1012,6 +1016,16 @@ async function bootstrap(): Promise<void> {
   handleTrusted("backups:scope", (_event, tenantId: unknown) => {
     if (typeof tenantId !== "string") throw new Error("Choose a tenant.")
     return scopes.get(tenantId)
+  })
+  const servicesFor = (tenantId: unknown, clientId: unknown, refresh: boolean) => {
+    if (typeof tenantId !== "string" || typeof clientId !== "string") throw new Error("Choose a tenant.")
+    return servicesStatus(tenantId, moduleSettings, (force) => tokenFor(tenantId, clientId, RESOURCE_SCOPES.graph, force), refresh)
+  }
+  handleTrusted("services:status", (_event, tenantId: unknown, clientId: unknown, refresh: unknown) => servicesFor(tenantId, clientId, refresh === true))
+  handleTrusted("services:setEnabled", (_event, tenantId: unknown, clientId: unknown, id: unknown, enabled: unknown) => {
+    if (typeof tenantId !== "string") throw new Error("Choose a tenant.")
+    moduleSettings.set(tenantId, id, enabled)
+    return servicesFor(tenantId, clientId, false)
   })
   handleTrusted("backups:failedAttempts", (_event, tenantId: unknown) => (typeof tenantId === "string" ? failedAttempts.list(tenantId) : []))
   handleTrusted("backups:liveRuns", (_event, tenantId: unknown) => (typeof tenantId === "string" ? engine.liveRuns(tenantId) : []))

@@ -8,6 +8,7 @@ import { buildRestorePlan, buildUpdatePlan, NotRestorableError, resolveStep, res
 import { assignmentsUnread, readObject, type GraphReader } from "../../../shared/intune/read"
 import { sameSnapshot } from "../../../shared/intune/compare"
 import { saveWrite, removeWrite, writeKey, writeRecords } from "../../../main/storage/restore-journal"
+import { restorePermissionBlocker, type GrantedPermissions } from "../../../shared/services/modules"
 
 /** A read that failed because the object no longer exists. */
 class Gone extends Error {}
@@ -39,6 +40,11 @@ export interface RestoreOptions {
    * missing instead of creating a new object from the snapshot. Defaults to true.
    */
   recreateMissing?: boolean
+  /**
+   * The permissions in the token the writes use (see shared/services/token). A service module whose
+   * restore permission is missing is reported before any write. Unknown permissions block nothing.
+   */
+  granted?: GrantedPermissions
 }
 
 export interface RestoreOutcome {
@@ -225,6 +231,8 @@ export class Restorer {
     const folder = path.split("/")[1] ?? ""
     const type = typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder)
     if (!type) return { success: false, path, error: "This backup file is not an Intune type TenuVault can restore." }
+    const unpermitted = restorePermissionBlocker(type.folder, this.options.granted)
+    if (unpermitted) return { success: false, path, action: "skipped", retryable: false, error: unpermitted }
     const source = this.remap(this.options.crossTenant ? forOtherTenant(snapshot) : snapshot)
     // A backup that could not read the assignments must not replace the live ones with an empty list.
     const unread = this.options.assignments && !this.options.crossTenant && assignmentsUnread(type, snapshot)

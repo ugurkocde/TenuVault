@@ -1,4 +1,5 @@
 import { readOwnedBackup } from "~/lib/policies/backup-owner"
+import { grantedPermissions } from "../../../../shared/services/token"
 import { validPolicyPath } from "~/lib/policies/restore"
 import { isGraphId, isGuid } from "../../../../shared/security"
 import { graphCaller, Restorer } from "~/lib/policies/graph-restore"
@@ -144,7 +145,7 @@ export async function POST(request: NextRequest) {
     if (action === "revert" && policyContent.id !== policyId) throw new Error("The authenticated snapshot does not belong to the selected policy")
     
     // Restore creates an unassigned copy; revert puts the existing policy back to the backed-up version.
-    const outcome = await new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode: action === 'revert' ? 'replace' : 'copy', assignments: false })
+    const outcome = await new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode: action === 'revert' ? 'replace' : 'copy', assignments: false, granted: grantedPermissions(graphToken) })
       .restore(backupPath, policyContent)
     const result = { success: outcome.success, error: outcome.error, policyId: outcome.policyId }
 
