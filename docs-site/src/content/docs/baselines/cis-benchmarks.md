@@ -69,7 +69,7 @@ The readiness view shows each Level of the benchmark:
 * **Pass rate.** When the pack lists its recommendations, the headline is the recommendation pass rate: a recommendation passes only when every setting it names is in the pack and **Present**, and fails when any of them is **Different** or **Missing**. Otherwise the headline is the settings pass rate.
 * **Coverage.** A line in plain words says how much of the full benchmark the pack covers, when the list of all its automated recommendations is available, and that pass rates do not depend on it.
 * **Recommendation results** list each recommendation with its settings and result, and whether TenuVault can remediate it (see [Remediation per recommendation](#remediation-per-recommendation)). A recommendation is **Not assessed** when the pack does not hold every setting it names; **Recommendations not assessed** counts them.
-* **Manual recommendations** and **Not covered by the benchmark pack** list the recommendations TenuVault does not check. Manual recommendations need a manual check by design. Recommendations marked **Not covered** are automated in CIS terms but not covered by the pack. Both show their CIS description, impact, audit and remediation text when the delivered list includes it, for you to check them yourself. Each is marked **Remediation: manual action** with the reason.
+* **Manual recommendations**, **Not assessed, in the benchmark pack** and **Not covered by the benchmark pack** list the recommendations TenuVault does not check. Manual recommendations need a manual check by design. Recommendations marked **Not assessed** are automated in CIS terms and in the pack, but the pack does not hold every setting they name. Recommendations marked **Not covered** are automated in CIS terms but not covered by the pack. All of them show their CIS description, impact, audit and remediation text when the delivered list includes it, for you to check them yourself. Each is marked **Remediation: manual action** with the reason.
 * **Exclusions.** Select findings and click **Exclude from score** to record an accepted exception with an owner, a reason and an expiry date. The pass rate with exclusions is shown next to the raw rate.
 
 Every readiness view and report carries the CIS notice: "Not all recommendations from the CIS Benchmarks are included in this tool. Please refer to the CIS website to access the free CIS Benchmarks PDFs for manual assessment instructions." with a link to [https://www.cisecurity.org/cis-benchmarks](https://www.cisecurity.org/cis-benchmarks).
@@ -108,7 +108,7 @@ See [How change sets work](/changes/#how-change-sets-work) for the review, apply
 ### Limits of remediation
 
 * TenuVault remediates only recommendations it assesses automatically: the settings in the delivered benchmark pack, written to Intune Settings Catalog policies.
-* Manual recommendations and recommendations marked **Not covered by the benchmark pack** cannot be remediated by TenuVault. They are listed for manual action, with their CIS text when the delivered list includes it.
+* Manual recommendations and recommendations marked **Not assessed** or **Not covered by the benchmark pack** cannot be remediated by TenuVault. They are listed for manual action, with their CIS text when the delivered list includes it.
 * **Review** findings hold alternative values in the pack. They cannot be selected for remediation until the profile is chosen.
 * **Missing** settings are created in new policies with no assignments. Nothing in them takes effect until an administrator assigns them in Intune.
 * **Different** settings are updated in place in the tenant policies that hold them. Those policies keep their assignments, so the change reaches their assigned devices.
@@ -116,14 +116,14 @@ See [How change sets work](/changes/#how-change-sets-work) for the review, apply
 
 ### Remediation per recommendation
 
-Every recommendation says whether TenuVault can remediate it, in the **Recommendation results**, the **Manual** and **Not covered** lists, and in the PDF, CSV and JSON exports:
+Every recommendation says whether TenuVault can remediate it, in the **Recommendation results**, the **Manual**, **Not assessed** and **Not covered** lists, and in the PDF, CSV and JSON exports:
 
 | Indication | Meaning |
 | --- | --- |
 | **Remediation: by TenuVault** | Every setting of the recommendation is in the delivered pack. TenuVault remediates its **Different** and **Missing** settings with a reviewed deployment. |
 | **Remediation: by TenuVault after a profile choice** | A setting of the recommendation is a **Review** finding. Choose the profile before it can be remediated. |
 | **Remediation: partly by TenuVault, partly manual action** | Some of its settings are in the pack and some are not. TenuVault remediates the ones in the pack; the others need manual action. |
-| **Remediation: manual action** | None of its settings are in the pack, or it is a Manual or Not covered recommendation. TenuVault does not remediate it. |
+| **Remediation: manual action** | None of its settings are in the pack, or it is a Manual, Not assessed or Not covered recommendation. TenuVault does not remediate it. |
 
 Findings exports state the same per setting: **Different** and **Missing** findings can be remediated by TenuVault, **Review** findings after a profile choice.
 
@@ -133,9 +133,9 @@ Open **Export** in the results header:
 
 | Export | Content |
 | --- | --- |
-| **PDF report** | Readiness per Level, recommendation results, Manual and Not covered recommendations, exceptions, and the remediation indication of each recommendation. |
+| **PDF report** | Readiness per Level, recommendation results, Manual, Not assessed and Not covered recommendations, exceptions, and the remediation indication of each recommendation. |
 | **Findings CSV** and **Findings JSON** | One row per pack setting with its result, the observed tenant policies, their assignment evidence and its remediation indication. The CSV starts with the disclosure rows, then an empty row, then the table. |
-| **Readiness CSV** and **Readiness JSON** | The readiness figures per Level, the recommendation results and the Manual and Not covered recommendations, each with its remediation indication. The Readiness CSV names the automated recommendations the pack does not cover in its **Not covered** column. |
+| **Readiness CSV** and **Readiness JSON** | The readiness figures per Level, the recommendation results and the Manual, Not assessed and Not covered recommendations, each with its remediation indication. The Readiness CSV names the automated recommendations TenuVault does not check in its **Not assessed or not covered** column. |
 
 Every CIS export, including the saved assessments JSON and the coverage export, carries the certified scope, the limits of remediation and the CIS notice with its link.
 

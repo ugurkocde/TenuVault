@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest"
 import { cisDisclosures, findingRemediation, manualRemediation, recommendationRemediation, CIS_NOTICE, certifiedScopeLines, cisCertificationHeadline, cisCertificationStatement, cisRemediationLimits, CIS_CERTIFICATION_STATEMENT, CIS_CERTIFIED_SEGMENTS, CIS_REMEDIATION_LIMITS, CIS_TENANT_NOT_CERTIFIED_NOTE, isCisCertified, isCisCertifiedReference, parsePackReference } from "../src/shared/frameworks/cis-certification"
 import { cisReadinessCsv, cisReadinessJson } from "../src/renderer/features/shared/governance-export"
 import { cisExportLimitations, workspaceExportCSV, workspaceExportJSON, workspaceHistoryJSON, workspaceReportHeader } from "../src/shared/compliance/export"
-import { generateCisReadinessPDF, generateWorkspaceAssessmentPDF } from "../src/shared/compliance/report-pdf"
+import { generateCisReadinessPDF, generateWorkspaceAssessmentPDF, type CisReportContext } from "../src/shared/compliance/report-pdf"
+import type { BaselinePolicy } from "../src/shared/frameworks/policies"
 import { MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDATIONS_URL } from "../src/shared/frameworks/cis-manual"
 import { isSelectableFinding } from "../src/shared/frameworks/cis-display"
 import { cisSummary, workspaceAssessment } from "./pdf-report-fixtures"
@@ -20,6 +21,12 @@ function pdfText(bytes: Uint8Array): string {
   const shown = parts.join("\n").match(/\((?:\\.|[^\\()])*\)\s*Tj/g) ?? []
   return shown.map(chunk => chunk.replace(/\)\s*Tj$/, "").slice(1).replace(/\\([()\\])/g, "$1")).join(" ").replace(/\s+/g, " ")
 }
+/** Windows 11 5.0.0 Level 1 policies as the delivery service stamps them, as a Build Kit import has them, and naming another Level. */
+const windowsPolicy = (provenance: Record<string, string>): BaselinePolicy => ({ name: "Synthetic policy", platforms: "windows10", technologies: "mdm", description: "", settings: [], provenance: { schemaVersion: 1, benchmark: "intune-windows11", version: "5.0.0", level: "Level 1", ...provenance } })
+const reference = "intune-windows11 5.0.0 Level 1"
+const deliveredPack = () => ({ reference, policies: [windowsPolicy({ benchmarkName: "Microsoft Intune for Windows 11" })] })
+const kitPack = () => ({ reference, policies: [windowsPolicy({ sourceFile: "synthetic.json" })] })
+const mismatchedPack = () => ({ reference, policies: [windowsPolicy({ benchmarkName: "Microsoft Intune for Windows 11", level: "Level 2" })] })
 const cisSaved = () => { const saved = workspaceAssessment(); return { ...saved, assessment: { ...saved.assessment, frameworkId: "cis-benchmarks" } } }
 
 describe("CIS certification scope", () => {
@@ -89,8 +96,22 @@ describe("CIS certification scope", () => {
     expect(json.certification.note).toBe(CIS_TENANT_NOT_CERTIFIED_NOTE)
     expect(json.remediationLimits).toEqual([...CIS_REMEDIATION_LIMITS])
     expect(json.manualFallback).toContain("Not all recommendations from the CIS Benchmarks are included in this tool.")
-    const certified = JSON.parse(cisReadinessJson({ ...summary, benchmark: "intune-windows11", version: "5.0.0" }, null, context.exportedAt)) as { certification: { levels: { level: number; certified: boolean }[] } }
-    expect(certified.certification.levels).toEqual([{ level: 1, certified: true }, { level: 2, certified: false }])
+    const windows = { ...summary, benchmark: "intune-windows11", version: "5.0.0" }
+    const levels = (pack?: Parameters<typeof cisReadinessJson>[3]) => (JSON.parse(cisReadinessJson(windows, null, context.exportedAt, pack)) as { certification: { levels: { level: number; certified: boolean }[] } }).certification.levels
+    expect(levels(deliveredPack())).toEqual([{ level: 1, certified: true }, { level: 2, certified: false }])
+    // The rule of the CIS Certified label: a Build Kit import, a pack that names another Level and no pack are never certified.
+    for (const pack of [kitPack(), mismatchedPack(), undefined]) expect(levels(pack)).toEqual([{ level: 1, certified: false }, { level: 2, certified: false }])
+  })
+
+  it("claims the certified scope in the readiness PDF only for a delivered pack of a certified Level", () => {
+    const windows = { ...cisSummary(), benchmark: "intune-windows11", version: "5.0.0" }
+    const statement = (pack?: CisReportContext["pack"]) => pdfText(generateCisReadinessPDF(windows, { ...context, tenantId: "11111111-1111-1111-1111-111111111111", assessedAt: "2026-11-01T09:00:00.000Z", ...(pack ? { pack } : {}) }))
+    expect(statement(deliveredPack())).toContain("This report: Level 1 is within the certified scope; Level 2 is not certified.")
+    for (const pack of [kitPack(), mismatchedPack(), undefined]) {
+      const text = statement(pack)
+      expect(text).toContain("This report: Level 1 is not certified; Level 2 is not certified.")
+      expect(text).not.toContain("is within the certified scope")
+    }
   })
 
   it("names the certified scope in the CIS findings JSON instead of the generic no-certification notice", () => {
@@ -164,18 +185,22 @@ describe("CIS certification scope", () => {
     expect(pdf).toContain("Manual action. CIS lists it as a manual recommendation.")
   })
 
-  it("names recommendations outside the pack Not covered in the readiness CSV, JSON and PDF, apart from Not assessed recommendation results", () => {
+  it("names pack recommendations it cannot assess Not assessed and recommendations outside the pack Not covered in the readiness CSV, JSON and PDF", () => {
     const summary = cisSummary()
     const level = summary.levels[0]!
     const notCovered = { identifier: "1.9.9", level: level.level, title: "Synthetic uncovered check", hasText: false, fallback: MANUAL_RECOMMENDATIONS_FALLBACK, fallbackUrl: MANUAL_RECOMMENDATIONS_URL, state: "Not covered" as const }
-    const withItem = { ...summary, levels: [{ ...level, manual: [...level.manual, notCovered], notAssessed: ["1.9.9"] }, ...summary.levels.slice(1)] }
+    const inPack = { identifier: "1.9.8", level: level.level, title: "Synthetic unassessed check", hasText: false, fallback: MANUAL_RECOMMENDATIONS_FALLBACK, fallbackUrl: MANUAL_RECOMMENDATIONS_URL, state: "Not assessed" as const }
+    const withItem = { ...summary, levels: [{ ...level, manual: [...level.manual, inPack, notCovered], notAssessed: ["1.9.8", "1.9.9"] }, ...summary.levels.slice(1)] }
     const csv = cisReadinessCsv(withItem)
-    expect(csv.split("\r\n")[0]).toContain("Coverage (%),Not covered,Note")
+    expect(csv.split("\r\n")[0]).toContain("Coverage (%),Not assessed or not covered,Note")
     expect(csv).toContain("Not covered,1.9.9,Synthetic uncovered check")
+    expect(csv).toContain("Not assessed,1.9.8,Synthetic unassessed check")
     const json = JSON.parse(cisReadinessJson(withItem, "Contoso", context.exportedAt)) as { manualItems: Array<{ identifier: string; state: string }> }
     expect(json.manualItems.find(item => item.identifier === "1.9.9")?.state).toBe("Not covered")
+    expect(json.manualItems.find(item => item.identifier === "1.9.8")?.state).toBe("Not assessed")
     const pdf = pdfText(generateCisReadinessPDF(withItem, { ...context, tenantId: "11111111-1111-1111-1111-111111111111", assessedAt: "2026-11-01T09:00:00.000Z" }))
     expect(pdf).toContain(`Not covered by the benchmark pack, Level ${level.level}`)
+    expect(pdf).toContain(`Not assessed, in the benchmark pack, Level ${level.level}`)
     expect(pdf).not.toContain("Not assessed by this tool")
     // Recommendation results keep Not assessed for a pack recommendation whose settings the pack does not all hold.
     expect(pdf).toContain("Not assessed")

@@ -1,6 +1,6 @@
 import { comparable, rootMatches, type BaselinePolicy, type Finding, type Json, type Observation } from "./policies"
 import { formatRate } from "./cis-readiness"
-import { findingRemediation, isCisCertifiedReference, parsePackReference } from "./cis-certification"
+import { findingRemediation, isCisCertified, isCisCertifiedReference, parsePackReference } from "./cis-certification"
 import { definitionLabel, payloadSettingId, settingNameOf } from "../intune/drift-format"
 import type { SettingNames } from "../intune/drift"
 import { summarizeSetting, type SettingLeaf } from "./setting-summary"
@@ -29,6 +29,18 @@ export function isCertifiedAssessment(reference: string, policies: readonly Base
   if (!parsed || !policies.length || !isCisCertifiedReference(reference)) return false
   return policies.every(({ provenance }) => provenance?.benchmark === parsed.benchmark && provenance.version === parsed.version
     && provenance.level === `Level ${parsed.level}` && typeof provenance.benchmarkName === "string" && provenance.benchmarkName.trim() !== "")
+}
+
+/** The pack an assessment compared: its reference and the policies saved with it. */
+export interface AssessedPack { reference: string; policies: readonly BaselinePolicy[] }
+
+/**
+ * Whether one Level of a readiness export is inside the certified scope: the assessed pack passes
+ * the rule of the CIS Certified label (isCertifiedAssessment) and the Level is certified for the
+ * benchmark and version, so an export never claims more than the page shows.
+ */
+export function isCertifiedReadinessLevel(summary: { benchmark: string; version: string }, level: number, pack: AssessedPack | undefined): boolean {
+  return !!pack && isCertifiedAssessment(pack.reference, pack.policies) && isCisCertified(summary.benchmark, summary.version, level)
 }
 
 /**

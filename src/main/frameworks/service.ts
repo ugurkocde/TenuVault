@@ -513,7 +513,7 @@ async function exportWorkspace(body: RecordJson, workspace: FrameworkWorkspace):
     // The same exclusion rule as every CIS view, so the PDF matches the page for this run.
     const summary = readinessFor(saved, workspace, localDate(), denominator)
     const { generateCisReadinessPDF } = await import("../../shared/compliance/report-pdf")
-    const pdf = generateCisReadinessPDF(summary, { exportedAt: context.exportedAt, tenantName: context.tenantName, tenantId: workspace.tenantId, assessedAt: saved.assessment.assessedAt, runId: saved.assessment.runId }, await pdfBrandingFor(workspace.tenantId))
+    const pdf = generateCisReadinessPDF(summary, { exportedAt: context.exportedAt, tenantName: context.tenantName, tenantId: workspace.tenantId, assessedAt: saved.assessment.assessedAt, runId: saved.assessment.runId, pack: { reference: saved.assessment.reference, policies: saved.policies } }, await pdfBrandingFor(workspace.tenantId))
     return { file: { name: savedName("readiness report", "pdf"), type: "application/pdf", encoding: "base64", data: Buffer.from(pdf).toString("base64") } }
   }
   if (body.action === "workspace-csv") return { file: { name: savedName("findings", "csv"), type: "text/csv;charset=utf-8", encoding: "utf8", data: `\uFEFF${workspaceExportCSV(saved, context, cis ? { layout: "table" } : {})}` } }

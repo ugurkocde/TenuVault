@@ -979,7 +979,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       requireCurrentCisAccess()
       const exportedAt = new Date().toISOString()
       const name = cisExportFileName({ reference: shown.reference, benchmarkName: current.benchmarkName, part: "readiness", tenantName: selectedTenant?.name ?? null, date: localDate(), extension: format })
-      await saveCisFile(format === "csv" ? `\uFEFF${cisReadinessCsv(current)}` : cisReadinessJson(current, selectedTenant?.name ?? null, exportedAt), name)
+      await saveCisFile(format === "csv" ? `\uFEFF${cisReadinessCsv(current)}` : cisReadinessJson(current, selectedTenant?.name ?? null, exportedAt, { reference: shown.reference, policies }), name)
     }, "export")
   }
   const exportCoverage = () => {
@@ -1504,6 +1504,7 @@ function RemediationNote({ indication }: { indication: RemediationIndication }) 
 /** The readiness sections for recommendations TenuVault does not check, in display order. */
 const MANUAL_SECTIONS: { state: ManualItemView["state"]; heading: string; note: string }[] = [
   { state: "Manual", heading: "Manual", note: "CIS classifies these recommendations as manual, so they are not assessed automatically. Check each one as its audit describes." },
+  { state: "Not assessed", heading: "Not assessed, in the benchmark pack", note: "These recommendations are in the benchmark pack, but the pack does not hold every setting they name, so TenuVault cannot assess them. Check each one as its audit describes." },
   { state: "Not covered", heading: "Not covered by the benchmark pack", note: "CIS classifies these recommendations as automated, but this benchmark pack does not cover them, so TenuVault does not check them. Check each one as its audit describes." },
 ]
 
@@ -1514,7 +1515,7 @@ function ManualList({ level, label, items, fallback, fallbackUrl }: { level: num
   const noun = label === "Manual" ? "manual items" : "items"
   return <>
     <div className="mt-2 flex flex-wrap items-center gap-2">
-      <SearchInput label={`Search Level ${level} ${label === "Manual" ? "manual items" : "items not covered by the benchmark pack"}`} value={query} onChange={setQuery} placeholder="Search ID, title or text" />
+      <SearchInput label={`Search Level ${level} ${label === "Manual" ? "manual items" : `items ${label.charAt(0).toLowerCase()}${label.slice(1)}`}`} value={query} onChange={setQuery} placeholder="Search ID, title or text" />
       <span aria-live="polite" className="ml-auto text-xs text-gray-500">{shown !== items ? `${shown.length} of ${items.length} ${noun}` : `${items.length} ${noun}`}</span>
     </div>
     <div className="mt-2 divide-y divide-gray-100 border-y border-gray-100">{shown.map(item => <details key={item.identifier} className="py-3">

@@ -133,6 +133,8 @@ export function serializeRecommendationList(list: RecommendationList): string {
 
 /**
  * One item of the readiness Manual section. Manual: CIS classifies it as a manual check.
+ * Not assessed: CIS classifies it as automated and it is in the benchmark pack, but the pack does
+ * not hold every setting it names, the same Not assessed as its recommendation result.
  * Not covered: CIS classifies it as automated, but the benchmark pack does not cover it.
  */
 export interface ManualItemView {
@@ -146,7 +148,7 @@ export interface ManualItemView {
   hasText: boolean
   fallback: string
   fallbackUrl: string
-  state: "Manual" | "Not covered"
+  state: "Manual" | "Not assessed" | "Not covered"
 }
 
 function toManualView(item: RecommendationListItem, state: ManualItemView["state"]): ManualItemView {
@@ -165,10 +167,11 @@ function toManualView(item: RecommendationListItem, state: ManualItemView["state
 /**
  * Items for one Level that TenuVault does not check: list items marked automated false and
  * denominator identifiers marked manual (state Manual), and automated identifiers the pack did
- * not assess (state Not covered). Deduplicated by identifier, Manual first, and each carries the
- * title and text of its list item when the list has one.
+ * not assess: Not assessed for the pack recommendations among them (`inPack`), Not covered for
+ * the rest. Deduplicated by identifier, Manual first, and each carries the title and text of its
+ * list item when the list has one.
  */
-export function manualItemsForLevel(list: RecommendationList | undefined, level: KitLevel, notAssessed: string[] = [], manual: string[] = []): ManualItemView[] {
+export function manualItemsForLevel(list: RecommendationList | undefined, level: KitLevel, notAssessed: string[] = [], manual: string[] = [], inPack: ReadonlySet<string> = new Set()): ManualItemView[] {
   const fromList = new Map((list?.items ?? []).filter(item => item.level === level).map(item => [item.identifier, item] as const))
   const byId = new Map<string, ManualItemView>()
   const add = (identifier: string, state: ManualItemView["state"]) => {
@@ -176,6 +179,6 @@ export function manualItemsForLevel(list: RecommendationList | undefined, level:
   }
   for (const item of fromList.values()) if (!item.automated) add(item.identifier, "Manual")
   for (const identifier of manual) add(identifier, "Manual")
-  for (const identifier of notAssessed) add(identifier, "Not covered")
+  for (const identifier of notAssessed) add(identifier, inPack.has(identifier) ? "Not assessed" : "Not covered")
   return [...byId.values()].sort((a, b) => a.identifier.localeCompare(b.identifier, undefined, { numeric: true }))
 }

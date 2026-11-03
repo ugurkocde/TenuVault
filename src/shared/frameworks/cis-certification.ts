@@ -124,7 +124,7 @@ export const CIS_TENANT_NOT_CERTIFIED_NOTE = "Results compare the recorded Intun
  */
 export const cisRemediationLimits = (product = "TenuVault"): string[] => [
   `${product} remediates only recommendations it assesses automatically: the settings in the delivered benchmark pack, written to Intune Settings Catalog policies.`,
-  `Manual recommendations and recommendations marked Not covered by the benchmark pack cannot be remediated by ${product}. They are listed for manual action, with their CIS text when the delivered list includes it.`,
+  `Manual recommendations and recommendations marked Not assessed or Not covered by the benchmark pack cannot be remediated by ${product}. They are listed for manual action, with their CIS text when the delivered list includes it.`,
   "Findings to Review hold alternative values in the pack. They cannot be selected for remediation until the profile is chosen.",
   "Missing settings are created in new policies with no assignments. Nothing in them takes effect until an administrator assigns them in Intune.",
   "Different settings are updated in place in the tenant policies that hold them. Those policies keep their assignments, so the change reaches their assigned devices.",
@@ -200,11 +200,13 @@ export function recommendationRemediation(recommendation: Pick<RecommendationRes
   return indication("product", product, `Its settings are in the delivered benchmark pack. ${product} remediates Different and Missing settings with a reviewed deployment.`)
 }
 
-/** Manual and Not covered recommendations are never remediated by the product. */
+/** Manual, Not assessed and Not covered recommendations are never remediated by the product. */
 export function manualRemediation(item: Pick<ManualItemView, "state">, product = "TenuVault"): RemediationIndication {
   return indication("manual", product, item.state === "Manual"
     ? `CIS lists it as a manual recommendation. ${product} does not assess or remediate it.`
-    : `The delivered benchmark pack does not cover it. ${product} does not assess or remediate it.`)
+    : item.state === "Not assessed"
+      ? `The delivered benchmark pack does not hold every setting it names. ${product} does not assess or remediate it.`
+      : `The delivered benchmark pack does not cover it. ${product} does not assess or remediate it.`)
 }
 
 /** The remediation indication of one finding, for findings exports. */
