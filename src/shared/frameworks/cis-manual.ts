@@ -133,7 +133,7 @@ export function serializeRecommendationList(list: RecommendationList): string {
 
 /**
  * One item of the readiness Manual section. Manual: CIS classifies it as a manual check.
- * Not assessed: CIS classifies it as automated, but the pack does not cover it.
+ * Not covered: CIS classifies it as automated, but the benchmark pack does not cover it.
  */
 export interface ManualItemView {
   identifier: string
@@ -146,7 +146,7 @@ export interface ManualItemView {
   hasText: boolean
   fallback: string
   fallbackUrl: string
-  state: "Manual" | "Not assessed"
+  state: "Manual" | "Not covered"
 }
 
 function toManualView(item: RecommendationListItem, state: ManualItemView["state"]): ManualItemView {
@@ -165,7 +165,7 @@ function toManualView(item: RecommendationListItem, state: ManualItemView["state
 /**
  * Items for one Level that TenuVault does not check: list items marked automated false and
  * denominator identifiers marked manual (state Manual), and automated identifiers the pack did
- * not assess (state Not assessed). Deduplicated by identifier, Manual first, and each carries the
+ * not assess (state Not covered). Deduplicated by identifier, Manual first, and each carries the
  * title and text of its list item when the list has one.
  */
 export function manualItemsForLevel(list: RecommendationList | undefined, level: KitLevel, notAssessed: string[] = [], manual: string[] = []): ManualItemView[] {
@@ -176,6 +176,6 @@ export function manualItemsForLevel(list: RecommendationList | undefined, level:
   }
   for (const item of fromList.values()) if (!item.automated) add(item.identifier, "Manual")
   for (const identifier of manual) add(identifier, "Manual")
-  for (const identifier of notAssessed) add(identifier, "Not assessed")
+  for (const identifier of notAssessed) add(identifier, "Not covered")
   return [...byId.values()].sort((a, b) => a.identifier.localeCompare(b.identifier, undefined, { numeric: true }))
 }

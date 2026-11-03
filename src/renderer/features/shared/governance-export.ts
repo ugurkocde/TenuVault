@@ -307,7 +307,7 @@ function cisManualRow(summary: CisReadinessSummary, level: CisReadinessSummary["
   }
 }
 
-const CIS_READINESS_HEADERS = ["Benchmark", "Version", "Level", "Headline", "Pass rate (%)", "Pass rate with exclusions (%)", "Exclusions", "Exclusions as of", "Assessed settings", "Present", "Different", "Missing", "Review", "Present in unassigned policies", "Assessed automated", "Enumerated", "Denominator", "Coverage (%)", "Not assessed", "Note", "State", "Identifier", "Title", "Exceptions", "Remediation capability"]
+const CIS_READINESS_HEADERS = ["Benchmark", "Version", "Level", "Headline", "Pass rate (%)", "Pass rate with exclusions (%)", "Exclusions", "Exclusions as of", "Assessed settings", "Present", "Different", "Missing", "Review", "Present in unassigned policies", "Assessed automated", "Enumerated", "Denominator", "Coverage (%)", "Not covered", "Note", "State", "Identifier", "Title", "Exceptions", "Remediation capability"]
 /** A row with only the leading Benchmark, Version and Level cells and the trailing cells from Note on. */
 const cisLineRow = (benchmark: string, version: string, level: number | "", tail: unknown[]) => [benchmark, version, level, ...Array(16).fill(""), ...tail]
 

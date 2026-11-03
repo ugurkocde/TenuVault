@@ -202,7 +202,7 @@ export async function planCisRemediation(deps: FeatureDeps, tenantId: string, in
   const policyIndexes = new Set<number>()
   if (whole) {
     for (const index of input.selectedPolicyIndexes!) {
-      if (!Number.isInteger(index) || !policies[index]) throw new FeatureError("A selected benchmark policy does not exist in the imported pack.")
+      if (!Number.isInteger(index) || !policies[index]) throw new FeatureError("A selected benchmark policy does not exist in the benchmark pack.")
       policyIndexes.add(index)
     }
     if (policyIndexes.size > MAX_OPERATIONS) throw tooMany(policyIndexes.size)
@@ -213,7 +213,7 @@ export async function planCisRemediation(deps: FeatureDeps, tenantId: string, in
       if (!finding) throw new FeatureError("A selected finding is not part of this assessment.")
       // The same rule the per-recommendation remediation indication shows (cis-certification.ts).
       if (findingRemediation(finding.status) !== "remediable") throw new FeatureError("Only deviating findings (Different or Missing) can be remediated. Present findings need no change and Review findings need a profile choice first.")
-      if (!policies[finding.policyIndex]?.settings[finding.settingIndex]) throw new FeatureError("A selected finding does not match the imported pack.")
+      if (!policies[finding.policyIndex]?.settings[finding.settingIndex]) throw new FeatureError("A selected finding does not match the benchmark pack.")
       const observed = finding.status === "Different" ? [...new Set(finding.observed.map((observation) => observation.policyId))] : []
       // Missing settings, and a Different finding with no observation, go into the new policy of their pack policy.
       if (!observed.length) creates.set(finding.policyIndex, [...(creates.get(finding.policyIndex) ?? []), finding])

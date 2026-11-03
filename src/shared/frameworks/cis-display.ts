@@ -1,6 +1,6 @@
 import { comparable, rootMatches, type BaselinePolicy, type Finding, type Json, type Observation } from "./policies"
 import { formatRate } from "./cis-readiness"
-import { findingRemediation } from "./cis-certification"
+import { findingRemediation, isCisCertifiedReference } from "./cis-certification"
 import { definitionLabel, payloadSettingId, settingNameOf } from "../intune/drift-format"
 import type { SettingNames } from "../intune/drift"
 import { summarizeSetting, type SettingLeaf } from "./setting-summary"
@@ -15,6 +15,15 @@ export function benchmarkDisplayName(id: string): string {
 export function packBenchmarkName(policies: readonly BaselinePolicy[]): string | null {
   for (const policy of policies) if (typeof policy.provenance?.benchmarkName === "string" && policy.provenance.benchmarkName) return policy.provenance.benchmarkName
   return null
+}
+
+/**
+ * Whether an assessment of a pack is inside the certified scope, from its reference. Only the
+ * delivery service stamps a catalog display name on the policies it delivers (cis-fetch-pack
+ * always does for a certified benchmark), so a pack without one is a Build Kit import.
+ */
+export function isCertifiedAssessment(reference: string, policies: readonly BaselinePolicy[]): boolean {
+  return isCisCertifiedReference(reference, { kitImport: packBenchmarkName(policies) === null })
 }
 
 /**

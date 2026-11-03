@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { benchmarkDisplayName, deviatingFindingKeys, groupFindingsByPolicy, groupObservationsByValue, humanSettingLabel, policyDisplayName, statusMixText, trendSummaryText } from "../src/shared/frameworks/cis-display"
-import type { Finding, Json, Observation } from "../src/shared/frameworks/policies"
+import { benchmarkDisplayName, deviatingFindingKeys, isCertifiedAssessment, groupFindingsByPolicy, groupObservationsByValue, humanSettingLabel, policyDisplayName, statusMixText, trendSummaryText } from "../src/shared/frameworks/cis-display"
+import type { BaselinePolicy, Finding, Json, Observation } from "../src/shared/frameworks/policies"
 import type { AssignmentEvidence } from "../src/shared/frameworks/evidence"
 
 function finding(policyIndex: number, policyName: string, settingId: string, status: Finding["status"]): Finding {
@@ -15,6 +15,19 @@ describe("benchmarkDisplayName", () => {
     expect(benchmarkDisplayName("fakebook")).toBe("Fakebook")
     expect(benchmarkDisplayName("intune")).toBe("Intune")
     expect(benchmarkDisplayName("")).toBe("")
+  })
+})
+
+describe("isCertifiedAssessment", () => {
+  const policy = (provenance: Record<string, string>): BaselinePolicy => ({ name: "Synthetic policy", platforms: "windows10", technologies: "mdm", description: "", settings: [], provenance: { schemaVersion: 1, ...provenance } })
+  const delivered = [policy({ benchmark: "intune-windows11", version: "5.0.0", level: "Level 1", benchmarkName: "Microsoft Intune for Windows 11" })]
+  const kit = [policy({ benchmark: "intune-windows11", version: "5.0.0", level: "Level 1", sourceFile: "synthetic.json" })]
+  it("marks a delivered pack of a certified Level certified, and a Build Kit import of it not", () => {
+    expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", delivered)).toBe(true)
+    expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 2", delivered)).toBe(false)
+    expect(isCertifiedAssessment("microsoft-intune-edge 1.0.0 Level 1", [policy({ benchmarkName: "Microsoft Intune for Edge" })])).toBe(false)
+    expect(isCertifiedAssessment("intune-windows11 5.0.0 Level 1", kit)).toBe(false)
+    expect(isCertifiedAssessment("not a pack reference", delivered)).toBe(false)
   })
 })
 

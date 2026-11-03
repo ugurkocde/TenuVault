@@ -1,6 +1,6 @@
 import { inflateSync } from "node:zlib"
 import { describe, expect, it } from "vitest"
-import { cisDisclosures, findingRemediation, manualRemediation, recommendationRemediation, CIS_NOTICE, certifiedScopeLines, cisCertificationHeadline, cisCertificationStatement, cisRemediationLimits, CIS_CERTIFICATION_STATEMENT, CIS_CERTIFIED_SEGMENTS, CIS_REMEDIATION_LIMITS, CIS_TENANT_NOT_CERTIFIED_NOTE, isCisCertified } from "../src/shared/frameworks/cis-certification"
+import { cisDisclosures, findingRemediation, manualRemediation, recommendationRemediation, CIS_NOTICE, certifiedScopeLines, cisCertificationHeadline, cisCertificationStatement, cisRemediationLimits, CIS_CERTIFICATION_STATEMENT, CIS_CERTIFIED_SEGMENTS, CIS_REMEDIATION_LIMITS, CIS_TENANT_NOT_CERTIFIED_NOTE, isCisCertified, isCisCertifiedReference, parsePackReference } from "../src/shared/frameworks/cis-certification"
 import { cisReadinessCsv, cisReadinessJson } from "../src/renderer/features/shared/governance-export"
 import { cisExportLimitations, workspaceExportCSV, workspaceExportJSON, workspaceHistoryJSON, workspaceReportHeader } from "../src/shared/compliance/export"
 import { generateCisReadinessPDF, generateWorkspaceAssessmentPDF } from "../src/shared/compliance/report-pdf"
@@ -45,6 +45,19 @@ describe("CIS certification scope", () => {
     for (const benchmark of ["office-intune-bk", "microsoft-intune-edge", "fakebook-os"]) {
       expect(isCisCertified(benchmark, "1.0.0", 1)).toBe(false)
       expect(isCisCertified(benchmark, "5.0.0", 1)).toBe(false)
+    }
+  })
+
+  it("reads the certification of an assessment from its pack reference", () => {
+    expect(parsePackReference("intune-windows11 5.0.0 Level 1")).toEqual({ benchmark: "intune-windows11", version: "5.0.0", level: 1 })
+    expect(isCisCertifiedReference("intune-windows11 5.0.0 Level 1")).toBe(true)
+    expect(isCisCertifiedReference("intune-windows11 5.0.0 Level 2")).toBe(false)
+    expect(isCisCertifiedReference("microsoft-intune-edge 1.0.0 Level 1")).toBe(false)
+    // A Build Kit import is never certified, even of a certified benchmark, version and Level.
+    expect(isCisCertifiedReference("intune-windows11 5.0.0 Level 1", { kitImport: true })).toBe(false)
+    for (const garbage of ["", "intune-windows11", "intune-windows11 5.0.0", "intune-windows11 5.0.0 Level 3", "approved workstation baseline, revision 3", "Intune-Windows11 5.0.0 Level 1"]) {
+      expect(parsePackReference(garbage), garbage).toBeNull()
+      expect(isCisCertifiedReference(garbage), garbage).toBe(false)
     }
   })
 
@@ -151,6 +164,23 @@ describe("CIS certification scope", () => {
     expect(pdf).toContain("Manual action. CIS lists it as a manual recommendation.")
   })
 
+  it("names recommendations outside the pack Not covered in the readiness CSV, JSON and PDF, apart from Not assessed recommendation results", () => {
+    const summary = cisSummary()
+    const level = summary.levels[0]!
+    const notCovered = { identifier: "1.9.9", level: level.level, title: "Synthetic uncovered check", hasText: false, fallback: MANUAL_RECOMMENDATIONS_FALLBACK, fallbackUrl: MANUAL_RECOMMENDATIONS_URL, state: "Not covered" as const }
+    const withItem = { ...summary, levels: [{ ...level, manual: [...level.manual, notCovered], notAssessed: ["1.9.9"] }, ...summary.levels.slice(1)] }
+    const csv = cisReadinessCsv(withItem)
+    expect(csv.split("\r\n")[0]).toContain("Coverage (%),Not covered,Note")
+    expect(csv).toContain("Not covered,1.9.9,Synthetic uncovered check")
+    const json = JSON.parse(cisReadinessJson(withItem, "Contoso", context.exportedAt)) as { manualItems: Array<{ identifier: string; state: string }> }
+    expect(json.manualItems.find(item => item.identifier === "1.9.9")?.state).toBe("Not covered")
+    const pdf = pdfText(generateCisReadinessPDF(withItem, { ...context, tenantId: "11111111-1111-1111-1111-111111111111", assessedAt: "2026-11-01T09:00:00.000Z" }))
+    expect(pdf).toContain(`Not covered by the benchmark pack, Level ${level.level}`)
+    expect(pdf).not.toContain("Not assessed by this tool")
+    // Recommendation results keep Not assessed for a pack recommendation whose settings the pack does not all hold.
+    expect(pdf).toContain("Not assessed")
+  })
+
   it("derives the remediation indication from the rule the remediation engine plans by", () => {
     // The engine plans exactly the findings the display marks remediable.
     for (const status of ["Present", "Missing", "Different", "Review"] as const) expect(isSelectableFinding({ status })).toBe(findingRemediation(status) === "remediable")
@@ -166,7 +196,7 @@ describe("CIS certification scope", () => {
     expect(recommendationRemediation({ settings: [setting("Different"), setting("Unmapped")] }).reason).not.toContain("profile")
     expect(recommendationRemediation({ settings: [setting("Unmapped")] }).label).toBe("Remediation: manual action")
     expect(recommendationRemediation({ settings: [] }).label).toBe("Remediation: manual action")
-    expect(manualRemediation({ state: "Not assessed" }).reason).toBe("The delivered benchmark pack does not cover it. TenuVault does not assess or remediate it.")
+    expect(manualRemediation({ state: "Not covered" }).reason).toBe("The delivered benchmark pack does not cover it. TenuVault does not assess or remediate it.")
     // A white label names its own product and never TenuVault.
     expect(recommendationRemediation({ settings: [setting("Missing")] }, "Fabrikam Reports").label).toBe("Remediation: by Fabrikam Reports")
     const disclosures = cisDisclosures()

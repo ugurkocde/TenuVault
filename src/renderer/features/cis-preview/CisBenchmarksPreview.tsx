@@ -19,7 +19,7 @@ import { isUnlicensed, useLicense } from "../../lib/license"
 export const CIS_PLAN_ADDITIONS: readonly string[] = [
   "Assessment of the tenant against the delivered benchmark pack, per Level. Packs are delivered to licensed tenants and stored encrypted on this device.",
   "Readiness per Level with the pass rate and the coverage of the benchmark.",
-  "Manual recommendations and recommendations marked Not assessed by this tool, listed with their CIS text for a manual check.",
+  "Manual recommendations and recommendations marked Not covered by the benchmark pack, listed with their CIS text for a manual check.",
   "Remediation per recommendation through a reviewed deployment, with a backup before the change, read-back after it and rollback. New policies are created with no assignments; settings that differ are updated in the policies that hold them, which keep their assignments.",
   "PDF, CSV and JSON exports of findings and readiness.",
   "On MSP, CIS scores across the tenants in your portfolio.",

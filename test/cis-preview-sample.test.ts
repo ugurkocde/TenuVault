@@ -86,7 +86,7 @@ describe("sample CIS readiness report", () => {
     expect(text).toContain("Manual recommendations, Level 1")
     expect(text).not.toContain("Manual recommendations, Level 2")
     // Every pack recommendation is assessed, as in the counts the preview states.
-    expect(text).not.toContain("Not assessed by this tool, Level")
+    expect(text).not.toContain("Not covered by the benchmark pack, Level")
     expect(text).toContain("Coverage:")
     expect(text).toContain("Recommendation pass rate")
     expect(text).toContain("Remediation: by TenuVault")

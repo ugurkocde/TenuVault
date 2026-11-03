@@ -38,6 +38,13 @@ describe("cisFlowSteps", () => {
     expect(cisFlowSteps(true, true, true)[1]?.step).toBe(2)
   })
 
+  it("does not make Review results current in setup after New assessment, whatever is loaded", () => {
+    expect(cisFlowSteps(true, true, false, true).map((item) => item.state)).toEqual(["complete", "current", "upcoming"])
+    expect(cisFlowSteps(false, true, false, true).map((item) => item.state)).toEqual(["current", "upcoming", "upcoming"])
+    // A run started from setup still makes step 2 current.
+    expect(cisFlowSteps(true, true, true, true).map((item) => item.state)).toEqual(["complete", "current", "upcoming"])
+  })
+
   it("makes step 2 current while a first run is active", () => {
     expect(cisFlowSteps(true, false, true).map((item) => item.state)).toEqual(["complete", "current", "upcoming"])
     expect(cisFlowSteps(false, false, true).map((item) => item.state)).toEqual(["upcoming", "current", "upcoming"])

@@ -826,7 +826,7 @@ function levelSection(layout: Layout, summary: CisReadinessSummary, level: CisLe
       })) }],
     }, `Recommendation results, Level ${level.level}`)
   }
-  for (const [state, heading] of [["Manual", "Manual recommendations"], ["Not assessed", "Not assessed by this tool"]] as const) {
+  for (const [state, heading] of [["Manual", "Manual recommendations"], ["Not covered", "Not covered by the benchmark pack"]] as const) {
     const items = level.manual.filter(manual => manual.state === state)
     if (!items.length) continue
     layout.heading(`${heading}, Level ${level.level}`, { toc: true, keep: 26 })

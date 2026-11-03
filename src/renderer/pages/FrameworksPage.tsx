@@ -15,7 +15,7 @@ import { coverageStatement, distinctExclusions, excludedFindingKeys, exceptionsB
 import { recommendationLabel, recommendationsForFinding, recommendationTotals, type PackRecommendation, type RecommendationResult } from "../../shared/frameworks/cis-recommendations"
 import { filterManualItems, recommendationResultView, type RecommendationResultFilter } from "../../shared/frameworks/recommendation-filter"
 import { exceptionKey, isActive, localDate } from "../../shared/frameworks/cis-exceptions"
-import { benchmarkTitle, cisExportFileName, deviatingFindingKeys, isSelectableFinding, knownSettingName, packBenchmarkName, referenceDisplayName, groupFindingsByPolicy, groupObservationsByValue, policyDisplayName, settingDisplayName, statusMixText, trendSummaryText } from "../../shared/frameworks/cis-display"
+import { benchmarkTitle, cisExportFileName, deviatingFindingKeys, isCertifiedAssessment, isSelectableFinding, knownSettingName, packBenchmarkName, referenceDisplayName, groupFindingsByPolicy, groupObservationsByValue, policyDisplayName, settingDisplayName, statusMixText, trendSummaryText } from "../../shared/frameworks/cis-display"
 import { cisFlowSteps, cisStage, isKitPackReference, kitLevelForPolicy, packSettingCount } from "../../shared/frameworks/cis-flow"
 import { cisDriftSignals, cisReadinessTrend, exclusionUse, sparklineSegments, trendChangeText, trendExclusionsText, trendGroups, trendRate, type CisTrendPoint } from "../../shared/frameworks/cis-trend"
 import { cisPortfolioRows, portfolioBenchmarks, portfolioMembers, portfolioRate, type CisPortfolioEntry } from "../../shared/frameworks/cis-portfolio"
@@ -79,6 +79,10 @@ function clearBackgroundCompare(tenantId: string | undefined, frameworkId: strin
 
 type ActionArea = "load" | "compare" | "export"
 const KIT_IMPORT_ONLY = "Build Kit import is available to internal TenuVault installations only."
+/** What a read-only saved CIS assessment allows, shown once wherever Run again is offered for it. */
+const CIS_SAVED_VIEW_NOTICE = "Showing a saved assessment. Run again to get current evidence and to select, exclude or remediate findings."
+/** An informational CIS note inside a card: neutral, so it never reads as an error or a warning. */
+const CIS_NOTE = "rounded-2xl bg-gray-50 px-4 py-3 text-sm text-gray-700"
 /** Where a CIS export was started: the results header, the saved assessments block, the full history alert or the pack coverage button. */
 type ExportOrigin = "header" | "saved" | "alert" | "coverage"
 
@@ -408,6 +412,13 @@ function CisExportMenu({ plan, disabled, readinessDisabled, onPdf, onFindingsCsv
   </>
 }
 
+/** The certification marker of a benchmark Level or an assessment, as the benchmark picker shows it. */
+function CertificationChip({ certified, prefix = "" }: { certified: boolean; prefix?: string }) {
+  return certified
+    ? <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-800"><Check className="h-3 w-3" aria-hidden="true" />{prefix}{CIS_CERTIFIED_LABEL}</span>
+    : <span className="inline-flex shrink-0 items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-600">{prefix}{CIS_NOT_CERTIFIED_LABEL}</span>
+}
+
 /** The certification and its exact scope, from the shared statement so the page and every export agree. */
 function CisCertificationNote() {
   return <section aria-label="CIS certification" className="mt-5 rounded-3xl bg-white px-6 py-5 text-sm text-gray-700 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
@@ -527,7 +538,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   }
   /** The status, error and saved file of a CIS export, shown next to the buttons that started it. */
   const exportStatus = (origin: ExportOrigin) => isCis && exportOrigin === origin && <>
-    {busy && busyAt === "export" && <p role="status" className="w-full text-sm text-blue-700">{busy}</p>}
+    {busy && busyAt === "export" && <p role="status" className="w-full text-sm text-gray-600">{busy}</p>}
     {error && errorAt === "export" && <p role="alert" className="w-full rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}
     <Notice result={exportNotice.result} onDismiss={exportNotice.clear} className="w-full" />
   </>
@@ -945,6 +956,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     <button type="button" className={cn(button, "mt-3")} disabled={!!busy} onClick={async () => { if (await confirm({ title: "Reset workspace?", description: "This deletes the unreadable saved workspace, including its saved pack and assessment history, and starts an empty one. This cannot be undone.", confirmLabel: "Reset workspace", destructive: true })) void deleteSavedWorkspace("Resetting workspace…") }}>Reset workspace</button>
   </div>
   const savedHistoryRows = workspace?.history.map(entry => <div key={entry.assessment.runId} className="mt-3 flex flex-wrap items-center gap-3 border-t pt-3 text-sm">
+    {isCis && <CertificationChip certified={isCertifiedAssessment(entry.assessment.reference, entry.policies)} />}
     <span>{isCis ? formatLocaleDateTime(entry.assessment.assessedAt) : entry.assessment.assessedAt} · {isCis ? referenceDisplayName(entry.assessment.reference, packBenchmarkName(entry.policies)) : entry.assessment.reference}{isCis && trendByRun.get(entry.assessment.runId)?.levels.length ? ` · ${(levels => levels.map(level => levels.length > 1 ? `Level ${level.level} ${formatRate(trendRate(level))}` : formatRate(trendRate(level))).join(", "))(trendByRun.get(entry.assessment.runId)!.levels)}` : ""} · {entry.assessment.findings.length} findings{entry.creation ? ` · ${entry.creation.results.length} creation outcomes` : ""}</span>
     <button className={button} disabled={!!busy} onClick={() => { reset(); setSetupRequested(false); setLoadedKitLevel(null); setPolicies(entry.policies); setReference(entry.assessment.reference); setAssessment(entry.assessment); setCreation(entry.creation ?? null); setHistorical(true); if (isCis) scrollTo("results") }}>View read-only</button>
     {!isCis && <ExportButton framework={framework} plan={plan} disabled={!!busy} onClick={() => exportSaved("json", entry.assessment.runId)}>Export JSON</ExportButton>}
@@ -982,11 +994,15 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       await saveCisFile(JSON.stringify({ reference, ...packCoverage(policies), ...cisDisclosures() }, null, 2), cisExportFileName({ reference, benchmarkName: packBenchmarkName(policies), part: "coverage", tenantName: selectedTenant?.name ?? null, date: localDate(), extension: "json" }))
     }, "export")
   }
+  // Run again assesses the pack of the saved assessment on screen and, like every run, makes it the
+  // loaded pack of the workspace, so a saved run of another pack names the pack it replaces.
+  const replacedPack = isCis && historical && workspace?.reference && (workspace.reference !== reference || JSON.stringify(workspace.policies) !== JSON.stringify(policies)) ? referenceDisplayName(workspace.reference, packBenchmarkName(workspace.policies)) : null
+  const savedViewNotice = `${CIS_SAVED_VIEW_NOTICE}${replacedPack ? ` Run again assesses the pack of this saved assessment and makes it the loaded pack in place of ${replacedPack}.` : ""}`
   const savedBlock = workspace ? (isCis ? <details ref={savedPanel} open={savedOpen} onToggle={e => setSavedOpen((e.target as HTMLDetailsElement).open)} className="mb-5 scroll-mt-6 rounded-3xl bg-white p-6" aria-label="Saved assessment history">
     <summary className="cursor-pointer text-lg font-medium">Saved assessments</summary>
     <p className="mt-2 text-sm text-gray-600">Packs, source versions and results are saved in encrypted storage on this device. Historical assessments are read-only. Run a fresh comparison before remediation.</p>
     {savedHistoryRows}
-    {historical && <p role="status" className="mt-3 text-sm text-amber-800">Viewing a saved assessment. Compare again to obtain current evidence and enable remediation.</p>}
+    {historical && contentStage === "setup" && <p role="status" className="mt-3 text-sm text-amber-800">{savedViewNotice}</p>}
     {savedWorkspaceActions}
   </details> : <section className="mb-5 rounded-3xl bg-white p-6" aria-label="Saved assessment history">
     <h2 className="text-lg font-medium">Saved workspace and history</h2>
@@ -1008,7 +1024,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     {isCis && (cisPreview ? <CisBenchmarksPreview className="mt-5" /> : <CisCertificationNote />)}
     {isCis && <nav aria-label="CIS Benchmarks progress" className="mt-6">
       <ol className="flex flex-wrap gap-2">
-        {cisFlowSteps(policies.length > 0, !!assessment, !!cisRun).map(item => {
+        {cisFlowSteps(policies.length > 0, !!assessment, !!cisRun, contentStage === "setup").map(item => {
           const content = <>
             {item.state === "complete" ? <Check className="h-4 w-4" aria-hidden="true" /> : <span aria-hidden="true" className="flex h-5 w-5 items-center justify-center rounded-full bg-white/20 text-xs font-semibold">{item.step}</span>}
             <span><span className="sr-only">Step {item.step}: </span>{item.label}</span>
@@ -1023,17 +1039,17 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     {unreadableNotice}
     {isCis && activeLookupFailed && !cisRun && <p role="alert" className="mt-6 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950">Could not check for a running assessment. <button type="button" className="font-medium text-blue-700 hover:underline disabled:opacity-50" disabled={!!busy} onClick={retryActiveLookup}>Retry</button></p>}
     {isCis && openNote && <p role="status" className="mt-6 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950">{openNote}</p>}
-    {isCis && pendingJob && !cisRun && <p role="status" aria-label="Assessment running" className="mt-6 flex flex-wrap items-center gap-3 rounded-2xl bg-blue-50 px-4 py-3 text-sm text-gray-900"><span>An assessment of {referenceDisplayName(pendingJob.reference, packBenchmarkName(pendingJob.policies))} is running.</span><button type="button" className="font-medium text-blue-700 hover:underline" onClick={() => { const job = pendingJob; void trackCisJob({ policies: job.policies, reference: job.reference }, async () => job.jobId) }}>View progress</button></p>}
+    {isCis && pendingJob && !cisRun && <p role="status" aria-label="Assessment running" className={cn("mt-6 flex flex-wrap items-center gap-3", CIS_NOTE, "bg-white")}><span>An assessment of {referenceDisplayName(pendingJob.reference, packBenchmarkName(pendingJob.policies))} is running.</span><button type="button" className="font-medium text-blue-700 hover:underline" onClick={() => { const job = pendingJob; void trackCisJob({ policies: job.policies, reference: job.reference }, async () => job.jobId) }}>View progress</button></p>}
     {contentStage === "loading" && <p role="status" className="mt-6 text-sm text-gray-500">Loading saved assessments…</p>}
     {isCis && contentStage === "results" && assessment && <div ref={resultsHeader} tabIndex={-1} aria-label="Results header" className={cn("mt-6 flex scroll-mt-6 flex-wrap items-center justify-between gap-3 rounded-3xl bg-white px-5 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)] outline-none", assessment.runId === revealedRunId && "run-results-reveal")}>
       <div className="min-w-0">
-        <p title={assessment.reference} className="truncate text-base font-medium text-gray-900">{(() => {
+        <div className="flex min-w-0 items-center gap-2"><p title={assessment.reference} className="truncate text-base font-medium text-gray-900">{(() => {
           const id = readiness?.benchmark && assessment.reference.startsWith(readiness.benchmark) ? readiness.benchmark : assessment.reference.split(/\s+/)[0] ?? ""
           const rest = assessment.reference.slice(id.length).trim()
           return `${benchmarkTitle(id, readiness?.benchmarkName ?? packBenchmarkName(policies))}${rest ? ` ${rest}` : ""}`
-        })()}</p>
+        })()}</p><CertificationChip certified={isCertifiedAssessment(assessment.reference, policies)} /></div>
         <p className="mt-0.5 text-sm text-gray-500">{selectedTenant?.name ? `${selectedTenant.name} · ` : ""}{assessment.policyCount} tenant policies read · {new Date(assessment.assessedAt).toLocaleString()}</p>
-        {historical && <p role="status" className="mt-1 text-sm text-amber-800">Showing a saved assessment. Run again to get current evidence and to select, exclude or remediate findings.</p>}
+        {historical && <p role="status" className="mt-1 text-sm text-amber-800">{savedViewNotice}</p>}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" className={primary} disabled={!!busy || !!cisRun || !cisAllowed || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={startCisAssessment}>{cisRun ? "Re-running" : "Run again"}</button>
@@ -1057,12 +1073,12 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       </div>
       <button type="button" className={button} onClick={() => setSetupRequested(false)}>Back to results</button>
     </div>}
-    {(!isCis || contentStage === "setup") && <details className="group my-6 rounded-3xl bg-blue-50/60 px-6 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)] lg:px-7 [&[open]_.chevron]:rotate-180">
+    {(!isCis || contentStage === "setup") && <details className={cn("group my-6 rounded-3xl px-6 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)] lg:px-7 [&[open]_.chevron]:rotate-180", isCis ? "bg-white" : "bg-blue-50/60")}>
       <summary className="flex cursor-pointer list-none items-center justify-between gap-4 [&::-webkit-details-marker]:hidden">
-        <span className="flex items-center gap-3 text-sm"><Info className="size-4 shrink-0 text-blue-700" aria-hidden="true" /><span><strong className="font-medium text-gray-900">Assessment coverage</strong><span className="text-gray-600"> · What is compared, content sources and limits.</span></span></span>
+        <span className="flex items-center gap-3 text-sm"><Info className={cn("size-4 shrink-0", isCis ? "text-gray-500" : "text-blue-700")} aria-hidden="true" /><span><strong className="font-medium text-gray-900">Assessment coverage</strong><span className="text-gray-600"> · What is compared, content sources and limits.</span></span></span>
         <ChevronDown className="chevron size-4 shrink-0 text-gray-500 transition-transform" aria-hidden="true" />
       </summary>
-      <div className="mt-4 space-y-2 border-t border-blue-100 pt-4 text-sm leading-6 text-gray-700"><p>{isCis ? `Benchmark packs come from the TenuVault delivery service. ${CIS_TENANT_NOT_CERTIFIED_NOTE}` : "Mapping format v1. Automatic content: NCSC Device Security Guidance 2025 Windows Settings Catalog only. Other frameworks use administrator-supplied mappings. No certification or complete framework assessment is implied."}</p><p>{framework.coverage}</p>{framework.licenseNotice && <p>{framework.licenseNotice}</p>}<p>Comparison covers Settings Catalog root settings and their nested values. Assignment targets, exclusions and filter references are reported separately from configuration. Group membership, device applicability, enforcement and other policy families remain unavailable. “Present” means a matching configuration exists; it does not mean the setting is assigned or enforced.</p></div>
+      <div className={cn("mt-4 space-y-2 border-t pt-4 text-sm leading-6 text-gray-700", isCis ? "border-gray-100" : "border-blue-100")}><p>{isCis ? `Benchmark packs come from the TenuVault delivery service. ${CIS_TENANT_NOT_CERTIFIED_NOTE}` : "Mapping format v1. Automatic content: NCSC Device Security Guidance 2025 Windows Settings Catalog only. Other frameworks use administrator-supplied mappings. No certification or complete framework assessment is implied."}</p><p>{framework.coverage}</p>{framework.licenseNotice && <p>{framework.licenseNotice}</p>}<p>Comparison covers Settings Catalog root settings and their nested values. Assignment targets, exclusions and filter references are reported separately from configuration. Group membership, device applicability, enforcement and other policy families remain unavailable. “Present” means a matching configuration exists; it does not mean the setting is assigned or enforced.</p></div>
     </details>}
     {(!isCis || contentStage === "setup") && savedBlock}
     {framework.id === CIS_BENCHMARKS_ID && contentStage === "setup" && <details className="mb-5"><summary className="inline-flex h-10 cursor-pointer list-none items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 [&::-webkit-details-marker]:hidden">Portfolio</summary><div className="mt-3"><CisPortfolio plan={plan} selectedTenantId={credentials?.tenantId} /></div></details>}
@@ -1075,18 +1091,16 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       {cisNeedsSignIn && <p className="mt-3 text-sm text-amber-800">{selectedTenant ? `Sign in to ${selectedTenant.name} from the sidebar to load benchmarks and run an assessment.` : "Select a tenant in the sidebar and sign in to load benchmarks and run an assessment."}</p>}
       {cisAllowed && <>
       <div className="mt-4 flex flex-wrap items-center gap-3"><button type="button" className={button} disabled={!!busy || cisCatalogLoading || !cisAllowed || !credentials} onClick={() => void loadCisCatalog()}>{cisCatalogLoading ? "Loading available benchmarks…" : "Refresh available benchmarks"}</button>
-        {cisCatalogLoading && <span role="status" className="text-sm text-blue-700">{cisCatalog ? "Checking for updated benchmarks…" : "Loading available benchmarks…"}</span>}</div>
+        {cisCatalogLoading && <span role="status" className="text-sm text-gray-600">{cisCatalog ? "Checking for updated benchmarks…" : "Loading available benchmarks…"}</span>}</div>
       {cisCatalogMessage && <p role="alert" className="mt-4 flex flex-wrap items-center gap-2 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900"><span>{cisCatalogMessage}{cisCatalog?.length ? " The benchmarks listed below were loaded earlier." : ""}</span><button type="button" className="font-medium text-blue-700 hover:underline disabled:opacity-50" disabled={cisCatalogLoading || !credentials} onClick={() => void loadCisCatalog()}>Retry</button></p>}
-      {busy && busyAt === "load" && <p role="status" className="mt-4 text-sm text-blue-700">{busy}</p>}
+      {busy && busyAt === "load" && <p role="status" className="mt-4 text-sm text-gray-600">{busy}</p>}
       {busy && busyAt === "load" && <div role="progressbar" aria-label={busy} className="mt-2 h-2 overflow-hidden rounded-full bg-gray-100"><div className="h-full w-1/3 animate-pulse rounded-full bg-primary" /></div>}
       {error && errorAt === "load" && <p role="alert" className="mt-4 flex flex-wrap items-center gap-2 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800"><span>{error}</span>{packRetry && <button type="button" className="font-medium text-blue-700 hover:underline disabled:opacity-50" disabled={!!busy || !credentials} onClick={() => void loadDeliveredPack(packRetry.benchmark, packRetry.level)}>Retry</button>}</p>}
       {cisCatalog && cisCatalog.length > 0 && <div className="mt-4 grid gap-3 sm:grid-cols-2" role="group" aria-label="Available benchmarks">{cisCatalog.map(benchmark => <div key={`${benchmark.id}-${benchmark.version}`} className="rounded-2xl border border-gray-200 bg-white p-4">
         <p className="text-sm font-medium text-gray-900">{benchmark.name}</p>
         <p className="mt-1 text-sm text-gray-600">Version {benchmark.version}<span className="ml-2 font-mono text-[11px] text-gray-400">{benchmark.id}</span></p>
         <div className="mt-3 flex flex-wrap gap-2">{benchmark.levels.map(level => { const loaded = reference === `${benchmark.id} ${benchmark.version} Level ${level}`; return <button key={level} type="button" aria-pressed={loaded} className={loaded ? primary : button} disabled={!!busy || !credentials} onClick={() => void loadDeliveredPack(benchmark, level)}>{loaded && <Check className="h-4 w-4" aria-hidden="true" />}Level {level}</button> })}</div>
-        <ul aria-label={`Certification of ${benchmark.name}`} className="mt-2 flex flex-wrap gap-1.5">{benchmark.levels.map(level => isCisCertified(benchmark.id, benchmark.version, level)
-          ? <li key={level} className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-800"><Check className="h-3 w-3" aria-hidden="true" />Level {level}: {CIS_CERTIFIED_LABEL}</li>
-          : <li key={level} className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-600">Level {level}: {CIS_NOT_CERTIFIED_LABEL}</li>)}</ul>
+        <ul aria-label={`Certification of ${benchmark.name}`} className="mt-2 flex flex-wrap gap-1.5">{benchmark.levels.map(level => <li key={level} className="flex"><CertificationChip certified={isCisCertified(benchmark.id, benchmark.version, level)} prefix={`Level ${level}: `} /></li>)}</ul>
       </div>)}</div>}
       </>}
     </section>}
@@ -1219,7 +1233,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     </section>}
     {(!isCis || contentStage === "setup" || contentStage === "results") && <section {...(isCis && contentStage === "results" ? { "aria-label": "Assessment results" } : { "aria-labelledby": "compare-title" })} className={cn("mt-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]", isCis && contentStage === "results" && assessment?.runId === revealedRunId && "run-results-reveal")}>
       {(!isCis || contentStage !== "results") && <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 id="compare-title" className="text-xl font-medium tracking-tight">2. Compare with your tenant</h2><p className="mt-1 text-sm text-gray-600">{selectedTenant ? `Selected tenant: ${selectedTenant.name}` : "Choose a connected tenant using the sidebar."}</p>{isCis && selectedTenant && !credentials && <p className="mt-1 text-sm text-amber-800">The assessment needs a signed-in tenant. Sign in to {selectedTenant.name} from the sidebar.</p>}</div>
-        {isCis ? <button className={primary} disabled={!!busy || !!cisRun || !cisAllowed || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={startCisAssessment}>{cisRun ? "Assessment running" : assessment ? "Run again" : "Start Assessment"}</button> : <button className={primary} disabled={!!busy || comparing || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={() => {
+        {isCis ? <button className={primary} disabled={!!busy || !!cisRun || !cisAllowed || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={startCisAssessment}>{cisRun ? "Assessment running" : assessment ? "Run again" : "Start assessment"}</button> : <button className={primary} disabled={!!busy || comparing || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={() => {
           if (!compareKey) return
           reset(); setError(""); setErrorAt("compare")
           const chosenReference = reference
@@ -1243,7 +1257,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
           })
         }}>{comparing ? "Comparing in background" : assessment ? "Compare again" : "Run comparison"}</button>}</div>}
       {comparing && <p role="status" className="mt-4 text-sm text-blue-700">Reading tenant policies and comparing settings in the background. You can keep working elsewhere; the result is saved here.</p>}
-      {busy && busyAt === "compare" && !(isCis && cisRun) && <p role="status" className="mt-4 text-sm text-blue-700">{busy}</p>}
+      {busy && busyAt === "compare" && !(isCis && cisRun) && <p role="status" className={cn("mt-4 text-sm", isCis ? "text-gray-600" : "text-blue-700")}>{busy}</p>}
       {busy && busyAt === "compare" && isCis && !cisRun && <div role="progressbar" aria-label={busy} className="mt-2 h-2 overflow-hidden rounded-full bg-gray-100"><div className="h-full w-1/3 animate-pulse rounded-full bg-primary" /></div>}
       {historyFull && <div id={historyAlertId} role="alert" aria-label="Saved assessment history is full" className="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
         <p className="font-medium">Saved assessment history is full</p>
@@ -1266,10 +1280,10 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
         {readiness && <section aria-label="CIS readiness" className="mb-6 border-b border-gray-100 pb-6 text-sm text-gray-700">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
             <h3 className="text-base font-medium text-gray-900">CIS readiness</h3>
-            <p className="text-xs text-gray-500">{readiness.manualNote} This view covers the automated settings in the imported pack only.</p>
+            <p className="text-xs text-gray-500">{readiness.manualNote} This view covers the automated settings in the benchmark pack only.</p>
           </div>
           {readiness.levels.length > 0 && <div className="mt-3 space-y-1 text-sm text-gray-700">{readiness.levels.map(level => <p key={level.level}>{levelCheckSummary(level)}</p>)}</div>}
-          <p role="note" aria-label="Manual recommendations" className="mt-3 flex items-start gap-2 rounded-2xl bg-blue-50 px-4 py-3 text-sm text-gray-800"><Info className="mt-0.5 size-4 shrink-0 text-blue-700" aria-hidden="true" /><span>{readiness.manualFallback} <a href={readiness.manualFallbackUrl} className="font-medium text-blue-700 underline underline-offset-2" onClick={event => { event.preventDefault(); void bridge.app.openExternal(readiness.manualFallbackUrl) }}>{readiness.manualFallbackUrl}</a></span></p>
+          <p role="note" aria-label="Manual recommendations" className={cn("mt-3 flex items-start gap-2", CIS_NOTE)}><Info className="mt-0.5 size-4 shrink-0 text-gray-500" aria-hidden="true" /><span>{readiness.manualFallback} <a href={readiness.manualFallbackUrl} className="font-medium text-blue-700 underline underline-offset-2" onClick={event => { event.preventDefault(); void bridge.app.openExternal(readiness.manualFallbackUrl) }}>{readiness.manualFallbackUrl}</a></span></p>
           <div className="mt-4 divide-y divide-gray-100">
             {readiness.levels.map(level => {
               const total = level.assessedSettings
@@ -1362,7 +1376,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
               <h4 className={benchmarkGroup.current ? "font-medium text-gray-900" : "text-sm text-gray-700"}>Level {group.level}{benchmarkGroup.current ? `: ${head?.exclusions ?? 0} excluded from score` : ""}</h4>
               {head && <p className="mt-1 text-xs text-gray-500">{head.label} {formatRate(head.rate)}{withExclusions ? `, ${withExclusions}` : ""}. Exclusions as of {formatExpiryDate(head.exclusionsAsOf)}. Raw counts above are unchanged.</p>}
               {group.items.length ? <ul className="mt-2 space-y-2">{group.items.map(listedItem => { const { exception, note } = listedItem; return <li key={`${group.level}-${exception.id}`} className="flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-gray-50 p-3">
-                <span><span className="font-medium text-gray-800">{exception.policyName}</span>{exception.level !== group.level && <span className="ml-2 inline-block rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-800">Policy Level {exception.level}</span>}{note && <span className="ml-2 inline-block rounded-full bg-gray-200 px-2.5 py-0.5 text-xs font-medium text-gray-700">{note}</span>}{knownSettingName(exception.settingId, settingNames) && <span className="block text-xs text-gray-700">{knownSettingName(exception.settingId, settingNames)}</span>}<span className="block break-all font-mono text-xs text-gray-500">{exception.version} · {exception.settingId}</span><span className="block text-xs text-gray-600">Owner: {exception.owner} · Expires: {formatExpiryDate(exception.expiresOn)}</span><span className="block text-xs text-gray-600">{exception.reason}</span></span>
+                <span><span className="font-medium text-gray-800">{exception.policyName}</span>{exception.level !== group.level && <span className="ml-2 inline-block rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-700">Policy Level {exception.level}</span>}{note && <span className="ml-2 inline-block rounded-full bg-gray-200 px-2.5 py-0.5 text-xs font-medium text-gray-700">{note}</span>}{knownSettingName(exception.settingId, settingNames) && <span className="block text-xs text-gray-700">{knownSettingName(exception.settingId, settingNames)}</span>}<span className="block break-all font-mono text-xs text-gray-500">{exception.version} · {exception.settingId}</span><span className="block text-xs text-gray-600">Owner: {exception.owner} · Expires: {formatExpiryDate(exception.expiresOn)}</span><span className="block text-xs text-gray-600">{exception.reason}</span></span>
                 <button type="button" className={button} disabled={!!busy || historical} onClick={() => void removeException(listedItem)}>Remove</button>
               </li> })}</ul> : <p className="mt-2 text-xs text-gray-500">Nothing is excluded for this level. Select findings and choose Exclude from score.</p>}
             </div>
@@ -1490,7 +1504,7 @@ function RemediationNote({ indication }: { indication: RemediationIndication }) 
 /** The readiness sections for recommendations TenuVault does not check, in display order. */
 const MANUAL_SECTIONS: { state: ManualItemView["state"]; heading: string; note: string }[] = [
   { state: "Manual", heading: "Manual", note: "CIS classifies these recommendations as manual, so they are not assessed automatically. Check each one as its audit describes." },
-  { state: "Not assessed", heading: "Not assessed by this tool", note: "CIS classifies these recommendations as automated, but this benchmark pack does not cover them, so TenuVault does not check them. Check each one as its audit describes." },
+  { state: "Not covered", heading: "Not covered by the benchmark pack", note: "CIS classifies these recommendations as automated, but this benchmark pack does not cover them, so TenuVault does not check them. Check each one as its audit describes." },
 ]
 
 /** One Level's items of one section with search over identifier, title and benchmark text. */
@@ -1500,7 +1514,7 @@ function ManualList({ level, label, items, fallback, fallbackUrl }: { level: num
   const noun = label === "Manual" ? "manual items" : "items"
   return <>
     <div className="mt-2 flex flex-wrap items-center gap-2">
-      <SearchInput label={`Search Level ${level} ${label === "Manual" ? "manual items" : "items not assessed by this tool"}`} value={query} onChange={setQuery} placeholder="Search ID, title or text" />
+      <SearchInput label={`Search Level ${level} ${label === "Manual" ? "manual items" : "items not covered by the benchmark pack"}`} value={query} onChange={setQuery} placeholder="Search ID, title or text" />
       <span aria-live="polite" className="ml-auto text-xs text-gray-500">{shown !== items ? `${shown.length} of ${items.length} ${noun}` : `${items.length} ${noun}`}</span>
     </div>
     <div className="mt-2 divide-y divide-gray-100 border-y border-gray-100">{shown.map(item => <details key={item.identifier} className="py-3">
