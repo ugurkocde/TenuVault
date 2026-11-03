@@ -36,6 +36,7 @@ import { CIS_FRAMEWORKS, upgradeMessage, type Plan } from "../../shared/plans"
 import type { AssessJobSnapshot, ExportFile } from "../../main/frameworks/service"
 import type { NcscPack } from "../../main/frameworks/ncsc"
 import { tenantLicense, tenantPlan, useLicense, useTenantPlan } from "../lib/license"
+import { useSelectedTenantPlan } from "../lib/selected-plan"
 import { RunOverlay } from "../components/RunOverlay"
 import { CisRemediationPanel } from "../features/cis-remediation/CisRemediationPanel"
 import { CisRemediationLimits } from "../features/cis-remediation/CisRemediationLimits"
@@ -482,16 +483,20 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   const comparing = compareTask?.status === "running"
   // Reports of licensed CIS content are Pro and MSP; the main process checks the same plan.
   const plan = useTenantPlan(credentials?.tenantId)
-  const { status: licenseStatus } = useLicense()
-  // CIS work (catalog, pack loads, runs) starts only once the plan is known to include CIS Benchmarks,
-  // so an unresolved plan sends nothing the main process would refuse, and a later plan change is followed.
+  // The plan the page explains, shared with the sidebar entry: the signed-in tenant's own plan, or the
+  // machine plan when no signed-in tenant is selected; undefined while it is not known yet.
+  const selectedPlan = useSelectedTenantPlan(credentials?.tenantId)
+  // CIS work (catalog, pack loads, runs) starts only once the signed-in tenant's plan is known to include
+  // CIS Benchmarks, so an unresolved plan sends nothing the main process would refuse, and a later plan
+  // change is followed.
   const cisAllowed = isCis && canUse(plan, "baselineAllPlatforms")
-  // CIS Benchmarks is Pro and MSP. Once the license is loaded, a page that cannot load real CIS
-  // content (no tenant selected, a tenant whose plan cannot be used, or a plan without CIS
-  // Benchmarks) shows no benchmark picker; saved assessments from an earlier plan stay readable.
-  const cisLocked = isCis && !cisAllowed && licenseStatus !== null
-  // Until the license is loaded, the picker waits too, so a Pro tenant never sees the preview flash.
-  const cisPlanPending = isCis && !cisAllowed && licenseStatus === null
+  // Until the plan is known, neither the picker nor the preview shows, so a Pro tenant never sees the preview flash.
+  const cisPlanPending = isCis && !cisAllowed && selectedPlan === undefined
+  // CIS Benchmarks is Pro and MSP. A plan without it (Community, no license, or a tenant whose plan
+  // cannot be used) shows no benchmark picker; saved assessments from an earlier plan stay readable.
+  const cisLocked = isCis && !cisAllowed && selectedPlan !== undefined && !canUse(selectedPlan, "baselineAllPlatforms")
+  // A machine plan with CIS Benchmarks but no signed-in tenant: the page asks for a sign-in, not a plan.
+  const cisNeedsSignIn = isCis && !cisAllowed && !cisPlanPending && !cisLocked
   // Where a new assessment would start, such a page shows the preview of what Pro and MSP add; saved
   // results keep their read-only view, and nothing replaces the note while saved results load.
   const cisPreview = cisLocked && contentStage === "setup"
@@ -1051,6 +1056,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       {policies.length > 0 && reference && <p className="mt-2 text-sm text-gray-800">Loaded: {referenceDisplayName(reference, packBenchmarkName(policies))}, {policies.length} {policies.length === 1 ? "policy" : "policies"}. Compare it with the tenant in step 2.</p>}
       {cisLocked && <p className="mt-3 text-sm text-gray-600">Benchmark packs are delivered to tenants on TenuVault Pro and MSP, as described at the top of this page.</p>}
       {cisPlanPending && <p role="status" className="mt-3 text-sm text-gray-500">Checking the plan of the selected tenant…</p>}
+      {cisNeedsSignIn && <p className="mt-3 text-sm text-amber-800">{selectedTenant ? `Sign in to ${selectedTenant.name} from the sidebar to load benchmarks and run an assessment.` : "Select a tenant in the sidebar and sign in to load benchmarks and run an assessment."}</p>}
       {cisAllowed && <>
       <div className="mt-4 flex flex-wrap items-center gap-3"><button type="button" className={button} disabled={!!busy || cisCatalogLoading || !cisAllowed || !credentials} onClick={() => void loadCisCatalog()}>{cisCatalogLoading ? "Loading available benchmarks…" : "Refresh available benchmarks"}</button>
         {cisCatalogLoading && <span role="status" className="text-sm text-blue-700">{cisCatalog ? "Checking for updated benchmarks…" : "Loading available benchmarks…"}</span>}</div>

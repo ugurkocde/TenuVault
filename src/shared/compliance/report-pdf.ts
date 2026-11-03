@@ -710,7 +710,9 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
     ],
     footerRight: sample ? `${sample.marker}: not a real assessment` : 'Readiness comparison, not a tenant certification',
   })
-  layout.contentsPage(aboutPanel(layout, [...(sample ? [sample.note] : []), `Readiness figures come from a saved assessment of the recorded Intune configuration and were not collected again for this export. They are not an audit opinion. ${CIS_TENANT_NOT_CERTIFIED_NOTE}`]))
+  layout.contentsPage(aboutPanel(layout, sample
+    ? [sample.note, `The readiness figures in this sample are computed from fictional inputs built for the example. No saved assessment and no tenant configuration were read. They are not an audit opinion. ${CIS_TENANT_NOT_CERTIFIED_NOTE}`]
+    : [`Readiness figures come from a saved assessment of the recorded Intune configuration and were not collected again for this export. They are not an audit opinion. ${CIS_TENANT_NOT_CERTIFIED_NOTE}`]))
 
   layout.pageTitle('Executive summary', 'Summary')
   facts(layout, [

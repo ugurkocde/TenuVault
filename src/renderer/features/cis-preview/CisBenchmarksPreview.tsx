@@ -1,4 +1,4 @@
-import { useNavigate } from "react-router-dom"
+import { Link } from "react-router-dom"
 import { Check, ExternalLink, FileText, KeyRound, ListChecks } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { cn } from "~/lib/utils"
@@ -40,7 +40,6 @@ async function saveSampleReport(): Promise<{ name: string; saved: boolean; path?
  * content (catalog, pack or list) and shows none: only numbers and the certified benchmark names.
  */
 export function CisBenchmarksPreview({ className }: { className?: string }) {
-  const navigate = useNavigate()
   const { status } = useLicense()
   const sample = useSaveNotice()
   // The trial is offered where the License page offers it: no key on this machine and no organization license.
@@ -95,9 +94,11 @@ export function CisBenchmarksPreview({ className }: { className?: string }) {
           <ExternalLink className="h-4 w-4" aria-hidden="true" />
           {trial ? "Start 30 day free trial" : "See plans"}
         </Button>
-        <Button type="button" variant="outline" onClick={() => void navigate("/license")}>
-          <KeyRound className="h-4 w-4" aria-hidden="true" />
-          Add a license key
+        <Button asChild variant="outline">
+          <Link to="/license">
+            <KeyRound className="h-4 w-4" aria-hidden="true" />
+            Add a license key
+          </Link>
         </Button>
         <Button type="button" variant="outline" disabled={sample.saving} onClick={() => void sample.save(async () => {
           const outcome = await saveSampleReport()

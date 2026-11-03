@@ -71,6 +71,10 @@ describe("sample CIS readiness report", () => {
     // The cover lead wraps, so its words are checked without the line breaks.
     expect(pages[0]!.replace(/\s+/g, "")).toContain(CIS_SAMPLE_NOTE.replace(/\s+/g, ""))
     expect(Buffer.from(bytes).toString("latin1")).toContain(`/Title (${CIS_SAMPLE_TITLE})`)
+    // The About panel describes the synthetic inputs, never a saved assessment of a tenant.
+    const flat = text.replace(/\s+/g, "")
+    expect(flat).toContain("Thereadinessfiguresinthissamplearecomputedfromfictionalinputsbuiltfortheexample.Nosavedassessmentandnotenantconfigurationwereread.")
+    expect(flat).not.toContain("comefromasavedassessment")
   })
 
   it("shows the real report features: readiness per Level, coverage, recommendation results with remediation labels, manual items, certification, limits and the CIS notice", () => {

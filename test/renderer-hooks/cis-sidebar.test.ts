@@ -363,6 +363,8 @@ describe("CIS Benchmarks route", () => {
     vi.stubGlobal("fetch", fetch)
     return { container: renderCisRoute(), fetch }
   }
+  /** The labels of the preview actions, buttons and the License page link, in order. */
+  const previewActions = (preview: Element) => [...preview.querySelectorAll("button, a")].map((item) => item.textContent)
   /** Every request body the page sent, by action. */
   const actions = (fetch: ReturnType<typeof vi.fn>) => fetch.mock.calls.map(([, init]) => JSON.parse(String((init as RequestInit | undefined)?.body ?? "{}")).action as string)
 
@@ -387,8 +389,9 @@ describe("CIS Benchmarks route", () => {
     // Plain words: no dashes used as punctuation anywhere in the preview.
     expect(preview?.textContent).not.toMatch(/[\u2013\u2014]/)
     expect(preview?.textContent).not.toContain(" - ")
-    const buttons = [...preview!.querySelectorAll("button")].map((button) => button.textContent)
-    expect(buttons).toEqual(["Start 30 day free trial", "Add a license key", "View sample report"])
+    expect(previewActions(preview!)).toEqual(["Start 30 day free trial", "Add a license key", "View sample report"])
+    // Add a license key is a link to the License page, so it is announced as a destination.
+    expect(preview?.querySelector('a[href="/license"]')?.textContent).toBe("Add a license key")
     // The certification is stated once on the page: in the preview.
     expect(container.querySelectorAll('[aria-label="CIS certification"]')).toHaveLength(1)
     // CIS Controls is not offered, so the CIS Benchmarks prompt never promises it.
@@ -409,7 +412,7 @@ describe("CIS Benchmarks route", () => {
     const { container } = communityPage()
     await flush()
     const preview = container.querySelector('[aria-label="CIS Benchmarks assessments, remediation and reports preview"]')!
-    const button = (label: string) => [...preview.querySelectorAll("button")].find((item) => item.textContent === label)!
+    const button = (label: string) => [...preview.querySelectorAll<HTMLElement>("button, a")].find((item) => item.textContent === label)!
     const { bridge } = await import("../../src/renderer/lib/bridge")
     const open = vi.spyOn(bridge.license, "open")
     await act(async () => { button("Start 30 day free trial").click() })
@@ -425,7 +428,7 @@ describe("CIS Benchmarks route", () => {
     const { container } = communityPage({ ...communityStatus(), hasKey: true, keyState: "failed" })
     await flush()
     const preview = container.querySelector('[aria-label="CIS Benchmarks assessments, remediation and reports preview"]')!
-    expect([...preview.querySelectorAll("button")].map((button) => button.textContent)).toEqual(["See plans", "Add a license key", "View sample report"])
+    expect(previewActions(preview)).toEqual(["See plans", "Add a license key", "View sample report"])
     vi.unstubAllGlobals()
   })
 
@@ -487,7 +490,7 @@ describe("CIS Benchmarks route", () => {
     await flush()
     const preview = container.querySelector(PREVIEW)
     expect(preview).not.toBeNull()
-    expect([...preview!.querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Start 30 day free trial", "Add a license key", "View sample report"])
+    expect(previewActions(preview!)).toEqual(["Start 30 day free trial", "Add a license key", "View sample report"])
     expect(container.querySelectorAll('[aria-label="CIS certification"]')).toHaveLength(1)
     expectNoCisContent(container, fetch)
     // The sample names no tenant: the one request carries only the action.
@@ -497,7 +500,10 @@ describe("CIS Benchmarks route", () => {
     vi.unstubAllGlobals()
   })
 
-  it("shows the preview with no tenant selected on a machine with a Pro key, never the picker", async () => {
+  const SIGN_IN_LINE = "Sign in to Not signed in from the sidebar to load benchmarks and run an assessment."
+  const SELECT_LINE = "Select a tenant in the sidebar and sign in to load benchmarks and run an assessment."
+
+  it("asks a machine with a Pro key and no tenant selected to choose a tenant, never the upsell or the picker", async () => {
     appInfo.mockResolvedValue({ internalCisBenchmarks: false })
     licenseStatus.current = entitledStatus("pro")
     selectedTenantState.current = null
@@ -505,7 +511,59 @@ describe("CIS Benchmarks route", () => {
     vi.stubGlobal("fetch", fetch)
     const container = renderCisRoute()
     await flush()
-    expect([...container.querySelector(PREVIEW)!.querySelectorAll("button")].map((button) => button.textContent)).toEqual(["See plans", "Add a license key", "View sample report"])
+    expect(container.querySelector(PREVIEW)).toBeNull()
+    expect(container.textContent).not.toContain("See plans")
+    expect(container.textContent).not.toContain("Add a license key")
+    expect(container.textContent).toContain(SELECT_LINE)
+    expect(container.querySelectorAll('[aria-label="CIS certification"]')).toHaveLength(1)
+    expectNoCisContent(container, fetch)
+    vi.unstubAllGlobals()
+  })
+
+  it("asks a machine with a Pro key to sign in to the selected tenant, with no preview and no CIS content request", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: false })
+    licenseStatus.current = entitledStatus("pro")
+    selectedTenantState.current = { id: 3, name: "Not signed in", credentials: undefined }
+    const fetch = sampleFetch()
+    vi.stubGlobal("fetch", fetch)
+    const container = renderCisRoute()
+    await flush()
+    expect(container.querySelector(PREVIEW)).toBeNull()
+    expect(container.textContent).not.toContain("See plans")
+    expect(container.textContent).toContain(SIGN_IN_LINE)
+    expect(container.textContent).not.toContain("Checking the plan")
+    expect(container.querySelectorAll('[aria-label="CIS certification"]')).toHaveLength(1)
+    expectNoCisContent(container, fetch)
+    vi.unstubAllGlobals()
+  })
+
+  it("shows the preview to a Community machine with a selected tenant that is not signed in", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: false })
+    licenseStatus.current = communityStatus()
+    selectedTenantState.current = { id: 3, name: "Not signed in", credentials: undefined }
+    const fetch = sampleFetch()
+    vi.stubGlobal("fetch", fetch)
+    const container = renderCisRoute()
+    await flush()
+    expect(previewActions(container.querySelector(PREVIEW)!)).toEqual(["Start 30 day free trial", "Add a license key", "View sample report"])
+    expect(container.textContent).not.toContain(SIGN_IN_LINE)
+    expectNoCisContent(container, fetch)
+    vi.unstubAllGlobals()
+  })
+
+  it("waits for the plan of a signed-in tenant the license status does not list yet, with no preview and no request", async () => {
+    appInfo.mockResolvedValue({ internalCisBenchmarks: false })
+    licenseStatus.current = { ...entitledStatus("pro"), tenants: [] }
+    selectedTenantState.current = tenantRef("t-entitled")
+    const fetch = sampleFetch("t-entitled")
+    vi.stubGlobal("fetch", fetch)
+    const container = renderCisRoute()
+    await flush()
+    expect(container.querySelector(PREVIEW)).toBeNull()
+    expect(container.textContent).toContain("Checking the plan of the selected tenant")
+    expect(container.textContent).not.toContain("See plans")
+    expect(container.textContent).not.toContain("Sign in to")
+    expect(container.querySelectorAll('[aria-label="CIS certification"]')).toHaveLength(1)
     expectNoCisContent(container, fetch)
     vi.unstubAllGlobals()
   })

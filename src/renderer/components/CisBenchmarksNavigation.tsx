@@ -2,7 +2,7 @@ import { Link, useLocation } from "react-router-dom"
 import { ListChecks } from "lucide-react"
 import { CIS_BENCHMARKS_ROUTE, isCisBenchmarksPath } from "../../shared/frameworks/cis-internal"
 import { allows } from "../../shared/plans"
-import { tenantLicense, tenantPlan, useLicense } from "../lib/license"
+import { useSelectedTenantPlan } from "../lib/selected-plan"
 import { useSelectedTenant } from "~/contexts/TenantContext"
 import { PlanBadge } from "./UpgradeNote"
 
@@ -13,18 +13,15 @@ import { PlanBadge } from "./UpgradeNote"
  * Benchmarks (Pro or MSP) see the plan badge next to the entry. When no signed-in tenant is
  * selected it falls back to the machine plan. Until the plan is known, while the license status
  * loads or before it lists the selected tenant, no badge shows, so an entitled tenant never
- * flashes it. The page and the main process check the plan.
+ * flashes it. It resolves the plan with `selectedTenantPlan`, the same helper the CIS page uses. The
+ * page and the main process check the plan.
  */
 export function CisBenchmarksNavigation({ linkClass }: { linkClass: (active: boolean) => string }) {
   const { pathname } = useLocation()
-  const { status } = useLicense()
   const { selectedTenant } = useSelectedTenant()
-  const tenantId = selectedTenant?.credentials?.tenantId
-  const license = tenantLicense(status, tenantId)
-  // A selected tenant that is not signed in has no license entry to wait for: the account plan applies.
-  const unresolved = !status || (!!tenantId && !license)
-  const plan = !status ? null : tenantId ? tenantPlan(license) : status.plan
-  const badge = !unresolved && (plan === null || !allows(plan, "baselineAllPlatforms"))
+  // The same plan the CIS page explains; undefined while it is not known yet.
+  const plan = useSelectedTenantPlan(selectedTenant?.credentials?.tenantId)
+  const badge = plan !== undefined && (plan === null || !allows(plan, "baselineAllPlatforms"))
   const active = isCisBenchmarksPath(pathname)
   return (
     <Link to={CIS_BENCHMARKS_ROUTE} aria-current={active ? "page" : undefined} className={linkClass(active)}>
