@@ -117,7 +117,7 @@ To keep Pro:
 
 1. Click **Buy Pro** in the reminder, or **Buy Pro** or **Buy MSP** on the **License** page, and complete the checkout. The checkout asks for payment right away; there is no second trial.
 2. Your new license key arrives by email.
-3. On the **License** page, click **Enter your new key**, paste the key and click **Use this key**. TenuVault activates the new key for your signed-in tenants and for every tenant the trial key covers on this machine, and only then releases the trial key. If the new key is refused for any of them, nothing changes: the trial key stays active and the reason is shown.
+3. On the **License** page, click **Enter your new key**, paste the key and click **Use this key**. TenuVault activates the new key for every tenant the trial key covers on this machine, and for signed-in tenants that are not licensed yet, and only then releases the trial key. If the new key is refused for a tenant the trial key covers, nothing changes: the trial key stays active and the reason is shown. Tenants licensed through your organization keep that license.
 
 If you do nothing, the trial key expires at the end of day 30. Nothing is charged. One tenant continues on Community, the free plan for one tenant; a second tenant is no longer covered. Pro features turn off, and your backups stay where they are.
 

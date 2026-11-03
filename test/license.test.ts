@@ -1462,6 +1462,26 @@ describe("LicenseService key replacement", () => {
     expect(entitled(license)).toBe(true)
   })
 
+  it("leaves a signed-in tenant licensed through its organization as it is", async () => {
+    store.set("license.state", JSON.stringify({
+      key: "TEST-LICENSE-KEY",
+      activations: {
+        [TENANT]: { activationId: "act-1", token: trialToken() },
+        [TENANT_B]: { activationId: "act-org", source: "tenant", token: fresh("act-org", { tenantId: TENANT_B }) },
+      },
+    }))
+    answer = ({ action }) => (action === "activate" ? granted("act-2") : Response.json({ success: true }))
+    const license = service()
+    await license.replaceKey("TENU-PAID-KEY-0001", [TENANT, TENANT_B])
+    expect(calls.map(({ action, body }) => `${action}:${String(body.tenantId ?? body.activationId)}`)).toEqual([
+      `activate:${TENANT}`,
+      "deactivate:act-1",
+    ])
+    const saved = JSON.parse(store.get("license.state")!)
+    expect(saved.activations[TENANT_B]).toMatchObject({ activationId: "act-org", source: "tenant" })
+    expect(saved.activations[TENANT]).toMatchObject({ activationId: "act-2" })
+  })
+
   it("needs a signed-in tenant and a well-formed key", async () => {
     storeLicense(trialToken())
     const license = service()

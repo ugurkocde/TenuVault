@@ -758,16 +758,23 @@ export class LicenseService {
     if (!/^[\x21-\x7e]{8,128}$/.test(trimmed)) throw new Error("Enter a valid license key.")
     const previousKey = this.state?.key
     if (!previousKey || previousKey === trimmed) return this.setKey(trimmed, tenantIds)
-    // Every tenant the current key covers here must be covered by the new key too, or the
-    // swap would cost it its license; the signed-in tenants are activated as well.
-    const keyTenants = Object.entries(this.state?.activations ?? {})
-      .filter(([tenantId, entry]) => !entry.source && this.tenantPresent(tenantId))
-      .map(([tenantId]) => tenantId)
-    const targets = [...new Set([...tenantIds.map((id) => id.toLowerCase()), ...keyTenants])].filter((id) => this.tenantPresent(id))
-    if (targets.length === 0) throw new Error("Sign in to a tenant to switch to the new license key.")
-    return this.mutate([...this.tenantMutations.keys(), ...Object.keys(this.state?.activations ?? {}), ...targets], true, async () => {
+    const signedIn = [...new Set(tenantIds.map((id) => id.toLowerCase()))]
+    return this.mutate([...this.tenantMutations.keys(), ...Object.keys(this.state?.activations ?? {}), ...signedIn], true, async () => {
       const unchanged = () => this.state?.key === previousKey
       this.assertCurrent(unchanged)
+      // Read after queued tenant work finished, so a key activation it added is covered too.
+      // Every tenant the current key covers here must be covered by the new key, or the
+      // swap would cost it its license. Signed-in tenants are activated as well, except
+      // those already licensed, for example through their organization, which stay as
+      // they are.
+      const keyTenants = Object.entries(this.state?.activations ?? {})
+        .filter(([tenantId, entry]) => !entry.source && this.tenantPresent(tenantId))
+        .map(([tenantId]) => tenantId)
+      const targets = [
+        ...keyTenants,
+        ...signedIn.filter((id) => !keyTenants.includes(id) && this.tenantPresent(id) && !this.valid(id)),
+      ]
+      if (targets.length === 0) throw new Error("Sign in to a tenant to switch to the new license key.")
       const accepted: { tenant: string; data: Record<string, unknown> }[] = []
       const errors = new Map<string, unknown>()
       for (const tenant of targets) {
