@@ -187,15 +187,27 @@ async function reader(deps: FeatureDeps, tenantId: string): Promise<GraphCall> {
 /**
  * CIS-origin change sets may only read or write the tenant while the tenant's plan includes
  * CIS Benchmarks. This is checked here as well as in the CIS workflow so a generic change-set
- * action cannot bypass a plan that ended for a CIS deployment or rollback.
+ * action cannot bypass a plan that ended for a CIS deployment.
+ *
+ * Recovery is the exception: rolling back CIS changes that were already applied writes the
+ * captured pre-change state back, never CIS content, so it stays available after the plan
+ * ends: previewRollback and createRollbackChangeSet do not check the plan, and `recovery` is
+ * true for a change set of kind "rollback", which only createRollbackChangeSet makes from an
+ * applied change set. Review, approval, integrity, lineage and target checks apply to it as
+ * to any change.
  */
-function requireCisChangeSetEnabled(workflow: string, tenantId: string): void {
-  if (workflow === "cis-remediation" && !cisBenchmarksAllowed(tenantId)) throw new PlanRequired("baselineAllPlatforms")
+function requireCisChangeSetEnabled(workflow: string, tenantId: string, recovery = false): void {
+  if (workflow === "cis-remediation" && !recovery && !cisBenchmarksAllowed(tenantId)) throw new PlanRequired("baselineAllPlatforms")
+}
+
+/** A rollback change set: recovery of an earlier applied change set, made by createRollbackChangeSet only. */
+function isRecovery(record: Pick<ChangeSetRecord, "kind" | "rollbackOf">): boolean {
+  return record.kind === "rollback" && typeof record.rollbackOf === "string" && record.rollbackOf.length > 0
 }
 
 /** Checks the CIS Benchmarks plan immediately before every Graph attempt made through this caller. */
-function gatedGraph(graph: GraphCall, workflow: string, tenantId: string): GraphCall {
-  if (workflow !== "cis-remediation") return graph
+function gatedGraph(graph: GraphCall, workflow: string, tenantId: string, recovery = false): GraphCall {
+  if (workflow !== "cis-remediation" || recovery) return graph
   return async (method, path, body, callOptions) => {
     requireCisChangeSetEnabled(workflow, tenantId)
     return graph(method, path, body, {
@@ -264,13 +276,15 @@ function retain(deps: FeatureDeps, tenantId: string): void {
  * update targets and content that still carries redacted values.
  */
 export async function createChangeSet(deps: FeatureDeps, tenantId: string, input: CreateChangeSetInput, actor: Actor): Promise<Stored_> {
-  requireCisChangeSetEnabled(input.origin?.workflow ?? "change-sets", tenantId)
+  // Only createRollbackChangeSet makes a change set of kind "rollback".
+  const recovery = input.kind === "rollback" && !!input.rollbackOf
+  requireCisChangeSetEnabled(input.origin?.workflow ?? "change-sets", tenantId, recovery)
   const tenant = tenantId.toLowerCase()
   const resolveVariables = input.kind !== "rollback" && ["custom-baseline", "baseline-upgrade", "standard-adoption"].includes(input.origin?.workflow ?? "")
   if (!input.title.trim() || input.title.length > 200) throw new FeatureError("A title of at most 200 characters is required.")
   if (!Array.isArray(input.operations) || !input.operations.length) throw new FeatureError("Select at least one operation.")
   if (input.operations.length > MAX_OPERATIONS) throw new FeatureError(`A change set holds at most ${MAX_OPERATIONS} operations. Split the change.`)
-  const graph = gatedGraph(await reader(deps, tenant), input.origin?.workflow ?? "change-sets", tenantId)
+  const graph = gatedGraph(await reader(deps, tenant), input.origin?.workflow ?? "change-sets", tenantId, recovery)
   const listings = createListingMemo()
   const operations: ChangeOperation[] = []
   const entries: ChangeSetContent["entries"] = {}
@@ -296,7 +310,7 @@ export async function createChangeSet(deps: FeatureDeps, tenantId: string, input
     // Freeze the target's values before review so writes, retries and read-back agree.
     const body = proposed ? (() => { const { assignments: _a, ...rest } = structuredClone(proposed); return resolveVariables ? replaceTenantVariables(rest as Item, tenant) : rest as Item })() : null
     let observed: Observation
-    requireCisChangeSetEnabled(input.origin?.workflow ?? "change-sets", tenantId)
+    requireCisChangeSetEnabled(input.origin?.workflow ?? "change-sets", tenantId, recovery)
     try {
       observed = await observe(graph, type, { action: operation.action, targetId, name: String(body?.[type.nameKey] ?? operation.name ?? "") }, listings)
     } catch (error) {
@@ -352,7 +366,8 @@ export async function createChangeSet(deps: FeatureDeps, tenantId: string, input
  */
 export async function reviseChangeSet(deps: FeatureDeps, tenantId: string, id: string, removeKeys: string[], actor: Actor): Promise<Stored_> {
   const record = getChangeSet(deps, tenantId, id)
-  requireCisChangeSetEnabled(record.origin.workflow, tenantId)
+  const recovery = isRecovery(record)
+  requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
   if (record.status === "stale") throw new FeatureError(STALE, 409)
   if (!["in-review", "approved", "rejected"].includes(record.status)) throw new FeatureError("Only change sets that were not applied can be revised.", 409)
   const operations = record.operations.filter((operation) => !removeKeys.includes(operation.key))
@@ -395,9 +410,10 @@ function integrity(deps: FeatureDeps, tenantId: string, record: ChangeSetRecord)
  */
 export async function previewChangeSet(deps: FeatureDeps, tenantId: string, id: string): Promise<ChangeSetPreview> {
   const record = getChangeSet(deps, tenantId, id)
-  requireCisChangeSetEnabled(record.origin.workflow, tenantId)
+  const recovery = isRecovery(record)
+  requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
   const { entries, problem } = integrity(deps, tenantId, record)
-  const graph = gatedGraph(await reader(deps, tenantId), record.origin.workflow, tenantId)
+  const graph = gatedGraph(await reader(deps, tenantId), record.origin.workflow, tenantId, recovery)
   const listings = createListingMemo()
   const operations: OperationPreview[] = []
   const fingerprints: Record<string, string> = {}
@@ -406,7 +422,7 @@ export async function previewChangeSet(deps: FeatureDeps, tenantId: string, id: 
     const blockers: string[] = []
     const warnings: string[] = []
     let observed: Observation
-    requireCisChangeSetEnabled(record.origin.workflow, tenantId)
+    requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
     try {
       observed = await observe(graph, type, operation, listings)
     } catch (error) {
@@ -464,15 +480,16 @@ export async function previewChangeSet(deps: FeatureDeps, tenantId: string, id: 
  */
 export async function approveChangeSet(deps: FeatureDeps, tenantId: string, id: string, input: { contentHash: string; targetFingerprint: string; reviewer?: string | null; note?: string | null }, actor: Actor): Promise<Stored_> {
   const record = getChangeSet(deps, tenantId, id)
-  requireCisChangeSetEnabled(record.origin.workflow, tenantId)
+  const recovery = isRecovery(record)
+  requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
   if (record.status === "stale") throw new FeatureError(STALE, 409)
   if (!["in-review", "approved"].includes(record.status)) throw new FeatureError("Only change sets in review can be approved.", 409)
   const preview = await previewChangeSet(deps, tenantId, id)
-  requireCisChangeSetEnabled(record.origin.workflow, tenantId)
+  requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
   if (preview.blockers.length) throw new FeatureError(`This change set cannot be approved: ${preview.blockers.join(" ")}`, 409)
   if (input.contentHash !== record.contentHash) throw new FeatureError("The change set content differs from what you reviewed. Review it again.", 409)
   if (input.targetFingerprint !== preview.targetFingerprint) throw new FeatureError("The target tenant changed since your preview. Preview again before approving.", 409)
-  requireCisChangeSetEnabled(record.origin.workflow, tenantId)
+  requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
   const at = deps.now().toISOString()
   const approved = deps.records.update<ChangeSetRecord>(DOMAINS.changeSets, tenantId, id, (current) => ({
     ...current,
@@ -650,7 +667,8 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
   try {
     return await withTenantWrite(tenant, "Change set apply", async () => {
     const record = getChangeSet(deps, tenant, id)
-    requireCisChangeSetEnabled(record.origin.workflow, tenantId)
+    const recovery = isRecovery(record)
+    requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
     if (record.status === "stale") throw new FeatureError(STALE, 409)
     if (["in-review", "rejected"].includes(record.status)) throw new FeatureError("This change set needs an approval of its current content and target state.", 409)
     if (record.status === "applied") throw new FeatureError("This change set was already applied and verified.", 409)
@@ -659,7 +677,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     if (input.contentHash !== record.contentHash || review.contentHash !== record.contentHash) markStale(deps, tenant, id, "The content changed after approval.", actor)
     const { entries, problem } = integrity(deps, tenant, record)
     if (problem) markStale(deps, tenant, id, problem, actor)
-    requireCisChangeSetEnabled(record.origin.workflow, tenantId)
+    requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
     const staleBefore = (await input.dependencyCheck?.()) ?? []
     if (staleBefore.length) markStale(deps, tenant, id, staleBefore.join(" "), actor)
 
@@ -684,14 +702,14 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       graph = await reader(deps, tenant)
       // Acquired before anything is marked as applying: a sign-in or plan failure here hands
       // the change set back through the catch below instead of leaving it stuck in "applying".
-      writer = gatedGraph(await deps.graph(tenant, { journal: true }), record.origin.workflow, tenantId)
-      requireCisChangeSetEnabled(record.origin.workflow, tenantId)
-      gated = gatedGraph(graph, record.origin.workflow, tenantId)
+      writer = gatedGraph(await deps.graph(tenant, { journal: true }), record.origin.workflow, tenantId, recovery)
+      requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
+      gated = gatedGraph(graph, record.origin.workflow, tenantId, recovery)
       if (!preChange) {
         const check = async () => {
           const observations: Record<string, Observation> = {}
           for (const operation of record.operations) {
-            requireCisChangeSetEnabled(record.origin.workflow, tenantId)
+            requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
             try {
               observations[operation.key] = await observe(gated, typeOf(operation.folder), operation, listings)
             } catch (error) {
@@ -702,11 +720,11 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
           return observations
         }
         await check()
-        requireCisChangeSetEnabled(record.origin.workflow, tenantId)
+        requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
         const backupFolder = await requirePreChangeBackup(deps, tenant, [...new Set(record.operations.map((operation) => operation.folder))])
         // The backup takes time: confirm the claim still holds, then re-check dependencies and
         // the target and read the capture that rollback relies on right before writing.
-        requireCisChangeSetEnabled(record.origin.workflow, tenantId)
+        requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
         const latest = getChangeSet(deps, tenant, id)
         if (latest.status !== "applying" || latest.contentHash !== record.contentHash || latest.review?.decidedAt !== review.decidedAt) throw new FeatureError("The change set changed during the backup. Nothing was written; review it again.", 409)
         const staleAfterBackup = (await input.dependencyCheck?.()) ?? []
@@ -730,7 +748,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       } else {
         captured = content(deps, tenant, preChange.captureId).entries
       }
-      requireCisChangeSetEnabled(record.origin.workflow, tenantId)
+      requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
     } catch (error) {
       // Nothing was written in this attempt: hand the change set back in its previous state.
       const message = error instanceof Error ? error.message : String(error)
@@ -750,7 +768,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
       const current = getChangeSet(deps, tenant, id).results[operation.key] ?? emptyResult()
       if (current.status === "verified") continue
       const stopIfCisRevoked = (): boolean => {
-        if (record.origin.workflow !== "cis-remediation" || cisBenchmarksAllowed(tenantId)) return false
+        if (record.origin.workflow !== "cis-remediation" || recovery || cisBenchmarksAllowed(tenantId)) return false
         saveResult(deps, tenant, id, operation.key, {
           ...current,
           status: current.status === "writing" || current.status === "uncertain" ? "uncertain" : "failed",
@@ -878,16 +896,15 @@ function inverseOperations(deps: FeatureDeps, tenantId: string, record: ChangeSe
 /**
  * What rolling back an applied change set would do, based on its captured pre-change state
  * and the live target now. Read only. Rollback is always a new change set with its own
- * review, backup, capture and read-back.
+ * review, backup, capture and read-back. Recovery works on every plan, so a CIS deployment
+ * stays recoverable after the plan that allowed it ended.
  */
 export async function previewRollback(deps: FeatureDeps, tenantId: string, id: string): Promise<RollbackPreview> {
   const record = getChangeSet(deps, tenantId, id)
-  requireCisChangeSetEnabled(record.origin.workflow, tenantId)
   const { inputs, manual } = inverseOperations(deps, tenantId, record)
-  const graph = gatedGraph(await reader(deps, tenantId), record.origin.workflow, tenantId)
+  const graph = await reader(deps, tenantId)
   const operations: RollbackPreview["operations"] = []
   for (const input of inputs) {
-    requireCisChangeSetEnabled(record.origin.workflow, tenantId)
     const type = typeOf(input.folder)
     let live: Item | null = null
     const warnings = [...input.warnings]
@@ -900,7 +917,6 @@ export async function previewRollback(deps: FeatureDeps, tenantId: string, id: s
     const diff = input.action === "update" && live && input.proposed ? diffConfigurations(type, sanitizeSnapshot(type, live).snapshot, input.proposed).entries : input.action === "create" && input.proposed ? diffConfigurations(type, null, input.proposed).entries : []
     operations.push({ key: input.key, action: input.action, name: input.name ?? String(input.proposed?.[type.nameKey] ?? ""), targetId: input.targetId ?? null, blocked: input.blocked, warnings, diff })
   }
-  requireCisChangeSetEnabled(record.origin.workflow, tenantId)
   return {
     changeSetId: record.id,
     operations,
@@ -914,7 +930,6 @@ export async function previewRollback(deps: FeatureDeps, tenantId: string, id: s
 /** Creates the rollback change set (in review) from the captured state; blocked parts are left out and reported. */
 export async function createRollbackChangeSet(deps: FeatureDeps, tenantId: string, id: string, input: { title?: string | null; ticket?: string | null }, actor: Actor): Promise<Stored_> {
   const record = getChangeSet(deps, tenantId, id)
-  requireCisChangeSetEnabled(record.origin.workflow, tenantId)
   if (record.kind === "rollback") throw new FeatureError("A rollback is itself rolled back by a new reviewed change, not by a rollback of a rollback.", 409)
   if (record.status === "applying") throw new FeatureError("This change set is being applied. Wait for its results before planning a rollback.", 409)
   const open = listChangeSets(deps, tenantId).find((entry) => entry.rollbackOf === record.id && ["in-review", "approved", "stale", "applying"].includes(entry.status))

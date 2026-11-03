@@ -8,7 +8,7 @@ import { useSelectedTenant, useTenants } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { frameworks as catalog, NCSC_COMMIT, NCSC_REPOSITORY, type Framework } from "../../shared/frameworks/catalog"
 import { CIS_BENCHMARKS_ID, internalKitImportEnabled, searchEffectiveFrameworks } from "../../shared/frameworks/cis-internal"
-import { certifiedScopeLines, CIS_CERTIFICATION_HEADLINE, CIS_CERTIFICATION_SCOPE_INTRO, CIS_CERTIFIED_LABEL, CIS_NOT_CERTIFIED_LABEL, CIS_NOT_CERTIFIED_NOTE, CIS_TENANT_NOT_CERTIFIED_NOTE, isCisCertified } from "../../shared/frameworks/cis-certification"
+import { certifiedScopeLines, cisDisclosures, manualRemediation, recommendationRemediation, type RemediationIndication, CIS_CERTIFICATION_HEADLINE, CIS_CERTIFICATION_SCOPE_INTRO, CIS_CERTIFIED_LABEL, CIS_NOT_CERTIFIED_LABEL, CIS_NOT_CERTIFIED_NOTE, CIS_TENANT_NOT_CERTIFIED_NOTE, isCisCertified } from "../../shared/frameworks/cis-certification"
 import { convertKit, readKitZip, suggestedKitBenchmark, type KitConversion, type KitFile, type KitLevel } from "../../shared/frameworks/cis-kit"
 import { parseDenominatorList, type DenominatorEntry } from "../../shared/frameworks/cis-coverage"
 import { coverageStatement, distinctExclusions, excludedFindingKeys, exceptionsByHeadline, exclusionsText, formatRate, headlineBasisNote, headlineLabel, levelCheckSummary, levelHeadline, listedExceptions, readinessFor, unassignedText } from "../../shared/frameworks/cis-readiness"
@@ -484,6 +484,9 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   // CIS Benchmarks is Pro and MSP. A known plan without it shows the plan preview instead of the
   // benchmark picker; saved assessments from an earlier plan stay readable.
   const cisLocked = isCis && plan !== null && !canUse(plan, "baselineAllPlatforms")
+  // CIS work (catalog, pack loads, runs) starts only once the plan is known to include CIS Benchmarks,
+  // so an unresolved plan sends nothing the main process would refuse, and a later plan change is followed.
+  const cisAllowed = isCis && canUse(plan, "baselineAllPlatforms")
   const { confirm, confirmDialog } = useConfirm()
   // CIS exports open the Save dialog like the Governance exports; the notice shows next to the button used.
   const [exportOrigin, setExportOrigin] = useState<ExportOrigin>("header")
@@ -771,8 +774,8 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   }
   // The catalog loads when the page opens, so a benchmark can be chosen without a click first,
   // and again on the way back to setup when a run made the first answer stale.
-  useEffect(() => { if (isCis && !cisLocked && credentials?.tenantId) void loadCisCatalog() }, [isCis, cisLocked, credentials?.tenantId])
-  useEffect(() => { if (stage === "setup" && !cisLocked && !cisCatalog && !cisCatalogLoading && !cisCatalogMessage) void loadCisCatalog() }, [stage])
+  useEffect(() => { if (cisAllowed && credentials?.tenantId) void loadCisCatalog() }, [cisAllowed, credentials?.tenantId])
+  useEffect(() => { if (stage === "setup" && cisAllowed && !cisCatalog && !cisCatalogLoading && !cisCatalogMessage) void loadCisCatalog() }, [stage, cisAllowed])
   // Display names of the settings and choices on screen, read once per definition; the same
   // stale-response rule as a run applies, and without names the raw values stay.
   const shownFindings = cisRun?.findings.length ? cisRun.findings : assessment?.findings
@@ -931,7 +934,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     const current = readiness
     const shown = assessment
     setExportOrigin("header")
-    void perform("Checking CIS access…", async () => {
+    void perform(`Exporting readiness ${format.toUpperCase()}…`, async () => {
       requireCurrentCisAccess()
       const exportedAt = new Date().toISOString()
       const name = cisExportFileName({ reference: shown.reference, benchmarkName: current.benchmarkName, part: "readiness", tenantName: selectedTenant?.name ?? null, date: localDate(), extension: format })
@@ -944,9 +947,10 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       return
     }
     setExportOrigin("coverage")
-    void perform("Checking CIS access…", async () => {
+    void perform("Exporting coverage…", async () => {
       requireCurrentCisAccess()
-      await saveCisFile(JSON.stringify({ reference, ...packCoverage(policies) }, null, 2), cisExportFileName({ reference, benchmarkName: packBenchmarkName(policies), part: "coverage", tenantName: selectedTenant?.name ?? null, date: localDate(), extension: "json" }))
+      // Every CIS export carries the certified scope, the limits of remediation and the CIS notice.
+      await saveCisFile(JSON.stringify({ reference, ...packCoverage(policies), ...cisDisclosures() }, null, 2), cisExportFileName({ reference, benchmarkName: packBenchmarkName(policies), part: "coverage", tenantName: selectedTenant?.name ?? null, date: localDate(), extension: "json" }))
     }, "export")
   }
   const savedBlock = workspace ? (isCis ? <details ref={savedPanel} open={savedOpen} onToggle={e => setSavedOpen((e.target as HTMLDetailsElement).open)} className="mb-5 scroll-mt-6 rounded-3xl bg-white p-6" aria-label="Saved assessment history">
@@ -1003,16 +1007,17 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
         {historical && <p role="status" className="mt-1 text-sm text-amber-800">Showing a saved assessment. Run again to get current evidence and to select, exclude or remediate findings.</p>}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className={primary} disabled={!!busy || !!cisRun || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={startCisAssessment}>{cisRun ? "Re-running" : "Run again"}</button>
+        <button type="button" className={primary} disabled={!!busy || !!cisRun || !cisAllowed || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={startCisAssessment}>{cisRun ? "Re-running" : "Run again"}</button>
         <button type="button" className={button} disabled={!!cisRun} onClick={() => setSetupRequested(true)}>New assessment</button>
         {workspace && workspace.history.length > 0 && <button type="button" className={button} onClick={() => { setSavedOpen(true); scrollTo("saved") }}>Saved assessments ({workspace.history.length})</button>}
         <CisExportMenu plan={plan} disabled={!!busy} readinessDisabled={!readiness} onPdf={exportCisPdf} onFindingsCsv={() => exportSaved("csv", assessment.runId)} onFindingsJson={() => exportSaved("json", assessment.runId)} onReadinessCsv={() => exportReadiness("csv")} onReadinessJson={() => exportReadiness("json")} />
       </div>
       {/* Why Run again is unavailable, in words, not only in a hover title. */}
-      {!cisRun && (!credentials || historyFull) && <p className="w-full text-sm text-amber-800">{!credentials ? `Run again needs a signed-in tenant. Sign in to ${selectedTenant?.name ?? "the selected tenant"} from the sidebar.` : "Run again is unavailable while the saved assessment history is full. Remove older assessments below first."}</p>}
+      {!cisRun && cisLocked && <p className="w-full text-sm text-amber-800">{upgradeMessage("baselineAllPlatforms")} Saved results stay readable.</p>}
+      {!cisRun && !cisLocked && (!credentials || historyFull) && <p className="w-full text-sm text-amber-800">{!credentials ? `Run again needs a signed-in tenant. Sign in to ${selectedTenant?.name ?? "the selected tenant"} from the sidebar.` : "Run again is unavailable while the saved assessment history is full. Remove older assessments below first."}</p>}
       {outOfDate && <div role="status" aria-label="Results out of date" className="flex w-full flex-wrap items-center justify-between gap-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950">
         <span>Out of date: changes were applied at {formatLocaleDateTime(appliedAt!)}. Run again to verify.</span>
-        <button type="button" className={button} disabled={!!busy || !!cisRun || !credentials || !policies.length || !reference.trim() || historyFull} onClick={startCisAssessment}>Run again</button>
+        <button type="button" className={button} disabled={!!busy || !!cisRun || !cisAllowed || !credentials || !policies.length || !reference.trim() || historyFull} onClick={startCisAssessment}>Run again</button>
       </div>}
       {exportStatus("header")}
     </div>}
@@ -1039,7 +1044,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       {cisLocked && <LockedPreview feature="baselineAllPlatforms" className="mt-4 bg-secondary/40 shadow-none" summary="Load CIS Benchmark packs from the TenuVault delivery service, assess your tenant per Level, remediate deviating settings with review, backup and rollback, and export readiness reports." points={["Benchmark packs and recommendation lists are delivered to licensed installations and stored encrypted on this device.", "Readiness per Level with Manual and Not assessed recommendations listed for manual action.", "PDF, CSV and JSON exports of findings and readiness."]} />}
       {!cisLocked && <>
       {!credentials && <p className="mt-3 text-sm text-amber-800">Sign in to {selectedTenant?.name ?? "a tenant"} from the sidebar to load benchmarks and run an assessment.</p>}
-      <div className="mt-4 flex flex-wrap items-center gap-3"><button type="button" className={button} disabled={!!busy || cisCatalogLoading || !credentials} onClick={() => void loadCisCatalog()}>{cisCatalogLoading ? "Loading available benchmarks…" : "Refresh available benchmarks"}</button>
+      <div className="mt-4 flex flex-wrap items-center gap-3"><button type="button" className={button} disabled={!!busy || cisCatalogLoading || !cisAllowed || !credentials} onClick={() => void loadCisCatalog()}>{cisCatalogLoading ? "Loading available benchmarks…" : "Refresh available benchmarks"}</button>
         {cisCatalogLoading && <span role="status" className="text-sm text-blue-700">{cisCatalog ? "Checking for updated benchmarks…" : "Loading available benchmarks…"}</span>}</div>
       {cisCatalogMessage && <p role="alert" className="mt-4 flex flex-wrap items-center gap-2 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900"><span>{cisCatalogMessage}{cisCatalog?.length ? " The benchmarks listed below were loaded earlier." : ""}</span><button type="button" className="font-medium text-blue-700 hover:underline disabled:opacity-50" disabled={cisCatalogLoading || !credentials} onClick={() => void loadCisCatalog()}>Retry</button></p>}
       {busy && busyAt === "load" && <p role="status" className="mt-4 text-sm text-blue-700">{busy}</p>}
@@ -1184,7 +1189,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     </section>}
     {(!isCis || contentStage === "setup" || contentStage === "results") && <section {...(isCis && contentStage === "results" ? { "aria-label": "Assessment results" } : { "aria-labelledby": "compare-title" })} className={cn("mt-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]", isCis && contentStage === "results" && assessment?.runId === revealedRunId && "run-results-reveal")}>
       {(!isCis || contentStage !== "results") && <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 id="compare-title" className="text-xl font-medium tracking-tight">2. Compare with your tenant</h2><p className="mt-1 text-sm text-gray-600">{selectedTenant ? `Selected tenant: ${selectedTenant.name}` : "Choose a connected tenant using the sidebar."}</p>{isCis && selectedTenant && !credentials && <p className="mt-1 text-sm text-amber-800">The assessment needs a signed-in tenant. Sign in to {selectedTenant.name} from the sidebar.</p>}</div>
-        {isCis ? <button className={primary} disabled={!!busy || !!cisRun || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={startCisAssessment}>{cisRun ? "Assessment running" : assessment ? "Run again" : "Start Assessment"}</button> : <button className={primary} disabled={!!busy || comparing || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={() => {
+        {isCis ? <button className={primary} disabled={!!busy || !!cisRun || !cisAllowed || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={startCisAssessment}>{cisRun ? "Assessment running" : assessment ? "Run again" : "Start Assessment"}</button> : <button className={primary} disabled={!!busy || comparing || !credentials || !policies.length || !reference.trim() || historyFull} {...historyBlocked} onClick={() => {
           if (!compareKey) return
           reset(); setError(""); setErrorAt("compare")
           const chosenReference = reference
@@ -1441,10 +1446,15 @@ function RecommendationResultList({ level, items, names }: { level: number; item
     </div>
     <ul className="mt-2 max-h-80 divide-y divide-gray-100 overflow-auto border-y border-gray-100">{view.shown.map(item => <li key={item.id} className="flex items-start gap-3 py-2">
       <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium ${item.result === "Pass" ? "bg-green-50 text-green-800" : item.result === "Fail" ? "bg-red-50 text-red-800" : "bg-gray-100 text-gray-700"}`}>{item.result}</span>
-      <span className="min-w-0 flex-1 text-sm text-gray-800"><span className="font-medium">{item.id}</span> {item.title}<span className="block text-xs leading-5 text-gray-600">{item.settings.map(setting => `${settingDisplayName(setting.id, names)}: ${setting.status}`).join("; ")}</span><span className="block break-all font-mono text-[11px] leading-4 text-gray-400">{item.settings.map(setting => setting.id).join("; ")}</span></span>
+      <span className="min-w-0 flex-1 text-sm text-gray-800"><span className="font-medium">{item.id}</span> {item.title}<span className="block text-xs leading-5 text-gray-600">{item.settings.map(setting => `${settingDisplayName(setting.id, names)}: ${setting.status}`).join("; ")}</span><span className="block break-all font-mono text-[11px] leading-4 text-gray-400">{item.settings.map(setting => setting.id).join("; ")}</span><RemediationNote indication={recommendationRemediation(item)} /></span>
     </li>)}
       {!view.shown.length && <li className="py-3 text-center text-sm text-gray-500">No recommendations match the filters.</li>}</ul>
   </>
+}
+
+/** Whether TenuVault can remediate a recommendation, with the reason, from the shared wording (cis-certification.ts). */
+function RemediationNote({ indication }: { indication: RemediationIndication }) {
+  return <span className="block text-xs leading-5 text-gray-600"><span className="font-medium text-gray-800">{indication.label}.</span> {indication.reason}</span>
 }
 
 /** The readiness sections for recommendations TenuVault does not check, in display order. */
@@ -1464,7 +1474,7 @@ function ManualList({ level, label, items, fallback, fallbackUrl }: { level: num
       <span aria-live="polite" className="ml-auto text-xs text-gray-500">{shown !== items ? `${shown.length} of ${items.length} ${noun}` : `${items.length} ${noun}`}</span>
     </div>
     <div className="mt-2 divide-y divide-gray-100 border-y border-gray-100">{shown.map(item => <details key={item.identifier} className="py-3">
-      <summary className="cursor-pointer text-sm"><span className="font-medium text-gray-800">{item.identifier}</span>{item.title && <span className="ml-2 text-gray-700">{item.title}</span>}<span className="ml-2 inline-block rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-700">{item.state}</span></summary>
+      <summary className="cursor-pointer text-sm"><span className="font-medium text-gray-800">{item.identifier}</span>{item.title && <span className="ml-2 text-gray-700">{item.title}</span>}<span className="ml-2 inline-block rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-700">{item.state}</span><RemediationNote indication={manualRemediation(item)} /></summary>
       <div className="mt-3 space-y-2 whitespace-pre-wrap text-sm text-gray-700">
         {item.hasText ? <>
           {item.description && <p><strong className="font-medium text-gray-900">Description:</strong> {item.description}</p>}

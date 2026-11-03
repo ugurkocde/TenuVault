@@ -175,6 +175,9 @@ describe("CIS Benchmarks top-level sidebar entry", () => {
     expect(button?.textContent).toContain("Pro")
     expect(button?.getAttribute("aria-disabled")).toBe("true")
     expect(button?.getAttribute("title")).toContain("Pro and MSP")
+    // The tooltip names CIS Benchmarks only: CIS Controls is not offered on any plan.
+    expect(button?.getAttribute("title")).toContain("CIS Benchmarks assessments, remediation and reports")
+    expect(button?.getAttribute("title")).not.toContain("CIS Controls")
     expect(button?.hasAttribute("disabled")).toBe(false)
     button?.focus()
     expect(document.activeElement).toBe(button)
@@ -183,6 +186,7 @@ describe("CIS Benchmarks top-level sidebar entry", () => {
     })
     await flush()
     expect(document.body.textContent).toContain("Included in TenuVault Pro and MSP")
+    expect(document.body.textContent).not.toContain("CIS Controls")
   })
 
   it("shows the locked Pro entry for a selected Community tenant even when the machine is entitled", async () => {
@@ -356,9 +360,11 @@ describe("CIS Benchmarks route", () => {
     vi.stubGlobal("fetch", fetch)
     const container = renderCisRoute()
     await flush()
-    const preview = container.querySelector('[aria-label="CIS Benchmark and CIS Controls assessments and reports preview"]')
+    const preview = container.querySelector('[aria-label="CIS Benchmarks assessments, remediation and reports preview"]')
     expect(preview).not.toBeNull()
     expect(preview?.textContent).toContain("Pro")
+    // CIS Controls is not offered, so the CIS Benchmarks prompt never promises it.
+    expect(preview?.textContent).not.toContain("CIS Controls")
     expect(container.textContent).not.toContain("Coming soon")
     expect(container.textContent).not.toContain("Refresh available benchmarks")
     expect(fetch.mock.calls.some(([, init]) => String((init as RequestInit | undefined)?.body).includes("cis-catalog"))).toBe(false)
@@ -417,6 +423,45 @@ describe("CIS Benchmarks route", () => {
     await flush()
     return container
   }
+
+  it("keeps saved results readable on Community but gates the readiness CSV and JSON and Run again", async () => {
+    licenseStatus.current = { ...communityStatus(), communityTenantId: "11111111-1111-1111-1111-111111111111", tenants: [communityTenant("11111111-1111-1111-1111-111111111111")] }
+    const container = await renderSavedAssessment()
+    // The saved readiness stays on screen.
+    expect(container.querySelector('[aria-label="CIS readiness"]')).not.toBeNull()
+    for (const label of ["Readiness CSV", "Readiness JSON", "Findings CSV", "Findings JSON", "PDF report"]) {
+      const button = [...container.querySelectorAll("button")].find((item) => item.textContent?.startsWith(label))
+      expect(button, label).toBeDefined()
+      expect(button?.getAttribute("aria-disabled"), label).toBe("true")
+      expect(button?.getAttribute("title"), label).toContain("CIS Benchmarks assessments, remediation and reports")
+    }
+    const readinessCsv = [...container.querySelectorAll("button")].find((item) => item.textContent?.startsWith("Readiness CSV"))!
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>
+    const before = fetchMock.mock.calls.length
+    await act(async () => { readinessCsv.click() })
+    await flush()
+    // The click explains the plan; nothing is exported or sent.
+    expect(document.body.textContent).toContain("Included in TenuVault Pro and MSP")
+    expect(fetchMock.mock.calls.length).toBe(before)
+    const runAgain = [...container.querySelectorAll("button")].find((item) => item.textContent === "Run again")
+    expect(runAgain?.disabled).toBe(true)
+    expect(container.textContent).toContain("Saved results stay readable.")
+    vi.unstubAllGlobals()
+  })
+
+  it("says per recommendation whether TenuVault can remediate it", async () => {
+    licenseStatus.current = { ...entitledStatus("pro"), tenants: [keyTenant("11111111-1111-1111-1111-111111111111", "pro", 2)] }
+    const container = await renderSavedAssessment({ recommendations: [
+      { id: "7.1.1", title: "Synthetic recommendation", level: 1, settings: ["synthetic_setting"] },
+      { id: "7.1.2", title: "Synthetic partly mapped recommendation", level: 1, settings: ["synthetic_setting", "synthetic_unmapped"] },
+    ] })
+    const results = [...container.querySelectorAll("details")].find((item) => item.querySelector("summary")?.textContent?.startsWith("Recommendation results, Level 1"))
+    expect(results).toBeDefined()
+    const rows = [...results!.querySelectorAll("li")]
+    expect(rows.find((row) => row.textContent?.includes("7.1.1"))?.textContent).toContain("Remediation: by TenuVault.")
+    expect(rows.find((row) => row.textContent?.includes("7.1.2"))?.textContent).toContain("Remediation: partly by TenuVault, partly manual action.")
+    vi.unstubAllGlobals()
+  })
 
   it("shows the CIS manual notice with its link in the readiness view without a manual recommendation list", async () => {
     const openExternal = vi.fn(async () => undefined)

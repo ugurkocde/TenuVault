@@ -69,7 +69,7 @@ const FEATURE_NAMES: Record<Feature, string> = {
   restoreAssignments: "Restoring assignments",
   driftRevert: "One click revert of drifted policies",
   auditLog: "The audit log",
-  baselineAllPlatforms: "CIS Benchmark and CIS Controls assessments and reports",
+  baselineAllPlatforms: "CIS Benchmarks assessments, remediation and reports",
   crossTenant: "The cross tenant dashboard",
   bulkActions: "Actions across several tenants",
   baselineScores: "Dashboard baseline scores",

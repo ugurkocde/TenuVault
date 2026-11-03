@@ -1,4 +1,7 @@
 import type { CisLevel } from "./cis-content"
+import { MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDATIONS_URL, type ManualItemView } from "./cis-manual"
+import type { RecommendationResult } from "./cis-recommendations"
+import type { Finding } from "./policies"
 
 /**
  * The CIS certification of TenuVault and its exact scope, in one place so the CIS Benchmarks
@@ -80,3 +83,80 @@ export const cisRemediationLimits = (product = "TenuVault"): string[] => [
   "Remediation changes Intune configuration only. It does not confirm that devices apply the settings. Run the assessment again after an apply to check the result.",
 ]
 export const CIS_REMEDIATION_LIMITS: readonly string[] = cisRemediationLimits()
+
+/** The CIS notice for recommendations this tool does not include, with its link, unchanged on every CIS export. */
+export const CIS_NOTICE = { text: MANUAL_RECOMMENDATIONS_FALLBACK, url: MANUAL_RECOMMENDATIONS_URL } as const
+
+/**
+ * Every disclosure a CIS export carries: the certified scope, the limits of remediation and the
+ * CIS notice with its link. Exports that are a table add them as preamble rows, the others as fields.
+ */
+export function cisDisclosures(product = "TenuVault") {
+  return {
+    certification: {
+      statement: cisCertificationStatement(product),
+      certifiedScope: CIS_CERTIFIED_SEGMENTS.map(segment => ({ benchmark: segment.benchmark, version: segment.version, levels: [...segment.levels], name: segment.name })),
+      note: CIS_TENANT_NOT_CERTIFIED_NOTE,
+    },
+    remediationLimits: cisRemediationLimits(product),
+    cisNotice: { text: CIS_NOTICE.text, url: CIS_NOTICE.url },
+  }
+}
+
+/**
+ * Whether the remediation engine (cis-remediation/engine.ts) can change a finding, by its status.
+ * The engine plans exactly the findings this calls "remediable"; Review findings hold alternative
+ * values in the pack and are refused until the profile is chosen; Present findings need no change.
+ */
+export type FindingRemediation = "remediable" | "profile-choice" | "no-change"
+export function findingRemediation(status: Finding["status"]): FindingRemediation {
+  return status === "Different" || status === "Missing" ? "remediable" : status === "Review" ? "profile-choice" : "no-change"
+}
+
+/** How a recommendation can be remediated: by the product, by it after a profile choice, partly, or only by hand. */
+export type RemediationKind = "product" | "profile-choice" | "partial" | "manual"
+export interface RemediationIndication {
+  kind: RemediationKind
+  /** For example "by TenuVault" or "manual action". */
+  short: string
+  /** For example "Remediation: by TenuVault". */
+  label: string
+  reason: string
+}
+
+function indication(kind: RemediationKind, product: string, reason: string): RemediationIndication {
+  const short = kind === "product" ? `by ${product}`
+    : kind === "profile-choice" ? `by ${product} after a profile choice`
+      : kind === "partial" ? `partly by ${product}, partly manual action`
+        : "manual action"
+  return { kind, short, label: `Remediation: ${short}`, reason }
+}
+
+/**
+ * The remediation indication of an assessed pack recommendation, from the same data the
+ * remediation engine plans from: each declared setting is in the delivered pack (a finding holds
+ * it) or not (Unmapped), and a setting whose finding is Review needs a profile choice first
+ * (findingRemediation). Settings the pack does not hold cannot be written by the product.
+ */
+export function recommendationRemediation(recommendation: Pick<RecommendationResult, "settings">, product = "TenuVault"): RemediationIndication {
+  const statuses = recommendation.settings.map(setting => setting.status)
+  const unmapped = statuses.filter(status => status === "Unmapped").length
+  if (!statuses.length || unmapped === statuses.length) return indication("manual", product, `None of its settings are in the delivered benchmark pack, so ${product} cannot write them.`)
+  if (unmapped) return indication("partial", product, `${product} remediates its settings that are in the delivered benchmark pack; the others are not in the pack and need manual action.`)
+  if (statuses.some(status => status !== "Unmapped" && findingRemediation(status) === "profile-choice")) return indication("profile-choice", product, "The pack holds alternative values for one of its settings. Choose the profile before it can be remediated.")
+  return indication("product", product, `Its settings are in the delivered benchmark pack. ${product} remediates Different and Missing settings with a reviewed deployment.`)
+}
+
+/** Manual and Not assessed recommendations are never remediated by the product. */
+export function manualRemediation(item: Pick<ManualItemView, "state">, product = "TenuVault"): RemediationIndication {
+  return indication("manual", product, item.state === "Manual"
+    ? `CIS lists it as a manual recommendation. ${product} does not assess or remediate it.`
+    : `The delivered benchmark pack does not cover it. ${product} does not assess or remediate it.`)
+}
+
+/** The remediation indication of one finding, for findings exports. */
+export function findingRemediationIndication(status: Finding["status"], product = "TenuVault"): RemediationIndication {
+  const kind = findingRemediation(status)
+  if (kind === "profile-choice") return indication("profile-choice", product, "The pack holds alternative values for this setting. Choose the profile before it can be remediated.")
+  return indication("product", product, kind === "remediable" ? `${product} can remediate this setting with a reviewed deployment.` : "The setting already matches; no change is needed.")
+}

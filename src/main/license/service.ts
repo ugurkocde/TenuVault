@@ -827,10 +827,15 @@ export class LicenseService {
     return "community"
   }
 
-  /** The tenant's plan as far as it is known without a network call, or null when it is not licensed. */
+  /**
+   * The tenant's plan as far as it is known without a network call, or null when it is not
+   * licensed. A tenant that was removed has no plan, like entitlementToken, even while an
+   * activation it could not release is still stored.
+   */
   plan(tenantId: string): Plan | null {
     this.load()
     const tenant = tenantId.toLowerCase()
+    if (!this.tenantPresent(tenant)) return null
     const payload = this.valid(tenant)
     if (payload) return payload.plan
     return this.options.store.get(COMMUNITY_KEY) === tenant ? "community" : null

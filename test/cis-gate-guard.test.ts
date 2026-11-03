@@ -26,11 +26,15 @@ describe("cisGuard", () => {
     for (const action of ["assess", "assess-start", "cis-catalog", "cis-fetch-pack", "workspace-cis-pdf", "workspace-csv", "workspace-json"]) {
       expect(requiredFeatures("/api/frameworks", { action, frameworkId: "cis-benchmarks" })).toEqual(["baselineAllPlatforms"])
     }
-    for (const action of ["plan", "preview", "approve", "apply", "rollback-create", "rollback-apply"]) {
+    for (const action of ["plan", "preview", "approve", "reject", "apply", "retry"]) {
       expect(featureRouteFeatures("/api/cis-remediation", action)).toEqual(["baselineAllPlatforms"])
     }
-    // Stored deployments stay readable on every plan.
+    // Stored deployments stay readable on every plan, and applied changes stay recoverable.
     expect(featureRouteFeatures("/api/cis-remediation", "list")).toEqual([])
+    for (const action of ["rollback-preview", "rollback-create", "rollback-review", "rollback-approve", "rollback-reject", "rollback-apply"]) {
+      expect(featureRouteFeatures("/api/cis-remediation", action)).toEqual([])
+      expect(requiredFeatures("/api/cis-remediation", { action, tenantId, id: "deployment-1" })).toEqual([])
+    }
   })
 
   it("refuses CIS content delivery without a cached entitlement before downstream guards", async () => {

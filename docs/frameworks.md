@@ -24,7 +24,7 @@ OpenIntuneBaseline (OIB) is no longer a catalog entry: it has its own sidebar se
 
 The catalog has sixteen entries: the ten native mappings listed above, UK NCSC Device Security Guidance, Microsoft Security Baselines, DISA STIG, Custom Baselines, CIS Benchmarks and CIS Controls. CIS Benchmarks has its own sidebar entry; CIS Controls displays **Coming soon**.
 
-Non-CIS native comparisons and administrator-imported Microsoft, STIG and Custom comparisons are available in Community. Only CIS Benchmarks and CIS Controls assessments and reports need Pro or MSP. Native comparisons do not accept policy imports or create policies.
+Non-CIS native comparisons and administrator-imported Microsoft, STIG and Custom comparisons are available in Community. Only CIS Benchmarks assessments, remediation and reports need Pro or MSP; CIS Controls is not offered. Native comparisons do not accept policy imports or create policies.
 
 ## Available assessment
 

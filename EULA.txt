@@ -1,6 +1,6 @@
 TENUVAULT DESKTOP END USER LICENSE AGREEMENT
 
-Version 1.0, 1 October 2026
+Version 1.1, 3 November 2026
 
 Ugurlabs UG (haftungsbeschraenkt), Duesseldorf, Germany ("Ugurlabs", "we", "us")
 

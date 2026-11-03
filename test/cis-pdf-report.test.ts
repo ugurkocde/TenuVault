@@ -103,7 +103,8 @@ describe("CIS readiness PDF report", () => {
     expect(text).toContain("Recommendation pass rate 0%")
     expect(text).toContain("Recommendation results, Level 1")
     // Recommendation, its settings and the result pill are table cells of one row.
-    expect(text).toContain("7.1.2 Synthetic beta recommendation fakebook_setting_beta Missing Fail")
+    // Each recommendation says whether TenuVault can remediate it, from the shared wording.
+    expect(text).toContain("7.1.2 Synthetic beta recommendation Remediation: by TenuVault fakebook_setting_beta Missing Fail")
     expect(text).toContain("Passed 0")
     expect(pdfText(generateCisReadinessPDF(cisReadiness(assessment, policies), context))).not.toContain("Recommendation results")
   })

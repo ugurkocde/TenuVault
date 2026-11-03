@@ -23,6 +23,7 @@ import { kitLevelForPolicy } from "../../shared/frameworks/cis-flow"
 import { MAX_DEFINITIONS } from "../../shared/intune/drift-format"
 import { readSettingNames } from "../../portal/lib/drift/setting-names"
 import { graphCaller } from "../../portal/lib/policies/graph-restore"
+import { CIS_POLICIES_NOT_DELIVERED, isDeliveredSubset, withDeliveredPack } from "./cis-delivered"
 
 
 const GRAPH = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies"
@@ -96,6 +97,17 @@ export const KIT_IMPORT_REFUSED = "Build Kit import is available to internal Ten
 /** Refuses the parts of a Build Kit import that reach the main process, its recommendation list and denominator, without the internal claim. */
 function requireKitImport(): void {
   if (!internalCisBenchmarksEnabled()) throw new FrameworkError(KIT_IMPORT_REFUSED, 403)
+}
+
+/**
+ * Without the internal CIS claim, CIS Benchmarks policies are accepted only when this process
+ * delivered them to the tenant: a subset of one pack cis-fetch-pack recorded (cis-delivered.ts).
+ * Checked on workspace-save, assess, assess-start and remediation planning, so policies a
+ * renderer built itself, such as a Build Kit conversion, cannot be saved, assessed or deployed.
+ */
+export function requireDeliveredCisPolicies(tenantId: string, policies: BaselinePolicy[]): void {
+  if (internalCisBenchmarksEnabled() || !policies.length) return
+  if (!isDeliveredSubset(loadWorkspace(tenantId, "cis-benchmarks").deliveredPacks, policies)) throw new FrameworkError(CIS_POLICIES_NOT_DELIVERED, 403)
 }
 
 function requireEnabledFramework(frameworkId: string): void {
@@ -604,6 +616,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     if (body.action === "workspace-save") {
       if (typeof body.reference !== "string" || body.reference.length > 200) throw new FrameworkError("Provide a source version up to 200 characters.")
       workspace.policies = Array.isArray(body.policies) && !body.policies.length ? [] : parsePolicies(body.policies)
+      if (body.frameworkId === "cis-benchmarks") requireDeliveredCisPolicies(body.tenantId, workspace.policies)
       workspace.reference = body.reference
       if ("recommendationList" in body) {
         // An imported recommendation list comes with a Build Kit; delivered packs bring their own lists.
@@ -682,6 +695,8 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       const workspace = loadWorkspace(body.tenantId, body.frameworkId)
       workspace.policies = policies
       workspace.reference = reference
+      // Recorded in the form saves and requests reparse it to, so the pack and any subset of it are accepted later.
+      workspace.deliveredPacks = withDeliveredPack(workspace.deliveredPacks, pack, parsePolicies(JSON.parse(JSON.stringify(policies))))
       // One delivered list per benchmark, version and Level replaces the earlier one for that Level, so saved
       // assessments of another Level keep theirs. A Level the service has no list for drops its old one.
       const lists = (workspace.recommendationLists ?? []).filter(item => !(item.benchmark === pack.benchmark && item.version === pack.version && item.items.every(entry => entry.level === pack.level)))
@@ -716,6 +731,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     if (typeof body.frameworkId !== "string" || !frameworks.some(f => f.id === body.frameworkId)) throw new FrameworkError("Select a framework.")
     if (typeof body.reference !== "string" || !body.reference.trim() || body.reference.length > 200) throw new FrameworkError("Provide a source version and profile (up to 200 characters).")
     const policies = parsePolicies(body.policies)
+    if (body.frameworkId === "cis-benchmarks") requireDeliveredCisPolicies(tenant, policies)
     pruneJobs()
     const running = [...jobs.values()].filter(job => !isFinished(job))
     const duplicate = running.find(job => job.tenantId === tenant && job.frameworkId === body.frameworkId)
@@ -753,6 +769,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     if (typeof body.frameworkId !== "string" || !frameworks.some(f => f.id === body.frameworkId)) throw new FrameworkError("Select a framework.")
     if (typeof body.reference !== "string" || !body.reference.trim() || body.reference.length > 200) throw new FrameworkError("Provide a source version and profile (up to 200 characters).")
     const policies = parsePolicies(body.policies)
+    if (body.frameworkId === "cis-benchmarks") requireDeliveredCisPolicies(tenant, policies)
     requireHistoryRoom(tenant, body.frameworkId)
     const current = await landscape(token, undefined, () => requireEnabledFramework(body.frameworkId as string))
     requireEnabledFramework(body.frameworkId)

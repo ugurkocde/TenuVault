@@ -3,7 +3,7 @@ import { frameworks } from '../frameworks/catalog'
 import { UNSUPPORTED } from '../frameworks/coverage'
 import type { Assessment, BaselinePolicy } from '../frameworks/policies'
 import { recommendationsForFinding } from '../frameworks/cis-recommendations'
-import { cisCertificationStatement, cisRemediationLimits, CIS_TENANT_NOT_CERTIFIED_NOTE } from '../frameworks/cis-certification'
+import { cisCertificationStatement, cisRemediationLimits, CIS_NOTICE, CIS_TENANT_NOT_CERTIFIED_NOTE, findingRemediationIndication } from '../frameworks/cis-certification'
 import { comparisonCounts, FRAMEWORK_USAGE_NOTICE, type NativeAssessment } from './native'
 import { COLLECTION_FAMILY_LABELS, COLLECTION_STATUS_LABELS, PLATFORM_LABELS, frameworkCoverageLabel } from './presentation'
 
@@ -121,6 +121,8 @@ export interface ReportHeader {
   notice: string
   /** CIS Benchmarks only: what TenuVault can and cannot remediate. */
   remediationLimits?: string[]
+  /** CIS Benchmarks only: the CIS notice for recommendations this tool does not include, with its link, unchanged. */
+  cisNotice?: { text: string; url: string }
 }
 
 // Frameworks that left the catalog but whose saved assessments can still be exported.
@@ -183,6 +185,8 @@ function headerRows(header: ReportHeader): unknown[][] {
     ...header.unknowns.map(line => ['Unknown', line]),
     ...header.limitations.map(line => ['Limitation', line]),
     ['Notice', header.notice],
+    ...(header.remediationLimits ?? []).map(line => ['Remediation limit', line]),
+    ...(header.cisNotice ? [['CIS notice', `${header.cisNotice.text} ${header.cisNotice.url}`]] : []),
     [],
   ]
 }
@@ -240,14 +244,32 @@ export function workspaceReportHeader(saved: SavedAssessment, context: ExportCon
       ? [cisCertificationStatement(product), CIS_TENANT_NOT_CERTIFIED_NOTE]
       : ['Framework names are factual references. No publisher affiliation, endorsement or certification is implied. The source version and profile are as entered by the administrator.',
         frameworks.find(f => f.id === assessment.frameworkId)?.licenseNotice]).filter(Boolean).join(' '),
-    ...(cis ? { remediationLimits: cisRemediationLimits(product) } : {}),
+    ...(cis ? { remediationLimits: cisRemediationLimits(product), cisNotice: { text: CIS_NOTICE.text, url: CIS_NOTICE.url } } : {}),
   }
 }
 
-/** Each finding with the id and title of the pack recommendations it implements, when the pack lists them. */
+/**
+ * Each finding with the id and title of the pack recommendations it implements, when the pack
+ * lists them, and for CIS Benchmarks whether TenuVault can remediate it.
+ */
 function withRecommendations(saved: SavedAssessment): SavedAssessment {
-  if (!saved.policies.some(policy => policy.recommendations?.length)) return saved
-  return { ...saved, assessment: { ...saved.assessment, findings: saved.assessment.findings.map(finding => ({ ...finding, recommendations: recommendationsForFinding(saved.policies, finding).map(({ id, title }) => ({ id, title })) })) } }
+  const identified = saved.policies.some(policy => policy.recommendations?.length)
+  const cis = saved.assessment.frameworkId === 'cis-benchmarks'
+  if (!identified && !cis) return saved
+  return { ...saved, assessment: { ...saved.assessment, findings: saved.assessment.findings.map(finding => ({ ...finding,
+    ...(identified ? { recommendations: recommendationsForFinding(saved.policies, finding).map(({ id, title }) => ({ id, title })) } : {}),
+    ...(cis ? { remediationCapability: (({ label, reason }) => ({ label, reason }))(findingRemediationIndication(finding.status)) } : {}),
+  })) } }
+}
+
+/** The CIS disclosures above a findings table: the CIS notice with its link, the certified scope and the limits of remediation. */
+function cisPreambleRows(header: ReportHeader): unknown[][] {
+  return [
+    ['Notice', header.cisNotice ? `${header.cisNotice.text} ${header.cisNotice.url}` : ''],
+    ['Certification', header.notice],
+    ...(header.remediationLimits ?? []).map(line => ['Remediation limit', line]),
+    [],
+  ]
 }
 
 /** JSON export of a saved policy pack assessment, redacted. */
@@ -264,9 +286,11 @@ export function workspaceHistoryJSON(history: SavedAssessment[], context: Export
 
 /**
  * CSV export of a saved pack assessment, one row per finding. The default layout puts the report
- * header rows above the table. The table layout, used for CIS, starts with the column header on
- * line 1 and carries the tenant, profile, assessment time and run as columns; the scope,
- * limitations and notice stay in the JSON and PDF exports.
+ * header rows above the table. The table layout, used for CIS, carries the tenant, profile,
+ * assessment time and run as columns; above its column header it has only the CIS disclosures
+ * (notice with link, certified scope and limits of remediation) as two-cell rows and an empty
+ * row, so the table parses from the row after the first empty one. CIS findings also carry
+ * whether TenuVault can remediate them.
  */
 export function workspaceExportCSV(saved: SavedAssessment, context: ExportContext, options: { layout?: 'report' | 'table' } = {}): string {
   // Recommendation columns appear only for packs that list their recommendations.
@@ -274,9 +298,11 @@ export function workspaceExportCSV(saved: SavedAssessment, context: ExportContex
   const table = options.layout === 'table'
   const { assessment } = saved
   const tenant = context.tenantName ? `${context.tenantName} (${assessment.tenantId})` : assessment.tenantId
-  const rows: unknown[][] = [...(table ? [] : headerRows(workspaceReportHeader(saved, context))),
+  const cis = assessment.frameworkId === 'cis-benchmarks'
+  const header = workspaceReportHeader(saved, context)
+  const rows: unknown[][] = [...(table ? (cis ? cisPreambleRows(header) : []) : headerRows(header)),
     [...(identified ? ['Recommendation ID', 'Recommendation title'] : []), 'Pack policy', 'Setting', 'Status', 'Recommended', 'Observed policies', 'Observed values', 'Assignment evidence',
-      ...(table ? ['Tenant', 'Profile', 'Assessed', 'Exported', 'Run'] : [])]]
+      ...(table ? ['Tenant', 'Profile', 'Assessed', 'Exported', 'Run'] : []), ...(cis ? ['Remediation capability'] : [])]]
   for (const finding of redactSecrets(assessment.findings)) {
     const recommendations = identified ? recommendationsForFinding(saved.policies, finding) : []
     rows.push([...(identified ? [recommendations.map(item => item.id).join('; '), recommendations.map(item => item.title).join('; ')] : []),
@@ -284,7 +310,8 @@ export function workspaceExportCSV(saved: SavedAssessment, context: ExportContex
       finding.observed.map(o => `${o.policyName} (${o.policyId})`).join('; ') || 'None',
       finding.observed.map(o => JSON.stringify(o.value)).join('; '),
       finding.observed.map(o => o.targeting?.state ?? 'unknown').join('; ') || 'unknown',
-      ...(table ? [tenant, assessment.reference, assessment.assessedAt, context.exportedAt, assessment.runId] : [])])
+      ...(table ? [tenant, assessment.reference, assessment.assessedAt, context.exportedAt, assessment.runId] : []),
+      ...(cis ? [(({ label, reason }) => `${label}. ${reason}`)(findingRemediationIndication(finding.status))] : [])])
   }
   return toCSV(rows)
 }

@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { applyCisRemediation, approveCisRemediation, createCisRollback, listCisRemediations, OFFLINE_PREVIEW_NOTICE, planCisRemediation, previewCisRemediation, previewCisRollback, RECOMPARE_NOTICE } from "../src/main/features/cis-remediation/engine"
 import { applyChangeSet, approveChangeSet, previewChangeSet } from "../src/main/features/change-sets/engine"
-import { setCisBenchmarksPlanProvider } from "../src/main/frameworks/service"
+import { setCisBenchmarksPlanProvider, setInternalCisBenchmarksEnabled } from "../src/main/frameworks/service"
 import { upgradeMessage, type Plan } from "../src/shared/plans"
 import type { Finding } from "../src/shared/frameworks/policies"
-import { fakeDeps, TENANT_A } from "./feature-helpers"
+import { call, fakeDeps, TENANT_A } from "./feature-helpers"
+import { routes as cisRoutes } from "../src/main/features/cis-remediation/index"
 import { FakeTenant, setting, wire } from "./feature-change-sets-fakes"
 import type { Item } from "../src/shared/intune/registry"
 import { rootMatches, type Json } from "../src/shared/frameworks/policies"
@@ -37,8 +38,10 @@ async function approveFlow(context: ReturnType<typeof setup>, id: string) {
 
 // The tenant's plan as the license service reports it; a test downgrades it mid-flow to stop CIS work.
 let cisPlan: Plan | null = "pro"
-beforeEach(() => { cisPlan = "pro"; setCisBenchmarksPlanProvider(() => cisPlan) })
-afterEach(() => setCisBenchmarksPlanProvider(null))
+// The synthetic packs here are not delivered by the service, so these tests hold the internal
+// claim; cis-delivered.test.ts covers the delivered-pack check without it.
+beforeEach(() => { cisPlan = "pro"; setCisBenchmarksPlanProvider(() => cisPlan); setInternalCisBenchmarksEnabled(true) })
+afterEach(() => { setCisBenchmarksPlanProvider(null); setInternalCisBenchmarksEnabled(null) })
 const PLAN_ENDED = { feature: "baselineAllPlatforms", message: upgradeMessage("baselineAllPlatforms") }
 
 describe("CIS remediation deploy", () => {
@@ -278,9 +281,9 @@ describe("CIS remediation deploy", () => {
     expect(context.tenant.writeCount()).toBe(0)
   })
 
-  it("stops reading a rollback preview when the plan ends during the first operation read", async () => {
+  it("keeps rollback of applied changes available after the plan ends, while new deployments stay refused", async () => {
     const context = setup()
-    const existing = context.tenant.addPolicy({ name: "Tenant Alpha", settings: [setting(DEF_A, "fake-off")] })
+    const existing = context.tenant.addPolicy({ name: "Tenant Alpha", settings: [setting(DEF_A, "fake-off")], description: "before" })
     const findings = [
       finding({ key: "0:0", policyIndex: 0, settingIndex: 0, status: "Different", observed: [{ policyId: existing.id as string, policyName: "Tenant Alpha", value: null }] }),
       finding({ key: "1:0", policyIndex: 1, settingIndex: 0, status: "Missing", policyName: "Fakebook Beta", settingId: DEF_B }),
@@ -288,25 +291,56 @@ describe("CIS remediation deploy", () => {
     const deployment = await planCisRemediation(context.deps, TENANT_A, { title: "Deploy", reference: "synthetic 1.0", policies, findings, selectedFindingKeys: ["0:0", "1:0"] }, "Admin")
     const { preview } = await approveFlow(context, deployment.id)
     await applyCisRemediation(context.deps, TENANT_A, deployment.id, { contentHash: preview.changeSet.contentHash, confirmed: true }, "Admin")
+    const second = await planCisRemediation(context.deps, TENANT_A, { title: "Second", reference: "synthetic 1.0", policies, findings, selectedFindingKeys: ["1:0"] }, "Admin")
 
+    // The plan ends after the apply: recovery still works end to end, with review and approval.
+    cisPlan = "community"
     const createdId = [...context.tenant.policies.values()].find((policy) => policy.name === "[Baseline] Fakebook Beta")!.id as string
-    const graphFor = context.deps.graph
-    let reads = 0
-    const readPaths: string[] = []
-    context.deps.graph = async (...args) => {
-      const graph = await graphFor(...args)
-      return async (method, path, body) => {
-        if (method === "GET") {
-          reads += 1
-          readPaths.push(path)
-          if (reads === 1) cisPlan = "community"
-        }
-        return graph(method, path, body)
-      }
-    }
-    await expect(previewCisRollback(context.deps, TENANT_A, deployment.id))
-      .rejects.toMatchObject(PLAN_ENDED)
-    expect(readPaths.some((path) => path.includes(createdId))).toBe(false)
+    const rollbackPreview = await previewCisRollback(context.deps, TENANT_A, deployment.id)
+    expect(rollbackPreview.operations.map((operation) => operation.action).sort()).toEqual(["delete", "update"])
+    const rollback = await createCisRollback(context.deps, TENANT_A, deployment.id, {}, "Admin")
+    const review = await previewChangeSet(context.deps, TENANT_A, rollback.id)
+    await expect(applyChangeSet(context.deps, TENANT_A, rollback.id, { contentHash: review.contentHash, confirmed: true }, "Admin")).rejects.toThrow(/approval/)
+    await expect(approveChangeSet(context.deps, TENANT_A, rollback.id, { contentHash: "0".repeat(64), targetFingerprint: review.targetFingerprint, reviewer: "Reviewer" }, "Admin")).rejects.toThrow(/differs from what you reviewed/)
+    await approveChangeSet(context.deps, TENANT_A, rollback.id, { contentHash: review.contentHash, targetFingerprint: review.targetFingerprint, reviewer: "Reviewer" }, "Admin")
+    const applied = await applyChangeSet(context.deps, TENANT_A, rollback.id, { contentHash: review.contentHash, confirmed: true }, "Admin")
+    expect(applied.status).toBe("applied")
+    expect(context.tenant.policies.has(createdId)).toBe(false)
+    expect(context.tenant.policies.get(existing.id as string)?.description).toBe("before")
+
+    // A new deployment, or the approval and apply of one planned before, still needs the plan.
+    const writes = context.tenant.writeCount()
+    await expect(planCisRemediation(context.deps, TENANT_A, { title: "Again", reference: "synthetic 1.0", policies, findings, selectedFindingKeys: ["1:0"] }, "Admin")).rejects.toMatchObject(PLAN_ENDED)
+    await expect(previewCisRemediation(context.deps, TENANT_A, second.id)).rejects.toMatchObject(PLAN_ENDED)
+    await expect(previewChangeSet(context.deps, TENANT_A, second.changeSetId!)).rejects.toMatchObject(PLAN_ENDED)
+    await expect(applyChangeSet(context.deps, TENANT_A, second.changeSetId!, { contentHash: "0".repeat(64), confirmed: true }, "Admin")).rejects.toMatchObject(PLAN_ENDED)
+    expect(context.tenant.writeCount()).toBe(writes)
+  })
+
+  it("serves the rollback route actions to a Community tenant and refuses deployment actions with 402", async () => {
+    const context = setup()
+    const findings = [finding({ key: "1:0", policyIndex: 1, settingIndex: 0, status: "Missing", policyName: "Fakebook Beta", settingId: DEF_B })]
+    const deployment = await planCisRemediation(context.deps, TENANT_A, { title: "Deploy", reference: "synthetic 1.0", policies, findings, selectedFindingKeys: ["1:0"] }, "Admin")
+    const { preview } = await approveFlow(context, deployment.id)
+    await applyCisRemediation(context.deps, TENANT_A, deployment.id, { contentHash: preview.changeSet.contentHash, confirmed: true }, "Admin")
+    expect([...context.tenant.policies.values()].some((policy) => policy.name === "[Baseline] Fakebook Beta")).toBe(true)
+
+    cisPlan = "community"
+    context.deps.plan = async () => "community"
+    const route = cisRoutes(context.deps)
+    const post = (body: Record<string, unknown>) => call(route, "/api/cis-remediation", { tenantId: TENANT_A, id: deployment.id, ...body })
+    expect((await post({ action: "plan", title: "Again", reference: "synthetic 1.0", policies, findings, selectedFindingKeys: ["1:0"] })).status).toBe(402)
+    expect((await post({ action: "preview" })).status).toBe(402)
+    expect((await post({ action: "list" })).status).toBe(200)
+    expect((await post({ action: "rollback-preview" })).status).toBe(200)
+    expect((await post({ action: "rollback-create" })).status).toBe(200)
+    const review = await post({ action: "rollback-review" })
+    expect(review.status).toBe(200)
+    expect((await post({ action: "rollback-approve", contentHash: review.body.contentHash, targetFingerprint: review.body.targetFingerprint, reviewer: "Reviewer" })).status).toBe(200)
+    const applied = await post({ action: "rollback-apply", contentHash: review.body.contentHash, confirm: true })
+    expect(applied.status).toBe(200)
+    expect(applied.body.changeSet.status).toBe("applied")
+    expect([...context.tenant.policies.values()].some((policy) => policy.name === "[Baseline] Fakebook Beta")).toBe(false)
   })
 
   it("rolls back exactly the recorded creates and setting changes, then offers re-comparison", async () => {

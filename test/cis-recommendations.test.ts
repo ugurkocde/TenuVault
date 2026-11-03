@@ -8,6 +8,9 @@ import type { CisException } from "../src/shared/frameworks/cis-exceptions"
 import { comparePolicies, definitionStatus, parsePolicies, remediationPayload, type Assessment, type LandscapePolicy } from "../src/shared/frameworks/policies"
 import { cisReadinessCsv, cisReadinessJson } from "../src/renderer/features/shared/governance-export"
 import { workspaceExportCSV, workspaceExportJSON } from "../src/shared/compliance/export"
+import { recommendationRemediation } from "../src/shared/frameworks/cis-certification"
+
+const BY_TENUVAULT = `Remediation: by TenuVault. ${recommendationRemediation({ settings: [{ id: "x", status: "Present", findingKeys: [] }] }).reason}`
 
 const choice = "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance"
 const group = "#microsoft.graph.deviceManagementConfigurationGroupSettingCollectionInstance"
@@ -91,18 +94,18 @@ describe("pack recommendations", () => {
     expect(recommendationTotals(summary.levels[0]!.recommendations)).toEqual({ passed: 2, failed: 2, review: 0, notAssessed: 1 })
     const csv = cisReadinessCsv(summary)
     // One headline: the recommendation pass rate in percent, named by its basis, and no second pass rate column.
-    expect(csv.split("\r\n")[0]).toMatch(/Exceptions,Mapped settings$/)
+    expect(csv.split("\r\n")[0]).toMatch(/Exceptions,Remediation capability,Mapped settings$/)
     expect(csv.split("\r\n")[0]).not.toContain("Recommendation pass rate")
     expect(csv.split("\r\n")[1]).toMatch(/^synthetic-os,9\.9\.9,1,Recommendation pass rate,50,,0,/)
-    expect(csv).toContain("synthetic-os,9.9.9,1,,,,,,,,,,,,,,,,,Fail,Recommendation,1.1.2,Synthetic leaf two,,synthetic_payload_two Different")
+    expect(csv).toContain(`synthetic-os,9.9.9,1,,,,,,,,,,,,,,,,,Fail,Recommendation,1.1.2,Synthetic leaf two,,${BY_TENUVAULT},synthetic_payload_two Different`)
     const json = JSON.parse(cisReadinessJson(summary, null, "2026-10-15T10:00:00Z")) as { levels: Array<{ recommendations?: Array<{ id: string }>; recommendationTotals?: unknown }> }
     expect(json.levels[0]!.recommendationTotals).toEqual({ passed: 2, failed: 2, review: 0, notAssessed: 1 })
-    expect(json.levels[0]!.recommendations?.[3]).toEqual({ id: "1.2.1", title: "Synthetic beta", level: 1, result: "Fail", settings: [{ id: "synthetic_beta", status: "Missing" }] })
+    expect(json.levels[0]!.recommendations?.[3]).toEqual({ id: "1.2.1", title: "Synthetic beta", level: 1, result: "Fail", settings: [{ id: "synthetic_beta", status: "Missing" }], remediationCapability: { label: "Remediation: by TenuVault", reason: recommendationRemediation({ settings: [{ id: "synthetic_beta", status: "Missing", findingKeys: [] }] }).reason } })
     const plain = cisReadiness(run, pack)
     expect(plain.levels[0]!.recommendations).toEqual([])
     const plainCsv = cisReadinessCsv(plain)
     expect(plainCsv).not.toContain("Recommendation")
-    expect(plainCsv.split("\r\n")[0]).toMatch(/Exceptions$/)
+    expect(plainCsv.split("\r\n")[0]).toMatch(/Exceptions,Remediation capability$/)
     expect(JSON.parse(cisReadinessJson(plain, null, "2026-10-15T10:00:00Z")).levels[0]).not.toHaveProperty("recommendations")
   })
 

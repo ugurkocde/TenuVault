@@ -3,7 +3,7 @@ import { capabilityComparison, comparisonCounts, type NativeAssessment } from '.
 import { cisExportLimitations, nativeReportHeader, redactSecrets, redactText, workspaceReportHeader, type ExportContext, type ReportHeader, type SavedAssessment } from './export'
 import { coverageStatement, exclusionsText, formatRate, headlineBasisNote, levelCheckSummary, levelHeadline, unassignedText, type CisLevelReadiness, type CisReadinessSummary } from '../frameworks/cis-readiness'
 import { recommendationTotals, type RecommendationResult } from '../frameworks/cis-recommendations'
-import { certifiedScopeLines, cisCertificationHeadline, cisRemediationLimits, CIS_CERTIFICATION_SCOPE_INTRO, CIS_NOT_CERTIFIED_NOTE, CIS_TENANT_NOT_CERTIFIED_NOTE, isCisCertified } from '../frameworks/cis-certification'
+import { certifiedScopeLines, cisCertificationHeadline, cisRemediationLimits, findingRemediationIndication, manualRemediation, recommendationRemediation, CIS_CERTIFICATION_SCOPE_INTRO, CIS_NOT_CERTIFIED_NOTE, CIS_TENANT_NOT_CERTIFIED_NOTE, isCisCertified } from '../frameworks/cis-certification'
 import { displayCheckValue } from './check-results'
 import type { CapabilityResult, CapabilityStatus, ControlAssessment, ControlStatus, TechnicalCheck } from './types'
 import { PALETTE, TONES, ascii, capHeight, chipWidth, drawCard, drawChip, drawPill, drawStackedBar, mixColor, pillMetrics, setFont, textWidth, type MarkerKind, type PillOptions, type RgbColor, type Tone } from '../pdf/kit'
@@ -566,6 +566,13 @@ export function generateWorkspaceAssessmentPDF(saved: SavedAssessment, context: 
   noteCard(layout, 'Coverage', header.supportedCoverage)
 
   scopeSection(layout, header, [{ label: 'Policies read', value: String(saved.assessment.policyCount) }, { label: 'Pack policies', value: String(saved.policies.length) }])
+  // CIS Benchmarks: the CIS notice with its link and the limits of remediation, as on every CIS export.
+  if (header.cisNotice) callout(layout, { title: 'Manual recommendations', tone: 'accent', body: [{ text: header.cisNotice.text }, { text: header.cisNotice.url, color: layout.theme.accentText, technical: true }], link: { url: header.cisNotice.url, text: header.cisNotice.url } })
+  if (header.remediationLimits?.length) {
+    layout.heading('Limits of remediation', { keep: 20 })
+    bullets(layout, header.remediationLimits, 'Limits of remediation')
+  }
+  const cis = saved.assessment.frameworkId === 'cis-benchmarks'
 
   layout.pageTitle('Findings', 'Findings by status', { lead: 'Every pack setting with its status and the tenant policies in which a matching root setting was observed, with their assignment evidence.' })
   const groups: Group[] = []
@@ -576,7 +583,7 @@ export function generateWorkspaceAssessmentPDF(saved: SavedAssessment, context: 
       label: `${status} (${rows.length})`, marker: { kind: WORKSPACE_STYLE[status].marker, color: WORKSPACE_STYLE[status].color },
       rows: rows.map(finding => ({
         cells: [
-          { text: [item(finding.policyName, 7.4, 'bold'), item(finding.settingId, 6.2, 'normal', PALETTE.faint, true)] },
+          { text: [item(finding.policyName, 7.4, 'bold'), item(finding.settingId, 6.2, 'normal', PALETTE.faint, true), ...(cis ? [item(findingRemediationIndication(finding.status, brandName(theme)).label, 6.4, 'normal', PALETTE.muted)] : [])] },
           { text: finding.observed.length ? finding.observed.map(o => item(`${o.policyName} (assignment evidence: ${o.targeting?.state ?? 'unknown'})`, 7, 'normal', PALETTE.body, true)) : [item('No matching root setting in the assessed policy family.', 7, 'italic', PALETTE.muted)] },
           { pill: status === 'Review' ? 'To review' : status, options: style(status) },
         ],
@@ -724,12 +731,12 @@ export function generateCisReadinessPDF(summary: CisReadinessSummary, context: C
   layout.heading('Limits of remediation', { keep: 20 })
   bullets(layout, cisRemediationLimits(product), 'Limits of remediation')
 
-  for (const level of summary.levels) levelSection(layout, summary, level)
+  for (const level of summary.levels) levelSection(layout, summary, level, product)
   return layout.finish()
 }
 
 /** One Level: tiles, figures, coverage, exceptions, recommendation results and manual recommendations. */
-function levelSection(layout: Layout, summary: CisReadinessSummary, level: CisLevelReadiness) {
+function levelSection(layout: Layout, summary: CisReadinessSummary, level: CisLevelReadiness, product: string) {
   const { doc, theme } = layout
   const caption = `Level ${level.level} readiness`
   const deviating = level.different + level.missing + level.review
@@ -791,7 +798,7 @@ function levelSection(layout: Layout, summary: CisReadinessSummary, level: CisLe
       groups: [{ label: '', rows: level.recommendations.map(result => ({
         wash: result.result === 'Fail' ? mixColor(TONES.bad.fill, PALETTE.white, 0.55) : undefined,
         cells: [
-          { chip: result.id, text: [item(result.title, 7.4)] },
+          { chip: result.id, text: [item(result.title, 7.4), item(recommendationRemediation(result, product).label, 6.4, 'normal', PALETTE.muted)] },
           { text: result.settings.length ? result.settings.map(setting => item(`${setting.id} ${setting.status}`, 6.6, 'normal', PALETTE.body, true)) : [item('No settings declared', 6.6, 'italic', PALETTE.muted)] },
           { pill: result.result, options: { tone: RESULT_STYLE[result.result].tone, marker: RESULT_STYLE[result.result].marker, markerColor: RESULT_STYLE[result.result].color } },
         ],
@@ -804,6 +811,8 @@ function levelSection(layout: Layout, summary: CisReadinessSummary, level: CisLe
     layout.heading(`${heading}, Level ${level.level}`, { toc: true, keep: 26 })
     for (const manual of items) {
       const blocks: FlowBlock[] = manualHeading(layout, manual.identifier, manual.title)
+      const remediation = manualRemediation(manual, product)
+      blocks.push(...labelledBlocks(layout, 'Remediation capability', [item(`${remediation.short[0]!.toUpperCase()}${remediation.short.slice(1)}. ${remediation.reason}`, 7.4, 'normal', PALETTE.body)]))
       if (manual.hasText) {
         for (const [label, value] of [['Description', manual.description], ['Impact', manual.impact], ['Audit', manual.audit], ['Remediation', manual.remediation]] as const) {
           if (value) blocks.push(...labelledBlocks(layout, label, [item(value, 7.4, 'normal', PALETTE.body)]))

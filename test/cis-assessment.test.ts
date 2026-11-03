@@ -8,6 +8,7 @@ import { cisReadinessCsv, cisReadinessJson, governanceExportName } from "../src/
 import { handleFramework, internalCisBenchmarksEnabled, KIT_IMPORT_REFUSED, setInternalCisBenchmarksEnabled, setInternalCisBenchmarksProvider, assessPolicySet } from "../src/main/frameworks/service"
 import { loadWorkspace, saveWorkspace, setFrameworkStore } from "../src/main/frameworks/workspaces"
 import { parsePolicies } from "../src/shared/frameworks/policies"
+import { CIS_POLICIES_NOT_DELIVERED } from "../src/main/frameworks/cis-delivered"
 
 const type = "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance"
 const policy = (name: string, description: string, settingId = "fakebook_setting_alpha") => JSON.stringify({
@@ -71,6 +72,10 @@ describe("CIS Benchmarks availability", () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string) => url.includes("oauth2") ? Response.json({ access_token: "test" }) : Response.json({ value: [] })))
     const converted = convertKit(kitFiles, { id: "fakebook-os", version: "9.9.9" })
     const pack = converted.packs.find(item => item.level === 1)!
+    // A Build Kit conversion was not delivered by the service: only the internal claim may assess it.
+    await expect(handleFramework({ action: "assess", frameworkId: "cis-benchmarks", tenantId, appId, reference: pack.reference, policies: JSON.parse(JSON.stringify(pack.policies)) }))
+      .rejects.toMatchObject({ status: 403, message: CIS_POLICIES_NOT_DELIVERED })
+    setInternalCisBenchmarksEnabled(true)
     const result = await handleFramework({ action: "assess", frameworkId: "cis-benchmarks", tenantId, appId, reference: pack.reference, policies: JSON.parse(JSON.stringify(pack.policies)) }) as { runId: string; findings: unknown[] }
     expect(result.findings).toHaveLength(2)
     await expect(handleFramework({ action: "create", tenantId, appId, runId: result.runId, keys: ["0:0"], confirmUnassigned: true }))

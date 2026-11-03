@@ -9,8 +9,9 @@ import { FeatureError } from "../route"
 import { applyChangeSet, approveChangeSet, createChangeSet, getChangeSet, previewChangeSet, previewRollback, createRollbackChangeSet, type ChangeSetPreview, type OperationInput, type RollbackPreview } from "../change-sets/engine"
 import { readCurrent } from "../change-sets/graph"
 import { MAX_OPERATIONS, type ChangeSetRecord } from "../change-sets/model"
-import { cisBenchmarksAllowed } from "../../frameworks/service"
+import { cisBenchmarksAllowed, FrameworkError, requireDeliveredCisPolicies } from "../../frameworks/service"
 import { PlanRequired } from "../../../shared/plans"
+import { findingRemediation } from "../../../shared/frameworks/cis-certification"
 import type { GraphCall } from "../../../portal/lib/policies/graph-restore"
 
 /**
@@ -182,6 +183,8 @@ export async function planCisRemediation(deps: FeatureDeps, tenantId: string, in
   if (!input.title.trim() || input.title.length > 200) throw new FeatureError("A title of at most 200 characters is required.")
   if (!input.reference.trim() || input.reference.length > 200) throw new FeatureError("Provide a source version up to 200 characters.")
   const policies = parsePolicies(input.policies)
+  // Only benchmark content this installation delivered to the tenant is deployed (Build Kit conversions need the internal claim).
+  try { requireDeliveredCisPolicies(tenant, policies) } catch (error) { throw error instanceof FrameworkError ? new FeatureError(error.message, error.status) : error }
   const findings = Array.isArray(input.findings) ? input.findings : []
   const whole = Array.isArray(input.selectedPolicyIndexes) && input.selectedPolicyIndexes.length > 0
   const findingKeys = new Set(input.selectedFindingKeys ?? [])
@@ -208,7 +211,8 @@ export async function planCisRemediation(deps: FeatureDeps, tenantId: string, in
     for (const key of findingKeys) {
       const finding = byKey.get(key)
       if (!finding) throw new FeatureError("A selected finding is not part of this assessment.")
-      if (finding.status !== "Different" && finding.status !== "Missing") throw new FeatureError("Only deviating findings (Different or Missing) can be remediated. Present findings need no change and Review findings need a profile choice first.")
+      // The same rule the per-recommendation remediation indication shows (cis-certification.ts).
+      if (findingRemediation(finding.status) !== "remediable") throw new FeatureError("Only deviating findings (Different or Missing) can be remediated. Present findings need no change and Review findings need a profile choice first.")
       if (!policies[finding.policyIndex]?.settings[finding.settingIndex]) throw new FeatureError("A selected finding does not match the imported pack.")
       const observed = finding.status === "Different" ? [...new Set(finding.observed.map((observation) => observation.policyId))] : []
       // Missing settings, and a Different finding with no observation, go into the new policy of their pack policy.
@@ -345,15 +349,27 @@ export async function applyCisRemediation(deps: FeatureDeps, tenantId: string, i
   } catch (error) { syncCisRemediationOutcome(deps, tenantId, id); throw error }
 }
 
-export function cisChangeSet(deps: FeatureDeps, tenantId: string, id: string): Stored<ChangeSetRecord> {
-  requireCisBenchmarksEnabled(tenantId)
+/** The change set of a deployment, without a plan check: rollback reads it to recover applied changes. */
+function deploymentChangeSet(deps: FeatureDeps, tenantId: string, id: string): Stored<ChangeSetRecord> {
   const deployment = getCisRemediation(deps, tenantId, id)
   if (!deployment.changeSetId) throw new FeatureError("This benchmark deployment is blocked and has no change set.", 409)
-  return getChangeSet(deps, tenantId, deployment.changeSetId)
+  const changeSet = getChangeSet(deps, tenantId, deployment.changeSetId)
+  if (changeSet.origin.workflow !== "cis-remediation" || changeSet.origin.recordId !== deployment.id) throw new FeatureError("The change set of this benchmark deployment does not match it.", 409)
+  return changeSet
 }
 
-export function cisRollback(deps: FeatureDeps, tenantId: string, id: string): Stored<ChangeSetRecord> {
+export function cisChangeSet(deps: FeatureDeps, tenantId: string, id: string): Stored<ChangeSetRecord> {
   requireCisBenchmarksEnabled(tenantId)
+  return deploymentChangeSet(deps, tenantId, id)
+}
+
+/**
+ * The rollback change set of a deployment. Rollback is recovery: it writes the captured
+ * pre-change state back, never CIS content, so it stays available on every plan, also after
+ * the plan that allowed the deployment ended. Its lineage is checked here; review, approval,
+ * integrity and target checks are the change set engine's.
+ */
+export function cisRollback(deps: FeatureDeps, tenantId: string, id: string): Stored<ChangeSetRecord> {
   const deployment = getCisRemediation(deps, tenantId, id)
   if (!deployment.rollbackChangeSetId) throw new FeatureError("No rollback was created for this benchmark deployment. Preview and create one first.", 409)
   const rollback = getChangeSet(deps, tenantId, deployment.rollbackChangeSetId)
@@ -361,14 +377,15 @@ export function cisRollback(deps: FeatureDeps, tenantId: string, id: string): St
   return rollback
 }
 
+/** Rollback preview and creation are recovery and need no plan, see cisRollback. */
 export async function previewCisRollback(deps: FeatureDeps, tenantId: string, id: string): Promise<RollbackPreview & { recompareNotice: string }> {
-  const changeSet = cisChangeSet(deps, tenantId, id)
+  const changeSet = deploymentChangeSet(deps, tenantId, id)
   const preview = await previewRollback(deps, tenantId, changeSet.id)
   return { ...preview, recompareNotice: RECOMPARE_NOTICE }
 }
 
 export async function createCisRollback(deps: FeatureDeps, tenantId: string, id: string, input: { title?: string | null; ticket?: string | null }, actor: string | null): Promise<Stored<ChangeSetRecord>> {
-  const changeSet = cisChangeSet(deps, tenantId, id)
+  const changeSet = deploymentChangeSet(deps, tenantId, id)
   const rollback = await createRollbackChangeSet(deps, tenantId, changeSet.id, input, actor)
   deps.records.update<CisRemediationRecord>(DOMAINS.cisRemediations, tenantId, id, (current) => ({ ...current, rollbackChangeSetId: rollback.id }), { actor, reason: "Created a rollback change set" })
   return rollback

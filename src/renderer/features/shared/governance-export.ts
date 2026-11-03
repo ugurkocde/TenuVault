@@ -7,7 +7,7 @@ import type { AdoptionState, Customization } from "../standards/api"
 import type { DeviationEntry } from "../governance/model"
 import { levelHeadline, ratePercent, type CisReadinessSummary } from "../../../shared/frameworks/cis-readiness"
 import { recommendationTotals } from "../../../shared/frameworks/cis-recommendations"
-import { CIS_CERTIFICATION_STATEMENT, CIS_CERTIFIED_SEGMENTS, CIS_REMEDIATION_LIMITS, CIS_TENANT_NOT_CERTIFIED_NOTE, isCisCertified } from "../../../shared/frameworks/cis-certification"
+import { CIS_CERTIFICATION_STATEMENT, CIS_CERTIFIED_SEGMENTS, CIS_NOTICE, CIS_REMEDIATION_LIMITS, CIS_TENANT_NOT_CERTIFIED_NOTE, isCisCertified, manualRemediation, recommendationRemediation, type RemediationIndication } from "../../../shared/frameworks/cis-certification"
 
 /**
  * CSV and JSON exports for the governance tabs (scores, hygiene, health review and
@@ -281,16 +281,21 @@ function cisReadinessRow(summary: CisReadinessSummary, level: CisReadinessSummar
     ...(level.recommendations?.length ? {
       recommendationsExcepted: level.recommendationsExcepted,
       recommendationTotals: recommendationTotals(level.recommendations),
-      recommendations: level.recommendations.map(({ id, title, level, result, settings }) => ({ id, title, level, result, settings: settings.map(({ id, status }) => ({ id, status })) })),
+      recommendations: level.recommendations.map(({ id, title, level, result, settings }) => ({ id, title, level, result, settings: settings.map(({ id, status }) => ({ id, status })), remediationCapability: remediationJson(recommendationRemediation({ settings })) })),
     } : {}),
     manualNote: summary.manualNote,
     manual: (level.manual ?? []).map(item => ({
       identifier: item.identifier, level: item.level, title: item.title ?? null, state: item.state,
       description: item.description ?? null, impact: item.impact ?? null, audit: item.audit ?? null, remediation: item.remediation ?? null,
       fallback: item.hasText ? null : summary.manualFallback, fallbackUrl: item.hasText ? null : summary.manualFallbackUrl,
+      remediationCapability: remediationJson(manualRemediation(item)),
     })),
   }
 }
+
+/** Whether TenuVault can remediate a recommendation, as readiness exports state it. */
+const remediationJson = ({ label, reason }: RemediationIndication) => ({ label, reason })
+const remediationText = ({ label, reason }: RemediationIndication) => `${label}. ${reason}`
 
 function cisManualRow(summary: CisReadinessSummary, level: CisReadinessSummary["levels"][number], item: NonNullable<CisReadinessSummary["levels"][number]["manual"]>[number]) {
   return {
@@ -298,10 +303,11 @@ function cisManualRow(summary: CisReadinessSummary, level: CisReadinessSummary["
     identifier: item.identifier, title: item.title ?? "",
     description: item.description ?? "", impact: item.impact ?? "", audit: item.audit ?? "", remediation: item.remediation ?? "",
     fallback: item.hasText ? "" : summary.manualFallback,
+    remediationCapability: remediationJson(manualRemediation(item)),
   }
 }
 
-const CIS_READINESS_HEADERS = ["Benchmark", "Version", "Level", "Headline", "Pass rate (%)", "Pass rate with exclusions (%)", "Exclusions", "Exclusions as of", "Assessed settings", "Present", "Different", "Missing", "Review", "Present in unassigned policies", "Assessed automated", "Enumerated", "Denominator", "Coverage (%)", "Not assessed", "Note", "State", "Identifier", "Title", "Exceptions"]
+const CIS_READINESS_HEADERS = ["Benchmark", "Version", "Level", "Headline", "Pass rate (%)", "Pass rate with exclusions (%)", "Exclusions", "Exclusions as of", "Assessed settings", "Present", "Different", "Missing", "Review", "Present in unassigned policies", "Assessed automated", "Enumerated", "Denominator", "Coverage (%)", "Not assessed", "Note", "State", "Identifier", "Title", "Exceptions", "Remediation capability"]
 /** A row with only the leading Benchmark, Version and Level cells and the trailing cells from Note on. */
 const cisLineRow = (benchmark: string, version: string, level: number | "", tail: unknown[]) => [benchmark, version, level, ...Array(16).fill(""), ...tail]
 
@@ -311,23 +317,23 @@ export function cisReadinessCsv(summary: CisReadinessSummary): string {
   const rows: unknown[][] = summary.levels.map((level) => {
     const row = cisReadinessRow(summary, level)
     const exceptionsText = row.exceptions.map(item => `${item.policyName} | ${item.settingId} | ${item.owner} | ${item.expiresOn} | ${item.reason}`).join("; ")
-    return [benchmark, row.version, row.level, row.headline, row.passRatePercent ?? "", row.passRateWithExclusionsPercent ?? "", row.exclusions, row.exclusionsAsOf, row.assessedSettings, row.present, row.different, row.missing, row.review, row.presentInUnassignedPolicies ?? "", row.assessedAutomated ?? "", row.enumerated, row.denominator ?? "", row.coveragePercent ?? "", row.notAssessed.join("; "), row.manualNote, row.state, "", "", exceptionsText]
+    return [benchmark, row.version, row.level, row.headline, row.passRatePercent ?? "", row.passRateWithExclusionsPercent ?? "", row.exclusions, row.exclusionsAsOf, row.assessedSettings, row.present, row.different, row.missing, row.review, row.presentInUnassignedPolicies ?? "", row.assessedAutomated ?? "", row.enumerated, row.denominator ?? "", row.coveragePercent ?? "", row.notAssessed.join("; "), row.manualNote, row.state, "", "", exceptionsText, ""]
   })
   for (const level of summary.levels) {
     for (const item of level.manual ?? []) {
       const row = cisManualRow(summary, level, item)
-      rows.push(cisLineRow(benchmark, row.version, row.level, [row.fallback, row.state, row.identifier, row.title, ""]))
+      rows.push(cisLineRow(benchmark, row.version, row.level, [row.fallback, row.state, row.identifier, row.title, "", remediationText(manualRemediation(item))]))
     }
   }
   // The CIS notice for recommendations this tool does not include, on every export.
-  rows.push(cisLineRow(benchmark, summary.version, "", [`${summary.manualFallback} ${summary.manualFallbackUrl}`, "Notice", "", "", ""]))
+  rows.push(cisLineRow(benchmark, summary.version, "", [`${summary.manualFallback} ${summary.manualFallbackUrl}`, "Notice", "", "", "", ""]))
   // The certified scope and the limits of remediation, on every export.
-  rows.push(cisLineRow(benchmark, summary.version, "", [`${CIS_CERTIFICATION_STATEMENT} ${CIS_TENANT_NOT_CERTIFIED_NOTE}`, "Certification", "", "", ""]))
-  rows.push(cisLineRow(benchmark, summary.version, "", [CIS_REMEDIATION_LIMITS.join(" "), "Remediation limits", "", "", ""]))
+  rows.push(cisLineRow(benchmark, summary.version, "", [`${CIS_CERTIFICATION_STATEMENT} ${CIS_TENANT_NOT_CERTIFIED_NOTE}`, "Certification", "", "", "", ""]))
+  rows.push(cisLineRow(benchmark, summary.version, "", [CIS_REMEDIATION_LIMITS.join(" "), "Remediation limits", "", "", "", ""]))
   // Packs that list their recommendations add one row per recommendation and a Mapped settings column.
   const recommendations = summary.levels.flatMap(level => level.recommendations ?? [])
   if (!recommendations.length) return toCsv([CIS_READINESS_HEADERS, ...rows])
-  const recommendationRows = recommendations.map(item => cisLineRow(benchmark, summary.version, item.level, [item.result, "Recommendation", item.id, item.title, "", item.settings.map(setting => `${setting.id} ${setting.status}`).join("; ")]))
+  const recommendationRows = recommendations.map(item => cisLineRow(benchmark, summary.version, item.level, [item.result, "Recommendation", item.id, item.title, "", remediationText(recommendationRemediation(item)), item.settings.map(setting => `${setting.id} ${setting.status}`).join("; ")]))
   return toCsv([[...CIS_READINESS_HEADERS, "Mapped settings"], ...rows.map(row => [...row, ""]), ...recommendationRows])
 }
 
@@ -343,5 +349,5 @@ function cisCertificationJson(summary: CisReadinessSummary) {
 
 export function cisReadinessJson(summary: CisReadinessSummary, tenantName: string | null, exportedAt: string): string {
   const manualItems = summary.levels.flatMap(level => (level.manual ?? []).map(item => cisManualRow(summary, level, item)))
-  return toJson({ exportedAt, tenant: tenantName, benchmark: summary.benchmark, ...(summary.benchmarkName ? { benchmarkName: summary.benchmarkName } : {}), version: summary.version, manualNote: summary.manualNote, manualFallback: summary.manualFallback, manualFallbackUrl: summary.manualFallbackUrl, certification: cisCertificationJson(summary), remediationLimits: [...CIS_REMEDIATION_LIMITS], levels: summary.levels.map((level) => cisReadinessRow(summary, level)), manualItems })
+  return toJson({ exportedAt, tenant: tenantName, benchmark: summary.benchmark, ...(summary.benchmarkName ? { benchmarkName: summary.benchmarkName } : {}), version: summary.version, manualNote: summary.manualNote, manualFallback: summary.manualFallback, manualFallbackUrl: summary.manualFallbackUrl, certification: cisCertificationJson(summary), remediationLimits: [...CIS_REMEDIATION_LIMITS], cisNotice: { text: CIS_NOTICE.text, url: CIS_NOTICE.url }, levels: summary.levels.map((level) => cisReadinessRow(summary, level)), manualItems })
 }

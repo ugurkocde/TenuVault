@@ -3,6 +3,7 @@ import { parsePolicies, record, type Assessment, type BaselinePolicy } from '../
 import { validateRecommendationList, type RecommendationList } from '../../shared/frameworks/cis-manual'
 import { validateExceptions, type CisException } from '../../shared/frameworks/cis-exceptions'
 import { packLevels } from '../../shared/frameworks/cis-readiness'
+import { validateDeliveredPacks, type DeliveredCisPack } from './cis-delivered'
 import { HISTORY_FULL_MESSAGE, KEEP_NEWEST_ASSESSMENTS, MAX_WORKSPACE_BYTES, MAX_WORKSPACE_HISTORY, WORKSPACE_UNREADABLE_MESSAGE, type WorkspaceCapacity } from '../../shared/frameworks/workspace-history'
 
 export interface AssessmentRecord {
@@ -22,6 +23,11 @@ export interface FrameworkWorkspace {
   /** Lists downloaded with delivered packs, one per benchmark, version and Level, held once and never copied into history. */
   recommendationLists?: RecommendationList[]
   exceptions?: CisException[]
+  /**
+   * CIS Benchmarks only: digests of the policies of each pack the delivery service delivered to
+   * this tenant (cis-delivered.ts). Written by cis-fetch-pack only, never by a workspace save.
+   */
+  deliveredPacks?: DeliveredCisPack[]
 }
 /** A workspace as the framework service returns it, with how full its history is. */
 export type WorkspaceView = FrameworkWorkspace & { capacity: WorkspaceCapacity }
@@ -43,6 +49,7 @@ export function loadWorkspace(tenant: string, framework: string): FrameworkWorks
     if (value.recommendationLists !== undefined && !Array.isArray(value.recommendationLists)) throw new Error()
     const storedLists = Array.isArray(value.recommendationLists) ? value.recommendationLists.map(list => validateRecommendationList(list)) : undefined
     const storedExceptions = value.exceptions !== undefined ? validateExceptions(value.exceptions) : undefined
+    const storedDelivered = value.deliveredPacks !== undefined ? validateDeliveredPacks(value.deliveredPacks) : undefined
     // Stored policies reparse under the workspace limit saveWorkspace enforced, not the
     // smaller import limit, so a saved workspace can never become unreadable by size.
     const policies = value.policies.length ? parsePolicies(value.policies, { maxBytes: MAX_WORKSPACE_BYTES }) : []
@@ -56,7 +63,7 @@ export function loadWorkspace(tenant: string, framework: string): FrameworkWorks
       }
       if (entry.creation !== undefined && (!record(entry.creation) || typeof entry.creation.success !== "boolean" || !Array.isArray(entry.creation.results) || entry.creation.results.some(item => !record(item) || typeof item.name !== "string" || (item.id !== undefined && typeof item.id !== "string") || (item.error !== undefined && typeof item.error !== "string")))) throw new Error()
     }
-    workspace = { ...value, policies, ...(storedList ? { recommendationList: storedList } : {}), ...(storedLists?.length ? { recommendationLists: storedLists } : {}), ...(storedExceptions ? { exceptions: storedExceptions } : {}) } as unknown as FrameworkWorkspace
+    workspace = { ...value, policies, ...(storedList ? { recommendationList: storedList } : {}), ...(storedLists?.length ? { recommendationLists: storedLists } : {}), ...(storedExceptions ? { exceptions: storedExceptions } : {}), ...(storedDelivered?.length ? { deliveredPacks: storedDelivered } : {}) } as unknown as FrameworkWorkspace
   } catch { throw new Error(WORKSPACE_UNREADABLE_MESSAGE) }
 
   return workspace
