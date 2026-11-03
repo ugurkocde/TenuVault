@@ -97,7 +97,9 @@ describe("report PDF layout", () => {
     expect(pdfText(native)).toContain("Contents")
   })
 
-  it("keeps every line inside the page grid on extreme input", () => {
+  // Generates and parses four extreme PDFs: fixed CPU bound work that runs several times
+  // slower on a loaded machine, so it gets more than the 5 second default.
+  it("keeps every line inside the page grid on extreme input", { timeout: 30_000 }, () => {
     const run = nativeRun({ extreme: true })
     expect(run.assessment.frameworks[0]!.controls.length).toBeGreaterThanOrEqual(40)
     expect(run.assessment.capabilities[0]!.checks.length).toBeGreaterThan(200)

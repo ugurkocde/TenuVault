@@ -86,7 +86,9 @@ describe("localInventoryProblem", () => {
     }
   })
 
-  it("reports one foreign file among many readable ones", async () => {
+  // Encrypts and durably writes 31 files, each synced to disk: a fixed amount of work that runs
+  // several times slower on a loaded machine, so it gets more than the 5 second default.
+  it("reports one foreign file among many readable ones", { timeout: 30_000 }, async () => {
     const root = folder()
     const own = [randomBytes(32)]
     const store = await backups(root, own, TENANT_A, Array.from({ length: 30 }, (_, i) => `backup-1/policy-${i}.json`))

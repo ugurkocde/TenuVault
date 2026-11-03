@@ -54,8 +54,12 @@ async function render() {
 const text = () => document.body.textContent ?? ""
 const button = (label: string) => [...document.querySelectorAll("button")].find((item) => item.textContent?.trim() === label) as HTMLButtonElement
 
+// Tests that render pages of 50 audit rows in jsdom do fixed CPU bound work that runs several
+// times slower on a loaded machine, so they get more than the 5 second default.
+const RENDER_TIMEOUT = { timeout: 30_000 }
+
 describe("Audit log paging", () => {
-  it("shows more available instead of a made-up total while another page exists", async () => {
+  it("shows more available instead of a made-up total while another page exists", RENDER_TIMEOUT, async () => {
     state.selected = tenant(1, "11111111-1111-1111-1111-111111111111")
     const calls = stubApi((call) => Math.min(call.filter.limit, 51 - call.filter.offset))
     await render()
@@ -70,7 +74,7 @@ describe("Audit log paging", () => {
     expect(button("Next").disabled).toBe(true)
   })
 
-  it("fetches only page 1 after a filter changes on a later page", async () => {
+  it("fetches only page 1 after a filter changes on a later page", RENDER_TIMEOUT, async () => {
     state.selected = tenant(1, "11111111-1111-1111-1111-111111111111")
     const calls = stubApi((call) => Math.min(call.filter.limit, 200 - call.filter.offset))
     await render()
@@ -89,7 +93,7 @@ describe("Audit log paging", () => {
     expect(text()).toContain("Showing 1 to 50")
   })
 
-  it("starts a search at page 1", async () => {
+  it("starts a search at page 1", RENDER_TIMEOUT, async () => {
     state.selected = tenant(1, "11111111-1111-1111-1111-111111111111")
     const calls = stubApi((call) => Math.min(call.filter.limit, 200 - call.filter.offset))
     await render()
@@ -138,7 +142,7 @@ describe("Audit log paging", () => {
     for (const filter of exported) expect(filter).toMatchObject({ searchQuery: "alpha" })
   })
 
-  it("keeps the page when the selected tenant object is replaced by a background update", async () => {
+  it("keeps the page when the selected tenant object is replaced by a background update", RENDER_TIMEOUT, async () => {
     state.selected = tenant(1, "11111111-1111-1111-1111-111111111111")
     const calls = stubApi((call) => Math.min(call.filter.limit, 200 - call.filter.offset))
     const root = await render()
