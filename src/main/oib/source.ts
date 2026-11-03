@@ -40,7 +40,9 @@ const PACK_FOLDERS: Array<[string, string]> = [
   ["IntuneManagement/AdministrativeTemplates/", "GroupPolicyConfigurations"],
   // NativeImport holds the Settings Catalog policies again in the portal's import format.
   ["NativeImport/", "ConfigurationPolicies"],
-  // BYOD app protection: the registry folder depends on the policy's @odata.type.
+  // BYOD app protection: the registry folder depends on the policy's @odata.type. BYOD v2.0 moved
+  // the files below IntuneManagement/; earlier commits of main kept them directly in AppProtection/.
+  ["IntuneManagement/AppProtection/", "AppProtection"],
   ["AppProtection/", "AppProtection"],
 ]
 
