@@ -162,6 +162,22 @@ describe("planGuard for frameworks and OpenIntuneBaseline", () => {
     expect(await unlicensed(post({ action: "native-csv", frameworkId: "cis-benchmarks" }))).toBeNull()
     expect(await unlicensed(oib({ action: "oib-deploy", platform: "windows", bulk: true, items: [{ source: "a", mode: "create" }] }))).toBeNull()
   })
+
+  it("refuses a new CIS assessment for a tenant without a current plan, and keeps saved results and rollback open", async () => {
+    for (const frameworkId of ["cis-benchmarks", "cis-controls"]) {
+      for (const action of ["assess", "assess-start"]) {
+        const refused = await unlicensed(post({ action, frameworkId, reference: "synthetic 1.0", policies: [] }))
+        expect(refused?.status).toBe(402)
+        expect(await refused?.json()).toMatchObject({ upgrade: "baselineAllPlatforms" })
+      }
+    }
+    // Other frameworks, progress of an admitted job, saved results and their exports are left to the handler as before.
+    expect(await unlicensed(post({ action: "assess-start", frameworkId: "microsoft", reference: "synthetic 1.0", policies: [] }))).toBeNull()
+    for (const action of ["assess-status", "workspace-load", "workspace-pdf", "workspace-csv", "workspace-json", "native-json"]) {
+      expect(await unlicensed(post({ action, frameworkId: "cis-benchmarks", runId: "r", jobId: "job-1" }))).toBeNull()
+    }
+    expect(await unlicensed(post({ action: "rollback-apply", id: "d", contentHash: "0".repeat(64), confirm: true }, "/api/cis-remediation"))).toBeNull()
+  })
 })
 
 describe("planGuard", () => {

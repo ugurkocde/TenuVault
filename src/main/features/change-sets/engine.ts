@@ -4,7 +4,7 @@ import { typeForFolder, type IntuneType, type Item } from "../../../shared/intun
 import { isGraphId } from "../../../shared/security"
 import { replaceTenantVariables } from "../../../shared/oib/variables"
 import { PlanRequired } from "../../../shared/plans"
-import type { FeatureDeps } from "../deps"
+import type { FeatureDeps, RecoveryScope } from "../deps"
 import { recordGovernanceAudit } from "../governance-audit"
 import { DOMAINS } from "../domains"
 import type { Stored } from "../records"
@@ -180,8 +180,9 @@ function typeOf(folder: string): IntuneType {
   return type
 }
 
-async function reader(deps: FeatureDeps, tenantId: string): Promise<GraphCall> {
-  return deps.graph(tenantId)
+/** With a recovery scope, the Graph client is acquired under recovery authorization (features/recovery.ts). */
+async function reader(deps: FeatureDeps, tenantId: string, recovery?: RecoveryScope): Promise<GraphCall> {
+  return recovery ? deps.graph(tenantId, { recovery }) : deps.graph(tenantId)
 }
 
 /**
@@ -203,6 +204,15 @@ function requireCisChangeSetEnabled(workflow: string, tenantId: string, recovery
 /** A rollback change set: recovery of an earlier applied change set, made by createRollbackChangeSet only. */
 function isRecovery(record: Pick<ChangeSetRecord, "kind" | "rollbackOf">): boolean {
   return record.kind === "rollback" && typeof record.rollbackOf === "string" && record.rollbackOf.length > 0
+}
+
+/**
+ * The recovery scope of a rollback change set: the applied change set it rolls back. Graph
+ * access and the pre-change backup of a rollback are authorized for that scope even after the
+ * tenant's license ended; nothing else in the engine asks for it.
+ */
+function recoveryScope(record: Pick<ChangeSetRecord, "kind" | "rollbackOf">): RecoveryScope | undefined {
+  return isRecovery(record) ? { changeSetId: record.rollbackOf! } : undefined
 }
 
 /** Checks the CIS Benchmarks plan immediately before every Graph attempt made through this caller. */
@@ -284,7 +294,7 @@ export async function createChangeSet(deps: FeatureDeps, tenantId: string, input
   if (!input.title.trim() || input.title.length > 200) throw new FeatureError("A title of at most 200 characters is required.")
   if (!Array.isArray(input.operations) || !input.operations.length) throw new FeatureError("Select at least one operation.")
   if (input.operations.length > MAX_OPERATIONS) throw new FeatureError(`A change set holds at most ${MAX_OPERATIONS} operations. Split the change.`)
-  const graph = gatedGraph(await reader(deps, tenant), input.origin?.workflow ?? "change-sets", tenantId, recovery)
+  const graph = gatedGraph(await reader(deps, tenant, recovery ? { changeSetId: input.rollbackOf! } : undefined), input.origin?.workflow ?? "change-sets", tenantId, recovery)
   const listings = createListingMemo()
   const operations: ChangeOperation[] = []
   const entries: ChangeSetContent["entries"] = {}
@@ -413,7 +423,7 @@ export async function previewChangeSet(deps: FeatureDeps, tenantId: string, id: 
   const recovery = isRecovery(record)
   requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
   const { entries, problem } = integrity(deps, tenantId, record)
-  const graph = gatedGraph(await reader(deps, tenantId), record.origin.workflow, tenantId, recovery)
+  const graph = gatedGraph(await reader(deps, tenantId, recoveryScope(record)), record.origin.workflow, tenantId, recovery)
   const listings = createListingMemo()
   const operations: OperationPreview[] = []
   const fingerprints: Record<string, string> = {}
@@ -699,10 +709,10 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
     let writer: GraphCall
     let listings = createListingMemo()
     try {
-      graph = await reader(deps, tenant)
+      graph = await reader(deps, tenant, recoveryScope(record))
       // Acquired before anything is marked as applying: a sign-in or plan failure here hands
       // the change set back through the catch below instead of leaving it stuck in "applying".
-      writer = gatedGraph(await deps.graph(tenant, { journal: true }), record.origin.workflow, tenantId, recovery)
+      writer = gatedGraph(await deps.graph(tenant, recovery ? { journal: true, recovery: recoveryScope(record) } : { journal: true }), record.origin.workflow, tenantId, recovery)
       requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
       gated = gatedGraph(graph, record.origin.workflow, tenantId, recovery)
       if (!preChange) {
@@ -721,7 +731,7 @@ export async function applyChangeSet(deps: FeatureDeps, tenantId: string, id: st
         }
         await check()
         requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
-        const backupFolder = await requirePreChangeBackup(deps, tenant, [...new Set(record.operations.map((operation) => operation.folder))])
+        const backupFolder = await requirePreChangeBackup(deps, tenant, [...new Set(record.operations.map((operation) => operation.folder))], recoveryScope(record))
         // The backup takes time: confirm the claim still holds, then re-check dependencies and
         // the target and read the capture that rollback relies on right before writing.
         requireCisChangeSetEnabled(record.origin.workflow, tenantId, recovery)
@@ -902,7 +912,7 @@ function inverseOperations(deps: FeatureDeps, tenantId: string, record: ChangeSe
 export async function previewRollback(deps: FeatureDeps, tenantId: string, id: string): Promise<RollbackPreview> {
   const record = getChangeSet(deps, tenantId, id)
   const { inputs, manual } = inverseOperations(deps, tenantId, record)
-  const graph = await reader(deps, tenantId)
+  const graph = await reader(deps, tenantId, { changeSetId: record.id })
   const operations: RollbackPreview["operations"] = []
   for (const input of inputs) {
     const type = typeOf(input.folder)

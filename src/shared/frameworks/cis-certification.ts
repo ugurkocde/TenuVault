@@ -124,10 +124,11 @@ export interface RemediationIndication {
   reason: string
 }
 
-function indication(kind: RemediationKind, product: string, reason: string): RemediationIndication {
+/** profileChoice marks a partial indication whose product part needs a profile choice first. */
+function indication(kind: RemediationKind, product: string, reason: string, profileChoice = false): RemediationIndication {
   const short = kind === "product" ? `by ${product}`
     : kind === "profile-choice" ? `by ${product} after a profile choice`
-      : kind === "partial" ? `partly by ${product}, partly manual action`
+      : kind === "partial" ? `partly by ${product}${profileChoice ? " after a profile choice" : ""}, partly manual action`
         : "manual action"
   return { kind, short, label: `Remediation: ${short}`, reason }
 }
@@ -142,8 +143,12 @@ export function recommendationRemediation(recommendation: Pick<RecommendationRes
   const statuses = recommendation.settings.map(setting => setting.status)
   const unmapped = statuses.filter(status => status === "Unmapped").length
   if (!statuses.length || unmapped === statuses.length) return indication("manual", product, `None of its settings are in the delivered benchmark pack, so ${product} cannot write them.`)
-  if (unmapped) return indication("partial", product, `${product} remediates its settings that are in the delivered benchmark pack; the others are not in the pack and need manual action.`)
-  if (statuses.some(status => status !== "Unmapped" && findingRemediation(status) === "profile-choice")) return indication("profile-choice", product, "The pack holds alternative values for one of its settings. Choose the profile before it can be remediated.")
+  const profileChoice = statuses.some(status => status !== "Unmapped" && findingRemediation(status) === "profile-choice")
+  if (unmapped) {
+    const choice = profileChoice ? " The pack holds alternative values for one of those settings: choose the profile before it can be remediated." : ""
+    return indication("partial", product, `${product} remediates its settings that are in the delivered benchmark pack; the others are not in the pack and need manual action.${choice}`, profileChoice)
+  }
+  if (profileChoice) return indication("profile-choice", product, "The pack holds alternative values for one of its settings. Choose the profile before it can be remediated.")
   return indication("product", product, `Its settings are in the delivered benchmark pack. ${product} remediates Different and Missing settings with a reviewed deployment.`)
 }
 

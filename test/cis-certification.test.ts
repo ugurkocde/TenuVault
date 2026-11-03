@@ -55,7 +55,7 @@ describe("CIS certification scope", () => {
     expect(cisCertificationStatement("Fabrikam")).not.toMatch(/tenuvault|fabrikam/i)
     expect(cisRemediationLimits("Fabrikam").join(" ")).not.toMatch(/tenuvault/i)
     for (const text of [CIS_CERTIFICATION_STATEMENT, CIS_TENANT_NOT_CERTIFIED_NOTE, ...CIS_REMEDIATION_LIMITS]) {
-      expect(text).not.toMatch(/[–—]/)
+      expect(text).not.toMatch(/[\u2013\u2014]/)
       expect(text).not.toContain(" - ")
     }
   })
@@ -127,6 +127,10 @@ describe("CIS certification scope", () => {
     expect(text).toContain("Not all recommendations from the CIS Benchmarks are included in this tool.")
     expect(text).toContain(MANUAL_RECOMMENDATIONS_URL)
     expect(text).toContain("Remediation: by TenuVault")
+    // Each finding prints its reason beside the label, as the CSV and JSON do: a Present one reads as needing no change.
+    expect(text).toContain("Remediation: by TenuVault. The setting already matches; no change is needed.")
+    expect(text).toContain("Remediation: by TenuVault. TenuVault can remediate this setting with a reviewed deployment.")
+    expect(text).toContain("Remediation: by TenuVault after a profile choice. The pack holds alternative values for this setting.")
     const other = pdfText(generateWorkspaceAssessmentPDF(workspaceAssessment(), context))
     expect(other).not.toContain("Limits of remediation")
     expect(other).not.toContain(MANUAL_RECOMMENDATIONS_URL)
@@ -154,6 +158,12 @@ describe("CIS certification scope", () => {
     expect(recommendationRemediation({ settings: [setting("Missing"), setting("Present")] }).label).toBe("Remediation: by TenuVault")
     expect(recommendationRemediation({ settings: [setting("Review")] }).label).toBe("Remediation: by TenuVault after a profile choice")
     expect(recommendationRemediation({ settings: [setting("Different"), setting("Unmapped")] }).label).toBe("Remediation: partly by TenuVault, partly manual action")
+    // A partial recommendation whose mapped setting is Review says the product part needs a profile choice, as the engine refuses Review findings.
+    const mixed = recommendationRemediation({ settings: [setting("Unmapped"), setting("Review")] })
+    expect(mixed).toMatchObject({ kind: "partial", label: "Remediation: partly by TenuVault after a profile choice, partly manual action" })
+    expect(mixed.reason).toContain("choose the profile before it can be remediated")
+    expect(recommendationRemediation({ settings: [setting("Review"), setting("Unmapped"), setting("Missing")] }).label).toBe("Remediation: partly by TenuVault after a profile choice, partly manual action")
+    expect(recommendationRemediation({ settings: [setting("Different"), setting("Unmapped")] }).reason).not.toContain("profile")
     expect(recommendationRemediation({ settings: [setting("Unmapped")] }).label).toBe("Remediation: manual action")
     expect(recommendationRemediation({ settings: [] }).label).toBe("Remediation: manual action")
     expect(manualRemediation({ state: "Not assessed" }).reason).toBe("The delivered benchmark pack does not cover it. TenuVault does not assess or remediate it.")
@@ -163,8 +173,8 @@ describe("CIS certification scope", () => {
     expect(disclosures.cisNotice).toEqual({ text: MANUAL_RECOMMENDATIONS_FALLBACK, url: MANUAL_RECOMMENDATIONS_URL })
     expect(disclosures.remediationLimits).toEqual([...CIS_REMEDIATION_LIMITS])
     expect(disclosures.certification.statement).toBe(CIS_CERTIFICATION_STATEMENT)
-    for (const text of [recommendationRemediation({ settings: [setting("Unmapped"), setting("Missing")] }).reason, manualRemediation({ state: "Manual" }).reason]) {
-      expect(text).not.toMatch(/[–—]/)
+    for (const text of [recommendationRemediation({ settings: [setting("Unmapped"), setting("Missing")] }).reason, mixed.reason, mixed.label, manualRemediation({ state: "Manual" }).reason]) {
+      expect(text).not.toMatch(/[\u2013\u2014]/)
       expect(text).not.toContain(" - ")
     }
   })

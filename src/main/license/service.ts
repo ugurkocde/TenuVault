@@ -758,6 +758,20 @@ export class LicenseService {
     return this.mutate([tenant], Boolean(this.state?.key || this.keyMutation), () => this.requireCurrent(tenant, options))
   }
 
+  /**
+   * For the rollback of a change set applied while the tenant was licensed (features/recovery.ts):
+   * the tenant's plan, or null when its license ended and Community covers another tenant.
+   * Every other refusal still throws, so a removed tenant or a malformed tenant ID is never used.
+   */
+  async requireRecovery(tenantId: string): Promise<Plan | null> {
+    try {
+      return await this.requireEntitlement(tenantId)
+    } catch (error) {
+      if (error instanceof CommunityLimitError) return null
+      throw error
+    }
+  }
+
   /** Checks explicit tenant use or a new sign-in after an earlier removal. */
   async checkNewTenant(tenantId: string, options: { retry?: boolean } = { retry: true }): Promise<Plan> {
     this.load()

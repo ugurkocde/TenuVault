@@ -1,4 +1,5 @@
 import { showFeaturePlanError } from "../../lib/plan-dialog"
+import { CIS_FRAMEWORKS } from "../../../shared/plans"
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Button } from "~/components/ui/button"
@@ -95,7 +96,7 @@ export default function BaselineUpgradesTab({ tenant, allowed }: FeatureTabProps
                       setSelected(result.upgrade.id)
                     })}>Compare with {release.tag}</Button>
                   ))}
-                  {install.origin.type === "workspace" && <Button type="button" size="sm" disabled={!!busy} onClick={() => void run("compare-workspace", async () => { setSelected((await compareRelease(tenant, install.id, null)).upgrade.id) })}>Compare with the workspace pack</Button>}
+                  {install.origin.type === "workspace" && !CIS_FRAMEWORKS.has(install.origin.frameworkId) && <Button type="button" size="sm" disabled={!!busy} onClick={() => void run("compare-workspace", async () => { setSelected((await compareRelease(tenant, install.id, null)).upgrade.id) })}>Compare with the workspace pack</Button>}
                 </div>
               )}
             </li>

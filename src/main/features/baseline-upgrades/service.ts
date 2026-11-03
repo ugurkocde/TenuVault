@@ -1,4 +1,5 @@
 import { typeForFolder, type Item } from "../../../shared/intune/registry"
+import { CIS_FRAMEWORKS } from "../../../shared/plans"
 import { isGraphId } from "../../../shared/security"
 import type { OibPlatform } from "../../../shared/oib/types"
 import { replaceTenantVariables } from "../../../shared/oib/variables"
@@ -287,7 +288,22 @@ export async function recordQuickStartInstall(deps: FeatureDeps, sources: Baseli
  * objects only by IDs the workspace recorded when it created them, or by IDs the admin names in
  * `mappings`; never by guessing from names.
  */
+/**
+ * CIS workspaces are never baseline upgrade sources: CIS content reaches a tenant only through a
+ * CIS Benchmarks deployment, with its plan check, disclosures and the delivery service's kill
+ * switch. An upgrade change set would write the stored pack without any of them.
+ */
+function refuseCisWorkspace(frameworkId: string): void {
+  if (CIS_FRAMEWORKS.has(frameworkId)) throw new FeatureError("CIS workspaces cannot be tracked or upgraded as baselines. Deploy CIS Benchmarks from the CIS Benchmarks page.", 403)
+}
+
+/** The workspace framework of an install, refused for CIS workspaces (see refuseCisWorkspace). */
+function refuseCisInstall(install: BaselineInstallRecord): void {
+  if (install.origin.type === "workspace") refuseCisWorkspace(install.origin.frameworkId)
+}
+
 export function recordWorkspaceInstall(deps: FeatureDeps, sources: BaselineSources, tenantId: string, frameworkId: string, mappings: Record<string, string>, actor: Actor): Stored<BaselineInstallRecord> {
+  refuseCisWorkspace(frameworkId)
   let workspace
   try {
     workspace = sources.workspace(tenantId, frameworkId)
@@ -322,6 +338,7 @@ export function recordWorkspaceInstall(deps: FeatureDeps, sources: BaselineSourc
 /** Newer OIB releases of an install's platform; remembers the newest for the pending-upgrade signal. */
 export async function checkReleases(deps: FeatureDeps, sources: BaselineSources, tenantId: string, installId: string, actor: Actor) {
   const install = getInstall(deps, tenantId, installId)
+  refuseCisInstall(install)
   if (install.origin.type !== "quickstart" || !install.platform) return { releases: [], warning: "Workspace baselines are upgraded from the workspace's current pack." }
   const { releases, warning } = await sources.releases()
   const newer = releases.filter((release) => release.platform === install.platform && offeredOver(release, install))
@@ -362,6 +379,7 @@ function documentedKeys(deps: FeatureDeps, tenantId: string, installId: string, 
  */
 export async function compareUpgrade(deps: FeatureDeps, sources: BaselineSources, tenantId: string, installId: string, commit: string | null, actor: Actor): Promise<Stored<UpgradeRecord>> {
   const install = getInstall(deps, tenantId, installId)
+  refuseCisInstall(install)
   const open = listUpgrades(deps, tenantId).find((upgrade) => upgrade.installId === installId && ["review", "ready", "change-set"].includes(upgrade.status))
   if (open) throw new FeatureError(`An upgrade of this baseline is already open ("${open.title}"). Finish or discard it first.`, 409)
   let upstream: Stored<BaselineSourceRecord>
@@ -523,6 +541,7 @@ export async function createUpgradeChangeSet(deps: FeatureDeps, tenantId: string
   const upgrade = getUpgrade(deps, tenantId, id)
   if (!["ready", "change-set"].includes(upgrade.status)) throw new FeatureError(upgrade.status === "review" ? "Resolve every conflicting setting before creating the change set." : "This upgrade can no longer create change sets.", 409)
   const install = getInstall(deps, tenantId, upgrade.installId)
+  refuseCisInstall(install)
   const comparison = getComparison(deps, tenantId, upgrade.comparisonId)
   const upstream = getBaselineSource(deps, tenantId, upgrade.to.sourceId)
   const candidates = upgrade.policies.filter((policy) => !policy.batch && (policy.kind === "matched" || (policy.kind === "added" && policy.choice === "include") || (policy.kind === "removed" && policy.choice === "delete")))

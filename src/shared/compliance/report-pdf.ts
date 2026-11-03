@@ -3,7 +3,7 @@ import { capabilityComparison, comparisonCounts, type NativeAssessment } from '.
 import { cisExportLimitations, nativeReportHeader, redactSecrets, redactText, workspaceReportHeader, type ExportContext, type ReportHeader, type SavedAssessment } from './export'
 import { coverageStatement, exclusionsText, formatRate, headlineBasisNote, levelCheckSummary, levelHeadline, unassignedText, type CisLevelReadiness, type CisReadinessSummary } from '../frameworks/cis-readiness'
 import { recommendationTotals, type RecommendationResult } from '../frameworks/cis-recommendations'
-import { certifiedScopeLines, cisCertificationHeadline, cisRemediationLimits, findingRemediationIndication, manualRemediation, recommendationRemediation, CIS_CERTIFICATION_SCOPE_INTRO, CIS_NOT_CERTIFIED_NOTE, CIS_TENANT_NOT_CERTIFIED_NOTE, isCisCertified } from '../frameworks/cis-certification'
+import { certifiedScopeLines, cisCertificationHeadline, cisRemediationLimits, findingRemediationIndication, manualRemediation, recommendationRemediation, CIS_CERTIFICATION_SCOPE_INTRO, CIS_NOT_CERTIFIED_NOTE, CIS_TENANT_NOT_CERTIFIED_NOTE, isCisCertified, type RemediationIndication } from '../frameworks/cis-certification'
 import { displayCheckValue } from './check-results'
 import type { CapabilityResult, CapabilityStatus, ControlAssessment, ControlStatus, TechnicalCheck } from './types'
 import { PALETTE, TONES, ascii, capHeight, chipWidth, drawCard, drawChip, drawPill, drawStackedBar, mixColor, pillMetrics, setFont, textWidth, type MarkerKind, type PillOptions, type RgbColor, type Tone } from '../pdf/kit'
@@ -573,6 +573,8 @@ export function generateWorkspaceAssessmentPDF(saved: SavedAssessment, context: 
     bullets(layout, header.remediationLimits, 'Limits of remediation')
   }
   const cis = saved.assessment.frameworkId === 'cis-benchmarks'
+  // The reason travels with the label, as in the CSV and JSON, so a Present finding reads as needing no change.
+  const remediationText = (indication: RemediationIndication) => `${indication.label}. ${indication.reason}`
 
   layout.pageTitle('Findings', 'Findings by status', { lead: 'Every pack setting with its status and the tenant policies in which a matching root setting was observed, with their assignment evidence.' })
   const groups: Group[] = []
@@ -583,7 +585,7 @@ export function generateWorkspaceAssessmentPDF(saved: SavedAssessment, context: 
       label: `${status} (${rows.length})`, marker: { kind: WORKSPACE_STYLE[status].marker, color: WORKSPACE_STYLE[status].color },
       rows: rows.map(finding => ({
         cells: [
-          { text: [item(finding.policyName, 7.4, 'bold'), item(finding.settingId, 6.2, 'normal', PALETTE.faint, true), ...(cis ? [item(findingRemediationIndication(finding.status, brandName(theme)).label, 6.4, 'normal', PALETTE.muted)] : [])] },
+          { text: [item(finding.policyName, 7.4, 'bold'), item(finding.settingId, 6.2, 'normal', PALETTE.faint, true), ...(cis ? [item(remediationText(findingRemediationIndication(finding.status, brandName(theme))), 6.4, 'normal', PALETTE.muted)] : [])] },
           { text: finding.observed.length ? finding.observed.map(o => item(`${o.policyName} (assignment evidence: ${o.targeting?.state ?? 'unknown'})`, 7, 'normal', PALETTE.body, true)) : [item('No matching root setting in the assessed policy family.', 7, 'italic', PALETTE.muted)] },
           { pill: status === 'Review' ? 'To review' : status, options: style(status) },
         ],

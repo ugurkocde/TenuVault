@@ -68,10 +68,10 @@ import { installedBySetup, isNightly, Updates, updatesDisabledByPolicy } from ".
 import { WhatsNew } from "./whats-new"
 import { featureRoutes, startFeatures } from "./features"
 import { emitBackupOutcome, emitDriftOutcome, emitRestoreOutcome } from "./features/notifications/producers"
-import { apiBody, type FeatureDeps } from "./features/deps"
+import type { FeatureDeps } from "./features/deps"
+import { backupAuthorization, featureAccess, withRecoveryBackups } from "./features/recovery"
 import { TenantRecords } from "./features/records"
 import { DriftJobs, driftScanRoutes } from "./drift/jobs"
-import { graphCaller } from "../portal/lib/policies/graph-restore"
 
 const RENDERER_STORAGE_PREFIX = "renderer."
 const LOCAL_FOLDER_KEY = "backup.localFolder"
@@ -192,6 +192,16 @@ async function bootstrap(): Promise<void> {
     fetch: chromiumFetch,
     onChange: pushLicense,
   })
+  // License check of the fetch bridge and the backup engine; a rollback in progress may use a
+  // tenant whose license ended, and its backup keeps every older backup (features/recovery.ts).
+  // tokenFor and preferences are declared below; they are only called once the app runs.
+  const backupAccess = backupAuthorization({
+    license,
+    tokenFor: (tenantId, clientId, scope) => tokenFor(tenantId, clientId, scope),
+    // Community keeps 30 days of history; Pro and MSP keep what the admin chooses (0 keeps everything).
+    retentionDays: (tenantId) => effectiveRetentionDays(preferences.get().retentionDays, license.plan(tenantId)),
+  })
+  const { authorizeTenant } = backupAccess
   const refreshLicenses = () => license.refreshAll().catch((error: unknown) => console.warn("[license]", error))
   setInterval(() => void refreshLicenses(), LICENSE_REFRESH_MS)
 
@@ -231,7 +241,7 @@ async function bootstrap(): Promise<void> {
     fetch: encryptedAzureFetch(withNetworkErrors(chromiumFetch), () => backupKeys.keyring(), () => {
       if (appStore.get("backup.recovery-exported") !== backupKeys.fingerprint()) throw new Error("Save your current backup recovery key in Settings before the first encrypted Azure backup.")
     }),
-    authorizeTenant: (tenant) => license.requireEntitlement(tenant),
+    authorizeTenant,
     handleLocalBlob: (request) => handleLocalBlobRequest(getLocalStore(), request),
     getDelegatedToken: async (tenant, clientId, scope, forceRefresh) => {
       const result = await tokenFor(tenant, clientId, scope, forceRefresh)
@@ -282,10 +292,7 @@ async function bootstrap(): Promise<void> {
   const backupReader = new BackupReaderService(tokenStore)
   const engine = new BackupEngine({
     fetch: bridgedFetch,
-    getToken: async (tenantId, clientId, scope) => {
-      await license.requireEntitlement(tenantId)
-      return (await tokenFor(tenantId, clientId, scope)).accessToken
-    },
+    getToken: backupAccess.getToken,
     unattendedTokens: (request) => {
       const plan = license.plan(request.tenantId)
       if (!plan || !allows(plan, "backupReader")) return null
@@ -306,8 +313,7 @@ async function bootstrap(): Promise<void> {
         },
       }
     },
-    // Community keeps 30 days of history; Pro and MSP keep what the admin chooses (0 keeps everything).
-    retentionDays: (tenantId) => effectiveRetentionDays(preferences.get().retentionDays, license.plan(tenantId)),
+    retentionDays: backupAccess.retentionDays,
     onFinished: (job, request) => {
       failedAttempts.finished(job, request)
       // Manual backup outcomes notify here; scheduled and tray outcomes notify from the
@@ -318,7 +324,6 @@ async function bootstrap(): Promise<void> {
   })
 
   const scopes = new BackupScopes(appStore)
-  const graphScope = "https://graph.microsoft.com/.default"
   const signedInClient = (tenantId: string) => {
     const account = accounts.get(tenantId)
     if (!account) throw new Error("Sign in to this tenant first.")
@@ -343,24 +348,16 @@ async function bootstrap(): Promise<void> {
       const account = accounts.get(tenantId)
       return account ? { id: account.username, name: account.name || account.username } : null
     },
-    graph: async (tenantId, options = {}) => {
-      await license.requireEntitlement(tenantId)
-      const clientId = signedInClient(tenantId)
-      const token = await tokenFor(tenantId, clientId, graphScope)
-      return graphCaller(token.accessToken, bridgedFetch, {
-        tenant: options.journal ? tenantId.toLowerCase() : undefined,
-        refreshToken: async () => (await tokenFor(tenantId, clientId, graphScope, true)).accessToken,
-      })
-    },
-    api: (path, tenantId, body = {}) => {
-      const profile = tenantProfile(tenantId)
-      if (!profile) return Promise.resolve(Response.json({ error: "This tenant is no longer connected." }, { status: 404 }))
-      return host.dispatch(new Request(`${INTERNAL_API_ORIGIN}${path}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(apiBody(tenantId, profile, body)),
-      }))
-    },
+    // Graph and the app's own routes; a rollback may use them under recovery authorization.
+    ...featureAccess({
+      license,
+      records,
+      signedInClient,
+      tokenFor,
+      fetch: bridgedFetch,
+      dispatch: (request) => host.dispatch(request),
+      tenantProfile: (tenantId) => tenantProfile(tenantId),
+    }),
     // Outside the bridge: only customer-configured endpoints use it.
     externalFetch: withNetworkErrors(chromiumFetch),
     notify: (title, body) => {
@@ -381,7 +378,8 @@ async function bootstrap(): Promise<void> {
   // A packaged build sends the CIS entitlement token only to the built-in origin above.
   setCisContentEnvOverrideAllowed(!app.isPackaged)
   const checkCis = cisGuard((tenantId) => license.entitlementToken(tenantId))
-  const planGate = planGuard((tenantId) => license.requireEntitlement(tenantId).catch(() => null))
+  // The pre-change backup of a rollback in progress is recovery and needs no plan (features/recovery.ts).
+  const planGate = withRecoveryBackups(planGuard((tenantId) => license.requireEntitlement(tenantId).catch(() => null)))
   // Progress polls of an assessment the plan guard admitted at start read only that job, bound to
   // its tenant, so they do not stall behind a slow license refresh.
   const checkPlan = async (request: Request) => (await isAdmittedAssessStatus(request)) ? null : planGate(request)
