@@ -939,6 +939,10 @@ async function bootstrap(): Promise<void> {
     if (typeof key !== "string" || key.length > 256) throw new Error("Enter a valid license key.")
     return withStatus(() => license.setKey(key, signedInTenants()))
   })
+  handleTrusted("license:replaceKey", (_event, key: unknown) => {
+    if (typeof key !== "string" || key.length > 256) throw new Error("Enter a valid license key.")
+    return withStatus(() => license.replaceKey(key, signedInTenants()))
+  })
   handleTrusted("license:retry", (_event, tenantId: unknown) => {
     if (tenantId !== undefined && tenantId !== null && !isTenantId(tenantId)) throw new Error("Unknown tenant.")
     return withStatus(() => license.retry(tenantId ? [tenantId] : signedInTenants()))

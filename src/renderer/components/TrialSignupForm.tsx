@@ -58,7 +58,11 @@ export const TrialSignupForm = forwardRef<HTMLInputElement, {
           placeholder="you@company.com"
           className="min-w-0 flex-1 basis-56"
           value={email}
-          onChange={(event) => setEmail(event.target.value)}
+          onChange={(event) => {
+            setEmail(event.target.value)
+            setError("")
+            setSentTo("")
+          }}
           disabled={busy}
           aria-describedby={`${id}-help`}
         />
@@ -75,7 +79,7 @@ export const TrialSignupForm = forwardRef<HTMLInputElement, {
           <MailCheck className="h-4 w-4 text-green-600" aria-hidden="true" />
           <AlertDescription>
             Check your inbox at <span className="font-medium break-all">{sentTo}</span>. The key usually arrives within a
-            minute. Paste it into License key and click Activate.
+            minute. Paste it into the license key field below.
           </AlertDescription>
         </Alert>
       )}

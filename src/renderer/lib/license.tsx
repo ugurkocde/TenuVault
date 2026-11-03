@@ -160,10 +160,10 @@ export function formatDate(iso: string): string {
 
 /**
  * Warn from 30 days before key expiry, including an expired key with a current offline token.
- * A trial key ends 30 days after it starts, so it gets the trial reminders instead.
+ * validUntil leaves out trial keys, which get the trial reminders instead.
  */
-export function licenseExpiryWarning(status: Pick<LicenseStatus, "validUntil"> & { trial?: boolean }, now = Date.now()): "expiring" | "expired" | null {
-  if (!status.validUntil || status.trial) return null
+export function licenseExpiryWarning(status: Pick<LicenseStatus, "validUntil">, now = Date.now()): "expiring" | "expired" | null {
+  if (!status.validUntil) return null
   const expiry = Date.parse(status.validUntil)
   if (!Number.isFinite(expiry) || expiry > now + 30 * 24 * 60 * 60 * 1000) return null
   return expiry <= now ? "expired" : "expiring"
@@ -205,9 +205,9 @@ const DAY_MS = 24 * 60 * 60 * 1000
 export const TRIAL_REMINDER_DAYS_LEFT = [10, 3] as const
 
 /** Whole days left in the trial, rounded up, or null when this machine has no running trial. */
-export function trialDaysLeft(status: Pick<LicenseStatus, "trial" | "validUntil">, now = Date.now()): number | null {
-  if (!status.trial || !status.validUntil) return null
-  const end = Date.parse(status.validUntil)
+export function trialDaysLeft(status: Pick<LicenseStatus, "trial" | "trialEndsAt">, now = Date.now()): number | null {
+  if (!status.trial || !status.trialEndsAt) return null
+  const end = Date.parse(status.trialEndsAt)
   if (!Number.isFinite(end) || end <= now) return null
   return Math.ceil((end - now) / DAY_MS)
 }
@@ -217,17 +217,17 @@ export function trialDaysLeft(status: Pick<LicenseStatus, "trial" | "validUntil"
  * the admin dismisses it; a dismissal before the day-27 reminder does not hide that one.
  */
 export function trialReminder(
-  status: Pick<LicenseStatus, "trial" | "validUntil">,
+  status: Pick<LicenseStatus, "trial" | "trialEndsAt">,
   dismissedAt: string | undefined,
   now = Date.now(),
 ): { stage: "day-20" | "day-27"; daysLeft: number; endsAt: string } | null {
   const daysLeft = trialDaysLeft(status, now)
-  if (daysLeft === null || !status.validUntil) return null
-  const end = Date.parse(status.validUntil)
+  if (daysLeft === null || !status.trialEndsAt) return null
+  const end = Date.parse(status.trialEndsAt)
   const started = TRIAL_REMINDER_DAYS_LEFT.filter((days) => end - days * DAY_MS <= now)
   const days = started[started.length - 1]
   if (days === undefined) return null
   const dismissed = dismissedAt ? Date.parse(dismissedAt) : NaN
   if (Number.isFinite(dismissed) && dismissed >= end - days * DAY_MS && dismissed <= now) return null
-  return { stage: days === 3 ? "day-27" : "day-20", daysLeft, endsAt: status.validUntil }
+  return { stage: days === 3 ? "day-27" : "day-20", daysLeft, endsAt: status.trialEndsAt }
 }

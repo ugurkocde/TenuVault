@@ -108,18 +108,18 @@ function TrialStatus({ status, busy, onReplace }: { status: LicenseStatus; busy:
   const [replacing, setReplacing] = useState(false)
   const [newKey, setNewKey] = useState("")
   const daysLeft = trialDaysLeft(status)
-  if (daysLeft === null || !status.validUntil) return null
+  if (daysLeft === null || !status.trialEndsAt) return null
   return (
     <div className="space-y-3 rounded-3xl bg-blue-50/60 p-5">
       <p className="flex items-center gap-3 text-base font-medium text-gray-900">
         <span className="flex size-9 flex-shrink-0 items-center justify-center rounded-full bg-coral-500 text-white" aria-hidden="true">
           <Clock className="h-4 w-4" />
         </span>
-        Your Pro trial ends on {formatDate(status.validUntil)}, {daysLeft === 1 ? "in 1 day" : `in ${daysLeft} days`}.
+        Your Pro trial ends on {formatDate(status.trialEndsAt)}, {daysLeft === 1 ? "in 1 day" : `in ${daysLeft} days`}.
       </p>
       <p className="text-sm text-gray-600">
-        Nothing is charged when it ends: tenants beyond the one Community covers stop, and Pro features turn off. Your
-        backups stay where they are. To keep Pro, buy a plan and paste the new license key from the purchase email here.
+        Nothing is charged when it ends. One tenant continues on Community, any other tenant is no longer covered, and
+        Pro features turn off. Your backups stay where they are. To keep Pro, buy a plan and paste the new license key from the purchase email here.
       </p>
       <div className="flex flex-wrap gap-2">
         <Button type="button" onClick={() => void bridge.license.open("checkout", { source: "license-page-trial" })}>
@@ -162,7 +162,7 @@ function TrialStatus({ status, busy, onReplace }: { status: LicenseStatus; busy:
               Use this key
             </Button>
           </div>
-          <p className="text-xs text-gray-500">The trial key is released from this machine and the new key is activated for your signed-in tenants.</p>
+          <p className="text-xs text-gray-500">The new key is activated for your signed-in tenants first. Only then is the trial key released from this machine.</p>
         </form>
       )}
     </div>
@@ -324,10 +324,7 @@ export default function LicensePage() {
   const replaceKey = (newKey: string) =>
     void run(
       "replace",
-      async () => {
-        await bridge.license.deactivate()
-        return bridge.license.setKey(newKey)
-      },
+      () => bridge.license.replaceKey(newKey),
       (result) =>
         result && result.tenants.some((t) => t.entitled && t.source === "key")
           ? "Your new license is active."

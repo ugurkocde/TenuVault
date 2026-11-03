@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
   startTrial: vi.fn(async () => undefined),
   deactivate: vi.fn(async () => undefined),
   setKey: vi.fn(async () => undefined),
+  replaceKey: vi.fn(async () => undefined),
   status: null as LicenseStatus | null,
 }))
 
@@ -22,6 +23,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
       startTrial: state.startTrial,
       deactivate: state.deactivate,
       setKey: state.setKey,
+      replaceKey: state.replaceKey,
       status: async () => state.status,
     },
     app: { openExternal: async () => undefined },
@@ -90,7 +92,7 @@ describe("License page trial", () => {
 
   it("shows when the trial ends and buys Pro without another trial", async () => {
     const validUntil = new Date(Date.now() + 9.5 * 24 * 60 * 60_000).toISOString()
-    const container = await render({ ...community, hasKey: true, keyState: "active", keyHint: "****ABCD", plan: "pro", tenantLimit: 2, validUntil, trial: true })
+    const container = await render({ ...community, hasKey: true, keyState: "active", keyHint: "****ABCD", plan: "pro", tenantLimit: 2, trialEndsAt: validUntil, trial: true })
     expect(container.textContent).toContain("Pro trial active")
     expect(container.textContent).toContain("in 10 days")
     expect(container.querySelector('input[type="email"]')).toBeNull()
@@ -100,13 +102,14 @@ describe("License page trial", () => {
 
   it("swaps the trial key for the paid key", async () => {
     const validUntil = new Date(Date.now() + 3 * 24 * 60 * 60_000).toISOString()
-    const container = await render({ ...community, hasKey: true, keyState: "active", keyHint: "****ABCD", plan: "pro", tenantLimit: 2, validUntil, trial: true })
+    const container = await render({ ...community, hasKey: true, keyState: "active", keyHint: "****ABCD", plan: "pro", tenantLimit: 2, trialEndsAt: validUntil, trial: true })
     await act(async () => { button(container, "Enter your new key")!.click() })
     type(container.querySelector<HTMLInputElement>("#replacement-key")!, "TENU-PAID-0001")
     await act(async () => { button(container, "Use this key")!.click() })
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
-    expect(state.deactivate).toHaveBeenCalledTimes(1)
-    expect(state.setKey).toHaveBeenCalledWith("TENU-PAID-0001")
-    expect(state.deactivate.mock.invocationCallOrder[0]).toBeLessThan(state.setKey.mock.invocationCallOrder[0]!)
+    // One call in the main process keeps the trial key until the new key is accepted.
+    expect(state.replaceKey).toHaveBeenCalledWith("TENU-PAID-0001")
+    expect(state.deactivate).not.toHaveBeenCalled()
+    expect(state.setKey).not.toHaveBeenCalled()
   })
 })

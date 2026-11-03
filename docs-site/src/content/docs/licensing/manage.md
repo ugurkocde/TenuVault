@@ -111,15 +111,15 @@ To read your existing backups on the new machine, import your backup recovery ke
 
 ## After your trial
 
-During the trial the top card shows **Pro trial active** and **Your Pro trial ends on** with the date and the days left. On day 20 and on day 27 a reminder appears at the top of every page with **Buy Pro**, which opens the checkout, and **Details**, which opens the **License** page. **Dismiss** hides a reminder on this machine; the day 27 reminder still appears after you dismissed the day 20 one. The generic 30 day expiry warning is not shown for trial keys.
+During the trial the top card shows **Pro trial active** and **Your Pro trial ends on** with the date and the days left. On day 20 and on day 27 a reminder appears at the top of every page with **Buy Pro**, which opens the checkout, and **Details**, which opens the **License** page. **Dismiss** hides a reminder on this machine; the day 27 reminder still appears after you dismissed the day 20 one. The trial end is not counted as **License valid until**, so the generic 30 day expiry warning is not shown for the trial key. It still appears for another license, such as one shared by your organization.
 
 To keep Pro:
 
-1. Click **Buy Pro** (or **Buy MSP**) on the **License** page or in the reminder, and complete the checkout. The checkout asks for payment right away; there is no second trial.
+1. Click **Buy Pro** in the reminder, or **Buy Pro** or **Buy MSP** on the **License** page, and complete the checkout. The checkout asks for payment right away; there is no second trial.
 2. Your new license key arrives by email.
-3. On the **License** page, click **Enter your new key**, paste the key and click **Use this key**. TenuVault releases the trial key from this machine and activates the new key for your signed-in tenants.
+3. On the **License** page, click **Enter your new key**, paste the key and click **Use this key**. TenuVault activates the new key for your signed-in tenants first, and only then releases the trial key from this machine. If the new key is refused, the trial key stays active and the reason is shown.
 
-If you do nothing, the trial key expires at the end of day 30. Nothing is charged. Your tenant falls back to Community, Pro features turn off, and your backups stay where they are.
+If you do nothing, the trial key expires at the end of day 30. Nothing is charged. One tenant continues on Community, the free plan for one tenant; a second tenant is no longer covered. Pro features turn off, and your backups stay where they are.
 
 To use a different key, first click **Deactivate this machine**, then enter the new key. TenuVault does not accept a new key while the current one is active on this machine and shows "Deactivate this machine before entering a different license key."
 

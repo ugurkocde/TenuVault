@@ -746,6 +746,70 @@ export class LicenseService {
   }
 
   /**
+   * Replaces this machine's key with another one, such as a trial key with the paid key.
+   * The new key is activated for the signed-in tenants while the current key and its
+   * activations stay in place. Only once the service accepted the new key for at least one
+   * tenant are the current key's activations released and the new key saved. A refused key
+   * changes nothing, and the first error is thrown.
+   */
+  async replaceKey(key: string, tenantIds: string[]): Promise<void> {
+    this.load()
+    const trimmed = key.trim()
+    if (!/^[\x21-\x7e]{8,128}$/.test(trimmed)) throw new Error("Enter a valid license key.")
+    const previousKey = this.state?.key
+    if (!previousKey || previousKey === trimmed) return this.setKey(trimmed, tenantIds)
+    const tenants = [...new Set(tenantIds.map((id) => id.toLowerCase()))].filter((id) => this.tenantPresent(id))
+    if (tenants.length === 0) throw new Error("Sign in to a tenant to switch to the new license key.")
+    return this.mutate([...this.tenantMutations.keys(), ...Object.keys(this.state?.activations ?? {}), ...tenants], true, async () => {
+      const unchanged = () => this.state?.key === previousKey
+      this.assertCurrent(unchanged)
+      const accepted: { tenant: string; data: Record<string, unknown> }[] = []
+      let firstError: unknown = null
+      for (const tenant of tenants) {
+        try {
+          const data = await this.call("activate", {
+            key: trimmed,
+            installId: this.installId,
+            tenantId: tenant,
+            os: this.platform,
+            appVersion: this.options.appVersion,
+            ...(await this.sharingFields(tenant)),
+          }, unchanged)
+          // Checked before anything is released, so an unusable answer costs nothing.
+          const payload = typeof data.token === "string" ? decodeToken(data.token, this.publicKey) : null
+          if (!payload || payload.tenantId !== tenant || payload.installId !== this.installId) {
+            throw new Error("The license token could not be verified.")
+          }
+          accepted.push({ tenant, data })
+        } catch (error) {
+          if (error instanceof StaleLicenseRequest) throw error
+          firstError ??= error
+        }
+      }
+      this.assertCurrent(unchanged)
+      if (accepted.length === 0) throw firstError
+      const state = this.state!
+      // The previous key's activations go; organization license activations stay.
+      for (const [tenantId, entry] of Object.entries(state.activations)) {
+        if (entry.source === "tenant") continue
+        try {
+          await this.call("deactivate", { key: previousKey, activationId: entry.activationId }, unchanged)
+        } catch (error) {
+          if (error instanceof StaleLicenseRequest) throw error
+          // The old key stays bound to that activation until it expires or is released in
+          // the customer portal; it no longer licenses anything on this machine.
+          console.warn(`[license] Previous key activation for ${tenantId} not released: ${errorText(error)}`)
+        }
+        delete state.activations[tenantId]
+      }
+      this.state = { key: trimmed, activations: state.activations, ...(state.seen !== undefined ? { seen: state.seen } : {}) }
+      for (const { tenant, data } of accepted) this.accept(tenant, data, "key")
+      this.message = null
+      this.save()
+    })
+  }
+
+  /**
    * Resolves when the tenant may be used, and throws with the reason otherwise. Called
    * before every token request and every local backup access, so it answers from the
    * cached token when it can. Otherwise it activates on first use, or refreshes an
@@ -1036,7 +1100,9 @@ export class LicenseService {
         ? new Date(payload.keyExp * 1000).toISOString()
         : null
       const tenantTrial = payload?.v === 2 && payload.trial === true && tenantValidUntil !== null
-      if (tenantValidUntil && (!validUntil || Date.parse(tenantValidUntil) < Date.parse(validUntil))) {
+      // A trial key's end is reported as trialEndsAt; validUntil stays with the other
+      // licenses, so their expiry warning is not hidden behind the trial.
+      if (tenantValidUntil && !tenantTrial && (!validUntil || Date.parse(tenantValidUntil) < Date.parse(validUntil))) {
         validUntil = tenantValidUntil
       }
       return {
@@ -1059,6 +1125,7 @@ export class LicenseService {
     this.keepSeen()
     const key = this.state?.key
     const latest = keyToken as Entitlement | null
+    const latestTrial = latest?.v === 2 && latest.trial === true && typeof latest.keyExp === "number"
     const keyMessage = !key || latest ? null
       : this.state?.keyFailure ? (REASONS[this.state.keyFailure] ?? null)
         : Object.values(this.state?.activations ?? {}).some((entry) => entry.source !== "tenant")
@@ -1075,7 +1142,8 @@ export class LicenseService {
       message: this.message,
       plan: latest?.plan ?? null,
       tenantLimit: latest?.tenants ?? null,
-      trial: latest?.v === 2 && latest.trial === true && typeof latest.keyExp === "number",
+      trial: latestTrial,
+      trialEndsAt: latestTrial ? new Date(latest!.keyExp! * 1000).toISOString() : null,
       validUntil,
       communityTenantId: communityTenant ?? null,
       tenants,

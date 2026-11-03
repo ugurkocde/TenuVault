@@ -298,11 +298,12 @@ describe("LicenseService key expiry", () => {
     expect(entitled(service())).toBe(false)
   })
 
-  it("reports a version 2 trial key and keeps the generic expiry warning for the trial reminders", () => {
+  it("reports a version 2 trial key with its end separate from validUntil", () => {
     const validUntil = new Date(T0 + 20 * DAY).toISOString()
     storeLicense(token({ v: 2, keyExp: (T0 + 20 * DAY) / 1000, trial: true }))
     const status = service().status([TENANT])
-    expect(status).toMatchObject({ trial: true, validUntil, plan: "pro" })
+    // The trial end is reported on its own, so it never stands in for another license's expiry.
+    expect(status).toMatchObject({ trial: true, trialEndsAt: validUntil, validUntil: null, plan: "pro" })
     expect(status.tenants[0]).toMatchObject({ trial: true, validUntil })
     expect(licenseExpiryWarning(status)).toBeNull()
   })
@@ -1379,5 +1380,72 @@ describe("LicenseService Community plan", () => {
     const license = service({ idTokenValue: null })
     await license.setKey("TEST-LICENSE-KEY", [])
     await expect(license.requireEntitlement(TENANT)).rejects.toThrow("maximum number of tenants")
+  })
+})
+
+describe("LicenseService key replacement", () => {
+  const trialToken = () => fresh("act-1", { v: 2, keyExp: Math.floor(Date.now() / 1000) + 20 * 86400, trial: true })
+
+  it("keeps the trial key and its activation when the new key is refused", async () => {
+    storeLicense(trialToken())
+    answer = ({ action }) => (action === "activate" ? denied("not_found") : Response.json({ success: true }))
+    const license = service()
+    await expect(license.replaceKey("TENU-PAID-KEY-0001", [TENANT])).rejects.toThrow()
+    expect(calls.map(({ action }) => action)).toEqual(["activate"])
+    expect(calls[0]!.body.key).toBe("TENU-PAID-KEY-0001")
+    const status = license.status([TENANT])
+    expect(status).toMatchObject({ hasKey: true, keyHint: "****-KEY", trial: true })
+    expect(entitled(license)).toBe(true)
+    expect(JSON.parse(store.get("license.state")!).key).toBe("TEST-LICENSE-KEY")
+  })
+
+  it("activates the new key first, then releases the trial key", async () => {
+    storeLicense(trialToken())
+    answer = ({ action }) => (action === "activate" ? granted("act-2") : Response.json({ success: true }))
+    const license = service()
+    await license.replaceKey("TENU-PAID-KEY-0001", [TENANT])
+    expect(calls.map(({ action, body }) => `${action}:${String(body.key)}`)).toEqual([
+      "activate:TENU-PAID-KEY-0001",
+      "deactivate:TEST-LICENSE-KEY",
+    ])
+    expect(calls[1]!.body.activationId).toBe("act-1")
+    const status = license.status([TENANT])
+    expect(status).toMatchObject({ keyHint: "****0001", trial: false, trialEndsAt: null })
+    expect(entitled(license)).toBe(true)
+    expect(JSON.parse(store.get("license.state")!)).toMatchObject({ key: "TENU-PAID-KEY-0001", activations: { [TENANT]: { activationId: "act-2" } } })
+  })
+
+  it("switches even when the trial activation cannot be released", async () => {
+    storeLicense(trialToken())
+    answer = ({ action }) => (action === "activate" ? granted("act-2") : Response.json({ reason: "upstream" }, { status: 502 }))
+    vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    const license = service()
+    await license.replaceKey("TENU-PAID-KEY-0001", [TENANT])
+    expect(license.status([TENANT]).keyHint).toBe("****0001")
+    vi.restoreAllMocks()
+  })
+
+  it("needs a signed-in tenant and a well-formed key", async () => {
+    storeLicense(trialToken())
+    const license = service()
+    await expect(license.replaceKey("short", [TENANT])).rejects.toThrow("Enter a valid license key.")
+    await expect(license.replaceKey("TENU-PAID-KEY-0001", [])).rejects.toThrow("Sign in to a tenant")
+    expect(calls).toHaveLength(0)
+  })
+
+  it("keeps another license's expiry as validUntil next to a trial", () => {
+    const orgExpiry = Math.floor(Date.now() / 1000) + 10 * 86400
+    store.set("license.state", JSON.stringify({
+      key: "TEST-LICENSE-KEY",
+      activations: {
+        [TENANT]: { activationId: "act-1", token: trialToken() },
+        [TENANT_B]: { activationId: "act-2", source: "tenant", token: fresh("act-2", { v: 2, tenantId: TENANT_B, keyExp: orgExpiry }) },
+      },
+    }))
+    const status = service().status([TENANT, TENANT_B])
+    expect(status.trial).toBe(true)
+    expect(status.validUntil).toBe(new Date(orgExpiry * 1000).toISOString())
+    expect(Date.parse(status.trialEndsAt!)).toBeGreaterThan(Date.parse(status.validUntil!))
+    expect(licenseExpiryWarning(status)).toBe("expiring")
   })
 })

@@ -131,10 +131,12 @@ export interface LicenseStatus {
   /** Plan and tenant allowance of this machine's key, from its latest valid token. */
   plan: "pro" | "msp" | null
   tenantLimit: number | null
-  /** Earliest license key expiry among the tenants, or null when none is supplied. */
+  /** Earliest license key expiry among the tenants, trial keys excluded, or null when none is supplied. */
   validUntil: string | null
   /** This machine's key is a no-card trial key, from its latest valid token. */
   trial?: boolean
+  /** When this machine's trial key ends, or null without a running trial key. */
+  trialEndsAt?: string | null
   /** The one tenant the free Community plan covers, once a tenant has used it. */
   communityTenantId: string | null
   /** Signed-in tenants and tenants with a stored activation. */
@@ -339,6 +341,11 @@ export interface TenuVaultBridge {
     refresh: () => Promise<LicenseStatus>
     /** Saves the key and activates it for every signed-in tenant that is not licensed yet. */
     setKey: (key: string) => Promise<LicenseStatus>
+    /**
+     * Replaces this machine's key, for example a trial key with the paid key. The current
+     * key stays active until the new one is accepted for a signed-in tenant.
+     */
+    replaceKey: (key: string) => Promise<LicenseStatus>
     /** Retries activation for one tenant, or for every signed-in tenant without a license. */
     retry: (tenantId?: string) => Promise<LicenseStatus>
     /** The key holder lets other admins of the tenant use the license, or stops. */

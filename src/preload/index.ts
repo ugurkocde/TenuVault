@@ -51,6 +51,7 @@ const bridge: TenuVaultPreloadBridge = {
     status: () => invoke("license:status"),
     refresh: () => invoke("license:refresh"),
     setKey: (key) => invoke("license:setKey", key),
+    replaceKey: (key) => invoke("license:replaceKey", key),
     retry: (tenantId) => invoke("license:retry", tenantId ?? null),
     setShared: (tenantId, shared) => invoke("license:setShared", tenantId, shared),
     deactivate: () => invoke("license:deactivate"),

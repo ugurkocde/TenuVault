@@ -55,7 +55,7 @@ describe("Buy now checkout link", () => {
 
 describe("trial reminders", () => {
   const END = Date.UTC(2026, 11, 3, 12, 0, 0)
-  const status = { trial: true, validUntil: new Date(END).toISOString() }
+  const status = { trial: true, trialEndsAt: new Date(END).toISOString() }
   const at = (daysBeforeEnd: number) => END - daysBeforeEnd * DAY
 
   it("stays quiet for the first 20 days", () => {
@@ -64,9 +64,9 @@ describe("trial reminders", () => {
   })
 
   it("reminds on day 20 and day 27 with the days left", () => {
-    expect(trialReminder(status, undefined, at(10))).toEqual({ stage: "day-20", daysLeft: 10, endsAt: status.validUntil })
+    expect(trialReminder(status, undefined, at(10))).toEqual({ stage: "day-20", daysLeft: 10, endsAt: status.trialEndsAt })
     expect(trialReminder(status, undefined, at(5))).toMatchObject({ stage: "day-20", daysLeft: 5 })
-    expect(trialReminder(status, undefined, at(3))).toEqual({ stage: "day-27", daysLeft: 3, endsAt: status.validUntil })
+    expect(trialReminder(status, undefined, at(3))).toEqual({ stage: "day-27", daysLeft: 3, endsAt: status.trialEndsAt })
     expect(trialReminder(status, undefined, at(0.5))).toMatchObject({ stage: "day-27", daysLeft: 1 })
   })
 
@@ -85,7 +85,7 @@ describe("trial reminders", () => {
   it("has no reminder for paid keys, ended trials or a missing end", () => {
     expect(trialReminder({ ...status, trial: false }, undefined, at(3))).toBeNull()
     expect(trialReminder(status, undefined, END)).toBeNull()
-    expect(trialReminder({ trial: true, validUntil: null }, undefined, at(3))).toBeNull()
+    expect(trialReminder({ trial: true, trialEndsAt: null }, undefined, at(3))).toBeNull()
     expect(trialDaysLeft(status, at(29.5))).toBe(30)
   })
 
