@@ -758,14 +758,19 @@ export class LicenseService {
     if (!/^[\x21-\x7e]{8,128}$/.test(trimmed)) throw new Error("Enter a valid license key.")
     const previousKey = this.state?.key
     if (!previousKey || previousKey === trimmed) return this.setKey(trimmed, tenantIds)
-    const tenants = [...new Set(tenantIds.map((id) => id.toLowerCase()))].filter((id) => this.tenantPresent(id))
-    if (tenants.length === 0) throw new Error("Sign in to a tenant to switch to the new license key.")
-    return this.mutate([...this.tenantMutations.keys(), ...Object.keys(this.state?.activations ?? {}), ...tenants], true, async () => {
+    // Every tenant the current key covers here must be covered by the new key too, or the
+    // swap would cost it its license; the signed-in tenants are activated as well.
+    const keyTenants = Object.entries(this.state?.activations ?? {})
+      .filter(([tenantId, entry]) => !entry.source && this.tenantPresent(tenantId))
+      .map(([tenantId]) => tenantId)
+    const targets = [...new Set([...tenantIds.map((id) => id.toLowerCase()), ...keyTenants])].filter((id) => this.tenantPresent(id))
+    if (targets.length === 0) throw new Error("Sign in to a tenant to switch to the new license key.")
+    return this.mutate([...this.tenantMutations.keys(), ...Object.keys(this.state?.activations ?? {}), ...targets], true, async () => {
       const unchanged = () => this.state?.key === previousKey
       this.assertCurrent(unchanged)
       const accepted: { tenant: string; data: Record<string, unknown> }[] = []
-      let firstError: unknown = null
-      for (const tenant of tenants) {
+      const errors = new Map<string, unknown>()
+      for (const tenant of targets) {
         try {
           const data = await this.call("activate", {
             key: trimmed,
@@ -775,19 +780,30 @@ export class LicenseService {
             appVersion: this.options.appVersion,
             ...(await this.sharingFields(tenant)),
           }, unchanged)
-          // Checked before anything is released, so an unusable answer costs nothing.
-          const payload = typeof data.token === "string" ? decodeToken(data.token, this.publicKey) : null
-          if (!payload || payload.tenantId !== tenant || payload.installId !== this.installId) {
-            throw new Error("The license token could not be verified.")
-          }
           accepted.push({ tenant, data })
+          // The same checks accept() applies, made before anything is released, so an
+          // unusable answer costs nothing.
+          if (!this.usableActivation(tenant, data)) throw new Error("The license token could not be verified.")
         } catch (error) {
           if (error instanceof StaleLicenseRequest) throw error
-          firstError ??= error
+          errors.set(tenant, error)
         }
       }
       this.assertCurrent(unchanged)
-      if (accepted.length === 0) throw firstError
+      const covered = new Set(accepted.filter(({ tenant }) => !errors.has(tenant)).map(({ tenant }) => tenant))
+      const uncovered = keyTenants.find((tenant) => !covered.has(tenant))
+      if (covered.size === 0 || uncovered) {
+        // Nothing changes: release what the new key was given, and report why.
+        for (const { data } of accepted) {
+          if (typeof data.activationId !== "string") continue
+          await this.call("deactivate", { key: trimmed, activationId: data.activationId }, unchanged).catch((error: unknown) => {
+            if (error instanceof StaleLicenseRequest) throw error
+            console.warn(`[license] New key activation ${data.activationId} not released: ${errorText(error)}`)
+          })
+        }
+        throw (uncovered ? errors.get(uncovered) : undefined) ?? errors.values().next().value
+          ?? new Error("The new license key does not cover every tenant on this machine. Your current license is unchanged.")
+      }
       const state = this.state!
       // The previous key's activations go; organization license activations stay.
       for (const [tenantId, entry] of Object.entries(state.activations)) {
@@ -803,10 +819,24 @@ export class LicenseService {
         delete state.activations[tenantId]
       }
       this.state = { key: trimmed, activations: state.activations, ...(state.seen !== undefined ? { seen: state.seen } : {}) }
-      for (const { tenant, data } of accepted) this.accept(tenant, data, "key")
+      for (const { tenant, data } of accepted) if (covered.has(tenant)) this.accept(tenant, data, "key")
       this.message = null
       this.save()
     })
+  }
+
+  // Whether accept() would take this activation response for the tenant.
+  private usableActivation(tenant: string, data: Record<string, unknown>): boolean {
+    if (typeof data.token !== "string" || typeof data.activationId !== "string") return false
+    const payload = decodeToken(data.token, this.publicKey)
+    const now = this.observe()
+    return Boolean(
+      payload &&
+      entitlementCurrent(payload, now, now) &&
+      payload.tenantId === tenant &&
+      payload.installId === this.installId &&
+      payload.act === data.activationId,
+    )
   }
 
   /**

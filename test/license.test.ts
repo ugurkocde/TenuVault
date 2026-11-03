@@ -1425,11 +1425,51 @@ describe("LicenseService key replacement", () => {
     vi.restoreAllMocks()
   })
 
+  it("changes nothing when the new key does not cover every tenant the trial key covers", async () => {
+    store.set("license.state", JSON.stringify({
+      key: "TEST-LICENSE-KEY",
+      activations: {
+        [TENANT]: { activationId: "act-1", token: trialToken() },
+        [TENANT_B]: { activationId: "act-b", token: fresh("act-b", { v: 2, tenantId: TENANT_B, keyExp: Math.floor(Date.now() / 1000) + 20 * 86400, trial: true }) },
+      },
+    }))
+    answer = ({ action, body }) =>
+      action === "activate"
+        ? body.tenantId === TENANT ? granted("act-2") : denied("tenant_limit")
+        : Response.json({ success: true })
+    const license = service()
+    // Only one tenant is signed in; the other one's trial activation is covered too.
+    await expect(license.replaceKey("TENU-PAID-KEY-0001", [TENANT])).rejects.toThrow()
+    expect(calls.map(({ action, body }) => `${action}:${String(body.tenantId ?? body.activationId)}:${String(body.key)}`)).toEqual([
+      `activate:${TENANT}:TENU-PAID-KEY-0001`,
+      `activate:${TENANT_B}:TENU-PAID-KEY-0001`,
+      "deactivate:act-2:TENU-PAID-KEY-0001",
+    ])
+    const saved = JSON.parse(store.get("license.state")!)
+    expect(saved.key).toBe("TEST-LICENSE-KEY")
+    expect(Object.keys(saved.activations).sort()).toEqual([TENANT, TENANT_B].sort())
+    expect(entitled(license, TENANT_B)).toBe(true)
+  })
+
+  it("refuses a signed token that would not be accepted, before releasing anything", async () => {
+    storeLicense(trialToken())
+    const expired = token({ act: "act-2", iat: Math.floor(Date.now() / 1000) - 20 * 86400, exp: Math.floor(Date.now() / 1000) - 60 })
+    answer = ({ action }) => (action === "activate" ? Response.json({ token: expired, activationId: "act-2", plan: "pro" }) : Response.json({ success: true }))
+    const license = service()
+    await expect(license.replaceKey("TENU-PAID-KEY-0001", [TENANT])).rejects.toThrow("could not be verified")
+    expect(calls.filter(({ action, body }) => action === "deactivate" && body.key === "TEST-LICENSE-KEY")).toHaveLength(0)
+    expect(JSON.parse(store.get("license.state")!).key).toBe("TEST-LICENSE-KEY")
+    expect(entitled(license)).toBe(true)
+  })
+
   it("needs a signed-in tenant and a well-formed key", async () => {
     storeLicense(trialToken())
     const license = service()
     await expect(license.replaceKey("short", [TENANT])).rejects.toThrow("Enter a valid license key.")
-    await expect(license.replaceKey("TENU-PAID-KEY-0001", [])).rejects.toThrow("Sign in to a tenant")
+    expect(calls).toHaveLength(0)
+    // A saved key with no activation on this machine needs a signed-in tenant to switch.
+    store.set("license.state", JSON.stringify({ key: "TEST-LICENSE-KEY", activations: {} }))
+    await expect(service().replaceKey("TENU-PAID-KEY-0001", [])).rejects.toThrow("Sign in to a tenant")
     expect(calls).toHaveLength(0)
   })
 
