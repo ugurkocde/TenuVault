@@ -8,7 +8,7 @@ import { buildRestorePlan, buildUpdatePlan, NotRestorableError, resolveStep, res
 import { assignmentsUnread, readObject, type GraphReader } from "../../../shared/intune/read"
 import { sameSnapshot } from "../../../shared/intune/compare"
 import { saveWrite, removeWrite, writeKey, writeRecords } from "../../../main/storage/restore-journal"
-import { moduleForFolder, restorePermissionBlocker, type GrantedPermissions } from "../../../shared/services/modules"
+import { moduleForFolder, restorePermissionBlocker, SERVICES_PAGE, type GrantedPermissions } from "../../../shared/services/modules"
 import { policyReferences, referenceLabel, referencePath, TENANT_KINDS } from "../../../shared/intune/conditional-access"
 
 /** A read that failed because the object no longer exists. */
@@ -187,7 +187,7 @@ const writeError = (type: IntuneType, body: Item, status: number) => {
   const inner = ((body.error as Item | undefined)?.innerError as Item | undefined)?.message
   if (typeof inner === "string" && inner && !message.includes(inner)) message = `${message} ${inner}`
   if (status !== 403) return message
-  return `Microsoft refused to change ${entry.module.label} (${message}). The TenuVault app registration needs the ${entry.area.restore.map((group) => group.join(" or ")).join(" and ")} permission with admin consent, and your account an admin role that may change it: ${entry.module.roles}`
+  return `Microsoft refused to change ${entry.module.label} (${message}). The TenuVault app registration needs the ${entry.area.restore.map((group) => group.join(" or ")).join(" and ")} permission with admin consent, and your account an admin role that may change it: ${entry.module.roles} ${SERVICES_PAGE} in Settings shows what is missing.`
 }
 
 function forOtherTenant(snapshot: Item): Item {

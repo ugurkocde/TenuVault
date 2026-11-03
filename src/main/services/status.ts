@@ -39,7 +39,7 @@ export async function servicesStatus(
       optIn: module.optIn,
       enabled: enabled[module.id].enabled,
       roles: module.roles,
-      ...(module.restoreSetup ? { restoreSetup: module.restoreSetup } : {}),
+      ...(module.restoreAccess ? { restoreAccess: { permissions: [...module.restoreAccess.permissions], newSetupSwitch: module.restoreAccess.newSetupSwitch } } : {}),
       check: checks?.find((check) => check.id === module.id) ?? null,
     })),
   }

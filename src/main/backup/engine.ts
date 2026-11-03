@@ -12,7 +12,7 @@ import { readObject, withMaskedSecrets } from "../../shared/intune/read"
 import { comparableSnapshot } from "../../shared/intune/compare"
 import type { BackupItems } from "../../shared/intune/backup-changes"
 import { EVERYTHING, includedTypes, normalizeScope, restorableFolders, type BackupScope } from "../../shared/intune/scope"
-import { canBackUp, describeRequirement, disabledFolders, moduleForFolder, type ModuleId } from "../../shared/services/modules"
+import { canBackUp, describeRequirement, disabledFolders, moduleForFolder, SERVICES_PAGE, type ModuleId } from "../../shared/services/modules"
 import { grantedPermissions } from "../../shared/services/token"
 
 /**
@@ -445,7 +445,7 @@ export class BackupEngine {
     const types = includedTypes(scope).filter((type) => !readerExcluded.has(type.folder) && !moduleOff.has(type.folder) && !unpermitted.includes(type))
     for (const type of unpermitted) {
       const entry = moduleForFolder(type.folder)!
-      this.write(job, `Leaving out ${type.label}: the ${tokens.mode === "app-only" ? "Backup Reader" : "TenuVault app registration"} has no ${describeRequirement(entry.area.backup, granted?.permissions)} permission for ${entry.module.label}.`)
+      this.write(job, `Leaving out ${type.label}: the ${tokens.mode === "app-only" ? "Backup Reader" : "TenuVault app registration"} has no ${describeRequirement(entry.area.backup, granted?.permissions)} permission for ${entry.module.label}. ${SERVICES_PAGE} in Settings shows how to add it.`)
     }
     if (scope.excluded.length) this.write(job, `Leaving out ${scope.excluded.length} of ${INTUNE_TYPES.length} types: ${scope.excluded.join(", ")}.`)
     if (notReadable.length) this.write(job, `Leaving out ${notReadable.length} type${notReadable.length === 1 ? "" : "s"} the Backup Reader has no permission for: ${notReadable.join(", ")}. Manual backups include them.`)
@@ -462,7 +462,8 @@ export class BackupEngine {
     job.progressMessage = "Reading Intune configuration..."
     const counts: Record<string, number> = Object.fromEntries(types.map((type) => [type.folder, 0]))
     const lists: Array<{ type: IntuneType; items: GraphItem[] } | null> = Array.from({ length: types.length }, () => null)
-    const skippedTypes: string[] = []
+    // Types left out for a missing permission count as skipped, like a type whose read was denied.
+    const skippedTypes: string[] = unpermitted.map((type) => type.folder)
     const failedTypes: string[] = []
     let failures = 0
     // A type the app registration has no permission for is skipped below and does not count:

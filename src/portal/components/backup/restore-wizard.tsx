@@ -34,6 +34,7 @@ import { showFeaturePlanError } from "@desktop/lib/plan-dialog"
 import { PlanBadge, UpgradeNote } from "@desktop/components/UpgradeNote"
 import { GatedButton } from "@desktop/components/PlanGate"
 import { formatDate, formatSize, statusKind, statusLabel, type BackupSummary, type BackupTenant } from "./types"
+import { LinkedMessage } from "~/components/linked-message"
 
 interface CopyTarget {
   tenantId: string
@@ -1102,12 +1103,12 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                       {outcome.targetTenantId && `${tenantName(outcome.targetTenantId)}: `}
                       {itemByPath.get(outcome.path)?.name ?? outcome.path.split("/").pop()}
                     </span>
-                    <span className="block text-xs text-gray-500">{text}</span>
+                    <span className="block text-xs text-gray-500"><LinkedMessage text={text} /></span>
                     {outcome.partial && outcome.policyId && <span className="block text-xs text-amber-800">Incomplete object: {outcome.policyId}. {outcome.repairToken ? "Retry repairs the remaining steps without creating another object. Repair is available for one hour in this app session." : "Check and repair it in Intune."}</span>}
                     {outcome.retryable === false && !outcome.success && <span className="block text-xs text-amber-800">Check this item in Intune before retrying; a write may already have completed.</span>}
                     {outcome.warnings?.map((warning) => (
                       <span key={warning} className="block text-xs text-amber-800">
-                        {warning}
+                        <LinkedMessage text={warning} />
                       </span>
                     ))}
                   </span>

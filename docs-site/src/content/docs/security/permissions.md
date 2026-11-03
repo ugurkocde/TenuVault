@@ -71,7 +71,9 @@ Delegated permissions let an app act on behalf of a signed-in user. They never g
 
 ### Check what the app registration allows
 
-**Settings** > **Sign-in** > **Services and permissions** lists each service TenuVault covers (Intune, and the opt-in Entra Conditional Access) with whether the tenant's app registration may back it up and restore it, area by area, and which permission is missing. TenuVault reads this from the sign-in it already has, without a new request to Microsoft; after you add a permission and grant consent, select **Check again**. Roles are not part of this check, because roles you can activate with Privileged Identity Management do not show until you activate them.
+**Settings** > **Sign-in** > **Services and permissions** lists each service TenuVault covers (Intune, and the opt-in Entra Conditional Access) with whether the tenant's app registration may back it up and restore it, and which permission is missing. With several tenants it starts with an overview of every tenant and service. For a missing permission it offers a link to the app registration's API permissions in Entra and, where TenuVault knows the permission's ID, Azure CLI commands that add it to the existing app registration. A backup type left out or a restore stopped for a missing permission links to this card.
+
+TenuVault reads this from the sign-in it already has, without a new request to Microsoft; after you add a permission and grant consent, select **Check again**. Roles are not part of this check, because roles you can activate with Privileged Identity Management do not show until you activate them.
 
 ### Azure Service Management
 

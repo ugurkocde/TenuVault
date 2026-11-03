@@ -25,6 +25,8 @@ import { AREAS } from "../../../../shared/intune/scope"
 import { typeForFolder } from "../../../../shared/intune/registry"
 import { storageLabel } from "~/lib/storage-label"
 import { storageResources, type StorageChoice } from "@desktop/lib/storage"
+import { LinkedMessage } from "~/components/linked-message"
+import { SERVICES_PAGE } from "../../../../shared/services/modules"
 
 type Tab = "backup" | "restore" | "schedule"
 
@@ -530,7 +532,7 @@ function BackupDetails({ backup, first, storageAccountName, downloading, onChang
             {backup.status === "unknown" && <p>{backup.error ?? "This backup does not record whether it finished."} Until its details can be read, whether it finished is not known and drift detection does not offer it.</p>}
             {(backup.failures ?? 0) > 0 && <p>{backup.failures} item{backup.failures === 1 ? "" : "s"} or type{backup.failures === 1 ? "" : "s"} could not be read. The backup log lists them.</p>}
             {(backup.failedTypes?.length ?? 0) > 0 && <p>Not read: {backup.failedTypes!.map(typeLabel).join(", ")}.</p>}
-            {(backup.skippedTypes?.length ?? 0) > 0 && <p>Left out because access was denied: {backup.skippedTypes!.map(typeLabel).join(", ")}. Grant admin consent for the app registration in Microsoft Entra, or run the setup script again, and check that your Intune role covers these items.</p>}
+            {(backup.skippedTypes?.length ?? 0) > 0 && <p>Left out because the app registration or your role does not allow reading them: {backup.skippedTypes!.map(typeLabel).join(", ")}. <LinkedMessage text={`${SERVICES_PAGE} in Settings shows which permission is missing and how to add it.`} /> Also check that your Intune or Entra role covers these items.</p>}
           </div>
         </div>
       )}

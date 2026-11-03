@@ -45,8 +45,13 @@ export interface ServiceModule {
   areas: readonly PermissionArea[]
   /** Admin roles that can use the module. Shown as guidance: tokens do not reliably list roles. */
   roles: string
-  /** How to add the restore permissions with the setup script, when they are not added by default. */
-  restoreSetup?: string
+  /**
+   * The delegated Microsoft Graph permissions to add for restores when the setup script does not grant
+   * them by default, with their IDs (verified against the Microsoft Graph service principal), and the
+   * setup script switch that adds them to a new app registration. Re-running the script always creates
+   * a new app registration, so an existing one is changed in Entra or with the Azure CLI instead.
+   */
+  restoreAccess?: { permissions: ReadonlyArray<{ name: string; id: string }>; newSetupSwitch: string }
   /** Backup Reader (app-only) application permission that lets scheduled backups read the module. */
   readerRole?: string
 }
@@ -111,8 +116,7 @@ export const MODULES: readonly ServiceModule[] = [
     description: "Conditional Access policies, named locations and authentication strengths. Restored policies start in report-only mode.",
     optIn: true,
     roles: "Security Reader or Global Reader to back up; Conditional Access Administrator or Security Administrator to restore.",
-    restoreSetup:
-      "To restore, run New-TenuVaultDesktopApp.ps1 again with -IncludeConditionalAccessRestore, or add the delegated Microsoft Graph permission Policy.ReadWrite.ConditionalAccess to the app registration and grant admin consent. Then click Check again.",
+    restoreAccess: { permissions: [{ name: "Policy.ReadWrite.ConditionalAccess", id: "ad902697-1014-4ef5-81ef-2b4301988e8c" }], newSetupSwitch: "-IncludeConditionalAccessRestore" },
     readerRole: "Policy.Read.All",
     // Writes also need Policy.Read.All (a documented Microsoft Graph requirement for POST and PATCH of policies).
     areas: [
@@ -174,9 +178,9 @@ export interface AreaCheck {
   folders: readonly string[]
   backup: boolean
   restore: boolean
-  /** What is missing, for example "DeviceManagementApps.Read.All or DeviceManagementApps.ReadWrite.All". */
-  missingBackup?: string
-  missingRestore?: string
+  /** What is missing: every group must be granted, any one permission of a group does. */
+  missingBackup?: Requirement
+  missingRestore?: Requirement
 }
 
 export interface ModuleCheck {
@@ -187,9 +191,11 @@ export interface ModuleCheck {
   areas: AreaCheck[]
 }
 
+const missingGroups = (needed: Requirement, granted: ReadonlySet<string>): Requirement => needed.filter((group) => !group.some((permission) => granted.has(permission)))
+
 /** "A or B", and groups joined with "and": what to grant for the requirement, missing groups only. */
 export const describeRequirement = (needed: Requirement, granted: ReadonlySet<string> = new Set()) =>
-  needed.filter((group) => !group.some((permission) => granted.has(permission))).map((group) => group.join(" or ")).join(" and ")
+  missingGroups(needed, granted).map((group) => group.join(" or ")).join(" and ")
 
 /** Whether the granted permissions cover each module's backup and restore, area by area. */
 export function checkModules(granted: GrantedPermissions, modules: readonly ServiceModule[] = MODULES): ModuleCheck[] {
@@ -202,8 +208,8 @@ export function checkModules(granted: GrantedPermissions, modules: readonly Serv
         folders: area.folders,
         backup,
         restore,
-        ...(backup ? {} : { missingBackup: describeRequirement(area.backup, granted.permissions) }),
-        ...(restore ? {} : { missingRestore: describeRequirement(area.restore, granted.permissions) }),
+        ...(backup ? {} : { missingBackup: missingGroups(area.backup, granted.permissions) }),
+        ...(restore ? {} : { missingRestore: missingGroups(area.restore, granted.permissions) }),
       }
     })
     const readiness = (key: "backup" | "restore"): Readiness => (areas.every((area) => area[key]) ? "ready" : areas.some((area) => area[key]) ? "partial" : "missing")
@@ -223,12 +229,41 @@ export function restorePermissionBlocker(folder: string, granted: GrantedPermiss
   const entry = moduleForFolder(folder)
   if (!entry || !granted || !entry.module.optIn) return undefined
   if (satisfied(entry.area.restore, granted.permissions)) return undefined
-  const setup = entry.module.restoreSetup ? ` ${entry.module.restoreSetup}` : " Add it to the TenuVault app registration and grant admin consent, then sign in again."
-  return `Restoring ${entry.module.label} ${entry.area.label.toLowerCase()} needs the ${describeRequirement(entry.area.restore, granted.permissions)} permission, which the TenuVault app registration does not have.${setup}`
+  return `Restoring ${entry.module.label} ${entry.area.label.toLowerCase()} needs the ${describeRequirement(entry.area.restore, granted.permissions)} permission, which the TenuVault app registration does not have. ${SERVICES_PAGE} shows how to add it.`
 }
 
 /** Whether the granted permissions can read this folder; true for folders that belong to no module. */
 export function canBackUp(folder: string, granted: GrantedPermissions): boolean {
   const entry = moduleForFolder(folder)
   return !entry || satisfied(entry.area.backup, granted.permissions)
+}
+
+/**
+ * The name of the Settings card that shows and fixes permissions. Messages that mention it are shown
+ * with the phrase linked to the card, so a skipped backup type or a blocked restore leads to the fix.
+ */
+export const SERVICES_PAGE = "Services and permissions"
+
+/** Settings route and anchor of the card. */
+export const SERVICES_HREF = "/portal/settings?section=signin#services"
+
+/**
+ * Azure CLI commands that add a module's restore permissions to the tenant's existing app registration
+ * and grant admin consent. The setup script cannot do this: it always creates a new app registration.
+ */
+export function restoreAccessCommands(module: Pick<ServiceModule, "restoreAccess">, tenantId: string, clientId: string): string | undefined {
+  const access = module.restoreAccess
+  if (!access) return undefined
+  const permissions = access.permissions.map((permission) => `${permission.id}=Scope`).join(" ")
+  return [
+    `# Adds ${access.permissions.map((permission) => permission.name).join(", ")} (delegated) to the TenuVault app registration ${clientId}, then grants admin consent.`,
+    `az login --tenant ${tenantId} --allow-no-subscriptions`,
+    `az ad app permission add --id ${clientId} --api 00000003-0000-0000-c000-000000000000 --api-permissions ${permissions}`,
+    `az ad app permission admin-consent --id ${clientId}`,
+  ].join("\n")
+}
+
+/** The app registration's API permissions page in the Entra admin center. */
+export function entraApiPermissionsUrl(clientId: string): string {
+  return `https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/CallAnAPI/appId/${encodeURIComponent(clientId)}/isMSAApp~/false`
 }

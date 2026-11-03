@@ -35,7 +35,7 @@ describe("Service modules", () => {
     expect(intune!.backup).toBe("ready")
     expect(intune!.restore).toBe("partial")
     const devices = intune!.areas.find((area) => area.folders.includes("DeviceCategories"))!
-    expect(devices).toMatchObject({ backup: true, restore: false, missingRestore: "DeviceManagementManagedDevices.ReadWrite.All" })
+    expect(devices).toMatchObject({ backup: true, restore: false, missingRestore: [["DeviceManagementManagedDevices.ReadWrite.All"]] })
   })
 
   it("treats read-only consent as backup without restore, and names what is missing", () => {
@@ -43,7 +43,7 @@ describe("Service modules", () => {
     expect(intune!.backup).toBe("partial")
     expect(intune!.restore).toBe("missing")
     const apps = intune!.areas.find((area) => area.label === "Apps and app protection")!
-    expect(apps.missingBackup).toBe("DeviceManagementApps.Read.All or DeviceManagementApps.ReadWrite.All")
+    expect(apps.missingBackup).toEqual([["DeviceManagementApps.Read.All", "DeviceManagementApps.ReadWrite.All"]])
   })
 
   it("never blocks an Intune restore on the mapping: Graph stays the judge for always-on modules", () => {
@@ -91,5 +91,19 @@ describe("Services status", () => {
     const status = await servicesStatus("tenant", new ModuleSettings(memoryStore()), async () => { throw new Error("Sign in again to continue.") })
     expect(status.error).toBe("Sign in again to continue.")
     expect(status.modules.every((module) => module.check === null)).toBe(true)
+  })
+})
+
+describe("Messages that lead to Services and permissions", () => {
+  it("links the card's name and leaves other messages as text", async () => {
+    const { createElement } = await import("react")
+    const { renderToStaticMarkup } = await import("react-dom/server")
+    const { MemoryRouter } = await import("react-router-dom")
+    const { LinkedMessage } = await import("../src/portal/components/linked-message")
+    const render = (text: string) => renderToStaticMarkup(createElement(MemoryRouter, null, createElement(LinkedMessage, { text })))
+    expect(render("Restoring needs a permission. Services and permissions shows how to add it.")).toBe(
+      'Restoring needs a permission. <a class="font-medium underline underline-offset-2" href="/portal/settings?section=signin#services" data-discover="true">Services and permissions</a> shows how to add it.',
+    )
+    expect(render("Created a [Restored] copy")).toBe("Created a [Restored] copy")
   })
 })

@@ -298,7 +298,8 @@ export interface ServiceModuleStatus {
   optIn: boolean
   enabled: boolean
   roles: string
-  restoreSetup?: string
+  /** Restore permissions this module adds on top of the default setup, and the setup switch for new app registrations. */
+  restoreAccess?: { permissions: Array<{ name: string; id: string }>; newSetupSwitch: string }
   /** Null when the permissions could not be read, for example while signed out. */
   check: ModuleCheck | null
 }

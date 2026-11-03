@@ -14,7 +14,7 @@ import { INTUNE_TYPES, restoreOrder, typeForFolder, type Item } from "../src/sha
 import { buildRestorePlan, buildUpdatePlan, restoreCapabilities } from "../src/shared/intune/restore-plan"
 import { EVERYTHING } from "../src/shared/intune/scope"
 import { Restorer, type GraphCall } from "../src/portal/lib/policies/graph-restore"
-import { checkModules, restorePermissionBlocker, type GrantedPermissions } from "../src/shared/services/modules"
+import { checkModules, entraApiPermissionsUrl, MODULE_BY_ID, restoreAccessCommands, restorePermissionBlocker, type GrantedPermissions } from "../src/shared/services/modules"
 
 const policies = typeForFolder("ConditionalAccessPolicies")!
 const strengths = typeForFolder("AuthenticationStrengths")!
@@ -163,16 +163,30 @@ describe("Conditional Access module permissions", () => {
   it("backs up with the default Policy.Read.All, and restores only with the opt-in write permission", () => {
     const readOnly = checkModules(delegated("Policy.Read.All")).find((check) => check.id === "conditionalAccess")!
     expect(readOnly).toMatchObject({ backup: "ready", restore: "missing" })
-    expect(readOnly.areas.find((area) => area.label === "Policies")?.missingRestore).toBe("Policy.ReadWrite.ConditionalAccess")
+    expect(readOnly.areas.find((area) => area.label === "Policies")?.missingRestore).toEqual([["Policy.ReadWrite.ConditionalAccess"]])
     const writable = checkModules(delegated("Policy.Read.All", "Policy.ReadWrite.ConditionalAccess")).find((check) => check.id === "conditionalAccess")!
     expect(writable).toMatchObject({ backup: "ready", restore: "ready" })
     // Microsoft Graph also needs Policy.Read.All to write policies.
-    expect(checkModules(delegated("Policy.ReadWrite.ConditionalAccess")).find((check) => check.id === "conditionalAccess")!.areas.find((area) => area.label === "Policies")).toMatchObject({ backup: false, restore: false, missingRestore: "Policy.Read.All" })
+    expect(checkModules(delegated("Policy.ReadWrite.ConditionalAccess")).find((check) => check.id === "conditionalAccess")!.areas.find((area) => area.label === "Policies")).toMatchObject({ backup: false, restore: false, missingRestore: [["Policy.Read.All"]] })
   })
 
-  it("explains how to add the restore permission", () => {
-    expect(restorePermissionBlocker("ConditionalAccessPolicies", delegated("Policy.Read.All"))).toMatch(/Policy.ReadWrite.ConditionalAccess.*-IncludeConditionalAccessRestore/)
+  it("explains how to add the restore permission, and leads to the card that fixes it", () => {
+    expect(restorePermissionBlocker("ConditionalAccessPolicies", delegated("Policy.Read.All"))).toMatch(/Policy.ReadWrite.ConditionalAccess.*Services and permissions shows how to add it/)
     expect(restorePermissionBlocker("ConditionalAccessPolicies", delegated("Policy.Read.All", "Policy.ReadWrite.ConditionalAccess"))).toBeUndefined()
+  })
+
+  it("changes the existing app registration instead of re-running the setup script, which would create a new one", () => {
+    const module = MODULE_BY_ID.get("conditionalAccess")!
+    const commands = restoreAccessCommands(module, "ffc10f05-e837-4803-81b1-7c4dee678c2a", "22222222-2222-2222-2222-222222222222")!.split("\n")
+    expect(commands).toEqual([
+      "# Adds Policy.ReadWrite.ConditionalAccess (delegated) to the TenuVault app registration 22222222-2222-2222-2222-222222222222, then grants admin consent.",
+      "az login --tenant ffc10f05-e837-4803-81b1-7c4dee678c2a --allow-no-subscriptions",
+      // The delegated permission ID read from the Microsoft Graph service principal.
+      "az ad app permission add --id 22222222-2222-2222-2222-222222222222 --api 00000003-0000-0000-c000-000000000000 --api-permissions ad902697-1014-4ef5-81ef-2b4301988e8c=Scope",
+      "az ad app permission admin-consent --id 22222222-2222-2222-2222-222222222222",
+    ])
+    expect(restoreAccessCommands(MODULE_BY_ID.get("intune")!, "t", "c")).toBeUndefined()
+    expect(entraApiPermissionsUrl("22222222-2222-2222-2222-222222222222")).toBe("https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/CallAnAPI/appId/22222222-2222-2222-2222-222222222222/isMSAApp~/false")
   })
 })
 
@@ -320,8 +334,10 @@ describe("Backing up Conditional Access", () => {
     const { run, graphPaths } = setup({ modules: ["conditionalAccess"], scopes: "DeviceManagementConfiguration.ReadWrite.All" })
     const { job, metadata } = await run()
     expect(graphPaths.some((graphPath) => graphPath.includes("conditionalAccess/policies"))).toBe(false)
-    expect(job.log.join("\n")).toContain("Leaving out Conditional Access policies: the TenuVault app registration has no Policy.Read.All permission for Entra Conditional Access.")
+    expect(job.log.join("\n")).toContain("Leaving out Conditional Access policies: the TenuVault app registration has no Policy.Read.All permission for Entra Conditional Access. Services and permissions in Settings shows how to add it.")
     expect(metadata.Scope.Included).not.toContain("ConditionalAccessPolicies")
+    // Recorded like a denied read, so coverage, completeness and Backup Details see it.
+    expect(metadata.SkippedTypes).toEqual(expect.arrayContaining(["NamedLocations", "AuthenticationStrengths", "ConditionalAccessPolicies"]))
     expect(metadata.Failures).toBe(0)
   })
 })

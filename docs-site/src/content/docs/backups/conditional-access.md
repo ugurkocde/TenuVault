@@ -41,11 +41,18 @@ While the service is on but the app registration cannot read it, backups leave t
 | Back up and detect drift | `Policy.Read.All` (requested by default) | Security Reader, Global Reader, Conditional Access Administrator or Security Administrator |
 | Restore | `Policy.Read.All` and `Policy.ReadWrite.ConditionalAccess` (opt-in) | Conditional Access Administrator or Security Administrator |
 
-To allow restores, run the app registration script again with the opt-in switch, or add the permission in Entra and grant admin consent:
+To allow restores in a tenant you already connected, add the permission to its existing TenuVault app registration and grant admin consent. That needs a Global Administrator, Privileged Role Administrator or Cloud Application Administrator. **Services and permissions** offers both ways:
 
-```powershell
-./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -IncludeConditionalAccessRestore
+* **Open API permissions in Entra**, then **Add a permission** > **Microsoft Graph** > **Delegated permissions** > `Policy.ReadWrite.ConditionalAccess`, and **Grant admin consent**.
+* **Copy Azure CLI commands**, filled in with the tenant and app registration:
+
+```bash
+az login --tenant <tenant ID> --allow-no-subscriptions
+az ad app permission add --id <application (client) ID> --api 00000003-0000-0000-c000-000000000000 --api-permissions ad902697-1014-4ef5-81ef-2b4301988e8c=Scope
+az ad app permission admin-consent --id <application (client) ID>
 ```
+
+Do not run `New-TenuVaultDesktopApp.ps1` again for this: it always creates a new app registration. Use its `-IncludeConditionalAccessRestore` switch only when you set up a new one.
 
 Then select **Check again** under **Services and permissions**. TenuVault reads the permissions from the sign-in it already has, so it asks Microsoft for nothing new. It cannot see roles you can activate with Privileged Identity Management until you activate them, so a restore your role does not allow is still refused by Microsoft, with a message that names the role.
 

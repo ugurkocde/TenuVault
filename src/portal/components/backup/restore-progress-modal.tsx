@@ -17,6 +17,7 @@ import {
   RefreshCw
 } from "lucide-react"
 import { cn } from "~/lib/utils"
+import { LinkedMessage } from "~/components/linked-message"
 
 interface RestoreProgressModalProps {
   open: boolean
@@ -200,7 +201,7 @@ export function RestoreProgressModal({
                           log.type === "warning" && "text-amber-700",
                           log.type === "info" && "text-gray-600"
                         )}>
-                          {log.message}
+                          <LinkedMessage text={log.message} />
                         </span>
                       </div>
                     </div>
@@ -217,7 +218,7 @@ export function RestoreProgressModal({
                 <AlertCircle className="h-5 w-5 text-red-600 mr-2 flex-shrink-0 mt-0.5" />
                 <div>
                   <h4 className="text-sm font-medium text-red-800">Restore Error</h4>
-                  <p className="text-sm text-red-700 mt-1">{error}</p>
+                  <p className="text-sm text-red-700 mt-1"><LinkedMessage text={error} /></p>
                 </div>
               </div>
             </div>
