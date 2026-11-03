@@ -119,7 +119,8 @@ describe("CIS Benchmarks at the history cap", () => {
     const calls = stubService("cis-benchmarks", 50)
     const container = render("cis-benchmarks")
     await flush()
-    await act(async () => { buttonNamed(container, "View read-only")!.click() })
+    // The newest run is already shown, so an older one is opened.
+    await act(async () => { [...container.querySelectorAll("button")].find(item => item.textContent === "View read-only" && !item.disabled)!.click() })
     await flush()
     const alert = historyAlert(container)
     expect(alert).not.toBeNull()

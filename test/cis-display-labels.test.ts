@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest"
-import { deploymentReferenceLabel } from "../src/renderer/features/cis-remediation/CisRemediationHistory"
-import { remediationTitle } from "../src/renderer/features/cis-remediation/CisRemediationPanel"
+import { deploymentReferenceLabel, remediationTitle } from "../src/renderer/features/cis-remediation/CisRemediationHistory"
 import { clearCisCatalogs, rememberCisCatalog } from "../src/renderer/lib/cis-catalog-cache"
 import { levelCheckCounts, levelCheckSummary, type CisLevelReadiness } from "../src/shared/frameworks/cis-readiness"
 

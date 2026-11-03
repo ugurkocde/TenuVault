@@ -1,7 +1,8 @@
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { CisRemediationHistory, deploymentState } from "../../src/renderer/features/cis-remediation/CisRemediationHistory"
+import { CisRemediationHistory, deploymentState, deploymentTitle } from "../../src/renderer/features/cis-remediation/CisRemediationHistory"
+import { STATUS_TONE } from "../../src/renderer/features/shared/change-set"
 import type { Tenant } from "../../src/portal/contexts/TenantContext"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -67,6 +68,29 @@ describe("CIS remediation history", () => {
     expect(state(null, null)).toMatchObject({ label: "applied", rollback: null })
   })
 
+  it("lists a generated title in one format from the reference and keeps any other title as stored", () => {
+    const record = (title: string, extra: object = {}) => ({ title, reference: "synthetic-os 9.9.9 Level 1", benchmarkName: null, ...extra })
+    expect(deploymentTitle(record("Remediate benchmark findings"), TENANT_ID)).toBe("Remediate Synthetic Os 9.9.9 Level 1 findings")
+    expect(deploymentTitle(record("Deploy benchmark policies"), TENANT_ID)).toBe("Deploy Synthetic Os 9.9.9 Level 1 policies")
+    // A title made now reads the same as before, and the stamped benchmark name wins over the id.
+    expect(deploymentTitle(record("Remediate Synthetic OS Benchmark 9.9.9 Level 1 findings", { benchmarkName: "Synthetic OS Benchmark" }), TENANT_ID)).toBe("Remediate Synthetic OS Benchmark 9.9.9 Level 1 findings")
+    expect(deploymentTitle(record("Remediate benchmark findings", { benchmarkName: "Synthetic OS Benchmark" }), TENANT_ID)).toBe("Remediate Synthetic OS Benchmark 9.9.9 Level 1 findings")
+    // Other titles, and records without a reference, are shown as stored.
+    expect(deploymentTitle(record("Quarterly hardening"), TENANT_ID)).toBe("Quarterly hardening")
+    // A title made with the prettified id before a name was known is rebuilt with the stamped name.
+    expect(deploymentTitle(record("Remediate Synthetic Os 9.9.9 Level 1 findings", { benchmarkName: "Synthetic OS Benchmark" }), TENANT_ID)).toBe("Remediate Synthetic OS Benchmark 9.9.9 Level 1 findings")
+    // A custom title in the generated shape is not rewritten.
+    expect(deploymentTitle(record("Remediate critical findings"), TENANT_ID)).toBe("Remediate critical findings")
+    expect(deploymentTitle(record("Deploy the pilot ring policies"), TENANT_ID)).toBe("Deploy the pilot ring policies")
+    expect(deploymentTitle(record("Remediate benchmark findings", { reference: " " }), TENANT_ID)).toBe("Remediate benchmark findings")
+  })
+
+  it("shows in review as pending, not in the error tone", () => {
+    expect(STATUS_TONE["in-review"]).toBe("warning")
+    expect(deploymentState({ status: "in-review", rollbackChangeSetId: null, rollbackStatus: null })).toMatchObject({ label: "in review", tone: "warning" })
+    expect(deploymentState({ status: "applied", rollbackChangeSetId: "rb", rollbackStatus: "applied" })).toMatchObject({ label: "rolled back", tone: "neutral" })
+  })
+
   it("lists deployments newest first and opens the deployment and its rollback change sets", async () => {
     const calls = stubRoutes((action, body) => {
       if (action === "list") return { deployments: [deployment(NEWER, "Remediate benchmark findings", "2026-10-15T11:00:00Z", { rollbackChangeSetId: "rb", rollbackStatus: "in-review" }), deployment(OLDER, "Deploy benchmark policies", "2026-10-14T09:00:00Z", { rollbackChangeSetId: "rb-old", rollbackStatus: "applied" })] }
@@ -76,9 +100,10 @@ describe("CIS remediation history", () => {
     const { container } = render()
     await flush()
     const rows = [...container.querySelectorAll("li > button[aria-expanded]")]
-    expect(rows.map((row) => row.textContent)).toEqual([
-      expect.stringContaining("Remediate benchmark findings"),
-      expect.stringContaining("Deploy benchmark policies"),
+    // Titles saved before they named the benchmark are listed in the format new deployments use.
+    expect(rows.map((row) => row.querySelector(".truncate")?.textContent)).toEqual([
+      "Remediate Synthetic Os 9.9.9 Level 1 findings",
+      "Deploy Synthetic Os 9.9.9 Level 1 policies",
     ])
     expect(rows[0]!.textContent).toContain("2 operations")
     expect(rows[0]!.textContent).toContain("rollback pending")

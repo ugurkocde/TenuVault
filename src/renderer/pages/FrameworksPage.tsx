@@ -293,12 +293,10 @@ function CisPortfolio({ plan, selectedTenantId }: { plan: Plan | null; selectedT
       if (generation.current === current) setBusy(false)
     }
   }
-  return <section aria-label="CIS portfolio" className="mb-5 rounded-3xl bg-white p-6 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
+  // The Portfolio card around it carries the heading.
+  return <section aria-label="CIS portfolio">
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <div>
-        <h2 className="text-lg font-medium text-gray-900">Portfolio</h2>
-        <p className="mt-1 text-sm text-gray-500">Tenants compared on one benchmark and version, ranked by the raw headline rate of each tenant's newest saved assessment of each Level, as the CIS page shows it. Tenants with no saved assessment of it are shown as not assessed.</p>
-      </div>
+      <p className="min-w-0 flex-1 text-sm text-gray-500">Tenants compared on one benchmark and version, ranked by the raw headline rate of each tenant's newest saved assessment of each Level, as the CIS page shows it. Tenants with no saved assessment of it are shown as not assessed.</p>
       <GatedButton feature="portfolio" plan={portfolioPlan} variant="outline" size="sm" disabled={busy || !included.length} onClick={() => void load()}>{busy ? "Loading" : rows ? "Refresh portfolio" : "Load portfolio"}</GatedButton>
     </div>
     {benchmarks.length > 1 && <div className="mt-3"><FilterSelect label="Compare tenants on benchmark" value={chosen ? JSON.stringify([chosen.benchmark, chosen.version]) : ""} onChange={setBenchmarkChoice} options={benchmarks.map(item => ({ value: JSON.stringify([item.benchmark, item.version]), label: `${benchmarkTitle(item.benchmark, item.benchmarkName)} ${item.version}` }))} /></div>}
@@ -955,13 +953,21 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     <p className="mt-1">The pack and saved assessments stored on this device for this tenant are damaged or come from an unsupported version, so nothing can be loaded, compared or saved. Reset the workspace to start again with an empty one.</p>
     <button type="button" className={cn(button, "mt-3")} disabled={!!busy} onClick={async () => { if (await confirm({ title: "Reset workspace?", description: "This deletes the unreadable saved workspace, including its saved pack and assessment history, and starts an empty one. This cannot be undone.", confirmLabel: "Reset workspace", destructive: true })) void deleteSavedWorkspace("Resetting workspace…") }}>Reset workspace</button>
   </div>
-  const savedHistoryRows = workspace?.history.map(entry => <div key={entry.assessment.runId} className="mt-3 flex flex-wrap items-center gap-3 border-t pt-3 text-sm">
+  // The saved run the results show; its View read-only would show it again. A saved entry counts as
+  // shown only when it is the one entry with the shown run's id, date and reference, so an ambiguous
+  // match never disables opening a run that is not on screen.
+  const isShownEntry = (entry: { assessment: Assessment }) => !!assessment && entry.assessment.runId === assessment.runId && entry.assessment.assessedAt === assessment.assessedAt && entry.assessment.reference === assessment.reference
+  const shownEntries = isCis && contentStage === "results" && workspace ? workspace.history.filter(isShownEntry) : []
+  const savedHistoryRows = workspace?.history.map((entry, index) => { const shown = shownEntries.length === 1 && shownEntries[0] === entry; return <div key={`${entry.assessment.runId}:${index}`} className="mt-3 flex flex-wrap items-center gap-3 border-t pt-3 text-sm">
     {isCis && <CertificationChip certified={isCertifiedAssessment(entry.assessment.reference, entry.policies)} />}
-    <span>{isCis ? formatLocaleDateTime(entry.assessment.assessedAt) : entry.assessment.assessedAt} · {isCis ? referenceDisplayName(entry.assessment.reference, packBenchmarkName(entry.policies)) : entry.assessment.reference}{isCis && trendByRun.get(entry.assessment.runId)?.levels.length ? ` · ${(levels => levels.map(level => levels.length > 1 ? `Level ${level.level} ${formatRate(trendRate(level))}` : formatRate(trendRate(level))).join(", "))(trendByRun.get(entry.assessment.runId)!.levels)}` : ""} · {entry.assessment.findings.length} findings{entry.creation ? ` · ${entry.creation.results.length} creation outcomes` : ""}</span>
-    <button className={button} disabled={!!busy} onClick={() => { reset(); setSetupRequested(false); setLoadedKitLevel(null); setPolicies(entry.policies); setReference(entry.assessment.reference); setAssessment(entry.assessment); setCreation(entry.creation ?? null); setHistorical(true); if (isCis) scrollTo("results") }}>View read-only</button>
-    {!isCis && <ExportButton framework={framework} plan={plan} disabled={!!busy} onClick={() => exportSaved("json", entry.assessment.runId)}>Export JSON</ExportButton>}
-    <button className={button} disabled={!!busy} onClick={async () => { if (await confirm({ title: "Delete saved assessment?", description: "Delete this saved assessment?", confirmLabel: "Delete", destructive: true })) void perform("Deleting assessment…", async () => { const saved = await workspaceRequest("workspace-delete-assessment", { runId: entry.assessment.runId }); setWorkspace(saved); setPolicies(saved.policies); setReference(saved.reference); reset() }) }}>Delete</button>
-  </div>)
+    {shown && <span className="inline-flex shrink-0 items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-700">Shown</span>}
+    <span className="min-w-0 flex-1">{isCis ? formatLocaleDateTime(entry.assessment.assessedAt) : entry.assessment.assessedAt} · {isCis ? referenceDisplayName(entry.assessment.reference, packBenchmarkName(entry.policies)) : entry.assessment.reference}{isCis && trendByRun.get(entry.assessment.runId)?.levels.length ? ` · ${(levels => levels.map(level => levels.length > 1 ? `Level ${level.level} ${formatRate(trendRate(level))}` : formatRate(trendRate(level))).join(", "))(trendByRun.get(entry.assessment.runId)!.levels)}` : ""} · {entry.assessment.findings.length} findings{entry.creation ? ` · ${entry.creation.results.length} creation outcomes` : ""}</span>
+    <span className="ml-auto flex shrink-0 flex-wrap justify-end gap-3">
+      <button className={button} disabled={!!busy || shown} {...(shown ? { title: "Already shown", "aria-label": "View read-only, already shown" } : {})} onClick={() => { reset(); setSetupRequested(false); setLoadedKitLevel(null); setPolicies(entry.policies); setReference(entry.assessment.reference); setAssessment(entry.assessment); setCreation(entry.creation ?? null); setHistorical(true); if (isCis) scrollTo("results") }}>View read-only</button>
+      {!isCis && <ExportButton framework={framework} plan={plan} disabled={!!busy} onClick={() => exportSaved("json", entry.assessment.runId)}>Export JSON</ExportButton>}
+      <button className={button} disabled={!!busy} onClick={async () => { if (await confirm({ title: "Delete saved assessment?", description: "Delete this saved assessment?", confirmLabel: "Delete", destructive: true })) void perform("Deleting assessment…", async () => { const saved = await workspaceRequest("workspace-delete-assessment", { runId: entry.assessment.runId }); setWorkspace(saved); setPolicies(saved.policies); setReference(saved.reference); reset() }) }}>Delete</button>
+    </span>
+  </div> })
   const exportCisPdf = () => {
     if (!assessment) return
     setExportOrigin("header")
@@ -1011,6 +1017,14 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     {savedHistoryRows}
     {historical && <p role="status" className="mt-3 text-sm text-amber-800">Viewing a saved assessment. Compare again to obtain current evidence and enable remediation.</p>}
   </section>) : null
+  const portfolioCard = <details aria-label="Portfolio" className="group mb-5 rounded-3xl bg-white px-6 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)] [&[open]_.chevron]:rotate-180">
+    <summary className="grid cursor-pointer list-none grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 [&::-webkit-details-marker]:hidden">
+      <h2 className="text-lg font-medium text-gray-900">Portfolio</h2>
+      <ChevronDown className="chevron row-span-2 size-4 text-gray-500 motion-safe:transition-transform" aria-hidden="true" />
+      <span className="mt-1 text-sm text-gray-600">CIS readiness of your signed-in tenants side by side, from each tenant's newest saved assessment of each Level of one benchmark.</span>
+    </summary>
+    <div className="mt-4 border-t border-gray-100 pt-4"><CisPortfolio plan={plan} selectedTenantId={credentials?.tenantId} /></div>
+  </details>
   return <div className="mx-auto max-w-6xl p-6 lg:p-8">
     {confirmDialog}
     {isCis && cisRun && <CisRunView run={cisRun} rerun={stage === "results"} error={errorAt === "compare" ? error : ""} policies={policies} reference={reference} names={settingNames} />}
@@ -1076,12 +1090,12 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     {(!isCis || contentStage === "setup") && <details className={cn("group my-6 rounded-3xl px-6 py-4 shadow-[0_1px_2px_rgba(22,21,20,0.04)] lg:px-7 [&[open]_.chevron]:rotate-180", isCis ? "bg-white" : "bg-blue-50/60")}>
       <summary className="flex cursor-pointer list-none items-center justify-between gap-4 [&::-webkit-details-marker]:hidden">
         <span className="flex items-center gap-3 text-sm"><Info className={cn("size-4 shrink-0", isCis ? "text-gray-500" : "text-blue-700")} aria-hidden="true" /><span><strong className="font-medium text-gray-900">Assessment coverage</strong><span className="text-gray-600"> · What is compared, content sources and limits.</span></span></span>
-        <ChevronDown className="chevron size-4 shrink-0 text-gray-500 transition-transform" aria-hidden="true" />
+        <ChevronDown className="chevron size-4 shrink-0 text-gray-500 motion-safe:transition-transform" aria-hidden="true" />
       </summary>
       <div className={cn("mt-4 space-y-2 border-t pt-4 text-sm leading-6 text-gray-700", isCis ? "border-gray-100" : "border-blue-100")}><p>{isCis ? `Benchmark packs come from the TenuVault delivery service. ${CIS_TENANT_NOT_CERTIFIED_NOTE}` : "Mapping format v1. Automatic content: NCSC Device Security Guidance 2025 Windows Settings Catalog only. Other frameworks use administrator-supplied mappings. No certification or complete framework assessment is implied."}</p><p>{framework.coverage}</p>{framework.licenseNotice && <p>{framework.licenseNotice}</p>}<p>Comparison covers Settings Catalog root settings and their nested values. Assignment targets, exclusions and filter references are reported separately from configuration. Group membership, device applicability, enforcement and other policy families remain unavailable. “Present” means a matching configuration exists; it does not mean the setting is assigned or enforced.</p></div>
     </details>}
     {(!isCis || contentStage === "setup") && savedBlock}
-    {framework.id === CIS_BENCHMARKS_ID && contentStage === "setup" && <details className="mb-5"><summary className="inline-flex h-10 cursor-pointer list-none items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 [&::-webkit-details-marker]:hidden">Portfolio</summary><div className="mt-3"><CisPortfolio plan={plan} selectedTenantId={credentials?.tenantId} /></div></details>}
+    {framework.id === CIS_BENCHMARKS_ID && contentStage === "setup" && portfolioCard}
     {isCis && contentStage === "setup" && <section aria-labelledby="cis-delivered-title" className="mb-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
       <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="cis-delivered-title" className="text-xl font-medium tracking-tight">1. Load benchmark</h2><span className="text-sm text-gray-500">{cisAllowed && cisCatalog ? `${cisCatalog.length} benchmarks available` : "Delivery service"}</span></div>
       <p className="mt-2 text-sm text-gray-600">Load a benchmark pack from the TenuVault delivery service. The pack is saved in encrypted storage on this device for the selected tenant.</p>
@@ -1278,10 +1292,8 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       {assessment && (!isCis || contentStage === "results") && <>
         {!isCis && <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500"><p>{assessment.policyCount} tenant policies read · {new Date(assessment.assessedAt).toLocaleString()}</p><div className="flex flex-wrap gap-2">{(["pdf", "csv", "json"] as ("pdf" | "csv" | "json")[]).map(format => <ExportButton key={format} framework={framework} plan={plan} disabled={!!busy} onClick={() => exportSaved(format, assessment.runId)}><Download className="h-4 w-4" aria-hidden="true" />{format === "pdf" ? "PDF report" : format.toUpperCase()}</ExportButton>)}</div></div>}
         {readiness && <section aria-label="CIS readiness" className="mb-6 border-b border-gray-100 pb-6 text-sm text-gray-700">
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h3 className="text-base font-medium text-gray-900">CIS readiness</h3>
-            <p className="text-xs text-gray-500">{readiness.manualNote} This view covers the automated settings in the benchmark pack only.</p>
-          </div>
+          {/* The Level sentences and the CIS notice below say which recommendations need a manual check. */}
+          <h3 className="text-base font-medium text-gray-900">CIS readiness</h3>
           {readiness.levels.length > 0 && <div className="mt-3 space-y-1 text-sm text-gray-700">{readiness.levels.map(level => <p key={level.level}>{levelCheckSummary(level)}</p>)}</div>}
           <p role="note" aria-label="Manual recommendations" className={cn("mt-3 flex items-start gap-2", CIS_NOTE)}><Info className="mt-0.5 size-4 shrink-0 text-gray-500" aria-hidden="true" /><span>{readiness.manualFallback} <a href={readiness.manualFallbackUrl} className="font-medium text-blue-700 underline underline-offset-2" onClick={event => { event.preventDefault(); void bridge.app.openExternal(readiness.manualFallbackUrl) }}>{readiness.manualFallbackUrl}</a></span></p>
           <div className="mt-4 divide-y divide-gray-100">
@@ -1311,16 +1323,17 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
                 const totals = recommendationTotals(level.recommendations)
                 stats.unshift(["Recommendations passed", String(totals.passed)], ["Recommendations failed", String(totals.failed)], ...(totals.review ? [["Recommendations to review", String(totals.review)] as [string, string]] : []), ["Recommendations not assessed", String(totals.notAssessed)])
               }
-              return <article key={`card-${level.level}`} aria-label={`Level ${level.level} summary`} className="grid gap-5 py-5 first:pt-1 sm:grid-cols-[11rem_minmax(0,1fr)] lg:grid-cols-[11rem_minmax(0,1fr)_16rem]">
+              return <article key={`card-${level.level}`} aria-label={`Level ${level.level} summary`} className="py-5 first:pt-1">
+                {/* The benchmark name has its own full width line, so it never wraps in the narrow score column. */}
+                <p className="text-xs font-medium text-gray-500">{benchmarkTitle(level.benchmark, readiness.benchmarkName)} · Level {level.level}{level.version ? ` · ${level.version}` : ""}</p>
+                <div className="mt-1 grid gap-5 sm:grid-cols-[11rem_minmax(0,1fr)] lg:grid-cols-[11rem_minmax(0,1fr)_16rem]">
                 <div>
-                  <p className="text-xs font-medium text-gray-500">{benchmarkTitle(level.benchmark, readiness.benchmarkName)} · Level {level.level}{level.version ? ` · ${level.version}` : ""}</p>
-                  <p className={`mt-1 font-light tabular-nums tracking-tight text-gray-900 ${head.rate === null ? "text-2xl" : "text-5xl"}`}>{head.rate === null ? "Not available" : percentText(head.rate)}</p>
+                  <p className={`font-light tabular-nums tracking-tight text-gray-900 ${head.rate === null ? "text-2xl" : "text-5xl"}`}>{head.rate === null ? "Not available" : percentText(head.rate)}</p>
                   <p className="mt-1 text-xs text-gray-500">{head.label}</p>
                   {headlineBasisNote(head) && <p className="mt-1 text-xs text-gray-600">{headlineBasisNote(head)}</p>}
                   {head.basis === "recommendations" && head.rate === null && <p className="mt-1 text-xs text-gray-600">No recommendation of this Level could be assessed: the pack does not hold every setting they name.</p>}
                   {withExclusions && <p className="mt-1 text-xs font-medium text-gray-700">{withExclusions}<span className="block font-normal text-gray-500">Exclusions as of {formatExpiryDate(head.exclusionsAsOf)}</span></p>}
                   {head.basis === "recommendations" && <p className="mt-1 text-xs text-gray-600">Settings: {level.present} of {level.assessedSettings} present</p>}
-                  {unassigned && <p className="mt-1 text-xs text-gray-600">{unassigned}</p>}
                 </div>
                 <div className="min-w-0 self-center">
                   <div role="img" aria-label={`Level ${level.level} status proportions`} className="flex h-2.5 w-full overflow-hidden rounded-full bg-gray-100">{visible.map(segment => <span key={segment.label} className={segment.className} style={{ width: total ? `${(segment.count / total) * 100}%` : "0%" }} />)}</div>
@@ -1338,6 +1351,8 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
                     <dd className="text-right text-xs font-medium tabular-nums text-gray-800">{value}</dd>
                   </div>)}
                 </dl>
+                </div>
+                {unassigned && <p role="note" aria-label={`Level ${level.level} unassigned policies`} className={cn("mt-4", CIS_NOTE)}>{unassigned}</p>}
               </article>
             })}
           </div>
@@ -1411,7 +1426,9 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
         </div>
         <div className="mb-2 flex flex-wrap items-center gap-2"><FilterChips label="Filter assessment findings" value={filter} onChange={status => { setFilter(status); setPage(0) }} options={["All", "Present", "Missing", "Different", "Review"].map(status => ({ value: status, label: status, count: searched.filter(f => status === "All" || f.status === status).length }))} />
           <span aria-live="polite" className="ml-auto text-sm text-gray-500">{isCis || searching ? `${findings.length} of ${assessment.findings.length} findings` : ""}</span>
-          {isCis && deviatingKeys.length > 0 && <button type="button" className={button} disabled={!!busy || !!creation || historical || allDeviatingSelected} onClick={selectAllDeviating}>Select all deviating ({deviatingKeys.length})</button>}
+          {isCis && deviatingKeys.length > 0 && (historical
+            ? <span role="note" className="text-sm text-gray-600">Read-only. Run again to select findings.</span>
+            : <button type="button" className={button} disabled={!!busy || !!creation || allDeviatingSelected} onClick={selectAllDeviating}>Select all deviating ({deviatingKeys.length})</button>)}
         </div>
         <p className="mb-4 text-xs leading-5 text-gray-500">Different: at least one existing configuration differs. Review: the pack contains alternative values for this setting. Select a single profile or resolve differences manually. Unassigned configurations can appear as Present. Expand a finding to inspect assignment evidence, including exclusions, filter references and unavailable reads.</p>
         {isCis ? <div>{groupFindingsByPolicy(findings).map(group => <section key={group.policyIndex} aria-label={group.policyName} className="border-t border-gray-100 py-4 first:border-t-0 first:pt-1">
@@ -1460,7 +1477,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     </section>}
     {(contentStage === "setup" || contentStage === "results") && selectedTenant && credentials && <CisRemediationHistory tenant={selectedTenant} focus={remediationFocus} onApplied={setAppliedAt} />}
     {isCis && contentStage === "results" && savedBlock}
-    {framework.id === CIS_BENCHMARKS_ID && contentStage === "results" && <details className="mb-5"><summary className="inline-flex h-10 cursor-pointer list-none items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 [&::-webkit-details-marker]:hidden">Portfolio</summary><div className="mt-3"><CisPortfolio plan={plan} selectedTenantId={credentials?.tenantId} /></div></details>}
+    {framework.id === CIS_BENCHMARKS_ID && contentStage === "results" && portfolioCard}
     {preview && !framework.comparisonOnly && <section aria-labelledby="preview-title" className="mt-5 rounded-3xl border-2 border-blue-200 bg-white p-7"><h2 id="preview-title" className="text-xl font-medium tracking-tight">3. Review unassigned policies</h2><p className="mt-2 text-sm text-gray-600">Create {payloads.length} new {payloads.length === 1 ? "policy" : "policies"} in <strong>{selectedTenant?.name}</strong> using the selected missing settings and their nested dependencies. Existing policies stay unchanged. Review target groups and conflicts in Intune before assigning these policies.</p><details className="mt-4"><summary className="cursor-pointer text-sm font-medium">Inspect the exact policy payloads</summary><pre className="mt-3 max-h-96 overflow-auto rounded-lg bg-gray-950 p-4 text-xs text-gray-100">{JSON.stringify(payloads, null, 2)}</pre></details><label className="mt-5 flex items-start gap-3 text-sm"><input type="checkbox" checked={confirmed} disabled={!!busy || !!creation} onChange={e => setConfirmed(e.target.checked)} className="mt-1 h-4 min-h-0 w-4 shrink-0" /><span>I reviewed these recommendations and want to create unassigned policies in {selectedTenant?.name}.</span></label><button className={`${primary} mt-4`} disabled={!confirmed || !!busy || !!creation} onClick={() => void perform("Rechecking tenant policies and creating unassigned policies…", async () => {
       const result = await request<NonNullable<typeof creation>>({ action: "create", tenantId: credentials!.tenantId, appId: credentials!.appId, storageAccountName: selectedTenant?.resources?.storageAccountName, runId: assessment!.runId, keys: [...selected], confirmUnassigned: true }); setCreation(result); setWorkspace(await workspaceRequest("workspace-load"))
     })}>Create {payloads.length} unassigned {payloads.length === 1 ? "policy" : "policies"}</button>
@@ -1545,16 +1562,19 @@ function CisFindingRow({ finding, recommendations, checked, disabled, onChange, 
   const groups = groupObservationsByValue(finding.observed, finding.recommended)
   const settingName = settingDisplayName(finding.settingId, names)
   return <div className="flex items-start gap-3 py-2.5">
-    {selectable && <input type="checkbox" aria-label={`Select finding ${settingName} from ${finding.policyName}`} checked={checked} disabled={disabled || !isSelectableFinding(finding)} onChange={onChange} className="mt-1 h-4 min-h-0 w-4 shrink-0" />}
+    {/* A finding that can never be selected keeps the checkbox width, so every title starts at the same place. */}
+    {selectable && (isSelectableFinding(finding)
+      ? <input type="checkbox" aria-label={`Select finding ${settingName} from ${finding.policyName}`} checked={checked} disabled={disabled} onChange={onChange} className="mt-1 h-4 min-h-0 w-4 shrink-0" />
+      : <span aria-hidden="true" data-checkbox-spacer="" className="mt-1 h-4 w-4 shrink-0" />)}
     <details className="group min-w-0 flex-1"><summary className="flex cursor-pointer list-none items-center gap-2.5 text-sm [&::-webkit-details-marker]:hidden">
-        <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium ${colors[finding.status]}`}>{finding.status}</span>
+        <span className={`w-[5.5rem] shrink-0 rounded-full px-2 py-0.5 text-center text-xs font-medium ${colors[finding.status]}`}>{finding.status}</span>
         {excluded && <span className="shrink-0 rounded-full bg-gray-200 px-2.5 py-0.5 text-xs font-medium text-gray-700">Excluded</span>}
         <span className="min-w-0 flex-1">
           {recommendation && <span title={recommendation} className="block truncate font-medium text-gray-900">{recommendation}</span>}
           <span className={recommendation ? "block truncate text-xs text-gray-600" : "block truncate font-medium text-gray-800"}>{settingName}</span>
           <span title={finding.settingId} className="block truncate font-mono text-[11px] leading-4 text-gray-400">{finding.settingId}</span>
         </span>
-        <ChevronDown className="h-4 w-4 shrink-0 text-gray-400 transition-transform group-open:rotate-180" aria-hidden="true" />
+        <ChevronDown className="h-4 w-4 shrink-0 text-gray-400 motion-safe:transition-transform group-open:rotate-180" aria-hidden="true" />
       </summary>
       {recommendations.length > 0 && <div className="mt-3"><p className="mb-1.5 text-xs font-semibold text-gray-600">Recommendations</p><ul className="space-y-0.5 text-xs leading-5 text-gray-700">{recommendations.map(item => <li key={item.id}><span className="font-medium">{item.id}</span> {item.title}</li>)}</ul></div>}
       <div className="mt-3 grid gap-x-6 gap-y-4 pb-2 lg:grid-cols-2">

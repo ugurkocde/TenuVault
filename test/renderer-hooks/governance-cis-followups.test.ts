@@ -191,10 +191,9 @@ describe("Governance CIS card links", () => {
     const summary = container.querySelector('[aria-label="Level 1 summary"]')!
     expect(summary.textContent).toContain(`${edgeCard!.levels[0]!.rate}%`)
     expect(summary.textContent).toContain("33.3%")
-    // A read-only result offers no selection: Select all deviating is disabled like the other actions.
-    const selectAll = [...container.querySelectorAll("button")].find(button => button.textContent?.startsWith("Select all deviating"))!
-    expect(selectAll.textContent).toBe("Select all deviating (2)")
-    expect(selectAll.disabled).toBe(true)
+    // A read-only result offers no selection: it says so in place of Select all deviating.
+    expect([...container.querySelectorAll("button")].some(button => button.textContent?.startsWith("Select all deviating"))).toBe(false)
+    expect(container.textContent).toContain("Read-only. Run again to select findings.")
   })
 
   it("keeps a requested run on screen while another assessment runs, and follows it only on View progress", async () => {

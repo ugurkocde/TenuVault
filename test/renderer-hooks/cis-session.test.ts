@@ -133,7 +133,9 @@ describe("CIS Benchmarks results across navigation", () => {
     const boxes = [...container.querySelectorAll<HTMLInputElement>('[aria-label="Assessment results"] input[type="checkbox"]')]
     expect(boxes.length).toBeGreaterThan(0)
     expect(boxes.every(box => box.disabled)).toBe(true)
-    expect(buttonNamed(container, "Select all deviating (1)")?.disabled).toBe(true)
+    // The saved view says it is read-only in place of a disabled Select all deviating.
+    expect([...container.querySelectorAll("button")].some(item => item.textContent?.startsWith("Select all deviating"))).toBe(false)
+    expect(results(container)?.textContent).toContain("Read-only. Run again to select findings.")
     // Leave the page and come back: the results are shown again.
     const page = render("/portal/dashboard")
     await flush()
@@ -685,6 +687,10 @@ describe("Run again from a saved assessment of another pack", () => {
     await act(async () => { buttonNamed(container, "Run again")!.click() })
     await waitFor(() => !container.querySelector('[aria-label="Assessment in progress"]') && header().includes("9.9.8") && !header().includes("Showing a saved assessment"))
     await flush()
+    // Fresh results keep the selection controls: an enabled Select all deviating and enabled checkboxes.
+    expect(buttonNamed(container, "Select all deviating (1)")?.disabled).toBe(false)
+    expect(container.textContent).not.toContain("Read-only. Run again to select findings.")
+    expect([...container.querySelectorAll<HTMLInputElement>('[aria-label="Assessment results"] input[type="checkbox"]')].every(box => !box.disabled)).toBe(true)
     const start = actions.find(body => body.action === "assess-start")
     expect(start?.reference).toBe(olderReference)
     expect((start!.policies as { name: string }[])[0]?.name).toBe("Older synthetic policy")

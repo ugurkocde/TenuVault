@@ -401,6 +401,8 @@ describe("CIS Benchmarks route", () => {
     expect(preview?.textContent).toContain("TenuVault checks all 52 recommendations automatically.")
     // What the plans add, then the ways to get them.
     for (const line of CIS_PLAN_ADDITIONS) expect(preview?.textContent).toContain(line)
+    // The listed recommendations are named as the results page names them: Manual, Not assessed and Not covered.
+    expect(preview?.textContent).toContain("Manual recommendations and recommendations marked Not assessed or Not covered by the benchmark pack, listed with their CIS text for a manual check.")
     // Plain words: no dashes used as punctuation anywhere in the preview.
     expect(preview?.textContent).not.toMatch(/[\u2013\u2014]/)
     expect(preview?.textContent).not.toContain(" - ")

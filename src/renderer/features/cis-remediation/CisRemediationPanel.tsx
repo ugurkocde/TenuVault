@@ -6,16 +6,9 @@ import { toast } from "../../lib/toast"
 import type { Assessment, BaselinePolicy } from "../../../shared/frameworks/policies"
 import { knownBenchmarkName, packBenchmarkName, selectedDeviatingFindings } from "../../../shared/frameworks/cis-display"
 import { cachedCisCatalog } from "../../lib/cis-catalog-cache"
-import { deploymentReferenceLabel } from "./CisRemediationHistory"
+import { deploymentReferenceLabel, remediationTitle } from "./CisRemediationHistory"
 import { PATH, type Deployment } from "./api"
 import { CisRemediationLimits } from "./CisRemediationLimits"
-
-/** The deployment title, naming the benchmark by its display name and kept within the 200 character limit. */
-export function remediationTitle(whole: boolean, benchmark: string): string {
-  const [verb, noun] = whole ? ["Deploy", "policies"] : ["Remediate", "findings"]
-  const name = benchmark.trim().slice(0, 200 - verb.length - noun.length - 2).trim()
-  return name ? `${verb} ${name} ${noun}` : `${verb} benchmark ${noun}`
-}
 
 const button = "inline-flex h-10 items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
 

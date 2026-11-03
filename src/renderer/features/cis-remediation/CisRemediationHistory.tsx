@@ -37,6 +37,37 @@ export function deploymentReferenceLabel(reference: string, tenantId: string | u
   return referenceDisplayName(reference.trim(), packName?.trim() || knownBenchmarkName(id) || benchmarkTitle(id, cachedCisCatalog(tenantId)?.find(benchmark => benchmark.id === id)?.name))
 }
 
+/** The deployment title, naming the benchmark by its display name and kept within the 200 character limit. */
+export function remediationTitle(whole: boolean, benchmark: string): string {
+  const [verb, noun] = whole ? ["Deploy", "policies"] : ["Remediate", "findings"]
+  const name = benchmark.trim().slice(0, 200 - verb.length - noun.length - 2).trim()
+  return name ? `${verb} ${name} ${noun}` : `${verb} benchmark ${noun}`
+}
+
+/** The titles earlier versions generated before titles named the benchmark. */
+const LEGACY_TITLES = new Set(["Deploy benchmark policies", "Remediate benchmark findings"])
+
+/**
+ * The title a deployment is listed with. Only a title TenuVault generated is built again from the
+ * deployment's reference: the legacy defaults, or the exact title the planner makes from this
+ * record's reference. A deployment saved before titles named the benchmark then reads like a new
+ * one. Any other title, such as one set through the planning route, is shown as stored, and stored
+ * records are not changed.
+ */
+export function deploymentTitle(deployment: Pick<Deployment, "title" | "reference" | "benchmarkName">, tenantId: string | undefined): string {
+  const title = deployment.title.trim()
+  const reference = deployment.reference.trim()
+  if (!reference) return deployment.title
+  const whole = title.startsWith("Deploy ")
+  const label = deploymentReferenceLabel(reference, tenantId, deployment.benchmarkName)
+  // The labels the planner can have used: the one it makes now, the one before catalog names, and the
+  // prettified id it falls back to while no name is known.
+  const id = reference.split(/\s+/)[0] ?? ""
+  const candidates = [label, referenceDisplayName(reference, deployment.benchmarkName?.trim() || null), referenceDisplayName(reference, benchmarkTitle(id))]
+  const generated = LEGACY_TITLES.has(title) || candidates.some(candidate => remediationTitle(whole, candidate) === title)
+  return generated ? remediationTitle(whole, label) : deployment.title
+}
+
 /** What a planned deployment does to the tenant, from its planned items: new policies stay unassigned, updates keep the assignments of the policy they change. */
 export function deploymentImpactText(items: Deployment["items"]): string {
   const creates = items.filter(item => item.action === "create").length
@@ -137,7 +168,7 @@ export function CisRemediationHistory({ tenant, focus, onApplied }: { tenant: Te
           <button type="button" aria-expanded={expanded} onClick={() => setOpen(expanded ? null : deployment.id)} className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 text-left focus-visible:outline focus-visible:outline-2">
             {expanded ? <ChevronDown className="h-4 w-4 shrink-0" aria-hidden="true" /> : <ChevronRight className="h-4 w-4 shrink-0" aria-hidden="true" />}
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-medium text-gray-900">{deployment.title}</span>
+              <span className="block truncate text-sm font-medium text-gray-900">{deploymentTitle(deployment, tenantId)}</span>
               <span className="block text-xs text-gray-500">{deploymentReferenceLabel(deployment.reference, tenantId, deployment.benchmarkName)} · {formatDate(deployment.createdAt)} · {deployment.items.length} {deployment.items.length === 1 ? "operation" : "operations"}</span>
             </span>
             {state.rollback && <Chip tone={state.rollback.tone}>{state.rollback.label}</Chip>}

@@ -226,6 +226,15 @@ describe("CIS flow on the page", () => {
     const panel = container.querySelector('details[aria-label="Saved assessment history"]') as HTMLDetailsElement
     expect(panel.open).toBe(true)
     expect(scrolled).toContain(panel)
+    // The run on screen is marked Shown, and showing it again is unavailable with the reason.
+    const shown = buttonNamed(container, "View read-only")!
+    expect(shown.disabled).toBe(true)
+    expect(shown.title).toBe("Already shown")
+    expect(panel.textContent).toContain("Shown")
+    // From the setup page the same run can be viewed again, which brings the results into view.
+    await click(buttonNamed(container, "New assessment"))
+    expect(buttonNamed(container, "View read-only")!.disabled).toBe(false)
+    expect(container.querySelector('details[aria-label="Saved assessment history"]')!.textContent).not.toContain("Shown")
     await click(buttonNamed(container, "View read-only"))
     await waitFor(() => scrolled.includes(container.querySelector('[aria-label="Results header"]')!))
   })
