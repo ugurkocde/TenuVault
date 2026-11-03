@@ -6,7 +6,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { frameworks } from "../../shared/frameworks/catalog"
 import { comparePolicies, parsePolicies, record, remediationPayload, type Assessment, type BaselinePolicy, type Finding, type LandscapePolicy, type RecordJson } from "../../shared/frameworks/policies"
 import { DELEGATED_CLIENT_SECRET } from "../../shared/constants"
-import { CIS_FRAMEWORKS } from "../../shared/plans"
+import { allows, CIS_FRAMEWORKS, type Plan } from "../../shared/plans"
 import { loadNcsc } from "./ncsc"
 import { pdfBrandingFor } from "../pdf-branding"
 import { validateRecommendationList } from "../../shared/frameworks/cis-manual"
@@ -23,6 +23,7 @@ import { kitLevelForPolicy } from "../../shared/frameworks/cis-flow"
 import { MAX_DEFINITIONS } from "../../shared/intune/drift-format"
 import { readSettingNames } from "../../portal/lib/drift/setting-names"
 import { graphCaller } from "../../portal/lib/policies/graph-restore"
+import { CIS_POLICIES_NOT_DELIVERED, isDeliveredSubset, withDeliveredPack } from "./cis-delivered"
 
 
 const GRAPH = "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies"
@@ -35,15 +36,22 @@ export class FrameworkError extends Error {
 
 let internalCisOverride: boolean | null = null
 let internalCisProvider: (() => boolean) | null = null
-/** Test hook for the internal CIS Benchmarks gate. A set override wins over the provider. */
+/** Test hook for the internal CIS claim. A set override wins over the provider. */
 export function setInternalCisBenchmarksEnabled(value: boolean | null): void { internalCisOverride = value }
 /**
- * Bootstrap hook wiring the gate to the license service. The provider reports whether a
- * verified entitlement on this machine carries the server-issued internal CIS claim.
- * There is deliberately no environment or settings fallback: without a provider or a
- * test override, CIS Benchmarks stays off in every shipped build.
+ * Bootstrap hook wiring the internal CIS claim to the license service. The provider reports
+ * whether a verified entitlement on this machine carries the server-issued internal CIS claim.
+ * The claim enables Build Kit import, internal testing tooling, and nothing else. There is
+ * deliberately no environment or settings fallback.
  */
 export function setInternalCisBenchmarksProvider(provider: (() => boolean) | null): void { internalCisProvider = provider }
+let cisPlanProvider: ((tenantId: string) => Plan | null) | null = null
+/**
+ * Bootstrap hook wiring the CIS Benchmarks plan gate to the license service. The provider
+ * returns a tenant's plan as a verified entitlement on this machine shows it, without a
+ * network call. Without a provider, CIS Benchmarks remediation is refused for every tenant.
+ */
+export function setCisBenchmarksPlanProvider(provider: ((tenantId: string) => Plan | null) | null): void { cisPlanProvider = provider }
 let cisEntitlementProvider: ((tenantId: string) => string | null) | null = null
 /**
  * Bootstrap hook wiring CIS content delivery to the license service. The provider
@@ -61,6 +69,7 @@ export function setFrameworkExportSaver(saver: ((file: ExportFile) => Promise<{ 
 function cisEntitlementToken(tenantId: string): string | null {
   try { return cisEntitlementProvider?.(tenantId) ?? null } catch { return null }
 }
+/** Whether this machine holds the internal CIS claim, which only Build Kit import needs. */
 export function internalCisBenchmarksEnabled(): boolean {
   if (internalCisOverride !== null) return internalCisOverride
   try {
@@ -70,9 +79,39 @@ export function internalCisBenchmarksEnabled(): boolean {
   }
 }
 
+/**
+ * Whether a tenant's current plan includes CIS Benchmarks (Pro or MSP). Checked by work that
+ * writes to the tenant from CIS content, before every Graph attempt, so a plan that ends during
+ * a deployment stops it. The plan guard checks requests before they reach a handler.
+ */
+export function cisBenchmarksAllowed(tenantId: string): boolean {
+  try {
+    const plan = cisPlanProvider?.(tenantId) ?? null
+    return plan !== null && allows(plan, "baselineAllPlatforms")
+  } catch {
+    return false
+  }
+}
+
+export const KIT_IMPORT_REFUSED = "Build Kit import is available to internal TenuVault installations only."
+/** Refuses the parts of a Build Kit import that reach the main process, its recommendation list and denominator, without the internal claim. */
+function requireKitImport(): void {
+  if (!internalCisBenchmarksEnabled()) throw new FrameworkError(KIT_IMPORT_REFUSED, 403)
+}
+
+/**
+ * Without the internal CIS claim, CIS Benchmarks policies are accepted only when this process
+ * delivered them to the tenant: a subset of one pack cis-fetch-pack recorded (cis-delivered.ts).
+ * Checked on workspace-save, assess, assess-start and remediation planning, so policies a
+ * renderer built itself, such as a Build Kit conversion, cannot be saved, assessed or deployed.
+ */
+export function requireDeliveredCisPolicies(tenantId: string, policies: BaselinePolicy[]): void {
+  if (internalCisBenchmarksEnabled() || !policies.length) return
+  if (!isDeliveredSubset(loadWorkspace(tenantId, "cis-benchmarks").deliveredPacks, policies)) throw new FrameworkError(CIS_POLICIES_NOT_DELIVERED, 403)
+}
+
 function requireEnabledFramework(frameworkId: string): void {
   const framework = frameworks.find(f => f.id === frameworkId)
-  if (frameworkId === "cis-benchmarks" && internalCisBenchmarksEnabled()) return
   if (framework?.disabledReason) throw new FrameworkError(framework.disabledReason, 403)
 }
 
@@ -465,6 +504,8 @@ async function exportWorkspace(body: RecordJson, workspace: FrameworkWorkspace):
     if (workspace.frameworkId !== "cis-benchmarks") throw new FrameworkError("CIS readiness reports are available for CIS Benchmarks assessments only.", 400)
     let denominator: DenominatorEntry[] | undefined
     if (body.denominator !== undefined) {
+      // The denominator list is part of a Build Kit import.
+      requireKitImport()
       if (!Array.isArray(body.denominator)) throw new FrameworkError("The denominator list is invalid.")
       try { denominator = parseDenominatorList(JSON.stringify(body.denominator)) }
       catch (error) { throw new FrameworkError(error instanceof Error ? error.message : "The denominator list is invalid.") }
@@ -575,8 +616,11 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     if (body.action === "workspace-save") {
       if (typeof body.reference !== "string" || body.reference.length > 200) throw new FrameworkError("Provide a source version up to 200 characters.")
       workspace.policies = Array.isArray(body.policies) && !body.policies.length ? [] : parsePolicies(body.policies)
+      if (body.frameworkId === "cis-benchmarks") requireDeliveredCisPolicies(body.tenantId, workspace.policies)
       workspace.reference = body.reference
       if ("recommendationList" in body) {
+        // An imported recommendation list comes with a Build Kit; delivered packs bring their own lists.
+        if (body.recommendationList !== null && body.frameworkId === "cis-benchmarks") requireKitImport()
         if (body.recommendationList === null) delete workspace.recommendationList
         else {
           try { workspace.recommendationList = validateRecommendationList(body.recommendationList) }
@@ -651,6 +695,8 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
       const workspace = loadWorkspace(body.tenantId, body.frameworkId)
       workspace.policies = policies
       workspace.reference = reference
+      // Recorded in the form saves and requests reparse it to, so the pack and any subset of it are accepted later.
+      workspace.deliveredPacks = withDeliveredPack(workspace.deliveredPacks, pack, parsePolicies(JSON.parse(JSON.stringify(policies))))
       // One delivered list per benchmark, version and Level replaces the earlier one for that Level, so saved
       // assessments of another Level keep theirs. A Level the service has no list for drops its old one.
       const lists = (workspace.recommendationLists ?? []).filter(item => !(item.benchmark === pack.benchmark && item.version === pack.version && item.items.every(entry => entry.level === pack.level)))
@@ -685,6 +731,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     if (typeof body.frameworkId !== "string" || !frameworks.some(f => f.id === body.frameworkId)) throw new FrameworkError("Select a framework.")
     if (typeof body.reference !== "string" || !body.reference.trim() || body.reference.length > 200) throw new FrameworkError("Provide a source version and profile (up to 200 characters).")
     const policies = parsePolicies(body.policies)
+    if (body.frameworkId === "cis-benchmarks") requireDeliveredCisPolicies(tenant, policies)
     pruneJobs()
     const running = [...jobs.values()].filter(job => !isFinished(job))
     const duplicate = running.find(job => job.tenantId === tenant && job.frameworkId === body.frameworkId)
@@ -722,6 +769,7 @@ export async function handleFramework(body: RecordJson): Promise<unknown> {
     if (typeof body.frameworkId !== "string" || !frameworks.some(f => f.id === body.frameworkId)) throw new FrameworkError("Select a framework.")
     if (typeof body.reference !== "string" || !body.reference.trim() || body.reference.length > 200) throw new FrameworkError("Provide a source version and profile (up to 200 characters).")
     const policies = parsePolicies(body.policies)
+    if (body.frameworkId === "cis-benchmarks") requireDeliveredCisPolicies(tenant, policies)
     requireHistoryRoom(tenant, body.frameworkId)
     const current = await landscape(token, undefined, () => requireEnabledFramework(body.frameworkId as string))
     requireEnabledFramework(body.frameworkId)

@@ -12,10 +12,10 @@ import { ComplianceScoringNotice } from "../../components/ComplianceScoringNotic
 import { ScoreDetail } from "./ScoreDetail"
 import { GovernanceExportButtons } from "../shared/GovernanceExportButtons"
 import { scoresCsv, scoresJson } from "../shared/governance-export"
-import { useInternalCisBenchmarks } from "../../lib/internal-cis"
 import { invalidateScores } from "./invalidate"
 import { cisScoreCards } from "./cis"
 import { CisCard } from "./CisCard"
+import { canUse } from "../../components/PlanGate"
 import { FreshnessStrip } from "../governance/FreshnessStrip"
 
 /**
@@ -30,7 +30,8 @@ export default function ScoresTab({ tenant, plan, allowed }: FeatureTabProps) {
   const detailRef = useRef<HTMLDivElement>(null)
   const tenantId = tenant.credentials?.tenantId
   const query = useQuery({ queryKey: ["scores-summary", tenantId], queryFn: () => loadSummary(tenant), enabled: allowed })
-  const cisAccess = useInternalCisBenchmarks()
+  // CIS Benchmarks cards follow the plan, like the CIS page: Pro and MSP include them.
+  const cisAccess = canUse(plan, "baselineAllPlatforms")
   // CIS assessments change on the CIS page, which does not notify this tab, so the workspace is
   // read fresh every time the tab opens and cards show only once that read is in.
   const cisEnabled = allowed && cisAccess && !!tenantId

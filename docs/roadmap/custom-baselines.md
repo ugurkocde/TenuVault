@@ -55,7 +55,7 @@ Lets an organization keep its own Settings Catalog baseline in TenuVault. Route:
      assignment state is unknown. Setting values present in the baseline are checked (matches
      or different).
    - Every result is labelled "Compared with baseline <name> v<n>, not with the live tenant."
-   - CIS keeps its own paid gate (`baselineAllPlatforms`) and is refused while it is disabled.
+   - CIS keeps its own paid gate (`baselineAllPlatforms`). CIS Benchmarks packs are compared on the CIS Benchmarks page only, and CIS Controls is refused while it is Coming soon.
 
 ## Plan boundary
 

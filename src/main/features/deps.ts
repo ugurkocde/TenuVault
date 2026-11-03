@@ -11,6 +11,11 @@ export interface TenantProfile {
   storageAccountName: string
 }
 
+/** The applied change set a rollback recovers; see features/recovery.ts. */
+export interface RecoveryScope {
+  changeSetId: string
+}
+
 /**
  * What the roadmap workflows get from the app. Everything is injected, so each workflow is
  * tested with fakes (see test/helpers/feature-deps.ts) and never reaches for globals.
@@ -30,14 +35,17 @@ export interface FeatureDeps {
   /**
    * Microsoft Graph (beta) for a tenant with the signed-in admin's delegated token. With
    * `journal`, every non-GET call is recorded in the restore write journal as uncertain until
-   * its outcome is known, and a repeated uncertain write is refused until reconciled.
+   * its outcome is known, and a repeated uncertain write is refused until reconciled. With
+   * `recovery`, only the change set engine's rollback path: a tenant whose license ended may
+   * still be used to roll back the named applied change set (see features/recovery.ts).
    */
-  graph: (tenantId: string, options?: { journal?: boolean }) => Promise<GraphCall>
+  graph: (tenantId: string, options?: { journal?: boolean; recovery?: RecoveryScope }) => Promise<GraphCall>
   /**
    * Calls one of the app's own API routes with the tenant's credentials filled in
-   * (see apiBody).
+   * (see apiBody). With `recovery`, only the pre-change backup of a rollback, under the same
+   * recovery authorization as `graph`.
    */
-  api: (path: string, tenantId: string, body?: Record<string, unknown>) => Promise<Response>
+  api: (path: string, tenantId: string, body?: Record<string, unknown>, options?: { recovery?: RecoveryScope }) => Promise<Response>
   /** fetch for customer-configured endpoints (notification webhooks); never Graph or storage. */
   externalFetch: typeof fetch
   /** A system notification on this computer. */

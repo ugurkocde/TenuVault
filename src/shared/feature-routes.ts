@@ -12,6 +12,10 @@ import type { Feature } from "./plans"
  * - `revoke-...` actions are free too: they only turn off or delete local outbound
  *   configuration (a notification webhook), never tenant settings or
  *   evidence, so an admin can always stop data leaving the device after a downgrade.
+ * - A route's `recovery` actions are free too: they roll back changes that were already
+ *   applied on a paid plan by writing the captured pre-change state back, so a tenant can
+ *   always undo them after a downgrade or license expiry. They keep their review, approval
+ *   and integrity checks; only the plan check is left out.
  * - `portfolio-...` actions also need `portfolio` (MSP) and name every other tenant they
  *   read in `targetTenants: [{ tenantId }]`, so the plan is checked on each of them.
  * - Every other action needs the route's `feature`.
@@ -19,6 +23,8 @@ import type { Feature } from "./plans"
 export interface FeatureRoute {
   feature: Feature
   prefixes?: Record<string, Feature>
+  /** Rollback actions of changes already applied, available on every plan. */
+  recovery?: readonly string[]
 }
 
 export const FEATURE_ROUTES = {
@@ -30,7 +36,10 @@ export const FEATURE_ROUTES = {
   "/api/notifications": { feature: "notifications" },
   "/api/standards": { feature: "customizations", prefixes: { "standard-": "goldenStandards" } },
   "/api/custom-baselines": { feature: "customBaselines" },
-  "/api/cis-remediation": { feature: "baselineAllPlatforms" },
+  "/api/cis-remediation": {
+    feature: "baselineAllPlatforms",
+    recovery: ["rollback-preview", "rollback-create", "rollback-review", "rollback-approve", "rollback-reject", "rollback-apply"],
+  },
 } as const satisfies Record<string, FeatureRoute>
 
 export type FeatureRoutePath = keyof typeof FEATURE_ROUTES
@@ -46,8 +55,8 @@ export function isReadAction(action: string): boolean {
 
 /** The features an action on a feature route needs; empty for stored-record reads. */
 export function featureRouteFeatures(pathname: FeatureRoutePath, action: string): Feature[] {
-  if (isReadAction(action)) return []
   const route: FeatureRoute = FEATURE_ROUTES[pathname]
+  if (isReadAction(action) || route.recovery?.includes(action)) return []
   const prefixed = Object.entries(route.prefixes ?? {}).find(([prefix]) => action.startsWith(prefix))?.[1]
   const features: Feature[] = [prefixed ?? route.feature]
   if (action.startsWith("portfolio-")) features.push("portfolio")

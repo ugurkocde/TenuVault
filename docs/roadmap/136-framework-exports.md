@@ -27,8 +27,8 @@ only the loaded pack's source mappings, no tenant evidence.
 ## Plan boundary (takes effect with the next release)
 
 Shipped free on every plan (Community, Pro, MSP) for every framework except CIS. CIS assessments
-and CIS reports (`cis-benchmarks`, `cis-controls`) need `baselineAllPlatforms` ("CIS Benchmark and
-CIS Controls assessments and reports", Pro and MSP). The earlier `frameworkExports` feature was
+and CIS reports (`cis-benchmarks`, `cis-controls`) need `baselineAllPlatforms` ("CIS Benchmarks
+assessments, remediation and reports", Pro and MSP; CIS Controls is not offered). The earlier `frameworkExports` feature was
 removed. Enforcement: `requiredFeatures` in `src/main/api/plan-gates.ts`, repeated in
 `authorizeFrameworkTenant` (`src/main/frameworks/native.ts`) when the authorizer reports the plan.
 In the UI, non-CIS export buttons are ordinary buttons and CIS export buttons are `GatedButton`s.
@@ -36,7 +36,7 @@ Backup, drift and audit exports keep their own rules.
 
 ## Limits
 
-- CIS stays disabled on every plan until its commercial-use agreement is signed.
+- CIS Benchmarks is available on Pro and MSP (see [frameworks](../frameworks.md#cis-benchmarks)); CIS Controls stays Coming soon on every plan.
 - Exports cover what the saved result recorded; a result saved before this release exports with
   the same facts, computed from the stored run.
 - Tenant name in a report is a label from the renderer, validated to a short single line.

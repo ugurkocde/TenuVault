@@ -33,7 +33,7 @@ interface Entitlement {
   exp: number
   /** Version 2: license key expiry in Unix seconds, absent for renewing subscriptions. */
   keyExp?: number
-  /** Server-issued internal CIS Benchmarks access for a validated internal license on an allowlisted installation, pre-certification only. */
+  /** Server-issued internal CIS claim for a validated internal license on an allowlisted installation. It enables Build Kit import only. */
   cis?: "internal"
 }
 
@@ -758,6 +758,20 @@ export class LicenseService {
     return this.mutate([tenant], Boolean(this.state?.key || this.keyMutation), () => this.requireCurrent(tenant, options))
   }
 
+  /**
+   * For the rollback of a change set applied while the tenant was licensed (features/recovery.ts):
+   * the tenant's plan, or null when its license ended and Community covers another tenant.
+   * Every other refusal still throws, so a removed tenant or a malformed tenant ID is never used.
+   */
+  async requireRecovery(tenantId: string): Promise<Plan | null> {
+    try {
+      return await this.requireEntitlement(tenantId)
+    } catch (error) {
+      if (error instanceof CommunityLimitError) return null
+      throw error
+    }
+  }
+
   /** Checks explicit tenant use or a new sign-in after an earlier removal. */
   async checkNewTenant(tenantId: string, options: { retry?: boolean } = { retry: true }): Promise<Plan> {
     this.load()
@@ -827,10 +841,15 @@ export class LicenseService {
     return "community"
   }
 
-  /** The tenant's plan as far as it is known without a network call, or null when it is not licensed. */
+  /**
+   * The tenant's plan as far as it is known without a network call, or null when it is not
+   * licensed. A tenant that was removed has no plan, like entitlementToken, even while an
+   * activation it could not release is still stored.
+   */
   plan(tenantId: string): Plan | null {
     this.load()
     const tenant = tenantId.toLowerCase()
+    if (!this.tenantPresent(tenant)) return null
     const payload = this.valid(tenant)
     if (payload) return payload.plan
     return this.options.store.get(COMMUNITY_KEY) === tenant ? "community" : null
@@ -970,7 +989,8 @@ export class LicenseService {
   /**
    * Whether any currently valid entitlement on this machine carries the server-issued
    * internal CIS claim. The licensing service issues the claim only to allowlisted
-   * internal installations, so this is the pre-certification CIS Benchmarks gate.
+   * internal installations. It enables Build Kit import, internal testing tooling;
+   * CIS Benchmarks itself follows the tenant's plan.
    */
   cisInternal(): boolean {
     this.load()

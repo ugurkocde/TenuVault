@@ -1,5 +1,5 @@
 import { backupBeforeWrite } from "../../backup/before-write"
-import type { FeatureDeps } from "../deps"
+import type { FeatureDeps, RecoveryScope } from "../deps"
 import { FeatureError } from "../route"
 
 /** Polling of the pre-change backup. Tests replace `sleep`; nothing else reads real time. */
@@ -15,12 +15,13 @@ const record = (value: unknown): Record<string, unknown> => (value && typeof val
  * Runs a full backup of the tenant through the app's own backup routes and waits for it,
  * like OpenIntuneBaseline deployments. Fails closed: any start, status or result failure throws before a single
  * tenant write, and so does a backup that is not complete for the folders being written.
- * Returns the backup folder, which the change set records.
+ * Returns the backup folder, which the change set records. A rollback passes its recovery
+ * scope, so the backup also runs after the tenant's license ended (features/recovery.ts).
  */
-export async function requirePreChangeBackup(deps: FeatureDeps, tenantId: string, folders: string[]): Promise<string> {
+export async function requirePreChangeBackup(deps: FeatureDeps, tenantId: string, folders: string[], recovery?: RecoveryScope): Promise<string> {
   const post = async (path: string, body: Record<string, unknown>) => {
     try {
-      const response = await deps.api(path, tenantId, body)
+      const response = await (recovery ? deps.api(path, tenantId, body, { recovery }) : deps.api(path, tenantId, body))
       return { ok: response.ok, status: response.status, json: record(await response.json().catch(() => ({}))) }
     } catch (error) {
       return { ok: false, status: 502, json: { error: error instanceof Error ? error.message : String(error) } }

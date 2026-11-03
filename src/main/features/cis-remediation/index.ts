@@ -17,7 +17,7 @@ const hashField = (body: Body, key: string): string => {
   return value
 }
 
-/** /api/cis-remediation. Every action refuses while the internal benchmark flag is off. */
+/** /api/cis-remediation. Actions other than list and get need a plan with CIS Benchmarks (Pro or MSP). */
 export function routes(deps: FeatureDeps): Record<string, RouteModule> {
   return featureRoute("/api/cis-remediation", deps, {
     list: ({ tenantId }) => ({ deployments: listCisRemediations(deps, tenantId) }),

@@ -1,5 +1,6 @@
 import { comparable, rootMatches, type BaselinePolicy, type Finding, type Json, type Observation } from "./policies"
 import { formatRate } from "./cis-readiness"
+import { findingRemediation } from "./cis-certification"
 import { definitionLabel, payloadSettingId, settingNameOf } from "../intune/drift-format"
 import type { SettingNames } from "../intune/drift"
 import { summarizeSetting, type SettingLeaf } from "./setting-summary"
@@ -189,7 +190,7 @@ export interface FindingPolicyGroup {
  * Present findings need nothing, and Review findings need a profile choice first.
  */
 export function isSelectableFinding(finding: Pick<Finding, "status">): boolean {
-  return finding.status === "Different" || finding.status === "Missing"
+  return findingRemediation(finding.status) === "remediable"
 }
 
 /** Keys of the findings that can be remediated: Different and Missing. Present and Review findings are never selected. */

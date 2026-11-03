@@ -5,7 +5,8 @@ import { parseDenominatorList } from "../src/shared/frameworks/cis-coverage"
 import { cisReadiness, coverageSourceLabel, MANUAL_NOT_ASSESSED_NOTE } from "../src/shared/frameworks/cis-readiness"
 import { MANUAL_RECOMMENDATIONS_FALLBACK } from "../src/shared/frameworks/cis-manual"
 import { generateCisReadinessPDF } from "../src/shared/compliance/report-pdf"
-import { handleFramework, setInternalCisBenchmarksEnabled, assessPolicySet, type ExportFile } from "../src/main/frameworks/service"
+import { handleFramework, KIT_IMPORT_REFUSED, setInternalCisBenchmarksEnabled, assessPolicySet, type ExportFile } from "../src/main/frameworks/service"
+import { CIS_CERTIFICATION_HEADLINE, certifiedScopeLines } from "../src/shared/frameworks/cis-certification"
 import { handleNativeFramework, setNativeFrameworkAuthorization, setNativeFrameworkStore } from "../src/main/frameworks/native"
 import { recordAssessment, setFrameworkStore } from "../src/main/frameworks/workspaces"
 import { requiredFeatures } from "../src/main/api/plan-gates"
@@ -102,7 +103,8 @@ describe("CIS readiness PDF report", () => {
     expect(text).toContain("Recommendation pass rate 0%")
     expect(text).toContain("Recommendation results, Level 1")
     // Recommendation, its settings and the result pill are table cells of one row.
-    expect(text).toContain("7.1.2 Synthetic beta recommendation fakebook_setting_beta Missing Fail")
+    // Each recommendation says whether TenuVault can remediate it, from the shared wording.
+    expect(text).toContain("7.1.2 Synthetic beta recommendation Remediation: by TenuVault. Its settings are in the delivered benchmark pack. TenuVault remediates Different and Missing settings with a reviewed deployment. fakebook_setting_beta Missing Fail")
     expect(text).toContain("Passed 0")
     expect(pdfText(generateCisReadinessPDF(cisReadiness(assessment, policies), context))).not.toContain("Recommendation results")
   })
@@ -169,16 +171,27 @@ describe("CIS readiness PDF export through the main process", () => {
     expect(requiredFeatures("/api/frameworks", { action: "workspace-cis-pdf", frameworkId: "custom" })).toEqual([])
   })
 
-  it("refuses the export when the internal flag is off, before any network call", async () => {
+  it("refuses a Build Kit denominator without the internal claim and exports the delivered pack PDF without it", async () => {
     setInternalCisBenchmarksEnabled(false)
-    const fetch = vi.fn()
+    setFrameworkStore(memory().store)
+    setNativeFrameworkAuthorization(async () => "pro")
+    const { policies, assessment } = assessed()
+    recordAssessment(assessment, policies)
+    const fetch = vi.fn(async () => { throw new Error("No network during export") })
     vi.stubGlobal("fetch", fetch)
-    await expect(handleFramework({ action: "workspace-cis-pdf", frameworkId: "cis-benchmarks", tenantId, runId: "run-1" }))
-      .rejects.toMatchObject({ status: 403, message: "CIS comparisons are coming soon." })
+    await expect(handleFramework({ action: "workspace-cis-pdf", frameworkId: "cis-benchmarks", tenantId, runId: "run-1", denominator: JSON.parse(JSON.stringify(denominator())) }))
+      .rejects.toMatchObject({ status: 403, message: KIT_IMPORT_REFUSED })
+    const result = await handleFramework({ action: "workspace-cis-pdf", frameworkId: "cis-benchmarks", tenantId, tenantName: "Contoso", runId: "run-1" }) as { file: ExportFile }
+    const text = pdfText(Buffer.from(result.file.data, "base64"))
+    // The certified scope and the remediation limits are on every CIS readiness report.
+    expect(text).toContain(CIS_CERTIFICATION_HEADLINE)
+    for (const line of certifiedScopeLines()) expect(text.replace(/\s+/g, " ")).toContain(line)
+    expect(text).toContain("Limits of remediation")
+    expect(text).not.toContain("not a certification")
     expect(fetch).not.toHaveBeenCalled()
   })
 
-  it("exports the saved CIS assessment as a PDF when the flag is on, without reading the tenant", async () => {
+  it("exports the saved CIS assessment as a PDF with a Build Kit denominator for the internal claim, without reading the tenant", async () => {
     setInternalCisBenchmarksEnabled(true)
     setFrameworkStore(memory().store)
     setNativeFrameworkAuthorization(async () => "pro")

@@ -284,7 +284,7 @@ export interface AppInfo {
   version: string
   platform: NodeJS.Platform
   trayIconLoaded: boolean
-  /** Internal CIS Benchmarks access from the server-issued license claim, as derived by the main process. Off when absent. */
+  /** The server-issued internal CIS claim, as derived by the main process. It enables Build Kit import only. Off when absent. */
   internalCisBenchmarks?: boolean
 }
 

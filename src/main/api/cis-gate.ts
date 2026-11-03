@@ -1,25 +1,17 @@
 import { CIS_CONTENT_ENTITLEMENT_REQUIRED_MESSAGE } from "../frameworks/cis-content"
 
 /**
- * Host-boundary refusal for CIS routes. It runs before plan resolution so a disabled
- * CIS feature performs no licensing or tenant work and returns its own 403 instead
- * of an upgrade response. CIS content delivery additionally needs a currently valid
- * cached entitlement for the selected tenant; without one it returns 401 here, before
- * plan resolution can trigger a licensing refresh. Route handlers repeat their checks
- * as defense in depth.
+ * Host-boundary refusal for CIS routes. It runs before plan resolution: CIS Controls is
+ * not offered and always answers 403, and CIS content delivery needs a currently valid
+ * cached entitlement for the selected tenant, so without one it answers 401 here, before
+ * plan resolution can trigger a licensing refresh. CIS Benchmarks itself is a Pro and MSP
+ * feature that the plan guard checks next; the delivery service decides which content a
+ * license receives. Route handlers repeat their checks as defense in depth.
  */
-export function cisInternalGuard(
-  internalEnabled: () => boolean,
-  entitlementToken?: (tenantId: string) => string | null,
-) {
+export function cisGuard(entitlementToken?: (tenantId: string) => string | null) {
   return async (request: Request): Promise<Response | null> => {
     if (request.method !== "POST") return null
     const pathname = new URL(request.url).pathname.replace(/\/$/, "")
-    if (pathname === "/api/cis-remediation") {
-      return internalEnabled()
-        ? null
-        : Response.json({ error: "CIS comparisons are coming soon." }, { status: 403 })
-    }
     if (pathname !== "/api/frameworks") return null
 
     let body: unknown
@@ -32,9 +24,6 @@ export function cisInternalGuard(
     const frameworkId = record?.frameworkId
     if (frameworkId === "cis-controls") {
       return Response.json({ error: "CIS Controls are coming soon." }, { status: 403 })
-    }
-    if (frameworkId === "cis-benchmarks" && !internalEnabled()) {
-      return Response.json({ error: "CIS comparisons are coming soon." }, { status: 403 })
     }
     const action = record?.action
     if (frameworkId === "cis-benchmarks" && (action === "cis-catalog" || action === "cis-fetch-pack")) {

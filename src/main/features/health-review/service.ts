@@ -177,7 +177,7 @@ const SIGNAL_PROVIDERS: Array<{ feature: Feature; provider: SignalProvider; sour
   { feature: "goldenStandards", provider: (deps, tenantId) => standardSignals(deps, tenantId), source: { label: "standards", link: "/portal/governance/standards" } },
   { feature: "hygieneExplorer", provider: hygieneSignals, source: { label: "conflicts and hygiene", link: "/portal/governance/hygiene" } },
   { feature: "baselineScores", provider: scoreSignals, source: { label: "baseline scores", link: "/portal/governance/scores" } },
-  { feature: "baselineScores", provider: (_deps, tenantId) => cisSignals(tenantId), source: { label: "CIS Benchmarks", link: "/portal/frameworks/cis-benchmarks" } },
+  { feature: "baselineAllPlatforms", provider: (_deps, tenantId) => cisSignals(tenantId), source: { label: "CIS Benchmarks", link: "/portal/frameworks/cis-benchmarks" } },
 ]
 
 /** The license could not be read, so no provider ran. */

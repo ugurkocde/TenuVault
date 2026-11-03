@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { frameworks } from "../src/shared/frameworks/catalog"
-import { effectiveFrameworks, internalKitImportEnabled } from "../src/shared/frameworks/cis-internal"
+import { internalKitImportEnabled, navigationFrameworks } from "../src/shared/frameworks/cis-internal"
 import { convertKit, type KitFile } from "../src/shared/frameworks/cis-kit"
 import { parseDenominatorList } from "../src/shared/frameworks/cis-coverage"
 import { cisReadiness, MANUAL_NOT_ASSESSED_NOTE } from "../src/shared/frameworks/cis-readiness"
 import { cisReadinessCsv, cisReadinessJson, governanceExportName } from "../src/renderer/features/shared/governance-export"
-import { handleFramework, setInternalCisBenchmarksEnabled, setInternalCisBenchmarksProvider, assessPolicySet } from "../src/main/frameworks/service"
+import { handleFramework, internalCisBenchmarksEnabled, KIT_IMPORT_REFUSED, setInternalCisBenchmarksEnabled, setInternalCisBenchmarksProvider, assessPolicySet } from "../src/main/frameworks/service"
 import { loadWorkspace, saveWorkspace, setFrameworkStore } from "../src/main/frameworks/workspaces"
 import { parsePolicies } from "../src/shared/frameworks/policies"
+import { CIS_POLICIES_NOT_DELIVERED } from "../src/main/frameworks/cis-delivered"
 
 const type = "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance"
 const policy = (name: string, description: string, settingId = "fakebook_setting_alpha") => JSON.stringify({
@@ -26,63 +27,62 @@ const kitFiles: KitFile[] = [
 beforeEach(() => { setInternalCisBenchmarksEnabled(null); setInternalCisBenchmarksProvider(null) })
 afterEach(() => { setInternalCisBenchmarksEnabled(null); setInternalCisBenchmarksProvider(null); vi.unstubAllGlobals() })
 
-describe("internal CIS Benchmarks flag", () => {
-  it("is off by default, ignores the legacy environment variable, and follows the server-issued provider", async () => {
+describe("CIS Benchmarks availability", () => {
+  it("binds Build Kit import to the internal claim only, ignoring the legacy environment variable", async () => {
     expect(internalKitImportEnabled(false)).toBe(false)
     expect(internalKitImportEnabled(true)).toBe(true)
     process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS = "1"
     try {
-      await expect(handleFramework({ action: "workspace-load", frameworkId: "cis-benchmarks", tenantId }))
-        .rejects.toMatchObject({ status: 403, message: "CIS comparisons are coming soon." })
-      setInternalCisBenchmarksProvider(() => true)
       const data = new Map<string, string>()
       setFrameworkStore({ get: k => data.get(k) ?? null, set: (k, v) => { data.set(k, v) }, delete: k => { data.delete(k) } })
+      // CIS Benchmarks no longer depends on the claim: the plan guard and the delivery service gate it.
       await expect(handleFramework({ action: "workspace-load", frameworkId: "cis-benchmarks", tenantId }))
         .resolves.toMatchObject({ frameworkId: "cis-benchmarks" })
+      // A Build Kit recommendation list still needs the claim, which the environment cannot grant.
+      await expect(handleFramework({ action: "workspace-save", frameworkId: "cis-benchmarks", tenantId, reference: "r1", policies: [], recommendationList: { benchmark: "fakebook-os", version: "9.9.9", items: [] } }))
+        .rejects.toMatchObject({ status: 403, message: KIT_IMPORT_REFUSED })
       setInternalCisBenchmarksProvider(() => { throw new Error("license unavailable") })
-      await expect(handleFramework({ action: "workspace-load", frameworkId: "cis-benchmarks", tenantId }))
-        .rejects.toMatchObject({ status: 403, message: "CIS comparisons are coming soon." })
+      expect(internalCisBenchmarksEnabled()).toBe(false)
+      setInternalCisBenchmarksProvider(() => true)
+      expect(internalCisBenchmarksEnabled()).toBe(true)
     } finally {
       delete process.env.TENUVAULT_INTERNAL_CIS_BENCHMARKS
       setInternalCisBenchmarksProvider(null)
     }
   })
 
-  it("keeps the catalog disabled with the existing reason when off, and enables only CIS Benchmarks when on", () => {
-    const off = effectiveFrameworks(false).find(f => f.id === "cis-benchmarks")!
-    expect(off.disabledReason).toBe("CIS comparisons are coming soon.")
-    expect(off.disabledReason).toBe(frameworks.find(f => f.id === "cis-benchmarks")!.disabledReason)
-    const on = effectiveFrameworks(true)
-    expect(on.find(f => f.id === "cis-benchmarks")!.disabledReason).toBeUndefined()
-    expect(on.find(f => f.id === "cis-controls")!.disabledReason).toBe("CIS comparisons are coming soon.")
+  it("shows CIS Benchmarks without a Coming soon reason and keeps CIS Controls Coming soon", () => {
+    expect(frameworks.find(f => f.id === "cis-benchmarks")!.disabledReason).toBeUndefined()
+    expect(frameworks.find(f => f.id === "cis-controls")!.disabledReason).toBe("CIS comparisons are coming soon.")
+    expect(navigationFrameworks().map(f => f.id)).not.toContain("cis-benchmarks")
+    expect(navigationFrameworks().map(f => f.id)).toContain("cis-controls")
   })
 
-  it("refuses CIS Benchmarks actions when off, before any network call", async () => {
-    setInternalCisBenchmarksEnabled(false)
+  it("still refuses CIS Controls before any network call", async () => {
     const fetch = vi.fn()
     vi.stubGlobal("fetch", fetch)
     for (const action of ["workspace-load", "workspace-save", "assess"]) {
-      await expect(handleFramework({ action, frameworkId: "cis-benchmarks", tenantId, appId, reference: "r1", policies: [] }))
+      await expect(handleFramework({ action, frameworkId: "cis-controls", tenantId, appId, reference: "r1", policies: [] }))
         .rejects.toMatchObject({ status: 403, message: "CIS comparisons are coming soon." })
     }
-    await expect(handleFramework({ action: "workspace-load", frameworkId: "cis-controls", tenantId }))
-      .rejects.toMatchObject({ status: 403, message: "CIS comparisons are coming soon." })
     expect(fetch).not.toHaveBeenCalled()
   })
 
-  it("assesses a synthetic pack when on and refuses policy creation from it", async () => {
-    setInternalCisBenchmarksEnabled(true)
+  it("assesses a synthetic pack and refuses policy creation from it", async () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string) => url.includes("oauth2") ? Response.json({ access_token: "test" }) : Response.json({ value: [] })))
     const converted = convertKit(kitFiles, { id: "fakebook-os", version: "9.9.9" })
     const pack = converted.packs.find(item => item.level === 1)!
+    // A Build Kit conversion was not delivered by the service: only the internal claim may assess it.
+    await expect(handleFramework({ action: "assess", frameworkId: "cis-benchmarks", tenantId, appId, reference: pack.reference, policies: JSON.parse(JSON.stringify(pack.policies)) }))
+      .rejects.toMatchObject({ status: 403, message: CIS_POLICIES_NOT_DELIVERED })
+    setInternalCisBenchmarksEnabled(true)
     const result = await handleFramework({ action: "assess", frameworkId: "cis-benchmarks", tenantId, appId, reference: pack.reference, policies: JSON.parse(JSON.stringify(pack.policies)) }) as { runId: string; findings: unknown[] }
     expect(result.findings).toHaveLength(2)
     await expect(handleFramework({ action: "create", tenantId, appId, runId: result.runId, keys: ["0:0"], confirmUnassigned: true }))
       .rejects.toMatchObject({ status: 403 })
   })
 
-  it("allows a CIS Benchmarks workspace load when on, and still refuses CIS Controls", async () => {
-    setInternalCisBenchmarksEnabled(true)
+  it("allows a CIS Benchmarks workspace load and still refuses CIS Controls", async () => {
     const data = new Map<string, string>()
     setFrameworkStore({ get: k => data.get(k) ?? null, set: (k, v) => { data.set(k, v) }, delete: k => { data.delete(k) } })
     await expect(handleFramework({ action: "workspace-load", tenantId, frameworkId: "cis-benchmarks" })).resolves.toMatchObject({ frameworkId: "cis-benchmarks" })

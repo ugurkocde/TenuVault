@@ -191,13 +191,13 @@ describe("CIS catalog session cache", () => {
     expect(cachedCisCatalog("bbbb")).toEqual([])
   })
 
-  it("clears every cached catalog when internal CIS access is revoked", async () => {
+  it("keeps cached catalogs when the internal claim changes, because CIS Benchmarks does not depend on it", async () => {
     let internal = true
     appInfo.mockImplementation(async () => ({ version: "0", platform: "darwin", trayIconLoaded: false, internalCisBenchmarks: internal }))
     await refreshInternalCisBenchmarks()
     rememberCisCatalog("aaaa", catalog)
     internal = false
     await refreshInternalCisBenchmarks()
-    expect(cachedCisCatalog("aaaa")).toBeNull()
+    expect(cachedCisCatalog("aaaa")).toEqual(catalog)
   })
 })

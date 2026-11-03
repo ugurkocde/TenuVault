@@ -8,12 +8,11 @@ import type { Tenant } from "~/contexts/TenantContext"
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
-const failing = vi.hoisted(() => ({ summary: vi.fn(), detail: vi.fn() }))
+const failing = vi.hoisted(() => ({ summary: vi.fn(), detail: vi.fn(), cis: vi.fn() }))
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: {} }))
-vi.mock("../../src/renderer/lib/internal-cis", () => ({ useInternalCisBenchmarks: () => false }))
 vi.mock("~/contexts/TenantContext", () => ({ useTenants: () => [] }))
 vi.mock("../../src/renderer/lib/license", () => ({ useLicense: () => ({ status: null }), tenantLicense: () => undefined, tenantPlan: () => null }))
-vi.mock("../../src/renderer/features/scores/api", async (original) => ({ ...(await original<object>()), loadSummary: failing.summary, loadDetail: failing.detail }))
+vi.mock("../../src/renderer/features/scores/api", async (original) => ({ ...(await original<object>()), loadSummary: failing.summary, loadDetail: failing.detail, loadCisWorkspace: failing.cis }))
 
 import ScoresTab from "../../src/renderer/features/scores/ScoresTab"
 import { ScoreDetail } from "../../src/renderer/features/scores/ScoreDetail"
@@ -55,9 +54,12 @@ const cachedScore = {
 describe("a failed refresh never shows old results as current", () => {
   it("hides cached scores and disables the export behind the error with Retry", async () => {
     failing.summary.mockRejectedValue(new Error("Scores could not be read (500)."))
+    // Pro includes CIS Benchmarks cards, so the tab also reads the CIS workspace; it holds no assessment here.
+    failing.cis.mockResolvedValue({ version: 1, tenantId: TENANT, frameworkId: "cis-benchmarks", policies: [], reference: "", updatedAt: "", history: [] })
     const client = clientWithCache(["scores-summary", TENANT], { tenantId: TENANT, tenantName: "Contoso", formula: "F", staleAfterDays: 30, scoringChanged: false, frameworks: [cachedScore] })
     const view = await render(client, createElement(ScoresTab, { tenant, plan: "pro", allowed: true }))
     expect(failing.summary).toHaveBeenCalled()
+    expect(failing.cis).toHaveBeenCalledWith(TENANT)
     expect(view.textContent).toContain("Scores could not be read (500).")
     expect(view.textContent).toContain("Retry")
     expect(view.textContent).not.toContain("Cached ISO card")

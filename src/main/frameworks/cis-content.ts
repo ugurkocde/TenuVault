@@ -11,6 +11,10 @@ const CIS_CONTENT_INVALID_BASE_URL_MESSAGE = "The CIS content delivery service b
 const CIS_CONTENT_UNREACHABLE_MESSAGE = "The CIS content delivery service could not be reached."
 const CIS_CONTENT_INVALID_RESPONSE_MESSAGE = "The CIS content delivery service returned an invalid response."
 export const CIS_CONTENT_ENTITLEMENT_REQUIRED_MESSAGE = "CIS benchmark delivery requires a current license entitlement for this tenant."
+/** The delivery service refused this license, for example before CIS content is released to it. */
+export const CIS_CONTENT_NOT_AVAILABLE_MESSAGE = "CIS Benchmarks content is not available for this license yet."
+/** The delivery service is switched off or temporarily unavailable. */
+export const CIS_CONTENT_DELIVERY_UNAVAILABLE_MESSAGE = "CIS Benchmarks content delivery is unavailable right now. Try again later."
 
 let fallbackBaseUrl: string | null = null
 /** Bootstrap hook: the license API origin injected at build time, used when the env override is unset. */
@@ -116,6 +120,8 @@ async function fetchJson(url: string, maxBytes: number, entitlementToken: string
   if (response.status >= 300 && response.status < 400) {
     throw new CisContentError(`The CIS content delivery service returned ${response.status}.`, response.status)
   }
+  if (response.status === 403) throw new CisContentError(CIS_CONTENT_NOT_AVAILABLE_MESSAGE, 403)
+  if (response.status === 503) throw new CisContentError(CIS_CONTENT_DELIVERY_UNAVAILABLE_MESSAGE, 503)
   if (!response.ok) throw new CisContentError(`The CIS content delivery service returned ${response.status}.`, response.status)
   const text = await readBodyWithCap(response, maxBytes)
   try {

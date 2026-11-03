@@ -14,6 +14,25 @@ import { clearCisSettingNames, loadCisSettingNames, MAX_NAME_ATTEMPTS, MAX_NAMED
 import type { SettingNames } from "../src/shared/intune/drift"
 import type { BaselinePolicy } from "../src/shared/frameworks/policies"
 import { diffConfigurations } from "../src/main/features/change-sets/model"
+import { CIS_CERTIFICATION_STATEMENT, CIS_REMEDIATION_LIMITS, CIS_TENANT_NOT_CERTIFIED_NOTE } from "../src/shared/frameworks/cis-certification"
+import { MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDATIONS_URL } from "../src/shared/frameworks/cis-manual"
+
+/** The cells of one CSV line, with quoted cells unquoted. */
+function csvCells(line: string): string[] {
+  const cells: string[] = []
+  let cell = "", quoted = false
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index]!
+    if (quoted) {
+      if (char === '"' && line[index + 1] === '"') { cell += '"'; index += 1 }
+      else if (char === '"') quoted = false
+      else cell += char
+    } else if (char === '"') quoted = true
+    else if (char === ",") { cells.push(cell); cell = "" }
+    else cell += char
+  }
+  return [...cells, cell]
+}
 import { typeForFolder, type Item } from "../src/shared/intune/registry"
 import { prepareGeneratedFile, prepareSaveFile, SAVE_FILE_LIMIT } from "../src/main/save-file"
 import { changeSetCreator } from "../src/renderer/features/shared/ChangeSetFlow"
@@ -103,15 +122,24 @@ describe("CIS main process actions", () => {
     return assessment
   }
 
-  it("exports findings CSV with its header on line 1 and a readable file name", async () => {
+  it("exports findings CSV with the CIS disclosures above a parseable table and a readable file name", async () => {
     record()
     const { file } = await handleFramework({ action: "workspace-csv", frameworkId: "cis-benchmarks", tenantId, tenantName: "Contoso", runId: "run-polish" }) as { file: ExportFile }
     expect(file.name).toBe(`CIS Microsoft Intune for Windows 11 5.0.0 L1 findings (Contoso) ${localDate()}.csv`)
     const lines = file.data.replace(/^﻿/, "").split("\r\n")
-    expect(lines[0]).toBe("Pack policy,Setting,Status,Recommended,Observed policies,Observed values,Assignment evidence,Tenant,Profile,Assessed,Exported,Run")
-    expect(lines[1]).toContain(`Synthetic policy,${ENCRYPTION},Missing,`)
-    expect(lines[1]).toContain("Contoso (11111111-1111-1111-1111-111111111111),intune-windows11 5.0.0 Level 1,2026-10-10T12:00:00.000Z,")
-    expect(lines).toHaveLength(3)
+    // The preamble: the unchanged CIS notice with its link, the certified scope and every limit of remediation.
+    const blank = lines.indexOf("")
+    const preamble = lines.slice(0, blank).map(csvCells)
+    expect(preamble[0]).toEqual(["Notice", `${MANUAL_RECOMMENDATIONS_FALLBACK} ${MANUAL_RECOMMENDATIONS_URL}`])
+    expect(preamble[1]).toEqual(["Certification", `${CIS_CERTIFICATION_STATEMENT} ${CIS_TENANT_NOT_CERTIFIED_NOTE}`])
+    expect(preamble.slice(2)).toEqual(CIS_REMEDIATION_LIMITS.map(line => ["Remediation limit", line]))
+    // The table starts on the row after the first empty one.
+    const table = lines.slice(blank + 1)
+    expect(table[0]).toBe("Pack policy,Setting,Status,Recommended,Observed policies,Observed values,Assignment evidence,Tenant,Profile,Assessed,Exported,Run,Remediation capability")
+    expect(table[1]).toContain(`Synthetic policy,${ENCRYPTION},Missing,`)
+    expect(table[1]).toContain("Contoso (11111111-1111-1111-1111-111111111111),intune-windows11 5.0.0 Level 1,2026-10-10T12:00:00.000Z,")
+    expect(table[1]).toMatch(/,Remediation: by TenuVault\. TenuVault can remediate this setting with a reviewed deployment\.$/)
+    expect(table).toHaveLength(3)
     const json = await handleFramework({ action: "workspace-json", frameworkId: "cis-benchmarks", tenantId, tenantName: "Contoso" }) as { file: ExportFile }
     expect(json.file.name).toBe(`CIS Benchmarks saved assessments (Contoso) ${localDate()}.json`)
     // Other frameworks keep the report header above the table.
@@ -157,8 +185,7 @@ describe("CIS main process actions", () => {
       { id: "1", method: "GET", url: "/deviceManagement/configurationSettings/unknown_setting" },
     ])
     await expect(handleFramework({ action: "cis-setting-names", frameworkId: "ncsc-dsg", tenantId, appId, ids: [ENCRYPTION] })).rejects.toMatchObject({ status: 400 })
-    setInternalCisBenchmarksEnabled(false)
-    await expect(handleFramework({ action: "cis-setting-names", frameworkId: "cis-benchmarks", tenantId, appId, ids: [ENCRYPTION] })).rejects.toMatchObject({ status: 403 })
+    await expect(handleFramework({ action: "cis-setting-names", frameworkId: "cis-controls", tenantId, appId, ids: [ENCRYPTION] })).rejects.toMatchObject({ status: 403 })
   })
 })
 

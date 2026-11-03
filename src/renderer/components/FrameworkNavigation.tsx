@@ -3,14 +3,13 @@ import { Link, NavLink, useLocation } from "react-router-dom"
 import { ChevronDown, LoaderCircle, ShieldCheck } from "lucide-react"
 import { isCisBenchmarksPath, navigationFrameworks } from "../../shared/frameworks/cis-internal"
 import { useFrameworkJobs } from "../lib/framework-jobs"
-import { useInternalCisBenchmarks } from "../lib/internal-cis"
 
 /**
  * Frameworks opens the catalog overview and lists every framework by name beneath it.
  * The chevron only folds the list away.
  */
 export function FrameworkNavigation() {
-  const catalog = navigationFrameworks(useInternalCisBenchmarks())
+  const catalog = navigationFrameworks()
   const { pathname } = useLocation()
   const active = !isCisBenchmarksPath(pathname) && (pathname.startsWith("/portal/frameworks") || pathname.startsWith("/portal/baselines"))
   const [open, setOpen] = useState(active)
