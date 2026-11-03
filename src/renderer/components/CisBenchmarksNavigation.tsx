@@ -1,56 +1,33 @@
-import { useState } from "react"
 import { Link, useLocation } from "react-router-dom"
 import { ListChecks } from "lucide-react"
 import { CIS_BENCHMARKS_ROUTE, isCisBenchmarksPath } from "../../shared/frameworks/cis-internal"
-import { allows, upgradeMessage } from "../../shared/plans"
-import { tenantLicense, tenantPlan, useLicense } from "../lib/license"
+import { allows } from "../../shared/plans"
+import { useSelectedTenantPlan } from "../lib/selected-plan"
 import { useSelectedTenant } from "~/contexts/TenantContext"
-import { cn } from "~/lib/utils"
-import { UpgradeDialog } from "./PlanGate"
 import { PlanBadge } from "./UpgradeNote"
 
 /**
- * Top-level CIS Benchmarks entry. It follows the plan of the currently selected tenant, the
- * same tenant whose plan the CIS page and the main process use: plans that include CIS
- * Benchmarks (Pro or MSP) get the normal link, other plans get a muted entry with the plan
- * badge that explains the plan instead of navigating. When no signed-in tenant is selected it
- * falls back to the machine plan. Until the plan is known, while the license status loads or
- * before it lists the selected tenant, the normal link shows, so an entitled tenant never
- * flashes the upgrade state. The page and the main process check the plan.
+ * Top-level CIS Benchmarks entry. It always opens the CIS page; the page shows a plan without CIS
+ * Benchmarks what Pro and MSP add. It follows the plan of the currently selected tenant, the same
+ * tenant whose plan the CIS page and the main process use: plans that do not include CIS
+ * Benchmarks (Pro or MSP) see the plan badge next to the entry. When no signed-in tenant is
+ * selected it falls back to the machine plan. Until the plan is known, while the license status
+ * loads or before it lists the selected tenant, no badge shows, so an entitled tenant never
+ * flashes it. It resolves the plan with `selectedTenantPlan`, the same helper the CIS page uses. The
+ * page and the main process check the plan.
  */
 export function CisBenchmarksNavigation({ linkClass }: { linkClass: (active: boolean) => string }) {
   const { pathname } = useLocation()
-  const { status } = useLicense()
   const { selectedTenant } = useSelectedTenant()
-  const tenantId = selectedTenant?.credentials?.tenantId
-  const license = tenantLicense(status, tenantId)
-  const [explaining, setExplaining] = useState(false)
-  // A selected tenant that is not signed in has no license entry to wait for: the account plan applies.
-  const unresolved = !status || (!!tenantId && !license)
-  const plan = !status ? null : tenantId ? tenantPlan(license) : status.plan
-  if (unresolved || (plan !== null && allows(plan, "baselineAllPlatforms"))) {
-    const active = isCisBenchmarksPath(pathname)
-    return (
-      <Link to={CIS_BENCHMARKS_ROUTE} aria-current={active ? "page" : undefined} className={linkClass(active)}>
-        <ListChecks className="h-[18px] w-[18px]" aria-hidden="true" />
-        <span className="truncate">CIS Benchmarks</span>
-      </Link>
-    )
-  }
+  // The same plan the CIS page explains; undefined while it is not known yet.
+  const plan = useSelectedTenantPlan(selectedTenant?.credentials?.tenantId)
+  const badge = plan !== undefined && (plan === null || !allows(plan, "baselineAllPlatforms"))
+  const active = isCisBenchmarksPath(pathname)
   return (
-    <>
-      <button
-        type="button"
-        aria-disabled="true"
-        title={upgradeMessage("baselineAllPlatforms")}
-        className={cn(linkClass(false), "w-full cursor-not-allowed opacity-60")}
-        onClick={() => setExplaining(true)}
-      >
-        <ListChecks className="h-[18px] w-[18px]" aria-hidden="true" />
-        <span className="truncate">CIS Benchmarks</span>
-        <PlanBadge feature="baselineAllPlatforms" className="ml-auto" />
-      </button>
-      <UpgradeDialog feature="baselineAllPlatforms" open={explaining} onOpenChange={setExplaining} />
-    </>
+    <Link to={CIS_BENCHMARKS_ROUTE} aria-current={active ? "page" : undefined} className={linkClass(active)}>
+      <ListChecks className="h-[18px] w-[18px]" aria-hidden="true" />
+      <span className="truncate">CIS Benchmarks</span>
+      {badge && <PlanBadge feature="baselineAllPlatforms" className="ml-auto" />}
+    </Link>
   )
 }

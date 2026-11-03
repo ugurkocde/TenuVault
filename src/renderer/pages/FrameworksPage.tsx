@@ -36,11 +36,13 @@ import { CIS_FRAMEWORKS, upgradeMessage, type Plan } from "../../shared/plans"
 import type { AssessJobSnapshot, ExportFile } from "../../main/frameworks/service"
 import type { NcscPack } from "../../main/frameworks/ncsc"
 import { tenantLicense, tenantPlan, useLicense, useTenantPlan } from "../lib/license"
+import { useSelectedTenantPlan } from "../lib/selected-plan"
 import { RunOverlay } from "../components/RunOverlay"
 import { CisRemediationPanel } from "../features/cis-remediation/CisRemediationPanel"
 import { CisRemediationLimits } from "../features/cis-remediation/CisRemediationLimits"
 import { CisRemediationHistory } from "../features/cis-remediation/CisRemediationHistory"
-import { canUse, GatedButton, LockedPreview } from "../components/PlanGate"
+import { canUse, GatedButton } from "../components/PlanGate"
+import { CisBenchmarksPreview } from "../features/cis-preview/CisBenchmarksPreview"
 import { FilterChips, FilterSelect, SearchInput } from "../components/FilterControls"
 import { filterFindings, findingLevels, findingSearchText, hiddenSelectedKeys, NO_FINDING_FILTER, type FindingFilter } from "../../shared/frameworks/finding-filter"
 import { useConfirm } from "~/components/ConfirmDialog"
@@ -481,12 +483,23 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
   const comparing = compareTask?.status === "running"
   // Reports of licensed CIS content are Pro and MSP; the main process checks the same plan.
   const plan = useTenantPlan(credentials?.tenantId)
-  // CIS Benchmarks is Pro and MSP. A known plan without it shows the plan preview instead of the
-  // benchmark picker; saved assessments from an earlier plan stay readable.
-  const cisLocked = isCis && plan !== null && !canUse(plan, "baselineAllPlatforms")
-  // CIS work (catalog, pack loads, runs) starts only once the plan is known to include CIS Benchmarks,
-  // so an unresolved plan sends nothing the main process would refuse, and a later plan change is followed.
+  // The plan the page explains, shared with the sidebar entry: the signed-in tenant's own plan, or the
+  // machine plan when no signed-in tenant is selected; undefined while it is not known yet.
+  const selectedPlan = useSelectedTenantPlan(credentials?.tenantId)
+  // CIS work (catalog, pack loads, runs) starts only once the signed-in tenant's plan is known to include
+  // CIS Benchmarks, so an unresolved plan sends nothing the main process would refuse, and a later plan
+  // change is followed.
   const cisAllowed = isCis && canUse(plan, "baselineAllPlatforms")
+  // Until the plan is known, neither the picker nor the preview shows, so a Pro tenant never sees the preview flash.
+  const cisPlanPending = isCis && !cisAllowed && selectedPlan === undefined
+  // CIS Benchmarks is Pro and MSP. A plan without it (Community, no license, or a tenant whose plan
+  // cannot be used) shows no benchmark picker; saved assessments from an earlier plan stay readable.
+  const cisLocked = isCis && !cisAllowed && selectedPlan !== undefined && !canUse(selectedPlan, "baselineAllPlatforms")
+  // A machine plan with CIS Benchmarks but no signed-in tenant: the page asks for a sign-in, not a plan.
+  const cisNeedsSignIn = isCis && !cisAllowed && !cisPlanPending && !cisLocked
+  // Where a new assessment would start, such a page shows the preview of what Pro and MSP add; saved
+  // results keep their read-only view, and nothing replaces the note while saved results load.
+  const cisPreview = cisLocked && contentStage === "setup"
   const { confirm, confirmDialog } = useConfirm()
   // CIS exports open the Save dialog like the Governance exports; the notice shows next to the button used.
   const [exportOrigin, setExportOrigin] = useState<ExportOrigin>("header")
@@ -976,7 +989,7 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
       <div><p className="text-xs uppercase tracking-widest text-gray-500">{framework.publisher} · {framework.kind}</p><h1 className={standalone ? "mt-2 text-4xl font-light tracking-tight text-gray-900" : "mt-2 text-3xl font-semibold tracking-tight text-gray-950"}>{framework.name}</h1><p className="mt-2 text-gray-600">{framework.description}</p></div>
       {framework.source && <a href={framework.source} target="_blank" rel="noreferrer" className={button}>Source <ExternalLink className="h-4 w-4" aria-hidden="true" /></a>}
     </div>
-    {isCis && <CisCertificationNote />}
+    {isCis && (cisPreview ? <CisBenchmarksPreview className="mt-5" /> : <CisCertificationNote />)}
     {isCis && <nav aria-label="CIS Benchmarks progress" className="mt-6">
       <ol className="flex flex-wrap gap-2">
         {cisFlowSteps(policies.length > 0, !!assessment, !!cisRun).map(item => {
@@ -1013,8 +1026,8 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
         <CisExportMenu plan={plan} disabled={!!busy} readinessDisabled={!readiness} onPdf={exportCisPdf} onFindingsCsv={() => exportSaved("csv", assessment.runId)} onFindingsJson={() => exportSaved("json", assessment.runId)} onReadinessCsv={() => exportReadiness("csv")} onReadinessJson={() => exportReadiness("json")} />
       </div>
       {/* Why Run again is unavailable, in words, not only in a hover title. */}
-      {!cisRun && cisLocked && <p className="w-full text-sm text-amber-800">{upgradeMessage("baselineAllPlatforms")} Saved results stay readable.</p>}
-      {!cisRun && !cisLocked && (!credentials || historyFull) && <p className="w-full text-sm text-amber-800">{!credentials ? `Run again needs a signed-in tenant. Sign in to ${selectedTenant?.name ?? "the selected tenant"} from the sidebar.` : "Run again is unavailable while the saved assessment history is full. Remove older assessments below first."}</p>}
+      {!cisRun && credentials && cisLocked && <p className="w-full text-sm text-amber-800">{upgradeMessage("baselineAllPlatforms")} Saved results stay readable.</p>}
+      {!cisRun && (!credentials || (!cisLocked && historyFull)) && <p className="w-full text-sm text-amber-800">{!credentials ? `Run again needs a signed-in tenant. Sign in to ${selectedTenant?.name ?? "the selected tenant"} from the sidebar.` : "Run again is unavailable while the saved assessment history is full. Remove older assessments below first."}</p>}
       {outOfDate && <div role="status" aria-label="Results out of date" className="flex w-full flex-wrap items-center justify-between gap-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950">
         <span>Out of date: changes were applied at {formatLocaleDateTime(appliedAt!)}. Run again to verify.</span>
         <button type="button" className={button} disabled={!!busy || !!cisRun || !cisAllowed || !credentials || !policies.length || !reference.trim() || historyFull} onClick={startCisAssessment}>Run again</button>
@@ -1038,12 +1051,13 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     {(!isCis || contentStage === "setup") && savedBlock}
     {framework.id === CIS_BENCHMARKS_ID && contentStage === "setup" && <details className="mb-5"><summary className="inline-flex h-10 cursor-pointer list-none items-center justify-center gap-2 rounded-full border border-gray-200 bg-white px-5 text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50 [&::-webkit-details-marker]:hidden">Portfolio</summary><div className="mt-3"><CisPortfolio plan={plan} selectedTenantId={credentials?.tenantId} /></div></details>}
     {isCis && contentStage === "setup" && <section aria-labelledby="cis-delivered-title" className="mb-5 rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
-      <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="cis-delivered-title" className="text-xl font-medium tracking-tight">1. Load benchmark</h2><span className="text-sm text-gray-500">{cisCatalog ? `${cisCatalog.length} benchmarks available` : "Delivery service"}</span></div>
+      <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="cis-delivered-title" className="text-xl font-medium tracking-tight">1. Load benchmark</h2><span className="text-sm text-gray-500">{cisAllowed && cisCatalog ? `${cisCatalog.length} benchmarks available` : "Delivery service"}</span></div>
       <p className="mt-2 text-sm text-gray-600">Load a benchmark pack from the TenuVault delivery service. The pack is saved in encrypted storage on this device for the selected tenant.</p>
       {policies.length > 0 && reference && <p className="mt-2 text-sm text-gray-800">Loaded: {referenceDisplayName(reference, packBenchmarkName(policies))}, {policies.length} {policies.length === 1 ? "policy" : "policies"}. Compare it with the tenant in step 2.</p>}
-      {cisLocked && <LockedPreview feature="baselineAllPlatforms" className="mt-4 bg-secondary/40 shadow-none" summary="Load CIS Benchmark packs from the TenuVault delivery service, assess your tenant per Level, remediate deviating settings with review, backup and rollback, and export readiness reports." points={["Benchmark packs and recommendation lists are delivered to licensed installations and stored encrypted on this device.", "Readiness per Level with Manual and Not assessed recommendations listed for manual action.", "PDF, CSV and JSON exports of findings and readiness."]} />}
-      {!cisLocked && <>
-      {!credentials && <p className="mt-3 text-sm text-amber-800">Sign in to {selectedTenant?.name ?? "a tenant"} from the sidebar to load benchmarks and run an assessment.</p>}
+      {cisLocked && <p className="mt-3 text-sm text-gray-600">Benchmark packs are delivered to tenants on TenuVault Pro and MSP, as described at the top of this page.</p>}
+      {cisPlanPending && <p role="status" className="mt-3 text-sm text-gray-500">Checking the plan of the selected tenant…</p>}
+      {cisNeedsSignIn && <p className="mt-3 text-sm text-amber-800">{selectedTenant ? `Sign in to ${selectedTenant.name} from the sidebar to load benchmarks and run an assessment.` : "Select a tenant in the sidebar and sign in to load benchmarks and run an assessment."}</p>}
+      {cisAllowed && <>
       <div className="mt-4 flex flex-wrap items-center gap-3"><button type="button" className={button} disabled={!!busy || cisCatalogLoading || !cisAllowed || !credentials} onClick={() => void loadCisCatalog()}>{cisCatalogLoading ? "Loading available benchmarks…" : "Refresh available benchmarks"}</button>
         {cisCatalogLoading && <span role="status" className="text-sm text-blue-700">{cisCatalog ? "Checking for updated benchmarks…" : "Loading available benchmarks…"}</span>}</div>
       {cisCatalogMessage && <p role="alert" className="mt-4 flex flex-wrap items-center gap-2 rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900"><span>{cisCatalogMessage}{cisCatalog?.length ? " The benchmarks listed below were loaded earlier." : ""}</span><button type="button" className="font-medium text-blue-700 hover:underline disabled:opacity-50" disabled={cisCatalogLoading || !credentials} onClick={() => void loadCisCatalog()}>Retry</button></p>}
