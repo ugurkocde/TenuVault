@@ -108,7 +108,7 @@ export function CisBenchmarksPreview({ className }: { className?: string }) {
           {sample.saving ? "Preparing sample report" : "View sample report"}
         </Button>
       </div>
-      <p className="mt-3 text-sm text-gray-500">The sample report is a PDF with a fictional tenant, fictional results and placeholder recommendations, saved where you choose. Every plan can open it.</p>
+      <p className="mt-3 text-sm text-gray-500">The sample report is a PDF with a fictional tenant, fictional results and placeholder recommendations, saved where you choose. No license is needed to open it.</p>
       <Notice result={sample.result} onDismiss={sample.clear} className="mt-3" />
     </section>
   )
