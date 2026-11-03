@@ -953,9 +953,12 @@ function FrameworkDetail({ framework, standalone = false, kitImport = false }: {
     <p className="mt-1">The pack and saved assessments stored on this device for this tenant are damaged or come from an unsupported version, so nothing can be loaded, compared or saved. Reset the workspace to start again with an empty one.</p>
     <button type="button" className={cn(button, "mt-3")} disabled={!!busy} onClick={async () => { if (await confirm({ title: "Reset workspace?", description: "This deletes the unreadable saved workspace, including its saved pack and assessment history, and starts an empty one. This cannot be undone.", confirmLabel: "Reset workspace", destructive: true })) void deleteSavedWorkspace("Resetting workspace…") }}>Reset workspace</button>
   </div>
-  // The saved run the results show; its View read-only would show it again.
-  const shownRunId = isCis && contentStage === "results" ? assessment?.runId : undefined
-  const savedHistoryRows = workspace?.history.map(entry => { const shown = entry.assessment.runId === shownRunId; return <div key={entry.assessment.runId} className="mt-3 flex flex-wrap items-center gap-3 border-t pt-3 text-sm">
+  // The saved run the results show; its View read-only would show it again. A saved entry counts as
+  // shown only when it is the one entry with the shown run's id, date and reference, so an ambiguous
+  // match never disables opening a run that is not on screen.
+  const isShownEntry = (entry: { assessment: Assessment }) => !!assessment && entry.assessment.runId === assessment.runId && entry.assessment.assessedAt === assessment.assessedAt && entry.assessment.reference === assessment.reference
+  const shownEntries = isCis && contentStage === "results" && workspace ? workspace.history.filter(isShownEntry) : []
+  const savedHistoryRows = workspace?.history.map((entry, index) => { const shown = shownEntries.length === 1 && shownEntries[0] === entry; return <div key={`${entry.assessment.runId}:${index}`} className="mt-3 flex flex-wrap items-center gap-3 border-t pt-3 text-sm">
     {isCis && <CertificationChip certified={isCertifiedAssessment(entry.assessment.reference, entry.policies)} />}
     {shown && <span className="inline-flex shrink-0 items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-700">Shown</span>}
     <span className="min-w-0 flex-1">{isCis ? formatLocaleDateTime(entry.assessment.assessedAt) : entry.assessment.assessedAt} · {isCis ? referenceDisplayName(entry.assessment.reference, packBenchmarkName(entry.policies)) : entry.assessment.reference}{isCis && trendByRun.get(entry.assessment.runId)?.levels.length ? ` · ${(levels => levels.map(level => levels.length > 1 ? `Level ${level.level} ${formatRate(trendRate(level))}` : formatRate(trendRate(level))).join(", "))(trendByRun.get(entry.assessment.runId)!.levels)}` : ""} · {entry.assessment.findings.length} findings{entry.creation ? ` · ${entry.creation.results.length} creation outcomes` : ""}</span>

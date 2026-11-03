@@ -84,7 +84,7 @@ const choice = "#microsoft.graph.deviceManagementConfigurationChoiceSettingInsta
 const setting = (id: string) => ({ settingInstance: { "@odata.type": choice, settingDefinitionId: id, choiceSettingValue: { value: `${id}_on`, children: [] } } })
 
 /** A saved assessment of one Level 1 pack, with exceptions in use, fixed and expired, opened read-only like after a reload. */
-async function renderSaved(): Promise<HTMLDivElement> {
+async function renderSaved(extraHistory: (assessment: Record<string, unknown>) => Record<string, unknown>[] = () => []): Promise<HTMLDivElement> {
   appInfo.mockResolvedValue({ internalCisBenchmarks: true })
   selectedTenantState.current = { id: "local", name: "Synthetic tenant", credentials: { tenantId, appId: "22222222-2222-2222-2222-222222222222" } }
   const policy = { name: "Synthetic policy", platforms: "windows10", technologies: "mdm", description: "Synthetic", provenance: { schemaVersion: 1, benchmark: "synthetic-os", version: "9.9.9", level: "Level 1", sourceFile: "synthetic.json" },
@@ -94,7 +94,7 @@ async function renderSaved(): Promise<HTMLDivElement> {
   const assessment = { runId: "run-1", tenantId, frameworkId: "cis-benchmarks", reference: "synthetic-os 9.9.9 Level 1", assessedAt: "2026-10-15T10:00:00Z", policyCount: 1,
     findings: [finding(0, "Missing"), finding(1, "Present", [{ policyId: "p1", policyName: "Tenant policy", value: policy.settings[1]!.settingInstance, targeting: unassigned }]), finding(2, "Review")] }
   const exception = (id: string, settingId: string, expiresOn: string) => ({ id, benchmark: "synthetic-os", version: "9.9.9", level: 1, policyName: "Synthetic policy", settingId, owner: "Owner", reason: `Reason ${id}`, expiresOn, createdAt: "2026-10-15T12:00:00Z" })
-  const workspace = { version: 1, tenantId, frameworkId: "cis-benchmarks", policies: [policy], reference: assessment.reference, updatedAt: "2026-10-15T10:00:00Z", history: [{ assessment, policies: [policy] }],
+  const workspace = { version: 1, tenantId, frameworkId: "cis-benchmarks", policies: [policy], reference: assessment.reference, updatedAt: "2026-10-15T10:00:00Z", history: [{ assessment, policies: [policy] }, ...extraHistory(assessment).map(extra => ({ assessment: extra, policies: [policy] }))],
     exceptions: [exception("exc-alpha", "synthetic_alpha", "2099-01-01"), exception("exc-beta", "synthetic_beta", "2099-01-01"), exception("exc-gamma", "synthetic_gamma", "2026-10-15")] }
   vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
     const opening = path === "/api/frameworks" && String(init?.body).includes('"workspace-open"')
@@ -174,6 +174,19 @@ describe("CIS page numbers", () => {
     expect(readiness.textContent).not.toContain(MANUAL_NOT_ASSESSED_NOTE)
     expect(readiness.textContent).not.toContain("This view covers the automated settings in the benchmark pack only.")
     expect(readiness.querySelector('[aria-label="Manual recommendations"]')?.textContent).toBe(`${CIS_NOTICE.text} ${CIS_NOTICE.url}`)
+  })
+
+  it("marks only the saved entry that is on screen, even when another entry shares its run id", async () => {
+    const viewButtons = (container: HTMLElement) => [...container.querySelector('[aria-label="Saved assessment history"]')!.querySelectorAll(".border-t")]
+      .map(row => ({ shown: [...row.querySelectorAll("span")].some(span => span.textContent === "Shown"), disabled: [...row.querySelectorAll("button")].find(item => item.textContent === "View read-only")!.disabled }))
+    // Same run id, another date: only the entry on screen is marked; the other one can still be opened.
+    const older = await renderSaved(assessment => [{ ...assessment, assessedAt: "2026-10-14T10:00:00Z" }])
+    expect(viewButtons(older)).toEqual([{ shown: true, disabled: true }, { shown: false, disabled: false }])
+    for (const root of roots.splice(0)) act(() => root.unmount())
+    for (const container of containers.splice(0)) container.remove()
+    // Two entries that cannot be told apart: neither is marked, so neither is blocked.
+    const twins = await renderSaved(assessment => [{ ...assessment }])
+    expect(viewButtons(twins)).toEqual([{ shown: false, disabled: false }, { shown: false, disabled: false }])
   })
 
   it("lines up finding titles, marks the shown saved run and shows Portfolio as a titled card", async () => {
