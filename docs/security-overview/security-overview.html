@@ -107,6 +107,8 @@
   }
   td { padding: 1mm 2mm 1mm 0; border-bottom: 1px solid var(--line); vertical-align: top; }
   table.perms td { padding: 0.6mm 2mm 0.6mm 0; }
+  table.flows td { padding: 0.6mm 2mm 0.6mm 0; font-size: 7.5pt; line-height: 1.3; }
+  table.flows code { font-size: 7.1pt; }
   td.purpose { font-weight: 600; color: var(--ink); white-space: nowrap; }
   code, .mono { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 7.6pt; color: var(--ink); }
   td.dest { white-space: nowrap; }
@@ -185,7 +187,7 @@
           <div class="sub">Security and architecture overview</div>
         </div>
       </div>
-      <div class="meta">Describes version 0.1.0<br>Revision 1, 29 September 2026</div>
+      <div class="meta">Describes version 0.4.0<br>Revision 2, 3 November 2026</div>
     </div>
     <h1>Runs locally. Your app registration. Your storage.</h1>
     <p>TenuVault Desktop backs up, compares and restores Intune configuration from the admin's computer. It signs in
@@ -202,9 +204,9 @@
       </div>
       <div class="card">
         <h3>Delegated access, admin in control</h3>
-        <p>Every call runs as the signed-in admin and is limited by their Intune role. Changes to Intune happen only
-          when an admin starts a restore, a drift revert, a baseline deployment or its undo. An optional, separate
-          read-only Backup Reader can run scheduled backups only; it cannot change Intune or delete backups.</p>
+        <p>Every call runs as the signed-in admin and is limited by their Intune role. Intune changes only when an admin
+          starts a restore, drift revert, baseline deployment, CIS remediation or its undo. An optional read-only
+          Backup Reader can run scheduled backups only; it cannot change Intune or delete backups.</p>
       </div>
       <div class="card">
         <h3>Backups stay with you</h3>
@@ -235,7 +237,7 @@
         <text x="46" y="118" font-size="12" fill="#55504a">Tokens encrypted by the OS (DPAPI or Keychain)</text>
         <text x="46" y="137" font-size="12" fill="#55504a">Backups encrypted before they are written</text>
         <text x="46" y="156" font-size="12" fill="#55504a">Scheduled backups run as the signed-in admin</text>
-        <text x="46" y="175" font-size="12" fill="#55504a">Writes only when an admin starts a restore</text>
+        <text x="46" y="175" font-size="12" fill="#55504a">Writes only when an admin starts a change</text>
         <text x="46" y="194" font-size="12" fill="#55504a">No telemetry or crash reporting</text>
 
         <path d="M210 202 L210 232" stroke="#c94b30" stroke-width="1.8" fill="none" marker-end="url(#arr)"/>
@@ -254,7 +256,7 @@
 
         <rect x="510" y="116" width="360" height="56" rx="8" fill="#fbf1ed" stroke="#e8c3b7"/>
         <text x="526" y="139" font-size="13.5" font-weight="700" fill="#1f1d1b">Microsoft Graph (Intune)</text>
-        <text x="526" y="159" font-size="12" fill="#55504a">Reads for backup and drift, writes for restore</text>
+        <text x="526" y="159" font-size="12" fill="#55504a">Reads for backup and drift, writes for admin changes</text>
 
         <rect x="510" y="182" width="360" height="58" rx="8" fill="#ffffff" stroke="#e8c3b7" stroke-dasharray="5 4"/>
         <text x="526" y="205" font-size="13.5" font-weight="700" fill="#1f1d1b">Your Azure Storage account (optional)</text>
@@ -271,13 +273,13 @@
         <!-- Vendor -->
         <path d="M300 202 C 330 290, 420 298, 508 294" stroke="#9a948d" stroke-width="1.5" stroke-dasharray="5 4" fill="none" marker-end="url(#arrg)"/>
         <rect x="510" y="268" width="380" height="52" rx="8" fill="#ffffff" stroke="#9a948d" stroke-dasharray="5 4"/>
-        <text x="526" y="290" font-size="12.5" font-weight="700" fill="#1f1d1b">4. License check and update check</text>
+        <text x="526" y="290" font-size="12.5" font-weight="700" fill="#1f1d1b">4. License, CIS content and updates</text>
         <text x="526" y="309" font-size="11.5" fill="#55504a">tenuvault.com and github.com. Metadata only, no Intune data.</text>
       </svg>
     </div>
 
     <h2>Everything that leaves the computer (no Intune data goes to the vendor)</h2>
-    <table>
+    <table class="flows">
       <thead>
         <tr><th style="width:25mm">Purpose</th><th style="width:47mm">Destination</th><th>What is sent</th></tr>
       </thead>
@@ -291,7 +293,7 @@
           <td class="purpose">Intune</td>
           <td class="dest"><code>graph.microsoft.com</code></td>
           <td>Requests with the admin's delegated token. Reads for backups and drift; writes only for restores, drift
-            reverts and baseline deployments an admin starts</td>
+            reverts, baseline deployments and CIS remediations an admin starts</td>
         </tr>
         <tr>
           <td class="purpose">Storage picker</td>
@@ -305,11 +307,12 @@
             Not used when backups are stored locally</td>
         </tr>
         <tr>
-          <td class="purpose">License check</td>
+          <td class="purpose">License and CIS</td>
           <td class="dest"><code>www.tenuvault.com</code></td>
           <td>License key (if any), tenant ID, random install ID, OS, app version and, when signed in, your client ID and a
             short-lived Microsoft ID token. The service reads only the tenant and client ID from the token; name and UPN
-            are not stored. Runs at start, every 6 hours, on first use of a tenant and on license changes</td>
+            are not stored. License checks run at start, every 6 hours, on first use of a tenant and on license changes. On
+            Pro and MSP, opening the CIS page or loading a benchmark downloads CIS content (signed entitlement, logged)</td>
         </tr>
         <tr>
           <td class="purpose">Updates</td>
@@ -335,7 +338,7 @@
 <section class="page page2">
   <header class="strip">
     <span><b>TenuVault Desktop</b> &nbsp;Security and architecture overview</span>
-    <span>Describes version 0.1.0 &nbsp;|&nbsp; Revision 1, 29 September 2026</span>
+    <span>Describes version 0.4.0 &nbsp;|&nbsp; Revision 2, 3 November 2026</span>
   </header>
 
   <div class="content">
@@ -385,7 +388,7 @@
         <h2>Changes to your tenant</h2>
         <ul class="facts">
           <li><b>Admin-started only.</b> Scheduled jobs read Intune and write to backup storage, never to Intune.
-            Restores, reverts and deployments need an admin to start them.</li>
+            Restores, reverts, deployments and CIS remediations need an admin to start them.</li>
           <li><b>Preview and confirm.</b> The live tenant is compared with the backup, and overwriting requires an
             explicit confirmation. The default restore creates copies, with assignments off.</li>
           <li><b>Cross-tenant copies</b> are always created unassigned; referenced apps need reviewed mappings.</li>

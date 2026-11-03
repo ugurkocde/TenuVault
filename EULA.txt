@@ -104,12 +104,18 @@ trademarks. All rights not expressly granted are reserved.
     control it and provide it without warranty.
 
 5.3 CIS Benchmark content is delivered at runtime to licensed installations
-    under Ugurlabs' CIS SecureSuite Product Vendor membership. It is
-    licensed to you for use within TenuVault only. You may not redistribute
-    or sublicense CIS content, or extract it from TenuVault for use outside
-    it. Assessment and remediation results are not a certification of your
-    systems' compliance with a CIS Benchmark. CIS, CIS Benchmarks and CIS
-    Controls are trademarks of the Center for Internet Security, Inc.
+    under Ugurlabs' CIS SecureSuite Product Vendor membership. You may use
+    it only within TenuVault and in the reports and exports TenuVault
+    produces. You may share those reports and exports within your
+    organization, with your auditors and advisers for your own compliance
+    work and, on the MSP plan, with the customer whose tenant a report
+    covers. You may not publish, redistribute or sublicense CIS
+    content, or extract it from TenuVault for any other use. Assessment and
+    remediation results are not a certification of your systems' compliance
+    with a CIS Benchmark. After your plan ends, you may still use TenuVault
+    to roll back CIS remediation changes applied while the plan was active.
+    CIS, CIS Benchmarks and CIS Controls are trademarks of the Center for
+    Internet Security, Inc.
 
 
 6. YOUR RESPONSIBILITIES

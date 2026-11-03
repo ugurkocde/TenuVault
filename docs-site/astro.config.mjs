@@ -172,6 +172,7 @@ export default defineConfig({
 						{ label: 'OpenIntuneBaseline', slug: 'baselines/quick-start' },
 						{ label: 'My baselines', slug: 'baselines/custom-baselines' },
 						{ label: 'Framework coverage', slug: 'baselines/frameworks' },
+						{ label: 'CIS Benchmarks', slug: 'baselines/cis-benchmarks' },
 					],
 				},
 				{
