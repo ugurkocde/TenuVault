@@ -1,6 +1,6 @@
 import { inflateSync } from "node:zlib"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { CIS_CERTIFIED_CHECK_COUNTS, CIS_CERTIFIED_SEGMENTS, CIS_REMEDIATION_LIMITS, cisCheckCount, cisCheckCountText, certifiedScopeLines } from "../src/shared/frameworks/cis-certification"
+import { CIS_CERTIFIED_CHECK_COUNTS, CIS_CERTIFIED_SEGMENTS, CIS_REMEDIATION_LIMITS, cisCheckCount, cisCheckCountText, certifiedScopeLines, isCisCertified } from "../src/shared/frameworks/cis-certification"
 import { CIS_SAMPLE_FILE_NAME, CIS_SAMPLE_MARKER, CIS_SAMPLE_NOTE, CIS_SAMPLE_TITLE, cisSampleSummary, generateCisSampleReportPDF } from "../src/shared/compliance/cis-sample-report"
 import { MANUAL_RECOMMENDATIONS_FALLBACK, MANUAL_RECOMMENDATIONS_URL } from "../src/shared/frameworks/cis-manual"
 import { handleFramework, setFrameworkExportSaver, type ExportFile } from "../src/main/frameworks/service"
@@ -96,8 +96,10 @@ describe("sample CIS readiness report", () => {
 
   it("holds only synthetic recommendations: placeholder ids, titles and text", () => {
     const summary = cisSampleSummary()
-    expect(summary.benchmark).toBe("intune-windows11")
-    expect(summary.version).toBe("5.0.0")
+    expect(summary.benchmark).toBe("intune-for-defender")
+    // Every Level the sample shows is inside the certified scope, so it never suggests an uncertified Level.
+    for (const level of summary.levels) expect(isCisCertified(summary.benchmark, summary.version, level.level)).toBe(true)
+    expect(summary.version).toBe("1.0.0")
     for (const level of summary.levels) {
       expect(level.recommendations.length).toBeGreaterThan(0)
       for (const result of level.recommendations) {

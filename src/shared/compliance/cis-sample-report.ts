@@ -22,9 +22,9 @@ export const CIS_SAMPLE_NOTE = "Sample data: a fictional tenant and fictional re
 export const CIS_SAMPLE_FILE_NAME = "TenuVault sample CIS readiness report (sample data).pdf"
 export const CIS_SAMPLE_PRESENTATION: CisSamplePresentation = { title: CIS_SAMPLE_TITLE, marker: CIS_SAMPLE_MARKER, note: CIS_SAMPLE_NOTE }
 
-const BENCHMARK = "intune-windows11"
-const VERSION = "5.0.0"
-const BENCHMARK_NAME = "CIS Microsoft Intune for Windows 11 Benchmark"
+const BENCHMARK = "intune-for-defender"
+const VERSION = "1.0.0"
+const BENCHMARK_NAME = "CIS Microsoft Intune for Microsoft Defender Antivirus Benchmark"
 const TENANT_ID = "00000000-0000-4000-8000-000000000000"
 const TENANT_NAME = "Contoso (sample)"
 const ASSESSED_AT = "2026-11-02T09:00:00.000Z"
