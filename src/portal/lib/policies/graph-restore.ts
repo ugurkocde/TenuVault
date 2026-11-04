@@ -348,7 +348,8 @@ export class Restorer {
     const id = String(created.body.id ?? "")
     if (!id) return { success: false, path, retryable: false, error: "Microsoft Graph did not return an ID. Check Intune before retrying." }
     if (typeof snapshot.id === "string" && !this.reviewed.has(snapshot.id.toLowerCase())) this.remapped.set(snapshot.id, id)
-    const outcome = await this.complete(type, path, id, created.body, "created", [...plan.steps, ...plan.assignments])
+    // Graph may answer with only the ID, so the body sent (with the [Restored] name) fills the gaps.
+    const outcome = await this.complete(type, path, id, { ...plan.create.body, ...created.body }, "created", [...plan.steps, ...plan.assignments])
     if (plan.assignments.length && type.assignmentWarning) outcome.warnings = [...(outcome.warnings ?? []), type.assignmentWarning]
     return this.withWarnings(outcome, type, source, plan.create.body, references.warnings)
   }

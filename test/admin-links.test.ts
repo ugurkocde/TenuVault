@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { adminCenterLink, inTenant } from "../src/shared/intune/admin-links"
 import { INTUNE_TYPES } from "../src/shared/intune/registry"
+import type { GraphCall } from "../src/portal/lib/policies/graph-restore"
 
 const ID = "0b699fa4-3779-4688-ba56-f9d2df52c25e"
 
@@ -34,5 +35,19 @@ describe("Admin center links for restored objects", () => {
   it("opens a link in the tenant the object is in", () => {
     expect(inTenant("https://intune.microsoft.com/#view/Microsoft_Intune_Apps/SettingsMenu/~/0/appId/a", "t-1")).toBe("https://intune.microsoft.com/#@t-1/view/Microsoft_Intune_Apps/SettingsMenu/~/0/appId/a")
     expect(inTenant("https://intune.microsoft.com/#view/x", undefined)).toBe("https://intune.microsoft.com/#view/x")
+  })
+})
+
+describe("Admin center links on restore outcomes", () => {
+  it("names a copy by its [Restored] name even when Graph answers with only the ID", async () => {
+    const { Restorer } = await import("../src/portal/lib/policies/graph-restore")
+    const graph: GraphCall = async (method): ReturnType<GraphCall> => {
+      if (method === "GET") return { status: 404, body: {} }
+      return { status: 201, body: { id: "new-1" } }
+    }
+    const outcome = await new Restorer(graph, { mode: "copy", assignments: false })
+      .restore("b/Remediations/Disk.json", { id: "old", displayName: "Disk Cleanup", detectionScriptContent: "", remediationScriptContent: "" })
+    expect(outcome.success).toBe(true)
+    expect(outcome.adminLink?.url).toContain("/id/new-1/scriptName/%5BRestored%5D%20Disk%20Cleanup/")
   })
 })
