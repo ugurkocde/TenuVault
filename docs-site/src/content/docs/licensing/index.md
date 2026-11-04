@@ -20,15 +20,15 @@ Enter your email address on the **License** page or the welcome screen in TenuVa
 
 TenuVault reminds you on day 20 and day 27 of the trial, with a **Buy Pro** button that opens the checkout. To keep Pro or move to MSP, buy a plan and enter the new key on the **License** page; see [Activate and manage your license](/licensing/manage/#after-your-trial).
 
-The trial covers two tenants, like Pro. To evaluate MSP with more tenants, the MSP checkout on [tenuvault.com/pricing](https://tenuvault.com/pricing) also offers a 30 day subscription trial that needs a card, or email [support@ugurlabs.com](mailto:support@ugurlabs.com).
+The trial covers two tenants, like Pro. To evaluate MSP with more tenants, the MSP checkout on [tenuvault.com/pricing](https://tenuvault.com/pricing) also offers a 30 day subscription trial that needs a card, or email [support@tenuvault.com](mailto:support@tenuvault.com).
 
 ## Buy a plan
 
 Click **Buy now** on [tenuvault.com/pricing](https://tenuvault.com/pricing) or on the **License** page. The checkout asks for payment right away, monthly or yearly, and your license key arrives by email after checkout. Payments are not refundable, so start with the free trial if you want to evaluate first.
 
-If your organization buys through procurement, yearly Pro and MSP plans are also available by quote, purchase order and invoice. Email [support@ugurlabs.com](mailto:support@ugurlabs.com) for a PDF quote; after your order you receive an invoice from Ugurlabs UG, payable by bank transfer.
+If your organization buys through procurement, yearly Pro and MSP plans are also available by quote, purchase order and invoice. Email [support@tenuvault.com](mailto:support@tenuvault.com) for a PDF quote; after your order you receive an invoice from Ugurlabs UG, payable by bank transfer.
 
-Eligible nonprofits can use Pro at no cost. Email [support@ugurlabs.com](mailto:support@ugurlabs.com) to request it.
+Eligible nonprofits can use Pro at no cost. Email [support@tenuvault.com](mailto:support@tenuvault.com) to request it.
 
 ## Features by plan
 
