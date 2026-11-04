@@ -61,6 +61,7 @@ If no computer should be part of the schedule at all, move it to [cloud backups]
 
 ## Related pages
 
+* [A client secret or a delegated sign-in for Intune automation](https://www.tenuvault.com/compare/intune-graph-client-secret-vs-delegated-sign-in): what an app-only script with a client secret exposes, on the product site
 * [Backup Reader for scheduled backups](/backups/backup-reader/)
 * [Cloud backups in Azure](/backups/cloud/)
 * [Schedule backups](/backups/schedules/)
