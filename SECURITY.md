@@ -21,7 +21,7 @@ requests.
 
 Report them privately through GitHub instead:
 [open a private security advisory](https://github.com/ugurkocde/TenuVault/security/advisories/new).
-If you cannot use GitHub, email [support@ugurlabs.com](mailto:support@ugurlabs.com) with
+If you cannot use GitHub, email [support@tenuvault.com](mailto:support@tenuvault.com) with
 "Security" in the subject line.
 
 Please include as much of the following as you can:

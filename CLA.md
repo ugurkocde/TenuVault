@@ -92,4 +92,4 @@ Your GitHub username, user ID and the date are recorded. One signature covers al
 Contributions to the Project. If you contribute on behalf of an employer, make sure you are
 authorized to accept this Agreement for them before signing.
 
-Questions about this Agreement can be sent to support@ugurlabs.com.
+Questions about this Agreement can be sent to support@tenuvault.com.
