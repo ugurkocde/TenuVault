@@ -489,15 +489,20 @@ export class Restorer {
     }
     // Consume before awaiting to prevent concurrent requests replaying additive steps.
     repairs.delete(token)
+    // A deleted object, a copy or a replaced one, has nothing to repair or open: report it missing, without an admin link.
+    const gone: RestoreOutcome = { success: false, path, policyId: entry.id, missing: true, retryable: false, error: "The object no longer exists, so it was not repaired. Start a fresh restore if you still need it." }
     if (entry.action === "updated") {
       try {
         const current = await this.current(entry.type, entry.id)
-        // A deleted object has nothing to repair or open, so it is reported missing, without an admin link.
-        if (!current) return { success: false, path, policyId: entry.id, missing: true, retryable: false, error: "The object no longer exists, so it was not repaired. Start a fresh restore if you still need it." }
+        if (!current) return gone
         if (!entry.expectedCurrent || !sameSnapshot(current, entry.expectedCurrent)) throw new Error("The live object changed after the failed restore. Review it and start a fresh replacement.")
       } catch (error) {
         return { success: false, path, partial: true, policyId: entry.id, retryable: false, error: error instanceof Error ? error.message : String(error) }
       }
+    } else {
+      // A copy is only checked for existence; a read that fails leaves the repair to run as before.
+      const current = await this.current(entry.type, entry.id).catch(() => null)
+      if (current === undefined) return gone
     }
     return this.complete(entry.type, path, entry.id, entry.body, entry.action, entry.steps)
   }
