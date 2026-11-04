@@ -111,7 +111,7 @@ To read your existing backups on the new machine, import your backup recovery ke
 
 ## After your trial
 
-During the trial the top card shows **Pro trial active** and **Your Pro trial ends on** with the date and the days left. On day 20 and on day 27 a reminder appears at the top of every page with **Buy Pro**, which opens the checkout, and **Details**, which opens the **License** page. **Dismiss** hides a reminder on this machine; the day 27 reminder still appears after you dismissed the day 20 one. The trial end is not counted as **License valid until**, so the generic 30 day expiry warning is not shown for the trial key. It still appears for another license, such as one shared by your organization.
+During the trial the top card shows **Pro trial active** and **Your Pro trial ends on** with the date and the days left. On day 20 and on day 27 a reminder appears at the top of every page with **Buy Pro**, which opens the checkout, and **Details**, which opens the **License** page. Unless you have bought a plan, tenuvault.com also emails you 5 days and 1 day before the trial ends. **Dismiss** hides an in-app reminder on this machine; the day 27 reminder still appears after you dismissed the day 20 one. The trial end is not counted as **License valid until**, so the generic 30 day expiry warning is not shown for the trial key. It still appears for another license, such as one shared by your organization.
 
 To keep Pro:
 
