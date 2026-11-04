@@ -226,7 +226,7 @@ function Overview({ tenants, statuses, selected, onSelect }: { tenants: Array<{ 
         </thead>
         <tbody>
           {tenants.map((tenant) => (
-            <tr key={tenant.id} className={cn("border-t border-gray-100", tenant.tenantId === selected && "bg-coral-50")}>
+            <tr key={tenant.id} className={cn("border-t border-gray-100", tenant.tenantId === selected && "bg-coral-50 dark:bg-coral-500/15")}>
               <td className="px-4 py-2">
                 <button type="button" className="text-left font-medium text-gray-900 hover:underline" aria-current={tenant.tenantId === selected} onClick={() => onSelect(tenant.tenantId)}>
                   {tenant.name}
