@@ -138,6 +138,41 @@ const KIND_LABEL: Record<ReferenceKind, string> = {
 
 export const referenceLabel = (reference: PolicyReference) => `${reference.exclude ? "excluded" : "included"} ${KIND_LABEL[reference.kind]} ${reference.id}`.replace(/^included (named location|authentication strength|terms of use)/, "$1")
 
+const KIND_PLURAL: Record<ReferenceKind, string> = {
+  user: "users",
+  group: "groups",
+  role: "roles",
+  application: "apps",
+  servicePrincipal: "workload identities",
+  namedLocation: "named locations",
+  authenticationStrength: "authentication strengths",
+  termsOfUse: "terms of use",
+}
+
+/** "a", "a and b", "a, b and c". */
+const listed = (items: string[]) => (items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`)
+
+/**
+ * The restore warning for references TenuVault could not check: why (the app registration cannot read
+ * that kind of object, or Microsoft did not answer) and what to do, which depends on whether an
+ * exclusion is among them. A deleted exclusion protects nobody once the policy is on; a deleted
+ * inclusion only narrows who the policy applies to.
+ */
+export function uncheckedReferencesWarning(cause: "forbidden" | "unanswered", references: PolicyReference[]): string | undefined {
+  if (!references.length) return undefined
+  const labels = listed(references.map(referenceLabel))
+  const verb = references.length === 1 ? "exists" : "exist"
+  const kinds = listed([...new Set(references.map((reference) => KIND_PLURAL[reference.kind]))])
+  const why = cause === "forbidden"
+    ? `The app registration has no permission to read ${kinds}, so TenuVault did not check that ${labels} still ${verb}.`
+    : `Microsoft did not answer when TenuVault checked that ${labels} still ${verb}.`
+  const one = references.length === 1
+  const advice = references.some((reference) => reference.exclude)
+    ? `Check ${one ? "it" : "them"} in Entra before you turn the policy on: an exclusion of a deleted account, such as an emergency access account, protects nobody.`
+    : `If ${one ? "it was" : "one was"} deleted, the policy applies to fewer people than in the backup.`
+  return `${why} ${advice}`
+}
+
 /**
  * What the restore result tells the admin about the policy it wrote: the state it was given and the
  * session controls that affect how long people, TenuVault included, stay signed in.

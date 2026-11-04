@@ -2,6 +2,7 @@ import { reviewedDependencyMappings, type RecoveryReadiness } from "../../../sha
 import { settingDefinitionIds, type DeprecatedSettingHit } from "../../../shared/intune/settings-catalog"
 import { typeForFolder, type ReviewChange } from "../../../shared/intune/registry"
 import { moduleForFolder } from "../../../shared/services/modules"
+import { inTenant, type AdminLink } from "../../../shared/intune/admin-links"
 import { passwordResetWarning } from "../../../shared/intune/restore-plan"
 import { ACKNOWLEDGEMENT_REQUIRED } from "../../../shared/disclaimer"
 "use client"
@@ -17,6 +18,7 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  ExternalLink,
   Loader2,
   RefreshCw,
   RotateCcw,
@@ -41,6 +43,12 @@ import { LinkedMessage } from "~/components/linked-message"
 /** Where an admin checks a restored item: Conditional Access lives in Entra, everything else in Intune. */
 function adminCenter(folder: string | undefined): string {
   return folder && moduleForFolder(folder)?.module.id === "conditionalAccess" ? "Entra" : "Intune"
+}
+
+/** "1 item completed.", or with what failed and what was skipped when there is any. */
+export function restoreSummary(handled: number, failed: number, skipped: number): string {
+  const parts = [`${handled} ${handled === 1 ? "item" : "items"} completed`, ...(failed ? [`${failed} failed`] : []), ...(skipped ? [`${skipped} skipped`] : [])]
+  return `${parts.join("; ")}.`
 }
 
 interface CopyTarget {
@@ -143,6 +151,7 @@ interface Outcome {
   partial?: boolean
   policyId?: string
   repairToken?: string
+  adminLink?: AdminLink
 }
 
 const PLAN_TEXT: Record<Plan, string> = {
@@ -509,7 +518,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       const skipped = outcomes.filter((outcome) => !outcome.success && outcome.action === "skipped").length
       setProgress((current) => (current ? { ...current, done: current.total, current: null } : current))
       setResult({ outcome: failed === 0 && handled > 0 ? "success" : handled > 0 || outcomes.some((item) => item.partial) ? "partial" : "failed",
-        message: `${handled} items completed; ${failed} failed${skipped ? `; ${skipped} skipped` : ""}.`, results: outcomes })
+        message: restoreSummary(handled, failed, skipped), results: outcomes })
     } catch (error) {
       showPlanError(error)
       const missing = (batch: (typeof batches)[number], outcome: Omit<Outcome, "path" | "targetTenantId">): Outcome[] => {
@@ -1106,7 +1115,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
               return (
                 <li key={`${outcome.targetTenantId ?? ""}:${outcome.path}:${index}`} className="flex items-start gap-3 py-2.5 text-sm">
                   <Icon className={cn("mt-0.5 h-4 w-4 flex-shrink-0", outcome.success ? "text-green-600" : outcome.action === "skipped" ? "text-gray-500" : "text-red-600")} />
-                  <span className="min-w-0">
+                  <span className="min-w-0 flex-1">
                     <span className="block break-words text-gray-900">
                       {outcome.targetTenantId && `${tenantName(outcome.targetTenantId)}: `}
                       {itemByPath.get(outcome.path)?.name ?? outcome.path.split("/").pop()}
@@ -1121,6 +1130,19 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                       </span>
                     ))}
                   </span>
+                  {outcome.adminLink && (
+                    <a
+                      href={inTenant(outcome.adminLink.url, outcome.targetTenantId ?? tenant.credentials.tenantId)}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label={`${outcome.adminLink.exact ? "Open" : "Open the list with"} ${itemByPath.get(outcome.path)?.name ?? "this item"} in the ${outcome.adminLink.center} admin center`}
+                      title={outcome.adminLink.exact ? undefined : `Opens the list this item is in; TenuVault cannot link to this item type directly.`}
+                      className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-full border border-gray-200 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                      {outcome.adminLink.exact ? `Open in ${outcome.adminLink.center}` : `Open list in ${outcome.adminLink.center}`}
+                    </a>
+                  )}
                 </li>
               )
             })}

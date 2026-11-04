@@ -148,7 +148,7 @@ The result lists, per policy type, how many items passed and failed, and names e
 
 The **Restoring...** screen shows the item being restored and a progress bar. TenuVault restores items that others depend on first (scope tags, assignment filters, Intune roles, app categories, device categories, notification templates and reusable settings) and policy sets last. When an item is recreated with a new ID, later items in the same restore that reference it are pointed to the new ID.
 
-When the restore ends, the heading changes to **Restore finished** and a summary such as "12 items completed; 1 failed." appears. Each item shows its outcome:
+When the restore ends, the heading changes to **Restore finished** and a summary such as "12 items completed; 1 failed." appears. It names failed and skipped items only when there are some, so a clean run reads "1 item completed." Each item shows its outcome:
 
 | Outcome | Meaning |
 | --- | --- |
@@ -164,6 +164,16 @@ Some results carry extra notes:
 * **Incomplete object: *ID*.** The item was created or updated, but a follow-up step (such as settings, categories or assignments) failed. If TenuVault can safely resume, the note says "Retry repairs the remaining steps without creating another object. Repair is available for one hour in this app session." Otherwise it says "Check and repair it in Intune."
 * **Check this item in Intune before retrying; a write may already have completed.** The response was lost, so TenuVault does not know whether the write reached Intune. It does not retry this item automatically. See [Restore write history](/restore/limitations/#restore-write-history).
 * Warnings in amber describe partial problems, for example "Assignments could not be restored: ..." followed by the Graph error.
+
+### Open a restored item
+
+Each item that is now in the tenant has a button next to it that opens it in the admin center, in the tenant it was restored to:
+
+* **Open in Intune** opens the item itself: settings catalog and endpoint security policies, device configuration profiles (including update rings), compliance policies, apps, app protection policies, PowerShell and shell scripts, remediations, Windows Autopilot profiles and feature update profiles.
+* **Open in Entra** opens a Conditional Access policy.
+* **Open list in Intune** or **Open list in Entra** opens the list the item is in, for types whose page the admin centers do not let TenuVault open directly, such as administrative templates, app configuration policies, enrollment restrictions, assignment filters, scope tags, named locations and authentication strengths. Find the item there by its name.
+
+Items that failed or were skipped have no button, because there is nothing new to open.
 
 ### After the restore
 
