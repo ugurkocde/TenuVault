@@ -22,6 +22,7 @@ import { Checkbox } from "~/components/ui/checkbox"
 import { Input } from "~/components/ui/input"
 import { Label } from "~/components/ui/label"
 import type { LicenseStatus, TenantLicenseStatus } from "../../shared/ipc"
+import { INVOICE_REQUEST_EMAIL, INVOICE_REQUEST_URL } from "../../shared/constants"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
 import { TrialSignupForm } from "../components/TrialSignupForm"
 import { bridge } from "../lib/bridge"
@@ -58,6 +59,23 @@ function openExternalLink(event: MouseEvent<HTMLAnchorElement>, url: string) {
   void bridge.app.openExternal(url)
 }
 
+/**
+ * For buyers who cannot pay by card: yearly plans by quote, purchase order and invoice,
+ * requested by email, as on the pricing page.
+ */
+function InvoiceNote() {
+  return (
+    <p className="text-sm text-gray-600">
+      <span className="font-medium text-gray-900">Need an invoice instead of a card?</span> For yearly Pro and MSP plans we
+      send a quote, accept your purchase order and invoice you for payment by bank transfer. Email{" "}
+      <a href={INVOICE_REQUEST_URL} className={linkClass} onClick={(event) => openExternalLink(event, INVOICE_REQUEST_URL)}>
+        {INVOICE_REQUEST_EMAIL}
+      </a>
+      .
+    </p>
+  )
+}
+
 const linkClass = "text-blue-600 underline underline-offset-4 hover:text-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600"
 
 function TrialCallToAction({ emailRef, onSent }: { emailRef: Ref<HTMLInputElement>; onSent: () => void }) {
@@ -88,11 +106,7 @@ function TrialCallToAction({ emailRef, onSent }: { emailRef: Ref<HTMLInputElemen
             Compare plans
           </Button>
         </div>
-        <p className="text-sm text-gray-600">
-          <a href="https://docs.tenuvault.com/licensing/" className={linkClass} onClick={(event) => openExternalLink(event, "https://docs.tenuvault.com/licensing/")}>
-            Buying for a company? Yearly plans are available by quote, purchase order and invoice.
-          </a>
-        </p>
+        <InvoiceNote />
         <p className="text-sm text-gray-600">
           <a href="https://docs.tenuvault.com/licensing/" className={linkClass} onClick={(event) => openExternalLink(event, "https://docs.tenuvault.com/licensing/")}>
             Eligible nonprofits can use Pro at no cost.
@@ -164,6 +178,7 @@ function InactiveKeyReplacement({ busy, onReplace }: { busy: Busy; onReplace: (k
         )}
       </div>
       {replacing && <ReplaceKeyForm busy={busy} onReplace={onReplace} />}
+      <InvoiceNote />
     </div>
   )
 }
@@ -202,6 +217,7 @@ function TrialStatus({ status, busy, onReplace }: { status: LicenseStatus; busy:
         )}
       </div>
       {replacing && <ReplaceKeyForm busy={busy} onReplace={onReplace} />}
+      <InvoiceNote />
     </div>
   )
 }

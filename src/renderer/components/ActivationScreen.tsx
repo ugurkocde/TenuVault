@@ -4,6 +4,7 @@ import { Alert, AlertDescription } from "~/components/ui/alert"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import { Label } from "~/components/ui/label"
+import { INVOICE_REQUEST_EMAIL, INVOICE_REQUEST_URL } from "../../shared/constants"
 import { bridge } from "../lib/bridge"
 import { useLicense } from "../lib/license"
 import { BrandMark } from "./BrandMark"
@@ -71,6 +72,10 @@ export function ActivationScreen({ onSignIn }: { onSignIn: () => void }) {
             You can upgrade any time from the License page, or{" "}
             <button type="button" className="text-blue-600 underline underline-offset-4 hover:text-blue-700" onClick={() => void bridge.license.open("checkout", { source: "welcome" })}>
               buy now
+            </button>
+            . Need an invoice instead of a card? Email{" "}
+            <button type="button" className="text-blue-600 underline underline-offset-4 hover:text-blue-700" onClick={() => void bridge.app.openExternal(INVOICE_REQUEST_URL)}>
+              {INVOICE_REQUEST_EMAIL}
             </button>
             .
           </p>

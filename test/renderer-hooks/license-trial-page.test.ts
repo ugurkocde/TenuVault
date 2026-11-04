@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   deactivate: vi.fn(async () => undefined),
   setKey: vi.fn(async () => undefined),
   replaceKey: vi.fn(async () => undefined),
+  openExternal: vi.fn(async () => undefined),
   status: null as LicenseStatus | null,
 }))
 
@@ -26,7 +27,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
       replaceKey: state.replaceKey,
       status: async () => state.status,
     },
-    app: { openExternal: async () => undefined },
+    app: { openExternal: state.openExternal },
   },
 }))
 vi.mock("../../src/renderer/lib/license", async (original) => ({
@@ -88,6 +89,23 @@ describe("License page trial", () => {
 
     await act(async () => { button(container, "Buy now")!.click() })
     expect(state.open).toHaveBeenCalledWith("checkout", { source: "license-page" })
+  })
+
+  it("offers an invoice for buyers who cannot pay by card", async () => {
+    for (const status of [
+      community,
+      { ...community, hasKey: true, keyState: "active" as const, plan: "pro" as const, tenantLimit: 2, trial: true, trialEndsAt: new Date(Date.now() + 5 * 86_400_000).toISOString() },
+      { ...community, hasKey: true, keyState: "failed" as const },
+    ]) {
+      const container = await render(status)
+      expect(container.textContent).toContain("Need an invoice instead of a card?")
+      const link = container.querySelector<HTMLAnchorElement>('a[href^="mailto:support@tenuvault.com"]')!
+      expect(link.textContent).toBe("support@tenuvault.com")
+      await act(async () => { link.click() })
+      expect(state.openExternal).toHaveBeenLastCalledWith("mailto:support@tenuvault.com?subject=TenuVault%20invoice%20or%20quote%20request")
+      for (const root of roots.splice(0)) act(() => root.unmount())
+      document.body.innerHTML = ""
+    }
   })
 
   it("shows when the trial ends and buys Pro without another trial", async () => {

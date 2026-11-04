@@ -26,6 +26,9 @@ export const TERMS_URL = "https://tenuvault.com/terms"
 
 /** Email support is part of the paid plans; Community users open a GitHub issue instead. */
 export const SUPPORT_EMAIL = "support@ugurlabs.com"
+/** Quotes, purchase orders and invoices for yearly plans, for buyers who cannot pay by card. */
+export const INVOICE_REQUEST_EMAIL = "support@tenuvault.com"
+export const INVOICE_REQUEST_URL = `mailto:${INVOICE_REQUEST_EMAIL}?subject=${encodeURIComponent("TenuVault invoice or quote request")}`
 
 export const GITHUB_ISSUES_URL = "https://github.com/ugurkocde/TenuVault/issues/new"
 

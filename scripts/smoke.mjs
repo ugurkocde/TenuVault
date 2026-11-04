@@ -868,7 +868,7 @@ await check("Community is a neutral plan state and its Overview notice remembers
   assert(await waitForCondition(`!${banner}`), "Community notice could not be dismissed again")
 })
 
-await check("Community trial is requested in the app, Buy now opens the checkout and procurement links use the external bridge", async () => {
+await check("Community trial is requested in the app, Buy now opens the checkout and the invoice and nonprofit links use the external bridge", async () => {
   try {
     await evaluate(`(() => {
       window.__communityTrial = { opened: [], docs: [], trials: [] }
@@ -910,9 +910,9 @@ await check("Community trial is requested in the app, Buy now opens the checkout
     assert(await evaluate(`window.__communityTrial.opened.length === 0`), "the trial opened a browser page")
     await evaluate(`[...${body}.querySelectorAll('button')].find(button => button.textContent.trim() === 'Buy now').click()`)
     assert(await evaluate(`window.__communityTrial.opened.length === 1 && window.__communityTrial.opened[0].destination === "checkout" && window.__communityTrial.opened[0].context?.source === "license-page"`), "Buy now did not open the checkout with the license-page source")
-    assert(await evaluate(`${body}.innerText.includes("Buying for a company? Yearly plans are available by quote, purchase order and invoice.") && !${body}.innerText.includes("on request") && ${body}.innerText.includes("Eligible nonprofits can use Pro at no cost.")`), "company or nonprofit copy missing")
-    await evaluate(`${body}.querySelectorAll('a[href="https://docs.tenuvault.com/licensing/"]').forEach(link => link.click())`)
-    assert(await evaluate(`window.__communityTrial.docs.length === 2 && window.__communityTrial.docs.every(url => url === "https://docs.tenuvault.com/licensing/")`), "docs links did not use the external bridge")
+    assert(await evaluate(`${body}.innerText.includes("Need an invoice instead of a card?") && ${body}.innerText.includes("support@tenuvault.com") && !${body}.innerText.includes("on request") && ${body}.innerText.includes("Eligible nonprofits can use Pro at no cost.")`), "invoice or nonprofit copy missing")
+    await evaluate(`${body}.querySelectorAll('a[href="https://docs.tenuvault.com/licensing/"], a[href^="mailto:support@tenuvault.com"]').forEach(link => link.click())`)
+    assert(await evaluate(`window.__communityTrial.docs.length === 2 && window.__communityTrial.docs.includes("https://docs.tenuvault.com/licensing/") && window.__communityTrial.docs.some(url => url.startsWith("mailto:support@tenuvault.com?subject="))`), "docs and invoice links did not use the external bridge")
     await screenshot("08-community-trial-key")
   } finally {
     await evaluate("window.__communityTrialFrame?.remove(); delete window.__communityTrialFrame; delete window.__communityTrial")
