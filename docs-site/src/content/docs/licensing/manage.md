@@ -32,9 +32,15 @@ If you have not connected a tenant yet, TenuVault opens on **Welcome to TenuVaul
 2. Paste your key into **License key**.
 3. Click **Activate**.
 
-For a trial, click **Start 30 day free trial** first. TenuVault opens the plans page in your browser, then scrolls to and focuses **License key** with the hint: "Paste the key from your email to activate the trial."
+### Start the free trial
 
-Below the trial button, links to [Plans and features](/licensing/) explain that yearly company plans are available by quote, purchase order and invoice, a 30 day trial key without a card is available on request, and eligible nonprofits can use Pro at no cost.
+On Community, the **License** page shows **Try Pro free for 30 days, no card needed.**
+
+1. Enter your work email address.
+2. Click **Start free trial**. TenuVault asks tenuvault.com to email you a Pro trial key and shows **Check your inbox** with the address, plus the hint "Paste the key from your email to activate the trial." under **License key**.
+3. Paste the key from the email into **License key** and click **Activate**.
+
+The key usually arrives within a minute, sometimes up to 15. Check your junk folder if it does not. **Buy now** opens the checkout in your browser instead, and **Compare plans** opens the plans page. Below it, **Need an invoice instead of a card?** explains that yearly Pro and MSP plans are available by quote, purchase order and invoice, payable by bank transfer, with a link to email [support@tenuvault.com](mailto:support@tenuvault.com). The same note appears on the trial panel and when a saved key is no longer active, and the welcome screen has a short version. A link also explains that eligible nonprofits can use Pro at no cost. **Start 30 day free trial** in other places, such as the second tenant dialog or the CIS Benchmarks preview, opens this form.
 
 If you are already signed in to one or more tenants, TenuVault activates the key for them right away and shows **License activated.** If you are not signed in to a tenant yet, it shows **License key saved. It activates for a tenant when you sign in to it.**
 
@@ -103,13 +109,25 @@ To read your existing backups on the new machine, import your backup recovery ke
 
 ## Change your license key
 
-To use a different key, first click **Deactivate this machine**, then enter the new key. TenuVault does not accept a new key while the current one is active on this machine and shows "Deactivate this machine before entering a different license key."
+## After your trial
+
+During the trial the top card shows **Pro trial active** and **Your Pro trial ends on** with the date and the days left. On day 20 and on day 27 a reminder appears at the top of every page with **Buy Pro**, which opens the checkout, and **Details**, which opens the **License** page. Unless you have bought a plan, tenuvault.com also emails you 5 days and 1 day before the trial ends. **Dismiss** hides an in-app reminder on this machine; the day 27 reminder still appears after you dismissed the day 20 one. The trial end is not counted as **License valid until**, so the generic 30 day expiry warning is not shown for the trial key. It still appears for another license, such as one shared by your organization.
+
+To keep Pro:
+
+1. Click **Buy Pro** in the reminder, or **Buy Pro** or **Buy MSP** on the **License** page, and complete the checkout. The checkout asks for payment right away; there is no second trial.
+2. Your new license key arrives by email.
+3. On the **License** page, click **Enter your new key**, paste the key and click **Use this key**. TenuVault activates the new key for every tenant the trial key covers on this machine, and for signed-in tenants that are not licensed yet, and only then releases the trial key. If the new key is refused for a tenant the trial key covers, nothing changes: the trial key stays active and the reason is shown. Tenants licensed through your organization keep that license.
+
+If you do nothing, the trial key expires at the end of day 30, also when TenuVault is offline. Nothing is charged. One tenant continues on Community, the free plan for one tenant; a second tenant is no longer covered. Pro features turn off, and your backups stay where they are.
+
+To use a different key outside a trial, first click **Deactivate this machine**, then enter the new key. Replacing a running trial key with **Enter your new key** is the exception, and so is a saved key that is no longer active, for example after the trial ended: the **License** page then shows **Enter a new key**, which swaps the key the same way and leaves licenses shared by your organization in place. TenuVault does not accept a new key while the current one is active on this machine and shows "Deactivate this machine before entering a different license key."
 
 ## Manage your subscription
 
 Click **Manage subscription** on the **License** page to open the customer portal at [polar.sh/ugurlabs/portal](https://polar.sh/ugurlabs/portal) in your browser. There you can manage your subscription and release installations you no longer use.
 
-To upgrade from Community, click **Start 30 day free trial** on the **License** page, or go to [tenuvault.com/desktop#pricing](https://tenuvault.com/desktop#pricing).
+To upgrade from Community, start the free trial or click **Buy now** on the **License** page, or go to [tenuvault.com/pricing](https://tenuvault.com/pricing).
 
 ## License messages
 

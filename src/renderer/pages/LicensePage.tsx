@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react"
-import { Link } from "react-router-dom"
+import { useEffect, useRef, useState, type MouseEvent, type Ref } from "react"
+import { Link, useLocation } from "react-router-dom"
 import {
   AlertCircle,
   AlertTriangle,
   BadgeCheck,
   CheckCircle2,
+  Clock,
   ExternalLink,
   KeyRound,
   Loader2,
@@ -21,12 +22,14 @@ import { Checkbox } from "~/components/ui/checkbox"
 import { Input } from "~/components/ui/input"
 import { Label } from "~/components/ui/label"
 import type { LicenseStatus, TenantLicenseStatus } from "../../shared/ipc"
+import { INVOICE_REQUEST_EMAIL, INVOICE_REQUEST_URL } from "../../shared/constants"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
+import { TrialSignupForm } from "../components/TrialSignupForm"
 import { bridge } from "../lib/bridge"
 import { useConfirm } from "~/components/ConfirmDialog"
-import { formatDate, formatDateTime, hasPaidLicense, isUnlicensed, licensePageTitle, planName, useLicense } from "../lib/license"
+import { formatDate, formatDateTime, hasPaidLicense, isUnlicensed, licensePageTitle, planName, trialDaysLeft, useLicense } from "../lib/license"
 
-type Busy = "activate" | "deactivate" | `retry:${string}` | `share:${string}` | null
+type Busy = "activate" | "replace" | "deactivate" | `retry:${string}` | `share:${string}` | null
 
 function useAction() {
   const { refresh } = useLicense()
@@ -51,39 +54,170 @@ function useAction() {
   return { busy, error, notice, run }
 }
 
-function TrialCallToAction({ onStartTrial }: { onStartTrial: () => void }) {
+function openExternalLink(event: MouseEvent<HTMLAnchorElement>, url: string) {
+  event.preventDefault()
+  void bridge.app.openExternal(url)
+}
+
+/**
+ * For buyers who cannot pay by card: yearly plans by quote, purchase order and invoice,
+ * requested by email, as on the pricing page.
+ */
+function InvoiceNote() {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-4 rounded-3xl bg-blue-50/60 p-5">
+    <p className="text-sm text-gray-600">
+      <span className="font-medium text-gray-900">Need an invoice instead of a card?</span> For yearly Pro and MSP plans we
+      send a quote, accept your purchase order and invoice you for payment by bank transfer. Email{" "}
+      <a href={INVOICE_REQUEST_URL} className={linkClass} onClick={(event) => openExternalLink(event, INVOICE_REQUEST_URL)}>
+        {INVOICE_REQUEST_EMAIL}
+      </a>
+      .
+    </p>
+  )
+}
+
+const linkClass = "text-blue-600 underline underline-offset-4 hover:text-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600"
+
+function TrialCallToAction({ emailRef, onSent }: { emailRef: Ref<HTMLInputElement>; onSent: () => void }) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-4 rounded-3xl bg-blue-50/60 p-5" id="trial">
       <div className="min-w-0 flex-1">
         <p className="flex items-center gap-3 text-base font-medium text-gray-900">
           <span className="flex size-9 flex-shrink-0 items-center justify-center rounded-full bg-coral-500 text-white" aria-hidden="true">
             <Sparkles className="h-4 w-4" />
           </span>
-          You are on Community, the free plan. Try Pro or MSP free for 30 days.
+          You are on Community, the free plan. Try Pro free for 30 days, no card needed.
         </p>
         <p className="mt-2 text-sm text-gray-600">
           Community covers one tenant with manual and weekly backups. Pro covers two tenants and adds daily backups, full
           restore, replace in place, drift revert, Azure storage, the audit log and white-label PDF reports. New MSP subscriptions include 5
-          tenants and add cross tenant views and bulk actions. Your license key arrives by email right after checkout, and
-          you are not charged until the trial ends.
+          tenants and add cross tenant views and bulk actions.
         </p>
       </div>
-      <div className="w-full space-y-2">
-        <Button className="bg-blue-600 hover:bg-blue-700" onClick={onStartTrial}>
-          <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
-          Start 30 day free trial
-        </Button>
+      <div className="w-full space-y-3">
+        <TrialSignupForm ref={emailRef} source="license-page" onSent={onSent} />
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-gray-600">
+          <span>Ready to buy?</span>
+          <Button type="button" variant="outline" size="sm" onClick={() => void bridge.license.open("checkout", { source: "license-page" })}>
+            <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
+            Buy now
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={() => void bridge.license.open("buy", { source: "license-page" })}>
+            Compare plans
+          </Button>
+        </div>
+        <InvoiceNote />
         <p className="text-sm text-gray-600">
-          <a href="https://docs.tenuvault.com/licensing/" className="text-blue-600 underline underline-offset-4 hover:text-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600" onClick={(event) => { event.preventDefault(); void bridge.app.openExternal("https://docs.tenuvault.com/licensing/") }}>
-            Buying for a company? Yearly plans are available by quote, purchase order and invoice, and a 30 day trial key without a card on request.
-          </a>
-        </p>
-        <p className="text-sm text-gray-600">
-          <a href="https://docs.tenuvault.com/licensing/" className="text-blue-600 underline underline-offset-4 hover:text-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600" onClick={(event) => { event.preventDefault(); void bridge.app.openExternal("https://docs.tenuvault.com/licensing/") }}>
+          <a href="https://docs.tenuvault.com/licensing/" className={linkClass} onClick={(event) => openExternalLink(event, "https://docs.tenuvault.com/licensing/")}>
             Eligible nonprofits can use Pro at no cost.
           </a>
         </p>
       </div>
+    </div>
+  )
+}
+
+/**
+ * Swaps this machine's key for another one in the main process: the new key is activated
+ * first and the saved key released only once it was accepted, so organization licenses and
+ * the current key survive a refused key.
+ */
+function ReplaceKeyForm({ busy, onReplace }: { busy: Busy; onReplace: (key: string) => void }) {
+  const [newKey, setNewKey] = useState("")
+  return (
+    <form
+      className="space-y-2"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (newKey.trim()) onReplace(newKey.trim())
+      }}
+    >
+      <Label htmlFor="replacement-key">New license key</Label>
+      <div className="flex gap-2">
+        <Input
+          id="replacement-key"
+          autoComplete="off"
+          className="font-mono"
+          placeholder="Paste the key from your purchase email"
+          value={newKey}
+          onChange={(event) => setNewKey(event.target.value)}
+          spellCheck={false}
+          disabled={busy !== null}
+        />
+        <Button type="submit" disabled={busy !== null || !newKey.trim()}>
+          {busy === "replace" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <KeyRound className="mr-2 h-4 w-4" />}
+          Use this key
+        </Button>
+      </div>
+      <p className="text-xs text-gray-500">The new key is activated for your tenants first. Only then is the saved key released from this machine.</p>
+    </form>
+  )
+}
+
+/**
+ * A saved key that no longer licenses anything, such as an ended trial: buy a plan and
+ * swap in the new key without deactivating the machine first.
+ */
+function InactiveKeyReplacement({ busy, onReplace }: { busy: Busy; onReplace: (key: string) => void }) {
+  const [replacing, setReplacing] = useState(false)
+  return (
+    <div className="space-y-3 rounded-3xl bg-gray-50 p-5">
+      <p className="text-sm text-gray-700">
+        Your saved key is not active, for example because your trial ended. Bought a new license? Enter its key here.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" onClick={() => void bridge.license.open("checkout", { source: "license-page-inactive" })}>
+          <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
+          Buy Pro
+        </Button>
+        {!replacing && (
+          <Button type="button" variant="outline" onClick={() => setReplacing(true)}>
+            <KeyRound className="mr-2 h-4 w-4" aria-hidden="true" />
+            Enter a new key
+          </Button>
+        )}
+      </div>
+      {replacing && <ReplaceKeyForm busy={busy} onReplace={onReplace} />}
+      <InvoiceNote />
+    </div>
+  )
+}
+
+/** A running no-card trial: when it ends, buying Pro, and swapping in the paid key. */
+function TrialStatus({ status, busy, onReplace }: { status: LicenseStatus; busy: Busy; onReplace: (key: string) => void }) {
+  const [replacing, setReplacing] = useState(false)
+  const daysLeft = trialDaysLeft(status)
+  if (daysLeft === null || !status.trialEndsAt) return null
+  return (
+    <div className="space-y-3 rounded-3xl bg-blue-50/60 p-5">
+      <p className="flex items-center gap-3 text-base font-medium text-gray-900">
+        <span className="flex size-9 flex-shrink-0 items-center justify-center rounded-full bg-coral-500 text-white" aria-hidden="true">
+          <Clock className="h-4 w-4" />
+        </span>
+        Your Pro trial ends on {formatDate(status.trialEndsAt)}, {daysLeft === 1 ? "in 1 day" : `in ${daysLeft} days`}.
+      </p>
+      <p className="text-sm text-gray-600">
+        Nothing is charged when it ends. One tenant continues on Community, any other tenant is no longer covered, and
+        Pro features turn off. Your backups stay where they are. To keep Pro, buy a plan and paste the new license key from the purchase email here.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" onClick={() => void bridge.license.open("checkout", { source: "license-page-trial" })}>
+          <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
+          Buy Pro
+        </Button>
+        <Button type="button" variant="outline" onClick={() => void bridge.license.open("checkout", { source: "license-page-trial", plan: "msp" })}>
+          <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
+          Buy MSP
+        </Button>
+        {!replacing && (
+          <Button type="button" variant="ghost" onClick={() => setReplacing(true)}>
+            <KeyRound className="mr-2 h-4 w-4" aria-hidden="true" />
+            Enter your new key
+          </Button>
+        )}
+      </div>
+      {replacing && <ReplaceKeyForm busy={busy} onReplace={onReplace} />}
+      <InvoiceNote />
     </div>
   )
 }
@@ -165,8 +299,17 @@ export default function LicensePage() {
   const [key, setKey] = useState("")
   const keyInput = useRef<HTMLInputElement>(null)
   const [trialKeyHint, setTrialKeyHint] = useState(false)
+  const trialEmail = useRef<HTMLInputElement>(null)
   const { busy, error, notice, run } = useAction()
   const checkedOnOpen = useRef(false)
+  // Other screens send the admin here to start the trial.
+  const startTrial = (useLocation().state as { startTrial?: boolean } | null)?.startTrial === true
+  const unlicensed = status ? isUnlicensed(status) : false
+  useEffect(() => {
+    if (!startTrial || !unlicensed) return
+    trialEmail.current?.scrollIntoView({ block: "center" })
+    trialEmail.current?.focus({ preventScroll: true })
+  }, [startTrial, unlicensed])
 
   useEffect(() => {
     // A failed read is shown below through the provider's error.
@@ -210,7 +353,7 @@ export default function LicensePage() {
     if (id && !tenantRows.some(row => row.tenantId.toLowerCase() === id)) {
       tenantRows.push({
         tenantId: id, signedIn: false, activated: false, entitled: false,
-        source: null, plan: null, tenants: null, expiresAt: null, validUntil: null, shared: null,
+        source: null, plan: null, tenants: null, expiresAt: null, validUntil: null, trial: false, shared: null,
         shareNeedsSignIn: false, displayKey: null, message: 'Sign in to check this tenant’s license.',
       })
     }
@@ -230,6 +373,15 @@ export default function LicensePage() {
         result && result.tenants.some((t) => t.entitled && t.source === "key")
           ? "License activated."
           : "License key saved. It activates for a tenant when you sign in to it.",
+    )
+  const replaceKey = (newKey: string) =>
+    void run(
+      "replace",
+      () => bridge.license.replaceKey(newKey),
+      (result) =>
+        result && result.tenants.some((t) => t.entitled && t.source === "key")
+          ? "Your new license is active."
+          : "Your new license key is saved. It activates for a tenant when you sign in to it.",
     )
   const deactivate = async () => {
     if (!(await confirm({ title: "Deactivate this machine?", description: "Backups that require this license will stop. Your existing backups remain available. Save your license key so you can activate again.", confirmLabel: "Deactivate", destructive: true }))) return
@@ -284,7 +436,7 @@ export default function LicensePage() {
               )}
               <CardDescription className="mt-2">
                 {isUnlicensed(status)
-                  ? "Paste the license key from your purchase email, or start a free trial."
+                  ? "Paste the license key from your email, or start a free trial."
                   : status.plan
                     ? `Your license covers ${status.tenantLimit ?? 1} tenant${status.tenantLimit === 1 ? "" : "s"}. ${activeKeyTenants} ${activeKeyTenants === 1 ? "is" : "are"} active on this machine.`
                     : hasPaidLicense(status)
@@ -318,12 +470,9 @@ export default function LicensePage() {
             </Alert>
           )}
 
-          {isUnlicensed(status) && <TrialCallToAction onStartTrial={() => {
-            void bridge.license.open("buy", { source: "license-page" })
-            setTrialKeyHint(true)
-            keyInput.current?.scrollIntoView({ block: "center" })
-            keyInput.current?.focus({ preventScroll: true })
-          }} />}
+          {isUnlicensed(status) && <TrialCallToAction emailRef={trialEmail} onSent={() => setTrialKeyHint(true)} />}
+          {status.trial && <TrialStatus status={status} busy={busy} onReplace={replaceKey} />}
+          {status.hasKey && !status.trial && status.keyState !== "active" && <InactiveKeyReplacement busy={busy} onReplace={replaceKey} />}
 
           {status.hasKey ? (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-gray-50 px-5 py-4">
@@ -349,7 +498,7 @@ export default function LicensePage() {
                   autoComplete="off"
                   aria-describedby={trialKeyHint ? "trial-key-hint" : undefined}
                   className="font-mono"
-                  placeholder="Paste the key from your purchase email"
+                  placeholder="Paste the key from your email"
                   value={key}
                   onChange={(e) => setKey(e.target.value)}
                   spellCheck={false}
@@ -360,7 +509,7 @@ export default function LicensePage() {
                   Activate
                 </Button>
               </div>
-              {trialKeyHint && <p id="trial-key-hint" className="text-sm text-gray-600" role="status">Paste the key from your email to activate the trial.</p>}
+              {trialKeyHint && <p id="trial-key-hint" className="text-sm text-gray-600">Paste the key from your email to activate the trial.</p>}
               <p className="text-xs text-gray-500">
                 Licensed through your organization? <Link to="/portal/onboarding" className="text-blue-600 hover:underline">Sign in to your tenant</Link>{" "}
                 and TenuVault uses the license a tenant admin shared with it.

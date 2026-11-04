@@ -205,16 +205,24 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
       assert(await evaluate(`window.__scheduleFixture.links.at(-1).source === 'plan-dialog-dailyschedule'`), "plan dialog buy source missing")
       await screenshot("09c-schedule-plan-dialog")
       await evaluate(`[...${body}.querySelectorAll('[role="dialog"] button')].find(button => button.textContent.trim() === 'Close').click()`)
-      await evaluate(`window.__scheduleFrame.contentWindow.location.hash = '#/portal/onboarding'`)
-      assert(await waitForCondition(`${body}.innerText.includes('I have the client id')`), "onboarding fixture did not open")
-      await evaluate(`[...${body}.querySelectorAll('button')].find(button => button.textContent.trim() === 'I have the client id').click()`)
-      await setValue("tenant", "44444444-4444-4444-4444-444444444444")
-      await setValue("clientId", "22222222-2222-2222-2222-222222222222")
-      await evaluate(`[...${body}.querySelectorAll('button')].find(button => button.textContent.trim() === 'Sign in with Microsoft').click()`)
-      assert(await waitForCondition(`${body}.querySelector('[role="dialog"]')?.innerText.includes('Community covers one tenant, and it is used for Contoso 1.')`), "Community dialog did not resolve the existing tenant name")
-      await evaluate(`[...${body}.querySelectorAll('[role="dialog"] button')].find(button => button.textContent.trim() === 'Start 30 day free trial').click()`)
-      assert(await evaluate(`window.__scheduleFixture.links.at(-1).source === 'second-tenant'`), "second tenant buy source missing")
+      const openSecondTenantDialog = async () => {
+        await evaluate(`window.__scheduleFrame.contentWindow.location.hash = '#/portal/onboarding'`)
+        // The second time the onboarding page may already be on its sign-in step.
+        assert(await waitForCondition(`[...${body}.querySelectorAll('button')].some(button => ['I have the client id', 'Sign in with Microsoft'].includes(button.textContent.trim()))`), "onboarding fixture did not open")
+        await evaluate(`[...${body}.querySelectorAll('button')].find(button => button.textContent.trim() === 'I have the client id')?.click()`)
+        await setValue("tenant", "44444444-4444-4444-4444-444444444444")
+        await setValue("clientId", "22222222-2222-2222-2222-222222222222")
+        await evaluate(`[...${body}.querySelectorAll('button')].find(button => button.textContent.trim() === 'Sign in with Microsoft').click()`)
+        assert(await waitForCondition(`${body}.querySelector('[role="dialog"]')?.innerText.includes('Community covers one tenant, and it is used for Contoso 1.')`), "Community dialog did not resolve the existing tenant name")
+      }
+      await openSecondTenantDialog()
       await screenshot("09d-community-tenant-dialog")
+      // The trial starts on the License page, in the app, without a browser.
+      const linksBefore = await evaluate(`window.__scheduleFixture.links.length`)
+      await evaluate(`[...${body}.querySelectorAll('[role="dialog"] button')].find(button => button.textContent.trim() === 'Start 30 day free trial').click()`)
+      assert(await waitForCondition(`${body}.innerText.includes('Try Pro free for 30 days, no card needed.') && !${body}.querySelector('[role="dialog"]')`), "second tenant trial did not open the trial form on the License page")
+      assert(await evaluate(`window.__scheduleFixture.links.length === ${linksBefore}`), "second tenant trial opened a browser page")
+      await openSecondTenantDialog()
       await evaluate(`[...${body}.querySelectorAll('[role="dialog"] button')].find(button => button.textContent.trim() === 'Add a license key').click()`)
       assert(await waitForCondition(`${body}.innerText.includes('License key') && !${body}.querySelector('[role="dialog"]')`), "Add a license key did not open the License page")
 

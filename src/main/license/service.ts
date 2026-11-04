@@ -33,6 +33,8 @@ interface Entitlement {
   exp: number
   /** Version 2: license key expiry in Unix seconds, absent for renewing subscriptions. */
   keyExp?: number
+  /** Version 2: the key is a no-card trial key. */
+  trial?: true
   /** Server-issued internal CIS claim for a validated internal license on an allowlisted installation. It enables Build Kit import only. */
   cis?: "internal"
 }
@@ -171,11 +173,18 @@ const LEGACY_KEYS = ["license.key", "license.trialStartedAt", "license.lastSeenA
 const guidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 // Time and status checks for a token whose signature already verified.
-export function entitlementCurrent(payload: Pick<Entitlement, "exp" | "status">, now: number, seen: number): boolean {
+export function entitlementCurrent(
+  payload: Pick<Entitlement, "exp" | "status"> & Partial<Pick<Entitlement, "v" | "keyExp" | "trial">>,
+  now: number,
+  seen: number,
+): boolean {
   return (
     payload.status === "granted" &&
     Number.isFinite(payload.exp) &&
     payload.exp * 1000 > now &&
+    // A trial ends at its key expiry, also offline: a token refreshed in its last 14 days
+    // must not carry Pro past day 30. Paid keys keep the offline grace of their token.
+    !(payload.v === 2 && payload.trial === true && typeof payload.keyExp === "number" && payload.keyExp * 1000 <= now) &&
     seen - now <= CLOCK_TOLERANCE_MS
   )
 }
@@ -192,6 +201,8 @@ function decodeToken(token: string, publicKey: KeyObject): Entitlement | null {
     if (payload.v === 2 && payload.keyExp !== undefined && (
       !Number.isFinite(payload.keyExp) || !Number.isFinite(new Date(payload.keyExp * 1000).getTime())
     )) return null
+    if (payload.v === 2 && payload.trial !== undefined && payload.trial !== true) return null
+    if (payload.v === 1) delete payload.trial
     if (payload.cis !== undefined && payload.cis !== "internal") return null
     return payload
   } catch {
@@ -622,6 +633,8 @@ export class LicenseService {
         activationId: entry.activationId,
         installId: this.installId,
         tenantId,
+        // Lets the service send version 2 tokens to apps that read them.
+        appVersion: this.options.appVersion,
         ...(await this.sharingFields(tenantId, shareWithTenant)),
         ...(shareWithTenant === undefined ? {} : { shareWithTenant }),
       }, current)
@@ -737,6 +750,107 @@ export class LicenseService {
       this.message = tenantIds.length === 0 ? "Sign in to a tenant to activate the license for it." : null
       this.save()
     })
+  }
+
+  /**
+   * Replaces this machine's key with another one, such as a trial key with the paid key.
+   * The new key is activated for the signed-in tenants while the current key and its
+   * activations stay in place. Only once the service accepted the new key for at least one
+   * tenant are the current key's activations released and the new key saved. A refused key
+   * changes nothing, and the first error is thrown.
+   */
+  async replaceKey(key: string, tenantIds: string[]): Promise<void> {
+    this.load()
+    const trimmed = key.trim()
+    if (!/^[\x21-\x7e]{8,128}$/.test(trimmed)) throw new Error("Enter a valid license key.")
+    const previousKey = this.state?.key
+    if (!previousKey || previousKey === trimmed) return this.setKey(trimmed, tenantIds)
+    const signedIn = [...new Set(tenantIds.map((id) => id.toLowerCase()))]
+    return this.mutate([...this.tenantMutations.keys(), ...Object.keys(this.state?.activations ?? {}), ...signedIn], true, async () => {
+      const unchanged = () => this.state?.key === previousKey
+      this.assertCurrent(unchanged)
+      // Read after queued tenant work finished, so a key activation it added is covered too.
+      // Every tenant the current key covers here must be covered by the new key, or the
+      // swap would cost it its license. Signed-in tenants are activated as well, except
+      // those already licensed, for example through their organization, which stay as
+      // they are.
+      const keyTenants = Object.entries(this.state?.activations ?? {})
+        .filter(([tenantId, entry]) => !entry.source && this.tenantPresent(tenantId))
+        .map(([tenantId]) => tenantId)
+      const targets = [
+        ...keyTenants,
+        ...signedIn.filter((id) => !keyTenants.includes(id) && this.tenantPresent(id) && !this.valid(id)),
+      ]
+      if (targets.length === 0) throw new Error("Sign in to a tenant to switch to the new license key.")
+      const accepted: { tenant: string; data: Record<string, unknown> }[] = []
+      const errors = new Map<string, unknown>()
+      for (const tenant of targets) {
+        try {
+          const data = await this.call("activate", {
+            key: trimmed,
+            installId: this.installId,
+            tenantId: tenant,
+            os: this.platform,
+            appVersion: this.options.appVersion,
+            ...(await this.sharingFields(tenant)),
+          }, unchanged)
+          accepted.push({ tenant, data })
+          // The same checks accept() applies, made before anything is released, so an
+          // unusable answer costs nothing.
+          if (!this.usableActivation(tenant, data)) throw new Error("The license token could not be verified.")
+        } catch (error) {
+          if (error instanceof StaleLicenseRequest) throw error
+          errors.set(tenant, error)
+        }
+      }
+      this.assertCurrent(unchanged)
+      const covered = new Set(accepted.filter(({ tenant }) => !errors.has(tenant)).map(({ tenant }) => tenant))
+      const uncovered = keyTenants.find((tenant) => !covered.has(tenant))
+      if (covered.size === 0 || uncovered) {
+        // Nothing changes: release what the new key was given, and report why.
+        for (const { data } of accepted) {
+          if (typeof data.activationId !== "string") continue
+          await this.call("deactivate", { key: trimmed, activationId: data.activationId }, unchanged).catch((error: unknown) => {
+            if (error instanceof StaleLicenseRequest) throw error
+            console.warn(`[license] New key activation ${data.activationId} not released: ${errorText(error)}`)
+          })
+        }
+        throw (uncovered ? errors.get(uncovered) : undefined) ?? errors.values().next().value
+          ?? new Error("The new license key does not cover every tenant on this machine. Your current license is unchanged.")
+      }
+      const state = this.state!
+      // The previous key's activations go; organization license activations stay.
+      for (const [tenantId, entry] of Object.entries(state.activations)) {
+        if (entry.source === "tenant") continue
+        try {
+          await this.call("deactivate", { key: previousKey, activationId: entry.activationId }, unchanged)
+        } catch (error) {
+          if (error instanceof StaleLicenseRequest) throw error
+          // The old key stays bound to that activation until it expires or is released in
+          // the customer portal; it no longer licenses anything on this machine.
+          console.warn(`[license] Previous key activation for ${tenantId} not released: ${errorText(error)}`)
+        }
+        delete state.activations[tenantId]
+      }
+      this.state = { key: trimmed, activations: state.activations, ...(state.seen !== undefined ? { seen: state.seen } : {}) }
+      for (const { tenant, data } of accepted) if (covered.has(tenant)) this.accept(tenant, data, "key")
+      this.message = null
+      this.save()
+    })
+  }
+
+  // Whether accept() would take this activation response for the tenant.
+  private usableActivation(tenant: string, data: Record<string, unknown>): boolean {
+    if (typeof data.token !== "string" || typeof data.activationId !== "string") return false
+    const payload = decodeToken(data.token, this.publicKey)
+    const now = this.observe()
+    return Boolean(
+      payload &&
+      entitlementCurrent(payload, now, now) &&
+      payload.tenantId === tenant &&
+      payload.installId === this.installId &&
+      payload.act === data.activationId,
+    )
   }
 
   /**
@@ -1029,7 +1143,10 @@ export class LicenseService {
       const tenantValidUntil = payload?.v === 2 && typeof payload.keyExp === "number"
         ? new Date(payload.keyExp * 1000).toISOString()
         : null
-      if (tenantValidUntil && (!validUntil || Date.parse(tenantValidUntil) < Date.parse(validUntil))) {
+      const tenantTrial = payload?.v === 2 && payload.trial === true && tenantValidUntil !== null
+      // A trial key's end is reported as trialEndsAt; validUntil stays with the other
+      // licenses, so their expiry warning is not hidden behind the trial.
+      if (tenantValidUntil && !tenantTrial && (!validUntil || Date.parse(tenantValidUntil) < Date.parse(validUntil))) {
         validUntil = tenantValidUntil
       }
       return {
@@ -1042,6 +1159,7 @@ export class LicenseService {
         tenants: payload?.tenants ?? null,
         expiresAt: payload ? new Date(payload.exp * 1000).toISOString() : null,
         validUntil: tenantValidUntil,
+        trial: tenantTrial,
         shared: source === "key" ? (entry?.shared ?? null) : null,
         shareNeedsSignIn: source === "key" && Boolean(entry?.shareNeedsSignIn),
         displayKey: source === "tenant" ? (entry?.displayKey ?? null) : null,
@@ -1051,6 +1169,7 @@ export class LicenseService {
     this.keepSeen()
     const key = this.state?.key
     const latest = keyToken as Entitlement | null
+    const latestTrial = latest?.v === 2 && latest.trial === true && typeof latest.keyExp === "number"
     const keyMessage = !key || latest ? null
       : this.state?.keyFailure ? (REASONS[this.state.keyFailure] ?? null)
         : Object.values(this.state?.activations ?? {}).some((entry) => entry.source !== "tenant")
@@ -1067,6 +1186,8 @@ export class LicenseService {
       message: this.message,
       plan: latest?.plan ?? null,
       tenantLimit: latest?.tenants ?? null,
+      trial: latestTrial,
+      trialEndsAt: latestTrial ? new Date(latest!.keyExp! * 1000).toISOString() : null,
       validUntil,
       communityTenantId: communityTenant ?? null,
       tenants,

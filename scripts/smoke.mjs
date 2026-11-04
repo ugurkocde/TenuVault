@@ -171,7 +171,7 @@ await check("first run shows the welcome screen", async () => {
   await disableAnimations()
   assert(!(await evaluate(`document.body.innerText.includes("Backup & Restore")`)), "welcome screen missing, app shown instead")
   assert(await waitForText("Start free with Community"), "Community call to action missing")
-  assert(await waitForText("Try Pro or MSP free for 30 days"), "trial call to action missing")
+  assert(await waitForText("Try Pro free for 30 days, no card"), "trial call to action missing")
   await screenshot("00-welcome")
 })
 
@@ -404,7 +404,8 @@ await check("platform sign-in support", async () => {
 await check("license page asks for a license and offers the free trial", async () => {
   await go("#/license", "Add your license")
   assert(await waitForText("Official TenuVault builds are licensed under the license agreement"), "license agreement link missing on the license page")
-  assert(await waitForText("Start 30 day free trial"), "trial call to action missing")
+  assert(await waitForText("Try Pro free for 30 days, no card needed."), "trial call to action missing")
+  assert(await waitForText("Start free trial"), "trial button missing")
   const status = await evaluate(`window.tenuvault.license.status()`)
   assert(!status.hasKey && status.tenants.length === 0, `unexpected license state ${JSON.stringify(status)}`)
   await screenshot("02-license-none")
@@ -867,10 +868,10 @@ await check("Community is a neutral plan state and its Overview notice remembers
   assert(await waitForCondition(`!${banner}`), "Community notice could not be dismissed again")
 })
 
-await check("Community trial focuses the key input and procurement links use the external bridge", async () => {
+await check("Community trial is requested in the app, Buy now opens the checkout and the invoice and nonprofit links use the external bridge", async () => {
   try {
     await evaluate(`(() => {
-      window.__communityTrial = { opened: [], docs: [] }
+      window.__communityTrial = { opened: [], docs: [], trials: [] }
       const frame = document.createElement("iframe")
       frame.style.cssText = "position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 9999;"
       document.body.appendChild(frame)
@@ -881,7 +882,11 @@ await check("Community trial focuses the key input and procurement links use the
       frame.contentWindow.location.hash = "#/license"
       frame.contentWindow.tenuvault = {
         ...window.tenuvault,
-        license: { ...window.tenuvault.license, open: (destination, context) => { window.__communityTrial.opened.push({ destination, context }); return Promise.resolve() } },
+        license: {
+          ...window.tenuvault.license,
+          open: (destination, context) => { window.__communityTrial.opened.push({ destination, context }); return Promise.resolve() },
+          startTrial: (email, context) => { window.__communityTrial.trials.push({ email, context }); return Promise.resolve() },
+        },
         app: { ...window.tenuvault.app, openExternal: url => { window.__communityTrial.docs.push(url); return Promise.resolve() } },
       }
       document.querySelectorAll('link[rel="stylesheet"]').forEach(link => frame.contentDocument.head.appendChild(link.cloneNode()))
@@ -891,15 +896,23 @@ await check("Community trial focuses the key input and procurement links use the
       frame.contentDocument.head.appendChild(script)
     })()`)
     const body = "window.__communityTrialFrame.contentDocument.body"
-    assert(await waitForCondition(`${body}.innerText.includes("Start 30 day free trial")`), "Community trial button missing")
-    await evaluate(`[...${body}.querySelectorAll('button')].find(button => button.textContent.includes('Start 30 day free trial')).click()`)
+    assert(await waitForCondition(`${body}.innerText.includes("Try Pro free for 30 days, no card needed.")`), "Community trial form missing")
+    await evaluate(`(() => {
+      const input = ${body}.querySelector('input[type="email"]')
+      Object.getOwnPropertyDescriptor(window.__communityTrialFrame.contentWindow.HTMLInputElement.prototype, "value").set.call(input, "admin@contoso.com")
+      input.dispatchEvent(new window.__communityTrialFrame.contentWindow.Event("input", { bubbles: true }))
+    })()`)
+    assert(await waitForCondition(`!![...${body}.querySelectorAll('button')].find(button => button.textContent.trim() === 'Start free trial' && !button.disabled)`), "trial button did not enable")
+    await evaluate(`[...${body}.querySelectorAll('button')].find(button => button.textContent.trim() === 'Start free trial').click()`)
+    assert(await waitForCondition(`${body}.innerText.includes("Check your inbox at admin@contoso.com")`), "trial confirmation missing")
     assert(await waitForCondition(`${body}.innerText.includes("Paste the key from your email to activate the trial.")`), "trial key hint missing")
-    assert(await evaluate(`window.__communityTrial.opened.length === 1 && window.__communityTrial.opened[0].destination === "buy" && window.__communityTrial.opened[0].context?.source === "license-page"`), "trial did not open pricing with the license-page source")
-    assert(await evaluate(`window.__communityTrialFrame.contentDocument.activeElement.id === "license-key"`), "trial did not focus the key input")
-    assert(await evaluate(`(() => { const input = ${body}.querySelector('#license-key'); const rect = input.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= window.__communityTrialFrame.contentWindow.innerHeight })()`), "trial key input was not scrolled into view")
-    assert(await evaluate(`${body}.innerText.includes("Buying for a company? Yearly plans are available by quote, purchase order and invoice, and a 30 day trial key without a card on request.") && ${body}.innerText.includes("Eligible nonprofits can use Pro at no cost.")`), "company or nonprofit copy missing")
-    await evaluate(`${body}.querySelectorAll('a[href="https://docs.tenuvault.com/licensing/"]').forEach(link => link.click())`)
-    assert(await evaluate(`window.__communityTrial.docs.length === 2 && window.__communityTrial.docs.every(url => url === "https://docs.tenuvault.com/licensing/")`), "docs links did not use the external bridge")
+    assert(await evaluate(`window.__communityTrial.trials.length === 1 && window.__communityTrial.trials[0].email === "admin@contoso.com" && window.__communityTrial.trials[0].context?.source === "license-page"`), "trial was not requested with the license-page source")
+    assert(await evaluate(`window.__communityTrial.opened.length === 0`), "the trial opened a browser page")
+    await evaluate(`[...${body}.querySelectorAll('button')].find(button => button.textContent.trim() === 'Buy now').click()`)
+    assert(await evaluate(`window.__communityTrial.opened.length === 1 && window.__communityTrial.opened[0].destination === "checkout" && window.__communityTrial.opened[0].context?.source === "license-page"`), "Buy now did not open the checkout with the license-page source")
+    assert(await evaluate(`${body}.innerText.includes("Need an invoice instead of a card?") && ${body}.innerText.includes("support@tenuvault.com") && !${body}.innerText.includes("on request") && ${body}.innerText.includes("Eligible nonprofits can use Pro at no cost.")`), "invoice or nonprofit copy missing")
+    await evaluate(`${body}.querySelectorAll('a[href="https://docs.tenuvault.com/licensing/"], a[href^="mailto:support@tenuvault.com"]').forEach(link => link.click())`)
+    assert(await evaluate(`window.__communityTrial.docs.length === 2 && window.__communityTrial.docs.includes("https://docs.tenuvault.com/licensing/") && window.__communityTrial.docs.some(url => url.startsWith("mailto:support@tenuvault.com?subject="))`), "docs and invoice links did not use the external bridge")
     await screenshot("08-community-trial-key")
   } finally {
     await evaluate("window.__communityTrialFrame?.remove(); delete window.__communityTrialFrame; delete window.__communityTrial")

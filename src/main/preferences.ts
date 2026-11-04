@@ -22,7 +22,7 @@ function validDismissalTimestamp(value: unknown): value is string {
 function checkChanges(changes: unknown): asserts changes is Partial<StoredPreferences> {
   if (typeof changes !== "object" || changes === null || Array.isArray(changes)) throw new Error("Invalid preferences.")
   for (const [key, value] of Object.entries(changes)) {
-    if (key === "communityBannerDismissedAt") {
+    if (key === "communityBannerDismissedAt" || key === "trialReminderDismissedAt") {
       if (!validDismissalTimestamp(value)) throw new Error(`Invalid value for ${key}.`)
       continue
     }
@@ -61,6 +61,7 @@ export class Preferences {
       const stored: Partial<StoredPreferences> = JSON.parse(this.store.get(KEY) ?? "{}")
       if (typeof stored !== "object" || stored === null || Array.isArray(stored)) return {}
       if (!validDismissalTimestamp(stored.communityBannerDismissedAt)) delete stored.communityBannerDismissedAt
+      if (!validDismissalTimestamp(stored.trialReminderDismissedAt)) delete stored.trialReminderDismissedAt
       return stored
     } catch {
       return {}

@@ -103,6 +103,8 @@ export interface TenantLicenseStatus {
   expiresAt: string | null
   /** When the license key expires, if supplied by the service. Separate from the offline token expiry. */
   validUntil: string | null
+  /** The license is a no-card trial key; validUntil is when the trial ends. */
+  trial?: boolean
   /** Key licenses: whether other admins in the tenant may use it, as last confirmed by the licensing service. */
   shared: boolean | null
   /** Key licenses: sharing could not be confirmed without a fresh sign-in. */
@@ -129,8 +131,12 @@ export interface LicenseStatus {
   /** Plan and tenant allowance of this machine's key, from its latest valid token. */
   plan: "pro" | "msp" | null
   tenantLimit: number | null
-  /** Earliest license key expiry among the tenants, or null when none is supplied. */
+  /** Earliest license key expiry among the tenants, trial keys excluded, or null when none is supplied. */
   validUntil: string | null
+  /** This machine's key is a no-card trial key, from its latest valid token. */
+  trial?: boolean
+  /** When this machine's trial key ends, or null without a running trial key. */
+  trialEndsAt?: string | null
   /** The one tenant the free Community plan covers, once a tenant has used it. */
   communityTenantId: string | null
   /** Signed-in tenants and tenants with a stored activation. */
@@ -228,6 +234,8 @@ export interface AppPreferences {
   nightlyUpdates: boolean
   /** ISO timestamp of the last dismissal of the Community notice on this machine. */
   communityBannerDismissedAt?: string
+  /** ISO timestamp of the last dismissal of a trial reminder on this machine. */
+  trialReminderDismissedAt?: string
   /** Set when an administrator turned automatic updates off by policy. */
   autoUpdateManaged: boolean
 }
@@ -333,6 +341,11 @@ export interface TenuVaultBridge {
     refresh: () => Promise<LicenseStatus>
     /** Saves the key and activates it for every signed-in tenant that is not licensed yet. */
     setKey: (key: string) => Promise<LicenseStatus>
+    /**
+     * Replaces this machine's key, for example a trial key with the paid key. The current
+     * key stays active until the new one is accepted for a signed-in tenant.
+     */
+    replaceKey: (key: string) => Promise<LicenseStatus>
     /** Retries activation for one tenant, or for every signed-in tenant without a license. */
     retry: (tenantId?: string) => Promise<LicenseStatus>
     /** The key holder lets other admins of the tenant use the license, or stops. */
@@ -346,8 +359,16 @@ export interface TenuVaultBridge {
     checkNewTenant: (tenantId: string) => Promise<LicenseStatus>
     /** Releases the tenant's activation and signs out of it, when the tenant is removed from the app. */
     releaseTenant: (tenantId: string) => Promise<LicenseStatus>
-    /** Opens the checkout page (buy) or the customer portal (portal) in the browser. */
-    open: (target: "buy" | "portal", options?: { source: string }) => Promise<void>
+    /**
+     * Opens the plans page (buy), the checkout that asks for payment right away (checkout,
+     * for the plan in options, Pro by default) or the customer portal (portal) in the browser.
+     */
+    open: (target: "buy" | "checkout" | "portal", options?: { source: string; plan?: "pro" | "msp" }) => Promise<void>
+    /**
+     * Asks the licensing service to email a 30 day no-card Pro trial key to this address.
+     * Resolves once the request was accepted; the key arrives by email.
+     */
+    startTrial: (email: string, options?: { source: string }) => Promise<void>
     /** Called whenever the license state changes in the main process. Returns an unsubscribe function. */
     onChanged: (listener: (status: LicenseStatus) => void) => () => void
   }

@@ -1,5 +1,6 @@
 import { CommunityLimitError, withPlanError } from "../shared/plan-errors"
-import { licenseBuyUrl } from "./license/buy-url"
+import { licenseBuyUrl, licenseCheckoutUrl } from "./license/buy-url"
+import { requestTrialKey } from "./license/trial"
 import { importConfirmedArchive, reviewArchive } from "./backup/archive"
 import { readFile, stat } from "node:fs/promises"
 import { pathToFileURL } from "node:url"
@@ -938,6 +939,10 @@ async function bootstrap(): Promise<void> {
     if (typeof key !== "string" || key.length > 256) throw new Error("Enter a valid license key.")
     return withStatus(() => license.setKey(key, signedInTenants()))
   })
+  handleTrusted("license:replaceKey", (_event, key: unknown) => {
+    if (typeof key !== "string" || key.length > 256) throw new Error("Enter a valid license key.")
+    return withStatus(() => license.replaceKey(key, signedInTenants()))
+  })
   handleTrusted("license:retry", (_event, tenantId: unknown) => {
     if (tenantId !== undefined && tenantId !== null && !isTenantId(tenantId)) throw new Error("Unknown tenant.")
     return withStatus(() => license.retry(tenantId ? [tenantId] : signedInTenants()))
@@ -966,11 +971,18 @@ async function bootstrap(): Promise<void> {
       backupReader.remove(tenantId)
     })
   })
-  handleTrusted("license:open", async (_event, target: unknown, options?: { source?: unknown }) => {
-    const url = target === "buy" ? licenseBuyUrl(LICENSE_BUY_URL, options?.source) : target === "portal" ? LICENSE_PORTAL_URL : null
+  handleTrusted("license:open", async (_event, target: unknown, options?: { source?: unknown; plan?: unknown }) => {
+    const url = target === "buy"
+      ? licenseBuyUrl(LICENSE_BUY_URL, options?.source)
+      : target === "checkout"
+        ? licenseCheckoutUrl(LICENSE_API_BASE, options?.plan, options?.source)
+        : target === "portal" ? LICENSE_PORTAL_URL : null
     if (!url || new URL(url).protocol !== "https:") throw new Error("Refused to open an unexpected link.")
     await shell.openExternal(url)
   })
+
+  handleTrusted("license:startTrial", (_event, email: unknown, options?: { source?: unknown }) =>
+    requestTrialKey(LICENSE_API_BASE, email, options?.source))
 
   ipcMain.on("storage:getSync", (event, key: unknown) => {
     if (!trustedSender(event)) { event.returnValue = null; return }

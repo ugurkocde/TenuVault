@@ -64,9 +64,9 @@ When backups are stored on **This device, encrypted**, TenuVault makes no storag
 
 ## tenuvault.com: license checks and CIS Benchmarks content
 
-The app talks to two TenuVault services, both on `www.tenuvault.com`: the licensing service at `https://www.tenuvault.com/api/desktop-license/`, used to activate, refresh and release licenses, and on Pro and MSP the CIS Benchmarks content service at `https://www.tenuvault.com/cis/v1/` (see [CIS Benchmarks content](#cis-benchmarks-content) below). The app never contacts the payment provider directly.
+The app talks to TenuVault services on `www.tenuvault.com`: the licensing service at `https://www.tenuvault.com/api/desktop-license/`, used to activate, refresh and release licenses, the trial service at `https://www.tenuvault.com/api/desktop-trial`, used only when you start the free trial, and on Pro and MSP the CIS Benchmarks content service at `https://www.tenuvault.com/cis/v1/` (see [CIS Benchmarks content](#cis-benchmarks-content) below). The app never contacts the payment provider directly.
 
-When you open the pricing page from the app, the link names the screen it was opened from (for example `src=app-license-page`) and carries no identifier.
+When you open the pricing page or the checkout (`https://www.tenuvault.com/api/desktop-checkout`) from the app, the link names the screen it was opened from (for example `src=app-license-page`) and carries no identifier.
 
 ### When the app connects
 
@@ -80,9 +80,10 @@ When you open the pricing page from the app, the link names the screen it was op
 | Request | Fields sent |
 | --- | --- |
 | Activate a license key for a tenant | License key, installation ID, tenant ID, operating system, app version. When you are signed in to the tenant: the app registration's client ID and, when one can be obtained without prompting you, a Microsoft ID token. |
-| Refresh a license key activation | License key, activation ID, installation ID, tenant ID. When sharing is on or not yet decided: the client ID and, when available, a Microsoft ID token. Your sharing choice, once one is set. |
+| Refresh a license key activation | License key, activation ID, installation ID, tenant ID, app version. When sharing is on or not yet decided: the client ID and, when available, a Microsoft ID token. Your sharing choice, once one is set. |
 | Organization license (a license shared with your tenant) | Microsoft ID token, installation ID, operating system, app version, the action (activate, refresh or release) and, for refresh and release, the activation ID and the license's ID. The license key is not sent and never reaches your machine. |
 | Release (remove a tenant or deactivate the machine) | License key and activation ID. For an organization license, the fields in the row above. |
+| Start the free trial | The email address you enter and the screen you started it from, such as `app-license-page`. Nothing else, and only when you click **Start free trial**. The service emails the trial key to that address and keeps a record of the request (see the [privacy policy](https://tenuvault.com/privacy#free-trial)). |
 
 What each field is:
 
@@ -157,7 +158,7 @@ A local notification option shows a system notification on your machine and make
 
 ## Links that open in your browser
 
-Some buttons open a web page in your default browser instead of making a request from the app, for example **Try Pro or MSP free for 30 days**, **Start 30 day free trial**, **Manage subscription** and **Setup guide**. These pages are visited by your browser only when you click them. TenuVault only opens `https` and `mailto` links, and never loads external pages inside the app window.
+Some buttons open a web page in your default browser instead of making a request from the app, for example **Buy now**, **Buy Pro**, **Compare plans**, **Manage subscription** and **Setup guide**. These pages are visited by your browser only when you click them. TenuVault only opens `https` and `mailto` links, and never loads external pages inside the app window.
 
 ## Firewall allow list
 
