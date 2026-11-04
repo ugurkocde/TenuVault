@@ -433,7 +433,7 @@ export class BackupEngine {
     const types = includedTypes(scope).filter((type) => !readerExcluded.has(type.folder))
     if (scope.excluded.length) this.write(job, `Leaving out ${scope.excluded.length} of ${INTUNE_TYPES.length} types: ${scope.excluded.join(", ")}.`)
     if (notReadable.length) this.write(job, `Leaving out ${notReadable.length} type${notReadable.length === 1 ? "" : "s"} the Backup Reader has no permission for: ${notReadable.join(", ")}. Manual backups include them.`)
-    // Only a Backup Reader run keeps a value it cannot decrypt masked; with the admin's sign-in a refused read fails the object as before.
+    // Only a Backup Reader run keeps a value Microsoft refuses to decrypt masked; with the admin's sign-in a refused read fails the object as before.
     const keepMasked = tokens.mode === "app-only" ? (error: unknown) => error instanceof GraphError && error.status === 403 : undefined
     const maskedItems: Array<{ Folder: string; Id: string; Name: string }> = []
     const graph = new GraphSession(fetchImpl, graphToken, network)

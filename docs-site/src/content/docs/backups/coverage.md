@@ -28,7 +28,7 @@ The area and type names below are the ones the **Back up** dialog shows under **
 
 | Type | Assignments | Notes |
 | --- | --- | --- |
-| Device configuration profiles | Yes | Including custom profiles with OMA-URI settings. Windows update rings are device configuration profiles, so they are included here. Encrypted OMA-URI values are read in plain text and stored inside the encrypted backup. Exception: in a scheduled backup made by the [Backup Reader](/backups/backup-reader/), these values stay masked (`****`) and the profile cannot be restored from that backup, because Microsoft returns them in plain text only with a write permission. |
+| Device configuration profiles | Yes | Including custom profiles with OMA-URI settings. Windows update rings are device configuration profiles, so they are included here. Encrypted OMA-URI values are read in plain text and stored inside the encrypted backup. The read-only [Backup Reader](/backups/backup-reader/) and [cloud backups](/backups/cloud/) read them too, because Microsoft documents `DeviceManagementConfiguration.Read.All` as enough. If Microsoft refuses such a read, the value stays masked (`****`) and the profile cannot be restored from that backup. |
 | Settings catalog and endpoint security policies | Yes | With all settings, including settings catalog based endpoint security policies |
 | Administrative templates | Yes | With every configured setting and its values |
 | Reusable settings | No | The reusable setting itself |

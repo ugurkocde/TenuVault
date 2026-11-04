@@ -16,8 +16,9 @@ export interface GraphReader {
 export interface ReadOptions {
   /**
    * Backup only, never restore: whether a refused plain-text read of a masked value keeps it masked
-   * (****) instead of failing the object. The Backup Reader may read encrypted OMA-URI settings but
-   * not decrypt them, which Microsoft allows only with write permission. A masked snapshot is never
+   * (****) instead of failing the object. Microsoft documents DeviceManagementConfiguration.Read.All
+   * as enough to read encrypted OMA-URI values, so this applies only when it refuses the Backup
+   * Reader's read anyway. A masked snapshot is never
    * restorable (see the registry's restorable checks), so it can only record that the value exists.
    */
   keepMasked?: (error: unknown) => boolean

@@ -45,7 +45,7 @@ function setup(options: { decrypt?: boolean; retentionDays?: number; excludedTyp
       if (path.includes("getOmaSettingPlainTextValue")) {
         return decrypt
           ? Response.json({ value: "plain-key" })
-          : Response.json({ error: { code: "Forbidden", message: "Application must have one of the following scopes: DeviceManagementConfiguration.ReadWrite.All" } }, { status: 403 })
+          : Response.json({ error: { code: "Forbidden", message: "Forbidden" } }, { status: 403 })
       }
       if (path.startsWith("/beta/")) return Response.json({ value: [] })
       throw new Error(`unexpected ${url}`)
