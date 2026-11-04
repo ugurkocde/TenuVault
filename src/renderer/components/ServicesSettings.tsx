@@ -127,7 +127,7 @@ function FixCallout({ module, tenantId, clientId }: { module: ServiceModuleStatu
     <div className="space-y-2 rounded-2xl bg-gray-50 px-4 py-3 text-sm">
       <p className="font-medium text-gray-900">{access ? "Allow restores" : "Add the missing permissions"}</p>
       <p className="text-gray-600">
-        Add {access ? <Permissions requirement={[access.permissions.map((permission) => permission.name)]} /> : missing.length ? <Permissions requirement={missing} /> : "the permissions above"} to this tenant's TenuVault app registration as delegated Microsoft Graph permissions, and grant admin consent. That needs a Global Administrator, Privileged Role Administrator or Cloud Application Administrator.
+        Add {access ? <Permissions requirement={[access.permissions.map((permission) => permission.name)]} /> : missing.length ? <Permissions requirement={missing} /> : "the permissions above"} to this tenant's TenuVault app registration as delegated Microsoft Graph permissions, and grant admin consent. That needs a Global Administrator, Privileged Role Administrator, Cloud Application Administrator or Application Administrator.
       </p>
       <div className="flex flex-wrap gap-2">
         {commands ? (

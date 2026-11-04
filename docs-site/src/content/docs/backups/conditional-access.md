@@ -41,7 +41,7 @@ While the service is on but the app registration cannot read it, backups leave t
 | Back up and detect drift | `Policy.Read.All` (requested by default) | Security Reader, Global Reader, Conditional Access Administrator or Security Administrator |
 | Restore | `Policy.Read.All` and `Policy.ReadWrite.ConditionalAccess` (opt-in) | Conditional Access Administrator or Security Administrator |
 
-To allow restores in a tenant you already connected, add the permission to its existing TenuVault app registration and grant admin consent. That needs a Global Administrator, Privileged Role Administrator or Cloud Application Administrator. **Services and permissions** offers both ways:
+To allow restores in a tenant you already connected, add the permission to its existing TenuVault app registration and grant admin consent. That needs a Global Administrator, Privileged Role Administrator, Cloud Application Administrator or Application Administrator. **Services and permissions** offers both ways:
 
 * **Open API permissions in Entra**, then **Add a permission** > **Microsoft Graph** > **Delegated permissions** > `Policy.ReadWrite.ConditionalAccess`, and **Grant admin consent**.
 * **Copy Azure CLI commands**, filled in with the tenant and app registration:

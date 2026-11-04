@@ -48,7 +48,7 @@ Shows, for each connected tenant, which services TenuVault backs up and what the
 | --- | --- |
 | **Check again** | Gets a new sign-in token and checks again, for example after you granted admin consent to a permission. |
 | **Include in backups** | Turns an opt-in service, such as Entra Conditional Access, on or off for the tenant. While it is off, backups leave its items out. |
-| **Open API permissions in Entra** | Shown when a permission is missing. Opens the tenant's existing app registration in Entra, where you add the permission and grant admin consent. That needs a Global Administrator, Privileged Role Administrator or Cloud Application Administrator. |
+| **Open API permissions in Entra** | Shown when a permission is missing. Opens the tenant's existing app registration in Entra, where you add the permission and grant admin consent. That needs a Global Administrator, Privileged Role Administrator, Cloud Application Administrator or Application Administrator. |
 | **Copy Azure CLI commands** | Shown when only a service's restore permission is missing. Copies the commands that add it to the existing app registration and grant admin consent. |
 
 Backup logs, **Backup Details** and the restore wizard link here when a missing permission leaves items out or stops a restore. For the permissions each service needs, see [App registration and delegated permissions](/security/permissions/) and [Conditional Access backups](/backups/conditional-access/).
