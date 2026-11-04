@@ -186,3 +186,9 @@ The **Adoption across customers** section shows the adopted version, pending upg
 * Organization customizations only document a difference. They do not change any policy.
 * A golden standard holds no tenant evidence. Customer values live in parameters, mappings and the overlay of each adoption.
 * Applying an adoption always goes through a reviewed change set. Nothing is written by publishing a standard or saving a configuration.
+
+## Related pages
+
+* [Baseline exceptions in a spreadsheet or a register](https://www.tenuvault.com/compare/intune-baseline-exceptions-spreadsheet-vs-register): when a spreadsheet of exceptions is enough, on the product site
+* [CIS Benchmarks](/baselines/cis-benchmarks/)
+* [Changes](/changes/)
