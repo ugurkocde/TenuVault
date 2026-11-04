@@ -255,7 +255,7 @@ describe("Restoring Conditional Access", () => {
     expect(writes[0]!.body).toMatchObject({ displayName: "[Restored] Require MFA outside the office", state: REPORT_ONLY })
     expect(outcome.adminLink).toEqual({ url: "https://entra.microsoft.com/#view/Microsoft_AAD_ConditionalAccess/PolicyBlade/policyId/new-1", center: "Entra", exact: true })
     expect(outcome.warnings?.join("\n")).toMatch(/report-only mode instead of enabled/)
-    expect(outcome.warnings).toContain(`The app registration has no permission to read groups, so TenuVault did not check that excluded group ${BREAK_GLASS} still exists. Check the excluded accounts and groups in Entra: an exclusion of a deleted account, such as an emergency access account, protects nobody.`)
+    expect(outcome.warnings).toContain(`The app registration has no permission to read groups, so TenuVault did not check that excluded group ${BREAK_GLASS} still exists. Check the excluded users, groups and workload identities in Entra: an exclusion of a deleted account, such as an emergency access account, protects nobody.`)
   })
 
   it("says why a reference was not checked and gives advice that fits what each reference does", () => {

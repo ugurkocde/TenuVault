@@ -70,3 +70,23 @@ it('rejects a replacement repair when live state changed after the failure', asy
   expect(result.error).toContain('changed after')
   expect(writes).toBe(1)
 })
+
+it('reports a replacement repair as missing, without an admin link, when the object was deleted after the failure', async () => {
+  let deleted = false
+  let writes = 0
+  const graph: GraphCall = async (method): ReturnType<GraphCall> => {
+    if (method === 'GET') return deleted ? { status: 404, body: { error: { code: 'ResourceNotFound', message: 'gone' } } } : { status: 200, body: { id: 'category', displayName: 'Before' } }
+    writes++
+    return { status: 400, body: { error: { message: 'Rejected' } } }
+  }
+  const restore = new Restorer(graph, { mode: 'replace', assignments: false })
+  const categoryPath = 'backup/DeviceCategories/a.json'
+  const failed = await restore.restore(categoryPath, { id: 'category', displayName: 'Wanted' })
+  // The partial outcome still links to the object, so the admin can check it.
+  expect(failed.adminLink?.url).toContain('deviceCategories')
+  deleted = true
+  const result = await restore.repair(categoryPath, failed.repairToken!)
+  expect(result).toMatchObject({ success: false, missing: true, retryable: false, policyId: 'category' })
+  expect(result.adminLink).toBeUndefined()
+  expect(writes).toBe(1)
+})

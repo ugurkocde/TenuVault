@@ -174,7 +174,7 @@ export function uncheckedReferencesWarning(cause: "forbidden" | "unanswered", re
   const assignees = references.filter((reference) => ASSIGNEE_KINDS.has(reference.kind))
   const advice = [
     ...(assignees.some((reference) => reference.exclude)
-      ? ["Check the excluded accounts and groups in Entra: an exclusion of a deleted account, such as an emergency access account, protects nobody."]
+      ? ["Check the excluded users, groups and workload identities in Entra: an exclusion of a deleted account, such as an emergency access account, protects nobody."]
       : []),
     ...(assignees.some((reference) => !reference.exclude)
       ? ["If an included user, group or workload identity was deleted, the policy applies to fewer of them than in the backup."]
