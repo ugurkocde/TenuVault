@@ -152,11 +152,16 @@ const KIND_PLURAL: Record<ReferenceKind, string> = {
 /** "a", "a and b", "a, b and c". */
 const listed = (items: string[]) => (items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`)
 
+/** Kinds that decide who a policy applies to: users, groups and workload identities. */
+const ASSIGNEE_KINDS: ReadonlySet<ReferenceKind> = new Set(["user", "group", "servicePrincipal"])
+
 /**
  * The restore warning for references TenuVault could not check: why (the app registration cannot read
- * that kind of object, or Microsoft did not answer) and what to do, which depends on whether an
- * exclusion is among them. A deleted exclusion protects nobody once the policy is on; a deleted
- * inclusion only narrows who the policy applies to.
+ * that kind of object, or Microsoft did not answer) and what to do. The advice depends on what each
+ * reference does, and does not assume the policy is off (a replace keeps a live policy enforced):
+ * a deleted excluded account protects nobody, a deleted included one narrows who the policy applies
+ * to, and a deleted named location or authentication strength breaks the condition or control that
+ * uses it.
  */
 export function uncheckedReferencesWarning(cause: "forbidden" | "unanswered", references: PolicyReference[]): string | undefined {
   if (!references.length) return undefined
@@ -166,11 +171,22 @@ export function uncheckedReferencesWarning(cause: "forbidden" | "unanswered", re
   const why = cause === "forbidden"
     ? `The app registration has no permission to read ${kinds}, so TenuVault did not check that ${labels} still ${verb}.`
     : `Microsoft did not answer when TenuVault checked that ${labels} still ${verb}.`
-  const one = references.length === 1
-  const advice = references.some((reference) => reference.exclude)
-    ? `Check ${one ? "it" : "them"} in Entra before you turn the policy on: an exclusion of a deleted account, such as an emergency access account, protects nobody.`
-    : `If ${one ? "it was" : "one was"} deleted, the policy applies to fewer people than in the backup.`
-  return `${why} ${advice}`
+  const assignees = references.filter((reference) => ASSIGNEE_KINDS.has(reference.kind))
+  const advice = [
+    ...(assignees.some((reference) => reference.exclude)
+      ? ["Check the excluded accounts and groups in Entra: an exclusion of a deleted account, such as an emergency access account, protects nobody."]
+      : []),
+    ...(assignees.some((reference) => !reference.exclude)
+      ? ["If an included user, group or workload identity was deleted, the policy applies to fewer of them than in the backup."]
+      : []),
+    ...(references.some((reference) => reference.kind === "namedLocation")
+      ? ["Check the named locations in Entra: the policy's location condition depends on them."]
+      : []),
+    ...(references.some((reference) => reference.kind === "authenticationStrength")
+      ? ["Check the authentication strength in Entra: the policy's grant control depends on it."]
+      : []),
+  ]
+  return [why, ...advice].join(" ")
 }
 
 /**

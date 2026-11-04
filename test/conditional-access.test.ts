@@ -255,16 +255,27 @@ describe("Restoring Conditional Access", () => {
     expect(writes[0]!.body).toMatchObject({ displayName: "[Restored] Require MFA outside the office", state: REPORT_ONLY })
     expect(outcome.adminLink).toEqual({ url: "https://entra.microsoft.com/#view/Microsoft_AAD_ConditionalAccess/PolicyBlade/policyId/new-1", center: "Entra", exact: true })
     expect(outcome.warnings?.join("\n")).toMatch(/report-only mode instead of enabled/)
-    expect(outcome.warnings).toContain(`The app registration has no permission to read groups, so TenuVault did not check that excluded group ${BREAK_GLASS} still exists. Check it in Entra before you turn the policy on: an exclusion of a deleted account, such as an emergency access account, protects nobody.`)
+    expect(outcome.warnings).toContain(`The app registration has no permission to read groups, so TenuVault did not check that excluded group ${BREAK_GLASS} still exists. Check the excluded accounts and groups in Entra: an exclusion of a deleted account, such as an emergency access account, protects nobody.`)
   })
 
-  it("says why a reference was not checked and gives advice that fits an included object", () => {
+  it("says why a reference was not checked and gives advice that fits what each reference does", () => {
     const group = { kind: "group", id: "g1", path: "conditions.users.includeGroups", exclude: false } as const
     const user = { kind: "user", id: "u1", path: "conditions.users.includeUsers", exclude: false } as const
+    const location = { kind: "namedLocation", id: "l1", path: "conditions.locations.excludeLocations", exclude: true } as const
+    const strength = { kind: "authenticationStrength", id: "s1", path: "grantControls.authenticationStrength.id", exclude: false } as const
     expect(uncheckedReferencesWarning("forbidden", [])).toBeUndefined()
-    expect(uncheckedReferencesWarning("forbidden", [group])).toBe("The app registration has no permission to read groups, so TenuVault did not check that included group g1 still exists. If it was deleted, the policy applies to fewer people than in the backup.")
-    expect(uncheckedReferencesWarning("unanswered", [group, user])).toBe("Microsoft did not answer when TenuVault checked that included group g1 and included user u1 still exist. If one was deleted, the policy applies to fewer people than in the backup.")
-    expect(uncheckedReferencesWarning("forbidden", [group, user, { ...user, id: "u2", exclude: true }])).toMatch(/^The app registration has no permission to read groups and users, so TenuVault did not check that included group g1, included user u1 and excluded user u2 still exist\. Check them in Entra/)
+    expect(uncheckedReferencesWarning("forbidden", [group])).toBe("The app registration has no permission to read groups, so TenuVault did not check that included group g1 still exists. If an included user, group or workload identity was deleted, the policy applies to fewer of them than in the backup.")
+    expect(uncheckedReferencesWarning("unanswered", [group, user])).toMatch(/^Microsoft did not answer when TenuVault checked that included group g1 and included user u1 still exist\. If an included/)
+    // A mixed list keeps both the exclusion and the inclusion advice.
+    const mixed = uncheckedReferencesWarning("forbidden", [group, user, { ...user, id: "u2", exclude: true }])!
+    expect(mixed).toMatch(/^The app registration has no permission to read groups and users, so TenuVault did not check that included group g1, included user u1 and excluded user u2 still exist\./)
+    expect(mixed).toContain("an exclusion of a deleted account")
+    expect(mixed).toContain("applies to fewer of them")
+    // Locations and strengths are not about who the policy applies to, and no advice assumes the policy is off.
+    const other = uncheckedReferencesWarning("unanswered", [location, strength])!
+    expect(other).toContain("location condition depends on them")
+    expect(other).toContain("grant control depends on it")
+    expect(other).not.toMatch(/fewer|account|turn the policy on/)
   })
 
   it("points a policy at the named location and authentication strength recreated earlier in the same restore", async () => {

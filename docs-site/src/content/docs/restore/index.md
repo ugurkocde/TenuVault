@@ -173,7 +173,7 @@ Each item that is now in the tenant has a button next to it that opens it in the
 * **Open in Entra** opens a Conditional Access policy.
 * **Open list in Intune** or **Open list in Entra** opens the list the item is in, for types whose page the admin centers do not let TenuVault open directly, such as administrative templates, app configuration policies, enrollment restrictions, assignment filters, scope tags, named locations and authentication strengths. Find the item there by its name.
 
-Items that failed or were skipped have no button, because there is nothing new to open.
+Skipped items, and failed items that left nothing behind, have no button. An incomplete object has one, so you can check and finish it in the admin center.
 
 ### After the restore
 
