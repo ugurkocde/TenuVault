@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { DEFAULT_SETTINGS_SECTION, SETTINGS_SECTION_IDS, parseSettingsSection, settingsHref } from "../src/renderer/lib/settings-section"
+import { DEFAULT_SETTINGS_SECTION, SETTINGS_SECTION_IDS, parseSettingsSection, resolveSettingsSection, settingsHref } from "../src/renderer/lib/settings-section"
 
 describe("parseSettingsSection", () => {
   it("accepts every known section id", () => {
@@ -32,5 +32,24 @@ describe("settingsHref", () => {
 
   it("keeps an in-section anchor after the query", () => {
     expect(settingsHref("storage", "recovery-key")).toBe("/portal/settings?section=storage#recovery-key")
+  })
+})
+
+describe("resolveSettingsSection", () => {
+  it("opens Services and permissions as its own section", () => {
+    expect(settingsHref("services")).toBe("/portal/settings?section=services")
+    expect(resolveSettingsSection("services", "")).toBe("services")
+  })
+
+  it("sends links from before the section existed to it", () => {
+    expect(resolveSettingsSection("signin", "#services")).toBe("services")
+    expect(resolveSettingsSection(null, "#services")).toBe("services")
+    expect(resolveSettingsSection("signin", "")).toBe("signin")
+    expect(resolveSettingsSection("storage", "#services")).toBe("storage")
+  })
+
+  it("keeps the recovery key anchor on the storage section", () => {
+    expect(resolveSettingsSection(null, "#recovery-key")).toBe("storage")
+    expect(resolveSettingsSection("signin", "#recovery-key")).toBe("signin")
   })
 })

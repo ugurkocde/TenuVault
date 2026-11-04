@@ -236,7 +236,7 @@ describe("Settings section list", () => {
   it("marks Notifications and PDF branding with Pro for Community and keeps every section a link", async () => {
     licenseStatus.current = statusFor("community")
     const community = await rows()
-    expect(Object.keys(community)).toHaveLength(8)
+    expect(Object.keys(community)).toHaveLength(9)
     expect(Object.values(community).filter((text) => text?.endsWith("Pro"))).toEqual(["NotificationsPro", "PDF brandingPro"])
   })
 

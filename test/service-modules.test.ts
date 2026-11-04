@@ -102,7 +102,7 @@ describe("Messages that lead to Services and permissions", () => {
     const { LinkedMessage } = await import("../src/portal/components/linked-message")
     const render = (text: string) => renderToStaticMarkup(createElement(MemoryRouter, null, createElement(LinkedMessage, { text })))
     expect(render("Restoring needs a permission. Services and permissions shows how to add it.")).toBe(
-      'Restoring needs a permission. <a class="font-medium underline underline-offset-2" href="/portal/settings?section=signin#services" data-discover="true">Services and permissions</a> shows how to add it.',
+      'Restoring needs a permission. <a class="font-medium underline underline-offset-2" href="/portal/settings?section=services" data-discover="true">Services and permissions</a> shows how to add it.',
     )
     expect(render("Created a [Restored] copy")).toBe("Created a [Restored] copy")
   })

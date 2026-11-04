@@ -28,7 +28,7 @@ The users, groups and apps a policy points to are saved as references; the objec
 
 Conditional Access is a separate service, off for every tenant until you turn it on, so an update never adds Entra policies to your backups unasked.
 
-1. Open **Settings** > **Sign-in**, and find **Services and permissions**.
+1. Open **Settings** > **Services and permissions**.
 2. Choose the tenant and select **Include in backups** for **Entra Conditional Access**.
 3. Check the badges next to it: **Backup** and **Restore** say whether the tenant's app registration has the permissions each needs, and which one is missing.
 

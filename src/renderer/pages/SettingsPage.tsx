@@ -2,7 +2,7 @@ import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
 import { useEffect, useId, useRef, useState, type ReactNode } from "react"
 import { Link, useLocation, useSearchParams } from "react-router-dom"
-import { Bell, Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, Palette, RefreshCw, Save, SunMoon, Upload, type LucideIcon } from "lucide-react"
+import { Bell, Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, Palette, RefreshCw, Save, ShieldCheck, SunMoon, Upload, type LucideIcon } from "lucide-react"
 import { cn } from "~/lib/utils"
 import { useTenantOperations, useTenants, type Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
@@ -24,7 +24,7 @@ import { storageResources, type StorageChoice } from "../lib/storage"
 import { toast } from "../lib/toast"
 import { tenantPlan, useLicense } from "../lib/license"
 import { anyTenantIncludes } from "../lib/selected-plan"
-import { parseSettingsSection, settingsHref, type SettingsSectionId } from "../lib/settings-section"
+import { resolveSettingsSection, settingsHref, type SettingsSectionId } from "../lib/settings-section"
 import { PlanBadge } from "../components/UpgradeNote"
 import { PdfBrandingSettings } from "../components/PdfBrandingSettings"
 import { BackupReaderSettings } from "../components/BackupReaderSettings"
@@ -799,6 +799,7 @@ function AppearanceSettings() {
 
 const SECTIONS: { id: SettingsSectionId; title: string; icon: typeof KeyRound; feature?: Feature }[] = [
   { id: "signin", title: "Sign-in", icon: KeyRound },
+  { id: "services", title: "Services and permissions", icon: ShieldCheck },
   { id: "storage", title: "Storage and recovery", icon: HardDrive },
   { id: "background", title: "Background runner", icon: MonitorCog },
   { id: "notifications", title: "Notifications", icon: Bell, feature: "notifications" },
@@ -817,7 +818,7 @@ const SECTIONS: { id: SettingsSectionId; title: string; icon: typeof KeyRound; f
 export function SettingsSectionNav({ section }: { section: SettingsSectionId }) {
   const { status, signedInTenantIds } = useLicense()
   return (
-    <nav aria-label="Settings sections" className="flex gap-1 overflow-x-auto p-1 xl:sticky xl:top-8 xl:w-56 xl:shrink-0 xl:flex-col xl:overflow-visible xl:p-0">
+    <nav aria-label="Settings sections" className="flex gap-1 overflow-x-auto p-1 xl:sticky xl:top-8 xl:w-60 xl:shrink-0 xl:flex-col xl:overflow-visible xl:p-0">
       {SECTIONS.map(({ id, title, icon: Icon, feature }) => (
         <Link
           key={id}
@@ -842,10 +843,7 @@ export function SettingsSectionNav({ section }: { section: SettingsSectionId }) 
 export default function SettingsPage() {
   const [searchParams] = useSearchParams()
   const { hash } = useLocation()
-  // Links that only carry the recovery key anchor predate the section parameter; they mean the storage section.
-  const section: SettingsSectionId = hash === "#recovery-key" && !searchParams.get("section")
-    ? "storage"
-    : parseSettingsSection(searchParams.get("section"))
+  const section = resolveSettingsSection(searchParams.get("section"), hash)
 
   // Keep every panel mounted and only toggle visibility, so unsaved edits and
   // loaded state survive switching sections. Start each section at the top,
@@ -903,12 +901,13 @@ export default function SettingsPage() {
     <div className="p-6 lg:p-8">
       <div className="pb-2">
         <h1 className="text-4xl font-medium tracking-tight text-gray-900">Settings</h1>
-        <p className="mt-2 text-lg text-gray-500">Sign-in, backup storage, encryption, background backups, notifications, PDF branding and updates.</p>
+        <p className="mt-2 text-lg text-gray-500">Sign-in, services and permissions, backup storage, encryption, background backups, notifications, PDF branding and updates.</p>
       </div>
       <div className="mt-4 flex flex-col gap-6 xl:flex-row xl:items-start">
         <SettingsSectionNav section={section} />
         <div className="min-w-0 w-full max-w-5xl flex-1">
-          {panel("signin", <div className="space-y-6"><TenantSettings active={section === "signin"} /><ServicesSettings /></div>)}
+          {panel("signin", <TenantSettings active={section === "signin"} />)}
+          {panel("services", <ServicesSettings />)}
           {panel("storage", <div className="space-y-6"><BackupsOnDevice /><RestoreWrites active={section === "storage"} /></div>)}
           {panel("background", <div className="space-y-6"><BackgroundAndRetention /><BackupReaderSettings /></div>)}
           {panel("notifications", <NotificationSettings active={section === "notifications"} />)}

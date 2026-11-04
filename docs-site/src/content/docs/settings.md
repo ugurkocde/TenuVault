@@ -5,7 +5,7 @@ description: Every control on the Settings page, what it does and when to use it
 
 **Settings** holds sign-in, backup storage, encryption, background backups, notifications, PDF branding and updates for this computer. Open it from the bottom of the sidebar.
 
-Choose a section in the list on the left to open it: **Sign-in**, **Storage and recovery**, **Background runner**, **Notifications**, **PDF branding**, **Updates**, **Appearance** and **About**. One section shows at a time, starting with **Sign-in**. When no tenant on this computer is on Pro or MSP, **Notifications** and **PDF branding** carry a **Pro** badge in the list; both sections still open. On a narrow window the list becomes a row above the section.
+Choose a section in the list on the left to open it: **Sign-in**, **Services and permissions**, **Storage and recovery**, **Background runner**, **Notifications**, **PDF branding**, **Updates**, **Appearance** and **About**. One section shows at a time, starting with **Sign-in**. When no tenant on this computer is on Pro or MSP, **Notifications** and **PDF branding** carry a **Pro** badge in the list; both sections still open. On a narrow window the list becomes a row above the section.
 
 Settings apply to this computer only. Other admins who use TenuVault have their own settings.
 
@@ -39,6 +39,19 @@ If no tenant is connected, the card shows **No tenants yet.** with a link to **S
 New backups go to the location you choose. Existing backups stay where they are and are only listed while that location is selected. Azure storage needs the Pro or MSP plan. For the options and errors, see [Choose where backups are stored](/getting-started/choose-storage/).
 
 To add or remove tenants, use **Tenants**. See [Manage tenants](/tenants/).
+
+## Services and permissions
+
+Shows, for each connected tenant, which services TenuVault backs up and what the tenant's app registration allows for each one: read permissions for backups and drift detection, write permissions for restores. TenuVault reads this from the sign-in it already has, so the check sends no request to Microsoft and changes nothing. With more than one tenant, an overview at the top lists every tenant; select one to see its details.
+
+| Control | What it does |
+| --- | --- |
+| **Check again** | Gets a new sign-in token and checks again, for example after you granted admin consent to a permission. |
+| **Include in backups** | Turns an opt-in service, such as Entra Conditional Access, on or off for the tenant. While it is off, backups leave its items out. |
+| **Open API permissions in Entra** | Shown when a permission is missing. Opens the tenant's existing app registration in Entra, where you add the permission and grant admin consent. That needs a Global Administrator, Privileged Role Administrator or Cloud Application Administrator. |
+| **Copy Azure CLI commands** | Shown when only a service's restore permission is missing. Copies the commands that add it to the existing app registration and grant admin consent. |
+
+Backup logs, **Backup Details** and the restore wizard link here when a missing permission leaves items out or stops a restore. For the permissions each service needs, see [App registration and delegated permissions](/security/permissions/) and [Conditional Access backups](/backups/conditional-access/).
 
 ## Storage and recovery
 
