@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
-import { DEVICE_INVENTORY_ROLE, READER_REQUIRED_ROLES } from "../src/main/auth/backup-reader"
+import { CONDITIONAL_ACCESS_ROLE, DEVICE_INVENTORY_ROLE, READER_REQUIRED_ROLES } from "../src/main/auth/backup-reader"
 
 const readerScript = readFileSync(new URL("../resources/New-TenuVaultBackupReader.ps1", import.meta.url), "utf8")
 const storageScript = readFileSync(new URL("../resources/New-TenuVaultStorage.ps1", import.meta.url), "utf8")
@@ -15,6 +15,7 @@ describe("New-TenuVaultBackupReader.ps1", () => {
   it("grants exactly the read permissions the app requires, and the device inventory one only on request", () => {
     expect(scriptRoles().sort()).toEqual([...READER_REQUIRED_ROLES].sort())
     expect(readerScript).toContain(`if ($IncludeDeviceCategories) { $roles += "${DEVICE_INVENTORY_ROLE}" }`)
+    expect(readerScript).toContain(`if ($IncludeConditionalAccess) { $roles += "${CONDITIONAL_ACCESS_ROLE}" }`)
     expect(scriptRoles().some((role) => role.includes("ReadWrite"))).toBe(false)
   })
 

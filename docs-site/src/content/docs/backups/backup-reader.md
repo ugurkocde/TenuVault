@@ -38,6 +38,7 @@ Microsoft Graph application permissions, read-only:
 | `DeviceManagementScripts.Read.All` | PowerShell and shell scripts, custom attributes, remediations, compliance scripts. |
 | `DeviceManagementRBAC.Read.All` | Intune roles, role assignments, scope tags, multi admin approval policies. |
 | `DeviceManagementManagedDevices.Read.All` (optional) | Device categories and device clean-up rules. Off by default, because it also exposes the managed device inventory (device names, serial numbers, primary users). Add it with `-IncludeDeviceCategories`. |
+| `Policy.Read.All` (optional) | Entra Conditional Access policies, named locations and authentication strengths, when the [Conditional Access service](/backups/conditional-access/) is on for the tenant. Off by default, because it reads every policy of the organization. Add it with `-IncludeConditionalAccess`. The reader never gets permission to change Conditional Access. |
 
 For Azure Storage, the custom role **TenuVault Backup Writer** allows reading and writing blobs, assigned on the `intune-backups` container only. It has no delete permission and cannot create containers.
 

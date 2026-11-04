@@ -115,6 +115,16 @@ Apps are the slowest type to back up. Because installer files are never download
 | Device clean-up rules | No | In a scheduled backup made by the [Backup Reader](/backups/backup-reader/), only with its optional device inventory permission; otherwise left out |
 | Multi admin approval policies | No | |
 
+## Entra Conditional Access (opt-in)
+
+Off until you turn the service on for the tenant in **Settings** > **Sign-in** > **Services and permissions**. **Everything** does not include these types while the service is off. See [Conditional Access backups](/backups/conditional-access/).
+
+| Type | Assignments | Notes |
+| --- | --- | --- |
+| Conditional Access policies | No | Who a policy covers is part of its settings. Microsoft-managed policies are backed up for drift detection only. |
+| Named locations | No | |
+| Authentication strengths | No | Built-in authentication strengths are skipped |
+
 ## What is not backed up
 
 * **App installer files.** Apps are saved as their Intune details only.

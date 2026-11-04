@@ -3,7 +3,7 @@ import { X509Certificate, createPrivateKey } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it, vi } from "vitest"
-import { BackupReaderError, BackupReaderService, DEVICE_INVENTORY_ROLE, DEVICE_INVENTORY_TYPES, READER_REQUIRED_ROLES, checkReaderToken, type AcquireToken } from "../src/main/auth/backup-reader"
+import { BackupReaderError, BackupReaderService, CONDITIONAL_ACCESS_ROLE, CONDITIONAL_ACCESS_TYPES, DEVICE_INVENTORY_ROLE, DEVICE_INVENTORY_TYPES, READER_REQUIRED_ROLES, checkReaderToken, type AcquireToken } from "../src/main/auth/backup-reader"
 import { certificateIdentity, createSelfSignedCertificate } from "../src/main/auth/certificate"
 import { SecureStore } from "../src/main/storage/secure-store"
 
@@ -97,11 +97,11 @@ describe("BackupReaderService", () => {
     const verified = await reader.verify(TENANT, READER)
     expect(verified.state).toBe("verified")
     expect(verified.verifiedRoles).toEqual([...READER_REQUIRED_ROLES].sort())
-    expect(verified.excludedTypes).toEqual(DEVICE_INVENTORY_TYPES)
+    expect(verified.excludedTypes).toEqual([...DEVICE_INVENTORY_TYPES, ...CONDITIONAL_ACCESS_TYPES])
 
     const tokens = reader.tokens(scheduled)!
     expect(tokens.mode).toBe("app-only")
-    expect(tokens.excludedTypes).toEqual(DEVICE_INVENTORY_TYPES)
+    expect(tokens.excludedTypes).toEqual([...DEVICE_INVENTORY_TYPES, ...CONDITIONAL_ACCESS_TYPES])
     expect(await tokens.graph()).toBe(graphToken())
     expect(await tokens.storage()).toBe(storageToken())
   })
@@ -109,7 +109,16 @@ describe("BackupReaderService", () => {
   it("includes the device inventory types when the reader has that permission", async () => {
     const { reader } = service({ graph: () => graphToken({ roles: [...READER_REQUIRED_ROLES, DEVICE_INVENTORY_ROLE] }) })
     reader.prepare(TENANT, "LAPTOP-1")
+    expect((await reader.verify(TENANT, READER)).excludedTypes).toEqual(CONDITIONAL_ACCESS_TYPES)
+  })
+
+  it("includes the Conditional Access types when the reader may read Entra policies, and never accepts a write role for them", async () => {
+    const { reader } = service({ graph: () => graphToken({ roles: [...READER_REQUIRED_ROLES, DEVICE_INVENTORY_ROLE, CONDITIONAL_ACCESS_ROLE] }) })
+    reader.prepare(TENANT, "LAPTOP-1")
     expect((await reader.verify(TENANT, READER)).excludedTypes).toEqual([])
+    expect(CONDITIONAL_ACCESS_TYPES).toEqual(["NamedLocations", "AuthenticationStrengths", "ConditionalAccessPolicies"])
+    const app = { tenantId: TENANT, clientId: READER }
+    expect(() => checkReaderToken(graphToken({ roles: [...READER_REQUIRED_ROLES, "Policy.ReadWrite.ConditionalAccess"] }), app, "graph")).toThrow(/beyond read-only backup: Policy.ReadWrite.ConditionalAccess/)
   })
 
   it("refuses to verify a reader with write permissions and keeps it unverified", async () => {

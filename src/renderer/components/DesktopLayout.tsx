@@ -1,4 +1,4 @@
-import { useEffect, useState, type ComponentType, type ReactNode } from "react"
+import { useEffect, useRef, useState, type ComponentType, type ReactNode, type RefObject } from "react"
 import { Link, Outlet, useLocation } from "react-router-dom"
 import {
   Activity,
@@ -255,6 +255,35 @@ function LicenseNavBadge() {
   return <span className={cn(chip, state.tone === "inactive" ? "bg-red-50 text-red-700" : "bg-gray-100 text-gray-700")}>{state.label}</span>
 }
 
+/**
+ * Whether the element's content is taller than the element. Watches the element and its children, so
+ * expanding a section of the sidebar updates it.
+ */
+function useOverflowing(ref: RefObject<HTMLElement | null>): boolean {
+  const [overflowing, setOverflowing] = useState(false)
+  useEffect(() => {
+    const element = ref.current
+    if (!element) return
+    const measure = () => setOverflowing(element.scrollHeight > element.clientHeight + 1)
+    if (typeof ResizeObserver === "undefined") return measure()
+    const resize = new ResizeObserver(measure)
+    const watch = () => {
+      resize.disconnect()
+      resize.observe(element)
+      for (const child of element.children) resize.observe(child)
+      measure()
+    }
+    const children = new MutationObserver(watch)
+    children.observe(element, { childList: true })
+    watch()
+    return () => {
+      resize.disconnect()
+      children.disconnect()
+    }
+  }, [ref])
+  return overflowing
+}
+
 export function DesktopLayout() {
   const { pathname } = useLocation()
   const tenants = useTenants()
@@ -264,6 +293,8 @@ export function DesktopLayout() {
     tenants.length > 1 ? [{ name: "All tenants", href: "/portal/overview", icon: LayoutGrid }, ...allNavigation] : allNavigation
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [supportOpen, setSupportOpen] = useState(false)
+  const navRef = useRef<HTMLElement>(null)
+  const navOverflowing = useOverflowing(navRef)
 
   const toggle = (name: string) =>
     setExpanded((prev) => {
@@ -335,8 +366,9 @@ export function DesktopLayout() {
           <TenantSwitcher />
         </div>
 
-        {/* min-h-0 lets the list shrink and scroll inside the panel instead of pushing past it. */}
-        <nav aria-label="Main navigation" className="min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-contain px-3 py-2">{navigation.map((item) => renderItem(item))}<CisBenchmarksNavigation linkClass={(active) => linkClass(active)} /><FrameworkNavigation /></nav>
+        {/* min-h-0 lets the list shrink and scroll inside the panel instead of pushing past it. Only while it
+            scrolls does it keep the wheel to itself; otherwise the wheel over the sidebar scrolls the page. */}
+        <nav ref={navRef} aria-label="Main navigation" className={cn("min-h-0 flex-1 space-y-0.5 overflow-y-auto px-3 py-2", navOverflowing && "overscroll-contain")}>{navigation.map((item) => renderItem(item))}<CisBenchmarksNavigation linkClass={(active) => linkClass(active)} /><FrameworkNavigation /></nav>
 
         <OibJobIndicator />
         <div className="space-y-1 p-3">

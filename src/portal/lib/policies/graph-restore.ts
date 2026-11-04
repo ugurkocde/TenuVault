@@ -8,6 +8,8 @@ import { buildRestorePlan, buildUpdatePlan, NotRestorableError, resolveStep, res
 import { assignmentsUnread, readObject, type GraphReader } from "../../../shared/intune/read"
 import { sameSnapshot } from "../../../shared/intune/compare"
 import { saveWrite, removeWrite, writeKey, writeRecords } from "../../../main/storage/restore-journal"
+import { moduleForFolder, restorePermissionBlocker, SERVICES_PAGE, type GrantedPermissions } from "../../../shared/services/modules"
+import { policyReferences, referenceLabel, referencePath, TENANT_KINDS } from "../../../shared/intune/conditional-access"
 
 /** A read that failed because the object no longer exists. */
 class Gone extends Error {}
@@ -39,6 +41,11 @@ export interface RestoreOptions {
    * missing instead of creating a new object from the snapshot. Defaults to true.
    */
   recreateMissing?: boolean
+  /**
+   * The permissions in the token the writes use (see shared/services/token). A service module whose
+   * restore permission is missing is reported before any write. Unknown permissions block nothing.
+   */
+  granted?: GrantedPermissions
 }
 
 export interface RestoreOutcome {
@@ -168,6 +175,21 @@ const errorMessage = (body: Item, status: number) => {
   return message || `Microsoft Graph returned ${status}`
 }
 
+/**
+ * The error of a refused write. Entra puts the useful part in innerError.message (for example "1007:
+ * Incoming ConditionalAccessPolicy object ... does not match the schema"), and a 403 on an opt-in
+ * service usually means the app registration or the admin's role does not cover it.
+ */
+const writeError = (type: IntuneType, body: Item, status: number) => {
+  const entry = moduleForFolder(type.folder)
+  let message = errorMessage(body, status)
+  if (!entry?.module.optIn) return message
+  const inner = ((body.error as Item | undefined)?.innerError as Item | undefined)?.message
+  if (typeof inner === "string" && inner && !message.includes(inner)) message = `${message} ${inner}`
+  if (status !== 403) return message
+  return `Microsoft refused to change ${entry.module.label} (${message}). The TenuVault app registration needs the ${entry.area.restore.map((group) => group.join(" or ")).join(" and ")} permission with admin consent, and your account an admin role that may change it: ${entry.module.roles} ${SERVICES_PAGE} in Settings shows what is missing.`
+}
+
 function forOtherTenant(snapshot: Item): Item {
   const copy = structuredClone(snapshot)
   delete copy.assignments
@@ -225,6 +247,8 @@ export class Restorer {
     const folder = path.split("/")[1] ?? ""
     const type = typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder)
     if (!type) return { success: false, path, error: "This backup file is not an Intune type TenuVault can restore." }
+    const unpermitted = restorePermissionBlocker(type.folder, this.options.granted)
+    if (unpermitted) return { success: false, path, action: "skipped", retryable: false, error: unpermitted }
     const source = this.remap(this.options.crossTenant ? forOtherTenant(snapshot) : snapshot)
     // A backup that could not read the assignments must not replace the live ones with an empty list.
     const unread = this.options.assignments && !this.options.crossTenant && assignmentsUnread(type, snapshot)
@@ -301,14 +325,16 @@ export class Restorer {
     if (unresolved.length) return { success: false, path, retryable: false, error: this.options.crossTenant
       ? `Unresolved target dependencies (${unresolved.join(", ")}). Copy the dependencies first or reconcile this object in the target tenant.`
       : `Unresolved dependencies (${unresolved.join(", ")}). Restore the dependencies first or reconcile this object in Intune.` }
+    const references = await this.policyReferences(type, plan.create.body)
+    if (references.blocking.length) return { success: false, path, action: "skipped", retryable: false, error: references.blocking.join(" ") }
     const created = await this.graph("POST", plan.create.path, plan.create.body, { sourceId: typeof snapshot.id === "string" ? snapshot.id : undefined })
-    if (created.status >= 300) return { success: false, path, retryable: created.status < 500 && created.status !== 408, error: errorMessage(created.body, created.status) }
+    if (created.status >= 300) return { success: false, path, retryable: created.status < 500 && created.status !== 408, error: writeError(type, created.body, created.status) }
     const id = String(created.body.id ?? "")
     if (!id) return { success: false, path, retryable: false, error: "Microsoft Graph did not return an ID. Check Intune before retrying." }
     if (typeof snapshot.id === "string" && !this.reviewed.has(snapshot.id.toLowerCase())) this.remapped.set(snapshot.id, id)
     const outcome = await this.complete(type, path, id, created.body, "created", [...plan.steps, ...plan.assignments])
     if (plan.assignments.length && type.assignmentWarning) outcome.warnings = [...(outcome.warnings ?? []), type.assignmentWarning]
-    return outcome
+    return this.withWarnings(outcome, type, source, plan.create.body, references.warnings)
   }
 
   /**
@@ -369,7 +395,57 @@ export class Restorer {
     const plan = buildUpdatePlan(type, source, id, { includeAssignments: assignments, current })
     // A type that writes only what differs may find nothing it can write, such as a value Intune would reject.
     if (!plan.length) return { success: true, path, policyId: id, policyName: type.singleton?.name, action: "unchanged", warnings: ["Nothing was written: what differs from the backup cannot be restored. Review it in Intune."] }
-    return this.complete(type, path, id, source, "updated", plan)
+    const written = plan[0]!.body
+    const references = await this.policyReferences(type, written)
+    if (references.blocking.length) return { success: false, path, policyId: id, action: "skipped", retryable: false, error: references.blocking.join(" ") }
+    return this.withWarnings(await this.complete(type, path, id, source, "updated", plan), type, source, written, references.warnings)
+  }
+
+  /** Adds what the type says about the written object, and the reference warnings, to a successful outcome. */
+  private withWarnings(outcome: RestoreOutcome, type: IntuneType, source: Item, written: Item, references: string[]): RestoreOutcome {
+    if (!outcome.success) return outcome
+    const warnings = [...(type.warnings?.(source, written) ?? []), ...references]
+    return warnings.length ? { ...outcome, warnings: [...(outcome.warnings ?? []), ...warnings] } : outcome
+  }
+
+  /**
+   * Checks the users, groups, workload identities, named locations and authentication strengths a
+   * Conditional Access policy points to, because Graph stores IDs that no longer exist without a word.
+   * Blocking: a referenced named location or authentication strength that is gone, and an excluded
+   * account or group that is gone (the exclusion would protect nobody, such as an emergency access
+   * account recreated with a new ID). A copy to another tenant blocks on every tenant-specific
+   * reference that was not recreated in this run. What cannot be checked (for example without
+   * permission to read users) only warns.
+   */
+  private async policyReferences(type: IntuneType, body: Item): Promise<{ blocking: string[]; warnings: string[] }> {
+    if (type.folder !== "ConditionalAccessPolicies") return { blocking: [], warnings: [] }
+    const resolved = new Set([...this.remapped.values(), ...this.reviewed.values()].map((value) => value.toLowerCase()))
+    const missing: string[] = []
+    const absentIncludes: string[] = []
+    const unchecked: string[] = []
+    for (const reference of policyReferences(body)) {
+      if (resolved.has(reference.id.toLowerCase())) continue
+      if (this.options.crossTenant) {
+        if (TENANT_KINDS.has(reference.kind)) missing.push(referenceLabel(reference))
+        continue
+      }
+      const path = referencePath(reference)
+      if (!path) continue
+      const exists = await this.existsLive(path, reference.id)
+      if (exists === undefined) unchecked.push(referenceLabel(reference))
+      else if (!exists && (reference.exclude || reference.kind === "namedLocation" || reference.kind === "authenticationStrength")) missing.push(referenceLabel(reference))
+      else if (!exists) absentIncludes.push(referenceLabel(reference))
+    }
+    const blocking = missing.length
+      ? [this.options.crossTenant
+        ? `This policy points to objects that exist only in the source tenant (${missing.join(", ")}). Copy its named locations and authentication strengths in the same run and recreate the users and groups it names, or create the policy in Entra.`
+        : `This policy points to objects that no longer exist (${missing.join(", ")}). Restore or recreate them first, or edit the policy in Entra: an exclusion of a deleted account protects nobody.`]
+      : []
+    const warnings = [
+      ...(absentIncludes.length ? [`These included objects no longer exist, so the policy applies to fewer people than when it was backed up: ${absentIncludes.join(", ")}.`] : []),
+      ...(unchecked.length ? [`TenuVault could not check that these still exist (no permission to read them, or Microsoft did not answer): ${unchecked.join(", ")}. Check excluded accounts, such as emergency access accounts, before you turn the policy on.`] : []),
+    ]
+    return { blocking, warnings }
   }
 
   /** Whether the live object already holds the backed-up configuration (and assignments, when those are restored). */
@@ -409,7 +485,7 @@ export class Restorer {
       try {
         const response = await this.graph(step.method, step.path, step.body)
         if (response.status < 300) continue
-        message = `${step.kind === "assignments" ? "Assignments" : "Settings"} could not be restored: ${errorMessage(response.body, response.status)}`
+        message = `${step.kind === "assignments" ? "Assignments" : "Settings"} could not be restored: ${writeError(type, response.body, response.status)}`
         safeToRetry = response.status < 500 && response.status !== 408
       } catch (error) {
         message = `Write outcome unknown: ${error instanceof Error ? error.message : String(error)}. Check Intune before retrying.`

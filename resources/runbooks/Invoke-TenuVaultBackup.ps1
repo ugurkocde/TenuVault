@@ -57,6 +57,9 @@ $script:Container = "intune-backups"
 # One status blob per tenant, so status blobs never collide when tenants share tooling.
 $script:StatusBlobPrefix = "cloud-backup-status-"
 $script:OriginalFolders = @("DeviceConfigurations", "CompliancePolicies", "ConfigurationPolicies", "GroupPolicyConfigurations")
+# The Entra Conditional Access service is opt-in, like in the desktop app: set the Automation variable
+# TenuVaultIncludeConditionalAccess to "true" and grant the managed identity Policy.Read.All.
+$script:ConditionalAccessFolders = @("NamedLocations", "AuthenticationStrengths", "ConditionalAccessPolicies")
 
 # ---------------------------------------------------------------------------
 # Small helpers
@@ -624,6 +627,7 @@ function Test-TvSkipped {
         "AppCategories" { return ([string](Get-TvProp $Item "lastModifiedDateTime")).StartsWith("0001-01-01") }
         "ScopeTags" { return (Get-TvProp $Item "isBuiltIn") -eq $true }
         "RoleDefinitions" { return (Get-TvProp $Item "isBuiltIn") -eq $true }
+        "AuthenticationStrengths" { return (Get-TvProp $Item "policyType") -eq "builtIn" }
         default { return $false }
     }
 }
@@ -684,6 +688,9 @@ function Get-TvTypes {
     @{ Folder = 'Branding'; Label = 'Company Portal branding'; Path = 'deviceManagement/intuneBrandingProfiles'; NameKey = 'profileName'; Expand = 'assignments'; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @(@{ Property = 'themeColorLogo'; Single = $true; Template = 'deviceManagement/intuneBrandingProfiles/{id}?$select=themeColorLogo'; Each = $null }; @{ Property = 'lightBackgroundLogo'; Single = $true; Template = 'deviceManagement/intuneBrandingProfiles/{id}?$select=lightBackgroundLogo'; Each = $null }; @{ Property = 'landingPageCustomizedImage'; Single = $true; Template = 'deviceManagement/intuneBrandingProfiles/{id}?$select=landingPageCustomizedImage'; Each = $null }) }
     @{ Folder = 'DeviceCleanupRules'; Label = 'device clean-up rules'; Path = 'deviceManagement/managedDeviceCleanupRules'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
     @{ Folder = 'MultiAdminApprovalPolicies'; Label = 'multi admin approval policies'; Path = 'deviceManagement/operationApprovalPolicies'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'NamedLocations'; Label = 'named locations'; Path = 'identity/conditionalAccess/namedLocations'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'AuthenticationStrengths'; Label = 'authentication strengths'; Path = 'identity/conditionalAccess/authenticationStrength/policies'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
+    @{ Folder = 'ConditionalAccessPolicies'; Label = 'Conditional Access policies'; Path = 'identity/conditionalAccess/policies'; NameKey = 'displayName'; Expand = $null; Select = $null; ListQuery = $null; AssignmentsFormerlyExpanded = $false; HasSecrets = $false; Singleton = $null; Extras = @() }
     )
 }
 
@@ -723,6 +730,7 @@ function Invoke-TvBackup {
     $scope = Get-TvAutomationVariable "TenuVaultScope"
     $excluded = Get-TvFolderList (Get-TvAutomationVariable "TenuVaultExcludedFolders")
     if (-not $excluded.Count -and $scope -eq "policies") { $excluded = @("Apps") }
+    if ([string](Get-TvAutomationVariable "TenuVaultIncludeConditionalAccess") -ne "true") { $excluded = @($excluded) + $script:ConditionalAccessFolders }
     $appOnlyExcluded = Get-TvFolderList (Get-TvAutomationVariable "TenuVaultAppOnlyExcluded")
 
     Write-Output "Backing up tenant $tenantId to storage account $storageAccount (runbook $script:RunbookVersion, run $runId)."

@@ -4,6 +4,7 @@ import type { BackupReaderStatus, BackupReaderTestResult } from "../../shared/ip
 import type { SecureStore } from "../storage/secure-store"
 import { RESOURCE_SCOPES } from "../../shared/constants"
 import { isGuid } from "../../shared/security"
+import { MODULE_BY_ID } from "../../shared/services/modules"
 import { certificateIdentity, createSelfSignedCertificate, type GeneratedCertificate } from "./certificate"
 
 /**
@@ -29,7 +30,16 @@ export const DEVICE_INVENTORY_ROLE = "DeviceManagementManagedDevices.Read.All"
 /** Types Microsoft Graph only returns with DEVICE_INVENTORY_ROLE. */
 export const DEVICE_INVENTORY_TYPES = ["DeviceCategories", "DeviceCleanupRules"]
 
-const ALLOWED_ROLES = new Set<string>([...READER_REQUIRED_ROLES, DEVICE_INVENTORY_ROLE])
+/**
+ * Optional: reads Entra policies for the Conditional Access module (CA policies, named locations,
+ * authentication strengths). Read only, but it covers every policy of the organization, so it is opt-in.
+ */
+export const CONDITIONAL_ACCESS_ROLE = MODULE_BY_ID.get("conditionalAccess")!.readerRole!
+
+/** Types Microsoft Graph only returns with CONDITIONAL_ACCESS_ROLE. */
+export const CONDITIONAL_ACCESS_TYPES = MODULE_BY_ID.get("conditionalAccess")!.areas.flatMap((area) => [...area.folders])
+
+const ALLOWED_ROLES = new Set<string>([...READER_REQUIRED_ROLES, DEVICE_INVENTORY_ROLE, CONDITIONAL_ACCESS_ROLE])
 
 const CERTIFICATE_DAYS = 365
 
@@ -276,7 +286,7 @@ function isCredential(value: unknown, tenant: string): value is BackupReaderCred
 }
 
 function excludedTypes(roles: string[] | null): string[] {
-  return roles?.includes(DEVICE_INVENTORY_ROLE) ? [] : DEVICE_INVENTORY_TYPES
+  return [...(roles?.includes(DEVICE_INVENTORY_ROLE) ? [] : DEVICE_INVENTORY_TYPES), ...(roles?.includes(CONDITIONAL_ACCESS_ROLE) ? [] : CONDITIONAL_ACCESS_TYPES)]
 }
 
 function sameRoles(a: string[], b: string[]): boolean {
@@ -306,7 +316,7 @@ export function checkReaderToken(token: string, app: { tenantId: string; clientI
   const extra = roles.filter((role) => !ALLOWED_ROLES.has(role))
   if (extra.length) {
     throw new BackupReaderError(
-      `The Backup Reader has permissions beyond read-only backup: ${extra.join(", ")}. Remove them from the app registration; TenuVault only uses a reader that cannot change Intune.`,
+      `The Backup Reader has permissions beyond read-only backup: ${extra.join(", ")}. Remove them from the app registration; TenuVault only uses a reader that cannot change Intune or Entra.`,
     )
   }
   const missing = READER_REQUIRED_ROLES.filter((role) => !roles.includes(role))

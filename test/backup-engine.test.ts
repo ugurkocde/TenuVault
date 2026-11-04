@@ -1,4 +1,5 @@
 import { mkdtempSync } from "node:fs"
+import { disabledFolders } from "../src/shared/services/modules"
 import { randomBytes } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -120,7 +121,8 @@ describe("BackupEngine", () => {
       (await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString(),
     ) as { ItemCounts: Record<string, number>; Status: string }
     expect(metadata.ItemCounts).toEqual({
-      ...Object.fromEntries(INTUNE_TYPES.map((type) => [type.folder, 0])),
+      // Opt-in services (Conditional Access) are not attempted while they are off for the tenant.
+      ...Object.fromEntries(INTUNE_TYPES.filter((type) => !disabledFolders([]).includes(type.folder)).map((type) => [type.folder, 0])),
       DeviceConfigurations: 2,
       CompliancePolicies: 1,
       CompliancePolicySettings: 1,

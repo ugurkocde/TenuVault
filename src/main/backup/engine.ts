@@ -12,6 +12,8 @@ import { readObject, withMaskedSecrets } from "../../shared/intune/read"
 import { comparableSnapshot } from "../../shared/intune/compare"
 import type { BackupItems } from "../../shared/intune/backup-changes"
 import { EVERYTHING, includedTypes, normalizeScope, restorableFolders, type BackupScope } from "../../shared/intune/scope"
+import { canBackUp, describeRequirement, disabledFolders, moduleForFolder, SERVICES_PAGE, type ModuleId } from "../../shared/services/modules"
+import { grantedPermissions } from "../../shared/services/token"
 
 /**
  * Runs Intune backups from the desktop app as the signed-in admin.
@@ -84,6 +86,11 @@ export interface BackupEngineDeps {
    * manual and tray backups, where an admin is present, always use the admin's own sign-in.
    */
   unattendedTokens?: (request: BackupRequest) => RunTokens | null
+  /**
+   * The opt-in service modules turned on for the tenant (see shared/services/modules). Types of opt-in
+   * modules that are off are never backed up, whatever the scope says. None when left out.
+   */
+  enabledModules?: (tenantId: string) => ModuleId[]
   /** Backups older than this many days are deleted after each backup; 0 keeps everything. */
   retentionDays?: (tenantId: string) => number
   now?: () => Date
@@ -429,8 +436,17 @@ export class BackupEngine {
 
     const scope = normalizeScope(request.scope ?? EVERYTHING)
     const readerExcluded = new Set(tokens.excludedTypes ?? [])
-    const notReadable = includedTypes(scope).filter((type) => readerExcluded.has(type.folder)).map((type) => type.folder)
-    const types = includedTypes(scope).filter((type) => !readerExcluded.has(type.folder))
+    const moduleOff = new Set(disabledFolders(this.deps.enabledModules?.(request.tenantId) ?? []))
+    const notReadable = includedTypes(scope).filter((type) => readerExcluded.has(type.folder) && !moduleOff.has(type.folder)).map((type) => type.folder)
+    // An opt-in module that is on but whose read permission the token lacks is left out up front with the
+    // missing permission named, instead of failing on a refused read. Intune keeps its long-standing per-type handling.
+    const granted = await moduleGrants(tokens, includedTypes(scope).some((type) => !moduleOff.has(type.folder) && moduleForFolder(type.folder)?.module.optIn))
+    const unpermitted = includedTypes(scope).filter((type) => !moduleOff.has(type.folder) && !readerExcluded.has(type.folder) && moduleForFolder(type.folder)?.module.optIn && granted && !canBackUp(type.folder, granted))
+    const types = includedTypes(scope).filter((type) => !readerExcluded.has(type.folder) && !moduleOff.has(type.folder) && !unpermitted.includes(type))
+    for (const type of unpermitted) {
+      const entry = moduleForFolder(type.folder)!
+      this.write(job, `Leaving out ${type.label}: the ${tokens.mode === "app-only" ? "Backup Reader" : "TenuVault app registration"} has no ${describeRequirement(entry.area.backup, granted?.permissions)} permission for ${entry.module.label}. ${SERVICES_PAGE} in Settings shows how to add it.`)
+    }
     if (scope.excluded.length) this.write(job, `Leaving out ${scope.excluded.length} of ${INTUNE_TYPES.length} types: ${scope.excluded.join(", ")}.`)
     if (notReadable.length) this.write(job, `Leaving out ${notReadable.length} type${notReadable.length === 1 ? "" : "s"} the Backup Reader has no permission for: ${notReadable.join(", ")}. Manual backups include them.`)
     // Only a Backup Reader run keeps a value Microsoft refuses to decrypt masked; with the admin's sign-in a refused read fails the object as before.
@@ -446,7 +462,8 @@ export class BackupEngine {
     job.progressMessage = "Reading Intune configuration..."
     const counts: Record<string, number> = Object.fromEntries(types.map((type) => [type.folder, 0]))
     const lists: Array<{ type: IntuneType; items: GraphItem[] } | null> = Array.from({ length: types.length }, () => null)
-    const skippedTypes: string[] = []
+    // Types left out for a missing permission count as skipped, like a type whose read was denied.
+    const skippedTypes: string[] = unpermitted.map((type) => type.folder)
     const failedTypes: string[] = []
     let failures = 0
     // A type the app registration has no permission for is skipped below and does not count:
@@ -485,7 +502,10 @@ export class BackupEngine {
         if (error instanceof TokenError || (error instanceof GraphError && error.status === 401)) throw error
         if (denied) {
           skippedTypes.push(type.folder)
-          this.write(job, `Skipped ${type.label}: access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it.`)
+          const module = moduleForFolder(type.folder)?.module
+          this.write(job, module?.optIn
+            ? `Skipped ${type.label}: access was denied. The app registration may lack the permission or admin consent, or your account may not have a role that can read ${module.label} (${module.roles.split(";")[0]}).`
+            : `Skipped ${type.label}: access was denied. The app registration may lack the permission or admin consent, or your Intune role may not allow it.`)
           return
         }
         countAuthFailure(error)
@@ -920,3 +940,14 @@ function uniqueName(name: string, id: string, used: Set<string>): string {
   return unique
 }
 
+
+/** The permissions in the run's Graph token, read only when an opt-in module needs checking. */
+async function moduleGrants(tokens: RunTokens, needed: boolean) {
+  if (!needed) return undefined
+  try {
+    return grantedPermissions(await tokens.graph())
+  } catch {
+    // A token that cannot be acquired fails the run on the first read with the usual sign-in handling.
+    return undefined
+  }
+}

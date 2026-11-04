@@ -15,6 +15,7 @@ import {
 import { Button } from "~/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "~/components/ui/dialog"
 import { cn } from "~/lib/utils"
+import { LinkedMessage } from "~/components/linked-message"
 
 interface RevertProgressModalProps {
   isOpen: boolean
@@ -179,7 +180,7 @@ export function RevertProgressModal({
               <AlertCircle className="h-5 w-5 text-red-600 mt-0.5" />
               <div>
                 <p className="font-medium text-red-800">Operation Failed</p>
-                <p className="text-sm text-red-700 mt-1">{error}</p>
+                <p className="text-sm text-red-700 mt-1"><LinkedMessage text={error} /></p>
               </div>
             </div>
           </div>

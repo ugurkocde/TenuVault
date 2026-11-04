@@ -6,6 +6,7 @@ import { validPolicyPath } from "~/lib/policies/restore"
 import { graphCaller, Restorer, DependencyMappingError, type RestoreOutcome } from "~/lib/policies/graph-restore"
 import { PROGRESS_ID, startProgress } from "~/lib/policies/restore-progress"
 import { restoreOrder, type Item } from "../../../../shared/intune/registry"
+import { grantedPermissions } from "../../../../shared/services/token"
 import { type NextRequest, NextResponse } from "next/server"
 async function getAccessToken(tenantId: string, appId: string, clientSecret: string, scope: string, forceRefresh = false) {
   const tokenResponse = await fetch(
@@ -158,12 +159,15 @@ export async function POST(request: NextRequest) {
     }
 
     const targets: Array<{ restorer: Restorer; targetTenantId?: string }> = targetTenants
-      ? await Promise.all((targetTenants as Array<{ tenantId: string; appId: string }>).map(async (target) => ({
-          targetTenantId: target.tenantId.toLowerCase(),
-          restorer: new Restorer(graphCaller(await getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default"), fetch, { tenant: target.tenantId, refreshToken: () => getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default", true) }),
-            { mode: 'copy', assignments: false, prefix: '', crossTenant: true, repairScope: repairScope(target.tenantId) }),
-        })))
-      : [{ restorer: new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode, assignments, repairScope: repairScope(tenantId) }) }]
+      ? await Promise.all((targetTenants as Array<{ tenantId: string; appId: string }>).map(async (target) => {
+          const targetToken = await getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default")
+          return {
+            targetTenantId: target.tenantId.toLowerCase(),
+            restorer: new Restorer(graphCaller(targetToken, fetch, { tenant: target.tenantId, refreshToken: () => getAccessToken(target.tenantId, target.appId, clientSecret, "https://graph.microsoft.com/.default", true) }),
+              { mode: 'copy', assignments: false, prefix: '', crossTenant: true, repairScope: repairScope(target.tenantId), granted: grantedPermissions(targetToken) }),
+          }
+        }))
+      : [{ restorer: new Restorer(graphCaller(graphToken, fetch, { tenant: tenantId, refreshToken: () => getAccessToken(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default", true) }), { mode, assignments, repairScope: repairScope(tenantId), granted: grantedPermissions(graphToken) }) }]
     try {
       if (dependencyMappings.length) for (const { restorer } of targets) await restorer.mapDependencies(dependencyMappings)
     } catch (error) {

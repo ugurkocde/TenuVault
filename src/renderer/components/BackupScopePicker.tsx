@@ -2,6 +2,7 @@ import { useState } from "react"
 import { ChevronDown, ChevronRight, Info } from "lucide-react"
 import { Checkbox } from "~/components/ui/checkbox"
 import { cn } from "~/lib/utils"
+import { moduleForFolder } from "../../shared/services/modules"
 import { AREAS, includedTypes, normalizeScope, presetOf, scopeForPreset, type BackupScope, type ScopePreset } from "../../shared/intune/scope"
 import { INTUNE_TYPES } from "../../shared/intune/registry"
 
@@ -101,6 +102,14 @@ export function BackupScopePicker({ value, onChange, counts, uncounted = [], dis
                     </span>
                   </button>
                 </div>
+                {(() => {
+                  const module = moduleForFolder(types[0]!.folder)?.module
+                  return module?.optIn ? (
+                    <p className="pb-2 pl-7 text-xs text-gray-500">
+                      Backed up only when {module.label} is turned on for the tenant in Settings, under Services and permissions.
+                    </p>
+                  ) : null
+                })()}
                 {expanded && (
                   <div className="space-y-2 px-4 pb-3 pl-11">
                     {types.map((type) => (
