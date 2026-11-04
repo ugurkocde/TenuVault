@@ -545,7 +545,7 @@ await check("settings show encrypted local backup storage", async () => {
 await check("settings sidebar switches sections and names the section in the URL", async () => {
   await go("#/portal/settings", "Storage and recovery")
   const nav = `document.querySelector('nav[aria-label="Settings sections"]')`
-  assert(await waitForCondition(`${nav}?.querySelectorAll("a").length === 8`), "settings sidebar does not list eight sections")
+  assert(await waitForCondition(`${nav}?.querySelectorAll("a").length === 9`), "settings sidebar does not list nine sections")
   assert(await evaluate(`document.getElementById("settings-storage").hidden === true`), "storage section visible on the default sign-in section")
   await evaluate(`[...${nav}.querySelectorAll("a")].find(a => a.textContent.trim() === "Background runner").click()`)
   assert(await waitForText("Keep backups for"), "background section did not appear after clicking its sidebar entry")
@@ -571,6 +571,9 @@ await check("settings sidebar switches sections and names the section in the URL
   // A link that only carries the recovery key anchor still opens storage and focuses the export.
   await evaluate(`location.hash = "#/portal/settings#recovery-key"`)
   assert(await waitForCondition(`document.getElementById("settings-storage").hidden === false && document.activeElement?.id === "save-recovery-key"`), "anchor-only recovery key link did not open storage and focus the export")
+  // Services and permissions used to sit under sign-in; links to that place open its own section.
+  await evaluate(`location.hash = "#/portal/settings?section=signin#services"`)
+  assert(await waitForCondition(`document.getElementById("settings-services").hidden === false && ${nav}.querySelector('[aria-current="page"]')?.textContent.trim() === "Services and permissions"`), "old Services and permissions link did not open its section")
   // In the narrow row layout, scrolling the section strip must not move the focused export out of view.
   await send("Emulation.setDeviceMetricsOverride", { width: 1024, height: 720, deviceScaleFactor: 1, mobile: false })
   await evaluate(`location.hash = "#/portal/settings?section=signin"`)

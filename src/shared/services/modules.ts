@@ -245,7 +245,7 @@ export function canBackUp(folder: string, granted: GrantedPermissions): boolean 
 export const SERVICES_PAGE = "Services and permissions"
 
 /** Settings route and anchor of the card. */
-export const SERVICES_HREF = "/portal/settings?section=signin#services"
+export const SERVICES_HREF = "/portal/settings?section=services"
 
 /**
  * Azure CLI commands that add a module's restore permissions to the tenant's existing app registration

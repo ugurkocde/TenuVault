@@ -117,7 +117,7 @@ Apps are the slowest type to back up. Because installer files are never download
 
 ## Entra Conditional Access (opt-in)
 
-Off until you turn the service on for the tenant in **Settings** > **Sign-in** > **Services and permissions**. **Everything** does not include these types while the service is off. See [Conditional Access backups](/backups/conditional-access/).
+Off until you turn the service on for the tenant in **Settings** > **Services and permissions**. **Everything** does not include these types while the service is off. See [Conditional Access backups](/backups/conditional-access/).
 
 | Type | Assignments | Notes |
 | --- | --- | --- |

@@ -1,5 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react"
-import { useLocation } from "react-router-dom"
+import { useEffect, useId, useState } from "react"
 import { AlertCircle, Check, CheckCircle2, Copy, ExternalLink, Loader2, MinusCircle, RefreshCw } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
@@ -128,7 +127,7 @@ function FixCallout({ module, tenantId, clientId }: { module: ServiceModuleStatu
     <div className="space-y-2 rounded-2xl bg-gray-50 px-4 py-3 text-sm">
       <p className="font-medium text-gray-900">{access ? "Allow restores" : "Add the missing permissions"}</p>
       <p className="text-gray-600">
-        Add {access ? <Permissions requirement={[access.permissions.map((permission) => permission.name)]} /> : missing.length ? <Permissions requirement={missing} /> : "the permissions above"} to this tenant's TenuVault app registration as delegated Microsoft Graph permissions, and grant admin consent. That needs a Global Administrator, Privileged Role Administrator or Cloud Application Administrator.
+        Add {access ? <Permissions requirement={[access.permissions.map((permission) => permission.name)]} /> : missing.length ? <Permissions requirement={missing} /> : "the permissions above"} to this tenant's TenuVault app registration as delegated Microsoft Graph permissions, and grant admin consent. That needs a Global Administrator, Privileged Role Administrator, Cloud Application Administrator or Application Administrator.
       </p>
       <div className="flex flex-wrap gap-2">
         {commands ? (
@@ -244,7 +243,7 @@ function Overview({ tenants, statuses, selected, onSelect }: { tenants: Array<{ 
 /**
  * The services each tenant backs up and what its app registration may do with each: read for backups
  * and drift, write for restores. Opt-in services are turned on here per tenant. With several tenants,
- * an overview lists them all. Backup and restore messages link here (#services) when a permission is missing.
+ * an overview lists them all. Backup and restore messages link to this section when a permission is missing.
  */
 export function ServicesSettings() {
   const tenants = useTenants().filter((tenant) => tenant.credentials?.tenantId)
@@ -253,16 +252,7 @@ export function ServicesSettings() {
   const [selected, setSelected] = useState(rows[0]?.tenantId ?? "")
   const [statuses, setStatuses] = useState<Map<string, TenantStatus>>(new Map())
   const [busy, setBusy] = useState(false)
-  const card = useRef<HTMLDivElement>(null)
-  const { hash } = useLocation()
   const current = rows.find((row) => row.tenantId === selected) ?? rows[0]
-
-  useEffect(() => {
-    if (hash !== "#services") return
-    // Settings scrolls to the top when its section changes, after this effect; scroll on the next frame.
-    const frame = requestAnimationFrame(() => card.current?.scrollIntoView({ block: "start", behavior: "smooth" }))
-    return () => cancelAnimationFrame(frame)
-  }, [hash])
 
   useEffect(() => {
     // Statuses come from tokens TenuVault already holds; a slow answer for an old tenant list is dropped.
@@ -306,7 +296,7 @@ export function ServicesSettings() {
   }
 
   return (
-    <Card ref={card} id="services" className="scroll-mt-6">
+    <Card id="services">
       <CardHeader>
         <CardTitle>Services and permissions</CardTitle>
         <CardDescription>
