@@ -121,15 +121,24 @@ describe("Conditional Access registry types", () => {
   it("updates an authentication strength the way Graph allows: name by PATCH, combinations by action, configurations one by one", () => {
     const live = strength({ displayName: "Renamed", allowedCombinations: ["fido2", "x509CertificateMultiFactor"], combinationConfigurations: [{ "@odata.type": "#microsoft.graph.fido2CombinationConfiguration", id: "live-config", appliesToCombinations: ["fido2"], allowedAAGUIDs: ["90a3ccdf-635c-4729-a248-9b709135078f"] }] })
     const steps = buildUpdatePlan(strengths, strength(), "s1", { current: live })
+    // The FIDO2 restriction changes in place (verified in a test tenant), so a failed restore never leaves FIDO2 accepting any key.
     expect(steps.map((step) => `${step.method} ${step.path}`)).toEqual([
       "PATCH identity/conditionalAccess/authenticationStrength/policies/s1",
-      "DELETE identity/conditionalAccess/authenticationStrength/policies/s1/combinationConfigurations/live-config",
+      "PATCH identity/conditionalAccess/authenticationStrength/policies/s1/combinationConfigurations/live-config",
       "POST identity/conditionalAccess/authenticationStrength/policies/s1/updateAllowedCombinations",
-      "POST identity/conditionalAccess/authenticationStrength/policies/s1/combinationConfigurations",
     ])
     // PATCH with allowedCombinations returns 405.
     expect(steps[0]!.body).toEqual({ displayName: "TenuVault verify strength", description: "" })
+    expect(steps[1]!.body).toEqual({ "@odata.type": "#microsoft.graph.fido2CombinationConfiguration", appliesToCombinations: ["fido2"], allowedAAGUIDs: ["de1e552d-db1d-4423-a619-566b625cdc84"] })
     expect(steps[2]!.body).toEqual({ allowedCombinations: ["windowsHelloForBusiness", "fido2"] })
+    // A configuration the backup does not have is removed, one it has and the live strength lacks is added.
+    const certificate = { "@odata.type": "#microsoft.graph.x509CertificateCombinationConfiguration", id: "cert-config", appliesToCombinations: ["x509CertificateMultiFactor"], allowedIssuerSkis: ["A1"] }
+    const swapped = buildUpdatePlan(strengths, strength(), "s1", { current: strength({ combinationConfigurations: [certificate] }) })
+    expect(swapped.map((step) => `${step.method} ${step.path.split("/").slice(-2).join("/")}`)).toEqual([
+      "PATCH policies/s1",
+      "DELETE combinationConfigurations/cert-config",
+      "POST s1/combinationConfigurations",
+    ])
     // Same combinations in another order and the same configurations: only the PATCH.
     const same = buildUpdatePlan(strengths, strength(), "s1", { current: strength({ allowedCombinations: ["fido2", "windowsHelloForBusiness"], combinationConfigurations: [{ ...(strength().combinationConfigurations as Item[])[0]!, id: "other-id" }] }) })
     expect(same.map((step) => step.method)).toEqual(["PATCH"])

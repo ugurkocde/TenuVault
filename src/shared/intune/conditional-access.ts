@@ -218,19 +218,32 @@ export function strengthUpdate(payload: Item, snapshot: Item, current: Item): St
   const steps: Step[] = [{ method: "PATCH", path: "{collection}/{id}", body: { displayName: payload.displayName ?? null, description: payload.description ?? "" }, kind: "content" }]
   const wanted = configurations(snapshot)
   const live = Array.isArray(current.combinationConfigurations) ? (current.combinationConfigurations as Item[]) : []
+  const liveClean = configurations(current)
   const key = (entry: Item) => JSON.stringify(Object.fromEntries(Object.entries(entry).sort(([a], [b]) => a.localeCompare(b))))
-  const wantedKeys = new Set(wanted.map(key))
-  const liveKeys = new Set(configurations(current).map(key))
+  // A configuration's slot: its type and the combinations it restricts. A changed restriction in the same
+  // slot is updated in place, so a failed restore never leaves the method without its restriction.
+  const slot = (entry: Item) => `${String(entry["@odata.type"])}|${JSON.stringify(entry.appliesToCombinations ?? [])}`
+  const used = new Set<number>()
+  const added: Item[] = []
+  const updates: Step[] = []
+  for (const entry of wanted) {
+    const same = liveClean.findIndex((candidate, index) => !used.has(index) && key(candidate) === key(entry))
+    if (same >= 0) { used.add(same); continue }
+    const inPlace = liveClean.findIndex((candidate, index) => !used.has(index) && slot(candidate) === slot(entry) && typeof live[index]?.id === "string")
+    if (inPlace >= 0) {
+      used.add(inPlace)
+      updates.push({ method: "PATCH", path: `{collection}/{id}/combinationConfigurations/${encodeURIComponent(live[inPlace]!.id as string)}`, body: entry, kind: "content" })
+    } else added.push(entry)
+  }
   // Configurations go first, so none still names a combination that is about to be removed.
   live.forEach((entry, index) => {
-    if (!wantedKeys.has(key(configurations(current)[index]!)) && typeof entry.id === "string") {
-      steps.push({ method: "DELETE", path: `{collection}/{id}/combinationConfigurations/${encodeURIComponent(entry.id)}`, body: {}, kind: "content" })
-    }
+    if (!used.has(index) && typeof entry.id === "string") steps.push({ method: "DELETE", path: `{collection}/{id}/combinationConfigurations/${encodeURIComponent(entry.id)}`, body: {}, kind: "content" })
   })
+  steps.push(...updates)
   if (!sameSet(snapshot.allowedCombinations, current.allowedCombinations)) {
     steps.push({ method: "POST", path: "{collection}/{id}/updateAllowedCombinations", body: { allowedCombinations: strings(snapshot.allowedCombinations) }, kind: "content" })
   }
-  for (const entry of wanted) if (!liveKeys.has(key(entry))) steps.push({ method: "POST", path: "{collection}/{id}/combinationConfigurations", body: entry, kind: "content" })
+  for (const entry of added) steps.push({ method: "POST", path: "{collection}/{id}/combinationConfigurations", body: entry, kind: "content" })
   return steps
 }
 
