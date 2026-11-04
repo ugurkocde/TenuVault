@@ -27,8 +27,9 @@
     What it can and cannot do: it reads all Intune configuration tenant-wide, including script
     contents and encrypted OMA-URI values in plain text (Microsoft documents
     DeviceManagementConfiguration.Read.All as enough for those), without Intune role scope tags
-    limiting it. If Microsoft refuses such a read, scheduled backups store the value masked and a
-    manual backup captures it. Treat the certificate on the TenuVault
+    limiting it. If Microsoft refuses such a read, scheduled backups store the value masked, and a
+    manual backup captures it when Microsoft returns the value to the admin's sign-in. Treat the
+    certificate on the TenuVault
     computer like an admin credential: remove it from the app registration when the computer is
     retired.
 
