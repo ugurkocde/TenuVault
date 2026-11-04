@@ -175,3 +175,4 @@ TenuVault compares each tenant's two newest complete backups, one tenant after a
 
 * [Intune drift detection](https://www.tenuvault.com/intune-drift-detection): what drift detection catches, on the product site
 * [Roll back an Intune policy change](https://www.tenuvault.com/guides/roll-back-intune-policy-change)
+* [Intune audit logs and diffs or drift detection](https://www.tenuvault.com/compare/intune-drift-audit-logs-vs-backup-comparison): when audit logs are enough, on the product site

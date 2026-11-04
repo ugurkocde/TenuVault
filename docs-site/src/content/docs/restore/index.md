@@ -176,6 +176,7 @@ Some results carry extra notes:
 
 * [Intune restore](https://www.tenuvault.com/intune-restore): restore modes, plans and limits, on the product site
 * [How to restore a deleted Intune policy](https://www.tenuvault.com/guides/restore-deleted-intune-policy)
+* [Your own Intune export script or a backup app](https://www.tenuvault.com/compare/intune-export-script-vs-backup-app): where restore gets hard in a script, on the product site
 * [Restore modes and assignments](/restore/modes/)
 * [Restore to another tenant](/restore/cross-tenant/)
 * [What cannot be restored and restore write history](/restore/limitations/)

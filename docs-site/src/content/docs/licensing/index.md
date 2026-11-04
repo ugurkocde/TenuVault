@@ -58,7 +58,7 @@ Eligible nonprofits can use Pro at no cost. Email [support@ugurlabs.com](mailto:
 | Reusable golden standards for customers | | | Yes |
 | Portfolio views across customer tenants | | | Yes |
 | Share the license with other admins in your tenant | | Yes, on by default | Yes, off by default |
-| Cross tenant dashboard, including **Check all** for drift | | | Yes |
+| **Check all** for drift across tenants (the [All tenants overview](/tenants/#the-all-tenants-overview) itself appears on any plan once two tenants are connected) | | | Yes |
 | Actions across several tenants: **Backup Selected**, **Copy to other tenants instead** when restoring, **Also deploy to** in OpenIntuneBaseline | | | Yes |
 
 :::note[Included in 0.2.0]

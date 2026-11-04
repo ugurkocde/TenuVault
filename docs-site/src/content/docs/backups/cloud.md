@@ -13,7 +13,7 @@ Scheduled backups normally run in the TenuVault app on an admin's computer. That
 | Survives Conditional Access sign-in frequency | No | Yes | Yes |
 | Identity that reads Intune | You, delegated | Read-only app registration, certificate on the computer | Automation managed identity, read-only app roles |
 | Storage | This device or your Azure account | Same | Your Azure account only |
-| Encrypted OMA-URI values | In plain text | Masked (`****`) | Masked (`****`) |
+| Encrypted OMA-URI values | In plain text | In plain text; masked (`****`) if Microsoft refuses the read | Same as the Backup Reader |
 | Deletes old backups (retention) | Yes | No, the next sign-in backup does | No, same |
 | Extra moving parts | Tray and background launch | Yearly certificate renewal per computer | Automation account, Key Vault secret, failure alert |
 | Plans | All (weekly on Community) | Pro and MSP | Pro and MSP |
@@ -84,7 +84,7 @@ Do not wait for the first night. In the portal, open the Automation account, **R
 
 ## How cloud backups show up in TenuVault
 
-* **Backup History** lists them like any backup: same folders, same sealed files, same compare, drift and restore. Profiles with encrypted OMA-URI values are marked not restorable from that backup (masked), like Backup Reader backups.
+* **Backup History** lists them like any backup: same folders, same sealed files, same compare, drift and restore. A profile whose encrypted OMA-URI value Microsoft refused to return is stored masked and marked not restorable from that backup, as in Backup Reader backups.
 * The **Schedule** tab status shows the Azure schedule and the last cloud run the runbook recorded. The runbook writes a sealed `cloud-backup-status-<tenant>.json` into the backup container as each run ends, including runs that stop while reading or claiming their folder; that is all the app reads. A run that fails before it could read the recovery key (no managed identity token, Key Vault unreachable or the secret missing) cannot record anything sealed, so the tab can still show the previous result. The Automation job list and the failure alert are the record for those, and job output and errors stay in the Automation account.
 * The **audit log** gets no entries from cloud runs: they never open the audit container. The Automation job list and the Entra managed identity sign-in log are the record.
 * **Notifications**: the [Azure watcher](/notifications/) sees cloud backups when it checks backup age. Failed jobs are reported by the Azure Monitor alert from setup, not by TenuVault.

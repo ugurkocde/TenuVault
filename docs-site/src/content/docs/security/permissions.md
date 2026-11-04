@@ -157,6 +157,7 @@ You can target the app registration with your own controls, for example:
 
 ## Related pages
 
+* [A client secret or a delegated sign-in for Intune automation](https://www.tenuvault.com/compare/intune-graph-client-secret-vs-delegated-sign-in): what an app-only script with a client secret exposes, on the product site
 * [Security and privacy](/security/)
 * [Network connections and data flows](/security/data-flows/)
 * [Create the app registration](/getting-started/app-registration/)

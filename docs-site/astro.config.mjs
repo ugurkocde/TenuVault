@@ -106,6 +106,7 @@ export default defineConfig({
 						'- Encryption: AES-256-GCM on the admin\'s machine before backups are written or uploaded, with a key protected by Windows DPAPI or the macOS Keychain. A recovery key lets backups be read on another device.',
 						'- Plans: Community is free for one tenant and needs no license key (manual and weekly scheduled backups, backup history up to 30 days, restore one item as a copy). Pro covers 2 tenants and adds daily schedules, Azure storage, history from 7 to 365 days or forever, bulk restore, replace in place and assignment restore. MSP covers the subscribed number of tenants (new subscriptions include 5) and adds the cross tenant dashboard and actions across several tenants. Pro and MSP include a 30 day free trial; each tenant can be active on up to 5 installations.',
 						'- Product overview: [Intune backup with TenuVault](https://www.tenuvault.com/intune-backup). Plans and prices: [TenuVault pricing](https://www.tenuvault.com/pricing).',
+						"- Comparisons with doing it by hand or with Microsoft's built-in features, including when TenuVault is not needed: [Manual or automated: Intune comparisons](https://www.tenuvault.com/compare).",
 					].join('\n'),
 				}),
 			],

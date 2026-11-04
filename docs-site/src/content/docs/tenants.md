@@ -189,3 +189,9 @@ If a tenant is licensed with your license key, the **Tenants** card on the **Lic
 | **Check all** drift across tenants | No | No | Yes |
 
 See [Plans and features](/licensing/) for the full comparison.
+
+## Related pages
+
+* [Many Intune tenants, one at a time or side by side](https://www.tenuvault.com/compare/manage-intune-tenants-one-by-one-vs-cross-tenant): working tenant by tenant in the Intune admin center compared with TenuVault MSP, on the product site
+* [Restore to another tenant](/restore/cross-tenant/)
+* [Plans and features](/licensing/)

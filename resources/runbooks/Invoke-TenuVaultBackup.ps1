@@ -20,8 +20,8 @@
     The type table below mirrors src/shared/intune/registry.ts in the desktop app (paths, expands,
     selects, extras, the singleton and the built-in skips). test/cloud-backup-runbook.test.ts
     fails when the two drift apart. Encrypted OMA-URI values are handled like the desktop Backup
-    Reader: Microsoft returns plain text only with a write permission, so a refused read keeps the
-    masked value (****), records MaskedSecretItems, and the profile is not restorable from this
+    Reader: Microsoft documents DeviceManagementConfiguration.Read.All as enough to read them in
+    plain text, and a refused read keeps the masked value (****), records MaskedSecretItems, and the profile is not restorable from this
     backup until a backup with an admin's sign-in captures it.
 
     The runbook deletes nothing. Retention is applied by the next desktop backup made with an
@@ -600,7 +600,7 @@ function Read-TvObject {
                 Set-TvProp $setting "value" $value
             } catch [TvHttpError] {
                 if ($_.Exception.Status -ne 403) { throw }
-                # App-only read roles cannot decrypt: keep the masked value, like the Backup Reader.
+                # Microsoft refused the plain-text read: keep the masked value, like the Backup Reader.
                 Set-TvProp $setting "value" "****"
                 $Outcome.Masked = $true
             }
