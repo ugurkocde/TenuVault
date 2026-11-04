@@ -114,3 +114,22 @@ it('reports a copy repair as missing, without another repair token, when the cop
   expect(result.adminLink).toBeUndefined()
   expect(writes).toBe(before)
 })
+
+it('keeps a copy repair when only a child resource is gone, because the object itself still exists', async () => {
+  let childGone = false
+  let writes = 0
+  const graph: GraphCall = async (method, path): ReturnType<GraphCall> => {
+    if (method === 'GET') return childGone && path !== 'deviceManagement/notificationMessageTemplates/copy' ? { status: 404, body: { error: { code: 'ResourceNotFound', message: 'gone' } } } : { status: 200, body: { id: 'copy', displayName: '[Restored] Message' } }
+    writes++
+    if (method === 'POST' && path === 'deviceManagement/notificationMessageTemplates') return { status: 201, body: { id: 'copy' } }
+    return { status: 400, body: { error: { message: 'Rejected' } } }
+  }
+  const restore = new Restorer(graph, { mode: 'copy', assignments: false })
+  const failed = await restore.restore(path, snapshot)
+  childGone = true
+  const before = writes
+  const result = await restore.repair(path, failed.repairToken!)
+  expect(result.missing).toBeUndefined()
+  expect(writes).toBeGreaterThan(before)
+  expect(result.adminLink?.url).toContain('compliance')
+})

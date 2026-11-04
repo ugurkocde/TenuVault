@@ -494,17 +494,30 @@ export class Restorer {
     if (entry.action === "updated") {
       try {
         const current = await this.current(entry.type, entry.id)
-        if (!current) return gone
-        if (!entry.expectedCurrent || !sameSnapshot(current, entry.expectedCurrent)) throw new Error("The live object changed after the failed restore. Review it and start a fresh replacement.")
+        if (!current && await this.parentGone(entry.type, entry.id)) return gone
+        if (!current || !entry.expectedCurrent || !sameSnapshot(current, entry.expectedCurrent)) throw new Error("The live object changed after the failed restore. Review it and start a fresh replacement.")
       } catch (error) {
         return { success: false, path, partial: true, policyId: entry.id, retryable: false, error: error instanceof Error ? error.message : String(error) }
       }
-    } else {
-      // A copy is only checked for existence; a read that fails leaves the repair to run as before.
-      const current = await this.current(entry.type, entry.id).catch(() => null)
-      if (current === undefined) return gone
+    } else if (await this.parentGone(entry.type, entry.id)) {
+      return gone
     }
     return this.complete(entry.type, path, entry.id, entry.body, entry.action, entry.steps)
+  }
+
+  /**
+   * Whether a direct read of the object itself answers that it no longer exists. Only that answer
+   * counts: a full read also reads child resources, and a child that is gone, or any other failure,
+   * says nothing about the object.
+   */
+  private async parentGone(type: IntuneType, id: string): Promise<boolean> {
+    if (type.singleton) return false
+    try {
+      const response = await this.graph("GET", `${type.path}/${encodeURIComponent(id)}`)
+      return response.status === 404 || (response.status === 400 && /ResourceNotFound/i.test(JSON.stringify(response.body)))
+    } catch {
+      return false
+    }
   }
 
   private async complete(type: IntuneType, path: string, id: string, body: Item, action: "created" | "updated", steps: Step[]): Promise<RestoreOutcome> {
