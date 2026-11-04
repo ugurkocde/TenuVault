@@ -111,6 +111,10 @@ describe("Conditional Access registry types", () => {
     expect((body.displayName as string).length).toBeLessThanOrEqual(30)
     for (const key of ["policyType", "requirementsSatisfied", "id", "combinationConfigurations@odata.context"]) expect(body).not.toHaveProperty(key)
     expect(body.combinationConfigurations).toEqual([{ "@odata.type": "#microsoft.graph.fido2CombinationConfiguration", appliesToCombinations: ["fido2"], allowedAAGUIDs: ["de1e552d-db1d-4423-a619-566b625cdc84"] }])
+    // A replacement fits the name too, for a backup edited to hold a longer one.
+    const long = strength({ displayName: "A strength name well over thirty characters" })
+    const rename = buildUpdatePlan(strengths, long, "s1", { current: long })[0]!
+    expect(rename.body).toMatchObject({ displayName: "A strength name well over thir" })
   })
 
   it("updates an authentication strength the way Graph allows: name by PATCH, combinations by action, configurations one by one", () => {

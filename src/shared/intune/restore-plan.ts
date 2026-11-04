@@ -81,6 +81,14 @@ export function restoreCapabilities(type: IntuneType, snapshot: Item, current: I
   return { blocker, replaceBlocker }
 }
 
+/** Graph refuses a name over the type's limit, such as a [Restored] copy of a long authentication strength name. */
+function fitName(type: IntuneType, payload: Item): void {
+  const nameKey = type.nameKey in payload ? type.nameKey : "displayName"
+  if (type.maxNameLength && typeof payload[nameKey] === "string" && (payload[nameKey] as string).length > type.maxNameLength) {
+    payload[nameKey] = (payload[nameKey] as string).slice(0, type.maxNameLength).trimEnd()
+  }
+}
+
 export function buildRestorePlan(type: IntuneType, snapshot: Item, options: PlanOptions = {}): RestorePlan {
   const blocker = restoreBlocker(type, snapshot)
   if (blocker) throw new NotRestorableError(blocker)
@@ -90,11 +98,7 @@ export function buildRestorePlan(type: IntuneType, snapshot: Item, options: Plan
     const key = type.nameKey in payload ? type.nameKey : "displayName"
     payload[key] = `${options.prefix} ${itemName(type, snapshot)}`
   }
-  // Graph refuses a name over the limit, such as a [Restored] copy of a long authentication strength name.
-  const nameKey = type.nameKey in payload ? type.nameKey : "displayName"
-  if (type.maxNameLength && typeof payload[nameKey] === "string" && (payload[nameKey] as string).length > type.maxNameLength) {
-    payload[nameKey] = (payload[nameKey] as string).slice(0, type.maxNameLength).trimEnd()
-  }
+  fitName(type, payload)
 
   const collection = (step: Step): Step => ({ ...step, path: step.path.replace("{collection}", type.path) })
   const steps = (type.after?.(snapshot) ?? []).map(collection)
@@ -118,6 +122,7 @@ export function buildUpdatePlan(type: IntuneType, snapshot: Item, id: string, op
     throw new NotRestorableError(`Assignment replacement is not supported for ${type.label}. Turn off Restore assignments and reconcile assignments in Intune.`)
   }
   const payload = cleanPayload(type, snapshot)
+  fitName(type, payload)
   const collection = (step: Step): Step => ({ ...step, path: step.path.replace("{collection}", type.path) })
   const after = (type.after?.(snapshot) ?? []).map(collection)
   const content = type.update
