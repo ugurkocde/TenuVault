@@ -843,7 +843,7 @@ await check("Community is a neutral plan state and its Overview notice remembers
   const banner = `document.querySelector('a[href="#/license"].bg-gray-100')`
   const dismiss = `[...document.querySelectorAll('button')].find(button => button.textContent === 'Dismiss')`
   const chip = `document.querySelector('aside a[href="#/license"] span.ml-auto')`
-  assert(await waitForCondition(`${chip}?.textContent === "Community" && ${chip}.classList.contains("bg-gray-100")`), "healthy Community sidebar chip missing")
+  assert(await waitForCondition(`${chip}?.textContent === "Community" && ${chip}.classList.contains("bg-secondary")`), "healthy Community sidebar chip missing")
   assert(await evaluate(`!${banner}`), "Community notice appeared on the tenants page")
   await go("#/portal/overview", "All tenants")
   assert(await waitForCondition(`Boolean(${banner})`), "neutral Community notice missing from Overview")
@@ -1734,7 +1734,7 @@ await check("a saved key before tenant sign-in stays neutral with activation gui
     const status = await evaluate(`window.tenuvault.license.setKey("SMOKE-LICENSE-KEY")`)
     assert(status.keyState === "pending" && status.keyMessage === null && status.message.includes("Sign in to a tenant"), "saving a key without tenants did not produce pending guidance")
     await go("#/license", "License key saved")
-    assert(await waitForCondition(`${chip}?.textContent === "Key saved" && ${chip}.classList.contains("bg-gray-100")`), "saved key chip is not neutral")
+    assert(await waitForCondition(`${chip}?.textContent === "Key saved" && ${chip}.classList.contains("bg-secondary")`), "saved key chip is not neutral")
     await send("Page.reload")
     assert(await waitForText("License key saved"), "saved key title changed after reload")
     await disableAnimations()

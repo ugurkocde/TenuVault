@@ -21,10 +21,13 @@ export function UpgradeNote({ feature, message, className }: { feature: Feature;
   )
 }
 
-/** Marks an option that needs a higher plan, such as "Pro". */
+/**
+ * Marks an option that needs a higher plan, such as "Pro". A quiet neutral chip, like the plan chip next to
+ * License in the sidebar, so it informs without competing with coral actions and the selected entry.
+ */
 export function PlanBadge({ feature, className }: { feature: Feature; className?: string }) {
   return (
-    <span className={cn("inline-flex items-center rounded-full bg-coral-100 px-2 py-0.5 text-xs font-medium text-coral-700", className)}>
+    <span className={cn("inline-flex shrink-0 items-center rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium leading-4 text-gray-700", className)}>
       {planLabel(FEATURE_PLAN[feature])}
     </span>
   )
