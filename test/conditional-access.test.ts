@@ -10,7 +10,7 @@ import { BackupEngine } from "../src/main/backup/engine"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
 import { localStorageAccountName } from "../src/shared/constants"
-import { policyChanges, policyReferences, replaceState, createState, REPORT_ONLY } from "../src/shared/intune/conditional-access"
+import { policyChanges, policyReferences, replaceState, createState, REPORT_ONLY, uncheckedReferencesWarning } from "../src/shared/intune/conditional-access"
 import { INTUNE_TYPES, restoreOrder, typeForFolder, type Item } from "../src/shared/intune/registry"
 import { buildRestorePlan, buildUpdatePlan, restoreCapabilities } from "../src/shared/intune/restore-plan"
 import { EVERYTHING } from "../src/shared/intune/scope"
@@ -253,8 +253,29 @@ describe("Restoring Conditional Access", () => {
     expect(outcome).toMatchObject({ success: true, action: "created" })
     expect(writes).toHaveLength(1)
     expect(writes[0]!.body).toMatchObject({ displayName: "[Restored] Require MFA outside the office", state: REPORT_ONLY })
+    expect(outcome.adminLink).toEqual({ url: "https://entra.microsoft.com/#view/Microsoft_AAD_ConditionalAccess/PolicyBlade/policyId/new-1", center: "Entra", exact: true })
     expect(outcome.warnings?.join("\n")).toMatch(/report-only mode instead of enabled/)
-    expect(outcome.warnings?.join("\n")).toMatch(new RegExp(`could not check.*excluded group ${BREAK_GLASS}`))
+    expect(outcome.warnings).toContain(`The app registration has no permission to read groups, so TenuVault did not check that excluded group ${BREAK_GLASS} still exists. Check the excluded users, groups and workload identities in Entra: an exclusion of a deleted account, such as an emergency access account, protects nobody.`)
+  })
+
+  it("says why a reference was not checked and gives advice that fits what each reference does", () => {
+    const group = { kind: "group", id: "g1", path: "conditions.users.includeGroups", exclude: false } as const
+    const user = { kind: "user", id: "u1", path: "conditions.users.includeUsers", exclude: false } as const
+    const location = { kind: "namedLocation", id: "l1", path: "conditions.locations.excludeLocations", exclude: true } as const
+    const strength = { kind: "authenticationStrength", id: "s1", path: "grantControls.authenticationStrength.id", exclude: false } as const
+    expect(uncheckedReferencesWarning("forbidden", [])).toBeUndefined()
+    expect(uncheckedReferencesWarning("forbidden", [group])).toBe("The app registration has no permission to read groups, so TenuVault did not check that included group g1 still exists. If an included user, group or workload identity was deleted, the policy applies to fewer of them than in the backup.")
+    expect(uncheckedReferencesWarning("unanswered", [group, user])).toMatch(/^Microsoft did not answer when TenuVault checked that included group g1 and included user u1 still exist\. If an included/)
+    // A mixed list keeps both the exclusion and the inclusion advice.
+    const mixed = uncheckedReferencesWarning("forbidden", [group, user, { ...user, id: "u2", exclude: true }])!
+    expect(mixed).toMatch(/^The app registration has no permission to read groups and users, so TenuVault did not check that included group g1, included user u1 and excluded user u2 still exist\./)
+    expect(mixed).toContain("an exclusion of a deleted account")
+    expect(mixed).toContain("applies to fewer of them")
+    // Locations and strengths are not about who the policy applies to, and no advice assumes the policy is off.
+    const other = uncheckedReferencesWarning("unanswered", [location, strength])!
+    expect(other).toContain("location condition depends on them")
+    expect(other).toContain("grant control depends on it")
+    expect(other).not.toMatch(/fewer|account|turn the policy on/)
   })
 
   it("points a policy at the named location and authentication strength recreated earlier in the same restore", async () => {

@@ -9,7 +9,8 @@ import { assignmentsUnread, readObject, type GraphReader } from "../../../shared
 import { sameSnapshot } from "../../../shared/intune/compare"
 import { saveWrite, removeWrite, writeKey, writeRecords } from "../../../main/storage/restore-journal"
 import { moduleForFolder, restorePermissionBlocker, SERVICES_PAGE, type GrantedPermissions } from "../../../shared/services/modules"
-import { policyReferences, referenceLabel, referencePath, TENANT_KINDS } from "../../../shared/intune/conditional-access"
+import { adminCenterLink, type AdminLink } from "../../../shared/intune/admin-links"
+import { policyReferences, referenceLabel, referencePath, TENANT_KINDS, uncheckedReferencesWarning, type PolicyReference } from "../../../shared/intune/conditional-access"
 
 /** A read that failed because the object no longer exists. */
 class Gone extends Error {}
@@ -63,6 +64,17 @@ export interface RestoreOutcome {
   repairToken?: string
   /** Replace with recreateMissing false found the object deleted and left it so. */
   missing?: boolean
+  /** Where the admin opens the object that is now in the tenant (Intune or Entra admin center). */
+  adminLink?: AdminLink
+}
+
+/** Adds the admin center link of the object a restore wrote or found, never of one it refused or left deleted. */
+function withAdminLink(path: string, outcome: RestoreOutcome, item: Item): RestoreOutcome {
+  if (!outcome.policyId || outcome.action === "skipped" || outcome.missing) return outcome
+  const folder = path.split("/")[1] ?? ""
+  const named = outcome.policyName ? { ...item, displayName: outcome.policyName, name: outcome.policyName } : item
+  const adminLink = adminCenterLink(folder, outcome.policyId, named)
+  return adminLink ? { ...outcome, adminLink } : outcome
 }
 
 export interface GraphCallOptions {
@@ -244,6 +256,10 @@ export class Restorer {
   }
 
   async restore(path: string, snapshot: Item): Promise<RestoreOutcome> {
+    return withAdminLink(path, await this.restoreOnce(path, snapshot), snapshot)
+  }
+
+  private async restoreOnce(path: string, snapshot: Item): Promise<RestoreOutcome> {
     const folder = path.split("/")[1] ?? ""
     const type = typeForFolder(folder === "DeviceCompliancePolicies" ? "CompliancePolicies" : folder)
     if (!type) return { success: false, path, error: "This backup file is not an Intune type TenuVault can restore." }
@@ -332,7 +348,8 @@ export class Restorer {
     const id = String(created.body.id ?? "")
     if (!id) return { success: false, path, retryable: false, error: "Microsoft Graph did not return an ID. Check Intune before retrying." }
     if (typeof snapshot.id === "string" && !this.reviewed.has(snapshot.id.toLowerCase())) this.remapped.set(snapshot.id, id)
-    const outcome = await this.complete(type, path, id, created.body, "created", [...plan.steps, ...plan.assignments])
+    // Graph may answer with only the ID, so the body sent (with the [Restored] name) fills the gaps.
+    const outcome = await this.complete(type, path, id, { ...plan.create.body, ...created.body }, "created", [...plan.steps, ...plan.assignments])
     if (plan.assignments.length && type.assignmentWarning) outcome.warnings = [...(outcome.warnings ?? []), type.assignmentWarning]
     return this.withWarnings(outcome, type, source, plan.create.body, references.warnings)
   }
@@ -372,22 +389,23 @@ export class Restorer {
 
   /**
    * Whether the referenced object exists live: true or false only when the read answers that
-   * clearly, and undefined when it does not (for example a permission or server error), so a
-   * failed check never masquerades as a missing dependency.
+   * clearly, "forbidden" when the app registration may not read it, and undefined for any other
+   * unclear answer (such as a server error), so a failed check never masquerades as a missing dependency.
    */
-  private async existsLive(path: string, id: string): Promise<boolean | undefined> {
+  private async existsLive(path: string, id: string): Promise<boolean | "forbidden" | undefined> {
     const cached = this.liveDependencies.get(path)
     if (cached !== undefined) return cached
-    let exists: boolean | undefined
+    let exists: boolean | "forbidden" | undefined
     try {
       const response = await this.graph("GET", path)
       const readId = response.body?.id
       if (response.status < 300) exists = readId === undefined ? undefined : String(readId).toLowerCase() === id.toLowerCase()
       else if (response.status === 404 || (response.status === 400 && /ResourceNotFound/i.test(JSON.stringify(response.body)))) exists = false
+      else if (response.status === 403) exists = "forbidden"
     } catch {
       exists = undefined
     }
-    if (exists !== undefined) this.liveDependencies.set(path, exists)
+    if (typeof exists === "boolean") this.liveDependencies.set(path, exists)
     return exists
   }
 
@@ -422,7 +440,8 @@ export class Restorer {
     const resolved = new Set([...this.remapped.values(), ...this.reviewed.values()].map((value) => value.toLowerCase()))
     const missing: string[] = []
     const absentIncludes: string[] = []
-    const unchecked: string[] = []
+    const forbidden: PolicyReference[] = []
+    const unanswered: PolicyReference[] = []
     for (const reference of policyReferences(body)) {
       if (resolved.has(reference.id.toLowerCase())) continue
       if (this.options.crossTenant) {
@@ -432,7 +451,8 @@ export class Restorer {
       const path = referencePath(reference)
       if (!path) continue
       const exists = await this.existsLive(path, reference.id)
-      if (exists === undefined) unchecked.push(referenceLabel(reference))
+      if (exists === "forbidden") forbidden.push(reference)
+      else if (exists === undefined) unanswered.push(reference)
       else if (!exists && (reference.exclude || reference.kind === "namedLocation" || reference.kind === "authenticationStrength")) missing.push(referenceLabel(reference))
       else if (!exists) absentIncludes.push(referenceLabel(reference))
     }
@@ -443,8 +463,9 @@ export class Restorer {
       : []
     const warnings = [
       ...(absentIncludes.length ? [`These included objects no longer exist, so the policy applies to fewer people than when it was backed up: ${absentIncludes.join(", ")}.`] : []),
-      ...(unchecked.length ? [`TenuVault could not check that these still exist (no permission to read them, or Microsoft did not answer): ${unchecked.join(", ")}. Check excluded accounts, such as emergency access accounts, before you turn the policy on.`] : []),
-    ]
+      uncheckedReferencesWarning("forbidden", forbidden),
+      uncheckedReferencesWarning("unanswered", unanswered),
+    ].filter((warning): warning is string => Boolean(warning))
     return { blocking, warnings }
   }
 
@@ -458,21 +479,46 @@ export class Restorer {
 
   /** A repair replays only rejected/unattempted steps against the object already created. */
   async repair(path: string, token: string): Promise<RestoreOutcome> {
+    const body = repairs.get(token)?.body ?? {}
+    return withAdminLink(path, await this.repairOnce(path, token), body)
+  }
+
+  private async repairOnce(path: string, token: string): Promise<RestoreOutcome> {
     const entry = repairs.get(token)
     if (!entry || entry.expires < Date.now() || entry.path !== path || entry.scope !== (this.options.repairScope ?? this.instanceScope)) {
       return { success: false, path, retryable: false, error: "Repair is unavailable or expired. Check the existing object in Intune; do not create another copy." }
     }
     // Consume before awaiting to prevent concurrent requests replaying additive steps.
     repairs.delete(token)
+    // A deleted object, a copy or a replaced one, has nothing to repair or open: report it missing, without an admin link.
+    const gone: RestoreOutcome = { success: false, path, policyId: entry.id, missing: true, retryable: false, error: "The object no longer exists, so it was not repaired. Start a fresh restore if you still need it." }
     if (entry.action === "updated") {
       try {
         const current = await this.current(entry.type, entry.id)
+        if (!current && await this.parentGone(entry.type, entry.id)) return gone
         if (!current || !entry.expectedCurrent || !sameSnapshot(current, entry.expectedCurrent)) throw new Error("The live object changed after the failed restore. Review it and start a fresh replacement.")
       } catch (error) {
         return { success: false, path, partial: true, policyId: entry.id, retryable: false, error: error instanceof Error ? error.message : String(error) }
       }
+    } else if (await this.parentGone(entry.type, entry.id)) {
+      return gone
     }
     return this.complete(entry.type, path, entry.id, entry.body, entry.action, entry.steps)
+  }
+
+  /**
+   * Whether a direct read of the object itself answers that it no longer exists. Only that answer
+   * counts: a full read also reads child resources, and a child that is gone, or any other failure,
+   * says nothing about the object.
+   */
+  private async parentGone(type: IntuneType, id: string): Promise<boolean> {
+    if (type.singleton) return false
+    try {
+      const response = await this.graph("GET", `${type.path}/${encodeURIComponent(id)}`)
+      return response.status === 404 || (response.status === 400 && /ResourceNotFound/i.test(JSON.stringify(response.body)))
+    } catch {
+      return false
+    }
   }
 
   private async complete(type: IntuneType, path: string, id: string, body: Item, action: "created" | "updated", steps: Step[]): Promise<RestoreOutcome> {

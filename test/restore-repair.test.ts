@@ -35,11 +35,13 @@ it('retains the created ID and blocks replay when a follow-up response is lost',
 it('reports a partial API operation and repairs across requests without another creation', async () => {
   let reject = true
   let creates = 0
-  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input))
     if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
     if (url.hostname.endsWith('.blob.core.windows.net')) return Response.json(snapshot)
     if (url.pathname.endsWith('localizedNotificationMessages')) return reject ? Response.json({ error: { message: 'No' } }, { status: 400 }) : new Response(null, { status: 204 })
+    // The repair reads the copy back first to confirm it still exists.
+    if ((init?.method ?? 'GET') === 'GET') return Response.json({ id: 'created', displayName: '[Restored] Message' })
     creates++
     return Response.json({ id: 'created' }, { status: 201 })
   }))
@@ -69,4 +71,65 @@ it('rejects a replacement repair when live state changed after the failure', asy
   expect(result).toMatchObject({ success: false, retryable: false, policyId: 'category' })
   expect(result.error).toContain('changed after')
   expect(writes).toBe(1)
+})
+
+it('reports a replacement repair as missing, without an admin link, when the object was deleted after the failure', async () => {
+  let deleted = false
+  let writes = 0
+  const graph: GraphCall = async (method): ReturnType<GraphCall> => {
+    if (method === 'GET') return deleted ? { status: 404, body: { error: { code: 'ResourceNotFound', message: 'gone' } } } : { status: 200, body: { id: 'category', displayName: 'Before' } }
+    writes++
+    return { status: 400, body: { error: { message: 'Rejected' } } }
+  }
+  const restore = new Restorer(graph, { mode: 'replace', assignments: false })
+  const categoryPath = 'backup/DeviceCategories/a.json'
+  const failed = await restore.restore(categoryPath, { id: 'category', displayName: 'Wanted' })
+  // The partial outcome still links to the object, so the admin can check it.
+  expect(failed.adminLink?.url).toContain('deviceCategories')
+  deleted = true
+  const result = await restore.repair(categoryPath, failed.repairToken!)
+  expect(result).toMatchObject({ success: false, missing: true, retryable: false, policyId: 'category' })
+  expect(result.adminLink).toBeUndefined()
+  expect(writes).toBe(1)
+})
+
+it('reports a copy repair as missing, without another repair token, when the copy was deleted after the failure', async () => {
+  let deleted = false
+  let writes = 0
+  const graph: GraphCall = async (method, path): ReturnType<GraphCall> => {
+    if (method === 'GET') return deleted ? { status: 404, body: { error: { code: 'ResourceNotFound', message: 'gone' } } } : { status: 200, body: { id: 'copy', displayName: '[Restored] Message' } }
+    writes++
+    if (method === 'POST' && path === 'deviceManagement/notificationMessageTemplates') return { status: 201, body: { id: 'copy' } }
+    return { status: 400, body: { error: { message: 'Rejected' } } }
+  }
+  const restore = new Restorer(graph, { mode: 'copy', assignments: false })
+  const failed = await restore.restore(path, snapshot)
+  expect(failed).toMatchObject({ partial: true, policyId: 'copy' })
+  expect(failed.repairToken).toBeTypeOf('string')
+  deleted = true
+  const before = writes
+  const result = await restore.repair(path, failed.repairToken!)
+  expect(result).toMatchObject({ success: false, missing: true, retryable: false, policyId: 'copy' })
+  expect(result.repairToken).toBeUndefined()
+  expect(result.adminLink).toBeUndefined()
+  expect(writes).toBe(before)
+})
+
+it('keeps a copy repair when only a child resource is gone, because the object itself still exists', async () => {
+  let childGone = false
+  let writes = 0
+  const graph: GraphCall = async (method, path): ReturnType<GraphCall> => {
+    if (method === 'GET') return childGone && path !== 'deviceManagement/notificationMessageTemplates/copy' ? { status: 404, body: { error: { code: 'ResourceNotFound', message: 'gone' } } } : { status: 200, body: { id: 'copy', displayName: '[Restored] Message' } }
+    writes++
+    if (method === 'POST' && path === 'deviceManagement/notificationMessageTemplates') return { status: 201, body: { id: 'copy' } }
+    return { status: 400, body: { error: { message: 'Rejected' } } }
+  }
+  const restore = new Restorer(graph, { mode: 'copy', assignments: false })
+  const failed = await restore.restore(path, snapshot)
+  childGone = true
+  const before = writes
+  const result = await restore.repair(path, failed.repairToken!)
+  expect(result.missing).toBeUndefined()
+  expect(writes).toBeGreaterThan(before)
+  expect(result.adminLink?.url).toContain('compliance')
 })

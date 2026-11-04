@@ -138,6 +138,57 @@ const KIND_LABEL: Record<ReferenceKind, string> = {
 
 export const referenceLabel = (reference: PolicyReference) => `${reference.exclude ? "excluded" : "included"} ${KIND_LABEL[reference.kind]} ${reference.id}`.replace(/^included (named location|authentication strength|terms of use)/, "$1")
 
+const KIND_PLURAL: Record<ReferenceKind, string> = {
+  user: "users",
+  group: "groups",
+  role: "roles",
+  application: "apps",
+  servicePrincipal: "workload identities",
+  namedLocation: "named locations",
+  authenticationStrength: "authentication strengths",
+  termsOfUse: "terms of use",
+}
+
+/** "a", "a and b", "a, b and c". */
+const listed = (items: string[]) => (items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`)
+
+/** Kinds that decide who a policy applies to: users, groups and workload identities. */
+const ASSIGNEE_KINDS: ReadonlySet<ReferenceKind> = new Set(["user", "group", "servicePrincipal"])
+
+/**
+ * The restore warning for references TenuVault could not check: why (the app registration cannot read
+ * that kind of object, or Microsoft did not answer) and what to do. The advice depends on what each
+ * reference does, and does not assume the policy is off (a replace keeps a live policy enforced):
+ * a deleted excluded account protects nobody, a deleted included one narrows who the policy applies
+ * to, and a deleted named location or authentication strength breaks the condition or control that
+ * uses it.
+ */
+export function uncheckedReferencesWarning(cause: "forbidden" | "unanswered", references: PolicyReference[]): string | undefined {
+  if (!references.length) return undefined
+  const labels = listed(references.map(referenceLabel))
+  const verb = references.length === 1 ? "exists" : "exist"
+  const kinds = listed([...new Set(references.map((reference) => KIND_PLURAL[reference.kind]))])
+  const why = cause === "forbidden"
+    ? `The app registration has no permission to read ${kinds}, so TenuVault did not check that ${labels} still ${verb}.`
+    : `Microsoft did not answer when TenuVault checked that ${labels} still ${verb}.`
+  const assignees = references.filter((reference) => ASSIGNEE_KINDS.has(reference.kind))
+  const advice = [
+    ...(assignees.some((reference) => reference.exclude)
+      ? ["Check the excluded users, groups and workload identities in Entra: an exclusion of a deleted account, such as an emergency access account, protects nobody."]
+      : []),
+    ...(assignees.some((reference) => !reference.exclude)
+      ? ["If an included user, group or workload identity was deleted, the policy applies to fewer of them than in the backup."]
+      : []),
+    ...(references.some((reference) => reference.kind === "namedLocation")
+      ? ["Check the named locations in Entra: the policy's location condition depends on them."]
+      : []),
+    ...(references.some((reference) => reference.kind === "authenticationStrength")
+      ? ["Check the authentication strength in Entra: the policy's grant control depends on it."]
+      : []),
+  ]
+  return [why, ...advice].join(" ")
+}
+
 /**
  * What the restore result tells the admin about the policy it wrote: the state it was given and the
  * session controls that affect how long people, TenuVault included, stay signed in.
