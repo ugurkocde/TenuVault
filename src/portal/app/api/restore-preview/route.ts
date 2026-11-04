@@ -7,6 +7,8 @@ import { itemName, typeForFolder, type Item, type ReviewChange } from "../../../
 import { restoreCapabilities } from "../../../../shared/intune/restore-plan"
 import { sameSnapshot } from "../../../../shared/intune/compare"
 import { assignmentsUnread } from "../../../../shared/intune/read"
+import { moduleForFolder, restorePermissionBlocker } from "../../../../shared/services/modules"
+import { grantedPermissions } from "../../../../shared/services/token"
 
 const MAX_ITEMS = 2000
 const CONCURRENCY = 6
@@ -60,8 +62,16 @@ export async function POST(request: NextRequest) {
   try {
     const [storageToken, graphToken] = await Promise.all([
       token(tenantId, appId, clientSecret, "https://storage.azure.com/.default"),
-      live === true ? token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default") : Promise.resolve(""),
+      // An opt-in service's items are checked against the app registration's permissions, so a restore
+      // that would be refused shows as not restorable here instead of failing when it starts.
+      live === true
+        ? token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default")
+        : paths.some((path) => moduleForFolder(String(path).split("/")[1] ?? "")?.module.optIn)
+          // Without the token the restore still checks the permission before its first write.
+          ? token(tenantId, appId, clientSecret, "https://graph.microsoft.com/.default").catch(() => "")
+          : Promise.resolve(""),
     ])
+    const granted = grantedPermissions(graphToken)
     const owned = await readOwnedBackup((name) => fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups/${name.split("/").map(encodeURIComponent).join("/")}`, {
       headers: { "x-ms-version": "2021-12-02", Authorization: `Bearer ${storageToken}` },
     }), backupId, tenantId)
@@ -107,7 +117,7 @@ export async function POST(request: NextRequest) {
       while (next < paths.length) {
         const index = next++
         const path = paths[index] as string
-        try { items[index] = await preview(path) }
+        try { items[index] = withPermission(await preview(path), granted) }
         catch { items[index] = { path, folder: path.split("/")[1] ?? "", name: path.split("/").pop() ?? path, live: "error", error: "This snapshot could not be read or assessed.", blocker: "This snapshot could not be assessed.", replaceBlocker: "This snapshot could not be assessed." } }
       }
     }))
@@ -115,4 +125,10 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "The restore preview failed." }, { status: 500 })
   }
+}
+
+/** Marks an item not restorable when the app registration lacks its opt-in service's write permission. */
+function withPermission(item: PreviewItem, granted: ReturnType<typeof grantedPermissions>): PreviewItem {
+  const blocker = restorePermissionBlocker(item.folder, granted)
+  return blocker ? { ...item, blocker: item.blocker ?? blocker, replaceBlocker: item.replaceBlocker ?? blocker } : item
 }

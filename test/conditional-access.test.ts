@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { NextRequest } from "../src/main/api/next-server-shim"
 import { POST as detectDrifts } from "../src/portal/app/api/detect-drifts/route"
+import { POST as restorePreview } from "../src/portal/app/api/restore-preview/route"
 import { BackupEngine } from "../src/main/backup/engine"
 import { handleLocalBlobRequest, localAccountFromUrl } from "../src/main/storage/blob-emulator"
 import { LocalBlobStore } from "../src/main/storage/local-blob-store"
@@ -373,5 +374,41 @@ describe("Conditional Access in a drift scan", () => {
     expect(drifts[0]).toMatchObject({ type: "Conditional Access policies", changeType: "modified", severity: "critical" })
     expect(drifts[0].changes.some((change: { field: string }) => change.field.startsWith("conditions.users.excludeGroups"))).toBe(true)
     expect(drifts[0].replaceBlocker).toBeUndefined()
+  })
+})
+
+describe("Conditional Access in the restore review", () => {
+  afterEach(() => vi.unstubAllGlobals())
+  const jwt = (scp: string) => `e30.${Buffer.from(JSON.stringify({ scp })).toString("base64url")}.sig`
+
+  async function preview(scopes: string) {
+    const backupId = "backup-2026-11-04-114043"
+    const path = `${backupId}/ConditionalAccessPolicies/Block legacy auth.json`
+    const graph: string[] = []
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input))
+      if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: jwt(scopes) })
+      if (url.hostname === "graph.microsoft.com") graph.push(url.pathname)
+      if (decodeURIComponent(url.pathname) === `/intune-backups/${path}`) return Response.json(policy(), { headers: { "x-tenuvault-authenticated": "true" } })
+      return new Response("", { status: 404 })
+    }))
+    const body = { tenantId: "tenant", appId: "app", clientSecret: "test", storageAccountName: "store", backupId, paths: [path] }
+    const response = await restorePreview(new NextRequest("http://tenuvault.internal/api/restore-preview", { method: "POST", body: JSON.stringify(body) }))
+    expect(response.status).toBe(200)
+    return { item: (await response.json()).items[0], graph }
+  }
+
+  it("shows a policy as not restorable before the restore starts when the write permission is missing", async () => {
+    const { item, graph } = await preview("Policy.Read.All")
+    expect(item.blocker).toMatch(/needs the Policy\.ReadWrite\.ConditionalAccess permission.*Services and permissions/)
+    expect(item.replaceBlocker).toBe(item.blocker)
+    // The check reads the token only; it sends nothing to Microsoft Graph.
+    expect(graph).toEqual([])
+  })
+
+  it("offers the policy once the permission is granted", async () => {
+    const { item } = await preview("Policy.Read.All Policy.ReadWrite.ConditionalAccess")
+    expect(item.blocker).toBeUndefined()
+    expect(item.replaceBlocker).toBeUndefined()
   })
 })

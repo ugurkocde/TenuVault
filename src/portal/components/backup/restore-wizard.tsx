@@ -1,6 +1,7 @@
 import { reviewedDependencyMappings, type RecoveryReadiness } from "../../../shared/intune/recovery"
 import { settingDefinitionIds, type DeprecatedSettingHit } from "../../../shared/intune/settings-catalog"
 import { typeForFolder, type ReviewChange } from "../../../shared/intune/registry"
+import { moduleForFolder } from "../../../shared/services/modules"
 import { passwordResetWarning } from "../../../shared/intune/restore-plan"
 import { ACKNOWLEDGEMENT_REQUIRED } from "../../../shared/disclaimer"
 "use client"
@@ -35,6 +36,12 @@ import { PlanBadge, UpgradeNote } from "@desktop/components/UpgradeNote"
 import { GatedButton } from "@desktop/components/PlanGate"
 import { formatDate, formatSize, statusKind, statusLabel, type BackupSummary, type BackupTenant } from "./types"
 import { LinkedMessage } from "~/components/linked-message"
+
+
+/** Where an admin checks a restored item: Conditional Access lives in Entra, everything else in Intune. */
+function adminCenter(folder: string | undefined): string {
+  return folder && moduleForFolder(folder)?.module.id === "conditionalAccess" ? "Entra" : "Intune"
+}
 
 interface CopyTarget {
   tenantId: string
@@ -499,9 +506,10 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
       const outcomes = mergeOutcomes(previous, completed)
       const handled = outcomes.filter((outcome) => outcome.success).length
       const failed = outcomes.filter((outcome) => !outcome.success && outcome.action !== "skipped").length
+      const skipped = outcomes.filter((outcome) => !outcome.success && outcome.action === "skipped").length
       setProgress((current) => (current ? { ...current, done: current.total, current: null } : current))
       setResult({ outcome: failed === 0 && handled > 0 ? "success" : handled > 0 || outcomes.some((item) => item.partial) ? "partial" : "failed",
-        message: `${handled} items completed; ${failed} failed.`, results: outcomes })
+        message: `${handled} items completed; ${failed} failed${skipped ? `; ${skipped} skipped` : ""}.`, results: outcomes })
     } catch (error) {
       showPlanError(error)
       const missing = (batch: (typeof batches)[number], outcome: Omit<Outcome, "path" | "targetTenantId">): Outcome[] => {
@@ -762,7 +770,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                                     />
                                     <span className="min-w-0">
                                       <span className={cn("block break-words", selectionBlocker(item) ? "text-gray-500" : "text-gray-900")}>{item.name}</span>
-                                      {(selectionBlocker(item) || item.blocker) && <span className="block text-xs text-gray-500">{selectionBlocker(item) || "Replace only: this object cannot be copied."}</span>}
+                                      {(selectionBlocker(item) || item.blocker) && <span className="block text-xs text-gray-500"><LinkedMessage text={selectionBlocker(item) || "Replace only: this object cannot be copied."} /></span>}
                                       {deprecatedByPath.get(item.path) && (
                                         <span className="mt-0.5 flex items-start gap-1 text-xs text-amber-800">
                                           <AlertTriangle className="mt-px h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
@@ -947,7 +955,7 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                             {state?.liveName && state.liveName !== item?.name && `, now named "${state.liveName}"`}
                           </span>
                           {state?.snapshot !== undefined && <details className="mt-2"><summary className="cursor-pointer text-xs text-blue-700">Review snapshot content (may contain secrets)</summary><pre className="max-h-64 max-w-xl overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(state.snapshot, null, 2)}</pre></details>}
-                          {reason && <span className="block text-xs text-gray-500">{reason}</span>}
+                          {reason && <span className="block text-xs text-gray-500"><LinkedMessage text={reason} /></span>}
                           {deprecatedByPath.get(path) && <span className="block text-xs text-amber-800">{deprecatedLabel(deprecatedByPath.get(path)!)}</span>}
                           {assignmentWarning && <span className="block text-xs text-amber-800">{assignmentWarning}</span>}
                           {passwordWarning && <span className="block text-xs text-amber-800">{passwordWarning}</span>}
@@ -1105,7 +1113,8 @@ export function RestoreWizard({ tenant, backups, initialBackupId, community, can
                     </span>
                     <span className="block text-xs text-gray-500"><LinkedMessage text={text} /></span>
                     {outcome.partial && outcome.policyId && <span className="block text-xs text-amber-800">Incomplete object: {outcome.policyId}. {outcome.repairToken ? "Retry repairs the remaining steps without creating another object. Repair is available for one hour in this app session." : "Check and repair it in Intune."}</span>}
-                    {outcome.retryable === false && !outcome.success && <span className="block text-xs text-amber-800">Check this item in Intune before retrying; a write may already have completed.</span>}
+                    {/* A skipped item was refused before any write, so there is nothing to check. */}
+                    {outcome.retryable === false && !outcome.success && outcome.action !== "skipped" && <span className="block text-xs text-amber-800">Check this item in {adminCenter(itemByPath.get(outcome.path)?.folder)} before retrying; a write may already have completed.</span>}
                     {outcome.warnings?.map((warning) => (
                       <span key={warning} className="block text-xs text-amber-800">
                         <LinkedMessage text={warning} />
