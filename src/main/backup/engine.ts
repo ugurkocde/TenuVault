@@ -647,7 +647,7 @@ export class BackupEngine {
     job.status = failures > 0 && totalPolicies === 0 ? "Failed" : "Completed"
     if (job.status === "Failed" && !outcome.answered && !outcome.otherFailures) job.unreachable = true
     if (maskedItems.length) {
-      this.write(job, `Saved ${maskedItems.length} object${maskedItems.length === 1 ? "" : "s"} with encrypted OMA-URI values masked (****): the Backup Reader cannot read them in plain text, so these copies cannot be restored. A manual backup captures them.`)
+      this.write(job, `Saved ${maskedItems.length} object${maskedItems.length === 1 ? "" : "s"} with encrypted OMA-URI values masked (****): Microsoft refused the plain-text read, so these copies cannot be restored. A manual backup with your sign-in captures them when Microsoft returns the values.`)
     }
     const warnings = failures + retentionWarnings + (maskedItems.length ? 1 : 0)
     job.progressMessage =
