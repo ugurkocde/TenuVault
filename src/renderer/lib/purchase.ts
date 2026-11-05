@@ -5,21 +5,46 @@ import { isUnlicensed } from "./license"
 
 /**
  * Buying from the app: the checkout opens in the browser, and the license key arrives in the
- * purchase email. Once a checkout was opened, the key is picked up from the clipboard when the
- * admin copies it from that email and returns to TenuVault (PurchaseKeyWatcher).
+ * purchase email. The key is picked up from the clipboard when the admin copies it from that
+ * email and returns to TenuVault (PurchaseKeyWatcher): within PURCHASE_WATCH_MS of opening a
+ * checkout here, and on the License page while a trial key is saved.
  */
 
 /** How long after opening a checkout a copied key is picked up. */
 export const PURCHASE_WATCH_MS = 6 * 60 * 60 * 1000
 
-let openedAt: number | null = null
+const STORAGE_KEY = "tenuvault-checkout-opened-at"
 const listeners = new Set<() => void>()
+
+// Kept across a restart within the watch window: buyers often close the app while paying.
+function stored(): number | null {
+  try {
+    const value = Number(localStorage.getItem(STORAGE_KEY))
+    return Number.isFinite(value) && value > 0 && Date.now() - value < PURCHASE_WATCH_MS ? value : null
+  } catch {
+    return null
+  }
+}
+
+let openedAt: number | null = stored()
+let opening: Promise<void> | null = null
+
+function remember(value: number | null) {
+  openedAt = value
+  try {
+    if (value === null) localStorage.removeItem(STORAGE_KEY)
+    else localStorage.setItem(STORAGE_KEY, String(value))
+  } catch {
+    /* Only within this session then. */
+  }
+  notify()
+}
 
 function notify() {
   for (const listener of listeners) listener()
 }
 
-/** When a checkout was last opened in this session, or null. */
+/** When a checkout was last opened, within the watch window, or null. */
 export function checkoutOpenedAt(): number | null {
   return openedAt
 }
@@ -31,8 +56,7 @@ export function subscribeCheckout(listener: () => void): () => void {
 
 /** Stops picking up copied keys, for example once the new key is active. */
 export function clearCheckout(): void {
-  openedAt = null
-  notify()
+  remember(null)
 }
 
 export function useCheckoutOpenedAt(): number | null {
@@ -48,17 +72,23 @@ export function trialUsed(status: LicenseStatus | null | undefined): boolean {
  * Opens the checkout that asks for payment right away. Trial users chose after a month of use,
  * so their checkout opens on yearly; monthly is on the same page.
  */
-export async function openCheckout(
+export function openCheckout(
   source: string,
   options: { plan?: "pro" | "msp"; status?: LicenseStatus | null } = {},
 ): Promise<void> {
-  await bridge.license.open("checkout", {
-    source,
-    ...(options.plan ? { plan: options.plan } : {}),
-    ...(trialUsed(options.status) ? { interval: "yearly" as const } : {}),
-  })
-  openedAt = Date.now()
-  notify()
+  // A trial checkout waits for the licensing service before the browser opens; repeated
+  // clicks meanwhile do not open more checkouts.
+  opening ??= bridge.license
+    .open("checkout", {
+      source,
+      ...(options.plan ? { plan: options.plan } : {}),
+      ...(trialUsed(options.status) ? { interval: "yearly" as const } : {}),
+    })
+    .then(() => remember(Date.now()))
+    .finally(() => {
+      opening = null
+    })
+  return opening
 }
 
 /**

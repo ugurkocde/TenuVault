@@ -28,6 +28,7 @@ import { BrandMark } from "./BrandMark"
 import { ErrorBoundary } from "./ErrorBoundary"
 import { communityBannerVisible, earliestExpiringTenant, formatDate, formatDateTime, hasPaidLicense, isUnlicensed, licenseChipState, licenseExpiryWarning, offlineDeadline, trialEndedNotice, trialReminder, unlicensedTenants, useLicense } from "../lib/license"
 import { openCheckout } from "../lib/purchase"
+import { PlanPromptButton } from "./PlanPromptButton"
 import { PurchaseKeyWatcher } from "./PurchaseKeyWatcher"
 import type { LicenseStatus } from "../../shared/ipc"
 import { Button } from "~/components/ui/button"
@@ -107,28 +108,23 @@ function BannerLink({ tone, icon, children, action, onDismiss, dismissing }: { t
   )
 }
 
-/** Day 20 and day 27 of the no-card trial: when it ends, and the checkout that keeps Pro. */
-function TrialReminderBanner({ reminder, status, onDismiss, dismissing }: {
-  reminder: NonNullable<ReturnType<typeof trialReminder>>
+/** A trial notice: what it says, Buy Pro (the checkout opens on yearly), Details and Dismiss. */
+function TrialBanner({ urgent, source, status, onDismiss, dismissing, children }: {
+  urgent: boolean
+  source: string
   status: LicenseStatus
   onDismiss: () => void
   dismissing: boolean
+  children: ReactNode
 }) {
-  const final = reminder.stage === "day-27"
-  const when = reminder.daysLeft === 1 ? "tomorrow" : `in ${reminder.daysLeft} days`
   return (
     <div className="px-6 pt-5 lg:px-8">
-      <div role="status" className={cn("flex flex-wrap items-center gap-3 rounded-3xl py-2 pl-2 pr-2 text-sm font-medium", final ? "bg-amber-50 text-amber-900" : "bg-blue-50 text-gray-900")}>
-        <span className={cn("flex size-9 flex-shrink-0 items-center justify-center rounded-full", final ? "bg-card text-amber-700" : "bg-coral-500 text-white")} aria-hidden="true">
+      <div role="status" className={cn("flex flex-wrap items-center gap-3 rounded-3xl py-2 pl-2 pr-2 text-sm font-medium", urgent ? "bg-amber-50 text-amber-900" : "bg-blue-50 text-gray-900")}>
+        <span className={cn("flex size-9 flex-shrink-0 items-center justify-center rounded-full", urgent ? "bg-card text-amber-700" : "bg-coral-500 text-white")} aria-hidden="true">
           <Clock className="h-4 w-4" />
         </span>
-        <span className="min-w-0 flex-1">
-          Your Pro trial ends {when}, on {formatDate(reminder.endsAt)}.{" "}
-          {final
-            ? "Buy Pro now to keep daily backups, full restore and drift revert for both tenants."
-            : "Buy Pro to keep daily backups, full restore and drift revert after the trial."}
-        </span>
-        <Button type="button" size="sm" onClick={() => void openCheckout(`trial-${reminder.stage}`, { status })}>
+        <span className="min-w-0 flex-1">{children}</span>
+        <Button type="button" size="sm" onClick={() => void openCheckout(source, { status })}>
           <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
           Buy Pro
         </Button>
@@ -141,6 +137,25 @@ function TrialReminderBanner({ reminder, status, onDismiss, dismissing }: {
   )
 }
 
+/** Day 20 and day 27 of the no-card trial: when it ends, and the checkout that keeps Pro. */
+function TrialReminderBanner({ reminder, status, onDismiss, dismissing }: {
+  reminder: NonNullable<ReturnType<typeof trialReminder>>
+  status: LicenseStatus
+  onDismiss: () => void
+  dismissing: boolean
+}) {
+  const final = reminder.stage === "day-27"
+  const when = reminder.daysLeft === 1 ? "tomorrow" : `in ${reminder.daysLeft} days`
+  return (
+    <TrialBanner urgent={final} source={`trial-${reminder.stage}`} status={status} onDismiss={onDismiss} dismissing={dismissing}>
+      Your Pro trial ends {when}, on {formatDate(reminder.endsAt)}.{" "}
+      {final
+        ? "Buy Pro now to keep daily backups, full restore and drift revert for both tenants."
+        : "Buy Pro to keep daily backups, full restore and drift revert after the trial."}
+    </TrialBanner>
+  )
+}
+
 /** After the no-card trial: what continues, and the checkout that brings Pro back. */
 function TrialEndedBanner({ endedAt, status, onDismiss, dismissing }: {
   endedAt: string
@@ -149,25 +164,10 @@ function TrialEndedBanner({ endedAt, status, onDismiss, dismissing }: {
   dismissing: boolean
 }) {
   return (
-    <div className="px-6 pt-5 lg:px-8">
-      <div role="status" className="flex flex-wrap items-center gap-3 rounded-3xl bg-amber-50 py-2 pl-2 pr-2 text-sm font-medium text-amber-900">
-        <span className="flex size-9 flex-shrink-0 items-center justify-center rounded-full bg-card text-amber-700" aria-hidden="true">
-          <Clock className="h-4 w-4" />
-        </span>
-        <span className="min-w-0 flex-1">
-          Your Pro trial ended on {formatDate(endedAt)}. TenuVault continues on Community for one tenant. Buy Pro to get daily
-          backups, full restore and drift revert back for both tenants.
-        </span>
-        <Button type="button" size="sm" onClick={() => void openCheckout("trial-ended", { status })}>
-          <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
-          Buy Pro
-        </Button>
-        <Link to="/license" className="rounded-full px-3 py-2 text-sm font-medium hover:bg-white/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
-          Details
-        </Link>
-        <button type="button" onClick={onDismiss} disabled={dismissing} className="shrink-0 rounded-full px-3 py-2 text-sm font-medium hover:bg-white/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50">Dismiss</button>
-      </div>
-    </div>
+    <TrialBanner urgent source="trial-ended" status={status} onDismiss={onDismiss} dismissing={dismissing}>
+      Your Pro trial ended on {formatDate(endedAt)}. TenuVault continues on Community for one tenant. Buy Pro to get daily
+      backups, full restore and drift revert back for both tenants.
+    </TrialBanner>
   )
 }
 
@@ -230,13 +230,8 @@ function LicenseBanner() {
     return <TrialEndedBanner endedAt={ended.endedAt} status={status} onDismiss={() => void dismissTrial()} dismissing={dismissing} />
   }
   if (inactive.length > 0) {
-    // Without a paid license, buying Pro is what covers the tenant.
-    const buy = hasPaidLicense(status) ? undefined : (
-      <Button type="button" size="sm" onClick={() => void openCheckout("not-covered", { status })}>
-        <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
-        Buy Pro
-      </Button>
-    )
+    // Without a paid license, Pro is what covers the tenant: the trial, Buy Pro after it, or the plans.
+    const buy = hasPaidLicense(status) ? undefined : <PlanPromptButton plan="pro" source="not-covered" size="sm" />
     return (
       <BannerLink tone="amber" icon={<AlertTriangle className="h-4 w-4" />} action={buy}>
         {inactive.length === 1 ? "A signed-in tenant is" : `${inactive.length} signed-in tenants are`} not covered by your

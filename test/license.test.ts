@@ -1569,6 +1569,19 @@ describe("LicenseService after a trial", () => {
     expect(license.status([TENANT]).trialEndedAt).toBeNull()
   })
 
+  it("does not call the trial ended while an organization license covers a tenant", () => {
+    store.set("license.state", JSON.stringify({
+      key: "TENU-TRIAL-0001",
+      trialToken: token({ ...trialClaims, keyExp: Math.floor(T0 / 1000) - DAY / 1000 }),
+      activations: { [TENANT]: { activationId: "act-org", token: token({ act: "act-org" }), source: "tenant", displayKey: "****ORG1" } },
+    }))
+    const license = service()
+    expect(license.status([TENANT]).trialEndedAt).toBeNull()
+    expect(license.status([TENANT_B]).trialEndedAt).toBeNull()
+    store.set("license.state", JSON.stringify({ key: "TENU-TRIAL-0001", trialToken: token({ ...trialClaims, keyExp: Math.floor(T0 / 1000) - DAY / 1000 }), activations: {} }))
+    expect(service().status([TENANT]).trialEndedAt).toBe(new Date(T0 - DAY).toISOString())
+  })
+
   it("finds the trial token of an activation stored before it was kept separately", () => {
     storeLicense(token({ ...trialClaims, keyExp: Math.floor(T0 / 1000) + DAY / 1000 }))
     expect(payloadOf(service().trialCheckoutToken())).toMatchObject({ sub: "trial-key-id" })

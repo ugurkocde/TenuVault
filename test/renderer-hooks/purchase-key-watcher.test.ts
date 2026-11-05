@@ -1,5 +1,6 @@
 import { act, createElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
+import { MemoryRouter } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { LicenseStatus } from "../../src/shared/ipc"
 
@@ -30,7 +31,7 @@ vi.mock("../../src/renderer/lib/license", async (original) => ({
 }))
 vi.mock("../../src/renderer/lib/toast", () => ({ toast: state.toast }))
 
-import { PurchaseKeyWatcher } from "../../src/renderer/components/PurchaseKeyWatcher"
+import { PurchaseKeyWatcher, watchesPurchaseKey } from "../../src/renderer/components/PurchaseKeyWatcher"
 import { clearCheckout, openCheckout } from "../../src/renderer/lib/purchase"
 
 const trial: LicenseStatus = {
@@ -47,10 +48,10 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-function mount() {
+function mount(path = "/portal/dashboard") {
   const root = createRoot(document.createElement("div"))
   roots.push(root)
-  act(() => root.render(createElement(PurchaseKeyWatcher)))
+  act(() => root.render(createElement(MemoryRouter, { initialEntries: [path] }, createElement(PurchaseKeyWatcher))))
 }
 
 const focus = async () => {
@@ -87,7 +88,7 @@ describe("purchase key pickup", () => {
     expect(state.replaceKey).toHaveBeenCalledTimes(1)
   })
 
-  it("saves the key when none is saved, and says why a key was refused", async () => {
+  it("saves the key when none is saved, and stops after a refused key", async () => {
     state.status = { ...trial, hasKey: false, trial: false, plan: null }
     state.clipboard = "TENU-PAID-0002"
     state.setKey.mockRejectedValue(new Error("This license key was not found."))
@@ -96,6 +97,53 @@ describe("purchase key pickup", () => {
     expect(state.open).toHaveBeenCalledWith("checkout", { source: "license-page" })
     await focus()
     expect(state.setKey).toHaveBeenCalledWith("TENU-PAID-0002")
-    expect(state.toast).toHaveBeenCalledWith("This license key was not found.", "error")
+    expect(state.toast).toHaveBeenCalledWith("This license key was not found. Enter the key on the License page.", "error")
+    await focus()
+    await focus()
+    expect(state.setKey).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not try a refused key again on the License page", async () => {
+    state.status = { ...trial, trial: false, trialEndsAt: null, trialEndedAt: new Date(Date.now() - 86_400_000).toISOString(), keyState: "failed" }
+    state.clipboard = "TENU-PAID-0002"
+    state.replaceKey.mockRejectedValue(new Error("Sign in to a tenant to switch to the new license key."))
+    mount("/license")
+    await focus()
+    await focus()
+    await focus()
+    expect(state.replaceKey).toHaveBeenCalledTimes(1)
+  })
+
+  it("opens one checkout for repeated clicks while the first is opening", async () => {
+    let finish!: () => void
+    state.open.mockImplementationOnce(() => new Promise<undefined>((resolve) => { finish = () => resolve(undefined) }))
+    const first = openCheckout("trial-ended", { status: trial })
+    const second = openCheckout("trial-ended", { status: trial })
+    finish()
+    await act(async () => { await Promise.all([first, second]) })
+    expect(state.open).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("when a copied key counts as the purchase", () => {
+  const HOUR = 3_600_000
+  const now = Date.now()
+  const none = { ...trial, hasKey: false, trial: false, plan: null }
+  const ended = { ...trial, trial: false, trialEndsAt: null, trialEndedAt: new Date(now - HOUR).toISOString() }
+  const paid = { ...trial, trial: false, trialEndsAt: null }
+
+  it("watches after a recent checkout, and on the License page while a trial key is saved", () => {
+    expect(watchesPurchaseKey(trial, now - HOUR, "/portal/dashboard", now)).toBe(true)
+    expect(watchesPurchaseKey(trial, now - 7 * HOUR, "/portal/dashboard", now)).toBe(false)
+    expect(watchesPurchaseKey(ended, null, "/license", now)).toBe(true)
+    expect(watchesPurchaseKey(ended, null, "/portal/dashboard", now)).toBe(false)
+  })
+
+  it("never swaps a paid key, and leaves the License page to its own check without a key", () => {
+    expect(watchesPurchaseKey(paid, now - HOUR, "/portal/dashboard", now)).toBe(false)
+    expect(watchesPurchaseKey(paid, now - HOUR, "/license", now)).toBe(false)
+    expect(watchesPurchaseKey(none, now - HOUR, "/portal/dashboard", now)).toBe(true)
+    expect(watchesPurchaseKey(none, now - HOUR, "/license", now)).toBe(false)
+    expect(watchesPurchaseKey(null, now - HOUR, "/license", now)).toBe(false)
   })
 })

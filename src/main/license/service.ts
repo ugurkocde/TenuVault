@@ -1150,9 +1150,13 @@ export class LicenseService {
    * null. It names the trial's customer for Buy Pro; it never carries the key itself.
    */
   trialCheckoutToken(): string | null {
+    return this.newestTrialToken()?.token ?? null
+  }
+
+  private newestTrialToken(): { token: string; keyExp: number } | null {
     this.load()
     if (!this.state?.key) return null
-    let best: { token: string; iat: number } | null = null
+    let best: { token: string; iat: number; keyExp: number } | null = null
     const candidates = [
       this.state.trialToken,
       ...Object.values(this.state.activations).filter((entry) => !entry.source).map((entry) => entry.token),
@@ -1161,17 +1165,16 @@ export class LicenseService {
       if (!token) continue
       const payload = decodeToken(token, this.publicKey)
       if (payload?.v !== 2 || payload.trial !== true || typeof payload.keyExp !== "number") continue
-      if (!best || payload.iat > best.iat) best = { token, iat: payload.iat }
+      if (!best || payload.iat > best.iat) best = { token, iat: payload.iat, keyExp: payload.keyExp }
     }
-    return best?.token ?? null
+    return best
   }
 
-  // When the saved trial key ended, while no other key token is valid on this machine.
-  private trialEndedAt(latest: Entitlement | null): string | null {
-    if (latest) return null
-    const token = this.trialCheckoutToken()
-    const keyExp = token ? decodeToken(token, this.publicKey)?.keyExp : undefined
-    if (typeof keyExp !== "number" || keyExp * 1000 > Date.now()) return null
+  // When the saved trial key ended, while no license of any kind covers a tenant here.
+  private trialEndedAt(covered: boolean): string | null {
+    if (covered) return null
+    const keyExp = this.newestTrialToken()?.keyExp
+    if (keyExp === undefined || keyExp * 1000 > Date.now()) return null
     return new Date(keyExp * 1000).toISOString()
   }
 
@@ -1242,7 +1245,7 @@ export class LicenseService {
       tenantLimit: latest?.tenants ?? null,
       trial: latestTrial,
       trialEndsAt: latestTrial ? new Date(latest!.keyExp! * 1000).toISOString() : null,
-      trialEndedAt: this.trialEndedAt(latest),
+      trialEndedAt: this.trialEndedAt(latest !== null || tenants.some((tenant) => tenant.entitled)),
       validUntil,
       communityTenantId: communityTenant ?? null,
       tenants,

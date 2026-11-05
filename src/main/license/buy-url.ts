@@ -1,12 +1,12 @@
+const SOURCE = /^[a-z0-9-]{1,40}$/
+
 /** Names the screen that opened the plans, without adding a user or tenant identifier. */
 export function licenseBuyUrl(url: string, source?: unknown): string {
-  if (typeof source !== "string" || !/^[a-z0-9-]{1,40}$/.test(source)) return url
+  if (typeof source !== "string" || !SOURCE.test(source)) return url
   const parsed = new URL(url)
   parsed.searchParams.set("src", `app-${source}`)
   return parsed.href
 }
-
-const SOURCE = /^[a-z0-9-]{1,40}$/
 
 /**
  * "Buy now": the licensing service's checkout route, which asks for payment right away
@@ -43,7 +43,8 @@ export async function trialCheckoutUrl(
         ...(typeof options.source === "string" && SOURCE.test(options.source) ? { src: `app-${options.source}` } : {}),
       }),
       redirect: "error",
-      signal: AbortSignal.timeout(20_000),
+      // The browser opens only after this answer, so a slow service falls back quickly.
+      signal: AbortSignal.timeout(8_000),
     })
     if (!response.ok) return null
     const data = (await response.json().catch(() => null)) as { url?: unknown } | null
