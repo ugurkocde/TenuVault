@@ -82,7 +82,8 @@ export const TrialSignupForm = forwardRef<HTMLInputElement, {
           <AlertDescription>
             Check your inbox at <span className="font-medium break-all">{sentTo}</span>. The key usually arrives within a
             minute. Copy it from the email and come back: TenuVault picks it up from the clipboard, or paste it into the
-            license key field.
+            license key field. If this address already used its trial or has a license, the email says what to do
+            instead.
           </AlertDescription>
         </Alert>
       )}

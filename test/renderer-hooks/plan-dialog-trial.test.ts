@@ -41,12 +41,27 @@ function render(status: LicenseStatus) {
   roots.push(root)
   act(() => root.render(createElement(MemoryRouter, null, createElement(PlanDialogs))))
   act(() => { showCommunityLimitError(new CommunityLimitError("66666666-7777-4888-8999-aaaaaaaaaaaa", "Community covers one tenant.")) })
-  return [...document.body.querySelectorAll("button")].map((button) => button.textContent?.trim())
+  return [...document.body.querySelectorAll("button, a")].map((item) => item.textContent?.trim())
 }
 
 describe("second tenant dialog", () => {
   it("offers the no-card trial without a license on this machine", () => {
     expect(render(community)).toContain("Start 30 day free trial")
+    // A link to the trial form on the License page.
+    const trial = [...document.body.querySelectorAll("a")].find((link) => link.textContent?.trim() === "Start 30 day free trial")
+    expect(trial?.getAttribute("href")).toBe("/license")
+  })
+
+  it.each([
+    ["running", { trial: true, trialEndsAt: new Date(Date.now() + 5 * 86_400_000).toISOString(), plan: "pro" as const, keyState: "active" as const }],
+    ["ended", { trialEndedAt: new Date(Date.now() - 86_400_000).toISOString(), keyState: "failed" as const }],
+  ])("sends a %s trial to the checkout, yearly first, instead of the plans", async (_name, trial) => {
+    const items = render({ ...community, hasKey: true, ...trial })
+    expect(items).not.toContain("Start 30 day free trial")
+    expect(items).not.toContain("See plans")
+    const buy = [...document.body.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Buy Pro")!
+    await act(async () => { buy.click() })
+    expect(state.open).toHaveBeenCalledWith("checkout", { source: "second-tenant", plan: "pro", interval: "yearly" })
   })
 
   it("offers the plans instead when a key or organization license is present", async () => {

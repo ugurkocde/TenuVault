@@ -133,7 +133,7 @@ describe("License page trial", () => {
     expect(container.textContent).toContain("in 10 days")
     expect(container.querySelector('input[type="email"]')).toBeNull()
     await act(async () => { button(container, "Buy Pro")!.click() })
-    expect(state.open).toHaveBeenCalledWith("checkout", { source: "license-page-trial" })
+    expect(state.open).toHaveBeenCalledWith("checkout", { source: "license-page-trial", interval: "yearly" })
   })
 
   it("offers the key swap for a saved key that is no longer active", async () => {

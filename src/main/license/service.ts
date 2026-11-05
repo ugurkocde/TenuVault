@@ -67,6 +67,13 @@ interface StoredLicense {
   keyFailure?: string
   activations: Record<string, StoredActivation>
   seen?: number
+  /**
+   * The latest entitlement token of this machine's no-card trial key. Kept after the trial
+   * ends and its activations are dropped, so Buy Pro can create the checkout for the trial's
+   * customer and the app can say the trial ended. Removed once a key that is not a trial key
+   * is activated.
+   */
+  trialToken?: string
 }
 
 /** A recent Microsoft ID token for the tenant, or null when none can be had silently. */
@@ -297,6 +304,7 @@ export class LicenseService {
         this.state = parsed as StoredLicense
         if (typeof this.state.keyFailure !== "string" || !Object.hasOwn(REASONS, this.state.keyFailure)) delete this.state.keyFailure
         if (!Number.isFinite(this.state.seen)) delete this.state.seen
+        if (typeof this.state.trialToken !== "string") delete this.state.trialToken
         this.savedSeen = this.state.seen ?? 0
         return
       }
@@ -524,7 +532,16 @@ export class LicenseService {
       throw new Error("The license token could not be verified.")
     }
     this.message = null
-    if (source === "key") delete this.state.keyFailure
+    if (source === "key") {
+      delete this.state.keyFailure
+      const payload = decodeToken(data.token, this.publicKey)
+      if (payload?.v === 2 && payload.trial === true && typeof payload.keyExp === "number") {
+        const kept = this.state.trialToken ? decodeToken(this.state.trialToken, this.publicKey) : null
+        if (!kept || kept.sub !== payload.sub || kept.iat <= payload.iat) this.state.trialToken = data.token
+      } else {
+        delete this.state.trialToken
+      }
+    }
     this.messages.delete(tenantId)
     this.failures.delete(tenantId)
     this.save()
@@ -714,6 +731,7 @@ export class LicenseService {
       this.state = {
         key: trimmed,
         ...(previous?.key === trimmed && previous.keyFailure ? { keyFailure: previous.keyFailure } : {}),
+        ...(previous?.key === trimmed && previous.trialToken ? { trialToken: previous.trialToken } : {}),
         activations: { ...previous?.activations },
         ...(previous?.seen !== undefined ? { seen: previous.seen } : {}),
       }
@@ -1127,6 +1145,42 @@ export class LicenseService {
     return this.state?.activations[tenant]?.token ?? null
   }
 
+  /**
+   * The newest entitlement token of this machine's trial key, also after the trial ended, or
+   * null. It names the trial's customer for Buy Pro; it never carries the key itself.
+   */
+  trialCheckoutToken(): string | null {
+    this.load()
+    if (!this.state?.key) return null
+    let best: { token: string; iat: number } | null = null
+    const candidates = [
+      this.state.trialToken,
+      ...Object.values(this.state.activations).filter((entry) => !entry.source).map((entry) => entry.token),
+    ]
+    for (const token of candidates) {
+      if (!token) continue
+      const payload = decodeToken(token, this.publicKey)
+      if (payload?.v !== 2 || payload.trial !== true || typeof payload.keyExp !== "number") continue
+      if (!best || payload.iat > best.iat) best = { token, iat: payload.iat }
+    }
+    return best?.token ?? null
+  }
+
+  // When the saved trial key ended, while no other key token is valid on this machine.
+  private trialEndedAt(latest: Entitlement | null): string | null {
+    if (latest) return null
+    const token = this.trialCheckoutToken()
+    const keyExp = token ? decodeToken(token, this.publicKey)?.keyExp : undefined
+    if (typeof keyExp !== "number" || keyExp * 1000 > Date.now()) return null
+    return new Date(keyExp * 1000).toISOString()
+  }
+
+  /** Whether this is the saved license key, so a copied key is not offered again. */
+  isSavedKey(key: string): boolean {
+    this.load()
+    return Boolean(this.state?.key) && this.state?.key === key.trim()
+  }
+
   /** The license state for the signed-in tenants plus every tenant with a stored activation. */
   status(signedInTenantIds: string[]): LicenseStatus {
     this.load()
@@ -1188,6 +1242,7 @@ export class LicenseService {
       tenantLimit: latest?.tenants ?? null,
       trial: latestTrial,
       trialEndsAt: latestTrial ? new Date(latest!.keyExp! * 1000).toISOString() : null,
+      trialEndedAt: this.trialEndedAt(latest),
       validUntil,
       communityTenantId: communityTenant ?? null,
       tenants,

@@ -1,13 +1,12 @@
 import { Link } from "react-router-dom"
-import { Check, ExternalLink, FileText, KeyRound, ListChecks, Sparkles } from "lucide-react"
+import { Check, FileText, KeyRound, ListChecks } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { cn } from "~/lib/utils"
 import { CIS_CERTIFICATION_HEADLINE, CIS_CERTIFICATION_SCOPE_INTRO, CIS_CERTIFIED_LABEL, CIS_CERTIFIED_SEGMENTS, CIS_NOT_CERTIFIED_NOTE, CIS_TENANT_NOT_CERTIFIED_NOTE, cisCheckCount, cisCheckCountText } from "../../../shared/frameworks/cis-certification"
 import { featureName } from "../../../shared/plans"
 import { Notice, useSaveNotice } from "../../components/oib/notices"
 import { PlanBadge } from "../../components/UpgradeNote"
-import { bridge } from "../../lib/bridge"
-import { isUnlicensed, useLicense } from "../../lib/license"
+import { PlanPromptButton } from "../../components/PlanPromptButton"
 
 /**
  * What Pro and MSP add to the CIS Benchmarks page, each as the app does it: delivered packs per
@@ -40,10 +39,7 @@ async function saveSampleReport(): Promise<{ name: string; saved: boolean; path?
  * content (catalog, pack or list) and shows none: only numbers and the certified benchmark names.
  */
 export function CisBenchmarksPreview({ className }: { className?: string }) {
-  const { status } = useLicense()
   const sample = useSaveNotice()
-  // The trial is offered where the License page offers it: no key on this machine and no organization license.
-  const trial = !!status && isUnlicensed(status)
   const feature = "baselineAllPlatforms" as const
   return (
     <section aria-label={`${featureName(feature)} preview`} className={cn("rounded-3xl bg-white p-7 shadow-[0_1px_2px_rgba(22,21,20,0.04)]", className)}>
@@ -90,19 +86,7 @@ export function CisBenchmarksPreview({ className }: { className?: string }) {
       </ul>
 
       <div className="mt-6 flex flex-wrap items-center gap-3">
-        {trial ? (
-          <Button asChild>
-            <Link to="/license" state={{ startTrial: true }}>
-              <Sparkles className="h-4 w-4" aria-hidden="true" />
-              Start 30 day free trial
-            </Link>
-          </Button>
-        ) : (
-          <Button type="button" onClick={() => void bridge.license.open("buy", { source: "cis-preview" })}>
-            <ExternalLink className="h-4 w-4" aria-hidden="true" />
-            See plans
-          </Button>
-        )}
+        <PlanPromptButton plan="pro" source="cis-preview" />
         <Button asChild variant="outline">
           <Link to="/license">
             <KeyRound className="h-4 w-4" aria-hidden="true" />

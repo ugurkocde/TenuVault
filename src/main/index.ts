@@ -1,5 +1,5 @@
 import { CommunityLimitError, withPlanError } from "../shared/plan-errors"
-import { licenseBuyUrl, licenseCheckoutUrl } from "./license/buy-url"
+import { licenseBuyUrl, licenseCheckoutUrl, trialCheckoutUrl } from "./license/buy-url"
 import { requestTrialKey } from "./license/trial"
 import { importConfirmedArchive, reviewArchive } from "./backup/archive"
 import { readFile, stat } from "node:fs/promises"
@@ -1046,11 +1046,15 @@ async function bootstrap(): Promise<void> {
       backupReader.remove(tenantId)
     })
   })
-  handleTrusted("license:open", async (_event, target: unknown, options?: { source?: unknown; plan?: unknown }) => {
+  handleTrusted("license:open", async (_event, target: unknown, options?: { source?: unknown; plan?: unknown; interval?: unknown }) => {
+    // With a trial key, the checkout is created for the trial's customer; if that fails,
+    // the plain checkout still opens.
+    const trialToken = target === "checkout" ? license.trialCheckoutToken() : null
+    const forTrial = trialToken ? await trialCheckoutUrl(LICENSE_API_BASE, trialToken, options ?? {}) : null
     const url = target === "buy"
       ? licenseBuyUrl(LICENSE_BUY_URL, options?.source)
       : target === "checkout"
-        ? licenseCheckoutUrl(LICENSE_API_BASE, options?.plan, options?.source)
+        ? forTrial ?? licenseCheckoutUrl(LICENSE_API_BASE, options?.plan, options?.source, options?.interval)
         : target === "portal" ? LICENSE_PORTAL_URL : null
     if (!url || new URL(url).protocol !== "https:") throw new Error("Refused to open an unexpected link.")
     await shell.openExternal(url)
@@ -1059,7 +1063,10 @@ async function bootstrap(): Promise<void> {
   handleTrusted("license:startTrial", (_event, email: unknown, options?: { source?: unknown }) =>
     requestTrialKey(LICENSE_API_BASE, email, options?.source))
   // While a trial key is on its way, the renderer asks for a key the admin copied from the email.
-  handleTrusted("license:clipboardKey", () => licenseKeyFromClipboard(clipboard.readText()))
+  handleTrusted("license:clipboardKey", () => {
+    const key = licenseKeyFromClipboard(clipboard.readText())
+    return key && !license.isSavedKey(key) ? key : null
+  })
 
   ipcMain.on("storage:getSync", (event, key: unknown) => {
     if (!trustedSender(event)) { event.returnValue = null; return }

@@ -1517,3 +1517,69 @@ describe("LicenseService key replacement", () => {
     expect(licenseExpiryWarning(status)).toBe("expiring")
   })
 })
+
+describe("LicenseService after a trial", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(T0)
+  })
+  afterEach(() => vi.useRealTimers())
+
+  const trialEnd = Math.floor(T0 / 1000) + 20 * 86400
+  const trialClaims = { v: 2, keyExp: trialEnd, trial: true, sub: "trial-key-id" }
+  const payloadOf = (value: string | null) => (value ? JSON.parse(Buffer.from(value.split(".")[0]!, "base64url").toString()) : null)
+
+  it("keeps the trial token once the key expired and says when the trial ended", async () => {
+    answer = () => granted("act-1", {}, trialClaims)
+    const license = service()
+    await license.setKey("TENU-TRIAL-0001", [TENANT])
+    expect(license.status([TENANT])).toMatchObject({ trial: true, trialEndedAt: null })
+    expect(payloadOf(license.trialCheckoutToken())).toMatchObject({ sub: "trial-key-id", trial: true })
+
+    // The trial key expired: the service refuses it, the activation is dropped and the tenant
+    // continues on Community.
+    vi.setSystemTime(trialEnd * 1000 + DAY)
+    answer = () => denied("expired")
+    await expect(license.requireEntitlement(TENANT, { retry: true })).resolves.toBe("community")
+    expect(JSON.parse(store.get("license.state")!).activations).toEqual({})
+    const status = license.status([TENANT])
+    expect(status).toMatchObject({ trial: false, trialEndsAt: null, trialEndedAt: new Date(trialEnd * 1000).toISOString(), hasKey: true })
+    // Still there for Buy Pro, also after a restart.
+    expect(payloadOf(service().trialCheckoutToken())).toMatchObject({ sub: "trial-key-id" })
+    expect(service().status([TENANT]).trialEndedAt).toBe(new Date(trialEnd * 1000).toISOString())
+  })
+
+  it("drops the trial token once a key that is not a trial key is active", async () => {
+    answer = () => granted("act-1", {}, trialClaims)
+    const license = service()
+    await license.setKey("TENU-TRIAL-0001", [TENANT])
+    answer = ({ action }) => (action === "activate" ? granted("act-2", {}, { sub: "paid-key-id" }) : Response.json({ success: true }))
+    await license.replaceKey("TENU-PAID-KEY-0001", [TENANT])
+    expect(license.trialCheckoutToken()).toBeNull()
+    expect(license.status([TENANT])).toMatchObject({ trial: false, trialEndedAt: null })
+    expect(JSON.parse(store.get("license.state")!).trialToken).toBeUndefined()
+  })
+
+  it("has no trial token for a paid key, and none without a key", async () => {
+    answer = () => granted("act-1", {}, { v: 2, keyExp: trialEnd })
+    const license = service()
+    expect(license.trialCheckoutToken()).toBeNull()
+    await license.setKey("TENU-PAID-KEY-0001", [TENANT])
+    expect(license.trialCheckoutToken()).toBeNull()
+    expect(license.status([TENANT]).trialEndedAt).toBeNull()
+  })
+
+  it("finds the trial token of an activation stored before it was kept separately", () => {
+    storeLicense(token({ ...trialClaims, keyExp: Math.floor(T0 / 1000) + DAY / 1000 }))
+    expect(payloadOf(service().trialCheckoutToken())).toMatchObject({ sub: "trial-key-id" })
+  })
+
+  it("knows the saved key, so a copied copy of it is not offered again", async () => {
+    answer = () => granted("act-1", {}, trialClaims)
+    const license = service()
+    expect(license.isSavedKey("TENU-TRIAL-0001")).toBe(false)
+    await license.setKey("TENU-TRIAL-0001", [TENANT])
+    expect(license.isSavedKey(" TENU-TRIAL-0001 ")).toBe(true)
+    expect(license.isSavedKey("TENU-PAID-KEY-0001")).toBe(false)
+  })
+})
