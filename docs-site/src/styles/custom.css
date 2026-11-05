@@ -28,6 +28,7 @@
 
 	--sl-nav-height: 4.5rem;
 	--sl-nav-pad-y: 1rem;
+	--sl-menu-button-size: 2.5rem;
 	--sl-sidebar-width: 18rem;
 	--sl-content-width: 48rem;
 
@@ -225,7 +226,6 @@ site-search button[data-open-modal]:hover {
 		width: 2.5rem;
 		height: 2.5rem;
 		justify-content: center;
-		margin-inline-end: 0.5rem;
 	}
 }
 
@@ -824,16 +824,20 @@ site-search dialog {
 	flex-wrap: wrap;
 	gap: 0.625rem;
 }
+/* Starlight lays the icon out at the top start of a padded flex box; center it in the circle instead. */
 button.sl-menu-button,
 :root[data-theme='light'] button.sl-menu-button {
-	width: 2.5rem;
-	height: 2.5rem;
-	top: calc((var(--sl-nav-height) - 2.5rem) / 2);
+	align-items: center;
+	justify-content: center;
+	padding: 0;
 	border: 0;
 	border-radius: 999px;
 	background-color: var(--tv-surface);
 	color: var(--sl-color-white);
 	box-shadow: none;
+}
+button.sl-menu-button svg {
+	font-size: 1.25rem;
 }
 button.sl-menu-button:has(~ :popover-open),
 :root[data-theme='light'] button.sl-menu-button:has(~ :popover-open) {

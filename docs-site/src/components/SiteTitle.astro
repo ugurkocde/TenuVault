@@ -1,46 +1,57 @@
 ---
-// Logo, product name and a muted "Docs" label, as in the marketing site header.
+// Logo and product name link to the marketing site; the muted "Docs" label links to the docs home.
 import { logos } from 'virtual:starlight/user-images';
 import config from 'virtual:starlight/user-config';
 const { siteTitleHref } = Astro.locals.starlightRoute;
 const hasThemedLogos = config.logo && !('src' in config.logo);
 ---
 
-<a href={siteTitleHref} class="site-title sl-flex" aria-label="TenuVault Docs home">
-	{
-		logos.dark && (
-			<img
-				class:list={{ 'light:sl-hidden print:hidden': hasThemedLogos }}
-				alt=""
-				src={logos.dark.src}
-				width={logos.dark.width}
-				height={logos.dark.height}
-			/>
-		)
-	}
-	{
-		hasThemedLogos && logos.light && (
-			<img
-				class="dark:sl-hidden print:block"
-				alt=""
-				src={logos.light.src}
-				width={logos.light.width}
-				height={logos.light.height}
-			/>
-		)
-	}
-	<span class="site-title-name" translate="no">TenuVault</span>
-	<span class="site-title-tag">Docs</span>
-</a>
+<div class="site-title sl-flex">
+	<a href="https://tenuvault.com/" class="site-title-brand sl-flex" aria-label="TenuVault home">
+		{
+			logos.dark && (
+				<img
+					class:list={{ 'light:sl-hidden print:hidden': hasThemedLogos }}
+					alt=""
+					src={logos.dark.src}
+					width={logos.dark.width}
+					height={logos.dark.height}
+				/>
+			)
+		}
+		{
+			hasThemedLogos && logos.light && (
+				<img
+					class="dark:sl-hidden print:block"
+					alt=""
+					src={logos.light.src}
+					width={logos.light.width}
+					height={logos.light.height}
+				/>
+			)
+		}
+		<span class="site-title-name" translate="no">TenuVault</span>
+	</a>
+	<a href={siteTitleHref} class="site-title-tag" aria-label="TenuVault Docs home">Docs</a>
+</div>
 
 <style>
 	.site-title {
 		align-items: center;
-		gap: 0.625rem;
-		color: var(--sl-color-white);
-		text-decoration: none;
+		gap: 0.25rem;
 		white-space: nowrap;
 		min-width: 0;
+	}
+	.site-title a {
+		color: var(--sl-color-white);
+		text-decoration: none;
+	}
+	/* Never shrinks, so the name cannot run under the Docs link and steal its taps. */
+	.site-title-brand {
+		flex-shrink: 0;
+		align-items: center;
+		gap: 0.625rem;
+		min-height: 2.75rem;
 	}
 	img {
 		height: 2rem;
@@ -51,9 +62,27 @@ const hasThemedLogos = config.logo && !('src' in config.logo);
 		font-weight: 600;
 		letter-spacing: -0.01em;
 	}
-	.site-title-tag {
+	/* At least 44px square so it is easy to hit next to the logo on a phone. */
+	.site-title .site-title-tag {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-width: 2.75rem;
+		min-height: 2.75rem;
+		padding-inline: 0.375rem;
+		border-radius: 999px;
 		font-size: 0.875rem;
 		font-weight: 400;
 		color: var(--sl-color-gray-3);
+		transition: color 150ms ease;
+	}
+	.site-title .site-title-tag:hover {
+		color: var(--sl-color-white);
+	}
+	/* Too narrow for both links: keep the brand, the sidebar still leads to the docs home. */
+	@media (max-width: 19.99rem) {
+		.site-title .site-title-tag {
+			display: none;
+		}
 	}
 </style>
