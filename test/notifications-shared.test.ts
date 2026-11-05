@@ -8,6 +8,8 @@ import liveFixture from "./fixtures/notifications/audit-live.json"
 import entraFixture from "./fixtures/notifications/entra-audit.json"
 import { entraChangeDigest } from "../src/shared/notifications/audit"
 import { mapEntraAuditEvent, type EntraAuditRaw } from "../src/shared/notifications/entra"
+import { DEFAULT_CARD_LAYOUT, DEFAULT_CARD_STYLE, isDefaultLayout, parseCardLayout, parseCardStyle, styleFor, styleIssues } from "../src/shared/notifications/layout"
+import { cardOf, fillPlaceholders } from "../src/shared/notifications/render"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 
@@ -218,5 +220,68 @@ describe("Conditional Access change digests", () => {
     const card = (teamsWorkflowsPayload(digest) as { attachments: Array<{ content: { actions?: Array<{ url: string }> } }> }).attachments[0]!.content
     expect(card.actions?.[0]?.url).toBe("https://entra.microsoft.com/#view/Microsoft_AAD_ConditionalAccess/ConditionalAccessBlade/~/Policies")
     expect(emailHtml(digest)).toContain("Open Conditional Access in Entra")
+  })
+})
+
+describe("Teams card layouts", () => {
+  const changes = fixture.events.map((event) => mapAuditEvent(event as AuditEventRaw)!)
+  const digest = intuneChangeDigest({ tenantId: TENANT, tenantName: "Contoso](https://evil.example)", changes, includeActor: true, source: "desktop" })
+  type Block = { type: string; text?: string; items?: Block[]; facts?: Array<{ title: string }>; style?: string }
+  const blocks = (style = DEFAULT_CARD_STYLE) => (cardOf(teamsWorkflowsPayload(digest, style)).body as Block[])
+  const texts = (style = DEFAULT_CARD_STYLE) => JSON.stringify(blocks(style))
+
+  it("the default layout is the standard card", () => {
+    expect(canonicalJson(teamsWorkflowsPayload(digest, DEFAULT_CARD_STYLE))).toBe(canonicalJson(teamsWorkflowsPayload(digest)))
+    expect(parseCardStyle({})).toEqual(DEFAULT_CARD_STYLE)
+    expect(isDefaultLayout(parseCardLayout(undefined))).toBe(true)
+  })
+
+  it("orders, hides and limits blocks", () => {
+    const style = parseCardStyle({ order: ["footer", "items", "summary", "details", "note"], hidden: ["details", "button"], maxItems: 3 })
+    const kinds = blocks(style).map((block) => block.type)
+    expect(kinds[0]).toBe("Container")
+    expect(blocks(style).some((block) => block.type === "FactSet")).toBe(false)
+    expect(blocks(style)[1]!.text).toContain("TenuVault desktop")
+    expect(cardOf(teamsWorkflowsPayload(digest, style)).actions).toBeUndefined()
+  })
+
+  it("keeps tenant text out of links and formatting whatever the layout says", () => {
+    const style = parseCardStyle({ titlePrefix: "{tenant} ", summaryText: "[click]({tenant})", noteText: "{title}", hidden: [], buttonLabel: "{tenant}", buttonDestination: "auto" })
+    const card = cardOf(teamsWorkflowsPayload(digest, style)) as { actions: Array<{ url: string; title: string }> }
+    expect(card.actions[0]!.url).toBe("https://intune.microsoft.com")
+    expect(texts(style)).not.toContain("](https://evil.example)")
+    expect(blocks(style)[1]!.text).toBe(String.raw`\[click\]\(Contoso\]\(https://evil\.example\)\)`)
+  })
+
+  it("fills known placeholders and leaves unknown ones, which block saving", () => {
+    expect(fillPlaceholders("{tenant}: {count} at {occurredAt} {nope}", digest)).toBe("Contoso](https://evil.example): 2 at 2026-10-17 10:02 UTC {nope}")
+    expect(styleIssues(parseCardStyle({ noteText: "Call {oncall}" }))).toEqual([{ field: "noteText", message: expect.stringContaining("{oncall}") }])
+    expect(styleIssues(DEFAULT_CARD_STYLE)).toEqual([])
+  })
+
+  it("repairs damaged layouts instead of failing", () => {
+    const style = parseCardStyle({ order: ["items", "items", "bogus"], hidden: "note", maxItems: 7, severityStyle: "loud", itemDetail: "yes", titlePrefix: "\u0007 x".repeat(30) })
+    expect(style.order).toEqual(["items", "summary", "details", "note", "footer"])
+    expect(style.hidden).toEqual(["note"])
+    expect(style.maxItems).toBe(20)
+    expect(style.severityStyle).toBe("both")
+    expect(style.itemDetail).toBe(true)
+    expect(style.titlePrefix.length).toBeLessThanOrEqual(40)
+  })
+
+  it("uses a group's override for its event types only", () => {
+    const layout = parseCardLayout({ base: { density: "compact" }, overrides: { changes: { maxItems: 5 }, bogus: { maxItems: 3 } } })
+    expect(Object.keys(layout.overrides)).toEqual(["changes"])
+    expect(styleFor(layout, "intune.change").maxItems).toBe(5)
+    expect(styleFor(layout, "entra.change").maxItems).toBe(5)
+    expect(styleFor(layout, "backup.failed")).toMatchObject({ density: "compact", maxItems: 20 })
+    expect(styleFor(layout, "test").density).toBe("compact")
+    expect(styleFor(null, "test")).toEqual(DEFAULT_CARD_LAYOUT.base)
+  })
+
+  it("shows the note only at or above its severity", () => {
+    const style = parseCardStyle({ hidden: [], noteText: "Call ext. 4411", noteMinSeverity: "critical" })
+    expect(texts(style)).not.toContain("4411")
+    expect(JSON.stringify(cardOf(teamsWorkflowsPayload({ ...digest, severity: "critical" }, style)))).toContain("4411")
   })
 })

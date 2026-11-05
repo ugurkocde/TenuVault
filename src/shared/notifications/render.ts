@@ -3,7 +3,8 @@
  * for its target format, and no link is ever derived from tenant data, so a hostile
  * policy name cannot turn an alert into a phishing message.
  */
-import type { NotificationEnvelope } from "./envelope"
+import { SEVERITY_RANK, type NotificationEnvelope } from "./envelope"
+import { BUTTON_TARGETS, DEFAULT_CARD_STYLE, type CardAccent, type CardStyle } from "./layout"
 
 export function escapeHtml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;")
@@ -35,30 +36,81 @@ export function localText(envelope: NotificationEnvelope): { title: string; body
   return { title: envelope.title, body: envelope.summary }
 }
 
-/** The Teams Workflows payload: a message with one Adaptive Card attachment. */
-export function teamsWorkflowsPayload(envelope: NotificationEnvelope): Record<string, unknown> {
-  const facts = envelope.details.map((entry) => ({ title: escapeMarkdown(entry.label), value: escapeMarkdown(entry.value) }))
-  const severity = SEVERITY_CARD[envelope.severity]
-  const body: Array<Record<string, unknown>> = [
-    {
-      type: "Container",
-      style: severity.container,
-      bleed: true,
-      items: [
-        { type: "TextBlock", size: "Small", weight: "Bolder", color: severity.color, text: severity.label, wrap: true },
-        { type: "TextBlock", size: "Medium", weight: "Bolder", text: escapeMarkdown(envelope.title), wrap: true, spacing: "None" },
-      ],
-    },
-    { type: "TextBlock", text: escapeMarkdown(envelope.summary), wrap: true },
-  ]
-  if (facts.length) body.push({ type: "FactSet", facts })
-  for (const item of envelope.items) {
-    body.push({ type: "TextBlock", text: escapeMarkdown(itemLine(item)), wrap: true, spacing: "Small" })
+const ACCENT_CONTAINER: Record<Exclude<CardAccent, "severity">, string> = { accent: "accent", emphasis: "emphasis", good: "good" }
+
+/** Fills {tenant}, {title}, {severity}, {eventType}, {count} and {occurredAt}. Unknown names stay as written. */
+export function fillPlaceholders(text: string, envelope: NotificationEnvelope, timeFormat: CardStyle["timeFormat"] = "friendly"): string {
+  const values: Record<string, string> = {
+    tenant: envelope.tenant.name ?? envelope.tenant.id,
+    title: envelope.title,
+    severity: SEVERITY_CARD[envelope.severity].label,
+    eventType: envelope.type,
+    count: String(envelope.items.length + envelope.moreCount),
+    occurredAt: timeFormat === "iso" ? envelope.occurredAt : friendlyTime(envelope.occurredAt),
   }
-  if (envelope.moreCount > 0) body.push({ type: "TextBlock", text: `And ${envelope.moreCount} more. Open TenuVault for the full list.`, wrap: true, isSubtle: true })
-  body.push({ type: "TextBlock", text: escapeMarkdown(footer(envelope)), wrap: true, isSubtle: true, size: "Small" })
-  const action = actionLink(envelope)
-  const actions = action ? [{ type: "Action.OpenUrl", title: action.label, url: action.href }] : []
+  return text.replace(/\{([A-Za-z]+)\}/g, (match, name: string) => values[name] ?? match)
+}
+
+/** The fixed button an event gets with this style, or null. Never built from tenant data. */
+export function cardButton(envelope: NotificationEnvelope, style: CardStyle): { href: string; label: string } | null {
+  if (style.hidden.includes("button")) return null
+  const target = style.buttonDestination === "auto" ? actionLink(envelope) : BUTTON_TARGETS[style.buttonDestination]
+  if (!target) return null
+  return { href: target.href, label: style.buttonLabel ? fillPlaceholders(style.buttonLabel, envelope, style.timeFormat) : target.label }
+}
+
+/**
+ * The Teams Workflows payload: a message with one Adaptive Card attachment, built from a card
+ * style (the default reproduces the standard card). The runbook's New-TvTeamsPayload builds
+ * the same JSON from the same style; test/notification-watcher-script.test.ts compares them.
+ */
+export function teamsWorkflowsPayload(envelope: NotificationEnvelope, style: CardStyle = DEFAULT_CARD_STYLE): Record<string, unknown> {
+  const severity = SEVERITY_CARD[envelope.severity]
+  const time = (iso: string) => (style.timeFormat === "iso" ? iso : friendlyTime(iso))
+  const compact = style.density === "compact"
+  const headerItems: Array<Record<string, unknown>> = []
+  if (style.severityStyle !== "tint") headerItems.push({ type: "TextBlock", size: "Small", weight: "Bolder", color: severity.color, text: severity.label, wrap: true })
+  // Prefixes are stored trimmed, so the space before the title is added here.
+  const prefix = fillPlaceholders(style.titlePrefix, envelope, style.timeFormat)
+  headerItems.push({ type: "TextBlock", size: "Medium", weight: "Bolder", text: escapeMarkdown(prefix ? `${prefix} ${envelope.title}` : envelope.title), wrap: true, spacing: "None" })
+  const containerStyle = style.accent !== "severity" ? ACCENT_CONTAINER[style.accent] : style.severityStyle === "label" ? "default" : severity.container
+  const body: Array<Record<string, unknown>> = [{ type: "Container", style: containerStyle, bleed: true, items: headerItems }]
+  for (const block of style.order) {
+    if (style.hidden.includes(block)) continue
+    if (block === "summary") {
+      const text = style.summaryText ? fillPlaceholders(style.summaryText, envelope, style.timeFormat) : envelope.summary
+      body.push({ type: "TextBlock", text: escapeMarkdown(text), wrap: true, ...(compact ? { spacing: "Small" } : {}) })
+    } else if (block === "details") {
+      const facts = envelope.details.filter((entry) => !style.hiddenDetails.includes(entry.label)).map((entry) => ({ title: escapeMarkdown(entry.label), value: escapeMarkdown(entry.value) }))
+      if (facts.length) body.push({ type: "FactSet", facts, ...(compact ? { spacing: "Small" } : {}) })
+    } else if (block === "items") {
+      const shown = envelope.items.slice(0, style.maxItems)
+      for (const item of shown) {
+        const meta = [style.itemDetail ? item.detail : undefined, style.itemActor && item.actor ? `by ${item.actor}` : undefined, style.itemTime && item.at ? time(item.at) : undefined].filter((part): part is string => Boolean(part))
+        if (style.itemStyle === "stacked") {
+          body.push({ type: "TextBlock", text: escapeMarkdown(item.title), wrap: true, weight: "Bolder", spacing: compact ? "Small" : "Medium" })
+          if (meta.length) body.push({ type: "TextBlock", text: escapeMarkdown(meta.join(" · ")), wrap: true, isSubtle: true, size: "Small", spacing: "None" })
+        } else {
+          body.push({ type: "TextBlock", text: escapeMarkdown([`• ${item.title}`, ...meta].join(" · ")), wrap: true, spacing: compact ? "None" : "Small" })
+        }
+      }
+      const more = envelope.moreCount + (envelope.items.length - shown.length)
+      if (more > 0) body.push({ type: "TextBlock", text: `And ${more} more. Open TenuVault for the full list.`, wrap: true, isSubtle: true })
+    } else if (block === "note") {
+      if (style.noteText && SEVERITY_RANK[envelope.severity] >= SEVERITY_RANK[style.noteMinSeverity]) {
+        body.push({ type: "Container", style: "emphasis", items: [{ type: "TextBlock", text: escapeMarkdown(fillPlaceholders(style.noteText, envelope, style.timeFormat)), wrap: true }] })
+      }
+    } else if (block === "footer") {
+      const parts = [
+        style.footerSource ? (envelope.source === "azure-watcher" ? "Azure watcher" : "TenuVault desktop") : null,
+        style.footerTime ? time(envelope.occurredAt) : null,
+        style.footerEventId ? `Event ${envelope.eventId.slice(0, 12)}` : null,
+      ].filter((part): part is string => part !== null)
+      if (parts.length) body.push({ type: "TextBlock", text: escapeMarkdown(parts.join(" · ")), wrap: true, isSubtle: true, size: "Small" })
+    }
+  }
+  const button = cardButton(envelope, style)
+  const actions = button ? [{ type: "Action.OpenUrl", title: button.label, url: button.href }] : []
   return {
     type: "message",
     attachments: [
@@ -69,6 +121,11 @@ export function teamsWorkflowsPayload(envelope: NotificationEnvelope): Record<st
       },
     ],
   }
+}
+
+/** The Adaptive Card inside a Workflows payload. */
+export function cardOf(payload: Record<string, unknown>): Record<string, unknown> {
+  return ((payload.attachments as Array<{ content: Record<string, unknown> }>)[0]!).content
 }
 
 function itemLine(item: NotificationEnvelope["items"][number]): string {
@@ -123,12 +180,12 @@ const VERB_STYLE: Record<string, { color: string; background: string }> = {
 }
 
 /** The Conditional Access policy list in the Entra admin center. */
-export const ENTRA_CONDITIONAL_ACCESS = "https://entra.microsoft.com/#view/Microsoft_AAD_ConditionalAccess/ConditionalAccessBlade/~/Policies"
+export const ENTRA_CONDITIONAL_ACCESS = BUTTON_TARGETS.entra.href
 
 /** Fixed Microsoft destinations per event type. Never built from tenant data. */
-function actionLink(envelope: NotificationEnvelope): { href: string; label: string } | null {
-  if (envelope.type === "intune.change") return { href: "https://intune.microsoft.com", label: "Open the Intune admin center" }
-  if (envelope.type === "entra.change") return { href: ENTRA_CONDITIONAL_ACCESS, label: "Open Conditional Access in Entra" }
+export function actionLink(envelope: NotificationEnvelope): { href: string; label: string } | null {
+  if (envelope.type === "intune.change") return BUTTON_TARGETS.intune
+  if (envelope.type === "entra.change") return BUTTON_TARGETS.entra
   return null
 }
 

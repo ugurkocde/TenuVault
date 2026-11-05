@@ -9,6 +9,7 @@ import { Input } from "~/components/ui/input"
 import { NOTIFICATION_EVENT_TYPES, type NotificationEventType, type NotificationSeverity } from "../../../shared/notifications/envelope"
 import { toast } from "../../lib/toast"
 import { UpgradeNote } from "../../components/UpgradeNote"
+import { TeamsCardTile } from "./CardLayoutEditor"
 import {
   categoryLabel,
   CHANNEL_KIND_LABELS,
@@ -49,6 +50,7 @@ export function NotificationsPanel({ tenant, active = true }: { tenant: Tenant; 
       {!data.licensed && <UpgradeNote feature="notifications" />}
       <p className="text-sm text-gray-600" role="note">{data.runtimeNote}</p>
       <ChannelsTile tenant={tenant} channels={data.channels} rules={data.rules} licensed={data.licensed} active={active} onChanged={refresh} />
+      <TeamsCardTile tenant={tenant} channels={data.channels} licensed={data.licensed} active={active} />
       <RulesTile tenant={tenant} rules={data.rules} channels={data.channels} licensed={data.licensed} active={active} onChanged={refresh} />
       <AuditWatchTile tenant={tenant} auditWatch={data.auditWatch} licensed={data.licensed} onChanged={refresh} />
       <Tile aria-labelledby="notifications-deliveries-heading" className="gap-3">

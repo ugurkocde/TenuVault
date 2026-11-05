@@ -1,6 +1,7 @@
 import type { Tenant } from "~/contexts/TenantContext"
 import { featureCall } from "../../lib/feature-api"
 import type { NotificationEnvelope, NotificationEventType, NotificationSeverity } from "../../../shared/notifications/envelope"
+import type { CardLayout } from "../../../shared/notifications/layout"
 
 export type ChannelKind = "local" | "webhook" | "teams" | "email"
 
@@ -139,7 +140,12 @@ export const notificationsApi = {
   revokeChannel: (tenant: Tenant, channelId: string, options: { removeFromRules?: boolean } = {}) => featureCall<{ removed: string; rulesUpdated: number }>(PATH, tenant, "revoke-channel", { channelId, ...options }),
   /** Turning a channel off stays free on every plan; sets enabled false only. */
   revokeDisableChannel: (tenant: Tenant, channelId: string) => featureCall<{ channel: PublicChannel }>(PATH, tenant, "revoke-disable-channel", { channelId }),
-  testChannel: (tenant: Tenant, channelId: string) => featureCall<{ delivery: DeliveryResult; channel: PublicChannel }>(PATH, tenant, "test-channel", { channelId }),
+  /** With a layout, the test card uses it instead of the saved one; nothing is saved. */
+  testChannel: (tenant: Tenant, channelId: string, layout?: CardLayout) => featureCall<{ delivery: DeliveryResult; channel: PublicChannel }>(PATH, tenant, "test-channel", layout ? { channelId, layout } : { channelId }),
+  getCardLayout: (tenant: Tenant) => featureCall<{ layout: CardLayout; updatedAt: string | null }>(PATH, tenant, "get-card-layout"),
+  saveCardLayout: (tenant: Tenant, layout: CardLayout) => featureCall<{ layout: CardLayout; updatedAt: string | null }>(PATH, tenant, "save-card-layout", { layout }),
+  /** Back to the standard card; free on every plan. */
+  resetCardLayout: (tenant: Tenant) => featureCall<{ layout: CardLayout; updatedAt: null }>(PATH, tenant, "revoke-card-layout"),
   previewEvent: (tenant: Tenant, channelId?: string) => featureCall<{ body: string; envelope: NotificationEnvelope }>(PATH, tenant, "preview-event", channelId ? { channelId } : {}),
   addRule: (tenant: Tenant, body: RuleBody) => featureCall<{ rule: NotificationRule }>(PATH, tenant, "add-rule", { ...body }),
   updateRule: (tenant: Tenant, ruleId: string, body: RuleBody) => featureCall<{ rule: NotificationRule }>(PATH, tenant, "update-rule", { ruleId, ...body }),

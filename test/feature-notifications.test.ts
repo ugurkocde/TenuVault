@@ -662,6 +662,34 @@ describe("Conditional Access change watching", () => {
     expect((await pollAuditWatch(w.deps, TENANT_A)).changes).toBe(3)
   })
 
+  it("a Conditional Access poll overtaken by a handoff and back is discarded, and its changes come once later", async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let gated = true
+    const w = world({ graph: () => async (_method: string, path: string) => {
+      if (path.startsWith("auditLogs/directoryAudits")) {
+        if (gated) await gate
+        const since = /activityDateTime gt ([^&\s]+)/.exec(decodeURIComponent(path))?.[1] ?? ""
+        return { status: 200, body: { value: (entraFixture.events as Array<{ activityDateTime: string }>).filter((event) => Date.parse(event.activityDateTime) > Date.parse(since)) } }
+      }
+      return { status: 200, body: { value: [] } }
+    } })
+    const channel = await addWebhook(w)
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-rule", eventTypes: ["entra.change"], minSeverity: "info", channelIds: [channel.id] })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", conditionalAccessEnabled: true })
+    const polling = pollAuditWatch(w.deps, TENANT_A)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", externalWatcher: true })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", externalWatcher: false })
+    release()
+    expect((await polling).changes).toBe(0)
+    expect(w.posts).toHaveLength(0)
+    gated = false
+    // The failed strength create and the Core Directory event are filtered: 5 changes, sent once.
+    expect((await pollAuditWatch(w.deps, TENANT_A)).changes).toBe(5)
+    expect(w.posts).toHaveLength(1)
+  })
+
   it("a failed poll overtaken by a restart leaves no old error or poll time behind", async () => {
     let release: () => void = () => undefined
     const gate = new Promise<void>((resolve) => { release = resolve })
@@ -779,5 +807,53 @@ describe("missed scheduled slots", () => {
     const sent = JSON.parse(String(w.posts[0]!.init.body)) as { type: string; severity: string; title: string }
     expect(sent).toMatchObject({ type: "backup.missed", severity: "warning" })
     expect(sent.title).toContain("missed its time")
+  })
+})
+
+describe("Teams card layout", () => {
+  async function teamsWorld() {
+    const w = world()
+    const created = await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-channel", kind: "teams", url: "https://contoso.webhook.office.com/workflows/abc" })
+    return { ...w, channelId: created.body.channel.id as string }
+  }
+  const cardOf = (post: { init: RequestInit }) => (JSON.parse(String(post.init.body)) as { attachments: Array<{ content: { body: Array<{ type: string; text?: string; style?: string }>; actions?: unknown[] } }> }).attachments[0]!.content
+
+  it("starts at the default and saves a validated layout that Teams deliveries follow", async () => {
+    const w = await teamsWorld()
+    expect((await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-card-layout" })).body).toMatchObject({ layout: { version: 1, overrides: {} }, updatedAt: null })
+    const saved = await call(w.routes, PATH, { tenantId: TENANT_A, action: "save-card-layout", layout: { base: { titlePrefix: "[Prod] ", hidden: ["footer", "button"], bogus: 1 } } })
+    expect(saved.status).toBe(200)
+    expect(saved.body.layout.base).not.toHaveProperty("bogus")
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "test-channel", channelId: w.channelId })
+    const card = cardOf(w.posts.at(-1)!)
+    expect(JSON.stringify(card)).toContain(String.raw`\\[Prod\\] TenuVault test notification`)
+    expect(JSON.stringify(card)).not.toContain("TenuVault desktop ·")
+    expect(card.actions).toBeUndefined()
+  })
+
+  it("refuses unknown placeholders and can test an unsaved layout", async () => {
+    const w = await teamsWorld()
+    const refused = await call(w.routes, PATH, { tenantId: TENANT_A, action: "save-card-layout", layout: { base: { noteText: "Call {oncall}" } } })
+    expect(refused.status).toBe(400)
+    expect(refused.body.error).toContain("{oncall}")
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "test-channel", channelId: w.channelId, layout: { base: { accent: "good" } } })
+    expect(cardOf(w.posts.at(-1)!).body[0]!.style).toBe("good")
+    // The unsaved layout was not stored.
+    expect((await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-card-layout" })).body.updatedAt).toBeNull()
+  })
+
+  it("uses per type overrides and goes back to the default for free", async () => {
+    const w = await teamsWorld()
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-rule", eventTypes: ["backup.failed"], minSeverity: "info", channelIds: [w.channelId] })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "save-card-layout", layout: { base: {}, overrides: { backups: { summaryText: "Backup of {tenant} needs a look" } } } })
+    await emitBackupOutcome(w.deps, TENANT_A, { status: "Failed", backupFolder: "backup-layout", finishedAt: NOW.toISOString(), trigger: "manual" })
+    expect(JSON.stringify(cardOf(w.posts.at(-1)!))).toContain("Backup of Tenant")
+    const seeded = w.deps.records.create(DOMAINS.notificationCardLayout, TENANT_B, { title: "Teams card layout", status: "enabled", summary: "Custom layout", layout: { version: 1, base: {}, overrides: {} } }, { actor: null, reason: "seed" })
+    expect(seeded.id).toBeTruthy()
+    const reset = await call(w.routes, PATH, { tenantId: TENANT_B, action: "revoke-card-layout" })
+    expect(reset.status).toBe(200)
+    expect(w.deps.records.list(DOMAINS.notificationCardLayout, TENANT_B)).toHaveLength(0)
+    const paid = await call(w.routes, PATH, { tenantId: TENANT_B, action: "save-card-layout", layout: { base: {} } })
+    expect(paid.status).toBe(402)
   })
 })

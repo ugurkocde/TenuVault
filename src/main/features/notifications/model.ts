@@ -1,3 +1,4 @@
+import type { CardLayout } from "../../../shared/notifications/layout"
 import { NOTIFICATION_EVENT_TYPES, type NotificationEnvelope, type NotificationEventType, type NotificationSeverity } from "../../../shared/notifications/envelope"
 
 /** Stored notification records. Secret values live only in these records and never reach the renderer. */
@@ -78,6 +79,14 @@ export interface ConditionalAccessWatch {
   continuation: string | null
   lastPollAt: string | null
   lastError: string | null
+}
+
+/** The tenant's Teams card layout, one record per tenant. */
+export interface CardLayoutRecord {
+  title: string
+  status: "enabled" | "disabled"
+  summary: string
+  layout: CardLayout
 }
 
 export interface AuditWatchRecord {

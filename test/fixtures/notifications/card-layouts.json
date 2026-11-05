@@ -1,0 +1,100 @@
+{
+  "styles": {
+    "default": {},
+    "everything-hidden": {
+      "hidden": [
+        "summary",
+        "details",
+        "items",
+        "note",
+        "footer",
+        "button"
+      ],
+      "severityStyle": "tint"
+    },
+    "extremes": {
+      "order": [
+        "note",
+        "footer",
+        "items",
+        "details",
+        "summary"
+      ],
+      "hidden": [],
+      "severityStyle": "label",
+      "accent": "good",
+      "titlePrefix": "[Prod] {tenant} ",
+      "summaryText": "{count} items at {occurredAt}, {severity} {eventType} {unknown}",
+      "hiddenDetails": [
+        "Changes",
+        "Result"
+      ],
+      "maxItems": 3,
+      "itemStyle": "stacked",
+      "itemDetail": false,
+      "itemActor": true,
+      "itemTime": true,
+      "noteText": "Call the on-call admin for {tenant} (ext. 4411)",
+      "noteMinSeverity": "info",
+      "buttonDestination": "entra",
+      "buttonLabel": "Review {severity}",
+      "footerSource": false,
+      "footerTime": true,
+      "footerEventId": false,
+      "density": "compact",
+      "timeFormat": "iso"
+    },
+    "line-compact": {
+      "density": "compact",
+      "maxItems": 5,
+      "itemActor": false,
+      "noteText": "Only for critical",
+      "noteMinSeverity": "critical",
+      "hidden": [],
+      "buttonDestination": "intune",
+      "accent": "emphasis"
+    },
+    "damaged": {
+      "order": [
+        "items",
+        "items",
+        "bogus"
+      ],
+      "hidden": "note",
+      "maxItems": 7,
+      "severityStyle": "loud",
+      "titlePrefix": "\u0007  Spaced\tout  prefix that is far too long for the forty character limit",
+      "itemDetail": "yes"
+    },
+    "max-text": {
+      "maxItems": "many",
+      "hidden": []
+    },
+    "max-array": {
+      "maxItems": []
+    },
+    "max-huge": {
+      "maxItems": 99999999999,
+      "itemStyle": "stacked"
+    },
+    "max-string-number": {
+      "maxItems": "5"
+    },
+    "list-strings": {
+      "order": "items",
+      "hiddenDetails": "Changes",
+      "hidden": "footer"
+    },
+    "one-item-lists": {
+      "order": [
+        "footer"
+      ],
+      "hiddenDetails": [
+        "Changes"
+      ],
+      "hidden": [
+        "button"
+      ]
+    }
+  }
+}
