@@ -7,9 +7,9 @@ Work is split into four phases. Each phase is one pull request, in order, becaus
 | Phase | Scope | Size | Status |
 | --- | --- | --- | --- |
 | 1 | Bugs and docs (B1 to B6, D1 to D6) | Small | Merged in #266 |
-| 2 | Editing channels and rules, Teams card polish (U1 to U4) | Medium | #267 |
-| 3 | Missing events and services (E1 to E4) | Large, adds an opt-in permission | Follows #267 |
-| 4 | Teams card layout editor (L1 to L12) | Large | Follows phase 3 |
+| 2 | Editing channels and rules, Teams card polish (U1 to U4) | Medium | Merged in #267 |
+| 3 | Missing events and services (E1 to E4) | Large, adds an opt-in permission | Merged in #268 |
+| 4 | Teams card layout editor (L1 to L12) | Large | This pull request |
 
 ---
 
