@@ -293,6 +293,17 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
         change.lastPollAt = null
         change.generation = (current?.generation ?? 0) + 1
       }
+      // A change of ownership between this computer and the Azure watcher overtakes any poll
+      // still waiting on Graph, also when it is switched on and off again during that poll.
+      // Positions are kept: only the generations move.
+      if (externalWatcher !== undefined && externalWatcher !== Boolean(current?.externalWatcher)) {
+        // A service turned on in this same save already got a new generation above.
+        const intuneGeneration = current?.generation ?? 0
+        if (change.generation === undefined) change.generation = intuneGeneration + 1
+        const caBefore = current?.conditionalAccess?.generation ?? 0
+        const ca = change.conditionalAccess ?? current?.conditionalAccess ?? defaultConditionalAccessWatch()
+        if ((ca.generation ?? 0) === caBefore) change.conditionalAccess = { ...ca, generation: caBefore + 1 }
+      }
       const reasons = [
         enabled === true && !current?.enabled ? "Intune change watching turned on" : enabled === false && current?.enabled ? "Intune change watching turned off" : null,
         conditionalAccess === true && !current?.conditionalAccess?.enabled ? "Conditional Access change watching turned on" : conditionalAccess === false && current?.conditionalAccess?.enabled ? "Conditional Access change watching turned off" : null,

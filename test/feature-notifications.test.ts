@@ -637,6 +637,31 @@ describe("Conditional Access change watching", () => {
     expect(w.deps.notifications).toHaveLength(0)
   })
 
+  it("handing over to the Azure watcher and back during a poll still discards that poll", async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const recentEvents = fixture.events.map((event) => ({ ...event, activityDateTime: "2026-10-17T11:50:00Z" }))
+    const w = world({ graph: () => async (_method: string, path: string) => {
+      if (path.startsWith("deviceManagement/auditEvents")) { await gate; return { status: 200, body: { value: recentEvents } } }
+      return { status: 200, body: { value: [] } }
+    } })
+    const local = await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-channel", kind: "local" })
+    await addRule(w, [local.body.channel.id])
+    const on = await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: true })
+    const watermark = on.body.auditWatch.watermark
+    const polling = pollAuditWatch(w.deps, TENANT_A)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", externalWatcher: true })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", externalWatcher: false })
+    release()
+    expect((await polling).changes).toBe(0)
+    expect(w.deps.notifications).toHaveLength(0)
+    // The position is kept: the next poll picks the same changes up and sends them once.
+    const status = (await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-status" })).body.auditWatch
+    expect(status.watermark).toBe(watermark)
+    expect((await pollAuditWatch(w.deps, TENANT_A)).changes).toBe(3)
+  })
+
   it("a failed poll overtaken by a restart leaves no old error or poll time behind", async () => {
     let release: () => void = () => undefined
     const gate = new Promise<void>((resolve) => { release = resolve })
