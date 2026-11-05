@@ -4,7 +4,7 @@
     layout, one canonical JSON line each, to compare how oversized cards are shortened.
 #>
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$EnvelopesPath, [string]$RunbookPath)
+param([Parameter(Mandatory)][string]$EnvelopesPath, [string]$StylePath, [string]$RunbookPath)
 
 $ErrorActionPreference = "Stop"
 if (-not $RunbookPath) {
@@ -13,6 +13,7 @@ if (-not $RunbookPath) {
 }
 . $RunbookPath -LibraryOnly
 
+$style = if ($StylePath) { ConvertTo-TvCardStyle (Get-Content $StylePath -Raw -Encoding UTF8 | ConvertFrom-Json) } else { $null }
 foreach ($envelope in @(Get-Content $EnvelopesPath -Raw -Encoding UTF8 | ConvertFrom-Json)) {
-    Write-Output (ConvertTo-TenuVaultCanonicalJson (New-TvTeamsPayload $envelope))
+    Write-Output (ConvertTo-TenuVaultCanonicalJson (New-TvTeamsPayload $envelope $style))
 }

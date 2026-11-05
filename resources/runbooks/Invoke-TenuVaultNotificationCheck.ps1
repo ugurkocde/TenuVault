@@ -907,23 +907,26 @@ function New-TvTeamsPayload {
     $detailCount = @(@(Get-TvProp $Envelope "details") | Where-Object { $_ }).Count
     $itemLimit = [Math]::Min([int]$Style.maxItems, $itemCount)
     $detailLimit = $detailCount
-    $payload = New-TvTeamsPayloadCore $Envelope $Style $itemLimit $detailLimit -1
+    $payload = New-TvTeamsPayloadCore $Envelope $Style $itemLimit $detailLimit -1 $true
     if ((Get-TvTeamsPayloadBytes $payload) -le $script:TvTeamsBudgetBytes) { return $payload }
     while ($itemLimit -gt 0) {
         $itemLimit--
-        $payload = New-TvTeamsPayloadCore $Envelope $Style $itemLimit $detailLimit -1
+        $payload = New-TvTeamsPayloadCore $Envelope $Style $itemLimit $detailLimit -1 $true
         if ((Get-TvTeamsPayloadBytes $payload) -le $script:TvTeamsBudgetBytes) { return $payload }
     }
     while ($detailLimit -gt 0) {
         $detailLimit--
-        $payload = New-TvTeamsPayloadCore $Envelope $Style $itemLimit $detailLimit -1
+        $payload = New-TvTeamsPayloadCore $Envelope $Style $itemLimit $detailLimit -1 $true
         if ((Get-TvTeamsPayloadBytes $payload) -le $script:TvTeamsBudgetBytes) { return $payload }
     }
-    return New-TvTeamsPayloadCore $Envelope $Style $itemLimit $detailLimit 200
+    $payload = New-TvTeamsPayloadCore $Envelope $Style $itemLimit $detailLimit 200 $true
+    if ((Get-TvTeamsPayloadBytes $payload) -le $script:TvTeamsBudgetBytes) { return $payload }
+    # A note can expand placeholders far past the limit on its own; it is the last part to go.
+    return New-TvTeamsPayloadCore $Envelope $Style $itemLimit $detailLimit 200 $false
 }
 
 function New-TvTeamsPayloadCore {
-    param([object]$Envelope, [object]$Style, [int]$ItemLimit, [int]$DetailLimit, [int]$SummaryMax)
+    param([object]$Envelope, [object]$Style, [int]$ItemLimit, [int]$DetailLimit, [int]$SummaryMax, [bool]$IncludeNote = $true)
     $severityName = [string](Get-TvProp $Envelope "severity")
     $severity = switch ($severityName) {
         "critical" { @{ container = "attention"; color = "Attention"; label = "Critical" } }
@@ -996,7 +999,7 @@ function New-TvTeamsPayloadCore {
                 }
             }
             "note" {
-                if ($Style.noteText -and $script:TvSeverityRank[$severityName] -ge $script:TvSeverityRank[[string]$Style.noteMinSeverity]) {
+                if ($IncludeNote -and $Style.noteText -and $script:TvSeverityRank[$severityName] -ge $script:TvSeverityRank[[string]$Style.noteMinSeverity]) {
                     $noteBlock = [pscustomobject][ordered]@{ type = "TextBlock"; text = Get-TvMarkdownEscape (Get-TvFilledText $Style.noteText $Envelope $timeFormat); wrap = $true }
                     $body.Add([pscustomobject][ordered]@{ type = "Container"; style = "emphasis"; items = @($noteBlock) })
                 }

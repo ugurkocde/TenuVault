@@ -241,6 +241,19 @@ describe("Azure notification watcher scripts", () => {
     })
   }, 120_000)
 
+  it.runIf(Boolean(pwsh))("PowerShell drops an oversized note exactly like TypeScript", () => {
+    const envelope = buildEnvelope({ type: "test", severity: "info", tenantId: fixture.tenantId, occurredAt: "2026-11-05T08:42:00.000Z", naturalKey: "note", title: ".".repeat(200), summary: "Test.", source: "azure-watcher" })
+    const raw = { hidden: [], noteText: "{title}".repeat(42), noteMinSeverity: "info" }
+    const dir = mkdtempSync(join(tmpdir(), "tv-note-"))
+    writeFileSync(join(dir, "envelopes.json"), JSON.stringify([envelope]))
+    writeFileSync(join(dir, "style.json"), JSON.stringify(raw))
+    const script = fileURLToPath(new URL("./fixtures/notifications/render-oversized.ps1", import.meta.url))
+    const output = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-EnvelopesPath", join(dir, "envelopes.json"), "-StylePath", join(dir, "style.json")], { encoding: "utf8" }).trim()
+    const payload = teamsWorkflowsPayload(envelope, parseCardStyle(raw))
+    expect(teamsPayloadBytes(payload)).toBeLessThanOrEqual(TEAMS_MESSAGE_BUDGET_BYTES)
+    expect(output).toBe(canonicalJson(payload))
+  }, 60_000)
+
   it.runIf(Boolean(pwsh))("PowerShell matches TypeScript on live-shaped read and assignment events", () => {
     const changes = liveFixture.events.map((event) => mapAuditEvent(event as AuditEventRaw)).filter((change) => change !== null)
     expect(changes.map((change) => change.changeType)).toEqual(["assigned", "unassigned", "created"])

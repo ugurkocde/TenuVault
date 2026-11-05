@@ -1,4 +1,5 @@
 import { useEffect, useId, useState } from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { AlertCircle, Check, CheckCircle2, Copy, ExternalLink, Loader2, MinusCircle, RefreshCw } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
@@ -254,6 +255,7 @@ export function ServicesSettings() {
   const [statuses, setStatuses] = useState<Map<string, TenantStatus>>(new Map())
   const [busy, setBusy] = useState(false)
   const current = rows.find((row) => row.tenantId === selected) ?? rows[0]
+  const queryClient = useQueryClient()
 
   useEffect(() => {
     // Statuses come from tokens TenuVault already holds; a slow answer for an old tenant list is dropped.
@@ -289,6 +291,8 @@ export function ServicesSettings() {
     try {
       const next = await action()
       setStatuses((previous) => new Map(previous).set(next.tenantId, next))
+      // Notifications reads the same status; a fresh check here must not leave it stale there.
+      void queryClient.invalidateQueries({ queryKey: ["services-status"] })
     } catch (error) {
       toast(error instanceof Error ? error.message : String(error), "error")
     } finally {
@@ -349,6 +353,10 @@ function OptionalPermissions({ entries, clientId }: { entries: OptionalPermissio
   return (
     <section aria-labelledby="optional-permissions-heading" className="space-y-2 border-t border-gray-100 pt-4 dark:border-gray-800">
       <h3 id="optional-permissions-heading" className="text-sm font-medium text-gray-900">Optional permissions</h3>
+      {/* Announced when Check again changes the result, without moving focus. */}
+      <p role="status" aria-live="polite" className="sr-only">
+        {entries.some((entry) => entry.granted === null) ? "Optional permissions could not be checked." : `${entries.filter((entry) => entry.granted).length} of ${entries.length} optional permissions granted.`}
+      </p>
       <p className="text-xs text-gray-500">
         Added only when you ask for them. A new app registration gets them with the setup switch shown; for this one, add the delegated permission in Entra and grant admin consent, then check again.
       </p>

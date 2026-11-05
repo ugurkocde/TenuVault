@@ -153,6 +153,16 @@ function ChannelRow({ tenant, channel, licensed, ruleCount, onChanged, onEdit, o
     onSuccess: (result) => { toast(result.delivery.ok ? "Test delivered" : `Test failed: ${result.delivery.error ?? "unknown error"}`, result.delivery.ok ? "success" : "error"); onChanged() },
     onError: failed,
   })
+  // Called for every row (hooks cannot be conditional); only email rows use the answer.
+  const mailPermission = useOptionalPermission(tenant, "notificationEmail")
+  const groupPermission = useOptionalPermission(tenant, "groupRecipients")
+  const mailWarning = channel.kind !== "email"
+    ? null
+    : mailPermission?.granted === false
+      ? `Your sign-in does not carry ${mailPermission.missing.join(", ")} yet, so mail from this channel, including a test, fails. Add it to the app registration in Entra, grant admin consent and sign in again.`
+      : groupPermission?.granted === false && channel.recipients.some((recipient) => recipient.type === "group")
+        ? `Group recipients need ${groupPermission.missing.join(", ")}, which your sign-in does not carry yet; without it a group resolves to nobody.`
+        : null
   const last = channel.lastDelivery
   return (
     <li className="space-y-2 py-3">
@@ -167,6 +177,7 @@ function ChannelRow({ tenant, channel, licensed, ruleCount, onChanged, onEdit, o
       <p className={last && !last.ok ? "text-sm text-red-700" : "text-sm text-gray-600"} role={last && !last.ok ? "status" : undefined}>
         {last ? `${last.ok ? "Last delivery succeeded" : `Last delivery failed after ${last.attempts} attempts: ${last.error ?? "unknown error"}`} (${formatTime(last.at)}${last.test ? ", test" : ""})` : "Nothing delivered yet."}
       </p>
+      {mailWarning && <p className="text-xs text-amber-700" role="status">{mailWarning}</p>}
       <div className="flex flex-wrap gap-2">
         <Button type="button" size="sm" variant="outline" onClick={() => update.mutate(!channel.enabled)} disabled={update.isPending || (!licensed && !channel.enabled)}>{channel.enabled ? "Turn off" : "Turn on"}</Button>
         <Button type="button" size="sm" variant="outline" onClick={onEdit} disabled={!licensed}><Pencil className="h-4 w-4" aria-hidden="true" />Edit</Button>

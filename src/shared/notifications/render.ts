@@ -76,6 +76,7 @@ interface CardFit {
   items: number
   details: number
   summaryMax: number
+  note: boolean
 }
 
 /**
@@ -83,7 +84,8 @@ interface CardFit {
  * style (the default reproduces the standard card). The runbook's New-TvTeamsPayload builds
  * the same JSON from the same style; test/notification-watcher-script.test.ts compares them.
  * A card over the Teams limit is shortened instead of refused: change lines first (they become
- * "And N more"), then detail rows from the end, then the summary to 200 characters.
+ * "And N more"), then detail rows from the end, then the summary to 200 characters, and last
+ * the note. Without a note every remaining part is capped small, so the result always fits.
  */
 export function teamsWorkflowsPayload(envelope: NotificationEnvelope, style: CardStyle = DEFAULT_CARD_STYLE): Record<string, unknown> {
   return fitTeamsPayload(envelope, style).payload
@@ -91,7 +93,7 @@ export function teamsWorkflowsPayload(envelope: NotificationEnvelope, style: Car
 
 /** The fitted payload and whether it had to be shortened, for the editor's status line. */
 export function fitTeamsPayload(envelope: NotificationEnvelope, style: CardStyle = DEFAULT_CARD_STYLE): { payload: Record<string, unknown>; shortened: boolean } {
-  const fit: CardFit = { items: Math.min(style.maxItems, envelope.items.length), details: envelope.details.length, summaryMax: Number.POSITIVE_INFINITY }
+  const fit: CardFit = { items: Math.min(style.maxItems, envelope.items.length), details: envelope.details.length, summaryMax: Number.POSITIVE_INFINITY, note: true }
   let payload = buildTeamsPayload(envelope, style, fit)
   if (teamsPayloadBytes(payload) <= TEAMS_MESSAGE_BUDGET_BYTES) return { payload, shortened: false }
   while (fit.items > 0) {
@@ -105,6 +107,10 @@ export function fitTeamsPayload(envelope: NotificationEnvelope, style: CardStyle
     if (teamsPayloadBytes(payload) <= TEAMS_MESSAGE_BUDGET_BYTES) return { payload, shortened: true }
   }
   fit.summaryMax = 200
+  payload = buildTeamsPayload(envelope, style, fit)
+  if (teamsPayloadBytes(payload) <= TEAMS_MESSAGE_BUDGET_BYTES) return { payload, shortened: true }
+  // A note can expand placeholders far past the limit on its own; it is the last part to go.
+  fit.note = false
   return { payload: buildTeamsPayload(envelope, style, fit), shortened: true }
 }
 
@@ -142,7 +148,7 @@ function buildTeamsPayload(envelope: NotificationEnvelope, style: CardStyle, fit
       const more = envelope.moreCount + (envelope.items.length - shown.length)
       if (more > 0) body.push({ type: "TextBlock", text: `And ${more} more. Open TenuVault for the full list.`, wrap: true, isSubtle: true })
     } else if (block === "note") {
-      if (style.noteText && SEVERITY_RANK[envelope.severity] >= SEVERITY_RANK[style.noteMinSeverity]) {
+      if (fit.note && style.noteText && SEVERITY_RANK[envelope.severity] >= SEVERITY_RANK[style.noteMinSeverity]) {
         body.push({ type: "Container", style: "emphasis", items: [{ type: "TextBlock", text: escapeMarkdown(fillPlaceholders(style.noteText, envelope, style.timeFormat)), wrap: true }] })
       }
     } else if (block === "footer") {

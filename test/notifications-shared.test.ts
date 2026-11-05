@@ -301,6 +301,15 @@ describe("Teams message size", () => {
     expect(teamsPayloadBytes(teamsWorkflowsPayload(small))).toBeLessThan(TEAMS_MESSAGE_BUDGET_BYTES)
   })
 
+  it("drops a note that expands past the limit on its own, as the last step", () => {
+    const envelope = buildEnvelope({ type: "test", severity: "info", tenantId: TENANT, occurredAt: "2026-11-05T08:42:00.000Z", naturalKey: "note", title: ".".repeat(200), summary: "Test.", source: "desktop" })
+    const style = parseCardStyle({ hidden: [], noteText: "{title}".repeat(42), noteMinSeverity: "info" })
+    const { payload, shortened } = fitTeamsPayload(envelope, style)
+    expect(shortened).toBe(true)
+    expect(teamsPayloadBytes(payload)).toBeLessThanOrEqual(TEAMS_MESSAGE_BUDGET_BYTES)
+    expect(JSON.stringify(payload)).not.toContain('"style":"emphasis","items"')
+  })
+
   it("drops change lines into And N more until the card fits", () => {
     const envelope = big(20)
     const { payload, shortened } = fitTeamsPayload(envelope)

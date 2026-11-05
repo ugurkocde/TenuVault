@@ -17,7 +17,8 @@ export function useOptionalPermission(tenant: Tenant, id: OptionalPermissionId):
       return bridge.services.status(tenantId!, clientId!)
     },
     enabled: Boolean(tenantId && clientId),
-    staleTime: 5 * 60_000,
+    // Short, and refreshed by Settings > Services and permissions after a fresh check.
+    staleTime: 60_000,
     retry: false,
   })
   return query.data?.optional?.find((entry) => entry.id === id) ?? null
