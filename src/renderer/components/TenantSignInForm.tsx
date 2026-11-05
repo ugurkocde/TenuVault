@@ -22,8 +22,8 @@ const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const DOMAIN = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i
 const CANCELLED = "Sign-in cancelled."
 
-/** A PowerShell single-quoted string: a quote inside is doubled. */
-const psQuote = (value: string) => `'${value.replace(/'/g, "''")}'`
+/** A PowerShell single-quoted string. PowerShell also ends one at a typographic single quote, so each one inside is doubled too. */
+const psQuote = (value: string) => `'${value.replace(/['\u2018\u2019\u201A\u201B]/g, (quote) => quote + quote)}'`
 
 /** The PowerShell command that runs the saved script: change to its folder when known, then run it. */
 export function setupCommand(folder?: string, fileName = SETUP_SCRIPT_FILE_NAME): string {

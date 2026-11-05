@@ -138,6 +138,8 @@ describe("setupCommand", () => {
     expect(setupCommand()).toBe("./New-TenuVaultDesktopApp.ps1")
     expect(setupCommand("C:\\Users\\Megan O'Neil\\Documents")).toBe("cd 'C:\\Users\\Megan O''Neil\\Documents'\n./New-TenuVaultDesktopApp.ps1")
     expect(setupCommand("/Users/megan", "TenuVault setup.ps1")).toBe("cd '/Users/megan'\n& './TenuVault setup.ps1'")
+    // Typographic apostrophes, common in macOS folder names, also end a PowerShell string.
+    expect(setupCommand("/Users/Megan\u2019s Docs")).toBe("cd '/Users/Megan\u2019\u2019s Docs'\n./New-TenuVaultDesktopApp.ps1")
   })
 })
 
