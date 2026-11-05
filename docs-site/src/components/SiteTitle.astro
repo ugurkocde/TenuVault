@@ -46,10 +46,11 @@ const hasThemedLogos = config.logo && !('src' in config.logo);
 		color: var(--sl-color-white);
 		text-decoration: none;
 	}
+	/* Never shrinks, so the name cannot run under the Docs link and steal its taps. */
 	.site-title-brand {
+		flex-shrink: 0;
 		align-items: center;
 		gap: 0.625rem;
-		min-width: 0;
 		min-height: 2.75rem;
 	}
 	img {
@@ -77,5 +78,11 @@ const hasThemedLogos = config.logo && !('src' in config.logo);
 	}
 	.site-title .site-title-tag:hover {
 		color: var(--sl-color-white);
+	}
+	/* Too narrow for both links: keep the brand, the sidebar still leads to the docs home. */
+	@media (max-width: 19.99rem) {
+		.site-title .site-title-tag {
+			display: none;
+		}
 	}
 </style>
