@@ -121,18 +121,33 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       if (enabled !== undefined) { changes.enabled = enabled; changes.status = enabled ? "enabled" : "disabled"; notes.push(enabled ? "enabled" : "disabled") }
       const title = optionalText(body, "title", 120)
       if (title) { changes.title = title; notes.push("renamed") }
-      if (channel.kind === "webhook" && (body.headerName !== undefined || body.headerValue !== undefined)) {
-        const headerName = optionalText(body, "headerName", 64)
-        const headerValue = optionalText(body, "headerValue", 2000)
-        const header = validateHeader(headerName, headerValue)
-        const signing = bool(body, "signRequests") ?? channel.signRequests
-        if (!header.ok && !(signing && !headerName && headerValue)) throw new FeatureError(header.error)
-        changes.headerName = headerName
-        changes.headerValue = headerValue
-        notes.push(headerValue ? "secret replaced" : "secret removed")
+      // URLs and secrets are write only: an omitted or empty value keeps the stored one, so an
+      // edit dialog never has to show them. clearSecret removes the secret explicitly.
+      if ((channel.kind === "webhook" || channel.kind === "teams") && typeof body.url === "string" && body.url.trim()) {
+        const checked = validateWebhookUrl(text(body, "url", 2000))
+        if (!checked.ok) throw new FeatureError(checked.error)
+        changes.url = checked.url
+        changes.summary = summaryFor(channel.kind, checked.url)
+        notes.push("URL replaced")
       }
-      const signRequests = bool(body, "signRequests")
-      if (signRequests !== undefined) {
+      const clearSecret = bool(body, "clearSecret") === true
+      if (channel.kind === "webhook" && (body.headerName !== undefined || optionalText(body, "headerValue", 2000) !== null || clearSecret)) {
+        const headerName = body.headerName !== undefined ? optionalText(body, "headerName", 64) : channel.headerName
+        const replaced = optionalText(body, "headerValue", 2000)
+        const headerValue = clearSecret ? null : replaced ?? channel.headerValue
+        const signing = clearSecret ? false : bool(body, "signRequests") ?? channel.signRequests
+        if (signing && !headerValue) throw new FeatureError("Request signing needs a secret value.")
+        if (headerName || headerValue) {
+          const header = validateHeader(headerName, headerValue)
+          if (!header.ok && !(signing && !headerName && headerValue)) throw new FeatureError(header.error)
+        }
+        changes.headerName = headerValue ? headerName : null
+        changes.headerValue = headerValue
+        if (clearSecret) changes.signRequests = false
+        notes.push(clearSecret ? "secret removed" : replaced ? "secret replaced" : "header renamed")
+      }
+      const signRequests = clearSecret ? undefined : bool(body, "signRequests")
+      if (signRequests !== undefined && channel.kind === "webhook") {
         const secret = changes.headerValue !== undefined ? changes.headerValue : channel.headerValue
         if (signRequests && !secret) throw new FeatureError("Request signing needs a secret value.")
         changes.signRequests = signRequests
@@ -155,10 +170,26 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       return { channel: publicChannel(updated!) }
     },
 
-    "revoke-channel": ({ tenantId, body, deps }) => {
+    // Free like every revoke: removing a channel may also take it out of the rules that use it.
+    // A rule left without channels is turned off, never deleted, so its choices are kept.
+    "revoke-channel": ({ tenantId, body, deps, actor }) => {
       const channel = requireChannel(deps, tenantId, body)
       deps.records.remove(DOMAINS.notificationChannels, tenantId, channel.id)
-      return { removed: channel.id }
+      let rulesUpdated = 0
+      if (bool(body, "removeFromRules") === true) {
+        // Ids of channels removed earlier are dropped too, so "no channel left" means no live one.
+        const live = new Set(channelsOf(deps, tenantId).map((entry) => entry.id))
+        for (const rule of rulesOf(deps, tenantId).filter((candidate) => candidate.channelIds.includes(channel.id))) {
+          deps.records.update<RuleRecord>(DOMAINS.notificationRules, tenantId, rule.id, (value) => {
+            const channelIds = value.channelIds.filter((id) => live.has(id))
+            const next: RuleRecord = { ...value, channelIds, ...(channelIds.length === 0 ? { enabled: false, status: "disabled" as const } : {}) }
+            next.summary = ruleSummary(next)
+            return next
+          }, { actor, reason: `Channel ${channel.title} removed from the rule` })
+          rulesUpdated++
+        }
+      }
+      return { removed: channel.id, rulesUpdated }
     },
 
     "test-channel": async ({ tenantId, body, deps, actor }) => {

@@ -541,14 +541,14 @@ function Get-TvItemLine {
     $parts.Add("$([char]0x2022) $(Get-TvProp $Item 'title')")
     if (Get-TvProp $Item "detail") { $parts.Add([string](Get-TvProp $Item "detail")) }
     if (Get-TvProp $Item "actor") { $parts.Add("by $(Get-TvProp $Item 'actor')") }
-    if (Get-TvProp $Item "at") { $parts.Add([string](Get-TvProp $Item "at")) }
+    if (Get-TvProp $Item "at") { $parts.Add((Get-TvFriendlyTime (Get-TvProp $Item "at"))) }
     return $parts -join " $([char]0x00B7) "
 }
 
 function Get-TvFooter {
     param([object]$Envelope)
     $dot = [char]0x00B7
-    return "Azure watcher $dot $(Get-TvProp $Envelope 'occurredAt') $dot Event $(([string](Get-TvProp $Envelope 'eventId')).Substring(0, 12))"
+    return "Azure watcher $dot $(Get-TvFriendlyTime (Get-TvProp $Envelope 'occurredAt')) $dot Event $(([string](Get-TvProp $Envelope 'eventId')).Substring(0, 12))"
 }
 
 function Get-TvHtmlEscape {
@@ -695,15 +695,20 @@ function New-TvTeamsPayload {
         })
     }
     $body.Add([pscustomobject][ordered]@{ type = "TextBlock"; text = Get-TvMarkdownEscape (Get-TvFooter $Envelope); wrap = $true; isSubtle = $true; size = "Small" })
+    $card = [pscustomobject][ordered]@{
+        '$schema' = "http://adaptivecards.io/schemas/adaptive-card.json"
+        type = "AdaptiveCard"; version = "1.4"; body = @($body.ToArray())
+    }
+    # Fixed Microsoft destination per event type, as actionLink in render.ts. Never tenant data.
+    if ([string](Get-TvProp $Envelope "type") -eq "intune.change") {
+        $card | Add-Member -NotePropertyName actions -NotePropertyValue @([pscustomobject][ordered]@{ type = "Action.OpenUrl"; title = "Open the Intune admin center"; url = "https://intune.microsoft.com" })
+    }
     return [pscustomobject][ordered]@{
         type = "message"
         attachments = @([pscustomobject][ordered]@{
             contentType = "application/vnd.microsoft.card.adaptive"
             contentUrl = $null
-            content = [pscustomobject][ordered]@{
-                '$schema' = "http://adaptivecards.io/schemas/adaptive-card.json"
-                type = "AdaptiveCard"; version = "1.4"; body = @($body.ToArray())
-            }
+            content = $card
         })
     }
 }

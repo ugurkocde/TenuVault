@@ -135,6 +135,19 @@ describe("rendering", () => {
     }
   })
 
+  it("Teams cards use friendly times and the fixed admin center action for Intune changes only", () => {
+    const changes = fixture.events.map((event) => mapAuditEvent(event as AuditEventRaw)!)
+    const digest = intuneChangeDigest({ tenantId: TENANT, tenantName: "Contoso", changes, includeActor: false, source: "desktop" })
+    type Card = { body: Array<{ text?: string }>; actions?: Array<{ type: string; url: string; title: string }> }
+    const card = (teamsWorkflowsPayload(digest) as { attachments: Array<{ content: Card }> }).attachments[0]!.content
+    const texts = card.body.map((block) => block.text ?? "").join(" ")
+    expect(texts).toContain("2026\\-10\\-17 10:00 UTC")
+    expect(texts).not.toMatch(/T10:00:00/)
+    expect(card.actions).toEqual([{ type: "Action.OpenUrl", title: "Open the Intune admin center", url: "https://intune.microsoft.com" }])
+    const testCard = (teamsWorkflowsPayload(envelope) as { attachments: Array<{ content: Card }> }).attachments[0]!.content
+    expect(testCard.actions).toBeUndefined()
+  })
+
   it("escapes markdown punctuation but leaves commas alone", () => {
     expect(escapeMarkdown("2 updated, 1 deleted - done.")).toBe("2 updated, 1 deleted \\- done\\.")
   })
