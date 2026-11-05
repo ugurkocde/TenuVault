@@ -779,30 +779,40 @@ function Get-TvStyleFlag {
     return $Fallback
 }
 
+# A list field of a layout, or $null when it is missing or not a list. Read directly,
+# because returning through Get-TvProp unrolls a one item list into a plain string,
+# and a plain string must not count as a list (parseCardStyle only accepts arrays).
+function Get-TvStyleList {
+    param([object]$Raw, [Parameter(Mandatory)][string]$Name)
+    $value = $null
+    if ($Raw -is [System.Collections.IDictionary]) {
+        if ($Raw.Contains($Name)) { $value = $Raw[$Name] }
+    } elseif ($null -ne $Raw -and $Raw.PSObject.Properties[$Name]) {
+        $value = $Raw.PSObject.Properties[$Name].Value
+    }
+    if ($value -is [array]) { return ,$value }
+    return $null
+}
+
 # Mirrors parseCardStyle: unknown fields are dropped and invalid values fall back to
 # the default, so a damaged layout never stops a delivery.
 function ConvertTo-TvCardStyle {
     param([object]$Raw)
     $order = [System.Collections.Generic.List[string]]::new()
-    foreach ($entry in @(Get-TvProp $Raw "order")) {
+    $orderList = Get-TvStyleList $Raw "order"
+    foreach ($entry in @(if ($null -ne $orderList) { $orderList })) {
         if ($entry -is [string] -and $script:TvMovableBlocks -ccontains $entry -and -not $order.Contains($entry)) { $order.Add($entry) }
     }
     foreach ($block in $script:TvMovableBlocks) { if (-not $order.Contains($block)) { $order.Add($block) } }
-    # An empty list from JSON would unroll to $null through Get-TvProp, so the property is
-    # read directly: a missing or non-array value means the default (note hidden).
-    $hiddenValue = $null
-    $hasHidden = $false
-    if ($Raw -is [System.Collections.IDictionary]) {
-        if ($Raw.Contains("hidden")) { $hiddenValue = $Raw["hidden"]; $hasHidden = $true }
-    } elseif ($null -ne $Raw -and $Raw.PSObject.Properties["hidden"]) {
-        $hiddenValue = $Raw.PSObject.Properties["hidden"].Value; $hasHidden = $true
-    }
+    # A missing or non-list value means the default (note hidden); an empty list hides nothing.
+    $hiddenValue = Get-TvStyleList $Raw "hidden"
     $hiddenSet = @{}
-    if (-not $hasHidden -or $hiddenValue -isnot [array]) { $hiddenSet["note"] = $true }
+    if ($null -eq $hiddenValue) { $hiddenSet["note"] = $true }
     else { foreach ($entry in $hiddenValue) { if ($entry -is [string]) { $hiddenSet[$entry] = $true } } }
     $hidden = @($script:TvHideableBlocks | Where-Object { $hiddenSet.ContainsKey($_) })
     $hiddenDetails = [System.Collections.Generic.List[string]]::new()
-    foreach ($entry in @(Get-TvProp $Raw "hiddenDetails")) {
+    $hiddenDetailsList = Get-TvStyleList $Raw "hiddenDetails"
+    foreach ($entry in @(if ($null -ne $hiddenDetailsList) { $hiddenDetailsList })) {
         $label = Get-TvCleanStyleText $entry 80
         if ($label -and -not $hiddenDetails.Contains($label) -and $hiddenDetails.Count -lt 20) { $hiddenDetails.Add($label) }
     }

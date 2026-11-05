@@ -99,11 +99,15 @@ describe("Teams card editor", () => {
     expect(dialog.querySelector<HTMLFieldSetElement>("fieldset")!.disabled).toBe(true)
     await act(async () => { button(dialog, "Customize backups")!.click() })
     expect(dialog.textContent).toContain("Own layout for backups")
+    // Make the backups style differ from the default before sending.
+    await act(async () => { button(dialog, "Compact")!.click() })
     await act(async () => { button(dialog, "Send test to IT Ops alerts")!.click() })
     await waitFor(() => state.tested)
     expect((state.tested as { channelId: string; layout: CardLayout }).layout.overrides.backups).toBeTruthy()
     // The tab's style is what the test card uses, since a test event belongs to no group.
     const tested = (state.tested as { layout: CardLayout }).layout
     expect(tested.base).toEqual(tested.overrides.backups)
+    expect(tested.base.density).toBe("compact")
+    expect(tested.overrides.backups!.density).toBe("compact")
   })
 })

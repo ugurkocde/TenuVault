@@ -79,6 +79,22 @@
     },
     "max-string-number": {
       "maxItems": "5"
+    },
+    "list-strings": {
+      "order": "items",
+      "hiddenDetails": "Changes",
+      "hidden": "footer"
+    },
+    "one-item-lists": {
+      "order": [
+        "footer"
+      ],
+      "hiddenDetails": [
+        "Changes"
+      ],
+      "hidden": [
+        "button"
+      ]
     }
   }
 }
