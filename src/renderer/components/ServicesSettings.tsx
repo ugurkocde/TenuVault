@@ -254,6 +254,8 @@ export function ServicesSettings() {
   const [selected, setSelected] = useState(rows[0]?.tenantId ?? "")
   const [statuses, setStatuses] = useState<Map<string, TenantStatus>>(new Map())
   const [busy, setBusy] = useState(false)
+  // Only Check again re-reads permissions; turning a module on or off does not.
+  const [checking, setChecking] = useState(false)
   const current = rows.find((row) => row.tenantId === selected) ?? rows[0]
   const queryClient = useQueryClient()
 
@@ -313,7 +315,7 @@ export function ServicesSettings() {
         {rows.length > 1 ? <Overview tenants={rows} statuses={statuses} selected={current.tenantId} onSelect={setSelected} /> : null}
         <div className="flex flex-wrap items-center gap-3">
           <p className="text-sm font-medium text-gray-900">{current.name}</p>
-          <Button variant="outline" size="sm" disabled={busy || status === "loading"} onClick={() => void run(() => bridge.services.status(current.tenantId, current.clientId, true))}>
+          <Button variant="outline" size="sm" disabled={busy || status === "loading"} onClick={() => { setChecking(true); void run(() => bridge.services.status(current.tenantId, current.clientId, true)).finally(() => setChecking(false)) }}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             Check again
           </Button>
@@ -335,7 +337,7 @@ export function ServicesSettings() {
             ))}
           </div>
         ) : null}
-        {status && status !== "loading" && status.optional?.length ? <OptionalPermissions entries={status.optional} clientId={current.clientId} checking={busy} /> : null}
+        {status && status !== "loading" && status.optional?.length ? <OptionalPermissions entries={status.optional} clientId={current.clientId} checking={checking} /> : null}
         <p className="text-xs text-gray-500">
           Roles are checked by Microsoft when you restore.{" "}
           <a href={PERMISSIONS_DOCS} target="_blank" rel="noreferrer" className="underline underline-offset-2">How permissions work</a>
