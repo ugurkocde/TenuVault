@@ -12,7 +12,7 @@ import { StorageChooser } from "../components/StorageChooser"
 import { FirstBackupNote } from "../components/FirstBackupNote"
 import { FirstBackupNextSteps } from "../components/FirstBackupNextSteps"
 import { PlanContext, TrialOrKey } from "../components/PlanChoice"
-import { useTenantPlan } from "../lib/license"
+import { tenantLicense, tenantPlan, useTenantPlan } from "../lib/license"
 import { SetupScriptCard, TenantSignInForm, type SignInFields } from "../components/TenantSignInForm"
 import { bridge } from "../lib/bridge"
 import { buildTenantProfile } from "../lib/desktop-tenant"
@@ -158,8 +158,10 @@ export default function OnboardingPage() {
     if (!account || !choice) return
     setCreating(true)
     setAddError(null)
+    let community = false
     try {
-      await bridge.license.checkNewTenant(account.tenantId)
+      const status = await bridge.license.checkNewTenant(account.tenantId)
+      community = tenantPlan(tenantLicense(status, account.tenantId)) === "community"
     } catch (error) {
       if (!showCommunityLimitError(error)) {
         const message = error instanceof Error ? error.message : String(error)
@@ -169,6 +171,13 @@ export default function OnboardingPage() {
       setChoice(null)
       setCreating(false)
       setStep(1)
+      return
+    }
+    // The plan can change between the storage choice and this check, such as a trial that ended.
+    if (community && choice.kind === "azure") {
+      setAddError({ message: "This tenant is on Community now, which keeps backups on this device. Choose This device to continue.", license: false })
+      setChoice(null)
+      setCreating(false)
       return
     }
     try {
@@ -381,7 +390,7 @@ export default function OnboardingPage() {
                 <p>{tenantName ? `${tenantName} is connected.` : "Your tenant is connected."} Take a first backup to check that everything works.</p>
                 <ul className="list-disc space-y-1 pl-5 text-gray-600">
                   <li>It reads your Intune policies, scripts and settings, and changes nothing in your tenant.</li>
-                  <li>Apps are left out to keep it quick. You can include them later in the backup scope.</li>
+                  <li>Apps are left out by default to keep it quick. You can change what is backed up later in the backup scope.</li>
                   <li>It usually takes a few minutes, longer for large tenants.</li>
                 </ul>
               </div>

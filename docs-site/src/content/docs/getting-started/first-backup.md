@@ -10,7 +10,7 @@ The last setup step takes a first backup, so you know sign-in, permissions and s
 The **First backup** step is headed **Take a first backup** and shows **&lt;tenant&gt; is connected.** It explains what the backup does:
 
 * It reads your Intune policies, scripts and settings, and changes nothing in your tenant.
-* Apps are left out to keep it quick. You can include them later in the backup scope.
+* Apps are left out by default to keep it quick. You can change what is backed up later in the backup scope.
 * It usually takes a few minutes, longer for large tenants.
 
 1. Select **Run first backup**.

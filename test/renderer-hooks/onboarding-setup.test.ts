@@ -1,4 +1,4 @@
-import { act, createElement, type ReactElement } from "react"
+import { act, createElement, useEffect, type ReactElement } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -13,6 +13,9 @@ const state = vi.hoisted(() => ({
   accounts: vi.fn(async (): Promise<SignedInAccount[]> => []),
   releaseTenant: vi.fn(async () => undefined),
   tenants: [] as { credentials?: { tenantId?: string } }[],
+  storageChoice: null as unknown,
+  checkNewTenant: vi.fn(async (): Promise<unknown> => undefined),
+  addTenant: vi.fn(),
 }))
 
 vi.mock("../../src/renderer/lib/bridge", () => ({
@@ -23,7 +26,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
       removeItem: async (key: string) => void state.store.delete(key),
     },
     auth: { signIn: state.signIn, cancelSignIn: state.cancelSignIn, accounts: state.accounts },
-    license: { releaseTenant: state.releaseTenant, clipboardKey: async () => null, checkNewTenant: async () => undefined },
+    license: { releaseTenant: state.releaseTenant, clipboardKey: async () => null, checkNewTenant: state.checkNewTenant },
     setup: { saveScript: async () => ({ saved: false }) },
     app: { openExternal: async () => undefined },
   },
@@ -31,19 +34,22 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
 vi.mock("../../src/renderer/lib/license", () => ({
   useTenantPlan: () => "community",
   useLicense: () => ({ status: null, error: null, refresh: async () => undefined }),
-  tenantLicense: () => undefined,
-  tenantPlan: () => null,
+  tenantLicense: (status: { tenants?: unknown[] } | undefined) => status?.tenants?.[0],
+  tenantPlan: (tenant: { plan?: string } | undefined) => tenant?.plan ?? null,
 }))
 vi.mock("~/contexts/TenantContext", () => ({
   useTenants: () => state.tenants,
-  useTenantOperations: () => ({ addTenant: vi.fn(), updateTenant: vi.fn() }),
+  useTenantOperations: () => ({ addTenant: state.addTenant, updateTenant: vi.fn() }),
   useSelectedTenant: () => ({ setSelectedTenantId: vi.fn() }),
 }))
 vi.mock("~/contexts/BackupProgressContext", () => ({
   useBackupProgress: () => ({ addJob: vi.fn(), removeJob: vi.fn(), activeJobs: [] }),
 }))
 vi.mock("../../src/renderer/components/StorageChooser", () => ({
-  StorageChooser: () => createElement("p", null, "Storage chooser"),
+  StorageChooser: ({ onChange }: { onChange: (choice: unknown) => void }) => {
+    useEffect(() => { if (state.storageChoice) onChange(state.storageChoice) }, [])
+    return createElement("p", null, "Storage chooser")
+  },
 }))
 
 import OnboardingPage from "../../src/renderer/pages/OnboardingPage"
@@ -61,6 +67,7 @@ const roots: Root[] = []
 beforeEach(() => {
   state.store.clear()
   state.tenants = []
+  state.storageChoice = null
 })
 
 afterEach(() => {
@@ -194,6 +201,21 @@ describe("OnboardingPage", () => {
     await flush()
     expect(state.releaseTenant).toHaveBeenCalledWith(TENANT)
     expect(container.querySelector("#tenant")).not.toBeNull()
+  })
+
+  it("keeps an Azure choice from being saved when the tenant turned out to be on Community", async () => {
+    const account = { tenantId: TENANT, clientId: CLIENT, username: "admin@contoso.com" }
+    state.store.set(DRAFT_KEY, JSON.stringify({ step: 2, tenant: TENANT, clientId: CLIENT, displayName: "", account }))
+    state.accounts.mockResolvedValueOnce([account])
+    state.storageChoice = { kind: "azure", storageAccountName: "contosobackups", subscriptionId: "sub", resourceGroupName: "rg", location: "westeurope" }
+    state.checkNewTenant.mockResolvedValueOnce({ tenants: [{ tenantId: TENANT, plan: "community" }] })
+    const container = await render(createElement(OnboardingPage))
+    await act(async () => { button(container, "Continue")!.click() })
+    await flush()
+    expect(state.checkNewTenant).toHaveBeenCalledWith(TENANT)
+    expect(state.addTenant).not.toHaveBeenCalled()
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("This tenant is on Community now")
+    expect(button(container, "Continue")!.disabled).toBe(true)
   })
 
   it("shows the Prepare checklist with the permissions and the handoff", async () => {
