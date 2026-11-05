@@ -154,8 +154,8 @@ function page(title: string, message: string): string {
  */
 export class AuthManager {
   private readonly apps = new Map<string, PublicClientApplication>()
-  /** Rejects the sign-ins waiting for the browser, for cancelInteractive. */
-  private readonly cancels = new Set<(error: Error) => void>()
+  /** Rejects the first sign-ins (signIn) waiting for the browser, for cancelInteractive. */
+  private readonly cancels = new Map<(error: Error) => void, string>()
   private readonly interactive = new Map<string, Promise<AuthenticationResult>>()
 
   constructor(private readonly host: AuthHost) {}
@@ -165,7 +165,7 @@ export class AuthManager {
    * a verified domain; the returned account always carries the tenant id.
    */
   async signIn(tenant: string, clientId: string): Promise<SignedInAccount> {
-    const result = await this.acquireInteractive(clientId, tenant, RESOURCE_SCOPES.graph, "select_account").catch((error: unknown) => {
+    const result = await this.acquireInteractive(clientId, tenant, RESOURCE_SCOPES.graph, "select_account", undefined, true).catch((error: unknown) => {
       throw firstSignInError(error)
     })
     const account = result.account
@@ -298,6 +298,7 @@ export class AuthManager {
     scope: string,
     prompt?: string,
     loginHint?: string,
+    cancellable = false,
   ): Promise<AuthenticationResult> {
     const key = `${clientId}|${tenant.toLowerCase()}|${scope}|${prompt ?? ""}|${loginHint ?? ""}`
     const pending = this.interactive.get(key)
@@ -313,11 +314,13 @@ export class AuthManager {
       ...(loginHint ? { loginHint } : {}),
     }
     // MSAL cannot abort a loopback sign-in, so a cancel stops waiting for it instead. A browser
-    // tab finished later only fills the token cache; its result is never used.
+    // tab finished later only fills the token cache; its result is never used. Only the first
+    // sign-in can be cancelled, so a reauthentication started elsewhere keeps waiting.
     let cancel: (error: Error) => void = () => {}
     const cancelled = new Promise<never>((_resolve, reject) => { cancel = reject })
-    this.cancels.add(cancel)
-    const promise = Promise.race([this.app(clientId).acquireTokenInteractive(request), cancelled])
+    if (cancellable) this.cancels.set(cancel, key)
+    const interactive = this.app(clientId).acquireTokenInteractive(request)
+    const promise = (cancellable ? Promise.race([interactive, cancelled]) : interactive)
       .finally(() => {
         this.cancels.delete(cancel)
         if (this.interactive.get(key) === promise) this.interactive.delete(key)
@@ -326,12 +329,14 @@ export class AuthManager {
     return promise
   }
 
-  /** Stops waiting for every sign-in that is open in the browser; they fail with SignInCancelledError. */
+  /** Stops waiting for the first sign-ins open in the browser; they fail with SignInCancelledError. */
   cancelInteractive(): void {
     const pending = [...this.cancels]
     this.cancels.clear()
-    this.interactive.clear()
-    for (const cancel of pending) cancel(new SignInCancelledError())
+    for (const [cancel, key] of pending) {
+      this.interactive.delete(key)
+      cancel(new SignInCancelledError())
+    }
   }
 
   private app(clientId: string): PublicClientApplication {

@@ -84,4 +84,20 @@ describe("AuthManager sign-in", () => {
     msal.interactive.mockResolvedValueOnce({ account: { tenantId: TENANT, username: "admin@contoso.com", homeAccountId: "home" } })
     await expect(auth.signIn(TENANT, CLIENT)).resolves.toMatchObject({ tenantId: TENANT, username: "admin@contoso.com" })
   })
+
+  it("leaves a reauthentication started elsewhere waiting when the first sign-in is cancelled", async () => {
+    const other = "22222222-2222-2222-2222-222222222222"
+    let finish: (value: unknown) => void = () => undefined
+    msal.interactive.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    msal.interactive.mockImplementationOnce(() => new Promise(() => undefined))
+    const auth = manager()
+    const reauth = auth.reauthenticate(other, CLIENT)
+    const waiting = auth.signIn(TENANT, CLIENT)
+    await Promise.resolve()
+    auth.cancelInteractive()
+    await expect(waiting).rejects.toThrow("Sign-in cancelled.")
+
+    finish({ account: { tenantId: other, username: "admin@fabrikam.com", homeAccountId: "home-2" } })
+    await expect(reauth).resolves.toMatchObject({ tenantId: other, username: "admin@fabrikam.com" })
+  })
 })
