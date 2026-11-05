@@ -96,7 +96,8 @@ export function FirstBackupNextSteps({ tenantId, plan }: { tenantId: string; pla
                 TenuVault backs up while it is open or in the tray. A backup missed while the computer was off runs the next
                 time TenuVault starts.
               </p>
-              <Button type="button" size="sm" onClick={() => void turnOn()} disabled={scheduling}>
+              {/* Until the plan is known the suggestion could be weekly for a tenant that gets daily backups. */}
+              <Button type="button" size="sm" onClick={() => void turnOn()} disabled={scheduling || plan === null}>
                 {scheduling && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}
                 {label}
               </Button>
