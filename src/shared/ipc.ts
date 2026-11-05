@@ -1,3 +1,4 @@
+import type { OptionalPermissionStatus } from "./services/optional-permissions"
 import type { PlanIpcError } from "./plan-errors"
 import type { BackupScope } from "./intune/scope"
 import type { ReportPayload } from "./oib/report"
@@ -315,6 +316,8 @@ export interface ServiceModuleStatus {
 export interface ServicesStatus {
   tenantId: string
   modules: ServiceModuleStatus[]
+  /** Optional delegated permissions and whether the token carries them; absent from older answers. */
+  optional?: OptionalPermissionStatus[]
   /** When the token behind the check was issued; consent changes made later show after "Check again". */
   checkedAt: string | null
   /** Why the permissions could not be checked. */

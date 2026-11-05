@@ -3,7 +3,7 @@
  * for its target format, and no link is ever derived from tenant data, so a hostile
  * policy name cannot turn an alert into a phishing message.
  */
-import { SEVERITY_RANK, type NotificationEnvelope } from "./envelope"
+import { canonicalJson, SEVERITY_RANK, type NotificationEnvelope } from "./envelope"
 import { BUTTON_TARGETS, DEFAULT_CARD_STYLE, type CardAccent, type CardStyle } from "./layout"
 
 export function escapeHtml(value: string): string {
@@ -60,11 +60,55 @@ export function cardButton(envelope: NotificationEnvelope, style: CardStyle): { 
 }
 
 /**
+ * Teams Workflows refuses messages over 28 KB (Microsoft Learn, "Create an Incoming Webhook")
+ * without saying how it counts. A card must fit both as UTF-8 bytes and as UTF-16 (two bytes
+ * per JSON character), with 1 KB to spare for the envelope Teams adds.
+ */
+export const TEAMS_MESSAGE_BUDGET_BYTES = 27 * 1024
+
+/** The size a payload is judged by: the larger of its UTF-8 and UTF-16 byte counts. */
+export function teamsPayloadBytes(payload: Record<string, unknown>): number {
+  const json = canonicalJson(payload)
+  return Math.max(new TextEncoder().encode(json).length, json.length * 2)
+}
+
+interface CardFit {
+  items: number
+  details: number
+  summaryMax: number
+}
+
+/**
  * The Teams Workflows payload: a message with one Adaptive Card attachment, built from a card
  * style (the default reproduces the standard card). The runbook's New-TvTeamsPayload builds
  * the same JSON from the same style; test/notification-watcher-script.test.ts compares them.
+ * A card over the Teams limit is shortened instead of refused: change lines first (they become
+ * "And N more"), then detail rows from the end, then the summary to 200 characters.
  */
 export function teamsWorkflowsPayload(envelope: NotificationEnvelope, style: CardStyle = DEFAULT_CARD_STYLE): Record<string, unknown> {
+  return fitTeamsPayload(envelope, style).payload
+}
+
+/** The fitted payload and whether it had to be shortened, for the editor's status line. */
+export function fitTeamsPayload(envelope: NotificationEnvelope, style: CardStyle = DEFAULT_CARD_STYLE): { payload: Record<string, unknown>; shortened: boolean } {
+  const fit: CardFit = { items: Math.min(style.maxItems, envelope.items.length), details: envelope.details.length, summaryMax: Number.POSITIVE_INFINITY }
+  let payload = buildTeamsPayload(envelope, style, fit)
+  if (teamsPayloadBytes(payload) <= TEAMS_MESSAGE_BUDGET_BYTES) return { payload, shortened: false }
+  while (fit.items > 0) {
+    fit.items--
+    payload = buildTeamsPayload(envelope, style, fit)
+    if (teamsPayloadBytes(payload) <= TEAMS_MESSAGE_BUDGET_BYTES) return { payload, shortened: true }
+  }
+  while (fit.details > 0) {
+    fit.details--
+    payload = buildTeamsPayload(envelope, style, fit)
+    if (teamsPayloadBytes(payload) <= TEAMS_MESSAGE_BUDGET_BYTES) return { payload, shortened: true }
+  }
+  fit.summaryMax = 200
+  return { payload: buildTeamsPayload(envelope, style, fit), shortened: true }
+}
+
+function buildTeamsPayload(envelope: NotificationEnvelope, style: CardStyle, fit: CardFit): Record<string, unknown> {
   const severity = SEVERITY_CARD[envelope.severity]
   const time = (iso: string) => (style.timeFormat === "iso" ? iso : friendlyTime(iso))
   const compact = style.density === "compact"
@@ -78,13 +122,14 @@ export function teamsWorkflowsPayload(envelope: NotificationEnvelope, style: Car
   for (const block of style.order) {
     if (style.hidden.includes(block)) continue
     if (block === "summary") {
-      const text = style.summaryText ? fillPlaceholders(style.summaryText, envelope, style.timeFormat) : envelope.summary
+      const full = style.summaryText ? fillPlaceholders(style.summaryText, envelope, style.timeFormat) : envelope.summary
+      const text = full.length > fit.summaryMax ? `${full.slice(0, fit.summaryMax)}...` : full
       body.push({ type: "TextBlock", text: escapeMarkdown(text), wrap: true, ...(compact ? { spacing: "Small" } : {}) })
     } else if (block === "details") {
-      const facts = envelope.details.filter((entry) => !style.hiddenDetails.includes(entry.label)).map((entry) => ({ title: escapeMarkdown(entry.label), value: escapeMarkdown(entry.value) }))
+      const facts = envelope.details.slice(0, fit.details).filter((entry) => !style.hiddenDetails.includes(entry.label)).map((entry) => ({ title: escapeMarkdown(entry.label), value: escapeMarkdown(entry.value) }))
       if (facts.length) body.push({ type: "FactSet", facts, ...(compact ? { spacing: "Small" } : {}) })
     } else if (block === "items") {
-      const shown = envelope.items.slice(0, style.maxItems)
+      const shown = envelope.items.slice(0, fit.items)
       for (const item of shown) {
         const meta = [style.itemDetail ? item.detail : undefined, style.itemActor && item.actor ? `by ${item.actor}` : undefined, style.itemTime && item.at ? time(item.at) : undefined].filter((part): part is string => Boolean(part))
         if (style.itemStyle === "stacked") {

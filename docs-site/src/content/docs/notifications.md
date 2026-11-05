@@ -68,6 +68,8 @@ Messages arrive as an Adaptive Card posted by Workflows: a header tinted by seve
 * **Send test** sends a test card with the layout of the open tab as edited, before saving. **Reset to standard** goes back to the built-in card.
 * Designing a layout is part of Pro. On the Community plan the editor opens read only, to view the saved layout, and **Reset to standard** stays available.
 
+Teams refuses messages over 28 KB. A card that would be larger, for example a digest of twenty changes with very long policy names, is shortened instead of refused: change lines first (they become "And N more"), then detail rows from the end, then the summary. The size is judged both as UTF-8 and as UTF-16, because Microsoft does not say how it counts. The editor shows the size of the preview card and says when it was shortened, and the Azure watcher shortens the same way.
+
 What a layout can never do: tenant text (policy names, tenant name, actor) is always plain text, so it cannot become a link or formatting; buttons only open the fixed Microsoft addresses above; and the card stays at Adaptive Card 1.4. A damaged or unknown setting falls back to the standard value instead of stopping a delivery.
 
 For the Azure watcher, **Copy for Azure watcher** copies the layout as JSON. Save it as a file and pass it to the watcher setup with `-TeamsCardLayoutPath`; the watcher builds the identical card from it.

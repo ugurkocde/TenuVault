@@ -47,14 +47,11 @@ import {
   type HideableBlock,
   type MovableBlock,
 } from "../../../shared/notifications/layout"
-import { cardOf, teamsWorkflowsPayload } from "../../../shared/notifications/render"
+import { cardOf, fitTeamsPayload, teamsPayloadBytes, teamsWorkflowsPayload } from "../../../shared/notifications/render"
 import { toast } from "../../lib/toast"
 import { notificationsApi, type PublicChannel } from "./api"
 import { CardPreview, type PreviewTheme } from "./CardPreview"
 import { CARD_SAMPLES, detailLabelsFor, samplesFor } from "./card-samples"
-
-/** A Teams message, including the card, may be about 28 KB. */
-const TEAMS_LIMIT_BYTES = 28 * 1024
 
 type Tab = "base" | EventGroup
 type Selection = "card" | "header" | MovableBlock | "button"
@@ -160,8 +157,10 @@ function CardLayoutEditor({ tenant, initial, channels, licensed, open, onClose, 
   }, [samples, sampleId])
 
   // Normalized like the server and the Azure watcher do on save, so the preview shows the delivered card.
-  const payload = useMemo(() => teamsWorkflowsPayload(sample.envelope, parseCardStyle(style)), [sample, style])
-  const bytes = useMemo(() => new TextEncoder().encode(JSON.stringify(payload)).length, [payload])
+  const fitted = useMemo(() => fitTeamsPayload(sample.envelope, parseCardStyle(style)), [sample, style])
+  const payload = fitted.payload
+  // Judged like the senders do: the larger of UTF-8 and UTF-16, since Teams does not say how it counts.
+  const bytes = useMemo(() => teamsPayloadBytes(payload), [payload])
   const dirty = !sameLayout(layout, initial)
   const allIssues = [layout.base, ...Object.values(layout.overrides)].flatMap((entry) => styleIssues(entry))
   const issues = styleIssues(style)
@@ -279,7 +278,8 @@ function CardLayoutEditor({ tenant, initial, channels, licensed, open, onClose, 
             </div>
             <div className="flex flex-wrap items-center gap-2 border-t border-gray-100 px-6 py-3 text-xs text-gray-500 dark:border-gray-800">
               <Chip tone="neutral">Adaptive Card 1.4</Chip>
-              <Chip tone={bytes > TEAMS_LIMIT_BYTES ? "danger" : "neutral"}>{(bytes / 1024).toFixed(1)} KB of 28 KB</Chip>
+              <Chip tone="neutral">{(bytes / 1024).toFixed(1)} KB of 28 KB</Chip>
+              {fitted.shortened && <Chip tone="warning">Shortened to fit the Teams size limit</Chip>}
               <Chip tone="success">The Azure watcher builds the same card</Chip>
             </div>
           </section>

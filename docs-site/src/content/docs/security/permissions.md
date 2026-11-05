@@ -111,6 +111,10 @@ To opt in, run the setup script with `-IncludeGroupRead` on a fresh registration
 
 The hygiene scan shows the same remediation next to the unresolved groups unknown until group reads succeed. After consent, sign in again and run a new hygiene scan.
 
+## See which optional permissions are granted
+
+**Settings > Services and permissions** lists the optional permissions below under **Optional permissions**, read from the sign-in TenuVault already holds: granted, not granted (with the permission that is missing, the setup switch for a new app registration and a link to the app registration in Entra), or not checkable. The Notifications section shows the same status where each is used, before a test mail or a Conditional Access poll fails.
+
 ## Notification email and group recipients (optional)
 
 Email notification channels send as the signed-in admin and can resolve Entra group recipients. Both are off unless you opt in with `-IncludeNotifications` on a fresh registration, or by adding the delegated `Mail.Send`, `GroupMember.Read.All` and `User.Read.All` permissions to an existing registration and granting admin consent:

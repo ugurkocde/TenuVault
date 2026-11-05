@@ -9,7 +9,7 @@ import entraFixture from "./fixtures/notifications/entra-audit.json"
 import { entraChangeDigest } from "../src/shared/notifications/audit"
 import { mapEntraAuditEvent, type EntraAuditRaw } from "../src/shared/notifications/entra"
 import { DEFAULT_CARD_LAYOUT, DEFAULT_CARD_STYLE, isDefaultLayout, parseCardLayout, parseCardStyle, styleFor, styleIssues } from "../src/shared/notifications/layout"
-import { cardOf, fillPlaceholders } from "../src/shared/notifications/render"
+import { cardOf, fillPlaceholders, fitTeamsPayload, TEAMS_MESSAGE_BUDGET_BYTES, teamsPayloadBytes } from "../src/shared/notifications/render"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 
@@ -283,5 +283,34 @@ describe("Teams card layouts", () => {
     const style = parseCardStyle({ hidden: [], noteText: "Call ext. 4411", noteMinSeverity: "critical" })
     expect(texts(style)).not.toContain("4411")
     expect(JSON.stringify(cardOf(teamsWorkflowsPayload({ ...digest, severity: "critical" }, style)))).toContain("4411")
+  })
+})
+
+describe("Teams message size", () => {
+  const big = (count: number) => buildEnvelope({
+    type: "intune.change", severity: "warning", tenantId: TENANT, tenantName: "Contoso", occurredAt: "2026-11-05T08:42:00.000Z", naturalKey: `big-${count}`,
+    title: "Intune changes: Contoso", summary: "Many changes.",
+    details: [{ label: "Changes", value: String(count) }],
+    items: Array.from({ length: count }, (_, index) => ({ title: `Updated: ${"Policy name ".repeat(24)}${index}`, detail: "Settings catalog ".repeat(17), actor: `admin${index}@contoso.com`, at: "2026-11-05T08:42:00.000Z" })),
+    moreCount: 0, source: "desktop",
+  })
+
+  it("leaves cards that fit untouched", () => {
+    const small = big(3)
+    expect(fitTeamsPayload(small).shortened).toBe(false)
+    expect(teamsPayloadBytes(teamsWorkflowsPayload(small))).toBeLessThan(TEAMS_MESSAGE_BUDGET_BYTES)
+  })
+
+  it("drops change lines into And N more until the card fits", () => {
+    const envelope = big(20)
+    const { payload, shortened } = fitTeamsPayload(envelope)
+    expect(shortened).toBe(true)
+    expect(teamsPayloadBytes(payload)).toBeLessThanOrEqual(TEAMS_MESSAGE_BUDGET_BYTES)
+    const texts = (cardOf(payload).body as Array<{ text?: string }>).map((block) => block.text ?? "")
+    const lines = texts.filter((text) => text.startsWith("•")).length
+    expect(lines).toBeLessThan(20)
+    expect(texts).toContain(`And ${20 - lines} more. Open TenuVault for the full list.`)
+    // The header, summary and details stay.
+    expect(JSON.stringify((cardOf(payload).body as unknown[])[0])).toContain("Intune changes: Contoso")
   })
 })

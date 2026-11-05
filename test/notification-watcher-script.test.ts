@@ -4,9 +4,9 @@ import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 import { intuneChangeDigest, mapAuditEvent, type AuditEventRaw } from "../src/shared/notifications/audit"
 import { canonicalJson } from "../src/shared/notifications/envelope"
-import { teamsWorkflowsPayload } from "../src/shared/notifications/render"
+import { TEAMS_MESSAGE_BUDGET_BYTES, teamsPayloadBytes, teamsWorkflowsPayload } from "../src/shared/notifications/render"
 import { parseCardStyle } from "../src/shared/notifications/layout"
-import { backupEvent, testEvent } from "../src/shared/notifications/envelope"
+import { backupEvent, buildEnvelope, testEvent } from "../src/shared/notifications/envelope"
 import layoutFixture from "./fixtures/notifications/card-layouts.json"
 import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -219,6 +219,27 @@ describe("Azure notification watcher scripts", () => {
     expect(lines).toHaveLength(expected.length)
     lines.forEach((line, index) => expect(line, `style/envelope pair ${index}`).toBe(expected[index]))
   }, 60_000)
+
+  it.runIf(Boolean(pwsh))("PowerShell shortens oversized cards exactly like TypeScript, under the Teams limit", () => {
+    const huge = (character: string) => character.repeat(2000)
+    const envelopes = ["a", ".", "\u00fc"].map((character) => buildEnvelope({
+      type: "intune.change", severity: "critical", tenantId: fixture.tenantId, tenantName: huge(character), occurredAt: "2026-11-05T08:42:00.000Z", naturalKey: `huge-${character}`,
+      title: huge(character), summary: huge(character),
+      details: Array.from({ length: 20 }, () => ({ label: huge(character), value: huge(character) })),
+      items: Array.from({ length: 20 }, () => ({ title: huge(character), detail: huge(character), actor: huge(character), at: "2026-11-05T08:42:00.000Z" })),
+      moreCount: 5, source: "azure-watcher",
+    }))
+    const dir = mkdtempSync(join(tmpdir(), "tv-oversized-"))
+    const envelopesPath = join(dir, "envelopes.json")
+    writeFileSync(envelopesPath, JSON.stringify(envelopes))
+    const script = fileURLToPath(new URL("./fixtures/notifications/render-oversized.ps1", import.meta.url))
+    const lines = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-EnvelopesPath", envelopesPath], { encoding: "utf8" }).trim().split(/\r?\n/)
+    envelopes.forEach((envelope, index) => {
+      const payload = teamsWorkflowsPayload(envelope)
+      expect(teamsPayloadBytes(payload)).toBeLessThanOrEqual(TEAMS_MESSAGE_BUDGET_BYTES)
+      expect(lines[index]).toBe(canonicalJson(payload))
+    })
+  }, 120_000)
 
   it.runIf(Boolean(pwsh))("PowerShell matches TypeScript on live-shaped read and assignment events", () => {
     const changes = liveFixture.events.map((event) => mapAuditEvent(event as AuditEventRaw)).filter((change) => change !== null)

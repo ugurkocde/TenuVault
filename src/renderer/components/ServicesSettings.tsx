@@ -6,6 +6,7 @@ import { useTenants } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { DOCS_HOME_URL } from "../../shared/constants"
 import type { ServiceModuleStatus, ServicesStatus } from "../../shared/ipc"
+import type { OptionalPermissionStatus } from "../../shared/services/optional-permissions"
 import { entraApiPermissionsUrl, missingPermissions, restoreAccessCommands, type AreaCheck, type Readiness, type Requirement } from "../../shared/services/modules"
 import { bridge } from "../lib/bridge"
 import { toast } from "../lib/toast"
@@ -330,11 +331,43 @@ export function ServicesSettings() {
             ))}
           </div>
         ) : null}
+        {status && status !== "loading" && status.optional?.length ? <OptionalPermissions entries={status.optional} clientId={current.clientId} /> : null}
         <p className="text-xs text-gray-500">
           Roles are checked by Microsoft when you restore.{" "}
           <a href={PERMISSIONS_DOCS} target="_blank" rel="noreferrer" className="underline underline-offset-2">How permissions work</a>
         </p>
       </CardContent>
     </Card>
+  )
+}
+
+/**
+ * Delegated permissions the setup script only adds on request. Each one turns on a single
+ * feature; without it that feature fails while the rest keeps working.
+ */
+function OptionalPermissions({ entries, clientId }: { entries: OptionalPermissionStatus[]; clientId: string }) {
+  return (
+    <section aria-labelledby="optional-permissions-heading" className="space-y-2 border-t border-gray-100 pt-4 dark:border-gray-800">
+      <h3 id="optional-permissions-heading" className="text-sm font-medium text-gray-900">Optional permissions</h3>
+      <p className="text-xs text-gray-500">
+        Added only when you ask for them. A new app registration gets them with the setup switch shown; for this one, add the delegated permission in Entra and grant admin consent, then check again.
+      </p>
+      <ul className="divide-y divide-gray-100 dark:divide-gray-800">
+        {entries.map((entry) => (
+          <li key={entry.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5 text-sm">
+            {entry.granted === true ? <CheckCircle2 className="h-4 w-4 text-green-600" aria-hidden="true" /> : entry.granted === false ? <MinusCircle className="h-4 w-4 text-gray-400" aria-hidden="true" /> : <AlertCircle className="h-4 w-4 text-gray-400" aria-hidden="true" />}
+            <span className="font-medium text-gray-900">{entry.label}</span>
+            <span className="font-mono text-xs text-gray-600">{entry.permissions.join(", ")}</span>
+            <span className="text-xs text-gray-500">{entry.granted === true ? "Granted" : entry.granted === false ? `Not granted: ${entry.missing.join(", ")}` : "Could not be checked"}</span>
+            {entry.granted === false && (
+              <span className="ml-auto flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                <span>New app registration: <span className="font-mono">{entry.setupSwitch}</span></span>
+                <a href={entraApiPermissionsUrl(clientId)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 underline underline-offset-2">Open in Entra<ExternalLink className="h-3 w-3" aria-hidden="true" /></a>
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }

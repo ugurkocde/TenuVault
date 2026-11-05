@@ -1,6 +1,7 @@
 import type { ServicesStatus } from "../../shared/ipc"
 import { checkModules, MODULES } from "../../shared/services/modules"
 import { grantedPermissions } from "../../shared/services/token"
+import { optionalPermissionStatus, type OptionalPermissionStatus } from "../../shared/services/optional-permissions"
 import type { ModuleSettings } from "./settings"
 
 /**
@@ -16,6 +17,7 @@ export async function servicesStatus(
 ): Promise<ServicesStatus> {
   const enabled = settings.get(tenantId)
   let checks: ReturnType<typeof checkModules> | null = null
+  let optional: OptionalPermissionStatus[] = optionalPermissionStatus(undefined)
   let checkedAt: string | null = null
   let error: string | undefined
   try {
@@ -23,6 +25,7 @@ export async function servicesStatus(
     const granted = grantedPermissions(token.accessToken)
     if (granted) {
       checks = checkModules(granted)
+      optional = optionalPermissionStatus(granted)
       checkedAt = issuedAt(token.accessToken) ?? new Date().toISOString()
     } else error = "The permissions in the Microsoft Graph token could not be read."
   } catch (cause) {
@@ -31,6 +34,7 @@ export async function servicesStatus(
   return {
     tenantId,
     checkedAt,
+    optional,
     ...(error ? { error } : {}),
     modules: MODULES.map((module) => ({
       id: module.id,
