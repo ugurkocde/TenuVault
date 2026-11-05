@@ -26,6 +26,8 @@ export const NOTIFICATION_EVENT_TYPES = [
   "drift.detected",
   "health.finding",
   "intune.change",
+  "entra.change",
+  "credential.expiring",
   "watcher.stale",
   "test",
 ] as const
@@ -257,6 +259,106 @@ export function restoreEvent(input: RestoreEventInput): NotificationEnvelope {
     title: type === "restore.failed" ? `Restore failed: ${tenantLabel}` : type === "restore.partial" ? `Restore partially completed: ${tenantLabel}` : `Restore completed: ${tenantLabel}`,
     summary: input.message || "Open TenuVault for the restore details.",
     details,
+    source: input.source,
+  })
+}
+
+/** How close a certificate is to its expiry: each band alerts once per certificate. */
+export type ExpiryBand = "30" | "7" | "expired"
+
+export function expiryBand(daysLeft: number): ExpiryBand | null {
+  if (daysLeft <= 0) return "expired"
+  if (daysLeft <= 7) return "7"
+  if (daysLeft <= 30) return "30"
+  return null
+}
+
+export interface CredentialExpiringInput {
+  tenantId: string
+  tenantName?: string | null
+  occurredAt: string
+  /** Expiry of the certificate in use; with the band, the delivery identity. */
+  notAfter: string
+  daysLeft: number
+  renewalPending: boolean
+  source: "desktop" | "azure-watcher"
+}
+
+/** The Backup Reader certificate is near or past its expiry. Null outside the 30 day window. */
+export function credentialExpiringEvent(input: CredentialExpiringInput): NotificationEnvelope | null {
+  const band = expiryBand(input.daysLeft)
+  if (!band) return null
+  const tenantLabel = input.tenantName ?? "your tenant"
+  const expired = band === "expired"
+  const when = expired ? "has expired" : `expires in ${input.daysLeft} ${input.daysLeft === 1 ? "day" : "days"}`
+  const next = input.renewalPending
+    ? "A renewal certificate is waiting: upload it with the setup script, then verify it in Settings > Background runner."
+    : "Renew it in Settings > Background runner so scheduled backups keep running without an admin sign-in."
+  return buildEnvelope({
+    type: "credential.expiring",
+    severity: band === "30" ? "warning" : "critical",
+    tenantId: input.tenantId,
+    tenantName: input.tenantName,
+    occurredAt: input.occurredAt,
+    naturalKey: `reader:${input.notAfter}:${band}`,
+    title: `Backup Reader certificate ${when}: ${tenantLabel}`,
+    summary: expired ? `Scheduled backups use an admin sign-in again until the certificate is renewed. ${next}` : next,
+    details: [
+      { label: "Expires", value: input.notAfter },
+      { label: "Renewal waiting", value: input.renewalPending ? "Yes" : "No" },
+    ],
+    source: input.source,
+  })
+}
+
+export interface WatcherStaleInput {
+  tenantId: string
+  tenantName?: string | null
+  occurredAt: string
+  /** The watcher's last recorded run, or null when no heartbeat exists. */
+  lastRunAt: string | null
+  thresholdHours: number
+  lastError?: string | null
+  source: "desktop" | "azure-watcher"
+}
+
+/** The Azure watcher has not run within the threshold. One alert per stale period. */
+export function watcherStaleEvent(input: WatcherStaleInput): NotificationEnvelope {
+  const tenantLabel = input.tenantName ?? "your tenant"
+  const details = [
+    { label: "Last run", value: input.lastRunAt ?? "never recorded" },
+    { label: "Threshold (hours)", value: String(input.thresholdHours) },
+  ]
+  if (input.lastError) details.push({ label: "Last reported error", value: input.lastError })
+  return buildEnvelope({
+    type: "watcher.stale",
+    severity: "critical",
+    tenantId: input.tenantId,
+    tenantName: input.tenantName,
+    occurredAt: input.occurredAt,
+    naturalKey: `stale:${input.lastRunAt ?? "none"}`,
+    title: `Azure watcher is not running: ${tenantLabel}`,
+    summary: input.lastRunAt
+      ? `The Azure watcher last ran at ${input.lastRunAt}, more than ${input.thresholdHours} hours ago. Alerts while this computer is off are not being sent. Open the Automation account's job history to see why.`
+      : "No Azure watcher heartbeat was found in the backup storage account. Alerts while this computer is off are not being sent. Check that the watcher is set up and its schedule is enabled.",
+    details,
+    source: input.source,
+  })
+}
+
+/** A scheduled backup slot passed while TenuVault was not running; it is caught up now. */
+export function lateBackupEvent(input: { tenantId: string; tenantName?: string | null; occurredAt: string; slot: string; source: "desktop" | "azure-watcher" }): NotificationEnvelope {
+  const tenantLabel = input.tenantName ?? "your tenant"
+  return buildEnvelope({
+    type: "backup.missed",
+    severity: "warning",
+    tenantId: input.tenantId,
+    tenantName: input.tenantName,
+    occurredAt: input.occurredAt,
+    naturalKey: `missed:slot:${input.slot}`,
+    title: `Scheduled backup missed its time: ${tenantLabel}`,
+    summary: "TenuVault was not running when this backup was due, so it runs now. A separate alert follows if it fails. For backups while this computer is off, use cloud backups.",
+    details: [{ label: "Scheduled for", value: input.slot }],
     source: input.source,
   })
 }

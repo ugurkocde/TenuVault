@@ -1,9 +1,9 @@
 ---
 title: "Notifications"
-description: Get backup, restore, drift and Intune change alerts in Teams, by email or webhook, on this computer or from Azure while it is off.
+description: Get backup, restore, drift, Intune and Conditional Access change alerts in Teams, by email or webhook, on this computer or from Azure while it is off.
 ---
 
-Notifications tell you when a backup fails, when a restore only partly succeeds, when drift is found between backups, and when something changed in your Intune tenant. You set them up per tenant under **Settings**, in the **Notifications** section. Notifications are a Pro feature. Turning a channel off or removing it always works, on every plan.
+Notifications tell you when a backup fails or misses its time, when a restore only partly succeeds, when drift is found between backups, when something changed in Intune or Conditional Access, and when the Backup Reader certificate or the Azure watcher needs attention. You set them up per tenant under **Settings**, in the **Notifications** section. Notifications are a Pro feature. Turning a channel off or removing it always works, on every plan.
 
 Nothing is sent until you add a channel and a rule. A **channel** is a destination. A **rule** picks which events go to which channels.
 
@@ -15,9 +15,13 @@ Nothing is sent until you add a channel and a rule. A **channel** is a destinati
 | Backup completed with warnings | A backup saved policies but some items could not be read | Warning |
 | Backup succeeded | A backup finished cleanly (opt in per rule) | Info |
 | No recent backup | The Azure watcher finds no backup newer than your threshold | Critical |
+| Scheduled backup missed its time | TenuVault starts more than an hour after a scheduled backup was due (it was closed or the computer was off) and runs it now; once per slot | Warning |
 | Restore completed, partial or failed | A restore finishes | Info, warning or critical |
 | Drift detected | A drift scan finds changes between two backups | Warning when something was deleted, else info |
-| Intune changes | The change watcher sees new Intune audit events | Warning when something was deleted, else info |
+| Intune changes | Change watching sees new Intune audit events | Warning when something was deleted or unassigned, else info |
+| Conditional Access changes | Change watching sees new Conditional Access policy, named location or authentication strength changes | Warning when something was deleted, else info |
+| Backup Reader certificate expiring | A scheduled backup finds the Backup Reader certificate within 30 days of expiry; once at 30 days, at 7 days and when it expired | Warning at 30 days, then critical |
+| Watcher stale | An Azure watcher owns change alerts and its heartbeat is older than 3 hours, or missing; once per stale period | Critical |
 
 Health review findings keep their own endpoints on the Health review screen and are unchanged.
 
@@ -74,19 +78,29 @@ Delivery is at least once. An undelivered notification stays queued, retries wit
 
 Channels and rules can be edited with **Edit** on their row. A channel's URL and secret are never shown again: leave those fields empty to keep what is stored, or paste a new URL, for example after a Teams workflow was recreated. Rules keep sending to the edited channel, and deliveries still queued go to the new address. Removing a channel that rules use asks first and takes it out of those rules; a rule left without any channel is turned off, not deleted.
 
-## Intune change watching
+## Change watching
 
-Change watching reads the Intune audit log through Microsoft Graph and digests new events into one `intune.change` message per poll: what was created, updated, deleted, assigned or unassigned, the policy name when the audit event carries it, and who did it. Read-only audit events (views and searches) are not changes and never appear in a digest. A digest that contains a deletion or a removed assignment is sent with warning severity.
+Change watching reads audit logs through Microsoft Graph and digests new events into one message per service and poll. Pick the services in the **Change watching** card: **Intune** (`intune.change` events) and **Conditional Access** (`entra.change` events). Both share the interval and the options below; each keeps its own position in its log.
+
+For Intune, a digest lists what was created, updated, deleted, assigned or unassigned, the policy name when the audit event carries it, and who did it. Read-only audit events (views and searches) are not changes and never appear in a digest. A digest that contains a deletion or a removed assignment is sent with warning severity.
 
 * On the desktop, watching runs while TenuVault is running and you are signed in. Default polling is every 15 minutes. After the app was closed with watching on, it catches up from where it left off; after a long gap the digest says older changes may be missing. Turning watching off and on again starts from that moment, so changes made while it was off are not sent as news.
 * **Audit categories** limit the digest to the categories you pick, from the list Intune itself reports (for example Device configuration, Compliance, Application, Role). Picking none watches every category. A category saved by an earlier version that Intune does not report is shown in amber so you can remove it: it would match no change.
 * **Poll now** reads the audit log at once with the saved settings. It is unavailable while watching is off or while an Azure watcher owns change alerts for the tenant.
-* Change watching reads the Intune audit log only. Edits to Entra Conditional Access policies are not in it; drift scans still compare Conditional Access policies between backups.
+* Categories apply to Intune only.
 * Changes made through TenuVault itself are ignored by default, so your own restores do not alert you.
 * Repeated edits of the same policy by the same admin collapse into one line with a count, and a digest shows at most 20 lines plus a remainder count, so a bulk edit does not flood a channel.
 * The watcher reads a fixed list of audit fields (ids, times, category, operation type, actor, resource names). Audit request bodies and changed setting values are never read or sent.
 * The actor name is personal data and is off by default. Turn it on only for destinations your policies allow it to reach. It applies to digests built after you save.
-* When the [Azure watcher](#alerts-while-this-computer-is-off-the-azure-watcher) sends change alerts for a tenant, turn on **An Azure watcher owns change alerts for this tenant**. Desktop polling then stands down for that tenant, so each change is reported once instead of by both.
+* When the [Azure watcher](#alerts-while-this-computer-is-off-the-azure-watcher) sends change alerts for a tenant, turn on **An Azure watcher owns change alerts for this tenant**. Desktop polling then stands down for that tenant, so each change is reported once instead of by both. While it is on, TenuVault reads the watcher's `heartbeat.json` from the backup storage account every 30 minutes (with your sign-in) and sends a **Watcher stale** alert when the last run is more than 3 hours old or no heartbeat exists. The card shows when the watcher last ran, with **Check now**. A watcher whose runs fail still writes a heartbeat; those failures reach you through the Azure Monitor alert described below.
+
+### Conditional Access changes
+
+Conditional Access watching reads the Entra audit log (`auditLogs/directoryAudits`) for changes to Conditional Access policies and named locations, and to authentication strengths. Each line names the policy or location and what happened: created, updated or deleted. Authentication strength events in the Entra audit log do not name the strength, so those lines say "Authentication strength". A digest with a deletion is sent as a warning, and it ends with an **Open Conditional Access in Entra** button.
+
+* It needs the delegated `AuditLog.Read.All` permission on the app registration: `-IncludeAuditLog` on a new one, or add it in Entra and grant admin consent. The signed-in admin also needs a role that can read audit logs, such as Security Reader, Global Reader or Reports Reader. Without them, the card shows the permission error and Intune watching keeps working. See [Permissions](/security/permissions/).
+* Microsoft Graph includes the full policy before and after each change, and the admin's IP address, in every audit event. TenuVault never reads or sends them: only ids, times, the activity, target names and, when you opt in, the actor.
+* Failed attempts are not changes and are left out.
 
 ## Alerts while this computer is off: the Azure watcher
 
@@ -95,6 +109,7 @@ Desktop notifications stop when the computer is off, asleep or signed out. The A
 What it can and cannot see, plainly:
 
 * It reads Intune audit events with the application permission `DeviceManagementApps.Read.All`.
+* With `-IncludeConditionalAccess` it also reads Conditional Access changes from the Entra audit log with the application permission `AuditLog.Read.All` (granted by `-GrantGraphRoles`), keeping its own position in that log. Policy content and IP addresses in those events are never read.
 * It reads backup folder names to detect a missed backup. Backup content and backup status details are encrypted with your recovery key, which never leaves your computer, so the watcher reports missed backups by age, while success and failure detail comes from the desktop app.
 * It writes only to its own state container (`tenuvault-notification-state`) and claims a lease on its state before sending, so overlapping runs cannot send twice.
 * Email from the watcher sends app-only from a mailbox you choose. Setup asks you to restrict that permission in Exchange to the one mailbox before the email channel is used.
@@ -145,6 +160,8 @@ Plan for Exchange propagation: a brand-new access policy and scope group can tak
 | The same alert arrived twice | A delivery succeeded but its confirmation was lost and the queue retried. The `eventId` is the same; this is expected at-least-once behaviour. |
 | Webhook URL refused | Only public https addresses are allowed, without credentials in the URL. |
 | Watcher mail verification fails with `ErrorAccessDenied ... [RAOP]` | The Exchange application access policy or its scope group has not propagated yet, or the sender mailbox is not in the scope group. Wait and re-run verification; see the watcher email section above. |
+| Conditional Access watching fails with a 403 | The app registration lacks the delegated `AuditLog.Read.All` permission, or your account has no role that can read audit logs. Add the permission in Entra, grant admin consent, use a role such as Security Reader and sign in again. |
+| A **Watcher stale** alert arrived | The Azure watcher has not written a heartbeat for 3 hours: its schedule stopped, the Automation account was removed, or it lost access to storage. Open the Automation account's job history. |
 | Watcher output says mail delivery is skipped | Mail was never verified for this sender, the sender changed, or the verification is older than 90 days. Run the runbook once with `VerifyMailOnly`. |
 | Automation account creation fails with `Conflict` | Regional Automation account quota or name taken. Retry setup with another `-Location` or `-AutomationAccountName`. |
 | Azure Monitor reports failed watcher jobs | Open the newest job in the Automation account. The exception names the step; `heartbeat.json` in the state container shows the last error and watermark. |

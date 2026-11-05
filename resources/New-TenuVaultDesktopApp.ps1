@@ -43,6 +43,12 @@
     recipients. Without it, email channels fail with a Graph permission error while
     webhook and Teams channels keep working. Off by default.
 
+.PARAMETER IncludeAuditLog
+    When set, also requests the delegated AuditLog.Read.All permission, so notification
+    change watching can read Conditional Access, named location and authentication strength
+    changes from the Entra audit log. The signed-in admin also needs a role that can read
+    audit logs, such as Security Reader, Global Reader or Reports Reader. Off by default.
+
 .PARAMETER IncludeConditionalAccessRestore
     When set, also requests the delegated Policy.ReadWrite.ConditionalAccess permission, so
     TenuVault can restore Entra Conditional Access policies, named locations and authentication
@@ -64,6 +70,7 @@ param(
     [string]$AllowedGroupId,
     [switch]$IncludeGroupRead,
     [switch]$IncludeNotifications,
+    [switch]$IncludeAuditLog,
     [switch]$IncludeConditionalAccessRestore
 )
 
@@ -154,6 +161,11 @@ if ($IncludeGroupRead) {
 if ($IncludeConditionalAccessRestore) {
     # Opt-in only: restores Conditional Access. Microsoft Graph also needs Policy.Read.All for these writes.
     $resources[0].Scopes += "Policy.ReadWrite.ConditionalAccess"
+}
+
+if ($IncludeAuditLog) {
+    # Opt-in only: Conditional Access change watching reads the Entra audit log.
+    $resources[0].Scopes += "AuditLog.Read.All"
 }
 
 if ($IncludeNotifications) {

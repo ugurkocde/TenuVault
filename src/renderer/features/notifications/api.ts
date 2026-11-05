@@ -41,7 +41,16 @@ export interface NotificationRule {
   mode: "immediate" | "digest"
 }
 
+export interface ConditionalAccessWatchView {
+  enabled: boolean
+  watermark: string | null
+  lastPollAt: string | null
+  lastError: string | null
+}
+
 export interface AuditWatch {
+  conditionalAccess: ConditionalAccessWatchView
+  watcherCheck?: { checkedAt: string; lastRunAt: string | null; stale: boolean; error: string | null }
   enabled: boolean
   intervalMinutes: number
   categories: string[]
@@ -112,6 +121,7 @@ export interface RuleBody {
 }
 
 export interface AuditWatchBody {
+  conditionalAccessEnabled?: boolean
   enabled?: boolean
   intervalMinutes?: number
   categories?: string[]
@@ -137,6 +147,7 @@ export const notificationsApi = {
   updateAuditWatch: (tenant: Tenant, body: AuditWatchBody) => featureCall<{ auditWatch: AuditWatch }>(PATH, tenant, "update-audit-watch", { ...body }),
   /** Turning change watching off stays free on every plan. */
   revokeAuditWatch: (tenant: Tenant) => featureCall<{ auditWatch: AuditWatch }>(PATH, tenant, "revoke-audit-watch"),
+  runWatcherCheck: (tenant: Tenant) => featureCall<{ auditWatch: AuditWatch; stale: boolean; enqueued: number; error: string | null }>(PATH, tenant, "run-watcher-check"),
   runAuditWatch: (tenant: Tenant) => featureCall<{ auditWatch: AuditWatch | null; enqueued: number; changes: number; error: string | null; skipped: "off" | "external" | "busy" | null }>(PATH, tenant, "run-audit-watch"),
   listAuditCategories: (tenant: Tenant) => featureCall<{ categories: string[]; source: "graph" | "known" }>(PATH, tenant, "list-audit-categories"),
   listGroups: (tenant: Tenant, search: string) => featureCall<{ groups: GroupResult[] }>(PATH, tenant, "list-groups", { search }).then((result) => result.groups),
@@ -175,6 +186,8 @@ export const EVENT_TYPE_LABELS: Record<NotificationEventType, string> = {
   "drift.detected": "Drift detected",
   "health.finding": "Health review finding",
   "intune.change": "Intune change (audit watch)",
+  "entra.change": "Conditional Access change (audit watch)",
+  "credential.expiring": "Backup Reader certificate expiring",
   "watcher.stale": "Watcher stale",
   test: "Test notification",
 }

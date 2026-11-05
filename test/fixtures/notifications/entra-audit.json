@@ -1,0 +1,84 @@
+{
+  "tenantId": "11111111-2222-3333-4444-555555555555",
+  "tenantName": "Contoso",
+  "includeActor": true,
+  "events": [
+    {
+      "id": "IPCGraph_aaaaaaaa-0000-0000-0000-000000000001_X_1",
+      "activityDateTime": "2026-11-03T22:14:27.192039Z",
+      "activityDisplayName": "Add named location",
+      "category": "Policy",
+      "operationType": "Add",
+      "result": "success",
+      "loggedByService": "Conditional Access",
+      "initiatedBy": { "user": { "id": "u1", "displayName": "Megan Bowen", "userPrincipalName": "megan@contoso.test", "ipAddress": "198.51.100.23" }, "app": { "appId": "22222222-0000-0000-0000-000000000002", "displayName": "Microsoft Entra admin center" } },
+      "targetResources": [{ "id": "loc-1", "displayName": "Head office", "type": "Policy", "modifiedProperties": [{ "displayName": "NamedLocation", "oldValue": null, "newValue": "{\"ipRanges\":[{\"cidrAddress\":\"203.0.113.0/24\"}],\"SECRET_MARKER\":true}" }] }]
+    },
+    {
+      "id": "Authentication Methods_bbbbbbbb-0000-0000-0000-000000000002_Y_2",
+      "activityDateTime": "2026-11-03T22:14:38.000000Z",
+      "activityDisplayName": "Authentication Strength Policy Create",
+      "category": "PolicyManagement",
+      "operationType": "Create",
+      "result": "clientError",
+      "loggedByService": "Authentication Methods",
+      "initiatedBy": { "user": { "userPrincipalName": "megan@contoso.test", "ipAddress": "198.51.100.23" }, "app": null },
+      "targetResources": [{ "id": null, "displayName": "Authentication Strength Policy", "type": "Policy", "modifiedProperties": [] }]
+    },
+    {
+      "id": "Authentication Methods_bbbbbbbb-0000-0000-0000-000000000003_Y_3",
+      "activityDateTime": "2026-11-03T22:14:40.000000Z",
+      "activityDisplayName": "Authentication Strength Policy Update",
+      "category": "PolicyManagement",
+      "operationType": "Update",
+      "result": "success",
+      "loggedByService": "Authentication Methods",
+      "initiatedBy": { "user": { "userPrincipalName": "megan@contoso.test", "ipAddress": "198.51.100.23" }, "app": null },
+      "targetResources": [{ "id": null, "displayName": null, "type": "Policy", "modifiedProperties": [{ "displayName": "DisplayName", "oldValue": "\"Phishing resistant\"", "newValue": "\"SECRET_MARKER strength\"" }] }, { "id": "str-1", "displayName": "Authentication Strength Policy", "type": "Policy", "modifiedProperties": [] }]
+    },
+    {
+      "id": "Authentication Methods_bbbbbbbb-0000-0000-0000-000000000004_Y_4",
+      "activityDateTime": "2026-11-03T22:14:45.000000Z",
+      "activityDisplayName": "Authentication Strength Combination Configuration Create",
+      "category": "PolicyManagement",
+      "operationType": "Create",
+      "result": "success",
+      "loggedByService": "Authentication Methods",
+      "initiatedBy": { "user": { "userPrincipalName": "megan@contoso.test" }, "app": null },
+      "targetResources": [{ "id": "cfg-1", "displayName": "Authentication Strength Policy", "type": "Policy", "modifiedProperties": [] }]
+    },
+    {
+      "id": "Core Directory_cccccccc-0000-0000-0000-000000000005_Z_5",
+      "activityDateTime": "2026-11-03T22:15:00.000000Z",
+      "activityDisplayName": "Update policy",
+      "category": "Policy",
+      "operationType": "Update",
+      "result": "success",
+      "loggedByService": "Core Directory",
+      "initiatedBy": { "user": { "userPrincipalName": "megan@contoso.test" }, "app": null },
+      "targetResources": [{ "id": "pol-x", "displayName": "Default policy", "type": "Policy", "modifiedProperties": [] }]
+    },
+    {
+      "id": "IPCGraph_dddddddd-0000-0000-0000-000000000006_X_6",
+      "activityDateTime": "2026-11-03T22:15:27.762049Z",
+      "activityDisplayName": "Add conditional access policy",
+      "category": "Policy",
+      "operationType": "Add",
+      "result": "success",
+      "loggedByService": "Conditional Access",
+      "initiatedBy": { "user": { "userPrincipalName": "megan@contoso.test", "ipAddress": "198.51.100.23" }, "app": { "appId": "22222222-0000-0000-0000-000000000002", "displayName": "Microsoft Entra admin center" } },
+      "targetResources": [{ "id": "ca-1", "displayName": "Require MFA for admins", "type": "Policy", "modifiedProperties": [{ "displayName": "ConditionalAccessPolicy", "oldValue": null, "newValue": "{\"state\":\"enabled\",\"SECRET_MARKER\":true}" }] }]
+    },
+    {
+      "id": "IPCGraph_eeeeeeee-0000-0000-0000-000000000007_X_7",
+      "activityDateTime": "2026-11-04T08:10:00.000000Z",
+      "activityDisplayName": "Delete conditional access policy",
+      "category": "Policy",
+      "operationType": "Delete",
+      "result": "success",
+      "loggedByService": "Conditional Access",
+      "initiatedBy": { "user": null, "app": { "appId": "33333333-0000-0000-0000-000000000003", "displayName": "Contoso Automation" } },
+      "targetResources": [{ "id": "ca-2", "displayName": "Block legacy authentication", "type": "Policy", "modifiedProperties": [{ "displayName": "DeletionType", "oldValue": null, "newValue": "\"SoftDelete\"" }] }]
+    }
+  ]
+}

@@ -21,7 +21,9 @@ import {
 import {
   auditWatchOf,
   channelsOf,
+  checkWatcher,
   defaultAuditWatch,
+  defaultConditionalAccessWatch,
   deliverToChannel,
   emit,
   outboxOf,
@@ -270,6 +272,15 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       const externalWatcher = bool(body, "externalWatcher")
       if (externalWatcher !== undefined) change.externalWatcher = externalWatcher
       const current = auditWatchOf(deps, tenantId)
+      // Conditional Access keeps its own position in the Entra audit log, and like Intune
+      // starts from now when it is turned on (keeping its dedupe ids for the overlap).
+      const conditionalAccess = bool(body, "conditionalAccessEnabled")
+      if (conditionalAccess !== undefined) {
+        const previous = current?.conditionalAccess ?? defaultConditionalAccessWatch()
+        change.conditionalAccess = conditionalAccess && !previous.enabled
+          ? { ...previous, enabled: true, watermark: deps.now().toISOString(), continuation: null, lastPollAt: null }
+          : { ...previous, enabled: conditionalAccess }
+      }
       // Turning watching on starts from now. Catching up from an old watermark would replay
       // every change made while it was off, which is history, not news. A closed app with
       // watching left on still catches up in the poller, because enabled never flipped.
@@ -280,14 +291,24 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
         change.continuation = null
         change.lastPollAt = null
       }
-      const saved = saveAuditWatch(deps, tenantId, change, { actor, reason: enabled === false ? "Intune change watching turned off" : enabled === true ? "Intune change watching turned on" : "Intune change watching changed" })
+      const reasons = [
+        enabled === true && !current?.enabled ? "Intune change watching turned on" : enabled === false && current?.enabled ? "Intune change watching turned off" : null,
+        conditionalAccess === true && !current?.conditionalAccess?.enabled ? "Conditional Access change watching turned on" : conditionalAccess === false && current?.conditionalAccess?.enabled ? "Conditional Access change watching turned off" : null,
+      ].filter(Boolean)
+      const saved = saveAuditWatch(deps, tenantId, change, { actor, reason: reasons.length ? reasons.join(", ") : "Change watching changed" })
       return { auditWatch: publicAuditWatch(saved) }
     },
 
     // Turning change watching off stays free on every plan.
     "revoke-audit-watch": ({ tenantId, deps, actor }) => {
-      const saved = saveAuditWatch(deps, tenantId, { enabled: false }, { actor, reason: "Intune change watching turned off" })
+      const current = auditWatchOf(deps, tenantId)
+      const saved = saveAuditWatch(deps, tenantId, { enabled: false, conditionalAccess: { ...(current?.conditionalAccess ?? defaultConditionalAccessWatch()), enabled: false } }, { actor, reason: "Change watching turned off" })
       return { auditWatch: publicAuditWatch(saved) }
+    },
+
+    "run-watcher-check": async ({ tenantId, deps }) => {
+      const result = await checkWatcher(deps, tenantId)
+      return { auditWatch: publicAuditWatch(auditWatchOf(deps, tenantId)), ...result }
     },
 
     "run-audit-watch": async ({ tenantId, deps }) => {
@@ -410,8 +431,9 @@ export function publicRule(rule: Stored<RuleRecord>) {
 
 export function publicAuditWatch(watch: Stored<AuditWatchRecord> | null) {
   const value = watch ?? { ...defaultAuditWatch(), id: null, createdAt: null, updatedAt: null, history: [] }
-  const { history, recent: _recent, ...rest } = value as Stored<AuditWatchRecord>
-  return { ...rest, history: (history ?? []).map(({ at, actor, reason }) => ({ at, actor, reason })) }
+  const { history, recent: _recent, conditionalAccess, ...rest } = value as Stored<AuditWatchRecord>
+  const { recent: _caRecent, continuation: _caContinuation, ...ca } = conditionalAccess ?? defaultConditionalAccessWatch()
+  return { ...rest, conditionalAccess: ca, history: (history ?? []).map(({ at, actor, reason }) => ({ at, actor, reason })) }
 }
 
 // The emit export is part of the module surface for producers in the main process.

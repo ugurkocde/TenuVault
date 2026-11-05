@@ -7,6 +7,9 @@ import { canonicalJson } from "../src/shared/notifications/envelope"
 import { teamsWorkflowsPayload } from "../src/shared/notifications/render"
 import fixture from "./fixtures/notifications/audit-digest.json"
 import liveFixture from "./fixtures/notifications/audit-live.json"
+import entraFixture from "./fixtures/notifications/entra-audit.json"
+import { entraChangeDigest } from "../src/shared/notifications/audit"
+import { mapEntraAuditEvent, type EntraAuditRaw } from "../src/shared/notifications/entra"
 
 const runbook = readFileSync(new URL("../resources/runbooks/Invoke-TenuVaultNotificationCheck.ps1", import.meta.url), "utf8")
 const setup = readFileSync(new URL("../resources/New-TenuVaultNotificationWatcher.ps1", import.meta.url), "utf8")
@@ -77,6 +80,11 @@ describe("Azure notification watcher scripts", () => {
     expect(setup).not.toMatch(/metricAlert[^\n]*api-version=2023-01-01/)
     expect(setup).toContain("api-version=2018-03-01")
     expect(setup).toContain("Mail.Send")
+    // Conditional Access watching is opt-in on both sides.
+    expect(setup).toContain("[switch]$IncludeConditionalAccess")
+    expect(setup).toContain("AuditLog.Read.All")
+    expect(runbook).toContain("TenuVaultWatchConditionalAccess")
+    expect(runbook).toContain("entraWatermark")
   })
 
   it("desktop setup adds notification scopes only with the opt-in switch", () => {
@@ -136,6 +144,39 @@ describe("Azure notification watcher scripts", () => {
       const output = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-Severity", severity], { encoding: "utf8" }).trim()
       expect(output).toBe(canonicalJson(teamsWorkflowsPayload({ ...digest, severity })))
     }
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("PowerShell builds the identical Conditional Access digest and card as TypeScript", () => {
+    const changes = entraFixture.events.map((event) => mapEntraAuditEvent(event as EntraAuditRaw)).filter((change) => change !== null)
+    const digest = entraChangeDigest({ tenantId: entraFixture.tenantId, tenantName: entraFixture.tenantName, changes, includeActor: entraFixture.includeActor, source: "azure-watcher" })
+    const script = fileURLToPath(new URL("./fixtures/notifications/render-entra.ps1", import.meta.url))
+    const [digestJson, cardJson] = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/)
+    expect(digestJson).toBe(canonicalJson(digest))
+    expect(cardJson).toBe(canonicalJson(teamsWorkflowsPayload(digest)))
+    expect(digestJson).not.toContain("SECRET_MARKER")
+    expect(digestJson).not.toContain("198.51.100.23")
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("watcher ingestion pages, dedupes, restarts an expired continuation and keeps state on failure", () => {
+    const script = fileURLToPath(new URL("./fixtures/notifications/ingest.ps1", import.meta.url))
+    const [paged, restarted, failed] = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/).map((line) => JSON.parse(line))
+    // The known id, the failed strength create and the Core Directory event are left out.
+    expect(paged.ids).toEqual([
+      "Authentication Methods_bbbbbbbb-0000-0000-0000-000000000003_Y_3",
+      "Authentication Methods_bbbbbbbb-0000-0000-0000-000000000004_Y_4",
+      "IPCGraph_dddddddd-0000-0000-0000-000000000006_X_6",
+      "IPCGraph_eeeeeeee-0000-0000-0000-000000000007_X_7",
+    ])
+    expect(paged.newest).toBe("2026-11-04T08:10:00.000Z")
+    expect(paged.continuation).toBeNull()
+    expect(paged.calls).toEqual(["https://graph.example/fresh", "https://graph.example/next?page=2"])
+    expect(restarted.calls[0]).toBe("https://graph.example/expired")
+    expect(restarted.calls[1]).toBe("https://graph.example/fresh")
+    expect(restarted.error).toBeNull()
+    expect(failed.ids).toEqual([])
+    expect(failed.newest).toBe("2026-11-03T22:00:00.000Z")
+    expect(failed.continuation).toBe("https://graph.example/saved")
+    expect(failed.error).toContain("Conditional Access audit ingestion failed")
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("PowerShell matches TypeScript on live-shaped read and assignment events", () => {

@@ -166,15 +166,35 @@ function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1)
 }
 
-/** One digest envelope for a poll worth of audit changes. The natural key is the sorted audit ids. */
-export function intuneChangeDigest(input: {
+/** The services change watching reads, with the event type and wording of their digests. */
+export type ChangeService = "intune" | "conditionalAccess"
+
+const SERVICE_DIGEST: Record<ChangeService, { type: "intune.change" | "entra.change"; title: string; label: string }> = {
+  intune: { type: "intune.change", title: "Intune changes", label: "Intune" },
+  conditionalAccess: { type: "entra.change", title: "Conditional Access changes", label: "Conditional Access" },
+}
+
+export interface ChangeDigestInput {
   tenantId: string
   tenantName?: string | null
   changes: AuditChange[]
   includeActor: boolean
   source: "desktop" | "azure-watcher"
   gapNotice?: string | null
-}): NotificationEnvelope {
+}
+
+/** One digest envelope for a poll worth of audit changes. The natural key is the sorted audit ids. */
+export function intuneChangeDigest(input: ChangeDigestInput): NotificationEnvelope {
+  return changeDigest("intune", input)
+}
+
+/** The Conditional Access digest: same shape as Intune's, as event type entra.change. */
+export function entraChangeDigest(input: ChangeDigestInput): NotificationEnvelope {
+  return changeDigest("conditionalAccess", input)
+}
+
+export function changeDigest(service: ChangeService, input: ChangeDigestInput): NotificationEnvelope {
+  const wording = SERVICE_DIGEST[service]
   const { items, moreCount, collapsed } = collapseAuditChanges(input.changes, { includeActor: input.includeActor })
   const newest = input.changes.reduce((max, change) => (change.at > max ? change.at : max), input.changes[0]?.at ?? new Date(0).toISOString())
   const tenantLabel = input.tenantName ?? "your tenant"
@@ -182,14 +202,14 @@ export function intuneChangeDigest(input: {
   for (const change of input.changes) byType.set(change.changeType, (byType.get(change.changeType) ?? 0) + 1)
   const counts = [...byType.entries()].map(([type, count]) => `${count} ${type}`).join(", ")
   return buildEnvelope({
-    type: "intune.change",
+    type: wording.type,
     severity: input.changes.some((change) => change.changeType === "deleted" || change.changeType === "unassigned") ? "warning" : "info",
     tenantId: input.tenantId,
     tenantName: input.tenantName,
     occurredAt: newest,
     naturalKey: input.changes.map((change) => change.auditId).sort().join(","),
-    title: `Intune changes: ${tenantLabel}`,
-    summary: `${input.changes.length} ${input.changes.length === 1 ? "change" : "changes"} in Intune (${counts})${collapsed < input.changes.length ? `, shown as ${collapsed} lines` : ""}.${input.gapNotice ? ` ${input.gapNotice}` : ""}`,
+    title: `${wording.title}: ${tenantLabel}`,
+    summary: `${input.changes.length} ${input.changes.length === 1 ? "change" : "changes"} in ${wording.label} (${counts})${collapsed < input.changes.length ? `, shown as ${collapsed} lines` : ""}.${input.gapNotice ? ` ${input.gapNotice}` : ""}`,
     details: [{ label: "Changes", value: String(input.changes.length) }],
     items,
     moreCount,

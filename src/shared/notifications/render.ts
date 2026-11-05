@@ -122,9 +122,13 @@ const VERB_STYLE: Record<string, { color: string; background: string }> = {
   Deleted: { color: "#b42318", background: "#fef3f2" },
 }
 
+/** The Conditional Access policy list in the Entra admin center. */
+export const ENTRA_CONDITIONAL_ACCESS = "https://entra.microsoft.com/#view/Microsoft_AAD_ConditionalAccess/ConditionalAccessBlade/~/Policies"
+
 /** Fixed Microsoft destinations per event type. Never built from tenant data. */
 function actionLink(envelope: NotificationEnvelope): { href: string; label: string } | null {
   if (envelope.type === "intune.change") return { href: "https://intune.microsoft.com", label: "Open the Intune admin center" }
+  if (envelope.type === "entra.change") return { href: ENTRA_CONDITIONAL_ACCESS, label: "Open Conditional Access in Entra" }
   return null
 }
 

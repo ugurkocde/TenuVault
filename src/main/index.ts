@@ -71,7 +71,10 @@ import { AppTray } from "./tray"
 import { installedBySetup, isNightly, Updates, updatesDisabledByPolicy } from "./updates"
 import { WhatsNew } from "./whats-new"
 import { featureRoutes, startFeatures } from "./features"
-import { emitBackupOutcome, emitDriftOutcome, emitRestoreOutcome } from "./features/notifications/producers"
+import { emitBackupOutcome, emitCredentialExpiring, emitDriftOutcome, emitLateBackup, emitRestoreOutcome } from "./features/notifications/producers"
+
+/** A scheduled slot that starts this long after its time was missed, not merely delayed by a queue. */
+const LATE_SLOT_MS = 60 * 60_000
 import type { FeatureDeps } from "./features/deps"
 import { backupAuthorization, featureAccess, withRecoveryBackups } from "./features/recovery"
 import { TenantRecords } from "./features/records"
@@ -372,6 +375,23 @@ async function bootstrap(): Promise<void> {
     notify: (title, body) => {
       if (Notification.isSupported()) new Notification({ title, body }).show()
     },
+    // The watcher writes heartbeat.json next to its state in the backup storage account. Only
+    // runAt and lastError are kept; the rest of the file is not read.
+    watcherHeartbeat: async (tenantId) => {
+      const profile = tenantProfile(tenantId)
+      if (!profile || isLocalAccount(profile.storageAccountName)) return { status: "missing" }
+      const token = (await tokenFor(tenantId, profile.clientId, "https://storage.azure.com/.default")).accessToken
+      const response = await bridgedFetch(`https://${profile.storageAccountName}.blob.core.windows.net/tenuvault-notification-state/heartbeat.json`, {
+        headers: { authorization: `Bearer ${token}`, "x-ms-version": "2021-12-02" },
+        signal: AbortSignal.timeout(15_000),
+      })
+      if (response.status === 404) return { status: "missing" }
+      if (!response.ok) return { status: "error", message: `The storage account answered HTTP ${response.status} for the watcher heartbeat.` }
+      const body = (await response.json().catch(() => null)) as Record<string, unknown> | null
+      const runAt = typeof body?.runAt === "string" && !Number.isNaN(Date.parse(body.runAt)) ? body.runAt : null
+      const lastError = typeof body?.lastError === "string" ? body.lastError.slice(0, 300) : null
+      return { status: "ok", runAt, lastError }
+    },
     now: () => new Date(),
   }
   // Every change to a tenant waits until the admin accepted the disclaimer for that tenant.
@@ -548,18 +568,23 @@ async function bootstrap(): Promise<void> {
     return result.localCreated
   }
 
-  // An expiring Backup Reader certificate is easy to miss when nobody opens TenuVault, so scheduled
-  // runs remind once a week from 30 days before expiry. After it, backups use the admin's sign-in again.
-  const remindBackupReaderRenewal = (tenantId: string, name: string) => {
+  // An expiring Backup Reader certificate is easy to miss when nobody opens TenuVault, so every
+  // scheduled run checks it. Notification channels get one alert per band (30 days, 7 days,
+  // expired); without a local channel the system notification still reminds once a week.
+  // After expiry, backups use the admin's sign-in again, so the check does not need a reader run.
+  const remindBackupReaderRenewal = async (tenantId: string, name: string) => {
     const reader = backupReader.status(tenantId)
     if (reader?.state !== "verified") return
+    const result = await emitCredentialExpiring(featureDeps, tenantId, { notAfter: reader.notAfter, renewalPending: reader.renewalPending, checkedAt: new Date().toISOString() })
+      .catch(() => ({ created: 0, localCreated: false }))
+    if (result.localCreated) return
     const daysLeft = Math.ceil((Date.parse(reader.notAfter) - Date.now()) / 86_400_000)
     const key = `backupReader.reminded.${tenantId.toLowerCase()}`
     if (daysLeft > 30 || Date.now() - Number(appStore.get(key) ?? 0) < 7 * 86_400_000) return
     appStore.set(key, String(Date.now()))
     if (Notification.isSupported()) {
       new Notification({
-        title: `Backup Reader certificate of ${name} expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`,
+        title: daysLeft <= 0 ? `Backup Reader certificate of ${name} has expired` : `Backup Reader certificate of ${name} expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`,
         body: reader.renewalPending
           ? "A renewal certificate is waiting: upload it with the setup script, then verify it in Settings > Background runner."
           : "Renew it in Settings > Background runner so scheduled backups keep running without your sign-in.",
@@ -592,6 +617,11 @@ async function bootstrap(): Promise<void> {
     if (refused) {
       failedAttempts.record({ tenantId, trigger, slot, message: refused })
       return { status: "Failed" as const, message: refused }
+    }
+    // A slot caught up well after its time (TenuVault was not running) says so first. Only the
+    // first attempt of the slot reports it; retries of the same slot do not.
+    if (trigger === "scheduled" && slot && !afterFailure && Date.now() - Date.parse(slot) > LATE_SLOT_MS) {
+      void emitLateBackup(featureDeps, tenantId, slot).catch(() => undefined)
     }
     let origin: { trigger: "scheduled" | "tray"; notified: boolean; audited: boolean; notifyKey?: string } = { trigger, notified: false, audited: false }
     // A job that was already running was started by someone else: a manual backup notifies with its
@@ -644,10 +674,9 @@ async function bootstrap(): Promise<void> {
       .then((logged) => { if (!logged.ok) console.warn(`[audit] Scheduled backup audit write failed (${logged.status})`) })
       .catch((error: unknown) => console.warn("[audit] Scheduled backup audit write failed:", error instanceof Error ? error.message : String(error)))
     }
-    if (job.authMode === "app-only") {
-      backupReader.recordRun(tenantId, result.status)
-      remindBackupReaderRenewal(tenantId, profile.name)
-    }
+    if (job.authMode === "app-only") backupReader.recordRun(tenantId, result.status)
+    // Also after runs with the admin's sign-in: an expired reader no longer runs, but still needs renewing.
+    void remindBackupReaderRenewal(tenantId, profile.name).catch(() => undefined)
     if (!ok && !cancelled && !origin.notified) {
       origin.notified = true
       // The channel delivery above already toasted this failure when a local intent was queued.

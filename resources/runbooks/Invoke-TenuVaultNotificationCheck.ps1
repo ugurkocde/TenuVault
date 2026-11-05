@@ -378,6 +378,73 @@ function ConvertFrom-TenuVaultAuditEvent {
     }
 }
 
+# Mirrors mapEntraAuditEvent in entra.ts. Graph returns target resources with their
+# modified property values (the full policy JSON) and the actor's IP address even
+# under $select; neither is ever read here.
+function ConvertFrom-TenuVaultEntraAuditEvent {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, Position = 0, ValueFromPipeline)]
+        [Alias("Event", "InputObject")]
+        [AllowNull()][object]$Raw
+    )
+    process {
+        if ($null -eq $Raw) { return }
+        $id = Get-TvText (Get-TvProp $Raw "id")
+        $at = ConvertTo-TvIso (Get-TvProp $Raw "activityDateTime")
+        if (-not $id -or -not $at) { return }
+        $resultText = Get-TvText (Get-TvProp $Raw "result")
+        if (-not $resultText -or $resultText.ToLowerInvariant() -ne "success") { return }
+        $activity = Get-TvText (Get-TvProp $Raw "activityDisplayName")
+        if (-not $activity) { $activity = "Change" }
+        $activityLower = $activity.ToLowerInvariant()
+        $service = Get-TvText (Get-TvProp $Raw "loggedByService")
+        if ($service -cne "Conditional Access" -and -not $activityLower.StartsWith("authentication strength")) { return }
+
+        $resourceType = "Conditional Access"
+        if ($activityLower.Contains("named location")) { $resourceType = "Named location" }
+        elseif ($activityLower.StartsWith("authentication strength")) { $resourceType = "Authentication strength" }
+        elseif ($activityLower.Contains("conditional access policy")) { $resourceType = "Conditional Access policy" }
+
+        $operationText = Get-TvText (Get-TvProp $Raw "operationType")
+        $operationLower = if ($operationText) { $operationText.ToLowerInvariant() } else { "" }
+        $changeType = "changed"
+        if ($activityLower.StartsWith("authentication strength combination configuration")) { $changeType = "updated" }
+        elseif ($operationLower -eq "add" -or $operationLower -eq "create") { $changeType = "created" }
+        elseif ($operationLower -eq "delete") { $changeType = "deleted" }
+        elseif ($operationLower -eq "update") { $changeType = "updated" }
+        elseif ($activityLower.StartsWith("add ") -or $activityLower.EndsWith(" create")) { $changeType = "created" }
+        elseif ($activityLower.StartsWith("delete ") -or $activityLower.EndsWith(" delete")) { $changeType = "deleted" }
+        elseif ($activityLower.StartsWith("update ") -or $activityLower.EndsWith(" update")) { $changeType = "updated" }
+
+        # Authentication strength events only carry a generic name; the strength's own
+        # name sits in the modified property values, which are never read.
+        $resourceName = $null
+        if ($resourceType -ne "Authentication strength") {
+            foreach ($target in @(Get-TvProp $Raw "targetResources")) {
+                if ($null -eq $target) { continue }
+                $name = Get-TvText (Get-TvProp $target "displayName")
+                if ($name) { $resourceName = if ($name.Length -gt 200) { $name.Substring(0, 200) } else { $name }; break }
+            }
+        }
+        $initiatedBy = Get-TvProp $Raw "initiatedBy"
+        $user = Get-TvProp $initiatedBy "user"
+        $app = Get-TvProp $initiatedBy "app"
+        return [pscustomobject][ordered]@{
+            auditId      = $id
+            at           = $at
+            category     = "ConditionalAccess"
+            changeType   = $changeType
+            resourceName = $resourceName
+            resourceType = $resourceType
+            actorUpn     = Get-TvText (Get-TvProp $user "userPrincipalName")
+            actorAppId   = Get-TvText (Get-TvProp $app "appId")
+            actorAppName = Get-TvText (Get-TvProp $app "displayName")
+            activity     = $activity
+        }
+    }
+}
+
 function New-TenuVaultAuditDigest {
     [CmdletBinding()]
     param(
@@ -385,15 +452,20 @@ function New-TenuVaultAuditDigest {
         [object]$TenantName,
         [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Changes,
         [bool]$IncludeActor = $false,
-        [object]$GapNotice
+        [object]$GapNotice,
+        [ValidateSet("intune", "conditionalAccess")][string]$Service = "intune"
     )
+    # Same wording as SERVICE_DIGEST in audit.ts.
+    $digestType = if ($Service -eq "conditionalAccess") { "entra.change" } else { "intune.change" }
+    $digestTitle = if ($Service -eq "conditionalAccess") { "Conditional Access changes" } else { "Intune changes" }
+    $digestLabel = if ($Service -eq "conditionalAccess") { "Conditional Access" } else { "Intune" }
     # Accept mapped changes, and raw Graph audit events for convenience.
     $mapped = [System.Collections.Generic.List[object]]::new()
     foreach ($entry in $Changes) {
         if ($null -eq $entry) { continue }
         if (Get-TvProp $entry "auditId") { $mapped.Add($entry) }
         else {
-            $change = ConvertFrom-TenuVaultAuditEvent $entry
+            $change = if ($Service -eq "conditionalAccess") { ConvertFrom-TenuVaultEntraAuditEvent $entry } else { ConvertFrom-TenuVaultAuditEvent $entry }
             if ($change) { $mapped.Add($change) }
         }
     }
@@ -461,16 +533,16 @@ function New-TenuVaultAuditDigest {
 
     $tenantLabel = if ($TenantName) { [string]$TenantName } else { "your tenant" }
     $changeCount = $mapped.Count
-    $summary = "$changeCount $(if ($changeCount -eq 1) { 'change' } else { 'changes' }) in Intune ($countsText)"
+    $summary = "$changeCount $(if ($changeCount -eq 1) { 'change' } else { 'changes' }) in $digestLabel ($countsText)"
     if ($collapsed -lt $changeCount) { $summary += ", shown as $collapsed lines" }
     $summary += "."
     if ($GapNotice) { $summary += " $GapNotice" }
 
-    return New-TvEnvelope -Type "intune.change" `
+    return New-TvEnvelope -Type $digestType `
         -Severity $(if (@($mapped | Where-Object { (Get-TvProp $_ "changeType") -eq "deleted" -or (Get-TvProp $_ "changeType") -eq "unassigned" }).Count -gt 0) { "warning" } else { "info" }) `
         -TenantId $TenantId -TenantName $TenantName -OccurredAt $newest `
         -NaturalKey ($sortedIds -join ",") `
-        -Title "Intune changes: $tenantLabel" -Summary $summary `
+        -Title "$($digestTitle): $tenantLabel" -Summary $summary `
         -Details @([pscustomobject][ordered]@{ label = "Changes"; value = [string]$changeCount }) `
         -Items @($items.ToArray()) -MoreCount $moreCount -Source "azure-watcher"
 }
@@ -532,6 +604,17 @@ function New-TenuVaultMissedBackupEvent {
 # ---------------------------------------------------------------------------
 # Rendering for Teams and mail (plain text item lines, like render.ts)
 # ---------------------------------------------------------------------------
+
+# Fixed Microsoft destinations per event type, as actionLink in render.ts. Never built
+# from tenant data.
+function Get-TvActionLink {
+    param([object]$Envelope)
+    switch ([string](Get-TvProp $Envelope "type")) {
+        "intune.change" { return @{ href = "https://intune.microsoft.com"; label = "Open the Intune admin center" } }
+        "entra.change" { return @{ href = "https://entra.microsoft.com/#view/Microsoft_AAD_ConditionalAccess/ConditionalAccessBlade/~/Policies"; label = "Open Conditional Access in Entra" } }
+    }
+    return $null
+}
 
 function Get-TvItemLine {
     param([object]$Item)
@@ -618,8 +701,9 @@ function Get-TvEmailHtml {
         $moreRow = "<tr><td style=`"padding:8px 24px 0;font-size:13px;color:#475467`">And $(Get-TvProp $Envelope 'moreCount') more. Open TenuVault for the full list.</td></tr>"
     }
     $actionRow = ""
-    if ((Get-TvProp $Envelope "type") -eq "intune.change") {
-        $actionRow = "<tr><td style=`"padding:18px 24px 4px`"><a href=`"https://intune.microsoft.com`" style=`"display:inline-block;padding:9px 16px;border-radius:6px;background:#175cd3;color:#ffffff;font-size:14px;font-weight:600;text-decoration:none`">Open the Intune admin center</a></td></tr>"
+    $action = Get-TvActionLink $Envelope
+    if ($action) {
+        $actionRow = "<tr><td style=`"padding:18px 24px 4px`"><a href=`"$($action.href)`" style=`"display:inline-block;padding:9px 16px;border-radius:6px;background:#175cd3;color:#ffffff;font-size:14px;font-weight:600;text-decoration:none`">$($action.label)</a></td></tr>"
     }
     $tenantRow = ""
     if ($tenant) {
@@ -699,9 +783,9 @@ function New-TvTeamsPayload {
         '$schema' = "http://adaptivecards.io/schemas/adaptive-card.json"
         type = "AdaptiveCard"; version = "1.4"; body = @($body.ToArray())
     }
-    # Fixed Microsoft destination per event type, as actionLink in render.ts. Never tenant data.
-    if ([string](Get-TvProp $Envelope "type") -eq "intune.change") {
-        $card | Add-Member -NotePropertyName actions -NotePropertyValue @([pscustomobject][ordered]@{ type = "Action.OpenUrl"; title = "Open the Intune admin center"; url = "https://intune.microsoft.com" })
+    $action = Get-TvActionLink $Envelope
+    if ($action) {
+        $card | Add-Member -NotePropertyName actions -NotePropertyValue @([pscustomobject][ordered]@{ type = "Action.OpenUrl"; title = $action.label; url = $action.href })
     }
     return [pscustomobject][ordered]@{
         type = "message"
@@ -1070,6 +1154,140 @@ function Send-TvMail {
     Send-TvRawMail -From $MailSender -To $to -Subject $subject -BodyText (Get-TvEmailHtml $Envelope) -GraphToken $GraphToken -BodyContentType "HTML"
 }
 
+# ---------------------------------------------------------------------------
+# Library: audit ingestion, shared by the Intune and the Entra audit log
+# ---------------------------------------------------------------------------
+
+# Reads one audit log from a saved continuation or from its watermark minus 30
+# minutes, dedupes by audit id against earlier runs and returns the new changes.
+# The ingestion cap counts NEW changes only. Duplicates inside the 30 minute
+# overlap never consume budget, and the newest seen time includes duplicates, so
+# a busy overlap window cannot stall progress. The leftover page URL is returned
+# as the continuation: the current page when the cap breaks mid page (its rest is
+# re-read and deduped), the next link when the page cap stopped the loop, or null
+# when paging ran to the end. On failure the partial collection is discarded and
+# the caller keeps its watermark, so the next run retries the same window.
+# Messages are returned, not written, so the function's output stays one object.
+function Invoke-TvAuditIngestion {
+    param(
+        [Parameter(Mandatory)][string]$Label,
+        [Parameter(Mandatory)][string]$FreshUri,
+        [AllowNull()][AllowEmptyString()][string]$Continuation,
+        [Parameter(Mandatory)][hashtable]$PriorIds,
+        [Parameter(Mandatory)][string]$WatermarkIso,
+        [AllowNull()][AllowEmptyString()][string]$GraphToken,
+        [AllowNull()][AllowEmptyString()][string]$TokenError,
+        [Parameter(Mandatory)][scriptblock]$Map,
+        [Parameter(Mandatory)][scriptblock]$RenewLease
+    )
+    $messages = [System.Collections.Generic.List[string]]::new()
+    $graphHeaders = @{ Authorization = "Bearer $GraphToken"; ConsistencyLevel = "eventual" }
+    $newChanges = [System.Collections.Generic.List[object]]::new()
+    $seenThisRun = @{}
+    $seenCount = 0
+    $newestSeenIso = $WatermarkIso
+    $capReached = $false
+    $pageCount = 0
+    $currentContinuation = if ($Continuation) { $Continuation } else { $null }
+    $nextUri = $FreshUri
+    $resumed = $false
+    $ingestionError = if ($TokenError) { $TokenError } else { $null }
+    if ($currentContinuation) {
+        $nextUri = $currentContinuation
+        $resumed = $true
+    }
+    while ($GraphToken -and $nextUri -and -not $capReached -and $pageCount -lt 500) {
+        & $RenewLease
+        $pageCount++
+        $page = $null
+        try {
+            $page = Invoke-RestMethod -Uri $nextUri -Headers $graphHeaders -Method Get -TimeoutSec 60
+        } catch {
+            $pageStatusCode = 0
+            if ($_.Exception.Response) { $pageStatusCode = [int]$_.Exception.Response.StatusCode }
+            if ($resumed -and $pageStatusCode -eq 400) {
+                # A stored continuation can expire. Discard it and restart once
+                # from the fresh overlap query inside the same run.
+                $messages.Add("The saved $Label audit continuation was rejected with HTTP 400. Restarting from the overlap query.")
+                $currentContinuation = $null
+                $resumed = $false
+                $nextUri = $FreshUri
+                continue
+            }
+            # A Graph outage or a persistent 403 must not abort the run here: the
+            # caller records it, still runs the missed backup check and every pending
+            # delivery, and fails the run nonzero at the very end.
+            $ingestionError = "$Label audit ingestion failed: $(Get-TvSafeError $_.Exception.Message)"
+            $messages.Add("$ingestionError Pending deliveries will still be attempted.")
+            break
+        }
+        $resumed = $false
+        foreach ($rawEvent in @($page.value)) {
+            if ($null -eq $rawEvent) { continue }
+            $seenCount++
+            $rawAt = ConvertTo-TvIso (Get-TvProp $rawEvent "activityDateTime")
+            if ($rawAt -and [StringComparer]::Ordinal.Compare($rawAt, $newestSeenIso) -gt 0) { $newestSeenIso = $rawAt }
+            $change = & $Map $rawEvent
+            if (-not $change) { continue }
+            $auditIdValue = [string](Get-TvProp $change "auditId")
+            if ($PriorIds.ContainsKey($auditIdValue) -or $seenThisRun.ContainsKey($auditIdValue)) { continue }
+            if ($newChanges.Count -ge 500) { $capReached = $true; break }
+            $seenThisRun[$auditIdValue] = $true
+            $newChanges.Add($change)
+        }
+        if (-not $capReached) {
+            $nextUri = Get-TvText (Get-TvProp $page "@odata.nextLink")
+        }
+    }
+    if ($ingestionError) {
+        $newChanges.Clear()
+        $newestSeenIso = $WatermarkIso
+    } else {
+        $currentContinuation = Get-TvText $nextUri
+    }
+    $messages.Add("Seen $seenCount $Label audit events, $($newChanges.Count) new.")
+    return [pscustomobject]@{
+        Changes = $newChanges
+        NewestSeenIso = $newestSeenIso
+        Continuation = $currentContinuation
+        Error = $ingestionError
+        Messages = $messages
+    }
+}
+
+# Dedupe ids only need to cover the re-read window: entries older than the
+# watermark minus 30 minutes can never be fetched again, so pruning is relative to
+# the watermark, never to run time. The cap is a high safety bound that drops the
+# oldest entries only.
+function Get-TvRecentAuditList {
+    param([Parameter(Mandatory)][hashtable]$RecentById, [Parameter(Mandatory)][string]$WatermarkIso)
+    $pruneBefore = ConvertTo-TvIso ([DateTimeOffset]::Parse($WatermarkIso).UtcDateTime.AddMinutes(-30))
+    $recentList = [System.Collections.Generic.List[object]]::new()
+    foreach ($entryId in $RecentById.Keys) {
+        $entryAt = $RecentById[$entryId]
+        if ($entryAt -and [StringComparer]::Ordinal.Compare([string]$entryAt, $pruneBefore) -lt 0) { continue }
+        $recentList.Add([pscustomobject][ordered]@{ id = [string]$entryId; at = [string]$entryAt })
+    }
+    $recentTrimmed = @($recentList | Sort-Object { [string](Get-TvProp $_ "at") } -Descending | Select-Object -First 25000)
+    [array]::Reverse($recentTrimmed)
+    return ,$recentTrimmed
+}
+
+function Get-TvRecentById {
+    param([object]$State, [Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$WatermarkIso)
+    $recentById = @{}
+    if ($State) {
+        foreach ($entry in @(Get-TvProp $State $Name)) {
+            if ($null -eq $entry) { continue }
+            $entryId = Get-TvText (Get-TvProp $entry "id")
+            $entryAt = ConvertTo-TvIso (Get-TvProp $entry "at")
+            if (-not $entryId -and $entry -is [string]) { $entryId = Get-TvText $entry; $entryAt = $WatermarkIso }
+            if ($entryId) { $recentById[$entryId] = $entryAt }
+        }
+    }
+    return $recentById
+}
+
 if ($LibraryOnly) { return }
 
 # ---------------------------------------------------------------------------
@@ -1113,6 +1331,10 @@ try {
     }
     $includeActorValue = Get-TvAutomationVariable "TenuVaultIncludeActor"
     $includeActor = $includeActorValue -match "^(true|1|yes)$"
+    # Conditional Access change watching reads the Entra audit log and needs the
+    # AuditLog.Read.All application role (setup -IncludeConditionalAccess).
+    $watchConditionalAccessValue = Get-TvAutomationVariable "TenuVaultWatchConditionalAccess"
+    $watchConditionalAccess = $watchConditionalAccessValue -match "^(true|1|yes)$"
 
     if (-not $tenantId) { throw "Automation variable TenuVaultTenantId is not set." }
     if (-not $storageAccount) { throw "Automation variable TenuVaultStorageAccount is not set." }
@@ -1130,6 +1352,7 @@ try {
         "mailProbeMailbox=$mailProbeMailbox"
         "missedBackupHours=$missedBackupHours"
         "includeActor=$($includeActor.ToString().ToLowerInvariant())"
+        "watchConditionalAccess=$($watchConditionalAccess.ToString().ToLowerInvariant())"
         "configVersion=$configVersion"
         "webhookUrl=$(if ($webhookUrl) { 'present' } else { 'absent' })"
         "webhookSecret=$(if ($webhookSecret) { 'present' } else { 'absent' })"
@@ -1217,16 +1440,13 @@ try {
     $watermarkIso = if ($state) { ConvertTo-TvIso (Get-TvProp $state "watermark") } else { $null }
     if (-not $watermarkIso) { $watermarkIso = ConvertTo-TvIso $runAt.AddHours(-1) }
 
-    $recentById = @{}
-    if ($state) {
-        foreach ($entry in @(Get-TvProp $state "recentAuditIds")) {
-            if ($null -eq $entry) { continue }
-            $entryId = Get-TvText (Get-TvProp $entry "id")
-            $entryAt = ConvertTo-TvIso (Get-TvProp $entry "at")
-            if (-not $entryId -and $entry -is [string]) { $entryId = Get-TvText $entry; $entryAt = $watermarkIso }
-            if ($entryId) { $recentById[$entryId] = $entryAt }
-        }
-    }
+    $recentById = Get-TvRecentById -State $state -Name "recentAuditIds" -WatermarkIso $watermarkIso
+    # The Entra audit log keeps its own position. A watcher that starts watching
+    # Conditional Access begins an hour back, like a new watcher does for Intune.
+    $entraWatermarkIso = if ($state) { ConvertTo-TvIso (Get-TvProp $state "entraWatermark") } else { $null }
+    if (-not $entraWatermarkIso) { $entraWatermarkIso = ConvertTo-TvIso $runAt.AddHours(-1) }
+    $entraRecentById = Get-TvRecentById -State $state -Name "entraRecentAuditIds" -WatermarkIso $entraWatermarkIso
+    $entraContinuation = if ($state) { Get-TvText (Get-TvProp $state "entraContinuation") } else { $null }
     $sentEventIds = [System.Collections.Generic.List[string]]::new()
     if ($state) {
         foreach ($entry in @(Get-TvProp $state "sentEventIds")) {
@@ -1266,19 +1486,8 @@ try {
     # Builds the full state object from the live collections. Used for every save,
     # so the pre delivery save and the final save can never drift apart in shape.
     $buildState = {
-        # Recent audit ids only need to cover the re-read window: entries older than
-        # the watermark minus 30 minutes can never be fetched again, so pruning is
-        # relative to the watermark, never to run time. The cap is a high safety
-        # bound that drops the oldest entries only.
-        $pruneBefore = ConvertTo-TvIso ([DateTimeOffset]::Parse($watermarkIso).UtcDateTime.AddMinutes(-30))
-        $recentList = [System.Collections.Generic.List[object]]::new()
-        foreach ($entryId in $recentById.Keys) {
-            $entryAt = $recentById[$entryId]
-            if ($entryAt -and [StringComparer]::Ordinal.Compare([string]$entryAt, $pruneBefore) -lt 0) { continue }
-            $recentList.Add([pscustomobject][ordered]@{ id = [string]$entryId; at = [string]$entryAt })
-        }
-        $recentTrimmed = @($recentList | Sort-Object { [string](Get-TvProp $_ "at") } -Descending | Select-Object -First 25000)
-        [array]::Reverse($recentTrimmed)
+        $recentTrimmed = Get-TvRecentAuditList -RecentById $recentById -WatermarkIso $watermarkIso
+        $entraRecentTrimmed = Get-TvRecentAuditList -RecentById $entraRecentById -WatermarkIso $entraWatermarkIso
         $sentArr = @($sentEventIds.ToArray())
         if ($sentArr.Count -gt 2000) { $sentArr = $sentArr[($sentArr.Count - 2000)..($sentArr.Count - 1)] }
         $deadArr = @($deadEnvelopes.ToArray())
@@ -1291,6 +1500,9 @@ try {
             sentEventIds = $sentArr
             lastMissedKey = $lastMissedKey
             continuation = $continuation
+            entraWatermark = $entraWatermarkIso
+            entraRecentAuditIds = $entraRecentTrimmed
+            entraContinuation = $entraContinuation
             pendingEnvelopes = @($pendingEnvelopes.ToArray())
             deadEnvelopes = $deadArr
             mailVerified = $mailVerified
@@ -1390,97 +1602,53 @@ try {
         Write-Output $lastError
     }
 
-    # --- Intune audit events ---------------------------------------------------
+    # --- Audit events: Intune, and Conditional Access when watched ---------------
+    $renewLease = { Update-TvStateLease -LeaseQueryUri $leaseQueryUri -Token $storageToken -LeaseId $leaseId }
+    $priorRecent = @{}
+    foreach ($priorId in $recentById.Keys) { $priorRecent[[string]$priorId] = $true }
     $filterFrom = ConvertTo-TvIso ([DateTimeOffset]::Parse($watermarkIso).UtcDateTime.AddMinutes(-30))
     $select = "id,displayName,componentName,actor,activity,activityDateTime,activityType,activityOperationType,activityResult,category,resources"
     $query = "`$select=$([uri]::EscapeDataString($select))&`$filter=$([uri]::EscapeDataString("activityDateTime gt $filterFrom and activityOperationType ne 'Get' and activityOperationType ne 'Search'"))&`$orderby=$([uri]::EscapeDataString('activityDateTime'))&`$top=200"
-    $freshUri = "https://graph.microsoft.com/beta/deviceManagement/auditEvents?$query"
-    $graphHeaders = @{ Authorization = "Bearer $graphToken"; ConsistencyLevel = "eventual" }
+    $intuneResult = Invoke-TvAuditIngestion -Label "Intune" -FreshUri "https://graph.microsoft.com/beta/deviceManagement/auditEvents?$query" `
+        -Continuation $continuation -PriorIds $priorRecent -WatermarkIso $watermarkIso -GraphToken $graphToken -TokenError $graphTokenError `
+        -Map { param($raw) ConvertFrom-TenuVaultAuditEvent $raw } -RenewLease $renewLease
+    foreach ($message in $intuneResult.Messages) { Write-Output $message }
+    $newChanges = $intuneResult.Changes
+    $newestSeenIso = $intuneResult.NewestSeenIso
+    $continuation = $intuneResult.Continuation
+    $ingestionError = $intuneResult.Error
 
-    # The ingestion cap counts NEW changes only. Duplicates inside the 30 minute
-    # overlap never consume budget, and the watermark tracks the newest event seen
-    # (duplicates included), so a busy overlap window cannot stall progress.
-    # A saved continuation resumes exactly where the previous run stopped, before
-    # any fresh overlap query. Like the desktop poller, the leftover page URL is
-    # what gets persisted: the current page when the new event cap breaks mid page
-    # (its remaining events are re-read and deduped), or the next link when a full
-    # page was consumed and the page cap stopped the loop.
-    $priorRecent = @{}
-    foreach ($priorId in $recentById.Keys) { $priorRecent[[string]$priorId] = $true }
-    $newChanges = [System.Collections.Generic.List[object]]::new()
-    $seenThisRun = @{}
-    $seenCount = 0
-    $newestSeenIso = $watermarkIso
-    $ingestionCapReached = $false
-    $pageCount = 0
-    $nextUri = $freshUri
-    $resumedContinuation = $false
-    $ingestionError = $graphTokenError
-    if ($continuation) {
-        $nextUri = $continuation
-        $resumedContinuation = $true
+    # Same filter and fields as entra.ts. Graph still returns each event's modified
+    # property values and the actor's IP address; the mapper never reads them.
+    $entraChanges = [System.Collections.Generic.List[object]]::new()
+    $entraNewestSeenIso = $entraWatermarkIso
+    if ($watchConditionalAccess) {
+        $entraPrior = @{}
+        foreach ($priorId in $entraRecentById.Keys) { $entraPrior[[string]$priorId] = $true }
+        $entraFrom = ConvertTo-TvIso ([DateTimeOffset]::Parse($entraWatermarkIso).UtcDateTime.AddMinutes(-30))
+        $entraSelect = "id,activityDateTime,activityDisplayName,category,operationType,result,loggedByService,initiatedBy,targetResources"
+        $entraFilter = "(loggedByService eq 'Conditional Access' or startswith(activityDisplayName,'Authentication Strength')) and activityDateTime gt $entraFrom"
+        $entraQuery = "`$select=$([uri]::EscapeDataString($entraSelect))&`$filter=$([uri]::EscapeDataString($entraFilter))&`$orderby=$([uri]::EscapeDataString('activityDateTime asc'))&`$top=200"
+        $entraResult = Invoke-TvAuditIngestion -Label "Conditional Access" -FreshUri "https://graph.microsoft.com/v1.0/auditLogs/directoryAudits?$entraQuery" `
+            -Continuation $entraContinuation -PriorIds $entraPrior -WatermarkIso $entraWatermarkIso -GraphToken $graphToken -TokenError $graphTokenError `
+            -Map { param($raw) ConvertFrom-TenuVaultEntraAuditEvent $raw } -RenewLease $renewLease
+        foreach ($message in $entraResult.Messages) { Write-Output $message }
+        $entraChanges = $entraResult.Changes
+        $entraNewestSeenIso = $entraResult.NewestSeenIso
+        $entraContinuation = $entraResult.Continuation
+        if ($entraResult.Error -and -not $ingestionError) { $ingestionError = $entraResult.Error }
+        elseif ($entraResult.Error -and $entraResult.Error -ne $ingestionError) { $ingestionError = "$ingestionError $($entraResult.Error)" }
     }
-    while ($graphToken -and $nextUri -and -not $ingestionCapReached -and $pageCount -lt 500) {
-        Update-TvStateLease -LeaseQueryUri $leaseQueryUri -Token $storageToken -LeaseId $leaseId
-        $pageCount++
-        $page = $null
-        try {
-            $page = Invoke-RestMethod -Uri $nextUri -Headers $graphHeaders -Method Get -TimeoutSec 60
-        } catch {
-            $pageStatusCode = 0
-            if ($_.Exception.Response) { $pageStatusCode = [int]$_.Exception.Response.StatusCode }
-            if ($resumedContinuation -and $pageStatusCode -eq 400) {
-                # A stored continuation can expire. Discard it and restart once
-                # from the fresh overlap query inside the same run.
-                Write-Output "The saved audit continuation was rejected with HTTP 400. Restarting from the overlap query."
-                $continuation = $null
-                $resumedContinuation = $false
-                $nextUri = $freshUri
-                continue
-            }
-            # A Graph outage or a persistent 403 must not abort the run here:
-            # record it, stop ingesting, and still run the missed backup check
-            # and every pending delivery. The run fails nonzero at the very end.
-            $ingestionError = "Audit ingestion failed: $(Get-TvSafeError $_.Exception.Message)"
-            Write-Output "$ingestionError Pending deliveries will still be attempted."
-            break
-        }
-        $resumedContinuation = $false
-        foreach ($rawEvent in @($page.value)) {
-            if ($null -eq $rawEvent) { continue }
-            $seenCount++
-            $rawAt = ConvertTo-TvIso (Get-TvProp $rawEvent "activityDateTime")
-            if ($rawAt -and [StringComparer]::Ordinal.Compare($rawAt, $newestSeenIso) -gt 0) { $newestSeenIso = $rawAt }
-            $change = ConvertFrom-TenuVaultAuditEvent $rawEvent
-            if (-not $change) { continue }
-            $auditIdValue = [string](Get-TvProp $change "auditId")
-            if ($priorRecent.ContainsKey($auditIdValue) -or $seenThisRun.ContainsKey($auditIdValue)) { continue }
-            if ($newChanges.Count -ge 500) { $ingestionCapReached = $true; break }
-            $seenThisRun[$auditIdValue] = $true
-            $newChanges.Add($change)
-        }
-        if (-not $ingestionCapReached) {
-            $nextUri = Get-TvText (Get-TvProp $page "@odata.nextLink")
-        }
-    }
-    if ($ingestionError) {
-        # Discard the partial collection and keep the saved watermark and
-        # continuation, so the next run retries the same window cleanly.
-        $newChanges.Clear()
-        $newestSeenIso = $watermarkIso
-        if (-not $lastError) { $lastError = $ingestionError }
-    } else {
-        # Persist wherever paging stopped: the next page URL after a fully consumed
-        # page, the current page URL when the new event cap broke mid page, or null
-        # when pagination ran to exhaustion.
-        $continuation = Get-TvText $nextUri
-    }
-    Write-Output "Seen $seenCount audit events, $($newChanges.Count) new."
+    if ($ingestionError -and -not $lastError) { $lastError = $ingestionError }
 
     $candidateEnvelopes = [System.Collections.Generic.List[object]]::new()
     if ($newChanges.Count -gt 0) {
         $candidateEnvelopes.Add((New-TenuVaultAuditDigest -TenantId $tenantId -TenantName $tenantName `
             -Changes @($newChanges.ToArray()) -IncludeActor $includeActor))
+    }
+    if ($entraChanges.Count -gt 0) {
+        $candidateEnvelopes.Add((New-TenuVaultAuditDigest -TenantId $tenantId -TenantName $tenantName `
+            -Changes @($entraChanges.ToArray()) -IncludeActor $includeActor -Service conditionalAccess))
     }
 
     # --- Missed backup check -----------------------------------------------------
@@ -1561,6 +1729,10 @@ try {
     foreach ($change in $newChanges) {
         $recentById[[string](Get-TvProp $change "auditId")] = [string](Get-TvProp $change "at")
     }
+    foreach ($change in $entraChanges) {
+        $entraRecentById[[string](Get-TvProp $change "auditId")] = [string](Get-TvProp $change "at")
+    }
+    $entraWatermarkIso = $entraNewestSeenIso
     if ($missedKeyToSet) { $lastMissedKey = $missedKeyToSet }
     $watermarkIso = $newestSeenIso
     & $saveState
