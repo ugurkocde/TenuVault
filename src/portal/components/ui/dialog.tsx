@@ -14,6 +14,15 @@ const DialogPortal = DialogPrimitive.Portal
 
 const DialogClose = DialogPrimitive.Close
 
+/**
+ * False inside a panel that is hidden, such as a settings section the admin switched away from.
+ * A dialog the hidden panel owns then closes at once instead of animating out: its section and
+ * its focus return target are already gone, and an exit animation only ends once the window
+ * draws frames, so the closing dialog would otherwise linger over the next section and hold focus.
+ */
+const DialogAnimationContext = React.createContext(true)
+const DialogAnimationProvider = DialogAnimationContext.Provider
+
 const DialogOverlay = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Overlay>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay> & { disableAnimation?: boolean }
@@ -33,26 +42,29 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & { hideClose?: boolean; disableAnimation?: boolean }
->(({ className, children, hideClose, disableAnimation, ...props }, ref) => (
-  <DialogPortal>
-    <DialogOverlay disableAnimation={disableAnimation} />
-    <DialogPrimitive.Content
-      ref={ref}
-      className={cn(
-        "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg grid-cols-[minmax(0,1fr)] translate-x-[-50%] translate-y-[-50%] gap-4 border border-transparent bg-card p-6 shadow-2xl rounded-3xl",
-        !disableAnimation && "duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]",
-        className
-      )}
-      {...props}
-    >
-      {children}
-      {!hideClose && <DialogPrimitive.Close className="absolute right-4 top-4 flex size-9 items-center justify-center rounded-full bg-gray-100 opacity-80 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
-        <X className="h-4 w-4" />
-        <span className="sr-only">Close</span>
-      </DialogPrimitive.Close>}
-    </DialogPrimitive.Content>
-  </DialogPortal>
-))
+>(({ className, children, hideClose, disableAnimation: disabled, ...props }, ref) => {
+  const disableAnimation = disabled || !React.useContext(DialogAnimationContext)
+  return (
+    <DialogPortal>
+      <DialogOverlay disableAnimation={disableAnimation} />
+      <DialogPrimitive.Content
+        ref={ref}
+        className={cn(
+          "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg grid-cols-[minmax(0,1fr)] translate-x-[-50%] translate-y-[-50%] gap-4 border border-transparent bg-card p-6 shadow-2xl rounded-3xl",
+          !disableAnimation && "duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]",
+          className
+        )}
+        {...props}
+      >
+        {children}
+        {!hideClose && <DialogPrimitive.Close className="absolute right-4 top-4 flex size-9 items-center justify-center rounded-full bg-gray-100 opacity-80 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
+          <X className="h-4 w-4" />
+          <span className="sr-only">Close</span>
+        </DialogPrimitive.Close>}
+      </DialogPrimitive.Content>
+    </DialogPortal>
+  )
+})
 DialogContent.displayName = DialogPrimitive.Content.displayName
 
 const DialogHeader = ({
@@ -116,6 +128,7 @@ export {
   DialogPortal,
   DialogOverlay,
   DialogClose,
+  DialogAnimationProvider,
   DialogTrigger,
   DialogContent,
   DialogHeader,
