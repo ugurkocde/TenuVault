@@ -29,31 +29,19 @@ The **Backup & Restore** page has its own **Select tenant** list. Choosing a ten
 
 ## Add a tenant
 
-You can add a tenant in two ways. Both need the tenant ID or domain and the application (client) ID of the app registration you created in that tenant. See [Create the app registration](/getting-started/app-registration/) if you have not created one yet.
+You add a tenant with the guided setup, **Set up TenuVault**. It needs the tenant ID or domain and the application (client) ID of the app registration you created in that tenant. See [Create the app registration](/getting-started/app-registration/) if you have not created one yet.
 
-### With the setup wizard
+Every button that adds a tenant opens the guided setup:
 
-Choose **Connect a tenant** in the tenant switcher or on the **All tenants** page. The wizard walks you through signing in, choosing storage and running a first backup. See [Sign in to your tenant](/getting-started/connect-tenant/).
+* **Connect a tenant** in the tenant switcher or on the **All tenants** page.
+* **Connect tenant** on the **Tenants** page or in the dashboard's **Quick Actions**.
+* **Set up TenuVault** on the dashboard when no tenant is connected. The dashboard then shows **Protect your Intune policies** with this one button.
 
-### From the Tenants page
+The setup walks you through the app registration, signing in, choosing storage and running a first backup. Select **Back to dashboard** to leave it. See [Sign in to your tenant](/getting-started/connect-tenant/).
 
-1. Open **Tenants** and click **Connect tenant**. The **Connect a tenant** dialog opens.
-2. If you still need an app registration, expand **First time? Create an app registration** for the setup script.
-3. Enter:
-   * **Tenant id or domain**, for example `contoso.onmicrosoft.com`
-   * **Application (client) id**, the GUID of your app registration
-   * **Display name (optional)**, a name you want to see in TenuVault
-4. Click **Sign in with Microsoft** and complete the sign-in in your browser.
-5. After you are signed in, the dialog asks **Where should backups be stored?** Choose **This device, encrypted** or **Your Azure storage account, encrypted**. See [Choose where backups are stored](/getting-started/choose-storage/).
-6. Click **Connect tenant**.
-
-TenuVault checks the license when you sign in and again before it saves the tenant. If your license does not cover the tenant, the tenant is not added, the new sign-in is removed and the dialog shows the reason, starting with "The tenant was not added."
+TenuVault checks the license when you sign in and again before it saves the tenant. If your license does not cover the tenant, the tenant is not added, the new sign-in is removed and the setup shows the reason.
 
 After the tenant is added, TenuVault reads its organization name, primary domain and policy counts from Microsoft Graph. If you connected the same tenant before with the same storage location, the custom name and tags you gave it are restored from that storage.
-
-:::note
-When no tenant is connected, the Dashboard shows **Protect your Intune policies** with two buttons: **Connect tenant** opens the dialog above and **Guided setup** opens the setup wizard.
-:::
 
 ## The tenant dashboard
 
@@ -109,7 +97,7 @@ The buttons on each card:
 | **Backups** | Selects the tenant and opens Backup & Restore |
 | **Drift** | Selects the tenant and opens Drift Detection |
 
-Click a tenant's name, or its arrow button, to select it and open its dashboard. **Connect a tenant** opens the setup wizard.
+Click a tenant's name, or its arrow button, to select it and open its dashboard. **Connect a tenant** opens the guided setup, **Set up TenuVault**.
 
 ## The Tenant Management page
 

@@ -123,7 +123,7 @@ For recovery, see [readiness and manual artifacts](docs/disaster-recovery.md), [
 ## Customer setup
 
 1. Run [`resources/New-TenuVaultDesktopApp.ps1`](resources/New-TenuVaultDesktopApp.ps1), also
-   available in the app. It creates a single-tenant public client app registration with these
+   available on the Prepare step of the app's guided setup. It creates a single-tenant public client app registration with these
    delegated permissions and grants admin consent:
    - Microsoft Graph: `User.Read`, `Organization.Read.All`, `Policy.Read.All`,
      `DeviceManagementConfiguration.ReadWrite.All`, `DeviceManagementApps.ReadWrite.All`,
@@ -271,8 +271,10 @@ it on the License page; other admins can use a shared organization license witho
   an older version) are checked at start when they are signed in, otherwise at their next sign-in;
   until then the overview shows "License checked at first use".
 - **First run.** Without a key and without a connected tenant the app opens on a welcome screen
-  that offers Community sign-in, a key, or a paid trial. Admins licensed through their organization continue to
-  the tenant sign-in without a key. The tenant switcher and the all tenants overview mark tenants the
+  with one **Connect your tenant** button, which opens the guided setup (Set up TenuVault), and quiet
+  links for the free Pro trial and a license key. A setup already in progress skips the welcome
+  screen, and with no tenant connected the app always opens the guided setup. The tenant's plan is
+  shown after the sign-in; admins licensed through their organization need no key. The tenant switcher and the all tenants overview mark tenants the
   license does not cover.
 - **Organization licenses.** The key holder can share the license with a tenant's other admins. They
   sign in with the same app registration and are licensed through the `tenant` route, checked with a

@@ -1,6 +1,6 @@
 ---
 title: "Get started: your first Intune backup"
-description: Install TenuVault and take your first encrypted Microsoft Intune backup in about fifteen minutes, on Windows or macOS.
+description: Install TenuVault and take your first encrypted Microsoft Intune backup in about 10 minutes, on Windows or macOS.
 ---
 
 This section takes you from a fresh computer to a first successful Intune backup. Follow the pages in order; each one ends where the next one starts.
@@ -19,14 +19,14 @@ Check the [Requirements](/getting-started/requirements/) first. In short, you ne
 | Step | What you do | Where |
 | --- | --- | --- |
 | 1 | Download and install TenuVault. | [Install and update TenuVault](/getting-started/install/) |
-| 2 | Run the setup script that creates the app registration in your tenant, and note the client ID it prints. | [Create the app registration](/getting-started/app-registration/) |
-| 3 | Start TenuVault and choose Community, a trial, or enter a license key. | [Choose a plan on first launch](/getting-started/first-launch/) |
-| 4 | Sign in to your tenant with your own admin account. | [Sign in to your tenant](/getting-started/connect-tenant/) |
+| 2 | Start TenuVault and select **Connect your tenant**. Optionally start the free Pro trial or enter a license key. | [Start TenuVault for the first time](/getting-started/first-launch/) |
+| 3 | On the **Prepare** step, run the setup script that creates the app registration in your tenant, and copy the two lines it prints. | [Create the app registration](/getting-started/app-registration/) |
+| 4 | Paste the two lines and sign in to your tenant with your own admin account. | [Sign in to your tenant](/getting-started/connect-tenant/) |
 | 5 | Choose whether backups stay on this device or go to your Azure storage account, and save your recovery key. | [Choose where backups are stored](/getting-started/choose-storage/) |
-| 6 | Run the first backup and check the result. | [Run your first backup](/getting-started/first-backup/) |
+| 6 | Run the first backup, then turn on automatic backups. | [Run your first backup](/getting-started/first-backup/) |
 
 :::note
-Steps 3 to 6 happen in the app's guided setup, **Set up TenuVault**, which walks you through **Prepare**, **Sign in**, **Storage** and **First backup**. The pages in this section explain each screen in detail.
+Steps 3 to 6 happen in the app's guided setup, **Set up TenuVault**, which walks you through **Prepare**, **Sign in**, **Storage** and **First backup**. The setup saves your progress, so you can close TenuVault, for example while another administrator creates the app registration, and continue later. The pages in this section explain each screen in detail.
 :::
 
 ## After your first backup

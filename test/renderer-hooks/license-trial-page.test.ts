@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({
   setKey: vi.fn(async () => undefined),
   replaceKey: vi.fn(async () => undefined),
   openExternal: vi.fn(async () => undefined),
+  clipboardKey: vi.fn(async (): Promise<string | null> => null),
   status: null as LicenseStatus | null,
 }))
 
@@ -25,6 +26,7 @@ vi.mock("../../src/renderer/lib/bridge", () => ({
       deactivate: state.deactivate,
       setKey: state.setKey,
       replaceKey: state.replaceKey,
+      clipboardKey: state.clipboardKey,
       status: async () => state.status,
     },
     app: { openExternal: state.openExternal },
@@ -85,10 +87,26 @@ describe("License page trial", () => {
     await act(async () => { button(container, "Start free trial")!.click() })
     expect(state.startTrial).toHaveBeenCalledWith("admin@contoso.com", { source: "license-page" })
     expect(container.textContent).toContain("Check your inbox at admin@contoso.com")
-    expect(container.textContent).toContain("Paste the key from your email to activate the trial.")
+    expect(container.textContent).toContain("Copy the key from your email and return to TenuVault: it activates by itself.")
 
     await act(async () => { button(container, "Buy now")!.click() })
     expect(state.open).toHaveBeenCalledWith("checkout", { source: "license-page" })
+  })
+
+  it("activates a trial key copied from the email when TenuVault gets focus", async () => {
+    const container = await render(community)
+    // Before a trial was requested the clipboard is never read.
+    await act(async () => { window.dispatchEvent(new Event("focus")) })
+    expect(state.clipboardKey).not.toHaveBeenCalled()
+
+    type(container.querySelector<HTMLInputElement>('input[type="email"]')!, "admin@contoso.com")
+    await act(async () => { button(container, "Start free trial")!.click() })
+    state.clipboardKey.mockResolvedValueOnce("TENU-TRIAL-KEY-0001")
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(state.setKey).toHaveBeenCalledWith("TENU-TRIAL-KEY-0001")
   })
 
   it("offers an invoice for buyers who cannot pay by card", async () => {

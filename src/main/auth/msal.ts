@@ -80,6 +80,44 @@ export function missingPermissionError(scope: string, error: unknown): Error | n
   )
 }
 
+/** Thrown when the admin cancels a sign-in that is waiting for the browser. */
+export class SignInCancelledError extends Error {
+  constructor() {
+    super("Sign-in cancelled.")
+    this.name = "SignInCancelledError"
+  }
+}
+
+/** Microsoft's refusals of a first sign-in that the admin can fix, with what to do. */
+const FIRST_SIGN_IN_ERRORS: Record<string, string> = {
+  AADSTS700016: "No app registration with this client ID exists in this tenant. Check the Application (client) id the setup script printed, and that the tenant is the one the script ran in.",
+  AADSTS90002: "Microsoft does not know this tenant. Check the tenant ID or domain, for example contoso.onmicrosoft.com.",
+  AADSTS900023: "This is not a valid tenant ID or domain. Use the Tenant id the setup script printed, or a domain such as contoso.onmicrosoft.com.",
+  AADSTS50011: "The app registration has no http://localhost redirect URI for mobile and desktop applications. Run the setup script again, or add the redirect URI as the setup guide describes.",
+  AADSTS7000218: "The app registration asks for a client secret, which happens when http://localhost is registered for the Web platform. In the Entra admin center, open the app registration > Authentication and add http://localhost under Mobile and desktop applications instead, or run the setup script again.",
+  AADSTS50020: "This account does not belong to the tenant. Sign in with an admin account of this tenant.",
+  AADSTS50105: "Your account is not assigned to the TenuVault app registration. Ask your Entra administrator to add you to the group that may sign in.",
+  AADSTS53000: "Conditional Access requires a compliant or registered device. Use a browser that passes the device identity, such as Microsoft Edge signed in to your work profile, as the default browser and try again.",
+  AADSTS53001: "Conditional Access requires a domain-joined device. Use a browser that passes the device identity, such as Microsoft Edge signed in to your work profile, as the default browser and try again.",
+  AADSTS53003: "Conditional Access blocked this sign-in. Check the sign-in logs in the Entra admin center for the policy, or sign in from a device and location it allows.",
+  AADSTS65004: "The consent was declined in the browser. Sign in again and accept, or ask an administrator to run the setup script, which grants admin consent.",
+}
+
+/**
+ * An actionable error for a failed first sign-in to a tenant: missing consent, a wrong client or
+ * tenant ID, a misconfigured app registration or a Conditional Access block. Other errors are
+ * returned unchanged.
+ */
+export function firstSignInError(error: unknown): unknown {
+  const consent = missingPermissionError(RESOURCE_SCOPES.graph, error)
+  if (consent) return consent
+  const message = error instanceof Error ? error.message : String(error)
+  const code = /AADSTS\d+/.exec(message)?.[0]
+  if (code && FIRST_SIGN_IN_ERRORS[code]) return new Error(`${FIRST_SIGN_IN_ERRORS[code]} (${code})`)
+  if (/access_denied/i.test(message) && !code) return new Error("The sign-in was cancelled in the browser. Sign in again to continue.")
+  return error
+}
+
 // The licensing service accepts ID tokens issued within the last 15 minutes. Entra
 // backdates iat by five minutes, so an older cached token is renewed.
 const ID_TOKEN_MAX_AGE_MS = 10 * 60_000
@@ -116,6 +154,8 @@ function page(title: string, message: string): string {
  */
 export class AuthManager {
   private readonly apps = new Map<string, PublicClientApplication>()
+  /** Rejects the first sign-ins (signIn) waiting for the browser, for cancelInteractive. */
+  private readonly cancels = new Map<(error: Error) => void, string>()
   private readonly interactive = new Map<string, Promise<AuthenticationResult>>()
 
   constructor(private readonly host: AuthHost) {}
@@ -125,7 +165,9 @@ export class AuthManager {
    * a verified domain; the returned account always carries the tenant id.
    */
   async signIn(tenant: string, clientId: string): Promise<SignedInAccount> {
-    const result = await this.acquireInteractive(clientId, tenant, RESOURCE_SCOPES.graph, "select_account")
+    const result = await this.acquireInteractive(clientId, tenant, RESOURCE_SCOPES.graph, "select_account", undefined, true).catch((error: unknown) => {
+      throw firstSignInError(error)
+    })
     const account = result.account
     if (!account) throw new Error("Microsoft did not return an account for this sign-in.")
 
@@ -256,25 +298,52 @@ export class AuthManager {
     scope: string,
     prompt?: string,
     loginHint?: string,
+    cancellable = false,
   ): Promise<AuthenticationResult> {
     const key = `${clientId}|${tenant.toLowerCase()}|${scope}|${prompt ?? ""}|${loginHint ?? ""}`
     const pending = this.interactive.get(key)
     if (pending) return pending
 
+    // MSAL opens the browser after a few awaits; a sign-in cancelled before then never opens it.
+    let cancelledEarly = false
     const request: InteractiveRequest = {
       scopes: [scope],
       authority: authority(tenant),
-      openBrowser: this.host.openBrowser,
+      openBrowser: (url) => cancelledEarly ? Promise.reject(new SignInCancelledError()) : this.host.openBrowser(url),
       successTemplate: SUCCESS_PAGE,
       errorTemplate: ERROR_PAGE,
       ...(prompt ? { prompt } : {}),
       ...(loginHint ? { loginHint } : {}),
     }
-    const promise = this.app(clientId)
-      .acquireTokenInteractive(request)
-      .finally(() => this.interactive.delete(key))
+    // MSAL cannot abort a loopback sign-in, so a cancel stops waiting for it instead. A browser
+    // tab finished later only fills the token cache; its result is never used. Only the first
+    // sign-in can be cancelled, so a reauthentication started elsewhere keeps waiting.
+    let cancel: (error: Error) => void = () => {}
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      cancel = (error) => {
+        cancelledEarly = true
+        reject(error)
+      }
+    })
+    if (cancellable) this.cancels.set(cancel, key)
+    const interactive = this.app(clientId).acquireTokenInteractive(request)
+    const promise = (cancellable ? Promise.race([interactive, cancelled]) : interactive)
+      .finally(() => {
+        this.cancels.delete(cancel)
+        if (this.interactive.get(key) === promise) this.interactive.delete(key)
+      })
     this.interactive.set(key, promise)
     return promise
+  }
+
+  /** Stops waiting for the first sign-ins open in the browser; they fail with SignInCancelledError. */
+  cancelInteractive(): void {
+    const pending = [...this.cancels]
+    this.cancels.clear()
+    for (const [cancel, key] of pending) {
+      this.interactive.delete(key)
+      cancel(new SignInCancelledError())
+    }
   }
 
   private app(clientId: string): PublicClientApplication {

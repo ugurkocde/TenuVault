@@ -77,7 +77,7 @@ function formatDistanceToNow(
 const quickActions = [
   { icon: Play, label: "Run Backup", href: "/portal/backup" },
   { icon: RefreshCw, label: "Restore policies", href: "/portal/backup?tab=restore" },
-  { icon: Building2, label: "Connect tenant", href: "/portal/tenants?connect=1" },
+  { icon: Building2, label: "Connect tenant", href: "/portal/onboarding" },
   { icon: Settings, label: "Settings", href: "/portal/settings" },
 ]
 

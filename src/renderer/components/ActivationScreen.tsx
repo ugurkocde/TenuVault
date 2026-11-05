@@ -1,44 +1,23 @@
-import { useRef, useState } from "react"
-import { AlertCircle, Building2, KeyRound, Loader2, Sparkles } from "lucide-react"
-import { Alert, AlertDescription } from "~/components/ui/alert"
+import { ArrowRight, DatabaseBackup, GitCompare, RotateCcw } from "lucide-react"
 import { Button } from "~/components/ui/button"
-import { Input } from "~/components/ui/input"
-import { Label } from "~/components/ui/label"
-import { INVOICE_REQUEST_EMAIL, INVOICE_REQUEST_URL } from "../../shared/constants"
-import { bridge } from "../lib/bridge"
-import { useLicense } from "../lib/license"
 import { BrandMark } from "./BrandMark"
-import { TrialSignupForm } from "./TrialSignupForm"
+import { TrialOrKey } from "./PlanChoice"
+
+const POINTS = [
+  { icon: DatabaseBackup, text: "Back up your Intune policies, encrypted on this computer." },
+  { icon: RotateCcw, text: "Restore a single policy or a whole set when something breaks." },
+  { icon: GitCompare, text: "See what changed between backups, down to the setting." },
+]
 
 /**
  * First run welcome, shown instead of the app while this machine has no license key, no
- * tenant licensed through its organization and no connected tenant.
+ * tenant licensed through its organization, no connected tenant and no setup in progress.
  *
- * Licensing is per tenant and enforced in the main process, so this screen is a guide,
- * not a lock: without a key the first tenant runs on Community, and a license shared by
- * the tenant's organization is checked at the tenant sign-in.
+ * Licensing is per tenant and enforced in the main process, so this screen is a guide, not a
+ * lock: the plan is shown after the sign-in, when the tenant is known. Without a key the first
+ * tenant runs on Community, and a license shared by the tenant's organization is picked up then.
  */
 export function ActivationScreen({ onSignIn }: { onSignIn: () => void }) {
-  const { refresh } = useLicense()
-  const [key, setKey] = useState("")
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState("")
-  const [trialOpen, setTrialOpen] = useState(false)
-  const keyInput = useRef<HTMLInputElement>(null)
-
-  const activate = async () => {
-    setBusy(true)
-    setError("")
-    try {
-      await bridge.license.setKey(key.trim())
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setBusy(false)
-      await refresh()
-    }
-  }
-
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-6">
       <div className="w-full max-w-lg space-y-6 rounded-3xl bg-card p-9 shadow-[0_24px_60px_-30px_rgba(22,21,20,0.25)]">
@@ -49,70 +28,30 @@ export function ActivationScreen({ onSignIn }: { onSignIn: () => void }) {
             <p className="text-base text-gray-500">TenuVault Desktop</p>
           </div>
         </div>
-        <p className="text-sm text-gray-600">
-          Sign in to your tenant to start. Community is free for one tenant, with manual and weekly backups. If your
-          organization shares a TenuVault license with your tenant, it is picked up when you sign in.
-        </p>
+
+        <ul className="space-y-3 text-sm text-gray-700">
+          {POINTS.map(({ icon: Icon, text }) => (
+            <li key={text} className="flex items-center gap-3">
+              <span className="flex size-8 flex-shrink-0 items-center justify-center rounded-full bg-secondary" aria-hidden="true"><Icon className="h-4 w-4" /></span>
+              {text}
+            </li>
+          ))}
+        </ul>
 
         <div className="space-y-3">
           <Button size="lg" className="w-full bg-blue-600 text-white hover:bg-blue-700" onClick={onSignIn}>
-            <Building2 className="mr-2 h-4 w-4" /> Start free with Community
+            Connect your tenant <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
           </Button>
-          {trialOpen ? (
-            <div className="rounded-2xl bg-blue-50/60 p-4">
-              <p className="mb-3 text-sm font-medium text-gray-900">Try Pro free for 30 days</p>
-              <TrialSignupForm source="welcome" onSent={() => keyInput.current?.focus()} />
-            </div>
-          ) : (
-            <Button variant="outline" size="lg" className="w-full" onClick={() => setTrialOpen(true)}>
-              <Sparkles className="mr-2 h-4 w-4" /> Try Pro free for 30 days, no card
-            </Button>
-          )}
           <p className="text-xs text-gray-600">
-            You can upgrade any time from the License page, or{" "}
-            <button type="button" className="text-blue-600 underline underline-offset-4 hover:text-blue-700" onClick={() => void bridge.license.open("checkout", { source: "welcome" })}>
-              buy now
-            </button>
-            . Need an invoice instead of a card? Email{" "}
-            <button type="button" className="text-blue-600 underline underline-offset-4 hover:text-blue-700" onClick={() => void bridge.app.openExternal(INVOICE_REQUEST_URL)}>
-              {INVOICE_REQUEST_EMAIL}
-            </button>
-            .
+            Setup takes about 10 minutes: create an app registration in your tenant, sign in and take a first backup. It is
+            free on Community for one tenant, and a TenuVault license your organization shares with the tenant is picked up
+            when you sign in.
           </p>
         </div>
 
-        <form
-          className="space-y-3 border-t border-gray-100 pt-5"
-          onSubmit={(e) => {
-            e.preventDefault()
-            if (key.trim()) void activate()
-          }}
-        >
-          <Label htmlFor="license-key">Already have a license key?</Label>
-          <div className="flex gap-2">
-            <Input
-              id="license-key"
-              ref={keyInput}
-              placeholder="Paste the key from your email"
-              value={key}
-              onChange={(e) => setKey(e.target.value)}
-              spellCheck={false}
-              className="font-mono"
-            />
-            <Button type="submit" variant="outline" disabled={busy || !key.trim()}>
-              {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <KeyRound className="mr-2 h-4 w-4" />}
-              Save key
-            </Button>
-          </div>
-          <p className="text-xs text-gray-600">The key is saved on this device and activated for your tenant when you sign in.</p>
-        </form>
-
-        {error && (
-          <Alert variant="destructive">
-            <AlertCircle className="h-4 w-4" />
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
+        <div className="border-t border-gray-100 pt-4">
+          <TrialOrKey source="welcome" />
+        </div>
 
         <p className="text-center text-xs text-gray-500">
           License checks go to tenuvault.com and send the license key or your Microsoft sign-in token, the tenant ID and a

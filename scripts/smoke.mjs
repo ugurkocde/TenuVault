@@ -170,8 +170,9 @@ await check("first run shows the welcome screen", async () => {
   assert(await waitForText("Welcome to TenuVault", 30000), "welcome screen did not appear")
   await disableAnimations()
   assert(!(await evaluate(`document.body.innerText.includes("Backup & Restore")`)), "welcome screen missing, app shown instead")
-  assert(await waitForText("Start free with Community"), "Community call to action missing")
-  assert(await waitForText("Try Pro free for 30 days, no card"), "trial call to action missing")
+  assert(await waitForText("Connect your tenant"), "setup call to action missing")
+  assert(await waitForText("Try Pro free for 30 days, no card"), "trial link missing")
+  assert(await waitForText("I have a license key"), "license key link missing")
   await screenshot("00-welcome")
 })
 
@@ -306,9 +307,10 @@ await check("hung license checks time out and ignore late responses after retry"
     await evaluate(`window.__licenseTimeout.refresh()`)
     assert(await evaluate(`window.__licenseTimeout.calls === 4 && ${body}.innerText.includes("Welcome to TenuVault")`), "background check did not keep the loaded status")
     await evaluate(`window.__licenseTimeout.onChanged({ ...window.__licenseTimeout.status, hasKey: true })`)
-    assert(await waitForCondition(`${body}.innerText.includes("Backup & Restore")`), "license change was not delivered during the pending check")
+    // With a key and no tenant the app opens the guided setup, which has the window to itself.
+    assert(await waitForCondition(`${body}.innerText.includes("Save setup script")`), "license change was not delivered during the pending check")
     assert(await waitForCondition(`window.__licenseTimeout.expired === 2 && window.__licenseTimeout.timers.size === 0`), "hung background check did not time out")
-    assert(await evaluate(`${body}.innerText.includes("Backup & Restore") && !${body}.querySelector('[role="alert"]')`), "background timeout discarded the loaded status")
+    assert(await evaluate(`${body}.innerText.includes("Save setup script") && !${body}.querySelector('[role="alert"]')`), "background timeout discarded the loaded status")
     await evaluate(`window.__licenseTimeout.refresh()`)
     assert(await waitForCondition(`window.__licenseTimeout.calls === 5 && ${body}.innerText.includes("Welcome to TenuVault")`), "background timeout left the refresh guard locked")
     await evaluate(`window.__licenseTimeout.resolveBackground()`)
@@ -320,8 +322,10 @@ await check("hung license checks time out and ignore late responses after retry"
 })
 
 await check("malformed license keys are rejected", async () => {
+  await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "I have a license key").click()`)
+  assert(await waitForCondition(`Boolean(document.querySelector('input[name="license-key"]'))`), "license key field did not open")
   await evaluate(`(() => {
-    const input = document.getElementById("license-key")
+    const input = document.querySelector('input[name="license-key"]')
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, "abc")
     input.dispatchEvent(new Event("input", { bubbles: true }))
   })()`)
@@ -332,9 +336,12 @@ await check("malformed license keys are rejected", async () => {
 
 // Without a key, Community (or a license shared by the organization) starts at the tenant sign-in.
 await check("Community users can reach the tenant sign-in without a key", async () => {
-  await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Start free with Community").click()`)
+  await evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "Connect your tenant").click()`)
   assert(await waitForText("Set up TenuVault", 15000), "tenant sign-in did not open")
-  assert(await waitForText("Backup & Restore"), "app did not open")
+  assert(await waitForText("Save setup script"), "setup checklist missing")
+  // Until a tenant is connected the guided setup has the window to itself.
+  assert(!(await evaluate(`Boolean(document.querySelector('nav[aria-label="Main navigation"]'))`)), "sidebar shown during the first setup")
+  await screenshot("00b-setup-prepare")
 })
 
 await check("dashboard renders in the desktop shell", async () => {
@@ -365,7 +372,7 @@ await check("a failed page keeps the sidebar and offers recovery", async () => {
     await go("#/portal/overview", "This screen could not be loaded")
     await evaluate(`[...document.querySelectorAll('main button')].find(b => b.textContent === 'Reload').click()`)
     assert(await waitForText("Welcome to TenuVault"), "Reload did not restart the app")
-    await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent.includes('Start free with Community')).click()`)
+    await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent.includes('Connect your tenant')).click()`)
     await go("#/portal/overview", "All tenants")
     assert(await waitForCondition(`Boolean(document.querySelector('main h1')?.textContent.includes('All tenants'))`), "Reload did not recover the page")
     await go("#/portal/dashboard", "Dashboard")
@@ -523,15 +530,17 @@ await check("tenants page offers delegated sign-in", async () => {
     return Boolean(button)
   })()`)
   assert(opened, "Connect tenant button not found")
-  assert(await waitForText("Sign in with Microsoft"), "desktop add-tenant dialog did not open")
-  assert(!(await evaluate(`document.body.innerText.includes("Client Secret")`)), "dialog still asks for a client secret")
+  // Connect tenant opens the guided setup, the one way to connect a tenant on the desktop.
+  assert(await waitForCondition(`location.hash === "#/portal/onboarding"`), "Connect tenant did not open the guided setup")
+  assert(await waitForText("Save setup script"), "guided setup did not open")
+  assert(!(await evaluate(`document.body.innerText.includes("Client Secret")`)), "setup still asks for a client secret")
   await screenshot("03-add-tenant")
-  await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
 })
 
 await check("onboarding is the desktop wizard, without client secrets", async () => {
   await go("#/portal/onboarding", "Set up TenuVault")
-  assert(await waitForText("Copy setup script"), "setup script step missing")
+  assert(await waitForText("Save setup script"), "setup script step missing")
+  assert(await waitForText("Permissions the app registration gets"), "permission list missing")
   assert(!(await evaluate(`/client secret/i.test(document.body.innerText) && !/no secret/i.test(document.body.innerText)`)), "wizard mentions client secrets")
   await screenshot("04-onboarding")
 })
@@ -908,7 +917,7 @@ await check("Community trial is requested in the app, Buy now opens the checkout
     assert(await waitForCondition(`!![...${body}.querySelectorAll('button')].find(button => button.textContent.trim() === 'Start free trial' && !button.disabled)`), "trial button did not enable")
     await evaluate(`[...${body}.querySelectorAll('button')].find(button => button.textContent.trim() === 'Start free trial').click()`)
     assert(await waitForCondition(`${body}.innerText.includes("Check your inbox at admin@contoso.com")`), "trial confirmation missing")
-    assert(await waitForCondition(`${body}.innerText.includes("Paste the key from your email to activate the trial.")`), "trial key hint missing")
+    assert(await waitForCondition(`${body}.innerText.includes("Copy the key from your email and return to TenuVault: it activates by itself.")`), "trial key hint missing")
     assert(await evaluate(`window.__communityTrial.trials.length === 1 && window.__communityTrial.trials[0].email === "admin@contoso.com" && window.__communityTrial.trials[0].context?.source === "license-page"`), "trial was not requested with the license-page source")
     assert(await evaluate(`window.__communityTrial.opened.length === 0`), "the trial opened a browser page")
     await evaluate(`[...${body}.querySelectorAll('button')].find(button => button.textContent.trim() === 'Buy now').click()`)

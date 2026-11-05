@@ -5,29 +5,34 @@ description: Sign in to your tenant with your own admin account and the client I
 
 You connect a tenant by signing in with your own admin account, through the app registration you created. TenuVault never asks for a password or a client secret.
 
-You need the **Application (client) id** printed by the [setup script](/getting-started/app-registration/), and your tenant ID or a domain of your tenant.
+You need the two values printed by the [setup script](/getting-started/app-registration/): the **Tenant id** (or a domain of your tenant) and the **Application (client) id**.
 
 ## Open the guided setup
 
-TenuVault opens **Set up TenuVault** after you select **Start free with Community** on the welcome screen. You can also open it at any time:
+The guided setup, **Set up TenuVault**, is the only way to connect a tenant. TenuVault opens it after you select **Connect your tenant** on the welcome screen, and whenever no tenant is connected. You can also open it at any time:
 
-* From the dashboard, when no tenant is connected: **Guided setup**.
+* From the dashboard, when no tenant is connected: **Set up TenuVault**.
 * From the tenant switcher at the top of the sidebar: **Connect a tenant**.
+* From **Tenants** or the dashboard's **Quick Actions**: **Connect tenant**.
+* From the **All tenants** page: **Connect a tenant**.
 
-The guided setup has four steps: **Prepare**, **Sign in**, **Storage** and **First backup**. Use **Previous** to go back a step. Setup remembers where you were while TenuVault stays open, so you can leave to check something (for example in **Settings**) and come back.
+The guided setup has four steps: **Prepare**, **Sign in**, **Storage** and **First backup**. Use **Previous** to go back a step. While no tenant is connected, the setup has the window to itself: there is no sidebar, only **License** and **Support** links at the top. Once a tenant is connected, the setup shows **Back to dashboard**.
+
+### Continue where you left off
+
+TenuVault saves your progress on this computer, in its encrypted app store: the step, the tenant ID, the client ID, the display name, and a sign-in to a tenant that is not saved yet. No token is kept in this record. Your progress survives a restart, so you can close TenuVault while you run the setup script or wait for another administrator. When you come back, TenuVault skips the welcome screen and the setup says **Welcome back. You can continue where you left off**. A saved sign-in is resumed only while it is still signed in on this computer; otherwise you sign in again. The **First backup** step is not resumed.
 
 ## Step 1: Prepare
 
-The **Prepare** step shows the **Create the app registration** card with **Copy setup script**, and lists what admins need:
+The **Prepare** step, **Before you sign in**, guides you through creating the app registration with the setup script. See [Create the app registration](/getting-started/app-registration/#in-tenuvault-the-prepare-step).
 
-* An Intune role, for example Intune Administrator.
-* For backups in Azure: the Storage Blob Data Contributor role on the storage account.
-
-If you have not created the app registration yet, do it now: see [Create the app registration](/getting-started/app-registration/). When you have the client ID, select **I have the client id**.
+The admins who use TenuVault need an Intune role, for example Intune Administrator. If the app registration already exists, select **Next: sign in**.
 
 ## Step 2: Sign in
 
-1. Fill in the form:
+The **Sign in** step is headed **Sign in to your tenant**.
+
+1. Paste the two lines the setup script printed into **Paste the script output**. TenuVault fills in **Tenant id or domain** and **Application (client) id** and shows **Filled in the tenant ID and the client ID.** Pasting the whole output into either ID field works too. Or type the values:
 
    | Field | Enter | Example |
    | --- | --- | --- |
@@ -35,16 +40,25 @@ If you have not created the app registration yet, do it now: see [Create the app
    | **Application (client) id** | The client ID printed by the setup script | `00000000-0000-0000-0000-000000000000` |
    | **Display name (optional)** | The name TenuVault shows for this tenant. If you leave it empty, TenuVault uses your organization's name from Microsoft Entra ID. | `Contoso Production` |
 
-2. Select **Sign in with Microsoft**. The button changes to **Waiting for sign-in...** and TenuVault shows **Complete the sign-in in your browser.**
+2. Select **Sign in with Microsoft**. The button changes to **Waiting for sign-in...** and TenuVault shows **Complete the sign-in in your browser. TenuVault then checks the license for this tenant.**
 3. Complete the Microsoft sign-in with your admin account, including MFA if your policies require it.
 
 The sign-in opens in your default browser, on Windows and on macOS. When it finishes, the browser shows **Signed in to TenuVault**. Close the tab and return to TenuVault.
 
+If you abandoned the sign-in in the browser, select **Cancel sign-in** to stop waiting and start again.
+
 You can use a separate admin account. It does not have to be the account you are signed in to Windows or macOS with. Pick it in the Microsoft account list, choose **Use another account**, or start the sign-in while a browser profile signed in as that admin account is your default.
 
-Device-based Conditional Access, such as requiring a compliant or Entra-joined device, is checked in the browser. On Windows it works in Microsoft Edge when you are signed in to the browser profile, in Chrome with the Microsoft Single Sign On extension or the `CloudAPAuthEnabled` policy, and in Firefox with Windows single sign-on turned on. On macOS it needs the Microsoft Enterprise SSO extension on the device, and Chrome there also needs the Microsoft Single Sign On extension, unless it is Chrome 135 or later on a Mac that stores the device key in the Secure Enclave.
+Device-based Conditional Access, such as requiring a compliant or Entra-joined device, is checked in the browser. While TenuVault waits for the sign-in, it notes that Conditional Access needs a browser that passes the device identity, such as Microsoft Edge signed in to your work profile: make it your default browser, cancel and sign in again. On Windows it works in Microsoft Edge when you are signed in to the browser profile, in Chrome with the Microsoft Single Sign On extension or the `CloudAPAuthEnabled` policy, and in Firefox with Windows single sign-on turned on. On macOS it needs the Microsoft Enterprise SSO extension on the device, and Chrome there also needs the Microsoft Single Sign On extension, unless it is Chrome 135 or later on a Mac that stores the device key in the Secure Enclave.
 
 4. After a successful sign-in, TenuVault checks the license for this tenant and moves to **Storage**, showing **Signed in as &lt;your account&gt;**.
+
+### Signed in, but not saved yet
+
+If you signed in but did not finish the **Storage** step, for example because you went back or restarted TenuVault, the **Sign in** step shows **Signed in as &lt;your account&gt;** with two buttons:
+
+* **Continue**: goes on to **Storage** with this sign-in.
+* **Use a different tenant or account**: signs out of that tenant and shows the sign-in form again. This also frees the free Community plan for another tenant.
 
 ### Form errors
 
@@ -52,8 +66,26 @@ Device-based Conditional Access, such as requiring a compliant or Entra-joined d
 | --- | --- |
 | **Enter a tenant id or a domain such as contoso.onmicrosoft.com.** | Enter the tenant GUID or a full domain name. |
 | **The client id is a GUID, printed by the setup script.** | Paste the **Application (client) id**, not the app name or object ID. |
+| **No IDs found. Paste the lines that start with Tenant id and Application (client) id.** | The pasted text does not contain the script output. Copy the two lines at the end of the script output again. |
 
-If the sign-in itself fails, TenuVault shows the error Microsoft returned under the form. Common causes are a mistyped client ID, a tenant ID from another tenant, or a sign-in restricted to a group you are not a member of. See [Troubleshooting](/troubleshooting/).
+### Sign-in errors
+
+If Microsoft refuses the first sign-in, TenuVault shows what to do, followed by the Microsoft error code:
+
+| Code | Meaning | Fix |
+| --- | --- | --- |
+| `AADSTS700016` | No app registration with this client ID exists in this tenant. | Check the **Application (client) id** the script printed, and that the tenant is the one the script ran in. |
+| `AADSTS90002`, `AADSTS900023` | Microsoft does not know this tenant, or it is not a valid tenant ID or domain. | Use the **Tenant id** the script printed, or a domain such as `contoso.onmicrosoft.com`. |
+| `AADSTS50011` | The app registration has no `http://localhost` redirect URI for mobile and desktop applications. | Run the setup script again, or add the redirect URI as described in [Create the app registration manually](/getting-started/app-registration/#2-add-the-redirect-uris). |
+| `AADSTS7000218` | The app registration asks for a client secret, because `http://localhost` is registered for the **Web** platform. | Add `http://localhost` under **Mobile and desktop applications** on the app registration's **Authentication** page, or run the setup script again. |
+| `AADSTS50020` | The account does not belong to this tenant. | Sign in with an admin account of this tenant. |
+| `AADSTS50105` | Your account is not assigned to the TenuVault app registration. | Ask your Entra administrator to add you to the group that may sign in. |
+| `AADSTS53000`, `AADSTS53001` | Conditional Access requires a compliant, registered or domain-joined device. | Make a browser that passes the device identity, such as Microsoft Edge signed in to your work profile, your default browser and try again. |
+| `AADSTS53003` | Conditional Access blocked the sign-in. | Check the sign-in logs in the Entra admin center for the policy, or sign in from a device and location it allows. |
+| `AADSTS65001`, `AADSTS650057` | The app registration has no admin consent for Microsoft Graph. | Add the Microsoft Graph permissions listed in [Delegated permissions](/getting-started/app-registration/#delegated-permissions), grant admin consent and sign in again. |
+| `AADSTS65004` | The consent was declined in the browser. | Sign in again and accept, or ask an administrator to run the setup script, which grants admin consent. |
+
+For other errors, TenuVault shows the error Microsoft returned. See [Troubleshooting](/troubleshooting/#sign-in).
 
 ### License check at sign-in
 
@@ -62,13 +94,9 @@ TenuVault checks that your license covers the tenant when you sign in, and again
 * **TenuVault Community covers one tenant, and it is used for tenant &lt;tenant id&gt;. Add a Pro or MSP license on the License page to use more tenants.**
 * **A TenuVault license is required for this tenant. Add your license key on the License page, or start a 30 day free trial.**
 
-See [Activate and manage your license](/licensing/manage/) for all license messages.
+If the second check, on **Continue** in the **Storage** step, fails, setup returns to **Sign in** with the tenant ID and client ID kept. It explains that TenuVault signed you out of this tenant and that you can sign in again once the license covers it, and offers **Try Pro free for 30 days, no card** and **I have a license key**. When Community already covers another tenant, the dialog **Community covers one tenant** explains the limit instead.
 
-## Other ways to connect a tenant
-
-**Tenants** > **Connect tenant** opens a shorter dialog, **Connect a tenant**, with the same sign-in form. Expand **First time? Create an app registration** to copy the setup script. After you sign in, the dialog asks **Where should backups be stored?**; choose storage and select **Connect tenant**. This dialog does not offer a first backup; run it from **Backup & Restore**.
-
-To add more tenants and switch between them, see [Manage tenants](/tenants/).
+See [Activate and manage your license](/licensing/manage/) for all license messages. To add more tenants and switch between them, see [Manage tenants](/tenants/).
 
 ## Staying signed in
 

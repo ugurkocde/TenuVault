@@ -95,9 +95,15 @@ describe("New-TenuVaultDesktopApp.ps1", () => {
     expect(desktopScript).toContain("New-TenuVaultStorage.ps1")
   })
 
-  it("names the Connect tenant button the app shows", () => {
-    expect(desktopScript).toContain("TenuVault > Tenants > Connect tenant")
+  it("points at the Sign in step of the guided setup the app shows", () => {
+    expect(desktopScript).toContain("paste them into the Sign in step of Set up TenuVault")
     expect(desktopScript).not.toContain("Add tenant")
+    expect(desktopScript).not.toContain("Tenants > Connect tenant")
+  })
+
+  it("lists the permissions it grants admin consent for", () => {
+    expect(desktopScript).toContain('Write-Host "  $($resource.Name): $($resource.Scopes -join \', \')"')
+    expect(desktopScript.indexOf("$($resource.Scopes -join ', ')")).toBeLessThan(desktopScript.indexOf("New-MgOauth2PermissionGrant"))
   })
 
   it("installs and imports every Graph module at the Microsoft.Graph.Authentication version", () => {

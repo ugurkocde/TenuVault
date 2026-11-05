@@ -208,8 +208,8 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
       const openSecondTenantDialog = async () => {
         await evaluate(`window.__scheduleFrame.contentWindow.location.hash = '#/portal/onboarding'`)
         // The second time the onboarding page may already be on its sign-in step.
-        assert(await waitForCondition(`[...${body}.querySelectorAll('button')].some(button => ['I have the client id', 'Sign in with Microsoft'].includes(button.textContent.trim()))`), "onboarding fixture did not open")
-        await evaluate(`[...${body}.querySelectorAll('button')].find(button => button.textContent.trim() === 'I have the client id')?.click()`)
+        assert(await waitForCondition(`[...${body}.querySelectorAll('button')].some(button => ['Next: sign in', 'Sign in with Microsoft'].includes(button.textContent.trim()))`), "onboarding fixture did not open")
+        await evaluate(`[...${body}.querySelectorAll('button')].find(button => button.textContent.trim() === 'Next: sign in')?.click()`)
         await setValue("tenant", "44444444-4444-4444-4444-444444444444")
         await setValue("clientId", "22222222-2222-2222-2222-222222222222")
         await evaluate(`[...${body}.querySelectorAll('button')].find(button => button.textContent.trim() === 'Sign in with Microsoft').click()`)

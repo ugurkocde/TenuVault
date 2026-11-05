@@ -9,8 +9,8 @@ import { rendererStorageKey, rendererStorageValue } from "./renderer-storage"
 import { prepareGeneratedFile, prepareSaveFile, type PreparedFile } from "./save-file"
 import { PdfBrandingPolicy, PdfBrandingStore, setPdfBrandingPolicy } from "./pdf-branding"
 import { prepareOibReportFile, printHtmlToPdf } from "./report-export"
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, net, Notification, safeStorage, shell } from "electron"
-import { basename, join } from "node:path"
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, safeStorage, shell } from "electron"
+import { basename, dirname, join } from "node:path"
 import type { ApiRequest, AppPreferences, ScheduleInput } from "../shared/ipc"
 import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, RESOURCE_SCOPES } from "../shared/constants"
 import { createAuditRecorder } from "./api/audit"
@@ -38,6 +38,9 @@ import { encryptedAzureFetch, registerStorageToken } from "./storage/azure-seal"
 import { BackupReaderService } from "./auth/backup-reader"
 // The same setup script the docs site downloads and the card copies, bundled so Save writes it exactly.
 import readerSetupScript from "../../resources/New-TenuVaultBackupReader.ps1?raw"
+import desktopSetupScript from "../../resources/New-TenuVaultDesktopApp.ps1?raw"
+import { SETUP_SCRIPT_FILE_NAME } from "../shared/app-registration"
+import { licenseKeyFromClipboard } from "./license/clipboard-key"
 import { assertStorageAccountName } from "../shared/storage-account"
 import { hostname } from "node:os"
 import { handleLocalBlobRequest, isLocalAccount, localRoutesRunning } from "./storage/blob-emulator"
@@ -930,6 +933,20 @@ async function bootstrap(): Promise<void> {
     pushLicense()
   })
   handleTrusted("auth:accounts", () => auth.accounts())
+  // Stops waiting for a sign-in the admin abandoned in the browser.
+  handleTrusted("auth:cancelSignIn", () => auth.cancelInteractive())
+  // The guided setup saves the app registration script it ships with; nothing else is written.
+  handleTrusted("setup:saveScript", async () => {
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      title: "Save the TenuVault setup script",
+      defaultPath: join(app.getPath("documents"), SETUP_SCRIPT_FILE_NAME),
+      filters: [{ name: "PowerShell script", extensions: ["ps1"] }],
+    })
+    if (result.canceled || !result.filePath) return { saved: false }
+    const { writeFile } = await import("node:fs/promises")
+    await writeFile(result.filePath, desktopSetupScript, "utf8")
+    return { saved: true, folder: dirname(result.filePath), fileName: basename(result.filePath) }
+  })
 
   const isTenantId = (value: unknown): value is string =>
     typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
@@ -991,6 +1008,8 @@ async function bootstrap(): Promise<void> {
 
   handleTrusted("license:startTrial", (_event, email: unknown, options?: { source?: unknown }) =>
     requestTrialKey(LICENSE_API_BASE, email, options?.source))
+  // While a trial key is on its way, the renderer asks for a key the admin copied from the email.
+  handleTrusted("license:clipboardKey", () => licenseKeyFromClipboard(clipboard.readText()))
 
   ipcMain.on("storage:getSync", (event, key: unknown) => {
     if (!trustedSender(event)) { event.returnValue = null; return }

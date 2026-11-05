@@ -57,7 +57,7 @@ TenuVault restores dependencies such as scope tags, assignment filters and categ
 
 Backups are encrypted with a key that is protected by your Windows or macOS account. A new or reinstalled device has a different key, so it needs your recovery key to read existing backups.
 
-1. Install TenuVault and sign in to the tenant with the same app registration. See [Install and update TenuVault](/getting-started/install/) and [Sign in to your tenant](/getting-started/connect-tenant/).
+1. Install TenuVault, select **Connect your tenant** and sign in to the tenant with the same app registration. The app registration already exists, so on the **Prepare** step select **Next: sign in** and enter its tenant ID and client ID. See [Install and update TenuVault](/getting-started/install/) and [Sign in to your tenant](/getting-started/connect-tenant/).
 2. Activate your license. If the old device is gone and your license has reached its installation limit, deactivate the old installation in the customer portal. See [Activate and manage your license](/licensing/manage/).
 3. Go to **Settings** > **Storage and recovery**, click **Import a recovery key**, paste the key (it starts with `TVK2.`, or `TVK1` for older keys) and click **Import**. The imported key encrypts new backups, and backups made with earlier keys stay readable.
 4. Point the tenant at the existing backups:

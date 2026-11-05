@@ -12,12 +12,14 @@ import { bridge } from "../lib/bridge"
  */
 export const TrialSignupForm = forwardRef<HTMLInputElement, {
   source: string
+  /** Prefills the address, for example with the signed-in admin's user name. */
+  initialEmail?: string
   /** Called once the request was accepted, for example to point at the key field. */
   onSent?: (email: string) => void
   className?: string
-}>(function TrialSignupForm({ source, onSent, className }, ref) {
+}>(function TrialSignupForm({ source, initialEmail, onSent, className }, ref) {
   const id = useId()
-  const [email, setEmail] = useState("")
+  const [email, setEmail] = useState(initialEmail ?? "")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   const [sentTo, setSentTo] = useState("")
@@ -79,7 +81,8 @@ export const TrialSignupForm = forwardRef<HTMLInputElement, {
           <MailCheck className="h-4 w-4 text-green-600" aria-hidden="true" />
           <AlertDescription>
             Check your inbox at <span className="font-medium break-all">{sentTo}</span>. The key usually arrives within a
-            minute. Paste it into the license key field below.
+            minute. Copy it from the email and come back: TenuVault picks it up from the clipboard, or paste it into the
+            license key field.
           </AlertDescription>
         </Alert>
       )}

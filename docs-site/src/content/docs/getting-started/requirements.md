@@ -25,6 +25,8 @@ Someone must create the app registration TenuVault signs in with. The setup scri
 
 The script grants tenant-wide admin consent, so the account must be allowed to consent. See [Create the app registration](/getting-started/app-registration/).
 
+If you do not have one of these roles yourself, select **Someone else is the admin? Copy instructions** on the **Prepare** step of **Set up TenuVault**. It copies a ready-to-send message for your Entra administrator with the script link, the command, the permissions and the two values to send back. TenuVault keeps your setup progress while you wait.
+
 ## Admins who use TenuVault
 
 TenuVault uses delegated permissions only. Every request runs as the signed-in admin, so the app can never do more than that admin can do in Intune.

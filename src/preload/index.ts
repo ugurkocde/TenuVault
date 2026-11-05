@@ -25,11 +25,15 @@ const bridge: TenuVaultPreloadBridge = {
     signOut: (tenantId) => invoke("auth:signOut", tenantId),
     accounts: () => invoke("auth:accounts"),
     reauthenticate: (tenantId, clientId, scope) => invoke("auth:reauthenticate", tenantId, clientId, scope),
+    cancelSignIn: () => invoke("auth:cancelSignIn"),
     onSignInRequired: (listener) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: SignInRequiredEvent) => listener(payload)
       ipcRenderer.on("auth:signInRequired", handler)
       return () => ipcRenderer.removeListener("auth:signInRequired", handler)
     },
+  },
+  setup: {
+    saveScript: () => invoke("setup:saveScript"),
   },
   backups: {
     cancel: (jobId) => invoke("backups:cancel", jobId),
@@ -63,6 +67,7 @@ const bridge: TenuVaultPreloadBridge = {
     releaseTenant: (tenantId) => invoke("license:releaseTenant", tenantId),
     open: (target, options) => invoke("license:open", target, options),
     startTrial: (email, options) => invoke("license:startTrial", email, options),
+    clipboardKey: () => invoke("license:clipboardKey"),
     onChanged: (listener) => subscribe<LicenseStatus>("license:changed", listener),
   },
   schedules: {
