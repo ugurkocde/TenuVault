@@ -62,7 +62,7 @@ export function auditWatchOf(deps: FeatureDeps, tenantId: string): Stored<AuditW
 }
 
 function defaultSourceState(): SourceState {
-  return { watermark: null, recent: [], continuation: null, lastPollAt: null, lastError: null }
+  return { generation: 0, watermark: null, recent: [], continuation: null, lastPollAt: null, lastError: null }
 }
 
 export function defaultConditionalAccessWatch(): ConditionalAccessWatch {
@@ -381,6 +381,7 @@ export async function pollAuditWatch(deps: FeatureDeps, tenantId: string, option
 
 /** Where one watched service keeps its position in its audit log. */
 interface SourceState {
+  generation: number
   watermark: string | null
   recent: Array<{ id: string; at: string }>
   continuation: string | null
@@ -397,13 +398,20 @@ export function enabledServices(watch: AuditWatchRecord): ChangeService[] {
 }
 
 function sourceStateOf(watch: AuditWatchRecord, service: ChangeService): SourceState {
-  if (service === "intune") return { watermark: watch.watermark, recent: watch.recent, continuation: watch.continuation, lastPollAt: watch.lastPollAt, lastError: watch.lastError }
-  return { ...defaultSourceState(), ...(watch.conditionalAccess ?? {}) }
+  if (service === "intune") return { generation: watch.generation ?? 0, watermark: watch.watermark, recent: watch.recent, continuation: watch.continuation, lastPollAt: watch.lastPollAt, lastError: watch.lastError }
+  const ca = watch.conditionalAccess
+  return { ...defaultSourceState(), ...(ca ?? {}), generation: ca?.generation ?? 0 }
 }
 
-/** The fields a poll owns for its service. Never enabled: that is the admin's setting. */
-function sourcePatch(service: ChangeService, change: Partial<SourceState>): AuditWatchChange {
+/** The fields a poll owns for its service. Never enabled or the generation: those are the admin's. */
+function sourcePatch(service: ChangeService, change: Partial<Omit<SourceState, "generation">>): AuditWatchChange {
   return service === "intune" ? change : { conditionalAccess: change }
+}
+
+/** Whether a poll's result still applies: the service is on and was not turned on again since it started. */
+function stillCurrent(deps: FeatureDeps, tenant: string, service: ChangeService, generation: number): boolean {
+  const watch = auditWatchOf(deps, tenant)
+  return Boolean(watch && enabledServices(watch).includes(service) && sourceStateOf(watch, service).generation === generation)
 }
 
 const SOURCES: Record<ChangeService, {
@@ -504,6 +512,9 @@ async function pollSource(deps: FeatureDeps, tenant: string, service: ChangeServ
       }
       path = nextPath(response.body)
     }
+    // The admin may have turned the service off, or off and on again (a fresh start), while
+    // Graph was answering. Then this result is history: send nothing and keep nothing.
+    if (!stillCurrent(deps, tenant, service, state.generation)) return { enqueued: 0, changes: 0, error: null }
     const profile = deps.tenant(tenant)
     // Categories are Intune audit categories; Conditional Access has none to pick.
     const filtered = filterAuditChanges(collected, { categories: service === "intune" ? watch.categories : [], ownAppId: profile?.clientId ?? null, ignoreOwnChanges: watch.ignoreOwnChanges })

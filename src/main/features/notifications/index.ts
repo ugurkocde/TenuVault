@@ -279,7 +279,7 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       if (conditionalAccess !== undefined) {
         const previous = current?.conditionalAccess ?? defaultConditionalAccessWatch()
         change.conditionalAccess = conditionalAccess && !previous.enabled
-          ? { ...previous, enabled: true, watermark: deps.now().toISOString(), continuation: null, lastPollAt: null }
+          ? { ...previous, enabled: true, watermark: deps.now().toISOString(), continuation: null, lastPollAt: null, generation: (previous.generation ?? 0) + 1 }
           : { ...previous, enabled: conditionalAccess }
       }
       // Turning watching on starts from now. Catching up from an old watermark would replay
@@ -291,6 +291,7 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
         change.watermark = deps.now().toISOString()
         change.continuation = null
         change.lastPollAt = null
+        change.generation = (current?.generation ?? 0) + 1
       }
       const reasons = [
         enabled === true && !current?.enabled ? "Intune change watching turned on" : enabled === false && current?.enabled ? "Intune change watching turned off" : null,

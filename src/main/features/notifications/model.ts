@@ -71,6 +71,8 @@ export interface OutboxRecord {
 /** Conditional Access change watching: its own position in the Entra audit log. */
 export interface ConditionalAccessWatch {
   enabled: boolean
+  /** Raised each time watching is turned on; a poll that started earlier discards its result. */
+  generation?: number
   watermark: string | null
   recent: Array<{ id: string; at: string }>
   continuation: string | null
@@ -100,6 +102,8 @@ export interface AuditWatchRecord {
   continuation: string | null
   lastPollAt: string | null
   lastError: string | null
+  /** Raised each time Intune watching is turned on; a poll that started earlier discards its result. */
+  generation?: number
   /** Settings above (interval, own changes, actor, external watcher) apply to both services. */
   conditionalAccess?: ConditionalAccessWatch
   /** Last heartbeat check of the Azure watcher, made while externalWatcher is on. */

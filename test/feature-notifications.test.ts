@@ -590,7 +590,32 @@ describe("Conditional Access change watching", () => {
     await polling
     const status = (await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-status" })).body.auditWatch
     expect(status.conditionalAccess.enabled).toBe(false)
-    expect(status.conditionalAccess.lastPollAt).not.toBeNull()
+    // The late result is discarded, not saved.
+    expect(status.conditionalAccess.lastPollAt).toBeNull()
+  })
+
+  it("a poll that started before watching was turned off and on again sends and keeps nothing", async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const old = fixture.events.map((event) => ({ ...event, activityDateTime: "2026-10-17T11:50:00Z" }))
+    const w = world({ graph: () => async (_method: string, path: string) => {
+      if (path.startsWith("deviceManagement/auditEvents")) { await gate; return { status: 200, body: { value: old } } }
+      return { status: 200, body: { value: [] } }
+    } })
+    const local = await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-channel", kind: "local" })
+    await addRule(w, [local.body.channel.id])
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: true })
+    const polling = pollAuditWatch(w.deps, TENANT_A)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: false })
+    w.advance(60_000)
+    const again = await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: true })
+    release()
+    expect((await polling).changes).toBe(0)
+    expect(w.deps.notifications).toHaveLength(0)
+    const status = (await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-status" })).body.auditWatch
+    expect(status.watermark).toBe(again.body.auditWatch.watermark)
+    expect(status.lastPollAt).toBeNull()
   })
 
   it("turning everything off also stops Conditional Access watching, free on every plan", async () => {
