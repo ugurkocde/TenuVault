@@ -39,6 +39,7 @@ import {
   TEXT_LIMITS,
   isDefaultLayout,
   parseCardLayout,
+  parseCardStyle,
   styleIssues,
   type CardLayout,
   type CardStyle,
@@ -158,7 +159,8 @@ function CardLayoutEditor({ tenant, initial, channels, licensed, open, onClose, 
     if (!samples.some((entry) => entry.id === sampleId)) setSampleId(samples[0]!.id)
   }, [samples, sampleId])
 
-  const payload = useMemo(() => teamsWorkflowsPayload(sample.envelope, style), [sample, style])
+  // Normalized like the server and the Azure watcher do on save, so the preview shows the delivered card.
+  const payload = useMemo(() => teamsWorkflowsPayload(sample.envelope, parseCardStyle(style)), [sample, style])
   const bytes = useMemo(() => new TextEncoder().encode(JSON.stringify(payload)).length, [payload])
   const dirty = !sameLayout(layout, initial)
   const allIssues = [layout.base, ...Object.values(layout.overrides)].flatMap((entry) => styleIssues(entry))
@@ -178,7 +180,8 @@ function CardLayoutEditor({ tenant, initial, channels, licensed, open, onClose, 
 
   const save = useMutation({ mutationFn: () => notificationsApi.saveCardLayout(tenant, layout), onSuccess: () => { toast("Teams card saved", "success"); onSaved() }, onError: failed })
   const test = useMutation({
-    mutationFn: () => notificationsApi.testChannel(tenant, testChannelId, layout),
+    // A test event belongs to no group, so the style shown on this tab is sent as the base.
+    mutationFn: () => notificationsApi.testChannel(tenant, testChannelId, { ...layout, base: style }),
     onSuccess: (result) => toast(result.delivery.ok ? "Test card sent to Teams" : `Test failed: ${result.delivery.error ?? "unknown error"}`, result.delivery.ok ? "success" : "error"),
     onError: failed,
   })

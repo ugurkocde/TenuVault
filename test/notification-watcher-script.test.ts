@@ -95,6 +95,10 @@ describe("Azure notification watcher scripts", () => {
     expect(setup).toContain("[string]$TeamsCardLayoutPath")
     expect(setup).toContain('"TenuVaultTeamsCardLayout"')
     expect(runbook).toContain("Get-TvCardStyleFor $Layout")
+    // The layout file is read as UTF-8, checked before any Azure write, and only written when passed.
+    expect(setup).toContain("Get-Content -LiteralPath $TeamsCardLayoutPath -Raw -Encoding UTF8")
+    expect(setup.indexOf("Teams card layout file not found")).toBeLessThan(setup.indexOf("Writing Automation variables"))
+    expect(setup).toContain('if ($PSBoundParameters.ContainsKey("TeamsCardLayoutPath"))')
   })
 
   it("desktop setup adds notification scopes only with the opt-in switch", () => {

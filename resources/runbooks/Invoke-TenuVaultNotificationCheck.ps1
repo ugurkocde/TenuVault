@@ -806,9 +806,12 @@ function ConvertTo-TvCardStyle {
         $label = Get-TvCleanStyleText $entry 80
         if ($label -and -not $hiddenDetails.Contains($label) -and $hiddenDetails.Count -lt 20) { $hiddenDetails.Add($label) }
     }
+    # The text form is checked before any conversion: a cast of "many", an array or an
+    # oversized number would throw and turn a damaged layout into a failed delivery.
     $maxItems = 20
     $maxRaw = Get-TvProp $Raw "maxItems"
-    if ($null -ne $maxRaw -and @(3, 5, 10, 20) -contains [int]$maxRaw -and "$maxRaw" -match '^\d+$') { $maxItems = [int]$maxRaw }
+    $maxParsed = 0
+    if (($maxRaw -is [string] -or $maxRaw -is [int] -or $maxRaw -is [long] -or $maxRaw -is [double]) -and "$maxRaw" -match '^\d{1,2}$' -and [int]::TryParse("$maxRaw", [ref]$maxParsed) -and @(3, 5, 10, 20) -contains $maxParsed) { $maxItems = $maxParsed }
     return [pscustomobject][ordered]@{
         order = @($order.ToArray())
         hidden = $hidden

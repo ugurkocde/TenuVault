@@ -102,5 +102,8 @@ describe("Teams card editor", () => {
     await act(async () => { button(dialog, "Send test to IT Ops alerts")!.click() })
     await waitFor(() => state.tested)
     expect((state.tested as { channelId: string; layout: CardLayout }).layout.overrides.backups).toBeTruthy()
+    // The tab's style is what the test card uses, since a test event belongs to no group.
+    const tested = (state.tested as { layout: CardLayout }).layout
+    expect(tested.base).toEqual(tested.overrides.backups)
   })
 })

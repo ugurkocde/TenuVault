@@ -131,7 +131,8 @@
 .PARAMETER TeamsCardLayoutPath
     Path to a Teams card layout file saved with "Copy for Azure watcher" in TenuVault
     (Settings > Notifications > Teams card). The watcher then builds its Teams cards
-    with that layout. Without it, cards use the standard layout.
+    with that layout. A rerun without it keeps the saved layout; pass an empty string
+    to go back to the standard card.
 
 .PARAMETER GrantGraphRoles
     Assign the Graph application roles to the managed identity now (needs Global
@@ -225,6 +226,18 @@ if ($MailProbeMailbox -and $MailProbeMailbox -notmatch "^[^@\s]+@[^@\s]+$") {
 }
 if ($AlertEmail -and $AlertEmail -notmatch "^[^@\s]+@[^@\s]+$") {
     throw "-AlertEmail '$AlertEmail' is not an email address."
+}
+# The Teams card layout file is checked here too, before anything is written to Azure.
+# It is read as UTF-8: Windows PowerShell 5.1 would otherwise decode a file without a
+# byte order mark with the ANSI code page and garble non-ASCII titles and notes.
+$teamsCardLayoutJson = ""
+if (-not $Remove -and $TeamsCardLayoutPath) {
+    if (-not (Test-Path -LiteralPath $TeamsCardLayoutPath)) { throw "Teams card layout file not found: $TeamsCardLayoutPath" }
+    $layoutText = (Get-Content -LiteralPath $TeamsCardLayoutPath -Raw -Encoding UTF8).Trim()
+    try { $parsedLayout = $layoutText | ConvertFrom-Json } catch { throw "The Teams card layout file is not valid JSON. Copy it again from TenuVault." }
+    if ($parsedLayout.version -ne 1 -or -not $parsedLayout.base) { throw "The Teams card layout file is not a TenuVault layout (version 1 with a base layout)." }
+    # Compact form keeps the variable small; it is not a secret.
+    $teamsCardLayoutJson = $parsedLayout | ConvertTo-Json -Depth 10 -Compress
 }
 if ($IncludeMailSend -and (-not $MailSender -or -not $MailRecipients)) {
     throw "-IncludeMailSend requires -MailSender and -MailRecipients. Refusing to grant Mail.Send without a named sender mailbox and recipients."
@@ -498,16 +511,11 @@ if ($MailProbeMailbox) { Set-TenuVaultAutomationVariable -Name "TenuVaultMailPro
 Set-TenuVaultAutomationVariable -Name "TenuVaultMissedBackupHours" -Value ([string]$MissedBackupHours)
 Set-TenuVaultAutomationVariable -Name "TenuVaultIncludeActor" -Value $(if ($IncludeActor) { "true" } else { "false" })
 Set-TenuVaultAutomationVariable -Name "TenuVaultWatchConditionalAccess" -Value $(if ($IncludeConditionalAccess) { "true" } else { "false" })
-$teamsCardLayoutJson = ""
-if ($TeamsCardLayoutPath) {
-    if (-not (Test-Path -LiteralPath $TeamsCardLayoutPath)) { throw "Teams card layout file not found: $TeamsCardLayoutPath" }
-    $teamsCardLayoutJson = (Get-Content -LiteralPath $TeamsCardLayoutPath -Raw).Trim()
-    try { $parsedLayout = $teamsCardLayoutJson | ConvertFrom-Json } catch { throw "The Teams card layout file is not valid JSON. Copy it again from TenuVault." }
-    if ($parsedLayout.version -ne 1 -or -not $parsedLayout.base) { throw "The Teams card layout file is not a TenuVault layout (version 1 with a base layout)." }
-    # Compact form keeps the variable small; it is not a secret.
-    $teamsCardLayoutJson = $parsedLayout | ConvertTo-Json -Depth 10 -Compress
+# Like the other optional values, the layout is only written when the parameter is passed,
+# so a rerun without it keeps the saved layout. -TeamsCardLayoutPath "" clears it.
+if ($PSBoundParameters.ContainsKey("TeamsCardLayoutPath")) {
+    Set-TenuVaultAutomationVariable -Name "TenuVaultTeamsCardLayout" -Value $teamsCardLayoutJson
 }
-Set-TenuVaultAutomationVariable -Name "TenuVaultTeamsCardLayout" -Value $teamsCardLayoutJson
 Set-TenuVaultAutomationVariable -Name "TenuVaultConfigVersion" -Value "1"
 
 # ---------------------------------------------------------------------------

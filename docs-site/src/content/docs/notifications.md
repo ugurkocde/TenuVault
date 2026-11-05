@@ -61,11 +61,12 @@ Messages arrive as an Adaptive Card posted by Workflows: a header tinted by seve
 * **Parts:** the header (severity and title) is always first and the button always last. Summary, details, the changes list, a note and the footer can be dragged into any order, or moved with the arrow buttons or the keyboard (space, arrow keys, space), and each can be hidden with its eye.
 * **Whole card:** header color (by severity, accent, neutral or green), comfortable or compact spacing, and readable or ISO times.
 * **Header:** show severity as color and label, color only or label only, and an optional title prefix such as `[Production]`.
-* **Summary, note and button label** take your own text with placeholders: `{tenant}`, `{title}`, `{severity}`, `{eventType}`, `{count}` and `{occurredAt}`. An unknown placeholder blocks saving. The note can show for every event, warnings and up, or critical only.
+* **Title prefix, summary, note and button label** take your own text with placeholders: `{tenant}`, `{title}`, `{severity}`, `{eventType}`, `{count}` and `{occurredAt}`. An unknown placeholder blocks **Save card** and **Send test** until it is fixed. Line breaks and repeated spaces become one space, in the preview as in Teams. The note can show for every event, warnings and up, or critical only.
 * **Details:** pick the rows to show. **Changes list:** 3, 5, 10 or 20 lines (the rest becomes "And N more"), one line each or the name with details below, and whether to show the type, who made the change and the time.
 * **Button:** the matching admin center (Intune or Conditional Access changes), or always the Intune admin center or Conditional Access in Entra, with an optional label.
 * **Per event type:** the tabs Backups, Restores, Drift, Changes and Alerts can each get their own layout; until then they use the default one.
-* **Send test** sends a test card with the layout as edited, before saving. **Reset to standard** goes back to the built-in card, also on the Community plan.
+* **Send test** sends a test card with the layout of the open tab as edited, before saving. **Reset to standard** goes back to the built-in card.
+* Designing a layout is part of Pro. On the Community plan the editor opens read only, to view the saved layout, and **Reset to standard** stays available.
 
 What a layout can never do: tenant text (policy names, tenant name, actor) is always plain text, so it cannot become a link or formatting; buttons only open the fixed Microsoft addresses above; and the card stays at Adaptive Card 1.4. A damaged or unknown setting falls back to the standard value instead of stopping a delivery.
 
