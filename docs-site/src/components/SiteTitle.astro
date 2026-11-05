@@ -50,6 +50,7 @@ const hasThemedLogos = config.logo && !('src' in config.logo);
 		align-items: center;
 		gap: 0.625rem;
 		min-width: 0;
+		min-height: 2.75rem;
 	}
 	img {
 		height: 2rem;
@@ -60,11 +61,13 @@ const hasThemedLogos = config.logo && !('src' in config.logo);
 		font-weight: 600;
 		letter-spacing: -0.01em;
 	}
-	/* Padded into a pill sized tap target so it is easy to hit next to the logo on a phone. */
+	/* At least 44px square so it is easy to hit next to the logo on a phone. */
 	.site-title .site-title-tag {
 		display: inline-flex;
 		align-items: center;
-		min-height: 2.25rem;
+		justify-content: center;
+		min-width: 2.75rem;
+		min-height: 2.75rem;
 		padding-inline: 0.375rem;
 		border-radius: 999px;
 		font-size: 0.875rem;
