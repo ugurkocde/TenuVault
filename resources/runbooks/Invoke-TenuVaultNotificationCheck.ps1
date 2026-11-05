@@ -757,7 +757,7 @@ $script:TvOutcomePrefix = "cloud-backup-outcomes/"
 $script:TvOutcomeSummary = @{
     Success = "The cloud backup in Azure completed successfully."
     CompletedWithWarnings = "The cloud backup in Azure saved policies, but some could not be read. Open TenuVault for the details."
-    Failed = "The cloud backup in Azure saved no policies. Open the runbook job in the Automation account for the reason."
+    Failed = "The cloud backup in Azure failed, so this backup is incomplete. Open the runbook job in the Automation account for the reason."
 }
 
 # Mirrors backupEvent in envelope.ts.
