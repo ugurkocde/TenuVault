@@ -259,9 +259,12 @@ describe("Azure notification watcher scripts", () => {
   it.runIf(Boolean(pwsh))("PowerShell turns cloud backup notes into the same backup events as TypeScript", () => {
     const script = fileURLToPath(new URL("./fixtures/notifications/render-outcomes.ps1", import.meta.url))
     // System.Text.Json on PowerShell 7, ConvertFrom-Json on the watcher's 5.1 runtime: both must agree.
+    // The fallback keeps times as text only on 5.1 and, with -DateKind String, on 7.5 and later;
+    // 7.2 to 7.4 always have System.Text.Json, so only a host with -DateKind can stand in for 5.1.
     const run = (parser: string) => execFileSync(pwsh!, ["-NoProfile", "-File", script, "-Parser", parser], { encoding: "utf8" }).trim().split(/\r?\n/)
     const lines = run("SystemTextJson")
-    expect(run("ConvertFromJson")).toEqual(lines)
+    const hasDateKind = execFileSync(pwsh!, ["-NoProfile", "-Command", "(Get-Command ConvertFrom-Json).Parameters.ContainsKey('DateKind')"], { encoding: "utf8" }).trim() === "True"
+    if (hasDateKind) expect(run("ConvertFromJson")).toEqual(lines)
     const expected = outcomeFixture.notes.map((note) => {
       const outcome = parseCloudOutcome(note, outcomeFixture.tenantId)
       return outcome ? canonicalJson(cloudOutcomeEvent(outcome, outcomeFixture.tenantId, outcomeFixture.tenantName)) : "null"
