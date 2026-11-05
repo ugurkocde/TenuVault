@@ -575,6 +575,24 @@ describe("Conditional Access change watching", () => {
     expect(status.conditionalAccess.lastError).toContain("AuditLog.Read.All")
   })
 
+  it("a poll that finishes after the admin turned watching off never turns it back on", async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const w = world({ graph: () => async (_method: string, path: string) => {
+      if (path.startsWith("auditLogs/directoryAudits")) { await gate; return { status: 200, body: { value: [] } } }
+      return { status: 200, body: { value: [] } }
+    } })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", conditionalAccessEnabled: true })
+    const polling = pollAuditWatch(w.deps, TENANT_A)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "revoke-audit-watch" })
+    release()
+    await polling
+    const status = (await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-status" })).body.auditWatch
+    expect(status.conditionalAccess.enabled).toBe(false)
+    expect(status.conditionalAccess.lastPollAt).not.toBeNull()
+  })
+
   it("turning everything off also stops Conditional Access watching, free on every plan", async () => {
     const w = caWorld()
     await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: true, conditionalAccessEnabled: true })

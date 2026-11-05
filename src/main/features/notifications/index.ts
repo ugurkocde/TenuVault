@@ -31,6 +31,7 @@ import {
   rulesOf,
   saveAuditWatch,
   tick,
+  type AuditWatchChange,
 } from "./service"
 
 const TICK_MS = 60_000
@@ -253,7 +254,7 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     },
 
     "update-audit-watch": ({ tenantId, body, deps, actor }) => {
-      const change: Partial<AuditWatchRecord> = {}
+      const change: AuditWatchChange = {}
       const enabled = bool(body, "enabled")
       if (enabled !== undefined) change.enabled = enabled
       if (body.intervalMinutes !== undefined) {

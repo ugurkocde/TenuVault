@@ -89,15 +89,26 @@ export function defaultAuditWatch(): AuditWatchRecord {
   }
 }
 
-export function saveAuditWatch(deps: FeatureDeps, tenantId: string, change: Partial<AuditWatchRecord>, meta: { actor: string | null; reason: string }): Stored<AuditWatchRecord> {
+/** A change to the watch record; conditionalAccess merges field by field into the stored one. */
+export type AuditWatchChange = Partial<Omit<AuditWatchRecord, "conditionalAccess">> & { conditionalAccess?: Partial<ConditionalAccessWatch> }
+
+/**
+ * Saves a change. Merges happen inside the record update against the stored value, so a poll
+ * that finishes after the admin changed a setting only writes the fields it owns.
+ */
+export function saveAuditWatch(deps: FeatureDeps, tenantId: string, change: AuditWatchChange, meta: { actor: string | null; reason: string }): Stored<AuditWatchRecord> {
   const current = auditWatchOf(deps, tenantId)
   const describe = (value: AuditWatchRecord): AuditWatchRecord => ({
     ...value,
     status: value.enabled ? "enabled" : "disabled",
     summary: enabledServices(value).length ? `Polling ${enabledServices(value).map((service) => (service === "intune" ? "Intune" : "Conditional Access")).join(" and ")} audit events every ${value.intervalMinutes} minutes while signed in.` : "Watching audit events is off.",
   })
-  if (!current) return deps.records.create<AuditWatchRecord>(DOMAINS.notificationAuditWatch, tenantId, describe({ ...defaultAuditWatch(), ...change }), meta)
-  return deps.records.update<AuditWatchRecord>(DOMAINS.notificationAuditWatch, tenantId, current.id, (value) => describe({ ...value, ...change }), meta)!
+  const merge = (value: AuditWatchRecord): AuditWatchRecord => {
+    const { conditionalAccess, ...rest } = change
+    return { ...value, ...rest, conditionalAccess: { ...defaultConditionalAccessWatch(), ...(value.conditionalAccess ?? {}), ...(conditionalAccess ?? {}) } }
+  }
+  if (!current) return deps.records.create<AuditWatchRecord>(DOMAINS.notificationAuditWatch, tenantId, describe(merge(defaultAuditWatch())), meta)
+  return deps.records.update<AuditWatchRecord>(DOMAINS.notificationAuditWatch, tenantId, current.id, (value) => describe(merge(value)), meta)!
 }
 
 /** Rules that select an event for a channel: enabled rule and channel, type listed, severity at or above the minimum. */
@@ -390,9 +401,9 @@ function sourceStateOf(watch: AuditWatchRecord, service: ChangeService): SourceS
   return { ...defaultSourceState(), ...(watch.conditionalAccess ?? {}) }
 }
 
-function sourcePatch(watch: AuditWatchRecord, service: ChangeService, change: Partial<SourceState>): Partial<AuditWatchRecord> {
-  if (service === "intune") return change
-  return { conditionalAccess: { ...defaultConditionalAccessWatch(), ...(watch.conditionalAccess ?? {}), ...change } }
+/** The fields a poll owns for its service. Never enabled: that is the admin's setting. */
+function sourcePatch(service: ChangeService, change: Partial<SourceState>): AuditWatchChange {
+  return service === "intune" ? change : { conditionalAccess: change }
 }
 
 const SOURCES: Record<ChangeService, {
@@ -518,7 +529,7 @@ async function pollSource(deps: FeatureDeps, tenant: string, service: ChangeServ
     const byId = new Map<string, { id: string; at: string }>()
     for (const entry of [...state.recent, ...seenNow]) if (Date.parse(entry.at) > pruneBefore || keep.has(entry.id)) byId.set(entry.id, entry)
     const recent = [...byId.values()].sort((a, b) => (a.at < b.at ? -1 : 1)).slice(-MAX_RECENT_AUDIT_IDS)
-    saveAuditWatch(deps, tenant, sourcePatch(watch, service, {
+    saveAuditWatch(deps, tenant, sourcePatch(service, {
       watermark: newWatermark,
       recent,
       continuation: path,
@@ -528,7 +539,7 @@ async function pollSource(deps: FeatureDeps, tenant: string, service: ChangeServ
     return { enqueued, changes: filtered.length, error: null }
   } catch (error) {
     const message = brief(error instanceof Error ? error.message : String(error))
-    saveAuditWatch(deps, tenant, sourcePatch(watch, service, { lastPollAt: now.toISOString(), lastError: message }), { actor: null, reason: `${service === "intune" ? "Intune" : "Conditional Access"} audit poll failed: ${message}` })
+    saveAuditWatch(deps, tenant, sourcePatch(service, { lastPollAt: now.toISOString(), lastError: message }), { actor: null, reason: `${service === "intune" ? "Intune" : "Conditional Access"} audit poll failed: ${message}` })
     return { enqueued: 0, changes: 0, error: message }
   }
 }

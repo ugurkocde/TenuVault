@@ -1500,9 +1500,11 @@ try {
             sentEventIds = $sentArr
             lastMissedKey = $lastMissedKey
             continuation = $continuation
-            entraWatermark = $entraWatermarkIso
-            entraRecentAuditIds = $entraRecentTrimmed
-            entraContinuation = $entraContinuation
+            # While Conditional Access is not watched its position is not kept, so turning it
+            # on later starts an hour back instead of replaying everything since an old watermark.
+            entraWatermark = $(if ($watchConditionalAccess) { $entraWatermarkIso } else { $null })
+            entraRecentAuditIds = @(if ($watchConditionalAccess) { $entraRecentTrimmed })
+            entraContinuation = $(if ($watchConditionalAccess) { $entraContinuation } else { $null })
             pendingEnvelopes = @($pendingEnvelopes.ToArray())
             deadEnvelopes = $deadArr
             mailVerified = $mailVerified
