@@ -14,7 +14,8 @@ Nothing is sent until you add a channel and a rule. A **channel** is a destinati
 | Backup failed | A backup saved nothing, or could not be read | Critical |
 | Backup completed with warnings | A backup saved policies but some items could not be read | Warning |
 | Backup succeeded | A backup finished cleanly (opt in per rule) | Info |
-| No recent backup | The Azure watcher finds no backup newer than your threshold | Critical |
+| No recent backup | The Azure watcher finds no backup newer than your threshold (backups a cloud run reported as failed do not count) | Critical |
+| Cloud backup failed, completed with warnings or succeeded | A [cloud backup](/backups/cloud/) run in Azure ends; the Azure watcher sends it on its next run | Critical, warning or info |
 | Scheduled backup missed its time | TenuVault starts more than an hour after a scheduled backup was due (it was closed or the computer was off) and runs it now; once per slot | Warning |
 | Restore completed, partial or failed | A restore finishes | Info, warning or critical |
 | Drift detected | A drift scan finds changes between two backups | Warning when something was deleted, else info |
@@ -130,8 +131,9 @@ What it can and cannot see, plainly:
 
 * It reads Intune audit events with the application permission `DeviceManagementApps.Read.All`.
 * With `-IncludeConditionalAccess` it also reads Conditional Access changes from the Entra audit log with the application permission `AuditLog.Read.All` (granted by `-GrantGraphRoles`), keeping its own position in that log. Policy content and IP addresses in those events are never read.
-* It reads backup folder names to detect a missed backup. Backup content and backup status details are encrypted with your recovery key, which never leaves your computer, so the watcher reports missed backups by age, while success and failure detail comes from the desktop app.
-* It writes only to its own state container (`tenuvault-notification-state`) and claims a lease on its state before sending, so overlapping runs cannot send twice.
+* It alerts on the results of [cloud backups](/backups/cloud/): **Backup failed**, **Backup completed with warnings** and **Backup succeeded**, the same alerts the desktop app sends. Backups and their status are encrypted with your recovery key, which the watcher never has, so each cloud backup run leaves a small unencrypted result note in the `tenuvault-backup-results` container: status, backup folder name, policy and failure counts, the names of failed types, the run id and the time. Never policy content, policy names or error messages. The watcher turns the note into the alert and deletes it once the alert is queued. These alerts are not a complete run history: writing the note is best effort, so a run that cannot write it (for example after its storage role was removed) sends no result alert, and notes older than 7 days are deleted without an alert. A run that never finishes is still caught by **No recent backup**, and the runbook job history in the Automation account lists every run.
+* It reads backup folder names to detect a missed backup, and leaves out folders a cloud backup reported as failed, so a cloud backup that fails every day still raises **No recent backup**. A failed backup made by the desktop app cannot be told apart by folder name; the desktop app alerts on those itself while it runs.
+* It writes only to its own state container (`tenuvault-notification-state`), where it claims a lease on its state before sending so overlapping runs cannot send twice, and deletes the cloud backup result notes it has handled in `tenuvault-backup-results`. Its storage roles are **Storage Blob Data Reader** on `intune-backups` and **Storage Blob Data Contributor** on those two containers, each scoped to one container.
 * Email from the watcher sends app-only from a mailbox you choose. Setup asks you to restrict that permission in Exchange to the one mailbox before the email channel is used.
 
 Setup is two copy and paste scripts in the TenuVault repository under `resources/`: `New-TenuVaultNotificationWatcher.ps1` creates the Automation account, imports `runbooks/Invoke-TenuVaultNotificationCheck.ps1`, sets the schedule and storage roles, and with `-GrantGraphRoles` (Global Administrator) assigns the Graph application roles and prints a consent receipt. Re-running the script upgrades the runbook in place. `-Remove` tears the schedule, runbook and variables down again and lists the app roles to revoke.
@@ -158,7 +160,8 @@ A watcher that fails silently would defeat its purpose, so setup refuses to gues
 Two setup errors worth knowing before you meet them:
 
 * `Conflict` while creating the Automation account usually means the regional Automation account quota (as low as 2 accounts per region on many subscription types) or the account name being taken in that region. Run again with another `-Location` or `-AutomationAccountName`.
-* A run that reports a missed backup check failure after listing the storage account is a real storage or role problem. The message includes the storage answer; check that the identity still has its two container-scoped roles and that they are permanently active, not PIM-eligible.
+* A run that reports a missed backup check failure after listing the storage account is a real storage or role problem. The message includes the storage answer; check that the identity still has its three container-scoped roles (reader on `intune-backups`, contributor on `tenuvault-notification-state` and `tenuvault-backup-results`) and that they are permanently active, not PIM-eligible.
+* A run that fails with "Cloud backup results could not be read" means the watcher cannot reach `tenuvault-backup-results`, usually because it was set up before cloud backup alerts existed. Run the watcher setup again; it creates the container and grants the role.
 
 ### Watcher email and the one-time verification
 

@@ -11,10 +11,11 @@
       * imports the sibling runbook runbooks/Invoke-TenuVaultNotificationCheck.ps1
         and publishes it (running the script again upgrades the published runbook)
       * creates the tenuvault-notification-state container in the backup storage
-        account for watcher state and heartbeat blobs
+        account for watcher state and heartbeat blobs, and the tenuvault-backup-results
+        container where cloud backups leave their result notes
       * grants the managed identity "Storage Blob Data Reader" on the intune-backups
         container only, and "Storage Blob Data Contributor" on the
-        tenuvault-notification-state container only
+        tenuvault-notification-state and tenuvault-backup-results containers only
       * writes the TenuVault configuration values as Automation variables, with the
         webhook URL, webhook secret and Teams URL stored encrypted when provided
       * links the runbook to a recurring schedule (hourly by default)
@@ -185,6 +186,8 @@ $ErrorActionPreference = "Stop"
 $runbookName = "Invoke-TenuVaultNotificationCheck"
 $scheduleName = "TenuVaultNotificationCheck"
 $stateContainer = "tenuvault-notification-state"
+# Cloud backups leave their result notes here; the watcher reads and deletes them.
+$resultsContainer = "tenuvault-backup-results"
 $backupContainer = "intune-backups"
 $runbookPath = Join-Path $PSScriptRoot "runbooks/Invoke-TenuVaultNotificationCheck.ps1"
 
@@ -456,6 +459,12 @@ if (-not $container) {
 } else {
     Write-Host "State container '$stateContainer' already exists."
 }
+if (-not (Get-AzStorageContainer -Name $resultsContainer -Context $storageContext -ErrorAction SilentlyContinue)) {
+    Write-Host "Creating container '$resultsContainer' for cloud backup results..."
+    if ($PSCmdlet.ShouldProcess($resultsContainer, "Create storage container")) {
+        New-AzStorageContainer -Name $resultsContainer -Context $storageContext -Permission Off | Out-Null
+    }
+}
 $backups = Get-AzStorageContainer -Name $backupContainer -Context $storageContext -ErrorAction SilentlyContinue
 if (-not $backups) {
     Write-Warning "Container '$backupContainer' was not found yet. The watcher reads it for the missed backup check; TenuVault creates it with the first Azure backup."
@@ -464,7 +473,8 @@ if (-not $backups) {
 if ($principalId) {
     $roleScopes = @(
         @{ Role = "Storage Blob Data Reader"; Scope = "$($storageAccount.Id)/blobServices/default/containers/$backupContainer" },
-        @{ Role = "Storage Blob Data Contributor"; Scope = "$($storageAccount.Id)/blobServices/default/containers/$stateContainer" }
+        @{ Role = "Storage Blob Data Contributor"; Scope = "$($storageAccount.Id)/blobServices/default/containers/$stateContainer" },
+        @{ Role = "Storage Blob Data Contributor"; Scope = "$($storageAccount.Id)/blobServices/default/containers/$resultsContainer" }
     )
     foreach ($entry in $roleScopes) {
         $existingAssignment = Get-AzRoleAssignment -ObjectId $principalId -RoleDefinitionName $entry.Role -Scope $entry.Scope |

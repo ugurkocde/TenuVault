@@ -13,6 +13,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import fixture from "./fixtures/notifications/audit-digest.json"
 import liveFixture from "./fixtures/notifications/audit-live.json"
+import outcomeFixture from "./fixtures/notifications/cloud-outcomes.json"
+import { cloudOutcomeEvent, parseCloudOutcome } from "../src/shared/notifications/cloud-outcome"
 import entraFixture from "./fixtures/notifications/entra-audit.json"
 import { entraChangeDigest } from "../src/shared/notifications/audit"
 import { mapEntraAuditEvent, type EntraAuditRaw } from "../src/shared/notifications/entra"
@@ -252,6 +254,26 @@ describe("Azure notification watcher scripts", () => {
     const payload = teamsWorkflowsPayload(envelope, parseCardStyle(raw))
     expect(teamsPayloadBytes(payload)).toBeLessThanOrEqual(TEAMS_MESSAGE_BUDGET_BYTES)
     expect(output).toBe(canonicalJson(payload))
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("PowerShell turns cloud backup notes into the same backup events as TypeScript", () => {
+    const script = fileURLToPath(new URL("./fixtures/notifications/render-outcomes.ps1", import.meta.url))
+    // System.Text.Json on PowerShell 7, ConvertFrom-Json on the watcher's 5.1 runtime: both must agree.
+    // The fallback keeps times as text only on 5.1 and, with -DateKind String, on 7.5 and later;
+    // 7.2 to 7.4 always have System.Text.Json, so only a host with -DateKind can stand in for 5.1.
+    const run = (parser: string) => execFileSync(pwsh!, ["-NoProfile", "-File", script, "-Parser", parser], { encoding: "utf8" }).trim().split(/\r?\n/)
+    const lines = run("SystemTextJson")
+    const hasDateKind = execFileSync(pwsh!, ["-NoProfile", "-Command", "(Get-Command ConvertFrom-Json).Parameters.ContainsKey('DateKind')"], { encoding: "utf8" }).trim() === "True"
+    if (hasDateKind) expect(run("ConvertFromJson")).toEqual(lines)
+    const expected = outcomeFixture.notes.map((note) => {
+      const outcome = parseCloudOutcome(note, outcomeFixture.tenantId)
+      return outcome ? canonicalJson(cloudOutcomeEvent(outcome, outcomeFixture.tenantId, outcomeFixture.tenantName)) : "null"
+    })
+    expect(lines).toEqual(expected)
+    // Rejected: other tenant, newer schema, path-like folder, bad status, a field wrapped in a list,
+    // a trailing newline, non-ASCII digits, a missing backupFolder key, a time without a zone, and impossible times
+    // (Feb 30, T24:00, an offset past 14 hours, before year 1).
+    expect(expected.filter((line) => line === "null")).toHaveLength(13)
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("PowerShell matches TypeScript on live-shaped read and assignment events", () => {
