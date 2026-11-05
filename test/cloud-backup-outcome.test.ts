@@ -58,6 +58,8 @@ describe("cloud backup result notes", () => {
     expect(watcherSetup).toContain('$resultsContainer = "tenuvault-backup-results"')
     expect(watcherSetup).toContain('@{ Role = "Storage Blob Data Contributor"; Scope = "$($storageAccount.Id)/blobServices/default/containers/$resultsContainer" }')
     expect(watcher).toContain('$resultsContainerUri = "https://$storageAccount.blob.core.windows.net/tenuvault-backup-results"')
+    // An unreadable results container fails the job, after state and heartbeat are saved.
+    expect(watcher.indexOf("if ($outcomeRead.Error) { throw")).toBeGreaterThan(watcher.indexOf("if ($missedCheckFailed) { throw"))
     expect(watcher).toContain("failedBackupFolders = @($failedBackupFolders.ToArray()")
     // Notes are deleted only after the state with their alerts is saved.
     expect(watcher.indexOf("foreach ($blobName in $processedOutcomeNames)")).toBeGreaterThan(watcher.indexOf("$watermarkIso = $newestSeenIso\n    & $saveState"))

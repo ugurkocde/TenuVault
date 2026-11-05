@@ -2373,6 +2373,9 @@ try {
     # runs keep delivering other work without re-alarming every hour.
     if ($ingestionError) { throw $ingestionError }
     if ($missedCheckFailed) { throw "Missed backup check failed for this run. See the heartbeat lastError for details." }
+    # A results container that cannot be read (missing role or container) would otherwise stop
+    # cloud backup alerts silently; failing the job raises the Azure Monitor alert instead.
+    if ($outcomeRead.Error) { throw "$($outcomeRead.Error) Run the watcher setup again to grant access to tenuvault-backup-results." }
     if ($newlyExhausted.Count -gt 0) { throw "A notification destination exhausted its retries and its events need attention: $($newlyExhausted -join '; ')" }
 } catch {
     $lastError = Get-TvSafeError $_.Exception.Message
