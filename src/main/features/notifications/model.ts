@@ -68,6 +68,18 @@ export interface OutboxRecord {
   sentAt: string | null
 }
 
+/** Conditional Access change watching: its own position in the Entra audit log. */
+export interface ConditionalAccessWatch {
+  enabled: boolean
+  /** Raised each time watching is turned on; a poll that started earlier discards its result. */
+  generation?: number
+  watermark: string | null
+  recent: Array<{ id: string; at: string }>
+  continuation: string | null
+  lastPollAt: string | null
+  lastError: string | null
+}
+
 export interface AuditWatchRecord {
   title: string
   status: "enabled" | "disabled"
@@ -90,7 +102,18 @@ export interface AuditWatchRecord {
   continuation: string | null
   lastPollAt: string | null
   lastError: string | null
+  /** Raised each time Intune watching is turned on; a poll that started earlier discards its result. */
+  generation?: number
+  /** Settings above (interval, own changes, actor, external watcher) apply to both services. */
+  conditionalAccess?: ConditionalAccessWatch
+  /** Last heartbeat check of the Azure watcher, made while externalWatcher is on. */
+  watcherCheck?: { checkedAt: string; lastRunAt: string | null; stale: boolean; error: string | null }
 }
+
+/** The Azure watcher counts as stale when its heartbeat is older than this. Setup schedules it hourly. */
+export const WATCHER_STALE_HOURS = 3
+/** How often the desktop reads the watcher heartbeat. */
+export const WATCHER_CHECK_MINUTES = 30
 
 export const MAX_CHANNELS = 10
 export const MAX_RULES = 25

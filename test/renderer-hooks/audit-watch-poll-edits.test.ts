@@ -45,7 +45,7 @@ async function waitFor<T>(find: () => T | null | undefined | false): Promise<T> 
 
 describe("Intune change watching form", () => {
   it("keeps unsaved edits through Poll now", async () => {
-    state.auditWatch = { enabled: true, intervalMinutes: 60, categories: [], ignoreOwnChanges: true, includeActor: false, externalWatcher: false, lastPollAt: null, lastError: null, watermark: null }
+    state.auditWatch = { enabled: true, intervalMinutes: 60, categories: [], ignoreOwnChanges: true, includeActor: false, externalWatcher: false, lastPollAt: null, lastError: null, watermark: null, conditionalAccess: { enabled: false, watermark: null, lastPollAt: null, lastError: null } }
     const container = document.createElement("div")
     document.body.appendChild(container)
     const root = createRoot(container)

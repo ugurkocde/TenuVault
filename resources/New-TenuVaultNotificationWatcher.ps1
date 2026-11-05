@@ -122,6 +122,12 @@
     are personal data and most channels are read by a wider group than Intune
     admins.
 
+.PARAMETER IncludeConditionalAccess
+    Also watch Conditional Access policies, named locations and authentication
+    strengths in the Entra audit log. With -GrantGraphRoles this also assigns the
+    AuditLog.Read.All application role. Only ids, times, activity names, target
+    names and the actor are used; policy content in the audit events is never read.
+
 .PARAMETER GrantGraphRoles
     Assign the Graph application roles to the managed identity now (needs Global
     Administrator) and print a consent receipt.
@@ -161,6 +167,7 @@ param(
     [switch]$NoFailureAlert,
     [ValidateRange(1, 8760)][int]$MissedBackupHours = 48,
     [switch]$IncludeActor,
+    [switch]$IncludeConditionalAccess,
     [switch]$GrantGraphRoles,
     [switch]$IncludeMailSend,
     [switch]$Remove
@@ -178,10 +185,12 @@ $automationVariableNames = @(
     "TenuVaultTenantId", "TenuVaultTenantName", "TenuVaultStorageAccount",
     "TenuVaultWebhookUrl", "TenuVaultWebhookSecret", "TenuVaultTeamsWebhookUrl",
     "TenuVaultMailSender", "TenuVaultMailRecipients", "TenuVaultMailProbeMailbox",
-    "TenuVaultMissedBackupHours", "TenuVaultIncludeActor", "TenuVaultConfigVersion"
+    "TenuVaultMissedBackupHours", "TenuVaultIncludeActor", "TenuVaultConfigVersion",
+    "TenuVaultWatchConditionalAccess"
 )
 
 $graphRoleNames = @("DeviceManagementApps.Read.All")
+if ($IncludeConditionalAccess) { $graphRoleNames += "AuditLog.Read.All" }
 if ($IncludeMailSend) { $graphRoleNames += "Mail.Send" }
 
 # Validate every input before the first Azure write, so a typo cannot leave a half
@@ -340,7 +349,7 @@ if ($Remove) {
     Write-Host "Revoke these Microsoft Graph application roles from the managed identity manually"
     Write-Host "(Entra ID > Enterprise applications > the Automation account identity > Permissions):"
     foreach ($role in $graphRoleNames) { Write-Host "  * $role" }
-    Write-Host "Also check for Mail.Send when an earlier run granted it."
+    Write-Host "Also check for Mail.Send and AuditLog.Read.All when an earlier run granted them."
     if ($principalId) { Write-Host "Managed identity object (principal) id: $principalId" }
     Write-Host "The container scoped storage role assignments can be removed in the storage account"
     Write-Host "under Access control (IAM) when the watcher identity is no longer used."
@@ -482,6 +491,7 @@ if ($MailRecipients) { Set-TenuVaultAutomationVariable -Name "TenuVaultMailRecip
 if ($MailProbeMailbox) { Set-TenuVaultAutomationVariable -Name "TenuVaultMailProbeMailbox" -Value $MailProbeMailbox }
 Set-TenuVaultAutomationVariable -Name "TenuVaultMissedBackupHours" -Value ([string]$MissedBackupHours)
 Set-TenuVaultAutomationVariable -Name "TenuVaultIncludeActor" -Value $(if ($IncludeActor) { "true" } else { "false" })
+Set-TenuVaultAutomationVariable -Name "TenuVaultWatchConditionalAccess" -Value $(if ($IncludeConditionalAccess) { "true" } else { "false" })
 Set-TenuVaultAutomationVariable -Name "TenuVaultConfigVersion" -Value "1"
 
 # ---------------------------------------------------------------------------

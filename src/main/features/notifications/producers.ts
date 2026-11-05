@@ -1,4 +1,4 @@
-import { backupEvent, driftEvent, restoreEvent } from "../../../shared/notifications/envelope"
+import { backupEvent, credentialExpiringEvent, driftEvent, lateBackupEvent, restoreEvent } from "../../../shared/notifications/envelope"
 import { allows } from "../../../shared/plans"
 import type { FeatureDeps } from "../deps"
 import { channelsOf, emit, emitDetailed, type NotificationOptions } from "./service"
@@ -88,6 +88,34 @@ export async function emitDriftOutcome(deps: FeatureDeps, tenantId: string, outc
     items: outcome.items,
     source: "desktop",
   })
+  const detailed = await emitDetailed(deps, tenantId, envelope, options)
+  return { created: detailed.created, localCreated: localCreated(deps, tenantId, detailed.coveredChannelIds) }
+}
+
+export interface ReaderCertificate {
+  notAfter: string
+  renewalPending: boolean
+  /** Now, for the days left; injectable for tests. */
+  checkedAt: string
+}
+
+/**
+ * Emits credential.expiring once per certificate and band (30 days, 7 days, expired).
+ * Nothing outside the 30 day window. localCreated lets the legacy toast stand down.
+ */
+export async function emitCredentialExpiring(deps: FeatureDeps, tenantId: string, certificate: ReaderCertificate, options: NotificationOptions = {}): Promise<ProducerResult> {
+  const daysLeft = Math.ceil((Date.parse(certificate.notAfter) - Date.parse(certificate.checkedAt)) / 86_400_000)
+  const envelope = credentialExpiringEvent({ tenantId, tenantName: deps.tenant(tenantId)?.name ?? null, occurredAt: certificate.checkedAt, notAfter: certificate.notAfter, daysLeft, renewalPending: certificate.renewalPending, source: "desktop" })
+  if (!envelope) return { created: 0, localCreated: false }
+  if (!(await licensed(deps, tenantId))) return { created: 0, localCreated: false }
+  const detailed = await emitDetailed(deps, tenantId, envelope, options)
+  return { created: detailed.created, localCreated: localCreated(deps, tenantId, detailed.coveredChannelIds) }
+}
+
+/** A scheduled slot that is being caught up after TenuVault was not running when it was due. */
+export async function emitLateBackup(deps: FeatureDeps, tenantId: string, slot: string, options: NotificationOptions = {}): Promise<ProducerResult> {
+  if (!(await licensed(deps, tenantId))) return { created: 0, localCreated: false }
+  const envelope = lateBackupEvent({ tenantId, tenantName: deps.tenant(tenantId)?.name ?? null, occurredAt: deps.now().toISOString(), slot, source: "desktop" })
   const detailed = await emitDetailed(deps, tenantId, envelope, options)
   return { created: detailed.created, localCreated: localCreated(deps, tenantId, detailed.coveredChannelIds) }
 }

@@ -5,6 +5,9 @@ import { backupEvent, buildEnvelope, canonicalJson, driftEvent, eventId, sha256H
 import { emailHtml, emailSubject, emailText, escapeMarkdown, friendlyTime, teamsWorkflowsPayload } from "../src/shared/notifications/render"
 import fixture from "./fixtures/notifications/audit-digest.json"
 import liveFixture from "./fixtures/notifications/audit-live.json"
+import entraFixture from "./fixtures/notifications/entra-audit.json"
+import { entraChangeDigest } from "../src/shared/notifications/audit"
+import { mapEntraAuditEvent, type EntraAuditRaw } from "../src/shared/notifications/entra"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
 
@@ -181,5 +184,39 @@ describe("rendering", () => {
     const digest = intuneChangeDigest({ tenantId: TENANT, changes, includeActor: true, source: "desktop" })
     expect(emailHtml(digest)).not.toContain("<script>alert(1)</script>")
     expect(emailHtml(digest)).toContain("&lt;script&gt;")
+  })
+})
+
+describe("Conditional Access change digests", () => {
+  const changes = entraFixture.events.map((event) => mapEntraAuditEvent(event as EntraAuditRaw)).filter((change) => change !== null)
+
+  it("keeps successful Conditional Access, named location and strength changes only", () => {
+    // The failed strength create and the Core Directory event are dropped.
+    expect(changes.map((change) => [change.changeType, change.resourceType, change.resourceName])).toEqual([
+      ["created", "Named location", "Head office"],
+      ["updated", "Authentication strength", null],
+      ["updated", "Authentication strength", null],
+      ["created", "Conditional Access policy", "Require MFA for admins"],
+      ["deleted", "Conditional Access policy", "Block legacy authentication"],
+    ])
+    expect(changes[4]).toMatchObject({ actorUpn: null, actorAppId: "33333333-0000-0000-0000-000000000003", actorAppName: "Contoso Automation" })
+  })
+
+  it("never carries policy content or the actor IP address", () => {
+    const digest = entraChangeDigest({ tenantId: entraFixture.tenantId, tenantName: entraFixture.tenantName, changes, includeActor: true, source: "desktop" })
+    const everything = JSON.stringify([changes, digest, teamsWorkflowsPayload(digest), emailHtml(digest)])
+    expect(everything).not.toContain("SECRET_MARKER")
+    expect(everything).not.toContain("198.51.100.23")
+    expect(everything).not.toContain("Phishing resistant")
+  })
+
+  it("builds an entra.change digest that warns on deletions and links to Conditional Access", () => {
+    const digest = entraChangeDigest({ tenantId: entraFixture.tenantId, tenantName: entraFixture.tenantName, changes, includeActor: false, source: "desktop" })
+    expect(digest).toMatchObject({ type: "entra.change", severity: "warning", title: "Conditional Access changes: Contoso" })
+    expect(digest.summary).toBe("5 changes in Conditional Access (2 created, 2 updated, 1 deleted), shown as 4 lines.")
+    expect(digest.items.map((item) => item.title)).toEqual(["Created: Head office", "Updated: Authentication strength (2 times)", "Created: Require MFA for admins", "Deleted: Block legacy authentication"])
+    const card = (teamsWorkflowsPayload(digest) as { attachments: Array<{ content: { actions?: Array<{ url: string }> } }> }).attachments[0]!.content
+    expect(card.actions?.[0]?.url).toBe("https://entra.microsoft.com/#view/Microsoft_AAD_ConditionalAccess/ConditionalAccessBlade/~/Policies")
+    expect(emailHtml(digest)).toContain("Open Conditional Access in Entra")
   })
 })

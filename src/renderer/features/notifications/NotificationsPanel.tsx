@@ -465,12 +465,12 @@ function RuleRow({ tenant, rule, licensed, onChanged, onEdit, channelTitle, remo
 }
 
 /** Event types a new rule cannot pick: shown disabled so they never look functional. Stored rules that already contain them still render in RuleRow. */
-const INERT_EVENT_TYPES: ReadonlySet<NotificationEventType> = new Set(["test", "watcher.stale", "backup.missed", "health.finding"])
+const INERT_EVENT_TYPES: ReadonlySet<NotificationEventType> = new Set(["test", "health.finding"])
 
 const EVENT_TYPE_NOTES: Partial<Record<NotificationEventType, string>> = {
   test: "Sent from a channel Send test button and bypasses rules",
-  "watcher.stale": "No producer in the desktop app",
-  "backup.missed": "Azure watcher only",
+  "watcher.stale": "While an Azure watcher owns change alerts",
+  "backup.missed": "A slot missed while TenuVault was closed",
   "health.finding": "Configured on the Health review screen",
 }
 
@@ -521,7 +521,7 @@ function RuleDialog({ tenant, channels, rule, open, onClose, onSaved }: { tenant
                 )
               })}
             </div>
-            <p className="text-xs text-gray-500">Greyed out types cannot be picked. Test notifications bypass rules, watcher stale and missed backups are reported outside the desktop app, and health findings are configured on the Health review screen. A rule that already contains one of these types keeps it.</p>
+            <p className="text-xs text-gray-500">Greyed out types cannot be picked. Test notifications bypass rules, and health findings are configured on the Health review screen. A rule that already contains one of these types keeps it.</p>
           </fieldset>
           <div className="flex flex-wrap items-center gap-4 text-sm">
             <label className="flex items-center gap-2 text-gray-700">
@@ -560,6 +560,7 @@ const SKIPPED_POLL = {
 
 function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: Tenant; auditWatch: AuditWatch | null; licensed: boolean; onChanged: () => void }) {
   const [enabled, setEnabled] = useState(false)
+  const [caEnabled, setCaEnabled] = useState(false)
   const [intervalMinutes, setIntervalMinutes] = useState(60)
   const [categories, setCategories] = useState<string[]>([])
   const [ignoreOwnChanges, setIgnoreOwnChanges] = useState(true)
@@ -570,6 +571,7 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
   // the watermark, which must not discard unsaved edits.
   const stored = JSON.stringify({
     enabled: auditWatch?.enabled ?? false,
+    caEnabled: auditWatch?.conditionalAccess?.enabled ?? false,
     intervalMinutes: auditWatch?.intervalMinutes ?? 60,
     categories: auditWatch?.categories ?? [],
     ignoreOwnChanges: auditWatch?.ignoreOwnChanges ?? true,
@@ -577,8 +579,9 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
     externalWatcher: auditWatch?.externalWatcher ?? false,
   })
   useEffect(() => {
-    const next = JSON.parse(stored) as { enabled: boolean; intervalMinutes: number; categories: string[]; ignoreOwnChanges: boolean; includeActor: boolean; externalWatcher: boolean }
+    const next = JSON.parse(stored) as { enabled: boolean; caEnabled: boolean; intervalMinutes: number; categories: string[]; ignoreOwnChanges: boolean; includeActor: boolean; externalWatcher: boolean }
     setEnabled(next.enabled)
+    setCaEnabled(next.caEnabled)
     setIntervalMinutes(next.intervalMinutes)
     setCategories(next.categories)
     setIgnoreOwnChanges(next.ignoreOwnChanges)
@@ -586,25 +589,19 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
     setExternalWatcher(next.externalWatcher)
   }, [stored])
 
+  const savedOn = Boolean(auditWatch?.enabled || auditWatch?.conditionalAccess?.enabled)
   // Without entitlement the only save allowed is turning watching off, through the free revoke action.
-  const turningOff = !licensed && Boolean(auditWatch?.enabled) && !enabled
+  const turningOff = !licensed && savedOn && !enabled && !caEnabled
   const save = useMutation({
     mutationFn: () =>
       !licensed
         ? notificationsApi.revokeAuditWatch(tenant)
-        : notificationsApi.updateAuditWatch(tenant, {
-            enabled,
-            intervalMinutes,
-            categories,
-            ignoreOwnChanges,
-            includeActor,
-            externalWatcher,
-          }),
+        : notificationsApi.updateAuditWatch(tenant, { enabled, conditionalAccessEnabled: caEnabled, intervalMinutes, categories, ignoreOwnChanges, includeActor, externalWatcher }),
     onSuccess: () => { toast("Change watching saved", "success"); onChanged() },
     onError: failed,
   })
   // Poll now reads the saved settings, so it waits for watching to be saved on and owned by this computer.
-  const pollBlocked = !auditWatch?.enabled ? SKIPPED_POLL.off : auditWatch.externalWatcher ? SKIPPED_POLL.external : null
+  const pollBlocked = !savedOn ? SKIPPED_POLL.off : auditWatch?.externalWatcher ? SKIPPED_POLL.external : null
   const poll = useMutation({
     mutationFn: () => notificationsApi.runAuditWatch(tenant),
     onSuccess: (result) => {
@@ -615,6 +612,17 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
     },
     onError: failed,
   })
+  const checkWatcher = useMutation({
+    mutationFn: () => notificationsApi.runWatcherCheck(tenant),
+    onSuccess: (result) => {
+      if (result.error) toast(`The watcher heartbeat could not be read: ${result.error}`, "error")
+      else toast(result.stale ? "The Azure watcher has not run recently." : "The Azure watcher ran recently.", result.stale ? "error" : "success")
+      onChanged()
+    },
+    onError: failed,
+  })
+  const watching = [auditWatch?.enabled ? "Intune" : null, auditWatch?.conditionalAccess?.enabled ? "Conditional Access" : null].filter(Boolean)
+  const check = auditWatch?.watcherCheck
 
   return (
     <Tile aria-labelledby="notifications-audit-heading" className="gap-3">
@@ -622,24 +630,56 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
         <div>
           <h3 id="notifications-audit-heading" className="flex items-center gap-2 text-lg font-medium text-gray-900">
             <Shield className="h-4 w-4 text-gray-500" aria-hidden="true" />
-            Intune change watching
+            Change watching
           </h3>
-          <p className="max-w-3xl text-sm text-gray-600">Polls the Intune audit log and sends one digest of what changed through your rules for the "Intune change" event type. Only policy names, change types and times are read. Audit request bodies and setting values are never read or sent.</p>
+          <p className="max-w-3xl text-sm text-gray-600">Polls the audit log of each service you pick and sends one digest per service through your rules, as the "Intune change" and "Conditional Access change" event types. Only names, change types and times are read. Request bodies, setting values and policy content are never read or sent.</p>
         </div>
-        <Chip tone={auditWatch?.enabled ? "success" : "neutral"}>{auditWatch?.enabled ? "Watching" : "Off"}</Chip>
+        <Chip tone={watching.length ? "success" : "neutral"}>{watching.length ? `Watching ${watching.join(" and ")}` : "Off"}</Chip>
       </div>
-      <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); if (licensed || turningOff) save.mutate() }}>
-        <label className="flex items-center gap-2 text-sm text-gray-800">
-          <input type="checkbox" className="size-4 accent-coral-600" checked={enabled} disabled={!licensed && !auditWatch?.enabled} onChange={(event) => setEnabled(event.target.checked)} />
-          Watch for Intune changes while TenuVault is running
-        </label>
-        {!licensed && auditWatch?.enabled && <p className="text-xs text-gray-500" role="note">This tenant no longer includes notifications. You can still turn change watching off here; turning it back on needs the plan.</p>}
+      <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (licensed || turningOff) save.mutate() }}>
+        <fieldset className="space-y-2">
+          <legend className="text-sm text-gray-700">Services, while TenuVault is running</legend>
+          <div className="grid gap-3 md:grid-cols-2">
+            <ServiceCard
+              title="Intune"
+              description="The Intune audit log: configuration, compliance, apps, scripts, enrollment and roles."
+              requirement="Uses the permissions TenuVault already has."
+              checked={enabled}
+              disabled={!licensed && !auditWatch?.enabled}
+              onChange={setEnabled}
+              lastPollAt={auditWatch?.enabled ? auditWatch.lastPollAt : null}
+              lastError={auditWatch?.enabled ? auditWatch.lastError : null}
+            />
+            <ServiceCard
+              title="Conditional Access"
+              description="Policies, named locations and authentication strengths, from the Entra audit log."
+              requirement="Needs the delegated AuditLog.Read.All permission (setup switch -IncludeAuditLog) and a role that can read audit logs, such as Security Reader."
+              checked={caEnabled}
+              disabled={!licensed && !auditWatch?.conditionalAccess?.enabled}
+              onChange={setCaEnabled}
+              lastPollAt={auditWatch?.conditionalAccess?.enabled ? auditWatch.conditionalAccess.lastPollAt : null}
+              lastError={auditWatch?.conditionalAccess?.enabled ? auditWatch.conditionalAccess.lastError : null}
+            />
+          </div>
+        </fieldset>
+        {!licensed && savedOn && <p className="text-xs text-gray-500" role="note">This tenant no longer includes notifications. You can still turn change watching off here; turning it back on needs the plan.</p>}
         <div className="space-y-1">
           <label className="flex items-center gap-2 text-sm text-gray-800">
             <input type="checkbox" className="size-4 accent-coral-600" checked={externalWatcher} disabled={!licensed} onChange={(event) => setExternalWatcher(event.target.checked)} />
             An Azure watcher owns change alerts for this tenant
           </label>
-          <p className="text-xs text-gray-500">With this on, desktop polling stands down for this tenant so each change is reported once, by the Azure watcher.</p>
+          <p className="text-xs text-gray-500">With this on, desktop polling stands down for this tenant so each change is reported once, by the Azure watcher. TenuVault then checks the watcher's heartbeat every 30 minutes and alerts ("Watcher stale") when it has not run for {WATCHER_STALE_LABEL}.</p>
+          {auditWatch?.externalWatcher && (
+            <div className="flex flex-wrap items-center gap-2 pt-1 text-sm">
+              {!check && <span className="text-gray-500">The watcher heartbeat has not been checked yet.</span>}
+              {check && !check.error && (
+                <Chip tone={check.stale ? "danger" : "success"}>{check.lastRunAt ? `Azure watcher last ran ${formatTime(check.lastRunAt)}` : "No watcher heartbeat found"}</Chip>
+              )}
+              {check?.error && <span className="text-red-700" role="status">Heartbeat could not be read: {check.error}</span>}
+              {check && <span className="text-xs text-gray-500">Checked {formatTime(check.checkedAt)}</span>}
+              <Button type="button" size="sm" variant="ghost" disabled={!licensed || checkWatcher.isPending} onClick={() => checkWatcher.mutate()}>{checkWatcher.isPending ? "Checking" : "Check now"}</Button>
+            </div>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-4 text-sm">
           <label className="flex items-center gap-2 text-gray-700">
@@ -660,12 +700,7 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
           </label>
         </div>
         <p className="text-xs text-gray-500">Actor names are personal data and are off by default. Leave this off for destinations outside Microsoft 365, such as generic webhooks or external email addresses.</p>
-        <CategoryPicker tenant={tenant} selected={categories} disabled={!licensed} onChange={setCategories} />
-        <p className="text-sm text-gray-600">
-          Last poll: {formatTime(auditWatch?.lastPollAt)}
-          {auditWatch?.watermark ? ` · Watermark: ${formatTime(auditWatch.watermark)}` : ""}
-        </p>
-        {auditWatch?.lastError && <p className="text-sm text-red-700" role="status">Last poll error: {auditWatch.lastError}</p>}
+        {enabled && <CategoryPicker tenant={tenant} selected={categories} disabled={!licensed} onChange={setCategories} />}
         <div className="flex flex-wrap gap-2">
           <Button type="submit" size="sm" disabled={save.isPending || (!licensed && !turningOff)}>{save.isPending ? "Saving" : "Save change watching"}</Button>
           <Button type="button" size="sm" variant="outline" onClick={() => poll.mutate()} disabled={!licensed || poll.isPending || pollBlocked !== null} aria-describedby={pollBlocked ? "notifications-poll-blocked" : undefined}>{poll.isPending ? "Polling" : "Poll now"}</Button>
@@ -673,6 +708,24 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
         {pollBlocked && <p id="notifications-poll-blocked" className="text-xs text-gray-500">{pollBlocked}</p>}
       </form>
     </Tile>
+  )
+}
+
+const WATCHER_STALE_LABEL = "3 hours"
+
+/** One watched service: its switch, what it reads, what it needs, and its last poll. */
+function ServiceCard({ title, description, requirement, checked, disabled, onChange, lastPollAt, lastError }: { title: string; description: string; requirement: string; checked: boolean; disabled: boolean; onChange: (next: boolean) => void; lastPollAt: string | null; lastError: string | null }) {
+  return (
+    <label className={`flex gap-3 rounded-2xl border p-4 transition-colors ${checked ? "border-gray-900 bg-gray-50 dark:border-gray-200 dark:bg-gray-900" : "border-gray-200 dark:border-gray-800"} ${disabled ? "opacity-60" : "cursor-pointer"}`}>
+      <input type="checkbox" className="mt-0.5 size-4 shrink-0 accent-coral-600" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} />
+      <span className="space-y-1">
+        <span className="block text-sm font-medium text-gray-900">{title}</span>
+        <span className="block text-sm text-gray-600">{description}</span>
+        <span className="block text-xs text-gray-500">{requirement}</span>
+        {lastPollAt && !lastError && <span className="block text-xs text-gray-500">Last poll {formatTime(lastPollAt)}</span>}
+        {lastError && <span className="block text-xs text-red-700" role="status">Last poll failed: {lastError}</span>}
+      </span>
+    </label>
   )
 }
 

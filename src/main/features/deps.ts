@@ -50,6 +50,11 @@ export interface FeatureDeps {
   externalFetch: typeof fetch
   /** A system notification on this computer. */
   notify: (title: string, body: string) => void
+  /**
+   * The Azure watcher's heartbeat.json from the tenant's backup storage account, read with the
+   * signed-in admin's storage token. "missing" when there is none (or the storage is local).
+   */
+  watcherHeartbeat?: (tenantId: string) => Promise<WatcherHeartbeatRead>
   now: () => Date
 }
 
@@ -58,6 +63,11 @@ export interface FeatureDeps {
  * tenant's credentials, and subscriptionId and resourceGroupName defaulted to "local". The
  * backup routes require those two but storage never uses them, for local or Azure accounts.
  */
+export type WatcherHeartbeatRead =
+  | { status: "ok"; runAt: string | null; lastError: string | null }
+  | { status: "missing" }
+  | { status: "error"; message: string }
+
 export function apiBody(tenantId: string, profile: Pick<TenantProfile, "clientId" | "storageAccountName">, body: Record<string, unknown> = {}): Record<string, unknown> {
   return { subscriptionId: "local", resourceGroupName: "local", ...body, tenantId, appId: profile.clientId, clientSecret: DELEGATED_CLIENT_SECRET, storageAccountName: profile.storageAccountName }
 }

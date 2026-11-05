@@ -2,11 +2,12 @@ import { createHmac } from "node:crypto"
 import { describe, expect, it } from "vitest"
 import { routes } from "../src/main/features/notifications"
 import { DOMAINS } from "../src/main/features/domains"
-import { channelsOf, flushOutbox, outboxOf, pollAuditWatch, saveAuditWatch, signBody } from "../src/main/features/notifications/service"
-import { emitBackupOutcome } from "../src/main/features/notifications/producers"
+import { channelsOf, checkWatcher, flushOutbox, outboxOf, pollAuditWatch, saveAuditWatch, signBody, tick } from "../src/main/features/notifications/service"
+import { emitBackupOutcome, emitCredentialExpiring, emitLateBackup } from "../src/main/features/notifications/producers"
 import type { ChannelRecord } from "../src/main/features/notifications/model"
 import { call, fakeDeps, TENANT_A, TENANT_B } from "./feature-helpers"
 import fixture from "./fixtures/notifications/audit-digest.json"
+import entraFixture from "./fixtures/notifications/entra-audit.json"
 
 const PATH = "/api/notifications"
 let NOW = new Date("2026-10-17T12:00:00Z")
@@ -512,5 +513,271 @@ describe("concurrent audit polls", () => {
     const result = await first
     expect(result.changes).toBe(3)
     expect(calls).toBe(1)
+  })
+})
+
+describe("Conditional Access change watching", () => {
+  function caWorld(options: { entraStatus?: number; entraEvents?: unknown[] } = {}) {
+    const paths: string[] = []
+    const w = world({
+      graph: () => async (_method: string, path: string) => {
+        paths.push(decodeURIComponent(path))
+        if (path.startsWith("auditLogs/directoryAudits")) {
+          if (options.entraStatus) return { status: options.entraStatus, body: { error: { message: "Forbidden" } } }
+          // Like Graph, only events after the requested time come back.
+          const since = /activityDateTime gt ([^&\s]+)/.exec(decodeURIComponent(path))?.[1] ?? ""
+          const events = (options.entraEvents ?? entraFixture.events) as Array<{ activityDateTime: string }>
+          return { status: 200, body: { value: events.filter((event) => Date.parse(event.activityDateTime) > Date.parse(since)) } }
+        }
+        if (path.startsWith("deviceManagement/auditEvents")) return { status: 200, body: { value: [] } }
+        return { status: 404, body: {} }
+      },
+    })
+    return { ...w, paths }
+  }
+
+  it("polls the Entra audit log with its own filter and sends an entra.change digest", async () => {
+    const w = caWorld()
+    const channel = await addWebhook(w)
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-rule", eventTypes: ["entra.change"], minSeverity: "info", channelIds: [channel.id] })
+    const saved = await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", conditionalAccessEnabled: true })
+    expect(saved.body.auditWatch.conditionalAccess).toMatchObject({ enabled: true, watermark: NOW.toISOString() })
+    expect(saved.body.auditWatch.conditionalAccess.recent).toBeUndefined()
+    const result = await call(w.routes, PATH, { tenantId: TENANT_A, action: "run-audit-watch" })
+    expect(result.body).toMatchObject({ changes: 5, enqueued: 1, error: null, skipped: null })
+    expect(w.paths[0]).toContain(`activityDateTime gt ${new Date(NOW.getTime() - 30 * 60_000).toISOString()}`)
+    // Intune is off, so only the Entra log was read.
+    expect(w.paths.every((path) => path.startsWith("auditLogs/directoryAudits"))).toBe(true)
+    expect(w.paths[0]).toContain("loggedByService eq 'Conditional Access' or startswith(activityDisplayName,'Authentication Strength')")
+    expect(w.paths[0]).toContain("$orderby=activityDateTime asc")
+    const body = JSON.parse(String(w.posts.at(-1)!.init.body))
+    expect(body).toMatchObject({ type: "entra.change", severity: "warning" })
+    expect(String(w.posts.at(-1)!.init.body)).not.toContain("SECRET_MARKER")
+    // A second poll reads the same events and sends nothing new.
+    expect((await call(w.routes, PATH, { tenantId: TENANT_A, action: "run-audit-watch" })).body.changes).toBe(0)
+  })
+
+  it("ignores Conditional Access changes made by TenuVault itself", async () => {
+    const own = entraFixture.events.map((event) => ({ ...event, initiatedBy: { user: null, app: { appId: "99999999-9999-9999-9999-999999999999", displayName: "TenuVault Desktop" } } }))
+    const w = caWorld({ entraEvents: own })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", conditionalAccessEnabled: true })
+    expect((await call(w.routes, PATH, { tenantId: TENANT_A, action: "run-audit-watch" })).body.changes).toBe(0)
+  })
+
+  it("explains a missing audit log permission without stopping Intune watching", async () => {
+    const w = caWorld({ entraStatus: 403 })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: true, conditionalAccessEnabled: true })
+    const result = await call(w.routes, PATH, { tenantId: TENANT_A, action: "run-audit-watch" })
+    expect(result.body.error).toContain("AuditLog.Read.All")
+    const status = (await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-status" })).body.auditWatch
+    expect(status.lastError).toBeNull()
+    expect(status.lastPollAt).not.toBeNull()
+    expect(status.conditionalAccess.lastError).toContain("AuditLog.Read.All")
+  })
+
+  it("a poll that finishes after the admin turned watching off never turns it back on", async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const w = world({ graph: () => async (_method: string, path: string) => {
+      if (path.startsWith("auditLogs/directoryAudits")) { await gate; return { status: 200, body: { value: [] } } }
+      return { status: 200, body: { value: [] } }
+    } })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", conditionalAccessEnabled: true })
+    const polling = pollAuditWatch(w.deps, TENANT_A)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "revoke-audit-watch" })
+    release()
+    await polling
+    const status = (await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-status" })).body.auditWatch
+    expect(status.conditionalAccess.enabled).toBe(false)
+    // The late result is discarded, not saved.
+    expect(status.conditionalAccess.lastPollAt).toBeNull()
+  })
+
+  it("a poll that started before watching was turned off and on again sends and keeps nothing", async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const old = fixture.events.map((event) => ({ ...event, activityDateTime: "2026-10-17T11:50:00Z" }))
+    const w = world({ graph: () => async (_method: string, path: string) => {
+      if (path.startsWith("deviceManagement/auditEvents")) { await gate; return { status: 200, body: { value: old } } }
+      return { status: 200, body: { value: [] } }
+    } })
+    const local = await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-channel", kind: "local" })
+    await addRule(w, [local.body.channel.id])
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: true })
+    const polling = pollAuditWatch(w.deps, TENANT_A)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: false })
+    w.advance(60_000)
+    const again = await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: true })
+    release()
+    expect((await polling).changes).toBe(0)
+    expect(w.deps.notifications).toHaveLength(0)
+    const status = (await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-status" })).body.auditWatch
+    expect(status.watermark).toBe(again.body.auditWatch.watermark)
+    expect(status.lastPollAt).toBeNull()
+  })
+
+  it("a poll that finishes after the tenant was handed to the Azure watcher sends nothing", async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const recentEvents = fixture.events.map((event) => ({ ...event, activityDateTime: "2026-10-17T11:50:00Z" }))
+    const w = world({ graph: () => async (_method: string, path: string) => {
+      if (path.startsWith("deviceManagement/auditEvents")) { await gate; return { status: 200, body: { value: recentEvents } } }
+      return { status: 200, body: { value: [] } }
+    } })
+    const local = await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-channel", kind: "local" })
+    await addRule(w, [local.body.channel.id])
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: true })
+    const polling = pollAuditWatch(w.deps, TENANT_A)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", externalWatcher: true })
+    release()
+    expect((await polling).changes).toBe(0)
+    expect(w.deps.notifications).toHaveLength(0)
+  })
+
+  it("handing over to the Azure watcher and back during a poll still discards that poll", async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const recentEvents = fixture.events.map((event) => ({ ...event, activityDateTime: "2026-10-17T11:50:00Z" }))
+    const w = world({ graph: () => async (_method: string, path: string) => {
+      if (path.startsWith("deviceManagement/auditEvents")) { await gate; return { status: 200, body: { value: recentEvents } } }
+      return { status: 200, body: { value: [] } }
+    } })
+    const local = await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-channel", kind: "local" })
+    await addRule(w, [local.body.channel.id])
+    const on = await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: true })
+    const watermark = on.body.auditWatch.watermark
+    const polling = pollAuditWatch(w.deps, TENANT_A)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", externalWatcher: true })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", externalWatcher: false })
+    release()
+    expect((await polling).changes).toBe(0)
+    expect(w.deps.notifications).toHaveLength(0)
+    // The position is kept: the next poll picks the same changes up and sends them once.
+    const status = (await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-status" })).body.auditWatch
+    expect(status.watermark).toBe(watermark)
+    expect((await pollAuditWatch(w.deps, TENANT_A)).changes).toBe(3)
+  })
+
+  it("a failed poll overtaken by a restart leaves no old error or poll time behind", async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const w = world({ graph: () => async (_method: string, path: string) => {
+      if (path.startsWith("auditLogs/directoryAudits")) { await gate; return { status: 403, body: { error: { message: "Forbidden" } } } }
+      return { status: 200, body: { value: [] } }
+    } })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", conditionalAccessEnabled: true })
+    const polling = pollAuditWatch(w.deps, TENANT_A)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", conditionalAccessEnabled: false })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", conditionalAccessEnabled: true })
+    release()
+    await polling
+    const ca = (await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-status" })).body.auditWatch.conditionalAccess
+    expect(ca).toMatchObject({ enabled: true, lastPollAt: null, lastError: null })
+  })
+
+  it("turning everything off also stops Conditional Access watching, free on every plan", async () => {
+    const w = caWorld()
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: true, conditionalAccessEnabled: true })
+    const off = await call(w.routes, PATH, { tenantId: TENANT_A, action: "revoke-audit-watch" })
+    expect(off.body.auditWatch).toMatchObject({ enabled: false, conditionalAccess: { enabled: false } })
+  })
+})
+
+describe("Backup Reader certificate expiry", () => {
+  it("alerts once per band: 30 days as a warning, 7 days and expired as critical", async () => {
+    const w = world()
+    const channel = await addWebhook(w)
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-rule", eventTypes: ["credential.expiring"], minSeverity: "info", channelIds: [channel.id] })
+    const notAfter = "2026-11-20T00:00:00.000Z"
+    const at = (iso: string) => emitCredentialExpiring(w.deps, TENANT_A, { notAfter, renewalPending: false, checkedAt: iso })
+    expect((await at("2026-10-01T00:00:00.000Z")).created).toBe(0)
+    expect((await at("2026-10-25T00:00:00.000Z")).created).toBe(1)
+    // A daily check inside the same band sends nothing new.
+    expect((await at("2026-10-26T00:00:00.000Z")).created).toBe(0)
+    expect((await at("2026-11-15T00:00:00.000Z")).created).toBe(1)
+    expect((await at("2026-11-21T00:00:00.000Z")).created).toBe(1)
+    const sent = w.posts.map((post) => JSON.parse(String(post.init.body)) as { severity: string; title: string })
+    expect(sent.map((event) => event.severity)).toEqual(["warning", "critical", "critical"])
+    expect(sent[2]!.title).toContain("has expired")
+    // A renewed certificate starts its own bands.
+    expect((await emitCredentialExpiring(w.deps, TENANT_A, { notAfter: "2027-11-20T00:00:00.000Z", renewalPending: false, checkedAt: "2027-10-25T00:00:00.000Z" })).created).toBe(1)
+  })
+
+  it("sends nothing for a tenant without the plan", async () => {
+    const w = world()
+    expect(await emitCredentialExpiring(w.deps, TENANT_B, { notAfter: "2026-11-20T00:00:00.000Z", renewalPending: true, checkedAt: "2026-11-18T00:00:00.000Z" })).toEqual({ created: 0, localCreated: false })
+  })
+})
+
+describe("Azure watcher heartbeat", () => {
+  async function watcherWorld(heartbeat: () => ReturnType<NonNullable<ReturnType<typeof world>["deps"]["watcherHeartbeat"]>>) {
+    const w = world()
+    w.deps.watcherHeartbeat = heartbeat
+    const channel = await addWebhook(w)
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-rule", eventTypes: ["watcher.stale"], minSeverity: "info", channelIds: [channel.id] })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", externalWatcher: true })
+    return w
+  }
+
+  it("alerts once per stale period and records fresh runs", async () => {
+    let runAt = "2026-10-17T11:30:00.000Z"
+    const w = await watcherWorld(async () => ({ status: "ok", runAt, lastError: "Mail delivery is skipped until mail verification passes." }))
+    expect(await checkWatcher(w.deps, TENANT_A)).toEqual({ stale: false, enqueued: 0, error: null })
+    w.advance(4 * 3_600_000)
+    expect((await checkWatcher(w.deps, TENANT_A)).enqueued).toBe(1)
+    // Still stale with the same last run: no second alert.
+    w.advance(3_600_000)
+    expect((await checkWatcher(w.deps, TENANT_A)).enqueued).toBe(0)
+    // It ran again, then stopped again: a new stale period alerts again.
+    runAt = NOW.toISOString()
+    expect((await checkWatcher(w.deps, TENANT_A)).stale).toBe(false)
+    w.advance(4 * 3_600_000)
+    expect((await checkWatcher(w.deps, TENANT_A)).enqueued).toBe(1)
+    const sent = JSON.parse(String(w.posts.at(-1)!.init.body)) as { type: string; severity: string; details: Array<{ label: string }> }
+    expect(sent).toMatchObject({ type: "watcher.stale", severity: "critical" })
+    expect(sent.details.map((entry) => entry.label)).toContain("Last reported error")
+    const status = (await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-status" })).body.auditWatch
+    expect(status.watcherCheck).toMatchObject({ stale: true, error: null })
+  })
+
+  it("alerts when no heartbeat exists, and only records a read failure", async () => {
+    const missing = await watcherWorld(async () => ({ status: "missing" }))
+    expect((await checkWatcher(missing.deps, TENANT_A)).enqueued).toBe(1)
+    const failing = await watcherWorld(async () => ({ status: "error", message: "The storage account answered HTTP 403 for the watcher heartbeat." }))
+    expect(await checkWatcher(failing.deps, TENANT_A)).toEqual({ stale: false, enqueued: 0, error: "The storage account answered HTTP 403 for the watcher heartbeat." })
+    expect(failing.posts).toHaveLength(0)
+  })
+
+  it("the background tick checks the heartbeat only while the Azure watcher owns the tenant", async () => {
+    let reads = 0
+    const w = await watcherWorld(async () => { reads++; return { status: "ok", runAt: NOW.toISOString(), lastError: null } })
+    await tick(w.deps)
+    await tick(w.deps)
+    expect(reads).toBe(1)
+    w.advance(31 * 60_000)
+    await tick(w.deps)
+    expect(reads).toBe(2)
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", externalWatcher: false })
+    w.advance(31 * 60_000)
+    await tick(w.deps)
+    expect(reads).toBe(2)
+  })
+})
+
+describe("missed scheduled slots", () => {
+  it("sends one backup.missed per slot as a warning", async () => {
+    const w = world()
+    const channel = await addWebhook(w)
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-rule", eventTypes: ["backup.missed"], minSeverity: "info", channelIds: [channel.id] })
+    expect((await emitLateBackup(w.deps, TENANT_A, "2026-10-17T02:00:00.000Z")).created).toBe(1)
+    expect((await emitLateBackup(w.deps, TENANT_A, "2026-10-17T02:00:00.000Z")).created).toBe(0)
+    const sent = JSON.parse(String(w.posts[0]!.init.body)) as { type: string; severity: string; title: string }
+    expect(sent).toMatchObject({ type: "backup.missed", severity: "warning" })
+    expect(sent.title).toContain("missed its time")
   })
 })

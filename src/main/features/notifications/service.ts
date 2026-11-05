@@ -1,7 +1,8 @@
 import { createHmac } from "node:crypto"
-import { canonicalJson, SEVERITY_RANK, type NotificationEnvelope } from "../../../shared/notifications/envelope"
+import { canonicalJson, SEVERITY_RANK, watcherStaleEvent, type NotificationEnvelope } from "../../../shared/notifications/envelope"
 import { emailHtml, emailSubject, localText, teamsWorkflowsPayload } from "../../../shared/notifications/render"
-import { AUDIT_EVENT_SELECT, filterAuditChanges, intuneChangeDigest, mapAuditEvent, type AuditChange, type AuditEventRaw } from "../../../shared/notifications/audit"
+import { AUDIT_EVENT_SELECT, changeDigest, filterAuditChanges, mapAuditEvent, type AuditChange, type AuditEventRaw, type ChangeService } from "../../../shared/notifications/audit"
+import { ENTRA_AUDIT_FILTER, ENTRA_AUDIT_SELECT, mapEntraAuditEvent, type EntraAuditRaw } from "../../../shared/notifications/entra"
 import { allows } from "../../../shared/plans"
 import type { FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
@@ -12,8 +13,11 @@ import {
   MAX_OUTBOX_KEPT,
   MAX_RECENT_AUDIT_IDS,
   MAX_RECIPIENTS,
+  WATCHER_CHECK_MINUTES,
+  WATCHER_STALE_HOURS,
   type AuditWatchRecord,
   type ChannelRecord,
+  type ConditionalAccessWatch,
   type DeliveryResult,
   type OutboxRecord,
   type RuleRecord,
@@ -53,7 +57,16 @@ export function auditWatchOf(deps: FeatureDeps, tenantId: string): Stored<AuditW
   const legacy = watch as Stored<AuditWatchRecord> & { recentIds?: string[] }
   if (!Array.isArray(watch.recent)) legacy.recent = (legacy.recentIds ?? []).map((id) => ({ id, at: watch.watermark ?? new Date(0).toISOString() }))
   if (legacy.continuation === undefined) legacy.continuation = null
+  if (!watch.conditionalAccess) watch.conditionalAccess = defaultConditionalAccessWatch()
   return watch
+}
+
+function defaultSourceState(): SourceState {
+  return { generation: 0, watermark: null, recent: [], continuation: null, lastPollAt: null, lastError: null }
+}
+
+export function defaultConditionalAccessWatch(): ConditionalAccessWatch {
+  return { enabled: false, ...defaultSourceState() }
 }
 
 export function defaultAuditWatch(): AuditWatchRecord {
@@ -72,18 +85,30 @@ export function defaultAuditWatch(): AuditWatchRecord {
     continuation: null,
     lastPollAt: null,
     lastError: null,
+    conditionalAccess: defaultConditionalAccessWatch(),
   }
 }
 
-export function saveAuditWatch(deps: FeatureDeps, tenantId: string, change: Partial<AuditWatchRecord>, meta: { actor: string | null; reason: string }): Stored<AuditWatchRecord> {
+/** A change to the watch record; conditionalAccess merges field by field into the stored one. */
+export type AuditWatchChange = Partial<Omit<AuditWatchRecord, "conditionalAccess">> & { conditionalAccess?: Partial<ConditionalAccessWatch> }
+
+/**
+ * Saves a change. Merges happen inside the record update against the stored value, so a poll
+ * that finishes after the admin changed a setting only writes the fields it owns.
+ */
+export function saveAuditWatch(deps: FeatureDeps, tenantId: string, change: AuditWatchChange, meta: { actor: string | null; reason: string }): Stored<AuditWatchRecord> {
   const current = auditWatchOf(deps, tenantId)
   const describe = (value: AuditWatchRecord): AuditWatchRecord => ({
     ...value,
     status: value.enabled ? "enabled" : "disabled",
-    summary: value.enabled ? `Polling Intune audit events every ${value.intervalMinutes} minutes while signed in.` : "Watching Intune audit events is off.",
+    summary: enabledServices(value).length ? `Polling ${enabledServices(value).map((service) => (service === "intune" ? "Intune" : "Conditional Access")).join(" and ")} audit events every ${value.intervalMinutes} minutes while signed in.` : "Watching audit events is off.",
   })
-  if (!current) return deps.records.create<AuditWatchRecord>(DOMAINS.notificationAuditWatch, tenantId, describe({ ...defaultAuditWatch(), ...change }), meta)
-  return deps.records.update<AuditWatchRecord>(DOMAINS.notificationAuditWatch, tenantId, current.id, (value) => describe({ ...value, ...change }), meta)!
+  const merge = (value: AuditWatchRecord): AuditWatchRecord => {
+    const { conditionalAccess, ...rest } = change
+    return { ...value, ...rest, conditionalAccess: { ...defaultConditionalAccessWatch(), ...value.conditionalAccess, ...conditionalAccess } }
+  }
+  if (!current) return deps.records.create<AuditWatchRecord>(DOMAINS.notificationAuditWatch, tenantId, describe(merge(defaultAuditWatch())), meta)
+  return deps.records.update<AuditWatchRecord>(DOMAINS.notificationAuditWatch, tenantId, current.id, (value) => describe(merge(value)), meta)!
 }
 
 /** Rules that select an event for a channel: enabled rule and channel, type listed, severity at or above the minimum. */
@@ -313,7 +338,7 @@ async function listGroupMembers(graph: Awaited<ReturnType<FeatureDeps["graph"]>>
   }
   if (path) return { error: "This group is too large to resolve completely. Send to a distribution list address instead." }
   if (inaccessibleUsers > 0) {
-    return { error: "Some group members came back without mail properties, so the recipient list would be incomplete. The app registration needs User.Read.All for group recipients: rerun the setup script with -IncludeNotifications and sign in again." }
+    return { error: "Some group members came back without mail properties, so the recipient list would be incomplete. Group recipients need the delegated User.Read.All permission: add it to the app registration in Entra, grant admin consent and sign in again." }
   }
   return { addresses }
 }
@@ -354,22 +379,99 @@ export async function pollAuditWatch(deps: FeatureDeps, tenantId: string, option
   }
 }
 
+/** Where one watched service keeps its position in its audit log. */
+interface SourceState {
+  generation: number
+  watermark: string | null
+  recent: Array<{ id: string; at: string }>
+  continuation: string | null
+  lastPollAt: string | null
+  lastError: string | null
+}
+
+/** The watched services that are on, in a fixed order. */
+export function enabledServices(watch: AuditWatchRecord): ChangeService[] {
+  const services: ChangeService[] = []
+  if (watch.enabled) services.push("intune")
+  if (watch.conditionalAccess?.enabled) services.push("conditionalAccess")
+  return services
+}
+
+function sourceStateOf(watch: AuditWatchRecord, service: ChangeService): SourceState {
+  if (service === "intune") return { generation: watch.generation ?? 0, watermark: watch.watermark, recent: watch.recent, continuation: watch.continuation, lastPollAt: watch.lastPollAt, lastError: watch.lastError }
+  const ca = watch.conditionalAccess
+  return { ...defaultSourceState(), ...ca, generation: ca?.generation ?? 0 }
+}
+
+/** The fields a poll owns for its service. Never enabled or the generation: those are the admin's. */
+function sourcePatch(service: ChangeService, change: Partial<Omit<SourceState, "generation">>): AuditWatchChange {
+  return service === "intune" ? change : { conditionalAccess: change }
+}
+
+/** Whether a poll's result still applies: the service is on and was not turned on again since it started. */
+function stillCurrent(deps: FeatureDeps, tenant: string, service: ChangeService, generation: number): boolean {
+  const watch = auditWatchOf(deps, tenant)
+  // Handing the tenant to the Azure watcher also overtakes a running poll: its digest would duplicate the watcher's.
+  return Boolean(watch && !watch.externalWatcher && enabledServices(watch).includes(service) && sourceStateOf(watch, service).generation === generation)
+}
+
+const SOURCES: Record<ChangeService, {
+  freshPath: (since: string) => string
+  map: (raw: Record<string, unknown>) => AuditChange | null
+  /** A friendlier reason for the answers that mean a missing permission or role. */
+  denied: string
+}> = {
+  intune: {
+    freshPath: (since) => `deviceManagement/auditEvents?$select=${AUDIT_EVENT_SELECT}&$filter=${encodeURIComponent(`activityDateTime gt ${since} and activityOperationType ne 'Get' and activityOperationType ne 'Search'`)}&$orderby=activityDateTime&$top=200`,
+    map: (raw) => mapAuditEvent(raw as AuditEventRaw),
+    denied: "Microsoft Graph returned 403 for the Intune audit log. The app needs DeviceManagementApps.Read.All and your account an Intune role that can read it.",
+  },
+  conditionalAccess: {
+    freshPath: (since) => `auditLogs/directoryAudits?$select=${ENTRA_AUDIT_SELECT}&$filter=${encodeURIComponent(`${ENTRA_AUDIT_FILTER} and activityDateTime gt ${since}`)}&$orderby=${encodeURIComponent("activityDateTime asc")}&$top=200`,
+    map: (raw) => mapEntraAuditEvent(raw as EntraAuditRaw),
+    denied: "Microsoft Graph returned 403 for the Entra audit log. Add delegated AuditLog.Read.All, use a role such as Security Reader, then sign in again.",
+  },
+}
+
 async function pollAuditWatchOnce(deps: FeatureDeps, tenantId: string, options: NotificationOptions = {}): Promise<PollResult> {
   const tenant = tenantId.toLowerCase()
   const watch = auditWatchOf(deps, tenant)
-  if (!watch || !watch.enabled) return { enqueued: 0, changes: 0, error: null, skipped: "off" }
+  const services = watch ? enabledServices(watch) : []
+  if (!watch || services.length === 0) return { enqueued: 0, changes: 0, error: null, skipped: "off" }
   if (watch.externalWatcher) return { enqueued: 0, changes: 0, error: null, skipped: "external" }
+  let enqueued = 0
+  let changes = 0
+  const errors: string[] = []
+  for (const service of services) {
+    const result = await pollSource(deps, tenant, service, options)
+    enqueued += result.enqueued
+    changes += result.changes
+    if (result.error) errors.push(services.length > 1 ? `${service === "intune" ? "Intune" : "Conditional Access"}: ${result.error}` : result.error)
+  }
+  if (enqueued > 0) await flushOutbox(deps, tenant, options)
+  return { enqueued, changes, error: errors.length ? errors.join(" ") : null }
+}
+
+/**
+ * One poll of one service: reads audit events page by page since its watermark minus the
+ * overlap, dedupes by audit event id, and queues one digest for the new changes. Ingestion
+ * (watermark) advances independently of delivery, which the outbox owns.
+ */
+async function pollSource(deps: FeatureDeps, tenant: string, service: ChangeService, options: NotificationOptions): Promise<{ enqueued: number; changes: number; error: string | null }> {
+  const watch = auditWatchOf(deps, tenant)!
+  const state = sourceStateOf(watch, service)
+  const source = SOURCES[service]
   const now = deps.now()
-  const since = watch.watermark ? new Date(Date.parse(watch.watermark) - AUDIT_OVERLAP_MS) : new Date(now.getTime() - 24 * 3_600_000)
+  const since = state.watermark ? new Date(Date.parse(state.watermark) - AUDIT_OVERLAP_MS) : new Date(now.getTime() - 24 * 3_600_000)
   try {
     const graph = await deps.graph(tenant)
-    const seen = new Set(watch.recent.map((entry) => entry.id))
+    const seen = new Set(state.recent.map((entry) => entry.id))
     const collected: AuditChange[] = []
     const seenNow: Array<{ id: string; at: string }> = []
     let newestSeenAt: string | null = null
-    const freshPath = `deviceManagement/auditEvents?$select=${AUDIT_EVENT_SELECT}&$filter=${encodeURIComponent(`activityDateTime gt ${since.toISOString()} and activityOperationType ne 'Get' and activityOperationType ne 'Search'`)}&$orderby=activityDateTime&$top=200`
-    let path: string | null = watch.continuation ?? freshPath
-    let resumed = Boolean(watch.continuation)
+    const freshPath = source.freshPath(since.toISOString())
+    let path: string | null = state.continuation ?? freshPath
+    let resumed = Boolean(state.continuation)
     let pages = 0
     // Events read on the page the poll stopped inside. That page is stored as the
     // continuation and read again from the top, so its events stay deduped whatever their age.
@@ -387,13 +489,14 @@ async function pollAuditWatchOnce(deps: FeatureDeps, tenantId: string, options: 
           path = freshPath
           continue
         }
+        if (response.status === 403) throw new Error(source.denied)
         throw new Error(graphError(response.body, response.status))
       }
       resumed = false
       pageSeen = []
-      const values = Array.isArray(response.body.value) ? (response.body.value as AuditEventRaw[]) : []
+      const values = Array.isArray(response.body.value) ? (response.body.value as Array<Record<string, unknown>>) : []
       for (const raw of values) {
-        const change = mapAuditEvent(raw)
+        const change = source.map(raw)
         if (!change) continue
         seenNow.push({ id: change.auditId, at: change.at })
         pageSeen.push(change.auditId)
@@ -410,13 +513,17 @@ async function pollAuditWatchOnce(deps: FeatureDeps, tenantId: string, options: 
       }
       path = nextPath(response.body)
     }
+    // The admin may have turned the service off, or off and on again (a fresh start), while
+    // Graph was answering. Then this result is history: send nothing and keep nothing.
+    if (!stillCurrent(deps, tenant, service, state.generation)) return { enqueued: 0, changes: 0, error: null }
     const profile = deps.tenant(tenant)
-    const filtered = filterAuditChanges(collected, { categories: watch.categories, ownAppId: profile?.clientId ?? null, ignoreOwnChanges: watch.ignoreOwnChanges })
+    // Categories are Intune audit categories; Conditional Access has none to pick.
+    const filtered = filterAuditChanges(collected, { categories: service === "intune" ? watch.categories : [], ownAppId: profile?.clientId ?? null, ignoreOwnChanges: watch.ignoreOwnChanges })
     filtered.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
-    const gap = watch.lastPollAt && now.getTime() - Date.parse(watch.lastPollAt) > AUDIT_GAP_NOTICE_MS
+    const gap = state.lastPollAt && now.getTime() - Date.parse(state.lastPollAt) > AUDIT_GAP_NOTICE_MS
     let enqueued = 0
     if (filtered.length) {
-      const digest = intuneChangeDigest({
+      const digest = changeDigest(service, {
         tenantId: tenant,
         tenantName: profile?.name ?? null,
         changes: filtered,
@@ -428,24 +535,25 @@ async function pollAuditWatchOnce(deps: FeatureDeps, tenantId: string, options: 
       // the same digest with the same eventId, which the outbox then dedupes.
       enqueued = await emit(deps, tenant, digest, { ...options, deferFlush: true })
     }
-    const newWatermark = newestSeenAt && (!watch.watermark || newestSeenAt > watch.watermark) ? newestSeenAt : watch.watermark ?? now.toISOString()
+    const newWatermark = newestSeenAt && (!state.watermark || newestSeenAt > state.watermark) ? newestSeenAt : state.watermark ?? now.toISOString()
     const pruneBefore = Date.parse(newWatermark) - AUDIT_OVERLAP_MS
     const keep = new Set(stoppedInPage ? pageSeen : [])
     const byId = new Map<string, { id: string; at: string }>()
-    for (const entry of [...watch.recent, ...seenNow]) if (Date.parse(entry.at) > pruneBefore || keep.has(entry.id)) byId.set(entry.id, entry)
+    for (const entry of [...state.recent, ...seenNow]) if (Date.parse(entry.at) > pruneBefore || keep.has(entry.id)) byId.set(entry.id, entry)
     const recent = [...byId.values()].sort((a, b) => (a.at < b.at ? -1 : 1)).slice(-MAX_RECENT_AUDIT_IDS)
-    saveAuditWatch(deps, tenant, {
+    saveAuditWatch(deps, tenant, sourcePatch(service, {
       watermark: newWatermark,
       recent,
       continuation: path,
       lastPollAt: now.toISOString(),
       lastError: null,
-    }, { actor: null, reason: `Audit poll read ${seenNow.length} events, ${filtered.length} new changes` })
-    if (enqueued > 0) await flushOutbox(deps, tenant, options)
+    }), { actor: null, reason: `${service === "intune" ? "Intune" : "Conditional Access"} audit poll read ${seenNow.length} events, ${filtered.length} new changes` })
     return { enqueued, changes: filtered.length, error: null }
   } catch (error) {
     const message = brief(error instanceof Error ? error.message : String(error))
-    saveAuditWatch(deps, tenant, { lastPollAt: now.toISOString(), lastError: message }, { actor: null, reason: `Audit poll failed: ${message}` })
+    // A failure of a poll that was overtaken by a restart is history too: keep nothing.
+    if (!stillCurrent(deps, tenant, service, state.generation)) return { enqueued: 0, changes: 0, error: null }
+    saveAuditWatch(deps, tenant, sourcePatch(service, { lastPollAt: now.toISOString(), lastError: message }), { actor: null, reason: `${service === "intune" ? "Intune" : "Conditional Access"} audit poll failed: ${message}` })
     return { enqueued: 0, changes: 0, error: message }
   }
 }
@@ -456,6 +564,38 @@ async function licensed(deps: FeatureDeps, tenantId: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/**
+ * While an Azure watcher owns change alerts, reads its heartbeat and emits watcher.stale
+ * when the last run is older than the threshold, or no heartbeat exists. One alert per
+ * stale period: the key is the last run time. A read failure is recorded, never alerted,
+ * because it says nothing about the watcher.
+ */
+export async function checkWatcher(deps: FeatureDeps, tenantId: string, options: NotificationOptions = {}): Promise<{ stale: boolean; enqueued: number; error: string | null }> {
+  const tenant = tenantId.toLowerCase()
+  const watch = auditWatchOf(deps, tenant)
+  if (!watch?.externalWatcher || !deps.watcherHeartbeat) return { stale: false, enqueued: 0, error: null }
+  const now = deps.now()
+  let read: Awaited<ReturnType<NonNullable<FeatureDeps["watcherHeartbeat"]>>>
+  try {
+    read = await deps.watcherHeartbeat(tenant)
+  } catch (error) {
+    read = { status: "error", message: brief(error instanceof Error ? error.message : String(error)) }
+  }
+  if (read.status === "error") {
+    saveAuditWatch(deps, tenant, { watcherCheck: { checkedAt: now.toISOString(), lastRunAt: watch.watcherCheck?.lastRunAt ?? null, stale: watch.watcherCheck?.stale ?? false, error: read.message } }, { actor: null, reason: `Azure watcher heartbeat could not be read: ${read.message}` })
+    return { stale: false, enqueued: 0, error: read.message }
+  }
+  const lastRunAt = read.status === "ok" ? read.runAt : null
+  const stale = !lastRunAt || now.getTime() - Date.parse(lastRunAt) > WATCHER_STALE_HOURS * 3_600_000
+  let enqueued = 0
+  if (stale) {
+    const envelope = watcherStaleEvent({ tenantId: tenant, tenantName: deps.tenant(tenant)?.name ?? null, occurredAt: now.toISOString(), lastRunAt, thresholdHours: WATCHER_STALE_HOURS, lastError: read.status === "ok" ? read.lastError : null, source: "desktop" })
+    enqueued = await emit(deps, tenant, envelope, options)
+  }
+  saveAuditWatch(deps, tenant, { watcherCheck: { checkedAt: now.toISOString(), lastRunAt, stale, error: null } }, { actor: null, reason: stale ? "Azure watcher heartbeat is stale" : "Azure watcher heartbeat is fresh" })
+  return { stale, enqueued, error: null }
 }
 
 const ticking = new WeakSet<FeatureDeps>()
@@ -469,9 +609,21 @@ export async function tick(deps: FeatureDeps, options: NotificationOptions = {})
       if (!(await licensed(deps, tenantId))) continue
       await flushOutbox(deps, tenantId, options).catch(() => undefined)
       const watch = auditWatchOf(deps, tenantId)
-      if (!watch?.enabled || watch.externalWatcher) continue
+      if (!watch) continue
+      if (watch.externalWatcher) {
+        const checkedAt = watch.watcherCheck?.checkedAt
+        const due = !checkedAt || deps.now().getTime() - Date.parse(checkedAt) >= WATCHER_CHECK_MINUTES * 60_000
+        if (due && deps.actor(tenantId)) await checkWatcher(deps, tenantId, options).catch(() => undefined)
+        continue
+      }
+      const services = enabledServices(watch)
+      if (services.length === 0) continue
       if (!deps.actor(tenantId)) continue
-      const due = !watch.lastPollAt || deps.now().getTime() - Date.parse(watch.lastPollAt) >= Math.max(5, watch.intervalMinutes) * 60_000
+      const interval = Math.max(5, watch.intervalMinutes) * 60_000
+      const due = services.some((service) => {
+        const lastPollAt = sourceStateOf(watch, service).lastPollAt
+        return !lastPollAt || deps.now().getTime() - Date.parse(lastPollAt) >= interval
+      })
       if (due) await pollAuditWatch(deps, tenantId, options).catch(() => undefined)
     }
   } finally {

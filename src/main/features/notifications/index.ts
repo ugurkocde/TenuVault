@@ -21,7 +21,9 @@ import {
 import {
   auditWatchOf,
   channelsOf,
+  checkWatcher,
   defaultAuditWatch,
+  defaultConditionalAccessWatch,
   deliverToChannel,
   emit,
   outboxOf,
@@ -29,6 +31,7 @@ import {
   rulesOf,
   saveAuditWatch,
   tick,
+  type AuditWatchChange,
 } from "./service"
 
 const TICK_MS = 60_000
@@ -251,7 +254,7 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     },
 
     "update-audit-watch": ({ tenantId, body, deps, actor }) => {
-      const change: Partial<AuditWatchRecord> = {}
+      const change: AuditWatchChange = {}
       const enabled = bool(body, "enabled")
       if (enabled !== undefined) change.enabled = enabled
       if (body.intervalMinutes !== undefined) {
@@ -270,6 +273,15 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       const externalWatcher = bool(body, "externalWatcher")
       if (externalWatcher !== undefined) change.externalWatcher = externalWatcher
       const current = auditWatchOf(deps, tenantId)
+      // Conditional Access keeps its own position in the Entra audit log, and like Intune
+      // starts from now when it is turned on (keeping its dedupe ids for the overlap).
+      const conditionalAccess = bool(body, "conditionalAccessEnabled")
+      if (conditionalAccess !== undefined) {
+        const previous = current?.conditionalAccess ?? defaultConditionalAccessWatch()
+        change.conditionalAccess = conditionalAccess && !previous.enabled
+          ? { ...previous, enabled: true, watermark: deps.now().toISOString(), continuation: null, lastPollAt: null, generation: (previous.generation ?? 0) + 1 }
+          : { ...previous, enabled: conditionalAccess }
+      }
       // Turning watching on starts from now. Catching up from an old watermark would replay
       // every change made while it was off, which is history, not news. A closed app with
       // watching left on still catches up in the poller, because enabled never flipped.
@@ -279,15 +291,37 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
         change.watermark = deps.now().toISOString()
         change.continuation = null
         change.lastPollAt = null
+        change.generation = (current?.generation ?? 0) + 1
       }
-      const saved = saveAuditWatch(deps, tenantId, change, { actor, reason: enabled === false ? "Intune change watching turned off" : enabled === true ? "Intune change watching turned on" : "Intune change watching changed" })
+      // A change of ownership between this computer and the Azure watcher overtakes any poll
+      // still waiting on Graph, also when it is switched on and off again during that poll.
+      // Positions are kept: only the generations move.
+      if (externalWatcher !== undefined && externalWatcher !== Boolean(current?.externalWatcher)) {
+        // A service turned on in this same save already got a new generation above.
+        const intuneGeneration = current?.generation ?? 0
+        if (change.generation === undefined) change.generation = intuneGeneration + 1
+        const caBefore = current?.conditionalAccess?.generation ?? 0
+        const ca = change.conditionalAccess ?? current?.conditionalAccess ?? defaultConditionalAccessWatch()
+        if ((ca.generation ?? 0) === caBefore) change.conditionalAccess = { ...ca, generation: caBefore + 1 }
+      }
+      const reasons = [
+        enabled === true && !current?.enabled ? "Intune change watching turned on" : enabled === false && current?.enabled ? "Intune change watching turned off" : null,
+        conditionalAccess === true && !current?.conditionalAccess?.enabled ? "Conditional Access change watching turned on" : conditionalAccess === false && current?.conditionalAccess?.enabled ? "Conditional Access change watching turned off" : null,
+      ].filter(Boolean)
+      const saved = saveAuditWatch(deps, tenantId, change, { actor, reason: reasons.length ? reasons.join(", ") : "Change watching changed" })
       return { auditWatch: publicAuditWatch(saved) }
     },
 
     // Turning change watching off stays free on every plan.
     "revoke-audit-watch": ({ tenantId, deps, actor }) => {
-      const saved = saveAuditWatch(deps, tenantId, { enabled: false }, { actor, reason: "Intune change watching turned off" })
+      const current = auditWatchOf(deps, tenantId)
+      const saved = saveAuditWatch(deps, tenantId, { enabled: false, conditionalAccess: { ...(current?.conditionalAccess ?? defaultConditionalAccessWatch()), enabled: false } }, { actor, reason: "Change watching turned off" })
       return { auditWatch: publicAuditWatch(saved) }
+    },
+
+    "run-watcher-check": async ({ tenantId, deps }) => {
+      const result = await checkWatcher(deps, tenantId)
+      return { auditWatch: publicAuditWatch(auditWatchOf(deps, tenantId)), ...result }
     },
 
     "run-audit-watch": async ({ tenantId, deps }) => {
@@ -410,8 +444,9 @@ export function publicRule(rule: Stored<RuleRecord>) {
 
 export function publicAuditWatch(watch: Stored<AuditWatchRecord> | null) {
   const value = watch ?? { ...defaultAuditWatch(), id: null, createdAt: null, updatedAt: null, history: [] }
-  const { history, recent: _recent, ...rest } = value as Stored<AuditWatchRecord>
-  return { ...rest, history: (history ?? []).map(({ at, actor, reason }) => ({ at, actor, reason })) }
+  const { history, recent: _recent, conditionalAccess, ...rest } = value as Stored<AuditWatchRecord>
+  const { recent: _caRecent, continuation: _caContinuation, ...ca } = conditionalAccess ?? defaultConditionalAccessWatch()
+  return { ...rest, conditionalAccess: ca, history: (history ?? []).map(({ at, actor, reason }) => ({ at, actor, reason })) }
 }
 
 // The emit export is part of the module surface for producers in the main process.

@@ -64,6 +64,7 @@ Delegated permissions let an app act on behalf of a signed-in user. They never g
 | `Mail.Send` (optional, only with `-IncludeNotifications`) | Sends notification email as the signed-in admin (`POST /me/sendMail`). Not requested by default. Only notification channels of kind email use it. |
 | `GroupMember.Read.All` (optional, only with `-IncludeNotifications`) | Resolves the members of an Entra group picked as an email notification recipient, at send time only, guests excluded. Not requested by default. Sending to a list address needs no group permission. |
 | `User.Read.All` (optional, only with `-IncludeNotifications`) | Reads mail address and user type of those group members so they can be addressed and guests excluded. Without it, Graph returns member objects with those fields empty and group recipients resolve to nobody. |
+| `AuditLog.Read.All` (optional, only with `-IncludeAuditLog`) | Reads Conditional Access, named location and authentication strength changes from the Entra audit log (`GET /auditLogs/directoryAudits`) for notification change watching. Not requested by default. Only ids, times, activity names, target names and the actor are used; the policy content Graph includes in each event is never read or sent. |
 
 :::note
 **About `Policy.Read.All`:** only the opt-in Conditional Access service uses it, to read Conditional Access policies, named locations and authentication strengths. If you do not turn that service on and your security review requires it, you can remove this permission from the app registration.
@@ -118,7 +119,17 @@ Email notification channels send as the signed-in admin and can resolve Entra gr
 ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -IncludeNotifications
 ```
 
-See [Notifications](/notifications/) for what is sent. The Azure watcher has its own managed identity and its own application roles (`DeviceManagementApps.Read.All`, and only when used, `Mail.Send` restricted to one mailbox in Exchange); the watcher setup script prints exactly what it granted.
+See [Notifications](/notifications/) for what is sent. The Azure watcher has its own managed identity and its own application roles (`DeviceManagementApps.Read.All`, `AuditLog.Read.All` only with `-IncludeConditionalAccess`, and only when used, `Mail.Send` restricted to one mailbox in Exchange); the watcher setup script prints exactly what it granted.
+
+## Conditional Access change watching (optional)
+
+Notification change watching can also report changes to Conditional Access policies, named locations and authentication strengths. Those changes are in the Entra audit log, which needs the delegated `AuditLog.Read.All` permission. It is off unless you opt in with `-IncludeAuditLog` on a fresh registration, or by adding the delegated permission to an existing registration and granting admin consent. The signed-in admin also needs a role that can read audit logs, such as Security Reader, Global Reader or Reports Reader:
+
+```powershell
+./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -IncludeAuditLog
+```
+
+The Azure watcher uses the application role `AuditLog.Read.All` instead. Its setup script with `-IncludeConditionalAccess` turns the watching on, and grants the role when `-GrantGraphRoles` is also given (Global Administrator); without it, assign `AuditLog.Read.All` to the watcher's managed identity yourself.
 
 ## Optional: the Backup Reader
 
