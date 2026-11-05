@@ -662,6 +662,34 @@ describe("Conditional Access change watching", () => {
     expect((await pollAuditWatch(w.deps, TENANT_A)).changes).toBe(3)
   })
 
+  it("a Conditional Access poll overtaken by a handoff and back is discarded, and its changes come once later", async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let gated = true
+    const w = world({ graph: () => async (_method: string, path: string) => {
+      if (path.startsWith("auditLogs/directoryAudits")) {
+        if (gated) await gate
+        const since = /activityDateTime gt ([^&\s]+)/.exec(decodeURIComponent(path))?.[1] ?? ""
+        return { status: 200, body: { value: (entraFixture.events as Array<{ activityDateTime: string }>).filter((event) => Date.parse(event.activityDateTime) > Date.parse(since)) } }
+      }
+      return { status: 200, body: { value: [] } }
+    } })
+    const channel = await addWebhook(w)
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-rule", eventTypes: ["entra.change"], minSeverity: "info", channelIds: [channel.id] })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", conditionalAccessEnabled: true })
+    const polling = pollAuditWatch(w.deps, TENANT_A)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", externalWatcher: true })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", externalWatcher: false })
+    release()
+    expect((await polling).changes).toBe(0)
+    expect(w.posts).toHaveLength(0)
+    gated = false
+    // The failed strength create and the Core Directory event are filtered: 5 changes, sent once.
+    expect((await pollAuditWatch(w.deps, TENANT_A)).changes).toBe(5)
+    expect(w.posts).toHaveLength(1)
+  })
+
   it("a failed poll overtaken by a restart leaves no old error or poll time behind", async () => {
     let release: () => void = () => undefined
     const gate = new Promise<void>((resolve) => { release = resolve })
