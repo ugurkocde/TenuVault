@@ -743,49 +743,244 @@ function Get-TvMarkdownEscape {
     return [regex]::Replace([string]$Value, '([\\`*_{}\[\]()#+\-.!>])', '\$1')
 }
 
+# ---------------------------------------------------------------------------
+# Library: Teams card layout, mirroring layout.ts and teamsWorkflowsPayload
+# ---------------------------------------------------------------------------
+
+$script:TvMovableBlocks = @("summary", "details", "items", "note", "footer")
+$script:TvHideableBlocks = @("summary", "details", "items", "note", "footer", "button")
+$script:TvSeverityRank = @{ info = 0; warning = 1; critical = 2 }
+$script:TvEventGroups = [ordered]@{
+    backups = @("backup.failed", "backup.warning", "backup.succeeded", "backup.missed")
+    restores = @("restore.completed", "restore.partial", "restore.failed")
+    drift = @("drift.detected")
+    changes = @("intune.change", "entra.change")
+    alerts = @("credential.expiring", "watcher.stale", "health.finding")
+}
+
+function Get-TvCleanStyleText {
+    param([object]$Value, [int]$Max)
+    if ($Value -isnot [string]) { return "" }
+    $text = [regex]::Replace($Value, '[\x00-\x1f\x7f]+', ' ')
+    $text = [regex]::Replace($text, '\s+', ' ').Trim()
+    if ($text.Length -gt $Max) { $text = $text.Substring(0, $Max) }
+    return $text
+}
+
+function Get-TvStyleChoice {
+    param([object]$Value, [string[]]$Allowed, [string]$Fallback)
+    if ($Value -is [string] -and $Allowed -ccontains $Value) { return $Value }
+    return $Fallback
+}
+
+function Get-TvStyleFlag {
+    param([object]$Value, [bool]$Fallback)
+    if ($Value -is [bool]) { return $Value }
+    return $Fallback
+}
+
+# Mirrors parseCardStyle: unknown fields are dropped and invalid values fall back to
+# the default, so a damaged layout never stops a delivery.
+function ConvertTo-TvCardStyle {
+    param([object]$Raw)
+    $order = [System.Collections.Generic.List[string]]::new()
+    foreach ($entry in @(Get-TvProp $Raw "order")) {
+        if ($entry -is [string] -and $script:TvMovableBlocks -ccontains $entry -and -not $order.Contains($entry)) { $order.Add($entry) }
+    }
+    foreach ($block in $script:TvMovableBlocks) { if (-not $order.Contains($block)) { $order.Add($block) } }
+    # An empty list from JSON would unroll to $null through Get-TvProp, so the property is
+    # read directly: a missing or non-array value means the default (note hidden).
+    $hiddenValue = $null
+    $hasHidden = $false
+    if ($Raw -is [System.Collections.IDictionary]) {
+        if ($Raw.Contains("hidden")) { $hiddenValue = $Raw["hidden"]; $hasHidden = $true }
+    } elseif ($null -ne $Raw -and $Raw.PSObject.Properties["hidden"]) {
+        $hiddenValue = $Raw.PSObject.Properties["hidden"].Value; $hasHidden = $true
+    }
+    $hiddenSet = @{}
+    if (-not $hasHidden -or $hiddenValue -isnot [array]) { $hiddenSet["note"] = $true }
+    else { foreach ($entry in $hiddenValue) { if ($entry -is [string]) { $hiddenSet[$entry] = $true } } }
+    $hidden = @($script:TvHideableBlocks | Where-Object { $hiddenSet.ContainsKey($_) })
+    $hiddenDetails = [System.Collections.Generic.List[string]]::new()
+    foreach ($entry in @(Get-TvProp $Raw "hiddenDetails")) {
+        $label = Get-TvCleanStyleText $entry 80
+        if ($label -and -not $hiddenDetails.Contains($label) -and $hiddenDetails.Count -lt 20) { $hiddenDetails.Add($label) }
+    }
+    $maxItems = 20
+    $maxRaw = Get-TvProp $Raw "maxItems"
+    if ($null -ne $maxRaw -and @(3, 5, 10, 20) -contains [int]$maxRaw -and "$maxRaw" -match '^\d+$') { $maxItems = [int]$maxRaw }
+    return [pscustomobject][ordered]@{
+        order = @($order.ToArray())
+        hidden = $hidden
+        severityStyle = Get-TvStyleChoice (Get-TvProp $Raw "severityStyle") @("both", "tint", "label") "both"
+        accent = Get-TvStyleChoice (Get-TvProp $Raw "accent") @("severity", "accent", "emphasis", "good") "severity"
+        titlePrefix = Get-TvCleanStyleText (Get-TvProp $Raw "titlePrefix") 40
+        summaryText = Get-TvCleanStyleText (Get-TvProp $Raw "summaryText") 300
+        hiddenDetails = @($hiddenDetails.ToArray())
+        maxItems = $maxItems
+        itemStyle = Get-TvStyleChoice (Get-TvProp $Raw "itemStyle") @("line", "stacked") "line"
+        itemDetail = Get-TvStyleFlag (Get-TvProp $Raw "itemDetail") $true
+        itemActor = Get-TvStyleFlag (Get-TvProp $Raw "itemActor") $true
+        itemTime = Get-TvStyleFlag (Get-TvProp $Raw "itemTime") $true
+        noteText = Get-TvCleanStyleText (Get-TvProp $Raw "noteText") 300
+        noteMinSeverity = Get-TvStyleChoice (Get-TvProp $Raw "noteMinSeverity") @("info", "warning", "critical") "warning"
+        buttonDestination = Get-TvStyleChoice (Get-TvProp $Raw "buttonDestination") @("auto", "intune", "entra") "auto"
+        buttonLabel = Get-TvCleanStyleText (Get-TvProp $Raw "buttonLabel") 40
+        footerSource = Get-TvStyleFlag (Get-TvProp $Raw "footerSource") $true
+        footerTime = Get-TvStyleFlag (Get-TvProp $Raw "footerTime") $true
+        footerEventId = Get-TvStyleFlag (Get-TvProp $Raw "footerEventId") $true
+        density = Get-TvStyleChoice (Get-TvProp $Raw "density") @("comfortable", "compact") "comfortable"
+        timeFormat = Get-TvStyleChoice (Get-TvProp $Raw "timeFormat") @("friendly", "iso") "friendly"
+    }
+}
+
+# The style an event type uses: its group's override, else the base. Mirrors styleFor.
+function Get-TvCardStyleFor {
+    param([object]$Layout, [string]$Type)
+    if ($null -eq $Layout) { return ConvertTo-TvCardStyle $null }
+    foreach ($group in $script:TvEventGroups.Keys) {
+        if ($script:TvEventGroups[$group] -ccontains $Type) {
+            $override = Get-TvProp (Get-TvProp $Layout "overrides") $group
+            if ($null -ne $override) { return ConvertTo-TvCardStyle $override }
+        }
+    }
+    return ConvertTo-TvCardStyle (Get-TvProp $Layout "base")
+}
+
+function Get-TvSeverityLabel {
+    param([string]$Severity)
+    switch ($Severity) { "critical" { return "Critical" } "warning" { return "Warning" } default { return "Info" } }
+}
+
+# Mirrors fillPlaceholders: unknown names stay as written.
+function Get-TvFilledText {
+    param([string]$Text, [object]$Envelope, [string]$TimeFormat)
+    if (-not $Text) { return "" }
+    $tenant = Get-TvProp $Envelope "tenant"
+    $tenantLabel = Get-TvProp $tenant "name"
+    if (-not $tenantLabel) { $tenantLabel = Get-TvProp $tenant "id" }
+    $values = @{
+        tenant = [string]$tenantLabel
+        title = [string](Get-TvProp $Envelope "title")
+        severity = Get-TvSeverityLabel ([string](Get-TvProp $Envelope "severity"))
+        eventType = [string](Get-TvProp $Envelope "type")
+        count = [string](@(Get-TvProp $Envelope "items" | Where-Object { $null -ne $_ }).Count + [int](Get-TvProp $Envelope "moreCount"))
+        occurredAt = if ($TimeFormat -eq "iso") { ConvertTo-TvIso (Get-TvProp $Envelope "occurredAt") } else { Get-TvFriendlyTime (Get-TvProp $Envelope "occurredAt") }
+    }
+    return [regex]::Replace($Text, '\{([A-Za-z]+)\}', {
+        param($match)
+        $name = $match.Groups[1].Value
+        if ($values.ContainsKey($name)) { return $values[$name] }
+        return $match.Value
+    })
+}
+
 function New-TvTeamsPayload {
-    param([object]$Envelope)
-    # TextBlock has no severity style: the header sits in a Container with a named container
-    # style, and a small label carries a named text color. Same shape as render.ts.
-    $severity = switch ([string](Get-TvProp $Envelope "severity")) {
+    param([object]$Envelope, [object]$Style)
+    if ($null -eq $Style) { $Style = ConvertTo-TvCardStyle $null }
+    $severityName = [string](Get-TvProp $Envelope "severity")
+    $severity = switch ($severityName) {
         "critical" { @{ container = "attention"; color = "Attention"; label = "Critical" } }
         "warning" { @{ container = "warning"; color = "Warning"; label = "Warning" } }
         default { @{ container = "emphasis"; color = "Accent"; label = "Info" } }
     }
+    $timeFormat = [string]$Style.timeFormat
+    $compact = $Style.density -eq "compact"
+    # ConvertFrom-Json turns ISO strings into DateTime values (envelopes reloaded from
+    # state.json), so ISO output is normalized instead of cast to a locale string.
+    $formatTime = { param($iso) if ($timeFormat -eq "iso") { ConvertTo-TvIso $iso } else { Get-TvFriendlyTime $iso } }
+
+    # TextBlock has no severity style: the header sits in a Container with a named container
+    # style, and a small label carries a named text color. Same shape as render.ts.
+    $headerItems = [System.Collections.Generic.List[object]]::new()
+    if ($Style.severityStyle -ne "tint") {
+        $headerItems.Add([pscustomobject][ordered]@{ type = "TextBlock"; size = "Small"; weight = "Bolder"; color = $severity.color; text = $severity.label; wrap = $true })
+    }
+    # Prefixes are stored trimmed, so the space before the title is added here.
+    $titlePrefix = Get-TvFilledText $Style.titlePrefix $Envelope $timeFormat
+    $titleText = if ($titlePrefix) { "$titlePrefix $([string](Get-TvProp $Envelope 'title'))" } else { [string](Get-TvProp $Envelope "title") }
+    $headerItems.Add([pscustomobject][ordered]@{ type = "TextBlock"; size = "Medium"; weight = "Bolder"; text = Get-TvMarkdownEscape $titleText; wrap = $true; spacing = "None" })
+    $containerStyle = if ($Style.accent -ne "severity") { [string]$Style.accent } elseif ($Style.severityStyle -eq "label") { "default" } else { $severity.container }
     $body = [System.Collections.Generic.List[object]]::new()
-    $body.Add([pscustomobject][ordered]@{
-        type = "Container"; style = $severity.container; bleed = $true
-        items = @(
-            [pscustomobject][ordered]@{ type = "TextBlock"; size = "Small"; weight = "Bolder"; color = $severity.color; text = $severity.label; wrap = $true },
-            [pscustomobject][ordered]@{
-                type = "TextBlock"; size = "Medium"; weight = "Bolder"
-                text = Get-TvMarkdownEscape (Get-TvProp $Envelope "title"); wrap = $true; spacing = "None"
+    $body.Add([pscustomobject][ordered]@{ type = "Container"; style = $containerStyle; bleed = $true; items = @($headerItems.ToArray()) })
+
+    foreach ($block in @($Style.order)) {
+        if (@($Style.hidden) -ccontains $block) { continue }
+        switch ($block) {
+            "summary" {
+                $summaryText = if ($Style.summaryText) { Get-TvFilledText $Style.summaryText $Envelope $timeFormat } else { [string](Get-TvProp $Envelope "summary") }
+                $summaryBlock = [ordered]@{ type = "TextBlock"; text = Get-TvMarkdownEscape $summaryText; wrap = $true }
+                if ($compact) { $summaryBlock["spacing"] = "Small" }
+                $body.Add([pscustomobject]$summaryBlock)
             }
-        )
-    })
-    $body.Add([pscustomobject][ordered]@{ type = "TextBlock"; text = Get-TvMarkdownEscape (Get-TvProp $Envelope "summary"); wrap = $true })
-    $facts = @(@(Get-TvProp $Envelope "details") | Where-Object { $_ } | ForEach-Object {
-        [pscustomobject][ordered]@{ title = Get-TvMarkdownEscape (Get-TvProp $_ "label"); value = Get-TvMarkdownEscape (Get-TvProp $_ "value") }
-    })
-    if ($facts.Count -gt 0) { $body.Add([pscustomobject][ordered]@{ type = "FactSet"; facts = $facts }) }
-    foreach ($item in @(Get-TvProp $Envelope "items")) {
-        if ($null -eq $item) { continue }
-        $body.Add([pscustomobject][ordered]@{ type = "TextBlock"; text = Get-TvMarkdownEscape (Get-TvItemLine $item); wrap = $true; spacing = "Small" })
+            "details" {
+                $facts = @(@(Get-TvProp $Envelope "details") | Where-Object { $_ -and -not (@($Style.hiddenDetails) -ccontains [string](Get-TvProp $_ "label")) } | ForEach-Object {
+                    [pscustomobject][ordered]@{ title = Get-TvMarkdownEscape (Get-TvProp $_ "label"); value = Get-TvMarkdownEscape (Get-TvProp $_ "value") }
+                })
+                if ($facts.Count -gt 0) {
+                    $factBlock = [ordered]@{ type = "FactSet"; facts = $facts }
+                    if ($compact) { $factBlock["spacing"] = "Small" }
+                    $body.Add([pscustomobject]$factBlock)
+                }
+            }
+            "items" {
+                $allItems = @(@(Get-TvProp $Envelope "items") | Where-Object { $null -ne $_ })
+                $shown = @($allItems | Select-Object -First ([int]$Style.maxItems))
+                foreach ($item in $shown) {
+                    $meta = [System.Collections.Generic.List[string]]::new()
+                    if ($Style.itemDetail -and (Get-TvProp $item "detail")) { $meta.Add([string](Get-TvProp $item "detail")) }
+                    if ($Style.itemActor -and (Get-TvProp $item "actor")) { $meta.Add("by $(Get-TvProp $item 'actor')") }
+                    if ($Style.itemTime -and (Get-TvProp $item "at")) { $meta.Add((& $formatTime (Get-TvProp $item "at"))) }
+                    # Bullet and middle dot as char codes: the runbook stays ASCII.
+                    $dot = " $([char]0x00B7) "
+                    if ($Style.itemStyle -eq "stacked") {
+                        $body.Add([pscustomobject][ordered]@{ type = "TextBlock"; text = Get-TvMarkdownEscape ([string](Get-TvProp $item "title")); wrap = $true; weight = "Bolder"; spacing = $(if ($compact) { "Small" } else { "Medium" }) })
+                        if ($meta.Count -gt 0) {
+                            $body.Add([pscustomobject][ordered]@{ type = "TextBlock"; text = Get-TvMarkdownEscape ($meta -join $dot); wrap = $true; isSubtle = $true; size = "Small"; spacing = "None" })
+                        }
+                    } else {
+                        $line = @("$([char]0x2022) $(Get-TvProp $item 'title')") + @($meta.ToArray())
+                        $body.Add([pscustomobject][ordered]@{ type = "TextBlock"; text = Get-TvMarkdownEscape ($line -join $dot); wrap = $true; spacing = $(if ($compact) { "None" } else { "Small" }) })
+                    }
+                }
+                $more = [int](Get-TvProp $Envelope "moreCount") + ($allItems.Count - $shown.Count)
+                if ($more -gt 0) {
+                    $body.Add([pscustomobject][ordered]@{ type = "TextBlock"; text = "And $more more. Open TenuVault for the full list."; wrap = $true; isSubtle = $true })
+                }
+            }
+            "note" {
+                if ($Style.noteText -and $script:TvSeverityRank[$severityName] -ge $script:TvSeverityRank[[string]$Style.noteMinSeverity]) {
+                    $noteBlock = [pscustomobject][ordered]@{ type = "TextBlock"; text = Get-TvMarkdownEscape (Get-TvFilledText $Style.noteText $Envelope $timeFormat); wrap = $true }
+                    $body.Add([pscustomobject][ordered]@{ type = "Container"; style = "emphasis"; items = @($noteBlock) })
+                }
+            }
+            "footer" {
+                $parts = [System.Collections.Generic.List[string]]::new()
+                if ($Style.footerSource) { $parts.Add($(if ((Get-TvProp $Envelope "source") -eq "azure-watcher") { "Azure watcher" } else { "TenuVault desktop" })) }
+                if ($Style.footerTime) { $parts.Add((& $formatTime (Get-TvProp $Envelope "occurredAt"))) }
+                if ($Style.footerEventId) { $parts.Add("Event $(([string](Get-TvProp $Envelope 'eventId')).Substring(0, 12))") }
+                if ($parts.Count -gt 0) {
+                    $body.Add([pscustomobject][ordered]@{ type = "TextBlock"; text = Get-TvMarkdownEscape ($parts -join " $([char]0x00B7) "); wrap = $true; isSubtle = $true; size = "Small" })
+                }
+            }
+        }
     }
-    if ([int](Get-TvProp $Envelope "moreCount") -gt 0) {
-        $body.Add([pscustomobject][ordered]@{
-            type = "TextBlock"; text = "And $(Get-TvProp $Envelope 'moreCount') more. Open TenuVault for the full list."
-            wrap = $true; isSubtle = $true
-        })
-    }
-    $body.Add([pscustomobject][ordered]@{ type = "TextBlock"; text = Get-TvMarkdownEscape (Get-TvFooter $Envelope); wrap = $true; isSubtle = $true; size = "Small" })
+
     $card = [pscustomobject][ordered]@{
         '$schema' = "http://adaptivecards.io/schemas/adaptive-card.json"
         type = "AdaptiveCard"; version = "1.4"; body = @($body.ToArray())
     }
-    $action = Get-TvActionLink $Envelope
-    if ($action) {
-        $card | Add-Member -NotePropertyName actions -NotePropertyValue @([pscustomobject][ordered]@{ type = "Action.OpenUrl"; title = $action.label; url = $action.href })
+    # Fixed Microsoft destinations only, as cardButton in render.ts. Never tenant data.
+    if (-not (@($Style.hidden) -ccontains "button")) {
+        $action = switch ([string]$Style.buttonDestination) {
+            "intune" { @{ href = "https://intune.microsoft.com"; label = "Open the Intune admin center" } }
+            "entra" { @{ href = "https://entra.microsoft.com/#view/Microsoft_AAD_ConditionalAccess/ConditionalAccessBlade/~/Policies"; label = "Open Conditional Access in Entra" } }
+            default { Get-TvActionLink $Envelope }
+        }
+        if ($action) {
+            $label = if ($Style.buttonLabel) { Get-TvFilledText $Style.buttonLabel $Envelope $timeFormat } else { $action.label }
+            $card | Add-Member -NotePropertyName actions -NotePropertyValue @([pscustomobject][ordered]@{ type = "Action.OpenUrl"; title = $label; url = $action.href })
+        }
     }
     return [pscustomobject][ordered]@{
         type = "message"
@@ -1068,9 +1263,10 @@ function Send-TvWebhook {
 }
 
 function Send-TvTeams {
-    param([object]$Envelope, [string]$Url)
+    param([object]$Envelope, [string]$Url, [object]$Layout)
     if (-not $Url) { return }
-    $payload = ConvertTo-TenuVaultCanonicalJson (New-TvTeamsPayload $Envelope)
+    $style = Get-TvCardStyleFor $Layout ([string](Get-TvProp $Envelope "type"))
+    $payload = ConvertTo-TenuVaultCanonicalJson (New-TvTeamsPayload $Envelope $style)
     $response = Invoke-WebRequest -Uri $Url -Method Post -MaximumRedirection 0 `
         -Body ([Text.Encoding]::UTF8.GetBytes($payload)) -ContentType "application/json; charset=utf-8" `
         -UseBasicParsing -TimeoutSec 30
@@ -1357,6 +1553,14 @@ try {
     # AuditLog.Read.All application role (setup -IncludeConditionalAccess).
     $watchConditionalAccessValue = Get-TvAutomationVariable "TenuVaultWatchConditionalAccess"
     $watchConditionalAccess = $watchConditionalAccessValue -match "^(true|1|yes)$"
+    # The Teams card layout copied from TenuVault (Settings > Notifications > Teams card).
+    # Unreadable JSON falls back to the standard card instead of stopping deliveries.
+    $teamsCardLayout = $null
+    $teamsCardLayoutValue = Get-TvAutomationVariable "TenuVaultTeamsCardLayout"
+    if ($teamsCardLayoutValue) {
+        try { $teamsCardLayout = $teamsCardLayoutValue | ConvertFrom-Json }
+        catch { Write-Output "TenuVaultTeamsCardLayout is not valid JSON; Teams cards use the standard layout." }
+    }
 
     if (-not $tenantId) { throw "Automation variable TenuVaultTenantId is not set." }
     if (-not $storageAccount) { throw "Automation variable TenuVaultStorageAccount is not set." }
@@ -1375,6 +1579,7 @@ try {
         "missedBackupHours=$missedBackupHours"
         "includeActor=$($includeActor.ToString().ToLowerInvariant())"
         "watchConditionalAccess=$($watchConditionalAccess.ToString().ToLowerInvariant())"
+        "teamsCardLayout=$(if ($teamsCardLayoutValue) { Get-TvSha256Hex $teamsCardLayoutValue } else { 'standard' })"
         "configVersion=$configVersion"
         "webhookUrl=$(if ($webhookUrl) { 'present' } else { 'absent' })"
         "webhookSecret=$(if ($webhookSecret) { 'present' } else { 'absent' })"
@@ -1800,7 +2005,7 @@ try {
                 try {
                     switch ($destination) {
                         "webhook" { Send-TvWebhook -Envelope $envelope -Url $webhookUrl -Secret $webhookSecret }
-                        "teams" { Send-TvTeams -Envelope $envelope -Url $teamsWebhookUrl }
+                        "teams" { Send-TvTeams -Envelope $envelope -Url $teamsWebhookUrl -Layout $teamsCardLayout }
                         "mail" { Send-TvMail -Envelope $envelope -MailSender $mailSender -Recipients $mailRecipients -GraphToken $graphToken }
                     }
                 } catch {

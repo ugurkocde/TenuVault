@@ -128,6 +128,11 @@
     AuditLog.Read.All application role. Only ids, times, activity names, target
     names and the actor are used; policy content in the audit events is never read.
 
+.PARAMETER TeamsCardLayoutPath
+    Path to a Teams card layout file saved with "Copy for Azure watcher" in TenuVault
+    (Settings > Notifications > Teams card). The watcher then builds its Teams cards
+    with that layout. Without it, cards use the standard layout.
+
 .PARAMETER GrantGraphRoles
     Assign the Graph application roles to the managed identity now (needs Global
     Administrator) and print a consent receipt.
@@ -168,6 +173,7 @@ param(
     [ValidateRange(1, 8760)][int]$MissedBackupHours = 48,
     [switch]$IncludeActor,
     [switch]$IncludeConditionalAccess,
+    [string]$TeamsCardLayoutPath,
     [switch]$GrantGraphRoles,
     [switch]$IncludeMailSend,
     [switch]$Remove
@@ -186,7 +192,7 @@ $automationVariableNames = @(
     "TenuVaultWebhookUrl", "TenuVaultWebhookSecret", "TenuVaultTeamsWebhookUrl",
     "TenuVaultMailSender", "TenuVaultMailRecipients", "TenuVaultMailProbeMailbox",
     "TenuVaultMissedBackupHours", "TenuVaultIncludeActor", "TenuVaultConfigVersion",
-    "TenuVaultWatchConditionalAccess"
+    "TenuVaultWatchConditionalAccess", "TenuVaultTeamsCardLayout"
 )
 
 $graphRoleNames = @("DeviceManagementApps.Read.All")
@@ -492,6 +498,16 @@ if ($MailProbeMailbox) { Set-TenuVaultAutomationVariable -Name "TenuVaultMailPro
 Set-TenuVaultAutomationVariable -Name "TenuVaultMissedBackupHours" -Value ([string]$MissedBackupHours)
 Set-TenuVaultAutomationVariable -Name "TenuVaultIncludeActor" -Value $(if ($IncludeActor) { "true" } else { "false" })
 Set-TenuVaultAutomationVariable -Name "TenuVaultWatchConditionalAccess" -Value $(if ($IncludeConditionalAccess) { "true" } else { "false" })
+$teamsCardLayoutJson = ""
+if ($TeamsCardLayoutPath) {
+    if (-not (Test-Path -LiteralPath $TeamsCardLayoutPath)) { throw "Teams card layout file not found: $TeamsCardLayoutPath" }
+    $teamsCardLayoutJson = (Get-Content -LiteralPath $TeamsCardLayoutPath -Raw).Trim()
+    try { $parsedLayout = $teamsCardLayoutJson | ConvertFrom-Json } catch { throw "The Teams card layout file is not valid JSON. Copy it again from TenuVault." }
+    if ($parsedLayout.version -ne 1 -or -not $parsedLayout.base) { throw "The Teams card layout file is not a TenuVault layout (version 1 with a base layout)." }
+    # Compact form keeps the variable small; it is not a secret.
+    $teamsCardLayoutJson = $parsedLayout | ConvertTo-Json -Depth 10 -Compress
+}
+Set-TenuVaultAutomationVariable -Name "TenuVaultTeamsCardLayout" -Value $teamsCardLayoutJson
 Set-TenuVaultAutomationVariable -Name "TenuVaultConfigVersion" -Value "1"
 
 # ---------------------------------------------------------------------------

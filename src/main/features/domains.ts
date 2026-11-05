@@ -17,6 +17,7 @@ export const DOMAINS = {
   notificationRules: "notification-rules",
   notificationOutbox: "notification-outbox",
   notificationAuditWatch: "notification-audit-watch",
+  notificationCardLayout: "notification-card-layout",
   customizations: "customizations",
   standards: "standards",
   adoptions: "standard-adoptions",

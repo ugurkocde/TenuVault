@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto"
 import { canonicalJson, SEVERITY_RANK, watcherStaleEvent, type NotificationEnvelope } from "../../../shared/notifications/envelope"
 import { emailHtml, emailSubject, localText, teamsWorkflowsPayload } from "../../../shared/notifications/render"
 import { AUDIT_EVENT_SELECT, changeDigest, filterAuditChanges, mapAuditEvent, type AuditChange, type AuditEventRaw, type ChangeService } from "../../../shared/notifications/audit"
+import { DEFAULT_CARD_LAYOUT, parseCardLayout, styleFor, type CardLayout } from "../../../shared/notifications/layout"
 import { ENTRA_AUDIT_FILTER, ENTRA_AUDIT_SELECT, mapEntraAuditEvent, type EntraAuditRaw } from "../../../shared/notifications/entra"
 import { allows } from "../../../shared/plans"
 import type { FeatureDeps } from "../deps"
@@ -16,6 +17,7 @@ import {
   WATCHER_CHECK_MINUTES,
   WATCHER_STALE_HOURS,
   type AuditWatchRecord,
+  type CardLayoutRecord,
   type ChannelRecord,
   type ConditionalAccessWatch,
   type DeliveryResult,
@@ -48,6 +50,16 @@ export function rulesOf(deps: FeatureDeps, tenantId: string): Stored<RuleRecord>
 
 export function outboxOf(deps: FeatureDeps, tenantId: string): Stored<OutboxRecord>[] {
   return deps.records.list<OutboxRecord>(DOMAINS.notificationOutbox, tenantId)
+}
+
+export function cardLayoutOf(deps: FeatureDeps, tenantId: string): Stored<CardLayoutRecord> | null {
+  return deps.records.list<CardLayoutRecord>(DOMAINS.notificationCardLayout, tenantId.toLowerCase())[0] ?? null
+}
+
+/** The saved layout, validated again on read so a damaged record still sends the default card. */
+export function layoutOf(deps: FeatureDeps, tenantId: string): CardLayout {
+  const stored = cardLayoutOf(deps, tenantId)
+  return stored ? parseCardLayout(stored.layout) : DEFAULT_CARD_LAYOUT
 }
 
 export function auditWatchOf(deps: FeatureDeps, tenantId: string): Stored<AuditWatchRecord> | null {
@@ -243,7 +255,7 @@ export function signBody(secret: string, timestampSeconds: number, body: string)
 }
 
 /** Delivers one envelope to one channel, single attempt. Retries live in the outbox, not here. */
-export async function deliverToChannel(deps: FeatureDeps, tenantId: string, channel: ChannelRecord, envelope: NotificationEnvelope): Promise<DeliveryResult> {
+export async function deliverToChannel(deps: FeatureDeps, tenantId: string, channel: ChannelRecord, envelope: NotificationEnvelope, layout?: CardLayout): Promise<DeliveryResult> {
   const at = deps.now().toISOString()
   const base = { at, test: envelope.test === true }
   try {
@@ -254,7 +266,8 @@ export async function deliverToChannel(deps: FeatureDeps, tenantId: string, chan
     }
     if (channel.kind === "email") return await deliverEmail(deps, tenantId, channel, envelope, base)
     if (!channel.url || !channel.url.startsWith("https://")) return { ...base, ok: false, attempts: 0, status: null, error: "The channel has no valid https URL." }
-    const body = channel.kind === "teams" ? JSON.stringify(teamsWorkflowsPayload(envelope)) : canonicalJson(envelope)
+    // Teams cards follow the tenant's card layout; a test send can pass an unsaved one.
+    const body = channel.kind === "teams" ? JSON.stringify(teamsWorkflowsPayload(envelope, styleFor(layout ?? layoutOf(deps, tenantId), envelope.type))) : canonicalJson(envelope)
     const headers: Record<string, string> = { "content-type": "application/json", "x-tenuvault-event-id": envelope.eventId }
     if (channel.kind === "webhook" && channel.headerName && channel.headerValue) headers[channel.headerName] = channel.headerValue
     if (channel.kind === "webhook" && channel.signRequests && channel.headerValue) {

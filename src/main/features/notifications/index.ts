@@ -1,6 +1,7 @@
 import type { RouteModule } from "../../api/host"
 import { allows } from "../../../shared/plans"
 import { NOTIFICATION_EVENT_TYPES, testEvent } from "../../../shared/notifications/envelope"
+import { DEFAULT_CARD_LAYOUT, isDefaultLayout, parseCardLayout, styleIssues } from "../../../shared/notifications/layout"
 import type { FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
 import type { Stored } from "../records"
@@ -15,12 +16,15 @@ import {
   parseRecipients,
   urlHost,
   type AuditWatchRecord,
+  type CardLayoutRecord,
   type ChannelRecord,
   type RuleRecord,
 } from "./model"
 import {
   auditWatchOf,
+  cardLayoutOf,
   channelsOf,
+  layoutOf,
   checkWatcher,
   defaultAuditWatch,
   defaultConditionalAccessWatch,
@@ -199,7 +203,10 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     "test-channel": async ({ tenantId, body, deps, actor }) => {
       const channel = requireChannel(deps, tenantId, body)
       const envelope = testEvent({ tenantId, tenantName: deps.tenant(tenantId)?.name ?? null, occurredAt: deps.now().toISOString(), channelTitle: channel.title, source: "desktop" })
-      const delivery = await deliverToChannel(deps, tenantId, channel, envelope)
+      // The layout editor sends a test with the layout being edited, before it is saved.
+      const layout = body.layout !== undefined ? parseCardLayout(body.layout) : undefined
+      if (layout && styleIssues(layout.base).length) throw new FeatureError(styleIssues(layout.base)[0]!.message)
+      const delivery = await deliverToChannel(deps, tenantId, channel, envelope, layout)
       const updated = deps.records.update<ChannelRecord>(DOMAINS.notificationChannels, tenantId, channel.id, (value) => ({ ...value, lastDelivery: delivery, deliveries: [...value.deliveries, delivery].slice(-20) }), { actor, reason: delivery.ok ? "Test delivery succeeded" : `Test delivery failed: ${delivery.error ?? "unknown error"}` })
       return { delivery, channel: publicChannel(updated!) }
     },
@@ -343,6 +350,32 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
         // Signed out or offline: the known list below still lets the filter be edited.
       }
       return { categories: [...KNOWN_AUDIT_CATEGORIES], source: "known" }
+    },
+
+    "get-card-layout": ({ tenantId, deps }) => {
+      const stored = cardLayoutOf(deps, tenantId)
+      return { layout: layoutOf(deps, tenantId), updatedAt: stored?.updatedAt ?? null, history: (stored?.history ?? []).slice(-10).map(({ at, actor, reason }) => ({ at, actor, reason })) }
+    },
+
+    "save-card-layout": ({ tenantId, body, deps, actor }) => {
+      const layout = parseCardLayout(body.layout)
+      for (const style of [layout.base, ...Object.values(layout.overrides)]) {
+        const issues = styleIssues(style)
+        if (issues.length) throw new FeatureError(issues[0]!.message)
+      }
+      const value: CardLayoutRecord = { title: "Teams card layout", status: "enabled", summary: isDefaultLayout(layout) ? "Default layout" : "Custom layout", layout }
+      const current = cardLayoutOf(deps, tenantId)
+      const saved = current
+        ? deps.records.update<CardLayoutRecord>(DOMAINS.notificationCardLayout, tenantId, current.id, () => value, { actor, reason: "Teams card layout changed" })!
+        : deps.records.create<CardLayoutRecord>(DOMAINS.notificationCardLayout, tenantId, value, { actor, reason: "Teams card layout saved" })
+      return { layout: parseCardLayout(saved.layout), updatedAt: saved.updatedAt }
+    },
+
+    // Free like every revoke: going back to the default card needs no plan.
+    "revoke-card-layout": ({ tenantId, deps }) => {
+      const current = cardLayoutOf(deps, tenantId)
+      if (current) deps.records.remove(DOMAINS.notificationCardLayout, tenantId, current.id)
+      return { layout: DEFAULT_CARD_LAYOUT, updatedAt: null }
     },
 
     "list-groups": async ({ tenantId, body, deps }) => {

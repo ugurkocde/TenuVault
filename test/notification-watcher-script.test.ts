@@ -5,6 +5,12 @@ import { describe, expect, it } from "vitest"
 import { intuneChangeDigest, mapAuditEvent, type AuditEventRaw } from "../src/shared/notifications/audit"
 import { canonicalJson } from "../src/shared/notifications/envelope"
 import { teamsWorkflowsPayload } from "../src/shared/notifications/render"
+import { parseCardStyle } from "../src/shared/notifications/layout"
+import { backupEvent, testEvent } from "../src/shared/notifications/envelope"
+import layoutFixture from "./fixtures/notifications/card-layouts.json"
+import { mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import fixture from "./fixtures/notifications/audit-digest.json"
 import liveFixture from "./fixtures/notifications/audit-live.json"
 import entraFixture from "./fixtures/notifications/entra-audit.json"
@@ -85,6 +91,10 @@ describe("Azure notification watcher scripts", () => {
     expect(setup).toContain("AuditLog.Read.All")
     expect(runbook).toContain("TenuVaultWatchConditionalAccess")
     expect(runbook).toContain("entraWatermark")
+    // The Teams card layout reaches the watcher as an Automation variable.
+    expect(setup).toContain("[string]$TeamsCardLayoutPath")
+    expect(setup).toContain('"TenuVaultTeamsCardLayout"')
+    expect(runbook).toContain("Get-TvCardStyleFor $Layout")
   })
 
   it("desktop setup adds notification scopes only with the opt-in switch", () => {
@@ -186,6 +196,24 @@ describe("Azure notification watcher scripts", () => {
     // A run that stopped inside a page keeps every dedupe id until that page is read again.
     expect(pruning.ids).toEqual(["new"])
     expect([...pruning.kept].sort()).toEqual(["new", "old"])
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("PowerShell builds the identical card for every layout in the matrix", () => {
+    const changes = fixture.events.map((event) => mapAuditEvent(event as AuditEventRaw)!)
+    const envelopes = [
+      intuneChangeDigest({ tenantId: fixture.tenantId, tenantName: fixture.tenantName, changes, includeActor: true, source: "azure-watcher" }),
+      entraChangeDigest({ tenantId: entraFixture.tenantId, tenantName: entraFixture.tenantName, changes: entraFixture.events.map((event) => mapEntraAuditEvent(event as EntraAuditRaw)).filter((change) => change !== null), includeActor: false, source: "azure-watcher" }),
+      backupEvent({ tenantId: fixture.tenantId, tenantName: null, status: "Failed", backupFolder: "backup-2026-10-17-020000", occurredAt: "2026-10-17T02:05:00.000Z", totalPolicies: 0, failures: 3, failedTypes: ["Apps"], trigger: "scheduled", source: "azure-watcher" }),
+      testEvent({ tenantId: fixture.tenantId, tenantName: "Contoso", occurredAt: "2026-10-17T10:00:00.000Z", channelTitle: "IT [Ops]", source: "azure-watcher" }),
+    ]
+    const dir = mkdtempSync(join(tmpdir(), "tv-layouts-"))
+    const envelopesPath = join(dir, "envelopes.json")
+    writeFileSync(envelopesPath, JSON.stringify(envelopes))
+    const script = fileURLToPath(new URL("./fixtures/notifications/render-layouts.ps1", import.meta.url))
+    const lines = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-EnvelopesPath", envelopesPath], { encoding: "utf8" }).trim().split(/\r?\n/)
+    const expected = Object.values(layoutFixture.styles).flatMap((raw) => envelopes.map((envelope) => canonicalJson(teamsWorkflowsPayload(envelope, parseCardStyle(raw)))))
+    expect(lines).toHaveLength(expected.length)
+    lines.forEach((line, index) => expect(line, `style/envelope pair ${index}`).toBe(expected[index]))
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("PowerShell matches TypeScript on live-shaped read and assignment events", () => {

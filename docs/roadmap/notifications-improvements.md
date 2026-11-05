@@ -4,12 +4,12 @@ Review of Settings > Notifications on main (3af2122), 2026-11-05. Covers the des
 
 Work is split into four phases. Each phase is one pull request, in order, because later phases build on the render code fixed in phase 1.
 
-| Phase | Scope | Size |
-| --- | --- | --- |
-| 1 | Bugs and docs (B1 to B6, D1 to D6) | Small |
-| 2 | Editing channels and rules, Teams card polish (U1 to U4) | Medium |
-| 3 | Missing events and services (E1 to E4) | Large, adds an opt-in permission |
-| 4 | Teams card layout editor (L1 to L12) | Large |
+| Phase | Scope | Size | Status |
+| --- | --- | --- | --- |
+| 1 | Bugs and docs (B1 to B6, D1 to D6) | Small | Merged in #266 |
+| 2 | Editing channels and rules, Teams card polish (U1 to U4) | Medium | #267 |
+| 3 | Missing events and services (E1 to E4) | Large, adds an opt-in permission | Follows #267 |
+| 4 | Teams card layout editor (L1 to L12) | Large | Follows phase 3 |
 
 ---
 
@@ -41,7 +41,7 @@ Fix: replace the free text input with a multi-select filled from `getAuditCatego
 
 `pollAuditWatchOnce` returns zeros when watching is off or `externalWatcher` is on, and the toast reads like a successful poll.
 
-Fix: return `skipped: "off" | "external"` and show "Change watching is off. Save it on first." or "The Azure watcher owns change alerts for this tenant." Disable the button in both states, with the reason as its description.
+Fix: return `skipped: "off" | "external" | "busy"` and show "Change watching is off. Turn it on and save before polling." or "An Azure watcher owns change alerts for this tenant, so this computer does not poll." Disable the button in both states, with the reason underneath.
 
 ### B5. One failed scheduled slot can alert three times
 
@@ -137,121 +137,77 @@ People can design how their Teams alerts look, without the risks of a free card 
 
 ### L1. Principles
 
-- The layout is stored as settings, never as card JSON. Both runtimes build the card from the layout, so the Azure watcher sends exactly what the preview shows.
-- Tenant text is always plain text: escaped, length capped, never part of a link, image or formatting.
-- Every option has a good default; "Reset to default" returns today's card (after B1 and U4).
-- Pro feature, like the rest of Notifications. Community sees the editor read-only with the plan badge.
+- The layout is stored as settings (`src/shared/notifications/layout.ts`), never as card JSON. `teamsWorkflowsPayload(envelope, style)` in render.ts and `New-TvTeamsPayload $Envelope $Style` in the runbook build the card from it, and a parity test compares both for a matrix of layouts and event types.
+- Tenant text is always escaped plain text, length capped, and never part of a link.
+- The default style produces exactly the standard card; "Reset to standard" deletes the stored layout (a free action).
+- Pro feature like the rest of Notifications. Without the plan the editor opens read only.
 
 ### L2. Where it lives
 
-Settings > Notifications gets a "Teams card" tile between Channels and Rules: a small live thumbnail of the current card, the text "Applies to every Teams channel of this tenant", and a "Customize card" button. Teams channel rows show a "Custom layout" chip when the layout is not the default.
+Settings > Notifications, a "Teams card" tile between Channels and Rules: a short description, a "Standard layout" or "Custom layout" chip, the groups with their own layout, "Customize card", "Reset to standard", and a live thumbnail of the card.
 
 ### L3. Editor layout
 
-A full-height dialog (max width 1200px) with three areas:
+A large dialog: header with the title, the tabs (Default, Backups, Restores, Drift, Changes, Alerts) and a close button; three columns on wide windows (parts, settings of the selected part, preview), two on narrower ones (parts with settings below, preview); a footer with Reset to standard and Copy for Azure watcher on the left, Send test, Cancel and Save card on the right. Closing with unsaved changes asks first.
 
-```
-+-----------------------------------------------------------------------------------+
-| Teams card                         [Default][Backups][Restores][Drift][Changes]   |
-+---------------------------+-------------------------------------------------------+
-| Blocks                    |  Preview   [Sample: Intune changes v] [Light | Dark]  |
-|  :: Header         [on]   |  +-------------------------------------------------+  |
-|  :: Summary        [on]   |  |  W  Workflows  10:04                            |  |
-|  :: Details        [on]   |  |  +-------------------------------------------+  |  |
-|  :: Changes list   [on]   |  |  | Intune changes: Contoso       [Warning]   |  |  |
-|  :: Note           [off]  |  |  | 3 changes in Intune (1 assigned, ...)     |  |  |
-|  :: Button         [on]   |  |  | Changes   3                               |  |  |
-|  :: Footer         [on]   |  |  | • Assigned: WiFi Corp · Device...         |  |  |
-|                           |  |  | [Open the Intune admin center]            |  |  |
-| Block settings            |  |  +-------------------------------------------+  |  |
-|  (options of the          |  +-------------------------------------------------+  |
-|   selected block)         |  Card 1.4 · 3.1 KB of 28 KB · Works in Azure watcher  |
-+---------------------------+-------------------------------------------------------+
-| Reset to default      Copy for Azure watcher     [Send test to v]  Cancel  [Save] |
-+-----------------------------------------------------------------------------------+
-```
+### L4. Parts and settings
 
-- Left column (320px): the block list on top, the settings of the selected block below it.
-- Right: the preview in a Teams-like frame (Workflows avatar, sender name, time) on a neutral canvas, centered, at Teams' real card width (about 450px), with a light and dark switch that follows the app theme by default.
-- Footer bar: actions on the left, primary actions on the right. Save is disabled until something changed; closing with unsaved changes asks first.
-- On narrow windows the preview moves below the block list, and the tabs become a select.
-
-### L4. Blocks
-
-| Block | Options |
+| Part | Settings |
 | --- | --- |
-| Header | Show severity as: colored band, colored title or badge. Show tenant name: in title, as a chip, hidden. Optional title prefix (plain text, 40 chars). |
-| Summary | On or off. Optional custom text with placeholders (L6) that replaces the generated summary. |
-| Details | Which rows to show (per event type: Backup, Result, Policies saved, Item failures, Failed types, Trigger, Added, Modified, Deleted, Changes). Layout: fact list or compact one-line. |
-| Changes list | Style: one line per change, or verb chip plus name with a second line. Items shown: 3, 5, 10 or 20 (the rest becomes "And N more"). Show resource type, actor (only when the tenant's actor setting is on), time. |
-| Note | Free text (300 chars) with placeholders, for example "Call the on-call admin at extension 4411 for critical alerts." Can show for all severities or only warning and critical. |
-| Button | Destination from a fixed list only: Intune admin center, Entra admin center Conditional Access, Azure portal storage account overview, TenuVault docs troubleshooting. Custom label (40 chars). |
-| Footer | Toggles for source, time and event id. |
+| Whole card | Header color (by severity, accent, neutral, green), density (comfortable, compact), times (readable UTC, ISO). |
+| Header (always first) | Severity as color and label, color only or label only; title prefix (40 characters, placeholders). |
+| Summary | Own text (300 characters, placeholders); empty keeps the generated summary. |
+| Details | Rows to show, from the rows the tab's event types carry: Backup, Result, Policies saved, Item failures, Failed types, Trigger, Restored, Partial, Failed, Added, Modified, Deleted, Changes, Channel, Expires, Renewal waiting, Last run, Threshold (hours), Scheduled for. |
+| Changes list | 3, 5, 10 or 20 lines (the rest becomes "And N more"); one line, or the name with details below; type or detail, actor, time on or off. |
+| Note | Own text (300 characters, placeholders) in a shaded box, for every event, warning and up, or critical only. Hidden by default. |
+| Footer | Sender, time and event id on or off. |
+| Button (always last) | Matching admin center (Intune or Conditional Access changes only), or always Intune or Conditional Access in Entra; own label (40 characters). |
 
-Blocks are reordered by drag and drop; Header always stays first. Hidden blocks stay in the list, dimmed.
+Summary, details, changes list, note and footer can be reordered by drag and drop, with the arrow buttons, or with the keyboard; every part but the header can be hidden with its eye.
 
-### L5. Card-wide options
+### L5. Placeholders
 
-- Density: comfortable or compact (Adaptive Card spacing values).
-- Time format: friendly UTC ("2026-10-17 10:02 UTC") or ISO.
-- Accent: severity colors (default) or one fixed container style (accent, emphasis, good). Adaptive Cards only offer named styles and colors, not hex values, so the options are those names with swatches showing how Teams renders them in light and dark.
+`{tenant}`, `{title}`, `{severity}`, `{eventType}`, `{count}`, `{occurredAt}`, inserted with chips under each text field. Unknown placeholders block Save and Send test and are named in the message. Values are escaped after substitution.
 
-### L6. Placeholders
+### L6. Per event type layouts
 
-`{tenant}`, `{title}`, `{severity}`, `{eventType}`, `{count}`, `{occurredAt}`. Typing `{` opens a suggestion list. Unknown placeholders are underlined red and block Save. Values are escaped with `escapeMarkdown` after substitution and capped at their envelope limits.
+Each tab starts as "uses the default layout" with a "Customize ..." button, which copies the default as a starting point. A customized tab shows a dot and "Use default again".
 
-### L7. Per event type layouts
+### L7. Preview
 
-The tabs at the top: Default, Backups (`backup.*`), Restores (`restore.*`), Drift, Changes (`intune.change`, later `entra.change`), Credentials and watcher (E2, E3). A tab starts as "Uses default" with a "Customize for backups" button; a customized tab shows a dot and a "Use default again" link.
+The preview draws the exact card JSON the channel receives. Instead of the `adaptivecards` package (3.x needs `swiper` as a peer for carousels) it uses a small renderer for exactly the elements the builder produces (Container, TextBlock, FactSet, Action.OpenUrl) with a Teams-like palette for light and dark, and flags any other element. Sample events use fictional Contoso data built with the real envelope builders, never the tenant's policies. A status line shows the card version and its size against the Teams message limit.
 
-### L8. Preview
+### L8. The Azure watcher
 
-- Rendered with the maintained `adaptivecards` package (3.x) and a Teams-like host config for light and dark, from the same `teamsWorkflowsPayload(envelope, layout)` that sends the card. No separate preview renderer.
-- Sample data only (Contoso, WiFi Corp, Baseline), never the tenant's real policies, so screenshots and screen sharing are safe.
-- The sample picker covers every event type and severity, including a long digest with "And 12 more" and long names, to check wrapping.
-- Status line under the preview: card version, size against the 28 KB Teams message limit, and "Works in Azure watcher" (always true by construction; shows the watcher version needed when the layout uses a newer option).
+"Copy for Azure watcher" copies the layout as JSON. The watcher setup takes it with `-TeamsCardLayoutPath`, checks that it is a version 1 layout and stores it as the Automation variable `TenuVaultTeamsCardLayout`. The runbook parses it with the same rules as the desktop: a damaged or unknown value falls back to the standard value for that setting, and unreadable JSON falls back to the standard card with a note in the job output. Every option the editor offers exists in both builders, so there is no version gate to show.
 
-### L9. Interaction and accessibility
+### L9. Accessibility
 
-- Drag and drop with `@dnd-kit/core` and `@dnd-kit/sortable` (keyboard sensor included): grab with Space, move with the arrow keys, drop with Space, with live region announcements ("Changes list moved to position 3 of 7"). Every row also has Move up and Move down in its menu.
-- Every control has a visible label; toggles are real switches with `role="switch"`.
-- Focus moves to the block settings when a block is selected and back to the row on Escape.
-- Preview updates within 100 ms of a change, without layout shift; reduced motion turns off the reorder animation.
-- Colors, spacing and type use the existing tokens (`Tile`, `Chip`, `Button`, coral accent), correct in light and dark.
+Drag and drop uses `@dnd-kit` with its keyboard sensor and announcements; arrow buttons appear on hover or focus; switches and segmented controls carry their roles and labels; reduced motion turns off transitions.
 
-### L10. Data model and runtimes
+### L10. Storage and routes
 
-- `CardLayout` in `src/shared/notifications/layout.ts`: `{ version: 1, blocks: Array<{ kind, visible, options }>, density, timeFormat, accent, overrides: Partial<Record<EventGroup, Omit<CardLayout, "overrides">>> }`.
-- `parseCardLayout(value)` validates and clamps every field (pure, shared); unknown fields are dropped, invalid layouts fall back to the default with a reason.
-- Stored per tenant in a new domain `notification-card-layouts`, with history like the other notification records. Routes: `get-card-layout`, `save-card-layout`, `reset-card-layout`, `preview-card` (returns card JSON for a sample).
-- `teamsWorkflowsPayload(envelope, layout = DEFAULT_LAYOUT)`; the outbox stores the envelope only, so a layout change also applies to queued retries.
-- Watcher: "Copy for Azure watcher" copies the layout as compact JSON. The setup script gets `-TeamsCardLayoutPath`, stored as the Automation variable `TenuVaultTeamsCardLayout`; `New-TvTeamsPayload -Layout` mirrors the TypeScript builder. A missing or invalid layout falls back to the default and writes a warning to the job output and `heartbeat.json`.
-- Shared fixtures: a matrix of layouts (default, every block hidden, every option at its extreme, per type overrides) times event types, asserting identical canonical JSON from both runtimes.
+One record per tenant in the domain `notification-card-layout`. Routes: `get-card-layout` (free read), `save-card-layout` (validated, refuses unknown placeholders), `revoke-card-layout` (free reset). `test-channel` takes an optional unsaved layout. Teams deliveries read the stored layout at send time, so queued retries follow the current layout.
 
-### L11. Safety rules, enforced in the builder and tested
+### L11. Safety rules, enforced in both builders and tested
 
-- No tenant value in any URL, image, `Action.*` or `selectAction`.
-- Button URLs come from the fixed destination list only.
-- No `Action.Submit` or `Action.Execute` (they do nothing in Workflows).
-- Card version stays at 1.4 or 1.5; the builder refuses options that need more.
-- Size is checked before sending; when a digest would exceed the limit, items are dropped from the end into "And N more" instead of failing.
+- No tenant value in any URL; buttons only open the fixed destinations.
+- No Submit or Execute actions; the card stays at version 1.4.
+- Control characters are stripped and texts are capped.
 
-### L12. Out of scope for the first version
+### L12. Not in the first version
 
-- Email layout (email keeps its fixed design; can reuse the model later).
-- Pasting raw card JSON.
-- Per channel layouts (per tenant and per event type covers the requests so far).
-- Images and logos (Workflows cards cannot load data URIs reliably, and remote images would come from a URL we do not control).
+Email layout, pasting raw card JSON, per channel layouts, images and logos.
 
 ### Layout editor acceptance
 
 1. Reordering, hiding and every option update the preview immediately; Save persists them; reopening shows the saved state.
-2. Keyboard only: open the editor, move the Changes list above Details, hide Footer, save. Screen reader announces each move.
+2. Keyboard only: open the editor, move the changes list above details, hide the footer, save. A screen reader announces each move.
 3. "Send test" to a real Teams channel in a test tenant matches the preview in light and dark Teams themes.
-4. The Azure watcher with the copied layout sends the same card (fixture test plus one real run).
-5. A policy named `[click](https://evil.example)` renders as literal text in every block and option.
-6. Reset to default produces the same card as a tenant that never opened the editor.
-7. Community plan: editor opens read-only with the plan badge; existing layouts still apply until the channel is removed.
+4. The Azure watcher with the copied layout sends the same card (parity matrix test plus one real run).
+5. A policy named `[click](https://evil.example)` renders as literal text in every part.
+6. Reset to standard produces the same card as a tenant that never opened the editor.
+7. Community plan: the editor opens read only. The layout belongs to the tenant, not to a channel: removing a Teams channel keeps it for the next one, and Reset to standard stays available.
 
 ---
 
@@ -259,9 +215,9 @@ The tabs at the top: Default, Backups (`backup.*`), Restores (`restore.*`), Drif
 
 Use a test tenant only; screenshots must not show real tenant, user or policy names.
 
-1. Teams channel, rule for all types at info. Send test: info card. Trigger a failed backup (revoke storage access): red critical card with Policies saved and Failed types (B1, B6).
+1. Teams channel, rule for all types at info. Send test: info card. Revoke the storage access and run a backup: red critical card (B1). Restore access, remove the read permission for one policy type and run a backup: a partial backup alert with Policies saved and Failed types (B6).
 2. Let a scheduled slot fail three times: one Teams message (B5).
-3. Turn change watching off, make an Intune change, wait, turn it on, Poll now: the earlier change is not reported; a new change is (B2).
+3. Turn change watching off and make an Intune change. Turn watching on and save, make a second change, then Poll now: only the second change is reported (B2).
 4. Category picker lists the Graph categories; picking DeviceConfiguration and changing a compliance policy sends nothing (B3).
 5. Poll now with watching off and with the Azure watcher toggle on: the button is disabled with its reason (B4).
 6. Edit a Teams channel URL and a rule's channels; existing rules keep working (U1 to U3).
