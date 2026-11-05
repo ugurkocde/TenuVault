@@ -55,7 +55,7 @@ Messages arrive as an Adaptive Card posted by Workflows: a header tinted by seve
 
 ![An Intune change digest as a Workflows card in a Teams channel: an amber Warning header, twelve changes with who made them and when, and an Open the Intune admin center button](/images/notifications/notifications-teams.png)
 
-![A Backup failed card in a Teams channel: a red Critical header, then the backup folder, result, policies saved, item failures, failed types and trigger](/images/notifications/notifications-teams-backup.png)
+![A Backup failed card in a Teams channel: a red Critical header, then the backup name, result, policies saved, item failures, failed types and trigger](/images/notifications/notifications-teams-backup.png)
 
 ### Teams card layout
 
