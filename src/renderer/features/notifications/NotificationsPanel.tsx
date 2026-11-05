@@ -10,6 +10,7 @@ import { NOTIFICATION_EVENT_TYPES, type NotificationEventType, type Notification
 import { toast } from "../../lib/toast"
 import { UpgradeNote } from "../../components/UpgradeNote"
 import {
+  categoryLabel,
   CHANNEL_KIND_LABELS,
   EVENT_TYPE_LABELS,
   formatTime,
@@ -441,10 +442,16 @@ function AddRuleDialog({ tenant, channels, open, onClose, onAdded }: { tenant: T
   )
 }
 
+const SKIPPED_POLL = {
+  off: "Change watching is off. Turn it on and save before polling.",
+  external: "An Azure watcher owns change alerts for this tenant, so this computer does not poll.",
+  busy: "A poll is already running. Try again in a moment.",
+} as const
+
 function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: Tenant; auditWatch: AuditWatch | null; licensed: boolean; onChanged: () => void }) {
   const [enabled, setEnabled] = useState(false)
   const [intervalMinutes, setIntervalMinutes] = useState(60)
-  const [categories, setCategories] = useState("")
+  const [categories, setCategories] = useState<string[]>([])
   const [ignoreOwnChanges, setIgnoreOwnChanges] = useState(true)
   const [includeActor, setIncludeActor] = useState(false)
   const [externalWatcher, setExternalWatcher] = useState(false)
@@ -454,13 +461,13 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
   const stored = JSON.stringify({
     enabled: auditWatch?.enabled ?? false,
     intervalMinutes: auditWatch?.intervalMinutes ?? 60,
-    categories: (auditWatch?.categories ?? []).join(", "),
+    categories: auditWatch?.categories ?? [],
     ignoreOwnChanges: auditWatch?.ignoreOwnChanges ?? true,
     includeActor: auditWatch?.includeActor ?? false,
     externalWatcher: auditWatch?.externalWatcher ?? false,
   })
   useEffect(() => {
-    const next = JSON.parse(stored) as { enabled: boolean; intervalMinutes: number; categories: string; ignoreOwnChanges: boolean; includeActor: boolean; externalWatcher: boolean }
+    const next = JSON.parse(stored) as { enabled: boolean; intervalMinutes: number; categories: string[]; ignoreOwnChanges: boolean; includeActor: boolean; externalWatcher: boolean }
     setEnabled(next.enabled)
     setIntervalMinutes(next.intervalMinutes)
     setCategories(next.categories)
@@ -478,7 +485,7 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
         : notificationsApi.updateAuditWatch(tenant, {
             enabled,
             intervalMinutes,
-            categories: categories.split(",").map((entry) => entry.trim()).filter(Boolean),
+            categories,
             ignoreOwnChanges,
             includeActor,
             externalWatcher,
@@ -486,10 +493,13 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
     onSuccess: () => { toast("Change watching saved", "success"); onChanged() },
     onError: failed,
   })
+  // Poll now reads the saved settings, so it waits for watching to be saved on and owned by this computer.
+  const pollBlocked = !auditWatch?.enabled ? SKIPPED_POLL.off : auditWatch.externalWatcher ? SKIPPED_POLL.external : null
   const poll = useMutation({
     mutationFn: () => notificationsApi.runAuditWatch(tenant),
     onSuccess: (result) => {
-      if (result.error) toast(`Poll failed: ${result.error}`, "error")
+      if (result.skipped) toast(SKIPPED_POLL[result.skipped], "info")
+      else if (result.error) toast(`Poll failed: ${result.error}`, "error")
       else toast(result.changes > 0 ? `${result.changes} change${result.changes === 1 ? "" : "s"} found, ${result.enqueued} queued for delivery.` : "No new changes found.", "success")
       onChanged()
     },
@@ -540,10 +550,7 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
           </label>
         </div>
         <p className="text-xs text-gray-500">Actor names are personal data and are off by default. Leave this off for destinations outside Microsoft 365, such as generic webhooks or external email addresses.</p>
-        <label className="block text-sm text-gray-700">
-          Audit categories (optional, comma separated; empty means all)
-          <Input className="mt-1" value={categories} disabled={!licensed} maxLength={1000} placeholder="For example: Policy, Compliance" onChange={(event) => setCategories(event.target.value)} />
-        </label>
+        <CategoryPicker tenant={tenant} selected={categories} disabled={!licensed} onChange={setCategories} />
         <p className="text-sm text-gray-600">
           Last poll: {formatTime(auditWatch?.lastPollAt)}
           {auditWatch?.watermark ? ` · Watermark: ${formatTime(auditWatch.watermark)}` : ""}
@@ -551,9 +558,52 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
         {auditWatch?.lastError && <p className="text-sm text-red-700" role="status">Last poll error: {auditWatch.lastError}</p>}
         <div className="flex flex-wrap gap-2">
           <Button type="submit" size="sm" disabled={save.isPending || (!licensed && !turningOff)}>{save.isPending ? "Saving" : "Save change watching"}</Button>
-          <Button type="button" size="sm" variant="outline" onClick={() => poll.mutate()} disabled={!licensed || poll.isPending}>{poll.isPending ? "Polling" : "Poll now"}</Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => poll.mutate()} disabled={!licensed || poll.isPending || pollBlocked !== null} aria-describedby={pollBlocked ? "notifications-poll-blocked" : undefined}>{poll.isPending ? "Polling" : "Poll now"}</Button>
         </div>
+        {pollBlocked && <p id="notifications-poll-blocked" className="text-xs text-gray-500">{pollBlocked}</p>}
       </form>
     </Tile>
+  )
+}
+
+/**
+ * The audit categories to watch, picked from the names Intune reports. Nothing picked means
+ * every category. A saved name Intune does not report (typed by hand in an earlier version)
+ * stays visible so it can be removed: it would otherwise silently match nothing.
+ */
+function CategoryPicker({ tenant, selected, disabled, onChange }: { tenant: Tenant; selected: string[]; disabled: boolean; onChange: (next: string[]) => void }) {
+  const known = useQuery({ queryKey: ["notifications-audit-categories", tenant.credentials?.tenantId], queryFn: () => notificationsApi.listAuditCategories(tenant), staleTime: 60 * 60_000, enabled: !!tenant.credentials?.tenantId })
+  const available = known.data?.categories ?? []
+  const lower = new Set(available.map((name) => name.toLowerCase()))
+  const unknown = selected.filter((name) => !lower.has(name.toLowerCase()))
+  const isOn = (name: string) => selected.some((entry) => entry.toLowerCase() === name.toLowerCase())
+  const toggle = (name: string) => onChange(isOn(name) ? selected.filter((entry) => entry.toLowerCase() !== name.toLowerCase()) : [...selected, name])
+  const pill = (on: boolean) =>
+    `inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors focus-visible:outline focus-visible:outline-2 disabled:cursor-not-allowed disabled:opacity-50 ${on ? "border-transparent bg-primary text-primary-foreground" : "border-gray-200 text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-900"}`
+  return (
+    <fieldset className="space-y-2">
+      <legend className="flex flex-wrap items-baseline gap-2 text-sm text-gray-700">
+        Audit categories
+        <span className="text-xs text-gray-500">{selected.length === 0 ? "All categories are watched." : `${selected.length} picked. Only these are watched.`}</span>
+      </legend>
+      {known.isLoading && <p className="text-sm text-gray-500">Loading the categories Intune reports...</p>}
+      <div className="flex flex-wrap gap-2">
+        {available.map((name) => (
+          <button key={name} type="button" className={pill(isOn(name))} aria-pressed={isOn(name)} disabled={disabled} onClick={() => toggle(name)} title={name}>
+            {categoryLabel(name)}
+          </button>
+        ))}
+        {unknown.map((name) => (
+          <button key={`unknown-${name}`} type="button" className="inline-flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm text-amber-800 hover:bg-amber-100 disabled:opacity-50 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200" disabled={disabled} onClick={() => toggle(name)} aria-label={`Remove ${name}, not an Intune audit category`}>
+            {name} <span className="text-xs">(not an Intune category)</span> <X className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        ))}
+      </div>
+      {selected.length > 0 && (
+        <Button type="button" size="sm" variant="ghost" disabled={disabled} onClick={() => onChange([])}>Watch all categories</Button>
+      )}
+      {known.data?.source === "known" && <p className="text-xs text-gray-500">Intune could not be asked for its categories, so this is the list TenuVault knows. Sign in to load the current list.</p>}
+      {unknown.length > 0 && <p className="text-xs text-amber-700" role="status">A saved category is not one Intune reports, so it matches no change. Remove it and save.</p>}
+    </fieldset>
   )
 }

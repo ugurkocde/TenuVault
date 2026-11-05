@@ -102,6 +102,33 @@ describe("notification channels and rules", () => {
     expect(outboxOf(w.deps, TENANT_A)[0]).toMatchObject({ state: "sent", attempts: 2 })
   })
 
+  it("sends one alert for the retries of one failing scheduled slot", async () => {
+    const w = world()
+    const channel = await addWebhook(w)
+    await addRule(w, [channel.id])
+    const slot = "2026-10-17T02:00:00.000Z"
+    // Three attempts of one slot, each with its own folder or none at all.
+    for (const backupFolder of ["backup-2026-10-17-020000", null, "backup-2026-10-17-023000"]) {
+      await emitBackupOutcome(w.deps, TENANT_A, { status: "Failed", backupFolder, naturalKey: `slot:${slot}`, finishedAt: NOW.toISOString(), trigger: "scheduled" })
+      w.advance(15 * 60_000)
+    }
+    expect(w.posts).toHaveLength(1)
+    // The next slot is a new event.
+    await emitBackupOutcome(w.deps, TENANT_A, { status: "Failed", backupFolder: null, naturalKey: "slot:2026-10-18T02:00:00.000Z", finishedAt: NOW.toISOString(), trigger: "scheduled" })
+    expect(w.posts).toHaveLength(2)
+  })
+
+  it("puts saved policies and failed types in the backup alert, and no folder row without a folder", async () => {
+    const w = world()
+    const channel = await addWebhook(w)
+    await addRule(w, [channel.id])
+    await emitBackupOutcome(w.deps, TENANT_A, { status: "CompletedWithWarnings", backupFolder: "backup-2026-10-17-040000", finishedAt: NOW.toISOString(), totalPolicies: 212, failures: 2, failedTypes: ["Apps", "Remediations"], trigger: "manual" })
+    await emitBackupOutcome(w.deps, TENANT_A, { status: "Failed", backupFolder: null, naturalKey: "job:abc", finishedAt: NOW.toISOString(), trigger: "manual" })
+    const [warning, failed] = w.posts.map((post) => JSON.parse(String(post.init.body)) as { details: Array<{ label: string; value: string }> })
+    expect(warning!.details).toEqual(expect.arrayContaining([{ label: "Policies saved", value: "212" }, { label: "Failed types", value: "Apps, Remediations" }, { label: "Backup", value: "backup-2026-10-17-040000" }]))
+    expect(failed!.details.map((entry) => entry.label)).not.toContain("Backup")
+  })
+
   it("marks an intent failed after a non-retryable answer", async () => {
     const w = world({ webhookStatus: 400 })
     const channel = await addWebhook(w)
@@ -215,6 +242,62 @@ describe("Intune audit watching", () => {
     saveAuditWatch(w.deps, TENANT_A, { enabled: true }, { actor: null, reason: "test" })
     const result = await pollAuditWatch(w.deps, TENANT_A)
     expect(result.changes).toBe(0)
+  })
+
+  it("turning watching back on starts from now instead of replaying the time it was off", async () => {
+    const paths: string[] = []
+    const w = world({ graph: () => async (_method: string, path: string) => { paths.push(decodeURIComponent(path)); return { status: 200, body: { value: [] } } } })
+    const on = await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: true })
+    expect(on.status).toBe(200)
+    await pollAuditWatch(w.deps, TENANT_A)
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: false })
+    w.advance(90 * 86_400_000)
+    const again = await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: true })
+    expect(again.body.auditWatch.watermark).toBe(NOW.toISOString())
+    expect(again.body.auditWatch.lastPollAt).toBeNull()
+    await pollAuditWatch(w.deps, TENANT_A)
+    // The overlap window reaches 30 minutes back from the switch, never into the 90 days off.
+    expect(paths.at(-1)).toContain(`activityDateTime gt ${new Date(NOW.getTime() - 30 * 60_000).toISOString()}`)
+  })
+
+  it("keeps catching up after a closed app when watching stayed on", async () => {
+    const paths: string[] = []
+    const w = world({ graph: () => async (_method: string, path: string) => { paths.push(decodeURIComponent(path)); return { status: 200, body: { value: [] } } } })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: true })
+    await pollAuditWatch(w.deps, TENANT_A)
+    const watermark = NOW.toISOString()
+    w.advance(3 * 86_400_000)
+    // Saving another setting while on keeps the watermark.
+    const saved = await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: true, intervalMinutes: 30 })
+    expect(saved.body.auditWatch.watermark).toBe(watermark)
+    await pollAuditWatch(w.deps, TENANT_A)
+    expect(paths.at(-1)).toContain(`activityDateTime gt ${new Date(Date.parse(watermark) - 30 * 60_000).toISOString()}`)
+  })
+
+  it("says why Poll now read nothing", async () => {
+    const w = auditWorld()
+    const off = await call(w.routes, PATH, { tenantId: TENANT_A, action: "run-audit-watch" })
+    expect(off.body).toMatchObject({ skipped: "off", changes: 0 })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: true, externalWatcher: true })
+    const external = await call(w.routes, PATH, { tenantId: TENANT_A, action: "run-audit-watch" })
+    expect(external.body).toMatchObject({ skipped: "external", changes: 0 })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", externalWatcher: false })
+    const polled = await call(w.routes, PATH, { tenantId: TENANT_A, action: "run-audit-watch" })
+    expect(polled.body.skipped).toBeNull()
+  })
+
+  it("lists the audit categories Intune reports, with a known list when Graph cannot answer", async () => {
+    const live = world({ graph: () => async (_method: string, path: string) => (path === "deviceManagement/auditEvents/getAuditCategories" ? { status: 200, body: { value: ["Role", "Compliance", "DeviceConfiguration", "Compliance"] } } : { status: 404, body: {} }) })
+    const fromGraph = await call(live.routes, PATH, { tenantId: TENANT_A, action: "list-audit-categories" })
+    expect(fromGraph.body).toEqual({ categories: ["Compliance", "DeviceConfiguration", "Role"], source: "graph" })
+    const down = world({ graph: () => async () => ({ status: 503, body: {} }) })
+    const known = await call(down.routes, PATH, { tenantId: TENANT_A, action: "list-audit-categories" })
+    expect(known.body.source).toBe("known")
+    expect(known.body.categories).toContain("DeviceConfiguration")
+    expect(known.body.categories).not.toContain("Policy")
+    // Listing is a read, so it stays available without the plan.
+    const community = await call(down.routes, PATH, { tenantId: TENANT_B, action: "list-audit-categories" })
+    expect(community.status).toBe(200)
   })
 
   it("records Graph failure on the watch instead of throwing", async () => {
@@ -339,7 +422,7 @@ describe("concurrent audit polls", () => {
     saveAuditWatch(w.deps, TENANT_A, { enabled: true }, { actor: null, reason: "test" })
     const first = pollAuditWatch(w.deps, TENANT_A)
     const second = await pollAuditWatch(w.deps, TENANT_A)
-    expect(second).toEqual({ enqueued: 0, changes: 0, error: null })
+    expect(second).toEqual({ enqueued: 0, changes: 0, error: null, skipped: "busy" })
     release()
     const result = await first
     expect(result.changes).toBe(3)

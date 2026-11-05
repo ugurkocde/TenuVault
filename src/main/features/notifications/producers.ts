@@ -11,7 +11,9 @@ import { channelsOf, emit, emitDetailed, type NotificationOptions } from "./serv
 
 export interface BackupOutcome {
   status: "Success" | "CompletedWithWarnings" | "Failed"
-  backupFolder: string
+  backupFolder: string | null
+  /** Delivery identity; see BackupEventInput.naturalKey. */
+  naturalKey?: string | null
   finishedAt: string
   totalPolicies?: number | null
   failures?: number | null
@@ -46,6 +48,7 @@ export async function emitBackupOutcome(deps: FeatureDeps, tenantId: string, out
     tenantName: deps.tenant(tenantId)?.name ?? null,
     status: outcome.status,
     backupFolder: outcome.backupFolder,
+    naturalKey: outcome.naturalKey,
     occurredAt: outcome.finishedAt,
     totalPolicies: outcome.totalPolicies,
     failures: outcome.failures,

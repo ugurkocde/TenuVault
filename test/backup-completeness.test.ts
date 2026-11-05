@@ -102,6 +102,10 @@ describe("scheduled outcome of a partial backup", () => {
     expect(job.status).toBe("Completed")
     expect(job.failures).toBe(1)
     const metadata = JSON.parse((await store.get(account, "intune-backups", `${job.backupFolder}/metadata.json`)).data.toString())
+    // Notifications read these from the job; they match what the manifest records.
+    expect(job.totalPolicies).toBe(metadata.ItemCounts.TotalPolicies)
+    expect(job.totalPolicies).toBeGreaterThan(0)
+    expect(job.failedTypes).toEqual(metadata.FailedTypes)
     expect(metadata).toMatchObject({ Status: "CompletedWithWarnings", Failures: 1 })
     expect(scheduledResult(job).status).toBe("Failed")
 

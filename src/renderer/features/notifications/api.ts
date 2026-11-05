@@ -133,8 +133,24 @@ export const notificationsApi = {
   updateAuditWatch: (tenant: Tenant, body: AuditWatchBody) => featureCall<{ auditWatch: AuditWatch }>(PATH, tenant, "update-audit-watch", { ...body }),
   /** Turning change watching off stays free on every plan. */
   revokeAuditWatch: (tenant: Tenant) => featureCall<{ auditWatch: AuditWatch }>(PATH, tenant, "revoke-audit-watch"),
-  runAuditWatch: (tenant: Tenant) => featureCall<{ auditWatch: AuditWatch | null; enqueued: number; changes: number; error: string | null }>(PATH, tenant, "run-audit-watch"),
+  runAuditWatch: (tenant: Tenant) => featureCall<{ auditWatch: AuditWatch | null; enqueued: number; changes: number; error: string | null; skipped: "off" | "external" | "busy" | null }>(PATH, tenant, "run-audit-watch"),
+  listAuditCategories: (tenant: Tenant) => featureCall<{ categories: string[]; source: "graph" | "known" }>(PATH, tenant, "list-audit-categories"),
   listGroups: (tenant: Tenant, search: string) => featureCall<{ groups: GroupResult[] }>(PATH, tenant, "list-groups", { search }).then((result) => result.groups),
+}
+
+/** Category names whose split form reads badly. */
+const CATEGORY_LABELS: Record<string, string> = {
+  EBookManagement: "eBook management",
+  EndpointPrivilegeMgmt: "Endpoint privilege management",
+  OnPremiseAccess: "On-premises access",
+}
+
+/** "DeviceConfiguration" as "Device configuration" for display; the stored value stays the Graph name. */
+export function categoryLabel(category: string): string {
+  const special = CATEGORY_LABELS[category]
+  if (special) return special
+  const words = category.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2").split(" ")
+  return words.map((word, index) => (index === 0 || /^[A-Z]{2,}$/.test(word) ? word : word.toLowerCase())).join(" ")
 }
 
 export function formatTime(value: string | null | undefined, fallback = "Never"): string {

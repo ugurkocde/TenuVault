@@ -324,11 +324,21 @@ function nextPath(body: GraphItem): string | null {
  */
 const polling = new WeakMap<FeatureDeps, Set<string>>()
 
-export async function pollAuditWatch(deps: FeatureDeps, tenantId: string, options: NotificationOptions = {}): Promise<{ enqueued: number; changes: number; error: string | null }> {
+/** Why a poll read nothing: watching is off, an Azure watcher owns the tenant, or a poll is already running. */
+export type PollSkipped = "off" | "external" | "busy"
+
+export interface PollResult {
+  enqueued: number
+  changes: number
+  error: string | null
+  skipped?: PollSkipped
+}
+
+export async function pollAuditWatch(deps: FeatureDeps, tenantId: string, options: NotificationOptions = {}): Promise<PollResult> {
   const tenant = tenantId.toLowerCase()
   const active = polling.get(deps) ?? new Set<string>()
   polling.set(deps, active)
-  if (active.has(tenant)) return { enqueued: 0, changes: 0, error: null }
+  if (active.has(tenant)) return { enqueued: 0, changes: 0, error: null, skipped: "busy" }
   active.add(tenant)
   try {
     return await pollAuditWatchOnce(deps, tenant, options)
@@ -337,10 +347,11 @@ export async function pollAuditWatch(deps: FeatureDeps, tenantId: string, option
   }
 }
 
-async function pollAuditWatchOnce(deps: FeatureDeps, tenantId: string, options: NotificationOptions = {}): Promise<{ enqueued: number; changes: number; error: string | null }> {
+async function pollAuditWatchOnce(deps: FeatureDeps, tenantId: string, options: NotificationOptions = {}): Promise<PollResult> {
   const tenant = tenantId.toLowerCase()
   const watch = auditWatchOf(deps, tenant)
-  if (!watch || !watch.enabled || watch.externalWatcher) return { enqueued: 0, changes: 0, error: null }
+  if (!watch || !watch.enabled) return { enqueued: 0, changes: 0, error: null, skipped: "off" }
+  if (watch.externalWatcher) return { enqueued: 0, changes: 0, error: null, skipped: "external" }
   const now = deps.now()
   const since = watch.watermark ? new Date(Date.parse(watch.watermark) - AUDIT_OVERLAP_MS) : new Date(now.getTime() - 24 * 3_600_000)
   try {

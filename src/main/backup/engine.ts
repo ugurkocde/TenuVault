@@ -40,6 +40,10 @@ export interface BackupJob {
   backupFolder?: string
   /** Policies and types that could not be read; above zero the backup on disk is partial. */
   failures?: number
+  /** Policies saved by a run that reached its manifest. */
+  totalPolicies?: number
+  /** Registry folders whose list could not be read, for notifications. */
+  failedTypes?: string[]
   /** Whose tokens the run reads and writes with: the signed-in admin's, or the tenant's Backup Reader. */
   authMode?: BackupAuthMode
   /** Failed because the Backup Reader could not be used; retrying or signing in cannot fix that. */
@@ -664,6 +668,8 @@ export class BackupEngine {
     }
 
     job.failures = failures
+    job.totalPolicies = totalPolicies
+    job.failedTypes = [...failedTypes]
     job.status = failures > 0 && totalPolicies === 0 ? "Failed" : "Completed"
     if (job.status === "Failed" && !outcome.answered && !outcome.otherFailures) job.unreachable = true
     if (maskedItems.length) {

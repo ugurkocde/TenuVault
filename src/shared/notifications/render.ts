@@ -9,11 +9,20 @@ export function escapeHtml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;")
 }
 
-const SEVERITY_STYLE: Record<NotificationEnvelope["severity"], string> = { info: "default", warning: "warning", critical: "attention" }
+/**
+ * Adaptive Card severity styling. TextBlock has no severity style, so the header sits in a
+ * Container with a named container style, and a small label carries a named text color.
+ */
+const SEVERITY_CARD: Record<NotificationEnvelope["severity"], { container: string; color: string; label: string }> = {
+  info: { container: "emphasis", color: "Accent", label: "Info" },
+  warning: { container: "warning", color: "Warning", label: "Warning" },
+  critical: { container: "attention", color: "Attention", label: "Critical" },
+}
 
 /** Adaptive Card TextBlocks render a Markdown subset; tenant text must stay literal. */
 export function escapeMarkdown(value: string): string {
-  return value.replace(/([\\`*_{}[\]()#+-.!>])/g, "\\$1")
+  // The hyphen is escaped inside the class: unescaped, "+-." is a range that also matches commas.
+  return value.replace(/([\\`*_{}[\]()#+\-.!>])/g, "\\$1")
 }
 
 function footer(envelope: NotificationEnvelope): string {
@@ -29,8 +38,17 @@ export function localText(envelope: NotificationEnvelope): { title: string; body
 /** The Teams Workflows payload: a message with one Adaptive Card attachment. */
 export function teamsWorkflowsPayload(envelope: NotificationEnvelope): Record<string, unknown> {
   const facts = envelope.details.map((entry) => ({ title: escapeMarkdown(entry.label), value: escapeMarkdown(entry.value) }))
+  const severity = SEVERITY_CARD[envelope.severity]
   const body: Array<Record<string, unknown>> = [
-    { type: "TextBlock", size: "Medium", weight: "Bolder", text: escapeMarkdown(envelope.title), wrap: true, style: SEVERITY_STYLE[envelope.severity] },
+    {
+      type: "Container",
+      style: severity.container,
+      bleed: true,
+      items: [
+        { type: "TextBlock", size: "Small", weight: "Bolder", color: severity.color, text: severity.label, wrap: true },
+        { type: "TextBlock", size: "Medium", weight: "Bolder", text: escapeMarkdown(envelope.title), wrap: true, spacing: "None" },
+      ],
+    },
     { type: "TextBlock", text: escapeMarkdown(envelope.summary), wrap: true },
   ]
   if (facts.length) body.push({ type: "FactSet", facts })
