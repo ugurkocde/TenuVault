@@ -289,9 +289,9 @@ function ChannelDialog({ tenant, channel, open, onClose, onSaved }: { tenant: Te
   // On edit, a stored secret counts unless it is being removed; the value itself is never shown.
   const keptSecret = Boolean(channel?.hasSecret) && !clearSecret
   const hasSecretValue = Boolean(headerValue) || keptSecret
-  const headerPairIncomplete = kind === "webhook" && !signRequests && Boolean(headerName.trim()) !== hasSecretValue
+  const headerPairIncomplete = kind === "webhook" && !clearSecret && !signRequests && Boolean(headerName.trim()) !== hasSecretValue
   const secretHint =
-    kind !== "webhook"
+    kind !== "webhook" || clearSecret
       ? null
       : signRequests && !hasSecretValue
         ? "Request signing needs a secret value."

@@ -132,7 +132,8 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       }
       const clearSecret = bool(body, "clearSecret") === true
       if (channel.kind === "webhook" && (body.headerName !== undefined || optionalText(body, "headerValue", 2000) !== null || clearSecret)) {
-        const headerName = body.headerName !== undefined ? optionalText(body, "headerName", 64) : channel.headerName
+        // Removing the secret also removes its header name: a name without a value is no header.
+        const headerName = clearSecret ? null : body.headerName !== undefined ? optionalText(body, "headerName", 64) : channel.headerName
         const replaced = optionalText(body, "headerValue", 2000)
         const headerValue = clearSecret ? null : replaced ?? channel.headerValue
         const signing = clearSecret ? false : bool(body, "signRequests") ?? channel.signRequests

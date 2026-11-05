@@ -198,6 +198,16 @@ describe("editing and removing channels", () => {
     expect(cleared.body.channel).toMatchObject({ hasSecret: false, signRequests: false, headerName: null })
   })
 
+  it("removes a named header secret together with its header name", async () => {
+    const w = world()
+    const channel = await addWebhook(w, { headerName: "X-Api-Key", headerValue: "header-secret" })
+    const cleared = await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-channel", channelId: channel.id, clearSecret: true })
+    expect(cleared.status).toBe(200)
+    expect(cleared.body.channel).toMatchObject({ hasSecret: false, headerName: null })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "test-channel", channelId: channel.id })
+    expect((w.posts.at(-1)!.init.headers as Record<string, string>)["X-Api-Key"]).toBeUndefined()
+  })
+
   it("removing a channel can take it out of its rules, turning off rules left without one", async () => {
     const w = world()
     const first = await addWebhook(w)
