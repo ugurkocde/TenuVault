@@ -13,9 +13,10 @@ if (-not $RunbookPath) {
 }
 . $RunbookPath -LibraryOnly
 
-$fixture = Get-Content (Join-Path $PSScriptRoot "cloud-outcomes.json") -Raw | ConvertFrom-Json
-foreach ($note in @($fixture.notes)) {
-    $outcome = ConvertFrom-TenuVaultBackupOutcome $note $fixture.tenantId
+# Parsed like a downloaded note, so times stay text exactly as written.
+$fixture = ConvertFrom-TvNoteJson (Get-Content (Join-Path $PSScriptRoot "cloud-outcomes.json") -Raw)
+foreach ($note in @($fixture["notes"])) {
+    $outcome = ConvertFrom-TenuVaultBackupOutcome $note $fixture["tenantId"]
     if ($null -eq $outcome) { Write-Output "null"; continue }
-    Write-Output (ConvertTo-TenuVaultCanonicalJson (New-TenuVaultCloudOutcomeEvent -Outcome $outcome -TenantId $fixture.tenantId -TenantName $fixture.tenantName))
+    Write-Output (ConvertTo-TenuVaultCanonicalJson (New-TenuVaultCloudOutcomeEvent -Outcome $outcome -TenantId $fixture["tenantId"] -TenantName $fixture["tenantName"]))
 }

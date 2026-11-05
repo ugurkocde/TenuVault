@@ -36,6 +36,10 @@ describe("cloud backup result notes", () => {
     expect(parseCloudOutcome(outcomeFixture.notes[13], TENANT)).toMatchObject({ totalPolicies: 3, failures: 1000, failedTypes: ["Apps"] })
     expect(events.slice(14, 16)).toEqual([null, null])
     expect(parseCloudOutcome(outcomeFixture.notes[16], TENANT)!.finishedAt).toBe("2026-11-12T02:05:00.000Z")
+    // Impossible calendar times are rejected, not rolled over: Feb 30, T24:00, an offset past 14 hours, before year 1.
+    expect(events.slice(17, 20)).toEqual([null, null, null])
+    expect(parseCloudOutcome(outcomeFixture.notes[20], TENANT)!.finishedAt).toBe("2028-02-29T02:00:00.000Z")
+    expect(events[21]).toBeNull()
   })
 
   it("is the only unsealed write, to the watcher's container and with fixed fields", () => {

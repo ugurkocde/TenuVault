@@ -265,8 +265,9 @@ describe("Azure notification watcher scripts", () => {
     })
     expect(lines).toEqual(expected)
     // Rejected: other tenant, newer schema, path-like folder, bad status, a field wrapped in a list,
-    // a trailing newline, non-ASCII digits, a missing backupFolder key and a time without a zone.
-    expect(expected.filter((line) => line === "null")).toHaveLength(9)
+    // a trailing newline, non-ASCII digits, a missing backupFolder key, a time without a zone, and impossible times
+    // (Feb 30, T24:00, an offset past 14 hours, before year 1).
+    expect(expected.filter((line) => line === "null")).toHaveLength(13)
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("PowerShell matches TypeScript on live-shaped read and assignment events", () => {

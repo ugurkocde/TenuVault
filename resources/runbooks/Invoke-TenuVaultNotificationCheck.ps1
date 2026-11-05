@@ -818,6 +818,43 @@ function Get-TvNoteCount {
     return $null
 }
 
+# Parses a note the way JSON.parse does: System.Text.Json keeps every string as written
+# (ConvertFrom-Json in the Automation 7.2 and 7.4 runtimes turns times into DateTime values
+# and rolls T24:00 over to the next day), keys stay case sensitive and a repeated key keeps
+# its last value.
+function ConvertFrom-TvNoteJsonElement {
+    param([Parameter(Mandatory)][System.Text.Json.JsonElement]$Element)
+    switch ($Element.ValueKind) {
+        ([System.Text.Json.JsonValueKind]::Object) {
+            $object = [System.Collections.Specialized.OrderedDictionary]::new([StringComparer]::Ordinal)
+            foreach ($property in $Element.EnumerateObject()) {
+                $object[$property.Name] = ConvertFrom-TvNoteJsonElement $property.Value
+            }
+            return $object
+        }
+        ([System.Text.Json.JsonValueKind]::Array) {
+            $items = [System.Collections.Generic.List[object]]::new()
+            foreach ($item in $Element.EnumerateArray()) { $items.Add((ConvertFrom-TvNoteJsonElement $item)) }
+            return , $items.ToArray()
+        }
+        ([System.Text.Json.JsonValueKind]::String) { return $Element.GetString() }
+        ([System.Text.Json.JsonValueKind]::Number) {
+            $long = [Int64]0
+            if ($Element.TryGetInt64([ref]$long)) { return $long }
+            return $Element.GetDouble()
+        }
+        ([System.Text.Json.JsonValueKind]::True) { return $true }
+        ([System.Text.Json.JsonValueKind]::False) { return $false }
+        default { return $null }
+    }
+}
+
+function ConvertFrom-TvNoteJson {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+    $document = [System.Text.Json.JsonDocument]::Parse($Text)
+    try { return ConvertFrom-TvNoteJsonElement $document.RootElement } finally { $document.Dispose() }
+}
+
 # Mirrors parseCloudOutcome: $null for anything that is not a usable note of this tenant.
 # Patterns use [0-9] and \z: .NET \d accepts any Unicode digit and $ also matches before a
 # trailing newline, which the JavaScript patterns do not.
@@ -836,18 +873,14 @@ function ConvertFrom-TenuVaultBackupOutcome {
     if (-not $folderField.Present) { return $null }
     $folder = $folderField.Value
     if ($null -ne $folder -and ($folder -isnot [string] -or $folder -cnotmatch '^backup-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}\z')) { return $null }
-    # A time with an explicit zone only. PowerShell 7.2 turns JSON dates into DateTime values,
-    # where an unspecified kind means the text had no zone.
+    # A real calendar time with an explicit zone, as text (ConvertFrom-TvNoteJson keeps it so).
+    # The exact parse rejects 2026-02-30, T24:00 and offsets past 14 hours, like isZonedTime.
     $finishedRaw = (Get-TvNoteField $Note "finishedAt").Value
-    if ($finishedRaw -is [string]) {
-        if ($finishedRaw -cnotmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,3})?(Z|[+-][0-9]{2}:[0-9]{2})\z') { return $null }
-    } elseif ($finishedRaw -is [DateTime]) {
-        if ($finishedRaw.Kind -eq [DateTimeKind]::Unspecified) { return $null }
-    } elseif ($finishedRaw -isnot [DateTimeOffset]) {
-        return $null
-    }
-    $finished = ConvertTo-TvIso $finishedRaw
-    if (-not $finished) { return $null }
+    if ($finishedRaw -isnot [string] -or $finishedRaw -cnotmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,3})?(Z|[+-][0-9]{2}:[0-9]{2})\z') { return $null }
+    $finishedAt = [DateTimeOffset]::MinValue
+    $formats = [string[]]@("yyyy-MM-dd'T'HH:mm:ssK", "yyyy-MM-dd'T'HH:mm:ss.FFFK")
+    if (-not [DateTimeOffset]::TryParseExact($finishedRaw, $formats, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$finishedAt)) { return $null }
+    $finished = $finishedAt.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture)
     $failures = Get-TvNoteCount (Get-TvNoteField $Note "failures").Value
     $typeList = (Get-TvNoteField $Note "failedTypes").Value
     $failedTypes = @(@(if ($typeList -is [array]) { $typeList }) | Where-Object { $_ -is [string] -and $_ -cmatch '^[A-Za-z]{1,64}\z' } | Select-Object -First 10)
@@ -915,7 +948,7 @@ function Read-TvBackupOutcomes {
                 $noteText = Get-TvBlobText -Uri "$ContainerUri/$encodedName" -Token $Token
                 if ($null -eq $noteText) { continue }
                 $note = $null
-                try { $note = ConvertFrom-TvJson $noteText } catch { $note = $null }
+                try { $note = ConvertFrom-TvNoteJson $noteText } catch { $note = $null }
                 $outcome = ConvertFrom-TenuVaultBackupOutcome $note $TenantId
                 if ($null -eq $outcome) { $ignored++; $processed.Add($blobName); continue }
                 if ([StringComparer]::Ordinal.Compare([string]$outcome.finishedAt, $oldest) -lt 0) {

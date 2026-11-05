@@ -35,7 +35,30 @@ const FOLDER = /^backup-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}$/
 const RUN_ID = /^[A-Za-z0-9-]{1,100}$/
 const TYPE_NAME = /^[A-Za-z]{1,64}$/
 /** A time with an explicit zone: a note written elsewhere must not be read in local time. */
-const ZONED_TIME = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,3})?(Z|[+-][0-9]{2}:[0-9]{2})$/
+const ZONED_TIME = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(\.[0-9]{1,3})?(Z|[+-]([0-9]{2}):([0-9]{2}))$/
+
+/**
+ * A real calendar time with an explicit zone. Date.parse rolls 2026-02-30 over to March and
+ * T24:00 to the next day; the watcher (.NET DateTimeOffset) rejects both, and offsets past
+ * 14 hours, so this does too.
+ */
+function isZonedTime(text: string): boolean {
+  const match = ZONED_TIME.exec(text)
+  if (!match) return false
+  const [year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0] = match.slice(1, 7).map(Number)
+  if (year < 1 || month < 1 || month > 12 || day < 1 || hour > 23 || minute > 59 || second > 59) return false
+  if (day > daysInMonth(year, month)) return false
+  if (match[9] !== undefined) {
+    const offsetMinutes = Number(match[9]) * 60 + Number(match[10])
+    if (Number(match[10]) > 59 || offsetMinutes > 14 * 60) return false
+  }
+  // The UTC time must stay within years 1 to 9999, as .NET requires.
+  const at = Date.parse(text)
+  return at >= Date.parse("0001-01-01T00:00:00.000Z") && at <= Date.parse("9999-12-31T23:59:59.999Z")
+}
+
+const isLeapYear = (year: number) => (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0
+const daysInMonth = (year: number, month: number) => (month === 2 ? (isLeapYear(year) ? 29 : 28) : [4, 6, 9, 11].includes(month) ? 30 : 31)
 
 /** Fixed summaries: a note never carries a message, so nothing from the run reaches a channel as text. */
 export const CLOUD_OUTCOME_SUMMARY: Record<CloudOutcomeStatus, string> = {
@@ -55,7 +78,7 @@ export function parseCloudOutcome(value: unknown, tenantId: string): CloudBackup
   if (note.status !== "Success" && note.status !== "CompletedWithWarnings" && note.status !== "Failed") return null
   if (typeof note.runId !== "string" || !RUN_ID.test(note.runId)) return null
   if (note.backupFolder !== null && (typeof note.backupFolder !== "string" || !FOLDER.test(note.backupFolder))) return null
-  if (typeof note.finishedAt !== "string" || !ZONED_TIME.test(note.finishedAt) || Number.isNaN(Date.parse(note.finishedAt))) return null
+  if (typeof note.finishedAt !== "string" || !isZonedTime(note.finishedAt) || Number.isNaN(Date.parse(note.finishedAt))) return null
   const failedTypes = Array.isArray(note.failedTypes) ? note.failedTypes.filter((entry): entry is string => typeof entry === "string" && TYPE_NAME.test(entry)).slice(0, 10) : []
   return {
     status: note.status,
