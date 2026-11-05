@@ -744,6 +744,156 @@ function Get-TvMarkdownEscape {
 }
 
 # ---------------------------------------------------------------------------
+# Library: cloud backup outcomes (mirror src/shared/notifications/cloud-outcome.ts)
+# ---------------------------------------------------------------------------
+# Backups and their status are sealed with the recovery key, which the watcher never
+# has. The cloud backup runbook therefore leaves one small unsealed note per run in this
+# watcher's state container: status, folder name, counts, failed type names and time,
+# never policy content, names or messages. The watcher turns it into a backup alert.
+
+$script:TvOutcomeSchema = "tenuvault.cloud-backup-outcome/v1"
+$script:TvOutcomePrefix = "cloud-backup-outcomes/"
+$script:TvOutcomeSummary = @{
+    Success = "The cloud backup in Azure completed successfully."
+    CompletedWithWarnings = "The cloud backup in Azure saved policies, but some could not be read. Open TenuVault for the details."
+    Failed = "The cloud backup in Azure saved no policies. Open the runbook job in the Automation account for the reason."
+}
+
+# Mirrors backupEvent in envelope.ts.
+function New-TenuVaultBackupEvent {
+    param(
+        [Parameter(Mandatory)][string]$TenantId,
+        [object]$TenantName,
+        [Parameter(Mandatory)][ValidateSet("Success", "CompletedWithWarnings", "Failed")][string]$Status,
+        [AllowNull()][string]$BackupFolder,
+        [AllowNull()][string]$NaturalKey,
+        [Parameter(Mandatory)][string]$OccurredAt,
+        [AllowNull()][object]$TotalPolicies,
+        [int]$Failures = 0,
+        [string[]]$FailedTypes = @(),
+        [AllowNull()][string]$Trigger,
+        [AllowNull()][string]$Message,
+        [string]$Source = "azure-watcher"
+    )
+    $type = switch ($Status) { "Failed" { "backup.failed" } "CompletedWithWarnings" { "backup.warning" } default { "backup.succeeded" } }
+    $details = [System.Collections.Generic.List[object]]::new()
+    if ($BackupFolder) { $details.Add([pscustomobject][ordered]@{ label = "Backup"; value = $BackupFolder }) }
+    $details.Add([pscustomobject][ordered]@{ label = "Result"; value = $Status })
+    if ($null -ne $TotalPolicies) { $details.Add([pscustomobject][ordered]@{ label = "Policies saved"; value = [string]$TotalPolicies }) }
+    if ($Failures) { $details.Add([pscustomobject][ordered]@{ label = "Item failures"; value = [string]$Failures }) }
+    $types = @($FailedTypes | Where-Object { $_ } | Select-Object -First 10)
+    if ($types.Count -gt 0) { $details.Add([pscustomobject][ordered]@{ label = "Failed types"; value = ($types -join ", ") }) }
+    if ($Trigger) { $details.Add([pscustomobject][ordered]@{ label = "Trigger"; value = $Trigger }) }
+    $tenantLabel = if ($null -ne $TenantName) { [string]$TenantName } else { "your tenant" }
+    $title = switch ($type) { "backup.failed" { "Backup failed: $tenantLabel" } "backup.warning" { "Backup completed with warnings: $tenantLabel" } default { "Backup succeeded: $tenantLabel" } }
+    $summary = if ($Message) { $Message } elseif ($type -eq "backup.succeeded") { "The backup completed successfully." } else { "Open TenuVault to see what could not be saved." }
+    $key = if ($NaturalKey) { $NaturalKey } elseif ($BackupFolder) { $BackupFolder } else { "$(if ($Trigger) { $Trigger } else { 'backup' }):$OccurredAt" }
+    return New-TvEnvelope -Type $type `
+        -Severity $(if ($type -eq "backup.failed") { "critical" } elseif ($type -eq "backup.warning") { "warning" } else { "info" }) `
+        -TenantId $TenantId -TenantName $TenantName -OccurredAt $OccurredAt -NaturalKey $key `
+        -Title $title -Summary $summary -Details @($details.ToArray()) -Items @() -Source $Source
+}
+
+# Mirrors parseCloudOutcome: $null for anything that is not a usable note of this tenant.
+function ConvertFrom-TenuVaultBackupOutcome {
+    param([AllowNull()][object]$Note, [Parameter(Mandatory)][string]$TenantId)
+    if ($null -eq $Note -or $Note -is [string] -or $Note -is [array]) { return $null }
+    if ((Get-TvProp $Note "schema") -cne $script:TvOutcomeSchema) { return $null }
+    $noteTenant = Get-TvProp $Note "tenantId"
+    if ($noteTenant -isnot [string] -or $noteTenant.ToLowerInvariant() -ne $TenantId.ToLowerInvariant()) { return $null }
+    $status = Get-TvProp $Note "status"
+    if (@("Success", "CompletedWithWarnings", "Failed") -cnotcontains $status) { return $null }
+    $runId = Get-TvProp $Note "runId"
+    if ($runId -isnot [string] -or $runId -cnotmatch '^[A-Za-z0-9-]{1,100}$') { return $null }
+    $folder = Get-TvProp $Note "backupFolder"
+    if ($null -ne $folder -and ($folder -isnot [string] -or $folder -cnotmatch '^backup-\d{4}-\d{2}-\d{2}-\d{6}$')) { return $null }
+    $finished = ConvertTo-TvIso (Get-TvProp $Note "finishedAt")
+    if (-not $finished) { return $null }
+    $countOf = {
+        param($value)
+        if (($value -is [int] -or $value -is [long]) -and $value -ge 0 -and $value -le 1000000) { return [int]$value }
+        return $null
+    }
+    $failures = & $countOf (Get-TvProp $Note "failures")
+    $typeList = Get-TvStyleList $Note "failedTypes"
+    $failedTypes = @(@(if ($null -ne $typeList) { $typeList }) | Where-Object { $_ -is [string] -and $_ -cmatch '^[A-Za-z]{1,64}$' } | Select-Object -First 10)
+    return [pscustomobject][ordered]@{
+        status = [string]$status
+        runId = [string]$runId
+        backupFolder = $folder
+        finishedAt = $finished
+        totalPolicies = & $countOf (Get-TvProp $Note "totalPolicies")
+        failures = if ($null -ne $failures) { $failures } else { 0 }
+        failedTypes = $failedTypes
+    }
+}
+
+# Reads the result notes the cloud backup runbook left under cloud-backup-outcomes/ in the
+# watcher's state container and turns the valid ones into backup alerts. Returns the alerts,
+# the folders reported as Failed, the blob names read (to delete once the alerts are saved),
+# how many notes were ignored, and an error message when the container could not be read.
+function Read-TvBackupOutcomes {
+    param(
+        [Parameter(Mandatory)][string]$StateContainerUri,
+        [Parameter(Mandatory)][string]$Token,
+        [Parameter(Mandatory)][string]$TenantId,
+        [object]$TenantName,
+        [Parameter(Mandatory)][scriptblock]$RenewLease
+    )
+    $envelopes = [System.Collections.Generic.List[object]]::new()
+    $failedFolders = [System.Collections.Generic.List[string]]::new()
+    $processed = [System.Collections.Generic.List[string]]::new()
+    $ignored = 0
+    $readError = $null
+    $marker = $null
+    do {
+        & $RenewLease
+        try {
+            $listUri = "$StateContainerUri`?restype=container&comp=list&prefix=$([uri]::EscapeDataString($script:TvOutcomePrefix))&maxresults=500"
+            if ($marker) { $listUri += "&marker=$([uri]::EscapeDataString($marker))" }
+            $listText = [string](Invoke-TvStorageRequest -Uri $listUri -Method Get -Token $Token).Content
+            $xmlStart = $listText.IndexOf("<")
+            if ($xmlStart -gt 0) { $listText = $listText.Substring($xmlStart) }
+            [xml]$listXml = $listText
+            $blobsNode = $listXml.EnumerationResults.Blobs
+            foreach ($blob in @(if ($blobsNode) { $blobsNode.Blob })) {
+                if (-not $blob -or -not $blob.Name) { continue }
+                $blobName = [string]$blob.Name
+                if (-not $blobName.StartsWith($script:TvOutcomePrefix, [StringComparison]::Ordinal)) { continue }
+                $encodedName = ($blobName -split "/" | ForEach-Object { [uri]::EscapeDataString($_) }) -join "/"
+                $noteText = Get-TvBlobText -Uri "$StateContainerUri/$encodedName" -Token $Token
+                if ($null -eq $noteText) { continue }
+                $note = $null
+                try { $note = ConvertFrom-TvJson $noteText } catch { $note = $null }
+                $outcome = ConvertFrom-TenuVaultBackupOutcome $note $TenantId
+                if ($null -eq $outcome) { $ignored++; continue }
+                $envelopes.Add((New-TenuVaultCloudOutcomeEvent -Outcome $outcome -TenantId $TenantId -TenantName $TenantName))
+                if ($outcome.status -eq "Failed" -and $outcome.backupFolder -and -not $failedFolders.Contains([string]$outcome.backupFolder)) {
+                    $failedFolders.Add([string]$outcome.backupFolder)
+                }
+                $processed.Add($blobName)
+            }
+            $marker = [string]$listXml.EnumerationResults.NextMarker
+            if (-not $marker) { $marker = $null }
+        } catch {
+            $marker = $null
+            $readError = "Cloud backup results could not be read in this run: $(Get-TvSafeError $_.Exception.Message)"
+        }
+    } while ($marker)
+    return [pscustomobject]@{ Envelopes = $envelopes; FailedFolders = $failedFolders; Processed = $processed; Ignored = $ignored; Error = $readError }
+}
+
+# Mirrors cloudOutcomeEvent.
+function New-TenuVaultCloudOutcomeEvent {
+    param([Parameter(Mandatory)][object]$Outcome, [Parameter(Mandatory)][string]$TenantId, [object]$TenantName)
+    $key = if ($Outcome.backupFolder) { [string]$Outcome.backupFolder } else { "run:$($Outcome.runId)" }
+    return New-TenuVaultBackupEvent -TenantId $TenantId -TenantName $TenantName -Status $Outcome.status `
+        -BackupFolder $Outcome.backupFolder -NaturalKey $key -OccurredAt $Outcome.finishedAt `
+        -TotalPolicies $Outcome.totalPolicies -Failures $Outcome.failures -FailedTypes @($Outcome.failedTypes) `
+        -Trigger "Cloud backup schedule" -Message $script:TvOutcomeSummary[[string]$Outcome.status]
+}
+
+# ---------------------------------------------------------------------------
 # Library: Teams card layout, mirroring layout.ts and teamsWorkflowsPayload
 # ---------------------------------------------------------------------------
 
@@ -1564,7 +1714,7 @@ if ($LibraryOnly) { return }
 # ---------------------------------------------------------------------------
 
 $ErrorActionPreference = "Stop"
-$runbookVersion = "1.0.0"
+$runbookVersion = "1.1.0"
 $runAt = [DateTime]::UtcNow
 $runAtIso = ConvertTo-TvIso $runAt
 $eventsSent = 0
@@ -1732,6 +1882,15 @@ try {
         }
     }
     $lastMissedKey = if ($state) { Get-TvText (Get-TvProp $state "lastMissedKey") } else { $null }
+    # Backup folders a cloud backup reported as Failed. The missed backup check does not count
+    # them, so a backup that fails every day still raises "No recent backup".
+    $failedBackupFolders = [System.Collections.Generic.List[string]]::new()
+    if ($state) {
+        $savedFailed = Get-TvStyleList $state "failedBackupFolders"
+        foreach ($entry in @(if ($null -ne $savedFailed) { $savedFailed })) {
+            if ($entry -is [string] -and $entry -cmatch '^backup-\d{4}-\d{2}-\d{2}-\d{6}$' -and -not $failedBackupFolders.Contains($entry)) { $failedBackupFolders.Add($entry) }
+        }
+    }
     $continuation = if ($state) { Get-TvText (Get-TvProp $state "continuation") } else { $null }
     $mailVerified = $false
     $mailVerifiedSender = $null
@@ -1776,6 +1935,7 @@ try {
             recentAuditIds = $recentTrimmed
             sentEventIds = $sentArr
             lastMissedKey = $lastMissedKey
+            failedBackupFolders = @($failedBackupFolders.ToArray() | Sort-Object -Descending | Select-Object -First 200)
             continuation = $continuation
             # While Conditional Access is not watched its position is not kept, so turning it
             # on later starts an hour back instead of replaying everything since an old watermark.
@@ -1930,6 +2090,25 @@ try {
             -Changes @($entraChanges.ToArray()) -IncludeActor $includeActor -Service conditionalAccess))
     }
 
+    # --- Cloud backup results ----------------------------------------------------
+    # Result notes the cloud backup runbook left in this container (see
+    # src/shared/notifications/cloud-outcome.ts). Each becomes a backup alert through the
+    # outbox below. A note is deleted only after the state holding its alert is saved, so a
+    # crash in between rereads it and the outbox dedupes it by event id. Reading them must
+    # never block the rest of the run.
+    $outcomeRead = Read-TvBackupOutcomes -StateContainerUri $stateContainerUri -Token $storageToken -TenantId $tenantId -TenantName $tenantName `
+        -RenewLease { Update-TvStateLease -LeaseQueryUri $leaseQueryUri -Token $storageToken -LeaseId $leaseId }
+    foreach ($envelope in $outcomeRead.Envelopes) { $candidateEnvelopes.Add($envelope) }
+    foreach ($folder in $outcomeRead.FailedFolders) { if (-not $failedBackupFolders.Contains($folder)) { $failedBackupFolders.Add($folder) } }
+    $processedOutcomeNames = $outcomeRead.Processed
+    $ignoredOutcomes = $outcomeRead.Ignored
+    if ($outcomeRead.Error) {
+        Write-Output $outcomeRead.Error
+        if (-not $lastError) { $lastError = $outcomeRead.Error }
+    }
+    if ($processedOutcomeNames.Count -gt 0) { Write-Output "Read $($processedOutcomeNames.Count) cloud backup result(s)." }
+    if ($ignoredOutcomes -gt 0) { Write-Output "Ignored $ignoredOutcomes cloud backup result note(s) that are not valid for this tenant." }
+
     # --- Missed backup check -----------------------------------------------------
     # A listing failure must never block delivery of envelopes already waiting in
     # the outbox: record the error, skip missed detection for this run, and carry
@@ -1957,6 +2136,8 @@ try {
                 foreach ($blob in @($blobsNode.Blob)) { if ($blob -and $blob.Name) { $names.Add([string]$blob.Name) } }
             }
             foreach ($name in $names) {
+                # A folder a cloud backup reported as Failed holds no usable backup.
+                if ($failedBackupFolders.Contains($name.TrimEnd("/"))) { continue }
                 $folderTime = Get-TenuVaultBackupFolderTime $name
                 if ($folderTime -and (-not $newestBackup -or $folderTime -gt $newestBackup)) { $newestBackup = $folderTime }
             }
@@ -2015,6 +2196,17 @@ try {
     if ($missedKeyToSet) { $lastMissedKey = $missedKeyToSet }
     $watermarkIso = $newestSeenIso
     & $saveState
+
+    # The alerts of the cloud backup results are in the saved outbox now, so their notes go.
+    foreach ($blobName in $processedOutcomeNames) {
+        try {
+            Update-TvStateLease -LeaseQueryUri $leaseQueryUri -Token $storageToken -LeaseId $leaseId
+            $encodedName = ($blobName -split "/" | ForEach-Object { [uri]::EscapeDataString($_) }) -join "/"
+            Invoke-TvStorageRequest -Uri "$stateContainerUri/$encodedName" -Method Delete -Token $storageToken | Out-Null
+        } catch {
+            Write-Output "Could not remove the cloud backup result $($blobName): $(Get-TvSafeError $_.Exception.Message). The next run reads it again and sends nothing twice."
+        }
+    }
 
     # --- Delivery from the outbox, per destination -----------------------------------
     # Each destination is attempted independently. Right after a destination accepts

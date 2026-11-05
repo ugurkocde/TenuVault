@@ -1,0 +1,16 @@
+{
+  "tenantId": "11111111-2222-3333-4444-555555555555",
+  "tenantName": "Contoso",
+  "notes": [
+    { "schema": "tenuvault.cloud-backup-outcome/v1", "tenantId": "11111111-2222-3333-4444-555555555555", "runId": "a1b2c3d4-0000-4000-8000-000000000001", "status": "Success", "backupFolder": "backup-2026-11-05-020000", "finishedAt": "2026-11-05T02:06:12.345Z", "totalPolicies": 412, "failures": 0, "failedTypes": [] },
+    { "schema": "tenuvault.cloud-backup-outcome/v1", "tenantId": "11111111-2222-3333-4444-555555555555", "runId": "a1b2c3d4-0000-4000-8000-000000000002", "status": "CompletedWithWarnings", "backupFolder": "backup-2026-11-06-020000", "finishedAt": "2026-11-06T02:05:00.000Z", "totalPolicies": 398, "failures": 3, "failedTypes": ["Apps", "Remediations"] },
+    { "schema": "tenuvault.cloud-backup-outcome/v1", "tenantId": "11111111-2222-3333-4444-555555555555", "runId": "a1b2c3d4-0000-4000-8000-000000000003", "status": "Failed", "backupFolder": "backup-2026-11-07-020000", "finishedAt": "2026-11-07T02:01:00.000Z", "totalPolicies": 0, "failures": 12, "failedTypes": ["DeviceConfigurations"] },
+    { "schema": "tenuvault.cloud-backup-outcome/v1", "tenantId": "11111111-2222-3333-4444-555555555555", "runId": "a1b2c3d4-0000-4000-8000-000000000004", "status": "Failed", "backupFolder": null, "finishedAt": "2026-11-08T02:00:30.000Z", "totalPolicies": null, "failures": 0, "failedTypes": [] },
+    { "schema": "tenuvault.cloud-backup-outcome/v1", "tenantId": "11111111-2222-3333-4444-555555555555", "runId": "a1b2c3d4-0000-4000-8000-000000000005", "status": "CompletedWithWarnings", "backupFolder": "backup-2026-11-09-020000", "finishedAt": "2026-11-09T02:05:00.000Z", "totalPolicies": -4, "failures": "many", "failedTypes": "Apps" },
+    { "schema": "tenuvault.cloud-backup-outcome/v1", "tenantId": "11111111-2222-3333-4444-555555555555", "runId": "a1b2c3d4-0000-4000-8000-000000000006", "status": "Success", "backupFolder": "backup-2026-11-10-020000", "finishedAt": "2026-11-10T02:05:00.000Z", "totalPolicies": 99999999, "failures": 0, "failedTypes": ["Apps", "has space", "<script>", "Remediations"] },
+    { "schema": "tenuvault.cloud-backup-outcome/v1", "tenantId": "99999999-2222-3333-4444-555555555555", "runId": "other-tenant", "status": "Failed", "backupFolder": null, "finishedAt": "2026-11-05T02:00:00.000Z", "totalPolicies": null, "failures": 0, "failedTypes": [] },
+    { "schema": "tenuvault.cloud-backup-outcome/v2", "tenantId": "11111111-2222-3333-4444-555555555555", "runId": "future", "status": "Failed", "backupFolder": null, "finishedAt": "2026-11-05T02:00:00.000Z", "totalPolicies": null, "failures": 0, "failedTypes": [] },
+    { "schema": "tenuvault.cloud-backup-outcome/v1", "tenantId": "11111111-2222-3333-4444-555555555555", "runId": "bad-folder", "status": "Failed", "backupFolder": "../intune-backups/x", "finishedAt": "2026-11-05T02:00:00.000Z", "totalPolicies": null, "failures": 0, "failedTypes": [] },
+    { "schema": "tenuvault.cloud-backup-outcome/v1", "tenantId": "11111111-2222-3333-4444-555555555555", "runId": "bad status", "status": "Exploded", "backupFolder": null, "finishedAt": "2026-11-05T02:00:00.000Z", "totalPolicies": null, "failures": 0, "failedTypes": [] }
+  ]
+}

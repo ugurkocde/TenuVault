@@ -153,4 +153,18 @@ describe("azuredeploy.json", () => {
     expect(paste).toContain("substring(parameters('scheduleStartTime'), 11, 5)")
     expect(Object.keys(template.outputs)).toContain("graphRolesToAssign")
   })
+
+  it("lets the identity leave result notes in the watcher's container with the same write-only role", () => {
+    const resources = template.resources as unknown as Array<{ type: string; name: string; scope?: string; properties: Record<string, unknown> }>
+    const container = resources.find((resource) => resource.type === "Microsoft.Storage/storageAccounts/blobServices/containers")!
+    expect(container.name).toContain("variables('outcomeContainer')")
+    expect(container.properties.publicAccess).toBe("None")
+    expect((template as unknown as { variables: Record<string, string> }).variables.outcomeContainer).toBe("tenuvault-notification-state")
+    const assignments = resources.filter((resource) => resource.type === "Microsoft.Authorization/roleAssignments" && resource.scope?.includes("variables('outcomeContainer')"))
+    expect(assignments).toHaveLength(1)
+    // The writer role it uses never allows delete.
+    expect(String(assignments[0]!.properties.roleDefinitionId)).toContain("variables('writerRoleName')")
+    const role = resources.find((resource) => resource.type === "Microsoft.Authorization/roleDefinitions")!
+    expect(JSON.stringify((role.properties as { permissions: unknown }).permissions)).not.toContain("delete")
+  })
 })

@@ -13,6 +13,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import fixture from "./fixtures/notifications/audit-digest.json"
 import liveFixture from "./fixtures/notifications/audit-live.json"
+import outcomeFixture from "./fixtures/notifications/cloud-outcomes.json"
+import { cloudOutcomeEvent, parseCloudOutcome } from "../src/shared/notifications/cloud-outcome"
 import entraFixture from "./fixtures/notifications/entra-audit.json"
 import { entraChangeDigest } from "../src/shared/notifications/audit"
 import { mapEntraAuditEvent, type EntraAuditRaw } from "../src/shared/notifications/entra"
@@ -252,6 +254,18 @@ describe("Azure notification watcher scripts", () => {
     const payload = teamsWorkflowsPayload(envelope, parseCardStyle(raw))
     expect(teamsPayloadBytes(payload)).toBeLessThanOrEqual(TEAMS_MESSAGE_BUDGET_BYTES)
     expect(output).toBe(canonicalJson(payload))
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("PowerShell turns cloud backup notes into the same backup events as TypeScript", () => {
+    const script = fileURLToPath(new URL("./fixtures/notifications/render-outcomes.ps1", import.meta.url))
+    const lines = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/)
+    const expected = outcomeFixture.notes.map((note) => {
+      const outcome = parseCloudOutcome(note, outcomeFixture.tenantId)
+      return outcome ? canonicalJson(cloudOutcomeEvent(outcome, outcomeFixture.tenantId, outcomeFixture.tenantName)) : "null"
+    })
+    expect(lines).toEqual(expected)
+    // Four valid notes, two repaired, four rejected (other tenant, newer schema, bad folder, bad status).
+    expect(expected.filter((line) => line === "null")).toHaveLength(4)
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("PowerShell matches TypeScript on live-shaped read and assignment events", () => {

@@ -19,6 +19,10 @@
         "TenuVault Backup Writer" on that container only: read and write blobs, no delete. The
         runbook therefore cannot remove backups; retention runs on the next desktop backup made
         with an admin's sign-in, or through a storage lifecycle rule
+      * creates the notification watcher's container tenuvault-notification-state when missing
+        and gives the identity the same write-only role there, so each run can leave its result
+        (status, folder name, counts, failed type names, time; never policy content) for the
+        notification watcher to alert on
       * links the runbook to a daily or weekly schedule in the timezone you choose
       * with -AlertEmail, creates an Azure Monitor action group and a metric alert on failed
         Automation jobs, before the schedule is linked. Without it, -NoFailureAlert is the
@@ -115,6 +119,8 @@ $ErrorActionPreference = "Stop"
 
 $runbookName = "Invoke-TenuVaultBackup"
 $backupContainer = "intune-backups"
+# The notification watcher's state container: each run leaves its result note there.
+$outcomeContainer = "tenuvault-notification-state"
 $runbookPath = Join-Path $PSScriptRoot "runbooks/Invoke-TenuVaultBackup.ps1"
 $tenantKey = $TenantId.Substring(0, [Math]::Min(8, $TenantId.Length)).ToLowerInvariant()
 $scheduleName = "TenuVaultBackup-$tenantKey"
@@ -397,6 +403,13 @@ if (-not $container) {
         New-AzStorageContainer -Name $backupContainer -Context $storageContext -Permission Off | Out-Null
     }
 }
+$stateContainer = Get-AzStorageContainer -Name $outcomeContainer -Context $storageContext -ErrorAction SilentlyContinue
+if (-not $stateContainer) {
+    Write-Host "Creating container '$outcomeContainer' for backup results the notification watcher alerts on..."
+    if ($PSCmdlet.ShouldProcess($outcomeContainer, "Create storage container")) {
+        New-AzStorageContainer -Name $outcomeContainer -Context $storageContext -Permission Off | Out-Null
+    }
+}
 
 if ($principalId) {
     # The container assignment lives under the storage account, which may be in another
@@ -456,6 +469,10 @@ if ($principalId) {
         Add-TenuVaultRoleAssignment -ObjectId $principalId -RoleName $writerRoleName `
             -RoleDefinitionId ([string]$role.Id) `
             -Scope "$($storageAccount.Id)/blobServices/default/containers/$backupContainer" -Target "the cloud backup identity"
+        # Write only there too: the runbook can add result notes but not delete or read others away.
+        Add-TenuVaultRoleAssignment -ObjectId $principalId -RoleName $writerRoleName `
+            -RoleDefinitionId ([string]$role.Id) `
+            -Scope "$($storageAccount.Id)/blobServices/default/containers/$outcomeContainer" -Target "the cloud backup identity (result notes)"
     }
 }
 
@@ -696,6 +713,7 @@ if ($WhatIfPreference) {
 Write-Host "  Automation account:  $AutomationAccountName (resource group $ResourceGroupName, $Location)"
 Write-Host "  Runbook:             $runbookName (published)"
 Write-Host "  Storage account:     $StorageAccountName (container '$backupContainer', writer role has no delete)"
+Write-Host "  Backup results:      '$outcomeContainer' (result notes for the notification watcher, same writer role)"
 Write-Host "  Key Vault:           $KeyVaultName (secret '$secretName')"
 if ($principalId) { Write-Host "  Managed identity:    $principalId" }
 if ($alertStatus) { Write-Host "  Failure alert:       $alertStatus" }

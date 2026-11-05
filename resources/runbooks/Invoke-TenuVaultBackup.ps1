@@ -51,7 +51,7 @@ param(
     [string]$TenantKey = ""
 )
 
-$script:RunbookVersion = "1.0.0"
+$script:RunbookVersion = "1.1.0"
 $script:GraphBeta = "https://graph.microsoft.com/beta"
 $script:Container = "intune-backups"
 # One status blob per tenant, so status blobs never collide when tenants share tooling.
@@ -486,6 +486,68 @@ function Set-TvSealedBlob {
 }
 
 # ---------------------------------------------------------------------------
+# The result note for the notification watcher (mirror src/shared/notifications/cloud-outcome.ts)
+# ---------------------------------------------------------------------------
+# The one write that is not sealed, on purpose: the notification watcher has no recovery
+# key, so it can only alert on a result it can read. The note goes to the watcher's own
+# container, never to intune-backups, and carries a fixed set of fields: status, folder
+# name, counts, failed type names, run id and time. No policy content, names or messages.
+# It is best effort: a missing container (no watcher set up) or a missing role never
+# changes the backup's own result.
+
+$script:OutcomeContainer = "tenuvault-notification-state"
+$script:OutcomeSent = $false
+
+function Send-TvBackupOutcome {
+    param(
+        [Parameter(Mandatory)][string]$Account,
+        [Parameter(Mandatory)][string]$Token,
+        [Parameter(Mandatory)][string]$TenantId,
+        [Parameter(Mandatory)][string]$RunId,
+        [Parameter(Mandatory)][ValidateSet("Success", "CompletedWithWarnings", "Failed")][string]$Status,
+        [AllowNull()][string]$BackupFolder,
+        [AllowNull()][object]$TotalPolicies,
+        [int]$Failures = 0,
+        [string[]]$FailedTypes = @()
+    )
+    # One note per run: the failure path can follow a Failed result that was already noted.
+    if ($script:OutcomeSent) { return }
+    $script:OutcomeSent = $true
+    $note = [ordered]@{
+        schema        = "tenuvault.cloud-backup-outcome/v1"
+        tenantId      = $TenantId.ToLowerInvariant()
+        runId         = $RunId
+        status        = $Status
+        backupFolder  = if ($BackupFolder) { $BackupFolder } else { $null }
+        finishedAt    = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", [Globalization.CultureInfo]::InvariantCulture)
+        totalPolicies = if ($null -ne $TotalPolicies) { [int]$TotalPolicies } else { $null }
+        failures      = [int]$Failures
+        failedTypes   = @($FailedTypes | Where-Object { $_ } | Select-Object -First 10 | ForEach-Object { [string]$_ })
+    }
+    $name = if ($BackupFolder) { $BackupFolder } else { "run-$RunId" }
+    $uri = "https://$Account.blob.core.windows.net/$script:OutcomeContainer/cloud-backup-outcomes/$([uri]::EscapeDataString($name)).json"
+    $headers = @{
+        "x-ms-blob-type" = "BlockBlob"
+        "x-ms-version"   = "2021-12-02"
+        "x-ms-date"      = [DateTime]::UtcNow.ToString("R", [Globalization.CultureInfo]::InvariantCulture)
+        "If-None-Match"  = "*"
+    }
+    try {
+        $body = [Text.Encoding]::UTF8.GetBytes(($note | ConvertTo-Json -Compress))
+        [void](Invoke-TvHttp -Uri $uri -Token $Token -Method "Put" -Headers $headers -BodyBytes $body -ContentType "application/json")
+        Write-Output "Left the result ($Status) for the notification watcher."
+    } catch [TvHttpError] {
+        $code = $_.Exception.Status
+        if ($code -eq 404) { Write-Output "No notification watcher state container in this storage account, so no backup alert is sent. Set up the notification watcher to get one." }
+        elseif ($code -eq 403) { Write-Output "The cloud backup identity cannot write to $script:OutcomeContainer, so no backup alert is sent. Run the cloud backup setup again to grant it." }
+        elseif ($code -in @(409, 412)) { Write-Output "The result for this backup was already left for the notification watcher." }
+        else { Write-Output "Could not leave the result for the notification watcher: $(Get-TvSafeError $_.Exception.Message)" }
+    } catch {
+        Write-Output "Could not leave the result for the notification watcher: $(Get-TvSafeError $_.Exception.Message)"
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Microsoft Graph reads (mirror src/shared/intune/read.ts)
 # ---------------------------------------------------------------------------
 
@@ -736,9 +798,16 @@ function Invoke-TvBackup {
     Write-Output "Backing up tenant $tenantId to storage account $storageAccount (runbook $script:RunbookVersion, run $runId)."
     $graphToken = Get-TvManagedIdentityToken "https://graph.microsoft.com/"
     $storageToken = Get-TvManagedIdentityToken "https://storage.azure.com/"
-    $vaultToken = Get-TvManagedIdentityToken "https://vault.azure.net"
-    $secret = Invoke-TvHttp -Uri "https://$keyVault.vault.azure.net/secrets/tenuvault-recovery-key/?api-version=7.4" -Token $vaultToken -Method "Get"
-    $master = Get-TvRecoveryMasterKey ([string](Get-TvProp ($secret.Text | ConvertFrom-Json) "value"))
+    # The note needs only the storage token, so even a run that cannot read the recovery key
+    # (Key Vault access, a rotated secret) reaches the notification watcher as Failed.
+    try {
+        $vaultToken = Get-TvManagedIdentityToken "https://vault.azure.net"
+        $secret = Invoke-TvHttp -Uri "https://$keyVault.vault.azure.net/secrets/tenuvault-recovery-key/?api-version=7.4" -Token $vaultToken -Method "Get"
+        $master = Get-TvRecoveryMasterKey ([string](Get-TvProp ($secret.Text | ConvertFrom-Json) "value"))
+    } catch {
+        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $null -TotalPolicies $null
+        throw
+    }
     $context = @{ TenantId = $tenantId; StorageAccount = $storageAccount; StorageToken = $storageToken; Master = $master }
 
     $allTypes = Get-TvTypes
@@ -812,6 +881,7 @@ function Invoke-TvBackup {
     }
     } catch {
         Set-TvCloudStatus $context "Failed" (Get-TvSafeError $_.Exception.Message) $null
+        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $null -TotalPolicies $null -Failures $failures -FailedTypes @($failedTypes)
         throw
     }
 
@@ -897,6 +967,7 @@ function Invoke-TvBackup {
         Set-TvSealedBlob $storageAccount "$backupFolder/metadata.json" ($metadata | ConvertTo-Json -Depth 100) $storageToken $master $tenantId
         Write-Output "Backup completed: $totalPolicies policies in $($metadata.Duration) ($status). Older backups were kept: the cloud identity cannot delete. The next desktop backup made with an admin's sign-in applies retention."
         Set-TvCloudStatus $context $status "Backup $status, $totalPolicies policies." $backupFolder
+        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status $status -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures $failures -FailedTypes @($failedTypes)
         if ($status -eq "Failed") { throw "The backup saved no policies. See the runbook output above." }
     } catch {
         $reason = Get-TvSafeError $_.Exception.Message
@@ -927,6 +998,7 @@ function Invoke-TvBackup {
             Set-TvSealedBlob $storageAccount "$backupFolder/metadata.json" ($failed | ConvertTo-Json -Depth 100) $storageToken $master $tenantId -CreateOnly
         } catch { Write-Output "Could not record this backup as Failed: $(Get-TvSafeError $_.Exception.Message). It is listed as incomplete." }
         Set-TvCloudStatus $context "Failed" $reason $backupFolder
+        Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $backupFolder -TotalPolicies $totalPolicies -Failures ([Math]::Max(1, $failures)) -FailedTypes @($failedTypes)
         throw
     }
 }
