@@ -9,7 +9,7 @@ For the step-by-step setup, see [Create the app registration](/getting-started/a
 
 ## What the setup script creates
 
-The setup script, `New-TenuVaultDesktopApp.ps1`, is available as a [download from this site](/downloads/New-TenuVaultDesktopApp.ps1), from the sign-in screen in TenuVault (**Copy setup script**) and in the public repository. It creates:
+The setup script, `New-TenuVaultDesktopApp.ps1`, is available as a [download from this site](/downloads/New-TenuVaultDesktopApp.ps1), from the **Prepare** step of **Set up TenuVault** (**Save setup script** or **Copy script**) and in the public repository. The same step lists these permissions under **Permissions the app registration gets** before anyone consents. It creates:
 
 | Setting | Value |
 | --- | --- |
@@ -23,7 +23,7 @@ The setup script, `New-TenuVaultDesktopApp.ps1`, is available as a [download fro
 | Enterprise app | Hidden from the My Apps portal. |
 | Notes field | "Used by the TenuVault desktop app. Delegated permissions only, no credentials." |
 
-At the end, the script prints your tenant ID and the application (client) ID. You enter these in TenuVault when you sign in.
+While it grants admin consent, the script lists the delegated permissions per API. At the end, it prints your tenant ID and the application (client) ID. You paste these two lines into the **Sign in** step of **Set up TenuVault**.
 
 ### Who can run the script
 

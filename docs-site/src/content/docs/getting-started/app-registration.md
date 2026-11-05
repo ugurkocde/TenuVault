@@ -3,7 +3,7 @@ title: "Create the app registration"
 description: Create the app registration TenuVault signs in with.
 ---
 
-TenuVault signs in through an app registration that lives in your own tenant. A PowerShell setup script creates it in one step and prints the two values you enter in the app: the tenant ID and the client ID.
+TenuVault signs in through an app registration that lives in your own tenant. A PowerShell setup script creates it in one step and prints the two values you paste into the app: the tenant ID and the client ID. In TenuVault, the **Prepare** step of **Set up TenuVault** walks you through it.
 
 You do this once per tenant. Every admin who uses TenuVault in that tenant signs in through the same app registration.
 
@@ -52,20 +52,41 @@ The table above is the default permission set. It does not change unless you opt
 * The Microsoft Graph PowerShell modules `Microsoft.Graph.Applications` and `Microsoft.Graph.Identity.SignIns`. The Graph modules only load together at one version, so the script uses the newest installed `Microsoft.Graph.Authentication` version and installs any missing module at that version for the current user from the PowerShell Gallery. If another Graph version is already loaded in your PowerShell session, the script stops and asks you to open a new PowerShell window. If that version cannot be downloaded, the script stops and names it; update the installed Graph modules to one version with `Get-InstalledModule Microsoft.Graph* | Update-Module` and run it again.
 * Optional: the object ID of a security group, if only its members should be able to sign in.
 
-## Get the script
+## In TenuVault: the Prepare step
 
-[Download `New-TenuVaultDesktopApp.ps1`](/downloads/New-TenuVaultDesktopApp.ps1) and save it to a folder of your choice. If someone else creates the app registration for you, send them this link or the file.
+When you select **Connect your tenant** on the welcome screen, TenuVault opens **Set up TenuVault** on the **Prepare** step, **Before you sign in**. Its card, **Create the app registration**, is a numbered checklist:
 
-The same script is also built into TenuVault:
+1. **Save the setup script.** Select **Save setup script** and choose a folder in the save dialog. By default it is saved to your Documents folder as `New-TenuVaultDesktopApp.ps1`. TenuVault saves the copy of the script it ships with. **Copy script** copies it instead; paste it into a text editor and save it as `New-TenuVaultDesktopApp.ps1`.
+2. **Run it in PowerShell.** The card shows the exact command, with a copy button. After you saved the script, the command first changes to the folder you chose (`cd`) and then runs the script. If PowerShell refuses to run it, the card suggests `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` first; see [Execution policy](#execution-policy).
+3. **Sign in when Microsoft Graph PowerShell asks.** Your browser opens. Microsoft may first ask you to consent to Microsoft Graph PowerShell, which the script uses to create the app registration.
+4. **Copy the two lines it prints at the end:** the Tenant id and the Application (client) id. You paste them on the **Sign in** step.
 
-1. Start TenuVault. If it shows **Welcome to TenuVault**, select a plan first; see [Choose a plan on first launch](/getting-started/first-launch/). You can change your plan later.
-2. On the **Prepare** step of **Set up TenuVault**, select **Copy setup script**. You also find this button in **Tenants** > **Connect tenant** under **First time? Create an app registration**.
-3. Paste the script into a text editor and save it as `New-TenuVaultDesktopApp.ps1`.
+The card names the roles that can run the script: Global Administrator, Privileged Role Administrator or Cloud Application Administrator. Expand **Permissions the app registration gets** to see the delegated permissions per API before anyone consents, and the tip to add `-AllowedGroupId` with a group's object ID to limit sign-in to a group of admins.
+
+The buttons under the checklist:
+
+| Button | What it does |
+| --- | --- |
+| **Someone else is the admin? Copy instructions** | Copies a ready-to-send message for your Entra administrator: what TenuVault is, who can run the script, the script download link, the command, the `-AllowedGroupId` option, the permissions it grants and the two values to send back. TenuVault keeps your place, so you can close it and continue when they reply. |
+| **Create it by hand instead** | Opens [Create the app registration manually](#create-the-app-registration-manually) on this page. |
+| **Setup guide** | Opens this page. |
+
+If the app registration already exists, for example from an earlier setup, skip the checklist. Select **Next: sign in** to continue to [Sign in to your tenant](/getting-started/connect-tenant/).
+
+## Get the script without TenuVault
+
+[Download `New-TenuVaultDesktopApp.ps1`](/downloads/New-TenuVaultDesktopApp.ps1) and save it to a folder of your choice. If someone else creates the app registration for you, send them this link, or use **Someone else is the admin? Copy instructions** in TenuVault.
 
 ## Run the script
 
-1. Open PowerShell in the folder where you saved the script.
+1. Open PowerShell in the folder where you saved the script. On macOS, use PowerShell 7 (`pwsh`).
 2. Run the script with the parameters you need:
+
+   ```powershell
+   ./New-TenuVaultDesktopApp.ps1
+   ```
+
+   To create it in a specific tenant:
 
    ```powershell
    ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com
@@ -84,15 +105,15 @@ The same script is also built into TenuVault:
    ```
 
 3. Sign in with your admin account when Microsoft Graph PowerShell asks you to. If you are prompted to consent to the permissions Graph PowerShell requests, accept. The script connects with `Application.ReadWrite.All`, `DelegatedPermissionGrant.ReadWrite.All` and `AppRoleAssignment.ReadWrite.All` to create the app and grant consent.
-4. Wait for the script to finish. It prints:
+4. Wait for the script to finish. While it grants admin consent, it lists the delegated permissions per API. At the end it prints:
 
    ```
-   Done. Enter these values in TenuVault > Tenants > Connect tenant:
+   Done. Copy the two lines below and paste them into the Sign in step of Set up TenuVault:
      Tenant id:                <tenant id>
      Application (client) id:  <client id>
    ```
 
-5. Copy the **Application (client) id**. You enter it when you [sign in to your tenant](/getting-started/connect-tenant/). The tenant ID is always printed as a GUID, even if you passed a domain.
+5. Copy both lines. On the **Sign in** step, paste them into **Paste the script output**, which fills in the tenant ID and the client ID. See [Sign in to your tenant](/getting-started/connect-tenant/). The tenant ID is always printed as a GUID, even if you passed a domain.
 
 :::note
 The script also ends with a reminder about admin roles. The roles TenuVault Desktop needs are listed in [Requirements](/getting-started/requirements/#admins-who-use-tenuvault).
@@ -166,4 +187,4 @@ Assigning a group to an enterprise application requires Microsoft Entra ID P1 or
 
 ## Next step
 
-[Choose a plan on first launch](/getting-started/first-launch/), then [sign in to your tenant](/getting-started/connect-tenant/) with the client ID.
+[Sign in to your tenant](/getting-started/connect-tenant/) with the two values the script printed.

@@ -41,6 +41,8 @@ This page lists the messages TenuVault shows, grouped by area, with the cause an
 | Sign in to access Intune and verify this tenant's license. | Notice on **Backup & Restore**, **Drift Detection** and **Audit Log**: the selected tenant is not signed in. | Click **Open sign-in settings** and sign in. |
 | The tenant was not added. *reason* | Adding the tenant failed. The reason follows. | Fix the reason shown, often a license or sign-in issue, and add the tenant again. |
 
+When the first sign-in to a tenant fails with a common Microsoft code, such as a wrong client ID, an unknown tenant, a missing redirect URI, a Conditional Access block or missing consent, TenuVault shows what to do followed by the code. See [Sign-in errors](/getting-started/connect-tenant/#sign-in-errors).
+
 If Microsoft shows an error in the sign-in window itself (an `AADSTS` code), check that the app registration exists in this tenant, that admin consent was granted, and, if the setup script was run with `-AllowedGroupId`, that your account is a member of that group. See [App registration and delegated permissions](/security/permissions/).
 
 If the browser shows `AADSTS50011` (redirect URI mismatch), the app registration is missing the `http://localhost` redirect URI. Add it under **Authentication** > **Mobile and desktop applications**, as described in [Create the app registration](/getting-started/app-registration/), and sign in again.

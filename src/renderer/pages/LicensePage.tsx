@@ -25,6 +25,7 @@ import type { LicenseStatus, TenantLicenseStatus } from "../../shared/ipc"
 import { INVOICE_REQUEST_EMAIL, INVOICE_REQUEST_URL } from "../../shared/constants"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
 import { TrialSignupForm } from "../components/TrialSignupForm"
+import { useClipboardLicenseKey } from "../lib/clipboard-key"
 import { bridge } from "../lib/bridge"
 import { useConfirm } from "~/components/ConfirmDialog"
 import { formatDate, formatDateTime, hasPaidLicense, isUnlicensed, licensePageTitle, planName, trialDaysLeft, useLicense } from "../lib/license"
@@ -302,6 +303,24 @@ export default function LicensePage() {
   const trialEmail = useRef<HTMLInputElement>(null)
   const { busy, error, notice, run } = useAction()
   const checkedOnOpen = useRef(false)
+  const activateKey = (value: string) =>
+    void run(
+      "activate",
+      async () => {
+        const result = await bridge.license.setKey(value)
+        setKey("")
+        return result
+      },
+      (result) =>
+        result && result.tenants.some((t) => t.entitled && t.source === "key")
+          ? "License activated."
+          : "License key saved. It activates for a tenant when you sign in to it.",
+    )
+  // The trial key arrives by email: once it is copied there, it activates when TenuVault gets focus.
+  useClipboardLicenseKey(trialKeyHint && status?.hasKey === false && busy === null, (found) => {
+    setKey(found)
+    activateKey(found)
+  })
   // Other screens send the admin here to start the trial.
   const startTrial = (useLocation().state as { startTrial?: boolean } | null)?.startTrial === true
   const unlicensed = status ? isUnlicensed(status) : false
@@ -361,19 +380,7 @@ export default function LicensePage() {
   const activeKeyTenants = status.tenants.filter((t) => t.entitled && t.source === "key").length
   const signedIn = status.tenants.filter((t) => t.signedIn).length
 
-  const activate = () =>
-    void run(
-      "activate",
-      async () => {
-        const result = await bridge.license.setKey(key.trim())
-        setKey("")
-        return result
-      },
-      (result) =>
-        result && result.tenants.some((t) => t.entitled && t.source === "key")
-          ? "License activated."
-          : "License key saved. It activates for a tenant when you sign in to it.",
-    )
+  const activate = () => activateKey(key.trim())
   const replaceKey = (newKey: string) =>
     void run(
       "replace",
@@ -509,7 +516,7 @@ export default function LicensePage() {
                   Activate
                 </Button>
               </div>
-              {trialKeyHint && <p id="trial-key-hint" className="text-sm text-gray-600">Paste the key from your email to activate the trial.</p>}
+              {trialKeyHint && <p id="trial-key-hint" className="text-sm text-gray-600">Copy the key from your email and return to TenuVault: it activates by itself. Or paste it here.</p>}
               <p className="text-xs text-gray-500">
                 Licensed through your organization? <Link to="/portal/onboarding" className="text-blue-600 hover:underline">Sign in to your tenant</Link>{" "}
                 and TenuVault uses the license a tenant admin shared with it.

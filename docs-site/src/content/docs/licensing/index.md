@@ -106,5 +106,5 @@ See [Activate and manage your license](/licensing/manage/) for how to turn shari
 ## Related pages
 
 * [Activate and manage your license](/licensing/manage/)
-* [Choose a plan on first launch](/getting-started/first-launch/)
+* [Start TenuVault for the first time](/getting-started/first-launch/)
 * [Network connections and data flows](/security/data-flows/)

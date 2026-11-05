@@ -7,15 +7,31 @@ The last setup step takes a first backup, so you know sign-in, permissions and s
 
 ## Run it from the guided setup
 
-On the **First backup** step, TenuVault shows **Your tenant is connected.**
+The **First backup** step is headed **Take a first backup** and shows **&lt;tenant&gt; is connected.** It explains what the backup does:
+
+* It reads your Intune policies, scripts and settings, and changes nothing in your tenant.
+* Apps are left out to keep it quick. You can include them later in the backup scope.
+* It usually takes a few minutes, longer for large tenants.
 
 1. Select **Run first backup**.
-2. Watch the progress bar and the log. TenuVault first lists every Intune type (**Reading Intune configuration...**), then saves each object (**Backing up &lt;type&gt;**).
-3. When the backup ends, select **Go to Backup & Restore** to see it.
+2. Watch the progress bar and the log. TenuVault first lists every Intune type (**Reading Intune configuration...**), then saves each object (**Backing up &lt;type&gt;**). Select **Cancel backup** to stop it.
+3. When the backup succeeds, the step shows **Your first backup is done** and **Next steps**, described below.
+4. Select **Go to dashboard**.
 
 The first backup uses the default scope, **Everything except apps**: policies, scripts, updates, enrollment and tenant settings. To include apps, run a manual backup with **Everything** from **Backup & Restore**, described below. See [What gets backed up](/backups/coverage/).
 
-To do it later, select **Skip for now**. TenuVault opens **Tenants**, and you can run the backup from **Backup & Restore** at any time.
+To do it later, select **Skip for now**. TenuVault opens the dashboard, and you can run the backup from **Backup & Restore** at any time.
+
+If the first backup fails or you cancel it, select **Try again** to run it again, or **Go to Backup & Restore** to continue there.
+
+### Next steps
+
+After a successful first backup, the step offers two things:
+
+* **Turn on automatic backups.** One button turns on a schedule for this tenant: **Back up every Sunday at 02:00** on Community, or **Back up daily at 02:00** on Pro and MSP. TenuVault backs up while it is open or in the tray. A backup missed while the computer was off runs the next time TenuVault starts. Change the day and time later in **Backup & Restore**, **Schedule**. See [Schedule backups](/backups/schedules/).
+* **Save your recovery key**, if you have not saved it yet. Select **Save recovery key** and keep the file somewhere safe, such as your password manager. Without the recovery key, your backups cannot be read after a reinstall or on another computer. See [Save your recovery key](/getting-started/choose-storage/#save-your-recovery-key).
+
+When a schedule is already on or the key is already saved, the step says so instead.
 
 ## Run it from Backup & Restore
 
@@ -56,7 +72,7 @@ After a successful manual backup on Community, a line beside the completion resu
 
 TenuVault is set up. Next:
 
-* [Schedule backups](/backups/schedules/). Community tenants can back up weekly; Pro and MSP can also back up daily.
+* [Schedule backups](/backups/schedules/), if you did not turn on automatic backups in **Next steps**. Community tenants can back up weekly; Pro and MSP can also back up daily.
 * Keep TenuVault running in the menu bar on macOS or the tray on Windows so schedules run. See [Settings reference](/settings/#background-runner).
 * Learn how to [restore Intune policies](/restore/) and [detect drift](/drift/).
 

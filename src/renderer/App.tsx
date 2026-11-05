@@ -15,6 +15,7 @@ import { DisclaimerHost } from "./components/DisclaimerHost"
 import { isUnlicensed, LicenseProvider, useLicense } from "./lib/license"
 import { WhatsNewProvider } from "./lib/whats-new"
 import LicensePage from "./pages/LicensePage"
+import { hasOnboardingDraft } from "./lib/onboarding-draft"
 
 // Desktop pages.
 const OnboardingPage = lazy(() => import("./pages/OnboardingPage"))
@@ -40,21 +41,22 @@ function Spinner() {
   )
 }
 
-/** Start page: the all-tenants overview when several tenants are connected, else the dashboard. */
+/** Start page: the guided setup until a tenant is connected, then the all-tenants overview or the dashboard. */
 function Home() {
   const tenants = useTenants()
+  if (tenants.length === 0) return <Navigate to="/portal/onboarding" replace />
   return <Navigate to={tenants.length > 1 ? "/portal/overview" : "/portal/dashboard"} replace />
 }
 
 /**
- * The welcome screen asks for a license key on first run. Licensing itself is per tenant
- * and enforced in the main process (sign-in, token requests, local backups, scheduled
- * backups), so admins licensed through their organization continue to the tenant sign-in.
+ * The welcome screen on first run. Licensing itself is per tenant and enforced in the main
+ * process (sign-in, token requests, local backups, scheduled backups), so the plan is shown in
+ * the guided setup once the tenant is known. A setup already in progress skips the welcome.
  */
 function LicenseGate({ children }: { children: ReactNode }) {
   const { status, error, refresh } = useLicense()
   const tenants = useTenants()
-  const [signingIn, setSigningIn] = useState(false)
+  const [signingIn, setSigningIn] = useState(hasOnboardingDraft)
   if (!status) {
     if (error !== null) {
       return (

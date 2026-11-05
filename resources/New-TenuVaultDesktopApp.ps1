@@ -192,8 +192,9 @@ Update-MgApplication -ApplicationId $app.Id -PublicClient @{
 
 $appSp = New-MgServicePrincipal -AppId $app.AppId -Tags "HideApp", "WindowsAzureActiveDirectoryIntegratedApp"
 
-Write-Host "Granting admin consent..."
+Write-Host "Granting admin consent for these delegated permissions..."
 foreach ($resource in $resources) {
+    Write-Host "  $($resource.Name): $($resource.Scopes -join ', ')"
     New-MgOauth2PermissionGrant -ClientId $appSp.Id -ConsentType "AllPrincipals" `
         -ResourceId $resource.ServicePrincipalId -Scope ($resource.Scopes -join " ") | Out-Null
 }
@@ -206,7 +207,7 @@ if ($AllowedGroupId) {
 }
 
 Write-Host ""
-Write-Host "Done. Enter these values in TenuVault > Tenants > Connect tenant:" -ForegroundColor Green
+Write-Host "Done. Copy the two lines below and paste them into the Sign in step of Set up TenuVault:" -ForegroundColor Green
 Write-Host "  Tenant id:                $($context.TenantId)"
 Write-Host "  Application (client) id:  $($app.AppId)"
 Write-Host ""

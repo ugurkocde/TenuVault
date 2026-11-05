@@ -350,9 +350,30 @@ export function DesktopLayout() {
     )
   }
 
+  // Until a tenant is connected the guided setup is the only job, so it gets the window to itself.
+  // The page keeps its place in the tree either way, so connecting the first tenant during the
+  // setup only brings in the sidebar and never remounts the setup.
+  const focus = tenants.length === 0 && pathname === "/portal/onboarding"
+  const quiet = "rounded-full px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-secondary hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+
   return (
     <div className="min-h-screen bg-background">
       {/* Floating white panel on the warm canvas, 12px from the window edge; the content column starts at 16rem. */}
+      {focus ? (
+        <header className="flex items-center justify-between gap-4 px-6 pt-5 lg:px-8">
+          <div className="flex items-center gap-3">
+            <BrandMark className="size-9" />
+            <div className="leading-tight">
+              <div className="text-base font-semibold tracking-tight text-foreground">TenuVault</div>
+              <div className="text-xs text-muted-foreground">Desktop</div>
+            </div>
+          </div>
+          <nav aria-label="Help" className="flex items-center gap-1">
+            <Link to="/license" className={quiet}>License</Link>
+            <button type="button" onClick={() => setSupportOpen(true)} className={quiet}>Support</button>
+          </nav>
+        </header>
+      ) : (
       <aside className="fixed bottom-3 left-3 top-3 z-40 flex w-[15.25rem] flex-col rounded-3xl bg-card shadow-[0_1px_2px_rgba(22,21,20,0.04)]">
         <div className="flex items-center gap-3 px-5 pb-4 pt-5">
           <BrandMark className="size-10" />
@@ -389,10 +410,11 @@ export function DesktopLayout() {
           </button>
         </div>
       </aside>
+      )}
 
-      <div className="pl-64">
-        <LicenseBanner />
-        <SignInBanner />
+      <div className={focus ? undefined : "pl-64"}>
+        {!focus && <LicenseBanner />}
+        {!focus && <SignInBanner />}
         {[/portal\/backup/, /portal\/drift/, /portal\/audit/, /portal\/(governance|changes|operations)/].some(pattern => pattern.test(pathname)) && <TenantAccessNotice />}
         {/* Room to scroll the end of a page clear of the floating backup and activity panels while they show. */}
         <main className="pb-[calc(var(--floating-progress-offset,0px)+var(--background-tasks-offset,0px))]">

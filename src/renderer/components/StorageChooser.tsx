@@ -31,10 +31,32 @@ interface StorageChooserProps {
   onChange: (choice: StorageChoice | null) => void
   /** Called whenever the in-progress selection changes. */
   onDraftChange?: (draft: StorageChooserDraft) => void
+  /** Called with what still keeps the choice incomplete, such as an unsaved recovery key, or null. */
+  onBlockerChange?: (blocker: string | null) => void
+}
+
+/** What still keeps an Azure storage choice incomplete, in the order the admin has to fix it, or null. */
+export function azureStorageBlocker(state: {
+  community: boolean
+  settingsLoaded: boolean
+  recoveryReady: boolean
+  accountsLoaded: boolean
+  accountCount: number
+  selected: boolean
+  verified: boolean
+}): string | null {
+  if (state.community) return "Azure storage needs Pro or MSP. Choose This device to continue on Community."
+  if (!state.settingsLoaded) return "Checking whether your recovery key is saved..."
+  if (!state.recoveryReady) return "To continue, save your recovery key."
+  if (!state.accountsLoaded) return "Loading your storage accounts..."
+  if (state.accountCount === 0) return "To continue, ask an Azure administrator for a storage account, or choose This device."
+  if (!state.selected) return "To continue, choose a storage account."
+  if (!state.verified) return "To continue, select Check access."
+  return null
 }
 
 /** Lets the admin keep backups encrypted on this device or in their own Azure storage account. */
-export function StorageChooser({ tenantId, clientId, initial, initialDraft, onChange, onDraftChange }: StorageChooserProps) {
+export function StorageChooser({ tenantId, clientId, initial, initialDraft, onChange, onDraftChange, onBlockerChange }: StorageChooserProps) {
   const [kind, setKind] = useState<StorageChoice["kind"]>(initialDraft?.kind ?? initial?.kind ?? "local")
   const [settingsError, setSettingsError] = useState("")
   const [settings, setSettings] = useBackupSettings((error) =>
@@ -118,6 +140,19 @@ export function StorageChooser({ tenantId, clientId, initial, initialDraft, onCh
     // onChange is a callback prop; re-running on its identity would loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, selected, verified, accounts, community, recoveryReady])
+
+  const blocker = kind === "local" ? null : azureStorageBlocker({
+    community,
+    settingsLoaded: Boolean(settings),
+    recoveryReady,
+    accountsLoaded: Boolean(accounts),
+    accountCount: accounts?.length ?? 0,
+    selected: Boolean(selected),
+    verified,
+  })
+  const blockerListener = useRef(onBlockerChange)
+  blockerListener.current = onBlockerChange
+  useEffect(() => { blockerListener.current?.(blocker) }, [blocker])
 
   const refreshAccounts = () => {
     setLoadError("")
@@ -217,7 +252,7 @@ export function StorageChooser({ tenantId, clientId, initial, initialDraft, onCh
         "local",
         <HardDrive className="h-5 w-5" />,
         "This device, encrypted",
-        "Backups are encrypted with AES-256 and the key is protected by your Windows or macOS account. Nothing leaves this computer.",
+        "Backups are encrypted with AES-256-GCM and the key is protected by your Windows or macOS account. Nothing leaves this computer.",
       )}
       {kind === "local" && settings && (
         <div className="ml-14 space-y-1 rounded-2xl bg-gray-50 px-4 py-3 text-xs text-gray-600">

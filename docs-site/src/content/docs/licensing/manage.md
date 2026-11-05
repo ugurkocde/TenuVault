@@ -22,9 +22,11 @@ You receive your license key by email right after checkout.
 
 If you have not connected a tenant yet, TenuVault opens on **Welcome to TenuVault**.
 
-1. Under **Already have a license key?**, paste your key.
-2. Click **Save key**.
-3. Click **Start free with Community** to continue to the tenant sign-in. Your key is activated for the tenant when you sign in to it.
+1. Click **I have a license key**.
+2. Paste your key into **License key** and click **Save key**.
+3. TenuVault opens **Set up TenuVault**. Your key is activated for the tenant when you sign in to it. See [Start TenuVault for the first time](/getting-started/first-launch/).
+
+The welcome screen also has **Try Pro free for 30 days, no card**, and the **Storage** step of the setup offers both options for a tenant on Community.
 
 ### On the License page
 
@@ -37,10 +39,12 @@ If you have not connected a tenant yet, TenuVault opens on **Welcome to TenuVaul
 On Community, the **License** page shows **Try Pro free for 30 days, no card needed.**
 
 1. Enter your work email address.
-2. Click **Start free trial**. TenuVault asks tenuvault.com to email you a Pro trial key and shows **Check your inbox** with the address, plus the hint "Paste the key from your email to activate the trial." under **License key**.
-3. Paste the key from the email into **License key** and click **Activate**.
+2. Click **Start free trial**. TenuVault asks tenuvault.com to email you a Pro trial key and shows **Check your inbox** with the address, plus the hint "Copy the key from your email and return to TenuVault: it activates by itself. Or paste it here." under **License key**.
+3. Copy the key from the email and return to TenuVault. TenuVault finds the key on the clipboard and activates it. Or paste it into **License key** and click **Activate**.
 
-The key usually arrives within a minute, sometimes up to 15. Check your junk folder if it does not. **Buy now** opens the checkout in your browser instead, and **Compare plans** opens the plans page. Below it, **Need an invoice instead of a card?** explains that yearly Pro and MSP plans are available by quote, purchase order and invoice, payable by bank transfer, with a link to email [support@tenuvault.com](mailto:support@tenuvault.com). The same note appears on the trial panel and when a saved key is no longer active, and the welcome screen has a short version. A link also explains that eligible nonprofits can use Pro at no cost. **Start 30 day free trial** in other places, such as the second tenant dialog or the CIS Benchmarks preview, opens this form.
+While it waits for the trial key, TenuVault checks the clipboard when its window gets focus. Only text shaped like a TenuVault key, starting with `TENU-`, is ever read back; other clipboard content is ignored.
+
+The key usually arrives within a minute, sometimes up to 15. Check your junk folder if it does not. **Buy now** opens the checkout in your browser instead, and **Compare plans** opens the plans page. Below it, **Need an invoice instead of a card?** explains that yearly Pro and MSP plans are available by quote, purchase order and invoice, payable by bank transfer, with a link to email [support@tenuvault.com](mailto:support@tenuvault.com). The same note appears on the trial panel and when a saved key is no longer active. A link also explains that eligible nonprofits can use Pro at no cost. **Start 30 day free trial** in other places, such as the second tenant dialog or the CIS Benchmarks preview, opens this form.
 
 If you are already signed in to one or more tenants, TenuVault activates the key for them right away and shows **License activated.** If you are not signed in to a tenant yet, it shows **License key saved. It activates for a tenant when you sign in to it.**
 
@@ -93,7 +97,7 @@ Things to know:
 
 ### For admins licensed through their organization
 
-You do not need to enter a key. On the welcome screen, click **Start free with Community** and sign in to your tenant. TenuVault finds the shared license at sign-in and the **License** page shows **Licensed through your organization**.
+You do not need to enter a key. On the welcome screen, click **Connect your tenant** and sign in to your tenant in **Set up TenuVault**. TenuVault finds the shared license at sign-in and the **License** page shows **Licensed through your organization**.
 
 TenuVault proves your sign-in to the licensing service with a fresh Microsoft ID token, which it requests silently. If that is not possible, the tenant shows "Sign in to this tenant again to check your organization's license." Sign in to the tenant again and click **Retry**.
 
@@ -147,6 +151,6 @@ To upgrade from Community, start the free trial or click **Buy now** on the **Li
 ## Related pages
 
 * [Plans and features](/licensing/)
-* [Choose a plan on first launch](/getting-started/first-launch/)
+* [Start TenuVault for the first time](/getting-started/first-launch/)
 * [Manage tenants](/tenants/)
 * [Network connections and data flows](/security/data-flows/)

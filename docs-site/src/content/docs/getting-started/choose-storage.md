@@ -3,9 +3,18 @@ title: "Choose where backups are stored"
 description: Keep backups encrypted on this device or in your own Azure storage account, and save your recovery key.
 ---
 
-On the **Storage** step you choose where this tenant's backups go. Both options encrypt every backup with AES-256-GCM before it is written, and neither sends anything to TenuVault.
+On the **Storage** step, **Choose where backups are stored**, you choose where this tenant's backups go. Both options encrypt every backup with AES-256-GCM before it is written, and neither sends anything to TenuVault.
 
 You can change the location later in **Settings** > **Sign-in** > **Change storage**.
+
+## The tenant's plan
+
+Above the storage options, the step shows **Signed in as &lt;your account&gt;** and the plan the tenant got at sign-in:
+
+* **This tenant uses Community, the free plan**: manual and weekly backups on this device, kept for 30 days. Next to it are **Try Pro free for 30 days, no card** and **I have a license key**, the same options as on the welcome screen. The trial form is filled in with your sign-in name when it is an email address. A trial key you copy from the email is saved by itself when you return to TenuVault. See [Start TenuVault for the first time](/getting-started/first-launch/#start-a-trial).
+* **This tenant uses Pro** or **MSP**, from your license key, **This tenant uses your Pro trial**, or **This tenant uses Pro, through the license your organization shares with it.**
+
+You can change the plan later on the **License** page.
 
 ## Compare the options
 
@@ -43,6 +52,16 @@ You need an existing storage account in a subscription of the tenant you signed 
 3. Select **Check access**. TenuVault creates the `intune-backups` container if it does not exist, then writes and deletes a small test file to confirm you can store backups there.
 4. When the button shows **Access confirmed** and your recovery key is saved, select **Continue**.
 
+While **Continue** is unavailable, a hint next to it says what is missing, in the order you fix it:
+
+| Hint | What to do |
+| --- | --- |
+| **Azure storage needs Pro or MSP. Choose This device to continue on Community.** | Start the trial or enter a key, or choose **This device, encrypted**. |
+| **To continue, save your recovery key.** | Select **Save recovery key**. |
+| **To continue, ask an Azure administrator for a storage account, or choose This device.** | No storage account is listed. See below. |
+| **To continue, choose a storage account.** | Choose one in **Storage account**. |
+| **To continue, select Check access.** | Select **Check access**. |
+
 If no storage account is listed, **No storage account yet?** offers **Copy setup instructions for your Azure administrator** (the guide link plus the script from [Create a storage account for TenuVault](/getting-started/create-storage-account/)) and **Storage setup guide**. After the account exists, select **Refresh**.
 
 ### Storage errors
@@ -73,7 +92,9 @@ Anyone with the recovery key and your backup files can read your Intune configur
 
 ## Continue
 
-When you select **Continue**, TenuVault checks the license for the tenant once more and saves it. Setup moves to **First backup**.
+When you select **Continue**, the button shows **Checking the license...** while TenuVault checks the license for the tenant once more. It then saves the tenant and setup moves to **First backup**.
+
+If the license no longer covers the tenant, the tenant is not saved and TenuVault signs you out of it. Setup returns to **Sign in** with the tenant ID and client ID kept, explains why, and offers **Try Pro free for 30 days, no card** and **I have a license key**. Sign in again once the license covers the tenant. See [License check at sign-in](/getting-started/connect-tenant/#license-check-at-sign-in).
 
 ## Next step
 

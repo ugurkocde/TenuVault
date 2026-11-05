@@ -332,6 +332,12 @@ export interface TenuVaultBridge {
     reauthenticate: (tenantId: string, clientId: string, scope?: string) => Promise<SignedInAccount>
     /** Called when a background request needs the admin to sign in again. Returns an unsubscribe function. */
     onSignInRequired: (listener: (event: SignInRequiredEvent) => void) => () => void
+    /** Stops waiting for a sign-in open in the browser; the waiting call fails with "Sign-in cancelled." */
+    cancelSignIn: () => Promise<void>
+  }
+  setup: {
+    /** Asks where to save the app registration setup script this build ships with, and writes it. */
+    saveScript: () => Promise<{ saved: boolean; folder?: string; fileName?: string }>
   }
   backups: {
     cancel: (jobId: string) => Promise<void>
@@ -400,6 +406,8 @@ export interface TenuVaultBridge {
      * Resolves once the request was accepted; the key arrives by email.
      */
     startTrial: (email: string, options?: { source: string }) => Promise<void>
+    /** A TenuVault license key on the clipboard, or null. Other clipboard text is never returned. */
+    clipboardKey: () => Promise<string | null>
     /** Called whenever the license state changes in the main process. Returns an unsubscribe function. */
     onChanged: (listener: (status: LicenseStatus) => void) => () => void
   }

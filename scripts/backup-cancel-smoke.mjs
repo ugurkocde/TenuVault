@@ -138,8 +138,8 @@ export async function checkBackupCancel({ check, evaluate, waitForCondition, scr
         })()`)
 
         if (view === "onboarding") {
-          assert(await waitForCondition(`Boolean(${button("I have the client id")})`), "onboarding did not load")
-          await evaluate(`${button("I have the client id")}.click()`)
+          assert(await waitForCondition(`Boolean(${button("Next: sign in")})`), "onboarding did not load")
+          await evaluate(`${button("Next: sign in")}.click()`)
           assert(await waitForCondition(`Boolean(${doc}.getElementById('tenant'))`), "sign-in form did not load")
           await evaluate(`(() => {
             const win = window.__backupCancelFrame.contentWindow;

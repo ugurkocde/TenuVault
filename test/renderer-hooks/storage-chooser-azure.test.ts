@@ -16,7 +16,7 @@ const clipboard = vi.hoisted(() => ({ writeText: vi.fn() }))
 vi.mock("../../src/renderer/lib/bridge", () => ({ bridge: { backups, app: { openExternal: async () => undefined } } }))
 vi.mock("../../src/renderer/lib/license", () => ({ useTenantPlan: () => "pro" }))
 
-import { StorageChooser, type StorageChooserDraft } from "../../src/renderer/components/StorageChooser"
+import { azureStorageBlocker, StorageChooser, type StorageChooserDraft } from "../../src/renderer/components/StorageChooser"
 import { announceBackupSettings, useBackupSettings } from "../../src/renderer/lib/local-inventory"
 
 const TENANT = "11111111-1111-1111-1111-111111111111"
@@ -341,5 +341,17 @@ describe("storage chooser Azure path", () => {
     expect(second.container.textContent).toContain("Check access")
     expect(second.container.textContent).not.toContain("Access confirmed")
     expect(second.last()).toBeNull()
+  })
+})
+
+describe("azureStorageBlocker", () => {
+  const ready = { community: false, settingsLoaded: true, recoveryReady: true, accountsLoaded: true, accountCount: 1, selected: true, verified: true }
+  it("names the next thing that keeps Continue disabled, in order", () => {
+    expect(azureStorageBlocker(ready)).toBeNull()
+    expect(azureStorageBlocker({ ...ready, verified: false })).toBe("To continue, select Check access.")
+    expect(azureStorageBlocker({ ...ready, selected: false, verified: false })).toBe("To continue, choose a storage account.")
+    expect(azureStorageBlocker({ ...ready, accountCount: 0 })).toContain("ask an Azure administrator")
+    expect(azureStorageBlocker({ ...ready, recoveryReady: false, selected: false })).toBe("To continue, save your recovery key.")
+    expect(azureStorageBlocker({ ...ready, community: true })).toContain("needs Pro or MSP")
   })
 })
