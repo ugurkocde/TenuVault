@@ -159,7 +159,7 @@ describe("Azure notification watcher scripts", () => {
 
   it.runIf(Boolean(pwsh))("watcher ingestion pages, dedupes, restarts an expired continuation and keeps state on failure", () => {
     const script = fileURLToPath(new URL("./fixtures/notifications/ingest.ps1", import.meta.url))
-    const [paged, restarted, failed, foreignSaved, foreignNext] = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/).map((line) => JSON.parse(line))
+    const [paged, restarted, failed, foreignSaved, foreignNext, pruning] = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/).map((line) => JSON.parse(line))
     // The known id, the failed strength create and the Core Directory event are left out.
     expect(paged.ids).toEqual([
       "Authentication Methods_bbbbbbbb-0000-0000-0000-000000000003_Y_3",
@@ -183,6 +183,9 @@ describe("Azure notification watcher scripts", () => {
     expect(foreignNext.calls.every((url: string) => url.startsWith("https://graph.microsoft.com/"))).toBe(true)
     expect(foreignNext.error).toContain("not a Microsoft Graph address")
     expect(foreignNext.ids).toEqual([])
+    // A run that stopped inside a page keeps every dedupe id until that page is read again.
+    expect(pruning.ids).toEqual(["new"])
+    expect([...pruning.kept].sort()).toEqual(["new", "old"])
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("PowerShell matches TypeScript on live-shaped read and assignment events", () => {

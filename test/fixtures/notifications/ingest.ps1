@@ -76,3 +76,9 @@ Write-Output (& $summary (Invoke-TvAuditIngestion @common -Continuation "https:/
 $script:calls.Clear()
 $script:foreignNext = $true
 Write-Output (& $summary (Invoke-TvAuditIngestion @common -Continuation $null -PriorIds @{}))
+
+# 6. Pruning: old ids go without a continuation and stay while one is saved.
+$recent = @{ "old" = "2026-11-01T00:00:00.000Z"; "new" = "2026-11-03T21:50:00.000Z" }
+$pruned = @(Get-TvRecentAuditList -RecentById $recent -WatermarkIso "2026-11-03T22:00:00.000Z" | ForEach-Object { $_.id })
+$kept = @(Get-TvRecentAuditList -RecentById $recent -WatermarkIso "2026-11-03T22:00:00.000Z" -KeepAll $true | ForEach-Object { $_.id })
+Write-Output (@{ ids = $pruned; calls = @(); kept = $kept } | ConvertTo-Json -Compress)

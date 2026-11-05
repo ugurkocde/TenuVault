@@ -1278,13 +1278,16 @@ function Invoke-TvAuditIngestion {
 # watermark minus 30 minutes can never be fetched again, so pruning is relative to
 # the watermark, never to run time. The cap is a high safety bound that drops the
 # oldest entries only.
+# While a continuation is saved, the run stopped inside a page that the next run reads
+# again from the top, whatever the age of its events, so no id is pruned until paging
+# has run to the end (the desktop keeps that page's ids the same way).
 function Get-TvRecentAuditList {
-    param([Parameter(Mandatory)][hashtable]$RecentById, [Parameter(Mandatory)][string]$WatermarkIso)
+    param([Parameter(Mandatory)][hashtable]$RecentById, [Parameter(Mandatory)][string]$WatermarkIso, [bool]$KeepAll = $false)
     $pruneBefore = ConvertTo-TvIso ([DateTimeOffset]::Parse($WatermarkIso).UtcDateTime.AddMinutes(-30))
     $recentList = [System.Collections.Generic.List[object]]::new()
     foreach ($entryId in $RecentById.Keys) {
         $entryAt = $RecentById[$entryId]
-        if ($entryAt -and [StringComparer]::Ordinal.Compare([string]$entryAt, $pruneBefore) -lt 0) { continue }
+        if (-not $KeepAll -and $entryAt -and [StringComparer]::Ordinal.Compare([string]$entryAt, $pruneBefore) -lt 0) { continue }
         $recentList.Add([pscustomobject][ordered]@{ id = [string]$entryId; at = [string]$entryAt })
     }
     $recentTrimmed = @($recentList | Sort-Object { [string](Get-TvProp $_ "at") } -Descending | Select-Object -First 25000)
@@ -1505,8 +1508,8 @@ try {
     # Builds the full state object from the live collections. Used for every save,
     # so the pre delivery save and the final save can never drift apart in shape.
     $buildState = {
-        $recentTrimmed = Get-TvRecentAuditList -RecentById $recentById -WatermarkIso $watermarkIso
-        $entraRecentTrimmed = Get-TvRecentAuditList -RecentById $entraRecentById -WatermarkIso $entraWatermarkIso
+        $recentTrimmed = Get-TvRecentAuditList -RecentById $recentById -WatermarkIso $watermarkIso -KeepAll ([bool]$continuation)
+        $entraRecentTrimmed = Get-TvRecentAuditList -RecentById $entraRecentById -WatermarkIso $entraWatermarkIso -KeepAll ([bool]$entraContinuation)
         $sentArr = @($sentEventIds.ToArray())
         if ($sentArr.Count -gt 2000) { $sentArr = $sentArr[($sentArr.Count - 2000)..($sentArr.Count - 1)] }
         $deadArr = @($deadEnvelopes.ToArray())
