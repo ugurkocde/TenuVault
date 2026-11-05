@@ -618,6 +618,25 @@ describe("Conditional Access change watching", () => {
     expect(status.lastPollAt).toBeNull()
   })
 
+  it("a poll that finishes after the tenant was handed to the Azure watcher sends nothing", async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const recentEvents = fixture.events.map((event) => ({ ...event, activityDateTime: "2026-10-17T11:50:00Z" }))
+    const w = world({ graph: () => async (_method: string, path: string) => {
+      if (path.startsWith("deviceManagement/auditEvents")) { await gate; return { status: 200, body: { value: recentEvents } } }
+      return { status: 200, body: { value: [] } }
+    } })
+    const local = await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-channel", kind: "local" })
+    await addRule(w, [local.body.channel.id])
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: true })
+    const polling = pollAuditWatch(w.deps, TENANT_A)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", externalWatcher: true })
+    release()
+    expect((await polling).changes).toBe(0)
+    expect(w.deps.notifications).toHaveLength(0)
+  })
+
   it("a failed poll overtaken by a restart leaves no old error or poll time behind", async () => {
     let release: () => void = () => undefined
     const gate = new Promise<void>((resolve) => { release = resolve })

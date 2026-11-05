@@ -411,7 +411,8 @@ function sourcePatch(service: ChangeService, change: Partial<Omit<SourceState, "
 /** Whether a poll's result still applies: the service is on and was not turned on again since it started. */
 function stillCurrent(deps: FeatureDeps, tenant: string, service: ChangeService, generation: number): boolean {
   const watch = auditWatchOf(deps, tenant)
-  return Boolean(watch && enabledServices(watch).includes(service) && sourceStateOf(watch, service).generation === generation)
+  // Handing the tenant to the Azure watcher also overtakes a running poll: its digest would duplicate the watcher's.
+  return Boolean(watch && !watch.externalWatcher && enabledServices(watch).includes(service) && sourceStateOf(watch, service).generation === generation)
 }
 
 const SOURCES: Record<ChangeService, {
