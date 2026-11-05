@@ -92,6 +92,10 @@ export interface AddChannelBody {
 export interface UpdateChannelBody {
   enabled?: boolean
   title?: string
+  /** Replaces the stored URL; omit to keep it. */
+  url?: string
+  /** Removes the stored secret and turns signing off. */
+  clearSecret?: boolean
   headerName?: string
   headerValue?: string
   signRequests?: boolean
@@ -122,7 +126,7 @@ export const notificationsApi = {
   status: (tenant: Tenant) => featureCall<NotificationsStatus>(PATH, tenant, "get-status"),
   addChannel: (tenant: Tenant, body: AddChannelBody) => featureCall<{ channel: PublicChannel }>(PATH, tenant, "add-channel", { ...body }),
   updateChannel: (tenant: Tenant, channelId: string, body: UpdateChannelBody) => featureCall<{ channel: PublicChannel }>(PATH, tenant, "update-channel", { channelId, ...body }),
-  revokeChannel: (tenant: Tenant, channelId: string) => featureCall<{ removed: string }>(PATH, tenant, "revoke-channel", { channelId }),
+  revokeChannel: (tenant: Tenant, channelId: string, options: { removeFromRules?: boolean } = {}) => featureCall<{ removed: string; rulesUpdated: number }>(PATH, tenant, "revoke-channel", { channelId, ...options }),
   /** Turning a channel off stays free on every plan; sets enabled false only. */
   revokeDisableChannel: (tenant: Tenant, channelId: string) => featureCall<{ channel: PublicChannel }>(PATH, tenant, "revoke-disable-channel", { channelId }),
   testChannel: (tenant: Tenant, channelId: string) => featureCall<{ delivery: DeliveryResult; channel: PublicChannel }>(PATH, tenant, "test-channel", { channelId }),

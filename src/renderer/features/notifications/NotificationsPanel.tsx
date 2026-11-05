@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Bell, Eye, History, Plus, Search, Shield, Trash2, X } from "lucide-react"
+import { Bell, Eye, History, Pencil, Plus, Search, Shield, Trash2, X } from "lucide-react"
 import type { Tenant } from "~/contexts/TenantContext"
 import { Chip, Tile } from "~/components/dashboard/tiles"
 import { Button } from "~/components/ui/button"
@@ -20,6 +20,7 @@ import {
   type EmailRecipient,
   type NotificationRule,
   type PublicChannel,
+  type UpdateChannelBody,
 } from "./api"
 
 const SEVERITIES: NotificationSeverity[] = ["info", "warning", "critical"]
@@ -47,7 +48,7 @@ export function NotificationsPanel({ tenant, active = true }: { tenant: Tenant; 
     <div className="space-y-4">
       {!data.licensed && <UpgradeNote feature="notifications" />}
       <p className="text-sm text-gray-600" role="note">{data.runtimeNote}</p>
-      <ChannelsTile tenant={tenant} channels={data.channels} licensed={data.licensed} active={active} onChanged={refresh} />
+      <ChannelsTile tenant={tenant} channels={data.channels} rules={data.rules} licensed={data.licensed} active={active} onChanged={refresh} />
       <RulesTile tenant={tenant} rules={data.rules} channels={data.channels} licensed={data.licensed} active={active} onChanged={refresh} />
       <AuditWatchTile tenant={tenant} auditWatch={data.auditWatch} licensed={data.licensed} onChanged={refresh} />
       <Tile aria-labelledby="notifications-deliveries-heading" className="gap-3">
@@ -72,12 +73,15 @@ export function NotificationsPanel({ tenant, active = true }: { tenant: Tenant; 
   )
 }
 
-function ChannelsTile({ tenant, channels, licensed, active, onChanged }: { tenant: Tenant; channels: PublicChannel[]; licensed: boolean; active: boolean; onChanged: () => void }) {
+function ChannelsTile({ tenant, channels, rules, licensed, active, onChanged }: { tenant: Tenant; channels: PublicChannel[]; rules: NotificationRule[]; licensed: boolean; active: boolean; onChanged: () => void }) {
   const [adding, setAdding] = useState(false)
+  const [editing, setEditing] = useState<PublicChannel | null>(null)
+  const [removing, setRemoving] = useState<PublicChannel | null>(null)
   const [preview, setPreview] = useState<string | null>(null)
   const hasLocal = channels.some((channel) => channel.kind === "local")
   const addLocal = useMutation({ mutationFn: () => notificationsApi.addChannel(tenant, { kind: "local" }), onSuccess: () => { toast("Local notifications on", "success"); onChanged() }, onError: failed })
   const showPreview = useMutation({ mutationFn: (channelId: string) => notificationsApi.previewEvent(tenant, channelId), onSuccess: (result) => setPreview(result.body), onError: failed })
+  const rulesUsing = (channel: PublicChannel) => rules.filter((rule) => rule.channelIds.includes(channel.id))
 
   return (
     <Tile aria-labelledby="notifications-channels-heading" className="gap-3">
@@ -97,10 +101,22 @@ function ChannelsTile({ tenant, channels, licensed, active, onChanged }: { tenan
       {channels.length === 0 && <p className="text-sm text-gray-500">No channels yet. Events are only shown inside TenuVault.</p>}
       <ul className="divide-y divide-gray-100 dark:divide-gray-800">
         {channels.map((channel) => (
-          <ChannelRow key={channel.id} tenant={tenant} channel={channel} licensed={licensed} onChanged={onChanged} onPreview={() => showPreview.mutate(channel.id)} />
+          <ChannelRow
+            key={channel.id}
+            tenant={tenant}
+            channel={channel}
+            licensed={licensed}
+            ruleCount={rulesUsing(channel).length}
+            onChanged={onChanged}
+            onEdit={() => setEditing(channel)}
+            onRemove={() => setRemoving(channel)}
+            onPreview={() => showPreview.mutate(channel.id)}
+          />
         ))}
       </ul>
-      {adding && <AddChannelDialog tenant={tenant} open={active} onClose={() => setAdding(false)} onAdded={() => { setAdding(false); onChanged() }} />}
+      {adding && <ChannelDialog tenant={tenant} open={active} onClose={() => setAdding(false)} onSaved={() => { setAdding(false); onChanged() }} />}
+      {editing && <ChannelDialog tenant={tenant} channel={editing} open={active} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); onChanged() }} />}
+      {removing && <RemoveChannelDialog tenant={tenant} channel={removing} rules={rulesUsing(removing)} liveChannelIds={new Set(channels.map((channel) => channel.id))} open={active} onClose={() => setRemoving(null)} onRemoved={() => { setRemoving(null); onChanged() }} />}
       <Dialog open={active && preview !== null} onOpenChange={(open) => !open && setPreview(null)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
@@ -120,7 +136,7 @@ function channelTarget(channel: PublicChannel): string {
   return channel.urlHost ?? CHANNEL_KIND_LABELS[channel.kind]
 }
 
-function ChannelRow({ tenant, channel, licensed, onChanged, onPreview }: { tenant: Tenant; channel: PublicChannel; licensed: boolean; onChanged: () => void; onPreview: () => void }) {
+function ChannelRow({ tenant, channel, licensed, ruleCount, onChanged, onEdit, onRemove, onPreview }: { tenant: Tenant; channel: PublicChannel; licensed: boolean; ruleCount: number; onChanged: () => void; onEdit: () => void; onRemove: () => void; onPreview: () => void }) {
   const update = useMutation({
     // Turning off after a downgrade uses the free revoke action; turning on stays licensed.
     mutationFn: (enabled: boolean) => (!enabled && !licensed ? notificationsApi.revokeDisableChannel(tenant, channel.id) : notificationsApi.updateChannel(tenant, channel.id, { enabled })),
@@ -142,17 +158,54 @@ function ChannelRow({ tenant, channel, licensed, onChanged, onPreview }: { tenan
         <Chip tone="neutral">{CHANNEL_KIND_LABELS[channel.kind]}</Chip>
         <span className="text-sm text-gray-500">{channelTarget(channel)}</span>
         {channel.hasSecret && <Chip tone="neutral">{channel.signRequests ? "Signing secret set" : `Secret header ${channel.headerName ?? ""} set`}</Chip>}
+        <span className="text-sm text-gray-500">{ruleCount === 0 ? "Used by no rule" : `Used by ${ruleCount} rule${ruleCount === 1 ? "" : "s"}`}</span>
       </div>
       <p className={last && !last.ok ? "text-sm text-red-700" : "text-sm text-gray-600"} role={last && !last.ok ? "status" : undefined}>
         {last ? `${last.ok ? "Last delivery succeeded" : `Last delivery failed after ${last.attempts} attempts: ${last.error ?? "unknown error"}`} (${formatTime(last.at)}${last.test ? ", test" : ""})` : "Nothing delivered yet."}
       </p>
       <div className="flex flex-wrap gap-2">
         <Button type="button" size="sm" variant="outline" onClick={() => update.mutate(!channel.enabled)} disabled={update.isPending || (!licensed && !channel.enabled)}>{channel.enabled ? "Turn off" : "Turn on"}</Button>
+        <Button type="button" size="sm" variant="outline" onClick={onEdit} disabled={!licensed}><Pencil className="h-4 w-4" aria-hidden="true" />Edit</Button>
         <Button type="button" size="sm" variant="outline" onClick={() => test.mutate()} disabled={!licensed || test.isPending}>{test.isPending ? "Sending" : "Send test"}</Button>
         <Button type="button" size="sm" variant="outline" onClick={onPreview}><Eye className="h-4 w-4" aria-hidden="true" />Preview event</Button>
-        <Button type="button" size="sm" variant="outline" onClick={() => revoke.mutate()} disabled={revoke.isPending}><Trash2 className="h-4 w-4" aria-hidden="true" />Remove</Button>
+        <Button type="button" size="sm" variant="outline" onClick={() => (ruleCount > 0 ? onRemove() : revoke.mutate())} disabled={revoke.isPending}><Trash2 className="h-4 w-4" aria-hidden="true" />Remove</Button>
       </div>
     </li>
+  )
+}
+
+/** Confirms removing a channel that rules still send to, and takes it out of those rules. */
+function RemoveChannelDialog({ tenant, channel, rules, liveChannelIds, open, onClose, onRemoved }: { tenant: Tenant; channel: PublicChannel; rules: NotificationRule[]; liveChannelIds: Set<string>; open: boolean; onClose: () => void; onRemoved: () => void }) {
+  const remove = useMutation({
+    mutationFn: () => notificationsApi.revokeChannel(tenant, channel.id, { removeFromRules: true }),
+    onSuccess: () => { toast("Channel removed", "success"); onRemoved() },
+    onError: failed,
+  })
+  // The server turns off rules left without a live channel; say so before it happens.
+  const emptied = rules.filter((rule) => !rule.channelIds.some((id) => id !== channel.id && liveChannelIds.has(id)))
+  return (
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Remove {channel.title}?</DialogTitle>
+          <DialogDescription>
+            {rules.length === 1 ? "1 rule sends" : `${rules.length} rules send`} to this channel. Removing it also takes it out of {rules.length === 1 ? "that rule" : "those rules"}. To send to a new URL instead, use Edit and keep the rules as they are.
+          </DialogDescription>
+        </DialogHeader>
+        <ul className="space-y-1.5 text-sm">
+          {rules.map((rule) => (
+            <li key={rule.id} className="flex flex-wrap items-center gap-2">
+              <span className="font-medium text-gray-900">{rule.title}</span>
+              {emptied.includes(rule) && <Chip tone="warning">Turned off: no channel left</Chip>}
+            </li>
+          ))}
+        </ul>
+        <div className="flex flex-wrap justify-end gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+          <Button type="button" variant="destructive" onClick={() => remove.mutate()} disabled={remove.isPending}>{remove.isPending ? "Removing" : "Remove channel"}</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -218,60 +271,94 @@ function RecipientRows({ tenant, rows, onChange }: { tenant: Tenant; rows: Recip
   )
 }
 
-function AddChannelDialog({ tenant, open, onClose, onAdded }: { tenant: Tenant; open: boolean; onClose: () => void; onAdded: () => void }) {
-  const [kind, setKind] = useState<Exclude<ChannelKind, "local">>("webhook")
-  const [title, setTitle] = useState("")
+function ChannelDialog({ tenant, channel, open, onClose, onSaved }: { tenant: Tenant; channel?: PublicChannel; open: boolean; onClose: () => void; onSaved: () => void }) {
+  const editing = Boolean(channel)
+  const [kind, setKind] = useState<ChannelKind>(channel?.kind ?? "webhook")
+  const [title, setTitle] = useState(channel?.title ?? "")
   const [url, setUrl] = useState("")
-  const [headerName, setHeaderName] = useState("")
+  const [headerName, setHeaderName] = useState(channel?.headerName ?? "")
   const [headerValue, setHeaderValue] = useState("")
-  const [signRequests, setSignRequests] = useState(false)
-  const [rows, setRows] = useState<RecipientRow[]>([{ type: "address", value: "" }])
+  const [clearSecret, setClearSecret] = useState(false)
+  const [signRequests, setSignRequests] = useState(channel?.signRequests ?? false)
+  const [rows, setRows] = useState<RecipientRow[]>(
+    channel?.recipients.length
+      ? channel.recipients.map((recipient) => (recipient.type === "address" ? { type: "address", value: recipient.address } : { type: "group", value: recipient.groupId, displayName: recipient.displayName ?? null }))
+      : [{ type: "address", value: "" }],
+  )
   const recipients = buildRecipients(rows)
-  const headerPairIncomplete = kind === "webhook" && !signRequests && Boolean(headerName.trim()) !== Boolean(headerValue)
+  // On edit, a stored secret counts unless it is being removed; the value itself is never shown.
+  const keptSecret = Boolean(channel?.hasSecret) && !clearSecret
+  const hasSecretValue = Boolean(headerValue) || keptSecret
+  const headerPairIncomplete = kind === "webhook" && !clearSecret && !signRequests && Boolean(headerName.trim()) !== hasSecretValue
   const secretHint =
-    kind !== "webhook"
+    kind !== "webhook" || clearSecret
       ? null
-      : signRequests && !headerValue
+      : signRequests && !hasSecretValue
         ? "Request signing needs a secret value."
-        : !signRequests && headerValue && !headerName.trim()
+        : !signRequests && hasSecretValue && !headerName.trim()
           ? "Add a header name for this secret, or turn on request signing to use the value as the signing secret."
-          : !signRequests && headerName.trim() && !headerValue
+          : !signRequests && headerName.trim() && !hasSecretValue
             ? "Add the secret value for this header, or clear the header name."
             : null
-  const valid = kind === "email" ? recipients.length > 0 : Boolean(url.trim()) && (!signRequests || Boolean(headerValue)) && !headerPairIncomplete
-  const add = useMutation({
-    mutationFn: () =>
-      notificationsApi.addChannel(tenant, {
-        kind,
-        title: title.trim() || undefined,
-        ...(kind === "email"
-          ? { recipients }
-          : {
-              url: url.trim(),
-              ...(kind === "webhook" ? { headerName: headerName.trim() || undefined, headerValue: headerValue || undefined, signRequests } : {}),
-            }),
-      }),
-    onSuccess: () => { toast("Channel added", "success"); onAdded() },
+  const needsUrl = (kind === "webhook" || kind === "teams") && !editing
+  const valid = kind === "email" ? recipients.length > 0 : kind === "local" ? true : (!needsUrl || Boolean(url.trim())) && (!signRequests || hasSecretValue) && !headerPairIncomplete
+  const save = useMutation({
+    mutationFn: () => {
+      if (!channel) {
+        return notificationsApi.addChannel(tenant, {
+          kind,
+          title: title.trim() || undefined,
+          ...(kind === "email"
+            ? { recipients }
+            : {
+                url: url.trim(),
+                ...(kind === "webhook" ? { headerName: headerName.trim() || undefined, headerValue: headerValue || undefined, signRequests } : {}),
+              }),
+        })
+      }
+      const body: UpdateChannelBody = {}
+      if (title.trim() && title.trim() !== channel.title) body.title = title.trim()
+      if (url.trim()) body.url = url.trim()
+      if (kind === "webhook") {
+        if (clearSecret) body.clearSecret = true
+        else {
+          if (headerName.trim() !== (channel.headerName ?? "")) body.headerName = headerName.trim()
+          if (headerValue) body.headerValue = headerValue
+          if (signRequests !== channel.signRequests) body.signRequests = signRequests
+        }
+      }
+      if (kind === "email") body.recipients = recipients
+      return notificationsApi.updateChannel(tenant, channel.id, body)
+    },
+    onSuccess: () => { toast(editing ? "Channel saved" : "Channel added", "success"); onSaved() },
     onError: failed,
   })
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Add a channel</DialogTitle>
-          <DialogDescription>Notifications carry names, counts, statuses and timestamps only. Addresses, URLs and secrets entered here stay on this computer and are never shown again in full.</DialogDescription>
+          <DialogTitle>{editing ? `Edit ${channel!.title}` : "Add a channel"}</DialogTitle>
+          <DialogDescription>
+            {editing
+              ? "URLs and secrets are never shown again. Leave those fields empty to keep what is stored. Rules that send to this channel keep working, and queued deliveries go to the new address."
+              : "Notifications carry names, counts, statuses and timestamps only. Addresses, URLs and secrets entered here stay on this computer and are never shown again in full."}
+          </DialogDescription>
         </DialogHeader>
-        <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); if (valid) add.mutate() }}>
-          <label className="flex items-center gap-2 text-sm text-gray-700">
-            Kind
-            <select className={selectClass} value={kind} onChange={(event) => setKind(event.target.value as Exclude<ChannelKind, "local">)}>
-              <option value="webhook">Webhook (https POST)</option>
-              <option value="teams">Teams channel (Workflows)</option>
-              <option value="email">Email</option>
-            </select>
-          </label>
-          <label className="block text-sm text-gray-700">Name (optional)<Input className="mt-1" maxLength={120} value={title} onChange={(event) => setTitle(event.target.value)} /></label>
-          {kind === "teams" && (
+        <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); if (valid) save.mutate() }}>
+          {editing ? (
+            <p className="text-sm text-gray-700">Kind <Chip tone="neutral">{CHANNEL_KIND_LABELS[kind]}</Chip></p>
+          ) : (
+            <label className="flex items-center gap-2 text-sm text-gray-700">
+              Kind
+              <select className={selectClass} value={kind} onChange={(event) => setKind(event.target.value as ChannelKind)}>
+                <option value="webhook">Webhook (https POST)</option>
+                <option value="teams">Teams channel (Workflows)</option>
+                <option value="email">Email</option>
+              </select>
+            </label>
+          )}
+          <label className="block text-sm text-gray-700">Name{editing ? "" : " (optional)"}<Input className="mt-1" maxLength={120} value={title} onChange={(event) => setTitle(event.target.value)} /></label>
+          {kind === "teams" && !editing && (
             <div className="space-y-1 rounded-2xl bg-gray-50 p-4 text-sm text-gray-700 dark:bg-gray-900">
               <p className="font-medium">Get a Teams Workflows URL</p>
               <ol className="list-decimal space-y-1 pl-5">
@@ -282,20 +369,27 @@ function AddChannelDialog({ tenant, open, onClose, onAdded }: { tenant: Tenant; 
               </ol>
             </div>
           )}
-          {kind !== "email" && (
+          {(kind === "webhook" || kind === "teams") && (
             <label className="block text-sm text-gray-700">
               {kind === "teams" ? "Workflows URL" : "https URL"}
-              <Input className="mt-1" type="url" required maxLength={2000} placeholder="https://" value={url} onChange={(event) => setUrl(event.target.value)} />
+              <Input className="mt-1" type="url" required={!editing} maxLength={2000} placeholder={editing ? `Leave empty to keep the current URL (${channel?.urlHost ?? "stored"})` : "https://"} value={url} onChange={(event) => setUrl(event.target.value)} />
+              {editing && kind === "teams" && <span className="mt-1 block text-xs text-gray-500">Paste a new Workflows URL when the old workflow was deleted or its owner left.</span>}
             </label>
           )}
           {kind === "webhook" && (
             <>
               <div className="grid gap-3 sm:grid-cols-2">
-                <label className="block text-sm text-gray-700">Secret header name (optional)<Input className="mt-1" maxLength={64} value={headerName} onChange={(event) => setHeaderName(event.target.value)} /></label>
-                <label className="block text-sm text-gray-700">Secret value<Input className="mt-1" type="password" autoComplete="off" maxLength={2000} value={headerValue} onChange={(event) => setHeaderValue(event.target.value)} /></label>
+                <label className="block text-sm text-gray-700">Secret header name (optional)<Input className="mt-1" maxLength={64} value={headerName} disabled={clearSecret} onChange={(event) => setHeaderName(event.target.value)} /></label>
+                <label className="block text-sm text-gray-700">Secret value<Input className="mt-1" type="password" autoComplete="off" maxLength={2000} value={headerValue} disabled={clearSecret} placeholder={channel?.hasSecret ? "Leave empty to keep the current secret" : undefined} onChange={(event) => setHeaderValue(event.target.value)} /></label>
               </div>
+              {channel?.hasSecret && (
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input type="checkbox" className="size-4 accent-coral-600" checked={clearSecret} onChange={(event) => { setClearSecret(event.target.checked); if (event.target.checked) setSignRequests(false) }} />
+                  Remove the stored secret (also turns request signing off)
+                </label>
+              )}
               <label className="flex items-center gap-2 text-sm text-gray-700">
-                <input type="checkbox" className="size-4 accent-coral-600" checked={signRequests} onChange={(event) => setSignRequests(event.target.checked)} />
+                <input type="checkbox" className="size-4 accent-coral-600" checked={signRequests} disabled={clearSecret} onChange={(event) => setSignRequests(event.target.checked)} />
                 Sign requests with the secret value (HMAC). Needs a secret value; the header name stays optional.
               </label>
               {secretHint && <p className="text-xs text-amber-700" role="status">{secretHint}</p>}
@@ -310,7 +404,7 @@ function AddChannelDialog({ tenant, open, onClose, onAdded }: { tenant: Tenant; 
           )}
           <div className="flex flex-wrap justify-end gap-2">
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={add.isPending || !valid}>{add.isPending ? "Adding" : "Add channel"}</Button>
+            <Button type="submit" disabled={save.isPending || !valid}>{save.isPending ? "Saving" : editing ? "Save channel" : "Add channel"}</Button>
           </div>
         </form>
       </DialogContent>
@@ -320,6 +414,8 @@ function AddChannelDialog({ tenant, open, onClose, onAdded }: { tenant: Tenant; 
 
 function RulesTile({ tenant, rules, channels, licensed, active, onChanged }: { tenant: Tenant; rules: NotificationRule[]; channels: PublicChannel[]; licensed: boolean; active: boolean; onChanged: () => void }) {
   const [adding, setAdding] = useState(false)
+  const [editing, setEditing] = useState<NotificationRule | null>(null)
+  const known = new Set(channels.map((channel) => channel.id))
   const channelTitle = (id: string) => channels.find((channel) => channel.id === id)?.title ?? "Removed channel"
   return (
     <Tile aria-labelledby="notifications-rules-heading" className="gap-3">
@@ -334,29 +430,34 @@ function RulesTile({ tenant, rules, channels, licensed, active, onChanged }: { t
       {channels.length > 0 && rules.length === 0 && <p className="text-sm text-gray-500">No rules yet. Channels stay quiet until a rule routes events to them.</p>}
       <ul className="divide-y divide-gray-100 dark:divide-gray-800">
         {rules.map((rule) => (
-          <RuleRow key={rule.id} tenant={tenant} rule={rule} licensed={licensed} onChanged={onChanged} channelTitle={channelTitle} />
+          <RuleRow key={rule.id} tenant={tenant} rule={rule} licensed={licensed} onChanged={onChanged} onEdit={() => setEditing(rule)} channelTitle={channelTitle} removedChannels={rule.channelIds.filter((id) => !known.has(id)).length} />
         ))}
       </ul>
-      {adding && <AddRuleDialog tenant={tenant} channels={channels} open={active} onClose={() => setAdding(false)} onAdded={() => { setAdding(false); onChanged() }} />}
+      {adding && <RuleDialog tenant={tenant} channels={channels} open={active} onClose={() => setAdding(false)} onSaved={() => { setAdding(false); onChanged() }} />}
+      {editing && <RuleDialog tenant={tenant} channels={channels} rule={editing} open={active} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); onChanged() }} />}
     </Tile>
   )
 }
 
-function RuleRow({ tenant, rule, licensed, onChanged, channelTitle }: { tenant: Tenant; rule: NotificationRule; licensed: boolean; onChanged: () => void; channelTitle: (id: string) => string }) {
+function RuleRow({ tenant, rule, licensed, onChanged, onEdit, channelTitle, removedChannels }: { tenant: Tenant; rule: NotificationRule; licensed: boolean; onChanged: () => void; onEdit: () => void; channelTitle: (id: string) => string; removedChannels: number }) {
   const update = useMutation({ mutationFn: (enabled: boolean) => notificationsApi.updateRule(tenant, rule.id, { enabled }), onSuccess: onChanged, onError: failed })
   const revoke = useMutation({ mutationFn: () => notificationsApi.revokeRule(tenant, rule.id), onSuccess: () => { toast("Rule removed", "success"); onChanged() }, onError: failed })
+  const liveChannels = rule.channelIds.length - removedChannels
   return (
     <li className="space-y-2 py-3">
       <div className="flex flex-wrap items-center gap-2">
         <Chip tone={rule.enabled ? "success" : "neutral"}>{rule.enabled ? "On" : "Off"}</Chip>
         <span className="font-medium text-gray-900">{rule.title}</span>
         <Chip tone={rule.minSeverity === "critical" ? "danger" : rule.minSeverity === "warning" ? "warning" : "neutral"}>{rule.minSeverity} and above</Chip>
-        {rule.mode === "digest" && <span className="text-sm text-gray-500">Mode: digest</span>}
+        {removedChannels > 0 && <Chip tone="warning">{removedChannels} removed channel{removedChannels === 1 ? "" : "s"}</Chip>}
+        {liveChannels === 0 && <Chip tone="danger">Sends nowhere</Chip>}
       </div>
       <p className="text-sm text-gray-600">{rule.eventTypes.map((type) => EVENT_TYPE_LABELS[type] ?? type).join(", ")}</p>
       <p className="text-sm text-gray-500">To: {rule.channelIds.map(channelTitle).join(", ") || "no channels"}</p>
+      {(removedChannels > 0 || liveChannels === 0) && <p className="text-xs text-amber-700" role="status">Edit the rule to pick a channel. Removed channels are dropped when you save.</p>}
       <div className="flex flex-wrap gap-2">
         <Button type="button" size="sm" variant="outline" onClick={() => update.mutate(!rule.enabled)} disabled={!licensed || update.isPending}>{rule.enabled ? "Turn off" : "Turn on"}</Button>
+        <Button type="button" size="sm" variant="outline" onClick={onEdit} disabled={!licensed}><Pencil className="h-4 w-4" aria-hidden="true" />Edit</Button>
         <Button type="button" size="sm" variant="outline" onClick={() => revoke.mutate()} disabled={revoke.isPending}><Trash2 className="h-4 w-4" aria-hidden="true" />Remove</Button>
       </div>
     </li>
@@ -373,15 +474,22 @@ const EVENT_TYPE_NOTES: Partial<Record<NotificationEventType, string>> = {
   "health.finding": "Configured on the Health review screen",
 }
 
-function AddRuleDialog({ tenant, channels, open, onClose, onAdded }: { tenant: Tenant; channels: PublicChannel[]; open: boolean; onClose: () => void; onAdded: () => void }) {
-  const [title, setTitle] = useState("")
-  const [eventTypes, setEventTypes] = useState<NotificationEventType[]>(["backup.failed"])
-  const [minSeverity, setMinSeverity] = useState<NotificationSeverity>("info")
-  const [channelIds, setChannelIds] = useState<string[]>(channels[0] ? [channels[0].id] : [])
-  const valid = eventTypes.length > 0 && channelIds.length > 0
-  const add = useMutation({
-    mutationFn: () => notificationsApi.addRule(tenant, { title: title.trim() || undefined, eventTypes, minSeverity, channelIds, mode: "immediate" }),
-    onSuccess: () => { toast("Rule added", "success"); onAdded() },
+function RuleDialog({ tenant, channels, rule, open, onClose, onSaved }: { tenant: Tenant; channels: PublicChannel[]; rule?: NotificationRule; open: boolean; onClose: () => void; onSaved: () => void }) {
+  const editing = Boolean(rule)
+  const known = new Set(channels.map((channel) => channel.id))
+  // Types a rule can no longer pick stay on the rule untouched when it is edited.
+  const keptInert = (rule?.eventTypes ?? []).filter((type) => INERT_EVENT_TYPES.has(type))
+  const [title, setTitle] = useState(rule?.title ?? "")
+  const [eventTypes, setEventTypes] = useState<NotificationEventType[]>(rule ? rule.eventTypes.filter((type) => !INERT_EVENT_TYPES.has(type)) : ["backup.failed"])
+  const [minSeverity, setMinSeverity] = useState<NotificationSeverity>(rule?.minSeverity ?? "info")
+  const [channelIds, setChannelIds] = useState<string[]>(rule ? rule.channelIds.filter((id) => known.has(id)) : channels[0] ? [channels[0].id] : [])
+  const valid = eventTypes.length + keptInert.length > 0 && channelIds.length > 0
+  const save = useMutation({
+    mutationFn: () => {
+      const body = { title: title.trim() || undefined, eventTypes: [...eventTypes, ...keptInert], minSeverity, channelIds }
+      return rule ? notificationsApi.updateRule(tenant, rule.id, body) : notificationsApi.addRule(tenant, { ...body, mode: "immediate" })
+    },
+    onSuccess: () => { toast(editing ? "Rule saved" : "Rule added", "success"); onSaved() },
     onError: failed,
   })
   const toggleEvent = (type: NotificationEventType, checked: boolean) => setEventTypes((current) => (checked ? [...current, type] : current.filter((entry) => entry !== type)))
@@ -390,20 +498,21 @@ function AddRuleDialog({ tenant, channels, open, onClose, onAdded }: { tenant: T
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Add a rule</DialogTitle>
+          <DialogTitle>{editing ? `Edit ${rule!.title}` : "Add a rule"}</DialogTitle>
           <DialogDescription>Pick the events, the lowest severity that should send, and where they go.</DialogDescription>
         </DialogHeader>
-        <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (valid) add.mutate() }}>
-          <label className="block text-sm text-gray-700">Name (optional)<Input className="mt-1" maxLength={120} value={title} onChange={(event) => setTitle(event.target.value)} /></label>
+        <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (valid) save.mutate() }}>
+          <label className="block text-sm text-gray-700">Name{editing ? "" : " (optional)"}<Input className="mt-1" maxLength={120} value={title} onChange={(event) => setTitle(event.target.value)} /></label>
           <fieldset className="space-y-1.5">
             <legend className="text-sm text-gray-700">Event types</legend>
             <div className="grid gap-1.5 sm:grid-cols-2">
               {NOTIFICATION_EVENT_TYPES.map((type) => {
                 const inert = INERT_EVENT_TYPES.has(type)
                 const note = EVENT_TYPE_NOTES[type]
+                const kept = keptInert.includes(type)
                 return (
                   <label key={type} className={inert ? "flex items-center gap-2 text-sm text-gray-400" : "flex items-center gap-2 text-sm text-gray-700"}>
-                    <input type="checkbox" className="size-4 accent-coral-600" disabled={inert} checked={!inert && eventTypes.includes(type)} onChange={(event) => toggleEvent(type, event.target.checked)} />
+                    <input type="checkbox" className="size-4 accent-coral-600" disabled={inert} checked={kept || (!inert && eventTypes.includes(type))} onChange={(event) => toggleEvent(type, event.target.checked)} />
                     <span>
                       {EVENT_TYPE_LABELS[type]}
                       {note && <span className="text-gray-500"> ({note})</span>}
@@ -412,7 +521,7 @@ function AddRuleDialog({ tenant, channels, open, onClose, onAdded }: { tenant: T
                 )
               })}
             </div>
-            <p className="text-xs text-gray-500">Greyed out types cannot be picked for a new rule. Test notifications bypass rules, watcher stale and missed backups are reported outside the desktop app, and health findings are configured on the Health review screen. Rules that already contain these types keep them unchanged.</p>
+            <p className="text-xs text-gray-500">Greyed out types cannot be picked. Test notifications bypass rules, watcher stale and missed backups are reported outside the desktop app, and health findings are configured on the Health review screen. A rule that already contains one of these types keeps it.</p>
           </fieldset>
           <div className="flex flex-wrap items-center gap-4 text-sm">
             <label className="flex items-center gap-2 text-gray-700">
@@ -430,11 +539,12 @@ function AddRuleDialog({ tenant, channels, open, onClose, onAdded }: { tenant: T
                 {channel.title} <span className="text-gray-500">({CHANNEL_KIND_LABELS[channel.kind]})</span>
               </label>
             ))}
+            {rule && rule.channelIds.some((id) => !known.has(id)) && <p className="text-xs text-amber-700">Removed channels are dropped from this rule when you save.</p>}
           </fieldset>
           {!valid && <p className="text-sm text-gray-500">Pick at least one event type and one channel.</p>}
           <div className="flex flex-wrap justify-end gap-2">
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={add.isPending || !valid}>{add.isPending ? "Adding" : "Add rule"}</Button>
+            <Button type="submit" disabled={save.isPending || !valid}>{save.isPending ? "Saving" : editing ? "Save rule" : "Add rule"}</Button>
           </div>
         </form>
       </DialogContent>
@@ -575,8 +685,10 @@ function CategoryPicker({ tenant, selected, disabled, onChange }: { tenant: Tena
   const known = useQuery({ queryKey: ["notifications-audit-categories", tenant.credentials?.tenantId], queryFn: () => notificationsApi.listAuditCategories(tenant), staleTime: 60 * 60_000, enabled: !!tenant.credentials?.tenantId })
   const available = known.data?.categories ?? []
   const lower = new Set(available.map((name) => name.toLowerCase()))
-  // Judged only once a list arrived: while it loads, every saved name would look unknown.
-  const unknown = known.data ? selected.filter((name) => !lower.has(name.toLowerCase())) : []
+  // Judged only against the list Intune reported: while it loads, or with the built-in list, a name could look unknown wrongly.
+  const unknown = known.data?.source === "graph" ? selected.filter((name) => !lower.has(name.toLowerCase())) : []
+  // With only the built-in list, a saved name it lacks may still be a newer Intune category: keep it selectable, unflagged.
+  const unconfirmed = known.data?.source === "known" ? selected.filter((name) => !lower.has(name.toLowerCase())) : []
   const isOn = (name: string) => selected.some((entry) => entry.toLowerCase() === name.toLowerCase())
   const toggle = (name: string) => onChange(isOn(name) ? selected.filter((entry) => entry.toLowerCase() !== name.toLowerCase()) : [...selected, name])
   const pill = (on: boolean) =>
@@ -591,6 +703,11 @@ function CategoryPicker({ tenant, selected, disabled, onChange }: { tenant: Tena
       <div className="flex flex-wrap gap-2">
         {available.map((name) => (
           <button key={name} type="button" className={pill(isOn(name))} aria-pressed={isOn(name)} disabled={disabled} onClick={() => toggle(name)} title={name}>
+            {categoryLabel(name)}
+          </button>
+        ))}
+        {unconfirmed.map((name) => (
+          <button key={`saved-${name}`} type="button" className={pill(true)} aria-pressed={true} disabled={disabled} onClick={() => toggle(name)} title={name}>
             {categoryLabel(name)}
           </button>
         ))}

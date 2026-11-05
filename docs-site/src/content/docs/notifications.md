@@ -46,7 +46,7 @@ Teams notifications use a Workflows incoming webhook, the supported replacement 
 2. Name the workflow and copy its URL.
 3. In TenuVault, add a **Teams** channel and paste the URL.
 
-Messages arrive as an Adaptive Card posted by Workflows: a header tinted by severity (red for critical, amber for warning) with a **Critical**, **Warning** or **Info** label, then the event title, summary, details and changed items. Good to know: the workflow belongs to the person who created it and stops when that account is disabled, and tenant policies for the Workflows app can block it. If a test message fails, the channel shows the answer it got.
+Messages arrive as an Adaptive Card posted by Workflows: a header tinted by severity (red for critical, amber for warning) with a **Critical**, **Warning** or **Info** label, then the event title, summary, details and changed items, with readable UTC times. Intune change digests end with an **Open the Intune admin center** button, a fixed Microsoft address like the one in email. Good to know: the workflow belongs to the person who created it and stops when that account is disabled, and tenant policies for the Workflows app can block it. If a test message fails, the channel shows the answer it got.
 
 ![An Intune change digest as a Workflows card in a Teams channel, with three changes and their policy names](/images/notifications/notifications-teams.png)
 
@@ -72,7 +72,7 @@ A rule has event types, a minimum severity and one or more channels. A useful st
 
 Delivery is at least once. An undelivered notification stays queued, retries with backoff, and survives restarting the app. In the rare case a destination accepted a message but the confirmation was lost, the same event can arrive twice; the `eventId` is identical so receivers can dedupe. Recent deliveries, including failures and retries, are listed under the channels. A scheduled backup slot that fails on every retry sends one alert, not one per attempt, and backup alerts list the policies saved and the types that could not be read.
 
-Channels and rules can be turned on and off, tested and removed, but not edited yet. To point a channel at a new Teams Workflows or webhook URL, add a new channel, add it to your rules, then remove the old one.
+Channels and rules can be edited with **Edit** on their row. A channel's URL and secret are never shown again: leave those fields empty to keep what is stored, or paste a new URL, for example after a Teams workflow was recreated. Rules keep sending to the edited channel, and deliveries still queued go to the new address. Removing a channel that rules use asks first and takes it out of those rules; a rule left without any channel is turned off, not deleted.
 
 ## Intune change watching
 
@@ -139,7 +139,7 @@ Plan for Exchange propagation: a brand-new access policy and scope group can tak
 | Symptom | Likely cause |
 | --- | --- |
 | Test message fails with a Graph permission error on email | The app registration lacks `Mail.Send`. Add the delegated `Mail.Send` permission (and `GroupMember.Read.All` and `User.Read.All` for group recipients) to the existing app registration, grant admin consent and sign in again. |
-| Teams test returns an error from the workflow | The workflow was deleted, its owner left, or a tenant policy blocks Workflows webhooks. Recreate the workflow and paste the new URL. |
+| Teams test returns an error from the workflow | The workflow was deleted, its owner left, or a tenant policy blocks Workflows webhooks. Recreate the workflow, then **Edit** the channel and paste the new URL. |
 | No Intune change digests | Watching is off, you are signed out, an Azure watcher owns change alerts for the tenant, the picked audit categories do not include the change, or the change was made through TenuVault and is ignored. The watch card shows the last poll and its error. |
 | Every change arrives twice | Both the desktop and the Azure watcher report changes. Turn on **An Azure watcher owns change alerts for this tenant** on the desktop. |
 | The same alert arrived twice | A delivery succeeded but its confirmation was lost and the queue retried. The `eventId` is the same; this is expected at-least-once behaviour. |

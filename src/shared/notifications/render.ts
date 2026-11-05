@@ -27,7 +27,7 @@ export function escapeMarkdown(value: string): string {
 
 function footer(envelope: NotificationEnvelope): string {
   const where = envelope.source === "azure-watcher" ? "Azure watcher" : "TenuVault desktop"
-  return `${where} · ${envelope.occurredAt} · Event ${envelope.eventId.slice(0, 12)}`
+  return `${where} · ${friendlyTime(envelope.occurredAt)} · Event ${envelope.eventId.slice(0, 12)}`
 }
 
 /** The local system notification text. Tenant data stays in the title only. */
@@ -57,13 +57,15 @@ export function teamsWorkflowsPayload(envelope: NotificationEnvelope): Record<st
   }
   if (envelope.moreCount > 0) body.push({ type: "TextBlock", text: `And ${envelope.moreCount} more. Open TenuVault for the full list.`, wrap: true, isSubtle: true })
   body.push({ type: "TextBlock", text: escapeMarkdown(footer(envelope)), wrap: true, isSubtle: true, size: "Small" })
+  const action = actionLink(envelope)
+  const actions = action ? [{ type: "Action.OpenUrl", title: action.label, url: action.href }] : []
   return {
     type: "message",
     attachments: [
       {
         contentType: "application/vnd.microsoft.card.adaptive",
         contentUrl: null,
-        content: { $schema: "http://adaptivecards.io/schemas/adaptive-card.json", type: "AdaptiveCard", version: "1.4", body },
+        content: { $schema: "http://adaptivecards.io/schemas/adaptive-card.json", type: "AdaptiveCard", version: "1.4", body, ...(actions.length ? { actions } : {}) },
       },
     ],
   }
@@ -73,7 +75,7 @@ function itemLine(item: NotificationEnvelope["items"][number]): string {
   const parts = [`• ${item.title}`]
   if (item.detail) parts.push(item.detail)
   if (item.actor) parts.push(`by ${item.actor}`)
-  if (item.at) parts.push(item.at)
+  if (item.at) parts.push(friendlyTime(item.at))
   return parts.join(" · ")
 }
 

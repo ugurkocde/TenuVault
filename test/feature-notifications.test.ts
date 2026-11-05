@@ -166,6 +166,67 @@ describe("notification channels and rules", () => {
   })
 })
 
+describe("editing and removing channels", () => {
+  it("replaces a channel URL without touching rules, and queued deliveries go to the new address", async () => {
+    const w = world({ webhookStatus: [503, 204] })
+    const channel = await addWebhook(w)
+    const rule = await addRule(w, [channel.id])
+    await emitBackupOutcome(w.deps, TENANT_A, { status: "Failed", backupFolder: "backup-edit", finishedAt: NOW.toISOString(), trigger: "manual" })
+    expect(w.posts.at(-1)!.url).toContain("hooks.example.test")
+    const edited = await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-channel", channelId: channel.id, url: "https://new-hooks.example.test/path" })
+    expect(edited.status).toBe(200)
+    expect(edited.body.channel.urlHost).toBe("new-hooks.example.test")
+    expect(JSON.stringify(edited.body.channel)).not.toContain("/path")
+    w.advance(31_000)
+    await flushOutbox(w.deps, TENANT_A)
+    expect(w.posts.at(-1)!.url).toBe("https://new-hooks.example.test/path")
+    const status = await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-status" })
+    expect(status.body.rules[0]).toMatchObject({ id: rule.id, channelIds: [channel.id] })
+    const refused = await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-channel", channelId: channel.id, url: "https://10.0.0.5/hook" })
+    expect(refused.status).toBe(400)
+  })
+
+  it("keeps a stored secret when the value is left empty and removes it only on request", async () => {
+    const w = world()
+    const channel = await addWebhook(w, { headerValue: "keep-me", signRequests: true })
+    const renamed = await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-channel", channelId: channel.id, title: "Ticketing", headerValue: "" })
+    expect(renamed.body.channel).toMatchObject({ title: "Ticketing", hasSecret: true, signRequests: true })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "test-channel", channelId: channel.id })
+    const headers = w.posts.at(-1)!.init.headers as Record<string, string>
+    expect(headers["x-tenuvault-signature"]).toBe(signBody("keep-me", Number(headers["x-tenuvault-timestamp"]), String(w.posts.at(-1)!.init.body)))
+    const cleared = await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-channel", channelId: channel.id, clearSecret: true })
+    expect(cleared.body.channel).toMatchObject({ hasSecret: false, signRequests: false, headerName: null })
+  })
+
+  it("removes a named header secret together with its header name", async () => {
+    const w = world()
+    const channel = await addWebhook(w, { headerName: "X-Api-Key", headerValue: "header-secret" })
+    const cleared = await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-channel", channelId: channel.id, clearSecret: true })
+    expect(cleared.status).toBe(200)
+    expect(cleared.body.channel).toMatchObject({ hasSecret: false, headerName: null })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "test-channel", channelId: channel.id })
+    expect((w.posts.at(-1)!.init.headers as Record<string, string>)["X-Api-Key"]).toBeUndefined()
+  })
+
+  it("removing a channel can take it out of its rules, turning off rules left without one", async () => {
+    const w = world()
+    const first = await addWebhook(w)
+    const second = await addWebhook(w, { title: "Second" })
+    const shared = await addRule(w, [first.id, second.id])
+    const only = await addRule(w, [first.id])
+    // A rule that also points at a channel removed earlier has no live channel left either.
+    const stale = await addWebhook(w, { title: "Stale" })
+    const mixed = await addRule(w, [first.id, stale.id])
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "revoke-channel", channelId: stale.id })
+    const removed = await call(w.routes, PATH, { tenantId: TENANT_A, action: "revoke-channel", channelId: first.id, removeFromRules: true })
+    expect(removed.body).toEqual({ removed: first.id, rulesUpdated: 3 })
+    const rules = (await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-status" })).body.rules as Array<{ id: string; channelIds: string[]; enabled: boolean }>
+    expect(rules.find((rule) => rule.id === shared.id)).toMatchObject({ channelIds: [second.id], enabled: true })
+    expect(rules.find((rule) => rule.id === only.id)).toMatchObject({ channelIds: [], enabled: false })
+    expect(rules.find((rule) => rule.id === mixed.id)).toMatchObject({ channelIds: [], enabled: false })
+  })
+})
+
 describe("email delivery and group resolution", () => {
   it("expands group recipients without guests and sends through Graph", async () => {
     const graphCalls: Array<{ method: string; path: string; body?: unknown }> = []
