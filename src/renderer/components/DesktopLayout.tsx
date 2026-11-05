@@ -26,7 +26,11 @@ import { useTenants } from "~/contexts/TenantContext"
 import { cn } from "~/lib/utils"
 import { BrandMark } from "./BrandMark"
 import { ErrorBoundary } from "./ErrorBoundary"
-import { communityBannerVisible, earliestExpiringTenant, formatDate, formatDateTime, isUnlicensed, licenseChipState, licenseExpiryWarning, offlineDeadline, trialReminder, unlicensedTenants, useLicense } from "../lib/license"
+import { communityBannerVisible, earliestExpiringTenant, formatDate, formatDateTime, hasPaidLicense, isUnlicensed, licenseChipState, licenseExpiryWarning, offlineDeadline, trialEndedNotice, trialReminder, unlicensedTenants, useLicense } from "../lib/license"
+import { openCheckout } from "../lib/purchase"
+import { PlanPromptButton } from "./PlanPromptButton"
+import { PurchaseKeyWatcher } from "./PurchaseKeyWatcher"
+import type { LicenseStatus } from "../../shared/ipc"
 import { Button } from "~/components/ui/button"
 import { toast, Toaster } from "../lib/toast"
 import { bridge } from "../lib/bridge"
@@ -69,10 +73,10 @@ const allNavigation: NavItem[] = [
 ]
 
 /** A calm pill inside the content padding: tinted surface, round icon, round arrow action. */
-function BannerLink({ tone, icon, children, onDismiss, dismissing }: { tone: "coral" | "amber" | "neutral"; icon: ReactNode; children: ReactNode; onDismiss?: () => void; dismissing?: boolean }) {
+function BannerLink({ tone, icon, children, action, onDismiss, dismissing }: { tone: "coral" | "amber" | "neutral"; icon: ReactNode; children: ReactNode; action?: ReactNode; onDismiss?: () => void; dismissing?: boolean }) {
   return (
     <div className="px-6 pt-5 lg:px-8">
-      <div className={cn("flex items-center rounded-3xl", tone === "neutral" && "bg-gray-100 text-gray-700")}>
+      <div className={cn("flex items-center gap-2 rounded-3xl", tone === "neutral" ? "bg-gray-100 text-gray-700" : tone === "amber" ? "bg-amber-50" : "bg-blue-50")}>
         <Link
           to="/license"
           className={cn(
@@ -97,33 +101,30 @@ function BannerLink({ tone, icon, children, onDismiss, dismissing }: { tone: "co
             <ArrowRight className="h-4 w-4" />
           </span>
         </Link>
+        {action && <span className={cn("shrink-0", !onDismiss && "mr-2")}>{action}</span>}
         {onDismiss && <button type="button" onClick={onDismiss} disabled={dismissing} className="mr-2 shrink-0 rounded-full px-3 py-2 text-sm font-medium hover:bg-gray-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50">Dismiss</button>}
       </div>
     </div>
   )
 }
 
-/** Day 20 and day 27 of the no-card trial: when it ends, and the checkout that keeps Pro. */
-function TrialReminderBanner({ reminder, onDismiss, dismissing }: {
-  reminder: NonNullable<ReturnType<typeof trialReminder>>
+/** A trial notice: what it says, Buy Pro (the checkout opens on yearly), Details and Dismiss. */
+function TrialBanner({ urgent, source, status, onDismiss, dismissing, children }: {
+  urgent: boolean
+  source: string
+  status: LicenseStatus
   onDismiss: () => void
   dismissing: boolean
+  children: ReactNode
 }) {
-  const final = reminder.stage === "day-27"
-  const when = reminder.daysLeft === 1 ? "tomorrow" : `in ${reminder.daysLeft} days`
   return (
     <div className="px-6 pt-5 lg:px-8">
-      <div role="status" className={cn("flex flex-wrap items-center gap-3 rounded-3xl py-2 pl-2 pr-2 text-sm font-medium", final ? "bg-amber-50 text-amber-900" : "bg-blue-50 text-gray-900")}>
-        <span className={cn("flex size-9 flex-shrink-0 items-center justify-center rounded-full", final ? "bg-card text-amber-700" : "bg-coral-500 text-white")} aria-hidden="true">
+      <div role="status" className={cn("flex flex-wrap items-center gap-3 rounded-3xl py-2 pl-2 pr-2 text-sm font-medium", urgent ? "bg-amber-50 text-amber-900" : "bg-blue-50 text-gray-900")}>
+        <span className={cn("flex size-9 flex-shrink-0 items-center justify-center rounded-full", urgent ? "bg-card text-amber-700" : "bg-coral-500 text-white")} aria-hidden="true">
           <Clock className="h-4 w-4" />
         </span>
-        <span className="min-w-0 flex-1">
-          Your Pro trial ends {when}, on {formatDate(reminder.endsAt)}.{" "}
-          {final
-            ? "Buy Pro now to keep daily backups, full restore and drift revert for both tenants."
-            : "Buy Pro to keep daily backups, full restore and drift revert after the trial."}
-        </span>
-        <Button type="button" size="sm" onClick={() => void bridge.license.open("checkout", { source: `trial-${reminder.stage}` })}>
+        <span className="min-w-0 flex-1">{children}</span>
+        <Button type="button" size="sm" onClick={() => void openCheckout(source, { status })}>
           <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
           Buy Pro
         </Button>
@@ -133,6 +134,40 @@ function TrialReminderBanner({ reminder, onDismiss, dismissing }: {
         <button type="button" onClick={onDismiss} disabled={dismissing} className="shrink-0 rounded-full px-3 py-2 text-sm font-medium hover:bg-white/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50">Dismiss</button>
       </div>
     </div>
+  )
+}
+
+/** Day 20 and day 27 of the no-card trial: when it ends, and the checkout that keeps Pro. */
+function TrialReminderBanner({ reminder, status, onDismiss, dismissing }: {
+  reminder: NonNullable<ReturnType<typeof trialReminder>>
+  status: LicenseStatus
+  onDismiss: () => void
+  dismissing: boolean
+}) {
+  const final = reminder.stage === "day-27"
+  const when = reminder.daysLeft === 1 ? "tomorrow" : `in ${reminder.daysLeft} days`
+  return (
+    <TrialBanner urgent={final} source={`trial-${reminder.stage}`} status={status} onDismiss={onDismiss} dismissing={dismissing}>
+      Your Pro trial ends {when}, on {formatDate(reminder.endsAt)}.{" "}
+      {final
+        ? "Buy Pro now to keep daily backups, full restore and drift revert for both tenants."
+        : "Buy Pro to keep daily backups, full restore and drift revert after the trial."}
+    </TrialBanner>
+  )
+}
+
+/** After the no-card trial: what continues, and the checkout that brings Pro back. */
+function TrialEndedBanner({ endedAt, status, onDismiss, dismissing }: {
+  endedAt: string
+  status: LicenseStatus
+  onDismiss: () => void
+  dismissing: boolean
+}) {
+  return (
+    <TrialBanner urgent source="trial-ended" status={status} onDismiss={onDismiss} dismissing={dismissing}>
+      Your Pro trial ended on {formatDate(endedAt)}. TenuVault continues on Community for one tenant. Buy Pro to get daily
+      backups, full restore and drift revert back for both tenants.
+    </TrialBanner>
   )
 }
 
@@ -190,9 +225,15 @@ function LicenseBanner() {
     )
   }
   const inactive = unlicensedTenants(status)
+  const ended = preferencesLoaded ? trialEndedNotice(status, trialDismissedAt) : null
+  if (ended) {
+    return <TrialEndedBanner endedAt={ended.endedAt} status={status} onDismiss={() => void dismissTrial()} dismissing={dismissing} />
+  }
   if (inactive.length > 0) {
+    // Without a paid license, Pro is what covers the tenant: the trial, Buy Pro after it, or the plans.
+    const buy = hasPaidLicense(status) ? undefined : <PlanPromptButton plan="pro" source="not-covered" size="sm" />
     return (
-      <BannerLink tone="amber" icon={<AlertTriangle className="h-4 w-4" />}>
+      <BannerLink tone="amber" icon={<AlertTriangle className="h-4 w-4" />} action={buy}>
         {inactive.length === 1 ? "A signed-in tenant is" : `${inactive.length} signed-in tenants are`} not covered by your
         license. Open License for details.
       </BannerLink>
@@ -225,7 +266,7 @@ function LicenseBanner() {
   if (!reminder) return expiry
   return (
     <>
-      <TrialReminderBanner reminder={reminder} onDismiss={() => void dismissTrial()} dismissing={dismissing} />
+      <TrialReminderBanner reminder={reminder} status={status} onDismiss={() => void dismissTrial()} dismissing={dismissing} />
       {expiry}
     </>
   )
@@ -427,6 +468,7 @@ export function DesktopLayout() {
       <FloatingProgress />
       <BackgroundTasksPanel />
       <Toaster />
+      <PurchaseKeyWatcher />
       <FrameworkJobNotifier />
       <CisJobNotifier />
       <DriftScanNotifier />

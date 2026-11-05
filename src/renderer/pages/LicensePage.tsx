@@ -26,6 +26,7 @@ import { INVOICE_REQUEST_EMAIL, INVOICE_REQUEST_URL } from "../../shared/constan
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
 import { TrialSignupForm } from "../components/TrialSignupForm"
 import { useClipboardLicenseKey } from "../lib/clipboard-key"
+import { openCheckout } from "../lib/purchase"
 import { bridge } from "../lib/bridge"
 import { useConfirm } from "~/components/ConfirmDialog"
 import { formatDate, formatDateTime, hasPaidLicense, isUnlicensed, licensePageTitle, planName, trialDaysLeft, useLicense } from "../lib/license"
@@ -99,7 +100,7 @@ function TrialCallToAction({ emailRef, onSent }: { emailRef: Ref<HTMLInputElemen
         <TrialSignupForm ref={emailRef} source="license-page" onSent={onSent} />
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-gray-600">
           <span>Ready to buy?</span>
-          <Button type="button" variant="outline" size="sm" onClick={() => void bridge.license.open("checkout", { source: "license-page" })}>
+          <Button type="button" variant="outline" size="sm" onClick={() => void openCheckout("license-page")}>
             <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
             Buy now
           </Button>
@@ -159,15 +160,17 @@ function ReplaceKeyForm({ busy, onReplace }: { busy: Busy; onReplace: (key: stri
  * A saved key that no longer licenses anything, such as an ended trial: buy a plan and
  * swap in the new key without deactivating the machine first.
  */
-function InactiveKeyReplacement({ busy, onReplace }: { busy: Busy; onReplace: (key: string) => void }) {
+function InactiveKeyReplacement({ status, busy, onReplace }: { status: LicenseStatus; busy: Busy; onReplace: (key: string) => void }) {
   const [replacing, setReplacing] = useState(false)
   return (
     <div className="space-y-3 rounded-3xl bg-gray-50 p-5">
       <p className="text-sm text-gray-700">
-        Your saved key is not active, for example because your trial ended. Bought a new license? Enter its key here.
+        {status.trialEndedAt
+          ? `Your Pro trial ended on ${formatDate(status.trialEndedAt)}. One tenant continues on Community. Buy Pro, then copy the key from your purchase email and return to TenuVault: it replaces the trial key by itself. Or enter it here.`
+          : "Your saved key is not active, for example because your trial ended. Bought a new license? Enter its key here."}
       </p>
       <div className="flex flex-wrap gap-2">
-        <Button type="button" onClick={() => void bridge.license.open("checkout", { source: "license-page-inactive" })}>
+        <Button type="button" onClick={() => void openCheckout(status.trialEndedAt ? "license-page-trial-ended" : "license-page-inactive", { status })}>
           <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
           Buy Pro
         </Button>
@@ -199,14 +202,14 @@ function TrialStatus({ status, busy, onReplace }: { status: LicenseStatus; busy:
       </p>
       <p className="text-sm text-gray-600">
         Nothing is charged when it ends. One tenant continues on Community, any other tenant is no longer covered, and
-        Pro features turn off. Your backups stay where they are. To keep Pro, buy a plan and paste the new license key from the purchase email here.
+        Pro features turn off. Your backups stay where they are. To keep Pro, buy a plan, then copy the license key from the purchase email and return to TenuVault: it replaces the trial key by itself. Or enter it here.
       </p>
       <div className="flex flex-wrap gap-2">
-        <Button type="button" onClick={() => void bridge.license.open("checkout", { source: "license-page-trial" })}>
+        <Button type="button" onClick={() => void openCheckout("license-page-trial", { status })}>
           <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
           Buy Pro
         </Button>
-        <Button type="button" variant="outline" onClick={() => void bridge.license.open("checkout", { source: "license-page-trial", plan: "msp" })}>
+        <Button type="button" variant="outline" onClick={() => void openCheckout("license-page-trial", { plan: "msp", status })}>
           <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
           Buy MSP
         </Button>
@@ -479,7 +482,7 @@ export default function LicensePage() {
 
           {isUnlicensed(status) && <TrialCallToAction emailRef={trialEmail} onSent={() => setTrialKeyHint(true)} />}
           {status.trial && <TrialStatus status={status} busy={busy} onReplace={replaceKey} />}
-          {status.hasKey && !status.trial && status.keyState !== "active" && <InactiveKeyReplacement busy={busy} onReplace={replaceKey} />}
+          {status.hasKey && !status.trial && status.keyState !== "active" && <InactiveKeyReplacement status={status} busy={busy} onReplace={replaceKey} />}
 
           {status.hasKey ? (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-gray-50 px-5 py-4">

@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest"
-import { licenseCheckoutUrl } from "../src/main/license/buy-url"
+import { licenseCheckoutUrl, trialCheckoutUrl } from "../src/main/license/buy-url"
 import { requestTrialKey } from "../src/main/license/trial"
 import { Preferences } from "../src/main/preferences"
-import { licensePageTitle, trialDaysLeft, trialReminder } from "../src/renderer/lib/license"
+import { licensePageTitle, trialDaysLeft, trialEndedNotice, trialReminder } from "../src/renderer/lib/license"
+import { planPromptAction, trialUsed } from "../src/renderer/lib/purchase"
 import type { LicenseStatus } from "../src/shared/ipc"
 
 vi.mock("../src/renderer/lib/bridge", () => ({ bridge: {} }))
@@ -50,6 +51,65 @@ describe("Buy now checkout link", () => {
     expect(licenseCheckoutUrl(API, undefined, "trial-day-20")).toBe(`${API}/api/desktop-checkout?plan=pro&src=app-trial-day-20`)
     expect(licenseCheckoutUrl(API, "msp", "license-page-trial")).toBe(`${API}/api/desktop-checkout?plan=msp&src=app-license-page-trial`)
     expect(licenseCheckoutUrl(API, "enterprise", "a&b=c")).toBe(`${API}/api/desktop-checkout?plan=pro`)
+  })
+
+  it("opens on yearly only when asked", () => {
+    expect(licenseCheckoutUrl(API, "pro", "trial-ended", "yearly")).toBe(`${API}/api/desktop-checkout?plan=pro&interval=yearly&src=app-trial-ended`)
+    expect(licenseCheckoutUrl(API, "pro", "trial-ended", "weekly")).toBe(`${API}/api/desktop-checkout?plan=pro&src=app-trial-ended`)
+  })
+})
+
+describe("checkout for the trial's customer", () => {
+  it("posts the trial token in the body and opens the checkout the service answers with", async () => {
+    const fetchMock = vi.fn(async () => Response.json({ url: "https://polar.sh/checkout/abc" }))
+    const url = await trialCheckoutUrl(API, "token.sig", { plan: "pro", interval: "yearly", source: "trial-ended" }, fetchMock as unknown as typeof fetch)
+    expect(url).toBe("https://polar.sh/checkout/abc")
+    const [target, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(target).toBe(`${API}/api/desktop-checkout`)
+    expect(init.method).toBe("POST")
+    expect(init.redirect).toBe("error")
+    expect(JSON.parse(init.body as string)).toEqual({ token: "token.sig", plan: "pro", interval: "yearly", src: "app-trial-ended" })
+  })
+
+  it.each([
+    ["an error status", async () => Response.json({}, { status: 502 })],
+    ["no URL", async () => Response.json({ ok: true })],
+    ["a URL that is not https", async () => Response.json({ url: "http://polar.sh/checkout/abc" })],
+    ["no connection", async () => { throw new TypeError("fetch failed") }],
+  ])("answers null for %s, so the plain checkout opens", async (_name, answer) => {
+    const fetchMock = vi.fn(answer)
+    expect(await trialCheckoutUrl(API, "token.sig", { source: "x" }, fetchMock as unknown as typeof fetch)).toBeNull()
+  })
+})
+
+describe("after the trial", () => {
+  const END = Date.UTC(2026, 11, 3, 12, 0, 0)
+  const ended = { trialEndedAt: new Date(END).toISOString() }
+
+  it("shows the ended notice until dismissed, and again after 30 days", () => {
+    expect(trialEndedNotice({ trialEndedAt: null }, undefined, END + DAY)).toBeNull()
+    expect(trialEndedNotice(ended, undefined, END + DAY)).toEqual({ endedAt: ended.trialEndedAt })
+    // A trial reminder dismissed before the end does not hide it.
+    expect(trialEndedNotice(ended, new Date(END - 2 * DAY).toISOString(), END + DAY)).not.toBeNull()
+    const dismissed = new Date(END + DAY).toISOString()
+    expect(trialEndedNotice(ended, dismissed, END + 2 * DAY)).toBeNull()
+    expect(trialEndedNotice(ended, dismissed, END + 31 * DAY)).not.toBeNull()
+    expect(trialEndedNotice(ended, undefined, END - DAY)).toBeNull()
+  })
+
+  it("offers the trial, then the checkout, then the plans", () => {
+    const community = { hasKey: false, tenants: [] } as unknown as LicenseStatus
+    const running = { hasKey: true, trial: true, tenants: [] } as unknown as LicenseStatus
+    const over = { hasKey: true, trialEndedAt: ended.trialEndedAt, tenants: [] } as unknown as LicenseStatus
+    const paid = { hasKey: true, plan: "pro", tenants: [] } as unknown as LicenseStatus
+    expect(planPromptAction(null, "pro")).toBe("plans")
+    expect(planPromptAction(community, "pro")).toBe("trial")
+    // The trial is Pro: it does not unlock an MSP feature.
+    expect(planPromptAction(community, "msp")).toBe("plans")
+    expect(planPromptAction(running, "msp")).toBe("checkout")
+    expect(planPromptAction(over, "pro")).toBe("checkout")
+    expect(planPromptAction(paid, "msp")).toBe("plans")
+    expect([community, running, over, paid].map(trialUsed)).toEqual([false, true, true, false])
   })
 })
 

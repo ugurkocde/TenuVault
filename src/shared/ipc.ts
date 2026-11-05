@@ -139,6 +139,8 @@ export interface LicenseStatus {
   trial?: boolean
   /** When this machine's trial key ends, or null without a running trial key. */
   trialEndsAt?: string | null
+  /** When this machine's saved trial key ended, while no other key of this machine is active. */
+  trialEndedAt?: string | null
   /** The one tenant the free Community plan covers, once a tenant has used it. */
   communityTenantId: string | null
   /** Signed-in tenants and tenants with a stored activation. */
@@ -401,15 +403,20 @@ export interface TenuVaultBridge {
     releaseTenant: (tenantId: string) => Promise<LicenseStatus>
     /**
      * Opens the plans page (buy), the checkout that asks for payment right away (checkout,
-     * for the plan in options, Pro by default) or the customer portal (portal) in the browser.
+     * for the plan in options, Pro by default, monthly first unless interval says yearly) or the
+     * customer portal (portal) in the browser. With a trial key, the checkout is created for the
+     * trial's customer.
      */
-    open: (target: "buy" | "checkout" | "portal", options?: { source: string; plan?: "pro" | "msp" }) => Promise<void>
+    open: (target: "buy" | "checkout" | "portal", options?: { source: string; plan?: "pro" | "msp"; interval?: "monthly" | "yearly" }) => Promise<void>
     /**
      * Asks the licensing service to email a 30 day no-card Pro trial key to this address.
      * Resolves once the request was accepted; the key arrives by email.
      */
     startTrial: (email: string, options?: { source: string }) => Promise<void>
-    /** A TenuVault license key on the clipboard, or null. Other clipboard text is never returned. */
+    /**
+     * A TenuVault license key on the clipboard, or null. Other clipboard text and the key
+     * already saved on this machine are never returned.
+     */
     clipboardKey: () => Promise<string | null>
     /** Called whenever the license state changes in the main process. Returns an unsubscribe function. */
     onChanged: (listener: (status: LicenseStatus) => void) => () => void

@@ -231,3 +231,21 @@ export function trialReminder(
   if (Number.isFinite(dismissed) && dismissed >= end - days * DAY_MS && dismissed <= now) return null
   return { stage: days === 3 ? "day-27" : "day-20", daysLeft, endsAt: status.trialEndsAt }
 }
+
+/**
+ * The notice that this machine's trial ended, or null. It shows from the end until the admin
+ * dismisses it, and returns 30 days after a dismissal, like the Community notice.
+ */
+export function trialEndedNotice(
+  status: Pick<LicenseStatus, "trialEndedAt">,
+  dismissedAt: string | undefined,
+  now = Date.now(),
+): { endedAt: string } | null {
+  const endedAt = status.trialEndedAt
+  if (!endedAt) return null
+  const end = Date.parse(endedAt)
+  if (!Number.isFinite(end) || end > now) return null
+  const dismissed = dismissedAt ? Date.parse(dismissedAt) : NaN
+  if (Number.isFinite(dismissed) && dismissed >= end && dismissed <= now && now - dismissed < 30 * DAY_MS) return null
+  return { endedAt }
+}

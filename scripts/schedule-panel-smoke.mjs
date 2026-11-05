@@ -201,8 +201,9 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
       assert(await waitForCondition(`!${doc}.querySelector('#schedule-frequency option[value="daily"]').disabled`), "Pro fixture was not applied")
       await evaluate(`${save}.click()`)
       assert(await waitForCondition(`${body}.querySelector('[role="dialog"]')?.innerText.includes('Included in TenuVault Pro and MSP')`), "schedule refusal did not open the plan dialog")
-      await evaluate(`[...${body}.querySelectorAll('[role="dialog"] button')].find(button => button.textContent.trim() === 'See plans').click()`)
-      assert(await evaluate(`window.__scheduleFixture.links.at(-1).source === 'plan-dialog-dailyschedule'`), "plan dialog buy source missing")
+      // Without a license on this machine, the plan dialog offers the no-card trial on the License page.
+      assert(await evaluate(`[...${body}.querySelectorAll('[role="dialog"] a')].some(link => link.textContent.trim() === 'Start 30 day free trial' && link.getAttribute('href')?.endsWith('/license'))`), "plan dialog does not offer the trial")
+      assert(await evaluate(`![...${body}.querySelectorAll('[role="dialog"] button')].some(button => button.textContent.trim() === 'See plans')`), "plan dialog offers the plans instead of the trial")
       await screenshot("09c-schedule-plan-dialog")
       await evaluate(`[...${body}.querySelectorAll('[role="dialog"] button')].find(button => button.textContent.trim() === 'Close').click()`)
       const openSecondTenantDialog = async () => {
@@ -219,7 +220,7 @@ export async function checkSchedulePanel({ check, evaluate, waitForCondition, sc
       await screenshot("09d-community-tenant-dialog")
       // The trial starts on the License page, in the app, without a browser.
       const linksBefore = await evaluate(`window.__scheduleFixture.links.length`)
-      await evaluate(`[...${body}.querySelectorAll('[role="dialog"] button')].find(button => button.textContent.trim() === 'Start 30 day free trial').click()`)
+      await evaluate(`[...${body}.querySelectorAll('[role="dialog"] a, [role="dialog"] button')].find(item => item.textContent.trim() === 'Start 30 day free trial').click()`)
       assert(await waitForCondition(`${body}.innerText.includes('Try Pro free for 30 days, no card needed.') && !${body}.querySelector('[role="dialog"]')`), "second tenant trial did not open the trial form on the License page")
       assert(await evaluate(`window.__scheduleFixture.links.length === ${linksBefore}`), "second tenant trial opened a browser page")
       await openSecondTenantDialog()

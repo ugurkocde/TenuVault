@@ -1,10 +1,10 @@
 import { useState, type ComponentProps, type ReactNode } from "react"
-import { ExternalLink, Lock, Sparkles } from "lucide-react"
+import { Lock, Sparkles } from "lucide-react"
 import { Button } from "~/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import { cn } from "~/lib/utils"
 import { allows, FEATURE_PLAN, featureName, planLabel, upgradeMessage, type Feature, type Plan } from "../../shared/plans"
-import { bridge } from "../lib/bridge"
+import { PlanPromptButton } from "./PlanPromptButton"
 import { PlanBadge } from "./UpgradeNote"
 
 /**
@@ -23,7 +23,7 @@ export function canUse(plan: Plan | null, feature: Feature): boolean {
   return plan !== null && allows(plan, feature)
 }
 
-/** A short dialog that says which plan includes a feature, with a link to the plans. */
+/** A short dialog that says which plan includes a feature, with the trial, the checkout or the plans. */
 export function UpgradeDialog({ feature, message, open, onOpenChange, onCloseAutoFocus }: { feature: Feature; message?: string; open: boolean; onOpenChange: (open: boolean) => void; onCloseAutoFocus?: (event: Event) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -40,10 +40,7 @@ export function UpgradeDialog({ feature, message, open, onOpenChange, onCloseAut
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Close
           </Button>
-          <Button type="button" onClick={() => void bridge.license.open("buy", { source: `plan-dialog-${feature.toLowerCase()}` })}>
-            <ExternalLink className="h-4 w-4" />
-            See plans
-          </Button>
+          <PlanPromptButton plan={FEATURE_PLAN[feature]} source={`plan-dialog-${feature.toLowerCase()}`} onLeave={() => onOpenChange(false)} />
         </div>
       </DialogContent>
     </Dialog>
@@ -108,10 +105,7 @@ export function LockedPreview({ feature, summary, points, className, children }:
       </ul>
       {children}
       <div className="mt-6 flex flex-wrap items-center gap-3">
-        <Button type="button" onClick={() => void bridge.license.open("buy", { source: `locked-${feature.toLowerCase()}` })}>
-          <ExternalLink className="h-4 w-4" />
-          See plans
-        </Button>
+        <PlanPromptButton plan={FEATURE_PLAN[feature]} source={`locked-${feature.toLowerCase()}`} />
         <span className="text-sm text-gray-500">Included in TenuVault {planLabel(FEATURE_PLAN[feature]) === "MSP" ? "MSP" : "Pro and MSP"}.</span>
       </div>
     </section>

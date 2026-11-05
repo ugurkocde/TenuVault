@@ -4,16 +4,14 @@ import { useTenants } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import { CommunityLimitError } from "../../shared/plan-errors"
-import { bridge } from "../lib/bridge"
-import { isUnlicensed, useLicense } from "../lib/license"
 import { closePlanDialog, planDialogError, subscribePlanDialog } from "../lib/plan-dialog"
 import { UpgradeDialog } from "./PlanGate"
+import { PlanPromptButton } from "./PlanPromptButton"
 
 /** One plan dialog for errors from queries, mutations and direct requests. */
 export function PlanDialogs() {
   const error = useSyncExternalStore(subscribePlanDialog, planDialogError)
   const tenants = useTenants()
-  const { status } = useLicense()
   const navigate = useNavigate()
   if (!error) return null
   if (!(error instanceof CommunityLimitError)) {
@@ -32,12 +30,7 @@ export function PlanDialogs() {
         <div className="flex flex-wrap justify-end gap-2">
           <Button type="button" variant="outline" onClick={closePlanDialog}>Not now</Button>
           <Button type="button" variant="outline" onClick={() => { closePlanDialog(); void navigate("/license") }}>Add a license key</Button>
-          {/* The License page offers the trial only without a key or organization license. */}
-          {status && isUnlicensed(status) ? (
-            <Button type="button" onClick={() => { closePlanDialog(); void navigate("/license", { state: { startTrial: true } }) }}>Start 30 day free trial</Button>
-          ) : (
-            <Button type="button" onClick={() => void bridge.license.open("buy", { source: "second-tenant" })}>See plans</Button>
-          )}
+          <PlanPromptButton plan="pro" source="second-tenant" onLeave={closePlanDialog} />
         </div>
       </DialogContent>
     </Dialog>
