@@ -118,6 +118,16 @@ describe("notification channels and rules", () => {
     expect(w.posts).toHaveLength(2)
   })
 
+  it("reports a local channel as covered on a retry, so the legacy toast stays quiet", async () => {
+    const w = world()
+    const local = await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-channel", kind: "local" })
+    await addRule(w, [local.body.channel.id])
+    const outcome = { status: "Failed" as const, backupFolder: null, naturalKey: "slot:2026-10-17T02:00:00.000Z", finishedAt: NOW.toISOString(), trigger: "scheduled" }
+    expect(await emitBackupOutcome(w.deps, TENANT_A, outcome)).toEqual({ created: 1, localCreated: true })
+    expect(await emitBackupOutcome(w.deps, TENANT_A, outcome)).toEqual({ created: 0, localCreated: true })
+    expect(w.deps.notifications.filter((text) => text.includes("Backup failed"))).toHaveLength(1)
+  })
+
   it("puts saved policies and failed types in the backup alert, and no folder row without a folder", async () => {
     const w = world()
     const channel = await addWebhook(w)
@@ -258,6 +268,20 @@ describe("Intune audit watching", () => {
     await pollAuditWatch(w.deps, TENANT_A)
     // The overlap window reaches 30 minutes back from the switch, never into the 90 days off.
     expect(paths.at(-1)).toContain(`activityDateTime gt ${new Date(NOW.getTime() - 30 * 60_000).toISOString()}`)
+  })
+
+  it("does not resend changes when watching is switched off and on within the overlap", async () => {
+    // Ten minutes before the switch: inside the 30 minute overlap the first poll reads again.
+    const recent = fixture.events.map((event) => ({ ...event, activityDateTime: "2026-10-17T11:50:00Z" }))
+    const w = auditWorld(recent)
+    const local = await call(w.routes, PATH, { tenantId: TENANT_A, action: "add-channel", kind: "local" })
+    await addRule(w, [local.body.channel.id])
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: true })
+    expect((await pollAuditWatch(w.deps, TENANT_A)).changes).toBe(3)
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: false })
+    w.advance(5 * 60_000)
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: true })
+    expect((await pollAuditWatch(w.deps, TENANT_A)).changes).toBe(0)
   })
 
   it("keeps catching up after a closed app when watching stayed on", async () => {

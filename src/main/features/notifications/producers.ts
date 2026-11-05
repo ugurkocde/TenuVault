@@ -32,7 +32,10 @@ async function licensed(deps: FeatureDeps, tenantId: string): Promise<boolean> {
 
 export interface ProducerResult {
   created: number
-  /** A local channel intent was queued, so a legacy OS toast for the same outcome can stand down. */
+  /**
+   * A local channel holds this outcome (queued now, or by an earlier attempt of the same slot), so
+   * a legacy OS toast for the same outcome can stand down.
+   */
   localCreated: boolean
 }
 
@@ -58,7 +61,7 @@ export async function emitBackupOutcome(deps: FeatureDeps, tenantId: string, out
     source: "desktop",
   })
   const detailed = await emitDetailed(deps, tenantId, envelope, options)
-  return { created: detailed.created, localCreated: localCreated(deps, tenantId, detailed.channelIds) }
+  return { created: detailed.created, localCreated: localCreated(deps, tenantId, detailed.coveredChannelIds) }
 }
 
 export interface DriftOutcome {
@@ -86,7 +89,7 @@ export async function emitDriftOutcome(deps: FeatureDeps, tenantId: string, outc
     source: "desktop",
   })
   const detailed = await emitDetailed(deps, tenantId, envelope, options)
-  return { created: detailed.created, localCreated: localCreated(deps, tenantId, detailed.channelIds) }
+  return { created: detailed.created, localCreated: localCreated(deps, tenantId, detailed.coveredChannelIds) }
 }
 
 export interface RestoreOutcome {

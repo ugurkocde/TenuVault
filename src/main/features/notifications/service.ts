@@ -107,6 +107,8 @@ export function matchingChannelIds(rules: RuleRecord[], channels: Array<ChannelR
 export interface EmitResult {
   created: number
   channelIds: string[]
+  /** Channels that hold this event after the call: created now, or already pending or sent. */
+  coveredChannelIds: string[]
 }
 
 export async function emit(deps: FeatureDeps, tenantId: string, envelope: NotificationEnvelope, options: NotificationOptions & { channelIds?: string[]; deferFlush?: boolean } = {}): Promise<number> {
@@ -120,11 +122,16 @@ export async function emitDetailed(deps: FeatureDeps, tenantId: string, envelope
   const existing = outboxOf(deps, tenant)
   let created = 0
   const createdChannelIds: string[] = []
+  const coveredChannelIds: string[] = []
   for (const channelId of selected) {
     const channel = channels.find((entry) => entry.id === channelId)
     if (!channel || !channel.enabled) continue
     // A pending or sent intent already covers this event; a failed one does not block a fresh emission.
-    if (existing.some((entry) => entry.channelId === channelId && entry.eventId === envelope.eventId && entry.state !== "failed")) continue
+    if (existing.some((entry) => entry.channelId === channelId && entry.eventId === envelope.eventId && entry.state !== "failed")) {
+      coveredChannelIds.push(channelId)
+      continue
+    }
+    coveredChannelIds.push(channelId)
     deps.records.create<OutboxRecord>(DOMAINS.notificationOutbox, tenant, {
       channelId,
       channelTitle: channel.title,
@@ -142,7 +149,7 @@ export async function emitDetailed(deps: FeatureDeps, tenantId: string, envelope
   }
   if (created > 0) pruneOutbox(deps, tenant)
   if (!options.deferFlush) await flushOutbox(deps, tenant, options)
-  return { created, channelIds: createdChannelIds }
+  return { created, channelIds: createdChannelIds, coveredChannelIds }
 }
 
 function pruneOutbox(deps: FeatureDeps, tenantId: string): void {

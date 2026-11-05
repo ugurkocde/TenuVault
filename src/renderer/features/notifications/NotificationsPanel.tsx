@@ -575,7 +575,8 @@ function CategoryPicker({ tenant, selected, disabled, onChange }: { tenant: Tena
   const known = useQuery({ queryKey: ["notifications-audit-categories", tenant.credentials?.tenantId], queryFn: () => notificationsApi.listAuditCategories(tenant), staleTime: 60 * 60_000, enabled: !!tenant.credentials?.tenantId })
   const available = known.data?.categories ?? []
   const lower = new Set(available.map((name) => name.toLowerCase()))
-  const unknown = selected.filter((name) => !lower.has(name.toLowerCase()))
+  // Judged only once a list arrived: while it loads, every saved name would look unknown.
+  const unknown = known.data ? selected.filter((name) => !lower.has(name.toLowerCase())) : []
   const isOn = (name: string) => selected.some((entry) => entry.toLowerCase() === name.toLowerCase())
   const toggle = (name: string) => onChange(isOn(name) ? selected.filter((entry) => entry.toLowerCase() !== name.toLowerCase()) : [...selected, name])
   const pill = (on: boolean) =>

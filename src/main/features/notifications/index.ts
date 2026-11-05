@@ -241,10 +241,11 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       // Turning watching on starts from now. Catching up from an old watermark would replay
       // every change made while it was off, which is history, not news. A closed app with
       // watching left on still catches up in the poller, because enabled never flipped.
+      // The dedupe ids stay: the first poll reads 30 minutes back, and changes delivered just
+      // before watching was turned off must not be sent again. They age out on their own.
       if (enabled === true && !current?.enabled) {
         change.watermark = deps.now().toISOString()
         change.continuation = null
-        change.recent = []
         change.lastPollAt = null
       }
       const saved = saveAuditWatch(deps, tenantId, change, { actor, reason: enabled === false ? "Intune change watching turned off" : enabled === true ? "Intune change watching turned on" : "Intune change watching changed" })
