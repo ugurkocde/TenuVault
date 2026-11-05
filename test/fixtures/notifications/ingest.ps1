@@ -21,6 +21,7 @@ $fixture = Get-Content (Join-Path $PSScriptRoot "entra-audit.json") -Raw | Conve
 $events = @($fixture.events)
 $script:calls = [System.Collections.Generic.List[string]]::new()
 $script:failAll = $false
+$script:foreignNext = $false
 
 function Invoke-RestMethod {
     param([string]$Uri, [hashtable]$Headers, [string]$Method, [int]$TimeoutSec)
@@ -33,11 +34,12 @@ function Invoke-RestMethod {
         throw $exception
     }
     if ($Uri -like "*page=2*") { return [pscustomobject]@{ value = @($events[4..6]) } }
-    return [pscustomobject]@{ value = @($events[0..3]); "@odata.nextLink" = "https://graph.example/next?page=2" }
+    if ($script:foreignNext) { return [pscustomobject]@{ value = @($events[0..1]); "@odata.nextLink" = "https://attacker.example/next" } }
+    return [pscustomobject]@{ value = @($events[0..3]); "@odata.nextLink" = "https://graph.microsoft.com/v1.0/next?page=2" }
 }
 
 $common = @{
-    Label = "Conditional Access"; FreshUri = "https://graph.example/fresh"; WatermarkIso = "2026-11-03T22:00:00.000Z"
+    Label = "Conditional Access"; FreshUri = "https://graph.microsoft.com/v1.0/fresh"; WatermarkIso = "2026-11-03T22:00:00.000Z"
     GraphToken = "token"; TokenError = $null; Map = { param($raw) ConvertFrom-TenuVaultEntraAuditEvent $raw }; RenewLease = { }
 }
 $summary = {
@@ -58,9 +60,19 @@ Write-Output (& $summary (Invoke-TvAuditIngestion @common -Continuation $null -P
 
 # 2. An expired continuation restarts from the fresh query.
 $script:calls.Clear()
-Write-Output (& $summary (Invoke-TvAuditIngestion @common -Continuation "https://graph.example/expired" -PriorIds @{}))
+Write-Output (& $summary (Invoke-TvAuditIngestion @common -Continuation "https://graph.microsoft.com/v1.0/expired" -PriorIds @{}))
 
 # 3. A failure discards the partial collection and keeps the watermark.
 $script:calls.Clear()
 $script:failAll = $true
-Write-Output (& $summary (Invoke-TvAuditIngestion @common -Continuation "https://graph.example/saved" -PriorIds @{}))
+Write-Output (& $summary (Invoke-TvAuditIngestion @common -Continuation "https://graph.microsoft.com/v1.0/saved" -PriorIds @{}))
+
+# 4. A saved continuation outside Microsoft Graph is ignored; the token never goes there.
+$script:calls.Clear()
+$script:failAll = $false
+Write-Output (& $summary (Invoke-TvAuditIngestion @common -Continuation "https://attacker.example/steal" -PriorIds @{}))
+
+# 5. A next link outside Microsoft Graph stops paging as an error.
+$script:calls.Clear()
+$script:foreignNext = $true
+Write-Output (& $summary (Invoke-TvAuditIngestion @common -Continuation $null -PriorIds @{}))

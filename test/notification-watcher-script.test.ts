@@ -159,7 +159,7 @@ describe("Azure notification watcher scripts", () => {
 
   it.runIf(Boolean(pwsh))("watcher ingestion pages, dedupes, restarts an expired continuation and keeps state on failure", () => {
     const script = fileURLToPath(new URL("./fixtures/notifications/ingest.ps1", import.meta.url))
-    const [paged, restarted, failed] = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/).map((line) => JSON.parse(line))
+    const [paged, restarted, failed, foreignSaved, foreignNext] = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/).map((line) => JSON.parse(line))
     // The known id, the failed strength create and the Core Directory event are left out.
     expect(paged.ids).toEqual([
       "Authentication Methods_bbbbbbbb-0000-0000-0000-000000000003_Y_3",
@@ -169,14 +169,20 @@ describe("Azure notification watcher scripts", () => {
     ])
     expect(paged.newest).toBe("2026-11-04T08:10:00.000Z")
     expect(paged.continuation).toBeNull()
-    expect(paged.calls).toEqual(["https://graph.example/fresh", "https://graph.example/next?page=2"])
-    expect(restarted.calls[0]).toBe("https://graph.example/expired")
-    expect(restarted.calls[1]).toBe("https://graph.example/fresh")
+    expect(paged.calls).toEqual(["https://graph.microsoft.com/v1.0/fresh", "https://graph.microsoft.com/v1.0/next?page=2"])
+    expect(restarted.calls[0]).toBe("https://graph.microsoft.com/v1.0/expired")
+    expect(restarted.calls[1]).toBe("https://graph.microsoft.com/v1.0/fresh")
     expect(restarted.error).toBeNull()
     expect(failed.ids).toEqual([])
     expect(failed.newest).toBe("2026-11-03T22:00:00.000Z")
-    expect(failed.continuation).toBe("https://graph.example/saved")
+    expect(failed.continuation).toBe("https://graph.microsoft.com/v1.0/saved")
     expect(failed.error).toContain("Conditional Access audit ingestion failed")
+    // The Graph token only ever goes to Microsoft Graph.
+    expect(foreignSaved.calls[0]).toBe("https://graph.microsoft.com/v1.0/fresh")
+    expect(foreignSaved.calls.every((url: string) => url.startsWith("https://graph.microsoft.com/"))).toBe(true)
+    expect(foreignNext.calls.every((url: string) => url.startsWith("https://graph.microsoft.com/"))).toBe(true)
+    expect(foreignNext.error).toContain("not a Microsoft Graph address")
+    expect(foreignNext.ids).toEqual([])
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("PowerShell matches TypeScript on live-shaped read and assignment events", () => {

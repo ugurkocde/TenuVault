@@ -129,7 +129,7 @@ Notification change watching can also report changes to Conditional Access polic
 ./New-TenuVaultDesktopApp.ps1 -TenantId contoso.onmicrosoft.com -IncludeAuditLog
 ```
 
-The Azure watcher uses the application role `AuditLog.Read.All` instead, granted by its setup script with `-IncludeConditionalAccess`.
+The Azure watcher uses the application role `AuditLog.Read.All` instead. Its setup script with `-IncludeConditionalAccess` turns the watching on, and grants the role when `-GrantGraphRoles` is also given (Global Administrator); without it, assign `AuditLog.Read.All` to the watcher's managed identity yourself.
 
 ## Optional: the Backup Reader
 

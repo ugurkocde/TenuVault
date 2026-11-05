@@ -393,10 +393,14 @@ async function bootstrap(): Promise<void> {
       })
       if (response.status === 404) return { status: "missing" }
       if (!response.ok) return { status: "error", message: `The storage account answered HTTP ${response.status} for the watcher heartbeat.` }
+      // A file that exists but cannot be read says nothing about the watcher, so it is an
+      // error to record, never a "no heartbeat" alert.
       const body = (await response.json().catch(() => null)) as Record<string, unknown> | null
-      const runAt = typeof body?.runAt === "string" && !Number.isNaN(Date.parse(body.runAt)) ? body.runAt : null
-      const lastError = typeof body?.lastError === "string" ? body.lastError.slice(0, 300) : null
-      return { status: "ok", runAt, lastError }
+      if (!body || typeof body.runAt !== "string" || Number.isNaN(Date.parse(body.runAt))) {
+        return { status: "error", message: "The watcher heartbeat file exists but has no readable run time." }
+      }
+      const lastError = typeof body.lastError === "string" ? body.lastError.slice(0, 300) : null
+      return { status: "ok", runAt: body.runAt, lastError }
     },
     now: () => new Date(),
   }

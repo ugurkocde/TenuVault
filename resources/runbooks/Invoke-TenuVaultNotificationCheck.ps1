@@ -1168,6 +1168,16 @@ function Send-TvMail {
 # when paging ran to the end. On failure the partial collection is discarded and
 # the caller keeps its watermark, so the next run retries the same window.
 # Messages are returned, not written, so the function's output stays one object.
+# The Graph token may only ever go to Microsoft Graph. Saved continuations come from
+# state.json and next links from responses, so both are checked before use.
+function Test-TvGraphUrl {
+    param([AllowNull()][AllowEmptyString()][string]$Url)
+    if (-not $Url) { return $false }
+    $parsed = $null
+    if (-not [Uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$parsed)) { return $false }
+    return ($parsed.Scheme -eq "https" -and $parsed.Host -eq "graph.microsoft.com" -and $parsed.IsDefaultPort)
+}
+
 function Invoke-TvAuditIngestion {
     param(
         [Parameter(Mandatory)][string]$Label,
@@ -1189,6 +1199,10 @@ function Invoke-TvAuditIngestion {
     $capReached = $false
     $pageCount = 0
     $currentContinuation = if ($Continuation) { $Continuation } else { $null }
+    if ($currentContinuation -and -not (Test-TvGraphUrl $currentContinuation)) {
+        $messages.Add("The saved $Label audit continuation is not a Microsoft Graph address. It is ignored and the overlap query is used.")
+        $currentContinuation = $null
+    }
     $nextUri = $FreshUri
     $resumed = $false
     $ingestionError = if ($TokenError) { $TokenError } else { $null }
@@ -1237,6 +1251,11 @@ function Invoke-TvAuditIngestion {
         }
         if (-not $capReached) {
             $nextUri = Get-TvText (Get-TvProp $page "@odata.nextLink")
+            if ($nextUri -and -not (Test-TvGraphUrl $nextUri)) {
+                $ingestionError = "$Label audit ingestion stopped: the next page link is not a Microsoft Graph address."
+                $messages.Add($ingestionError)
+                break
+            }
         }
     }
     if ($ingestionError) {
