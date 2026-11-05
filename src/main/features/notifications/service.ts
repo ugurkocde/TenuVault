@@ -105,7 +105,7 @@ export function saveAuditWatch(deps: FeatureDeps, tenantId: string, change: Audi
   })
   const merge = (value: AuditWatchRecord): AuditWatchRecord => {
     const { conditionalAccess, ...rest } = change
-    return { ...value, ...rest, conditionalAccess: { ...defaultConditionalAccessWatch(), ...(value.conditionalAccess ?? {}), ...(conditionalAccess ?? {}) } }
+    return { ...value, ...rest, conditionalAccess: { ...defaultConditionalAccessWatch(), ...value.conditionalAccess, ...conditionalAccess } }
   }
   if (!current) return deps.records.create<AuditWatchRecord>(DOMAINS.notificationAuditWatch, tenantId, describe(merge(defaultAuditWatch())), meta)
   return deps.records.update<AuditWatchRecord>(DOMAINS.notificationAuditWatch, tenantId, current.id, (value) => describe(merge(value)), meta)!
@@ -400,7 +400,7 @@ export function enabledServices(watch: AuditWatchRecord): ChangeService[] {
 function sourceStateOf(watch: AuditWatchRecord, service: ChangeService): SourceState {
   if (service === "intune") return { generation: watch.generation ?? 0, watermark: watch.watermark, recent: watch.recent, continuation: watch.continuation, lastPollAt: watch.lastPollAt, lastError: watch.lastError }
   const ca = watch.conditionalAccess
-  return { ...defaultSourceState(), ...(ca ?? {}), generation: ca?.generation ?? 0 }
+  return { ...defaultSourceState(), ...ca, generation: ca?.generation ?? 0 }
 }
 
 /** The fields a poll owns for its service. Never enabled or the generation: those are the admin's. */
