@@ -747,8 +747,9 @@ function Get-TvMarkdownEscape {
 # Library: cloud backup outcomes (mirror src/shared/notifications/cloud-outcome.ts)
 # ---------------------------------------------------------------------------
 # Backups and their status are sealed with the recovery key, which the watcher never
-# has. The cloud backup runbook therefore leaves one small unsealed note per run in this
-# watcher's state container: status, folder name, counts, failed type names and time,
+# has. The cloud backup runbook therefore leaves one small unsealed note per run in the
+# container tenuvault-backup-results (its own, so the backup identity can never touch this
+# watcher's state): status, folder name, counts, failed type names and time,
 # never policy content, names or messages. The watcher turns it into a backup alert.
 
 $script:TvOutcomeSchema = "tenuvault.cloud-backup-outcome/v1"
@@ -829,12 +830,12 @@ function ConvertFrom-TenuVaultBackupOutcome {
 }
 
 # Reads the result notes the cloud backup runbook left under cloud-backup-outcomes/ in the
-# watcher's state container and turns the valid ones into backup alerts. Returns the alerts,
+# results container and turns the valid ones into backup alerts. Returns the alerts,
 # the folders reported as Failed, the blob names read (to delete once the alerts are saved),
 # how many notes were ignored, and an error message when the container could not be read.
 function Read-TvBackupOutcomes {
     param(
-        [Parameter(Mandatory)][string]$StateContainerUri,
+        [Parameter(Mandatory)][string]$ContainerUri,
         [Parameter(Mandatory)][string]$Token,
         [Parameter(Mandatory)][string]$TenantId,
         [object]$TenantName,
@@ -849,7 +850,7 @@ function Read-TvBackupOutcomes {
     do {
         & $RenewLease
         try {
-            $listUri = "$StateContainerUri`?restype=container&comp=list&prefix=$([uri]::EscapeDataString($script:TvOutcomePrefix))&maxresults=500"
+            $listUri = "$ContainerUri`?restype=container&comp=list&prefix=$([uri]::EscapeDataString($script:TvOutcomePrefix))&maxresults=500"
             if ($marker) { $listUri += "&marker=$([uri]::EscapeDataString($marker))" }
             $listText = [string](Invoke-TvStorageRequest -Uri $listUri -Method Get -Token $Token).Content
             $xmlStart = $listText.IndexOf("<")
@@ -861,7 +862,7 @@ function Read-TvBackupOutcomes {
                 $blobName = [string]$blob.Name
                 if (-not $blobName.StartsWith($script:TvOutcomePrefix, [StringComparison]::Ordinal)) { continue }
                 $encodedName = ($blobName -split "/" | ForEach-Object { [uri]::EscapeDataString($_) }) -join "/"
-                $noteText = Get-TvBlobText -Uri "$StateContainerUri/$encodedName" -Token $Token
+                $noteText = Get-TvBlobText -Uri "$ContainerUri/$encodedName" -Token $Token
                 if ($null -eq $noteText) { continue }
                 $note = $null
                 try { $note = ConvertFrom-TvJson $noteText } catch { $note = $null }
@@ -1801,6 +1802,8 @@ try {
     }
 
     $stateContainerUri = "https://$storageAccount.blob.core.windows.net/tenuvault-notification-state"
+    # Cloud backup result notes have their own container: the backup identity may write there.
+    $resultsContainerUri = "https://$storageAccount.blob.core.windows.net/tenuvault-backup-results"
     $stateBlobUri = "$stateContainerUri/state.json"
     $heartbeatBlobUri = "$stateContainerUri/heartbeat.json"
     $leaseQueryUri = "$stateBlobUri`?comp=lease"
@@ -2091,12 +2094,12 @@ try {
     }
 
     # --- Cloud backup results ----------------------------------------------------
-    # Result notes the cloud backup runbook left in this container (see
+    # Result notes the cloud backup runbook left in tenuvault-backup-results (see
     # src/shared/notifications/cloud-outcome.ts). Each becomes a backup alert through the
     # outbox below. A note is deleted only after the state holding its alert is saved, so a
     # crash in between rereads it and the outbox dedupes it by event id. Reading them must
     # never block the rest of the run.
-    $outcomeRead = Read-TvBackupOutcomes -StateContainerUri $stateContainerUri -Token $storageToken -TenantId $tenantId -TenantName $tenantName `
+    $outcomeRead = Read-TvBackupOutcomes -ContainerUri $resultsContainerUri -Token $storageToken -TenantId $tenantId -TenantName $tenantName `
         -RenewLease { Update-TvStateLease -LeaseQueryUri $leaseQueryUri -Token $storageToken -LeaseId $leaseId }
     foreach ($envelope in $outcomeRead.Envelopes) { $candidateEnvelopes.Add($envelope) }
     foreach ($folder in $outcomeRead.FailedFolders) { if (-not $failedBackupFolders.Contains($folder)) { $failedBackupFolders.Add($folder) } }
@@ -2202,7 +2205,7 @@ try {
         try {
             Update-TvStateLease -LeaseQueryUri $leaseQueryUri -Token $storageToken -LeaseId $leaseId
             $encodedName = ($blobName -split "/" | ForEach-Object { [uri]::EscapeDataString($_) }) -join "/"
-            Invoke-TvStorageRequest -Uri "$stateContainerUri/$encodedName" -Method Delete -Token $storageToken | Out-Null
+            Invoke-TvStorageRequest -Uri "$resultsContainerUri/$encodedName" -Method Delete -Token $storageToken | Out-Null
         } catch {
             Write-Output "Could not remove the cloud backup result $($blobName): $(Get-TvSafeError $_.Exception.Message). The next run reads it again and sends nothing twice."
         }

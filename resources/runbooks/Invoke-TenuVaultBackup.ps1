@@ -489,13 +489,14 @@ function Set-TvSealedBlob {
 # The result note for the notification watcher (mirror src/shared/notifications/cloud-outcome.ts)
 # ---------------------------------------------------------------------------
 # The one write that is not sealed, on purpose: the notification watcher has no recovery
-# key, so it can only alert on a result it can read. The note goes to the watcher's own
-# container, never to intune-backups, and carries a fixed set of fields: status, folder
+# key, so it can only alert on a result it can read. The note goes to a container of its
+# own, never to intune-backups and never to the watcher's state container (where this
+# identity could otherwise rewrite the watcher's state), and carries a fixed set of fields: status, folder
 # name, counts, failed type names, run id and time. No policy content, names or messages.
 # It is best effort: a missing container (no watcher set up) or a missing role never
 # changes the backup's own result.
 
-$script:OutcomeContainer = "tenuvault-notification-state"
+$script:OutcomeContainer = "tenuvault-backup-results"
 $script:OutcomeSent = $false
 
 function Send-TvBackupOutcome {
@@ -538,7 +539,7 @@ function Send-TvBackupOutcome {
         Write-Output "Left the result ($Status) for the notification watcher."
     } catch [TvHttpError] {
         $code = $_.Exception.Status
-        if ($code -eq 404) { Write-Output "No notification watcher state container in this storage account, so no backup alert is sent. Set up the notification watcher to get one." }
+        if ($code -eq 404) { Write-Output "No $script:OutcomeContainer container in this storage account, so no backup alert is sent. Run the cloud backup setup again to create it." }
         elseif ($code -eq 403) { Write-Output "The cloud backup identity cannot write to $script:OutcomeContainer, so no backup alert is sent. Run the cloud backup setup again to grant it." }
         elseif ($code -in @(409, 412)) { Write-Output "The result for this backup was already left for the notification watcher." }
         else { Write-Output "Could not leave the result for the notification watcher: $(Get-TvSafeError $_.Exception.Message)" }

@@ -83,7 +83,7 @@
     "runbookName": "Invoke-TenuVaultBackup",
     "scheduleName": "[concat('TenuVaultBackup-', variables('tenantKey'))]",
     "container": "intune-backups",
-    "outcomeContainer": "tenuvault-notification-state",
+    "outcomeContainer": "tenuvault-backup-results",
     "secretName": "tenuvault-recovery-key",
     "storageAccountIdForName": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
     "containerScope": "[concat('subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.Storage/storageAccounts/', parameters('storageAccountName'), '/blobServices/default/containers/', variables('container'))]",

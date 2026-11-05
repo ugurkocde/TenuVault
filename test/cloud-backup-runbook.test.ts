@@ -159,7 +159,7 @@ describe("azuredeploy.json", () => {
     const container = resources.find((resource) => resource.type === "Microsoft.Storage/storageAccounts/blobServices/containers")!
     expect(container.name).toContain("variables('outcomeContainer')")
     expect(container.properties.publicAccess).toBe("None")
-    expect((template as unknown as { variables: Record<string, string> }).variables.outcomeContainer).toBe("tenuvault-notification-state")
+    expect((template as unknown as { variables: Record<string, string> }).variables.outcomeContainer).toBe("tenuvault-backup-results")
     const assignments = resources.filter((resource) => resource.type === "Microsoft.Authorization/roleAssignments" && resource.scope?.includes("variables('outcomeContainer')"))
     expect(assignments).toHaveLength(1)
     // The writer role it uses never allows delete.

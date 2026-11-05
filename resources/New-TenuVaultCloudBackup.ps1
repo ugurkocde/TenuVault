@@ -19,10 +19,11 @@
         "TenuVault Backup Writer" on that container only: read and write blobs, no delete. The
         runbook therefore cannot remove backups; retention runs on the next desktop backup made
         with an admin's sign-in, or through a storage lifecycle rule
-      * creates the notification watcher's container tenuvault-notification-state when missing
-        and gives the identity the same write-only role there, so each run can leave its result
-        (status, folder name, counts, failed type names, time; never policy content) for the
-        notification watcher to alert on
+      * creates the container tenuvault-backup-results when missing and gives the identity the
+        same write-only role there, so each run can leave its result (status, folder name,
+        counts, failed type names, time; never policy content) for the notification watcher to
+        alert on. A container of its own: the identity never gets write access to the
+        watcher's state
       * links the runbook to a daily or weekly schedule in the timezone you choose
       * with -AlertEmail, creates an Azure Monitor action group and a metric alert on failed
         Automation jobs, before the schedule is linked. Without it, -NoFailureAlert is the
@@ -119,8 +120,9 @@ $ErrorActionPreference = "Stop"
 
 $runbookName = "Invoke-TenuVaultBackup"
 $backupContainer = "intune-backups"
-# The notification watcher's state container: each run leaves its result note there.
-$outcomeContainer = "tenuvault-notification-state"
+# Each run leaves its result note here for the notification watcher. Not the watcher's state
+# container: write access there would let this identity rewrite the watcher's state.
+$outcomeContainer = "tenuvault-backup-results"
 $runbookPath = Join-Path $PSScriptRoot "runbooks/Invoke-TenuVaultBackup.ps1"
 $tenantKey = $TenantId.Substring(0, [Math]::Min(8, $TenantId.Length)).ToLowerInvariant()
 $scheduleName = "TenuVaultBackup-$tenantKey"

@@ -37,7 +37,7 @@ function Get-TvBlobText {
     return $notes[[uri]::UnescapeDataString($name)]
 }
 
-$read = Read-TvBackupOutcomes -StateContainerUri "https://stcontoso.blob.core.windows.net/tenuvault-notification-state" -Token "t" `
+$read = Read-TvBackupOutcomes -ContainerUri "https://stcontoso.blob.core.windows.net/tenuvault-backup-results" -Token "t" `
     -TenantId $fixture.tenantId -TenantName "Contoso" -RenewLease { $script:renewals++ }
 Write-Output (@{
     types = @($read.Envelopes | ForEach-Object { $_.type })
@@ -49,6 +49,6 @@ Write-Output (@{
 } | ConvertTo-Json -Compress)
 
 $script:failList = $true
-$failed = Read-TvBackupOutcomes -StateContainerUri "https://stcontoso.blob.core.windows.net/tenuvault-notification-state" -Token "t" `
+$failed = Read-TvBackupOutcomes -ContainerUri "https://stcontoso.blob.core.windows.net/tenuvault-backup-results" -Token "t" `
     -TenantId $fixture.tenantId -TenantName "Contoso" -RenewLease { }
 Write-Output (@{ count = $failed.Envelopes.Count; error = $failed.Error } | ConvertTo-Json -Compress)

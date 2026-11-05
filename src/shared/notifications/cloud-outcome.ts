@@ -3,8 +3,9 @@
  *
  * Backups and their status are sealed with the recovery key, which the watcher never has. So
  * the cloud backup runbook (Invoke-TenuVaultBackup.ps1) writes, after every run, one small
- * unsealed note to the watcher's state container `tenuvault-notification-state` under
- * `cloud-backup-outcomes/`. It holds only what a backup alert shows anyway: status, folder
+ * unsealed note to its own container `tenuvault-backup-results` under `cloud-backup-outcomes/`.
+ * A container of its own, because the backup identity may write there: in the watcher's state
+ * container it could rewrite the watcher's state. It holds only what a backup alert shows anyway: status, folder
  * name, counts, failed type names and the time. Never policy content, names or messages.
  *
  * The watcher (Invoke-TenuVaultNotificationCheck.ps1, ConvertFrom-TenuVaultBackupOutcome)
@@ -14,7 +15,7 @@
 import { backupEvent, type NotificationEnvelope } from "./envelope"
 
 export const CLOUD_OUTCOME_SCHEMA = "tenuvault.cloud-backup-outcome/v1"
-export const CLOUD_OUTCOME_CONTAINER = "tenuvault-notification-state"
+export const CLOUD_OUTCOME_CONTAINER = "tenuvault-backup-results"
 export const CLOUD_OUTCOME_PREFIX = "cloud-backup-outcomes/"
 
 export type CloudOutcomeStatus = "Success" | "CompletedWithWarnings" | "Failed"
