@@ -10,6 +10,8 @@ import { NOTIFICATION_EVENT_TYPES, type NotificationEventType, type Notification
 import { toast } from "../../lib/toast"
 import { UpgradeNote } from "../../components/UpgradeNote"
 import { TeamsCardTile } from "./CardLayoutEditor"
+import { useOptionalPermission } from "./optional-permissions"
+import type { OptionalPermissionStatus } from "../../../shared/services/optional-permissions"
 import {
   categoryLabel,
   CHANNEL_KIND_LABELS,
@@ -151,6 +153,16 @@ function ChannelRow({ tenant, channel, licensed, ruleCount, onChanged, onEdit, o
     onSuccess: (result) => { toast(result.delivery.ok ? "Test delivered" : `Test failed: ${result.delivery.error ?? "unknown error"}`, result.delivery.ok ? "success" : "error"); onChanged() },
     onError: failed,
   })
+  // Called for every row (hooks cannot be conditional); only email rows use the answer.
+  const mailPermission = useOptionalPermission(tenant, "notificationEmail")
+  const groupPermission = useOptionalPermission(tenant, "groupRecipients")
+  const mailWarning = channel.kind !== "email"
+    ? null
+    : mailPermission?.granted === false
+      ? `Your sign-in does not carry ${mailPermission.missing.join(", ")} yet, so mail from this channel, including a test, fails. Add it to the app registration in Entra, grant admin consent and sign in again.`
+      : groupPermission?.granted === false && channel.recipients.some((recipient) => recipient.type === "group")
+        ? `Group recipients need ${groupPermission.missing.join(", ")}, which your sign-in does not carry yet; without it a group resolves to nobody.`
+        : null
   const last = channel.lastDelivery
   return (
     <li className="space-y-2 py-3">
@@ -165,6 +177,7 @@ function ChannelRow({ tenant, channel, licensed, ruleCount, onChanged, onEdit, o
       <p className={last && !last.ok ? "text-sm text-red-700" : "text-sm text-gray-600"} role={last && !last.ok ? "status" : undefined}>
         {last ? `${last.ok ? "Last delivery succeeded" : `Last delivery failed after ${last.attempts} attempts: ${last.error ?? "unknown error"}`} (${formatTime(last.at)}${last.test ? ", test" : ""})` : "Nothing delivered yet."}
       </p>
+      {mailWarning && <p className="text-xs text-amber-700" role="status">{mailWarning}</p>}
       <div className="flex flex-wrap gap-2">
         <Button type="button" size="sm" variant="outline" onClick={() => update.mutate(!channel.enabled)} disabled={update.isPending || (!licensed && !channel.enabled)}>{channel.enabled ? "Turn off" : "Turn on"}</Button>
         <Button type="button" size="sm" variant="outline" onClick={onEdit} disabled={!licensed}><Pencil className="h-4 w-4" aria-hidden="true" />Edit</Button>
@@ -274,6 +287,8 @@ function RecipientRows({ tenant, rows, onChange }: { tenant: Tenant; rows: Recip
 }
 
 function ChannelDialog({ tenant, channel, open, onClose, onSaved }: { tenant: Tenant; channel?: PublicChannel; open: boolean; onClose: () => void; onSaved: () => void }) {
+  const mailPermission = useOptionalPermission(tenant, "notificationEmail")
+  const groupPermission = useOptionalPermission(tenant, "groupRecipients")
   const editing = Boolean(channel)
   const [kind, setKind] = useState<ChannelKind>(channel?.kind ?? "webhook")
   const [title, setTitle] = useState(channel?.title ?? "")
@@ -402,6 +417,8 @@ function ChannelDialog({ tenant, channel, open, onClose, onSaved }: { tenant: Te
             <>
               <RecipientRows tenant={tenant} rows={rows} onChange={setRows} />
               <p className="text-xs text-gray-500">Mail is sent through Microsoft Graph as the account you are signed in with for this tenant, and is not kept in Sent Items.</p>
+              {mailPermission?.granted === false && <p className="text-xs text-amber-700" role="status">Your sign-in does not carry {mailPermission.missing.join(", ")} yet, so mail would fail. Add it to the app registration in Entra (setup switch {mailPermission.setupSwitch} for a new one), grant admin consent and sign in again.</p>}
+              {groupPermission?.granted === false && rows.some((row) => row.type === "group") && <p className="text-xs text-amber-700" role="status">Group recipients also need {groupPermission.missing.join(", ")}; without it a group resolves to nobody.</p>}
             </>
           )}
           <div className="flex flex-wrap justify-end gap-2">
@@ -591,6 +608,7 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
     setExternalWatcher(next.externalWatcher)
   }, [stored])
 
+  const auditLogPermission = useOptionalPermission(tenant, "conditionalAccessWatching")
   const savedOn = Boolean(auditWatch?.enabled || auditWatch?.conditionalAccess?.enabled)
   // Without entitlement the only save allowed is turning watching off, through the free revoke action.
   const turningOff = !licensed && savedOn && !enabled && !caEnabled
@@ -656,6 +674,7 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
               title="Conditional Access"
               description="Policies, named locations and authentication strengths, from the Entra audit log."
               requirement="Needs the delegated AuditLog.Read.All permission (setup switch -IncludeAuditLog) and a role that can read audit logs, such as Security Reader."
+              permission={auditLogPermission}
               checked={caEnabled}
               disabled={!licensed && !auditWatch?.conditionalAccess?.enabled}
               onChange={setCaEnabled}
@@ -716,7 +735,7 @@ function AuditWatchTile({ tenant, auditWatch, licensed, onChanged }: { tenant: T
 const WATCHER_STALE_LABEL = "3 hours"
 
 /** One watched service: its switch, what it reads, what it needs, and its last poll. */
-function ServiceCard({ title, description, requirement, checked, disabled, onChange, lastPollAt, lastError }: { title: string; description: string; requirement: string; checked: boolean; disabled: boolean; onChange: (next: boolean) => void; lastPollAt: string | null; lastError: string | null }) {
+function ServiceCard({ title, description, requirement, checked, disabled, onChange, lastPollAt, lastError, permission }: { title: string; description: string; requirement: string; checked: boolean; disabled: boolean; onChange: (next: boolean) => void; lastPollAt: string | null; lastError: string | null; permission?: OptionalPermissionStatus | null }) {
   return (
     <label className={`flex gap-3 rounded-2xl border p-4 transition-colors ${checked ? "border-gray-900 bg-gray-50 dark:border-gray-200 dark:bg-gray-900" : "border-gray-200 dark:border-gray-800"} ${disabled ? "opacity-60" : "cursor-pointer"}`}>
       <input type="checkbox" className="mt-0.5 size-4 shrink-0 accent-coral-600" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} />
@@ -724,6 +743,8 @@ function ServiceCard({ title, description, requirement, checked, disabled, onCha
         <span className="block text-sm font-medium text-gray-900">{title}</span>
         <span className="block text-sm text-gray-600">{description}</span>
         <span className="block text-xs text-gray-500">{requirement}</span>
+        {permission?.granted === true && <span className="block text-xs text-green-700">{permission.permissions.join(", ")} is granted in your sign-in.</span>}
+        {permission?.granted === false && <span className="block text-xs text-amber-700" role="status">Not granted in your sign-in yet: {permission.missing.join(", ")}. Add it to the app registration in Entra, grant admin consent and sign in again.</span>}
         {lastPollAt && !lastError && <span className="block text-xs text-gray-500">Last poll {formatTime(lastPollAt)}</span>}
         {lastError && <span className="block text-xs text-red-700" role="status">Last poll failed: {lastError}</span>}
       </span>

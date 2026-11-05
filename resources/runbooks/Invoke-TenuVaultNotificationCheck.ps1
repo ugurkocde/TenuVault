@@ -888,9 +888,45 @@ function Get-TvFilledText {
     })
 }
 
+# Teams Workflows refuses messages over 28 KB without saying how it counts, so a card must
+# fit both as UTF-8 bytes and as UTF-16, with 1 KB to spare. Same rule as render.ts.
+$script:TvTeamsBudgetBytes = 27 * 1024
+
+function Get-TvTeamsPayloadBytes {
+    param([object]$Payload)
+    $json = ConvertTo-TenuVaultCanonicalJson $Payload
+    return [Math]::Max([Text.Encoding]::UTF8.GetByteCount($json), $json.Length * 2)
+}
+
+# Mirrors fitTeamsPayload: a card over the limit is shortened instead of refused, change
+# lines first (they become "And N more"), then detail rows from the end, then the summary.
 function New-TvTeamsPayload {
     param([object]$Envelope, [object]$Style)
     if ($null -eq $Style) { $Style = ConvertTo-TvCardStyle $null }
+    $itemCount = @(@(Get-TvProp $Envelope "items") | Where-Object { $null -ne $_ }).Count
+    $detailCount = @(@(Get-TvProp $Envelope "details") | Where-Object { $_ }).Count
+    $itemLimit = [Math]::Min([int]$Style.maxItems, $itemCount)
+    $detailLimit = $detailCount
+    $payload = New-TvTeamsPayloadCore $Envelope $Style $itemLimit $detailLimit -1 $true
+    if ((Get-TvTeamsPayloadBytes $payload) -le $script:TvTeamsBudgetBytes) { return $payload }
+    while ($itemLimit -gt 0) {
+        $itemLimit--
+        $payload = New-TvTeamsPayloadCore $Envelope $Style $itemLimit $detailLimit -1 $true
+        if ((Get-TvTeamsPayloadBytes $payload) -le $script:TvTeamsBudgetBytes) { return $payload }
+    }
+    while ($detailLimit -gt 0) {
+        $detailLimit--
+        $payload = New-TvTeamsPayloadCore $Envelope $Style $itemLimit $detailLimit -1 $true
+        if ((Get-TvTeamsPayloadBytes $payload) -le $script:TvTeamsBudgetBytes) { return $payload }
+    }
+    $payload = New-TvTeamsPayloadCore $Envelope $Style $itemLimit $detailLimit 200 $true
+    if ((Get-TvTeamsPayloadBytes $payload) -le $script:TvTeamsBudgetBytes) { return $payload }
+    # A note can expand placeholders far past the limit on its own; it is the last part to go.
+    return New-TvTeamsPayloadCore $Envelope $Style $itemLimit $detailLimit 200 $false
+}
+
+function New-TvTeamsPayloadCore {
+    param([object]$Envelope, [object]$Style, [int]$ItemLimit, [int]$DetailLimit, [int]$SummaryMax, [bool]$IncludeNote = $true)
     $severityName = [string](Get-TvProp $Envelope "severity")
     $severity = switch ($severityName) {
         "critical" { @{ container = "attention"; color = "Attention"; label = "Critical" } }
@@ -922,12 +958,13 @@ function New-TvTeamsPayload {
         switch ($block) {
             "summary" {
                 $summaryText = if ($Style.summaryText) { Get-TvFilledText $Style.summaryText $Envelope $timeFormat } else { [string](Get-TvProp $Envelope "summary") }
+                if ($SummaryMax -ge 0 -and $summaryText.Length -gt $SummaryMax) { $summaryText = $summaryText.Substring(0, $SummaryMax) + "..." }
                 $summaryBlock = [ordered]@{ type = "TextBlock"; text = Get-TvMarkdownEscape $summaryText; wrap = $true }
                 if ($compact) { $summaryBlock["spacing"] = "Small" }
                 $body.Add([pscustomobject]$summaryBlock)
             }
             "details" {
-                $facts = @(@(Get-TvProp $Envelope "details") | Where-Object { $_ -and -not (@($Style.hiddenDetails) -ccontains [string](Get-TvProp $_ "label")) } | ForEach-Object {
+                $facts = @(@(Get-TvProp $Envelope "details") | Where-Object { $_ } | Select-Object -First $DetailLimit | Where-Object { -not (@($Style.hiddenDetails) -ccontains [string](Get-TvProp $_ "label")) } | ForEach-Object {
                     [pscustomobject][ordered]@{ title = Get-TvMarkdownEscape (Get-TvProp $_ "label"); value = Get-TvMarkdownEscape (Get-TvProp $_ "value") }
                 })
                 if ($facts.Count -gt 0) {
@@ -938,7 +975,7 @@ function New-TvTeamsPayload {
             }
             "items" {
                 $allItems = @(@(Get-TvProp $Envelope "items") | Where-Object { $null -ne $_ })
-                $shown = @($allItems | Select-Object -First ([int]$Style.maxItems))
+                $shown = @($allItems | Select-Object -First $ItemLimit)
                 foreach ($item in $shown) {
                     $meta = [System.Collections.Generic.List[string]]::new()
                     if ($Style.itemDetail -and (Get-TvProp $item "detail")) { $meta.Add([string](Get-TvProp $item "detail")) }
@@ -962,7 +999,7 @@ function New-TvTeamsPayload {
                 }
             }
             "note" {
-                if ($Style.noteText -and $script:TvSeverityRank[$severityName] -ge $script:TvSeverityRank[[string]$Style.noteMinSeverity]) {
+                if ($IncludeNote -and $Style.noteText -and $script:TvSeverityRank[$severityName] -ge $script:TvSeverityRank[[string]$Style.noteMinSeverity]) {
                     $noteBlock = [pscustomobject][ordered]@{ type = "TextBlock"; text = Get-TvMarkdownEscape (Get-TvFilledText $Style.noteText $Envelope $timeFormat); wrap = $true }
                     $body.Add([pscustomobject][ordered]@{ type = "Container"; style = "emphasis"; items = @($noteBlock) })
                 }
