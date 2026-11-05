@@ -685,8 +685,10 @@ function CategoryPicker({ tenant, selected, disabled, onChange }: { tenant: Tena
   const known = useQuery({ queryKey: ["notifications-audit-categories", tenant.credentials?.tenantId], queryFn: () => notificationsApi.listAuditCategories(tenant), staleTime: 60 * 60_000, enabled: !!tenant.credentials?.tenantId })
   const available = known.data?.categories ?? []
   const lower = new Set(available.map((name) => name.toLowerCase()))
-  // Judged only once a list arrived: while it loads, every saved name would look unknown.
-  const unknown = known.data ? selected.filter((name) => !lower.has(name.toLowerCase())) : []
+  // Judged only against the list Intune reported: while it loads, or with the built-in list, a name could look unknown wrongly.
+  const unknown = known.data?.source === "graph" ? selected.filter((name) => !lower.has(name.toLowerCase())) : []
+  // With only the built-in list, a saved name it lacks may still be a newer Intune category: keep it selectable, unflagged.
+  const unconfirmed = known.data?.source === "known" ? selected.filter((name) => !lower.has(name.toLowerCase())) : []
   const isOn = (name: string) => selected.some((entry) => entry.toLowerCase() === name.toLowerCase())
   const toggle = (name: string) => onChange(isOn(name) ? selected.filter((entry) => entry.toLowerCase() !== name.toLowerCase()) : [...selected, name])
   const pill = (on: boolean) =>
@@ -701,6 +703,11 @@ function CategoryPicker({ tenant, selected, disabled, onChange }: { tenant: Tena
       <div className="flex flex-wrap gap-2">
         {available.map((name) => (
           <button key={name} type="button" className={pill(isOn(name))} aria-pressed={isOn(name)} disabled={disabled} onClick={() => toggle(name)} title={name}>
+            {categoryLabel(name)}
+          </button>
+        ))}
+        {unconfirmed.map((name) => (
+          <button key={`saved-${name}`} type="button" className={pill(true)} aria-pressed={true} disabled={disabled} onClick={() => toggle(name)} title={name}>
             {categoryLabel(name)}
           </button>
         ))}
