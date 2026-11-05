@@ -254,8 +254,9 @@ export function ServicesSettings() {
   const [selected, setSelected] = useState(rows[0]?.tenantId ?? "")
   const [statuses, setStatuses] = useState<Map<string, TenantStatus>>(new Map())
   const [busy, setBusy] = useState(false)
-  // Only Check again re-reads permissions; turning a module on or off does not.
-  const [checking, setChecking] = useState(false)
+  // Only Check again re-reads permissions; turning a module on or off does not. Scoped to the
+  // tenant being checked, since another tenant can be selected while it runs.
+  const [checkingTenant, setCheckingTenant] = useState<string | null>(null)
   const current = rows.find((row) => row.tenantId === selected) ?? rows[0]
   const queryClient = useQueryClient()
 
@@ -302,6 +303,28 @@ export function ServicesSettings() {
     }
   }
 
+  // A failed re-check leaves the module list as it was but marks the optional permissions
+  // unknown, so an old Granted or Not granted is never shown or announced as current.
+  const recheck = async (tenantId: string, clientId: string) => {
+    setCheckingTenant(tenantId)
+    try {
+      await run(async () => {
+        try {
+          return await bridge.services.status(tenantId, clientId, true)
+        } catch (error) {
+          setStatuses((previous) => {
+            const before = previous.get(tenantId)
+            if (!before || before === "loading" || !before.optional) return previous
+            return new Map(previous).set(tenantId, { ...before, optional: before.optional.map((entry) => ({ ...entry, granted: null, missing: [] })) })
+          })
+          throw error
+        }
+      })
+    } finally {
+      setCheckingTenant((value) => (value === tenantId ? null : value))
+    }
+  }
+
   return (
     <Card id="services">
       <CardHeader>
@@ -315,7 +338,7 @@ export function ServicesSettings() {
         {rows.length > 1 ? <Overview tenants={rows} statuses={statuses} selected={current.tenantId} onSelect={setSelected} /> : null}
         <div className="flex flex-wrap items-center gap-3">
           <p className="text-sm font-medium text-gray-900">{current.name}</p>
-          <Button variant="outline" size="sm" disabled={busy || status === "loading"} onClick={() => { setChecking(true); void run(() => bridge.services.status(current.tenantId, current.clientId, true)).finally(() => setChecking(false)) }}>
+          <Button variant="outline" size="sm" disabled={busy || status === "loading"} onClick={() => { void recheck(current.tenantId, current.clientId) }}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             Check again
           </Button>
@@ -337,7 +360,7 @@ export function ServicesSettings() {
             ))}
           </div>
         ) : null}
-        {status && status !== "loading" && status.optional?.length ? <OptionalPermissions entries={status.optional} clientId={current.clientId} checking={checking} /> : null}
+        {status && status !== "loading" && status.optional?.length ? <OptionalPermissions entries={status.optional} clientId={current.clientId} checking={checkingTenant === current.tenantId} /> : null}
         <p className="text-xs text-gray-500">
           Roles are checked by Microsoft when you restore.{" "}
           <a href={PERMISSIONS_DOCS} target="_blank" rel="noreferrer" className="underline underline-offset-2">How permissions work</a>
