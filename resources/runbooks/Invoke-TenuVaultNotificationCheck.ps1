@@ -818,10 +818,14 @@ function Get-TvNoteCount {
     return $null
 }
 
-# Parses a note the way JSON.parse does: System.Text.Json keeps every string as written
-# (ConvertFrom-Json in the Automation 7.2 and 7.4 runtimes turns times into DateTime values
-# and rolls T24:00 over to the next day), keys stay case sensitive and a repeated key keeps
-# its last value.
+# Parses a note the way JSON.parse does, with every string kept as written: ConvertFrom-Json
+# in PowerShell 7.2 to 7.4 turns times into DateTime values and rolls T24:00 over to the next
+# day. System.Text.Json (PowerShell 7) also keeps keys case sensitive and a repeated key keeps
+# its last value. The watcher runs on the Windows PowerShell 5.1 runtime, which has no
+# System.Text.Json; there ConvertFrom-TvJson is used, whose ConvertFrom-Json keeps ISO times
+# as strings, as it does with -DateKind String on PowerShell 7.5 and later.
+$script:TvNoteJsonParser = if ("System.Text.Json.JsonDocument" -as [type]) { "SystemTextJson" } else { "ConvertFromJson" }
+
 function ConvertFrom-TvNoteJsonElement {
     param([Parameter(Mandatory)][System.Text.Json.JsonElement]$Element)
     switch ($Element.ValueKind) {
@@ -851,6 +855,7 @@ function ConvertFrom-TvNoteJsonElement {
 
 function ConvertFrom-TvNoteJson {
     param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+    if ($script:TvNoteJsonParser -ne "SystemTextJson") { return ConvertFrom-TvJson $Text }
     $document = [System.Text.Json.JsonDocument]::Parse($Text)
     try { return ConvertFrom-TvNoteJsonElement $document.RootElement } finally { $document.Dispose() }
 }
