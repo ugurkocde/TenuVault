@@ -7,7 +7,7 @@ import { cn } from "~/lib/utils"
 import { useTenantOperations, useTenants, type Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog"
+import { Dialog, DialogAnimationProvider, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import { storageLabel } from "~/lib/storage-label"
 import type { AppInfo, AppPreferences, SignedInAccount, UpdateStatus } from "../../shared/ipc"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
@@ -880,10 +880,11 @@ export default function SettingsPage() {
         document.querySelector<HTMLElement>('nav[aria-label="Settings sections"] [aria-current="page"]')?.focus({ preventScroll: true })
       }
     }
+    // Dialogs of the hidden panel are already gone (they skip their exit
+    // animation), so their focus has dropped to the page by now.
     landFocus()
-    // A closing dialog still holds focus inside its portal through its exit
-    // animation and only drops it when the portal leaves the DOM, so keep
-    // checking while nodes are removed, then stop watching.
+    // A portaled layer that still animates out holds focus until it leaves
+    // the DOM, so keep checking while nodes are removed, then stop watching.
     const observer = new MutationObserver(landFocus)
     observer.observe(document.body, { childList: true, subtree: true })
     const stop = setTimeout(() => observer.disconnect(), 1000)
@@ -894,7 +895,10 @@ export default function SettingsPage() {
   }, [section])
 
   const panel = (id: SettingsSectionId, content: ReactNode) => (
-    <section key={id} id={`settings-${id}`} hidden={section !== id}>{content}</section>
+    <section key={id} id={`settings-${id}`} hidden={section !== id}>
+      {/* A dialog this panel owns closes at once when the panel hides, in the same commit, so focus can land below. */}
+      <DialogAnimationProvider value={section === id}>{content}</DialogAnimationProvider>
+    </section>
   )
 
   return (
