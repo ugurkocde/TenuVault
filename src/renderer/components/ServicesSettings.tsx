@@ -335,7 +335,7 @@ export function ServicesSettings() {
             ))}
           </div>
         ) : null}
-        {status && status !== "loading" && status.optional?.length ? <OptionalPermissions entries={status.optional} clientId={current.clientId} /> : null}
+        {status && status !== "loading" && status.optional?.length ? <OptionalPermissions entries={status.optional} clientId={current.clientId} checking={busy} /> : null}
         <p className="text-xs text-gray-500">
           Roles are checked by Microsoft when you restore.{" "}
           <a href={PERMISSIONS_DOCS} target="_blank" rel="noreferrer" className="underline underline-offset-2">How permissions work</a>
@@ -349,13 +349,13 @@ export function ServicesSettings() {
  * Delegated permissions the setup script only adds on request. Each one turns on a single
  * feature; without it that feature fails while the rest keeps working.
  */
-function OptionalPermissions({ entries, clientId }: { entries: OptionalPermissionStatus[]; clientId: string }) {
+function OptionalPermissions({ entries, clientId, checking }: { entries: OptionalPermissionStatus[]; clientId: string; checking: boolean }) {
   return (
     <section aria-labelledby="optional-permissions-heading" className="space-y-2 border-t border-gray-100 pt-4 dark:border-gray-800">
       <h3 id="optional-permissions-heading" className="text-sm font-medium text-gray-900">Optional permissions</h3>
-      {/* Announced when Check again changes the result, without moving focus. */}
+      {/* The text switches to "Checking" while Check again runs, so every finished check is announced, also when the result is unchanged. */}
       <p role="status" aria-live="polite" className="sr-only">
-        {entries.some((entry) => entry.granted === null) ? "Optional permissions could not be checked." : `${entries.filter((entry) => entry.granted).length} of ${entries.length} optional permissions granted.`}
+        {checking ? "Checking optional permissions." : entries.some((entry) => entry.granted === null) ? "Optional permissions could not be checked." : `${entries.filter((entry) => entry.granted).length} of ${entries.length} optional permissions granted.`}
       </p>
       <p className="text-xs text-gray-500">
         Added only when you ask for them. A new app registration gets them with the setup switch shown; for this one, add the delegated permission in Entra and grant admin consent, then check again.
