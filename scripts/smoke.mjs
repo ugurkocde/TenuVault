@@ -34,6 +34,10 @@ const packagedApp = process.env.TENUVAULT_SMOKE_APP
 const args = [...(packagedApp ? [] : [desktopDir]), `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`]
 if (!packagedApp) args.push(`--inspect=127.0.0.1:${inspectorPort}`)
 if (process.platform === "linux") args.push("--no-sandbox")
+// On a Wayland desktop the compositor stops sending frame callbacks to a window it does not draw
+// (an idle or locked screen, another workspace), so CSS animations stall and a dialog's exit
+// animation never ends. X11 (XWayland on a desktop, Xvfb in CI) keeps producing frames.
+if (process.platform === "linux" && process.env.DISPLAY) args.push("--ozone-platform=x11")
 // Development smoke profiles use a mock keychain; packaged runs exercise the real Keychain by default.
 if (process.platform === "darwin" && (!packagedApp || process.env.TENUVAULT_SMOKE_MOCK_KEYCHAIN === "1")) args.push("--use-mock-keychain")
 // Tools that are themselves Electron apps may export ELECTRON_RUN_AS_NODE, which would start plain Node.
@@ -593,32 +597,52 @@ await check("settings sidebar switches sections and names the section in the URL
   await send("Emulation.clearDeviceMetricsOverride")
   // A dialog owned by a panel closes while its section is hidden and comes back with it.
   // Run this part with real exit animations so focus landing is checked after teardown.
+  const agreementOpen = `document.body.innerText.includes("TENUVAULT DESKTOP END USER LICENSE AGREEMENT")`
+  const agreementTrigger = `[...document.getElementById("settings-about").querySelectorAll("button")].find(b => b.textContent.trim() === "License agreement")`
+  const dialogClose = `[...(document.querySelector('[role="dialog"]')?.querySelectorAll("button") ?? [])].find(b => b.textContent.trim() === "Close")`
   await evaluate(`document.getElementById("smoke-no-animations")?.remove()`)
-  await evaluate(`location.hash = "#/portal/settings?section=about"`)
-  assert(await waitForCondition(`document.getElementById("settings-about").hidden === false`), "about section did not appear")
-  await evaluate(`[...document.getElementById("settings-about").querySelectorAll("button")].find(b => b.textContent.trim() === "License agreement").click()`)
-  assert(await waitForText("TENUVAULT DESKTOP END USER LICENSE AGREEMENT"), "license agreement dialog did not open")
-  await evaluate(`location.hash = "#/portal/settings?section=signin"`)
-  assert(await waitForCondition(`!document.body.innerText.includes("TENUVAULT DESKTOP END USER LICENSE AGREEMENT")`), "dialog stayed open while its section was hidden")
-  assert(await evaluate(`document.querySelectorAll('[role="dialog"]').length === 0`), "hidden panel left a dialog in the page")
-  assert(await waitForCondition(`document.activeElement === document.querySelector('nav[aria-label="Settings sections"] [aria-current="page"]')`), "focus did not land on the active section entry after the dialog closed")
-  await evaluate(`location.hash = "#/portal/settings?section=about"`)
-  assert(await waitForText("TENUVAULT DESKTOP END USER LICENSE AGREEMENT"), "dialog did not come back with its section")
-  await evaluate(`[...document.querySelectorAll("button")].find(b => b.textContent.trim() === "Close").click()`)
-  assert(await waitForCondition(`!document.body.innerText.includes("TENUVAULT DESKTOP END USER LICENSE AGREEMENT")`), "license agreement dialog did not close")
-  await disableAnimations()
+  let closed = false
+  try {
+    await evaluate(`location.hash = "#/portal/settings?section=about"`)
+    assert(await waitForCondition(`document.getElementById("settings-about").hidden === false && Boolean(${agreementTrigger})`), "about section did not appear")
+    await evaluate(`${agreementTrigger}.click()`)
+    assert(await waitForCondition(`${agreementOpen} && Boolean(${dialogClose})`), "license agreement dialog did not open")
+    await evaluate(`location.hash = "#/portal/settings?section=signin"`)
+    assert(await waitForCondition(`!${agreementOpen}`), "dialog stayed open while its section was hidden")
+    assert(await evaluate(`document.querySelectorAll('[role="dialog"]').length === 0`), "hidden panel left a dialog in the page")
+    assert(await waitForCondition(`document.activeElement === document.querySelector('nav[aria-label="Settings sections"] [aria-current="page"]')`), "focus did not land on the active section entry after the dialog closed")
+    await evaluate(`location.hash = "#/portal/settings?section=about"`)
+    assert(await waitForCondition(`${agreementOpen} && Boolean(${dialogClose})`), "dialog did not come back with its section")
+    await evaluate(`${dialogClose}.click()`)
+    assert(await waitForCondition(`!${agreementOpen}`), "license agreement dialog did not close")
+    closed = true
+  } finally {
+    // A failure above must not leave real animations on or the agreement open (it would come back
+    // with the about section) for the checks that follow.
+    await disableAnimations()
+    if (!closed) {
+      await evaluate(`location.hash = "#/portal/settings?section=about"`)
+      if (await waitForCondition(`Boolean(${dialogClose})`, 2000)) await evaluate(`${dialogClose}.click()`)
+      await waitForCondition(`!document.querySelector('[role="dialog"]')`, 5000)
+    }
+  }
 })
 
 await check("license agreement opens from settings", async () => {
   await go("#/portal/settings?section=about", "License agreement")
-  await evaluate(`[...document.querySelectorAll("button")].find(b => b.textContent.trim() === "License agreement").click()`)
+  const trigger = `[...document.getElementById("settings-about").querySelectorAll("button")].find(b => b.textContent.trim() === "License agreement")`
+  // The link toggles the dialog, so it must start closed for the click to open it.
+  assert(await waitForCondition(`Boolean(${trigger}) && !document.querySelector('[role="dialog"]')`), "license agreement link missing, or a dialog was already open")
+  await evaluate(`${trigger}.click()`)
   assert(await waitForText("TENUVAULT DESKTOP END USER LICENSE AGREEMENT"), "license agreement text missing")
   assert(await waitForText("Terms of Use"), "Terms of Use link missing")
   await screenshot("05b-license-agreement")
   await evaluate(`document.documentElement.classList.add('dark')`)
   await screenshot("05c-license-agreement-dark")
   await evaluate(`document.documentElement.classList.remove('dark')`)
-  await evaluate(`[...document.querySelectorAll("button")].find(b => b.textContent.trim() === "Close").click()`)
+  const closeButton = `[...(document.querySelector('[role="dialog"]')?.querySelectorAll("button") ?? [])].find(b => b.textContent.trim() === "Close")`
+  assert(await waitForCondition(`Boolean(${closeButton})`, 5000), "license agreement has no Close button")
+  await evaluate(`${closeButton}.click()`)
   assert(await waitForCondition(`!document.body.innerText.includes("TENUVAULT DESKTOP END USER LICENSE AGREEMENT")`, 5000), "license agreement did not close")
   assert(await waitForCondition(`document.activeElement?.textContent.trim() === "License agreement"`, 5000), "focus did not return to the license agreement link")
 })

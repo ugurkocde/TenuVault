@@ -87,6 +87,13 @@ export async function checkBackupCancel({ check, evaluate, waitForCondition, scr
       const jobId = await startFixture({ inspectorPort, desktopDir, evaluate, assert })
       const doc = "window.__backupCancelFrame.contentDocument"
       const button = label => `[...${doc}.querySelectorAll('button')].find(button => button.textContent.trim() === ${JSON.stringify(label)})`
+      // Once the backup runs in the background, the floating panel holds the control under test. The
+      // progress dialog it left keeps its own Cancel backup button until its exit animation ends, so
+      // a lookup across the whole document can find that closing dialog instead.
+      const panel = `${doc}.querySelector('section[aria-label="Backup activity"]')`
+      const control = view === "floating"
+        ? label => `[...(${panel}?.querySelectorAll('button') ?? [])].find(button => button.textContent.trim() === ${JSON.stringify(label)})`
+        : button
       try {
         await evaluate(`(async () => {
           const statusRequest = { path: '/api/backup/status', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: new TextEncoder().encode(JSON.stringify({ jobId: ${JSON.stringify(jobId)} })) };
@@ -165,18 +172,18 @@ export async function checkBackupCancel({ check, evaluate, waitForCondition, scr
           if (view === "floating") await evaluate(`${button("Run in Background")}.click()`)
         }
 
-        assert(await waitForCondition(`${button("Cancel backup")}?.disabled === false`), "cancel control did not enable for the running job")
+        assert(await waitForCondition(`${control("Cancel backup")}?.disabled === false`), "cancel control did not enable for the running job")
         if (view === "dialog") {
-          await evaluate(`${button("Cancel backup")}.click()`)
-          assert(await waitForCondition(`${doc}.querySelector('[role="dialog"] [role="alert"]')?.textContent.includes('This backup job is no longer available') && ${button("Cancel backup")}?.disabled === false`), "cancellation failure did not show inline and allow retry")
+          await evaluate(`${control("Cancel backup")}.click()`)
+          assert(await waitForCondition(`${doc}.querySelector('[role="dialog"] [role="alert"]')?.textContent.includes('This backup job is no longer available') && ${control("Cancel backup")}?.disabled === false`), "cancellation failure did not show inline and allow retry")
         }
         await screenshot(`backup-cancel-${view}`)
-        await evaluate(`${button("Cancel backup")}.click()`)
+        await evaluate(`${control("Cancel backup")}.click()`)
         assert(await waitForCondition(`window.__backupCancel.cancelResolved && window.__backupCancel.heldPolls >= 2`), "real cancellation did not finish while terminal polls were held")
-        assert(await evaluate(`${button("Cancelling…")}?.disabled === true && !${button("Cancel backup")}`), "cancel control re-enabled before the terminal status arrived")
+        assert(await evaluate(`${control("Cancelling…")}?.disabled === true && !${control("Cancel backup")}`), "cancel control re-enabled before the terminal status arrived")
         assert(await evaluate(`window.__backupCancel.terminal?.status === 'Cancelled' && window.__backupCancel.terminal.exception.includes('Backup cancelled by you')`), "fixture did not reach the real cancelled state")
         await evaluate(`window.__backupCancel.releaseStatus = true`)
-        assert(await waitForCondition(`${doc}.body.textContent.includes('Backup cancelled by you') && !${button("Cancel backup")} && !${button("Cancelling…")}`), "terminal cancellation status did not replace the control")
+        assert(await waitForCondition(`${doc}.body.textContent.includes('Backup cancelled by you') && !${control("Cancel backup")} && !${control("Cancelling…")}`), "terminal cancellation status did not replace the control")
         await screenshot(`backup-cancelled-${view}`)
       } finally {
         await evaluate(`(() => {
