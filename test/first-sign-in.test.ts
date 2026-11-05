@@ -18,11 +18,13 @@ const { AuthManager, SignInCancelledError, firstSignInError } = await import("..
 const TENANT = "11111111-1111-1111-1111-111111111111"
 const CLIENT = "33333333-3333-3333-3333-333333333333"
 
+const openBrowser = vi.fn(async () => undefined)
+
 function manager() {
   const store = new Map()
   return new AuthManager({
     cachePlugin: () => ({ beforeCacheAccess: async () => undefined, afterCacheAccess: async () => undefined }),
-    openBrowser: async () => undefined,
+    openBrowser,
     accountStore: {
       get: (tenantId) => store.get(tenantId) ?? null,
       set: (profile) => void store.set(profile.tenantId, profile),
@@ -83,6 +85,20 @@ describe("AuthManager sign-in", () => {
 
     msal.interactive.mockResolvedValueOnce({ account: { tenantId: TENANT, username: "admin@contoso.com", homeAccountId: "home" } })
     await expect(auth.signIn(TENANT, CLIENT)).resolves.toMatchObject({ tenantId: TENANT, username: "admin@contoso.com" })
+  })
+
+  it("does not open the browser for a sign-in cancelled before MSAL opens it", async () => {
+    let request: { openBrowser: (url: string) => Promise<void> } | undefined
+    msal.interactive.mockImplementationOnce((value) => {
+      request = value as typeof request
+      return new Promise(() => undefined)
+    })
+    const auth = manager()
+    const waiting = auth.signIn(TENANT, CLIENT)
+    auth.cancelInteractive()
+    await expect(waiting).rejects.toThrow("Sign-in cancelled.")
+    await expect(request!.openBrowser("https://login.microsoftonline.com/")).rejects.toThrow("Sign-in cancelled.")
+    expect(openBrowser).not.toHaveBeenCalled()
   })
 
   it("leaves a reauthentication started elsewhere waiting when the first sign-in is cancelled", async () => {

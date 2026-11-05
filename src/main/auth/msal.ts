@@ -304,10 +304,12 @@ export class AuthManager {
     const pending = this.interactive.get(key)
     if (pending) return pending
 
+    // MSAL opens the browser after a few awaits; a sign-in cancelled before then never opens it.
+    let cancelledEarly = false
     const request: InteractiveRequest = {
       scopes: [scope],
       authority: authority(tenant),
-      openBrowser: this.host.openBrowser,
+      openBrowser: (url) => cancelledEarly ? Promise.reject(new SignInCancelledError()) : this.host.openBrowser(url),
       successTemplate: SUCCESS_PAGE,
       errorTemplate: ERROR_PAGE,
       ...(prompt ? { prompt } : {}),
@@ -317,7 +319,12 @@ export class AuthManager {
     // tab finished later only fills the token cache; its result is never used. Only the first
     // sign-in can be cancelled, so a reauthentication started elsewhere keeps waiting.
     let cancel: (error: Error) => void = () => {}
-    const cancelled = new Promise<never>((_resolve, reject) => { cancel = reject })
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      cancel = (error) => {
+        cancelledEarly = true
+        reject(error)
+      }
+    })
     if (cancellable) this.cancels.set(cancel, key)
     const interactive = this.app(clientId).acquireTokenInteractive(request)
     const promise = (cancellable ? Promise.race([interactive, cancelled]) : interactive)
