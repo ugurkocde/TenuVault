@@ -535,17 +535,20 @@ function New-TenuVaultMissedBackupEvent {
 
 function Get-TvItemLine {
     param([object]$Item)
+    # Bullet and middle dot as char codes: the runbook stays ASCII so Windows PowerShell 5.1
+    # reads it the same with or without a byte order mark. Same text as itemLine in render.ts.
     $parts = [System.Collections.Generic.List[string]]::new()
-    $parts.Add("- $(Get-TvProp $Item 'title')")
+    $parts.Add("$([char]0x2022) $(Get-TvProp $Item 'title')")
     if (Get-TvProp $Item "detail") { $parts.Add([string](Get-TvProp $Item "detail")) }
     if (Get-TvProp $Item "actor") { $parts.Add("by $(Get-TvProp $Item 'actor')") }
     if (Get-TvProp $Item "at") { $parts.Add([string](Get-TvProp $Item "at")) }
-    return $parts -join " | "
+    return $parts -join " $([char]0x00B7) "
 }
 
 function Get-TvFooter {
     param([object]$Envelope)
-    return "Azure watcher | $(Get-TvProp $Envelope 'occurredAt') | Event $(([string](Get-TvProp $Envelope 'eventId')).Substring(0, 12))"
+    $dot = [char]0x00B7
+    return "Azure watcher $dot $(Get-TvProp $Envelope 'occurredAt') $dot Event $(([string](Get-TvProp $Envelope 'eventId')).Substring(0, 12))"
 }
 
 function Get-TvHtmlEscape {
@@ -658,15 +661,23 @@ function Get-TvMarkdownEscape {
 
 function New-TvTeamsPayload {
     param([object]$Envelope)
-    $style = switch ([string](Get-TvProp $Envelope "severity")) {
-        "critical" { "attention" }
-        "warning" { "warning" }
-        default { "default" }
+    # TextBlock has no severity style: the header sits in a Container with a named container
+    # style, and a small label carries a named text color. Same shape as render.ts.
+    $severity = switch ([string](Get-TvProp $Envelope "severity")) {
+        "critical" { @{ container = "attention"; color = "Attention"; label = "Critical" } }
+        "warning" { @{ container = "warning"; color = "Warning"; label = "Warning" } }
+        default { @{ container = "emphasis"; color = "Accent"; label = "Info" } }
     }
     $body = [System.Collections.Generic.List[object]]::new()
     $body.Add([pscustomobject][ordered]@{
-        type = "TextBlock"; size = "Medium"; weight = "Bolder"
-        text = Get-TvMarkdownEscape (Get-TvProp $Envelope "title"); wrap = $true; style = $style
+        type = "Container"; style = $severity.container; bleed = $true
+        items = @(
+            [pscustomobject][ordered]@{ type = "TextBlock"; size = "Small"; weight = "Bolder"; color = $severity.color; text = $severity.label; wrap = $true },
+            [pscustomobject][ordered]@{
+                type = "TextBlock"; size = "Medium"; weight = "Bolder"
+                text = Get-TvMarkdownEscape (Get-TvProp $Envelope "title"); wrap = $true; spacing = "None"
+            }
+        )
     })
     $body.Add([pscustomobject][ordered]@{ type = "TextBlock"; text = Get-TvMarkdownEscape (Get-TvProp $Envelope "summary"); wrap = $true })
     $facts = @(@(Get-TvProp $Envelope "details") | Where-Object { $_ } | ForEach-Object {

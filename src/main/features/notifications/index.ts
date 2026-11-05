@@ -33,6 +33,14 @@ import {
 
 const TICK_MS = 60_000
 
+/** Intune audit categories as returned by getAuditCategories (checked 2026-11-05), for when Graph cannot be asked. */
+export const KNOWN_AUDIT_CATEGORIES = [
+  "AdminTask", "Application", "AssignmentFilter", "Autopilot", "Compliance", "ConditionalAccess", "Deployment", "Device",
+  "DeviceConfiguration", "DeviceIntent", "DeviceIntentSetting", "DeviceInventory", "DeviceSecurity", "DeviceSetupConfiguration",
+  "EBookManagement", "Enrollment", "EndpointPrivilegeMgmt", "GroupPolicyAnalytics", "OnPremiseAccess", "Other", "RemoteHelp",
+  "Role", "SoftwareUpdates",
+] as const
+
 export const RUNTIME_NOTE =
   "Desktop notifications and Intune change watching run only while TenuVault is running on this computer and you are signed in to the tenant. For alerts while this computer is off, set up the Azure watcher runbook. Undelivered notifications stay queued and retry on the next launch."
 
@@ -230,7 +238,16 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       const externalWatcher = bool(body, "externalWatcher")
       if (externalWatcher !== undefined) change.externalWatcher = externalWatcher
       const current = auditWatchOf(deps, tenantId)
-      if (enabled === true && !current?.watermark) change.watermark = deps.now().toISOString()
+      // Turning watching on starts from now. Catching up from an old watermark would replay
+      // every change made while it was off, which is history, not news. A closed app with
+      // watching left on still catches up in the poller, because enabled never flipped.
+      // The dedupe ids stay: the first poll reads 30 minutes back, and changes delivered just
+      // before watching was turned off must not be sent again. They age out on their own.
+      if (enabled === true && !current?.enabled) {
+        change.watermark = deps.now().toISOString()
+        change.continuation = null
+        change.lastPollAt = null
+      }
       const saved = saveAuditWatch(deps, tenantId, change, { actor, reason: enabled === false ? "Intune change watching turned off" : enabled === true ? "Intune change watching turned on" : "Intune change watching changed" })
       return { auditWatch: publicAuditWatch(saved) }
     },
@@ -243,7 +260,23 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
 
     "run-audit-watch": async ({ tenantId, deps }) => {
       const result = await pollAuditWatch(deps, tenantId)
-      return { auditWatch: publicAuditWatch(auditWatchOf(deps, tenantId)), enqueued: result.enqueued, changes: result.changes, error: result.error }
+      return { auditWatch: publicAuditWatch(auditWatchOf(deps, tenantId)), enqueued: result.enqueued, changes: result.changes, error: result.error, skipped: result.skipped ?? null }
+    },
+
+    // The categories Intune itself reports, so the filter can only hold names that match.
+    "list-audit-categories": async ({ tenantId, deps }) => {
+      try {
+        const graph = await deps.graph(tenantId)
+        const response = await graph("GET", "deviceManagement/auditEvents/getAuditCategories")
+        const values = (response.body as Record<string, unknown>)?.value
+        if (response.status === 200 && Array.isArray(values)) {
+          const names = values.filter((value): value is string => typeof value === "string" && value.length > 0 && value.length <= 120)
+          if (names.length) return { categories: [...new Set(names)].sort((a, b) => a.localeCompare(b)), source: "graph" }
+        }
+      } catch {
+        // Signed out or offline: the known list below still lets the filter be edited.
+      }
+      return { categories: [...KNOWN_AUDIT_CATEGORIES], source: "known" }
     },
 
     "list-groups": async ({ tenantId, body, deps }) => {

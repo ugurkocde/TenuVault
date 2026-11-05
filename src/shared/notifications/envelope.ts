@@ -132,7 +132,13 @@ export interface BackupEventInput {
   tenantId: string
   tenantName?: string | null
   status: "Success" | "CompletedWithWarnings" | "Failed"
-  backupFolder: string
+  /** The backup folder, when the run got far enough to claim one. */
+  backupFolder?: string | null
+  /**
+   * The delivery identity of this outcome. Defaults to the folder. Scheduled runs pass their
+   * slot, so the up to three attempts of one failing slot send one alert, not three.
+   */
+  naturalKey?: string | null
   occurredAt: string
   totalPolicies?: number | null
   failures?: number | null
@@ -145,7 +151,7 @@ export interface BackupEventInput {
 export function backupEvent(input: BackupEventInput): NotificationEnvelope {
   const type: NotificationEventType = input.status === "Failed" ? "backup.failed" : input.status === "CompletedWithWarnings" ? "backup.warning" : "backup.succeeded"
   const details: Array<{ label: string; value: string }> = [
-    { label: "Backup", value: input.backupFolder },
+    ...(input.backupFolder ? [{ label: "Backup", value: input.backupFolder }] : []),
     { label: "Result", value: input.status },
   ]
   if (input.totalPolicies !== null && input.totalPolicies !== undefined) details.push({ label: "Policies saved", value: String(input.totalPolicies) })
@@ -159,7 +165,7 @@ export function backupEvent(input: BackupEventInput): NotificationEnvelope {
     tenantId: input.tenantId,
     tenantName: input.tenantName,
     occurredAt: input.occurredAt,
-    naturalKey: input.backupFolder,
+    naturalKey: input.naturalKey || input.backupFolder || `${input.trigger ?? "backup"}:${input.occurredAt}`,
     title: type === "backup.failed" ? `Backup failed: ${tenantLabel}` : type === "backup.warning" ? `Backup completed with warnings: ${tenantLabel}` : `Backup succeeded: ${tenantLabel}`,
     summary: input.message || (type === "backup.succeeded" ? "The backup completed successfully." : "Open TenuVault to see what could not be saved."),
     details,

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 import { intuneChangeDigest, mapAuditEvent, type AuditEventRaw } from "../src/shared/notifications/audit"
 import { canonicalJson } from "../src/shared/notifications/envelope"
+import { teamsWorkflowsPayload } from "../src/shared/notifications/render"
 import fixture from "./fixtures/notifications/audit-digest.json"
 import liveFixture from "./fixtures/notifications/audit-live.json"
 
@@ -11,7 +12,7 @@ const runbook = readFileSync(new URL("../resources/runbooks/Invoke-TenuVaultNoti
 const setup = readFileSync(new URL("../resources/New-TenuVaultNotificationWatcher.ps1", import.meta.url), "utf8")
 const desktopApp = readFileSync(new URL("../resources/New-TenuVaultDesktopApp.ps1", import.meta.url), "utf8")
 
-const pwsh = ["/usr/local/bin/pwsh", "/opt/homebrew/bin/pwsh", "/usr/bin/pwsh"].find((candidate) => existsSync(candidate))
+const pwsh = ["/usr/local/bin/pwsh", "/opt/homebrew/bin/pwsh", "/usr/bin/pwsh", ...(process.env.HOME ? [`${process.env.HOME}/.local/bin/pwsh`] : [])].find((candidate) => existsSync(candidate))
 
 describe("Azure notification watcher scripts", () => {
   it("never reads audit request bodies or property values", () => {
@@ -125,6 +126,16 @@ describe("Azure notification watcher scripts", () => {
     expect(html).toContain("&lt;script&gt;")
     expect(runbook).toContain('BodyContentType "HTML"')
     expect(runbook).not.toContain("function Get-TvEmailText")
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("PowerShell builds the identical Teams card as TypeScript for every severity", () => {
+    const changes = fixture.events.map((event) => mapAuditEvent(event as AuditEventRaw)!)
+    const digest = intuneChangeDigest({ tenantId: fixture.tenantId, tenantName: fixture.tenantName, changes, includeActor: fixture.includeActor, source: "azure-watcher" })
+    const script = fileURLToPath(new URL("./fixtures/notifications/render-teams.ps1", import.meta.url))
+    for (const severity of ["info", "warning", "critical"] as const) {
+      const output = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-Severity", severity], { encoding: "utf8" }).trim()
+      expect(output).toBe(canonicalJson(teamsWorkflowsPayload({ ...digest, severity })))
+    }
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("PowerShell matches TypeScript on live-shaped read and assignment events", () => {

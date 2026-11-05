@@ -46,13 +46,13 @@ Teams notifications use a Workflows incoming webhook, the supported replacement 
 2. Name the workflow and copy its URL.
 3. In TenuVault, add a **Teams** channel and paste the URL.
 
-Messages arrive as an Adaptive Card posted by Workflows, with the event title, summary, details and changed items. Good to know: the workflow belongs to the person who created it and stops when that account is disabled, and tenant policies for the Workflows app can block it. If a test message fails, the channel shows the answer it got.
+Messages arrive as an Adaptive Card posted by Workflows: a header tinted by severity (red for critical, amber for warning) with a **Critical**, **Warning** or **Info** label, then the event title, summary, details and changed items. Good to know: the workflow belongs to the person who created it and stops when that account is disabled, and tenant policies for the Workflows app can block it. If a test message fails, the channel shows the answer it got.
 
 ![An Intune change digest as a Workflows card in a Teams channel, with three changes and their policy names](/images/notifications/notifications-teams.png)
 
 ### Email
 
-Email is sent through Microsoft Graph as the signed-in admin. It needs the optional `Mail.Send` permission: re-run the app registration script with `-IncludeNotifications` to add it, see [Permissions](/security/permissions/). Without it, email deliveries fail with a Graph permission error while other channels keep working.
+Email is sent through Microsoft Graph as the signed-in admin. It needs the optional delegated `Mail.Send` permission, and Entra group recipients also need `GroupMember.Read.All` and `User.Read.All`. A new app registration gets all three with `-IncludeNotifications` on the setup script. For an existing app registration, add the three delegated permissions to it in the Entra admin center and grant admin consent, then sign in to TenuVault again: running the script again would create a second app registration. See [Permissions](/security/permissions/). Without `Mail.Send`, email deliveries fail with a Graph permission error while other channels keep working.
 
 Recipients can be:
 
@@ -70,17 +70,23 @@ A rule has event types, a minimum severity and one or more channels. A useful st
 * One rule for backup failed, backup warnings, restore failures and drift, at info and above, to your Teams channel and email.
 * Success events only if you really want them. Most tenants find them noise within a week.
 
-Delivery is at least once. An undelivered notification stays queued, retries with backoff, and survives restarting the app. In the rare case a destination accepted a message but the confirmation was lost, the same event can arrive twice; the `eventId` is identical so receivers can dedupe. Recent deliveries, including failures and retries, are listed under the channels.
+Delivery is at least once. An undelivered notification stays queued, retries with backoff, and survives restarting the app. In the rare case a destination accepted a message but the confirmation was lost, the same event can arrive twice; the `eventId` is identical so receivers can dedupe. Recent deliveries, including failures and retries, are listed under the channels. A scheduled backup slot that fails on every retry sends one alert, not one per attempt, and backup alerts list the policies saved and the types that could not be read.
+
+Channels and rules can be turned on and off, tested and removed, but not edited yet. To point a channel at a new Teams Workflows or webhook URL, add a new channel, add it to your rules, then remove the old one.
 
 ## Intune change watching
 
 Change watching reads the Intune audit log through Microsoft Graph and digests new events into one `intune.change` message per poll: what was created, updated, deleted, assigned or unassigned, the policy name when the audit event carries it, and who did it. Read-only audit events (views and searches) are not changes and never appear in a digest. A digest that contains a deletion or a removed assignment is sent with warning severity.
 
-* On the desktop, watching runs while TenuVault is running and you are signed in. Default polling is every 15 minutes. After the app was closed it catches up from where it left off; after a long gap the digest says older changes may be missing.
+* On the desktop, watching runs while TenuVault is running and you are signed in. Default polling is every 15 minutes. After the app was closed with watching on, it catches up from where it left off; after a long gap the digest says older changes may be missing. Turning watching off and on again starts from that moment, so changes made while it was off are not sent as news.
+* **Audit categories** limit the digest to the categories you pick, from the list Intune itself reports (for example Device configuration, Compliance, Application, Role). Picking none watches every category. A category saved by an earlier version that Intune does not report is shown in amber so you can remove it: it would match no change.
+* **Poll now** reads the audit log at once with the saved settings. It is unavailable while watching is off or while an Azure watcher owns change alerts for the tenant.
+* Change watching reads the Intune audit log only. Edits to Entra Conditional Access policies are not in it; drift scans still compare Conditional Access policies between backups.
 * Changes made through TenuVault itself are ignored by default, so your own restores do not alert you.
 * Repeated edits of the same policy by the same admin collapse into one line with a count, and a digest shows at most 20 lines plus a remainder count, so a bulk edit does not flood a channel.
 * The watcher reads a fixed list of audit fields (ids, times, category, operation type, actor, resource names). Audit request bodies and changed setting values are never read or sent.
-* The actor name is personal data and is off by default. Turn it on only for destinations your policies allow it to reach.
+* The actor name is personal data and is off by default. Turn it on only for destinations your policies allow it to reach. It applies to digests built after you save.
+* When the [Azure watcher](#alerts-while-this-computer-is-off-the-azure-watcher) sends change alerts for a tenant, turn on **An Azure watcher owns change alerts for this tenant**. Desktop polling then stands down for that tenant, so each change is reported once instead of by both.
 
 ## Alerts while this computer is off: the Azure watcher
 
@@ -132,9 +138,10 @@ Plan for Exchange propagation: a brand-new access policy and scope group can tak
 
 | Symptom | Likely cause |
 | --- | --- |
-| Test message fails with a Graph permission error on email | The app registration lacks `Mail.Send`. Re-run it with `-IncludeNotifications` and sign in again. |
+| Test message fails with a Graph permission error on email | The app registration lacks `Mail.Send`. Add the delegated `Mail.Send` permission (and `GroupMember.Read.All` and `User.Read.All` for group recipients) to the existing app registration, grant admin consent and sign in again. |
 | Teams test returns an error from the workflow | The workflow was deleted, its owner left, or a tenant policy blocks Workflows webhooks. Recreate the workflow and paste the new URL. |
-| No Intune change digests | Watching is off, you are signed out, or changes were made through TenuVault and are being ignored. The watch card shows the last poll and its error. |
+| No Intune change digests | Watching is off, you are signed out, an Azure watcher owns change alerts for the tenant, the picked audit categories do not include the change, or the change was made through TenuVault and is ignored. The watch card shows the last poll and its error. |
+| Every change arrives twice | Both the desktop and the Azure watcher report changes. Turn on **An Azure watcher owns change alerts for this tenant** on the desktop. |
 | The same alert arrived twice | A delivery succeeded but its confirmation was lost and the queue retried. The `eventId` is the same; this is expected at-least-once behaviour. |
 | Webhook URL refused | Only public https addresses are allowed, without credentials in the URL. |
 | Watcher mail verification fails with `ErrorAccessDenied ... [RAOP]` | The Exchange application access policy or its scope group has not propagated yet, or the sender mailbox is not in the scope group. Wait and re-run verification; see the watcher email section above. |

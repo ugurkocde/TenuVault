@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { describe, expect, it } from "vitest"
 import { collapseAuditChanges, filterAuditChanges, intuneChangeDigest, mapAuditEvent, type AuditEventRaw } from "../src/shared/notifications/audit"
 import { backupEvent, buildEnvelope, canonicalJson, driftEvent, eventId, sha256Hex, testEvent } from "../src/shared/notifications/envelope"
-import { emailHtml, emailSubject, emailText, friendlyTime, teamsWorkflowsPayload } from "../src/shared/notifications/render"
+import { emailHtml, emailSubject, emailText, escapeMarkdown, friendlyTime, teamsWorkflowsPayload } from "../src/shared/notifications/render"
 import fixture from "./fixtures/notifications/audit-digest.json"
 import liveFixture from "./fixtures/notifications/audit-live.json"
 
@@ -118,6 +118,25 @@ describe("rendering", () => {
     expect(payload.type).toBe("message")
     expect(payload.attachments[0]?.contentType).toContain("adaptive")
     expect(payload.attachments[0]?.content.body.some((block) => block.text?.includes("test"))).toBe(true)
+  })
+
+  it("shows severity with a container style and a colored label, never a TextBlock style", () => {
+    type Block = { type: string; style?: string; color?: string; text?: string; items?: Block[] }
+    const cardOf = (severity: "info" | "warning" | "critical") => (teamsWorkflowsPayload({ ...envelope, severity }) as { attachments: Array<{ content: { body: Block[] } }> }).attachments[0]!.content.body
+    const expected = { info: ["emphasis", "Accent", "Info"], warning: ["warning", "Warning", "Warning"], critical: ["attention", "Attention", "Critical"] } as const
+    for (const severity of ["info", "warning", "critical"] as const) {
+      const [header] = cardOf(severity)
+      expect(header?.type).toBe("Container")
+      expect(header?.style).toBe(expected[severity][0])
+      expect(header?.items?.[0]).toMatchObject({ color: expected[severity][1], text: expected[severity][2] })
+      const blocks = (function flatten(list: Block[]): Block[] { return list.flatMap((block) => [block, ...flatten(block.items ?? [])]) })(cardOf(severity))
+      // TextBlock style only accepts default and heading; severity values there are ignored by Teams.
+      expect(blocks.filter((block) => block.type === "TextBlock" && block.style !== undefined)).toEqual([])
+    }
+  })
+
+  it("escapes markdown punctuation but leaves commas alone", () => {
+    expect(escapeMarkdown("2 updated, 1 deleted - done.")).toBe("2 updated, 1 deleted \\- done\\.")
   })
 
   it("escapes markdown links in card text", () => {

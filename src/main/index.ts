@@ -525,17 +525,23 @@ async function bootstrap(): Promise<void> {
   const refusals = new RefusalLog(appStore, () => mainWindow?.webContents.send("schedules:refusalsChanged"))
 
   // Joined requests share one notification, one audit entry and the trigger that started the job.
-  const unattendedBackupTriggers = new WeakMap<BackupJob, { trigger: "scheduled" | "tray"; notified: boolean; audited: boolean }>()
+  // notifyKey is the delivery identity of the shared outcome, chosen by the caller that started the job,
+  // so a tray or scheduled request that joined it sends to the same event instead of a second one.
+  const unattendedBackupTriggers = new WeakMap<BackupJob, { trigger: "scheduled" | "tray"; notified: boolean; audited: boolean; notifyKey?: string }>()
 
   // Best-effort notification event for one finished backup job, with fixed summary text
-  // only. Resolves true when a local channel intent was queued for this outcome.
-  const notifyBackupOutcome = async (job: BackupJob, trigger: string): Promise<boolean> => {
+  // only. Resolves true when a local channel intent was queued for this outcome. A scheduled
+  // run is keyed by its slot, so the retries of one failing slot send one alert.
+  const notifyBackupOutcome = async (job: BackupJob, trigger: string, key?: string): Promise<boolean> => {
     if (job.status === "Cancelled") return false
     const result = await emitBackupOutcome(featureDeps, job.tenantId, {
       status: job.status === "Failed" ? "Failed" : job.failures || /completed with \d+ warnings?/i.test(job.progressMessage) ? "CompletedWithWarnings" : "Success",
-      backupFolder: job.backupFolder ?? `job:${job.id}`,
+      backupFolder: job.backupFolder ?? null,
+      naturalKey: key ?? job.backupFolder ?? `job:${job.id}`,
       finishedAt: job.endTime ?? new Date().toISOString(),
+      totalPolicies: job.totalPolicies ?? null,
       failures: job.failures ?? 0,
+      failedTypes: job.failedTypes ?? [],
       trigger,
       message: null,
     }).catch(() => ({ created: 0, localCreated: false }))
@@ -587,7 +593,11 @@ async function bootstrap(): Promise<void> {
       failedAttempts.record({ tenantId, trigger, slot, message: refused })
       return { status: "Failed" as const, message: refused }
     }
-    let origin = { trigger, notified: false, audited: false }
+    let origin: { trigger: "scheduled" | "tray"; notified: boolean; audited: boolean; notifyKey?: string } = { trigger, notified: false, audited: false }
+    // A job that was already running was started by someone else: a manual backup notifies with its
+    // folder, an unattended one through the shared origin. Only a job this scheduled call started
+    // is keyed by its slot, so the retries of one failing slot send one alert.
+    const liveBefore = new Set(engine.liveRuns(tenantId))
     const job = await runUnattended(engine, { tenantId, clientId: profile.clientId, storageAccountName: profile.storageAccountName, scope: scopes.get(tenantId).scope, trigger, slot }, (started) => {
       origin = unattendedBackupTriggers.get(started) ?? { trigger, notified: false, audited: false }
       unattendedBackupTriggers.set(started, origin)
@@ -598,7 +608,8 @@ async function bootstrap(): Promise<void> {
     if (!reportsResult(afterFailure, result)) return result
     const ok = result.status === "Completed"
     const cancelled = result.status === "Cancelled"
-    const localNotified = cancelled ? false : await notifyBackupOutcome(job, trigger)
+    origin.notifyKey ??= trigger === "scheduled" && slot && !liveBefore.has(job.id) ? `slot:${slot}` : job.backupFolder ?? `job:${job.id}`
+    const localNotified = cancelled ? false : await notifyBackupOutcome(job, trigger, origin.notifyKey)
     const account = accounts.get(tenantId)
     // Record scheduled backups in the tenant's audit log, attributed to the signed-in admin. A Backup
     // Reader run skips it: the audit route signs in as the admin, which is exactly what the reader
