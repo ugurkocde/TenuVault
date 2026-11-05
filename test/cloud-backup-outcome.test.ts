@@ -30,7 +30,12 @@ describe("cloud backup result notes", () => {
     const repaired = parseCloudOutcome(outcomeFixture.notes[4], TENANT)!
     expect(repaired).toMatchObject({ totalPolicies: null, failures: 0, failedTypes: [] })
     expect(parseCloudOutcome(outcomeFixture.notes[5], TENANT)!.failedTypes).toEqual(["Apps", "Remediations"])
-    expect(events.slice(6)).toEqual([null, null, null, null])
+    expect(events.slice(6, 10)).toEqual([null, null, null, null])
+    // Lists for strings, a trailing newline, non-ASCII digits, a missing folder key and a zoneless time.
+    expect(events.slice(10, 13)).toEqual([null, null, null])
+    expect(parseCloudOutcome(outcomeFixture.notes[13], TENANT)).toMatchObject({ totalPolicies: 3, failures: 1000, failedTypes: ["Apps"] })
+    expect(events.slice(14, 16)).toEqual([null, null])
+    expect(parseCloudOutcome(outcomeFixture.notes[16], TENANT)!.finishedAt).toBe("2026-11-12T02:05:00.000Z")
   })
 
   it("is the only unsealed write, to the watcher's container and with fixed fields", () => {
@@ -76,13 +81,18 @@ describe("cloud backup result notes", () => {
     const script = fileURLToPath(new URL("./fixtures/notifications/outcome-read.ps1", import.meta.url))
     const [read, failed] = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/).map((line) => JSON.parse(line))
     expect(read.types).toEqual(["backup.warning", "backup.failed", "backup.failed"])
-    expect(read.failedFolders).toEqual(["backup-2026-11-07-020000"])
-    // The note of another tenant is ignored and kept, so it is never deleted by this watcher.
-    expect(read.processed).toHaveLength(3)
-    expect(read.processed).not.toContain("cloud-backup-outcomes/run-other-tenant.json")
-    expect(read.ignored).toBe(1)
+    // The expired failure sends nothing but still keeps its folder out of the missed check.
+    expect(read.failedFolders).toEqual(["backup-2026-11-07-020000", "backup-2026-10-01-020000"])
+    expect(read.expired).toBe(1)
+    // Every note looked at is deleted after the save: valid, invalid, expired and oversized.
+    expect(read.processed).toHaveLength(6)
+    expect(read.processed).toContain("cloud-backup-outcomes/run-other-tenant.json")
+    expect(read.processed).toContain("cloud-backup-outcomes/huge.json")
+    expect(read.ignored).toBe(2)
+    expect(read.downloadedHuge).toBe(0)
     expect(read.error).toBeNull()
-    expect(read.renewals).toBe(2)
+    // Once per list page and once per note.
+    expect(read.renewals).toBe(2 + 6)
     expect(failed).toEqual({ count: 0, error: expect.stringContaining("Cloud backup results could not be read") })
   }, 60_000)
 })

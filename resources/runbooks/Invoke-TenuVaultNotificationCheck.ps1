@@ -795,52 +795,93 @@ function New-TenuVaultBackupEvent {
         -Title $title -Summary $summary -Details @($details.ToArray()) -Items @() -Source $Source
 }
 
+# One field of a note, read directly so a one item list is never unrolled into a scalar
+# (parseCloudOutcome rejects lists where it expects a string). Present tells a missing
+# field from a null one.
+function Get-TvNoteField {
+    param([object]$Note, [Parameter(Mandatory)][string]$Name)
+    if ($Note -is [System.Collections.IDictionary]) {
+        if ($Note.Contains($Name)) { return [pscustomobject]@{ Present = $true; Value = $Note[$Name] } }
+    } elseif ($null -ne $Note -and $Note.PSObject.Properties[$Name]) {
+        return [pscustomobject]@{ Present = $true; Value = $Note.PSObject.Properties[$Name].Value }
+    }
+    return [pscustomobject]@{ Present = $false; Value = $null }
+}
+
+# A count as parseCloudOutcome reads it: any integral JSON number from 0 to 1,000,000.
+function Get-TvNoteCount {
+    param([object]$Value)
+    if ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal]) {
+        $number = [double]$Value
+        if ($number -ge 0 -and $number -le 1000000 -and [Math]::Floor($number) -eq $number) { return [int]$number }
+    }
+    return $null
+}
+
 # Mirrors parseCloudOutcome: $null for anything that is not a usable note of this tenant.
+# Patterns use [0-9] and \z: .NET \d accepts any Unicode digit and $ also matches before a
+# trailing newline, which the JavaScript patterns do not.
 function ConvertFrom-TenuVaultBackupOutcome {
     param([AllowNull()][object]$Note, [Parameter(Mandatory)][string]$TenantId)
-    if ($null -eq $Note -or $Note -is [string] -or $Note -is [array]) { return $null }
-    if ((Get-TvProp $Note "schema") -cne $script:TvOutcomeSchema) { return $null }
-    $noteTenant = Get-TvProp $Note "tenantId"
+    if ($null -eq $Note -or $Note -is [string] -or $Note -is [array] -or $Note -is [ValueType]) { return $null }
+    $schema = (Get-TvNoteField $Note "schema").Value
+    if ($schema -isnot [string] -or $schema -cne $script:TvOutcomeSchema) { return $null }
+    $noteTenant = (Get-TvNoteField $Note "tenantId").Value
     if ($noteTenant -isnot [string] -or $noteTenant.ToLowerInvariant() -ne $TenantId.ToLowerInvariant()) { return $null }
-    $status = Get-TvProp $Note "status"
-    if (@("Success", "CompletedWithWarnings", "Failed") -cnotcontains $status) { return $null }
-    $runId = Get-TvProp $Note "runId"
-    if ($runId -isnot [string] -or $runId -cnotmatch '^[A-Za-z0-9-]{1,100}$') { return $null }
-    $folder = Get-TvProp $Note "backupFolder"
-    if ($null -ne $folder -and ($folder -isnot [string] -or $folder -cnotmatch '^backup-\d{4}-\d{2}-\d{2}-\d{6}$')) { return $null }
-    $finished = ConvertTo-TvIso (Get-TvProp $Note "finishedAt")
-    if (-not $finished) { return $null }
-    $countOf = {
-        param($value)
-        if (($value -is [int] -or $value -is [long]) -and $value -ge 0 -and $value -le 1000000) { return [int]$value }
+    $status = (Get-TvNoteField $Note "status").Value
+    if ($status -isnot [string] -or @("Success", "CompletedWithWarnings", "Failed") -cnotcontains $status) { return $null }
+    $runId = (Get-TvNoteField $Note "runId").Value
+    if ($runId -isnot [string] -or $runId -cnotmatch '^[A-Za-z0-9-]{1,100}\z') { return $null }
+    $folderField = Get-TvNoteField $Note "backupFolder"
+    if (-not $folderField.Present) { return $null }
+    $folder = $folderField.Value
+    if ($null -ne $folder -and ($folder -isnot [string] -or $folder -cnotmatch '^backup-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}\z')) { return $null }
+    # A time with an explicit zone only. PowerShell 7.2 turns JSON dates into DateTime values,
+    # where an unspecified kind means the text had no zone.
+    $finishedRaw = (Get-TvNoteField $Note "finishedAt").Value
+    if ($finishedRaw -is [string]) {
+        if ($finishedRaw -cnotmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,3})?(Z|[+-][0-9]{2}:[0-9]{2})\z') { return $null }
+    } elseif ($finishedRaw -is [DateTime]) {
+        if ($finishedRaw.Kind -eq [DateTimeKind]::Unspecified) { return $null }
+    } elseif ($finishedRaw -isnot [DateTimeOffset]) {
         return $null
     }
-    $failures = & $countOf (Get-TvProp $Note "failures")
-    $typeList = Get-TvStyleList $Note "failedTypes"
-    $failedTypes = @(@(if ($null -ne $typeList) { $typeList }) | Where-Object { $_ -is [string] -and $_ -cmatch '^[A-Za-z]{1,64}$' } | Select-Object -First 10)
+    $finished = ConvertTo-TvIso $finishedRaw
+    if (-not $finished) { return $null }
+    $failures = Get-TvNoteCount (Get-TvNoteField $Note "failures").Value
+    $typeList = (Get-TvNoteField $Note "failedTypes").Value
+    $failedTypes = @(@(if ($typeList -is [array]) { $typeList }) | Where-Object { $_ -is [string] -and $_ -cmatch '^[A-Za-z]{1,64}\z' } | Select-Object -First 10)
     return [pscustomobject][ordered]@{
         status = [string]$status
         runId = [string]$runId
         backupFolder = $folder
         finishedAt = $finished
-        totalPolicies = & $countOf (Get-TvProp $Note "totalPolicies")
+        totalPolicies = Get-TvNoteCount (Get-TvNoteField $Note "totalPolicies").Value
         failures = if ($null -ne $failures) { $failures } else { 0 }
         failedTypes = $failedTypes
     }
 }
 
 # Reads the result notes the cloud backup runbook left under cloud-backup-outcomes/ in the
-# results container and turns the valid ones into backup alerts. Returns the alerts,
-# the folders reported as Failed, the blob names read (to delete once the alerts are saved),
-# how many notes were ignored, and an error message when the container could not be read.
+# results container and turns the valid ones into backup alerts. Returns the alerts, the
+# folders reported as Failed, the blob names to delete once the alerts are saved, how many
+# notes were ignored (invalid, oversized) or expired, and an error message when the
+# container could not be read. Every note it looked at is deleted after the save, valid or
+# not, so nothing is read again forever. Notes older than MaxAgeDays are deleted without an
+# alert: a watcher set up long after the first cloud backups must not send weeks of history.
+# Notes above 4 KB are not downloaded at all; a real note is a few hundred bytes.
 function Read-TvBackupOutcomes {
     param(
         [Parameter(Mandatory)][string]$ContainerUri,
         [Parameter(Mandatory)][string]$Token,
         [Parameter(Mandatory)][string]$TenantId,
         [object]$TenantName,
-        [Parameter(Mandatory)][scriptblock]$RenewLease
+        [Parameter(Mandatory)][scriptblock]$RenewLease,
+        [DateTime]$Now = [DateTime]::UtcNow,
+        [int]$MaxAgeDays = 7
     )
+    $oldest = ConvertTo-TvIso ($Now.ToUniversalTime().AddDays(-$MaxAgeDays))
+    $expired = 0
     $envelopes = [System.Collections.Generic.List[object]]::new()
     $failedFolders = [System.Collections.Generic.List[string]]::new()
     $processed = [System.Collections.Generic.List[string]]::new()
@@ -861,13 +902,31 @@ function Read-TvBackupOutcomes {
                 if (-not $blob -or -not $blob.Name) { continue }
                 $blobName = [string]$blob.Name
                 if (-not $blobName.StartsWith($script:TvOutcomePrefix, [StringComparison]::Ordinal)) { continue }
+                # The lease is renewed per note: hundreds of slow reads must not outlast it.
+                & $RenewLease
+                $length = 0L
+                $lengthText = [string]$blob.Properties.'Content-Length'
+                if ($lengthText -and [long]::TryParse($lengthText, [ref]$length) -and $length -gt 4096) {
+                    $ignored++
+                    $processed.Add($blobName)
+                    continue
+                }
                 $encodedName = ($blobName -split "/" | ForEach-Object { [uri]::EscapeDataString($_) }) -join "/"
                 $noteText = Get-TvBlobText -Uri "$ContainerUri/$encodedName" -Token $Token
                 if ($null -eq $noteText) { continue }
                 $note = $null
                 try { $note = ConvertFrom-TvJson $noteText } catch { $note = $null }
                 $outcome = ConvertFrom-TenuVaultBackupOutcome $note $TenantId
-                if ($null -eq $outcome) { $ignored++; continue }
+                if ($null -eq $outcome) { $ignored++; $processed.Add($blobName); continue }
+                if ([StringComparer]::Ordinal.Compare([string]$outcome.finishedAt, $oldest) -lt 0) {
+                    # Too old to be news; the folder still counts as failed for the missed check.
+                    $expired++
+                    if ($outcome.status -eq "Failed" -and $outcome.backupFolder -and -not $failedFolders.Contains([string]$outcome.backupFolder)) {
+                        $failedFolders.Add([string]$outcome.backupFolder)
+                    }
+                    $processed.Add($blobName)
+                    continue
+                }
                 $envelopes.Add((New-TenuVaultCloudOutcomeEvent -Outcome $outcome -TenantId $TenantId -TenantName $TenantName))
                 if ($outcome.status -eq "Failed" -and $outcome.backupFolder -and -not $failedFolders.Contains([string]$outcome.backupFolder)) {
                     $failedFolders.Add([string]$outcome.backupFolder)
@@ -881,7 +940,7 @@ function Read-TvBackupOutcomes {
             $readError = "Cloud backup results could not be read in this run: $(Get-TvSafeError $_.Exception.Message)"
         }
     } while ($marker)
-    return [pscustomobject]@{ Envelopes = $envelopes; FailedFolders = $failedFolders; Processed = $processed; Ignored = $ignored; Error = $readError }
+    return [pscustomobject]@{ Envelopes = $envelopes; FailedFolders = $failedFolders; Processed = $processed; Ignored = $ignored; Expired = $expired; Error = $readError }
 }
 
 # Mirrors cloudOutcomeEvent.
@@ -2110,7 +2169,8 @@ try {
         if (-not $lastError) { $lastError = $outcomeRead.Error }
     }
     if ($processedOutcomeNames.Count -gt 0) { Write-Output "Read $($processedOutcomeNames.Count) cloud backup result(s)." }
-    if ($ignoredOutcomes -gt 0) { Write-Output "Ignored $ignoredOutcomes cloud backup result note(s) that are not valid for this tenant." }
+    if ($ignoredOutcomes -gt 0) { Write-Output "Removed $ignoredOutcomes cloud backup result note(s) that are not valid for this tenant or too large." }
+    if ($outcomeRead.Expired -gt 0) { Write-Output "Removed $($outcomeRead.Expired) cloud backup result note(s) older than 7 days without an alert." }
 
     # --- Missed backup check -----------------------------------------------------
     # A listing failure must never block delivery of envelopes already waiting in
@@ -2202,8 +2262,9 @@ try {
 
     # The alerts of the cloud backup results are in the saved outbox now, so their notes go.
     foreach ($blobName in $processedOutcomeNames) {
+        # Losing the lease stays fatal, like everywhere else; only the delete itself is best effort.
+        Update-TvStateLease -LeaseQueryUri $leaseQueryUri -Token $storageToken -LeaseId $leaseId
         try {
-            Update-TvStateLease -LeaseQueryUri $leaseQueryUri -Token $storageToken -LeaseId $leaseId
             $encodedName = ($blobName -split "/" | ForEach-Object { [uri]::EscapeDataString($_) }) -join "/"
             Invoke-TvStorageRequest -Uri "$resultsContainerUri/$encodedName" -Method Delete -Token $storageToken | Out-Null
         } catch {

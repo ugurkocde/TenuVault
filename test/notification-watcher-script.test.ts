@@ -264,8 +264,9 @@ describe("Azure notification watcher scripts", () => {
       return outcome ? canonicalJson(cloudOutcomeEvent(outcome, outcomeFixture.tenantId, outcomeFixture.tenantName)) : "null"
     })
     expect(lines).toEqual(expected)
-    // Four valid notes, two repaired, four rejected (other tenant, newer schema, bad folder, bad status).
-    expect(expected.filter((line) => line === "null")).toHaveLength(4)
+    // Rejected: other tenant, newer schema, path-like folder, bad status, a field wrapped in a list,
+    // a trailing newline, non-ASCII digits, a missing backupFolder key and a time without a zone.
+    expect(expected.filter((line) => line === "null")).toHaveLength(9)
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("PowerShell matches TypeScript on live-shaped read and assignment events", () => {

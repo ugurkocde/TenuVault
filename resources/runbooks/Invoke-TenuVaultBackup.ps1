@@ -797,26 +797,28 @@ function Invoke-TvBackup {
     $appOnlyExcluded = Get-TvFolderList (Get-TvAutomationVariable "TenuVaultAppOnlyExcluded")
 
     Write-Output "Backing up tenant $tenantId to storage account $storageAccount (runbook $script:RunbookVersion, run $runId)."
-    $graphToken = Get-TvManagedIdentityToken "https://graph.microsoft.com/"
+    # The storage token comes first: the result note needs only it, so every later failure
+    # (Graph token, Key Vault, a scope that leaves nothing) still reaches the notification
+    # watcher as Failed. A run that cannot even get a storage token is reported by the
+    # Azure Monitor alert on failed jobs.
     $storageToken = Get-TvManagedIdentityToken "https://storage.azure.com/"
-    # The note needs only the storage token, so even a run that cannot read the recovery key
-    # (Key Vault access, a rotated secret) reaches the notification watcher as Failed.
     try {
+        $graphToken = Get-TvManagedIdentityToken "https://graph.microsoft.com/"
         $vaultToken = Get-TvManagedIdentityToken "https://vault.azure.net"
         $secret = Invoke-TvHttp -Uri "https://$keyVault.vault.azure.net/secrets/tenuvault-recovery-key/?api-version=7.4" -Token $vaultToken -Method "Get"
         $master = Get-TvRecoveryMasterKey ([string](Get-TvProp ($secret.Text | ConvertFrom-Json) "value"))
+        $context = @{ TenantId = $tenantId; StorageAccount = $storageAccount; StorageToken = $storageToken; Master = $master }
+
+        $allTypes = Get-TvTypes
+        $known = @($allTypes | ForEach-Object { $_.Folder })
+        $excluded = @($known | Where-Object { $excluded -contains $_ })
+        $notReadable = @($known | Where-Object { $appOnlyExcluded -contains $_ -and $excluded -notcontains $_ })
+        $types = @($allTypes | Where-Object { $excluded -notcontains $_.Folder -and $appOnlyExcluded -notcontains $_.Folder })
+        if (-not $types.Count) { throw "The configured scope leaves nothing to back up." }
     } catch {
         Send-TvBackupOutcome -Account $storageAccount -Token $storageToken -TenantId $tenantId -RunId $runId -Status "Failed" -BackupFolder $null -TotalPolicies $null
         throw
     }
-    $context = @{ TenantId = $tenantId; StorageAccount = $storageAccount; StorageToken = $storageToken; Master = $master }
-
-    $allTypes = Get-TvTypes
-    $known = @($allTypes | ForEach-Object { $_.Folder })
-    $excluded = @($known | Where-Object { $excluded -contains $_ })
-    $notReadable = @($known | Where-Object { $appOnlyExcluded -contains $_ -and $excluded -notcontains $_ })
-    $types = @($allTypes | Where-Object { $excluded -notcontains $_.Folder -and $appOnlyExcluded -notcontains $_.Folder })
-    if (-not $types.Count) { throw "The configured scope leaves nothing to back up." }
     if ($excluded.Count) { Write-Output "Leaving out $($excluded.Count) of $($known.Count) types: $($excluded -join ', ')." }
     if ($notReadable.Count) { Write-Output "Leaving out $($notReadable.Count) type(s) the cloud identity has no permission for: $($notReadable -join ', '). Desktop backups include them." }
 
