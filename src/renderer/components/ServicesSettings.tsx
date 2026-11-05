@@ -317,6 +317,11 @@ export function ServicesSettings() {
             if (!before || before === "loading" || !before.optional) return previous
             return new Map(previous).set(tenantId, { ...before, optional: before.optional.map((entry) => ({ ...entry, granted: null, missing: [] })) })
           })
+          // The Notifications section reads its own cached copy; mark that unknown too.
+          queryClient.setQueryData<ServicesStatus>(["services-status", tenantId, clientId], (cached) => {
+            if (!cached?.optional) return cached
+            return { ...cached, optional: cached.optional.map((entry) => ({ ...entry, granted: null, missing: [] })) }
+          })
           throw error
         }
       })
