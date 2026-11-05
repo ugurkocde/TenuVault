@@ -53,7 +53,9 @@ Teams notifications use a Workflows incoming webhook, the supported replacement 
 
 Messages arrive as an Adaptive Card posted by Workflows: a header tinted by severity (red for critical, amber for warning) with a **Critical**, **Warning** or **Info** label, then the event title, summary, details and changed items, with readable UTC times. Intune change digests end with an **Open the Intune admin center** button, a fixed Microsoft address like the one in email. Good to know: the workflow belongs to the person who created it and stops when that account is disabled, and tenant policies for the Workflows app can block it. If a test message fails, the channel shows the answer it got.
 
-![An Intune change digest as a Workflows card in a Teams channel, with three changes and their policy names](/images/notifications/notifications-teams.png)
+![An Intune change digest as a Workflows card in a Teams channel: an amber Warning header, twelve changes with who made them and when, and an Open the Intune admin center button](/images/notifications/notifications-teams.png)
+
+![A Backup failed card in a Teams channel: a red Critical header, then the backup folder, result, policies saved, item failures, failed types and trigger](/images/notifications/notifications-teams-backup.png)
 
 ### Teams card layout
 
