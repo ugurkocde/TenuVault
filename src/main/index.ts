@@ -380,6 +380,12 @@ async function bootstrap(): Promise<void> {
     watcherHeartbeat: async (tenantId) => {
       const profile = tenantProfile(tenantId)
       if (!profile || isLocalAccount(profile.storageAccountName)) return { status: "missing" }
+      // The name comes from renderer storage: validate it before a token goes to the host it names.
+      try {
+        assertStorageAccountName(profile.storageAccountName)
+      } catch {
+        return { status: "error", message: "The backup storage account name is not valid, so the watcher heartbeat was not read." }
+      }
       const token = (await tokenFor(tenantId, profile.clientId, "https://storage.azure.com/.default")).accessToken
       const response = await bridgedFetch(`https://${profile.storageAccountName}.blob.core.windows.net/tenuvault-notification-state/heartbeat.json`, {
         headers: { authorization: `Bearer ${token}`, "x-ms-version": "2021-12-02" },

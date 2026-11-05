@@ -618,6 +618,24 @@ describe("Conditional Access change watching", () => {
     expect(status.lastPollAt).toBeNull()
   })
 
+  it("a failed poll overtaken by a restart leaves no old error or poll time behind", async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const w = world({ graph: () => async (_method: string, path: string) => {
+      if (path.startsWith("auditLogs/directoryAudits")) { await gate; return { status: 403, body: { error: { message: "Forbidden" } } } }
+      return { status: 200, body: { value: [] } }
+    } })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", conditionalAccessEnabled: true })
+    const polling = pollAuditWatch(w.deps, TENANT_A)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", conditionalAccessEnabled: false })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", conditionalAccessEnabled: true })
+    release()
+    await polling
+    const ca = (await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-status" })).body.auditWatch.conditionalAccess
+    expect(ca).toMatchObject({ enabled: true, lastPollAt: null, lastError: null })
+  })
+
   it("turning everything off also stops Conditional Access watching, free on every plan", async () => {
     const w = caWorld()
     await call(w.routes, PATH, { tenantId: TENANT_A, action: "update-audit-watch", enabled: true, conditionalAccessEnabled: true })

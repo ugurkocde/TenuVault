@@ -550,6 +550,8 @@ async function pollSource(deps: FeatureDeps, tenant: string, service: ChangeServ
     return { enqueued, changes: filtered.length, error: null }
   } catch (error) {
     const message = brief(error instanceof Error ? error.message : String(error))
+    // A failure of a poll that was overtaken by a restart is history too: keep nothing.
+    if (!stillCurrent(deps, tenant, service, state.generation)) return { enqueued: 0, changes: 0, error: null }
     saveAuditWatch(deps, tenant, sourcePatch(service, { lastPollAt: now.toISOString(), lastError: message }), { actor: null, reason: `${service === "intune" ? "Intune" : "Conditional Access"} audit poll failed: ${message}` })
     return { enqueued: 0, changes: 0, error: message }
   }
