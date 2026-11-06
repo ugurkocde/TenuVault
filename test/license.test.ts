@@ -1308,6 +1308,17 @@ describe("LicenseService organization licenses", () => {
     }
   })
 
+  it("offers key replacement while a key is active, trial flag or not", async () => {
+    // A trial key the service failed to flag as a trial is indistinguishable from a paid key
+    // here; without an in-place swap the buyer could not enter the paid key they just bought.
+    answer = () => granted("act-a")
+    const license = service()
+    await license.setKey("TEST-LICENSE-KEY", [TENANT])
+    const status = license.status([TENANT])
+    expect(status).toMatchObject({ hasKey: true, trial: false, keyState: "active" })
+    expect(renderLicensePage(status)).toContain("Use a different key")
+  })
+
   it("keeps the key's refusal when the tenant has no organization license", async () => {
     answer = ({ action }) => (action === "activate" ? denied("tenant_limit") : denied("tenant_not_licensed"))
     const license = service()

@@ -433,7 +433,7 @@ await check("license key expiry stays separate from offline verification and war
         shared: false, shareNeedsSignIn: false, displayKey: null, message: null,
       }
       window.__licenseExpiry = {
-        status: { ...status, hasKey: true, plan: "pro", tenantLimit: 1, validUntil: null, tenants: [tenant] },
+        status: { ...status, hasKey: true, keyState: "active", keyHint: "****-KEY", plan: "pro", tenantLimit: 1, validUntil: null, tenants: [tenant] },
       }
       const frame = document.createElement("iframe")
       frame.style.cssText = "position: fixed; inset: 0; width: 100%; height: 100%; border: 0; z-index: 9999;"
@@ -463,6 +463,12 @@ await check("license key expiry stays separate from offline verification and war
     const body = "window.__licenseExpiryFrame.contentDocument.body"
     const banner = `${body}.querySelector('a[href="#/license"].bg-amber-50')`
     assert(await waitForCondition(`${body}.innerText.includes("Pro plan active") && ${body}.innerText.includes("Works offline until")`), "offline verification label missing")
+    // An active key can always be swapped in place, trial flag or not: a trial key the
+    // service did not flag as a trial must not strand the buyer who just paid.
+    assert(await waitForCondition(`${body}.innerText.includes("Use a different key")`), "active key offers no replacement")
+    await evaluate(`[...${body}.querySelectorAll("button")].find(b => b.innerText.trim() === "Use a different key")?.click()`)
+    assert(await waitForCondition(`${body}.innerText.includes("The new key is activated for your tenants first.")`), "replacement form missing")
+    await screenshot("02b-license-replace-key")
     assert(await evaluate(`!${body}.innerText.includes("License valid until") && !${banner}`), "legacy token displayed a key expiry or warning")
 
     const setExpiry = async days => {

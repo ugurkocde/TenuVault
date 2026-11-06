@@ -8,11 +8,14 @@ import { clearCheckout, PURCHASE_WATCH_MS, trialUsed, useCheckoutOpenedAt } from
 import { toast } from "../lib/toast"
 
 /**
- * Whether a key copied now is taken as the purchased key. Only while the saved key is a trial
- * key (running or ended) or there is none, so a paid key is never swapped for some other
- * copied key. Within the watch window after a checkout opened here, and on the License page
- * while a trial key is saved (its text says so). Without a key, the License page's own
- * clipboard check handles that page.
+ * Whether a key copied now is taken as the purchased key. The signal is the watch window
+ * after a checkout opened here: within it, a copied key is the purchase, whatever key is
+ * saved now. That includes an active key with no trial flag, because a trial key the service
+ * failed to flag as a trial is indistinguishable from a paid one, and its buyer still has to
+ * get the paid key in. Outside the window an active key is never swapped for clipboard
+ * content; the exception is the License page while a trial key is saved, whose text promises
+ * the pickup. Replacement in the main process is safe to attempt either way: the saved key
+ * stays in place unless the new one is accepted for every tenant it covers.
  */
 export function watchesPurchaseKey(
   status: LicenseStatus | null,
@@ -22,9 +25,8 @@ export function watchesPurchaseKey(
 ): boolean {
   if (!status) return false
   const recent = openedAt !== null && now - openedAt < PURCHASE_WATCH_MS
-  if (!status.hasKey) return recent && pathname !== "/license"
-  if (!trialUsed(status)) return false
-  return recent || pathname === "/license"
+  if (recent) return true
+  return status.hasKey && trialUsed(status) && pathname === "/license"
 }
 
 /**

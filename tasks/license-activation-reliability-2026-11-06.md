@@ -10,6 +10,12 @@ Sources: two independent read-only reviews of this repo and of the licensing ser
 re-checked against the code after the reviews. Nothing in Polar, Vercel, or GitHub settings was
 inspected live; those items are listed as unverified.
 
+Implementation status (2026-11-06): merged as #288 (this plan, invariants, CODEOWNERS, coverage
+floor), #289 (task 1 desktop gate), #290 (tasks 2 and 7, desktop halves), #291 (task 18), #292
+(tasks 3 desktop half and 12), and TenuVault-Website #87 (tasks 8 and 9 website half). Checked
+items and "done" notes below reflect that. Everything still open needs either the other repo,
+the production audit (task 5), or a design decision; none of it blocks the merged hardening.
+
 ## Confirmed model (both reviews agree)
 
 - The Polar checkout email has no effect on activation. The key is a bearer credential.
@@ -60,7 +66,10 @@ inspected live; those items are listed as unverified.
   failure. Acceptance: a delayed-dependency test where every Polar call is slow still activates
   within budget, and a retry reuses the completed activation.
 - [ ] **3. Never let trial misclassification hide the paid-key replacement flow.** (desktop +
-  website, verified) The website only sets `trial: true` when `DESKTOP_TRIAL_PRODUCT_ID` is
+  website, verified; desktop half done: the License page offers "Use a different key" for any
+  active key, and clipboard pickup inside the checkout window no longer depends on the trial
+  flag. Remaining: website trial provenance and production readiness for
+  `DESKTOP_TRIAL_PRODUCT_ID`) The website only sets `trial: true` when `DESKTOP_TRIAL_PRODUCT_ID` is
   configured and a Polar product lookup succeeds; on failure it silently omits the flag
   (`service.ts:223`, `http.ts:131`). The desktop then treats the trial key as an ordinary active
   key: the replacement field only shows for a recognized trial or an inactive key
@@ -125,13 +134,16 @@ inspected live; those items are listed as unverified.
   entries on load, and move the split inside the guard.
   Acceptance: injected crashes and write failures at each boundary recover after restart with at
   least one usable credential.
-- [ ] **8. Paginate Polar benefit grants.** (website, verified) MSP tenant quantity is resolved
+- [x] **8. Paginate Polar benefit grants.** (website, verified; done: grants are walked page
+  by page in TenuVault-Website) MSP tenant quantity is resolved
   from `GET /benefits/:id/grants?limit=100` with no pagination (`polar.ts:190`). A customer
   whose matching grant lands past item 100 gets `tenant_quantity_unknown` and cannot activate.
   Follow pages until the grant is found or the list is exhausted. Product and trial key lookups
   share the pattern.
   Acceptance: a fixture with the grant on page 2 resolves and activates.
-- [ ] **9. Make rate limiting recoverable for legitimate batches.** (website + desktop, verified)
+- [ ] **9. Make rate limiting recoverable for legitimate batches.** (website + desktop,
+  verified; website half done: 429 responses carry `Retry-After`. Remaining: the desktop
+  honours it with a bounded retry instead of reporting generic unavailability)
   The licensing routes allow 20 requests per IP per minute (`http.ts:136`). Several admins
   behind one corporate NAT, or an MSP activating many tenants, can exceed it. The desktop treats
   429 as generic unavailability, does not retry, and can leave a key partly activated
@@ -159,7 +171,8 @@ inspected live; those items are listed as unverified.
   Acceptance: every supported upgrade path keeps installation identity and entitlement; the
   reverse (newer state, older app) either works or reports an explicit compatibility error
   without destroying the state.
-- [ ] **12. Close the first-purchase clipboard gap.** (desktop, verified) After opening checkout
+- [x] **12. Close the first-purchase clipboard gap.** (desktop, verified; done with task 3's
+  desktop half: pickup inside the checkout window now includes the License page) After opening checkout
   with no saved key, the purchase watcher excludes the License page
   (`PurchaseKeyWatcher.tsx:24`), and that page's own watcher only arms after a trial request
   (`LicensePage.tsx:323`). A first-time buyer returning there gets no pickup and must paste

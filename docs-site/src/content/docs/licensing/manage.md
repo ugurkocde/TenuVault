@@ -125,7 +125,7 @@ To keep Pro:
 
 If you do nothing, the trial key expires at the end of day 30, also when TenuVault is offline. Nothing is charged. One tenant continues on Community, the free plan for one tenant; a second tenant is no longer covered. Pro features turn off, and your backups stay where they are.
 
-To use a different key outside a trial, first click **Deactivate this machine**, then enter the new key. Replacing a running trial key with **Enter your new key** is the exception, and so is a saved key that is no longer active, for example after the trial ended: the **License** page then shows **Enter a new key**, which swaps the key the same way and leaves licenses shared by your organization in place. TenuVault does not accept a new key while the current one is active on this machine and shows "Deactivate this machine before entering a different license key."
+To use a different key while one is active, click **Use a different key** next to the saved key on the **License** page and paste the new key. The new key is activated first, for every tenant the saved key covers on this machine; only then is the saved key released. If the new key does not cover one of those tenants, nothing changes and the reason is shown. Replacing a running trial key with **Enter your new key** works the same way, and so does **Enter a new key** for a saved key that is no longer active, for example after the trial ended. Licenses shared by your organization stay in place through every swap.
 
 ## Manage your subscription
 
