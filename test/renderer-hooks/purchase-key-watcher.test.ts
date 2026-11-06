@@ -75,8 +75,8 @@ describe("purchase key pickup", () => {
     state.clipboard = null
     state.replaceKey.mockResolvedValue(active)
     mount()
-    await act(async () => { await openCheckout("trial-day-27", { status: trial }) })
-    expect(state.open).toHaveBeenCalledWith("checkout", { source: "trial-day-27", interval: "yearly" })
+    await act(async () => { await openCheckout("trial-day-27") })
+    expect(state.open).toHaveBeenCalledWith("checkout", { source: "trial-day-27" })
     // Nothing usable copied yet (the main process never returns the saved trial key).
     await focus()
     expect(state.replaceKey).not.toHaveBeenCalled()
@@ -117,8 +117,8 @@ describe("purchase key pickup", () => {
   it("opens one checkout for repeated clicks while the first is opening", async () => {
     let finish!: () => void
     state.open.mockImplementationOnce(() => new Promise<undefined>((resolve) => { finish = () => resolve(undefined) }))
-    const first = openCheckout("trial-ended", { status: trial })
-    const second = openCheckout("trial-ended", { status: trial })
+    const first = openCheckout("trial-ended")
+    const second = openCheckout("trial-ended")
     finish()
     await act(async () => { await Promise.all([first, second]) })
     expect(state.open).toHaveBeenCalledTimes(1)
