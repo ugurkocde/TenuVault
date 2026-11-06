@@ -426,6 +426,48 @@ describe("review round regressions", () => {
     expect(counts).toEqual([500, 500, 500, 500, 500, 1, 0])
   })
 
+  it("reads Intune audit pages without ordering and loses no older event when a continuation expires", async () => {
+    // Graph without $orderby: pages are not in time order. Here the newest events come first.
+    const many = Array.from({ length: 600 }, (_, i) => ({
+      id: `unordered-${i}`,
+      displayName: "Update policy",
+      componentName: "Policy",
+      activity: "Update",
+      activityOperationType: "Update",
+      activityResult: "Success",
+      activityDateTime: new Date(Date.parse("2026-10-17T06:00:00Z") + i * 60_000).toISOString(),
+      category: "Policy",
+      actor: { applicationId: "app-portal", userPrincipalName: "admin@contoso.test" },
+      resources: [{ displayName: `Policy ${i}`, type: "Policy" }],
+    })).reverse()
+    const paths: string[] = []
+    let expireContinuations = false
+    const w = world({ graph: () => async (_method: string, path: string) => {
+      paths.push(path)
+      const decoded = decodeURIComponent(path)
+      const offset = Number(decoded.match(/\$skiptoken=(\d+)/)?.[1] ?? 0)
+      // Only the continuation saved by the first poll has expired; fresh paging works.
+      if (offset && expireContinuations) {
+        expireContinuations = false
+        return { status: 400, body: { error: { message: "Invalid skip token" } } }
+      }
+      const since = decoded.match(/activityDateTime gt ([^&]+)/)?.[1]
+      const filtered = since ? many.filter((event) => event.activityDateTime > since) : many
+      const value = filtered.slice(offset, offset + 200)
+      const next = offset + 200 < filtered.length ? { "@odata.nextLink": `https://graph.microsoft.com/beta/deviceManagement/auditEvents?$skiptoken=${offset + 200}` } : {}
+      return { status: 200, body: { value, ...next } }
+    } })
+    saveAuditWatch(w.deps, TENANT_A, { enabled: true }, { actor: null, reason: "test" })
+    const first = await pollAuditWatch(w.deps, TENANT_A)
+    expect(decodeURIComponent(paths[0]!)).not.toContain("$orderby")
+    expect(first.changes).toBe(500)
+    // The 100 oldest events are on pages not read yet, so the watermark must not jump past them.
+    expireContinuations = true
+    const second = await pollAuditWatch(w.deps, TENANT_A)
+    expect(second.changes).toBe(100)
+    expect((await pollAuditWatch(w.deps, TENANT_A)).changes).toBe(0)
+  })
+
   it("does not resend events already processed on a continuation page after a capped poll", async () => {
     // 600 events two minutes apart: the cap is hit inside page 3, whose earlier events are
     // more than the overlap older than the last one processed.
