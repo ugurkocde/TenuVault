@@ -127,4 +127,15 @@ describe("cloudSetupCommand", () => {
     expect(command.toLowerCase()).not.toContain("recovery")
     expect(command.toLowerCase()).not.toContain("secret")
   })
+
+  it("passes the change report choice, and leaves it out when off", () => {
+    const base = { tenantId: TENANT, storageAccount: "tvbkp1", frequency: "daily", time: "02:00", weekday: 0, timeZone: "UTC", scope: "policies" } as const
+    expect(cloudSetupCommand(base)).not.toContain("-ChangeReport")
+    expect(cloudSetupCommand({ ...base, changeReport: "off" })).not.toContain("-ChangeReport")
+    expect(cloudSetupCommand({ ...base, changeReport: "names" })).toContain("-Scope policies -ChangeReport Names -GrantGraphRoles")
+    expect(cloudSetupCommand({ ...base, changeReport: "full" })).toContain("-ChangeReport Full")
+    // The tenant name goes with a report, quoted so PowerShell expands nothing in it.
+    expect(cloudSetupCommand({ ...base, changeReport: "full", tenantName: "O'Brien $(Get-Secret) & Co" })).toContain("-ChangeReport Full -TenantName 'O''Brien $(Get-Secret) & Co' -GrantGraphRoles")
+    expect(cloudSetupCommand({ ...base, changeReport: "off", tenantName: "Contoso" })).not.toContain("-TenantName")
+  })
 })

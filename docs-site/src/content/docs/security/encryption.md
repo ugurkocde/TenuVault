@@ -12,6 +12,7 @@ TenuVault encrypts every backup on your machine before it is written to disk or 
 | Backups on this device | The backup folder you choose | AES-256-GCM, with the TenuVault backup key |
 | Backups in Azure | The `intune-backups` container in your storage account | AES-256-GCM on your machine before upload, with the same backup key |
 | Cloud backup result notes | `tenuvault-backup-results/cloud-backup-outcomes/` in your storage account | Not encrypted by TenuVault, so the notification watcher can alert without the recovery key. Status, backup folder name, counts, failed type names, run id and time only; no policy content. See [the result note](/backups/cloud/#the-result-note). |
+| Cloud change reports | `tenuvault-backup-results/cloud-change-reports/` in your storage account, until the watcher sends them (7 days at most) | Not encrypted by TenuVault, and only when you turn them on, so the watcher can email them. Policy and setting names, and with **With setting values** their values; never secret values. See [Change reports by email](/backups/cloud/#change-reports-by-email). |
 | Audit log and tenant metadata on this device | The backup folder you choose | AES-256-GCM, with the TenuVault backup key |
 | Audit log and tenant metadata in Azure | The `audit-logs` and `tenant-metadata` containers | Not encrypted by TenuVault. Protected by your storage account's own encryption and access control. |
 | Microsoft token cache | Your user profile | Windows DPAPI or the macOS Keychain |

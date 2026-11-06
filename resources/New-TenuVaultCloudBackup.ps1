@@ -80,6 +80,22 @@
 .PARAMETER ExcludedFolders
     Comma separated type folders to leave out. Wins over -Scope.
 
+.PARAMETER TenantName
+    The tenant's name as change reports show it, in titles, the email subject and the file
+    name. Without it, reports name the tenant by its id.
+
+.PARAMETER ChangeReport
+    Off (default), Names or Full. With Names or Full, every complete backup is compared with the
+    previous complete backup, and a change report (what changed, setting by setting, and who
+    changed it from the Intune audit log) is left in the 'tenuvault-backup-results' container for
+    the notification watcher to send by email. Names lists which settings changed without their
+    values; Full includes the values. Secret values are never included. The report is not
+    encrypted with the recovery key, so the watcher can send it; it is deleted once sent, or
+    unsent after 7 days.
+
+.PARAMETER ChangeReportWithoutActors
+    Leave out who made each change (user principal names are personal data).
+
 .PARAMETER GrantGraphRoles
     Assign the Graph application roles to the managed identity now. Needs Global Administrator.
 
@@ -108,6 +124,9 @@ param(
     [string]$TimeZone = "UTC",
     [ValidateSet("everything", "policies")][string]$Scope = "policies",
     [string]$ExcludedFolders,
+    [string]$TenantName,
+    [ValidateSet("Off", "Names", "Full")][string]$ChangeReport = "Off",
+    [switch]$ChangeReportWithoutActors,
     [string]$AlertEmail,
     [switch]$NoFailureAlert,
     [switch]$IncludeDeviceCategories,
@@ -141,7 +160,8 @@ $appOnlyExcluded = if ($IncludeDeviceCategories) { "" } else { "DeviceCategories
 
 $variableNames = @(
     "TenuVaultTenantId-$tenantKey", "TenuVaultStorageAccount-$tenantKey", "TenuVaultKeyVault-$tenantKey",
-    "TenuVaultScope-$tenantKey", "TenuVaultExcludedFolders-$tenantKey", "TenuVaultAppOnlyExcluded-$tenantKey"
+    "TenuVaultScope-$tenantKey", "TenuVaultExcludedFolders-$tenantKey", "TenuVaultAppOnlyExcluded-$tenantKey",
+    "TenuVaultChangeReport-$tenantKey", "TenuVaultChangeReportActors-$tenantKey", "TenuVaultTenantName-$tenantKey"
 )
 
 # Validate every input before the first Azure write.
@@ -552,6 +572,9 @@ Set-TenuVaultAutomationVariable -Name "TenuVaultKeyVault-$tenantKey" -Value $Key
 Set-TenuVaultAutomationVariable -Name "TenuVaultScope-$tenantKey" -Value $Scope
 Set-TenuVaultAutomationVariable -Name "TenuVaultExcludedFolders-$tenantKey" -Value $ExcludedFolders
 Set-TenuVaultAutomationVariable -Name "TenuVaultAppOnlyExcluded-$tenantKey" -Value $appOnlyExcluded
+Set-TenuVaultAutomationVariable -Name "TenuVaultChangeReport-$tenantKey" -Value $ChangeReport.ToLowerInvariant()
+if ($TenantName) { Set-TenuVaultAutomationVariable -Name "TenuVaultTenantName-$tenantKey" -Value $TenantName.Trim() }
+Set-TenuVaultAutomationVariable -Name "TenuVaultChangeReportActors-$tenantKey" -Value $(if ($ChangeReportWithoutActors) { "false" } else { "true" })
 
 # ---------------------------------------------------------------------------
 # Failure alert, before the schedule is linked (same rule as the watcher).
@@ -717,6 +740,7 @@ Write-Host "  Runbook:             $runbookName (published)"
 Write-Host "  Storage account:     $StorageAccountName (container '$backupContainer', writer role has no delete)"
 Write-Host "  Backup results:      '$outcomeContainer' (result notes for the notification watcher, same writer role)"
 Write-Host "  Key Vault:           $KeyVaultName (secret '$secretName')"
+Write-Host "  Change reports:      $(switch ($ChangeReport) { 'Off' { 'off' } 'Names' { 'names only, sent by the notification watcher' } default { 'with setting values, sent by the notification watcher' } })$(if ($ChangeReport -ne 'Off' -and $ChangeReportWithoutActors) { ', without who made each change' })"
 if ($principalId) { Write-Host "  Managed identity:    $principalId" }
 if ($alertStatus) { Write-Host "  Failure alert:       $alertStatus" }
 Write-Host "  Schedule:            $(if ($linked) { "$Frequency at $Time $TimeZone ('$scheduleName')" } else { 'not linked yet' })"

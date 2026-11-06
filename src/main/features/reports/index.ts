@@ -390,7 +390,7 @@ async function printReport(deps: FeatureDeps, tenantId: string, report: ChangeRe
 }
 
 /** The email: a summary with the first changes, in the design of notification email, and the report attached. */
-export function reportEmail(record: Pick<ReportRecord, "report">, attachmentNote: string | null) {
+export function reportEmail(record: Pick<ReportRecord, "report">, attachmentNote: string | null, source: "desktop" | "azure-watcher" = "desktop") {
   const { report } = record
   const severity = report.summary.deleted > 0 || report.summary.critical > 0 ? "warning" as const : "info" as const
   const verbs = { added: "Created", modified: "Changed", deleted: "Deleted" } as const
@@ -417,7 +417,7 @@ export function reportEmail(record: Pick<ReportRecord, "report">, attachmentNote
       ...(item.activity[0] ? { at: item.activity[0].at } : {}),
     })),
     moreCount: Math.max(0, report.items.length - 20),
-    source: "desktop",
+    source,
   })
   return { subject: emailSubject(envelope), html: emailHtml(envelope) }
 }

@@ -90,6 +90,7 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
   const [time, setTime] = useState("02:00")
   const [weekday, setWeekday] = useState(0)
   const [excluded, setExcluded] = useState<string[]>(["Apps"])
+  const [changeReport, setChangeReport] = useState<"off" | "names" | "full">("off")
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
 
   useEffect(() => {
@@ -123,12 +124,14 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
       weekday,
       timeZone,
       scope: preset === "everything" ? "everything" : "policies",
+      changeReport,
+      tenantName: tenant?.name,
       resourceGroup: tenant?.resources?.resourceGroupName || undefined,
       location: tenant?.resources?.resourceGroupLocation || undefined,
       subscriptionId: tenant?.resources?.subscriptionId || undefined,
     })
     return preset === "custom" ? `${base} -ExcludedFolders "${excluded.join(",")}"` : base
-  }, [tenantId, storageAccount, frequency, time, weekday, timeZone, preset, excluded, tenant])
+  }, [tenantId, storageAccount, frequency, time, weekday, timeZone, preset, excluded, changeReport, tenant])
 
   const applyPaste = async () => {
     const config = parseCloudSetup(pasted)
@@ -300,15 +303,30 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
                   <label htmlFor="cloud-time" className="block text-sm font-medium text-gray-900">Time ({timeZone})</label>
                   <input id="cloud-time" type="time" className={select} value={time} onChange={(e) => setTime(e.target.value)} />
                 </div>
+                <div className="space-y-1.5">
+                  <label htmlFor="cloud-change-report" className="block text-sm font-medium text-gray-900">Change report by email</label>
+                  <select id="cloud-change-report" className={select} value={changeReport} onChange={(e) => setChangeReport(e.target.value as "off" | "names" | "full")}>
+                    <option value="off">Off</option>
+                    <option value="names">Which settings changed</option>
+                    <option value="full">With setting values</option>
+                  </select>
+                </div>
               </div>
+              {changeReport !== "off" && (
+                <p className="mt-2 max-w-2xl text-xs text-gray-500">
+                  After every complete cloud backup, what changed since the previous one, and who changed it, is emailed as HTML and Markdown by the
+                  Azure watcher, from its verified mailbox to its report recipients. The report is stored unencrypted in your storage account until it is
+                  sent, and secret values are never included. See Change reports in the setup guide.
+                </p>
+              )}
               {previewRuns.length > 0 && <div className="mt-4 max-w-sm"><RunsCalendar runs={previewRuns} /></div>}
             </li>
             <li>
               Create the Azure resources, in whichever way fits whoever owns Azure. The script also grants the Graph
               roles (as a Global Administrator) and creates the failure alert; the template deploys everything ARM
               can and lists the roles in its outputs. The Deploy to Azure link cannot carry the choices above with
-              it: enter frequency, day, time, timezone, scope and, for a custom choice, the excluded folders
-              (excludedFolders) in the template as well (its defaults are daily, everything except apps).
+              it: enter frequency, day, time, timezone, scope, the change report (changeReport) and, for a custom choice, the excluded folders
+              (excludedFolders) in the template as well (its defaults are daily, everything except apps, no change report).
               <div className="mt-3 flex flex-wrap gap-2">
                 <Button size="sm" disabled={community || localStorage} onClick={() => void bridge.app.openExternal(deployToAzureUrl())}>
                   <Cloud className="mr-2 h-4 w-4" /> Deploy to Azure

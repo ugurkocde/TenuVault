@@ -96,6 +96,25 @@ Backups and the status file are sealed with your recovery key, and the watcher n
 Setup creates the `tenuvault-backup-results` container when it is missing and gives the cloud backup identity the same **TenuVault Backup Writer** role there: it can add notes, not delete anything. It is a container of its own on purpose: the identity gets no write access to the watcher's state. The watcher's setup gives the watcher read and delete access to it; a watcher set up before this version needs its setup run once more. Without the watcher, notes stay in that container unread; they are small and harmless, and the watcher picks them up when you set it up. A run that cannot write its note (no container, no role) logs why and finishes normally; the note never changes the backup's result. Runs set up before this version leave no note until you run the cloud backup setup again (or redeploy the template) to grant the role.
 * **Retention** does not run in Azure, because the identity cannot delete. The next backup a desktop makes with an admin's sign-in applies retention to every backup of the tenant, cloud ones included. If a tenant backs up only from the cloud, run a desktop backup now and then. Do not substitute an age-based storage lifecycle rule: it has none of the desktop protections (newest backup kept, failed runs never counted, a hold for unlicensed runs) and deletes every backup once cloud runs have been stopped longer than its threshold, which is exactly when the backups matter.
 
+## Change reports by email
+
+A cloud backup can also produce a [change report](/reports/): what changed since the previous complete backup, setting by setting, with who made each change from the Intune audit log. The [Azure watcher](/notifications/#alerts-while-this-computer-is-off-the-azure-watcher) emails it, so the report arrives with no computer on. It is off unless you turn it on.
+
+1. In the app, under **Change report by email** next to the schedule, choose **Which settings changed** or **With setting values**. The setup command then carries `-ChangeReport Names` or `-ChangeReport Full`, and `-TenantName` with the tenant's name as reports show it. In the template, set `changeReport` to `names` or `full`, and `tenantName`.
+2. Run the setup script (or redeploy the template) so the runbook and its settings are updated.
+3. Set up the Azure watcher with verified mail, if you have not, or run its setup again so it has the version that sends reports. Reports go to the watcher's `-ReportRecipients`, or to its `-MailRecipients` when you set none. Any address works, inside or outside your organization.
+
+After every cloud backup that completes without warnings, the runbook compares it with the newest earlier complete backup of the tenant in the same storage account, made in the cloud or by the desktop app. It reads both with the recovery key, reads the readable setting names from Microsoft Graph and the Intune audit events between the two backups (with the permissions it already has), and writes the report to `tenuvault-backup-results/cloud-change-reports/<backup folder>.json`. The watcher sends it on its next run from its verified mailbox, with the report attached as an HTML file (opens in any browser and prints to PDF) and as Markdown, then deletes it.
+
+What to know before you turn it on:
+
+* **The report is not encrypted** with the recovery key while it waits in your storage account, because the watcher has no key. It holds policy and setting names and, with **With setting values**, their values. Secret values (passwords, keys, encrypted OMA-URI values) are never included. It stays until the watcher sends it, or 7 days at most. Anyone who can read that container can read it, and so can everyone who receives the email.
+* **Who made each change** is included by default. To leave user names out, add `-ChangeReportWithoutActors` to the setup command (template: `changeReportActors` false). Conditional Access changes have no actors in cloud reports: the Entra audit log needs a permission the cloud identity does not have.
+* A backup that completed with warnings gets no report, and neither does the first backup of a tenant. The runbook output says why.
+* Reports wait while the watcher's mail is not verified, and are deleted unsent after 7 days.
+* The report HTML uses the TenuVault design; [PDF branding](/settings/#pdf-branding) applies to desktop reports only.
+* Each report adds a few Graph reads per changed Settings Catalog setting and a few seconds to the run.
+
 ## License note
 
 Cloud backups only exist where a tenant's backups already go to Azure storage, which needs Pro or MSP, and setup is guided from the app under that licence. The runbook itself runs in your subscription and cannot check your TenuVault licence at 02:00. Keep the tenant licensed: without an active Pro or MSP license for the tenant you are not entitled to keep using the cloud runner, and desktop features such as restore stay gated as usual.
@@ -115,6 +134,7 @@ To stop cloud backups for a tenant, run the setup script with `-Remove`: it dele
 | The backup runs but TenuVault cannot open it | The vault secret and this device's keyring disagree. Import the recovery key of the vault secret, or update the secret to the current key. |
 | Two backups in the same second, one fails | The folder claim refused the second writer, by design. It writes nothing and the next slot runs normally. |
 | The app shows no cloud run | The pasted setup points at another storage account than the tenant uses in the app, or no run finished yet. Check the Automation job list first. |
+| No change report arrives | Check the runbook output of the backup: it says when there was no earlier complete backup or the backup completed with warnings. Then check the watcher: reports wait while its mail is not verified, and the heartbeat's last error names a failed send. |
 | Costs | Automation job minutes for one short run per slot, Key Vault operations, and the storage you already pay for. Retention does not run in Azure, so watch container growth. |
 
 ## Related pages
