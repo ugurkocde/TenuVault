@@ -55,13 +55,13 @@ describe("second tenant dialog", () => {
   it.each([
     ["running", { trial: true, trialEndsAt: new Date(Date.now() + 5 * 86_400_000).toISOString(), plan: "pro" as const, keyState: "active" as const }],
     ["ended", { trialEndedAt: new Date(Date.now() - 86_400_000).toISOString(), keyState: "failed" as const }],
-  ])("sends a %s trial to the checkout, yearly first, instead of the plans", async (_name, trial) => {
+  ])("sends a %s trial to the checkout instead of the plans", async (_name, trial) => {
     const items = render({ ...community, hasKey: true, ...trial })
     expect(items).not.toContain("Start 30 day free trial")
     expect(items).not.toContain("See plans")
     const buy = [...document.body.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Buy Pro")!
     await act(async () => { buy.click() })
-    expect(state.open).toHaveBeenCalledWith("checkout", { source: "second-tenant", plan: "pro", interval: "yearly" })
+    expect(state.open).toHaveBeenCalledWith("checkout", { source: "second-tenant", plan: "pro" })
   })
 
   it("offers the plans instead when a key or organization license is present", async () => {

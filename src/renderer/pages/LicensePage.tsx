@@ -170,7 +170,7 @@ function InactiveKeyReplacement({ status, busy, onReplace }: { status: LicenseSt
           : "Your saved key is not active, for example because your trial ended. Bought a new license? Enter its key here."}
       </p>
       <div className="flex flex-wrap gap-2">
-        <Button type="button" onClick={() => void openCheckout(status.trialEndedAt ? "license-page-trial-ended" : "license-page-inactive", { status })}>
+        <Button type="button" onClick={() => void openCheckout(status.trialEndedAt ? "license-page-trial-ended" : "license-page-inactive")}>
           <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
           Buy Pro
         </Button>
@@ -205,11 +205,11 @@ function TrialStatus({ status, busy, onReplace }: { status: LicenseStatus; busy:
         Pro features turn off. Your backups stay where they are. To keep Pro, buy a plan, then copy the license key from the purchase email and return to TenuVault: it replaces the trial key by itself. Or enter it here.
       </p>
       <div className="flex flex-wrap gap-2">
-        <Button type="button" onClick={() => void openCheckout("license-page-trial", { status })}>
+        <Button type="button" onClick={() => void openCheckout("license-page-trial")}>
           <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
           Buy Pro
         </Button>
-        <Button type="button" variant="outline" onClick={() => void openCheckout("license-page-trial", { plan: "msp", status })}>
+        <Button type="button" variant="outline" onClick={() => void openCheckout("license-page-trial", { plan: "msp" })}>
           <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
           Buy MSP
         </Button>

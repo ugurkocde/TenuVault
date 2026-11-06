@@ -50,7 +50,7 @@ export function PlanPromptButton({
   }
   if (action === "checkout") {
     return (
-      <Button type="button" variant={variant} size={size} onClick={() => void openCheckout(source, { plan, status })}>
+      <Button type="button" variant={variant} size={size} onClick={() => void openCheckout(source, { plan })}>
         <ExternalLink className="h-4 w-4" aria-hidden="true" />
         {plan === "msp" ? "Buy MSP" : "Buy Pro"}
       </Button>

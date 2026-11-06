@@ -30,7 +30,6 @@ import { communityBannerVisible, earliestExpiringTenant, formatDate, formatDateT
 import { openCheckout } from "../lib/purchase"
 import { PlanPromptButton } from "./PlanPromptButton"
 import { PurchaseKeyWatcher } from "./PurchaseKeyWatcher"
-import type { LicenseStatus } from "../../shared/ipc"
 import { Button } from "~/components/ui/button"
 import { toast, Toaster } from "../lib/toast"
 import { bridge } from "../lib/bridge"
@@ -108,11 +107,10 @@ function BannerLink({ tone, icon, children, action, onDismiss, dismissing }: { t
   )
 }
 
-/** A trial notice: what it says, Buy Pro (the checkout opens on yearly), Details and Dismiss. */
-function TrialBanner({ urgent, source, status, onDismiss, dismissing, children }: {
+/** A trial notice: what it says, Buy Pro, Details and Dismiss. */
+function TrialBanner({ urgent, source, onDismiss, dismissing, children }: {
   urgent: boolean
   source: string
-  status: LicenseStatus
   onDismiss: () => void
   dismissing: boolean
   children: ReactNode
@@ -124,7 +122,7 @@ function TrialBanner({ urgent, source, status, onDismiss, dismissing, children }
           <Clock className="h-4 w-4" />
         </span>
         <span className="min-w-0 flex-1">{children}</span>
-        <Button type="button" size="sm" onClick={() => void openCheckout(source, { status })}>
+        <Button type="button" size="sm" onClick={() => void openCheckout(source)}>
           <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
           Buy Pro
         </Button>
@@ -138,16 +136,15 @@ function TrialBanner({ urgent, source, status, onDismiss, dismissing, children }
 }
 
 /** Day 20 and day 27 of the no-card trial: when it ends, and the checkout that keeps Pro. */
-function TrialReminderBanner({ reminder, status, onDismiss, dismissing }: {
+function TrialReminderBanner({ reminder, onDismiss, dismissing }: {
   reminder: NonNullable<ReturnType<typeof trialReminder>>
-  status: LicenseStatus
   onDismiss: () => void
   dismissing: boolean
 }) {
   const final = reminder.stage === "day-27"
   const when = reminder.daysLeft === 1 ? "tomorrow" : `in ${reminder.daysLeft} days`
   return (
-    <TrialBanner urgent={final} source={`trial-${reminder.stage}`} status={status} onDismiss={onDismiss} dismissing={dismissing}>
+    <TrialBanner urgent={final} source={`trial-${reminder.stage}`} onDismiss={onDismiss} dismissing={dismissing}>
       Your Pro trial ends {when}, on {formatDate(reminder.endsAt)}.{" "}
       {final
         ? "Buy Pro now to keep daily backups, full restore and drift revert for both tenants."
@@ -157,14 +154,13 @@ function TrialReminderBanner({ reminder, status, onDismiss, dismissing }: {
 }
 
 /** After the no-card trial: what continues, and the checkout that brings Pro back. */
-function TrialEndedBanner({ endedAt, status, onDismiss, dismissing }: {
+function TrialEndedBanner({ endedAt, onDismiss, dismissing }: {
   endedAt: string
-  status: LicenseStatus
   onDismiss: () => void
   dismissing: boolean
 }) {
   return (
-    <TrialBanner urgent source="trial-ended" status={status} onDismiss={onDismiss} dismissing={dismissing}>
+    <TrialBanner urgent source="trial-ended" onDismiss={onDismiss} dismissing={dismissing}>
       Your Pro trial ended on {formatDate(endedAt)}. TenuVault continues on Community for one tenant. Buy Pro to get daily
       backups, full restore and drift revert back for both tenants.
     </TrialBanner>
@@ -227,7 +223,7 @@ function LicenseBanner() {
   const inactive = unlicensedTenants(status)
   const ended = preferencesLoaded ? trialEndedNotice(status, trialDismissedAt) : null
   if (ended) {
-    return <TrialEndedBanner endedAt={ended.endedAt} status={status} onDismiss={() => void dismissTrial()} dismissing={dismissing} />
+    return <TrialEndedBanner endedAt={ended.endedAt} onDismiss={() => void dismissTrial()} dismissing={dismissing} />
   }
   if (inactive.length > 0) {
     // Without a paid license, Pro is what covers the tenant: the trial, Buy Pro after it, or the plans.
@@ -266,7 +262,7 @@ function LicenseBanner() {
   if (!reminder) return expiry
   return (
     <>
-      <TrialReminderBanner reminder={reminder} status={status} onDismiss={() => void dismissTrial()} dismissing={dismissing} />
+      <TrialReminderBanner reminder={reminder} onDismiss={() => void dismissTrial()} dismissing={dismissing} />
       {expiry}
     </>
   )

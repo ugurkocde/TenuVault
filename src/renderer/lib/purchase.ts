@@ -69,20 +69,16 @@ export function trialUsed(status: LicenseStatus | null | undefined): boolean {
 }
 
 /**
- * Opens the checkout that asks for payment right away. Trial users chose after a month of use,
- * so their checkout opens on yearly; monthly is on the same page.
+ * Opens the checkout that asks for payment right away, monthly first with yearly on the same
+ * page. With a trial key, the main process creates it for the trial's customer.
  */
-export function openCheckout(
-  source: string,
-  options: { plan?: "pro" | "msp"; status?: LicenseStatus | null } = {},
-): Promise<void> {
+export function openCheckout(source: string, options: { plan?: "pro" | "msp" } = {}): Promise<void> {
   // A trial checkout waits for the licensing service before the browser opens; repeated
   // clicks meanwhile do not open more checkouts.
   opening ??= bridge.license
     .open("checkout", {
       source,
       ...(options.plan ? { plan: options.plan } : {}),
-      ...(trialUsed(options.status) ? { interval: "yearly" as const } : {}),
     })
     .then(() => remember(Date.now()))
     .finally(() => {
