@@ -200,3 +200,39 @@ describe('Backup list', () => {
     expect(backups[0].policies.deviceConfigurations).toBe(1)
   })
 })
+
+describe('Drift comparison for change reports', () => {
+  function storage(files: Record<string, Record<string, unknown>>) {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input))
+      if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
+      if (url.pathname === '/api/revert-metadata') return Response.json({ reverts: {} })
+      if (url.hostname === 'graph.microsoft.com') return Response.json({ value: [] })
+      if (url.searchParams.get('delimiter')) return new Response(prefixes(['backup-2026-11-06-020000', 'backup-2026-11-05-020000']))
+      const prefix = url.searchParams.get('prefix')
+      if (prefix) return new Response(Object.keys(files).filter(name => name.startsWith(prefix)).map(name => `<Blob><Name>${name}</Name></Blob>`).join(''))
+      const path = decodeURIComponent(url.pathname.split('/').slice(2).join('/'))
+      if (path.endsWith('/metadata.json')) return Response.json({ Status: 'Success' })
+      return files[path] ? Response.json(files[path]) : new Response('', { status: 404 })
+    }))
+  }
+  const run = (documentItems: boolean) => drift(new NextRequest('http://tenuvault.internal/api/test', { method: 'POST', body: JSON.stringify({ ...args, documentItems }) }))
+
+  it('lists every setting of added and deleted items and never a secret, only when asked', async () => {
+    storage({
+      'backup-2026-11-05-020000/DeviceConfigurations/Old.json': { id: 'old', displayName: 'Old', passwordMinimumLength: 8 },
+      'backup-2026-11-05-020000/DeviceConfigurations/Wifi.json': { id: 'wifi', displayName: 'Wifi', ssid: 'corp', preSharedKey: 'old-key' },
+      'backup-2026-11-06-020000/DeviceConfigurations/Wifi.json': { id: 'wifi', displayName: 'Wifi', ssid: 'corp', preSharedKey: 'new-key' },
+      'backup-2026-11-06-020000/DeviceConfigurations/New.json': { id: 'new', displayName: 'New', cameraBlocked: true, omaSettings: [{ displayName: 'Key', omaUri: './x', isEncrypted: true, value: 'plain-secret' }] },
+    })
+    const plain = await (await run(false)).json()
+    expect(plain.drifts.find((entry: any) => entry.changeType === 'added').changes).toBeUndefined()
+
+    const body = await (await run(true)).json()
+    const byName = (name: string) => body.drifts.find((entry: any) => entry.configName === name)
+    expect(byName('New').changes.map((change: any) => change.field)).toEqual(['displayName', 'cameraBlocked', 'omaSettings[Key]'])
+    expect(byName('Old').changes).toEqual([{ field: 'displayName', oldValue: 'Old' }, { field: 'passwordMinimumLength', oldValue: 8 }])
+    expect(byName('Wifi').changes).toEqual([{ field: 'secretValues', oldValue: '[redacted]', newValue: '[redacted]', displayName: 'Secret values' }])
+    expect(JSON.stringify(body)).not.toMatch(/old-key|new-key|plain-secret/)
+  })
+})

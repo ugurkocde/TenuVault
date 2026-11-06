@@ -299,7 +299,7 @@ async function deliverEmail(deps: FeatureDeps, tenantId: string, channel: Channe
   return { ...base, ok: false, attempts: 1, status: response.status, error: brief(graphError(response.body as GraphItem, response.status)) }
 }
 
-function graphError(body: GraphItem, status: number): string {
+export function graphError(body: GraphItem, status: number): string {
   const error = body?.error as GraphItem | undefined
   const message = typeof error?.message === "string" ? error.message : ""
   return message ? `Microsoft Graph returned ${status}: ${message}` : `Microsoft Graph returned ${status}`
@@ -309,7 +309,7 @@ function graphError(body: GraphItem, status: number): string {
  * Resolves channel recipients to addresses. Explicit and list addresses pass through;
  * picked groups expand through transitive members, guests excluded, capped.
  */
-export async function resolveRecipients(graph: Awaited<ReturnType<FeatureDeps["graph"]>>, channel: ChannelRecord): Promise<{ addresses: string[] } | { error: string }> {
+export async function resolveRecipients(graph: Awaited<ReturnType<FeatureDeps["graph"]>>, channel: Pick<ChannelRecord, "recipients">): Promise<{ addresses: string[] } | { error: string }> {
   const addresses = new Set<string>()
   for (const recipient of channel.recipients) {
     if (recipient.type === "address") {
@@ -356,7 +356,7 @@ async function listGroupMembers(graph: Awaited<ReturnType<FeatureDeps["graph"]>>
   return { addresses }
 }
 
-function nextPath(body: GraphItem): string | null {
+export function nextPath(body: GraphItem): string | null {
   const next = body["@odata.nextLink"]
   if (typeof next !== "string") return null
   return next.replace(/^https:\/\/graph\.microsoft\.com\/(beta|v1\.0)\//, "")

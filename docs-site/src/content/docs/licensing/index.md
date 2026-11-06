@@ -62,6 +62,7 @@ Eligible nonprofits can use Pro at no cost. Email [support@tenuvault.com](mailto
 | Baseline upgrades that keep your customizations | | Yes | Yes |
 | Dev to Prod settings promotion | | Yes | Yes |
 | Scheduled health review and notifications | | Yes | Yes |
+| [Change reports](/reports/): what changed and who changed it, as PDF, Markdown or JSON, and by email after every scheduled backup | | Yes | Yes |
 | Organization baseline customizations | | Yes | Yes |
 | Custom baselines from OpenIntuneBaseline or a tenant snapshot | | Yes | Yes |
 | Full white-label PDF reports | | Yes | Yes |

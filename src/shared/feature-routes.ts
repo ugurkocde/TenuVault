@@ -36,6 +36,7 @@ export const FEATURE_ROUTES = {
   "/api/notifications": { feature: "notifications" },
   "/api/standards": { feature: "customizations", prefixes: { "standard-": "goldenStandards" } },
   "/api/custom-baselines": { feature: "customBaselines" },
+  "/api/reports": { feature: "changeReports" },
   "/api/cis-remediation": {
     feature: "baselineAllPlatforms",
     recovery: ["rollback-preview", "rollback-create", "rollback-review", "rollback-approve", "rollback-reject", "rollback-apply"],

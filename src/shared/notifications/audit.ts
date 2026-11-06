@@ -35,6 +35,11 @@ export interface AuditChange {
   actorAppId: string | null
   actorAppName: string | null
   activity: string
+  /**
+   * IDs of the objects the event names (auditResource.resourceId), so a change report can tell who
+   * changed a backed-up item. Never part of a notification.
+   */
+  resourceIds?: string[]
 }
 
 const text = (value: unknown): string | null => {
@@ -110,6 +115,7 @@ export function mapAuditEvent(raw: AuditEventRaw): AuditChange | null {
     actorAppId: actor ? text(actor.applicationId) : null,
     actorAppName: actor ? text(actor.applicationDisplayName) : null,
     activity: text(raw.activity) ?? text(raw.displayName) ?? "Change",
+    resourceIds: resources.flatMap((entry) => text(entry.resourceId) ?? []).slice(0, 20),
   }
 }
 

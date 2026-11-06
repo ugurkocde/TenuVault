@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url"
 import { isGuid, isMicrosoftLoginUrl, sameRendererDocument } from "../shared/security"
 import { rendererStorageKey, rendererStorageValue } from "./renderer-storage"
 import { prepareGeneratedFile, prepareSaveFile, type PreparedFile } from "./save-file"
-import { PdfBrandingPolicy, PdfBrandingStore, setPdfBrandingPolicy } from "./pdf-branding"
+import { pdfBrandingFor, PdfBrandingPolicy, PdfBrandingStore, setPdfBrandingPolicy } from "./pdf-branding"
 import { prepareOibReportFile, printHtmlToPdf } from "./report-export"
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, safeStorage, shell } from "electron"
 import { basename, dirname, join } from "node:path"
@@ -79,6 +79,7 @@ import type { FeatureDeps } from "./features/deps"
 import { backupAuthorization, featureAccess, withRecoveryBackups } from "./features/recovery"
 import { TenantRecords } from "./features/records"
 import { DriftJobs, driftScanRoutes } from "./drift/jobs"
+import { afterScheduledBackup } from "./features/reports"
 import { ModuleSettings } from "./services/settings"
 import { disabledFolders } from "../shared/services/modules"
 import { servicesStatus } from "./services/status"
@@ -372,6 +373,8 @@ async function bootstrap(): Promise<void> {
     }),
     // Outside the bridge: only customer-configured endpoints use it.
     externalFetch: withNetworkErrors(chromiumFetch),
+    printPdf: (html, options) => printHtmlToPdf(html, options, (window) => new BrowserWindow(window)),
+    pdfBranding: (tenantId) => pdfBrandingFor(tenantId),
     notify: (title, body) => {
       if (Notification.isSupported()) new Notification({ title, body }).show()
     },
@@ -684,6 +687,8 @@ async function bootstrap(): Promise<void> {
       .then((logged) => { if (!logged.ok) console.warn(`[audit] Scheduled backup audit write failed (${logged.status})`) })
       .catch((error: unknown) => console.warn("[audit] Scheduled backup audit write failed:", error instanceof Error ? error.message : String(error)))
     }
+    // A change report of this backup, when the tenant asked for one; it needs the admin's sign-in.
+    if (ok && trigger === "scheduled") void afterScheduledBackup(featureDeps, tenantId, job.backupFolder ?? null).catch(() => undefined)
     if (job.authMode === "app-only") backupReader.recordRun(tenantId, result.status)
     // Also after runs with the admin's sign-in: an expired reader no longer runs, but still needs renewing.
     void remindBackupReaderRenewal(tenantId, profile.name).catch(() => undefined)

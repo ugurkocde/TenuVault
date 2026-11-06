@@ -21,8 +21,24 @@ export interface Hub {
   tabs: HubTab[]
 }
 
-/** The roadmap workflows, grouped into three hubs so the sidebar stays short. */
+/** The roadmap workflows, grouped into hubs so the sidebar stays short. */
 export const HUBS: Hub[] = [
+  {
+    id: "reports",
+    title: "Reports",
+    description: "What changed in the tenant between two backups, setting by setting, and who changed it. Save as PDF, Markdown or JSON, or send by email after every scheduled backup.",
+    tabs: [
+      {
+        id: "changes",
+        label: "Change reports",
+        feature: "changeReports",
+        path: "/api/reports",
+        summary: "A report of every added, changed and deleted item between two backups, with the changed settings, every setting of new and deleted items, and who made each change from the Intune and Entra audit logs.",
+        points: ["PDF with your branding, Markdown for a wiki or Git repository, and JSON.", "Sent by email to any address after every scheduled backup, or on demand.", "Reads only your backups and the audit logs; nothing in the tenant is changed."],
+        Component: lazy(() => import("./reports/ChangeReportsTab")),
+      },
+    ],
+  },
   {
     id: "governance",
     title: "Governance",

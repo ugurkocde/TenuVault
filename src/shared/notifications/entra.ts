@@ -91,5 +91,6 @@ export function mapEntraAuditEvent(raw: EntraAuditRaw): AuditChange | null {
     actorAppId: app ? text(app.appId) : null,
     actorAppName: app ? text(app.displayName) : null,
     activity,
+    resourceIds: targets.flatMap((target) => text(target.id) ?? []).slice(0, 20),
   }
 }
