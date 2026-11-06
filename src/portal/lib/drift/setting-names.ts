@@ -57,6 +57,11 @@ interface BatchItem {
  * lookup and returns what was read, since names only make the page easier to read.
  */
 export async function readSettingNames(ids: string[], graph: GraphCall, signal?: AbortSignal): Promise<SettingNames> {
+  return (await readSettingNamesReport(ids, graph, signal)).names
+}
+
+/** readSettingNames, saying whether any lookup failed (so some names may be missing for that reason). */
+export async function readSettingNamesReport(ids: string[], graph: GraphCall, signal?: AbortSignal): Promise<{ names: SettingNames; failed: boolean }> {
   const uncached = [...new Set(ids.filter((id) => !definitions.has(id)))]
   let failed = false
   for (let start = 0; start < uncached.length && !failed; start += BATCH_SIZE) {
@@ -98,7 +103,7 @@ export async function readSettingNames(ids: string[], graph: GraphCall, signal?:
     if (definition.name) names.settings[id] = definition.name
     Object.assign(names.options, definition.options)
   }
-  return names
+  return { names, failed }
 }
 
 /** For tests. */

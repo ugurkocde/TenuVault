@@ -22,7 +22,7 @@ const definitionOf = (value: Json | undefined) => (isObject(value) && typeof val
 const sortKey = (value: Json) => definitionOf(value) ?? JSON.stringify(value)
 
 /** Configuration without metadata, empty values or ordering, so equal configuration is equal JSON. */
-function canonical(value: Json | undefined, ignored: Set<string> = METADATA): Json | undefined {
+export function canonical(value: Json | undefined, ignored: Set<string> = METADATA): Json | undefined {
   if (Array.isArray(value)) {
     const list = value.map((entry) => canonical(entry, ignored)).filter((entry): entry is Json => entry !== undefined)
     return list.length ? list.sort((a, b) => sortKey(a).localeCompare(sortKey(b))) : undefined
@@ -73,8 +73,11 @@ function differences(oib: Json | undefined, tenant: Json | undefined, path: stri
   out.push({ path, oibValue: show(oib), tenantValue: show(tenant) })
 }
 
+/** A policy's settings keyed by setting (definition ID, property or ADMX definition), with canonical values. */
+export type SettingIndex = Map<string, { label: string; value: Json | undefined }>
+
 /** Compares two keyed sets of canonical settings. */
-function compareMaps(oib: Map<string, { label: string; value: Json | undefined }>, tenant: Map<string, { label: string; value: Json | undefined }>): ValidationResult {
+function compareMaps(oib: SettingIndex, tenant: SettingIndex): ValidationResult {
   const mismatches: SettingDiff[] = []
   const oibOnly: SettingDiff[] = []
   const tenantOnly: SettingDiff[] = []
@@ -110,53 +113,56 @@ function compareMaps(oib: Map<string, { label: string; value: Json | undefined }
 const list = (value: Json | undefined): Item[] => (Array.isArray(value) ? value.filter(isObject) : [])
 
 /** Settings Catalog (and Endpoint security) settings, keyed by root setting definition. */
-export function compareSettings(oib: Json | undefined, tenant: Json | undefined): ValidationResult {
-  const index = (settings: Json | undefined) => {
-    const map = new Map<string, { label: string; value: Json | undefined }>()
-    for (const setting of list(settings)) {
-      const instance = setting.settingInstance
-      const id = definitionOf(instance)
-      if (id) map.set(id, { label: settingLabel(id), value: canonical(instance) })
-    }
-    return map
+export function catalogIndex(settings: Json | undefined): SettingIndex {
+  const map: SettingIndex = new Map()
+  for (const setting of list(settings)) {
+    const instance = setting.settingInstance
+    const id = definitionOf(instance)
+    if (id) map.set(id, { label: settingLabel(id), value: canonical(instance) })
   }
-  return compareMaps(index(oib), index(tenant))
+  return map
 }
 
-/** Policies whose settings are top-level properties: compliance, device configuration, update profiles. */
-export function compareFlat(oib: Item, tenant: Item): ValidationResult {
-  const index = (policy: Item) => {
-    const map = new Map<string, { label: string; value: Json | undefined }>()
-    for (const key of Object.keys(policy)) {
-      if (FLAT_IGNORED.has(key) || annotation(key)) continue
-      const value = canonical(policy[key], FLAT_IGNORED)
-      if (value !== undefined) map.set(key, { label: key.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/^./, (c) => c.toUpperCase()), value })
-    }
-    return map
+export function compareSettings(oib: Json | undefined, tenant: Json | undefined): ValidationResult {
+  return compareMaps(catalogIndex(oib), catalogIndex(tenant))
+}
+
+/** Settings of policies whose settings are top-level properties: compliance, device configuration, update profiles, app protection. */
+export function flatIndex(policy: Item): SettingIndex {
+  const map: SettingIndex = new Map()
+  for (const key of Object.keys(policy)) {
+    if (FLAT_IGNORED.has(key) || annotation(key)) continue
+    const value = canonical(policy[key], FLAT_IGNORED)
+    if (value !== undefined) map.set(key, { label: key.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/^./, (c) => c.toUpperCase()), value })
   }
-  return compareMaps(index(oib), index(tenant))
+  return map
+}
+
+export function compareFlat(oib: Item, tenant: Item): ValidationResult {
+  return compareMaps(flatIndex(oib), flatIndex(tenant))
 }
 
 const lastGuid = (value: unknown) => (typeof value === "string" ? /([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})'?\)?$/i.exec(value)?.[1]?.toLowerCase() : undefined)
 
 /** Administrative templates, keyed by ADMX definition: enabled state and presentation values. */
-export function compareAdminTemplate(oib: Item, tenant: Item): ValidationResult {
-  const index = (policy: Item) => {
-    const map = new Map<string, { label: string; value: Json | undefined }>()
-    for (const value of list(policy.definitionValues)) {
-      const definition = isObject(value.definition) ? value.definition : undefined
-      const id = (typeof definition?.id === "string" ? definition.id.toLowerCase() : undefined) ?? lastGuid(value["definition@odata.bind"])
-      if (!id) continue
-      const presentations = list(value.presentationValues).map((presentation) => ({
-        presentation: (isObject(presentation.presentation) && typeof presentation.presentation.id === "string" ? presentation.presentation.id.toLowerCase() : lastGuid(presentation["presentation@odata.bind"])) ?? null,
-        value: presentation.value ?? null,
-        values: presentation.values ?? null,
-      }))
-      map.set(id, { label: typeof definition?.displayName === "string" ? definition.displayName : id, value: canonical({ enabled: value.enabled ?? false, presentations } as Json) })
-    }
-    return map
+export function adminTemplateIndex(policy: Item): SettingIndex {
+  const map: SettingIndex = new Map()
+  for (const value of list(policy.definitionValues)) {
+    const definition = isObject(value.definition) ? value.definition : undefined
+    const id = (typeof definition?.id === "string" ? definition.id.toLowerCase() : undefined) ?? lastGuid(value["definition@odata.bind"])
+    if (!id) continue
+    const presentations = list(value.presentationValues).map((presentation) => ({
+      presentation: (isObject(presentation.presentation) && typeof presentation.presentation.id === "string" ? presentation.presentation.id.toLowerCase() : lastGuid(presentation["presentation@odata.bind"])) ?? null,
+      value: presentation.value ?? null,
+      values: presentation.values ?? null,
+    }))
+    map.set(id, { label: typeof definition?.displayName === "string" ? definition.displayName : id, value: canonical({ enabled: value.enabled ?? false, presentations } as Json) })
   }
-  return compareMaps(index(oib), index(tenant))
+  return map
+}
+
+export function compareAdminTemplate(oib: Item, tenant: Item): ValidationResult {
+  return compareMaps(adminTemplateIndex(oib), adminTemplateIndex(tenant))
 }
 
 /** Folders whose policies can be validated setting by setting. */

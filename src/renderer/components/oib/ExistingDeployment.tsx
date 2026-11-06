@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { AlertTriangle, ArrowRight, FileText, RefreshCw } from "lucide-react"
 import { cn } from "~/lib/utils"
 import { formatReportDate } from "../../../shared/compliance/presentation"
+import { VALIDATED_FOLDERS } from "../../../shared/oib/compare"
 import { policyTypeName } from "../../../shared/oib/licensing"
 import type { ReportPayload } from "../../../shared/oib/report"
 import { OIB_PLATFORMS, type MatchStatus, type OibPlatform } from "../../../shared/oib/types"
@@ -14,6 +15,7 @@ import { clearJob, useOibJob } from "./jobs"
 import { LoadProgress, usePlatformLoader } from "./LoadProgress"
 import { joinRows, MatchNotes, rowKey, STATUS_LABELS, StatusBadge, ambiguousReason, versionText, type MatchRow } from "./match-ui"
 import { Notice, savePdf, useSaveNotice } from "./notices"
+import { PolicyChanges, PolicySettings } from "./PolicySettings"
 import { ChangeVersions } from "./Versions"
 import { ReviewDeploy, type DeployJob, type DeployOutcome } from "./ReviewDeploy"
 
@@ -137,7 +139,7 @@ export function ExistingDeployment({ selections }: { selections: Selections }) {
   }
 
   const description = step === "platforms" ? "Compare the OpenIntuneBaseline policies in your tenant with the selected version, then deploy missing or outdated policies."
-    : step === "compare" && loader.loaded.length ? <>Comparing against OpenIntuneBaseline {versionsLabel(loader.loaded.map(l => l.catalog))}. Policies are matched on the OIBID in their description, or on their name for older versions; settings are not compared here. Use Policy Validation to check settings.</>
+    : step === "compare" && loader.loaded.length ? <>Comparing against OpenIntuneBaseline {versionsLabel(loader.loaded.map(l => l.catalog))}. Policies are matched on the OIBID in their description, or on their name for older versions. This list does not compare settings: open Show what changes on a policy with an update, or use Policy Validation.</>
     : undefined
 
   return <>
@@ -174,6 +176,10 @@ export function ExistingDeployment({ selections }: { selections: Selections }) {
         </div>
         <ul className="mt-4 divide-y divide-gray-100 overflow-hidden rounded-2xl bg-gray-50">{shown.map(r => {
           const k = rowKey(r), mode = selected.get(k), reason = disabledReason(r)
+          const catalog = loader.loaded.find(l => l.catalog.platform === r.platform)?.catalog
+          // An update compares with the tenant policy it would replace; other rows show the OIB settings.
+          // The tenant policy must be of the same type: a match through an earlier OIBID can be another type.
+          const changes = r.match.status === "outdated" && r.match.tenant?.folder === r.policy.folder && VALIDATED_FOLDERS.includes(r.policy.folder) ? r.match.tenant : undefined
           return <li key={k} className="flex flex-wrap items-start gap-3 p-3 text-sm">
             <input type="checkbox" aria-label={`Select ${r.policy.name}`} checked={!!mode} disabled={!!reason} title={reason} onChange={() => toggle(r)} className="mt-1 h-4 min-h-0 w-4 shrink-0" />
             <div className="min-w-0 flex-1">
@@ -183,6 +189,9 @@ export function ExistingDeployment({ selections }: { selections: Selections }) {
               {reason && r.match.status !== "current" && <p className="mt-1 text-xs text-gray-600">{reason}</p>}
               {r.match.legacy.length > 0 && <div className="mt-1 text-xs text-amber-800"><p>{r.match.legacy.length === 1 ? "Another copy" : "Other copies"} of this policy also deployed (older versions or extra copies), review for removal; {r.match.legacy.length === 1 ? "it keeps" : "they keep"} applying until removed:</p><ul className="mt-1 list-disc space-y-0.5 pl-5">{r.match.legacy.map(l => <li key={l.id}>{l.name}<span className="ml-2 font-mono opacity-80">{l.id}</span></li>)}</ul></div>}
               {r.policy.status === "deprecated" && <p className="mt-1 text-xs text-amber-800">Deprecated{r.policy.replacements.length ? `; replaced by ${r.policy.replacements.map(x => x.name).join(", ")}` : ""}.</p>}
+              {catalog && (changes
+                ? <PolicyChanges tenant={tenant} catalog={catalog} source={r.policy.source} targetId={changes.id} targetName={changes.name} />
+                : <PolicySettings tenant={tenant} catalog={catalog} source={r.policy.source} name={r.policy.name} />)}
             </div>
             {mode && r.match.status === "outdated" && <div className="w-full text-xs text-gray-700 sm:w-80">
               <label>How to update
