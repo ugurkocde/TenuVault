@@ -170,8 +170,10 @@ outside the code (tasks 4, 5, 20, and the last steps of 13 and 14), each noted b
   Acceptance: a throttled multi-tenant activation completes without re-entering the key.
 - [x] **10. Share one executable contract between the two repos.** (both, verified gap; done:
   `test/fixtures/license-contract.json` here and `contract/desktop-license-contract.json` in the
-  website, byte-identical, with tokens from the service's own signer; the website's CI fails when
-  the copies differ, also daily) Token
+  website, byte-identical, with tokens from the service's own signer, each tested by its side.
+  The website's CI fails when the copies differ, on every push and daily, so drift from either
+  side fails there; this repository's CI cannot read the private website repository, so it does
+  not fail on its own. That fits the client-first rule: changes start here) Token
   versions, refusal reason strings, and response shapes currently match, and the website gates
   v2 tokens on `appVersion` (website `service.ts:204`), but no test runs the other side's code. A
   payload or reason change can pass both suites and break fresh activation everywhere.
@@ -183,8 +185,10 @@ outside the code (tasks 4, 5, 20, and the last steps of 13 and 14), each noted b
   Acceptance: changing a fixture in one repo fails the other repo's CI until updated.
 - [x] **11. Freeze released on-disk license state as fixtures.** (desktop, verified gap; done:
   `test/fixtures/license/v0.4.2`, written by the released 0.4.2 code itself, loaded offline by
-  `test/license-upgrade.test.ts`. The OS encryption layer cannot be reproduced in CI, and the
-  reverse direction is not tested) Tests
+  `test/license-upgrade.test.ts`. The OS encryption layer cannot be reproduced in CI. The reverse
+  direction is only partly met: an older app keeps a newer state entitled, but it drops a
+  `pendingRelease` record when it saves, after which those replaced-key activations can only be
+  released in the customer portal) Tests
   cover legacy cleanup, restarts over the same store, and v1/v2 tokens, but nothing loads bytes
   written by a previous release. A store format, `userData` path, or macOS signing identity
   change would lose the key and burn an installation slot on upgrade.
