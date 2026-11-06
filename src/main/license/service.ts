@@ -942,18 +942,30 @@ export class LicenseService {
         ...signedIn.filter((id) => !keyTenants.includes(id) && this.tenantPresent(id) && !this.valid(id)),
       ]
       if (targets.length === 0) throw new Error("Sign in to a tenant to switch to the new license key.")
+      // The sharing choice each tenant has with the current key. The new key's activations are
+      // staged without touching sharing (shareWithTenant false only removes a mapping of the new
+      // key itself), so a refused swap leaves every tenant's sharing exactly as it was; the
+      // choice is carried over and published once the swap is saved.
+      const choices = new Map(targets.map((tenant) => {
+        const entry = this.state?.activations[tenant]
+        return [tenant, entry && !entry.source ? entry.shared : undefined] as const
+      }))
       const accepted: { tenant: string; data: Record<string, unknown> }[] = []
       const errors = new Map<string, unknown>()
       for (const tenant of targets) {
         try {
-          const data = await this.call("activate", {
+          const answer = await this.call("activate", {
             key: trimmed,
             installId: this.installId,
             tenantId: tenant,
             os: this.platform,
             appVersion: this.options.appVersion,
-            ...(await this.sharingFields(tenant)),
+            shareWithTenant: false,
           }, unchanged)
+          // Keep the tenant's sharing choice, not the staged answer's.
+          const { shared: _staged, sharedReason: _reason, ...data } = answer
+          const choice = choices.get(tenant)
+          if (choice !== undefined) data.shared = choice
           accepted.push({ tenant, data })
           // The same checks accept() applies, made before anything is released, so an
           // unusable answer costs nothing.
@@ -1021,6 +1033,16 @@ export class LicenseService {
         throw new Error(`The new license key could not be saved. Your current license is unchanged. ${errorText(error)}`)
       }
       this.message = null
+      // Publish the carried sharing choice for the new key. A tenant that shared moves its
+      // organization license to the new key here; until this succeeds (it is retried with every
+      // refresh) the tenant's admins keep the previous key's sharing.
+      for (const tenant of covered) {
+        if (choices.get(tenant) !== true || !this.state?.activations[tenant]) continue
+        await this.refreshCurrent(tenant, true).catch((error: unknown) => {
+          if (error instanceof StaleLicenseRequest) throw error
+          console.warn(`[license] Sharing for ${tenant} not moved to the new key yet: ${errorText(error)}`)
+        })
+      }
       await this.releasePrevious()
     })
   }

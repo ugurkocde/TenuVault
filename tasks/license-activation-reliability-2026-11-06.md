@@ -10,11 +10,14 @@ Sources: two independent read-only reviews of this repo and of the licensing ser
 re-checked against the code after the reviews. Nothing in Polar, Vercel, or GitHub settings was
 inspected live; those items are listed as unverified.
 
-Implementation status (2026-11-06): merged as #288 (this plan, invariants, CODEOWNERS, coverage
-floor), #289 (task 1 desktop gate), #290 (tasks 2 and 7, desktop halves), #291 (task 18), #292
-(tasks 3 desktop half and 12), and TenuVault-Website #87 (tasks 8 and 9 website half). Checked
-items and "done" notes below reflect that. Everything still open needs either the other repo,
-the production audit (task 5), or a design decision; none of it blocks the merged hardening.
+Implementation status (2026-11-06): first round merged as #288 (this plan, invariants, CODEOWNERS,
+coverage floor), #289 (task 1 desktop gate), #290 (tasks 2 and 7, desktop halves), #291 (task 18),
+#292 (tasks 3 desktop half and 12), and TenuVault-Website #87 (tasks 8 and 9 website half). Second
+round: #294 (tasks 7 and 9, desktop), #295 (task 19), #296 (task 10, desktop), #300 (task 15, task
+13 docs), #298 (tasks 11, 14, 16 soak, task 5 record), #299 (task 6, desktop), and
+TenuVault-Website #88 (tasks 1, 2, 3 and 4, website), #89 (task 13), #90 (task 6, website) and #91
+(task 10, website). What remains needs the owner: accounts, purchases or settings
+outside the code (tasks 4, 5, 20, and the last steps of 13 and 14), each noted below.
 
 ## Confirmed model (both reviews agree)
 
@@ -37,11 +40,13 @@ the production audit (task 5), or a design decision; none of it blocks the merge
 
 ## P0: can break activation for every buyer, or for a buyer who just paid
 
-- [ ] **1. Prove the shipped app carries the production signing key.** (desktop + website,
-  verified gap; desktop gate done: release builds now fail on the placeholder or any key whose
-  fingerprint differs from the one pinned in `scripts/license-public-key.ts`, read back from the
-  shipped 0.4.2 and nightly installers. Remaining: the website-side readiness mirror so a signer
-  change there is caught too) The build only checks the baked-in key is *an* Ed25519 key
+- [x] **1. Prove the shipped app carries the production signing key.** (desktop + website,
+  verified gap; done: release builds fail on the placeholder or any key whose fingerprint differs
+  from the one pinned in `scripts/license-public-key.ts`, read back from the shipped 0.4.2 and
+  nightly installers, and the website pins the same fingerprint: its production health check
+  fails when the signer differs. That check answered `ok` after deploy, so the live signer is the
+  key in the shipped apps. A server-signed golden token through the built verifier was not added:
+  the two pinned fingerprints cover the same failure without a production-signed fixture) The build only checks the baked-in key is *an* Ed25519 key
   (`electron.vite.config.ts:43`), the placeholder only warns (line 56), and the release workflow
   only checks the secret is non-empty (`.github/workflows/release.yml:170`). A wrong but valid
   key (sandbox, preview, rotated) passes every gate and every entitlement then fails verification
@@ -53,9 +58,10 @@ the production audit (task 5), or a design decision; none of it blocks the merge
   final rebuilt artifact of a stable promotion too. Mirror the fingerprint as a readiness check
   on the website so a signer change there is caught from the other side.
   Acceptance: an unrelated Ed25519 key and the placeholder both fail nightly and stable gates.
-- [ ] **2. Fix the activation deadline mismatch.** (desktop + website, verified; desktop half
-  done: the request deadline is now the named `LICENSE_REQUEST_TIMEOUT_MS` at 45 seconds.
-  Remaining: bound the service's end-to-end activation work inside that budget) The desktop
+- [x] **2. Fix the activation deadline mismatch.** (desktop + website, verified; done: the
+  desktop waits `LICENSE_REQUEST_TIMEOUT_MS`, 45 seconds, and the service bounds all Polar calls
+  of a request by `LICENSE_BUDGET_MS`, 35 seconds, answering a retryable 502 when it runs out;
+  tested with every Polar call slow, and the retry reuses the activation) The desktop
   gives up after 20 seconds (`src/main/license/service.ts:428`). The server allows each Polar
   call 10 seconds (`polar.ts:81`) and the route 60 seconds (`activate/route.ts:7`), and
   activation makes several sequential calls (validate, read, allowance, key details, create,
@@ -65,11 +71,12 @@ the production audit (task 5), or a design decision; none of it blocks the merge
   desktop deadline, and give the desktop a waiting state for the full budget instead of a
   failure. Acceptance: a delayed-dependency test where every Polar call is slow still activates
   within budget, and a retry reuses the completed activation.
-- [ ] **3. Never let trial misclassification hide the paid-key replacement flow.** (desktop +
-  website, verified; desktop half done: the License page offers "Use a different key" for any
-  active key, and clipboard pickup inside the checkout window no longer depends on the trial
-  flag. Remaining: website trial provenance and production readiness for
-  `DESKTOP_TRIAL_PRODUCT_ID`) The website only sets `trial: true` when `DESKTOP_TRIAL_PRODUCT_ID` is
+- [x] **3. Never let trial misclassification hide the paid-key replacement flow.** (desktop +
+  website, verified; done: the License page offers "Use a different key" for any active key,
+  clipboard pickup no longer depends on the trial flag, production readiness requires
+  `DESKTOP_TRIAL_PRODUCT_ID`, and a failed trial lookup alerts the operator instead of passing
+  silently. Trial provenance is still read live from Polar rather than recorded: with the
+  replacement flow independent of it, a misclassification now only affects trial wording) The website only sets `trial: true` when `DESKTOP_TRIAL_PRODUCT_ID` is
   configured and a Polar product lookup succeeds; on failure it silently omits the flag
   (`service.ts:223`, `http.ts:131`). The desktop then treats the trial key as an ordinary active
   key: the replacement field only shows for a recognized trial or an inactive key
@@ -83,7 +90,11 @@ the production audit (task 5), or a design decision; none of it blocks the merge
   Acceptance: an active token without a trial claim can be replaced in place; a lookup outage
   cannot silently relabel a known trial key as paid.
 - [ ] **4. Extend the existing 15 minute cron into a real buyer canary.** (website + ops,
-  verified gap) Today's probe checks configuration presence and Polar access with a nonexistent
+  verified gap; partly done: the scheduled check verifies both benefit ids are license key
+  benefits of the organization, pings `LICENSING_HEARTBEAT_URL` after a pass, and every request
+  logs an outcome line by `appVersion`. Owner: create a heartbeat monitor and set the variable,
+  and create a dedicated canary key for a real activation, as described in the website's
+  `docs/licensing-checks.md`) Today's probe checks configuration presence and Polar access with a nonexistent
   key. It does not prove that a real key can activate, that activation writes are permitted, that
   the configured benefit IDs match the products on sale, or that a shipped desktop build accepts
   the signature. HTTP success alone is not enough: a wrong baked-in key yields successful server
@@ -95,7 +106,11 @@ the production audit (task 5), or a design decision; none of it blocks the merge
   by the client) so a bad nightly shows up before stable promotion.
   Acceptance: wrong signer, denied activation write, wrong benefit ID, and a stopped cron each
   produce an alert.
-- [ ] **5. Audit the production configuration nobody has verified.** (ops, unverified) Checkout
+- [ ] **5. Audit the production configuration nobody has verified.** (ops; mostly done: the
+  live Polar benefits, products and portal settings, the Vercel variable names and the deployed
+  service were checked on 6 November and recorded in `docs/release-setup.md`, whose token scopes
+  were corrected. Vercel values are sensitive and cannot be read back, so the service now checks
+  them itself. Owner: the sandbox purchase rehearsal and Polar's key email delivery) Checkout
   and licensing use separate configuration, so customers can pay while activation is broken:
   wrong benefit IDs reject genuine keys as `invalid_key`, a wrong Polar environment yields
   `not_found`, missing benefit or subscription read scopes break MSP quantity resolution.
@@ -111,8 +126,10 @@ the production audit (task 5), or a design decision; none of it blocks the merge
 
 ## P1: breaks activation for a subset of buyers or tenants
 
-- [ ] **6. Stop `replaceKey` from changing tenant sharing before it commits.** (desktop +
-  website, verified) Replacement activates the new key first (`service.ts:803`), and that already
+- [x] **6. Stop `replaceKey` from changing tenant sharing before it commits.** (desktop +
+  website, verified; done: replacement activations are staged with `shareWithTenant: false`,
+  keep the previous choice and publish it after the save, and a trial key can no longer take a
+  tenant's mapping from another key) Replacement activates the new key first (`service.ts:803`), and that already
   applies the server sharing default and overwrites the tenant mapping
   (website `service.ts:505`, `tenant-store.ts:59`). A failed swap rolls back activations but not
   the mapping, an explicit opt-out is not carried forward, and another machine still holding the
@@ -122,9 +139,9 @@ the production audit (task 5), or a design decision; none of it blocks the merge
   with the previous choice; make the store refuse stale-key overwrites.
   Acceptance: a failed replacement leaves mappings untouched, a successful one preserves an
   opt-out, and an old trial key refresh cannot reclaim a tenant.
-- [ ] **7. Make key replacement crash-safe.** (desktop, verified; the stored-state half is
-  done: token decoding cannot throw on damaged state and malformed activations are dropped on
-  load. Remaining: persist a recoverable record before releasing the old key's activations)
+- [x] **7. Make key replacement crash-safe.** (desktop, verified; done: damaged stored state
+  cannot throw, and the new key is saved with a `pendingRelease` record before anything is
+  released; releases are retried after refreshes and before deactivation)
   `replaceKey` releases the old
   activations before persisting the new state (`service.ts:839`). A crash or failed write in
   between restarts with the old key whose activations are gone. Separately, `load()` validates
@@ -141,9 +158,9 @@ the production audit (task 5), or a design decision; none of it blocks the merge
   Follow pages until the grant is found or the list is exhausted. Product and trial key lookups
   share the pattern.
   Acceptance: a fixture with the grant on page 2 resolves and activates.
-- [ ] **9. Make rate limiting recoverable for legitimate batches.** (website + desktop,
-  verified; website half done: 429 responses carry `Retry-After`. Remaining: the desktop
-  honours it with a bounded retry instead of reporting generic unavailability)
+- [x] **9. Make rate limiting recoverable for legitimate batches.** (website + desktop,
+  verified; done: 429 carries `Retry-After`, and the desktop waits and retries up to twice for
+  waits up to 20 seconds, otherwise says when to retry. The 20 per minute allowance is unchanged)
   The licensing routes allow 20 requests per IP per minute (`http.ts:136`). Several admins
   behind one corporate NAT, or an MSP activating many tenants, can exceed it. The desktop treats
   429 as generic unavailability, does not retry, and can leave a key partly activated
@@ -151,7 +168,12 @@ the production audit (task 5), or a design decision; none of it blocks the merge
   Return `Retry-After`, review the allowance, and add bounded desktop retries that name the
   affected tenants.
   Acceptance: a throttled multi-tenant activation completes without re-entering the key.
-- [ ] **10. Share one executable contract between the two repos.** (both, verified gap) Token
+- [x] **10. Share one executable contract between the two repos.** (both, verified gap; done:
+  `test/fixtures/license-contract.json` here and `contract/desktop-license-contract.json` in the
+  website, byte-identical, with tokens from the service's own signer, each tested by its side.
+  The website's CI fails when the copies differ, on every push and daily, so drift from either
+  side fails there; this repository's CI cannot read the private website repository, so it does
+  not fail on its own. That fits the client-first rule: changes start here) Token
   versions, refusal reason strings, and response shapes currently match, and the website gates
   v2 tokens on `appVersion` (website `service.ts:204`), but no test runs the other side's code. A
   payload or reason change can pass both suites and break fresh activation everywhere.
@@ -161,7 +183,12 @@ the production audit (task 5), or a design decision; none of it blocks the merge
   new token versions ship in the client one stable before the server emits them, reasons are
   add-only, client first.
   Acceptance: changing a fixture in one repo fails the other repo's CI until updated.
-- [ ] **11. Freeze released on-disk license state as fixtures.** (desktop, verified gap) Tests
+- [x] **11. Freeze released on-disk license state as fixtures.** (desktop, verified gap; done:
+  `test/fixtures/license/v0.4.2`, written by the released 0.4.2 code itself, loaded offline by
+  `test/license-upgrade.test.ts`. The OS encryption layer cannot be reproduced in CI. The reverse
+  direction is only partly met: an older app keeps a newer state entitled, but it drops a
+  `pendingRelease` record when it saves, after which those replaced-key activations can only be
+  released in the customer portal) Tests
   cover legacy cleanup, restarts over the same store, and v1/v2 tokens, but nothing loads bytes
   written by a previous release. A store format, `userData` path, or macOS signing identity
   change would lose the key and burn an installation slot on upgrade.
@@ -179,7 +206,10 @@ the production audit (task 5), or a design decision; none of it blocks the merge
   manually.
   Arm the same single pickup on the License page within the 6 hour checkout window.
   Acceptance: one copied paid key triggers exactly one activation attempt on return.
-- [ ] **13. Tell buyers which email does what.** (website + docs, from the email analysis) The
+- [x] **13. Tell buyers which email does what.** (website + docs, from the email analysis; done
+  on the pricing and support pages, the trial and first getting-started emails, and the docs
+  site. Polar sends the license key email itself; owner: add the same line to the Polar product
+  or benefit description if Polar shows it there) The
   key binds to the tenant signed in to the app, whoever enters it, while billing, invoices, key
   retrieval, and the Polar portal belong to the checkout email. A buyer who pays with a finance
   or personal mailbox and loses that email currently has no way to recover the key (the app only
@@ -191,7 +221,9 @@ the production audit (task 5), or a design decision; none of it blocks the merge
 
 ## P2: preventive, do before the situation exists
 
-- [ ] **14. Support overlapping signing keys before any rotation.** (both, verified) The desktop
+- [x] **14. Support overlapping signing keys before any rotation.** (both, verified; done: the app
+  trusts a key ring, `ROTATION_LICENSE_PUBLIC_KEYS`, and `docs/release-setup.md` has the rotation
+  runbook. Owner: keep an offline backup of the production private key and test restoring it) The desktop
   trusts exactly one public key and the website signs with one private key. Rotating either side
   first blocks fresh activation on the entire installed base that has not updated; cached tokens
   only soften this for existing tenants. The rotation note in `docs/release-setup.md:113` does
@@ -201,7 +233,10 @@ the production audit (task 5), or a design decision; none of it blocks the merge
   version. Keep an offline backup of the private key and test restoring it.
   Acceptance: fixtures signed by old and new keys both verify during the overlap, and a written
   rotation runbook exists with the order above.
-- [ ] **15. Diagnose clock and persistence failures in user terms.** (desktop, verified) A clock
+- [x] **15. Diagnose clock and persistence failures in user terms.** (desktop, verified; done:
+  a fast clock and a wrong signer have distinct messages, and the reset runbook is in the
+  troubleshooting docs. Session-only licensing turned out not to reach buyers: packaged builds
+  refuse to start without OS encryption) A clock
   more than 14 days fast rejects a freshly issued token with the same message as a signing-key
   mismatch (`service.ts:183`). Without OS encryption the license is session-only and the buyer
   learns this only after a restart (`src/main/index.ts:191`). An app-state reset silently
@@ -210,9 +245,10 @@ the production audit (task 5), or a design decision; none of it blocks the merge
   licensing before activation completes, and document install-slot release after a reset in the
   support runbook.
   Acceptance: fast-clock and no-encryption test cases produce actionable, distinct messages.
-- [ ] **16. Give the license path release armour.** (process, partly done: `CODEOWNERS`, the
-  per-directory coverage floor, and the invariants in `RELEASING.md` landed with this plan; the
-  enforced nightly soak and a ruleset requirement for code-owner approval remain) Add
+- [x] **16. Give the license path release armour.** (process; done: `CODEOWNERS`, the coverage
+  floor, the invariants in `RELEASING.md`, and a release gate that holds licensing changes on
+  nightly for 24 hours before any stable release, tags included. A ruleset requiring code-owner
+  approval was left off on purpose: with one maintainer it would block every license change) Add
   `CODEOWNERS` (none exists)
   requiring maintainer review for `src/main/license/`, `src/main/storage/secure-store.ts`, the
   key injection in `electron.vite.config.ts`, and both workflow files. Add a per-file coverage
@@ -223,9 +259,9 @@ the production audit (task 5), or a design decision; none of it blocks the merge
   releases, which can currently bypass the promoted-nightly path.
   Acceptance: a licensing change cannot merge unreviewed, ship same-day to stable, or drop
   license coverage silently.
-- [ ] **17. Dogfood the buyer path on every release.** (ops, partly done: the promotion check
-  is now named in `RELEASING.md`; keeping maintainer machines on nightly with a real key is an
-  ongoing habit, not a change) Keep the maintainers' own machines
+- [x] **17. Dogfood the buyer path on every release.** (ops; done as far as code goes: the
+  promotion check is named in `RELEASING.md`; keeping maintainer machines on nightly with a real
+  key is an ongoing habit) Keep the maintainers' own machines
   on the nightly channel with a real Pro key against a real tenant, and add one manual check to
   the stable promotion: the promoted nightly still shows Pro active and can refresh. This is the
   cheapest catch for failures that only appear with production keys, config, and proxies.
@@ -259,7 +295,12 @@ documented in the network requirements. Two gaps remain:
   test that fails if MSAL bypasses the injected fetch.
   Acceptance: token, trial, and checkout requests provably go through `net.fetch` regardless of
   msal-node internals or bootstrap order.
-- [ ] **19. Handle proxies that require authentication.** (desktop, verified gap) There is no
+- [x] **19. Handle proxies that require authentication.** (desktop, verified gap; done: the
+  app's fetch is `net.fetch` rebuilt on `net.request` with a proxy login listener, since
+  `net.fetch` cancels every challenge; one prompt per proxy, remembered in the encrypted store,
+  wrong credentials asked again at most three times. Verified behind a local authenticating
+  proxy: licensing and Microsoft requests with real Chromium, and the built app's prompt, retry
+  and remembered credentials; not with a real Microsoft sign-in and backup) There is no
   Electron `login` event handler, so a proxy that challenges for credentials gets none and the
   request fails. Transparent proxies and PAC setups without auth are unaffected. The same
   applies to egress that demands a client certificate, which has no selection handler either.
@@ -268,7 +309,9 @@ documented in the network requirements. Two gaps remain:
   guidance and network requirements in the meantime.
   Acceptance: behind an authenticated test proxy, sign-in, licensing, and a backup all succeed
   after one credential prompt, and the credentials survive a restart.
-- [ ] **20. Keep tenuvault.com allowlist-friendly and prove the MITM path periodically.** (ops)
+- [ ] **20. Keep tenuvault.com allowlist-friendly and prove the MITM path periodically.** (ops;
+  owner: submit the domain to the web-filter vendors and record a MITM activation check per
+  stable release)
   Web filters often block uncategorized or newly seen domains regardless of certificates, and
   nothing in the app can override that; the current mitigations are the published destination
   list, the 14 day offline grace, and Community working with tenuvault.com fully blocked.
