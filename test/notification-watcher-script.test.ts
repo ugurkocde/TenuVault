@@ -124,6 +124,8 @@ describe("Azure notification watcher scripts", () => {
     expect(runbook).toContain('Get-TvAutomationVariable "TenuVaultAlertRules"')
     // An unreadable value falls back to sending everything, never to silence.
     expect(runbook).toContain("every event goes to every destination until it is set again")
+    expect(runbook).toContain("holds no alert this runbook can use")
+    expect(setup).toContain("No alert in the file takes these watcher events")
     expect(runbook).toContain("alertRules=")
   })
 

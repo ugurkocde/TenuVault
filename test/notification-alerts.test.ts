@@ -53,11 +53,29 @@ describe("changed setting names", () => {
     expect(intuneChangedSettings(resource)).toEqual({ names: ["RoleScopeTagIds"], more: 0 })
   })
 
-  it("caps the names and counts the rest", () => {
+  it("keeps every changed name for matching, and shows 15 with a count of the rest", () => {
     const resource = { modifiedProperties: Array.from({ length: 22 }, (_, index) => ({ displayName: `Setting${index}`, oldValue: "a", newValue: "b" })) }
     const result = intuneChangedSettings(resource)
-    expect(result.names).toHaveLength(15)
-    expect(result.more).toBe(7)
+    expect(result).toEqual({ names: resource.modifiedProperties.map((entry) => entry.displayName), more: 0 })
+    const change: AuditChange = { ...intune[1]!, settings: result.names, settingsMore: 0 }
+    expect(changeMatches(parseConditions({ settingNames: ["Setting21"] }), change, "intune")).toBe(true)
+    const envelope = changeEvent("intune", { ...context, change })
+    expect(envelope.items[0]!.change).toMatchObject({ settingsMore: 7 })
+    expect(envelope.items[0]!.change!.settings).toHaveLength(15)
+    expect(envelope.summary).toContain("Setting14 and 7 more.")
+  })
+
+  it("keeps two policies that share a name as two lines", () => {
+    const twin: AuditChange = { ...intune[1]!, auditId: "twin", resourceId: "77777777-0000-0000-0000-000000000007", settings: ["TpmRequired"] }
+    const digest = changeEvent("intune", { ...context, change: intune[1]! })
+    expect(digest.items).toHaveLength(1)
+    const plan = planChangeAlerts("intune", [intune[1]!, twin], [{ id: "a", enabled: true, eventTypes: ["intune.change"], minSeverity: "info" }], context)
+    expect(plan[0]!.envelope.items.map((item) => item.change?.resourceId)).toEqual(["44444444-0000-0000-0000-000000000004", "77777777-0000-0000-0000-000000000007"])
+  })
+
+  it("names an object that only changed between null and empty", () => {
+    const result = entraChangedSettings([{ modifiedProperties: [{ displayName: "ConditionalAccessPolicy", oldValue: JSON.stringify({ sessionControls: null }), newValue: JSON.stringify({ sessionControls: {} }) }] }])
+    expect(result.names).toEqual(["sessionControls"])
   })
 
   it("compares lists whole and stops at three levels", () => {
@@ -125,7 +143,7 @@ describe("planning alerts for one poll", () => {
   })
 
   it("sends the changes past the per-check limit in one summary", () => {
-    const many: AuditChange[] = Array.from({ length: MAX_EACH_PER_CHECK + 3 }, (_, index) => ({ ...intune[1]!, auditId: `bulk-${index}`, resourceName: `Policy ${index}`, at: `2026-11-06T10:${String(index).padStart(2, "0")}:00.000Z` }))
+    const many: AuditChange[] = Array.from({ length: MAX_EACH_PER_CHECK + 3 }, (_, index) => ({ ...intune[1]!, auditId: `bulk-${index}`, resourceId: `bulk-id-${index}`, resourceName: `Policy ${index}`, at: `2026-11-06T10:${String(index).padStart(2, "0")}:00.000Z` }))
     const plan = planChangeAlerts("intune", many, [{ id: "each", enabled: true, eventTypes: ["intune.change"], minSeverity: "info", delivery: "each" }], context)
     expect(plan).toHaveLength(MAX_EACH_PER_CHECK + 1)
     expect(plan.at(-1)!.envelope.title).toBe("Intune changes: Contoso")

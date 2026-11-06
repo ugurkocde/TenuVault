@@ -8,8 +8,10 @@
  * object, which says nothing about what changed, so callers ask for updates only.
  */
 
-/** How many setting names one change carries; the rest is counted. */
+/** How many setting names a message shows; the rest is counted. */
 export const MAX_SETTING_NAMES = 15
+/** How many names a change keeps for alert matching, so a filter on any changed setting still works. */
+export const MAX_TRACKED_SETTINGS = 200
 const MAX_SETTING_NAME = 120
 
 /** Bookkeeping fields Intune and Entra log on every write. They never count as a setting. */
@@ -44,7 +46,7 @@ function bounded(names: string[]): ChangedSettings {
     seen.add(key)
     unique.push(name)
   }
-  return { names: unique.slice(0, MAX_SETTING_NAMES), more: Math.max(0, unique.length - MAX_SETTING_NAMES) }
+  return { names: unique.slice(0, MAX_TRACKED_SETTINGS), more: Math.max(0, unique.length - MAX_TRACKED_SETTINGS) }
 }
 
 /** Parses a logged value that holds a whole object as JSON, or null. */
@@ -85,9 +87,10 @@ function differingPaths(before: Record<string, unknown>, after: Record<string, u
     const path = prefix ? `${prefix}.${key}` : key
     const childA = record(a)
     const childB = record(b)
-    if (depth < 3 && childA && childB) differingPaths(childA, childB, path, depth + 1, out)
-    else if (depth < 3 && (childA || childB)) differingPaths(childA ?? {}, childB ?? {}, path, depth + 1, out)
-    else out.push(path.slice(0, MAX_SETTING_NAME))
+    const countBefore = out.length
+    if (depth < 3 && (childA || childB)) differingPaths(childA ?? {}, childB ?? {}, path, depth + 1, out)
+    // A leaf, or an object that only changed between null and empty: the path itself changed.
+    if (out.length === countBefore) out.push(path.slice(0, MAX_SETTING_NAME))
   }
 }
 

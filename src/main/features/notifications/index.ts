@@ -289,7 +289,9 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
         alerts.push({ id: rule.id, title: rule.title, eventTypes: rule.eventTypes.filter((type) => type !== "test"), minSeverity: rule.minSeverity, destinations: WATCHER_DESTINATIONS.filter((entry) => destinations.includes(entry)), delivery: parseDelivery(rule.delivery), conditions: parseConditions(rule.conditions) })
       }
       const document: WatcherAlerts = { schema: WATCHER_ALERTS_SCHEMA, alerts }
-      return { document, json: JSON.stringify(document, null, 2), skipped }
+      // Events the watcher produces that no copied alert takes stop reaching any destination.
+      const uncovered = WATCHER_EVENT_TYPES.filter((type) => !alerts.some((alert) => alert.eventTypes.includes(type)))
+      return { document, json: JSON.stringify(document, null, 2), skipped, uncovered }
     },
 
     "revoke-rule": ({ tenantId, body, deps }) => {
@@ -449,6 +451,8 @@ function ruleSummary(rule: RuleRecord): string {
 }
 
 const WATCHER_DESTINATIONS: WatcherDestination[] = ["webhook", "teams", "mail"]
+/** The event types the Azure watcher produces. */
+const WATCHER_EVENT_TYPES = ["intune.change", "entra.change", "backup.failed", "backup.warning", "backup.succeeded", "backup.missed"] as const
 
 function conditions(value: unknown): RuleRecord["conditions"] {
   if (value === undefined || value === null) return null

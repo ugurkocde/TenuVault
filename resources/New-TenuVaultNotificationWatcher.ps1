@@ -262,11 +262,22 @@ if (-not $Remove -and $AlertRulesPath) {
     $alertRulesText = (Get-Content -LiteralPath $AlertRulesPath -Raw -Encoding UTF8).Trim()
     try { $parsedAlerts = $alertRulesText | ConvertFrom-Json } catch { throw "The alerts file is not valid JSON. Copy it again from TenuVault." }
     if ($parsedAlerts.schema -cne "tenuvault.watcher-alerts/v1") { throw "The alerts file is not a TenuVault alerts file (schema tenuvault.watcher-alerts/v1)." }
-    $usable = @($parsedAlerts.alerts | Where-Object { $_ -and @($_.eventTypes).Count -gt 0 -and @($_.destinations).Count -gt 0 })
+    # The same event types and destinations the runbook accepts (ConvertFrom-TvWatcherAlerts).
+    $knownTypes = @("backup.failed", "backup.warning", "backup.succeeded", "backup.missed", "restore.completed", "restore.partial", "restore.failed", "drift.detected", "health.finding", "intune.change", "entra.change", "credential.expiring", "watcher.stale")
+    $knownDestinations = @("webhook", "teams", "mail")
+    $usable = @($parsedAlerts.alerts | Where-Object {
+        $_ -and @(@($_.eventTypes) | Where-Object { $knownTypes -ccontains $_ }).Count -gt 0 -and
+        @(@($_.destinations) | Where-Object { $knownDestinations -ccontains $_ }).Count -gt 0
+    })
     if ($usable.Count -eq 0) { throw "The alerts file has no alert with an event type and a webhook, Teams or email channel, so the watcher would send nothing. Add one in TenuVault, or pass -AlertRulesPath '' to send every event to every destination." }
     if ($alertRulesText.Length -gt 500000) { throw "The alerts file is larger than 500 KB. Shorten the alert conditions." }
     $alertRulesJson = $alertRulesText
     Write-Host "Alerts file read: $($usable.Count) alert(s) for the watcher."
+    # Events the watcher produces that no alert takes are no longer sent anywhere: say so.
+    $watcherTypes = @("intune.change", "entra.change", "backup.failed", "backup.warning", "backup.succeeded", "backup.missed")
+    $covered = @($usable | ForEach-Object { @($_.eventTypes) })
+    $uncovered = @($watcherTypes | Where-Object { $covered -cnotcontains $_ })
+    if ($uncovered.Count -gt 0) { Write-Warning "No alert in the file takes these watcher events, so the watcher will not send them: $($uncovered -join ', '). Add them to an alert in TenuVault if you want them." }
 }
 if ($IncludeMailSend -and (-not $MailSender -or -not $MailRecipients)) {
     throw "-IncludeMailSend requires -MailSender and -MailRecipients. Refusing to grant Mail.Send without a named sender mailbox and recipients."

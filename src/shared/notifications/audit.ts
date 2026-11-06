@@ -39,7 +39,7 @@ export interface AuditChange {
   activity: string
   /** The object id of the changed policy or object, when the audit event carries one. */
   resourceId?: string | null
-  /** Names of the settings an update changed (never their values), capped; the rest counted. */
+  /** Names of the settings an update changed (never their values), up to 200 for matching; messages show 15. */
   settings?: string[]
   settingsMore?: number
 }
@@ -178,7 +178,8 @@ export function collapseAuditChanges(changes: AuditChange[], options: { includeA
   const max = options.maxItems ?? 20
   const groups = new Map<string, AuditChange[]>()
   for (const change of changes) {
-    const key = [change.changeType, change.resourceName ?? change.resourceType ?? change.auditId, change.actorUpn ?? change.actorAppName ?? change.actorAppId ?? ""].join("|").toLowerCase()
+    // The object id first: two policies that share a name stay two lines.
+    const key = [change.changeType, change.resourceId ?? change.resourceName ?? change.resourceType ?? change.auditId, change.actorUpn ?? change.actorAppName ?? change.actorAppId ?? ""].join("|").toLowerCase()
     const existing = groups.get(key)
     if (existing) existing.push(change)
     else groups.set(key, [change])
@@ -284,8 +285,9 @@ export function changeEvent(service: ChangeService, input: ChangeEventInput): No
   const verb = CHANGE_VERB[change.changeType]
   const tenantLabel = input.tenantName ?? "your tenant"
   const actor = input.includeActor ? (change.actorUpn ?? change.actorAppName) : null
-  const settings = change.settings ?? []
-  const more = change.settingsMore ?? 0
+  const allSettings = change.settings ?? []
+  const settings = allSettings.slice(0, MAX_SETTING_NAMES)
+  const more = (change.settingsMore ?? 0) + Math.max(0, allSettings.length - MAX_SETTING_NAMES)
   const kind = change.resourceName && change.resourceType ? ` (${change.resourceType})` : ""
   const details: Array<{ label: string; value: string }> = [{ label: "Change", value: capitalize(change.changeType) }]
   if (change.resourceType) details.push({ label: "Type", value: change.resourceType })

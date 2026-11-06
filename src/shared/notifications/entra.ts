@@ -85,7 +85,9 @@ export function mapEntraAuditEvent(raw: EntraAuditRaw): AuditChange | null {
   const app = record(initiatedBy?.app)
   const changeType = changeTypeOf(text(raw.operationType) ?? "", activity)
   const changed = changeType === "updated" ? entraChangedSettings(targets) : { names: [], more: 0 }
-  const targetId = targets.map((target) => text(target.id)).find((id) => id !== null) ?? null
+  // Authentication strength events target the strength or one of its combinations, so no
+  // id names the strength: like its name, it is left out.
+  const targetId = resourceType === "Authentication strength" ? null : targets.map((target) => text(target.id)).find((id) => id !== null) ?? null
   return {
     auditId: id,
     at: new Date(at).toISOString(),

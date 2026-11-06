@@ -140,7 +140,7 @@ What to expect:
 * Creates, deletes and assignments list no settings: the audit log records every property for them, which says nothing about what changed.
 * Settings catalog policies do not record their old values in the audit log, so their updates name no settings. The change itself is still sent.
 * Conditional Access policies and named locations are named down to three levels, for example `conditions.users.excludeGroups`. A changed list counts as one setting.
-* An alert shows up to 15 setting names and counts the rest.
+* A message shows up to 15 setting names and counts the rest. **Changed settings contain** still matches every changed setting, not only the ones shown.
 
 ### Webhook fields for changes
 
@@ -170,7 +170,7 @@ Every line of a change event carries the same change as fields, in `items[].chan
 }
 ```
 
-`resourceId` is the object id of the policy when the audit event carries one, `count` appears when repeated edits were collapsed into one line, and `settingsMore` counts changed settings beyond the names listed. A single change alert uses `change:<auditId>` as its natural key, so its `eventId` is the same whichever alert or watcher sends it.
+`resourceId` is the object id of the policy when the audit event carries one (authentication strength events do not name their strength, so they have none), `count` appears when repeated edits were collapsed into one line, and `settingsMore` counts changed settings beyond the names listed. A single change alert uses `change:<auditId>` as its natural key, so its `eventId` is the same whichever alert or watcher sends it.
 
 ## Change watching
 
@@ -236,7 +236,7 @@ The watcher has its own destinations: one webhook, one Teams Workflows URL and o
 
 The file holds the enabled alerts with their event types, minimum severity, filters and how to send. Channels become kinds of destinations: an alert that sends to a Teams channel sends to the watcher's Teams URL, an email channel to its mail recipients, a webhook to its webhook. Alerts that only send to **This computer** are left out, and the app says which. The file contains no URLs, addresses or secrets.
 
-The watcher then plans alerts exactly like the desktop app: same filters, same summaries and single change alerts, same event ids. Backup results and **No recent backup** go to the destinations of the alerts that take their event type and severity; an event no alert takes is not sent. Copy and pass the file again after you change your alerts. A rerun without `-AlertRulesPath` keeps the saved alerts, and `-AlertRulesPath ''` removes them, so every event goes everywhere again. A value the runbook cannot read does the same and says so in the job output, so a damaged file never silences the watcher.
+The watcher then plans alerts exactly like the desktop app: same filters, same summaries and single change alerts, same event ids. Backup results and **No recent backup** go to the destinations of the alerts that take their event type and severity; an event no alert takes is not sent. **Copy for Azure watcher** and the setup script both name the watcher events that no alert takes, so an alert set that only covers changes does not silently stop backup alerts. Copy and pass the file again after you change your alerts. A rerun without `-AlertRulesPath` keeps the saved alerts, and `-AlertRulesPath ''` removes them, so every event goes everywhere again. A value the runbook cannot read, or one without any alert it can use, does the same and says so in the job output, so a damaged file never silences the watcher.
 
 ### If the watcher itself breaks
 

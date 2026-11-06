@@ -287,6 +287,8 @@ function New-TvEnvelope {
 # delete lists every property of the object, so only updates ask for changed settings.
 
 $script:TvMaxSettingNames = 15
+# Names kept per change for alert matching; messages show $script:TvMaxSettingNames of them.
+$script:TvMaxTrackedSettings = 200
 $script:TvSettingNoise = @("id", "createddatetime", "lastmodifieddatetime", "modifieddatetime", "version", "devicemanagementapiversion", "templateid", "deleteddatetime")
 
 # A logged value as text, or $null when that side was not recorded (JSON null). PowerShell 7
@@ -323,8 +325,8 @@ function Get-TvBoundedSettings {
         if ($seen.Add($name.ToLowerInvariant())) { $unique.Add($name) }
     }
     $shown = [System.Collections.Generic.List[string]]::new()
-    foreach ($name in $unique) { if ($shown.Count -lt $script:TvMaxSettingNames) { $shown.Add($name) } }
-    return [pscustomobject][ordered]@{ names = $shown.ToArray(); more = [Math]::Max(0, $unique.Count - $script:TvMaxSettingNames) }
+    foreach ($name in $unique) { if ($shown.Count -lt $script:TvMaxTrackedSettings) { $shown.Add($name) } }
+    return [pscustomobject][ordered]@{ names = $shown.ToArray(); more = [Math]::Max(0, $unique.Count - $script:TvMaxTrackedSettings) }
 }
 
 function Test-TvJsonRecord {
@@ -368,13 +370,16 @@ function Add-TvDifferingPaths {
         if ($Prefix) { $path = $Prefix + "." + $key }
         $recordA = Test-TvJsonRecord $a
         $recordB = Test-TvJsonRecord $b
+        $countBefore = $Out.Count
         if ($Depth -lt 3 -and ($recordA -or $recordB)) {
             $childA = $a
             $childB = $b
             if (-not $recordA) { $childA = [pscustomobject]@{} }
             if (-not $recordB) { $childB = [pscustomobject]@{} }
             Add-TvDifferingPaths -Before $childA -After $childB -Prefix $path -Depth ($Depth + 1) -Out $Out
-        } else {
+        }
+        # A leaf, or an object that only changed between null and empty: the path itself changed.
+        if ($Out.Count -eq $countBefore) {
             if ($path.Length -gt 120) { $path = $path.Substring(0, 120) }
             $Out.Add($path)
         }
@@ -610,8 +615,10 @@ function ConvertFrom-TenuVaultEntraAuditEvent {
         foreach ($target in @(Get-TvProp $Raw "targetResources")) {
             if ($target -is [PSCustomObject] -or $target -is [System.Collections.IDictionary]) { $targetList.Add($target) }
         }
+        # Authentication strength events target the strength or one of its combinations, so no
+        # id names the strength: like its name, it is left out.
         $resourceId = $null
-        foreach ($target in $targetList) {
+        foreach ($target in @(if ($resourceType -ne "Authentication strength") { $targetList })) {
             $targetId = Get-TvText (Get-TvProp $target "id")
             if ($targetId) { $resourceId = if ($targetId.Length -gt 200) { $targetId.Substring(0, 200) } else { $targetId }; break }
         }
@@ -671,7 +678,9 @@ function New-TenuVaultAuditDigest {
     $counts = @{}
     $members = @{}
     foreach ($change in $mapped) {
-        $targetKey = Get-TvProp $change "resourceName"
+        # The object id first: two policies that share a name stay two lines.
+        $targetKey = Get-TvProp $change "resourceId"
+        if (-not $targetKey) { $targetKey = Get-TvProp $change "resourceName" }
         if (-not $targetKey) { $targetKey = Get-TvProp $change "resourceType" }
         if (-not $targetKey) { $targetKey = Get-TvProp $change "auditId" }
         $actorKey = Get-TvProp $change "actorUpn"
@@ -857,9 +866,15 @@ function New-TenuVaultChangeEvent {
         if (-not $actor) { $actor = Get-TvProp $Change "actorAppName" }
     }
     $settings = [System.Collections.Generic.List[string]]::new()
-    foreach ($name in @($Change.settings)) { if ($null -ne $name) { $settings.Add([string]$name) } }
+    $allCount = 0
+    foreach ($name in @($Change.settings)) {
+        if ($null -eq $name) { continue }
+        $allCount++
+        if ($settings.Count -lt $script:TvMaxSettingNames) { $settings.Add([string]$name) }
+    }
     $more = 0
     [void][int]::TryParse("$($Change.settingsMore)", [ref]$more)
+    $more += [Math]::Max(0, $allCount - $script:TvMaxSettingNames)
     $sentence = Get-TvSettingsSentence -Names $settings.ToArray() -More $more
     $kind = ""
     if ($resourceName -and $resourceType) { $kind = " ($resourceType)" }
@@ -2447,6 +2462,11 @@ try {
     if ($alertRulesValue) {
         $watcherAlerts = ConvertFrom-TvWatcherAlerts $alertRulesValue
         if ($null -eq $watcherAlerts) { Write-Output "TenuVaultAlertRules could not be read; every event goes to every destination until it is set again." }
+        elseif (@($watcherAlerts).Count -eq 0) {
+            # Set but nothing usable (unknown event types or destinations): never fall silent.
+            $watcherAlerts = $null
+            Write-Output "TenuVaultAlertRules holds no alert this runbook can use; every event goes to every destination until it is set again."
+        }
         else { Write-Output "Alerts from TenuVault: $(@($watcherAlerts).Count)." }
     }
 

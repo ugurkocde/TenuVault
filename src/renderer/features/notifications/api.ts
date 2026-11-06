@@ -160,7 +160,7 @@ export const notificationsApi = {
   /** Sends a made up change that passes the alert's conditions to its channels, marked as a test. */
   testRule: (tenant: Tenant, ruleId: string) => featureCall<{ results: Array<{ channelId: string; channelTitle: string; ok: boolean; error: string | null }>; envelope: NotificationEnvelope }>(PATH, tenant, "test-rule", { ruleId }),
   /** The alerts as the Azure watcher reads them, for setup -AlertRulesPath. */
-  exportWatcherAlerts: (tenant: Tenant) => featureCall<{ document: WatcherAlerts; json: string; skipped: string[] }>(PATH, tenant, "export-watcher-alerts"),
+  exportWatcherAlerts: (tenant: Tenant) => featureCall<{ document: WatcherAlerts; json: string; skipped: string[]; uncovered: NotificationEventType[] }>(PATH, tenant, "export-watcher-alerts"),
   updateAuditWatch: (tenant: Tenant, body: AuditWatchBody) => featureCall<{ auditWatch: AuditWatch }>(PATH, tenant, "update-audit-watch", { ...body }),
   /** Turning change watching off stays free on every plan. */
   revokeAuditWatch: (tenant: Tenant) => featureCall<{ auditWatch: AuditWatch }>(PATH, tenant, "revoke-audit-watch"),

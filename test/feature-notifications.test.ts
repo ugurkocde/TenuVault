@@ -935,6 +935,7 @@ describe("alerts with conditions", () => {
     const exported = await call(w.routes, PATH, { tenantId: TENANT_A, action: "export-watcher-alerts" })
     expect(exported.status).toBe(200)
     expect(exported.body.skipped).toEqual(["Only here"])
+    expect(exported.body.uncovered).toEqual(["entra.change", "backup.failed", "backup.warning", "backup.succeeded", "backup.missed"])
     expect(exported.body.document).toEqual({
       schema: "tenuvault.watcher-alerts/v1",
       alerts: [{ id: expect.any(String), title: "Changes", eventTypes: ["intune.change"], minSeverity: "info", destinations: ["webhook", "teams"], delivery: "each", conditions: { changeTypes: ["deleted"], categories: [], policyNames: [], settingNames: [], excludeActors: [] } }],

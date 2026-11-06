@@ -448,7 +448,8 @@ function RulesTile({ tenant, rules, channels, licensed, active, onChanged }: { t
       try {
         await navigator.clipboard.writeText(result.json)
         const skipped = result.skipped.length ? ` Left out (only This computer channels): ${result.skipped.join(", ")}.` : ""
-        toast(`Alerts copied. Save them as a .json file and pass it to the watcher setup with -AlertRulesPath.${skipped}`, "success")
+        const uncovered = result.uncovered.length ? ` The watcher will not send ${result.uncovered.map((type) => EVENT_TYPE_LABELS[type] ?? type).join(", ")}: no alert takes them.` : ""
+        toast(`Alerts copied. Save them as a .json file and pass it to the watcher setup with -AlertRulesPath.${skipped}${uncovered}`, "success")
       } catch {
         toast("The alerts could not be copied to the clipboard.", "error")
       }
