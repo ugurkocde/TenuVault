@@ -2349,6 +2349,9 @@ function Invoke-TvAuditIngestion {
         $newestSeenIso = $WatermarkIso
     } else {
         $currentContinuation = Get-TvText $nextUri
+        # Pages are not in time order, so the watermark only moves once paging ran to the end:
+        # unread pages can hold older events, and an expired continuation restarts from it.
+        if ($currentContinuation) { $newestSeenIso = $WatermarkIso }
     }
     $messages.Add("Seen $seenCount $Label audit events, $($newChanges.Count) new.")
     return [pscustomobject]@{
@@ -2756,7 +2759,9 @@ try {
     foreach ($priorId in $recentById.Keys) { $priorRecent[[string]$priorId] = $true }
     $filterFrom = ConvertTo-TvIso ([DateTimeOffset]::Parse($watermarkIso).UtcDateTime.AddMinutes(-30))
     $select = "id,displayName,componentName,actor,activity,activityDateTime,activityType,activityOperationType,activityResult,category,resources"
-    $query = "`$select=$([uri]::EscapeDataString($select))&`$filter=$([uri]::EscapeDataString("activityDateTime gt $filterFrom and activityOperationType ne 'Get' and activityOperationType ne 'Search'"))&`$orderby=$([uri]::EscapeDataString('activityDateTime'))&`$top=200"
+    # No $orderby: with it, Graph scans the whole audit history from the oldest event and answers
+    # with empty pages until it reaches the window. Alerts are sorted after reading.
+    $query = "`$select=$([uri]::EscapeDataString($select))&`$filter=$([uri]::EscapeDataString("activityDateTime gt $filterFrom and activityOperationType ne 'Get' and activityOperationType ne 'Search'"))&`$top=200"
     $intuneResult = Invoke-TvAuditIngestion -Label "Intune" -FreshUri "https://graph.microsoft.com/beta/deviceManagement/auditEvents?$query" `
         -Continuation $continuation -PriorIds $priorRecent -WatermarkIso $watermarkIso -GraphToken $graphToken -TokenError $graphTokenError `
         -Map { param($raw) ConvertFrom-TenuVaultAuditEvent $raw } -RenewLease $renewLease

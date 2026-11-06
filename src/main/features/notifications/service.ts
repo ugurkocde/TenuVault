@@ -476,7 +476,9 @@ const SOURCES: Record<ChangeService, {
   denied: string
 }> = {
   intune: {
-    freshPath: (since) => `deviceManagement/auditEvents?$select=${AUDIT_EVENT_SELECT}&$filter=${encodeURIComponent(`activityDateTime gt ${since} and activityOperationType ne 'Get' and activityOperationType ne 'Search'`)}&$orderby=activityDateTime&$top=200`,
+    // No $orderby: with it, Graph scans the tenant's whole audit history from the oldest event and
+    // answers with empty pages until it reaches the window. Alerts are sorted after reading.
+    freshPath: (since) => `deviceManagement/auditEvents?$select=${AUDIT_EVENT_SELECT}&$filter=${encodeURIComponent(`activityDateTime gt ${since} and activityOperationType ne 'Get' and activityOperationType ne 'Search'`)}&$top=200`,
     map: (raw) => mapAuditEvent(raw as AuditEventRaw),
     denied: "Microsoft Graph returned 403 for the Intune audit log. The app needs DeviceManagementApps.Read.All and your account an Intune role that can read it.",
   },
@@ -584,7 +586,12 @@ async function pollSource(deps: FeatureDeps, tenant: string, service: ChangeServ
         gapNotice: gap ? "Change watching was off for a while; older changes may be missing from this digest." : null,
       }, { ...options, deferFlush: true })
     }
-    const newWatermark = newestSeenAt && (!state.watermark || newestSeenAt > state.watermark) ? newestSeenAt : state.watermark ?? now.toISOString()
+    // Pages are not in time order, so the watermark only moves once paging ran to the end. While a
+    // continuation is pending, unread pages can hold older events; if the continuation expires,
+    // the overlap query then starts from the old watermark and the recent ids skip what was read.
+    const newWatermark = path
+      ? state.watermark ?? since.toISOString()
+      : newestSeenAt && (!state.watermark || newestSeenAt > state.watermark) ? newestSeenAt : state.watermark ?? now.toISOString()
     const pruneBefore = Date.parse(newWatermark) - AUDIT_OVERLAP_MS
     const keep = new Set(stoppedInPage ? pageSeen : [])
     const byId = new Map<string, { id: string; at: string }>()
