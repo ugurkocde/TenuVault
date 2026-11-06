@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { withNetworkErrors } from "../src/main/api/network-error"
+import { networkFailure, ProxyAuthRequiredError, rejectProxyAuthResponses, withNetworkErrors } from "../src/main/api/network-error"
 
 const failing = (error: unknown): typeof fetch => async () => { throw error }
 
@@ -35,5 +35,32 @@ describe("withNetworkErrors", () => {
   it("returns responses untouched, including HTTP errors", async () => {
     const response = new Response("denied", { status: 403 })
     expect(await withNetworkErrors(async () => response)("https://graph.microsoft.com/")).toBe(response)
+  })
+})
+
+describe("proxy authentication", () => {
+  it("names proxy authentication for Chromium's proxy auth codes", async () => {
+    for (const code of ["ERR_PROXY_AUTH_REQUESTED", "ERR_PROXY_AUTH_UNSUPPORTED", "ERR_UNEXPECTED_PROXY_AUTH"]) {
+      const request = withNetworkErrors(failing(new Error(`net::${code}`)))("https://graph.microsoft.com/beta/")
+      await expect(request).rejects.toThrow("The proxy on this network requires a sign-in.")
+      await expect(request).rejects.toThrow(`(${code})`)
+    }
+  })
+
+  it("turns a 407 answer into a proxy authentication failure", async () => {
+    const proxied = rejectProxyAuthResponses(async () => new Response("<html>Proxy sign-in</html>", { status: 407 }))
+    await expect(proxied("https://www.tenuvault.com/")).rejects.toBeInstanceOf(ProxyAuthRequiredError)
+    expect(networkFailure(new ProxyAuthRequiredError(), "www.tenuvault.com")).toEqual({
+      code: "HTTP 407",
+      guidance: expect.stringContaining("requires a sign-in"),
+    })
+    const request = withNetworkErrors(proxied)("https://graph.microsoft.com/beta/")
+    await expect(request).rejects.toThrow("graph.microsoft.com could not be reached. The proxy on this network requires a sign-in.")
+    await expect(request).rejects.toThrow("(HTTP 407)")
+  })
+
+  it("passes every other answer through", async () => {
+    const response = new Response("denied", { status: 401 })
+    expect(await rejectProxyAuthResponses(async () => response)("https://graph.microsoft.com/")).toBe(response)
   })
 })

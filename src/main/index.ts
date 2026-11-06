@@ -9,7 +9,9 @@ import { rendererStorageKey, rendererStorageValue } from "./renderer-storage"
 import { prepareGeneratedFile, prepareSaveFile, type PreparedFile } from "./save-file"
 import { pdfBrandingFor, PdfBrandingPolicy, PdfBrandingStore, setPdfBrandingPolicy } from "./pdf-branding"
 import { prepareOibReportFile, printHtmlToPdf } from "./report-export"
-import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, safeStorage, shell } from "electron"
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, safeStorage, session, shell } from "electron"
+import { createChromiumFetch } from "./chromium-fetch"
+import { ProxyAuth, ProxyPrompts, type ProxyAuthAttempt, type ProxyChallenge } from "./proxy-auth"
 import { basename, dirname, join } from "node:path"
 import type { ApiRequest, AppPreferences, ScheduleInput } from "../shared/ipc"
 import { DELEGATED_CLIENT_SECRET, INTERNAL_API_ORIGIN, RESOURCE_SCOPES } from "../shared/constants"
@@ -17,7 +19,7 @@ import { createAuditRecorder } from "./api/audit"
 import { setAuditOutboxStore } from "../portal/lib/audit/outbox"
 import { backupRoutes, surfaceTokenErrors } from "./api/desktop-routes"
 import { createBridgedFetch } from "./api/fetch-bridge"
-import { withNetworkErrors } from "./api/network-error"
+import { rejectProxyAuthResponses, withNetworkErrors } from "./api/network-error"
 import { ApiHost } from "./api/host"
 import { routes } from "./api/routes"
 import { AuthManager, SignInRequiredError } from "./auth/msal"
@@ -150,12 +152,27 @@ function openStore(filePath: string, cipher: Cipher, startOver = "your saved dat
   }
 }
 
+/** Answers proxy sign-in challenges once the encrypted store is open (set in bootstrap). */
+let proxyAuth: ProxyAuth | null = null
+const NO_PROXY_AUTH: ProxyAuthAttempt = { login: () => Promise.resolve(null), responded: () => {} }
+
+/** Answers a proxy challenge Electron reports without its request; server challenges keep the default cancel. */
+function answerProxyLogin(id: string, authInfo: ProxyChallenge, callback: (username?: string, password?: string) => void): void {
+  void (proxyAuth?.attemptFor(id) ?? NO_PROXY_AUTH).login(authInfo).then(
+    (answer) => (answer ? callback(answer.username, answer.password) : callback()),
+    () => callback(),
+  )
+}
+
 /**
  * Requests to Microsoft, Azure and licensing use Chromium's network stack, which follows the
  * system proxy (including PAC) and certificate store. Node's fetch uses neither, so behind a
- * corporate proxy or HTTPS inspection it fails with "fetch failed".
+ * corporate proxy or HTTPS inspection it fails with "fetch failed". It is built on net.request
+ * because net.fetch cancels every authentication challenge, so a proxy that asks for a sign-in
+ * (HTTP 407) gets one here (see proxy-auth.ts). A 407 that is still left is thrown as proxy
+ * authentication, so the error guidance names it.
  */
-const chromiumFetch: typeof fetch = (input, init) => net.fetch(input instanceof URL ? input.href : input, init)
+const chromiumFetch: typeof fetch = rejectProxyAuthResponses(createChromiumFetch((options) => net.request(options), () => proxyAuth?.attempt() ?? NO_PROXY_AUTH))
 
 async function bootstrap(): Promise<void> {
   const cipher = osCipher()
@@ -170,6 +187,33 @@ async function bootstrap(): Promise<void> {
     app.quit()
     return
   }
+
+  // Proxy sign-ins: asked once per proxy in the window, remembered in the encrypted store
+  // (for this session only without OS encryption).
+  const proxyPrompts = new ProxyPrompts((prompts) => {
+    mainWindow?.webContents.send("proxy:prompts", prompts)
+    if (prompts.length && !mainWindow?.isVisible() && Notification.isSupported()) {
+      const notice = new Notification({ title: "Your proxy asks TenuVault to sign in", body: "Open TenuVault to enter the proxy credentials." })
+      notice.on("click", () => showWindow())
+      notice.show()
+    }
+  })
+  proxyAuth = new ProxyAuth({
+    store: appStore,
+    persist: canEncrypt(),
+    prompt: (request) => proxyPrompts.ask(request),
+    onChange: () => mainWindow?.webContents.send("proxy:savedChanged"),
+  })
+  const savedProxyAuth = proxyAuth
+  handleTrusted("proxy:pending", () => proxyPrompts.pending())
+  handleTrusted("proxy:answer", (_event, id: unknown, answer: unknown) => proxyPrompts.answer(id, answer))
+  handleTrusted("proxy:saved", () => savedProxyAuth.list())
+  handleTrusted("proxy:forget", async () => {
+    savedProxyAuth.forget()
+    // Chromium keeps accepted credentials for the session; clear them so the next challenge asks.
+    await session.defaultSession.clearAuthCache().catch((error: unknown) => console.warn("[proxy] Could not clear the sign-in cache:", error))
+    return savedProxyAuth.list()
+  })
 
   const accounts = accountStore(appStore)
   // MSAL token traffic goes through the bridged fetch, which is only created below (it needs
@@ -765,6 +809,7 @@ async function bootstrap(): Promise<void> {
   app.on("before-quit", stopFeatures)
 
   const updates = new Updates((status) => mainWindow?.webContents.send("updates:changed", status))
+  updates.onLogin((authInfo, callback) => answerProxyLogin("updates", authInfo, callback))
   // The MSI is deployed and updated by the organization; updating it would add a per-user copy.
   const autoUpdateManaged = (app.isPackaged && !installedBySetup(process.execPath)) || (await updatesDisabledByPolicy())
   const applyPreferences = (prefs: ReturnType<Preferences["get"]>) => {
@@ -1394,6 +1439,14 @@ app.on("window-all-closed", () => {
 })
 
 app.on("activate", () => showWindow())
+
+// Window and utility process requests that meet a proxy asking for a sign-in. Server
+// challenges (401) are not answered: without preventDefault Electron cancels them.
+app.on("login", (event, _webContents, details, authInfo, callback) => {
+  if (!authInfo.isProxy) return
+  event.preventDefault()
+  answerProxyLogin(`app:${details.url}`, authInfo, callback)
+})
 
 app.on("web-contents-created", (_event, contents) => {
   contents.on("will-attach-webview", (event) => event.preventDefault())

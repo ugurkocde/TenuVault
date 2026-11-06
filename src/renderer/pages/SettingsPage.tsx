@@ -2,14 +2,14 @@ import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
 import { useEffect, useId, useRef, useState, type ReactNode } from "react"
 import { Link, useLocation, useSearchParams } from "react-router-dom"
-import { Bell, Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, Palette, RefreshCw, Save, ShieldCheck, Siren, SunMoon, Upload, type LucideIcon } from "lucide-react"
+import { Bell, Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, Network, Palette, RefreshCw, Save, ShieldCheck, Siren, SunMoon, Upload, type LucideIcon } from "lucide-react"
 import { cn } from "~/lib/utils"
 import { useTenantOperations, useTenants, type Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card"
 import { Dialog, DialogAnimationProvider, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import { storageLabel } from "~/lib/storage-label"
-import type { AppInfo, AppPreferences, SignedInAccount, UpdateStatus } from "../../shared/ipc"
+import type { AppInfo, AppPreferences, ProxyCredentialSummary, SignedInAccount, UpdateStatus } from "../../shared/ipc"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
 import { COMMUNITY_RETENTION_DAYS, effectiveRetentionDays, type Feature } from "../../shared/plans"
 import { isGuid } from "../../shared/security"
@@ -356,6 +356,50 @@ function currentChoice(tenant: Tenant): StorageChoice | undefined {
     resourceGroupName: resources.resourceGroupName,
     location: resources.resourceGroupLocation ?? "",
   }
+}
+
+/** Remembered sign-ins for proxies that require authentication; shown only when there is one. */
+export function ProxySignInSettings() {
+  const [saved, setSaved] = useState<ProxyCredentialSummary[]>([])
+  const [forgetting, setForgetting] = useState(false)
+  useEffect(() => {
+    const load = () => void bridge.proxy.saved().then((list) => setSaved(list ?? []), () => undefined)
+    load()
+    return bridge.proxy.onSavedChanged(load)
+  }, [])
+  if (!saved.length) return null
+  const forget = async () => {
+    setForgetting(true)
+    try {
+      setSaved((await bridge.proxy.forget()) ?? [])
+      toast("Proxy sign-in forgotten. TenuVault asks again the next time the proxy requires it.", "success")
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "The proxy sign-in could not be forgotten.", "error")
+    } finally {
+      setForgetting(false)
+    }
+  }
+  return (
+    <Card>
+      <CardHeader className="p-7 pb-4">
+        <CardTitle className="flex items-center gap-3 text-xl font-medium">
+          <span className="flex size-10 items-center justify-center rounded-full bg-secondary" aria-hidden="true"><Network className="h-[18px] w-[18px]" /></span> Proxy sign-in
+        </CardTitle>
+        <CardDescription>Credentials TenuVault uses for a proxy that requires authentication.</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-wrap items-center justify-between gap-4 px-7 pb-7 text-sm text-gray-700">
+        <ul className="space-y-1">
+          {saved.map((entry) => (
+            <li key={entry.proxy}>
+              <span className="font-medium text-gray-900">{entry.proxy}</span> as {entry.username}
+              <span className="text-gray-500">{entry.saved ? " (saved on this computer)" : " (until TenuVault quits)"}</span>
+            </li>
+          ))}
+        </ul>
+        <Button variant="outline" size="sm" disabled={forgetting} onClick={() => void forget()}>Forget proxy sign-in</Button>
+      </CardContent>
+    </Card>
+  )
 }
 
 function TenantSettings({ active }: { active: boolean }) {
@@ -897,7 +941,7 @@ export default function SettingsPage() {
       <div className="mt-4 flex flex-col gap-6 xl:flex-row xl:items-start">
         <SettingsSectionNav section={section} />
         <div className="min-w-0 w-full max-w-5xl flex-1">
-          {panel("signin", <TenantSettings active={section === "signin"} />)}
+          {panel("signin", <div className="space-y-6"><TenantSettings active={section === "signin"} /><ProxySignInSettings /></div>)}
           {panel("services", <ServicesSettings />)}
           {panel("storage", <div className="space-y-6"><BackupsOnDevice /><RestoreWrites active={section === "storage"} /></div>)}
           {panel("background", <div className="space-y-6"><BackgroundAndRetention /><BackupReaderSettings /></div>)}

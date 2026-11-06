@@ -155,6 +155,35 @@ export interface SignInRequiredEvent {
   scope: string
 }
 
+/** A proxy that asked TenuVault to sign in (HTTP 407), waiting for the admin's answer. */
+export interface ProxySignInPrompt {
+  id: number
+  /** The proxy's host:port. */
+  proxy: string
+  /** The authentication scheme the proxy asked for, such as basic or digest. */
+  scheme: string
+  realm: string
+  /** The proxy did not accept the previous credentials. */
+  rejected: boolean
+  /** Remembered credentials survive a restart; false when OS encryption is unavailable. */
+  persistent: boolean
+}
+
+export interface ProxySignInAnswer {
+  username: string
+  password: string
+  /** Keep the credentials for the next requests (and restarts, when `persistent`). */
+  remember: boolean
+}
+
+/** A remembered proxy sign-in, without its password. */
+export interface ProxyCredentialSummary {
+  proxy: string
+  username: string
+  /** Saved in the encrypted store; false when kept for this session only. */
+  saved: boolean
+}
+
 export interface BackupSettings {
   /** Folder that holds encrypted backups for tenants that store backups on this device. */
   localFolder: string
@@ -339,6 +368,21 @@ export interface TenuVaultBridge {
     onSignInRequired: (listener: (event: SignInRequiredEvent) => void) => () => void
     /** Stops waiting for a sign-in open in the browser; the waiting call fails with "Sign-in cancelled." */
     cancelSignIn: () => Promise<void>
+  }
+  /** Sign-in for a proxy that requires authentication. */
+  proxy: {
+    /** The prompts waiting for an answer, for a window that loads while one is open. */
+    pending: () => Promise<ProxySignInPrompt[]>
+    /** Answers a prompt; null cancels it. */
+    answer: (id: number, answer: ProxySignInAnswer | null) => Promise<void>
+    /** Called whenever the open prompts change. Returns an unsubscribe function. */
+    onPrompts: (listener: (prompts: ProxySignInPrompt[]) => void) => () => void
+    /** Remembered proxy sign-ins, without passwords. */
+    saved: () => Promise<ProxyCredentialSummary[]>
+    /** Forgets every remembered proxy sign-in. */
+    forget: () => Promise<ProxyCredentialSummary[]>
+    /** Called when the remembered proxy sign-ins change. Returns an unsubscribe function. */
+    onSavedChanged: (listener: () => void) => () => void
   }
   setup: {
     /** Asks where to save the app registration setup script this build ships with, and writes it. */

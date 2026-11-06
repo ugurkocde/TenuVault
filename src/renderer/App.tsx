@@ -12,6 +12,7 @@ import { ErrorBoundary, ErrorPanel } from "./components/ErrorBoundary"
 import { ActivationScreen } from "./components/ActivationScreen"
 import { PlanDialogs } from "./components/PlanDialogs"
 import { DisclaimerHost } from "./components/DisclaimerHost"
+import { ProxySignInHost } from "./components/ProxySignInHost"
 import { isUnlicensed, LicenseProvider, useLicense } from "./lib/license"
 import { WhatsNewProvider } from "./lib/whats-new"
 import LicensePage from "./pages/LicensePage"
@@ -83,6 +84,7 @@ function LicenseGate({ children }: { children: ReactNode }) {
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
+      <ProxySignInHost />
       <LicenseProvider>
         <WhatsNewProvider>
         <TenantProvider>

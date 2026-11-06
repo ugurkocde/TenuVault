@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron"
-import type { BackupSchedule, LicenseStatus, SignInRequiredEvent, TenuVaultPreloadBridge, UpdateStatus } from "../shared/ipc"
+import type { BackupSchedule, LicenseStatus, ProxySignInPrompt, SignInRequiredEvent, TenuVaultPreloadBridge, UpdateStatus } from "../shared/ipc"
 
 /** Strips Electron's "Error invoking remote method 'x': Error: " prefix from IPC errors. */
 async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -31,6 +31,14 @@ const bridge: TenuVaultPreloadBridge = {
       ipcRenderer.on("auth:signInRequired", handler)
       return () => ipcRenderer.removeListener("auth:signInRequired", handler)
     },
+  },
+  proxy: {
+    pending: () => invoke("proxy:pending"),
+    answer: (id, answer) => invoke("proxy:answer", id, answer),
+    onPrompts: (listener) => subscribe<ProxySignInPrompt[]>("proxy:prompts", listener),
+    saved: () => invoke("proxy:saved"),
+    forget: () => invoke("proxy:forget"),
+    onSavedChanged: (listener) => subscribe<void>("proxy:savedChanged", () => listener()),
   },
   setup: {
     saveScript: () => invoke("setup:saveScript"),
