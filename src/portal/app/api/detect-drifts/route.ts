@@ -483,9 +483,6 @@ async function detectDrifts(
   return { drifts, warnings, stats: { compared: tasks.length, unchanged } }
 }
 
-/** Settings listed per documented item; a report notes how many more an item has. */
-export const MAX_DOCUMENTED_SETTINGS = 300
-
 /**
  * Every setting of an added or deleted item, as changes from or to "not set", so a change report
  * lists them with the same names and values as a modified item. Settings Catalog settings and
@@ -494,8 +491,8 @@ export const MAX_DOCUMENTED_SETTINGS = 300
 export function documentItem(content: unknown, change: "added" | "deleted"): DriftChange[] {
   const redacted = reportRedact(content)
   const empty = emptyLike(redacted)
-  const rows = change === "added" ? compareObjects(empty, redacted) : compareObjects(redacted, empty)
-  return rows.slice(0, MAX_DOCUMENTED_SETTINGS + 1)
+  // Every row: the report lists the first MAX_REPORT_SETTINGS and counts the rest.
+  return change === "added" ? compareObjects(empty, redacted) : compareObjects(redacted, empty)
 }
 
 /**

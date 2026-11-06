@@ -127,6 +127,15 @@ describe("documented and redacted items", () => {
     expect(rows.every((row) => row.oldValue === undefined)).toBe(true)
   })
 
+  it("documents every row, so a report can count the settings it does not list", () => {
+    const content = Object.fromEntries(Array.from({ length: 450 }, (_, index) => [`setting${index}`, index]))
+    const rows = documentItem({ displayName: "Big", ...content }, "added")
+    expect(rows).toHaveLength(451)
+    const report = buildChangeReport(result([drift({ configId: "big", configName: "Big", changeType: "added", changes: rows })]), { changes: [] }, options)
+    expect(report.items[0]!.settings).toHaveLength(300)
+    expect(report.items[0]!.moreSettings).toBe(150)
+  })
+
   it("shows a changed secret as one Secret values row without its value", () => {
     const before = { passwordMinimumLength: 8, wifiPassword: "old-secret" }
     const after = { passwordMinimumLength: 10, wifiPassword: "new-secret" }

@@ -427,9 +427,13 @@ export async function sendReport(
           printError = error instanceof Error ? error.message : String(error)
         }
       }
+      // The note reaches recipients, possibly outside the organization: it states the reason, never the raw error.
+      if (printError) console.warn("[reports] The PDF report could not be printed for email:", printError)
       const note = attachment
-        ? attachment.format !== preferred ? "The PDF was too large to attach, so the report is attached as Markdown." : null
-        : `The report was too large to attach${printError ? ` (${printError})` : ""}; open it in TenuVault.`
+        ? attachment.format !== preferred
+          ? printError ? "The PDF could not be created, so the report is attached as Markdown." : "The PDF was too large to attach, so the report is attached as Markdown."
+          : null
+        : "The report could not be attached; open it in TenuVault."
       const email = reportEmail(record, note)
       const message = {
         subject: email.subject,

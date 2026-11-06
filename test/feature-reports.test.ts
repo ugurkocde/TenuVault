@@ -137,6 +137,18 @@ describe("change reports route", () => {
     expect(mail.message.body.content).toContain("The PDF was too large to attach")
   })
 
+  it("says the PDF could not be created, without the error text, when printing fails", async () => {
+    const w = world()
+    w.deps.printPdf = async () => { throw new Error("ENOENT /tmp/tenuvault-report-abc/report.html") }
+    const report = await generate(w)
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "save-settings", recipients: [{ type: "address", address: "auditor@fabrikam.test" }] })
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "send", reportId: report.id })
+    const mail = w.graphCalls.find((entry) => entry.path === "me/sendMail")!.body
+    expect(mail.message.attachments[0].name).toMatch(/\.md$/)
+    expect(mail.message.body.content).toContain("The PDF could not be created, so the report is attached as Markdown.")
+    expect(mail.message.body.content).not.toContain("ENOENT")
+  })
+
   it("reports a failed send without hiding it", async () => {
     const w = world({ mailStatus: 403 })
     const report = await generate(w)

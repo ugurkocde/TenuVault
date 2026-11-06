@@ -3,7 +3,7 @@ title: "Change reports"
 description: A report of what changed in Intune between two backups, setting by setting, with who made each change. Save it as PDF, Markdown or JSON, or have it sent by email after every scheduled backup.
 ---
 
-A change report documents what changed in a tenant between two backups: every added, changed and deleted item, the settings that changed with their old and new values, every setting of new and deleted items, and who made each change according to the Intune and Entra audit logs. Reports are made from your backups and the audit logs only. Nothing in the tenant is changed.
+A change report documents what changed in a tenant between two backups: every added, changed and deleted item, the settings that changed with their old and new values, the settings of new and deleted items (up to 300 per item), and who made each change according to the Intune and Entra audit logs. Reports are made from your backups and the audit logs only. Nothing in the tenant is changed.
 
 Open **Reports** in the sidebar. The page works on the tenant selected in the tenant switcher.
 
@@ -34,11 +34,13 @@ The report runs in the background and shows in the activity panel, so you can op
 Click a report in the **Reports** list to open it. It has these parts, in the app and in every saved format:
 
 * **Summary**: how many items were changed, added and deleted, and how many of them have matching audit events.
-* **Deleted**: each deleted item with every setting it had, and the backup that still holds it, so you can [restore](/restore/) it.
+* **Deleted**: each deleted item with the settings it had, and the backup that still holds it, so you can [restore](/restore/) it.
 * **Changed**: each changed item with the settings that changed, before and after. A renamed item shows its previous name.
-* **Added**: each new item with every setting it has, including its assignments.
+* **Added**: each new item with the settings it has, including its assignments.
 * **Other activity**: audit events in the same period that match no item in the report. This is where you see a change that was made and undone between the two backups, or a change to something TenuVault does not back up.
 * **Not compared**: files that could not be read and were left out.
+
+Each item lists at most 300 settings. An item with more says how many are not listed; the backup itself holds the full item.
 
 Under each item, the report lists the audit events about it: what was done, by whom and when, for example "Updated by admin@contoso.com, 6 Nov 2026, 14:02 UTC (Intune: Patch DeviceConfiguration)". Times are in UTC, so a report reads the same wherever it is opened.
 
