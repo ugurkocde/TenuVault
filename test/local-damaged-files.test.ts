@@ -245,4 +245,43 @@ describe("backup history with damaged local files", () => {
       vi.unstubAllGlobals()
     }
   })
+
+  async function history(store: LocalBlobStore, summary: boolean) {
+    const { NextRequest } = await import("../src/main/api/next-server-shim")
+    const { POST: listBackups } = await import("../src/portal/app/api/list-backups/route")
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      const url = new URL(request.url)
+      if (url.hostname === "login.microsoftonline.com") return Response.json({ access_token: "token" })
+      if (localAccountFromUrl(url)) return handleLocalBlobRequest(store, request)
+      throw new Error(`unexpected ${url}`)
+    }))
+    try {
+      const body = { tenantId: TENANT, appId: CLIENT, clientSecret: "x", storageAccountName: account, subscriptionId: "local", resourceGroupName: "local", summary }
+      const data = await (await listBackups(new NextRequest("http://tenuvault.internal/api/list-backups", { method: "POST", body: JSON.stringify(body) }))).json()
+      return Object.fromEntries(data.backups.map((entry: { id: string; status: string }) => [entry.id, entry.status])) as Record<string, string>
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  }
+
+  it("notices in a summary list that a backup became unavailable after its manifest was read", async () => {
+    const { store, dir } = await setup()
+    await backup(store, OLD)
+    await backup(store, NEW)
+    expect(await history(store, true)).toMatchObject({ [OLD]: "Success", [NEW]: "Success" })
+    damage(dir, await fileOf(store, `${OLD}/CompliancePolicies/b.json`), true)
+    expect(await history(store, true)).toMatchObject({ [OLD]: "unavailable", [NEW]: "Success" })
+  })
+
+  it("keeps a folder without a manifest running or incomplete next to a file that cannot be traced", async () => {
+    const { store, dir } = await setup()
+    await backup(store, NEW)
+    // A backup that stopped before it wrote metadata.json, and a file no backup can be traced to.
+    await store.put(account, CONTAINER, `${OLD}/CompliancePolicies/a.json`, Buffer.from("{}"), "application/json")
+    writeFileSync(join(dir, `${"e".repeat(40)}.tvb`), Buffer.concat([Buffer.from("TVB2"), randomBytes(80)]))
+    for (const summary of [false, true]) {
+      expect(await history(store, summary)).toMatchObject({ [OLD]: "incomplete", [NEW]: "Success" })
+    }
+  })
 })

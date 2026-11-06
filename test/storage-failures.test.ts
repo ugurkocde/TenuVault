@@ -96,7 +96,7 @@ it('skips a backup on this device that damaged files made unavailable instead of
     if (url.pathname.endsWith('/metadata.json')) {
       metadata(url.pathname)
       // The newest backup is unavailable: its files could not be read.
-      if (url.pathname.includes(folders[0]!)) return new Response(`<Error><Code>InventoryIncomplete</Code><Message>Backup ${folders[0]} is unavailable.</Message></Error>`, { status: 409, headers: { 'x-ms-error-code': 'InventoryIncomplete' } })
+      if (url.pathname.includes(folders[0]!)) return new Response(`<Error><Code>BackupUnavailable</Code><Message>Backup ${folders[0]} is unavailable.</Message></Error>`, { status: 409, headers: { 'x-ms-error-code': 'BackupUnavailable' } })
       return Response.json({ Status: 'Success', Items: {} })
     }
     return new Response('<Blobs></Blobs>')

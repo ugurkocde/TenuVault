@@ -152,6 +152,8 @@ export class BlobAlreadyExistsError extends Error {}
 export class BlobConditionNotMetError extends Error {}
 
 export class IncompleteInventoryError extends Error {
+  /** The backup folder that is unavailable, when the error is about one backup. */
+  backup?: string
   constructor(readonly unreadableFiles: number, message?: string) {
     super(message ?? `Backup inventory is incomplete: ${unreadableFiles} encrypted file(s) could not be read. Import the correct recovery keys or recover damaged files before continuing.`)
   }
@@ -339,7 +341,7 @@ export class LocalBlobStore {
   private assertAvailable(entries: Map<string, Entry>, folder: string): void {
     const damage = this.damageOf.get(entries)
     const reason = damage?.unavailable.get(folder)
-    if (damage && reason) throw new IncompleteInventoryError(damage.files.length, `Backup ${folder} is unavailable: ${reason} ${RECOVERY}`)
+    if (damage && reason) throw Object.assign(new IncompleteInventoryError(damage.files.length, `Backup ${folder} is unavailable: ${reason} ${RECOVERY}`), { backup: folder })
   }
 
   /** A blob that is not in the inventory may be in a file that could not be traced, so it is not reported as missing then. */

@@ -47,7 +47,8 @@ export class InventoryDamagedError extends StorageError {}
 
 /** The error for a failed storage response, keeping the local store's damage refusals apart. */
 export async function storageFailure(response: Response, account: string): Promise<StorageError> {
-  if (response.headers.get("x-ms-error-code") === "InventoryIncomplete") {
+  const code = response.headers.get("x-ms-error-code")
+  if (code === "InventoryIncomplete" || code === "BackupUnavailable") {
     const text = await response.text()
     const message = /<Message>([^<]+)<\/Message>/.exec(text)?.[1]
     const decoded = (message ?? "Files in the backup folder could not be read.").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")

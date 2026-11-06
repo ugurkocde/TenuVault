@@ -224,8 +224,10 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
   } catch (caught) {
     if (caught instanceof BlobAlreadyExistsError) return error(412, "ConditionNotMet", "The blob already exists.")
     if (caught instanceof BlobConditionNotMetError) return error(412, "ConditionNotMet", "The condition specified using HTTP conditional header(s) is not met.")
-    // Damaged files: retrying cannot help, so this is not a 5xx that clients retry.
-    if (caught instanceof IncompleteInventoryError) return error(409, "InventoryIncomplete", caught.message)
+    // Damaged files: retrying cannot help, so this is not a 5xx that clients retry. BackupUnavailable
+    // is about one backup; InventoryIncomplete covers the rest, such as a blob that may be in a file
+    // that could not be traced, or a delete refused while damage is present.
+    if (caught instanceof IncompleteInventoryError) return error(409, caught.backup ? "BackupUnavailable" : "InventoryIncomplete", caught.message)
     if (caught instanceof BlobNotFoundError) {
       return (await store.containerExists(account, container))
         ? error(404, "BlobNotFound", "The specified blob does not exist.")
