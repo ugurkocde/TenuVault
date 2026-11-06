@@ -1,4 +1,5 @@
 import type { CardLayout } from "../../../shared/notifications/layout"
+import type { AlertConditions, AlertDelivery } from "../../../shared/notifications/alerts"
 import { NOTIFICATION_EVENT_TYPES, type NotificationEnvelope, type NotificationEventType, type NotificationSeverity } from "../../../shared/notifications/envelope"
 
 /** Stored notification records. Secret values live only in these records and never reach the renderer. */
@@ -44,8 +45,15 @@ export interface RuleRecord {
   eventTypes: NotificationEventType[]
   minSeverity: NotificationSeverity
   channelIds: string[]
-  /** Immediate sends per event; digest exists for intune.change, which is already one digest per poll. */
+  /** Kept for records written before alerts had delivery; delivery below decides. */
   mode: "immediate" | "digest"
+  /**
+   * For change events only: which changes the alert sends. Missing or null sends every change,
+   * like rules did before conditions existed.
+   */
+  conditions?: AlertConditions | null
+  /** For change events only: one summary per check (the default) or one alert per change. */
+  delivery?: AlertDelivery
 }
 
 export type OutboxState = "pending" | "sent" | "failed"

@@ -1,6 +1,8 @@
 import type { RouteModule } from "../../api/host"
 import { allows } from "../../../shared/plans"
 import { NOTIFICATION_EVENT_TYPES, testEvent } from "../../../shared/notifications/envelope"
+import { changeEvent } from "../../../shared/notifications/audit"
+import { describeConditions, hasConditions, isChangeEventType, parseConditions, parseDelivery, WATCHER_ALERTS_SCHEMA, type WatcherAlert, type WatcherAlerts, type WatcherDestination } from "../../../shared/notifications/alerts"
 import { DEFAULT_CARD_LAYOUT, isDefaultLayout, parseCardLayout, styleIssues } from "../../../shared/notifications/layout"
 import type { FeatureDeps } from "../deps"
 import { DOMAINS } from "../domains"
@@ -21,6 +23,7 @@ import {
   type RuleRecord,
 } from "./model"
 import {
+  alertMatcher,
   auditWatchOf,
   cardLayoutOf,
   channelsOf,
@@ -49,7 +52,7 @@ export const KNOWN_AUDIT_CATEGORIES = [
 ] as const
 
 export const RUNTIME_NOTE =
-  "Desktop notifications and Intune change watching run only while TenuVault is running on this computer and you are signed in to the tenant. For alerts while this computer is off, set up the Azure watcher runbook. Undelivered notifications stay queued and retry on the next launch."
+  "Desktop alerts and change watching run only while TenuVault is running on this computer and you are signed in to the tenant. For alerts while this computer is off, set up the Azure watcher runbook and copy your alerts to it. Undelivered notifications stay queued and retry on the next launch."
 
 /** /api/notifications. Channels, rules, audit watching, test sends and delivery state per tenant. */
 export function routes(deps: FeatureDeps): Record<string, RouteModule> {
@@ -218,9 +221,9 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
     },
 
     "add-rule": ({ tenantId, body, deps, actor }) => {
-      if (rulesOf(deps, tenantId).length >= MAX_RULES) throw new FeatureError("Remove a rule before adding another.")
+      if (rulesOf(deps, tenantId).length >= MAX_RULES) throw new FeatureError("Remove an alert before adding another.")
       const value: RuleRecord = {
-        title: optionalText(body, "title", 120) ?? "Notification rule",
+        title: optionalText(body, "title", 120) ?? "Alert",
         status: "enabled",
         summary: "",
         enabled: bool(body, "enabled") ?? true,
@@ -228,10 +231,12 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
         minSeverity: severity(body.minSeverity),
         channelIds: channelIds(deps, tenantId, body.channelIds),
         mode: body.mode === "digest" ? "digest" : "immediate",
+        conditions: conditions(body.conditions),
+        delivery: delivery(body.delivery),
       }
       value.summary = ruleSummary(value)
       value.status = value.enabled ? "enabled" : "disabled"
-      const created = deps.records.create<RuleRecord>(DOMAINS.notificationRules, tenantId, value, { actor, reason: "Notification rule added" })
+      const created = deps.records.create<RuleRecord>(DOMAINS.notificationRules, tenantId, value, { actor, reason: "Alert added" })
       return { rule: publicRule(created) }
     },
 
@@ -246,12 +251,45 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       if (body.minSeverity !== undefined) changes.minSeverity = severity(body.minSeverity)
       if (body.channelIds !== undefined) changes.channelIds = channelIds(deps, tenantId, body.channelIds)
       if (body.mode !== undefined) changes.mode = body.mode === "digest" ? "digest" : "immediate"
+      if (body.conditions !== undefined) changes.conditions = conditions(body.conditions)
+      if (body.delivery !== undefined) changes.delivery = delivery(body.delivery)
       const updated = deps.records.update<RuleRecord>(DOMAINS.notificationRules, tenantId, rule.id, (value) => {
         const next = { ...value, ...changes }
         next.summary = ruleSummary(next)
         return next
-      }, { actor, reason: "Notification rule changed" })
+      }, { actor, reason: "Alert changed" })
       return { rule: publicRule(updated!) }
+    },
+
+    // A sample change sent to the alert's channels now, outside the outbox, marked as a test.
+    "test-rule": async ({ tenantId, body, deps, actor }) => {
+      const rule = requireRule(deps, tenantId, body)
+      const channels = channelsOf(deps, tenantId).filter((channel) => rule.channelIds.includes(channel.id))
+      if (channels.length === 0) throw new FeatureError("This alert sends to no channel. Edit it and pick one.")
+      const envelope = sampleAlertEnvelope(deps, tenantId, rule)
+      const results = []
+      for (const channel of channels) {
+        const delivery = await deliverToChannel(deps, tenantId, channel, envelope)
+        deps.records.update<ChannelRecord>(DOMAINS.notificationChannels, tenantId, channel.id, (value) => ({ ...value, lastDelivery: delivery, deliveries: [...value.deliveries, delivery].slice(-20) }), { actor, reason: delivery.ok ? `Alert test for ${rule.title} delivered` : `Alert test for ${rule.title} failed: ${delivery.error ?? "unknown error"}` })
+        results.push({ channelId: channel.id, channelTitle: channel.title, ok: delivery.ok, error: delivery.error })
+      }
+      return { results, envelope }
+    },
+
+    // The alerts as the Azure watcher reads them (setup -AlertRulesPath). Channels become kinds
+    // of destinations, because the watcher has its own webhook, Teams URL and mail settings.
+    "export-watcher-alerts": ({ tenantId, deps }) => {
+      const channels = channelsOf(deps, tenantId)
+      const alerts: WatcherAlert[] = []
+      const skipped: string[] = []
+      for (const rule of rulesOf(deps, tenantId)) {
+        if (!rule.enabled) continue
+        const destinations = [...new Set(channels.filter((channel) => channel.enabled && rule.channelIds.includes(channel.id)).flatMap((channel): WatcherDestination[] => (channel.kind === "email" ? ["mail"] : channel.kind === "teams" ? ["teams"] : channel.kind === "webhook" ? ["webhook"] : [])))]
+        if (!destinations.length) { skipped.push(rule.title); continue }
+        alerts.push({ id: rule.id, title: rule.title, eventTypes: rule.eventTypes.filter((type) => type !== "test"), minSeverity: rule.minSeverity, destinations: WATCHER_DESTINATIONS.filter((entry) => destinations.includes(entry)), delivery: parseDelivery(rule.delivery), conditions: parseConditions(rule.conditions) })
+      }
+      const document: WatcherAlerts = { schema: WATCHER_ALERTS_SCHEMA, alerts }
+      return { document, json: JSON.stringify(document, null, 2), skipped }
     },
 
     "revoke-rule": ({ tenantId, body, deps }) => {
@@ -404,7 +442,61 @@ function summaryFor(kind: ChannelRecord["kind"], url: string | null): string {
 }
 
 function ruleSummary(rule: RuleRecord): string {
-  return `${rule.eventTypes.length} event types at ${rule.minSeverity} or above to ${rule.channelIds.length} channels.`
+  const narrowed = describeConditions(parseConditions(rule.conditions))
+  const each = parseDelivery(rule.delivery) === "each" && rule.eventTypes.some(isChangeEventType) ? " One alert per change." : ""
+  const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`
+  return `${plural(rule.eventTypes.length, "event type")} at ${rule.minSeverity} or above to ${plural(rule.channelIds.length, "channel")}.${narrowed ? ` Changes: ${narrowed}.` : ""}${each}`
+}
+
+const WATCHER_DESTINATIONS: WatcherDestination[] = ["webhook", "teams", "mail"]
+
+function conditions(value: unknown): RuleRecord["conditions"] {
+  if (value === undefined || value === null) return null
+  if (typeof value !== "object" || Array.isArray(value)) throw new FeatureError("conditions is invalid")
+  const raw = value as Record<string, unknown>
+  for (const key of ["changeTypes", "categories", "policyNames", "settingNames", "excludeActors"]) {
+    const list = raw[key]
+    if (list === undefined) continue
+    if (!Array.isArray(list) || list.length > 50 || list.some((entry) => typeof entry !== "string" || entry.length > 200)) throw new FeatureError(`conditions.${key} is invalid`)
+  }
+  const parsed = parseConditions(value)
+  return hasConditions(parsed) ? parsed : null
+}
+
+function delivery(value: unknown): RuleRecord["delivery"] {
+  if (value === undefined || value === null) return "digest"
+  if (value !== "digest" && value !== "each") throw new FeatureError("delivery must be digest or each")
+  return value
+}
+
+/** A made up change that passes the alert's conditions, so a test shows what the alert sends. */
+function sampleAlertEnvelope(deps: FeatureDeps, tenantId: string, rule: Stored<RuleRecord>) {
+  const matcher = alertMatcher(rule)
+  const service = rule.eventTypes.includes("entra.change") && !rule.eventTypes.includes("intune.change") ? "conditionalAccess" : "intune"
+  const c = matcher.conditions
+  const settingHint = c?.settingNames[0]
+  const envelope = changeEvent(service, {
+    tenantId,
+    tenantName: deps.tenant(tenantId)?.name ?? null,
+    includeActor: false,
+    source: "desktop",
+    change: {
+      auditId: `test-${deps.now().toISOString()}`,
+      at: deps.now().toISOString(),
+      category: c?.categories[0] ?? (service === "intune" ? "Compliance" : "ConditionalAccess"),
+      changeType: c?.changeTypes[0] ?? "updated",
+      resourceName: c?.policyNames[0] ? `${c.policyNames[0]} (sample)` : service === "intune" ? "Sample compliance policy" : "Sample Conditional Access policy",
+      resourceType: service === "intune" ? "Windows10CompliancePolicy" : "Conditional Access policy",
+      resourceId: "00000000-0000-0000-0000-000000000000",
+      actorUpn: null,
+      actorAppId: null,
+      actorAppName: null,
+      activity: "Sample change",
+      settings: settingHint ? [settingHint] : service === "intune" ? ["PasswordRequired", "OsMinimumVersion"] : ["conditions.users.excludeGroups"],
+      settingsMore: 0,
+    },
+  })
+  return { ...envelope, title: `Test: ${envelope.title}`, summary: `This is a test of the alert "${rule.title}" with a made up change. ${envelope.summary}`, test: true as const }
 }
 
 function eventTypes(value: unknown): RuleRecord["eventTypes"] {
@@ -443,7 +535,7 @@ function requireChannel(deps: FeatureDeps, tenantId: string, body: Body): Stored
 
 function requireRule(deps: FeatureDeps, tenantId: string, body: Body): Stored<RuleRecord> {
   const rule = deps.records.get<RuleRecord>(DOMAINS.notificationRules, tenantId, text(body, "ruleId", 100))
-  if (!rule) throw new FeatureError("Rule not found", 404)
+  if (!rule) throw new FeatureError("Alert not found", 404)
   return rule
 }
 
@@ -472,7 +564,7 @@ export function publicChannel(channel: Stored<ChannelRecord>) {
 
 export function publicRule(rule: Stored<RuleRecord>) {
   const { history, ...rest } = rule
-  return { ...rest, history: history.map(({ at, actor, reason }) => ({ at, actor, reason })) }
+  return { ...rest, conditions: parseConditions(rule.conditions), delivery: parseDelivery(rule.delivery), history: history.map(({ at, actor, reason }) => ({ at, actor, reason })) }
 }
 
 export function publicAuditWatch(watch: Stored<AuditWatchRecord> | null) {

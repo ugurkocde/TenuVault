@@ -3,11 +3,14 @@
  * policies, named locations and authentication strengths to notification change items.
  *
  * Graph returns targetResources with modifiedProperties (the full policy JSON before and
- * after) and initiatedBy.user.ipAddress even under $select. Neither is ever read: only
- * ids, times, the activity name, the operation, the result, target display names and the
- * actor's UPN and app are.
+ * after) and initiatedBy.user.ipAddress even under $select. The IP address is never read.
+ * The policy JSON is only compared in memory by settings.ts for updates, to name the
+ * settings that changed; the policy and its values are never kept or sent. Otherwise only
+ * ids, times, the activity name, the operation, the result, target names and the actor's
+ * UPN and app are read.
  */
 import type { AuditChange, AuditChangeType } from "./audit"
+import { entraChangedSettings } from "./settings"
 
 export interface EntraAuditRaw {
   id?: unknown
@@ -80,16 +83,22 @@ export function mapEntraAuditEvent(raw: EntraAuditRaw): AuditChange | null {
   const initiatedBy = record(raw.initiatedBy)
   const user = record(initiatedBy?.user)
   const app = record(initiatedBy?.app)
+  const changeType = changeTypeOf(text(raw.operationType) ?? "", activity)
+  const changed = changeType === "updated" ? entraChangedSettings(targets) : { names: [], more: 0 }
+  const targetId = targets.map((target) => text(target.id)).find((id) => id !== null) ?? null
   return {
     auditId: id,
     at: new Date(at).toISOString(),
     category: "ConditionalAccess",
-    changeType: changeTypeOf(text(raw.operationType) ?? "", activity),
+    changeType,
     resourceName: named ? named.slice(0, 200) : null,
     resourceType,
     actorUpn: user ? text(user.userPrincipalName) : null,
     actorAppId: app ? text(app.appId) : null,
     actorAppName: app ? text(app.displayName) : null,
     activity,
+    resourceId: targetId ? targetId.slice(0, 200) : null,
+    settings: changed.names,
+    settingsMore: changed.more,
   }
 }

@@ -22,10 +22,15 @@
     twice. A heartbeat.json blob next to it lets the desktop app show that the watcher
     is alive.
 
-    Payload allowlist: envelopes carry names, counts, statuses, timestamps and, when
-    TenuVaultIncludeActor is true, actor UPNs. Audit request bodies and audit property
-    values are never read, and secrets, tokens and URLs with query strings are never
+    Payload allowlist: envelopes carry names, object ids, counts, statuses, timestamps,
+    the names of changed settings and, when TenuVaultIncludeActor is true, actor UPNs.
+    Audit request bodies are never read. Changed property values are only compared, in
+    the changed settings library, to name the settings an update changed; they are
+    never kept, logged or sent. Secrets, tokens and URLs with query strings are never
     logged.
+
+    With TenuVaultAlertRules (setup -AlertRulesPath) each event goes only where the
+    alerts copied from TenuVault send it, planned exactly like the desktop app.
 
     Dot source the file with -LibraryOnly to load the library functions without
     running the watcher, which is how the parity check script uses it. Run with
@@ -241,6 +246,8 @@ function New-TvEnvelope {
         if (Get-TvProp $item "detail") { $entry["detail"] = Get-TvClean (Get-TvProp $item "detail") 300 }
         if (Get-TvProp $item "actor") { $entry["actor"] = Get-TvClean (Get-TvProp $item "actor") 200 }
         if (Get-TvProp $item "at") { $entry["at"] = [string](Get-TvProp $item "at") }
+        $itemChange = Get-TvProp $item "change"
+        if ($itemChange) { $entry["change"] = ConvertTo-TvCleanItemChange $itemChange }
         $itemList.Add([pscustomobject]$entry)
     }
 
@@ -269,6 +276,158 @@ function New-TvEnvelope {
     }
     if ($Test) { $envelope["test"] = $true }
     return [pscustomobject]$envelope
+}
+
+# ---------------------------------------------------------------------------
+# Library: changed setting names (mirrors src/shared/notifications/settings.ts)
+# ---------------------------------------------------------------------------
+# Intune and Entra log each changed property of an update with its old and new value.
+# The values are compared here, in memory, and dropped: only the names of the settings
+# whose value changed are returned. A value is never kept, logged or sent. A create or
+# delete lists every property of the object, so only updates ask for changed settings.
+
+$script:TvMaxSettingNames = 15
+$script:TvSettingNoise = @("id", "createddatetime", "lastmodifieddatetime", "modifieddatetime", "version", "devicemanagementapiversion", "templateid", "deleteddatetime")
+
+# A logged value as text, or $null when that side was not recorded (JSON null). PowerShell 7
+# before 7.5 turns ISO times into DateTime values while parsing; those still count as recorded.
+function Get-TvLoggedValue {
+    param([AllowNull()][object]$Value)
+    if ($Value -is [string]) { return $Value }
+    if ($Value -is [DateTime] -or $Value -is [DateTimeOffset]) { return ConvertTo-TvIso $Value }
+    return $null
+}
+
+# "<null>" and "null" are how Intune writes a recorded empty value; both mean the same.
+function Get-TvNormalizedSettingValue {
+    param([AllowNull()][string]$Value)
+    $trimmed = ([string]$Value).Trim()
+    if ($trimmed -ceq "<null>" -or $trimmed -ceq "null") { return "" }
+    return $trimmed
+}
+
+# "$Collection.RoleScopeTagIds[0]" as "RoleScopeTagIds": one name per collection, not per index.
+function Get-TvSettingName {
+    param([AllowNull()][string]$Raw)
+    $name = ((([string]$Raw) -creplace '^\$Collection\.', '') -creplace '\[[0-9]+\]', '').Trim()
+    if (-not $name -or $script:TvSettingNoise -contains $name.ToLowerInvariant()) { return $null }
+    if ($name.Length -gt 120) { $name = $name.Substring(0, 120) }
+    return $name
+}
+
+function Get-TvBoundedSettings {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Names)
+    $unique = [System.Collections.Generic.List[string]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($name in $Names) {
+        if ($seen.Add($name.ToLowerInvariant())) { $unique.Add($name) }
+    }
+    $shown = [System.Collections.Generic.List[string]]::new()
+    foreach ($name in $unique) { if ($shown.Count -lt $script:TvMaxSettingNames) { $shown.Add($name) } }
+    return [pscustomobject][ordered]@{ names = $shown.ToArray(); more = [Math]::Max(0, $unique.Count - $script:TvMaxSettingNames) }
+}
+
+function Test-TvJsonRecord {
+    param([AllowNull()][object]$Value)
+    if ($null -eq $Value -or $Value -is [string] -or $Value -is [ValueType] -or $Value -is [array]) { return $false }
+    return ($Value -is [System.Management.Automation.PSCustomObject])
+}
+
+# A logged value that holds a whole object as JSON, or $null.
+function ConvertFrom-TvLoggedObject {
+    param([AllowNull()][string]$Value)
+    if ($null -eq $Value) { return $null }
+    $trimmed = $Value.Trim()
+    if (-not $trimmed.StartsWith("{")) { return $null }
+    $parsed = $null
+    try { $parsed = ConvertFrom-Json -InputObject $trimmed -ErrorAction Stop } catch { return $null }
+    if (Test-TvJsonRecord $parsed) { return $parsed }
+    return $null
+}
+
+# The paths that differ between two versions of an object, dotted down to three levels.
+# Lists are compared whole. Values are read straight from the properties, never through a
+# function return, so a one item or empty list is never unrolled into something else.
+function Add-TvDifferingPaths {
+    param([object]$Before, [object]$After, [string]$Prefix, [int]$Depth, [System.Collections.Generic.List[string]]$Out)
+    $keys = [System.Collections.Generic.List[string]]::new()
+    foreach ($source in @($Before, $After)) {
+        foreach ($prop in $source.PSObject.Properties) { if (-not $keys.Contains($prop.Name)) { $keys.Add($prop.Name) } }
+    }
+    $keys.Sort([StringComparer]::Ordinal)
+    foreach ($key in $keys) {
+        if ($script:TvSettingNoise -contains $key.ToLowerInvariant() -or $key.StartsWith("@odata")) { continue }
+        $a = $null
+        $b = $null
+        $propA = $Before.PSObject.Properties[$key]
+        $propB = $After.PSObject.Properties[$key]
+        if ($propA) { $a = $propA.Value }
+        if ($propB) { $b = $propB.Value }
+        if ((ConvertTo-TenuVaultCanonicalJson $a) -ceq (ConvertTo-TenuVaultCanonicalJson $b)) { continue }
+        $path = $key
+        if ($Prefix) { $path = $Prefix + "." + $key }
+        $recordA = Test-TvJsonRecord $a
+        $recordB = Test-TvJsonRecord $b
+        if ($Depth -lt 3 -and ($recordA -or $recordB)) {
+            $childA = $a
+            $childB = $b
+            if (-not $recordA) { $childA = [pscustomobject]@{} }
+            if (-not $recordB) { $childB = [pscustomobject]@{} }
+            Add-TvDifferingPaths -Before $childA -After $childB -Prefix $path -Depth ($Depth + 1) -Out $Out
+        } else {
+            if ($path.Length -gt 120) { $path = $path.Substring(0, 120) }
+            $Out.Add($path)
+        }
+    }
+}
+
+# Mirrors intuneChangedSettings: a property counts only when both its old and its new value
+# were recorded and they differ. Settings catalog updates record no old values at all.
+function Get-TvIntuneChangedSettings {
+    param([AllowNull()][object]$Resource)
+    $names = [System.Collections.Generic.List[string]]::new()
+    if ($null -ne $Resource) {
+        foreach ($property in @(Get-TvProp $Resource "modifiedProperties")) {
+            if ($null -eq $property) { continue }
+            $display = Get-TvProp $property "displayName"
+            if ($display -isnot [string]) { continue }
+            $old = Get-TvLoggedValue (Get-TvProp $property "oldValue")
+            $new = Get-TvLoggedValue (Get-TvProp $property "newValue")
+            if ($null -eq $old -or $null -eq $new) { continue }
+            if ((Get-TvNormalizedSettingValue $old) -ceq (Get-TvNormalizedSettingValue $new)) { continue }
+            $name = Get-TvSettingName $display
+            if ($name) { $names.Add($name) }
+        }
+    }
+    return Get-TvBoundedSettings -Names $names
+}
+
+# Mirrors entraChangedSettings: a property holding the whole object as JSON (the policy) is
+# compared field by field; any other property counts by its own name.
+function Get-TvEntraChangedSettings {
+    param([AllowEmptyCollection()][object[]]$Targets)
+    $names = [System.Collections.Generic.List[string]]::new()
+    foreach ($target in @($Targets)) {
+        if ($null -eq $target) { continue }
+        foreach ($property in @(Get-TvProp $target "modifiedProperties")) {
+            if ($null -eq $property) { continue }
+            $display = Get-TvProp $property "displayName"
+            if ($display -isnot [string]) { continue }
+            $old = Get-TvLoggedValue (Get-TvProp $property "oldValue")
+            $new = Get-TvLoggedValue (Get-TvProp $property "newValue")
+            if ($null -eq $old -or $null -eq $new) { continue }
+            $before = ConvertFrom-TvLoggedObject $old
+            $after = ConvertFrom-TvLoggedObject $new
+            if ($null -ne $before -and $null -ne $after) {
+                Add-TvDifferingPaths -Before $before -After $after -Prefix "" -Depth 1 -Out $names
+                continue
+            }
+            if ((Get-TvNormalizedSettingValue $old) -ceq (Get-TvNormalizedSettingValue $new)) { continue }
+            $name = Get-TvSettingName $display
+            if ($name) { $names.Add($name) }
+        }
+    }
+    return Get-TvBoundedSettings -Names $names
 }
 
 # ---------------------------------------------------------------------------
@@ -308,8 +467,8 @@ function ConvertFrom-TenuVaultAuditEvent {
         $displayText = Get-TvText (Get-TvProp $Raw "displayName")
         $activityLower = (@($activityTypeText, $activityText, $displayText) -join " ").ToLowerInvariant()
 
-        # Object entries of the resources collection. Modified property values
-        # inside resources are never read.
+        # Object entries of the resources collection. Modified property values are only
+        # compared for updates, by Get-TvIntuneChangedSettings, and never kept.
         $resourceEntries = @()
         foreach ($entry in @(Get-TvProp $Raw "resources")) {
             if ($entry -is [PSCustomObject] -or $entry -is [System.Collections.IDictionary]) { $resourceEntries += $entry }
@@ -357,6 +516,19 @@ function ConvertFrom-TenuVaultAuditEvent {
             if (-not $resourceType) { $resourceType = Get-TvText (Get-TvProp $resource "auditResourceType") }
         }
         if (-not $resourceType) { $resourceType = Get-TvText (Get-TvProp $Raw "componentName") }
+        $resourceId = $null
+        if ($resource) {
+            $resourceIdText = Get-TvText (Get-TvProp $resource "resourceId")
+            if ($resourceIdText) { $resourceId = if ($resourceIdText.Length -gt 200) { $resourceIdText.Substring(0, 200) } else { $resourceIdText } }
+        }
+        # Names of the settings an update changed; the values stay inside the function.
+        $changedNames = @()
+        $changedMore = 0
+        if ($changeType -eq "updated") {
+            $changed = Get-TvIntuneChangedSettings $resource
+            $changedNames = $changed.names
+            $changedMore = [int]$changed.more
+        }
 
         $actor = Get-TvProp $Raw "actor"
 
@@ -374,13 +546,17 @@ function ConvertFrom-TenuVaultAuditEvent {
             actorAppId   = Get-TvText (Get-TvProp $actor "applicationId")
             actorAppName = Get-TvText (Get-TvProp $actor "applicationDisplayName")
             activity     = $activity
+            resourceId   = $resourceId
+            settings     = $changedNames
+            settingsMore = $changedMore
         }
     }
 }
 
 # Mirrors mapEntraAuditEvent in entra.ts. Graph returns target resources with their
 # modified property values (the full policy JSON) and the actor's IP address even
-# under $select; neither is ever read here.
+# under $select. The IP address is never read; the policy JSON is only compared for
+# updates, by Get-TvEntraChangedSettings, to name the changed settings, and never kept.
 function ConvertFrom-TenuVaultEntraAuditEvent {
     [CmdletBinding()]
     param(
@@ -430,6 +606,22 @@ function ConvertFrom-TenuVaultEntraAuditEvent {
         $initiatedBy = Get-TvProp $Raw "initiatedBy"
         $user = Get-TvProp $initiatedBy "user"
         $app = Get-TvProp $initiatedBy "app"
+        $targetList = [System.Collections.Generic.List[object]]::new()
+        foreach ($target in @(Get-TvProp $Raw "targetResources")) {
+            if ($target -is [PSCustomObject] -or $target -is [System.Collections.IDictionary]) { $targetList.Add($target) }
+        }
+        $resourceId = $null
+        foreach ($target in $targetList) {
+            $targetId = Get-TvText (Get-TvProp $target "id")
+            if ($targetId) { $resourceId = if ($targetId.Length -gt 200) { $targetId.Substring(0, 200) } else { $targetId }; break }
+        }
+        $changedNames = @()
+        $changedMore = 0
+        if ($changeType -eq "updated") {
+            $changed = Get-TvEntraChangedSettings -Targets @($targetList.ToArray())
+            $changedNames = $changed.names
+            $changedMore = [int]$changed.more
+        }
         return [pscustomobject][ordered]@{
             auditId      = $id
             at           = $at
@@ -441,6 +633,9 @@ function ConvertFrom-TenuVaultEntraAuditEvent {
             actorAppId   = Get-TvText (Get-TvProp $app "appId")
             actorAppName = Get-TvText (Get-TvProp $app "displayName")
             activity     = $activity
+            resourceId   = $resourceId
+            settings     = $changedNames
+            settingsMore = $changedMore
         }
     }
 }
@@ -474,6 +669,7 @@ function New-TenuVaultAuditDigest {
     # first appearance, exactly like collapseAuditChanges in audit.ts.
     $groups = [System.Collections.Specialized.OrderedDictionary]::new()
     $counts = @{}
+    $members = @{}
     foreach ($change in $mapped) {
         $targetKey = Get-TvProp $change "resourceName"
         if (-not $targetKey) { $targetKey = Get-TvProp $change "resourceType" }
@@ -483,8 +679,12 @@ function New-TenuVaultAuditDigest {
         if (-not $actorKey) { $actorKey = Get-TvProp $change "actorAppId" }
         if ($null -eq $actorKey) { $actorKey = "" }
         $key = (@([string](Get-TvProp $change "changeType"), [string]$targetKey, [string]$actorKey) -join "|").ToLowerInvariant()
-        if ($groups.Contains($key)) { $counts[$key] = $counts[$key] + 1 }
-        else { $groups.Add($key, $change); $counts[$key] = 1 }
+        if ($groups.Contains($key)) { $counts[$key] = $counts[$key] + 1; $members[$key].Add($change) }
+        else {
+            $groups.Add($key, $change); $counts[$key] = 1
+            $members[$key] = [System.Collections.Generic.List[object]]::new()
+            $members[$key].Add($change)
+        }
     }
 
     $items = [System.Collections.Generic.List[object]]::new()
@@ -507,6 +707,7 @@ function New-TenuVaultAuditDigest {
         if (-not $actorLabel) { $actorLabel = Get-TvProp $change "actorAppName" }
         if ($IncludeActor -and $actorLabel) { $item["actor"] = [string]$actorLabel }
         $item["at"] = [string](Get-TvProp $change "at")
+        $item["change"] = New-TvItemChange -Changes @($members[$key].ToArray())
         $items.Add([pscustomobject]$item)
     }
     $collapsed = $groups.Count
@@ -545,6 +746,359 @@ function New-TenuVaultAuditDigest {
         -Title "$($digestTitle): $tenantLabel" -Summary $summary `
         -Details @([pscustomobject][ordered]@{ label = "Changes"; value = [string]$changeCount }) `
         -Items @($items.ToArray()) -MoreCount $moreCount -Source "azure-watcher"
+}
+
+# ---------------------------------------------------------------------------
+# Library: change lines, single change alerts and alert planning
+# (mirror itemChange and changeEvent in audit.ts and planChangeAlerts in alerts.ts)
+# ---------------------------------------------------------------------------
+
+# The structured fields of a change line; settings of collapsed changes are merged in order.
+function New-TvItemChange {
+    param([Parameter(Mandatory)][object[]]$Changes)
+    $first = $Changes[0]
+    $settings = [System.Collections.Generic.List[string]]::new()
+    $more = 0
+    foreach ($change in $Changes) {
+        foreach ($name in @($change.settings)) {
+            if ($null -eq $name) { continue }
+            $known = $false
+            foreach ($existing in $settings) { if ($existing.ToLowerInvariant() -ceq ([string]$name).ToLowerInvariant()) { $known = $true; break } }
+            if (-not $known) { $settings.Add([string]$name) }
+        }
+        $changeMore = 0
+        [void][int]::TryParse("$($change.settingsMore)", [ref]$changeMore)
+        if ($changeMore -gt $more) { $more = $changeMore }
+    }
+    $entry = [ordered]@{
+        auditId = [string]$first.auditId
+        changeType = [string]$first.changeType
+        category = [string]$first.category
+    }
+    foreach ($field in @("resourceId", "resourceName", "resourceType")) {
+        $value = Get-TvProp $first $field
+        if ($value) { $entry[$field] = [string]$value }
+    }
+    if ($Changes.Count -gt 1) { $entry["count"] = $Changes.Count }
+    $overflow = [Math]::Max(0, $settings.Count - $script:TvMaxSettingNames)
+    if ($settings.Count -gt 0) {
+        $shown = [System.Collections.Generic.List[string]]::new()
+        foreach ($name in $settings) { if ($shown.Count -lt $script:TvMaxSettingNames) { $shown.Add($name) } }
+        $entry["settings"] = $shown.ToArray()
+    }
+    if ($more + $overflow -gt 0) { $entry["settingsMore"] = $more + $overflow }
+    return [pscustomobject]$entry
+}
+
+# Mirrors cleanChange in envelope.ts: bounded, cleaned fields; names only, never a value.
+function ConvertTo-TvCleanItemChange {
+    param([Parameter(Mandatory)][object]$Change)
+    $rawSettings = [System.Collections.Generic.List[string]]::new()
+    foreach ($name in @(Get-TvProp $Change "settings")) { if ($null -ne $name) { $rawSettings.Add([string]$name) } }
+    $settings = [System.Collections.Generic.List[string]]::new()
+    $index = 0
+    foreach ($name in $rawSettings) {
+        if ($index -ge 15) { break }
+        $index++
+        $cleaned = Get-TvClean $name 120
+        if ($cleaned) { $settings.Add($cleaned) }
+    }
+    $moreValue = 0
+    [void][int]::TryParse("$(Get-TvProp $Change 'settingsMore')", [ref]$moreValue)
+    $more = [Math]::Max(0, $moreValue) + [Math]::Max(0, $rawSettings.Count - 15)
+    $entry = [ordered]@{
+        auditId = Get-TvClean (Get-TvProp $Change "auditId") 200
+        changeType = Get-TvClean (Get-TvProp $Change "changeType") 40
+        category = Get-TvClean (Get-TvProp $Change "category") 120
+    }
+    foreach ($field in @("resourceId", "resourceName", "resourceType")) {
+        $value = Get-TvProp $Change $field
+        if ($value) { $entry[$field] = Get-TvClean $value 200 }
+    }
+    $count = 0
+    [void][int]::TryParse("$(Get-TvProp $Change 'count')", [ref]$count)
+    if ($count -gt 1) { $entry["count"] = $count }
+    if ($settings.Count -gt 0) { $entry["settings"] = $settings.ToArray() }
+    if ($more -gt 0) { $entry["settingsMore"] = $more }
+    return [pscustomobject]$entry
+}
+
+# "A, B and 3 more", as settingsSentence in audit.ts.
+function Get-TvSettingsSentence {
+    param([AllowEmptyCollection()][string[]]$Names, [int]$More)
+    if (-not $Names -or $Names.Count -eq 0) { return "" }
+    $shown = $Names -join ", "
+    if ($More -gt 0) { return "$shown and $More more" }
+    return $shown
+}
+
+# Mirrors changeEvent in audit.ts: one alert for one audited change, keyed by its audit id.
+function New-TenuVaultChangeEvent {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$TenantId,
+        [object]$TenantName,
+        [Parameter(Mandatory)][object]$Change,
+        [bool]$IncludeActor = $false,
+        [ValidateSet("intune", "conditionalAccess")][string]$Service = "intune"
+    )
+    $digestType = if ($Service -eq "conditionalAccess") { "entra.change" } else { "intune.change" }
+    $label = if ($Service -eq "conditionalAccess") { "Conditional Access" } else { "Intune" }
+    $changeType = [string]$Change.changeType
+    $resourceName = Get-TvProp $Change "resourceName"
+    $resourceType = Get-TvProp $Change "resourceType"
+    $target = $resourceName
+    if (-not $target) { $target = $resourceType }
+    if (-not $target) { $target = [string]$Change.category }
+    $tenantLabel = if ($TenantName) { [string]$TenantName } else { "your tenant" }
+    $actor = $null
+    if ($IncludeActor) {
+        $actor = Get-TvProp $Change "actorUpn"
+        if (-not $actor) { $actor = Get-TvProp $Change "actorAppName" }
+    }
+    $settings = [System.Collections.Generic.List[string]]::new()
+    foreach ($name in @($Change.settings)) { if ($null -ne $name) { $settings.Add([string]$name) } }
+    $more = 0
+    [void][int]::TryParse("$($Change.settingsMore)", [ref]$more)
+    $sentence = Get-TvSettingsSentence -Names $settings.ToArray() -More $more
+    $kind = ""
+    if ($resourceName -and $resourceType) { $kind = " ($resourceType)" }
+    $details = [System.Collections.Generic.List[object]]::new()
+    $details.Add([pscustomobject][ordered]@{ label = "Change"; value = Get-TvCapitalized $changeType })
+    if ($resourceType) { $details.Add([pscustomobject][ordered]@{ label = "Type"; value = [string]$resourceType }) }
+    if ($Service -eq "intune") { $details.Add([pscustomobject][ordered]@{ label = "Category"; value = [string]$Change.category }) }
+    if ($actor) { $details.Add([pscustomobject][ordered]@{ label = "By"; value = [string]$actor }) }
+    $summary = "$target$kind was $changeType in $label for $tenantLabel"
+    if ($actor) { $summary += " by $actor" }
+    $summary += "."
+    if ($settings.Count -gt 0) { $summary += " Changed settings: $sentence." }
+    $item = [ordered]@{ title = "$(Get-TvCapitalized $changeType): $target" }
+    $item["detail"] = if ($resourceName -and $resourceType) { [string]$resourceType } else { [string]$Change.activity }
+    if ($actor) { $item["actor"] = [string]$actor }
+    $item["at"] = [string]$Change.at
+    $item["change"] = New-TvItemChange -Changes @($Change)
+    $severity = if ($changeType -eq "deleted" -or $changeType -eq "unassigned") { "warning" } else { "info" }
+    return New-TvEnvelope -Type $digestType -Severity $severity -TenantId $TenantId -TenantName $TenantName `
+        -OccurredAt ([string]$Change.at) -NaturalKey "change:$([string]$Change.auditId)" `
+        -Title "$label change: $target $changeType" -Summary $summary `
+        -Details @($details.ToArray()) -Items @([pscustomobject]$item) -Source "azure-watcher"
+}
+
+$script:TvChangeTypes = @("created", "updated", "deleted", "assigned", "unassigned", "changed")
+$script:TvEachPerCheck = 20
+
+# Mirrors textList in alerts.ts: strings only, control characters to spaces, trimmed,
+# 200 characters, case-insensitive unique, at most 50.
+function Get-TvConditionTextList {
+    param([object]$Raw, [Parameter(Mandatory)][string]$Name)
+    $out = [System.Collections.Generic.List[string]]::new()
+    $list = Get-TvStyleList $Raw $Name
+    if ($null -eq $list) { return ,$out.ToArray() }
+    foreach ($entry in $list) {
+        if ($entry -isnot [string]) { continue }
+        $cleaned = ([regex]::Replace($entry, '[\x00-\x1f\x7f]+', ' ')).Trim()
+        if ($cleaned.Length -gt 200) { $cleaned = $cleaned.Substring(0, 200) }
+        if (-not $cleaned) { continue }
+        $known = $false
+        foreach ($existing in $out) { if ($existing.ToLowerInvariant() -ceq $cleaned.ToLowerInvariant()) { $known = $true; break } }
+        if (-not $known) { $out.Add($cleaned) }
+        if ($out.Count -ge 50) { break }
+    }
+    return ,$out.ToArray()
+}
+
+# Mirrors parseConditions: $null when nothing narrows.
+function ConvertTo-TvAlertConditions {
+    param([AllowNull()][object]$Raw)
+    if ($null -eq $Raw -or $Raw -is [string] -or $Raw -is [ValueType] -or $Raw -is [array]) { return $null }
+    $typeList = Get-TvStyleList $Raw "changeTypes"
+    $types = [System.Collections.Generic.List[string]]::new()
+    foreach ($type in $script:TvChangeTypes) { if ($null -ne $typeList -and $typeList -ccontains $type) { $types.Add($type) } }
+    $conditions = [pscustomobject][ordered]@{
+        changeTypes = $types.ToArray()
+        categories = Get-TvConditionTextList $Raw "categories"
+        policyNames = Get-TvConditionTextList $Raw "policyNames"
+        settingNames = Get-TvConditionTextList $Raw "settingNames"
+        excludeActors = Get-TvConditionTextList $Raw "excludeActors"
+    }
+    $total = $conditions.changeTypes.Count + $conditions.categories.Count + $conditions.policyNames.Count + $conditions.settingNames.Count + $conditions.excludeActors.Count
+    if ($total -eq 0) { return $null }
+    return $conditions
+}
+
+function Test-TvContainsAny {
+    param([AllowNull()][object]$Haystack, [string[]]$Needles)
+    if (-not $Haystack) { return $false }
+    $lower = ([string]$Haystack).ToLowerInvariant()
+    foreach ($needle in $Needles) { if ($lower.Contains($needle.ToLowerInvariant())) { return $true } }
+    return $false
+}
+
+# Mirrors changeMatches in alerts.ts.
+function Test-TvChangeMatches {
+    param([AllowNull()][object]$Conditions, [Parameter(Mandatory)][object]$Change, [string]$Service)
+    if ($null -eq $Conditions) { return $true }
+    if ($Conditions.changeTypes.Count -gt 0 -and -not ($Conditions.changeTypes -ccontains [string]$Change.changeType)) { return $false }
+    if ($Service -eq "intune" -and $Conditions.categories.Count -gt 0) {
+        $category = ([string]$Change.category).ToLowerInvariant()
+        $hit = $false
+        foreach ($entry in $Conditions.categories) { if ($entry.ToLowerInvariant() -ceq $category) { $hit = $true; break } }
+        if (-not $hit) { return $false }
+    }
+    if ($Conditions.policyNames.Count -gt 0 -and -not (Test-TvContainsAny (Get-TvProp $Change "resourceName") $Conditions.policyNames)) { return $false }
+    if ($Conditions.settingNames.Count -gt 0) {
+        $hit = $false
+        foreach ($name in @($Change.settings)) { if ($null -ne $name -and (Test-TvContainsAny $name $Conditions.settingNames)) { $hit = $true; break } }
+        if (-not $hit) { return $false }
+    }
+    if ($Conditions.excludeActors.Count -gt 0) {
+        $actors = @(@((Get-TvProp $Change "actorUpn"), (Get-TvProp $Change "actorAppName")) | Where-Object { $_ } | ForEach-Object { ([string]$_).ToLowerInvariant() })
+        foreach ($excluded in $Conditions.excludeActors) { if ($actors -ccontains $excluded.ToLowerInvariant()) { return $false } }
+    }
+    return $true
+}
+
+# The watcher's copy of the alerts (TenuVaultAlertRules, from setup -AlertRulesPath), or $null
+# when the value is missing or unreadable: then every event goes to every destination, as a
+# watcher without alerts does. Alerts without event types or destinations are dropped.
+function ConvertFrom-TvWatcherAlerts {
+    param([AllowNull()][AllowEmptyString()][string]$Text)
+    if (-not $Text) { return $null }
+    $document = $null
+    try { $document = ConvertFrom-Json -InputObject $Text -ErrorAction Stop } catch { return $null }
+    if ($null -eq $document -or (Get-TvProp $document "schema") -cne "tenuvault.watcher-alerts/v1") { return $null }
+    $list = Get-TvStyleList $document "alerts"
+    if ($null -eq $list) { return $null }
+    $known = @("backup.failed", "backup.warning", "backup.succeeded", "backup.missed", "restore.completed", "restore.partial", "restore.failed", "drift.detected", "health.finding", "intune.change", "entra.change", "credential.expiring", "watcher.stale")
+    $alerts = [System.Collections.Generic.List[object]]::new()
+    $index = 0
+    foreach ($raw in $list) {
+        $index++
+        if ($null -eq $raw -or $raw -is [string] -or $raw -is [ValueType]) { continue }
+        $types = [System.Collections.Generic.List[string]]::new()
+        $eventTypeList = Get-TvConditionTextList $raw "eventTypes"
+        foreach ($type in $eventTypeList) { if ($known -ccontains $type -and -not $types.Contains($type)) { $types.Add($type) } }
+        $destinationList = Get-TvStyleList $raw "destinations"
+        $destinations = [System.Collections.Generic.List[string]]::new()
+        foreach ($destination in @("webhook", "teams", "mail")) { if ($null -ne $destinationList -and $destinationList -ccontains $destination) { $destinations.Add($destination) } }
+        if ($types.Count -eq 0 -or $destinations.Count -eq 0) { continue }
+        $id = Get-TvText (Get-TvProp $raw "id")
+        if (-not $id) { $id = "alert-$index" }
+        $alerts.Add([pscustomobject][ordered]@{
+            id = $id
+            title = Get-TvClean (Get-TvProp $raw "title") 120
+            eventTypes = $types.ToArray()
+            minSeverity = Get-TvStyleChoice (Get-TvProp $raw "minSeverity") @("info", "warning", "critical") "info"
+            destinations = $destinations.ToArray()
+            delivery = Get-TvStyleChoice (Get-TvProp $raw "delivery") @("digest", "each") "digest"
+            conditions = ConvertTo-TvAlertConditions (Get-TvProp $raw "conditions")
+        })
+    }
+    return ,$alerts.ToArray()
+}
+
+# Whether an alert takes an event of this type and severity at all, as alertTakes.
+function Test-TvAlertTakes {
+    param([Parameter(Mandatory)][object]$Alert, [string]$Type, [string]$Severity)
+    if (-not (@($Alert.eventTypes) -ccontains $Type)) { return $false }
+    return $script:TvSeverityRank[$Severity] -ge $script:TvSeverityRank[[string]$Alert.minSeverity]
+}
+
+# The destinations of the given alerts, in the fixed order webhook, Teams, mail.
+function Get-TvAlertDestinations {
+    param([AllowEmptyCollection()][object[]]$Alerts, [AllowEmptyCollection()][string[]]$AlertIds)
+    $wanted = [System.Collections.Generic.List[string]]::new()
+    foreach ($destination in @("webhook", "teams", "mail")) {
+        foreach ($alert in @($Alerts)) {
+            if ($null -ne $alert -and @($AlertIds) -ccontains [string]$alert.id -and @($alert.destinations) -ccontains $destination) { $wanted.Add($destination); break }
+        }
+    }
+    return ,$wanted.ToArray()
+}
+
+# The ids of the alerts that take an event that is not a change (backup results, missed backups).
+function Get-TvAlertsTaking {
+    param([AllowEmptyCollection()][object[]]$Alerts, [Parameter(Mandatory)][object]$Envelope)
+    $ids = [System.Collections.Generic.List[string]]::new()
+    foreach ($alert in @($Alerts)) {
+        if ($null -ne $alert -and (Test-TvAlertTakes $alert ([string](Get-TvProp $Envelope "type")) ([string](Get-TvProp $Envelope "severity")))) { $ids.Add([string]$alert.id) }
+    }
+    return ,$ids.ToArray()
+}
+
+# Where one envelope is owed. Without alerts: every configured destination. With alerts: the
+# destinations of the alerts that planned it (change alerts) or that take its type and
+# severity (everything else), limited to the destinations configured in this watcher.
+function Get-TvIntendedDestinations {
+    param(
+        [AllowNull()][object[]]$Alerts,
+        [Parameter(Mandatory)][object]$Envelope,
+        [AllowNull()][string[]]$Planned,
+        [AllowEmptyCollection()][string[]]$Configured
+    )
+    $out = [System.Collections.Generic.List[string]]::new()
+    if ($null -eq $Alerts) {
+        foreach ($destination in @($Configured)) { if ($destination) { $out.Add($destination) } }
+        return ,$out.ToArray()
+    }
+    $wanted = $Planned
+    if ($null -eq $wanted) {
+        $takingIds = Get-TvAlertsTaking -Alerts $Alerts -Envelope $Envelope
+        $wanted = Get-TvAlertDestinations -Alerts $Alerts -AlertIds $takingIds
+    }
+    foreach ($destination in @($wanted)) { if ($destination -and @($Configured) -ccontains [string]$destination) { $out.Add([string]$destination) } }
+    return ,$out.ToArray()
+}
+
+# Mirrors planChangeAlerts: the envelopes one poll of one service sends, and which alerts
+# send each. Alerts that pick the same changes produce the same envelope (same event id).
+function Get-TvChangeAlertPlan {
+    param(
+        [Parameter(Mandatory)][ValidateSet("intune", "conditionalAccess")][string]$Service,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Changes,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Alerts,
+        [Parameter(Mandatory)][string]$TenantId,
+        [object]$TenantName,
+        [bool]$IncludeActor = $false,
+        [object]$GapNotice
+    )
+    $type = if ($Service -eq "conditionalAccess") { "entra.change" } else { "intune.change" }
+    $planned = [System.Collections.Specialized.OrderedDictionary]::new()
+    foreach ($alert in @($Alerts)) {
+        if ($null -eq $alert -or -not (@($alert.eventTypes) -ccontains $type)) { continue }
+        $selected = [System.Collections.Generic.List[object]]::new()
+        foreach ($change in @($Changes)) { if ($null -ne $change -and (Test-TvChangeMatches $alert.conditions $change $Service)) { $selected.Add($change) } }
+        if ($selected.Count -eq 0) { continue }
+        $envelopes = [System.Collections.Generic.List[object]]::new()
+        if ($alert.delivery -eq "each") {
+            $rest = [System.Collections.Generic.List[object]]::new()
+            foreach ($change in $selected) {
+                if ($envelopes.Count -lt $script:TvEachPerCheck) {
+                    $envelopes.Add((New-TenuVaultChangeEvent -TenantId $TenantId -TenantName $TenantName -Change $change -IncludeActor $IncludeActor -Service $Service))
+                } else { $rest.Add($change) }
+            }
+            if ($rest.Count -gt 0) {
+                $envelopes.Add((New-TenuVaultAuditDigest -TenantId $TenantId -TenantName $TenantName -Changes @($rest.ToArray()) -IncludeActor $IncludeActor -GapNotice $GapNotice -Service $Service))
+            }
+        } else {
+            $envelopes.Add((New-TenuVaultAuditDigest -TenantId $TenantId -TenantName $TenantName -Changes @($selected.ToArray()) -IncludeActor $IncludeActor -GapNotice $GapNotice -Service $Service))
+        }
+        foreach ($envelope in $envelopes) {
+            if (-not (Test-TvAlertTakes $alert ([string]$envelope.type) ([string]$envelope.severity))) { continue }
+            $eventIdValue = [string]$envelope.eventId
+            if ($planned.Contains($eventIdValue)) {
+                $entry = $planned[$eventIdValue]
+                if (-not $entry.alertIds.Contains([string]$alert.id)) { $entry.alertIds.Add([string]$alert.id) }
+            } else {
+                $ids = [System.Collections.Generic.List[string]]::new()
+                $ids.Add([string]$alert.id)
+                $planned.Add($eventIdValue, [pscustomobject][ordered]@{ envelope = $envelope; alertIds = $ids })
+            }
+        }
+    }
+    $result = [System.Collections.Generic.List[object]]::new()
+    foreach ($key in $planned.Keys) { $result.Add($planned[$key]) }
+    return ,$result.ToArray()
 }
 
 # ---------------------------------------------------------------------------
@@ -616,6 +1170,20 @@ function Get-TvActionLink {
     return $null
 }
 
+# "Changed: A, B and 2 more" for a change line with changed settings, as itemSettingsText.
+function Get-TvItemSettingsText {
+    param([object]$Item)
+    $change = Get-TvProp $Item "change"
+    if (-not $change) { return $null }
+    $names = @(@(Get-TvProp $change "settings") | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_ })
+    if ($names.Count -eq 0) { return $null }
+    $more = 0
+    [void][int]::TryParse("$(Get-TvProp $change 'settingsMore')", [ref]$more)
+    $text = "Changed: $($names -join ', ')"
+    if ($more -gt 0) { $text += " and $more more" }
+    return $text
+}
+
 function Get-TvItemLine {
     param([object]$Item)
     # Bullet and middle dot as char codes: the runbook stays ASCII so Windows PowerShell 5.1
@@ -625,7 +1193,10 @@ function Get-TvItemLine {
     if (Get-TvProp $Item "detail") { $parts.Add([string](Get-TvProp $Item "detail")) }
     if (Get-TvProp $Item "actor") { $parts.Add("by $(Get-TvProp $Item 'actor')") }
     if (Get-TvProp $Item "at") { $parts.Add((Get-TvFriendlyTime (Get-TvProp $Item "at"))) }
-    return $parts -join " $([char]0x00B7) "
+    $line = $parts -join " $([char]0x00B7) "
+    $settingsText = Get-TvItemSettingsText $Item
+    if ($settingsText) { $line += "`n  $settingsText" }
+    return $line
 }
 
 function Get-TvFooter {
@@ -693,6 +1264,8 @@ function Get-TvEmailHtml {
         if (Get-TvProp $item "actor") { $metaParts.Add("by $(Get-TvProp $item 'actor')") }
         if (Get-TvProp $item "at") { $metaParts.Add((Get-TvFriendlyTime (Get-TvProp $item "at"))) }
         $meta = if ($metaParts.Count -gt 0) { "<div style=`"font-size:12px;line-height:18px;color:#475467;margin-top:2px`">$(Get-TvHtmlEscape ($metaParts -join " $dot "))</div>" } else { "" }
+        $settingsText = Get-TvItemSettingsText $item
+        if ($settingsText) { $meta += "<div style=`"font-size:12px;line-height:18px;color:#344054;margin-top:2px`">$(Get-TvHtmlEscape $settingsText)</div>" }
         $itemRows += "<tr><td style=`"padding:10px 16px;border-top:1px solid #eaecf0`"><div style=`"font-size:14px;line-height:20px`">$chip<span style=`"font-weight:600`">$(Get-TvHtmlEscape $title)</span></div>$meta</td></tr>"
     }
 
@@ -1239,6 +1812,10 @@ function New-TvTeamsPayloadCore {
                     } else {
                         $line = @("$([char]0x2022) $(Get-TvProp $item 'title')") + @($meta.ToArray())
                         $body.Add([pscustomobject][ordered]@{ type = "TextBlock"; text = Get-TvMarkdownEscape ($line -join $dot); wrap = $true; spacing = $(if ($compact) { "None" } else { "Small" }) })
+                    }
+                    $settingsText = Get-TvItemSettingsText $item
+                    if ($settingsText) {
+                        $body.Add([pscustomobject][ordered]@{ type = "TextBlock"; text = Get-TvMarkdownEscape $settingsText; wrap = $true; isSubtle = $true; size = "Small"; spacing = "None" })
                     }
                 }
                 $more = [int](Get-TvProp $Envelope "moreCount") + ($allItems.Count - $shown.Count)
@@ -1862,6 +2439,17 @@ try {
 
     if (-not $tenantId) { throw "Automation variable TenuVaultTenantId is not set." }
     if (-not $storageAccount) { throw "Automation variable TenuVaultStorageAccount is not set." }
+    # The alerts copied from TenuVault (Settings > Notifications > Alerts > Copy for Azure watcher).
+    # Without them every event goes to every destination. An unreadable value does the same and
+    # says so, because sending too much is safer than silently sending nothing.
+    $watcherAlerts = $null
+    $alertRulesValue = Get-TvAutomationVariable "TenuVaultAlertRules"
+    if ($alertRulesValue) {
+        $watcherAlerts = ConvertFrom-TvWatcherAlerts $alertRulesValue
+        if ($null -eq $watcherAlerts) { Write-Output "TenuVaultAlertRules could not be read; every event goes to every destination until it is set again." }
+        else { Write-Output "Alerts from TenuVault: $(@($watcherAlerts).Count)." }
+    }
+
     if ($webhookUrl -and $webhookUrl -notmatch "^https://") { throw "TenuVaultWebhookUrl must use https." }
     if ($teamsWebhookUrl -and $teamsWebhookUrl -notmatch "^https://") { throw "TenuVaultTeamsWebhookUrl must use https." }
 
@@ -1878,6 +2466,7 @@ try {
         "includeActor=$($includeActor.ToString().ToLowerInvariant())"
         "watchConditionalAccess=$($watchConditionalAccess.ToString().ToLowerInvariant())"
         "teamsCardLayout=$(if ($teamsCardLayoutValue) { Get-TvSha256Hex $teamsCardLayoutValue } else { 'standard' })"
+        "alertRules=$(if ($alertRulesValue) { Get-TvSha256Hex $alertRulesValue } else { 'none' })"
         "configVersion=$configVersion"
         "webhookUrl=$(if ($webhookUrl) { 'present' } else { 'absent' })"
         "webhookSecret=$(if ($webhookSecret) { 'present' } else { 'absent' })"
@@ -2181,13 +2770,22 @@ try {
     if ($ingestionError -and -not $lastError) { $lastError = $ingestionError }
 
     $candidateEnvelopes = [System.Collections.Generic.List[object]]::new()
-    if ($newChanges.Count -gt 0) {
-        $candidateEnvelopes.Add((New-TenuVaultAuditDigest -TenantId $tenantId -TenantName $tenantName `
-            -Changes @($newChanges.ToArray()) -IncludeActor $includeActor))
-    }
-    if ($entraChanges.Count -gt 0) {
-        $candidateEnvelopes.Add((New-TenuVaultAuditDigest -TenantId $tenantId -TenantName $tenantName `
-            -Changes @($entraChanges.ToArray()) -IncludeActor $includeActor -Service conditionalAccess))
+    # With alerts, change envelopes come from the alert plan and carry the destinations of the
+    # alerts that picked them; other envelopes get theirs at enqueue time below.
+    $plannedDestinations = @{}
+    foreach ($serviceRun in @(@{ Service = "intune"; Changes = $newChanges }, @{ Service = "conditionalAccess"; Changes = $entraChanges })) {
+        if ($null -eq $serviceRun.Changes -or @($serviceRun.Changes).Count -eq 0) { continue }
+        if ($null -eq $watcherAlerts) {
+            $candidateEnvelopes.Add((New-TenuVaultAuditDigest -TenantId $tenantId -TenantName $tenantName `
+                -Changes @($serviceRun.Changes) -IncludeActor $includeActor -Service $serviceRun.Service))
+            continue
+        }
+        $plan = Get-TvChangeAlertPlan -Service $serviceRun.Service -Changes @($serviceRun.Changes) -Alerts @($watcherAlerts) `
+            -TenantId $tenantId -TenantName $tenantName -IncludeActor $includeActor
+        foreach ($plannedAlert in $plan) {
+            $candidateEnvelopes.Add($plannedAlert.envelope)
+            $plannedDestinations[[string]$plannedAlert.envelope.eventId] = Get-TvAlertDestinations -Alerts @($watcherAlerts) -AlertIds @($plannedAlert.alertIds.ToArray())
+        }
     }
 
     # --- Cloud backup results ----------------------------------------------------
@@ -2276,7 +2874,10 @@ try {
         if ($knownEventIds.ContainsKey($candidateId)) { continue }
         $knownEventIds[$candidateId] = $true
         $intendedChannels = [System.Collections.Generic.List[string]]::new()
-        foreach ($channelName in $configuredDestinations) { $intendedChannels.Add($channelName) }
+        $wanted = Get-TvIntendedDestinations -Alerts $watcherAlerts -Envelope $candidate -Planned $plannedDestinations[$candidateId] -Configured @($configuredDestinations.ToArray())
+        foreach ($channelName in $wanted) { $intendedChannels.Add([string]$channelName) }
+        # With alerts, an envelope no alert takes (or whose destinations are not set up here) is owed nothing.
+        if ($null -ne $watcherAlerts -and $intendedChannels.Count -eq 0) { continue }
         $pendingEnvelopes.Add([pscustomobject][ordered]@{
             envelope = $candidate
             attempts = 0

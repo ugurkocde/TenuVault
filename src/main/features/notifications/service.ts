@@ -1,7 +1,8 @@
 import { createHmac } from "node:crypto"
 import { canonicalJson, SEVERITY_RANK, watcherStaleEvent, type NotificationEnvelope } from "../../../shared/notifications/envelope"
 import { emailHtml, emailSubject, localText, teamsWorkflowsPayload } from "../../../shared/notifications/render"
-import { AUDIT_EVENT_SELECT, changeDigest, filterAuditChanges, mapAuditEvent, type AuditChange, type AuditEventRaw, type ChangeService } from "../../../shared/notifications/audit"
+import { AUDIT_EVENT_SELECT, filterAuditChanges, mapAuditEvent, type AuditChange, type AuditEventRaw, type ChangeService } from "../../../shared/notifications/audit"
+import { hasConditions, isChangeEventType, parseConditions, parseDelivery, planChangeAlerts, type AlertMatcher } from "../../../shared/notifications/alerts"
 import { DEFAULT_CARD_LAYOUT, parseCardLayout, styleFor, type CardLayout } from "../../../shared/notifications/layout"
 import { ENTRA_AUDIT_FILTER, ENTRA_AUDIT_SELECT, mapEntraAuditEvent, type EntraAuditRaw } from "../../../shared/notifications/entra"
 import { allows } from "../../../shared/plans"
@@ -123,18 +124,58 @@ export function saveAuditWatch(deps: FeatureDeps, tenantId: string, change: Audi
   return deps.records.update<AuditWatchRecord>(DOMAINS.notificationAuditWatch, tenantId, current.id, (value) => describe(merge(value)), meta)!
 }
 
-/** Rules that select an event for a channel: enabled rule and channel, type listed, severity at or above the minimum. */
-export function matchingChannelIds(rules: RuleRecord[], channels: Array<ChannelRecord & { id: string }>, envelope: NotificationEnvelope): string[] {
+/** A stored alert as the shared matcher reads it, with its conditions validated again on read. */
+export function alertMatcher(rule: Stored<RuleRecord> | (RuleRecord & { id: string })): AlertMatcher {
+  return { id: rule.id, enabled: rule.enabled, eventTypes: rule.eventTypes, minSeverity: rule.minSeverity, conditions: parseConditions(rule.conditions), delivery: parseDelivery(rule.delivery) }
+}
+
+/**
+ * Rules that select an event for a channel: enabled rule and channel, type listed, severity at
+ * or above the minimum. A change event built outside planChangeAlerts (a full digest) skips
+ * alerts that narrow changes or send each change on its own: those were planned per change.
+ */
+export function matchingChannelIds(rules: Array<RuleRecord & { id?: string }>, channels: Array<ChannelRecord & { id: string }>, envelope: NotificationEnvelope): string[] {
   const enabledChannels = new Set(channels.filter((channel) => channel.enabled).map((channel) => channel.id))
   const selected = new Set<string>()
   for (const rule of rules) {
     if (!rule.enabled) continue
     if (!rule.eventTypes.includes(envelope.type)) continue
     if (SEVERITY_RANK[envelope.severity] < SEVERITY_RANK[rule.minSeverity]) continue
+    if (isChangeEventType(envelope.type) && (hasConditions(parseConditions(rule.conditions)) || parseDelivery(rule.delivery) === "each")) continue
     for (const channelId of rule.channelIds) if (enabledChannels.has(channelId)) selected.add(channelId)
   }
   return [...selected]
 }
+
+/** The enabled channels of the given alerts, in alert order, each once. */
+export function channelsOfAlerts(rules: Array<Stored<RuleRecord>>, channels: Array<ChannelRecord & { id: string }>, alertIds: string[]): string[] {
+  const enabledChannels = new Set(channels.filter((channel) => channel.enabled).map((channel) => channel.id))
+  const selected: string[] = []
+  for (const id of alertIds) {
+    const rule = rules.find((entry) => entry.id === id)
+    for (const channelId of rule?.channelIds ?? []) if (enabledChannels.has(channelId) && !selected.includes(channelId)) selected.push(channelId)
+  }
+  return selected
+}
+
+/**
+ * Queues the alerts for one poll worth of changes: planChangeAlerts decides the envelopes
+ * per alert, and each envelope goes to the channels of the alerts that picked it.
+ */
+export async function emitChangeAlerts(deps: FeatureDeps, tenantId: string, service: ChangeService, changes: AuditChange[], context: { includeActor: boolean; gapNotice?: string | null }, options: NotificationOptions & { deferFlush?: boolean } = {}): Promise<number> {
+  const tenant = tenantId.toLowerCase()
+  const rules = rulesOf(deps, tenant)
+  const channels = channelsOf(deps, tenant)
+  const plan = planChangeAlerts(service, changes, rules.map(alertMatcher), { tenantId: tenant, tenantName: deps.tenant(tenant)?.name ?? null, includeActor: context.includeActor, source: "desktop", gapNotice: context.gapNotice })
+  let enqueued = 0
+  for (const { envelope, alertIds } of plan) {
+    const channelIds = channelsOfAlerts(rules, channels, alertIds)
+    if (channelIds.length) enqueued += await emit(deps, tenant, envelope, { ...options, deferFlush: true, channelIds })
+  }
+  if (enqueued > 0 && !options.deferFlush) await flushOutbox(deps, tenant, options)
+  return enqueued
+}
+
 
 /**
  * Emits one event: matches rules, persists one outbox intent per selected channel
@@ -536,17 +577,12 @@ async function pollSource(deps: FeatureDeps, tenant: string, service: ChangeServ
     const gap = state.lastPollAt && now.getTime() - Date.parse(state.lastPollAt) > AUDIT_GAP_NOTICE_MS
     let enqueued = 0
     if (filtered.length) {
-      const digest = changeDigest(service, {
-        tenantId: tenant,
-        tenantName: profile?.name ?? null,
-        changes: filtered,
-        includeActor: watch.includeActor,
-        source: "desktop",
-        gapNotice: gap ? "Change watching was off for a while; older changes may be missing from this digest." : null,
-      })
       // Intents first, dedupe state second, delivery last: a crash between them rebuilds
-      // the same digest with the same eventId, which the outbox then dedupes.
-      enqueued = await emit(deps, tenant, digest, { ...options, deferFlush: true })
+      // the same alerts with the same eventIds, which the outbox then dedupes.
+      enqueued = await emitChangeAlerts(deps, tenant, service, filtered, {
+        includeActor: watch.includeActor,
+        gapNotice: gap ? "Change watching was off for a while; older changes may be missing from this digest." : null,
+      }, { ...options, deferFlush: true })
     }
     const newWatermark = newestSeenAt && (!state.watermark || newestSeenAt > state.watermark) ? newestSeenAt : state.watermark ?? now.toISOString()
     const pruneBefore = Date.parse(newWatermark) - AUDIT_OVERLAP_MS

@@ -233,7 +233,7 @@ function NotificationSettings({ active }: { active: boolean }) {
           <span className="flex size-10 items-center justify-center rounded-full bg-secondary" aria-hidden="true"><Bell className="h-[18px] w-[18px]" /></span> Notifications
           {locked && <PlanBadge feature="notifications" />}
         </h2>
-        <p className="mt-2 text-sm text-gray-500">Backup, restore, drift and Intune change alerts to this computer, a webhook, a Teams channel or email. Settings are kept per tenant.</p>
+        <p className="mt-2 text-sm text-gray-500">Backup, restore, drift, Intune and Conditional Access change alerts to this computer, a webhook, a Teams channel or email, for the policies and settings you pick. Settings are kept per tenant.</p>
       </div>
       <label className="block text-sm">
         Notifications tenant
