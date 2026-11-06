@@ -3,7 +3,7 @@ import { BACKUP_CONTAINER } from "../../shared/constants"
 import { retryDelay, retryableStatus, sleep } from "../graph-retry"
 import { FetchApplicationError } from "../api/network-error"
 import type { NetworkCircuit } from "./engine"
-import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, withAbort, withRequestTimeout } from "./request"
+import { MAX_LIST_PAGES, REQUEST_ATTEMPTS, BlobClaimError, ProtectedBlobError, RequestTimeoutError, RetryableStorageError, StorageError, TokenError, isImmutabilityRefusal, requestFailure, storageError, storageFailure, withAbort, withRequestTimeout } from "./request"
 
 /** Writes blobs to Azure or, for local accounts, to the encrypted store via the fetch bridge. */
 export class BlobWriter {
@@ -73,7 +73,7 @@ export class BlobWriter {
       const query = new URLSearchParams({ restype: "container", comp: "list", prefix, ...(delimiter ? { delimiter } : {}), ...(marker ? { marker } : {}) })
       const xml = await this.request(`${BACKUP_CONTAINER}?${query.toString()}`, { method: "GET" }, async (response) => {
         if (response.status === 404) return null
-        if (!response.ok) throw new StorageError(await storageError(response, this.account))
+        if (!response.ok) throw await storageFailure(response, this.account)
         return response.text()
       })
       if (xml === null) break
@@ -92,7 +92,7 @@ export class BlobWriter {
   async readJson(name: string, authenticated = false): Promise<Record<string, unknown> | null> {
     return this.request(`${BACKUP_CONTAINER}/${name.split("/").map(encodeURIComponent).join("/")}`, { method: "GET" }, async (response) => {
       if (response.status === 404) return null
-      if (!response.ok) throw new StorageError(await storageError(response, this.account))
+      if (!response.ok) throw await storageFailure(response, this.account)
       if (authenticated && response.headers.get("x-tenuvault-authenticated") !== "true") {
         void response.body?.cancel().catch(() => undefined)
         return null
@@ -116,7 +116,7 @@ export class BlobWriter {
         const text = await response.clone().text()
         const bodyCode = /<Code>([^<]+)<\/Code>/.exec(text)?.[1] ?? ""
         if (isImmutabilityRefusal(response.status, bodyCode)) throw new ProtectedBlobError(bodyCode)
-        throw new StorageError(await storageError(response, this.account))
+        throw await storageFailure(response, this.account)
       }
     })
   }

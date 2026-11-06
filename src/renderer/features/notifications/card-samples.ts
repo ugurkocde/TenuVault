@@ -1,4 +1,4 @@
-import { entraChangeDigest, intuneChangeDigest, type AuditChange } from "../../../shared/notifications/audit"
+import { changeEvent, entraChangeDigest, intuneChangeDigest, type AuditChange } from "../../../shared/notifications/audit"
 import { backupEvent, credentialExpiringEvent, driftEvent, lateBackupEvent, restoreEvent, testEvent, watcherStaleEvent, type NotificationEnvelope } from "../../../shared/notifications/envelope"
 import { groupOf, type EventGroup } from "../../../shared/notifications/layout"
 
@@ -26,8 +26,8 @@ function change(index: number, partial: Partial<AuditChange> & Pick<AuditChange,
 }
 
 const intuneChanges: AuditChange[] = [
-  change(1, { changeType: "updated", resourceName: "Windows - BitLocker", resourceType: "Settings catalog" }),
-  change(2, { changeType: "updated", resourceName: "Windows - BitLocker", resourceType: "Settings catalog" }),
+  change(1, { changeType: "updated", resourceName: "Windows - Compliance", resourceType: "Windows10CompliancePolicy", category: "Compliance", settings: ["BitLockerEnabled", "OsMinimumVersion"] }),
+  change(2, { changeType: "updated", resourceName: "Windows - Compliance", resourceType: "Windows10CompliancePolicy", category: "Compliance", settings: ["PasswordRequired"] }),
   change(3, { changeType: "assigned", resourceName: "Windows - Defender Antivirus", resourceType: "Endpoint security" }),
   change(4, { changeType: "deleted", resourceName: "Legacy - Wi-Fi Corp", resourceType: "Device configuration", actorUpn: "alex.wilber@contoso.com" }),
   change(5, { changeType: "created", resourceName: "macOS - FileVault", resourceType: "Settings catalog" }),
@@ -35,7 +35,7 @@ const intuneChanges: AuditChange[] = [
 ]
 
 const entraChanges: AuditChange[] = [
-  change(1, { category: "ConditionalAccess", changeType: "updated", resourceName: "Require MFA for admins", resourceType: "Conditional Access policy", activity: "Update conditional access policy" }),
+  change(1, { category: "ConditionalAccess", changeType: "updated", resourceName: "Require MFA for admins", resourceType: "Conditional Access policy", activity: "Update conditional access policy", settings: ["conditions.users.excludeGroups", "state"] }),
   change(2, { category: "ConditionalAccess", changeType: "created", resourceName: "Head office", resourceType: "Named location", activity: "Add named location" }),
   change(3, { category: "ConditionalAccess", changeType: "deleted", resourceName: "Block legacy authentication", resourceType: "Conditional Access policy", activity: "Delete conditional access policy" }),
 ]
@@ -48,6 +48,7 @@ export interface CardSample {
 
 export const CARD_SAMPLES: CardSample[] = [
   { id: "intune", label: "Intune changes (12 changes)", envelope: intuneChangeDigest({ tenantId: TENANT, tenantName: NAME, changes: intuneChanges, includeActor: true, source: "desktop" }) },
+  { id: "intune-each", label: "Intune change (one alert per change)", envelope: changeEvent("intune", { tenantId: TENANT, tenantName: NAME, change: intuneChanges[0]!, includeActor: true, source: "desktop" }) },
   { id: "entra", label: "Conditional Access changes", envelope: entraChangeDigest({ tenantId: TENANT, tenantName: NAME, changes: entraChanges, includeActor: true, source: "desktop" }) },
   { id: "backup-failed", label: "Backup failed", envelope: backupEvent({ tenantId: TENANT, tenantName: NAME, status: "Failed", backupFolder: "backup-2026-11-05-020000", occurredAt: AT, totalPolicies: 0, failures: 4, failedTypes: ["Apps", "Remediations"], trigger: "scheduled", message: null, source: "desktop" }) },
   { id: "backup-warning", label: "Backup with warnings", envelope: backupEvent({ tenantId: TENANT, tenantName: NAME, status: "CompletedWithWarnings", backupFolder: "backup-2026-11-05-020000", occurredAt: AT, totalPolicies: 412, failures: 2, failedTypes: ["Apps"], trigger: "scheduled", message: null, source: "desktop" }) },

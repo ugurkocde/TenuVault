@@ -2,6 +2,7 @@ import type { Tenant } from "~/contexts/TenantContext"
 import { featureCall } from "../../lib/feature-api"
 import type { NotificationEnvelope, NotificationEventType, NotificationSeverity } from "../../../shared/notifications/envelope"
 import type { CardLayout } from "../../../shared/notifications/layout"
+import type { AlertConditions, AlertDelivery, WatcherAlerts } from "../../../shared/notifications/alerts"
 
 export type ChannelKind = "local" | "webhook" | "teams" | "email"
 
@@ -40,6 +41,9 @@ export interface NotificationRule {
   minSeverity: NotificationSeverity
   channelIds: string[]
   mode: "immediate" | "digest"
+  conditions: AlertConditions | null
+  delivery: AlertDelivery
+  summary?: string
 }
 
 export interface ConditionalAccessWatchView {
@@ -119,6 +123,9 @@ export interface RuleBody {
   minSeverity?: NotificationSeverity
   channelIds?: string[]
   mode?: "immediate" | "digest"
+  /** Null clears the conditions: the alert sends every change. */
+  conditions?: AlertConditions | null
+  delivery?: AlertDelivery
 }
 
 export interface AuditWatchBody {
@@ -150,6 +157,10 @@ export const notificationsApi = {
   addRule: (tenant: Tenant, body: RuleBody) => featureCall<{ rule: NotificationRule }>(PATH, tenant, "add-rule", { ...body }),
   updateRule: (tenant: Tenant, ruleId: string, body: RuleBody) => featureCall<{ rule: NotificationRule }>(PATH, tenant, "update-rule", { ruleId, ...body }),
   revokeRule: (tenant: Tenant, ruleId: string) => featureCall<{ removed: string }>(PATH, tenant, "revoke-rule", { ruleId }),
+  /** Sends a made up change that passes the alert's conditions to its channels, marked as a test. */
+  testRule: (tenant: Tenant, ruleId: string) => featureCall<{ results: Array<{ channelId: string; channelTitle: string; ok: boolean; error: string | null }>; envelope: NotificationEnvelope }>(PATH, tenant, "test-rule", { ruleId }),
+  /** The alerts as the Azure watcher reads them, for setup -AlertRulesPath. */
+  exportWatcherAlerts: (tenant: Tenant) => featureCall<{ document: WatcherAlerts; json: string; skipped: string[]; uncovered: NotificationEventType[] }>(PATH, tenant, "export-watcher-alerts"),
   updateAuditWatch: (tenant: Tenant, body: AuditWatchBody) => featureCall<{ auditWatch: AuditWatch }>(PATH, tenant, "update-audit-watch", { ...body }),
   /** Turning change watching off stays free on every plan. */
   revokeAuditWatch: (tenant: Tenant) => featureCall<{ auditWatch: AuditWatch }>(PATH, tenant, "revoke-audit-watch"),

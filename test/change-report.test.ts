@@ -168,9 +168,9 @@ describe("change report PDF document", () => {
 })
 
 describe("audit events name their objects", () => {
-  it("keeps Intune resource IDs and Entra target IDs for matching", () => {
-    expect(mapAuditEvent({ id: "1", activityDateTime: "2026-11-05T10:00:00Z", activityOperationType: "Patch", activityResult: "Success", resources: [{ displayName: "A", resourceId: "p-1" }, { resourceId: "p-2" }] })?.resourceIds).toEqual(["p-1", "p-2"])
-    expect(mapEntraAuditEvent({ id: "2", activityDateTime: "2026-11-05T10:00:00Z", activityDisplayName: "Update conditional access policy", operationType: "Update", result: "success", loggedByService: "Conditional Access", targetResources: [{ id: "ca-1", displayName: "Require MFA" }] })?.resourceIds).toEqual(["ca-1"])
+  it("keep the ID of the named object for matching: the policy on an assignment event, the Entra target", () => {
+    expect(mapAuditEvent({ id: "1", activityDateTime: "2026-11-05T10:00:00Z", activityOperationType: "Patch", activityResult: "Success", resources: [{ resourceId: "assignment-1" }, { displayName: "A", resourceId: "p-1" }] })?.resourceId).toBe("p-1")
+    expect(mapEntraAuditEvent({ id: "2", activityDateTime: "2026-11-05T10:00:00Z", activityDisplayName: "Update conditional access policy", operationType: "Update", result: "success", loggedByService: "Conditional Access", targetResources: [{ id: "ca-1", displayName: "Require MFA" }] })?.resourceId).toBe("ca-1")
   })
 })
 

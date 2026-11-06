@@ -31,6 +31,14 @@ function footer(envelope: NotificationEnvelope): string {
   return `${where} · ${friendlyTime(envelope.occurredAt)} · Event ${envelope.eventId.slice(0, 12)}`
 }
 
+/** "Changed: A, B and 2 more" for a change line with changed settings, else null. */
+export function itemSettingsText(item: NotificationEnvelope["items"][number]): string | null {
+  const names = item.change?.settings ?? []
+  if (!names.length) return null
+  const more = item.change?.settingsMore ?? 0
+  return `Changed: ${names.join(", ")}${more > 0 ? ` and ${more} more` : ""}`
+}
+
 /** The local system notification text. Tenant data stays in the title only. */
 export function localText(envelope: NotificationEnvelope): { title: string; body: string } {
   return { title: envelope.title, body: envelope.summary }
@@ -138,12 +146,14 @@ function buildTeamsPayload(envelope: NotificationEnvelope, style: CardStyle, fit
       const shown = envelope.items.slice(0, fit.items)
       for (const item of shown) {
         const meta = [style.itemDetail ? item.detail : undefined, style.itemActor && item.actor ? `by ${item.actor}` : undefined, style.itemTime && item.at ? time(item.at) : undefined].filter((part): part is string => Boolean(part))
+        const settings = itemSettingsText(item)
         if (style.itemStyle === "stacked") {
           body.push({ type: "TextBlock", text: escapeMarkdown(item.title), wrap: true, weight: "Bolder", spacing: compact ? "Small" : "Medium" })
           if (meta.length) body.push({ type: "TextBlock", text: escapeMarkdown(meta.join(" · ")), wrap: true, isSubtle: true, size: "Small", spacing: "None" })
         } else {
           body.push({ type: "TextBlock", text: escapeMarkdown([`• ${item.title}`, ...meta].join(" · ")), wrap: true, spacing: compact ? "None" : "Small" })
         }
+        if (settings) body.push({ type: "TextBlock", text: escapeMarkdown(settings), wrap: true, isSubtle: true, size: "Small", spacing: "None" })
       }
       const more = envelope.moreCount + (envelope.items.length - shown.length)
       if (more > 0) body.push({ type: "TextBlock", text: `And ${more} more. Open TenuVault for the full list.`, wrap: true, isSubtle: true })
@@ -184,7 +194,8 @@ function itemLine(item: NotificationEnvelope["items"][number]): string {
   if (item.detail) parts.push(item.detail)
   if (item.actor) parts.push(`by ${item.actor}`)
   if (item.at) parts.push(friendlyTime(item.at))
-  return parts.join(" · ")
+  const settings = itemSettingsText(item)
+  return settings ? `${parts.join(" · ")}\n  ${settings}` : parts.join(" · ")
 }
 
 export function emailSubject(envelope: NotificationEnvelope): string {
@@ -248,10 +259,12 @@ function itemHtml(item: NotificationEnvelope["items"][number]): string {
     : ""
   const title = style ? item.title.slice(item.title.indexOf(":") + 1).trim() : item.title
   const meta = [item.detail, item.actor ? `by ${item.actor}` : null, item.at ? friendlyTime(item.at) : null].filter(Boolean).join(" · ")
+  const settings = itemSettingsText(item)
   return [
     `<tr><td style="padding:10px 16px;border-top:1px solid #eaecf0">`,
     `<div style="font-size:14px;line-height:20px">${chip}<span style="font-weight:600">${escapeHtml(title)}</span></div>`,
     meta ? `<div style="font-size:12px;line-height:18px;color:#475467;margin-top:2px">${escapeHtml(meta)}</div>` : "",
+    settings ? `<div style="font-size:12px;line-height:18px;color:#344054;margin-top:2px">${escapeHtml(settings)}</div>` : "",
     `</td></tr>`,
   ].join("")
 }

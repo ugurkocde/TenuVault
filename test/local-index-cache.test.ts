@@ -115,7 +115,7 @@ it('reconciles external additions and removals with an unchanged directory stamp
   expect(decrypt).toHaveBeenCalledTimes(1)
 })
 
-it('rejects an external duplicate with an unchanged directory stamp on the next listing', async () => {
+it('notices an external duplicate with an unchanged directory stamp on the next listing', async () => {
   const root = mkdtempSync(join(tmpdir(), 'tv-coarse-duplicate-')); roots.push(root)
   const store = new LocalBlobStore(root, [randomBytes(32)], 1)
   await store.createContainer('account', 'intune-backups')
@@ -127,7 +127,9 @@ it('rejects an external duplicate with an unchanged directory stamp on the next 
   // TVB1 permits another file name, so both headers authenticate as the same blob.
   const duplicate = `${file === '0'.repeat(40) + '.tvb' ? '1'.repeat(40) : '0'.repeat(40)}.tvb`
   copyFileSync(join(dir, file), join(dir, duplicate))
-  await expect(store.list('account', 'intune-backups')).rejects.toBeInstanceOf(IncompleteInventoryError)
+  // Neither copy is trusted: the blob leaves the listing and its backup is unavailable.
+  expect(await store.list('account', 'intune-backups')).toEqual([])
+  await expect(store.list('account', 'intune-backups', 'backup-one/')).rejects.toBeInstanceOf(IncompleteInventoryError)
 })
 
 async function pausedInventoryCheck() {
@@ -252,7 +254,7 @@ it.each(['addition', 'removal', 'replacement'])('reconciles an external %s durin
 })
 
 
-it('updates the cached inventory across own deletes and still rejects a missing manifest item', async () => {
+it('updates the cached inventory across own deletes and still blocks a backup with a missing manifest item', async () => {
   const root = mkdtempSync(join(tmpdir(), 'tv-delete-index-')); roots.push(root)
   const store = new LocalBlobStore(root, [randomBytes(32)])
   const account = 'account', container = 'intune-backups'
@@ -267,6 +269,9 @@ it('updates the cached inventory across own deletes and still rejects a missing 
   expect(await store.list(account, container)).toHaveLength(2)
   expect(readIndex).toHaveBeenCalledTimes(1)
   await store.delete(account, container, 'backup-one/Policies/0.json')
-  await expect(store.get(account, container, manifest)).rejects.toThrow('manifest are missing')
-  await expect(store.list(account, container)).rejects.toThrow('manifest are missing')
+  await expect(store.get(account, container, manifest)).rejects.toThrow('1 file listed in its manifest is missing or damaged')
+  await expect(store.list(account, container, 'backup-one/')).rejects.toThrow('1 file listed in its manifest is missing or damaged')
+  expect((await store.list(account, container)).map(blob => blob.name)).toEqual([manifest])
+  // While a backup is unavailable nothing is deleted, its manifest included.
+  await expect(store.delete(account, container, manifest)).rejects.toThrow('Nothing in the backup folder is deleted')
 })

@@ -60,14 +60,15 @@ describe("notification envelope", () => {
 describe("audit mapping and digest", () => {
   const changes = fixture.events.map((event) => mapAuditEvent(event as AuditEventRaw)!)
 
-  it("maps verbs, resource names and types, without reading property values", () => {
-    expect(changes[0]).toMatchObject({ changeType: "updated", resourceName: "WiFi Corp", resourceType: "DeviceConfiguration", actorUpn: "admin@contoso.test", actorAppId: "app-portal" })
+  it("maps verbs, resource names and types, and names changed settings without their values", () => {
+    expect(changes[0]).toMatchObject({ changeType: "updated", resourceName: "WiFi Corp", resourceType: "DeviceConfiguration", actorUpn: "admin@contoso.test", actorAppId: "app-portal", resourceId: "abc", settings: ["networkName"] })
     expect(changes[2]?.changeType).toBe("deleted")
+    expect(changes[2]?.settings).toEqual([])
     const digest = intuneChangeDigest({ tenantId: TENANT, tenantName: "Contoso", changes, includeActor: true, source: "desktop" })
     const serialized = canonicalJson(digest)
     expect(serialized).not.toContain("old-secret")
     expect(serialized).not.toContain("new-secret")
-    expect(serialized).not.toContain("networkName")
+    expect(digest.items[0]!.change).toMatchObject({ auditId: "audit-1", count: 2, settings: ["networkName"] })
   })
 
   it("collapses repeated updates by the same actor", () => {
