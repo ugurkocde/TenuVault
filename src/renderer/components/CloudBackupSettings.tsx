@@ -125,6 +125,7 @@ export function CloudBackupSettings({ tenant, community, cloud, scopeVersion = 0
       timeZone,
       scope: preset === "everything" ? "everything" : "policies",
       changeReport,
+      tenantName: tenant?.name,
       resourceGroup: tenant?.resources?.resourceGroupName || undefined,
       location: tenant?.resources?.resourceGroupLocation || undefined,
       subscriptionId: tenant?.resources?.subscriptionId || undefined,

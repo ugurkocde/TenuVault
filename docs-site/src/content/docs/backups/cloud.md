@@ -100,7 +100,7 @@ Setup creates the `tenuvault-backup-results` container when it is missing and gi
 
 A cloud backup can also produce a [change report](/reports/): what changed since the previous complete backup, setting by setting, with who made each change from the Intune audit log. The [Azure watcher](/notifications/#alerts-while-this-computer-is-off-the-azure-watcher) emails it, so the report arrives with no computer on. It is off unless you turn it on.
 
-1. In the app, under **Change report by email** next to the schedule, choose **Which settings changed** or **With setting values**. The setup command then carries `-ChangeReport Names` or `-ChangeReport Full`. In the template, set `changeReport` to `names` or `full`.
+1. In the app, under **Change report by email** next to the schedule, choose **Which settings changed** or **With setting values**. The setup command then carries `-ChangeReport Names` or `-ChangeReport Full`, and `-TenantName` with the tenant's name as reports show it. In the template, set `changeReport` to `names` or `full`, and `tenantName`.
 2. Run the setup script (or redeploy the template) so the runbook and its settings are updated.
 3. Set up the Azure watcher with verified mail, if you have not, or run its setup again so it has the version that sends reports. Reports go to the watcher's `-ReportRecipients`, or to its `-MailRecipients` when you set none. Any address works, inside or outside your organization.
 

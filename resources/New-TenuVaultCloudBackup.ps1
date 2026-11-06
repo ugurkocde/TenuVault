@@ -80,6 +80,10 @@
 .PARAMETER ExcludedFolders
     Comma separated type folders to leave out. Wins over -Scope.
 
+.PARAMETER TenantName
+    The tenant's name as change reports show it, in titles, the email subject and the file
+    name. Without it, reports name the tenant by its id.
+
 .PARAMETER ChangeReport
     Off (default), Names or Full. With Names or Full, every complete backup is compared with the
     previous complete backup, and a change report (what changed, setting by setting, and who
@@ -120,6 +124,7 @@ param(
     [string]$TimeZone = "UTC",
     [ValidateSet("everything", "policies")][string]$Scope = "policies",
     [string]$ExcludedFolders,
+    [string]$TenantName,
     [ValidateSet("Off", "Names", "Full")][string]$ChangeReport = "Off",
     [switch]$ChangeReportWithoutActors,
     [string]$AlertEmail,
@@ -156,7 +161,7 @@ $appOnlyExcluded = if ($IncludeDeviceCategories) { "" } else { "DeviceCategories
 $variableNames = @(
     "TenuVaultTenantId-$tenantKey", "TenuVaultStorageAccount-$tenantKey", "TenuVaultKeyVault-$tenantKey",
     "TenuVaultScope-$tenantKey", "TenuVaultExcludedFolders-$tenantKey", "TenuVaultAppOnlyExcluded-$tenantKey",
-    "TenuVaultChangeReport-$tenantKey", "TenuVaultChangeReportActors-$tenantKey"
+    "TenuVaultChangeReport-$tenantKey", "TenuVaultChangeReportActors-$tenantKey", "TenuVaultTenantName-$tenantKey"
 )
 
 # Validate every input before the first Azure write.
@@ -568,6 +573,7 @@ Set-TenuVaultAutomationVariable -Name "TenuVaultScope-$tenantKey" -Value $Scope
 Set-TenuVaultAutomationVariable -Name "TenuVaultExcludedFolders-$tenantKey" -Value $ExcludedFolders
 Set-TenuVaultAutomationVariable -Name "TenuVaultAppOnlyExcluded-$tenantKey" -Value $appOnlyExcluded
 Set-TenuVaultAutomationVariable -Name "TenuVaultChangeReport-$tenantKey" -Value $ChangeReport.ToLowerInvariant()
+if ($TenantName) { Set-TenuVaultAutomationVariable -Name "TenuVaultTenantName-$tenantKey" -Value $TenantName.Trim() }
 Set-TenuVaultAutomationVariable -Name "TenuVaultChangeReportActors-$tenantKey" -Value $(if ($ChangeReportWithoutActors) { "false" } else { "true" })
 
 # ---------------------------------------------------------------------------

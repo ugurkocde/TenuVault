@@ -3246,8 +3246,10 @@ try {
     }
 
     # --- Change reports left by cloud backups ---------------------------------------
+    # Reports need the verified sender and their own recipients, not the alert recipients.
+    $reportTo = if ($reportRecipients) { $reportRecipients } else { $mailRecipients }
     $reportRun = Send-TvChangeReports -ContainerUri $resultsContainerUri -Token $storageToken -TenantId $tenantId -TenantName $tenantName `
-        -MailEnabled ([bool]$mailEnabled) -MailSender $mailSender -Recipients $(if ($reportRecipients) { $reportRecipients } else { $mailRecipients }) `
+        -MailEnabled ([bool]($mailSender -and $reportTo -and $senderVerified)) -MailSender $mailSender -Recipients $reportTo `
         -GraphToken $graphToken -RenewLease $renewLease -Now $runAt
     foreach ($message in $reportRun.Messages) { Write-Output $message }
     if ($reportRun.Error -and -not $lastError) { $lastError = $reportRun.Error }

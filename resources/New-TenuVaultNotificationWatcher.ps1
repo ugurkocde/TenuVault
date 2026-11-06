@@ -290,8 +290,8 @@ if (-not $Remove -and $AlertRulesPath) {
     $uncovered = @($watcherTypes | Where-Object { $covered -cnotcontains $_ })
     if ($uncovered.Count -gt 0) { Write-Warning "No alert in the file takes these watcher events, so the watcher will not send them: $($uncovered -join ', '). Add them to an alert in TenuVault if you want them." }
 }
-if ($IncludeMailSend -and (-not $MailSender -or -not $MailRecipients)) {
-    throw "-IncludeMailSend requires -MailSender and -MailRecipients. Refusing to grant Mail.Send without a named sender mailbox and recipients."
+if ($IncludeMailSend -and (-not $MailSender -or (-not $MailRecipients -and -not $ReportRecipients))) {
+    throw "-IncludeMailSend requires -MailSender and -MailRecipients or -ReportRecipients. Refusing to grant Mail.Send without a named sender mailbox and recipients."
 }
 if ($AlertEmail -and $NoFailureAlert) {
     throw "-AlertEmail and -NoFailureAlert contradict each other. Pass only one of them."

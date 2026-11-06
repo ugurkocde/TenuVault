@@ -134,5 +134,8 @@ describe("cloudSetupCommand", () => {
     expect(cloudSetupCommand({ ...base, changeReport: "off" })).not.toContain("-ChangeReport")
     expect(cloudSetupCommand({ ...base, changeReport: "names" })).toContain("-Scope policies -ChangeReport Names -GrantGraphRoles")
     expect(cloudSetupCommand({ ...base, changeReport: "full" })).toContain("-ChangeReport Full")
+    // The tenant name goes with a report, quoted so PowerShell expands nothing in it.
+    expect(cloudSetupCommand({ ...base, changeReport: "full", tenantName: "O'Brien $(Get-Secret) & Co" })).toContain("-ChangeReport Full -TenantName 'O''Brien $(Get-Secret) & Co' -GrantGraphRoles")
+    expect(cloudSetupCommand({ ...base, changeReport: "off", tenantName: "Contoso" })).not.toContain("-TenantName")
   })
 })

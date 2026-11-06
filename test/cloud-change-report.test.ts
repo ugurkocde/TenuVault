@@ -187,6 +187,10 @@ describe("cloud change report setup", () => {
     const template = JSON.parse(read("../resources/cloud-backup/azuredeploy.json")) as { parameters: Record<string, { defaultValue?: unknown; allowedValues?: unknown }> }
     expect(template.parameters.changeReport).toMatchObject({ defaultValue: "off", allowedValues: ["off", "names", "full"] })
     expect(template.parameters.changeReportActors).toMatchObject({ defaultValue: true })
+    // Reports name the tenant, so the name is stored with the cloud backup's own variables.
+    expect(setup).toContain('Set-TenuVaultAutomationVariable -Name "TenuVaultTenantName-$tenantKey" -Value $TenantName.Trim()')
+    expect(setup).toContain('"TenuVaultTenantName-$tenantKey"')
+    expect(template.parameters.tenantName).toMatchObject({ defaultValue: "" })
   })
 
   it("lets the watcher send reports to their own recipients", () => {
@@ -195,6 +199,9 @@ describe("cloud change report setup", () => {
     expect(setup).toContain('Set-TenuVaultAutomationVariable -Name "TenuVaultReportRecipients"')
     const watcher = read("../resources/runbooks/Invoke-TenuVaultNotificationCheck.ps1")
     expect(watcher).toContain('Get-TvAutomationVariable "TenuVaultReportRecipients"')
+    // Report recipients alone are enough: delivery does not wait for the alert recipients.
+    expect(watcher).toContain("-MailEnabled ([bool]($mailSender -and $reportTo -and $senderVerified))")
+    expect(setup).toContain("(-not $MailRecipients -and -not $ReportRecipients)")
     expect([...watcher].every((char) => char.codePointAt(0)! <= 0x7f)).toBe(true)
   })
 
