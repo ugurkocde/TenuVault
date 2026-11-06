@@ -216,6 +216,23 @@ describe("the Azure watcher card", () => {
   })
 })
 
+describe("the Azure watcher card over time", () => {
+  it("turns to Not running while it stays open and the last run ages past the threshold", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] })
+    try {
+      const lastRunAt = new Date(Date.now() - 2.99 * 3_600_000).toISOString()
+      state.status = { ...empty, channels: [teams], signedIn: true, auditWatch: { enabled: false, intervalMinutes: 15, categories: [], ignoreOwnChanges: true, includeActor: false, externalWatcher: true, lastPollAt: null, lastError: null, watermark: null, conditionalAccess: { enabled: false, watermark: null, lastPollAt: null, lastError: null }, watcherCheck: { checkedAt: lastRunAt, lastRunAt, stale: false, error: null, alertsHash: "same", runbookVersion: "1.2.0" } }, watcherAlerts: { current: "same", reported: "same", source: "storage", runbookVersion: "1.2.0", readsAlertsFile: true, auto: false, pushedAt: null, pushedHash: null, error: null, errorAt: null } }
+      const container = await render(AlertsTab, true)
+      const card = () => container.querySelector('[aria-labelledby="notifications-watcher-sync-heading"]')!.textContent
+      expect(card()).toContain("Up to date")
+      act(() => { vi.advanceTimersByTime(2 * 60_000) })
+      expect(card()).toContain("Not running")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe("alert me about this policy", () => {
   it("opens a Conditional Access alert from Drift detection labels and backup folders alike", async () => {
     const { alertForPolicyHref } = await import("../../src/renderer/lib/alert-links")

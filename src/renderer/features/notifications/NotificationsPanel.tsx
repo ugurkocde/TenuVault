@@ -665,6 +665,12 @@ function useCopyForWatcher(tenant: Tenant) {
  * which runbook 1.2.0 and later read on every run; older runbooks need one setup rerun first.
  */
 function WatcherSyncCard({ tenant, data, onChanged }: { tenant: Tenant; data: NotificationsStatus; onChanged: () => void }) {
+  // Renders again every minute, so the card turns to "Not running" while it stays open without new data.
+  const [, setMinute] = useState(0)
+  useEffect(() => {
+    const timer = setInterval(() => setMinute((minute) => minute + 1), 60_000)
+    return () => clearInterval(timer)
+  }, [])
   const copy = useCopyForWatcher(tenant)
   const check = useMutation({
     mutationFn: () => notificationsApi.runWatcherCheck(tenant),
