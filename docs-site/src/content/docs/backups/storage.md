@@ -53,7 +53,7 @@ A damaged or unreadable file affects only what it belongs to:
 * New backups are still saved.
 * Damaged files are never changed or removed by TenuVault. To recover, import the recovery key the files were made with, or restore the damaged files from a copy. A file that cannot be recovered can be removed from the folder by hand. If it belonged to a backup with a manifest, that backup then stays unavailable because its manifest lists a missing file, and you can remove the rest of that backup's folder too.
 
-TenuVault checks each file's header when it reads the inventory. Damage further into a file is found when the file is read, and that read fails with the reason instead of returning damaged content.
+TenuVault checks each file's header when it reads the inventory. Damage further into a file is found when the file is read, and that read fails with the reason instead of returning damaged content. From then on, that backup is unavailable and retention is paused, as for other damage. TenuVault never writes over a damaged file.
 
 ## Backups in your Azure storage account
 

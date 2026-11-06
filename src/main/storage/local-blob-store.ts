@@ -194,6 +194,9 @@ function unreadableReason(error: unknown): string {
   return "it is damaged or incomplete"
 }
 
+/** How long a delete trusts the last check of every file in its folder. */
+const DELETE_RECHECK_MS = 5_000
+
 /** Damaged files named in a message at most. */
 export const MAX_NAMED_FILES = 10
 
@@ -268,6 +271,8 @@ export class LocalBlobStore {
   private readonly blobWrites = new Map<string, Promise<void>>()
   /** Damage found by the read that built each inventory. */
   private readonly damageOf = new WeakMap<Map<string, Entry>, InventoryDamage>()
+  /** When every file of each folder was last checked; see delete. */
+  private readonly checkedAt = new Map<string, number>()
   /** File names derived for traced blob names; see fileNames. */
   private readonly fileNameCache = new Map<string, string[]>()
   /** Stamps of the damaged files of each inventory, so a repaired or removed file is noticed. */
@@ -388,8 +393,17 @@ export class LocalBlobStore {
     try {
       return { blob, data: this.decrypt(body, bodyAad(version, account, container, name)) }
     } catch (error) {
-      // Inventories check headers only, so a damaged body is found when it is read. Retrying cannot repair it.
-      throw new IncompleteInventoryError(1, `${name} could not be read: ${unreadableReason(error)}. ${RECOVERY}`)
+      // Inventories check headers only, so a damaged body is found when it is read. Retrying cannot
+      // repair it. It is recorded like other damage: its backup becomes unavailable and nothing is
+      // deleted, until the file changes and the next listing reads the folder again.
+      const reason = unreadableReason(error)
+      const damage = this.damageOf.get(entries)
+      if (damage && container === BACKUP_CONTAINER && !damage.files.some((file) => file.file === entry!.file)) {
+        damage.files.push({ file: entry.file, reason, backup: folder })
+        if (folder && !damage.unavailable.has(folder)) damage.unavailable.set(folder, `one of its files could not be read: ${reason}.`)
+        this.damagedStamps.get(entries)?.set(entry.file, entry.stamp)
+      }
+      throw Object.assign(new IncompleteInventoryError(1, `${name} could not be read: ${reason}. ${RECOVERY}`), folder ? { backup: folder } : {})
     }
   }
 
@@ -425,6 +439,10 @@ export class LocalBlobStore {
     // A version 1 file keeps its name when overwritten, so the blob never has two files.
     const version = this.writeFormat
     const file = existing?.file ?? fileName(version, current.naming, account, container, name)
+    // A damaged file under the name this blob would get is kept for recovery, never written over.
+    if (!existing && this.damageOf.get(entries)?.files.some((damaged) => damaged.file === file)) {
+      throw new IncompleteInventoryError(1, `${name} was not written: the file it would replace (${file}) could not be read, and is kept for recovery. ${RECOVERY}`)
+    }
     const created = existing?.created ?? new Date()
 
     const header = seal(current.encryption, Buffer.from(JSON.stringify({ name, contentType, created, ...(metadata ? { metadata } : {}) })), headerAad(version, account, container, file))
@@ -480,20 +498,23 @@ export class LocalBlobStore {
   /**
    * Deletes one blob. Nothing in the backup container is deleted while it holds damaged files or
    * an unavailable backup: a damaged file may be the only copy of what an older backup holds.
-   * The check uses the cached inventory, which a new or removed file always refreshes. Retention
-   * lists the folder right before it deletes, and a listing checks every file's stamp, so a file
-   * damaged in place is found then. despiteDamage is for removing files the caller has just
-   * written itself, such as an archive import that is rolled back.
+   * The check uses an inventory whose every file was checked within the last DELETE_RECHECK_MS
+   * (a new or removed file always refreshes it), so a file damaged in place is found within a run
+   * of deletes. despiteDamage is for removing files the caller has just written itself, such as
+   * an archive import that is rolled back.
    */
   async delete(account: string, container: string, name: string, options: { despiteDamage?: boolean } = {}): Promise<void> {
-    const entries = await this.entries(account, container)
+    const dir = this.dir(account, container)
+    // Every file is checked again at most every few seconds, so a file damaged in place is found
+    // within a run of deletes without checking every file before each one.
+    const fresh = Date.now() - (this.checkedAt.get(dir) ?? 0) > DELETE_RECHECK_MS
+    const entries = fresh ? await this.checkedEntries(account, container) : await this.entries(account, container)
     const damage = this.damageOf.get(entries)
     if (!options.despiteDamage && damage && (damage.files.length > 0 || damage.unavailable.size > 0)) {
       throw new IncompleteInventoryError(damage.files.length, `${describeDamage(damage)} Nothing in the backup folder is deleted until this is resolved, so older backups are kept. ${RECOVERY}`)
     }
     const entry = entries.get(name)
     if (!entry) throw new BlobNotFoundError(name)
-    const dir = this.dir(account, container)
     await this.write(dir, async () => {
       await rm(join(dir, entry.file), { force: true })
       this.changed(dir)
@@ -638,7 +659,9 @@ export class LocalBlobStore {
           this.index.delete(dir)
           entries = await this.entries(account, container, entries)
         }
-        return (this.generations.get(dir) ?? 0) === generation ? entries : this.checkedEntries(account, container)
+        if ((this.generations.get(dir) ?? 0) !== generation) return this.checkedEntries(account, container)
+        this.checkedAt.set(dir, Date.now())
+        return entries
       } catch (error) {
         if ((this.generations.get(dir) ?? 0) !== generation) return this.checkedEntries(account, container)
         throw error

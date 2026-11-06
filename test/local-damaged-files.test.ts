@@ -169,6 +169,42 @@ describe("damaged local backup files", () => {
     expect(await store.damage(account, CONTAINER)).toMatchObject({ files: [] })
   })
 
+  it("remembers a damaged body found on read: the backup becomes unavailable and nothing is deleted", async () => {
+    const { store, dir } = await setup()
+    await backup(store, OLD)
+    await backup(store, NEW)
+    damage(dir, await fileOf(store, `${NEW}/CompliancePolicies/a.json`))
+    await expect(store.get(account, CONTAINER, `${NEW}/CompliancePolicies/a.json`)).rejects.toThrow("could not be read")
+    await expect(store.list(account, CONTAINER, `${NEW}/`)).rejects.toThrow(`Backup ${NEW} is unavailable`)
+    await expect(store.delete(account, CONTAINER, `${OLD}/metadata.json`)).rejects.toThrow("Nothing in the backup folder is deleted")
+  })
+
+  it("never writes over a damaged file", async () => {
+    const { store, dir } = await setup()
+    await backup(store, OLD)
+    const file = await fileOf(store, `${OLD}/CompliancePolicies/a.json`)
+    damage(dir, file, true)
+    const damaged = readFileSync(join(dir, file))
+    await store.list(account, CONTAINER)
+    await expect(store.put(account, CONTAINER, `${OLD}/CompliancePolicies/a.json`, Buffer.from("{}"), "application/json")).rejects.toThrow("is kept for recovery")
+    expect(readFileSync(join(dir, file))).toEqual(damaged)
+  })
+
+  it("checks every file again before a delete once the last check is a few seconds old", async () => {
+    const { store, dir } = await setup()
+    await backup(store, OLD)
+    await backup(store, NEW)
+    await store.list(account, CONTAINER)
+    damage(dir, await fileOf(store, `${NEW}/CompliancePolicies/a.json`), true)
+    const now = Date.now()
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 10_000)
+    try {
+      await expect(store.delete(account, CONTAINER, `${OLD}/metadata.json`)).rejects.toThrow("Nothing in the backup folder is deleted")
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
   it("notices a damaged file restored in place and makes its backup available again", async () => {
     const { store, dir } = await setup()
     await backup(store, OLD)
@@ -185,11 +221,14 @@ describe("damaged local backup files", () => {
   it("refuses a damaged body when it is read, with a refusal retrying cannot change", async () => {
     const { store, dir } = await setup()
     await backup(store, OLD)
+    await backup(store, NEW)
     damage(dir, await fileOf(store, `${OLD}/CompliancePolicies/a.json`))
     const response = await handleLocalBlobRequest(store, new Request(`https://${account}.blob.core.windows.net/${CONTAINER}/${OLD}/CompliancePolicies/a.json`))
     expect(response.status).toBe(409)
     expect(await response.text()).toContain(`${OLD}/CompliancePolicies/a.json could not be read: it is damaged, or was encrypted with a key this device does not have.`)
-    expect(await text(store, `${OLD}/CompliancePolicies/b.json`)).toBe('{"id":"b"}')
+    // The rest of that backup is unavailable now; other backups are not affected.
+    await expect(store.get(account, CONTAINER, `${OLD}/CompliancePolicies/b.json`)).rejects.toThrow(`Backup ${OLD} is unavailable`)
+    expect(await text(store, `${NEW}/CompliancePolicies/b.json`)).toBe('{"id":"b"}')
   })
 
   it("pauses retention with the reason in the backup log and still saves the new backup", async () => {
