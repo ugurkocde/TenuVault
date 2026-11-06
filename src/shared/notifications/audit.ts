@@ -1,10 +1,12 @@
 /**
  * Mapping of Intune audit events (GET deviceManagement/auditEvents) to notification
  * change items, following the documented auditEvent resource: identity and operation
- * fields plus resource display names and types. Modified property values inside
- * resources are never read.
+ * fields plus resource display names, types and ids. For updates, the names of the changed
+ * settings are taken from the resource's modified properties; their values are compared in
+ * memory by settings.ts and never kept or sent.
  */
-import { buildEnvelope, type NotificationEnvelope, type NotificationItem } from "./envelope"
+import { buildEnvelope, type NotificationEnvelope, type NotificationItem, type NotificationItemChange } from "./envelope"
+import { intuneChangedSettings, MAX_SETTING_NAMES } from "./settings"
 
 export interface AuditEventRaw {
   id?: unknown
@@ -35,11 +37,11 @@ export interface AuditChange {
   actorAppId: string | null
   actorAppName: string | null
   activity: string
-  /**
-   * IDs of the objects the event names (auditResource.resourceId), so a change report can tell who
-   * changed a backed-up item. Never part of a notification.
-   */
-  resourceIds?: string[]
+  /** The object id of the changed policy or object, when the audit event carries one. */
+  resourceId?: string | null
+  /** Names of the settings an update changed (never their values), up to 200 for matching; messages show 15. */
+  settings?: string[]
+  settingsMore?: number
 }
 
 const text = (value: unknown): string | null => {
@@ -104,18 +106,23 @@ export function mapAuditEvent(raw: AuditEventRaw): AuditChange | null {
   const resources = resourcesOf(raw)
   const resource = resourceOf(resources)
   const resourceName = resource ? text(resource.displayName) : null
+  const changeType = changeTypeOf(raw, resources)
+  const changed = changeType === "updated" ? intuneChangedSettings(resource) : { names: [], more: 0 }
+  const resourceId = resource ? text(resource.resourceId) : null
   return {
     auditId: id,
     at: new Date(at).toISOString(),
     category: text(raw.category) ?? "Unknown",
-    changeType: changeTypeOf(raw, resources),
+    changeType,
     resourceName: resourceName ? resourceName.slice(0, 200) : null,
     resourceType: (resource ? (text(resource.type) ?? text(resource.auditResourceType)) : null) ?? text(raw.componentName),
     actorUpn: actor ? text(actor.userPrincipalName) : null,
     actorAppId: actor ? text(actor.applicationId) : null,
     actorAppName: actor ? text(actor.applicationDisplayName) : null,
     activity: text(raw.activity) ?? text(raw.displayName) ?? "Change",
-    resourceIds: resources.flatMap((entry) => text(entry.resourceId) ?? []).slice(0, 20),
+    resourceId: resourceId ? resourceId.slice(0, 200) : null,
+    settings: changed.names,
+    settingsMore: changed.more,
   }
 }
 
@@ -141,21 +148,46 @@ export function filterAuditChanges(changes: AuditChange[], options: AuditFilterO
   })
 }
 
+/** The structured fields of a change line; settings of collapsed changes are merged in order. */
+export function itemChange(changes: AuditChange[]): NotificationItemChange {
+  const first = changes[0]!
+  const settings: string[] = []
+  let more = 0
+  for (const change of changes) {
+    for (const name of change.settings ?? []) if (!settings.some((entry) => entry.toLowerCase() === name.toLowerCase())) settings.push(name)
+    more = Math.max(more, change.settingsMore ?? 0)
+  }
+  return {
+    auditId: first.auditId,
+    changeType: first.changeType,
+    category: first.category,
+    ...(first.resourceId ? { resourceId: first.resourceId } : {}),
+    ...(first.resourceName ? { resourceName: first.resourceName } : {}),
+    ...(first.resourceType ? { resourceType: first.resourceType } : {}),
+    ...(changes.length > 1 ? { count: changes.length } : {}),
+    ...(settings.length ? { settings: settings.slice(0, MAX_SETTING_NAMES) } : {}),
+    ...(more + Math.max(0, settings.length - MAX_SETTING_NAMES) > 0 ? { settingsMore: more + Math.max(0, settings.length - MAX_SETTING_NAMES) } : {}),
+  }
+}
+
 /**
  * Collapses repeated updates to the same resource by the same actor into one line with
  * a count, keeps chronological order of first appearance, and caps the visible items.
  */
 export function collapseAuditChanges(changes: AuditChange[], options: { includeActor: boolean; maxItems?: number }): { items: NotificationItem[]; moreCount: number; collapsed: number } {
   const max = options.maxItems ?? 20
-  const groups = new Map<string, { change: AuditChange; count: number }>()
+  const groups = new Map<string, AuditChange[]>()
   for (const change of changes) {
-    const key = [change.changeType, change.resourceName ?? change.resourceType ?? change.auditId, change.actorUpn ?? change.actorAppName ?? change.actorAppId ?? ""].join("|").toLowerCase()
+    // The object id first: two policies that share a name stay two lines.
+    const key = [change.changeType, change.resourceId ?? change.resourceName ?? change.resourceType ?? change.auditId, change.actorUpn ?? change.actorAppName ?? change.actorAppId ?? ""].join("|").toLowerCase()
     const existing = groups.get(key)
-    if (existing) existing.count++
-    else groups.set(key, { change, count: 1 })
+    if (existing) existing.push(change)
+    else groups.set(key, [change])
   }
   const lines = [...groups.values()]
-  const items = lines.slice(0, max).map(({ change, count }) => {
+  const items = lines.slice(0, max).map((group) => {
+    const change = group[0]!
+    const count = group.length
     const target = change.resourceName ?? change.resourceType ?? change.category
     const title = `${capitalize(change.changeType)}: ${target}${count > 1 ? ` (${count} times)` : ""}`
     return {
@@ -163,6 +195,7 @@ export function collapseAuditChanges(changes: AuditChange[], options: { includeA
       detail: change.resourceName && change.resourceType ? change.resourceType : change.activity,
       ...(options.includeActor && (change.actorUpn ?? change.actorAppName) ? { actor: (change.actorUpn ?? change.actorAppName) as string } : {}),
       at: change.at,
+      change: itemChange(group),
     }
   })
   return { items, moreCount: Math.max(0, lines.length - items.length), collapsed: lines.length }
@@ -175,7 +208,7 @@ function capitalize(value: string): string {
 /** The services change watching reads, with the event type and wording of their digests. */
 export type ChangeService = "intune" | "conditionalAccess"
 
-const SERVICE_DIGEST: Record<ChangeService, { type: "intune.change" | "entra.change"; title: string; label: string }> = {
+export const SERVICE_DIGEST: Record<ChangeService, { type: "intune.change" | "entra.change"; title: string; label: string }> = {
   intune: { type: "intune.change", title: "Intune changes", label: "Intune" },
   conditionalAccess: { type: "entra.change", title: "Conditional Access changes", label: "Conditional Access" },
 }
@@ -219,6 +252,58 @@ export function changeDigest(service: ChangeService, input: ChangeDigestInput): 
     details: [{ label: "Changes", value: String(input.changes.length) }],
     items,
     moreCount,
+    source: input.source,
+  })
+}
+
+/** "updated" as written in a sentence. */
+const CHANGE_VERB: Record<AuditChangeType, string> = { created: "created", updated: "updated", deleted: "deleted", assigned: "assigned", unassigned: "unassigned", changed: "changed" }
+
+/** Joins setting names for a sentence: "A, B and 3 more". */
+export function settingsSentence(names: string[], more: number): string {
+  if (!names.length) return ""
+  const shown = names.join(", ")
+  return more > 0 ? `${shown} and ${more} more` : shown
+}
+
+export interface ChangeEventInput {
+  tenantId: string
+  tenantName?: string | null
+  change: AuditChange
+  includeActor: boolean
+  source: "desktop" | "azure-watcher"
+}
+
+/**
+ * One alert for one audited change, for alerts that send each change on its own. The natural
+ * key is the audit id, so every alert that picks the same change sends the same event.
+ */
+export function changeEvent(service: ChangeService, input: ChangeEventInput): NotificationEnvelope {
+  const wording = SERVICE_DIGEST[service]
+  const { change } = input
+  const target = change.resourceName ?? change.resourceType ?? change.category
+  const verb = CHANGE_VERB[change.changeType]
+  const tenantLabel = input.tenantName ?? "your tenant"
+  const actor = input.includeActor ? (change.actorUpn ?? change.actorAppName) : null
+  const allSettings = change.settings ?? []
+  const settings = allSettings.slice(0, MAX_SETTING_NAMES)
+  const more = (change.settingsMore ?? 0) + Math.max(0, allSettings.length - MAX_SETTING_NAMES)
+  const kind = change.resourceName && change.resourceType ? ` (${change.resourceType})` : ""
+  const details: Array<{ label: string; value: string }> = [{ label: "Change", value: capitalize(change.changeType) }]
+  if (change.resourceType) details.push({ label: "Type", value: change.resourceType })
+  if (service === "intune") details.push({ label: "Category", value: change.category })
+  if (actor) details.push({ label: "By", value: actor })
+  return buildEnvelope({
+    type: wording.type,
+    severity: change.changeType === "deleted" || change.changeType === "unassigned" ? "warning" : "info",
+    tenantId: input.tenantId,
+    tenantName: input.tenantName,
+    occurredAt: change.at,
+    naturalKey: `change:${change.auditId}`,
+    title: `${wording.label} change: ${target} ${verb}`,
+    summary: `${target}${kind} was ${verb} in ${wording.label} for ${tenantLabel}${actor ? ` by ${actor}` : ""}.${settings.length ? ` Changed settings: ${settingsSentence(settings, more)}.` : ""}`,
+    details,
+    items: collapseAuditChanges([change], { includeActor: input.includeActor }).items,
     source: input.source,
   })
 }

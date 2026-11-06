@@ -126,9 +126,9 @@ export function buildChangeReport(drift: DriftResult, audit: ReportAudit, option
     const ids = new Set([entry.configId.toLowerCase()].filter(Boolean))
     const names = new Set([entry.configName, entry.previousName].filter((name): name is string => Boolean(name)).map((name) => name.toLowerCase()))
     const matching = events.filter((event) => {
-      const byId = (event.resourceIds ?? []).some((id) => ids.has(id.toLowerCase()))
+      const byId = !!event.resourceId && ids.has(event.resourceId.toLowerCase())
       // A name match only when the event names no ID at all, so two items sharing a name are not mixed up.
-      const byName = !event.resourceIds?.length && event.resourceName !== null && names.has(event.resourceName.toLowerCase())
+      const byName = !event.resourceId && event.resourceName !== null && names.has(event.resourceName.toLowerCase())
       return byId || byName
     })
     for (const event of matching) used.add(event.auditId)

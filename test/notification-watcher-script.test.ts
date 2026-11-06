@@ -26,10 +26,22 @@ const desktopApp = readFileSync(new URL("../resources/New-TenuVaultDesktopApp.ps
 const pwsh = ["/usr/local/bin/pwsh", "/opt/homebrew/bin/pwsh", "/usr/bin/pwsh", ...(process.env.HOME ? [`${process.env.HOME}/.local/bin/pwsh`] : [])].find((candidate) => existsSync(candidate))
 
 describe("Azure notification watcher scripts", () => {
-  it("never reads audit request bodies or property values", () => {
+  it("never reads audit request bodies, and touches property values only to name changed settings", () => {
     expect(runbook).not.toContain("requestBody")
-    expect(runbook).not.toContain("modifiedProperties")
     expect(runbook).toContain("id,displayName,componentName,actor,activity,activityDateTime,activityType,activityOperationType,activityResult,category,resources")
+    // Old and new values are read in the changed settings library only, which returns names.
+    const start = runbook.indexOf("# Library: changed setting names")
+    const end = runbook.indexOf("# Library: audit event mapping")
+    expect(start).toBeGreaterThan(0)
+    expect(end).toBeGreaterThan(start)
+    for (const marker of ["modifiedProperties", "oldValue", "newValue"]) {
+      let at = runbook.indexOf(marker)
+      expect(at).toBeGreaterThan(0)
+      while (at >= 0) {
+        expect(at > start && at < end).toBe(true)
+        at = runbook.indexOf(marker, at + 1)
+      }
+    }
   })
 
   it("claims the state lease before any delivery function runs", () => {
@@ -101,6 +113,20 @@ describe("Azure notification watcher scripts", () => {
     expect(setup).toContain("Get-Content -LiteralPath $TeamsCardLayoutPath -Raw -Encoding UTF8")
     expect(setup.indexOf("Teams card layout file not found")).toBeLessThan(setup.indexOf("Writing Automation variables"))
     expect(setup).toContain('if ($PSBoundParameters.ContainsKey("TeamsCardLayoutPath"))')
+  })
+
+  it("takes the alerts from TenuVault as an Automation variable, checked before any Azure write", () => {
+    expect(setup).toContain("[string]$AlertRulesPath")
+    expect(setup).toContain('"TenuVaultAlertRules"')
+    expect(setup).toContain("Get-Content -LiteralPath $AlertRulesPath -Raw -Encoding UTF8")
+    expect(setup.indexOf("The alerts file has no alert")).toBeLessThan(setup.indexOf("Writing Automation variables"))
+    expect(setup).toContain('if ($PSBoundParameters.ContainsKey("AlertRulesPath"))')
+    expect(runbook).toContain('Get-TvAutomationVariable "TenuVaultAlertRules"')
+    // An unreadable value falls back to sending everything, never to silence.
+    expect(runbook).toContain("every event goes to every destination until it is set again")
+    expect(runbook).toContain("holds no alert this runbook can use")
+    expect(setup).toContain("No alert in the file takes these watcher events")
+    expect(runbook).toContain("alertRules=")
   })
 
   it("desktop setup adds notification scopes only with the opt-in switch", () => {

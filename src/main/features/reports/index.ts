@@ -250,13 +250,14 @@ function optionalBackup(body: Body, key: string): string | null {
 export async function generateReport(
   deps: FeatureDeps,
   tenantId: string,
+  /** Both backups, neither (the two newest complete ones), or only the comparison (it and the complete backup before it). */
   input: { baseline: string | null; comparison: string | null; trigger: ChangeReport["trigger"]; actor: string | null },
 ): Promise<Stored<ReportRecord>> {
   const tenant = tenantId.toLowerCase()
   const profile = deps.tenant(tenant)
   if (!profile) throw new FeatureError("This tenant is not connected.", 404)
   const response = await deps.api("/api/detect-drifts", tenant, {
-    ...(input.baseline && input.comparison ? { baseline: input.baseline, comparison: input.comparison } : {}),
+    ...(input.baseline && input.comparison ? { baseline: input.baseline, comparison: input.comparison } : input.comparison ? { comparison: input.comparison } : {}),
     documentItems: true,
   })
   const body = (await response.json().catch(() => null)) as (DriftResult & { error?: string; code?: string }) | null
@@ -313,7 +314,10 @@ export async function readAudit(deps: FeatureDeps, tenantId: string, drift: Pick
       (raw) => mapEntraAuditEvent(raw as EntraAuditRaw), "Conditional Access",
       "Conditional Access changes have no actors: reading the Entra audit log needs the delegated AuditLog.Read.All permission and a role such as Security Reader.")
     if ("error" in entra) note = [note, entra.error].filter(Boolean).join(" ")
-    else changes.push(...entra.changes)
+    else {
+      changes.push(...entra.changes)
+      if (entra.truncated) note = [note, `More than ${MAX_AUDIT_EVENTS} Conditional Access audit events in this window; the newest were not read.`].filter(Boolean).join(" ")
+    }
   }
   return { changes, note }
 }
@@ -468,8 +472,8 @@ export async function sendReport(
 
 /**
  * After a scheduled backup finished: when the tenant asked for it, compares that backup with the
- * one before it and sends the report. Once per backup; best effort, never throws. A backup that
- * completed with warnings is not one of the two newest complete backups, so it is skipped.
+ * complete backup before it and sends the report. Once per backup; best effort, never throws. A
+ * backup that completed with warnings, or the first backup of a tenant, is skipped.
  */
 export async function afterScheduledBackup(deps: FeatureDeps, tenantId: string, backupFolder: string | null): Promise<void> {
   const tenant = tenantId.toLowerCase()
@@ -484,11 +488,14 @@ export async function afterScheduledBackup(deps: FeatureDeps, tenantId: string, 
     return
   }
   try {
-    const record = await generateReport(deps, tenant, { baseline: null, comparison: null, trigger: "scheduled", actor: null })
-    if (record.report.to.id !== backupFolder) {
-      deps.records.remove(DOMAINS.changeReports, tenant, record.id)
-      remember("skipped", "The backup did not complete cleanly, so it was not compared.", null)
-      return
+    // This backup and the complete backup before it, even when another backup finished meanwhile.
+    let record: Stored<ReportRecord>
+    try {
+      record = await generateReport(deps, tenant, { baseline: null, comparison: backupFolder, trigger: "scheduled", actor: null })
+    } catch (error) {
+      // Completed with warnings, the first backup, or removed by retention: nothing to compare, not a failure.
+      if (error instanceof FeatureError && (error.status === 404 || error.status === 409)) return void remember("skipped", error.message, null)
+      throw error
     }
     const total = record.report.items.length
     if (!settings.recipients.length) return void remember("skipped", "The report was saved. No recipients are set, so it was not sent.", record.id)

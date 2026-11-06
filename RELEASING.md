@@ -29,7 +29,10 @@ plan records events; Community sees a locked preview on the Audit Log page.
 
 Put these in the next stable release's notes, then remove them here.
 
-None yet.
+- Damaged files in a local backup folder no longer block the whole folder (#277). Backups they
+  belong to show as Unavailable in Backup History; other backups stay usable and new backups are
+  saved. While any file is damaged, retention deletes nothing and logs "Retention is paused." No
+  file format, recovery key or file on disk changes.
 
 ## Cutting a stable release
 

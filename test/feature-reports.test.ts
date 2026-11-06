@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { afterScheduledBackup, MAX_REPORTS, routes } from "../src/main/features/reports"
+import { afterScheduledBackup, MAX_AUDIT_EVENTS, MAX_REPORTS, readAudit, routes } from "../src/main/features/reports"
 import { DOMAINS } from "../src/main/features/domains"
 import type { Drift, DriftResult } from "../src/shared/intune/drift"
 import { call, fakeDeps, TENANT_A, TENANT_B } from "./feature-helpers"
@@ -85,6 +85,20 @@ describe("change reports route", () => {
     const w = world({ drift: { status: 409, error: "Drift comparison needs two complete backups." } })
     const response = await call(w.routes, PATH, { tenantId: TENANT_A, action: "generate" })
     expect(response).toEqual({ status: 409, body: { error: "Drift comparison needs two complete backups." } })
+  })
+
+  it("says when the Conditional Access audit log was cut short", async () => {
+    const entra = (index: number) => ({ id: `x${index}`, activityDateTime: "2026-11-05T10:00:00Z", activityDisplayName: "Update conditional access policy", operationType: "Update", result: "success", loggedByService: "Conditional Access", targetResources: [{ id: "ca-1", displayName: "CA001" }] })
+    const deps = fakeDeps({
+      graph: (() => async (_method: string, path: string) => path.startsWith("auditLogs/")
+        ? { status: 200, body: { value: Array.from({ length: MAX_AUDIT_EVENTS + 1 }, (_, index) => entra(index)) } }
+        : { status: 200, body: { value: [] } }) as never,
+    })
+    const drift = driftResult()
+    drift.drifts[0]!.type = "Conditional Access policies"
+    const audit = await readAudit(deps, TENANT_A, drift)
+    expect(audit).toMatchObject({ note: `More than ${MAX_AUDIT_EVENTS} Conditional Access audit events in this window; the newest were not read.` })
+    expect("changes" in audit && audit.changes).toHaveLength(MAX_AUDIT_EVENTS)
   })
 
   it("keeps the report without actors when the audit log is closed", async () => {
@@ -202,12 +216,19 @@ describe("reports after scheduled backups", () => {
     expect(status.body.reports[0]).toMatchObject({ trigger: "scheduled", lastSend: { ok: true, automatic: true } })
   })
 
-  it("skips a backup the default pair does not end with, and drops the report it made", async () => {
-    const w = world({ drift: driftResult("backup-2026-11-05-120000") })
+  it("compares exactly the scheduled backup with the complete backup before it", async () => {
+    const w = world()
+    await call(w.routes, PATH, { tenantId: TENANT_A, action: "save-settings", afterScheduledBackup: true, recipients })
+    await afterScheduledBackup(w.deps, TENANT_A, "backup-2026-11-06-020000")
+    expect(w.apiCalls[0]).toEqual({ path: "/api/detect-drifts", body: { comparison: "backup-2026-11-06-020000", documentItems: true } })
+  })
+
+  it("skips a backup that completed with warnings, without saving or sending a report", async () => {
+    const w = world({ drift: { status: 409, error: "Backup backup-2026-11-06-020000 did not complete without warnings, so it is not compared." } })
     await call(w.routes, PATH, { tenantId: TENANT_A, action: "save-settings", afterScheduledBackup: true, recipients })
     await afterScheduledBackup(w.deps, TENANT_A, "backup-2026-11-06-020000")
     const status = await call(w.routes, PATH, { tenantId: TENANT_A, action: "get-status" })
-    expect(status.body.settings.lastAutomatic).toMatchObject({ outcome: "skipped" })
+    expect(status.body.settings.lastAutomatic).toMatchObject({ outcome: "skipped", message: expect.stringContaining("did not complete without warnings") })
     expect(status.body.reports).toHaveLength(0)
     expect(w.graphCalls.some((entry) => entry.path === "me/sendMail")).toBe(false)
   })

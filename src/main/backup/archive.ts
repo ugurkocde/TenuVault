@@ -82,7 +82,7 @@ export async function importArchive(store: LocalBlobStore, archive: ReviewedArch
       const data = name === 'metadata.json' ? Buffer.from(JSON.stringify({ ...JSON.parse(content.toString()), SourceTenantId: archive.tenantId, Import: { sha256: archive.digest, reviewedAt: new Date().toISOString(), provenance: 'User-reviewed ZIP; source identity is not cryptographically verified' } })) : content
       await store.put(account, container, prefix + name, data, 'application/json', true); written.push(prefix + name)
     }
-  } catch (error) { for (const name of written) await store.delete(account, container, name).catch(() => undefined); throw error }
+  } catch (error) { for (const name of written) await store.delete(account, container, name, { despiteDamage: true }).catch(() => undefined); throw error }
 }
 /**
  * Imports a reviewed archive once the admin confirms it. The archive's tenant uses a license slot

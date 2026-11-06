@@ -53,6 +53,17 @@ describe('Backup pair selection', () => {
     expect(load).toHaveBeenCalledTimes(5)
   })
 
+  it('compares only the comparison asked for with the complete backup of the tenant before it', async () => {
+    const pair = await select({ comparison: 'backup-2026-09-23-120000' }).result
+    expect([pair.baseline.name, pair.comparison.name]).toEqual(['backup-2026-09-22-120000', 'backup-2026-09-23-120000'])
+    // A newer backup, another tenant's backup in between, or one with warnings never takes its place.
+    expect((await select({ comparison: 'backup-2026-09-22-120000' }).result).baseline.name).toBe('backup-2026-09-21-120000')
+    expect(await refusal({ comparison: 'backup-2026-09-25-120000' })).toMatchObject({ code: 'BACKUP_INCOMPLETE', status: 409 })
+    expect(await refusal({ comparison: 'backup-2026-09-24-120000' })).toMatchObject({ code: 'BACKUP_INCOMPLETE', status: 409 })
+    expect(await refusal({ comparison: 'backup-2026-09-21-120000' })).toMatchObject({ code: 'INSUFFICIENT_BACKUPS', status: 409 })
+    expect(await refusal({ comparison: 'backup-2026-09-20-120000' })).toMatchObject({ code: 'BACKUP_NOT_FOUND', status: 404 })
+  })
+
   it('compares exactly the pair asked for, including one that completed with warnings', async () => {
     const pair = await select({ baseline: 'backup-2026-09-21-120000', comparison: 'backup-2026-09-25-120000' }).result
     expect([pair.baseline.name, pair.comparison.name]).toEqual(['backup-2026-09-21-120000', 'backup-2026-09-25-120000'])

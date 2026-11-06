@@ -132,13 +132,23 @@
     Also watch Conditional Access policies, named locations and authentication
     strengths in the Entra audit log. With -GrantGraphRoles this also assigns the
     AuditLog.Read.All application role. Only ids, times, activity names, target
-    names and the actor are used; policy content in the audit events is never read.
+    names and the actor are used. For updates, the policy versions in the audit
+    event are compared in memory to name the changed settings; policy content and
+    values are never kept or sent.
 
 .PARAMETER TeamsCardLayoutPath
     Path to a Teams card layout file saved with "Copy for Azure watcher" in TenuVault
     (Settings > Notifications > Teams card). The watcher then builds its Teams cards
     with that layout. A rerun without it keeps the saved layout; pass an empty string
     to go back to the standard card.
+
+.PARAMETER AlertRulesPath
+    Path to an alerts file saved with "Copy for Azure watcher" in TenuVault (Settings >
+    Notifications > Alerts). The watcher then sends each event only where an alert sends
+    it: by event type and severity, and for Intune and Conditional Access changes by the
+    alert's conditions, as one summary or one alert per change. Each alert's channels
+    become the watcher's own destinations of the same kind (webhook, Teams, email).
+    Without it, or after an empty string, every event goes to every destination.
 
 .PARAMETER GrantGraphRoles
     Assign the Graph application roles to the managed identity now (needs Global
@@ -182,6 +192,7 @@ param(
     [switch]$IncludeActor,
     [switch]$IncludeConditionalAccess,
     [string]$TeamsCardLayoutPath,
+    [string]$AlertRulesPath,
     [switch]$GrantGraphRoles,
     [switch]$IncludeMailSend,
     [switch]$Remove
@@ -202,7 +213,7 @@ $automationVariableNames = @(
     "TenuVaultWebhookUrl", "TenuVaultWebhookSecret", "TenuVaultTeamsWebhookUrl",
     "TenuVaultMailSender", "TenuVaultMailRecipients", "TenuVaultReportRecipients", "TenuVaultMailProbeMailbox",
     "TenuVaultMissedBackupHours", "TenuVaultIncludeActor", "TenuVaultConfigVersion",
-    "TenuVaultWatchConditionalAccess", "TenuVaultTeamsCardLayout"
+    "TenuVaultWatchConditionalAccess", "TenuVaultTeamsCardLayout", "TenuVaultAlertRules"
 )
 
 $graphRoleNames = @("DeviceManagementApps.Read.All")
@@ -252,6 +263,32 @@ if (-not $Remove -and $TeamsCardLayoutPath) {
     if ($parsedLayout.version -ne 1 -or -not $parsedLayout.base) { throw "The Teams card layout file is not a TenuVault layout (version 1 with a base layout)." }
     # Compact form keeps the variable small; it is not a secret.
     $teamsCardLayoutJson = $parsedLayout | ConvertTo-Json -Depth 10 -Compress
+}
+# The alerts file is checked before anything is written to Azure, read as UTF-8 for the
+# same reason as the layout. An alerts file without alerts would silence the watcher, so it
+# is refused: pass an empty string to go back to sending every event everywhere.
+$alertRulesJson = ""
+if (-not $Remove -and $AlertRulesPath) {
+    if (-not (Test-Path -LiteralPath $AlertRulesPath)) { throw "Alerts file not found: $AlertRulesPath" }
+    $alertRulesText = (Get-Content -LiteralPath $AlertRulesPath -Raw -Encoding UTF8).Trim()
+    try { $parsedAlerts = $alertRulesText | ConvertFrom-Json } catch { throw "The alerts file is not valid JSON. Copy it again from TenuVault." }
+    if ($parsedAlerts.schema -cne "tenuvault.watcher-alerts/v1") { throw "The alerts file is not a TenuVault alerts file (schema tenuvault.watcher-alerts/v1)." }
+    # The same event types and destinations the runbook accepts (ConvertFrom-TvWatcherAlerts).
+    $knownTypes = @("backup.failed", "backup.warning", "backup.succeeded", "backup.missed", "restore.completed", "restore.partial", "restore.failed", "drift.detected", "health.finding", "intune.change", "entra.change", "credential.expiring", "watcher.stale")
+    $knownDestinations = @("webhook", "teams", "mail")
+    $usable = @($parsedAlerts.alerts | Where-Object {
+        $_ -and @(@($_.eventTypes) | Where-Object { $knownTypes -ccontains $_ }).Count -gt 0 -and
+        @(@($_.destinations) | Where-Object { $knownDestinations -ccontains $_ }).Count -gt 0
+    })
+    if ($usable.Count -eq 0) { throw "The alerts file has no alert with an event type and a webhook, Teams or email channel, so the watcher would send nothing. Add one in TenuVault, or pass -AlertRulesPath '' to send every event to every destination." }
+    if ($alertRulesText.Length -gt 500000) { throw "The alerts file is larger than 500 KB. Shorten the alert conditions." }
+    $alertRulesJson = $alertRulesText
+    Write-Host "Alerts file read: $($usable.Count) alert(s) for the watcher."
+    # Events the watcher produces that no alert takes are no longer sent anywhere: say so.
+    $watcherTypes = @("intune.change", "entra.change", "backup.failed", "backup.warning", "backup.succeeded", "backup.missed")
+    $covered = @($usable | ForEach-Object { @($_.eventTypes) })
+    $uncovered = @($watcherTypes | Where-Object { $covered -cnotcontains $_ })
+    if ($uncovered.Count -gt 0) { Write-Warning "No alert in the file takes these watcher events, so the watcher will not send them: $($uncovered -join ', '). Add them to an alert in TenuVault if you want them." }
 }
 if ($IncludeMailSend -and (-not $MailSender -or -not $MailRecipients)) {
     throw "-IncludeMailSend requires -MailSender and -MailRecipients. Refusing to grant Mail.Send without a named sender mailbox and recipients."
@@ -537,6 +574,10 @@ Set-TenuVaultAutomationVariable -Name "TenuVaultWatchConditionalAccess" -Value $
 # so a rerun without it keeps the saved layout. -TeamsCardLayoutPath "" clears it.
 if ($PSBoundParameters.ContainsKey("TeamsCardLayoutPath")) {
     Set-TenuVaultAutomationVariable -Name "TenuVaultTeamsCardLayout" -Value $teamsCardLayoutJson
+}
+# The alerts follow the same rule: written only when passed, -AlertRulesPath "" clears them.
+if ($PSBoundParameters.ContainsKey("AlertRulesPath")) {
+    Set-TenuVaultAutomationVariable -Name "TenuVaultAlertRules" -Value $alertRulesJson
 }
 Set-TenuVaultAutomationVariable -Name "TenuVaultConfigVersion" -Value "1"
 

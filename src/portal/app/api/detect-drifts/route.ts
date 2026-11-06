@@ -103,6 +103,8 @@ export async function POST(request: NextRequest) {
       checked++
       report({ phase: "checking", detail: `Checking the backups: ${checked - 1} read`, done: checked, total: 0 })
       if (response.status === 404) return null
+      // A backup on this device that damaged files made unavailable is skipped like one without a manifest.
+      if (response.status === 409 && ['BackupUnavailable', 'InventoryIncomplete'].includes(response.headers.get('x-ms-error-code') ?? '')) return null
       if (!response.ok) throw new Error(`Cannot verify that the backups are complete (${response.status}). Check storage access and retry.`)
       return await response.json()
     }

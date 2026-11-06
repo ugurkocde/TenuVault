@@ -153,7 +153,10 @@ describe("encrypted local backups", () => {
     writeFileSync(path, bytes)
     const fresh = new LocalBlobStore(root, keys)
     const tampered = await handleLocalBlobRequest(fresh, new Request(`${base}/intune-backups/backup-2026-09-24-101500/metadata.json`))
-    expect(tampered.status).toBe(500)
+    // The backup is unavailable: a refusal that retrying cannot fix, never the tampered content.
+    expect(tampered.status).toBe(409)
+    expect(tampered.headers.get("x-ms-error-code")).toBe("BackupUnavailable")
+    expect(await tampered.text()).toContain("backup-2026-09-24-101500 is unavailable: its manifest (metadata.json) could not be read.")
   })
 
   it("lists backups in the XML shape the shared routes parse", async () => {

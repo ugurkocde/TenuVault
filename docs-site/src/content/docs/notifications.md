@@ -1,11 +1,11 @@
 ---
 title: "Notifications"
-description: Get backup, restore, drift, Intune and Conditional Access change alerts in Teams, by email or webhook, on this computer or from Azure while it is off.
+description: Get backup, restore, drift, Intune and Conditional Access change alerts in Teams, by email or webhook, for the policies you pick, with the names of the settings that changed, on this computer or from Azure while it is off.
 ---
 
 Notifications tell you when a backup fails or misses its time, when a restore only partly succeeds, when drift is found between backups, when something changed in Intune or Conditional Access, and when the Backup Reader certificate or the Azure watcher needs attention. You set them up per tenant under **Settings**, in the **Notifications** section. Notifications are a Pro feature. Turning a channel off or removing it always works, on every plan.
 
-Nothing is sent until you add a channel and a rule. A **channel** is a destination. A **rule** picks which events go to which channels.
+Nothing is sent until you add a channel and an alert. A **channel** is a destination. An **alert** picks which events go to which channels, and for Intune and Conditional Access changes, which changes: for example only updates to one compliance policy, each in its own message with the names of the settings that changed.
 
 ## Events
 
@@ -13,7 +13,7 @@ Nothing is sent until you add a channel and a rule. A **channel** is a destinati
 | --- | --- | --- |
 | Backup failed | A backup saved nothing, or could not be read | Critical |
 | Backup completed with warnings | A backup saved policies but some items could not be read | Warning |
-| Backup succeeded | A backup finished cleanly (opt in per rule) | Info |
+| Backup succeeded | A backup finished cleanly (opt in per alert) | Info |
 | No recent backup | The Azure watcher finds no backup newer than your threshold (backups a cloud run reported as failed do not count) | Critical |
 | Cloud backup failed, completed with warnings or succeeded | A [cloud backup](/backups/cloud/) run in Azure ends; the Azure watcher sends it on its next run | Critical, warning or info |
 | Scheduled backup missed its time | TenuVault starts more than an hour after a scheduled backup was due (it was closed or the computer was off) and runs it now; once per slot | Warning |
@@ -34,7 +34,7 @@ A system notification on this computer. It only appears while TenuVault runs, in
 
 ### Webhook
 
-TenuVault posts a signed JSON event to an https address you control, for example a ticketing system, Slack incoming webhook or your own automation. The body is one event object with the schema name `tenuvault.notification/v1`. It carries names, counts, statuses and timestamps only. It never carries policy content, credentials or audit details such as changed setting values.
+TenuVault posts a signed JSON event to an https address you control, for example a ticketing system, Slack incoming webhook or your own automation. The body is one event object with the schema name `tenuvault.notification/v1`. It carries names, object ids, counts, statuses, timestamps and the names of changed settings. It never carries policy content, setting values, credentials or audit request bodies. The fields of change events are listed under [Webhook fields for changes](#webhook-fields-for-changes).
 
 Two optional protections:
 
@@ -90,30 +90,101 @@ Mail arrives as HTML with a severity badge, one row per change with a colored ve
 
 ![An Intune change digest as HTML email with severity badge, verb markers and an admin center button](/images/notifications/notifications-email.png)
 
-## Rules
+## Alerts
 
-A rule has event types, a minimum severity and one or more channels. A useful starting point:
+An alert has event types, a minimum severity and one or more channels. A useful starting point:
 
-* One rule for backup failed, backup warnings, restore failures and drift, at info and above, to your Teams channel and email.
+* One alert for backup failed, backup warnings, restore failures and drift, at info and above, to your Teams channel and email.
+* One alert per policy area you care about, for example compliance policy changes, sent one change at a time (see below).
 * Success events only if you really want them. Most tenants find them noise within a week.
+
+**Send test** on an alert's row sends a made up change that passes the alert's filters to its channels, marked as a test, so you can see what the alert will look like. It is not queued and does not count as a real event.
 
 Delivery is at least once. An undelivered notification stays queued, retries with backoff, and survives restarting the app. In the rare case a destination accepted a message but the confirmation was lost, the same event can arrive twice; the `eventId` is identical so receivers can dedupe. Recent deliveries, including failures and retries, are listed under the channels. A scheduled backup slot that fails on every retry sends one alert, not one per attempt, and backup alerts list the policies saved and the types that could not be read.
 
-Channels and rules can be edited with **Edit** on their row. A channel's URL and secret are never shown again: leave those fields empty to keep what is stored, or paste a new URL, for example after a Teams workflow was recreated. Rules keep sending to the edited channel, and deliveries still queued go to the new address. Removing a channel that rules use asks first and takes it out of those rules; a rule left without any channel is turned off, not deleted.
+Channels and alerts can be edited with **Edit** on their row. A channel's URL and secret are never shown again: leave those fields empty to keep what is stored, or paste a new URL, for example after a Teams workflow was recreated. Alerts keep sending to the edited channel, and deliveries still queued go to the new address. Removing a channel that alerts use asks first and takes it out of those alerts; an alert left without any channel is turned off, not deleted.
+
+### Which changes an alert sends
+
+An alert that includes **Intune change** or **Conditional Access change** gets a **Which changes** section. Leave it empty and the alert sends every change, as before. Each filter you fill in narrows the alert further, and a change has to pass all of them:
+
+| Filter | A change passes when |
+| --- | --- |
+| Change types | It is one of the types you pick: created, updated, deleted, assigned, unassigned, or other changes |
+| Intune categories | Its Intune audit category is one you pick, for example Compliance or Device configuration. Conditional Access changes have no category and always pass |
+| Policy names contain | Its policy or object name contains one of the entries, ignoring case. Use the full name for one specific policy |
+| Changed settings contain | One of the settings it changed contains one of the entries, ignoring case. Only updates name changed settings, so creates, deletes and assignments never pass |
+| Never alert for changes by | It was not made by one of these user principal names or app names (exact, ignoring case), for example an automation account |
+
+The filters apply to change events only. Other event types in the same alert, such as backup failed, are sent as usual.
+
+Filters work on what change watching reads. The **Audit categories** in the change watching card decide what is read at all, so an alert cannot send a category that watching leaves out.
+
+### One summary or one alert per change
+
+**How to send** decides the shape of change alerts:
+
+* **One summary per check** (the default): all matching changes of one poll in one message, with one line per change.
+* **One alert per change**: each matching change in its own message, titled for example "Intune change: Windows compliance updated", with its type and category as details and the names of the settings that changed. Up to 20 per check; any more arrive together in one summary, so a bulk edit does not flood a channel.
+
+Two alerts that pick the same changes send the same event, so a channel both use gets it once.
+
+### Changed settings
+
+For updates, alerts name the settings that changed, for example "Changed: PasswordRequired, BitLockerEnabled, OsMinimumVersion" for a compliance policy, or "Changed: conditions.users.excludeGroups, state" for a Conditional Access policy.
+
+The audit log records each changed property of an update with its old and new value. TenuVault compares the two in memory and keeps only the names of the settings whose value differs. The values themselves are never stored, shown or sent, in the desktop app and in the Azure watcher alike. Bookkeeping fields such as the modified time and the version are left out.
+
+What to expect:
+
+* Creates, deletes and assignments list no settings: the audit log records every property for them, which says nothing about what changed.
+* Settings catalog policies do not record their old values in the audit log, so their updates name no settings. The change itself is still sent.
+* Conditional Access policies and named locations are named down to three levels, for example `conditions.users.excludeGroups`. A changed list counts as one setting.
+* A message shows up to 15 setting names and counts the rest. **Changed settings contain** still matches every changed setting, not only the ones shown.
+
+### Webhook fields for changes
+
+Every line of a change event carries the same change as fields, in `items[].change`, so a receiver does not have to read the text:
+
+```json
+{
+  "schema": "tenuvault.notification/v1",
+  "type": "intune.change",
+  "title": "Intune change: Windows compliance updated",
+  "items": [
+    {
+      "title": "Updated: Windows compliance",
+      "detail": "Windows10CompliancePolicy",
+      "at": "2026-11-06T09:32:33.125Z",
+      "change": {
+        "auditId": "8c1f2d3e-0000-4000-8000-000000000001",
+        "changeType": "updated",
+        "category": "Compliance",
+        "resourceId": "5b7e9a10-0000-4000-8000-000000000002",
+        "resourceName": "Windows compliance",
+        "resourceType": "Windows10CompliancePolicy",
+        "settings": ["PasswordRequired", "BitLockerEnabled", "OsMinimumVersion"]
+      }
+    }
+  ]
+}
+```
+
+`resourceId` is the object id of the policy when the audit event carries one (authentication strength events do not name their strength, so they have none), `count` appears when repeated edits were collapsed into one line, and `settingsMore` counts changed settings beyond the names listed. A single change alert uses `change:<auditId>` as its natural key, so its `eventId` is the same whichever alert or watcher sends it.
 
 ## Change watching
 
-Change watching reads audit logs through Microsoft Graph and digests new events into one message per service and poll. Pick the services in the **Change watching** card: **Intune** (`intune.change` events) and **Conditional Access** (`entra.change` events). Both share the interval and the options below; each keeps its own position in its log.
+Change watching reads audit logs through Microsoft Graph and hands new changes to your [alerts](#alerts), which send them as one summary per service and poll or one message per change. Pick the services in the **Change watching** card: **Intune** (`intune.change` events) and **Conditional Access** (`entra.change` events). Both share the interval and the options below; each keeps its own position in its log.
 
 For Intune, a digest lists what was created, updated, deleted, assigned or unassigned, the policy name when the audit event carries it, and who did it. Read-only audit events (views and searches) are not changes and never appear in a digest. A digest that contains a deletion or a removed assignment is sent with warning severity.
 
 * On the desktop, watching runs while TenuVault is running and you are signed in. Default polling is every 15 minutes. After the app was closed with watching on, it catches up from where it left off; after a long gap the digest says older changes may be missing. Turning watching off and on again starts from that moment, so changes made while it was off are not sent as news.
-* **Audit categories** limit the digest to the categories you pick, from the list Intune itself reports (for example Device configuration, Compliance, Application, Role). Picking none watches every category. A category saved by an earlier version that Intune does not report is shown in amber so you can remove it: it would match no change.
+* **Audit categories** limit what is watched at all to the categories you pick, from the list Intune itself reports (for example Device configuration, Compliance, Application, Role). Picking none watches every category. A category saved by an earlier version that Intune does not report is shown in amber so you can remove it: it would match no change.
 * **Poll now** reads the audit log at once with the saved settings. It is unavailable while watching is off or while an Azure watcher owns change alerts for the tenant.
 * Categories apply to Intune only.
 * Changes made through TenuVault itself are ignored by default, so your own restores do not alert you.
 * Repeated edits of the same policy by the same admin collapse into one line with a count, and a digest shows at most 20 lines plus a remainder count, so a bulk edit does not flood a channel.
-* The watcher reads a fixed list of audit fields (ids, times, category, operation type, actor, resource names). Audit request bodies and changed setting values are never read or sent.
+* The watcher reads a fixed list of audit fields (ids, times, category, operation type, actor, resource names and ids, and for updates the changed properties). Changed property values are only compared to [name the settings that changed](#changed-settings) and are never kept or sent. Audit request bodies are never read.
 * The actor name is personal data and is off by default. Turn it on only for destinations your policies allow it to reach. It applies to digests built after you save.
 * When the [Azure watcher](#alerts-while-this-computer-is-off-the-azure-watcher) sends change alerts for a tenant, turn on **An Azure watcher owns change alerts for this tenant**. Desktop polling then stands down for that tenant, for Intune and Conditional Access alike, so each change is reported once instead of by both. If you watch Conditional Access on the desktop, set the watcher up with `-IncludeConditionalAccess` first; otherwise handing over stops Conditional Access alerts while the watcher's heartbeat still looks healthy. While it is on, TenuVault reads the watcher's `heartbeat.json` from the backup storage account every 30 minutes (with your sign-in) and sends a **Watcher stale** alert when the last run is more than 3 hours old or no heartbeat exists. The card shows when the watcher last ran, with **Check now**. A watcher whose runs fail still writes a heartbeat; those failures reach you through the Azure Monitor alert described below.
 
@@ -122,17 +193,18 @@ For Intune, a digest lists what was created, updated, deleted, assigned or unass
 Conditional Access watching reads the Entra audit log (`auditLogs/directoryAudits`) for changes to Conditional Access policies and named locations, and to authentication strengths. Each line names the policy or location and what happened: created, updated or deleted. Authentication strength events in the Entra audit log do not name the strength, so those lines say "Authentication strength". A digest with a deletion is sent as a warning, and it ends with an **Open Conditional Access in Entra** button.
 
 * It needs the delegated `AuditLog.Read.All` permission on the app registration: `-IncludeAuditLog` on a new one, or add it in Entra and grant admin consent. The signed-in admin also needs a role that can read audit logs, such as Security Reader, Global Reader or Reports Reader. Without them, the card shows the permission error and Intune watching keeps working. See [Permissions](/security/permissions/).
-* Microsoft Graph includes the full policy before and after each change, and the admin's IP address, in every audit event. TenuVault never reads or sends them: only ids, times, the activity, target names and, when you opt in, the actor.
+* Microsoft Graph includes the full policy before and after each change, and the admin's IP address, in every audit event. The IP address is never read. For updates, the two versions of the policy are compared in memory to [name the settings that changed](#changed-settings); the policy and its values are never kept or sent. Otherwise only ids, times, the activity, target names and, when you opt in, the actor are used.
 * Failed attempts are not changes and are left out.
 
 ## Alerts while this computer is off: the Azure watcher
 
-Desktop notifications stop when the computer is off, asleep or signed out. The Azure watcher closes that gap. It is a PowerShell runbook in an Azure Automation account in the customer tenant, running on a schedule with a managed identity and no stored secret. It watches the same Intune audit events and checks the age of the newest backup folder in the backup storage account, then delivers to the same kinds of channels: webhook, Teams Workflows and email. The event content and the mail design are identical to the desktop app.
+Desktop notifications stop when the computer is off, asleep or signed out. The Azure watcher closes that gap. It is a PowerShell runbook in an Azure Automation account in the customer tenant, running on a schedule with a managed identity and no stored secret. It watches the same Intune audit events (and, if you choose, Conditional Access changes) and checks the age of the newest backup folder in the backup storage account, then delivers to the same kinds of channels: webhook, Teams Workflows and email. The event content and the mail design are identical to the desktop app.
 
 What it can and cannot see, plainly:
 
 * It reads Intune audit events with the application permission `DeviceManagementApps.Read.All`.
-* With `-IncludeConditionalAccess` it also reads Conditional Access changes from the Entra audit log with the application permission `AuditLog.Read.All` (granted by `-GrantGraphRoles`), keeping its own position in that log. Policy content and IP addresses in those events are never read.
+* With `-IncludeConditionalAccess` it also reads Conditional Access changes from the Entra audit log with the application permission `AuditLog.Read.All` (granted by `-GrantGraphRoles`), keeping its own position in that log. IP addresses in those events are never read, and policy content is only compared to name the settings that changed, as on the desktop.
+* It sends your [alerts](#alerts) when you copy them to it (see [Alerts in the watcher](#alerts-in-the-watcher)); without them every event goes to every destination it has.
 * It alerts on the results of [cloud backups](/backups/cloud/): **Backup failed**, **Backup completed with warnings** and **Backup succeeded**, the same alerts the desktop app sends. Backups and their status are encrypted with your recovery key, which the watcher never has, so each cloud backup run leaves a small unencrypted result note in the `tenuvault-backup-results` container: status, backup folder name, policy and failure counts, the names of failed types, the run id and the time. Never policy content, policy names or error messages. The watcher turns the note into the alert and deletes it once the alert is queued. These alerts are not a complete run history: writing the note is best effort, so a run that cannot write it (for example after its storage role was removed) sends no result alert, and notes older than 7 days are deleted without an alert. A run that never finishes is still caught by **No recent backup**, and the runbook job history in the Automation account lists every run.
 * It reads backup folder names to detect a missed backup, and leaves out folders a cloud backup reported as failed, so a cloud backup that fails every day still raises **No recent backup**. A failed backup made by the desktop app cannot be told apart by folder name; the desktop app alerts on those itself while it runs.
 * It sends the [change reports](/backups/cloud/#change-reports-by-email) cloud backups leave in `tenuvault-backup-results` when they were set up with `-ChangeReport`, by email only, from the verified sender to `-ReportRecipients` (or `-MailRecipients`), and deletes each one once it is sent. A report waits while mail is not verified and is deleted unsent after 7 days.
@@ -155,6 +227,17 @@ One full setup run looks like this. The storage account is the one from the back
   -MailSender notifications@contoso.com `
   -MailRecipients team@contoso.com
 ```
+
+### Alerts in the watcher
+
+The watcher has its own destinations: one webhook, one Teams Workflows URL and one list of mail recipients, set with the setup parameters. Without alerts it sends every event to each of them. To make it send what your alerts send:
+
+1. In **Settings** > **Notifications** > **Alerts**, click **Copy for Azure watcher**, and save the copied text as a file, for example `alerts.json`.
+2. Run the watcher setup again with `-AlertRulesPath ./alerts.json`. The script checks the file before it changes anything in Azure and stores it as the Automation variable `TenuVaultAlertRules`.
+
+The file holds the enabled alerts with their event types, minimum severity, filters and how to send. Channels become kinds of destinations: an alert that sends to a Teams channel sends to the watcher's Teams URL, an email channel to its mail recipients, a webhook to its webhook. Alerts that only send to **This computer** are left out, and the app says which. The file contains no URLs, addresses or secrets.
+
+The watcher then plans alerts exactly like the desktop app: same filters, same summaries and single change alerts, same event ids. Backup results and **No recent backup** go to the destinations of the alerts that take their event type and severity; an event no alert takes is not sent. **Copy for Azure watcher** and the setup script both name the watcher events that no alert takes, so an alert set that only covers changes does not silently stop backup alerts. Copy and pass the file again after you change your alerts. A rerun without `-AlertRulesPath` keeps the saved alerts, and `-AlertRulesPath ''` removes them, so every event goes everywhere again. A value the runbook cannot read, or one without any alert it can use, does the same and says so in the job output, so a damaged file never silences the watcher.
 
 ### If the watcher itself breaks
 
@@ -183,6 +266,9 @@ Plan for Exchange propagation: a brand-new access policy and scope group can tak
 | Test message fails with a Graph permission error on email | The app registration lacks `Mail.Send`. Add the delegated `Mail.Send` permission (and `GroupMember.Read.All` and `User.Read.All` for group recipients) to the existing app registration, grant admin consent and sign in again. |
 | Teams test returns an error from the workflow | The workflow was deleted, its owner left, or a tenant policy blocks Workflows webhooks. Recreate the workflow, then **Edit** the channel and paste the new URL. |
 | No Intune change digests | Watching is off, you are signed out, an Azure watcher owns change alerts for the tenant, the picked audit categories do not include the change, or the change was made through TenuVault and is ignored. The watch card shows the last poll and its error. |
+| An alert sends no changes | Its filters exclude them. Check the alert's **Which changes** section: with **Changed settings contain** filled in, only updates pass, and settings catalog updates name no settings. Use **Send test** to see the alert's shape. |
+| A change alert lists no changed settings | The change is a create, delete or assignment, or a settings catalog policy, whose audit events do not record old values. |
+| The Azure watcher ignores my alerts | Copy them again with **Copy for Azure watcher** and rerun the setup with `-AlertRulesPath`. The job output says how many alerts it read, or that the value could not be read. |
 | Every change arrives twice | Both the desktop and the Azure watcher report changes. Turn on **An Azure watcher owns change alerts for this tenant** on the desktop. |
 | The same alert arrived twice | A delivery succeeded but its confirmation was lost and the queue retried. The `eventId` is the same; this is expected at-least-once behaviour. |
 | Webhook URL refused | Only public https addresses are allowed, without credentials in the URL. |

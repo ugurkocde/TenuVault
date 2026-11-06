@@ -96,7 +96,12 @@ describe("localInventoryProblem", () => {
     await backups(scratch, [randomBytes(32)], TENANT_A, ["backup-1/foreign.json"])
     copyFiles(scratch, root)
     expect(files(root)).toHaveLength(31)
-    expect(await inventoryProblem(store, TENANT_A)).toContain("1 encrypted file(s) could not be read")
+    const problem = await inventoryProblem(store, TENANT_A)
+    expect(problem).toContain("1 file in the backup folder could not be read")
+    expect(problem).toContain("encrypted with a key this device does not have")
+    // The foreign file cannot be traced. The own folder has no metadata.json yet, so it counts as
+    // a backup still being written or stopped early, not as one that is unavailable.
+    expect(problem).not.toContain("backup-1:")
   })
 
   it("reports a TVB1 and a TVB2 file for the same blob", async () => {
@@ -107,7 +112,10 @@ describe("localInventoryProblem", () => {
     await backups(scratch, key, TENANT_A, ["backup-1/policy.json"], 2)
     copyFiles(scratch, root)
     expect(files(root)).toHaveLength(2)
-    expect(await inventoryProblem(new LocalBlobStore(root, key), TENANT_A)).toContain("could not be read")
+    const problem = await inventoryProblem(new LocalBlobStore(root, key), TENANT_A)
+    expect(problem).toContain("2 files in the backup folder could not be read")
+    expect(problem).toContain("another file holds the same backup item")
+    expect(problem).toContain("backup-1: two files hold the same backup item.")
   })
 
   it("reports a backup whose metadata.json body is damaged", async () => {
@@ -129,7 +137,7 @@ describe("localInventoryProblem", () => {
     await store.put(account(TENANT_A), CONTAINER, "backup-1/metadata.json", Buffer.from(JSON.stringify(metadata)), "application/json")
     expect(await inventoryProblem(store, TENANT_A)).toBeNull()
     rmSync(join(containerDir(root), item!))
-    expect(await inventoryProblem(store, TENANT_A)).toContain("listed in the manifest are missing")
+    expect(await inventoryProblem(store, TENANT_A)).toContain("backup-1: 1 file listed in its manifest is missing or damaged.")
   })
 
   it("follows a file damaged and then restored in place under the same name", async () => {
@@ -187,11 +195,12 @@ describe("localInventoryProblem", () => {
     expect(await inventoryProblem(store, TENANT_A)).toBeNull()
     expect(vi.mocked(fileSystem.open).mock.calls.length).toBe(0)
 
+    // Damaged files are remembered by their stamps too: an unchanged unreadable folder is not read again.
     const foreign = new LocalBlobStore(root, [randomBytes(32)])
     expect(await inventoryProblem(foreign, TENANT_A)).not.toBeNull()
     vi.mocked(fileSystem.open).mockClear()
     expect(await inventoryProblem(foreign, TENANT_A)).not.toBeNull()
-    expect(vi.mocked(fileSystem.open).mock.calls.length).toBe(20)
+    expect(vi.mocked(fileSystem.open).mock.calls.length).toBe(0)
   })
 
   it("reports no problem for a complete backup that retention prunes while it is checked", async () => {
@@ -261,17 +270,17 @@ describe("localInventoryProblem", () => {
     const root = folder()
     mkdirSync(containerDir(root), { recursive: true })
     let writes = 0
-    const changing = { list: vi.fn(async () => {
+    const changing = { damage: vi.fn(async () => {
       writeFileSync(join(containerDir(root), `write-${writes++}.tmp`), "")
-      throw new Error("Backup inventory is incomplete: 1 encrypted file(s) could not be read.")
+      return { files: [{ file: "a.tvb", reason: "it is damaged or incomplete", backup: null }], unavailable: new Map<string, string>(), unattributed: 1 }
     }) }
     expect(await localInventoryProblem(changing, root, TENANT_A)).toBeNull()
-    expect(changing.list).toHaveBeenCalledTimes(3)
+    expect(changing.damage).toHaveBeenCalledTimes(3)
   })
 
   it("returns the message of a failed read", async () => {
-    const failing = { list: vi.fn().mockRejectedValue(Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" })) }
+    const failing = { damage: vi.fn().mockRejectedValue(Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" })) }
     expect(await localInventoryProblem(failing, folder(), TENANT_A)).toBe("EACCES: permission denied")
-    expect(failing.list).toHaveBeenCalledWith(account(TENANT_A), CONTAINER)
+    expect(failing.damage).toHaveBeenCalledWith(account(TENANT_A), CONTAINER)
   })
 })
