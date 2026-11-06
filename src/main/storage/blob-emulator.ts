@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks"
-import { LOCAL_STORAGE_PREFIX, localStorageAccountName } from "../../shared/constants"
+import { BACKUP_CONTAINER, LOCAL_STORAGE_PREFIX, localStorageAccountName } from "../../shared/constants"
 import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobNotFoundError, IncompleteInventoryError, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
 
 /**
@@ -182,7 +182,7 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
       if (method === "GET" || method === "HEAD") {
         // Container properties say how much of the backup folder could not be read, so a list of
         // backups can say that some may be missing from it.
-        const damage = await store.damage(account, container)
+        const damage = container === BACKUP_CONTAINER ? await store.damage(account, container) : { files: [], unavailable: new Map() }
         return new Response(null, {
           status: 200,
           headers: {

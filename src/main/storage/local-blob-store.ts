@@ -260,6 +260,8 @@ export class LocalBlobStore {
   private readonly blobWrites = new Map<string, Promise<void>>()
   /** Damage found by the read that built each inventory. */
   private readonly damageOf = new WeakMap<Map<string, Entry>, InventoryDamage>()
+  /** File names derived for traced blob names; see fileNames. */
+  private readonly fileNameCache = new Map<string, string[]>()
   /** Stamps of the damaged files of each inventory, so a repaired or removed file is noticed. */
   private readonly damagedStamps = new WeakMap<Map<string, Entry>, Map<string, string>>()
 
@@ -320,6 +322,18 @@ export class LocalBlobStore {
   async damage(account: string, container: string): Promise<InventoryDamage> {
     const entries = await this.checkedEntries(account, container)
     return this.damageOf.get(entries) ?? { files: [], unavailable: new Map(), unattributed: 0 }
+  }
+
+  /** Every file name a blob can have, for each key and format. Remembered, since each takes an HMAC per key. */
+  private fileNames(account: string, container: string, name: string): string[] {
+    const key = JSON.stringify([account, container, name])
+    let names = this.fileNameCache.get(key)
+    if (!names) {
+      names = this.keyring.flatMap((keys) => ([1, 2] as const).map((version) => fileName(version, keys.naming, account, container, name)))
+      if (this.fileNameCache.size >= FILE_NAME_CACHE_LIMIT) this.fileNameCache.clear()
+      this.fileNameCache.set(key, names)
+    }
+    return names
   }
 
   private assertAvailable(entries: Map<string, Entry>, folder: string): void {
@@ -457,12 +471,13 @@ export class LocalBlobStore {
    * an unavailable backup: a damaged file may be the only copy of what an older backup holds.
    * The check uses the cached inventory, which a new or removed file always refreshes. Retention
    * lists the folder right before it deletes, and a listing checks every file's stamp, so a file
-   * damaged in place is found then.
+   * damaged in place is found then. despiteDamage is for removing files the caller has just
+   * written itself, such as an archive import that is rolled back.
    */
-  async delete(account: string, container: string, name: string): Promise<void> {
+  async delete(account: string, container: string, name: string, options: { despiteDamage?: boolean } = {}): Promise<void> {
     const entries = await this.entries(account, container)
     const damage = this.damageOf.get(entries)
-    if (damage && (damage.files.length > 0 || damage.unavailable.size > 0)) {
+    if (!options.despiteDamage && damage && (damage.files.length > 0 || damage.unavailable.size > 0)) {
       throw new IncompleteInventoryError(damage.files.length, `${describeDamage(damage)} Nothing in the backup folder is deleted until this is resolved, so older backups are kept. ${RECOVERY}`)
     }
     const entry = entries.get(name)
@@ -719,10 +734,15 @@ export class LocalBlobStore {
     const cached = await Promise.resolve(previous).catch(() => undefined)
     const byFile = new Map([...(cached?.values() ?? [])].map(entry => [entry.file, entry]))
     // Headers are read a few at a time and added in directory order, so duplicates are found as before.
+    // The stamp of each file before its header is read: a damaged file is remembered by it, so a
+    // file still being written when it was read is read again once it changes.
+    const before = new Map<string, string>()
     const read = await mapLimit(files, HEADER_CONCURRENCY, async (file): Promise<Entry | Unreadable | typeof VANISHED> => {
       try {
+        const stamp = fileStamp(await stat(join(dir, file), { bigint: true }))
+        before.set(file, stamp)
         const cached = byFile.get(file)
-        if (cached && fileStamp(await stat(join(dir, file), { bigint: true })) === cached.stamp) return cached
+        if (cached && stamp === cached.stamp) return cached
         return this.readEntry(dir, account, container, file)
       } catch (error) {
         return isMissing(error) ? VANISHED : new Unreadable(unreadableReason(error))
@@ -767,6 +787,8 @@ export class LocalBlobStore {
     const traced = new Map<string, string>()
     for (const folder of folders) traced.set(`${folder}/metadata.json`, folder).set(`${folder}/${BACKUP_OWNER_FILE}`, folder)
     const withManifest = new Set<string>()
+    // Folders whose metadata.json has no item list (backups from versions before the manifest).
+    const legacy = new Set<string>()
 
     // Desktop metadata already contains a per-item manifest. Check it before
     // exposing any inventory to downloads or restores, including selective reads.
@@ -785,7 +807,7 @@ export class LocalBlobStore {
         unavailable(folder, "its manifest (metadata.json) could not be read.")
         continue
       }
-      if (metadata?.Items === undefined) continue // Legacy backups have no inventory manifest.
+      if (metadata?.Items === undefined) { legacy.add(folder); continue } // Legacy backups have no inventory manifest.
       if (!metadata.Items || typeof metadata.Items !== "object" || Array.isArray(metadata.Items)) {
         unavailable(folder, "its manifest (metadata.json) is not valid.")
         continue
@@ -809,9 +831,7 @@ export class LocalBlobStore {
     if (unreadable.length) {
       const byFileName = new Map<string, string>()
       for (const [name, folder] of traced) {
-        for (const keys of this.keyring) {
-          for (const version of [1, 2] as const) byFileName.set(fileName(version, keys.naming, account, container, name), folder)
-        }
+        for (const file of this.fileNames(account, container, name)) byFileName.set(file, folder)
       }
       for (const { file, reason } of unreadable) {
         const folder = byFileName.get(file) ?? null
@@ -820,18 +840,15 @@ export class LocalBlobStore {
         else damage.unattributed++
       }
     }
-    // A file that cannot be traced may belong to any backup whose files cannot be checked against a manifest.
+    // A file that cannot be traced may belong to any finished backup whose files cannot be checked
+    // against a manifest. A folder without metadata.json is still being written or stopped early,
+    // and is already shown as running or incomplete; a backup writing to it must be able to read
+    // back what it wrote.
     if (damage.unattributed > 0) {
-      for (const folder of folders) {
-        if (!withManifest.has(folder)) unavailable(folder, "files in the backup folder could not be read, and this backup has no manifest to show that none of them are its own.")
-      }
+      for (const folder of legacy) unavailable(folder, "files in the backup folder could not be read, and this backup has no manifest to show that none of them are its own.")
     }
     this.damageOf.set(entries, damage)
-    const stamps = new Map<string, string>()
-    await mapLimit(damage.files, HEADER_CONCURRENCY, async ({ file }) => {
-      try { stamps.set(file, fileStamp(await stat(join(dir, file), { bigint: true }))) } catch { stamps.set(file, "missing") }
-    })
-    this.damagedStamps.set(entries, stamps)
+    this.damagedStamps.set(entries, new Map(damage.files.map(({ file }) => [file, before.get(file) ?? "missing"])))
     return entries
   }
 
@@ -849,6 +866,9 @@ export class LocalBlobStore {
 
 /** Errors of a file system that has no hard links. */
 const NO_HARD_LINKS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"])
+
+/** Derived file names remembered at most, so a very large folder does not grow the cache without bound. */
+const FILE_NAME_CACHE_LIMIT = 200_000
 
 /** Age after which an empty create-only claim counts as left behind by a writer that stopped. */
 const STALE_CLAIM_MS = 60_000

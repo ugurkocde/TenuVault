@@ -85,3 +85,24 @@ it('stops a download when storage repeats the continuation marker', async () => 
   expect(response.status).toBe(500)
   expect((await response.json()).error).toContain('repeated continuation marker')
 })
+
+it('skips a backup on this device that damaged files made unavailable instead of failing the scan', async () => {
+  const folders = ['backup-2026-09-25-120000', 'backup-2026-09-24-120000', 'backup-2026-09-23-120000']
+  const metadata = vi.fn()
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(String(input))
+    if (url.hostname === 'login.microsoftonline.com') return Response.json({ access_token: 'test' })
+    if (url.searchParams.get('delimiter')) return new Response(folders.map((folder) => `<BlobPrefix><Name>${folder}/</Name></BlobPrefix>`).join(''))
+    if (url.pathname.endsWith('/metadata.json')) {
+      metadata(url.pathname)
+      // The newest backup is unavailable: its files could not be read.
+      if (url.pathname.includes(folders[0]!)) return new Response(`<Error><Code>InventoryIncomplete</Code><Message>Backup ${folders[0]} is unavailable.</Message></Error>`, { status: 409, headers: { 'x-ms-error-code': 'InventoryIncomplete' } })
+      return Response.json({ Status: 'Success', Items: {} })
+    }
+    return new Response('<Blobs></Blobs>')
+  }))
+  const response = await drift(request())
+  // The two older backups are compared; the unavailable one does not stop the scan.
+  expect(metadata).toHaveBeenCalledTimes(3)
+  expect(response.status).toBe(200)
+})

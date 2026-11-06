@@ -99,8 +99,9 @@ describe("localInventoryProblem", () => {
     const problem = await inventoryProblem(store, TENANT_A)
     expect(problem).toContain("1 file in the backup folder could not be read")
     expect(problem).toContain("encrypted with a key this device does not have")
-    // The foreign file cannot be traced, and the own backup has no manifest to rule it out.
-    expect(problem).toContain("backup-1: files in the backup folder could not be read")
+    // The foreign file cannot be traced. The own folder has no metadata.json yet, so it counts as
+    // a backup still being written or stopped early, not as one that is unavailable.
+    expect(problem).not.toContain("backup-1:")
   })
 
   it("reports a TVB1 and a TVB2 file for the same blob", async () => {

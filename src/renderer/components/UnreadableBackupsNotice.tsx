@@ -63,7 +63,7 @@ export function UnreadableBackupsNotice({ settings, affected, checking, onChange
         <p className="font-medium">This folder has backups this device cannot read</p>
         <p className="mt-1">
           Some backups in <span className="break-all font-mono text-xs">{settings.localFolder}</span> were made with a
-          different recovery key, for example by another device or an earlier installation, or are damaged. Your other
+          different recovery key, for example by another device or an earlier installation, or are damaged or missing. Your other
           backups still work and new backups are saved, but older backups are not deleted until you import that recovery
           key or choose another folder.
         </p>

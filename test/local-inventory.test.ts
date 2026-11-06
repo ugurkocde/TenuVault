@@ -72,11 +72,14 @@ it('still rejects two files for the same blob when headers are read together', a
   const { store, dir } = await setup()
   const [file] = readdirSync(dir)
   copyFileSync(join(dir, file!), join(dir, `${'0'.repeat(40)}.tvb`))
-  // A version 2 header is bound to its file name, so the copy under another name is unreadable,
-  // cannot be traced, and the backup without a manifest cannot be checked against it.
+  // A version 2 header is bound to its file name, so the copy under another name is unreadable and
+  // cannot be traced. The folder has no metadata.json, so it is a backup still being written:
+  // it stays readable, so that backup can read back what it wrote.
   expect((await store.list(account, container)).map(blob => blob.name)).toEqual(['backup-test/Policies/one.json'])
   expect(await store.damage(account, container)).toMatchObject({ files: [{ file: `${'0'.repeat(40)}.tvb`, backup: null }], unattributed: 1 })
-  await expect(store.list(account, container, 'backup-test/')).rejects.toThrow('no manifest')
+  expect(await store.list(account, container, 'backup-test/')).toHaveLength(1)
+  // Retention still deletes nothing while the folder holds the unreadable file.
+  await expect(store.delete(account, container, 'backup-test/Policies/one.json')).rejects.toThrow('Nothing in the backup folder is deleted')
 })
 it.each([false, true])('syncs a complete file before resolving put (createOnly=%s)', async (createOnly) => {
   const { store, root, key, dir } = await setup()

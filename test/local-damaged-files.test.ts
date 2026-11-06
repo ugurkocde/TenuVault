@@ -136,6 +136,38 @@ describe("damaged local backup files", () => {
     expect(readdirSync(dir)).toHaveLength(3)
   })
 
+  it("lets an archive import that is rolled back remove the files it just wrote", async () => {
+    const { store, dir } = await setup()
+    await backup(store, OLD)
+    damage(dir, await fileOf(store, `${OLD}/CompliancePolicies/a.json`), true)
+    await store.put(account, CONTAINER, `${NEW}/CompliancePolicies/a.json`, Buffer.from("{}"), "application/json")
+    await store.list(account, CONTAINER)
+    await expect(store.delete(account, CONTAINER, `${NEW}/CompliancePolicies/a.json`)).rejects.toBeInstanceOf(IncompleteInventoryError)
+    await store.delete(account, CONTAINER, `${NEW}/CompliancePolicies/a.json`, { despiteDamage: true })
+    expect((await store.list(account, CONTAINER)).some((blob) => blob.name.startsWith(NEW))).toBe(false)
+  })
+
+  it("keeps a backup that is still being written readable next to a file that cannot be traced", async () => {
+    const { store, dir } = await setup()
+    writeFileSync(join(dir, `${"f".repeat(40)}.tvb`), Buffer.concat([Buffer.from("TVB2"), randomBytes(80)]))
+    // No metadata.json yet: the backup can read back what it wrote, for example after a retried upload.
+    await store.put(account, CONTAINER, `${NEW}/${BACKUP_OWNER_FILE}`, Buffer.from("{}"), "application/json")
+    expect(await text(store, `${NEW}/${BACKUP_OWNER_FILE}`)).toBe("{}")
+    expect(await store.damage(account, CONTAINER)).toMatchObject({ unattributed: 1, unavailable: new Map() })
+  })
+
+  it("checks damage on container properties of the backup container only", async () => {
+    const { store, root, key } = await setup()
+    const audit = new LocalBlobStore(root, [randomBytes(32)])
+    await audit.createContainer(account, "audit-logs")
+    await audit.put(account, "audit-logs", "events.json", Buffer.from("{}"), "application/json")
+    // The audit container holds a file this key cannot read; its properties still answer.
+    const response = await handleLocalBlobRequest(new LocalBlobStore(root, [key]), new Request(`https://${account}.blob.core.windows.net/audit-logs?restype=container`, { method: "HEAD" }))
+    expect(response.status).toBe(200)
+    expect(response.headers.get("x-tenuvault-unreadable-files")).toBe("0")
+    expect(await store.damage(account, CONTAINER)).toMatchObject({ files: [] })
+  })
+
   it("notices a damaged file restored in place and makes its backup available again", async () => {
     const { store, dir } = await setup()
     await backup(store, OLD)
