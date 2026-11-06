@@ -172,6 +172,21 @@ function summarizeInternal(value: unknown, depth: number, names?: SettingNames):
   return [fallbackLine(value)]
 }
 
+/**
+ * The value lines of a Settings Catalog setting instance without its name, for views that show
+ * the name separately: the first line is the setting's own value, child settings follow indented.
+ */
+export function settingValueLines(instance: unknown, names?: SettingNames): string[] {
+  try {
+    if (!isRecord(instance) || !hasValueKey(instance)) return [fallbackLine(instance)]
+    const definitionId = typeof instance.settingDefinitionId === "string" && instance.settingDefinitionId ? instance.settingDefinitionId : undefined
+    const lines = valueLines(instance, definitionId, 0, names)
+    return lines.length ? lines : [fallbackLine(instance)]
+  } catch {
+    return [FURTHER_NESTED_LINE]
+  }
+}
+
 export function summarizeSetting(value: unknown, names?: SettingNames): string[] {
   try {
     return capLines(summarizeInternal(value, 0, names))

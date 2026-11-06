@@ -3,14 +3,15 @@ import { useNavigate } from "react-router-dom"
 import { ArrowRight, Search } from "lucide-react"
 import { cn } from "~/lib/utils"
 import { policyTypeName, POLICY_TYPES, typeGate, type TenantProfile } from "../../../shared/oib/licensing"
-import { OIB_PLATFORMS, type OibPlatform } from "../../../shared/oib/types"
-import { button, card, listJoin, OptionCard, PlatformPicker, platformsLabel, primary, StatCard, useOibTenant, type Selections } from "./common"
+import { OIB_PLATFORMS, type OibCatalog, type OibPlatform } from "../../../shared/oib/types"
+import { button, card, listJoin, OptionCard, PlatformPicker, platformsLabel, primary, StatCard, useOibTenant, type OibTenant, type Selections } from "./common"
 import { batchFor } from "./deploy-sequence"
 import { RunsList } from "./DeployPanel"
 import { ActionBar, FlowShell } from "./FlowShell"
 import { clearJob, useOibJob } from "./jobs"
 import { LoadProgress, usePlatformLoader } from "./LoadProgress"
 import { addShown, availableTypes, buildRows, defaultSelection, inTenantReason, needsLicensing, NEUTRAL_PROFILE, pruneSelection, rowCounts, rowKey, selectable, shownRows, type NewRow } from "./NewDeploymentRows"
+import { PolicySettings } from "./PolicySettings"
 import { ReviewDeploy, startedBatches, type DeployOutcome } from "./ReviewDeploy"
 import { ChangeVersions } from "./Versions"
 
@@ -156,7 +157,7 @@ export function NewDeployment({ selections }: { selections: Selections }) {
           {counts.gated > 0 && <label className="flex items-center gap-2 text-sm text-gray-700"><input type="checkbox" checked={showGated} onChange={e => toggleGated(e.target.checked)} className="h-4 min-h-0 w-4" />Show {plural(counts.gated, "policy that does not suit this tenant", "policies that do not suit this tenant")}</label>}
           {search.trim() && <span role="status" className="text-sm text-gray-500">Showing {shown.length} of {counts.available}</span>}
         </div>
-        <PolicyGroups rows={shown} selected={selected} onToggle={k => setSelected(s => { const next = new Set(s); next.has(k) ? next.delete(k) : next.add(k); return next })} />
+        <PolicyGroups tenant={tenant} catalogs={new Map(loader.loaded.map(l => [l.catalog.platform, l.catalog]))} rows={shown} selected={selected} onToggle={k => setSelected(s => { const next = new Set(s); next.has(k) ? next.delete(k) : next.add(k); return next })} />
         <ActionBar summary={`${selected.size} selected`} error={loadError} back={{ onClick: () => go("types") }}>
           <button type="button" className={button} disabled={!selected.size} onClick={() => setSelected(new Set())}>Clear</button>
           <button type="button" className={primary} disabled={!selected.size} onClick={() => setStep("review")}>Review deployment ({selected.size})<ArrowRight className="h-4 w-4" aria-hidden="true" /></button>
@@ -173,7 +174,7 @@ export function NewDeployment({ selections }: { selections: Selections }) {
   </>
 }
 
-function PolicyGroups({ rows, selected, onToggle }: { rows: NewRow[]; selected: Set<string>; onToggle: (key: string) => void }) {
+function PolicyGroups({ tenant, catalogs, rows, selected, onToggle }: { tenant: OibTenant; catalogs: Map<OibPlatform, OibCatalog>; rows: NewRow[]; selected: Set<string>; onToggle: (key: string) => void }) {
   const groups = new Map<string, NewRow[]>()
   for (const row of rows) {
     const group = `${OIB_PLATFORMS[row.platform].label} · ${policyTypeName(row.policy.policyType)}`
@@ -184,7 +185,8 @@ function PolicyGroups({ rows, selected, onToggle }: { rows: NewRow[]; selected: 
     <h3 className="mb-2 text-sm font-medium text-gray-800">{group} <span className="ml-1 text-xs font-normal text-gray-500">{entries.length}</span></h3>
     <ul className="divide-y divide-gray-100 overflow-hidden rounded-2xl bg-gray-50">{entries.map(row => {
       const { key, policy, inTenant, gate } = row
-      return <li key={key}><label className={cn("flex items-start gap-3 p-3 text-sm", selectable(row) ? "cursor-pointer" : "opacity-70")}>
+      const catalog = catalogs.get(row.platform)
+      return <li key={key} className="p-3"><label className={cn("flex items-start gap-3 text-sm", selectable(row) ? "cursor-pointer" : "opacity-70")}>
         <input type="checkbox" checked={selected.has(key)} disabled={!selectable(row)} onChange={() => onToggle(key)} className="mt-1 h-4 min-h-0 w-4 shrink-0" />
         <span className="min-w-0 flex-1"><span className="text-gray-900">{policy.name}</span>
           <span className="mt-1 flex flex-wrap items-center gap-2 text-xs">
@@ -195,7 +197,9 @@ function PolicyGroups({ rows, selected, onToggle }: { rows: NewRow[]; selected: 
             {inTenant && <span className="text-gray-600">{inTenantReason(inTenant)}</span>}
           </span>
         </span>
-      </label></li>
+      </label>
+      {/* Outside the label, so opening the settings never ticks the policy. */}
+      {catalog && <div className="pl-7"><PolicySettings tenant={tenant} catalog={catalog} source={policy.source} name={policy.name} /></div>}</li>
     })}</ul>
   </div>)}</div>
 }

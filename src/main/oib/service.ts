@@ -8,6 +8,7 @@ import { normalizeScope } from "../../shared/intune/scope"
 import { VALIDATED_FOLDERS, validatePolicy } from "../../shared/oib/compare"
 import { extractOibId } from "../../shared/oib/manifest"
 import { compareToTenant } from "../../shared/oib/match"
+import { definitionIdsOf, describePolicy, policyChanges, type OibPolicyChanges, type OibPolicySettings } from "../../shared/oib/policy-settings"
 import { replaceTenantVariables } from "../../shared/oib/variables"
 import { isFullValidation, OIB_BACKUP_REUSE_MINUTES, OIB_PLATFORMS, type DeployItem, type OibBackupChoice, type OibBackupOptions, type OibComparison, type OibPlatform, type OibProgress, type OibRecentBackup, type OibRun, type PolicyValidation, type TenantPolicy, type UndoResult, type ValidationRun } from "../../shared/oib/types"
 import { backupGaps, describeMissing, describeStatus, folderLabel } from "../backup/completeness"
@@ -16,6 +17,7 @@ import { withTenantWrite } from "../features/write-lock"
 import { backupBeforeWrite } from "../backup/before-write"
 import type { KeyValueStore } from "../storage/secure-store"
 import { FrameworkError, tokenFor } from "../frameworks/service"
+import { readSettingNames } from "../../portal/lib/drift/setting-names"
 import { loadPack, oibDownloads, oibVersions, resolveMain, type LoadedPack } from "./source"
 
 /**
@@ -162,6 +164,57 @@ async function compare(body: RecordJson): Promise<OibComparison> {
     tenantId: tenant, platform, commit: pack.catalog.commit, reference: pack.catalog.reference,
     comparedAt: new Date().toISOString(), tenantPolicyCount: tenantPolicies.length, matches, deprecated,
   }
+}
+
+// Policy settings, read only
+
+/** The pack policy a request names by its repository path. */
+async function packPolicy(body: RecordJson) {
+  const platform = platformOf(body.platform)
+  const tenant = tenantOf(body.tenantId)
+  if (typeof body.source !== "string" || !body.source) throw new FrameworkError("Choose an OpenIntuneBaseline policy.")
+  const pack = await loadPack(platform, body.commit, body.tag)
+  const policy = pack.items.get(body.source)
+  if (!policy) throw new FrameworkError(`${body.source} is not part of this OIB pack.`)
+  // The tenant ID stands in for %OrganizationId%, as it does when the policy is deployed.
+  return { tenant, policy: { ...policy, snapshot: replaceTenantVariables(policy.snapshot, tenant) } }
+}
+
+/**
+ * Display names of the Settings Catalog settings in the policies. Names only make the list easier
+ * to read, so a failed lookup returns undefined and the view falls back to names from the IDs.
+ */
+async function namesFor(graph: () => Promise<GraphCall>, folder: string, ...policies: Item[]) {
+  if (folder !== "ConfigurationPolicies") return { names: undefined, missing: false }
+  const ids = definitionIdsOf(...policies)
+  if (!ids.length) return { names: undefined, missing: false }
+  try {
+    const names = await readSettingNames(ids, await graph())
+    return { names, missing: !Object.keys(names.settings).length }
+  } catch {
+    return { names: undefined, missing: true }
+  }
+}
+
+/** The settings of one OIB policy, to read before deploying it. The tenant is only read for setting names. */
+async function policySettings(body: RecordJson): Promise<OibPolicySettings> {
+  const { policy } = await packPolicy(body)
+  const { names, missing } = await namesFor(async () => graphCaller((await tokenFor(body)).token), policy.folder, policy.snapshot)
+  return { ...describePolicy(policy, names), ...(missing ? { namesMissing: true } : {}) }
+}
+
+/** What updating a tenant policy in place to this OIB policy would change. Only reads the tenant. */
+async function policyChangesFor(body: RecordJson): Promise<OibPolicyChanges> {
+  const { policy } = await packPolicy(body)
+  if (typeof body.targetId !== "string" || !OBJECT_ID.test(body.targetId)) throw new FrameworkError("Choose the tenant policy to compare.")
+  const type = typeForFolder(policy.folder)
+  if (!type) throw new FrameworkError("This policy type cannot be read.")
+  const graph = graphCaller((await tokenFor(body)).token)
+  const live = await readLive(graph, type, body.targetId)
+  if (!live) throw new FrameworkError("The tenant policy no longer exists. Compare again.", 404)
+  const name = live[type.nameKey] ?? live.displayName ?? live.name
+  const { names, missing } = await namesFor(async () => graph, policy.folder, policy.snapshot, live)
+  return { ...policyChanges(policy, { id: body.targetId, name: typeof name === "string" ? name : body.targetId, policy: live }, names), ...(missing ? { namesMissing: true } : {}) }
 }
 
 // Runs
@@ -598,6 +651,10 @@ export async function handleOib(body: RecordJson): Promise<unknown> {
       return (await loadPack(platformOf(body.platform), body.commit, body.tag)).catalog
     case "oib-compare":
       return compare(body)
+    case "oib-policy-settings":
+      return policySettings(body)
+    case "oib-policy-changes":
+      return policyChangesFor(body)
     case "oib-deploy":
       return deploy(body, "deploy")
     case "oib-fix":

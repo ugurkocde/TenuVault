@@ -67,11 +67,22 @@ Use New Deployment the first time you deploy OIB to a tenant.
 3. Choose the policy types, then review and select the policies. Policies already in the tenant are left out; use Existing Deployment to update them.
 4. Set the deployment options and deploy. See [Deploy and undo](#deploy-and-undo).
 
+### Read a policy's settings before you deploy it
+
+Every policy in the list has **Show settings**. It lists each setting the policy configures in the selected OIB version, with its value, so you can read the baseline without importing it into a tenant first. Child settings are listed under the setting they belong to. When a policy has ten settings or more, **Filter settings** narrows the list by setting name, setting ID or value.
+
+* Settings Catalog settings show their names and choices as Intune does. TenuVault reads them from the setting definitions in Microsoft Graph, which are the same in every tenant. If they cannot be read, the list says so and shows names derived from the setting IDs.
+* Compliance policies, update rings, driver updates, device configuration and app protection policies list their configured properties. Administrative templates list each setting as **Enabled** or **Disabled** with its values.
+* `%OrganizationId%` is shown as the tenant ID, as it is deployed.
+* **Why OIB sets them** opens the platform's page in the [OpenIntuneBaseline documentation](https://docs.openintunebaseline.com), which explains the reasoning behind the settings.
+
+Show settings only reads. Nothing is created or changed in the tenant.
+
 ## Existing Deployment
 
 Existing Deployment compares the OIB policies in your tenant with the selected OIB version, then deploys missing or outdated policies.
 
-Tenant policies are matched on the `OIBID` in the policy description first, then on the policy name without its version, for policies deployed before OIB added the OIBID. Settings are not compared; use Policy Validation for that.
+Tenant policies are matched on the `OIBID` in the policy description first, then on the policy name without its version, for policies deployed before OIB added the OIBID. The comparison does not compare settings; use Policy Validation for that, or open a policy's settings as described below.
 
 | Status | Meaning |
 | --- | --- |
@@ -87,6 +98,14 @@ Select missing and outdated policies to deploy them. For an outdated policy, cho
 
 * **Create the new version alongside:** the new version is created as a new policy. The old one stays unchanged.
 * **Update the existing policy in place** (Pro and MSP): the policy's settings are replaced with the OIB version. Assignments, assignment filters and scope tags stay.
+
+**Show what changes** on a policy marked **Update available** reads the tenant policy as it is now and compares it with the selected OIB version, setting by setting:
+
+* **Changed** lists each setting with its value in the tenant now and in the OIB version.
+* **Added by OIB** lists settings the OIB version has and the tenant policy does not.
+* **Only in** the tenant policy lists settings the OIB version does not have, such as settings an earlier OIB version had or settings added in Intune since.
+
+Updating in place applies these changes; creating the new version alongside leaves the tenant policy unchanged. Show what changes covers the policy types Policy Validation checks setting by setting. For other policy types, and for every other policy in the list, **Show settings** lists the OIB settings instead. Both only read the tenant.
 
 **Export PDF** saves the comparison as a PDF report: a cover with the counts at a glance, a contents page with bookmarks, a summary, one table per status with the platform, type, OIB policy, tenant policy, versions and match method, and the OpenIntuneBaseline attribution. Pro and MSP can brand it with their own name, logo and colors in [Settings](/settings/#pdf-branding).
 
