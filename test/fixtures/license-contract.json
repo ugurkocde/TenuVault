@@ -1,0 +1,224 @@
+{
+  "description": "Licensing contract between the TenuVault desktop app and the licensing service at /api/desktop-license. Keep byte-identical in both repositories. Add-only: never remove or rename a reason, field or token version.",
+  "installId": "0f9e8d7c-6b5a-4c3d-8e2f-1a0b9c8d7e6f",
+  "tenantId": "11111111-2222-4333-8444-555555555555",
+  "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAiE6x17AvwSlY6K2hdd3Wb4c+H0pHyXG7P3K04LLVwIQ=\n-----END PUBLIC KEY-----\n",
+  "refusalReasons": [
+    "invalid_key",
+    "not_found",
+    "revoked",
+    "disabled",
+    "expired",
+    "tenant_limit",
+    "install_limit",
+    "activation_limit",
+    "activation_mismatch",
+    "tenant_not_licensed"
+  ],
+  "otherReasons": {
+    "400": [
+      "bad_request"
+    ],
+    "401": [
+      "invalid_token"
+    ],
+    "429": [
+      "rate_limited"
+    ],
+    "502": [
+      "upstream"
+    ],
+    "503": [
+      "unavailable",
+      "tenant_quantity_unknown",
+      "storage_unavailable"
+    ]
+  },
+  "tokenVersions": [
+    1,
+    2
+  ],
+  "tokens": [
+    {
+      "name": "v1 pro",
+      "payload": {
+        "v": 1,
+        "sub": "5a0e2f6c-8a41-4a8e-9b33-0c6e2d1f7a10",
+        "act": "7c1d9e2a-4b5f-4c6d-8e7f-9a0b1c2d3e4f",
+        "plan": "pro",
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "installId": "0f9e8d7c-6b5a-4c3d-8e2f-1a0b9c8d7e6f",
+        "tenants": 2,
+        "status": "granted",
+        "iat": 1793000000,
+        "exp": 1794209600
+      },
+      "token": "eyJ2IjoxLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDB9.0Tm3tflWVLqLAXmqDuF_G1Csv_u9YlqaXoU2dyKF8xMorl5Qx2MEQYY8XoB2u6u3CJeExS4iLmb8NHg0mhHzDQ"
+    },
+    {
+      "name": "v1 msp",
+      "payload": {
+        "v": 1,
+        "sub": "5a0e2f6c-8a41-4a8e-9b33-0c6e2d1f7a10",
+        "act": "7c1d9e2a-4b5f-4c6d-8e7f-9a0b1c2d3e4f",
+        "plan": "msp",
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "installId": "0f9e8d7c-6b5a-4c3d-8e2f-1a0b9c8d7e6f",
+        "tenants": 25,
+        "status": "granted",
+        "iat": 1793000000,
+        "exp": 1794209600
+      },
+      "token": "eyJ2IjoxLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoibXNwIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyNSwic3RhdHVzIjoiZ3JhbnRlZCIsImlhdCI6MTc5MzAwMDAwMCwiZXhwIjoxNzk0MjA5NjAwfQ.juXm90GbnmL_sa3QxbC8uf1YsZOpT7Wjh0TPQJf9ykP9AoDsb9L48geeEYMslI7bS5kHxX8OnVnhm_jhXOFkCQ"
+    },
+    {
+      "name": "v2 expiring paid key",
+      "payload": {
+        "v": 2,
+        "sub": "5a0e2f6c-8a41-4a8e-9b33-0c6e2d1f7a10",
+        "act": "7c1d9e2a-4b5f-4c6d-8e7f-9a0b1c2d3e4f",
+        "plan": "pro",
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "installId": "0f9e8d7c-6b5a-4c3d-8e2f-1a0b9c8d7e6f",
+        "tenants": 2,
+        "status": "granted",
+        "iat": 1793000000,
+        "exp": 1794209600,
+        "keyExp": 1810280000
+      },
+      "token": "eyJ2IjoyLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsImtleUV4cCI6MTgxMDI4MDAwMH0.x5i4g9GAx1c0qvL0FwwXs64gTqaYhdNyqYnS_SB-Ih_eUidEFfq58HBV-xShvBVGjZu5IBoYxM7IfcI_rrdyBQ"
+    },
+    {
+      "name": "v2 trial",
+      "payload": {
+        "v": 2,
+        "sub": "5a0e2f6c-8a41-4a8e-9b33-0c6e2d1f7a10",
+        "act": "7c1d9e2a-4b5f-4c6d-8e7f-9a0b1c2d3e4f",
+        "plan": "pro",
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "installId": "0f9e8d7c-6b5a-4c3d-8e2f-1a0b9c8d7e6f",
+        "tenants": 2,
+        "status": "granted",
+        "iat": 1793000000,
+        "exp": 1794209600,
+        "keyExp": 1794728000,
+        "trial": true
+      },
+      "token": "eyJ2IjoyLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsImtleUV4cCI6MTc5NDcyODAwMCwidHJpYWwiOnRydWV9.oRo0gxKrF9UO6MuvhzM3H6eg62JIpHo-AbgpWmeF-Du9hx814ZNhUMlzE4jPuyVDgNy3kT5-f-iPCLtCnT3ACQ"
+    },
+    {
+      "name": "v1 internal cis",
+      "payload": {
+        "v": 1,
+        "sub": "5a0e2f6c-8a41-4a8e-9b33-0c6e2d1f7a10",
+        "act": "7c1d9e2a-4b5f-4c6d-8e7f-9a0b1c2d3e4f",
+        "plan": "pro",
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "installId": "0f9e8d7c-6b5a-4c3d-8e2f-1a0b9c8d7e6f",
+        "tenants": 2,
+        "status": "granted",
+        "iat": 1793000000,
+        "exp": 1794209600,
+        "cis": "internal"
+      },
+      "token": "eyJ2IjoxLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsImNpcyI6ImludGVybmFsIn0.L4u4DVVNK0JsWnCj_i1Q-Yerw-1wg_BnbavAU0_gx6G6cg_BwLEveKN51WzvULikPgW1pZze-EulE5Z4ZqjFDA"
+    },
+    {
+      "name": "v2 renewing, keyExp null",
+      "payload": {
+        "v": 2,
+        "sub": "5a0e2f6c-8a41-4a8e-9b33-0c6e2d1f7a10",
+        "act": "7c1d9e2a-4b5f-4c6d-8e7f-9a0b1c2d3e4f",
+        "plan": "pro",
+        "tenantId": "11111111-2222-4333-8444-555555555555",
+        "installId": "0f9e8d7c-6b5a-4c3d-8e2f-1a0b9c8d7e6f",
+        "tenants": 2,
+        "status": "granted",
+        "iat": 1793000000,
+        "exp": 1794209600,
+        "keyExp": null
+      },
+      "token": "eyJ2IjoyLCJzdWIiOiI1YTBlMmY2Yy04YTQxLTRhOGUtOWIzMy0wYzZlMmQxZjdhMTAiLCJhY3QiOiI3YzFkOWUyYS00YjVmLTRjNmQtOGU3Zi05YTBiMWMyZDNlNGYiLCJwbGFuIjoicHJvIiwidGVuYW50SWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpbnN0YWxsSWQiOiIwZjllOGQ3Yy02YjVhLTRjM2QtOGUyZi0xYTBiOWM4ZDdlNmYiLCJ0ZW5hbnRzIjoyLCJzdGF0dXMiOiJncmFudGVkIiwiaWF0IjoxNzkzMDAwMDAwLCJleHAiOjE3OTQyMDk2MDAsImtleUV4cCI6bnVsbH0.qdGPkIPcc2sXbURj6_STzy8Xy4VM1Ppipmg7qWLQgIxWecUEYFpbdJ1bFbflEurx_sQ3pme59-CosTwQYJoNAQ"
+    }
+  ],
+  "requests": {
+    "activate": {
+      "required": [
+        "key",
+        "installId",
+        "tenantId",
+        "os",
+        "appVersion"
+      ],
+      "optional": [
+        "clientId",
+        "idToken",
+        "shareWithTenant"
+      ]
+    },
+    "refresh": {
+      "required": [
+        "key",
+        "activationId",
+        "installId",
+        "tenantId"
+      ],
+      "optional": [
+        "appVersion",
+        "clientId",
+        "idToken",
+        "shareWithTenant"
+      ]
+    },
+    "deactivate": {
+      "required": [
+        "key",
+        "activationId"
+      ],
+      "optional": []
+    },
+    "tenant": {
+      "required": [
+        "idToken",
+        "installId",
+        "os",
+        "appVersion",
+        "action"
+      ],
+      "optional": [
+        "activationId",
+        "licenseKeyId"
+      ]
+    }
+  },
+  "responses": {
+    "entitlement": {
+      "required": [
+        "token",
+        "activationId",
+        "plan",
+        "tenants",
+        "expiresAt"
+      ],
+      "optional": [
+        "shared",
+        "sharedReason",
+        "displayKey",
+        "licenseKeyId"
+      ]
+    },
+    "deactivate": {
+      "required": [
+        "success"
+      ],
+      "optional": []
+    },
+    "error": {
+      "required": [
+        "error",
+        "reason"
+      ],
+      "optional": []
+    }
+  }
+}
