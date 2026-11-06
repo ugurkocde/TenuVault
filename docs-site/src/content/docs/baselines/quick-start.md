@@ -82,7 +82,7 @@ Show settings only reads. Nothing is created or changed in the tenant.
 
 Existing Deployment compares the OIB policies in your tenant with the selected OIB version, then deploys missing or outdated policies.
 
-Tenant policies are matched on the `OIBID` in the policy description first, then on the policy name without its version, for policies deployed before OIB added the OIBID. The comparison does not compare settings; use Policy Validation for that, or open a policy's settings as described below.
+Tenant policies are matched on the `OIBID` in the policy description first, then on the policy name without its version, for policies deployed before OIB added the OIBID. The comparison does not compare settings; use Policy Validation for that, or open **Show what changes** on a policy as described below, or **Show settings** as described under [New Deployment](#read-a-policys-settings-before-you-deploy-it).
 
 | Status | Meaning |
 | --- | --- |

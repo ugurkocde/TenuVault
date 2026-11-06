@@ -60,7 +60,7 @@ function Failure({ error, onRetry }: { error: string; onRetry: () => void }) {
   return <p role="alert" className="mt-2 text-xs text-red-700">{error} <button type="button" className="font-medium underline" onClick={onRetry}>Retry</button></p>
 }
 
-const NamesNote = () => <p className="mt-2 text-xs text-gray-600">Some setting names could not be read from Microsoft Graph, so those names are derived from the setting IDs.</p>
+const NamesNote = ({ onRetry }: { onRetry: () => void }) => <p className="mt-2 text-xs text-gray-600">Some setting names could not be read from Microsoft Graph, so those names are derived from the setting IDs. <button type="button" className="font-medium underline" onClick={onRetry}>Try again</button></p>
 
 const Lines = ({ lines }: { lines: string[] }) => <span className="block whitespace-pre-wrap break-words">{lines.join("\n")}</span>
 
@@ -112,7 +112,7 @@ export function PolicySettings({ tenant, catalog, source, name }: { tenant: OibT
       {data && <>
         <p className="text-xs text-gray-600">{data.total ? `${plural(data.total, "setting", "settings")} in OpenIntuneBaseline ${versionLabel(catalog)}.` : "This policy sets no settings."}{" "}
           <a href={docsUrl(catalog.platform)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-blue-700 underline">Why OIB sets them<ExternalLink className="h-3 w-3" aria-hidden="true" /></a></p>
-        {data.namesMissing && <NamesNote />}
+        {data.namesMissing && !view.loading && <NamesNote onRetry={() => void view.retry()} />}
         {data.total > 0 && <SettingList rows={data.settings} total={data.total} label={name} />}
       </>}
     </div>}
@@ -145,7 +145,7 @@ export function PolicyChanges({ tenant, catalog, source, targetId, targetName }:
           ? `The settings of ${data.tenantPolicyName} already match ${version}.`
           : `${data.tenantPolicyName} as it is in the tenant now, compared with ${version}. ${plural(data.unchanged, "setting stays", "settings stay")} the same.`}
           {" "}Update in place applies these changes and keeps its assignments; Create alongside leaves it unchanged.</p>
-        {data.namesMissing && <NamesNote />}
+        {data.namesMissing && !view.loading && <NamesNote onRetry={() => void view.retry()} />}
         <ChangeGroup title="Changed" count={data.counts.changed} shown={data.changed.length}>
           <div className="mt-1 overflow-x-auto rounded-2xl bg-white px-4"><table className="w-full table-fixed text-left text-xs">
             <thead><tr className="text-gray-500"><th className="w-2/5 py-2 pr-3 font-medium">Setting</th><th className="py-2 pr-3 font-medium">In the tenant now</th><th className="py-2 font-medium">{version}</th></tr></thead>
