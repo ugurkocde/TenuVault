@@ -8,7 +8,7 @@ import { canonicalJson, type NotificationSeverity } from "../src/shared/notifica
 import { emailHtml, emailText, teamsWorkflowsPayload } from "../src/shared/notifications/render"
 import { DEFAULT_CARD_STYLE } from "../src/shared/notifications/layout"
 import { entraChangedSettings, intuneChangedSettings } from "../src/shared/notifications/settings"
-import { changeMatches, describeConditions, MAX_EACH_PER_CHECK, parseConditions, planChangeAlerts, type AlertMatcher, type WatcherAlert } from "../src/shared/notifications/alerts"
+import { changeMatches, describeConditions, MAX_EACH_PER_CHECK, parseConditions, planChangeAlerts, WATCHER_ALERTS_SCHEMA, watcherAlertsHash, type AlertMatcher, type WatcherAlert, type WatcherAlerts } from "../src/shared/notifications/alerts"
 import live from "./fixtures/notifications/alert-live.json"
 
 const pwsh = ["/usr/local/bin/pwsh", "/opt/homebrew/bin/pwsh", "/usr/bin/pwsh", ...(process.env.HOME ? [`${process.env.HOME}/.local/bin/pwsh`] : [])].find((candidate) => existsSync(candidate))
@@ -198,5 +198,20 @@ describe("watcher parity", () => {
     expect(JSON.parse(taking!)).toEqual(["all"])
     // Without alerts everything goes everywhere; with alerts only to set up destinations of alerts that take it.
     expect(JSON.parse(routing!)).toEqual({ legacy: ["webhook", "teams", "mail"], routed: ["teams"], planned: ["webhook"], nobody: [] })
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("PowerShell hashes the saved alerts file exactly like TypeScript hashes the alerts", () => {
+    const document: WatcherAlerts = { schema: WATCHER_ALERTS_SCHEMA, alerts: (live.alerts as unknown as WatcherAlert[]).map((alert) => ({ ...alert, conditions: parseConditions(alert.conditions) })) }
+    const script = (text: string) => `. '${fileURLToPath(new URL("../resources/runbooks/Invoke-TenuVaultNotificationCheck.ps1", import.meta.url))}' -LibraryOnly; Get-TvWatcherAlertsHash ([Console]::In.ReadToEnd())${text}`
+    const hash = (input: string) => execFileSync(pwsh!, ["-NoProfile", "-Command", script("")], { input, encoding: "utf8" }).trim()
+    // The file the user saves is the pretty JSON the app copies; the hash ignores its layout.
+    expect(hash(JSON.stringify(document, null, 2))).toBe(watcherAlertsHash(document))
+    expect(hash(JSON.stringify(document))).toBe(watcherAlertsHash(document))
+    expect(hash(JSON.stringify({ schema: WATCHER_ALERTS_SCHEMA, alerts: [] }))).toBe("none")
+    expect(hash("not json")).toBe("unreadable")
+    // Characters a culture aware comparison treats as ignorable keep their own encoding.
+    const ignorable: WatcherAlerts = { ...document, alerts: [{ ...document.alerts[0]!, title: "Soft\u00adhyphen \u200d joiner \ufeff bom \u200b space \u007f del" }] }
+    expect(hash(JSON.stringify(ignorable, null, 2))).toBe(watcherAlertsHash(ignorable))
+    expect(watcherAlertsHash(null)).toBe("none")
   }, 60_000)
 })

@@ -92,27 +92,38 @@ Mail arrives as HTML with a severity badge, one row per change with a colored ve
 
 ## Alerts
 
-An alert has event types, a minimum severity and one or more channels. A useful starting point:
+An alert has event types, a minimum severity and one or more channels. **Add alert** starts from a template, which fills in the dialog; everything stays editable:
 
-* One alert for backup failed, backup warnings, restore failures and drift, at info and above, to your Teams channel and email.
-* One alert per policy area you care about, for example compliance policy changes, sent one change at a time (see below).
-* Success events only if you really want them. Most tenants find them noise within a week.
+* **Backup problems**: failed, partial and missed backups, and failed or partial restores.
+* **Every Intune change, one by one**, **Compliance policy changes** and **Conditional Access changes**: change alerts that send each change on its own.
+* **Deletions and removed assignments**: deleted policies and removed assignments in Intune and Conditional Access.
+* **Everything critical**: every event type, at critical only.
+
+You can add a channel from the dialog with **Add a channel**; it is saved right away and picked for the alert, so a first alert needs no trip to the **Channels** tab. Success events are best left out unless you really want them. Most tenants find them noise within a week.
+
+An alert that cannot send changes says so on its row with **Not sending changes** and the reason: change watching is off for a service it listens to, the sign-in lacks `AuditLog.Read.All` for Conditional Access, the last check failed, or this computer is signed out of the tenant. A button fixes what can be fixed there, such as **Turn on Intune watching**. Saving a change alert while its watching is off offers to turn watching on with it.
+
+**Alert me about changes to this policy** in [Drift detection](/drift/), and the bell next to a changed item in a backup's changes, open a new alert for that one policy, sending each of its changes on its own.
+
+**Copy to other tenants** (MSP) copies alerts to other connected tenants. Each copy sends to that tenant's channels of the same kind: Teams to its Teams channels, email to its email channels. A tenant that already has an alert with the same name keeps its own, and a copy is turned off when the tenant has no matching channel yet.
+
+**Check the last 7 days** in the alert dialog reads the Intune and Conditional Access audit logs and lists what the alert, as it is in the dialog, would have sent for the changes of the last week, planned per check interval as change watching would. Nothing is sent and the change watching positions do not move. It uses the change watching filters (audit categories and changes made by TenuVault itself) and needs a sign-in to the tenant.
 
 **Send test** on an alert's row sends a made up change that passes the alert's filters to its channels, marked as a test, so you can see what the alert will look like. It is not queued and does not count as a real event.
 
-Delivery is at least once. An undelivered notification stays queued, retries with backoff, and survives restarting the app. In the rare case a destination accepted a message but the confirmation was lost, the same event can arrive twice; the `eventId` is identical so receivers can dedupe. Recent deliveries, including failures and retries, are listed on the **Deliveries** tab. A scheduled backup slot that fails on every retry sends one alert, not one per attempt, and backup alerts list the policies saved and the types that could not be read.
+Delivery is at least once. An undelivered notification stays queued, retries with backoff, and survives restarting the app. In the rare case a destination accepted a message but the confirmation was lost, the same event can arrive twice; the `eventId` is identical so receivers can dedupe. Recent deliveries, including failures and retries, are listed on the **Deliveries** tab, with a filter for failed, waiting and sent ones. **View** shows a delivery as it was sent: the email, the Teams card and the webhook JSON, built from the stored event. **Retry** sends a failed delivery again. A scheduled backup slot that fails on every retry sends one alert, not one per attempt, and backup alerts list the policies saved and the types that could not be read.
 
 Channels and alerts can be edited with **Edit** on their row. A channel's URL and secret are never shown again: leave those fields empty to keep what is stored, or paste a new URL, for example after a Teams workflow was recreated. Alerts keep sending to the edited channel, and deliveries still queued go to the new address. Removing a channel that alerts use asks first and takes it out of those alerts; an alert left without any channel is turned off, not deleted.
 
 ### Which changes an alert sends
 
-An alert that includes **Intune change** or **Conditional Access change** gets a **Which changes** section. Leave it empty and the alert sends every change, as before. Each filter you fill in narrows the alert further, and a change has to pass all of them:
+An alert that includes **Intune change** or **Conditional Access change** gets a **Which changes** section. Leave it empty and the alert sends every change, as before. **Policy names contain** and **Changed settings contain** each have a search box: the first lists the policies of the newest backup, the second the changed settings seen in recent alerts. Picking one adds it to the list. Each filter you fill in narrows the alert further, and a change has to pass all of them:
 
 | Filter | A change passes when |
 | --- | --- |
 | Change types | It is one of the types you pick: created, updated, deleted, assigned, unassigned, or other changes |
 | Intune categories | Its Intune audit category is one you pick, for example Compliance or Device configuration. Conditional Access changes have no category and always pass |
-| Policy names contain | Its policy or object name contains one of the entries, ignoring case. Use the full name for one specific policy |
+| Policy names contain | Its policy or object name contains one of the entries, ignoring case. A full name picks that policy, and any other policy whose name contains it |
 | Changed settings contain | One of the settings it changed contains one of the entries, ignoring case. Only updates name changed settings, so creates, deletes and assignments never pass |
 | Never alert for changes by | It was not made by one of these user principal names or app names (exact, ignoring case), for example an automation account |
 
@@ -236,11 +247,11 @@ The watcher has its own destinations: one webhook, one Teams Workflows URL and o
 
 The file holds the enabled alerts with their event types, minimum severity, filters and how to send. Channels become kinds of destinations: an alert that sends to a Teams channel sends to the watcher's Teams URL, an email channel to its mail recipients, a webhook to its webhook. Alerts that only send to **This computer** are left out, and the app says which. The file contains no URLs, addresses or secrets.
 
-The watcher then plans alerts exactly like the desktop app: same filters, same summaries and single change alerts, same event ids. Backup results and **No recent backup** go to the destinations of the alerts that take their event type and severity; an event no alert takes is not sent. **Copy for Azure watcher** and the setup script both name the watcher events that no alert takes, so an alert set that only covers changes does not silently stop backup alerts. Copy and pass the file again after you change your alerts. A rerun without `-AlertRulesPath` keeps the saved alerts, and `-AlertRulesPath ''` removes them, so every event goes everywhere again. A value the runbook cannot read, or one without any alert it can use, does the same and says so in the job output, so a damaged file never silences the watcher.
+The watcher then plans alerts exactly like the desktop app: same filters, same summaries and single change alerts, same event ids. Backup results and **No recent backup** go to the destinations of the alerts that take their event type and severity; an event no alert takes is not sent. **Copy for Azure watcher** and the setup script both name the watcher events that no alert takes, so an alert set that only covers changes does not silently stop backup alerts. Copy and pass the file again after you change your alerts. While an Azure watcher owns the tenant, the **Alerts** tab shows an **Azure watcher** card that says whether the watcher runs the alerts on the page, from the alerts its last heartbeat reported: **Up to date**, or **Needs an update** with the step to take. **Check now** reads the heartbeat again, for example after the watcher's next run. A rerun without `-AlertRulesPath` keeps the saved alerts, and `-AlertRulesPath ''` removes them, so every event goes everywhere again. A value the runbook cannot read, or one without any alert it can use, does the same and says so in the job output, so a damaged file never silences the watcher.
 
 ### If the watcher itself breaks
 
-A watcher that fails silently would defeat its purpose, so setup refuses to guess about failure reporting. Pass `-AlertEmail` and the script creates an Azure Monitor action group and a metric alert on failed Automation jobs in the watcher resource group, so a broken watcher emails you through Azure Monitor, independent of the runbook itself. Passing `-NoFailureAlert` is the explicit opt-out. Successful runs also write `heartbeat.json` (last run time, watermark, last error) into the state container. A fresh heartbeat is the quickest health check. A stale one only means there is no recent health evidence: a watcher that lost storage access keeps failing without updating it, so check the Automation account's job history to see whether runs happen and how they fail.
+A watcher that fails silently would defeat its purpose, so setup refuses to guess about failure reporting. Pass `-AlertEmail` and the script creates an Azure Monitor action group and a metric alert on failed Automation jobs in the watcher resource group, so a broken watcher emails you through Azure Monitor, independent of the runbook itself. Passing `-NoFailureAlert` is the explicit opt-out. Successful runs also write `heartbeat.json` (last run time, watermark, last error, and which alerts it runs) into the state container. A fresh heartbeat is the quickest health check. A stale one only means there is no recent health evidence: a watcher that lost storage access keeps failing without updating it, so check the Automation account's job history to see whether runs happen and how they fail.
 
 Two setup errors worth knowing before you meet them:
 

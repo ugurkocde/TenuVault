@@ -55,7 +55,7 @@ export interface ConditionalAccessWatchView {
 
 export interface AuditWatch {
   conditionalAccess: ConditionalAccessWatchView
-  watcherCheck?: { checkedAt: string; lastRunAt: string | null; stale: boolean; error: string | null }
+  watcherCheck?: { checkedAt: string; lastRunAt: string | null; stale: boolean; error: string | null; alertsHash?: string | null }
   enabled: boolean
   intervalMinutes: number
   categories: string[]
@@ -85,6 +85,44 @@ export interface NotificationsStatus {
   deliveries: DeliveryView[]
   licensed: boolean
   runtimeNote: string
+  /** The hash of the alerts the Azure watcher would get now, and the one its heartbeat reported (null: unknown). */
+  watcherAlerts?: { current: string; reported: string | null }
+  /** Whether this computer is signed in to the tenant, which desktop change watching needs. */
+  signedIn?: boolean
+}
+
+export interface AlertSuggestions {
+  policies: Array<{ name: string; type: string; service: "intune" | "conditionalAccess" }>
+  settings: string[]
+  backup: { id: string; at: string | null } | null
+  error: string | null
+}
+
+export interface AlertPreview {
+  days: number
+  services: Array<{ service: "intune" | "conditionalAccess"; read: number; changes: number; capped: boolean; error: string | null }>
+  messages: Array<{ title: string; severity: NotificationSeverity; occurredAt: string; changes: number }>
+  total: number
+}
+
+export interface DeliveryDetail {
+  id: string
+  state: "pending" | "sent" | "failed"
+  attempts: number
+  lastError: string | null
+  sentAt: string | null
+  channelTitle: string
+  channelKind: ChannelKind | null
+  envelope: NotificationEnvelope
+}
+
+export interface CopyRulesResult {
+  tenantId: string
+  tenantName: string
+  created: string[]
+  skipped: string[]
+  withoutChannels: string[]
+  full: string[]
 }
 
 export interface GroupResult {
@@ -167,6 +205,13 @@ export const notificationsApi = {
   runWatcherCheck: (tenant: Tenant) => featureCall<{ auditWatch: AuditWatch; stale: boolean; enqueued: number; error: string | null }>(PATH, tenant, "run-watcher-check"),
   runAuditWatch: (tenant: Tenant) => featureCall<{ auditWatch: AuditWatch | null; enqueued: number; changes: number; error: string | null; skipped: "off" | "external" | "busy" | null }>(PATH, tenant, "run-audit-watch"),
   listAuditCategories: (tenant: Tenant) => featureCall<{ categories: string[]; source: "graph" | "known" }>(PATH, tenant, "list-audit-categories"),
+  listAlertSuggestions: (tenant: Tenant) => featureCall<AlertSuggestions>(PATH, tenant, "list-alert-suggestions"),
+  /** What an alert, saved or not, would have sent for the last days; nothing is sent. */
+  previewRule: (tenant: Tenant, body: RuleBody & { days?: number }) => featureCall<AlertPreview>(PATH, tenant, "preview-rule", { ...body }),
+  getDelivery: (tenant: Tenant, deliveryId: string) => featureCall<DeliveryDetail>(PATH, tenant, "get-delivery", { deliveryId }),
+  retryDelivery: (tenant: Tenant, deliveryId: string) => featureCall<{ state: string; lastError: string | null; attempts: number }>(PATH, tenant, "retry-delivery", { deliveryId }),
+  /** MSP: copies alerts to other connected tenants, mapping channels by kind. */
+  copyRules: (tenant: Tenant, ruleIds: string[], targetTenantIds: string[]) => featureCall<{ results: CopyRulesResult[] }>(PATH, tenant, "portfolio-copy-rules", { ruleIds, targetTenants: targetTenantIds.map((tenantId) => ({ tenantId })) }),
   listGroups: (tenant: Tenant, search: string) => featureCall<{ groups: GroupResult[] }>(PATH, tenant, "list-groups", { search }).then((result) => result.groups),
 }
 

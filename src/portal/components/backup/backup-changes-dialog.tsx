@@ -1,7 +1,9 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { ChevronDown, ChevronRight, Loader2, Minus, PencilLine, Plus } from "lucide-react"
+import { Link } from "react-router-dom"
+import { BellPlus, ChevronDown, ChevronRight, Loader2, Minus, PencilLine, Plus } from "lucide-react"
+import { alertForPolicyHref } from "@desktop/lib/alert-links"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "~/components/ui/dialog"
 import { cn } from "~/lib/utils"
 import { formatDate, type BackupSummary, type BackupTenant } from "./types"
@@ -97,9 +99,10 @@ export function BackupChangesDialog({ open, onOpenChange, tenant, backup, previo
               const expandable = item.change === "modified" && (item.fields?.length ?? 0) > 0
               return (
                 <li key={key} className="py-3">
+                  <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    className={cn("flex w-full items-center gap-3 text-left", !expandable && "cursor-default")}
+                    className={cn("flex min-w-0 flex-1 items-center gap-3 text-left", !expandable && "cursor-default")}
                     onClick={() => expandable && toggle(key)}
                     aria-expanded={expandable ? open : undefined}
                   >
@@ -115,6 +118,17 @@ export function BackupChangesDialog({ open, onOpenChange, tenant, backup, previo
                     </span>
                     {expandable && (open ? <ChevronDown className="h-4 w-4 text-gray-500" /> : <ChevronRight className="h-4 w-4 text-gray-500" />)}
                   </button>
+                  {item.change !== "removed" && (
+                    <Link
+                      to={alertForPolicyHref(item.name, item.folder)}
+                      className="flex size-8 flex-shrink-0 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900"
+                      title={`Alert me about changes to ${item.name}`}
+                      aria-label={`Alert me about changes to ${item.name}`}
+                    >
+                      <BellPlus className="h-4 w-4" aria-hidden="true" />
+                    </Link>
+                  )}
+                  </div>
                   {expandable && open && (
                     <dl className="mt-2 space-y-2 rounded-2xl bg-gray-50 p-3 pl-4 text-xs">
                       {item.fields!.map((field) => (

@@ -124,7 +124,7 @@ export interface AuditWatchRecord {
   /** Settings above (interval, own changes, actor, external watcher) apply to both services. */
   conditionalAccess?: ConditionalAccessWatch
   /** Last heartbeat check of the Azure watcher, made while externalWatcher is on. */
-  watcherCheck?: { checkedAt: string; lastRunAt: string | null; stale: boolean; error: string | null }
+  watcherCheck?: { checkedAt: string; lastRunAt: string | null; stale: boolean; error: string | null; alertsHash?: string | null }
 }
 
 /** The Azure watcher counts as stale when its heartbeat is older than this. Setup schedules it hourly. */

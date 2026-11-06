@@ -12,6 +12,7 @@ import type { Stored } from "../records"
 import { retryable } from "../health-review/rules"
 import {
   MAX_DELIVERY_LOG,
+  MAX_RULES,
   MAX_OUTBOX_KEPT,
   MAX_RECENT_AUDIT_IDS,
   MAX_RECIPIENTS,
@@ -640,7 +641,7 @@ export async function checkWatcher(deps: FeatureDeps, tenantId: string, options:
     read = { status: "error", message: brief(error instanceof Error ? error.message : String(error)) }
   }
   if (read.status === "error") {
-    saveAuditWatch(deps, tenant, { watcherCheck: { checkedAt: now.toISOString(), lastRunAt: watch.watcherCheck?.lastRunAt ?? null, stale: watch.watcherCheck?.stale ?? false, error: read.message } }, { actor: null, reason: `Azure watcher heartbeat could not be read: ${read.message}` })
+    saveAuditWatch(deps, tenant, { watcherCheck: { checkedAt: now.toISOString(), lastRunAt: watch.watcherCheck?.lastRunAt ?? null, stale: watch.watcherCheck?.stale ?? false, error: read.message, alertsHash: watch.watcherCheck?.alertsHash ?? null } }, { actor: null, reason: `Azure watcher heartbeat could not be read: ${read.message}` })
     return { stale: false, enqueued: 0, error: read.message }
   }
   const lastRunAt = read.status === "ok" ? read.runAt : null
@@ -650,7 +651,7 @@ export async function checkWatcher(deps: FeatureDeps, tenantId: string, options:
     const envelope = watcherStaleEvent({ tenantId: tenant, tenantName: deps.tenant(tenant)?.name ?? null, occurredAt: now.toISOString(), lastRunAt, thresholdHours: WATCHER_STALE_HOURS, lastError: read.status === "ok" ? read.lastError : null, source: "desktop" })
     enqueued = await emit(deps, tenant, envelope, options)
   }
-  saveAuditWatch(deps, tenant, { watcherCheck: { checkedAt: now.toISOString(), lastRunAt, stale, error: null } }, { actor: null, reason: stale ? "Azure watcher heartbeat is stale" : "Azure watcher heartbeat is fresh" })
+  saveAuditWatch(deps, tenant, { watcherCheck: { checkedAt: now.toISOString(), lastRunAt, stale, error: null, alertsHash: read.status === "ok" ? read.alertsHash ?? null : null } }, { actor: null, reason: stale ? "Azure watcher heartbeat is stale" : "Azure watcher heartbeat is fresh" })
   return { stale, enqueued, error: null }
 }
 
@@ -685,4 +686,128 @@ export async function tick(deps: FeatureDeps, options: NotificationOptions = {})
   } finally {
     ticking.delete(deps)
   }
+}
+
+const PREVIEW_MAX_PAGES = 10
+const PREVIEW_MAX_EVENTS = 2000
+
+export interface AlertPreview {
+  days: number
+  services: Array<{ service: ChangeService; read: number; changes: number; capped: boolean; error: string | null }>
+  /** What the alert would have sent, newest first, at most 25. */
+  messages: Array<{ title: string; severity: NotificationEnvelope["severity"]; occurredAt: string; changes: number }>
+  total: number
+}
+
+/**
+ * What one alert would have sent for the changes of the last days: reads the audit logs it
+ * listens to, applies the change watching filters and plans the alert, without queueing or
+ * sending anything and without moving the watch positions.
+ */
+export async function previewChangeAlert(deps: FeatureDeps, tenantId: string, alert: AlertMatcher, days = 7): Promise<AlertPreview> {
+  const tenant = tenantId.toLowerCase()
+  const watch = auditWatchOf(deps, tenant) ?? { ...defaultAuditWatch(), id: "", tenantId: tenant, createdAt: "", updatedAt: "", history: [] }
+  const profile = deps.tenant(tenant)
+  const since = new Date(deps.now().getTime() - days * 24 * 3_600_000).toISOString()
+  const services = (["intune", "conditionalAccess"] as ChangeService[]).filter((service) => alert.eventTypes.includes(service === "intune" ? "intune.change" : "entra.change"))
+  const result: AlertPreview = { days, services: [], messages: [], total: 0 }
+  const envelopes: NotificationEnvelope[] = []
+  const graph = services.length ? await deps.graph(tenant) : null
+  for (const service of services) {
+    const source = SOURCES[service]
+    const collected: AuditChange[] = []
+    let read = 0
+    let pages = 0
+    let path: string | null = source.freshPath(since)
+    let error: string | null = null
+    try {
+      while (path && pages < PREVIEW_MAX_PAGES && read < PREVIEW_MAX_EVENTS) {
+        pages++
+        const response: { status: number; body: GraphItem } = await graph!("GET", path)
+        if (response.status === 403) throw new Error(source.denied)
+        if (response.status !== 200) throw new Error(graphError(response.body, response.status))
+        for (const raw of Array.isArray(response.body.value) ? (response.body.value as Array<Record<string, unknown>>) : []) {
+          read++
+          const change = source.map(raw)
+          if (change) collected.push(change)
+        }
+        path = nextPath(response.body)
+      }
+    } catch (failure) {
+      error = brief(failure instanceof Error ? failure.message : String(failure))
+    }
+    const filtered = filterAuditChanges(collected, { categories: service === "intune" ? watch.categories : [], ownAppId: profile?.clientId ?? null, ignoreOwnChanges: watch.ignoreOwnChanges })
+    filtered.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
+    result.services.push({ service, read, changes: filtered.length, capped: Boolean(path), error })
+    // Watching plans each poll on its own, so the week is planned in poll sized windows: one
+    // summary per window, or each change on its own up to the per-check limit of each window.
+    const windowMs = Math.max(5, watch.intervalMinutes) * 60_000
+    const windows = new Map<number, AuditChange[]>()
+    for (const change of filtered) {
+      const key = Math.floor(Date.parse(change.at) / windowMs)
+      windows.set(key, [...(windows.get(key) ?? []), change])
+    }
+    for (const changes of windows.values()) {
+      for (const planned of planChangeAlerts(service, changes, [{ ...alert, enabled: true }], { tenantId: tenant, tenantName: profile?.name ?? null, includeActor: watch.includeActor, source: "desktop" })) envelopes.push(planned.envelope)
+    }
+  }
+  envelopes.sort((a, b) => (a.occurredAt < b.occurredAt ? 1 : a.occurredAt > b.occurredAt ? -1 : 0))
+  result.total = envelopes.length
+  result.messages = envelopes.slice(0, 25).map((envelope) => ({ title: envelope.title, severity: envelope.severity, occurredAt: envelope.occurredAt, changes: envelope.items.length + envelope.moreCount }))
+  return result
+}
+
+/** Sends a failed delivery again: back to pending with fresh attempts, then flushed. */
+export async function retryDelivery(deps: FeatureDeps, tenantId: string, outboxId: string, actor: string | null): Promise<Stored<OutboxRecord> | null> {
+  const tenant = tenantId.toLowerCase()
+  const entry = outboxOf(deps, tenant).find((candidate) => candidate.id === outboxId)
+  if (!entry || entry.state !== "failed") return null
+  deps.records.update<OutboxRecord>(DOMAINS.notificationOutbox, tenant, entry.id, (value) => ({ ...value, state: "pending", attempts: 0, nextAttemptAt: deps.now().toISOString(), lastError: null }), { actor, reason: `Retry of ${entry.envelope.type} to ${entry.channelTitle}` })
+  await flushOutbox(deps, tenant)
+  return outboxOf(deps, tenant).find((candidate) => candidate.id === outboxId) ?? null
+}
+
+export interface CopyRulesResult {
+  tenantId: string
+  created: string[]
+  /** Alerts the target already has under the same name; left as they are. */
+  skipped: string[]
+  /** Created turned off: the target has no enabled channel of the kinds the alert sends to. */
+  withoutChannels: string[]
+  /** Not copied: the target already has the most alerts a tenant can have. */
+  full: string[]
+}
+
+/**
+ * Copies alerts to other tenants. Each copy sends to the target's enabled channels of the
+ * kinds the original sends to (Teams to Teams, email to email), since channels are per tenant.
+ * An alert the target already has by name is skipped; one without a matching channel is
+ * created turned off, so its choices are kept for when a channel is added.
+ */
+export function copyRulesToTenants(deps: FeatureDeps, sourceTenantId: string, ruleIds: string[], targetTenantIds: string[], actor: string | null, summarize: (rule: RuleRecord) => string): CopyRulesResult[] {
+  const source = sourceTenantId.toLowerCase()
+  const sourceChannels = channelsOf(deps, source)
+  const rules = rulesOf(deps, source).filter((rule) => ruleIds.includes(rule.id))
+  return targetTenantIds.map((target) => {
+    const result: CopyRulesResult = { tenantId: target, created: [], skipped: [], withoutChannels: [], full: [] }
+    const targetChannels = channelsOf(deps, target).filter((channel) => channel.enabled)
+    const existing = new Set(rulesOf(deps, target).map((rule) => rule.title.toLowerCase()))
+    let count = existing.size
+    for (const rule of rules) {
+      if (existing.has(rule.title.toLowerCase())) { result.skipped.push(rule.title); continue }
+      if (count >= MAX_RULES) { result.full.push(rule.title); continue }
+      const kinds = new Set(sourceChannels.filter((channel) => rule.channelIds.includes(channel.id)).map((channel) => channel.kind))
+      const channelIds = targetChannels.filter((channel) => kinds.has(channel.kind)).map((channel) => channel.id)
+      const enabled = rule.enabled && channelIds.length > 0
+      const { id: _id, tenantId: _tenant, createdAt: _created, updatedAt: _updated, history: _history, ...value } = rule
+      const copy: RuleRecord = { ...value, channelIds, enabled, status: enabled ? "enabled" : "disabled" }
+      copy.summary = summarize(copy)
+      deps.records.create<RuleRecord>(DOMAINS.notificationRules, target, copy, { actor, reason: `Alert copied from ${deps.tenant(source)?.name ?? "another tenant"}` })
+      existing.add(rule.title.toLowerCase())
+      count++
+      result.created.push(rule.title)
+      if (channelIds.length === 0) result.withoutChannels.push(rule.title)
+    }
+    return result
+  })
 }

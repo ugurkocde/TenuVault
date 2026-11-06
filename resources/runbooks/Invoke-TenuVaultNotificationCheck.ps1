@@ -138,15 +138,17 @@ function ConvertTo-TvJsonString {
     param([string]$Value)
     $sb = [Text.StringBuilder]::new()
     [void]$sb.Append('"')
+    # Compared by code point: a switch on the character compares strings culture aware, and
+    # characters that sort as ignorable (soft hyphen, zero width joiner, BOM) would match "`b".
     foreach ($char in $Value.ToCharArray()) {
-        switch ($char) {
-            '"' { [void]$sb.Append('\"'); continue }
-            '\' { [void]$sb.Append('\\'); continue }
-            "`b" { [void]$sb.Append('\b'); continue }
-            "`f" { [void]$sb.Append('\f'); continue }
-            "`n" { [void]$sb.Append('\n'); continue }
-            "`r" { [void]$sb.Append('\r'); continue }
-            "`t" { [void]$sb.Append('\t'); continue }
+        switch ([int]$char) {
+            0x22 { [void]$sb.Append('\"'); continue }
+            0x5C { [void]$sb.Append('\\'); continue }
+            0x08 { [void]$sb.Append('\b'); continue }
+            0x0C { [void]$sb.Append('\f'); continue }
+            0x0A { [void]$sb.Append('\n'); continue }
+            0x0D { [void]$sb.Append('\r'); continue }
+            0x09 { [void]$sb.Append('\t'); continue }
             default {
                 if ([int]$char -lt 0x20) { [void]$sb.Append(("\u{0:x4}" -f [int]$char)) }
                 else { [void]$sb.Append($char) }
@@ -1039,6 +1041,19 @@ function Get-TvAlertsTaking {
         if ($null -ne $alert -and (Test-TvAlertTakes $alert ([string](Get-TvProp $Envelope "type")) ([string](Get-TvProp $Envelope "severity")))) { $ids.Add([string]$alert.id) }
     }
     return ,$ids.ToArray()
+}
+
+# Mirrors watcherAlertsHash in alerts.ts: SHA-256 of the canonical JSON of the alerts, "none"
+# without alerts and "unreadable" for a value that is not JSON. The heartbeat carries it so the
+# desktop can tell whether the watcher runs the alerts it has now.
+function Get-TvWatcherAlertsHash {
+    param([AllowNull()][AllowEmptyString()][string]$Text)
+    if (-not $Text) { return "none" }
+    $document = $null
+    try { $document = ConvertFrom-Json -InputObject $Text -ErrorAction Stop } catch { return "unreadable" }
+    $alerts = Get-TvStyleList $document "alerts"
+    if ($null -eq $alerts -or $alerts.Count -eq 0) { return "none" }
+    return Get-TvSha256Hex (ConvertTo-TenuVaultCanonicalJson $document)
 }
 
 # Where one envelope is owed. Without alerts: every configured destination. With alerts: the
@@ -2414,6 +2429,7 @@ $eventsSent = 0
 $lastError = $null
 $configVersion = "1"
 $configHash = $null
+$alertsHash = $null
 $leaseId = $null
 $storageToken = $null
 $stateBlobUri = $null
@@ -2462,6 +2478,7 @@ try {
     # says so, because sending too much is safer than silently sending nothing.
     $watcherAlerts = $null
     $alertRulesValue = Get-TvAutomationVariable "TenuVaultAlertRules"
+    $alertsHash = Get-TvWatcherAlertsHash $alertRulesValue
     if ($alertRulesValue) {
         $watcherAlerts = ConvertFrom-TvWatcherAlerts $alertRulesValue
         if ($null -eq $watcherAlerts) { Write-Output "TenuVaultAlertRules could not be read; every event goes to every destination until it is set again." }
@@ -2527,6 +2544,7 @@ try {
                 runbookVersion = $runbookVersion
                 configVersion = $configVersion
                 configHash = $configHash
+                alertsHash = $alertsHash
                 watermark = $watermarkIso
                 eventsSent = $eventsSent
                 lastError = $lastError
@@ -2721,6 +2739,7 @@ try {
             runbookVersion = $runbookVersion
             configVersion = $configVersion
             configHash = $configHash
+            alertsHash = $alertsHash
             watermark = $watermarkIso
             eventsSent = $eventsSent
             lastError = $null
@@ -3023,6 +3042,7 @@ try {
         runbookVersion = $runbookVersion
         configVersion = $configVersion
         configHash = $configHash
+        alertsHash = $alertsHash
         watermark = $watermarkIso
         eventsSent = $eventsSent
         lastError = $lastError
@@ -3050,6 +3070,7 @@ try {
                 runbookVersion = $runbookVersion
                 configVersion = $configVersion
                 configHash = $configHash
+                alertsHash = $alertsHash
                 watermark = $watermarkIso
                 eventsSent = $eventsSent
                 lastError = $lastError

@@ -403,7 +403,9 @@ async function bootstrap(): Promise<void> {
         return { status: "error", message: "The watcher heartbeat file exists but has no readable run time." }
       }
       const lastError = typeof body.lastError === "string" ? body.lastError.slice(0, 300) : null
-      return { status: "ok", runAt: body.runAt, lastError }
+      // Which alerts the watcher runs; older runbooks write none, which reads as unknown.
+      const alertsHash = typeof body.alertsHash === "string" ? body.alertsHash.slice(0, 80) : null
+      return { status: "ok", runAt: body.runAt, lastError, alertsHash }
     },
     now: () => new Date(),
   }
