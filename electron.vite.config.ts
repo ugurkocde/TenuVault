@@ -1,9 +1,9 @@
-import { createPublicKey } from "node:crypto"
 import { resolve } from "node:path"
 import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react"
 import { defineConfig } from "electron-vite"
 import { checkFrameworkRights } from "./scripts/check-framework-rights"
+import { PLACEHOLDER_LICENSE_PUBLIC_KEY, checkLicensePublicKey } from "./scripts/license-public-key"
 
 const desktopRoot = import.meta.dirname
 checkFrameworkRights(desktopRoot)
@@ -24,13 +24,10 @@ const CSP = [
   "form-action 'none'",
 ].join("; ")
 
-// Licensing endpoints and the token verification key are fixed at build time. The public
-// key below is a placeholder whose private half was discarded, so no token verifies against
-// it and an unconfigured build cannot license any tenant. Release builds must set
-// TENUVAULT_LICENSE_PUBLIC_KEY (see scripts/generate-license-keypair.mjs).
-const PLACEHOLDER_LICENSE_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEAKxXrhBA4x3ybwuC7hkZm8pyRgkM/Zy51UwCGj8EzsF8=
------END PUBLIC KEY-----`
+// Licensing endpoints and the token verification key are fixed at build time. Unconfigured
+// builds fall back to the placeholder key from scripts/license-public-key.ts, whose private
+// half was discarded, so they cannot license any tenant. Release builds set
+// TENUVAULT_RELEASE_BUILD=1 and must carry the pinned production key.
 const license = {
   // The canonical host. The apex redirects to it, and CIS content requests refuse redirects so the
   // entitlement bearer never follows one, so the apex would break CIS delivery.
@@ -41,9 +38,10 @@ const license = {
   portalUrl: process.env.TENUVAULT_LICENSE_PORTAL_URL ?? "https://polar.sh/ugurlabs/portal",
 }
 // The app parses this key at startup, so refuse to build with one that would crash it.
-if (createPublicKey(license.publicKey).asymmetricKeyType !== "ed25519") {
-  throw new Error("TENUVAULT_LICENSE_PUBLIC_KEY must be an Ed25519 public key.")
-}
+// Release builds must carry the pinned production key, never the placeholder or a wrong key.
+// The fingerprint is printed so build logs show which verification key an artifact carries.
+const licenseKeyFingerprint = checkLicensePublicKey(license.publicKey, process.env.TENUVAULT_RELEASE_BUILD === "1")
+console.info(`License public key fingerprint (sha256): ${licenseKeyFingerprint}`)
 for (const [name, value] of [
   ["TENUVAULT_LICENSE_API_BASE", license.apiBase],
   ["TENUVAULT_LICENSE_BUY_URL", license.buyUrl],

@@ -40,8 +40,10 @@ rationale live in
   replayed to another origin). Keep `redirect: "error"` on every request that carries a key, a
   token, or an entitlement.
 - **Signing keys.** The app verifies tokens with the single Ed25519 public key baked in at build
-  time. Never rotate the service signing key until the app accepts both keys and that version
-  has shipped; see task 14 in the plan.
+  time. Its fingerprint is pinned in `scripts/license-public-key.ts`; release builds
+  (`TENUVAULT_RELEASE_BUILD=1`, set by the release and manual installer workflows) fail when the
+  configured key is the placeholder or any other key. Never rotate the service signing key
+  until the app accepts both keys and that version has shipped; see task 14 in the plan.
 - **Buyer identity.** The Polar checkout email owns billing only. Activation binds the key to a
   tenant and an installation, never to an email address or a signed-in user. Do not add an
   email, UPN, or OID comparison to any licensing route.
