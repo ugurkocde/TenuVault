@@ -23,6 +23,7 @@ $script:calls = [System.Collections.Generic.List[string]]::new()
 $script:failAll = $false
 $script:foreignNext = $false
 $script:many = $null
+$script:lastPage = $false
 
 function Invoke-RestMethod {
     param([string]$Uri, [hashtable]$Headers, [string]$Method, [int]$TimeoutSec)
@@ -34,6 +35,7 @@ function Invoke-RestMethod {
         $exception | Add-Member -NotePropertyName Response -NotePropertyValue $response -Force
         throw $exception
     }
+    if ($script:many -and $script:lastPage) { return [pscustomobject]@{ value = $script:many } }
     if ($script:many) { return [pscustomobject]@{ value = $script:many; "@odata.nextLink" = "https://graph.microsoft.com/v1.0/next?page=9" } }
     if ($Uri -like "*page=2*") { return [pscustomobject]@{ value = @($events[4..6]) } }
     if ($script:foreignNext) { return [pscustomobject]@{ value = @($events[0..1]); "@odata.nextLink" = "https://attacker.example/next" } }
@@ -85,7 +87,7 @@ $pruned = @(Get-TvRecentAuditList -RecentById $recent -WatermarkIso "2026-11-03T
 $kept = @(Get-TvRecentAuditList -RecentById $recent -WatermarkIso "2026-11-03T22:00:00.000Z" -KeepAll $true | ForEach-Object { $_.id })
 Write-Output (@{ ids = $pruned; calls = @(); kept = $kept } | ConvertTo-Json -Compress)
 
-# 7. Pages are not in time order: a run that stops early (here the 500 change cap) keeps the
+# 7. and 8. Pages are not in time order: a run that stops early (here the 500 change cap) keeps the
 #    watermark, so an expired continuation restarts from it and loses no older event.
 $script:calls.Clear()
 $script:foreignNext = $false
@@ -93,4 +95,14 @@ $script:many = @(0..520 | ForEach-Object {
     [pscustomobject]@{ id = "many-$_"; activityDateTime = ([DateTime]"2026-11-04T09:00:00Z").ToUniversalTime().AddMinutes(-$_).ToString("yyyy-MM-ddTHH:mm:ss.fffZ"); activityDisplayName = "Update conditional access policy"; operationType = "Update"; result = "success"; loggedByService = "Conditional Access"; targetResources = @([pscustomobject]@{ id = "ca-$_"; displayName = "Policy $_" }) }
 })
 Write-Output (& $summary (Invoke-TvAuditIngestion @common -Continuation $null -PriorIds @{}))
+$capped = Invoke-TvAuditIngestion @common -Continuation $null -PriorIds @{}
+$script:calls.Clear()
+# 8. Its continuation expires: the run restarts from the kept watermark, and the ids of the
+#    first run skip what was already sent, so only the 21 events it did not reach are new.
+$script:lastPage = $true
+$sent = @{}
+foreach ($change in $capped.Changes) { $sent[[string]$change.auditId] = $true }
+$restartArgs = $common.Clone()
+$restartArgs.WatermarkIso = $capped.NewestSeenIso
+Write-Output (& $summary (Invoke-TvAuditIngestion @restartArgs -Continuation "https://graph.microsoft.com/v1.0/expired" -PriorIds $sent))
 

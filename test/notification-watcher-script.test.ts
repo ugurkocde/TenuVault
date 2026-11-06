@@ -201,7 +201,7 @@ describe("Azure notification watcher scripts", () => {
 
   it.runIf(Boolean(pwsh))("watcher ingestion pages, dedupes, restarts an expired continuation and keeps state on failure", () => {
     const script = fileURLToPath(new URL("./fixtures/notifications/ingest.ps1", import.meta.url))
-    const [paged, restarted, failed, foreignSaved, foreignNext, pruning, capped] = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/).map((line) => JSON.parse(line))
+    const [paged, restarted, failed, foreignSaved, foreignNext, pruning, capped, recovered] = execFileSync(pwsh!, ["-NoProfile", "-File", script], { encoding: "utf8" }).trim().split(/\r?\n/).map((line) => JSON.parse(line))
     // The known id, the failed strength create and the Core Directory event are left out.
     expect(paged.ids).toEqual([
       "Authentication Methods_bbbbbbbb-0000-0000-0000-000000000003_Y_3",
@@ -232,6 +232,12 @@ describe("Azure notification watcher scripts", () => {
     expect(capped.ids).toHaveLength(500)
     expect(capped.continuation).toBe("https://graph.microsoft.com/v1.0/fresh")
     expect(capped.newest).toBe("2026-11-03T22:00:00.000Z")
+    // After the continuation expires, the restart brings the events the capped run did not reach, and none twice.
+    expect(recovered.calls).toEqual(["https://graph.microsoft.com/v1.0/expired", "https://graph.microsoft.com/v1.0/fresh"])
+    expect(recovered.ids).toHaveLength(21)
+    expect(recovered.ids.filter((id: string) => capped.ids.includes(id))).toEqual([])
+    expect(recovered.continuation).toBeNull()
+    expect(recovered.newest).toBe("2026-11-04T09:00:00.000Z")
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("PowerShell builds the identical card for every layout in the matrix", () => {
