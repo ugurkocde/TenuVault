@@ -5,6 +5,8 @@ import { changeEvent } from "../../../shared/notifications/audit"
 import { describeConditions, hasConditions, isChangeEventType, parseConditions, parseDelivery, WATCHER_ALERTS_SCHEMA, watcherAlertsHash, type WatcherAlert, type WatcherAlerts, type WatcherDestination } from "../../../shared/notifications/alerts"
 import { DEFAULT_CARD_LAYOUT, isDefaultLayout, parseCardLayout, styleIssues } from "../../../shared/notifications/layout"
 import type { FeatureDeps } from "../deps"
+import { normalizeBackupStatus } from "../../../portal/lib/backup-health"
+import type { BackupSummary } from "../../../portal/components/backup/types"
 import { DOMAINS } from "../domains"
 import type { Stored } from "../records"
 import { featureRoute, FeatureError, optionalText, text, type Body } from "../route"
@@ -301,11 +303,17 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       let backup: { id: string; at: string | null } | null = null
       let error: string | null = null
       try {
-        const listing = (await (await deps.api("/api/list-backups", tenantId)).json().catch(() => ({}))) as { backups?: Array<{ id?: string; status?: string; timestamp?: string; createdAt?: string }> }
-        const chosen = (listing.backups ?? []).find((entry) => typeof entry.id === "string" && !/fail/i.test(entry.status ?? ""))
+        const listed = await deps.api("/api/list-backups", tenantId)
+        if (!listed.ok) throw new Error(`The backup list answered HTTP ${listed.status}.`)
+        const listing = (await listed.json().catch(() => ({}))) as { backups?: Array<BackupSummary & { timestamp?: string; createdAt?: string }> }
+        // The newest complete backup, else the newest partial one; unavailable or running ones list nothing.
+        const backups = (listing.backups ?? []).filter((entry) => typeof entry.id === "string")
+        const chosen = backups.find((entry) => normalizeBackupStatus(entry) === "success") ?? backups.find((entry) => normalizeBackupStatus(entry) === "partial")
         if (chosen?.id) {
           backup = { id: chosen.id, at: chosen.timestamp ?? chosen.createdAt ?? null }
-          const contents = (await (await deps.api("/api/list-backup-contents", tenantId, { backupId: chosen.id })).json().catch(() => ({}))) as { content?: { groups?: Array<{ folder?: string; label?: string; policies?: Array<{ displayName?: string }> }> } }
+          const read = await deps.api("/api/list-backup-contents", tenantId, { backupId: chosen.id })
+          if (!read.ok) throw new Error(`The backup contents answered HTTP ${read.status}.`)
+          const contents = (await read.json().catch(() => ({}))) as { content?: { groups?: Array<{ folder?: string; label?: string; policies?: Array<{ displayName?: string }> }> } }
           const seen = new Set<string>()
           for (const group of contents.content?.groups ?? []) {
             const service = /conditionalaccess|namedlocation|authenticationstrength/i.test(group.folder ?? "") ? "conditionalAccess" : "intune"
@@ -356,7 +364,7 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       const known = new Set(rulesOf(deps, tenantId).map((rule) => rule.id))
       const ruleIds = (body.ruleIds as string[]).filter((id) => known.has(id))
       if (ruleIds.length === 0) throw new FeatureError("The picked alerts no longer exist.")
-      return { results: copyRulesToTenants(deps, tenantId, ruleIds, targetTenants, actor).map((result) => ({ ...result, tenantName: deps.tenant(result.tenantId)?.name ?? result.tenantId })) }
+      return { results: copyRulesToTenants(deps, tenantId, ruleIds, targetTenants, actor, ruleSummary).map((result) => ({ ...result, tenantName: deps.tenant(result.tenantId)?.name ?? result.tenantId })) }
     },
 
 

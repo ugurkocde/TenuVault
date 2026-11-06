@@ -209,6 +209,9 @@ describe("watcher parity", () => {
     expect(hash(JSON.stringify(document))).toBe(watcherAlertsHash(document))
     expect(hash(JSON.stringify({ schema: WATCHER_ALERTS_SCHEMA, alerts: [] }))).toBe("none")
     expect(hash("not json")).toBe("unreadable")
+    // Characters a culture aware comparison treats as ignorable keep their own encoding.
+    const ignorable: WatcherAlerts = { ...document, alerts: [{ ...document.alerts[0]!, title: "Soft\u00adhyphen \u200d joiner \ufeff bom \u200b space \u007f del" }] }
+    expect(hash(JSON.stringify(ignorable, null, 2))).toBe(watcherAlertsHash(ignorable))
     expect(watcherAlertsHash(null)).toBe("none")
   }, 60_000)
 })

@@ -46,6 +46,18 @@ describe("checking an alert against the last days", () => {
     expect(outboxOf(w.deps, TENANT_A)).toHaveLength(0)
   })
 
+  it("plans each check interval on its own, as watching does", async () => {
+    const many = Array.from({ length: 30 }, (_, index) => ({ ...fixture.events[0]!, id: `bulk-${index}`, activityDateTime: new Date(Date.parse("2026-10-16T08:00:00Z") + index * 60 * 60_000).toISOString(), resources: [{ ...fixture.events[0]!.resources[0]!, displayName: `Policy ${index}`, resourceId: `id-${index}` }] }))
+    const w = world()
+    w.deps.graph = async () => (async () => ({ status: 200, body: { value: many } })) as never
+    // One change per hour with a 15 minute interval: 30 checks, so each change goes on its own,
+    // past the per-check limit of 20 that one big plan would apply.
+    const each = await call(w.api, PATH, { tenantId: TENANT_A, action: "preview-rule", eventTypes: ["intune.change"], delivery: "each" })
+    expect(each.body.total).toBe(30)
+    const digest = await call(w.api, PATH, { tenantId: TENANT_A, action: "preview-rule", eventTypes: ["intune.change"], delivery: "digest" })
+    expect(digest.body.total).toBe(30)
+  })
+
   it("explains that only change alerts can be checked", async () => {
     const w = world()
     const refused = await call(w.api, PATH, { tenantId: TENANT_A, action: "preview-rule", eventTypes: ["backup.failed"] })
@@ -76,7 +88,7 @@ describe("suggestions for the alert dialog", () => {
   it("lists policy names of the newest usable backup and setting names seen in alerts", async () => {
     const w = world({
       api: (path, body) => {
-        if (path === "/api/list-backups") return Response.json({ backups: [{ id: "b-failed", status: "Failed" }, { id: "b-ok", status: "Success", timestamp: "2026-10-16T02:00:00Z" }] })
+        if (path === "/api/list-backups") return Response.json({ backups: [{ id: "b-running", status: "Running" }, { id: "b-gone", status: "Unavailable" }, { id: "b-failed", status: "Failed" }, { id: "b-ok", status: "Success", timestamp: "2026-10-16T02:00:00Z" }] })
         if (path === "/api/list-backup-contents" && body?.backupId === "b-ok") return Response.json({ content: { groups: [
           { folder: "DeviceCompliancePolicies", label: "Compliance policies", policies: [{ displayName: "Windows 11 - Compliance" }, { displayName: "Windows 11 - Compliance" }] },
           { folder: "ConditionalAccessPolicies", label: "Conditional Access policies", policies: [{ displayName: "Block legacy authentication" }] },
@@ -132,12 +144,26 @@ describe("copying alerts to other tenants", () => {
     const copied = await call(w.api, PATH, { tenantId: TENANT_A, action: "portfolio-copy-rules", ruleIds: rules.map((rule) => rule.id), targetTenants: [{ tenantId: TENANT_B }, { tenantId: TENANT_C }] })
     expect(copied.status).toBe(200)
     expect(copied.body.results).toEqual([
-      { tenantId: TENANT_B, tenantName: expect.any(String), created: ["Compliance"], skipped: ["Teams only"], withoutChannels: [] },
-      { tenantId: TENANT_C, tenantName: expect.any(String), created: ["Compliance", "Teams only"], skipped: [], withoutChannels: ["Compliance", "Teams only"] },
+      { tenantId: TENANT_B, tenantName: expect.any(String), created: ["Compliance"], skipped: ["Teams only"], withoutChannels: [], full: [] },
+      { tenantId: TENANT_C, tenantName: expect.any(String), created: ["Compliance", "Teams only"], skipped: [], withoutChannels: ["Compliance", "Teams only"], full: [] },
     ])
     const onB = w.deps.records.list<RuleRecord>(DOMAINS.notificationRules, TENANT_B).find((rule) => rule.title === "Compliance")!
     expect(onB).toMatchObject({ enabled: true, channelIds: [targetHook], delivery: "each", conditions: { categories: ["Compliance"] } })
+    // The copy describes its own channels, not the original's.
+    expect(w.deps.records.list<RuleRecord>(DOMAINS.notificationRules, TENANT_C)[0]!.summary).toContain("to 0 channels")
     expect(w.deps.records.list<RuleRecord>(DOMAINS.notificationRules, TENANT_C).every((rule) => !rule.enabled && rule.channelIds.length === 0)).toBe(true)
+  })
+
+  it("stops at the alert limit of the target tenant", async () => {
+    const w = world({ plans: { [TENANT_A]: "msp", [TENANT_B]: "msp" } })
+    const source = await webhook(w)
+    await call(w.api, PATH, { tenantId: TENANT_A, action: "add-rule", title: "One more", eventTypes: ["backup.failed"], channelIds: [source] })
+    const target = await webhook(w, TENANT_B)
+    for (let index = 0; index < 25; index++) await call(w.api, PATH, { tenantId: TENANT_B, action: "add-rule", title: `Alert ${index}`, eventTypes: ["backup.failed"], channelIds: [target] })
+    const rules = (await call(w.api, PATH, { tenantId: TENANT_A, action: "get-status" })).body.rules as Array<{ id: string }>
+    const copied = await call(w.api, PATH, { tenantId: TENANT_A, action: "portfolio-copy-rules", ruleIds: rules.map((rule) => rule.id), targetTenants: [{ tenantId: TENANT_B }] })
+    expect(copied.body.results[0]).toMatchObject({ created: [], full: ["One more"] })
+    expect(w.deps.records.list<RuleRecord>(DOMAINS.notificationRules, TENANT_B)).toHaveLength(25)
   })
 
   it("needs the MSP plan", async () => {

@@ -914,13 +914,24 @@ function RuleDialog({ tenant, data, rule, draft, open, onClose, onSaved, onChann
   const save = useMutation({
     mutationFn: async () => {
       const body = { title: title.trim() || undefined, eventTypes: [...eventTypes, ...keptInert], minSeverity, channelIds, conditions: conditions(), delivery: changes ? delivery : "digest" as const }
-      const saved = rule ? await notificationsApi.updateRule(tenant, rule.id, body) : await notificationsApi.addRule(tenant, { ...body, mode: "immediate" })
-      if (turnOnWatching && watchingOff.length) {
+      if (rule) await notificationsApi.updateRule(tenant, rule.id, body)
+      else await notificationsApi.addRule(tenant, { ...body, mode: "immediate" })
+      // The alert is saved now. Turning watching on is a second step: its failure must not
+      // leave the dialog open, where saving again would add the alert twice.
+      if (!turnOnWatching || !watchingOff.length) return { watching: null as string | null }
+      try {
         await notificationsApi.updateAuditWatch(tenant, { ...(watchingOff.includes("Intune") ? { enabled: true } : {}), ...(watchingOff.includes("Conditional Access") ? { conditionalAccessEnabled: true } : {}) })
+        return { watching: null }
+      } catch (error) {
+        return { watching: error instanceof Error ? error.message : "The request failed." }
       }
-      return saved
     },
-    onSuccess: () => { toast(editing ? "Alert saved" : turnOnWatching && watchingOff.length ? `Alert added and ${watchingOff.join(" and ")} change watching turned on` : "Alert added", "success"); onSaved() },
+    onSuccess: ({ watching }) => {
+      const saved = editing ? "Alert saved" : "Alert added"
+      if (watching) toast(`${saved}, but change watching could not be turned on: ${watching} Turn it on from the alert's row.`, "error")
+      else toast(turnOnWatching && watchingOff.length ? `${saved} and ${watchingOff.join(" and ")} change watching turned on` : saved, "success")
+      onSaved()
+    },
     onError: failed,
   })
   const check = useMutation({
@@ -1019,7 +1030,7 @@ function RuleDialog({ tenant, data, rule, draft, open, onClose, onSaved, onChann
                   empty={suggestions.isLoading ? "Loading the policies of the newest backup..." : "No backup to pick policies from yet. Type the names instead."}
                   onPick={(name) => { setPreview(null); setPolicyNames((current) => addLine(current, name)) }}
                 />
-                <span className="block text-xs text-gray-500">A change counts when its policy name contains one of these, ignoring case. A full name picks one specific policy.</span>
+                <span className="block text-xs text-gray-500">A change counts when its policy name contains one of these, ignoring case. A full name picks that policy, and any other policy whose name contains it.</span>
               </div>
               <div className="space-y-1.5">
                 <label className="block text-sm text-gray-700">
@@ -1151,6 +1162,7 @@ function CopyAlertsDialog({ tenant, rules, tenants, plan, onClose }: { tenant: T
                 <p className="font-medium text-gray-900">{result.tenantName}</p>
                 <p className="text-gray-600">{result.created.length ? `Copied: ${result.created.join(", ")}.` : "Nothing copied."}{result.skipped.length ? ` Already there: ${result.skipped.join(", ")}.` : ""}</p>
                 {result.withoutChannels.length > 0 && <p className="text-amber-700">Turned off until that tenant has a matching channel: {result.withoutChannels.join(", ")}.</p>}
+                {result.full.length > 0 && <p className="text-amber-700">Not copied, the tenant already has the most alerts it can have: {result.full.join(", ")}.</p>}
               </div>
             ))}
             <div className="flex justify-end"><Button type="button" onClick={onClose}>Done</Button></div>

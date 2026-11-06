@@ -12,6 +12,7 @@ import type { Stored } from "../records"
 import { retryable } from "../health-review/rules"
 import {
   MAX_DELIVERY_LOG,
+  MAX_RULES,
   MAX_OUTBOX_KEPT,
   MAX_RECENT_AUDIT_IDS,
   MAX_RECIPIENTS,
@@ -738,7 +739,17 @@ export async function previewChangeAlert(deps: FeatureDeps, tenantId: string, al
     const filtered = filterAuditChanges(collected, { categories: service === "intune" ? watch.categories : [], ownAppId: profile?.clientId ?? null, ignoreOwnChanges: watch.ignoreOwnChanges })
     filtered.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
     result.services.push({ service, read, changes: filtered.length, capped: Boolean(path), error })
-    for (const planned of planChangeAlerts(service, filtered, [{ ...alert, enabled: true }], { tenantId: tenant, tenantName: profile?.name ?? null, includeActor: watch.includeActor, source: "desktop" })) envelopes.push(planned.envelope)
+    // Watching plans each poll on its own, so the week is planned in poll sized windows: one
+    // summary per window, or each change on its own up to the per-check limit of each window.
+    const windowMs = Math.max(5, watch.intervalMinutes) * 60_000
+    const windows = new Map<number, AuditChange[]>()
+    for (const change of filtered) {
+      const key = Math.floor(Date.parse(change.at) / windowMs)
+      windows.set(key, [...(windows.get(key) ?? []), change])
+    }
+    for (const changes of windows.values()) {
+      for (const planned of planChangeAlerts(service, changes, [{ ...alert, enabled: true }], { tenantId: tenant, tenantName: profile?.name ?? null, includeActor: watch.includeActor, source: "desktop" })) envelopes.push(planned.envelope)
+    }
   }
   envelopes.sort((a, b) => (a.occurredAt < b.occurredAt ? 1 : a.occurredAt > b.occurredAt ? -1 : 0))
   result.total = envelopes.length
@@ -763,6 +774,8 @@ export interface CopyRulesResult {
   skipped: string[]
   /** Created turned off: the target has no enabled channel of the kinds the alert sends to. */
   withoutChannels: string[]
+  /** Not copied: the target already has the most alerts a tenant can have. */
+  full: string[]
 }
 
 /**
@@ -771,22 +784,27 @@ export interface CopyRulesResult {
  * An alert the target already has by name is skipped; one without a matching channel is
  * created turned off, so its choices are kept for when a channel is added.
  */
-export function copyRulesToTenants(deps: FeatureDeps, sourceTenantId: string, ruleIds: string[], targetTenantIds: string[], actor: string | null): CopyRulesResult[] {
+export function copyRulesToTenants(deps: FeatureDeps, sourceTenantId: string, ruleIds: string[], targetTenantIds: string[], actor: string | null, summarize: (rule: RuleRecord) => string): CopyRulesResult[] {
   const source = sourceTenantId.toLowerCase()
   const sourceChannels = channelsOf(deps, source)
   const rules = rulesOf(deps, source).filter((rule) => ruleIds.includes(rule.id))
   return targetTenantIds.map((target) => {
-    const result: CopyRulesResult = { tenantId: target, created: [], skipped: [], withoutChannels: [] }
+    const result: CopyRulesResult = { tenantId: target, created: [], skipped: [], withoutChannels: [], full: [] }
     const targetChannels = channelsOf(deps, target).filter((channel) => channel.enabled)
     const existing = new Set(rulesOf(deps, target).map((rule) => rule.title.toLowerCase()))
+    let count = existing.size
     for (const rule of rules) {
       if (existing.has(rule.title.toLowerCase())) { result.skipped.push(rule.title); continue }
+      if (count >= MAX_RULES) { result.full.push(rule.title); continue }
       const kinds = new Set(sourceChannels.filter((channel) => rule.channelIds.includes(channel.id)).map((channel) => channel.kind))
       const channelIds = targetChannels.filter((channel) => kinds.has(channel.kind)).map((channel) => channel.id)
       const enabled = rule.enabled && channelIds.length > 0
       const { id: _id, tenantId: _tenant, createdAt: _created, updatedAt: _updated, history: _history, ...value } = rule
-      deps.records.create<RuleRecord>(DOMAINS.notificationRules, target, { ...value, channelIds, enabled, status: enabled ? "enabled" : "disabled", summary: rule.summary }, { actor, reason: `Alert copied from ${deps.tenant(source)?.name ?? "another tenant"}` })
+      const copy: RuleRecord = { ...value, channelIds, enabled, status: enabled ? "enabled" : "disabled" }
+      copy.summary = summarize(copy)
+      deps.records.create<RuleRecord>(DOMAINS.notificationRules, target, copy, { actor, reason: `Alert copied from ${deps.tenant(source)?.name ?? "another tenant"}` })
       existing.add(rule.title.toLowerCase())
+      count++
       result.created.push(rule.title)
       if (channelIds.length === 0) result.withoutChannels.push(rule.title)
     }

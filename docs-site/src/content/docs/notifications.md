@@ -107,7 +107,7 @@ An alert that cannot send changes says so on its row with **Not sending changes*
 
 **Copy to other tenants** (MSP) copies alerts to other connected tenants. Each copy sends to that tenant's channels of the same kind: Teams to its Teams channels, email to its email channels. A tenant that already has an alert with the same name keeps its own, and a copy is turned off when the tenant has no matching channel yet.
 
-**Check the last 7 days** in the alert dialog reads the Intune and Conditional Access audit logs and lists what the alert, as it is in the dialog, would have sent for the changes of the last week. Nothing is sent and the change watching positions do not move. It uses the change watching filters (audit categories and changes made by TenuVault itself) and needs a sign-in to the tenant.
+**Check the last 7 days** in the alert dialog reads the Intune and Conditional Access audit logs and lists what the alert, as it is in the dialog, would have sent for the changes of the last week, planned per check interval as change watching would. Nothing is sent and the change watching positions do not move. It uses the change watching filters (audit categories and changes made by TenuVault itself) and needs a sign-in to the tenant.
 
 **Send test** on an alert's row sends a made up change that passes the alert's filters to its channels, marked as a test, so you can see what the alert will look like. It is not queued and does not count as a real event.
 
@@ -123,7 +123,7 @@ An alert that includes **Intune change** or **Conditional Access change** gets a
 | --- | --- |
 | Change types | It is one of the types you pick: created, updated, deleted, assigned, unassigned, or other changes |
 | Intune categories | Its Intune audit category is one you pick, for example Compliance or Device configuration. Conditional Access changes have no category and always pass |
-| Policy names contain | Its policy or object name contains one of the entries, ignoring case. Use the full name for one specific policy |
+| Policy names contain | Its policy or object name contains one of the entries, ignoring case. A full name picks that policy, and any other policy whose name contains it |
 | Changed settings contain | One of the settings it changed contains one of the entries, ignoring case. Only updates name changed settings, so creates, deletes and assignments never pass |
 | Never alert for changes by | It was not made by one of these user principal names or app names (exact, ignoring case), for example an automation account |
 

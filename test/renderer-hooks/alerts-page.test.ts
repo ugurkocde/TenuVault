@@ -130,3 +130,11 @@ describe("the Alerts page", () => {
     expect([...container.querySelectorAll("button")].some((button) => button.textContent === "Retry")).toBe(true)
   })
 })
+
+describe("alert me about this policy", () => {
+  it("opens a Conditional Access alert from Drift detection labels and backup folders alike", async () => {
+    const { alertForPolicyHref } = await import("../../src/renderer/lib/alert-links")
+    for (const type of ["Conditional Access policies", "Named locations", "Authentication strengths", "ConditionalAccessPolicies"]) expect(alertForPolicyHref("X", type)).toContain("service=conditionalAccess")
+    expect(alertForPolicyHref("X", "Compliance policies")).toContain("service=intune")
+  })
+})

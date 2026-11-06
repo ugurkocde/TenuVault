@@ -4,6 +4,7 @@
  * alert; everything else an Intune one. `type` is a backup folder or a Graph type name.
  */
 export function alertForPolicyHref(name: string, type: string | null | undefined): string {
-  const service = /conditionalaccess|namedlocation|authenticationstrength/i.test(type ?? "") ? "conditionalAccess" : "intune"
+  // Folders ("ConditionalAccessPolicies") and display labels ("Named locations") alike.
+  const service = /conditional\s*access|named\s*location|authentication\s*strength/i.test(type ?? "") ? "conditionalAccess" : "intune"
   return `/portal/alerts/alerts?${new URLSearchParams({ alertFor: name.slice(0, 200), service }).toString()}`
 }

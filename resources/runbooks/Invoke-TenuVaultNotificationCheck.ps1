@@ -138,15 +138,17 @@ function ConvertTo-TvJsonString {
     param([string]$Value)
     $sb = [Text.StringBuilder]::new()
     [void]$sb.Append('"')
+    # Compared by code point: a switch on the character compares strings culture aware, and
+    # characters that sort as ignorable (soft hyphen, zero width joiner, BOM) would match "`b".
     foreach ($char in $Value.ToCharArray()) {
-        switch ($char) {
-            '"' { [void]$sb.Append('\"'); continue }
-            '\' { [void]$sb.Append('\\'); continue }
-            "`b" { [void]$sb.Append('\b'); continue }
-            "`f" { [void]$sb.Append('\f'); continue }
-            "`n" { [void]$sb.Append('\n'); continue }
-            "`r" { [void]$sb.Append('\r'); continue }
-            "`t" { [void]$sb.Append('\t'); continue }
+        switch ([int]$char) {
+            0x22 { [void]$sb.Append('\"'); continue }
+            0x5C { [void]$sb.Append('\\'); continue }
+            0x08 { [void]$sb.Append('\b'); continue }
+            0x0C { [void]$sb.Append('\f'); continue }
+            0x0A { [void]$sb.Append('\n'); continue }
+            0x0D { [void]$sb.Append('\r'); continue }
+            0x09 { [void]$sb.Append('\t'); continue }
             default {
                 if ([int]$char -lt 0x20) { [void]$sb.Append(("\u{0:x4}" -f [int]$char)) }
                 else { [void]$sb.Append($char) }
@@ -2542,6 +2544,7 @@ try {
                 runbookVersion = $runbookVersion
                 configVersion = $configVersion
                 configHash = $configHash
+                alertsHash = $alertsHash
                 watermark = $watermarkIso
                 eventsSent = $eventsSent
                 lastError = $lastError
@@ -2736,6 +2739,7 @@ try {
             runbookVersion = $runbookVersion
             configVersion = $configVersion
             configHash = $configHash
+            alertsHash = $alertsHash
             watermark = $watermarkIso
             eventsSent = $eventsSent
             lastError = $null

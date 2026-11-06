@@ -122,6 +122,7 @@ export interface CopyRulesResult {
   created: string[]
   skipped: string[]
   withoutChannels: string[]
+  full: string[]
 }
 
 export interface GroupResult {
