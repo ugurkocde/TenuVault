@@ -167,6 +167,9 @@ const REASONS: Record<string, string> = {
   tenant_not_licensed: "Your organization has no license for this tenant.",
 }
 
+/** The refusal reasons this app knows (test/fixtures/license-contract.json lists the service's). */
+export const LICENSE_REFUSAL_REASONS: readonly string[] = Object.keys(REASONS)
+
 // How far the clock may move back (an NTP correction, a restored VM snapshot, a time zone
 // or RTC mix-up) before cached tokens stop counting offline. A larger rollback could
 // otherwise keep an expired token alive indefinitely; this bounds that to two days past expiry.
