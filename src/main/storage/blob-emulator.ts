@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { LOCAL_STORAGE_PREFIX, localStorageAccountName } from "../../shared/constants"
-import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobNotFoundError, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
+import { BlobAlreadyExistsError, BlobConditionNotMetError, BlobNotFoundError, IncompleteInventoryError, type LocalBlobStore, type StoredBlob } from "./local-blob-store"
 
 /**
  * Serves the subset of the Azure Blob REST API that the shared API routes use
@@ -179,7 +179,18 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
         return error(404, "ContainerNotFound", "The specified container does not exist.")
       }
       if (method === "GET" && query.get("comp") === "list") return await listBlobs(store, account, container, query)
-      if (method === "GET" || method === "HEAD") return new Response(null, { status: 200 })
+      if (method === "GET" || method === "HEAD") {
+        // Container properties say how much of the backup folder could not be read, so a list of
+        // backups can say that some may be missing from it.
+        const damage = await store.damage(account, container)
+        return new Response(null, {
+          status: 200,
+          headers: {
+            "x-tenuvault-unreadable-files": String(damage.files.length),
+            "x-tenuvault-unavailable-backups": String(damage.unavailable.size),
+          },
+        })
+      }
       return error(400, "UnsupportedHttpVerb", `${method} is not supported on containers.`)
     }
 
@@ -213,6 +224,8 @@ export async function handleLocalBlobRequest(store: LocalBlobStore, request: Req
   } catch (caught) {
     if (caught instanceof BlobAlreadyExistsError) return error(412, "ConditionNotMet", "The blob already exists.")
     if (caught instanceof BlobConditionNotMetError) return error(412, "ConditionNotMet", "The condition specified using HTTP conditional header(s) is not met.")
+    // Damaged files: retrying cannot help, so this is not a 5xx that clients retry.
+    if (caught instanceof IncompleteInventoryError) return error(409, "InventoryIncomplete", caught.message)
     if (caught instanceof BlobNotFoundError) {
       return (await store.containerExists(account, container))
         ? error(404, "BlobNotFound", "The specified blob does not exist.")

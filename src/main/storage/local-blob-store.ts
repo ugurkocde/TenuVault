@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } f
 import type { BigIntStats } from "node:fs"
 import { link, mkdir, open, readdir, readFile, rename, rm, stat } from "node:fs/promises"
 import { dirname, join } from "node:path"
+import { BACKUP_CONTAINER, BACKUP_OWNER_FILE } from "../../shared/constants"
 import { mapLimit } from "../../shared/map-limit"
 
 /**
@@ -22,6 +23,16 @@ import { mapLimit } from "../../shared/map-limit"
  * both AES-GCM AADs, and the header AAD also holds the file name, so a header cannot be
  * moved to another file, container or account. Both versions are read, each with its
  * own rules; new files and overwrites use WRITE_FORMAT.
+ *
+ * Damaged files. In the backup container, a file that cannot be read (damaged, truncated, or
+ * encrypted with a key this device does not have) or a second file for the same blob does not
+ * block the healthy backups. Damage that can be traced to a backup (its folder's manifest or
+ * ownership marker, a manifest item, or a duplicate's name) makes only that backup unavailable:
+ * its listing and reads fail with IncompleteInventoryError. Damage that cannot be traced makes
+ * every backup without a manifest unavailable, since none of them can be checked. While any
+ * damage is present nothing in the container is deleted, so retention never removes a copy that
+ * may be needed. Damaged files are left in place for recovery. Other containers still fail
+ * closed: one unreadable file stops every listing and read.
  */
 
 /**
@@ -141,9 +152,67 @@ export class BlobAlreadyExistsError extends Error {}
 export class BlobConditionNotMetError extends Error {}
 
 export class IncompleteInventoryError extends Error {
-  constructor(readonly unreadableFiles: number) {
-    super(`Backup inventory is incomplete: ${unreadableFiles} encrypted file(s) could not be read. Import the correct recovery keys or recover damaged files before continuing.`)
+  constructor(readonly unreadableFiles: number, message?: string) {
+    super(message ?? `Backup inventory is incomplete: ${unreadableFiles} encrypted file(s) could not be read. Import the correct recovery keys or recover damaged files before continuing.`)
   }
+}
+
+/** A file in the backup container that could not be used. */
+export interface DamagedFile {
+  /** The encrypted file name on disk. */
+  file: string
+  reason: string
+  /** The backup folder the file belongs to, or null when it cannot be traced. */
+  backup: string | null
+}
+
+/** Damage found while reading the backup container's inventory. */
+export interface InventoryDamage {
+  files: DamagedFile[]
+  /** Backup folders (without the trailing slash) that cannot be used, with the reason. */
+  unavailable: Map<string, string>
+  /** Damaged files that could not be traced to a backup. */
+  unattributed: number
+}
+
+const RECOVERY = "Import the recovery key it was made with, or restore the damaged files from a copy. Files that cannot be recovered can be removed from the backup folder."
+
+/** Why a file could not be read. */
+class Unreadable {
+  constructor(readonly reason: string) {}
+}
+
+function unreadableReason(error: unknown): string {
+  if (error instanceof Error && error.message.startsWith("This backup was encrypted with a key")) return "it was encrypted with a key this device does not have"
+  const code = (error as NodeJS.ErrnoException)?.code
+  if (typeof code === "string" && /^E[A-Z]+$/.test(code)) return `it could not be read (${code})`
+  return "it is damaged or incomplete"
+}
+
+const backupFolderOf = (name: string) => /^(backup-[^/]+)\//.exec(name)?.[1] ?? null
+
+/** One sentence on the damage in a container, for messages. */
+function describeDamage(damage: InventoryDamage): string {
+  const files = damage.files.length
+  const backups = damage.unavailable.size
+  const parts = [
+    ...(files ? [`${files} file${files === 1 ? "" : "s"} in the backup folder could not be read`] : []),
+    ...(backups ? [`${backups} backup${backups === 1 ? " is" : "s are"} unavailable`] : []),
+  ]
+  return `${parts.join(" and ")}.`
+}
+
+/** The damage in a container in a few sentences, or null when there is none. */
+export function damageSummary(damage: InventoryDamage): string | null {
+  if (damage.files.length === 0 && damage.unavailable.size === 0) return null
+  const reasons = [...new Set(damage.files.map((file) => file.reason))]
+  const backups = [...damage.unavailable].slice(0, 3).map(([folder, reason]) => `${folder}: ${reason}`)
+  return [
+    describeDamage(damage),
+    ...(reasons.length ? [`${reasons.length === 1 ? "Reason" : "Reasons"}: ${reasons.join("; ")}.`] : []),
+    ...backups,
+    ...(damage.unavailable.size > 3 ? [`And ${damage.unavailable.size - 3} more.`] : []),
+  ].join(" ")
 }
 
 /** Syncs a directory so its entries survive a crash; a failure is logged, since the data itself is already written. */
@@ -189,6 +258,10 @@ export class LocalBlobStore {
   /** Cleared once the folder's file system refuses a hard link. */
   private hardLinks = true
   private readonly blobWrites = new Map<string, Promise<void>>()
+  /** Damage found by the read that built each inventory. */
+  private readonly damageOf = new WeakMap<Map<string, Entry>, InventoryDamage>()
+  /** Stamps of the damaged files of each inventory, so a repaired or removed file is noticed. */
+  private readonly damagedStamps = new WeakMap<Map<string, Entry>, Map<string, string>>()
 
   /**
    * @param root   Folder that holds the encrypted backups.
@@ -237,15 +310,38 @@ export class LocalBlobStore {
 
   async list(account: string, container: string, prefix = ""): Promise<StoredBlob[]> {
     const entries = await this.checkedEntries(account, container)
+    const folder = backupFolderOf(prefix)
+    if (folder) this.assertAvailable(entries, folder)
     return [...entries.values()].filter((entry) => entry.name.startsWith(prefix))
       .map(({ file: _file, version: _version, stamp: _stamp, ...blob }) => blob).sort((a, b) => (a.name < b.name ? -1 : 1))
+  }
+
+  /** Damage in the container's current inventory; empty when there is none. */
+  async damage(account: string, container: string): Promise<InventoryDamage> {
+    const entries = await this.checkedEntries(account, container)
+    return this.damageOf.get(entries) ?? { files: [], unavailable: new Map(), unattributed: 0 }
+  }
+
+  private assertAvailable(entries: Map<string, Entry>, folder: string): void {
+    const damage = this.damageOf.get(entries)
+    const reason = damage?.unavailable.get(folder)
+    if (damage && reason) throw new IncompleteInventoryError(damage.files.length, `Backup ${folder} is unavailable: ${reason} ${RECOVERY}`)
+  }
+
+  /** A blob that is not in the inventory may be in a file that could not be traced, so it is not reported as missing then. */
+  private missing(entries: Map<string, Entry>, name: string): Error {
+    const damage = this.damageOf.get(entries)
+    if (!damage?.unattributed) return new BlobNotFoundError(name)
+    return new IncompleteInventoryError(damage.files.length, `${name} could not be found, and ${damage.unattributed} file${damage.unattributed === 1 ? "" : "s"} in the backup folder could not be read, so it may be in one of them. ${RECOVERY}`)
   }
 
   async get(account: string, container: string, name: string): Promise<{ blob: StoredBlob; data: Buffer }> {
     const dir = this.dir(account, container)
     let entries = this.dirty.has(dir) ? await this.checkedEntries(account, container) : await this.entries(account, container)
     let entry = entries.get(name)
-    if (!entry) throw new BlobNotFoundError(name)
+    const folder = backupFolderOf(name)
+    if (folder) this.assertAvailable(entries, folder)
+    if (!entry) throw this.missing(entries, name)
     // A selective read checks its own file. Listings still verify every cached header,
     // and directory changes or our own writes still validate the complete manifest.
     let unchanged = false
@@ -254,8 +350,9 @@ export class LocalBlobStore {
       this.changed(dir)
       this.index.delete(dir)
       entries = await this.checkedEntries(account, container)
+      if (folder) this.assertAvailable(entries, folder)
       entry = entries.get(name)
-      if (!entry) throw new BlobNotFoundError(name)
+      if (!entry) throw this.missing(entries, name)
     }
     const raw = await readFile(join(this.dir(account, container), entry.file))
     const version = versionOf(raw.subarray(0, MAGIC_LENGTH))
@@ -342,7 +439,7 @@ export class LocalBlobStore {
       else {
         // Keep the replacement's authenticated filename and metadata for the next mutation.
         const replacement = await this.readEntry(dir, account, container, file)
-        if (replacement !== VANISHED && replacement?.name === name) this.updateEntry(dir, entries, name, replacement)
+        if (replacement !== VANISHED && !(replacement instanceof Unreadable) && replacement.name === name) this.updateEntry(dir, entries, name, replacement)
         else this.index.delete(dir)
         this.changed(dir)
       }
@@ -350,8 +447,16 @@ export class LocalBlobStore {
     })
   }
 
+  /**
+   * Deletes one blob. Nothing in the backup container is deleted while it holds damaged files or
+   * an unavailable backup: a damaged file may be the only copy of what an older backup holds.
+   */
   async delete(account: string, container: string, name: string): Promise<void> {
     const entries = await this.entries(account, container)
+    const damage = this.damageOf.get(entries)
+    if (damage && (damage.files.length > 0 || damage.unavailable.size > 0)) {
+      throw new IncompleteInventoryError(damage.files.length, `Nothing was deleted: ${describeDamage(damage)} Older backups are kept until the damage is resolved. ${RECOVERY}`)
+    }
     const entry = entries.get(name)
     if (!entry) throw new BlobNotFoundError(name)
     const dir = this.dir(account, container)
@@ -487,9 +592,12 @@ export class LocalBlobStore {
         let entries = await this.entries(account, container)
         const files = new Set(await this.files(dir))
         // Directory stamps can be coarse on a shared folder, so always reconcile names.
-        const sameFiles = files.size === entries.size && [...entries.values()].every(entry => files.has(entry.file))
-        const unchanged = !this.dirty.has(dir) && sameFiles && (await mapLimit([...entries.values()], HEADER_CONCURRENCY, async (entry) => {
-          try { return fileStamp(await stat(join(dir, entry.file), { bigint: true })) === entry.stamp } catch { return false }
+        // Damaged files count too, so a file that is repaired, replaced or removed is read again.
+        const damaged = this.damagedStamps.get(entries) ?? new Map<string, string>()
+        const known = new Map<string, string>([...damaged, ...[...entries.values()].map((entry): [string, string] => [entry.file, entry.stamp])])
+        const sameFiles = files.size === known.size && [...known.keys()].every(file => files.has(file))
+        const unchanged = !this.dirty.has(dir) && sameFiles && (await mapLimit([...known], HEADER_CONCURRENCY, async ([file, stamp]) => {
+          try { return fileStamp(await stat(join(dir, file), { bigint: true })) === stamp } catch { return false }
         })).every(Boolean)
         if ((this.generations.get(dir) ?? 0) !== generation) return this.checkedEntries(account, container)
         if (!unchanged) {
@@ -549,11 +657,11 @@ export class LocalBlobStore {
   }
 
   /**
-   * Returns null for a file that cannot be read, and VANISHED for one removed since it was listed
+   * Returns Unreadable for a file that cannot be read, and VANISHED for one removed since it was listed
    * or an empty file. Every blob file has a header, so an empty one is a create-only claim that a
    * writer is about to fill or never finished (see publishNew), not a damaged blob.
    */
-  private async readEntry(dir: string, account: string, container: string, file: string): Promise<Entry | null | typeof VANISHED> {
+  private async readEntry(dir: string, account: string, container: string, file: string): Promise<Entry | Unreadable | typeof VANISHED> {
     const path = join(dir, file)
     let handle: Awaited<ReturnType<typeof open>> | undefined
     try {
@@ -591,7 +699,7 @@ export class LocalBlobStore {
         ...(header.metadata ? { metadata: header.metadata } : {}),
       }
     } catch (error) {
-      return isMissing(error) ? VANISHED : null
+      return isMissing(error) ? VANISHED : new Unreadable(unreadableReason(error))
     } finally {
       await handle?.close()
     }
@@ -603,50 +711,119 @@ export class LocalBlobStore {
     const cached = await Promise.resolve(previous).catch(() => undefined)
     const byFile = new Map([...(cached?.values() ?? [])].map(entry => [entry.file, entry]))
     // Headers are read a few at a time and added in directory order, so duplicates are found as before.
-    const read = await mapLimit(files, HEADER_CONCURRENCY, async (file): Promise<Entry | null | typeof VANISHED> => {
+    const read = await mapLimit(files, HEADER_CONCURRENCY, async (file): Promise<Entry | Unreadable | typeof VANISHED> => {
       try {
         const cached = byFile.get(file)
         if (cached && fileStamp(await stat(join(dir, file), { bigint: true })) === cached.stamp) return cached
         return this.readEntry(dir, account, container, file)
       } catch (error) {
-        return isMissing(error) ? VANISHED : null
+        return isMissing(error) ? VANISHED : new Unreadable(unreadableReason(error))
       }
     })
-    let unreadable = 0
-    for (const entry of read) {
+    const unreadable: Array<{ file: string; reason: string }> = []
+    // Every file that claims a blob another file also claims: none of them can be trusted.
+    const claims = new Map<string, string[]>()
+    for (const [index, entry] of read.entries()) {
       // A file removed since the listing (retention, another device) is simply gone, and an empty claim holds no blob yet.
       if (entry === VANISHED) continue
-      // A file that cannot be read, or a second file for the same blob, is unreadable.
-      if (!entry || entries.has(entry.name)) unreadable++
-      else entries.set(entry.name, entry)
+      if (entry instanceof Unreadable) {
+        unreadable.push({ file: files[index]!, reason: entry.reason })
+        continue
+      }
+      const first = entries.get(entry.name)
+      if (first || claims.has(entry.name)) {
+        claims.set(entry.name, [...(claims.get(entry.name) ?? [first!.file]), entry.file])
+        entries.delete(entry.name)
+        continue
+      }
+      entries.set(entry.name, entry)
     }
-    if (unreadable) throw new IncompleteInventoryError(unreadable)
+    // Other containers fail closed, as the backup container did before damage could be traced.
+    if (container !== BACKUP_CONTAINER) {
+      const count = unreadable.length + [...claims.values()].reduce((sum, list) => sum + list.length, 0)
+      if (count) throw new IncompleteInventoryError(count)
+      return entries
+    }
+
+    const damage: InventoryDamage = { files: [], unavailable: new Map(), unattributed: 0 }
+    const unavailable = (folder: string, reason: string) => { if (!damage.unavailable.has(folder)) damage.unavailable.set(folder, reason) }
+    for (const [name, claimed] of claims) {
+      const folder = backupFolderOf(name)
+      for (const file of claimed) damage.files.push({ file, reason: "another file holds the same backup item", backup: folder })
+      if (folder) unavailable(folder, "two files hold the same backup item.")
+      else damage.unattributed += claimed.length
+    }
+
+    // Blob names whose files can be traced to a backup folder, by the encrypted file name they would have.
+    const folders = new Set([...entries.keys(), ...claims.keys()].map(backupFolderOf).filter((folder) => folder !== null))
+    const traced = new Map<string, string>()
+    for (const folder of folders) traced.set(`${folder}/metadata.json`, folder).set(`${folder}/${BACKUP_OWNER_FILE}`, folder)
+    const withManifest = new Set<string>()
+
     // Desktop metadata already contains a per-item manifest. Check it before
     // exposing any inventory to downloads or restores, including selective reads.
-    for (const entry of entries.values()) {
-      if (container !== "intune-backups" || !/^backup-[^/]+\/metadata\.json$/.test(entry.name)) continue
-      let raw: Buffer
+    for (const entry of [...entries.values()]) {
+      if (!/^backup-[^/]+\/metadata\.json$/.test(entry.name)) continue
+      const folder = backupFolderOf(entry.name)!
+      let metadata: { Items?: unknown }
       try {
-        raw = await readFile(join(dir, entry.file))
+        const raw = await readFile(join(dir, entry.file))
+        const body = raw.subarray(MAGIC_LENGTH + 2 + raw.readUInt16BE(MAGIC_LENGTH))
+        metadata = JSON.parse(this.decrypt(body, bodyAad(entry.version, account, container, entry.name)).toString())
       } catch (error) {
         // A manifest removed since the listing no longer describes a backup.
         if (isMissing(error)) { entries.delete(entry.name); continue }
-        throw error
+        damage.files.push({ file: entry.file, reason: unreadableReason(error), backup: folder })
+        unavailable(folder, "its manifest (metadata.json) could not be read.")
+        continue
       }
-      const body = raw.subarray(MAGIC_LENGTH + 2 + raw.readUInt16BE(MAGIC_LENGTH))
-      const metadata = JSON.parse(this.decrypt(body, bodyAad(entry.version, account, container, entry.name)).toString())
-      if (metadata.Items === undefined) continue // Legacy backups have no inventory manifest.
-      if (!metadata.Items || typeof metadata.Items !== "object" || Array.isArray(metadata.Items)) throw new Error("Invalid backup inventory manifest")
-      const prefix = entry.name.slice(0, -"metadata.json".length)
+      if (metadata?.Items === undefined) continue // Legacy backups have no inventory manifest.
+      if (!metadata.Items || typeof metadata.Items !== "object" || Array.isArray(metadata.Items)) {
+        unavailable(folder, "its manifest (metadata.json) is not valid.")
+        continue
+      }
+      const prefix = `${folder}/`
       let missing = 0
+      let valid = true
       for (const [key, item] of Object.entries(metadata.Items)) {
-        const folder = key.split("/")[0]
+        const type = key.split("/")[0]
         const file = (item as { file?: unknown } | null)?.file
-        if (!folder || typeof file !== "string" || !file || file.includes("/") || file.includes("\\")) throw new Error("Invalid backup inventory manifest")
-        if (!entries.has(`${prefix}${folder}/${file}`)) missing++
+        if (!type || typeof file !== "string" || !file || file.includes("/") || file.includes("\\")) { valid = false; break }
+        const name = `${prefix}${type}/${file}`
+        traced.set(name, folder)
+        if (!entries.has(name)) missing++
       }
-      if (missing) throw new Error(`Backup inventory is incomplete: ${missing} file(s) listed in the manifest are missing. Recover the missing files before downloading or restoring.`)
+      if (!valid) unavailable(folder, "its manifest (metadata.json) is not valid.")
+      else if (missing) unavailable(folder, `${missing} file${missing === 1 ? "" : "s"} listed in its manifest ${missing === 1 ? "is" : "are"} missing or damaged.`)
+      else withManifest.add(folder)
     }
+
+    if (unreadable.length) {
+      const byFileName = new Map<string, string>()
+      for (const [name, folder] of traced) {
+        for (const keys of this.keyring) {
+          for (const version of [1, 2] as const) byFileName.set(fileName(version, keys.naming, account, container, name), folder)
+        }
+      }
+      for (const { file, reason } of unreadable) {
+        const folder = byFileName.get(file) ?? null
+        damage.files.push({ file, reason, backup: folder })
+        if (folder) unavailable(folder, `one of its files could not be read: ${reason}.`)
+        else damage.unattributed++
+      }
+    }
+    // A file that cannot be traced may belong to any backup whose files cannot be checked against a manifest.
+    if (damage.unattributed > 0) {
+      for (const folder of folders) {
+        if (!withManifest.has(folder)) unavailable(folder, "files in the backup folder could not be read, and this backup has no manifest to show that none of them are its own.")
+      }
+    }
+    this.damageOf.set(entries, damage)
+    const stamps = new Map<string, string>()
+    await mapLimit(damage.files, HEADER_CONCURRENCY, async ({ file }) => {
+      try { stamps.set(file, fileStamp(await stat(join(dir, file), { bigint: true }))) } catch { stamps.set(file, "missing") }
+    })
+    this.damagedStamps.set(entries, stamps)
     return entries
   }
 

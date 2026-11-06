@@ -21,18 +21,28 @@ async function setup() {
   await store.put(account, container, 'backup-test/Policies/one.json', Buffer.from('{}'), 'application/json')
   return { root, key, store, dir: join(root, account, container) }
 }
-it('reports wrong keys instead of an empty list through the blob API', async () => {
+it('reports files made with another key on the container instead of only an empty list', async () => {
   const { root } = await setup()
-  const response = await handleLocalBlobRequest(new LocalBlobStore(root, [randomBytes(32)]), new Request(`https://${account}.blob.core.windows.net/${container}?restype=container&comp=list`))
-  expect(response.status).toBe(500)
-  expect(await response.text()).toContain('1 encrypted file(s) could not be read')
+  const store = new LocalBlobStore(root, [randomBytes(32)])
+  const listing = await handleLocalBlobRequest(store, new Request(`https://${account}.blob.core.windows.net/${container}?restype=container&comp=list`))
+  expect(listing.status).toBe(200)
+  expect(await listing.text()).toContain('<Blobs></Blobs>')
+  const properties = await handleLocalBlobRequest(store, new Request(`https://${account}.blob.core.windows.net/${container}?restype=container`))
+  expect(properties.headers.get('x-tenuvault-unreadable-files')).toBe('1')
+  expect(properties.headers.get('x-tenuvault-unavailable-backups')).toBe('0')
+  // A blob that may be in the unreadable file is not reported as missing.
+  const read = await handleLocalBlobRequest(store, new Request(`https://${account}.blob.core.windows.net/${container}/backup-test/Policies/one.json`))
+  expect(read.status).toBe(409)
+  expect(read.headers.get('x-ms-error-code')).toBe('InventoryIncomplete')
+  expect(await read.text()).toContain('could not be read')
 })
 it('rejects corrupt headers even after warming the inventory cache', async () => {
   const { store, dir } = await setup()
   expect(await store.list(account, container)).toHaveLength(1)
   writeFileSync(join(dir, readdirSync(dir)[0]!), 'corrupt')
-  await expect(store.list(account, container)).rejects.toThrow('1 encrypted file(s)')
-  await expect(store.get(account, container, 'backup-test/Policies/one.json')).rejects.toThrow('incomplete')
+  expect(await store.list(account, container)).toEqual([])
+  expect((await store.damage(account, container)).files).toMatchObject([{ reason: 'it is damaged or incomplete', backup: null }])
+  await expect(store.get(account, container, 'backup-test/Policies/one.json')).rejects.toThrow('could not be read')
 })
 it('blocks reads and listings when an authenticated manifest lists a missing file', async () => {
   const { store, root, key, dir } = await setup()
@@ -40,10 +50,10 @@ it('blocks reads and listings when an authenticated manifest lists a missing fil
   await store.put(account, container, 'backup-test/metadata.json', Buffer.from(JSON.stringify({ Items: { 'Policies/id': { file: 'one.json', hash: 'hash' } } })), 'application/json')
   expect(await store.list(account, container)).toHaveLength(2)
   rmSync(join(dir, policyFile))
-  await expect(store.get(account, container, 'backup-test/metadata.json')).rejects.toThrow('manifest are missing')
+  await expect(store.get(account, container, 'backup-test/metadata.json')).rejects.toThrow('listed in its manifest is missing')
   const fresh = new LocalBlobStore(root, [key])
-  await expect(fresh.get(account, container, 'backup-test/metadata.json')).rejects.toThrow('manifest are missing')
-  await expect(store.list(account, container)).rejects.toThrow('manifest are missing')
+  await expect(fresh.get(account, container, 'backup-test/metadata.json')).rejects.toThrow('listed in its manifest is missing')
+  await expect(store.list(account, container, 'backup-test/')).rejects.toThrow('listed in its manifest is missing')
 })
 it('shares one inventory reread between listings made together, and each still sees earlier changes', async () => {
   const { store, root, key } = await setup()
@@ -62,7 +72,11 @@ it('still rejects two files for the same blob when headers are read together', a
   const { store, dir } = await setup()
   const [file] = readdirSync(dir)
   copyFileSync(join(dir, file!), join(dir, `${'0'.repeat(40)}.tvb`))
-  await expect(store.list(account, container)).rejects.toThrow('1 encrypted file(s)')
+  // A version 2 header is bound to its file name, so the copy under another name is unreadable,
+  // cannot be traced, and the backup without a manifest cannot be checked against it.
+  expect((await store.list(account, container)).map(blob => blob.name)).toEqual(['backup-test/Policies/one.json'])
+  expect(await store.damage(account, container)).toMatchObject({ files: [{ file: `${'0'.repeat(40)}.tvb`, backup: null }], unattributed: 1 })
+  await expect(store.list(account, container, 'backup-test/')).rejects.toThrow('no manifest')
 })
 it.each([false, true])('syncs a complete file before resolving put (createOnly=%s)', async (createOnly) => {
   const { store, root, key, dir } = await setup()
