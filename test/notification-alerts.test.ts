@@ -100,6 +100,27 @@ describe("alert conditions", () => {
     expect(changeMatches(parseConditions({ excludeActors: ["lab automation"] }), update, "intune")).toBe(false)
   })
 
+  it("matches whole policy names with exact matching, ignoring case and surrounding spaces", () => {
+    const exact = (...names: string[]) => parseConditions({ policyNames: names, policyNameMatch: "exact" })
+    expect(changeMatches(exact("tv-alerts-test compliance"), update, "intune")).toBe(true)
+    // A part of the name is enough for contains, never for exact.
+    expect(changeMatches(exact("alerts-test"), update, "intune")).toBe(false)
+    expect(changeMatches(parseConditions({ policyNames: ["alerts-test"], policyNameMatch: "contains" }), update, "intune")).toBe(true)
+    expect(changeMatches(exact("TV-ALERTS-TEST compliance"), { ...update, resourceName: "\u00a0TV-ALERTS-TEST Compliance\t " }, "intune")).toBe(true)
+    expect(changeMatches(exact("TV-ALERTS-TEST compliance"), { ...update, resourceName: "TV-ALERTS-TEST compliance (copy)" }, "intune")).toBe(false)
+    expect(changeMatches(exact("TV-ALERTS-TEST compliance"), { ...update, resourceName: null }, "intune")).toBe(false)
+    expect(changeMatches(exact("Other", "TV-ALERTS-TEST CA"), caUpdate, "conditionalAccess")).toBe(true)
+  })
+
+  it("keeps exact matching only with names, so older alerts and their watcher hash stay the same", () => {
+    expect(parseConditions({ policyNames: ["A"] })).not.toHaveProperty("policyNameMatch")
+    expect(parseConditions({ policyNames: ["A"], policyNameMatch: "contains" })).not.toHaveProperty("policyNameMatch")
+    expect(parseConditions({ policyNames: ["A"], policyNameMatch: "EXACT" })).not.toHaveProperty("policyNameMatch")
+    expect(parseConditions({ policyNames: [], policyNameMatch: "exact" })).toBeNull()
+    expect(parseConditions({ policyNames: [], settingNames: ["x"], policyNameMatch: "exact" })).not.toHaveProperty("policyNameMatch")
+    expect(describeConditions(parseConditions({ policyNames: ["A", "B"], policyNameMatch: "exact" }))).toBe('policies named "A" or "B"')
+  })
+
   it("leaves Conditional Access changes alone when an alert picks Intune categories", () => {
     expect(changeMatches(parseConditions({ categories: ["Compliance"] }), caUpdate, "conditionalAccess")).toBe(true)
   })
@@ -196,8 +217,25 @@ describe("watcher parity", () => {
     expect(teams).toBe(canonicalJson(teamsWorkflowsPayload(single, DEFAULT_CARD_STYLE)))
     expect(JSON.parse(mail!)).toBe(emailHtml(single))
     expect(JSON.parse(taking!)).toEqual(["all"])
+    // Exact names: the full names pick their policies, a part of a name picks nothing.
+    const planned = [...planChangeAlerts("intune", intune, matchers, context), ...planChangeAlerts("conditionalAccess", entra, matchers, context)]
+    expect(planned.filter((entry) => entry.alertIds.includes("exact-hit")).map((entry) => entry.envelope.items[0]!.change!.auditId).sort()).toEqual(["IPCGraph_live-ca-create", "IPCGraph_live-ca-update", "live-intune-create", "live-intune-update"])
+    expect(planned.filter((entry) => entry.alertIds.includes("exact-miss"))).toEqual([])
     // Without alerts everything goes everywhere; with alerts only to set up destinations of alerts that take it.
     expect(JSON.parse(routing!)).toEqual({ legacy: ["webhook", "teams", "mail"], routed: ["teams"], planned: ["webhook"], nobody: [] })
+  }, 60_000)
+
+  it.runIf(Boolean(pwsh))("PowerShell matches policy names exactly like TypeScript", () => {
+    const update = intune.find((change) => change.auditId === "live-intune-update")!
+    const names = ["TV-ALERTS-TEST compliance", " tv-alerts-test COMPLIANCE ", "\u00a0TV-ALERTS-TEST compliance\t", "TV-ALERTS-TEST compliance ", "TV-ALERTS-TEST", "compliance", "TV-ALERTS-TEST  compliance", "Straße policy", "STRASSE POLICY", "", "\u00e9t\u00e9 \u00c9T\u00c9"]
+    const conditions = [["TV-ALERTS-TEST compliance"], ["tv-alerts-test"], ["Straße policy"], ["été ÉTÉ"], ["x", " TV-ALERTS-TEST compliance"]]
+    const cases = names.flatMap((name) => conditions.flatMap((policyNames) => ["exact", "contains"].map((policyNameMatch) => ({ change: { ...update, resourceName: name || null }, conditions: { policyNames, policyNameMatch } }))))
+    const expected = cases.map((entry) => changeMatches(parseConditions(entry.conditions), entry.change, "intune"))
+    const runbook = fileURLToPath(new URL("../resources/runbooks/Invoke-TenuVaultNotificationCheck.ps1", import.meta.url))
+    const command = `. '${runbook}' -LibraryOnly; $cases = [Console]::In.ReadToEnd() | ConvertFrom-Json; $out = foreach ($case in $cases) { [bool](Test-TvChangeMatches (ConvertTo-TvAlertConditions $case.conditions) $case.change "intune") }; ConvertTo-Json -Compress @($out)`
+    const actual = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-Command", command], { input: JSON.stringify(cases), encoding: "utf8" }).trim())
+    expect(actual).toEqual(expected)
+    expect(expected.filter(Boolean).length).toBeGreaterThan(10)
   }, 60_000)
 
   it.runIf(Boolean(pwsh))("PowerShell hashes the saved alerts file exactly like TypeScript hashes the alerts", () => {

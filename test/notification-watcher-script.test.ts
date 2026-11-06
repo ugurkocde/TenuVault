@@ -18,6 +18,7 @@ import { cloudOutcomeEvent, parseCloudOutcome } from "../src/shared/notification
 import entraFixture from "./fixtures/notifications/entra-audit.json"
 import { entraChangeDigest } from "../src/shared/notifications/audit"
 import { mapEntraAuditEvent, type EntraAuditRaw } from "../src/shared/notifications/entra"
+import { WATCHER_ALERTS_SCHEMA, watcherAlertsHash, type WatcherAlerts } from "../src/shared/notifications/alerts"
 
 const runbook = readFileSync(new URL("../resources/runbooks/Invoke-TenuVaultNotificationCheck.ps1", import.meta.url), "utf8")
 const setup = readFileSync(new URL("../resources/New-TenuVaultNotificationWatcher.ps1", import.meta.url), "utf8")
@@ -115,9 +116,12 @@ describe("Azure notification watcher scripts", () => {
     expect(setup).toContain('if ($PSBoundParameters.ContainsKey("TeamsCardLayoutPath"))')
   })
 
-  it("takes the alerts from TenuVault as an Automation variable, checked before any Azure write", () => {
+  it("takes the alerts from TenuVault as a file in the state container, checked before any Azure write", () => {
     expect(setup).toContain("[string]$AlertRulesPath")
     expect(setup).toContain('"TenuVaultAlertRules"')
+    expect(setup).toContain('$alertsBlobName = "alerts.json"')
+    expect(runbook).toContain('$alertsBlobUri = "$stateContainerUri/alerts.json"')
+    expect(runbook.match(/alertsSource = \$alertsSource/g)).toHaveLength(4)
     expect(setup).toContain("Get-Content -LiteralPath $AlertRulesPath -Raw -Encoding UTF8")
     expect(setup.indexOf("The alerts file has no alert")).toBeLessThan(setup.indexOf("Writing Automation variables"))
     expect(setup).toContain('if ($PSBoundParameters.ContainsKey("AlertRulesPath"))')
@@ -130,6 +134,103 @@ describe("Azure notification watcher scripts", () => {
     expect(setup).toContain("No alert in the file takes these watcher events")
     expect(runbook).toContain("alertRules=")
   })
+
+  it.runIf(Boolean(pwsh))("setup spreads runs faster than hourly over extra hourly schedules and cleans them up", () => {
+    const script = fileURLToPath(new URL("./fixtures/notifications/setup-harness.ps1", import.meta.url))
+    type Schedule = { name: string; interval: number; minute: number; linked: boolean }
+    // The harness adds an unrelated TenuVaultNotificationCheck-7 first; it must survive every run, -Remove included.
+    const runs = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-Scenario", "schedules"], { encoding: "utf8" }).trim().split(/\r?\n/).map((line) => JSON.parse(line)).map((run) => {
+      expect(run.schedules.some((schedule: Schedule) => schedule.name === "TenuVaultNotificationCheck-7")).toBe(true)
+      return { ...run, schedules: run.schedules.filter((schedule: Schedule) => schedule.name !== "TenuVaultNotificationCheck-7") }
+    })
+    const names = (run: { schedules: Schedule[] }) => run.schedules.map((schedule) => schedule.name)
+    // The countdown to the first run moves with the clock; everything else must be identical.
+    const stable = (run: { schedules: Array<Schedule & { startsInMinutes?: number }>; links: string[] }) => ({ links: run.links, schedules: run.schedules.map(({ startsInMinutes: _countdown, ...rest }) => rest) })
+    const [hourly, quarter, again, half, back, fourHours, twenty, removed] = runs
+    expect(names(hourly)).toEqual(["TenuVaultNotificationCheck"])
+    const base = hourly.schedules[0].minute
+    // A new schedule first runs about 10 minutes from now, not an hour later.
+    expect(hourly.schedules[0].startsInMinutes).toBeGreaterThan(5)
+    expect(hourly.schedules[0].startsInMinutes).toBeLessThan(11)
+    // Every 15 minutes: four hourly schedules, linked, 15 minutes apart from the base schedule's minute.
+    expect(names(quarter)).toEqual(["TenuVaultNotificationCheck", "TenuVaultNotificationCheck-2", "TenuVaultNotificationCheck-3", "TenuVaultNotificationCheck-4"])
+    expect(quarter.schedules.map((schedule: Schedule) => schedule.minute)).toEqual([0, 15, 30, 45].map((offset) => (base + offset) % 60))
+    expect(quarter.schedules.every((schedule: Schedule) => schedule.interval === 1 && schedule.linked)).toBe(true)
+    // A rerun with the same interval changes nothing.
+    expect(stable(again)).toEqual(stable(quarter))
+    expect(half.schedules.map((schedule: Schedule) => [schedule.name, schedule.minute])).toEqual([["TenuVaultNotificationCheck", base], ["TenuVaultNotificationCheck-2", (base + 30) % 60]])
+    expect(stable(back)).toEqual(stable(hourly))
+    expect(fourHours.schedules).toMatchObject([{ name: "TenuVaultNotificationCheck", interval: 4, linked: true }])
+    expect(twenty.schedules.map((schedule: Schedule) => schedule.interval)).toEqual([1, 1, 1])
+    const twentyBase = twenty.schedules[0].minute
+    expect(twenty.schedules.map((schedule: Schedule) => schedule.minute)).toEqual([0, 20, 40].map((offset) => (twentyBase + offset) % 60))
+    expect(twenty.links).toEqual(names(twenty))
+    expect(removed.schedules).toEqual([])
+    expect(removed.links).toEqual([])
+    // A schedule turned off by an administrator is reported, never turned back on.
+    const disabled = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-Scenario", "disabled"], { encoding: "utf8" })
+    expect(disabled).toContain("Schedule 'TenuVaultNotificationCheck' is turned off or expired")
+    expect(JSON.parse(disabled.trim().split(/\r?\n/).at(-1)!)).toEqual({ enabled: false })
+    const conflict = JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script, "-Scenario", "conflict"], { encoding: "utf8" }).trim())
+    expect(conflict.error).toContain("contradict each other")
+  }, 120_000)
+
+  it.runIf(Boolean(pwsh))("setup writes the alerts to alerts.json, keeps them on a rerun and deletes them with an empty path", () => {
+    const script = fileURLToPath(new URL("./fixtures/notifications/setup-harness.ps1", import.meta.url))
+    const [before, written, kept, cleared] = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-Scenario", "alerts"], { encoding: "utf8" }).trim().split(/\r?\n/).filter((line) => line.startsWith("{")).map((line) => JSON.parse(line))
+    expect(before.alertsBlob).toBeNull()
+    expect(JSON.parse(written.alertsBlob).alerts[0].conditions.policyNameMatch).toBe("exact")
+    expect(written.alertsBlobType).toBe("application/json; charset=utf-8")
+    // The older variable is emptied, so only one copy of the alerts exists.
+    expect(written.alertRulesVariable).toBe("")
+    expect(kept.alertsBlob).toBe(written.alertsBlob)
+    expect(cleared.alertsBlob).toBeNull()
+    // A file that cannot be checked is never reported as removed.
+    const [failed, after] = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-Scenario", "forbidden"], { encoding: "utf8" }).trim().split(/\r?\n/).filter((line) => line.startsWith("{")).map((line) => JSON.parse(line))
+    expect(failed.error).toContain("Could not check 'alerts.json'")
+    expect(after.kept).toBe(true)
+  }, 120_000)
+
+  it.runIf(Boolean(pwsh))("the watcher runs the alerts from alerts.json, else from setup, and never falls silent", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tv-run-"))
+    const document: WatcherAlerts = { schema: WATCHER_ALERTS_SCHEMA, alerts: [{ id: "exact", title: "Exact", eventTypes: ["intune.change"], minSeverity: "info", destinations: ["webhook"], delivery: "each", conditions: { changeTypes: [], categories: [], policyNames: ["tv-alerts-test compliance"], policyNameMatch: "exact", settingNames: [], excludeActors: [] } }] }
+    const older: WatcherAlerts = { schema: WATCHER_ALERTS_SCHEMA, alerts: [{ id: "teams", title: "Teams", eventTypes: ["intune.change"], minSeverity: "info", destinations: ["teams"], delivery: "digest", conditions: null }] }
+    const run = (blob: string, variable: string, readFails = false) => {
+      const blobPath = join(dir, `blob-${Math.random()}.json`)
+      const variablePath = join(dir, `variable-${Math.random()}.json`)
+      writeFileSync(blobPath, blob)
+      writeFileSync(variablePath, variable)
+      const script = fileURLToPath(new URL("./fixtures/notifications/run-watcher.ps1", import.meta.url))
+      return JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script, "-AlertsBlobPath", blobPath, "-AlertsVariablePath", variablePath, ...(readFails ? ["-AlertsReadFails"] : [])], { encoding: "utf8" }).trim()) as { posts: Array<{ host: string; title: string }>; heartbeat: Record<string, unknown>; output: string[] }
+    }
+    // alerts.json wins over the variable, written by the app as pretty JSON with a byte order mark.
+    const fromFile = run(`\ufeff${JSON.stringify(document, null, 2)}\n`, JSON.stringify(older))
+    expect(fromFile.heartbeat).toMatchObject({ alertsSource: "storage", alertsHash: watcherAlertsHash(document), runbookVersion: "1.2.0", lastError: null })
+    expect(fromFile.posts.map((post) => post.host)).toEqual(["hooks.example.test", "hooks.example.test"])
+    expect(fromFile.posts.map((post) => post.title)).toEqual(["Intune change: TV-ALERTS-TEST compliance created", "Intune change: TV-ALERTS-TEST compliance updated"])
+    // Without the file, a watcher set up earlier keeps the alerts of its setup.
+    const fromSetup = run("", JSON.stringify(older))
+    expect(fromSetup.heartbeat).toMatchObject({ alertsSource: "setup", alertsHash: watcherAlertsHash(older) })
+    expect(fromSetup.posts.map((post) => post.host)).toEqual(["contoso.webhook.office.com"])
+    // An unreadable file sends every event everywhere and says so.
+    const unreadable = run("not json", JSON.stringify(older))
+    expect(unreadable.heartbeat).toMatchObject({ alertsSource: "storage", alertsHash: "unreadable" })
+    expect(new Set(unreadable.posts.map((post) => post.host))).toEqual(new Set(["hooks.example.test", "contoso.webhook.office.com"]))
+    expect(unreadable.output.join("\n")).toContain("alerts.json could not be read; every event goes to every destination")
+    // An empty file says so and sends everything, like a damaged one.
+    const blank = run(" \n", JSON.stringify(older))
+    expect(blank.heartbeat).toMatchObject({ alertsSource: "storage", alertsHash: "unreadable" })
+    expect(blank.output.join("\n")).toContain("alerts.json could not be read; every event goes to every destination")
+    expect(new Set(blank.posts.map((post) => post.host))).toEqual(new Set(["hooks.example.test", "contoso.webhook.office.com"]))
+    // A file that cannot be read never brings back the older setup alerts: everything goes everywhere.
+    const failedRead = run(JSON.stringify(document), JSON.stringify(older), true)
+    expect(failedRead.heartbeat).toMatchObject({ alertsSource: "storage", alertsHash: "unreadable", lastError: null })
+    expect(failedRead.output.join("\n")).toContain("alerts.json could not be read (")
+    expect(new Set(failedRead.posts.map((post) => post.host))).toEqual(new Set(["hooks.example.test", "contoso.webhook.office.com"]))
+    const none = run("", "")
+    expect(none.heartbeat).toMatchObject({ alertsSource: "none", alertsHash: "none" })
+    expect(new Set(none.posts.map((post) => post.host))).toEqual(new Set(["hooks.example.test", "contoso.webhook.office.com"]))
+  }, 180_000)
 
   it("desktop setup adds notification scopes only with the opt-in switch", () => {
     expect(desktopApp).toContain("[switch]$IncludeNotifications")

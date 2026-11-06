@@ -122,12 +122,133 @@ describe("the Azure watcher runs which alerts", () => {
     await checkWatcher(w.deps, TENANT_A)
     let status = (await call(w.api, PATH, { tenantId: TENANT_A, action: "get-status" })).body
     const exported = (await call(w.api, PATH, { tenantId: TENANT_A, action: "export-watcher-alerts" })).body
-    expect(status.watcherAlerts).toEqual({ current: watcherAlertsHash(exported.document), reported: "none" })
+    expect(status.watcherAlerts).toMatchObject({ current: watcherAlertsHash(exported.document), reported: "none", readsAlertsFile: null, auto: false, pushedHash: null })
     expect(status.signedIn).toBe(true)
     reported = watcherAlertsHash(exported.document)
     await checkWatcher(w.deps, TENANT_A)
     status = (await call(w.api, PATH, { tenantId: TENANT_A, action: "get-status" })).body
     expect(status.watcherAlerts.reported).toBe(status.watcherAlerts.current)
+  })
+})
+
+describe("updating the Azure watcher's alerts from the app", () => {
+  function watched(w: ReturnType<typeof world>, write: (text: string) => { status: "ok" } | { status: "error"; message: string } = () => ({ status: "ok" })) {
+    const writes: string[] = []
+    w.deps.watcherAlertsWrite = async (_tenant, text) => { writes.push(text); return write(text) }
+    saveAuditWatch(w.deps, TENANT_A, { externalWatcher: true }, { actor: null, reason: "test" })
+    return writes
+  }
+
+  it("writes the watcher document, records it, and reads as sent until the watcher reports it", async () => {
+    const w = world()
+    const writes = watched(w)
+    let heartbeat: { alertsHash: string | null; runbookVersion: string | null } = { alertsHash: "none", runbookVersion: "1.2.0" }
+    w.deps.watcherHeartbeat = async () => ({ status: "ok", runAt: NOW.toISOString(), lastError: null, ...heartbeat, alertsSource: "storage" })
+    const channelId = await webhook(w)
+    await call(w.api, PATH, { tenantId: TENANT_A, action: "add-rule", title: "One policy", eventTypes: ["intune.change"], channelIds: [channelId], conditions: { policyNames: ["Windows 11 - Compliance"], policyNameMatch: "exact" } })
+    // Automatic updates are off: saving an alert writes nothing.
+    expect(writes).toHaveLength(0)
+    const pushed = await call(w.api, PATH, { tenantId: TENANT_A, action: "push-watcher-alerts" })
+    expect(pushed.status).toBe(200)
+    expect(writes).toHaveLength(1)
+    const exported = (await call(w.api, PATH, { tenantId: TENANT_A, action: "export-watcher-alerts" })).body
+    // The same document the setup script takes, so both produce the same alerts hash.
+    expect(JSON.parse(writes[0]!)).toEqual(exported.document)
+    expect(exported.document.alerts[0].conditions).toMatchObject({ policyNames: ["Windows 11 - Compliance"], policyNameMatch: "exact" })
+    expect(pushed.body).toMatchObject({ ok: true, alerts: 1, hash: watcherAlertsHash(exported.document), uncovered: expect.arrayContaining(["backup.failed"]) })
+    await checkWatcher(w.deps, TENANT_A)
+    let status = (await call(w.api, PATH, { tenantId: TENANT_A, action: "get-status" })).body.watcherAlerts
+    expect(status).toMatchObject({ pushedHash: status.current, reported: "none", readsAlertsFile: true, source: "storage", error: null })
+    heartbeat = { alertsHash: status.current, runbookVersion: "1.2.0" }
+    await checkWatcher(w.deps, TENANT_A)
+    status = (await call(w.api, PATH, { tenantId: TENANT_A, action: "get-status" })).body.watcherAlerts
+    expect(status.reported).toBe(status.current)
+  })
+
+  it("updates on every alert and channel change once automatic updates are on, and only when something changed", async () => {
+    const w = world()
+    const writes = watched(w)
+    const channelId = await webhook(w)
+    const added = await call(w.api, PATH, { tenantId: TENANT_A, action: "add-rule", title: "Changes", eventTypes: ["intune.change"], channelIds: [channelId] })
+    const on = await call(w.api, PATH, { tenantId: TENANT_A, action: "push-watcher-alerts", auto: true })
+    expect(on.status).toBe(200)
+    expect(writes).toHaveLength(1)
+    const ruleId = added.body.rule.id
+    const updated = await call(w.api, PATH, { tenantId: TENANT_A, action: "update-rule", ruleId, conditions: { policyNames: ["WiFi"] } })
+    expect(writes).toHaveLength(2)
+    expect(updated.body.watcherSync).toMatchObject({ ok: true })
+    expect(JSON.parse(writes[1]!).alerts[0].conditions.policyNames).toEqual(["WiFi"])
+    // A save that changes nothing the watcher reads writes nothing.
+    await call(w.api, PATH, { tenantId: TENANT_A, action: "update-rule", ruleId, title: "Changes" })
+    expect(writes).toHaveLength(2)
+    // Turning the only remote channel off leaves the watcher nothing to run: refused, recorded, not written.
+    const off = await call(w.api, PATH, { tenantId: TENANT_A, action: "revoke-disable-channel", channelId })
+    expect(off.status).toBe(200)
+    expect(off.body.watcherSync).toMatchObject({ ok: false, error: expect.stringContaining("No alert sends to a webhook") })
+    expect(writes).toHaveLength(2)
+    const status = (await call(w.api, PATH, { tenantId: TENANT_A, action: "get-status" })).body.watcherAlerts
+    expect(status.error).toContain("No alert sends to a webhook")
+    await call(w.api, PATH, { tenantId: TENANT_A, action: "push-watcher-alerts", auto: false, write: false })
+    await call(w.api, PATH, { tenantId: TENANT_A, action: "update-channel", channelId, enabled: true })
+    expect(writes).toHaveLength(2)
+  })
+
+  it("skips automatic updates while signed out, keeps writes in order, and updates tenants alerts were copied to", async () => {
+    const w = world({ plans: { [TENANT_A]: "msp", [TENANT_B]: "msp" } })
+    const order: string[] = []
+    let delay = 30
+    w.deps.watcherAlertsWrite = async (tenant, text) => {
+      const wait = delay
+      delay = 0
+      await new Promise((resolve) => setTimeout(resolve, wait))
+      order.push(`${tenant}:${JSON.parse(text).alerts.map((alert: { title: string }) => alert.title).join(",")}`)
+      return { status: "ok" }
+    }
+    for (const tenant of [TENANT_A, TENANT_B]) saveAuditWatch(w.deps, tenant, { externalWatcher: true, watcherAlertsSync: { auto: true, pushedAt: null, pushedHash: null, error: null, errorAt: null } }, { actor: null, reason: "test" })
+    const channelId = await webhook(w)
+    const added = await call(w.api, PATH, { tenantId: TENANT_A, action: "add-rule", title: "First", eventTypes: ["intune.change"], channelIds: [channelId] })
+    // Two pushes at once: the slow first one still lands before the second.
+    const { pushWatcherAlerts } = await import("../src/main/features/notifications")
+    await call(w.api, PATH, { tenantId: TENANT_A, action: "update-rule", ruleId: added.body.rule.id, title: "Renamed" })
+    // The first write is slow and the second, with newer alerts, fast: the newer one still lands last.
+    delay = 30
+    const first = pushWatcherAlerts(w.deps, TENANT_A, null)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    w.deps.records.update<RuleRecord>(DOMAINS.notificationRules, TENANT_A, added.body.rule.id, (value) => ({ ...value, title: "Newer" }), { actor: null, reason: "test" })
+    await Promise.all([first, pushWatcherAlerts(w.deps, TENANT_A, null)])
+    expect(order.slice(-2)).toEqual([`${TENANT_A}:Renamed`, `${TENANT_A}:Newer`])
+    // Copying alerts to another tenant updates that tenant's watcher.
+    await webhook(w, TENANT_B)
+    await call(w.api, PATH, { tenantId: TENANT_A, action: "portfolio-copy-rules", ruleIds: [added.body.rule.id], targetTenants: [{ tenantId: TENANT_B }] })
+    expect(order.at(-1)).toBe(`${TENANT_B}:Newer`)
+    // Signed out: a save writes nothing (no sign-in prompt mid-save).
+    const before = order.length
+    w.deps.actor = () => null
+    await call(w.api, PATH, { tenantId: TENANT_A, action: "update-rule", ruleId: added.body.rule.id, title: "Signed out" })
+    expect(order).toHaveLength(before)
+  })
+
+  it("reports a storage failure, needs an Azure watcher and the plan", async () => {
+    const w = world({ plans: { [TENANT_A]: "pro", [TENANT_B]: "community" } })
+    const writes = watched(w, () => ({ status: "error", message: "Your account cannot write to the watcher's state container." }))
+    const channelId = await webhook(w)
+    await call(w.api, PATH, { tenantId: TENANT_A, action: "add-rule", title: "Changes", eventTypes: ["intune.change"], channelIds: [channelId] })
+    const failed = await call(w.api, PATH, { tenantId: TENANT_A, action: "push-watcher-alerts" })
+    expect(failed.status).toBe(502)
+    expect(failed.body.error).toContain("cannot write")
+    expect(writes).toHaveLength(1)
+    expect((await call(w.api, PATH, { tenantId: TENANT_A, action: "get-status" })).body.watcherAlerts).toMatchObject({ error: expect.stringContaining("cannot write"), pushedHash: null })
+    saveAuditWatch(w.deps, TENANT_A, { externalWatcher: false }, { actor: null, reason: "test" })
+    expect((await call(w.api, PATH, { tenantId: TENANT_A, action: "push-watcher-alerts" })).status).toBe(409)
+    expect((await call(w.api, PATH, { tenantId: TENANT_B, action: "push-watcher-alerts" })).status).toBe(402)
+  })
+
+  it("tells an older runbook from one that reads alerts.json", async () => {
+    const w = world()
+    watched(w)
+    w.deps.watcherHeartbeat = async () => ({ status: "ok", runAt: NOW.toISOString(), lastError: null, alertsHash: "none", runbookVersion: "1.1.0" })
+    await checkWatcher(w.deps, TENANT_A)
+    expect((await call(w.api, PATH, { tenantId: TENANT_A, action: "get-status" })).body.watcherAlerts).toMatchObject({ runbookVersion: "1.1.0", readsAlertsFile: false })
   })
 })
 

@@ -24,8 +24,14 @@ export interface AlertConditions {
   changeTypes: AuditChangeType[]
   /** Intune audit categories; empty sends every category. Conditional Access changes have none and always pass. */
   categories: string[]
-  /** Parts of policy names; a change passes when its name contains one, ignoring case. Empty passes every name. */
+  /** Policy names; a change passes when its name contains one, ignoring case. Empty passes every name. */
   policyNames: string[]
+  /**
+   * "exact": a change passes only when its policy name is one of policyNames, ignoring case and
+   * surrounding spaces. Absent means contains, so alerts saved before this field keep their meaning
+   * and their watcher hash.
+   */
+  policyNameMatch?: "exact"
   /** Parts of setting names; a change passes when one of its changed settings contains one. Empty passes every change. */
   settingNames: string[]
   /** Admins or apps (UPN or app name, exact, ignoring case) whose changes are never sent. */
@@ -81,6 +87,8 @@ export function parseConditions(value: unknown): AlertConditions | null {
     settingNames: textList(raw.settingNames),
     excludeActors: textList(raw.excludeActors),
   }
+  // Only stored when it narrows something, so a plain alert and its watcher copy stay unchanged.
+  if (raw.policyNameMatch === "exact" && conditions.policyNames.length) conditions.policyNameMatch = "exact"
   return hasConditions(conditions) ? conditions : null
 }
 
@@ -99,12 +107,22 @@ const contains = (haystack: string | null | undefined, needles: string[]) => {
   return needles.some((needle) => lower.includes(needle.toLowerCase()))
 }
 
+/** Spaces, tabs and no-break spaces around a name, which audit records sometimes keep. The runbook strips the same set. */
+const EDGE_SPACE = /^[ \t\u00a0]+|[ \t\u00a0]+$/g
+
+/** Whether a name equals one of the names, ignoring case and surrounding spaces. */
+const equalsAny = (haystack: string | null | undefined, names: string[]) => {
+  if (!haystack) return false
+  const lower = haystack.replace(EDGE_SPACE, "").toLowerCase()
+  return names.some((name) => name.replace(EDGE_SPACE, "").toLowerCase() === lower)
+}
+
 /** Whether one change passes an alert's conditions. */
 export function changeMatches(conditions: AlertConditions | null | undefined, change: AuditChange, service: ChangeService): boolean {
   if (!conditions) return true
   if (conditions.changeTypes.length && !conditions.changeTypes.includes(change.changeType)) return false
   if (service === "intune" && conditions.categories.length && !conditions.categories.some((category) => category.toLowerCase() === change.category.toLowerCase())) return false
-  if (conditions.policyNames.length && !contains(change.resourceName, conditions.policyNames)) return false
+  if (conditions.policyNames.length && !(conditions.policyNameMatch === "exact" ? equalsAny : contains)(change.resourceName, conditions.policyNames)) return false
   if (conditions.settingNames.length && !(change.settings ?? []).some((name) => contains(name, conditions.settingNames))) return false
   if (conditions.excludeActors.length) {
     const actors = [change.actorUpn, change.actorAppName].filter((entry): entry is string => Boolean(entry)).map((entry) => entry.toLowerCase())
@@ -176,11 +194,14 @@ export function describeConditions(conditions: AlertConditions | null | undefine
   const c = conditions!
   if (c.changeTypes.length) parts.push(`${c.changeTypes.join(", ")} only`)
   if (c.categories.length) parts.push(`categories ${c.categories.join(", ")}`)
-  if (c.policyNames.length) parts.push(`policy names containing ${c.policyNames.map((name) => `"${name}"`).join(" or ")}`)
+  if (c.policyNames.length) parts.push(`${c.policyNameMatch === "exact" ? "policies named" : "policy names containing"} ${c.policyNames.map((name) => `"${name}"`).join(" or ")}`)
   if (c.settingNames.length) parts.push(`changed settings containing ${c.settingNames.map((name) => `"${name}"`).join(" or ")}`)
   if (c.excludeActors.length) parts.push(`not by ${c.excludeActors.join(", ")}`)
   return parts.join("; ")
 }
+
+/** The Azure watcher counts as stale when its last run is older than this. The desktop alerts on it and the Alerts page shows it. */
+export const WATCHER_STALE_HOURS = 3
 
 /** The Azure watcher's copy of the alerts: kinds of destinations instead of desktop channel ids. */
 export const WATCHER_ALERTS_SCHEMA = "tenuvault.watcher-alerts/v1"

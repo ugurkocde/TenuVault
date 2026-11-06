@@ -379,7 +379,7 @@ async function bootstrap(): Promise<void> {
       if (Notification.isSupported()) new Notification({ title, body }).show()
     },
     // The watcher writes heartbeat.json next to its state in the backup storage account. Only
-    // runAt and lastError are kept; the rest of the file is not read.
+    // runAt, lastError and which alerts it runs are kept; the rest of the file is not read.
     watcherHeartbeat: async (tenantId) => {
       const profile = tenantProfile(tenantId)
       if (!profile || isLocalAccount(profile.storageAccountName)) return { status: "missing" }
@@ -405,7 +405,30 @@ async function bootstrap(): Promise<void> {
       const lastError = typeof body.lastError === "string" ? body.lastError.slice(0, 300) : null
       // Which alerts the watcher runs; older runbooks write none, which reads as unknown.
       const alertsHash = typeof body.alertsHash === "string" ? body.alertsHash.slice(0, 80) : null
-      return { status: "ok", runAt: body.runAt, lastError, alertsHash }
+      const runbookVersion = typeof body.runbookVersion === "string" ? body.runbookVersion.slice(0, 20) : null
+      const alertsSource = typeof body.alertsSource === "string" ? body.alertsSource.slice(0, 20) : null
+      return { status: "ok", runAt: body.runAt, lastError, alertsHash, runbookVersion, alertsSource }
+    },
+    // The alerts the watcher reads on its next run, written next to its state (Alerts > Update watcher).
+    watcherAlertsWrite: async (tenantId, text) => {
+      const profile = tenantProfile(tenantId)
+      if (!profile || isLocalAccount(profile.storageAccountName)) return { status: "error", message: "This tenant keeps its backups on this computer, so it has no Azure watcher to update." }
+      try {
+        assertStorageAccountName(profile.storageAccountName)
+      } catch {
+        return { status: "error", message: "The backup storage account name is not valid, so the watcher alerts were not written." }
+      }
+      const token = (await tokenFor(tenantId, profile.clientId, "https://storage.azure.com/.default")).accessToken
+      const response = await bridgedFetch(`https://${profile.storageAccountName}.blob.core.windows.net/tenuvault-notification-state/alerts.json`, {
+        method: "PUT",
+        headers: { authorization: `Bearer ${token}`, "x-ms-version": "2021-12-02", "x-ms-blob-type": "BlockBlob", "content-type": "application/json; charset=utf-8" },
+        body: text,
+        signal: AbortSignal.timeout(30_000),
+      })
+      if (response.ok) return { status: "ok" }
+      if (response.status === 404) return { status: "error", message: "The storage account has no tenuvault-notification-state container. Run the watcher setup once, then try again." }
+      if (response.status === 403) return { status: "error", message: "Your account cannot write to the watcher's state container. It needs Storage Blob Data Contributor on the backup storage account, as New-TenuVaultStorage.ps1 grants." }
+      return { status: "error", message: `The storage account answered HTTP ${response.status} when the watcher alerts were written.` }
     },
     now: () => new Date(),
   }

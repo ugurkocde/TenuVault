@@ -8,7 +8,7 @@ import type { NotificationRule, NotificationsStatus, PublicChannel } from "../..
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const state = vi.hoisted(() => ({ status: null as unknown as NotificationsStatus, watchUpdates: [] as unknown[] }))
+const state = vi.hoisted(() => ({ status: null as unknown as NotificationsStatus, watchUpdates: [] as unknown[], pushes: [] as unknown[], added: [] as unknown[] }))
 
 vi.mock("../../src/renderer/features/notifications/api", async (original) => ({
   ...(await original<typeof import("../../src/renderer/features/notifications/api")>()),
@@ -17,6 +17,8 @@ vi.mock("../../src/renderer/features/notifications/api", async (original) => ({
     updateAuditWatch: async (_tenant: unknown, body: unknown) => { state.watchUpdates.push(body); return { auditWatch: null } },
     listAuditCategories: async () => ({ categories: ["Compliance"], source: "known" }),
     listAlertSuggestions: async () => ({ policies: [], settings: [], backup: null, error: null }),
+    pushWatcherAlerts: async (_tenant: unknown, body: unknown = {}) => { state.pushes.push(body); return { watcherAlerts: state.status.watcherAlerts, skipped: [], uncovered: [] } },
+    addRule: async (_tenant: unknown, body: unknown) => { state.added.push(body); return { rule: body } },
   },
 }))
 vi.mock("../../src/portal/contexts/TenantContext", () => ({ useTenants: () => [] }))
@@ -115,6 +117,28 @@ describe("the Alerts page", () => {
     const prefilled = document.body.querySelector('[role="dialog"]')!
     expect((prefilled.querySelector('input[placeholder="For example: Compliance policy changes"]') as HTMLInputElement).value).toBe("Changes to Windows baseline")
     expect((prefilled.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Windows baseline")
+    // A policy picked elsewhere means only that policy: exact name matching is on.
+    const exact = [...prefilled.querySelectorAll('[role="radio"]')].find((radio) => radio.textContent === "Exact name")!
+    expect(exact.getAttribute("aria-checked")).toBe("true")
+    expect(prefilled.textContent).toContain("Policy names are exactly")
+    state.added = []
+    const save = [...prefilled.querySelectorAll("button")].find((button) => button.textContent === "Add alert" || button.textContent === "Save alert") as HTMLButtonElement
+    await act(async () => { save.click() })
+    expect(state.added).toMatchObject([{ conditions: { policyNames: ["Windows baseline"], policyNameMatch: "exact" } }])
+  })
+
+  it("switches a policy filter between contains and exact name", async () => {
+    state.status = { ...empty, channels: [teams], signedIn: true }
+    const container = await render(AlertsTab, true)
+    act(() => ([...container.querySelectorAll("button")].find((button) => button.textContent === "Add alert")!).click())
+    act(() => ([...document.body.querySelectorAll('[role="dialog"] button')].find((button) => button.textContent === "Compliance policy changes") as HTMLButtonElement).click())
+    const dialog = document.body.querySelector('[role="dialog"]')!
+    const radio = (label: string) => [...dialog.querySelectorAll('[role="radio"]')].find((entry) => entry.textContent === label) as HTMLButtonElement
+    expect(radio("Contains").getAttribute("aria-checked")).toBe("true")
+    expect(dialog.textContent).toContain("Choose Exact name for only that policy")
+    act(() => radio("Exact name").click())
+    expect(radio("Exact name").getAttribute("aria-checked")).toBe("true")
+    expect(dialog.textContent).toContain("Renaming the policy stops its alerts")
   })
 
   it("filters deliveries and offers Retry on failed ones", async () => {
@@ -128,6 +152,84 @@ describe("the Alerts page", () => {
     expect(container.textContent).toContain("Failed one")
     expect(container.textContent).not.toContain("Sent one")
     expect([...container.querySelectorAll("button")].some((button) => button.textContent === "Retry")).toBe(true)
+  })
+})
+
+describe("the Azure watcher card", () => {
+  const watched = (watcherAlerts: Partial<NonNullable<NotificationsStatus["watcherAlerts"]>>, runbookVersion: string | null = "1.2.0"): NotificationsStatus => ({
+    ...empty,
+    channels: [teams],
+    signedIn: true,
+    auditWatch: { enabled: false, intervalMinutes: 15, categories: [], ignoreOwnChanges: true, includeActor: false, externalWatcher: true, lastPollAt: null, lastError: null, watermark: null, conditionalAccess: { enabled: false, watermark: null, lastPollAt: null, lastError: null }, watcherCheck: { checkedAt: new Date(Date.now() - 5 * 60_000).toISOString(), lastRunAt: new Date(Date.now() - 10 * 60_000).toISOString(), stale: false, error: null, alertsHash: "old", runbookVersion } },
+    watcherAlerts: { current: "new", reported: "old", source: "storage", runbookVersion, readsAlertsFile: runbookVersion === null ? null : runbookVersion >= "1.2.0", auto: false, pushedAt: null, pushedHash: null, error: null, errorAt: null, ...watcherAlerts },
+  })
+  const card = (container: HTMLElement) => container.querySelector('[aria-labelledby="notifications-watcher-sync-heading"]') as HTMLElement
+
+  it("updates the watcher from the app and can do so on every change", async () => {
+    state.pushes = []
+    state.status = watched({})
+    const container = await render(AlertsTab, true)
+    expect(card(container).textContent).toContain("Needs an update")
+    const update = [...card(container).querySelectorAll("button")].find((button) => button.textContent === "Update watcher")!
+    await act(async () => { update.click() })
+    expect(state.pushes).toEqual([{}])
+    const auto = card(container).querySelector('input[type="checkbox"]') as HTMLInputElement
+    await act(async () => { auto.click() })
+    expect(state.pushes).toEqual([{}, { auto: true, write: true }])
+  })
+
+  it("says when the update waits for the next run, failed, or needs a setup rerun first", async () => {
+    state.status = watched({ pushedHash: "new", pushedAt: new Date(Date.now() - 60_000).toISOString() })
+    let container = await render(AlertsTab, true)
+    expect(card(container).textContent).toContain("Waiting for its next run")
+    for (const root of roots.splice(0)) act(() => root.unmount())
+    // The watcher ran after the update but still reports the old alerts: a warning, not waiting.
+    const ran = watched({ pushedHash: "new", pushedAt: new Date(Date.now() - 60 * 60_000).toISOString(), source: "setup" })
+    state.status = ran
+    container = await render(AlertsTab, true)
+    expect(card(container).textContent).toContain("Not using the update")
+    expect(card(container).textContent).toContain("the alerts from its setup")
+    for (const root of roots.splice(0)) act(() => root.unmount())
+    state.status = watched({ error: "Your account cannot write to the watcher's state container.", errorAt: new Date().toISOString() })
+    container = await render(AlertsTab, true)
+    expect(card(container).querySelector('[role="alert"]')?.textContent).toContain("cannot write")
+    for (const root of roots.splice(0)) act(() => root.unmount())
+    state.status = watched({}, "1.1.0")
+    container = await render(AlertsTab, true)
+    expect(card(container).textContent).toContain("Needs a setup rerun")
+    expect(card(container).textContent).toContain("runbook 1.1.0")
+    for (const root of roots.splice(0)) act(() => root.unmount())
+    // A stale heartbeat comes first: what it reported may no longer hold.
+    const stale = watched({ reported: "new" })
+    stale.auditWatch!.watcherCheck = { ...stale.auditWatch!.watcherCheck!, stale: true }
+    state.status = stale
+    container = await render(AlertsTab, true)
+    expect(card(container).textContent).toContain("Not running")
+    expect(card(container).textContent).not.toContain("Up to date")
+    for (const root of roots.splice(0)) act(() => root.unmount())
+    // Checks stopped (signed out) while the saved check still says fresh: the old run time decides.
+    const old = watched({ reported: "new" })
+    old.auditWatch!.watcherCheck = { ...old.auditWatch!.watcherCheck!, stale: false, lastRunAt: new Date(Date.now() - 4 * 3_600_000).toISOString() }
+    state.status = old
+    container = await render(AlertsTab, true)
+    expect(card(container).textContent).toContain("Not running")
+  })
+})
+
+describe("the Azure watcher card over time", () => {
+  it("turns to Not running while it stays open and the last run ages past the threshold", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] })
+    try {
+      const lastRunAt = new Date(Date.now() - 2.99 * 3_600_000).toISOString()
+      state.status = { ...empty, channels: [teams], signedIn: true, auditWatch: { enabled: false, intervalMinutes: 15, categories: [], ignoreOwnChanges: true, includeActor: false, externalWatcher: true, lastPollAt: null, lastError: null, watermark: null, conditionalAccess: { enabled: false, watermark: null, lastPollAt: null, lastError: null }, watcherCheck: { checkedAt: lastRunAt, lastRunAt, stale: false, error: null, alertsHash: "same", runbookVersion: "1.2.0" } }, watcherAlerts: { current: "same", reported: "same", source: "storage", runbookVersion: "1.2.0", readsAlertsFile: true, auto: false, pushedAt: null, pushedHash: null, error: null, errorAt: null } }
+      const container = await render(AlertsTab, true)
+      const card = () => container.querySelector('[aria-labelledby="notifications-watcher-sync-heading"]')!.textContent
+      expect(card()).toContain("Up to date")
+      act(() => { vi.advanceTimersByTime(2 * 60_000) })
+      expect(card()).toContain("Not running")
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

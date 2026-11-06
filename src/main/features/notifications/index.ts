@@ -9,7 +9,7 @@ import { normalizeBackupStatus } from "../../../portal/lib/backup-health"
 import type { BackupSummary } from "../../../portal/components/backup/types"
 import { DOMAINS } from "../domains"
 import type { Stored } from "../records"
-import { featureRoute, FeatureError, optionalText, text, type Body } from "../route"
+import { featureRoute, FeatureError, optionalText, text, type ActionHandler, type Body } from "../route"
 import { validateHeader, validateWebhookUrl } from "../health-review/rules"
 import {
   isChannelKind,
@@ -17,16 +17,20 @@ import {
   isSeverity,
   MAX_CHANNELS,
   MAX_RULES,
+  MAX_WATCHER_ALERTS_LENGTH,
+  WATCHER_ALERTS_FILE_RUNBOOK,
   parseRecipients,
   urlHost,
   type AuditWatchRecord,
   type CardLayoutRecord,
   type ChannelRecord,
   type RuleRecord,
+  type WatcherAlertsSync,
 } from "./model"
 import {
   alertMatcher,
   auditWatchOf,
+  brief,
   cardLayoutOf,
   channelsOf,
   layoutOf,
@@ -61,7 +65,7 @@ export const RUNTIME_NOTE =
 
 /** /api/notifications. Channels, rules, audit watching, test sends and delivery state per tenant. */
 export function routes(deps: FeatureDeps): Record<string, RouteModule> {
-  return featureRoute("/api/notifications", deps, {
+  const handlers: Record<string, ActionHandler> = {
     "get-status": ({ tenantId, deps, plan }) => ({
       licensed: allows(plan, "notifications"),
       runtimeNote: RUNTIME_NOTE,
@@ -69,7 +73,7 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       rules: rulesOf(deps, tenantId).map(publicRule),
       auditWatch: publicAuditWatch(auditWatchOf(deps, tenantId)),
       // Whether the Azure watcher runs these alerts: the hash its heartbeat reported, against now.
-      watcherAlerts: { current: watcherAlertsHash(watcherAlertsDocument(deps, tenantId).document), reported: auditWatchOf(deps, tenantId)?.watcherCheck?.alertsHash ?? null },
+      watcherAlerts: watcherAlertsStatus(deps, tenantId),
       signedIn: Boolean(deps.actor(tenantId)),
       deliveries: outboxOf(deps, tenantId).slice(-50).reverse().map((entry) => ({
         id: entry.id,
@@ -284,12 +288,23 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       return { results, envelope }
     },
 
+    // Writes the alerts to the watcher's alerts.json, which it reads on its next run, so the
+    // setup script does not run again. Also turns updating on every change on or off.
+    "push-watcher-alerts": async ({ tenantId, body, deps, actor }) => {
+      const auto = bool(body, "auto")
+      if (auto !== undefined) saveWatcherSync(deps, tenantId, { auto }, actor, auto ? "Watcher alerts update on every change" : "Watcher alerts update only on request")
+      if (bool(body, "write") === false) return { watcherAlerts: watcherAlertsStatus(deps, tenantId) }
+      const result = await pushWatcherAlerts(deps, tenantId, actor)
+      if (!result.ok) throw new FeatureError(result.error, result.status)
+      return { ...result, watcherAlerts: watcherAlertsStatus(deps, tenantId) }
+    },
+
     // The alerts as the Azure watcher reads them (setup -AlertRulesPath). Channels become kinds
     // of destinations, because the watcher has its own webhook, Teams URL and mail settings.
     "export-watcher-alerts": ({ tenantId, deps }) => {
       const { document, skipped } = watcherAlertsDocument(deps, tenantId)
       // Events the watcher produces that no copied alert takes stop reaching any destination.
-      const uncovered = WATCHER_EVENT_TYPES.filter((type) => !document.alerts.some((alert) => alert.eventTypes.includes(type)))
+      const uncovered = uncoveredWatcherEvents(document)
       return { document, json: JSON.stringify(document, null, 2), skipped, uncovered }
     },
 
@@ -500,7 +515,125 @@ export function routes(deps: FeatureDeps): Record<string, RouteModule> {
       const values = Array.isArray((response.body as Record<string, unknown>).value) ? ((response.body as Record<string, unknown>).value as Array<Record<string, unknown>>) : []
       return { groups: values.map((group) => ({ id: group.id, displayName: group.displayName ?? null, mail: group.mail ?? null })) }
     },
-  })
+  }
+  // Changes to alerts or channels change what the watcher should run; with automatic updates on,
+  // the new alerts go to it right after the change is saved.
+  for (const action of WATCHER_SYNC_ACTIONS) handlers[action] = withWatcherSync(handlers[action]!)
+  // Copied alerts change the target tenants, each checked for the same plan by the portfolio guard.
+  const copyRules = handlers["portfolio-copy-rules"]!
+  handlers["portfolio-copy-rules"] = async (context) => {
+    const result = await copyRules(context)
+    for (const target of context.targetTenants) await syncWatcherAlerts(context.deps, target, context.actor, true)
+    return result
+  }
+  return featureRoute("/api/notifications", deps, handlers)
+}
+
+/** Actions after which the watcher's alerts can differ. */
+const WATCHER_SYNC_ACTIONS = ["add-rule", "update-rule", "revoke-rule", "update-channel", "revoke-disable-channel", "revoke-channel"] as const
+
+function withWatcherSync(handler: ActionHandler): ActionHandler {
+  return async (context) => {
+    const result = await handler(context)
+    const sync = await syncWatcherAlerts(context.deps, context.tenantId, context.actor, allows(context.plan, "notifications"))
+    return sync && result && typeof result === "object" ? { ...result, watcherSync: sync } : result
+  }
+}
+
+export type WatcherPushResult =
+  | { ok: true; hash: string; pushedAt: string; alerts: number; skipped: string[]; uncovered: string[] }
+  | { ok: false; error: string; status: number }
+
+/**
+ * Writes the current alerts to the Azure watcher's alerts.json and records what was written.
+ * Refused without an alert the watcher can send, because the watcher would then send every
+ * event to every destination: that stays a choice made in its setup (-AlertRulesPath "").
+ */
+export function pushWatcherAlerts(deps: FeatureDeps, tenantId: string, actor: string | null): Promise<WatcherPushResult> {
+  const key = tenantId.toLowerCase()
+  const run = (pushQueues.get(key) ?? Promise.resolve()).catch(() => undefined).then(() => pushNow(deps, tenantId, actor))
+  pushQueues.set(key, run)
+  // The caller handles a failure of run; this cleanup must not raise it a second time.
+  run.finally(() => { if (pushQueues.get(key) === run) pushQueues.delete(key) }).catch(() => undefined)
+  return run
+}
+
+async function pushNow(deps: FeatureDeps, tenantId: string, actor: string | null): Promise<WatcherPushResult> {
+  const fail = (error: string, status = 400): WatcherPushResult => {
+    saveWatcherSync(deps, tenantId, { error, errorAt: deps.now().toISOString() }, actor, `Watcher alerts not updated: ${error}`)
+    return { ok: false, error, status }
+  }
+  if (!auditWatchOf(deps, tenantId)?.externalWatcher) return { ok: false, error: "No Azure watcher owns change alerts for this tenant. Turn on \"An Azure watcher handles change alerts\" in the Watching tab first.", status: 409 }
+  if (!deps.watcherAlertsWrite) return fail("This version of TenuVault cannot write to the watcher's storage.", 501)
+  const { document, skipped } = watcherAlertsDocument(deps, tenantId)
+  if (document.alerts.length === 0) return fail("No alert sends to a webhook, Teams or email channel, so there is nothing for the watcher to run. Add such a channel to an alert first.")
+  const json = JSON.stringify(document, null, 2)
+  if (json.length > MAX_WATCHER_ALERTS_LENGTH) return fail("The alerts are larger than 500 KB. Shorten their conditions.")
+  let written: Awaited<ReturnType<NonNullable<FeatureDeps["watcherAlertsWrite"]>>>
+  try {
+    written = await deps.watcherAlertsWrite(tenantId, json)
+  } catch (error) {
+    written = { status: "error", message: brief(error instanceof Error ? error.message : String(error)) }
+  }
+  if (written.status !== "ok") return fail(written.message, 502)
+  const hash = watcherAlertsHash(document)
+  const pushedAt = deps.now().toISOString()
+  saveWatcherSync(deps, tenantId, { pushedAt, pushedHash: hash, error: null, errorAt: null }, actor, `Watcher alerts updated: ${document.alerts.length} alert${document.alerts.length === 1 ? "" : "s"}`)
+  return { ok: true, hash, pushedAt, alerts: document.alerts.length, skipped, uncovered: uncoveredWatcherEvents(document) }
+}
+
+/**
+ * With automatic updates on, writes the alerts when they differ from what was written last.
+ * Skipped while signed out of the tenant: a storage token would prompt for a sign-in in the
+ * middle of a save. The next save, or Update watcher, catches up.
+ */
+export async function syncWatcherAlerts(deps: FeatureDeps, tenantId: string, actor: string | null, licensed: boolean): Promise<WatcherPushResult | null> {
+  const watch = auditWatchOf(deps, tenantId)
+  if (!licensed || !watch?.externalWatcher || !watch.watcherAlertsSync?.auto || !deps.actor(tenantId)) return null
+  if (watcherAlertsHash(watcherAlertsDocument(deps, tenantId).document) === watch.watcherAlertsSync.pushedHash) return null
+  return pushWatcherAlerts(deps, tenantId, actor)
+}
+
+/** Writes per tenant run one after another, so an older document never lands after a newer one. */
+const pushQueues = new Map<string, Promise<unknown>>()
+
+function saveWatcherSync(deps: FeatureDeps, tenantId: string, change: Partial<WatcherAlertsSync>, actor: string | null, reason: string) {
+  const current = auditWatchOf(deps, tenantId)?.watcherAlertsSync
+  const next: WatcherAlertsSync = { auto: false, pushedAt: null, pushedHash: null, error: null, errorAt: null, ...current, ...change }
+  saveAuditWatch(deps, tenantId, { watcherAlertsSync: next }, { actor, reason })
+}
+
+/** Whether the Azure watcher runs these alerts: what its heartbeat reported, what was written to it, and now. */
+function watcherAlertsStatus(deps: FeatureDeps, tenantId: string) {
+  const watch = auditWatchOf(deps, tenantId)
+  const sync = watch?.watcherAlertsSync
+  const runbookVersion = watch?.watcherCheck?.runbookVersion ?? null
+  return {
+    current: watcherAlertsHash(watcherAlertsDocument(deps, tenantId).document),
+    reported: watch?.watcherCheck?.alertsHash ?? null,
+    source: watch?.watcherCheck?.alertsSource ?? null,
+    runbookVersion,
+    // Null while the heartbeat has not said which runbook runs.
+    readsAlertsFile: runbookVersion === null ? null : versionAtLeast(runbookVersion, WATCHER_ALERTS_FILE_RUNBOOK),
+    auto: sync?.auto ?? false,
+    pushedAt: sync?.pushedAt ?? null,
+    pushedHash: sync?.pushedHash ?? null,
+    error: sync?.error ?? null,
+    errorAt: sync?.errorAt ?? null,
+  }
+}
+
+function versionAtLeast(version: string, minimum: string): boolean {
+  const parts = (value: string) => value.split(".").map((part) => Number.parseInt(part, 10) || 0)
+  const [a, b] = [parts(version), parts(minimum)]
+  for (let index = 0; index < Math.max(a.length, b.length); index++) {
+    if ((a[index] ?? 0) !== (b[index] ?? 0)) return (a[index] ?? 0) > (b[index] ?? 0)
+  }
+  return true
+}
+
+function uncoveredWatcherEvents(document: WatcherAlerts): string[] {
+  return WATCHER_EVENT_TYPES.filter((type) => !document.alerts.some((alert) => alert.eventTypes.includes(type)))
 }
 
 /** Background work while the app runs: outbox retries and due audit polls every minute. */
@@ -551,6 +684,7 @@ function conditions(value: unknown): RuleRecord["conditions"] {
     if (list === undefined) continue
     if (!Array.isArray(list) || list.length > 50 || list.some((entry) => typeof entry !== "string" || entry.length > 200)) throw new FeatureError(`conditions.${key} is invalid`)
   }
+  if (raw.policyNameMatch !== undefined && raw.policyNameMatch !== null && raw.policyNameMatch !== "contains" && raw.policyNameMatch !== "exact") throw new FeatureError("conditions.policyNameMatch must be contains or exact")
   const parsed = parseConditions(value)
   return hasConditions(parsed) ? parsed : null
 }
@@ -577,7 +711,7 @@ function sampleAlertEnvelope(deps: FeatureDeps, tenantId: string, rule: Stored<R
       at: deps.now().toISOString(),
       category: c?.categories[0] ?? (service === "intune" ? "Compliance" : "ConditionalAccess"),
       changeType: c?.changeTypes[0] ?? "updated",
-      resourceName: c?.policyNames[0] ? `${c.policyNames[0]} (sample)` : service === "intune" ? "Sample compliance policy" : "Sample Conditional Access policy",
+      resourceName: c?.policyNames[0] ? (c.policyNameMatch === "exact" ? c.policyNames[0] : `${c.policyNames[0]} (sample)`) : service === "intune" ? "Sample compliance policy" : "Sample Conditional Access policy",
       resourceType: service === "intune" ? "Windows10CompliancePolicy" : "Conditional Access policy",
       resourceId: "00000000-0000-0000-0000-000000000000",
       actorUpn: null,
