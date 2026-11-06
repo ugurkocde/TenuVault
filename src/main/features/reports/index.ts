@@ -480,8 +480,14 @@ export async function afterScheduledBackup(deps: FeatureDeps, tenantId: string, 
   const settings = settingsOf(deps, tenant)
   if (!settings?.afterScheduledBackup || !backupFolder) return
   if (settings.lastAutomatic?.backup === backupFolder) return
-  const remember = (outcome: "sent" | "skipped" | "failed", message: string, reportId: string | null) =>
-    saveSettings(deps, tenant, { lastAutomatic: { at: deps.now().toISOString(), backup: backupFolder, outcome, message: message.slice(0, 300), reportId } }, { actor: null, reason: `Report after scheduled backup ${outcome}` })
+  // Recording the outcome is best effort too: a failed write is logged, never thrown into the backup run.
+  const remember = (outcome: "sent" | "skipped" | "failed", message: string, reportId: string | null) => {
+    try {
+      saveSettings(deps, tenant, { lastAutomatic: { at: deps.now().toISOString(), backup: backupFolder, outcome, message: message.slice(0, 300), reportId } }, { actor: null, reason: `Report after scheduled backup ${outcome}` })
+    } catch (error) {
+      console.warn(`[reports] The outcome of the report after ${backupFolder} could not be recorded (${outcome}):`, error instanceof Error ? error.message : String(error))
+    }
+  }
   try {
     if (!allows(await deps.plan(tenant), "changeReports")) return
   } catch {
