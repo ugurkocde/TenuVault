@@ -183,7 +183,7 @@ class Unreadable {
 }
 
 function unreadableReason(error: unknown): string {
-  if (error instanceof Error && error.message.startsWith("This backup was encrypted with a key")) return "it was encrypted with a key this device does not have"
+  if (error instanceof Error && error.message.startsWith("This backup was encrypted with a key")) return "it is damaged, or was encrypted with a key this device does not have"
   const code = (error as NodeJS.ErrnoException)?.code
   if (typeof code === "string" && /^E[A-Z]+$/.test(code)) return `it could not be read (${code})`
   return "it is damaged or incomplete"
@@ -360,7 +360,12 @@ export class LocalBlobStore {
     const headerLength = raw.readUInt16BE(MAGIC_LENGTH)
     const body = raw.subarray(MAGIC_LENGTH + 2 + headerLength)
     const { file: _file, version: _version, stamp: _stamp, ...blob } = entry
-    return { blob, data: this.decrypt(body, bodyAad(version, account, container, name)) }
+    try {
+      return { blob, data: this.decrypt(body, bodyAad(version, account, container, name)) }
+    } catch (error) {
+      // Inventories check headers only, so a damaged body is found when it is read. Retrying cannot repair it.
+      throw new IncompleteInventoryError(1, `${name} could not be read: ${unreadableReason(error)}. ${RECOVERY}`)
+    }
   }
 
   /**
@@ -450,12 +455,15 @@ export class LocalBlobStore {
   /**
    * Deletes one blob. Nothing in the backup container is deleted while it holds damaged files or
    * an unavailable backup: a damaged file may be the only copy of what an older backup holds.
+   * The check uses the cached inventory, which a new or removed file always refreshes. Retention
+   * lists the folder right before it deletes, and a listing checks every file's stamp, so a file
+   * damaged in place is found then.
    */
   async delete(account: string, container: string, name: string): Promise<void> {
     const entries = await this.entries(account, container)
     const damage = this.damageOf.get(entries)
     if (damage && (damage.files.length > 0 || damage.unavailable.size > 0)) {
-      throw new IncompleteInventoryError(damage.files.length, `Nothing was deleted: ${describeDamage(damage)} Older backups are kept until the damage is resolved. ${RECOVERY}`)
+      throw new IncompleteInventoryError(damage.files.length, `${describeDamage(damage)} Nothing in the backup folder is deleted until this is resolved, so older backups are kept. ${RECOVERY}`)
     }
     const entry = entries.get(name)
     if (!entry) throw new BlobNotFoundError(name)
@@ -762,7 +770,7 @@ export class LocalBlobStore {
 
     // Desktop metadata already contains a per-item manifest. Check it before
     // exposing any inventory to downloads or restores, including selective reads.
-    for (const entry of [...entries.values()]) {
+    for (const entry of entries.values()) {
       if (!/^backup-[^/]+\/metadata\.json$/.test(entry.name)) continue
       const folder = backupFolderOf(entry.name)!
       let metadata: { Items?: unknown }

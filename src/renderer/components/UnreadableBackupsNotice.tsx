@@ -17,9 +17,9 @@ interface UnreadableBackupsNoticeProps {
 
 /**
  * Shown when the local folder holds backups this device cannot read, such as a folder written by
- * another installation with a different recovery key, or damaged files. Backups to it fail until
- * the admin imports that recovery key or keeps this device's backups in another folder; the
- * notice offers both.
+ * another installation with a different recovery key, or damaged files. Other backups stay usable
+ * and new backups are saved, but nothing in the folder is deleted until the admin imports that
+ * recovery key or keeps this device's backups in another folder; the notice offers both.
  */
 export function UnreadableBackupsNotice({ settings, affected, checking, onChange }: UnreadableBackupsNoticeProps) {
   const [importing, setImporting] = useState(false)
@@ -63,8 +63,9 @@ export function UnreadableBackupsNotice({ settings, affected, checking, onChange
         <p className="font-medium">This folder has backups this device cannot read</p>
         <p className="mt-1">
           Some backups in <span className="break-all font-mono text-xs">{settings.localFolder}</span> were made with a
-          different recovery key, for example by another device or an earlier installation, or are damaged. Backups to
-          this folder fail until you import that recovery key or choose another folder.
+          different recovery key, for example by another device or an earlier installation, or are damaged. Your other
+          backups still work and new backups are saved, but older backups are not deleted until you import that recovery
+          key or choose another folder.
         </p>
       </div>
       <div className="flex flex-wrap gap-2">

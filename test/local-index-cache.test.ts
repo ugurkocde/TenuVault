@@ -273,5 +273,5 @@ it('updates the cached inventory across own deletes and still blocks a backup wi
   await expect(store.list(account, container, 'backup-one/')).rejects.toThrow('1 file listed in its manifest is missing or damaged')
   expect((await store.list(account, container)).map(blob => blob.name)).toEqual([manifest])
   // While a backup is unavailable nothing is deleted, its manifest included.
-  await expect(store.delete(account, container, manifest)).rejects.toThrow('Nothing was deleted')
+  await expect(store.delete(account, container, manifest)).rejects.toThrow('Nothing in the backup folder is deleted')
 })

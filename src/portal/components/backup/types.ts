@@ -67,7 +67,7 @@ export type StatusKind = "success" | "warning" | "failed" | "cancelled" | "runni
 
 export function statusKind(status: string): StatusKind {
   const value = status.toLowerCase()
-  if (value.includes("fail") || value === "incomplete") return "failed"
+  if (value.includes("fail") || value === "incomplete" || value === "unavailable") return "failed"
   // A backup the user cancelled is neither complete nor a failure.
   if (value === "cancelled") return "cancelled"
   // "unknown": the metadata could not be read, so whether the backup finished is not known.
@@ -88,8 +88,14 @@ export const STATUS_LABEL: Record<StatusKind, string> = {
 export function statusLabel(status: string): string {
   const value = status.toLowerCase()
   if (value === "incomplete") return "Incomplete"
+  if (value === "unavailable") return "Unavailable"
   if (value === "unknown") return "Status unknown"
   return STATUS_LABEL[statusKind(status)]
+}
+
+/** Shown when files in the local backup folder could not be read. */
+export function damagedFilesNotice(count: number): string {
+  return `${count} file${count === 1 ? "" : "s"} in this tenant's backup folder could not be read, so some backups may be unavailable or missing from this list. Older backups are not deleted until this is resolved. Import the recovery key the files were made with, or restore them from a copy. Files that cannot be recovered can be removed from the backup folder.`
 }
 
 /** Shown when backup folders were left out of the list because their ownership could not be read. */

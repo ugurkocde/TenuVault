@@ -11,7 +11,7 @@ import { Alert, AlertDescription } from "~/components/ui/alert"
 import { BackupProgressModal } from "~/components/tenants/backup-progress-modal"
 import { BackupChangesDialog } from "~/components/backup/backup-changes-dialog"
 import { RestoreWizard } from "~/components/backup/restore-wizard"
-import { formatDate, formatDuration, formatSize, statusKind, statusLabel, TRIGGER_LABEL, unresolvedNotice, type BackupSummary, type BackupTenant, type StatusKind } from "~/components/backup/types"
+import { damagedFilesNotice, formatDate, formatDuration, formatSize, statusKind, statusLabel, TRIGGER_LABEL, unresolvedNotice, type BackupSummary, type BackupTenant, type StatusKind } from "~/components/backup/types"
 import { BackupSchedulePanel } from "@desktop/components/BackupSchedulePanel"
 import { RunBackupDialog } from "@desktop/components/RunBackupDialog"
 import { useTenantPlan } from "@desktop/lib/license"
@@ -284,6 +284,12 @@ export default function BackupRestorePage() {
             {completedBackup && completedBackup.tenantId === selectedTenant?.credentials?.tenantId.toLowerCase() && (
               <div className="mb-4"><FirstBackupNote key={completedBackup.jobId} plan={plan} /></div>
             )}
+            {backupList.damagedFiles > 0 && (
+              <p className="mb-4 flex items-start gap-2 text-sm text-amber-800">
+                <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                {damagedFilesNotice(backupList.damagedFiles)}
+              </p>
+            )}
             {backupList.unresolved > 0 && (
               <p className="mb-4 flex items-start gap-2 text-sm text-amber-800">
                 <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
@@ -488,6 +494,8 @@ interface BackupDetailsProps {
 /** Everything known about one backup, from its metadata and file listing. */
 function BackupDetails({ backup, first, storageAccountName, downloading, onChanges, onDownload, onRestore, ref }: BackupDetailsProps) {
   const kind = statusKind(backup.status)
+  // Damaged or unreadable files of this backup on this device: nothing can be read from it.
+  const unavailable = backup.status === "unavailable"
   const counts = backup.counts ?? {}
   const excluded = new Set(backup.scope?.excluded ?? [])
   const areas = AREAS.map(({ area, types }) => ({
@@ -507,15 +515,15 @@ function BackupDetails({ backup, first, storageAccountName, downloading, onChang
           <p className="text-sm text-gray-500">{formatDate(backup.timestamp)}</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" onClick={onChanges} disabled={!backup.changes} title={backup.changes ? undefined : "There is no earlier backup to compare this one with, or it was made by an older version."}>
+          <Button variant="outline" size="sm" onClick={onChanges} disabled={!backup.changes || unavailable} title={backup.changes ? undefined : "There is no earlier backup to compare this one with, or it was made by an older version."}>
             <GitBranch className="mr-1 h-4 w-4" />
             View Changes
           </Button>
-          <Button variant="outline" size="sm" onClick={onDownload} disabled={downloading}>
+          <Button variant="outline" size="sm" onClick={onDownload} disabled={downloading || unavailable}>
             {downloading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Download className="mr-1 h-4 w-4" />}
             Download
           </Button>
-          <Button size="sm" className="bg-coral-600 text-white hover:bg-coral-700" onClick={onRestore} disabled={kind === "running" || backup.totalPolicies === 0}>
+          <Button size="sm" className="bg-coral-600 text-white hover:bg-coral-700" onClick={onRestore} disabled={kind === "running" || backup.totalPolicies === 0 || unavailable}>
             <RefreshCw className="mr-1 h-4 w-4" />
             Restore from this backup
           </Button>
@@ -526,8 +534,9 @@ function BackupDetails({ backup, first, storageAccountName, downloading, onChang
         <div className={cn("mb-6 flex gap-3 rounded-2xl px-4 py-3 text-sm", kind === "failed" ? "bg-red-50 text-red-800" : kind === "cancelled" ? "bg-gray-100 text-gray-800" : "bg-amber-50 text-amber-900")}>
           <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
           <div className="space-y-1">
+            {unavailable && <p>{backup.error ?? "Files of this backup could not be read."} Until then it cannot be downloaded, compared or restored, and older backups are kept.</p>}
             {backup.status === "incomplete" && <p>This backup stopped before it finished, for example because TenuVault was closed. It holds only part of the tenant.</p>}
-            {backup.status !== "incomplete" && kind === "failed" && backup.totalPolicies > 0 && <p>This backup failed before it finished. It holds only the policies it saved and is never used as a complete backup.</p>}
+            {backup.status !== "incomplete" && !unavailable && kind === "failed" && backup.totalPolicies > 0 && <p>This backup failed before it finished. It holds only the policies it saved and is never used as a complete backup.</p>}
             {kind === "cancelled" && <p>This backup was cancelled before it finished. It holds only the policies it saved and is never used as a complete backup.</p>}
             {backup.status === "unknown" && <p>{backup.error ?? "This backup does not record whether it finished."} Until its details can be read, whether it finished is not known and drift detection does not offer it.</p>}
             {(backup.failures ?? 0) > 0 && <p>{backup.failures} item{backup.failures === 1 ? "" : "s"} or type{backup.failures === 1 ? "" : "s"} could not be read. The backup log lists them.</p>}

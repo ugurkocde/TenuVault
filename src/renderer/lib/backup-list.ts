@@ -17,9 +17,11 @@ export interface BackupList {
   loading: boolean
   /** Folders the last list left out because their ownership could not be read. */
   unresolved: number
+  /** Files in the local backup folder that could not be read; some backups may be unavailable or missing. */
+  damagedFiles: number
 }
 
-const EMPTY: BackupList = { backups: null, error: "", loading: false, unresolved: 0 }
+const EMPTY: BackupList = { backups: null, error: "", loading: false, unresolved: 0, damagedFiles: 0 }
 
 let lists: Record<string, BackupList> = {}
 const listeners = new Set<() => void>()
@@ -85,7 +87,7 @@ export function refreshBackupList(tenant: Tenant, options: { force?: boolean } =
       })
       const data = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(data.details || data.error || "Backups are unavailable. Check this tenant's sign-in, license, and storage access.")
-      if (latest.get(key) === id) update(key, { backups: data.backups ?? [], error: "", loading: false, unresolved: typeof data.unresolved === "number" ? data.unresolved : 0 })
+      if (latest.get(key) === id) update(key, { backups: data.backups ?? [], error: "", loading: false, unresolved: typeof data.unresolved === "number" ? data.unresolved : 0, damagedFiles: typeof data.damagedFiles === "number" ? data.damagedFiles : 0 })
     } catch (failure) {
       if (latest.get(key) === id) update(key, { error: failure instanceof Error ? failure.message : "Backups are unavailable.", loading: false })
     }
