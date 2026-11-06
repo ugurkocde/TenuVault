@@ -1570,7 +1570,7 @@ describe("LicenseService key replacement", () => {
       expect(JSON.parse(store.get("license.state")!)).toMatchObject({
         key: "TENU-PAID-KEY-0001",
         activations: { [TENANT]: { activationId: "act-2" } },
-        pendingRelease: { key: "TEST-LICENSE-KEY", activationIds: ["act-1"] },
+        pendingRelease: [{ key: "TEST-LICENSE-KEY", activationIds: ["act-1"] }],
       })
       calls = []
       answer = () => Response.json({ success: true })
@@ -1591,7 +1591,7 @@ describe("LicenseService key replacement", () => {
       answer = ({ action }) => (action === "activate" ? granted("act-2") : Response.json({ reason: "upstream" }, { status: 502 }))
       const license = service()
       await license.replaceKey("TENU-PAID-KEY-0001", [TENANT])
-      expect(JSON.parse(store.get("license.state")!).pendingRelease).toEqual({ key: "TEST-LICENSE-KEY", activationIds: ["act-1"] })
+      expect(JSON.parse(store.get("license.state")!).pendingRelease).toEqual([{ key: "TEST-LICENSE-KEY", activationIds: ["act-1"] }])
       // A release refused because the activation is gone also counts as done.
       answer = ({ action }) => (action === "refresh" ? granted("act-2") : denied("not_found"))
       await service().refreshAll()
@@ -1603,7 +1603,7 @@ describe("LicenseService key replacement", () => {
       store.set("license.state", JSON.stringify({
         key: "TENU-PAID-KEY-0001",
         activations: { [TENANT]: { activationId: "act-2", token: fresh("act-2") } },
-        pendingRelease: { key: "TEST-LICENSE-KEY", activationIds: ["act-1"] },
+        pendingRelease: [{ key: "TEST-LICENSE-KEY", activationIds: ["act-1"] }],
       }))
       answer = () => Response.json({ success: true })
       await service().deactivate()
@@ -1613,11 +1613,73 @@ describe("LicenseService key replacement", () => {
       ])
     })
 
+    it("keeps a replaced key's release when it cannot be released before deactivating", async () => {
+      store.set("license.state", JSON.stringify({
+        key: "TENU-PAID-KEY-0001",
+        activations: { [TENANT]: { activationId: "act-2", token: fresh("act-2") } },
+        pendingRelease: [{ key: "TEST-LICENSE-KEY", activationIds: ["act-1"] }],
+      }))
+      vi.spyOn(console, "warn").mockImplementation(() => undefined)
+      answer = ({ body }) => (body.key === "TEST-LICENSE-KEY" ? Response.json({ reason: "upstream" }, { status: 502 }) : Response.json({ success: true }))
+      await expect(service().deactivate()).rejects.toThrow("could not be released")
+      expect(JSON.parse(store.get("license.state")!).pendingRelease).toEqual([{ key: "TEST-LICENSE-KEY", activationIds: ["act-1"] }])
+      vi.restoreAllMocks()
+    })
+
+    it("keeps every replaced key's release across a second replacement", async () => {
+      storeLicense(trialToken())
+      vi.spyOn(console, "warn").mockImplementation(() => undefined)
+      const unreachable = () => Response.json({ reason: "upstream" }, { status: 502 })
+      answer = ({ action }) => (action === "activate" ? granted("act-2") : unreachable())
+      const license = service()
+      await license.replaceKey("TENU-PAID-KEY-0001", [TENANT])
+      answer = ({ action }) => (action === "activate" ? granted("act-3") : unreachable())
+      await license.replaceKey("TENU-PAID-KEY-0002", [TENANT])
+      expect(JSON.parse(store.get("license.state")!).pendingRelease).toEqual([
+        { key: "TEST-LICENSE-KEY", activationIds: ["act-1"] },
+        { key: "TENU-PAID-KEY-0001", activationIds: ["act-2"] },
+      ])
+      calls = []
+      answer = ({ action }) => (action === "refresh" ? granted("act-3") : Response.json({ success: true }))
+      await service().refreshAll()
+      expect(calls.filter(({ action }) => action === "deactivate").map(({ body }) => `${String(body.key)}:${String(body.activationId)}`)).toEqual([
+        "TEST-LICENSE-KEY:act-1",
+        "TENU-PAID-KEY-0001:act-2",
+      ])
+      expect(JSON.parse(store.get("license.state")!).pendingRelease).toBeUndefined()
+      vi.restoreAllMocks()
+    })
+
+    it("refreshes first and stops releasing at the first unreachable answer", async () => {
+      store.set("license.state", JSON.stringify({
+        key: "TENU-PAID-KEY-0001",
+        activations: { [TENANT]: { activationId: "act-2", token: fresh("act-2") } },
+        pendingRelease: [{ key: "TEST-LICENSE-KEY", activationIds: ["act-a", "act-b", "act-c"] }],
+      }))
+      vi.spyOn(console, "warn").mockImplementation(() => undefined)
+      answer = ({ action }) => (action === "refresh" ? granted("act-2") : Response.json({ reason: "upstream" }, { status: 502 }))
+      await service().refreshAll()
+      expect(calls.map(({ action }) => action)).toEqual(["refresh", "deactivate"])
+      expect(JSON.parse(store.get("license.state")!).pendingRelease).toEqual([{ key: "TEST-LICENSE-KEY", activationIds: ["act-a", "act-b", "act-c"] }])
+      vi.restoreAllMocks()
+    })
+
+    it("does not undo a saved replacement when a change listener throws", async () => {
+      storeLicense(trialToken())
+      vi.spyOn(console, "warn").mockImplementation(() => undefined)
+      answer = ({ action }) => (action === "activate" ? granted("act-2") : Response.json({ success: true }))
+      const license = service({ onChange: () => { throw new Error("listener failed") } })
+      await license.replaceKey("TENU-PAID-KEY-0001", [TENANT])
+      expect(JSON.parse(store.get("license.state")!)).toMatchObject({ key: "TENU-PAID-KEY-0001", activations: { [TENANT]: { activationId: "act-2" } } })
+      expect(calls.filter(({ action, body }) => action === "deactivate" && body.key === "TENU-PAID-KEY-0001")).toHaveLength(0)
+      vi.restoreAllMocks()
+    })
+
     it("ignores a damaged release record", () => {
       store.set("license.state", JSON.stringify({
         key: "TENU-PAID-KEY-0001",
         activations: { [TENANT]: { activationId: "act-2", token: fresh("act-2") } },
-        pendingRelease: { key: 7, activationIds: "act-1" },
+        pendingRelease: [{ key: 7, activationIds: "act-1" }, null],
       }))
       const license = service()
       expect(entitled(license)).toBe(true)

@@ -75,12 +75,13 @@ interface StoredLicense {
    */
   trialToken?: string
   /**
-   * Activations of the key this machine replaced, still to be released. Written together with
-   * the new key, before anything is released, so a crash or failed write during a key
-   * replacement always leaves either the previous key with its activations or the new key with
-   * its own on disk. Releasing is retried on the next refresh until the service confirms it.
+   * Activations of keys this machine replaced, still to be released, one entry per replaced
+   * key. Written together with the new key, before anything is released, so a crash or failed
+   * write during a key replacement always leaves either the previous key with its activations
+   * or the new key with its own on disk. Releasing is retried after the next refresh until the
+   * service confirms it.
    */
-  pendingRelease?: { key: string; activationIds: string[] }
+  pendingRelease?: { key: string; activationIds: string[] }[]
 }
 
 /** A recent Microsoft ID token for the tenant, or null when none can be had silently. */
@@ -359,13 +360,15 @@ export class LicenseService {
         if (typeof this.state.keyFailure !== "string" || !Object.hasOwn(REASONS, this.state.keyFailure)) delete this.state.keyFailure
         if (!Number.isFinite(this.state.seen)) delete this.state.seen
         if (typeof this.state.trialToken !== "string") delete this.state.trialToken
-        const pending = this.state.pendingRelease as Partial<NonNullable<StoredLicense["pendingRelease"]>> | undefined
-        if (
-          pending !== undefined &&
-          !(pending && typeof pending.key === "string" && pending.key !== "" &&
-            Array.isArray(pending.activationIds) &&
-            pending.activationIds.every((id) => typeof id === "string" && id !== ""))
-        ) delete this.state.pendingRelease
+        const pending: unknown = this.state.pendingRelease
+        const releases = Array.isArray(pending)
+          ? pending.filter((entry: Partial<{ key: unknown; activationIds: unknown }> | null) =>
+            entry && typeof entry.key === "string" && entry.key !== "" &&
+            Array.isArray(entry.activationIds) && entry.activationIds.length > 0 &&
+            entry.activationIds.every((id) => typeof id === "string" && id !== "")) as NonNullable<StoredLicense["pendingRelease"]>
+          : []
+        if (releases.length > 0) this.state.pendingRelease = releases
+        else delete this.state.pendingRelease
         this.savedSeen = this.state.seen ?? 0
         return
       }
@@ -428,7 +431,13 @@ export class LicenseService {
       else this.options.store.delete(STATE_KEY)
       this.savedSeen = this.state?.seen ?? 0
     }
-    this.options.onChange?.()
+    // Only a failed write is a failed save: a listener that throws must not make a caller undo
+    // state that is already on disk.
+    try {
+      this.options.onChange?.()
+    } catch (error) {
+      console.warn(`[license] Change notification failed: ${errorText(error)}`)
+    }
   }
 
   // Advances the high-water mark of observed time and returns the current time.
@@ -750,7 +759,6 @@ export class LicenseService {
   /** Refreshes every cached activation. Network failures keep the cached token until it expires; a confirmed refusal drops it. */
   async refreshAll(): Promise<void> {
     this.load()
-    if (this.state?.pendingRelease) await this.mutate([], true, () => this.releasePrevious())
     const key = this.state?.key
     const entries = Object.entries(this.state?.activations ?? {})
     for (const [tenantId, entry] of entries) {
@@ -765,6 +773,9 @@ export class LicenseService {
         await this.refreshCurrent(tenantId)
       }).catch(() => undefined)
     }
+    // After the refreshes, and outside the key mutation: releasing a replaced key's activations
+    // must never hold up license checks of the tenants in use.
+    await this.releasePrevious()
     this.options.onChange?.()
   }
 
@@ -923,15 +934,21 @@ export class LicenseService {
       // place; after it, the new key is saved and the release is retried on the next refresh.
       // Organization license activations do not depend on the key and stay.
       const activations = Object.fromEntries(Object.entries(previous.activations).filter(([, entry]) => entry.source === "tenant"))
+      // Releases still pending from earlier replacements are kept, so a key replaced twice before
+      // its activations could be released is still released later.
       const release = [
-        ...(previous.pendingRelease?.key === previousKey ? previous.pendingRelease.activationIds : []),
+        ...(previous.pendingRelease ?? []).filter((entry) => entry.key === previousKey).flatMap((entry) => entry.activationIds),
         ...Object.values(previous.activations).filter((entry) => !entry.source).map((entry) => entry.activationId),
+      ]
+      const pendingRelease = [
+        ...(previous.pendingRelease ?? []).filter((entry) => entry.key !== previousKey),
+        ...(release.length > 0 ? [{ key: previousKey, activationIds: [...new Set(release)] }] : []),
       ]
       this.state = {
         key: trimmed,
         activations,
         ...(previous.seen !== undefined ? { seen: previous.seen } : {}),
-        ...(release.length > 0 ? { pendingRelease: { key: previousKey, activationIds: [...new Set(release)] } } : {}),
+        ...(pendingRelease.length > 0 ? { pendingRelease } : {}),
       }
       try {
         for (const { tenant, data } of accepted) if (covered.has(tenant)) this.accept(tenant, data, "key", false)
@@ -954,31 +971,42 @@ export class LicenseService {
   }
 
   /**
-   * Releases the activations of a replaced key that are still bound to this machine. A release
-   * the service confirms, or refuses because the activation no longer exists, is done; any other
-   * failure keeps it for the next attempt. Never throws.
+   * Releases the activations of replaced keys that are still bound to this machine. A release
+   * the service confirms, or refuses because the activation no longer exists, is done. The first
+   * other failure ends the attempt and keeps it and everything after it for the next one, so a
+   * service that cannot be reached costs one request, not one per activation. Never throws.
    */
   private async releasePrevious(): Promise<void> {
     const pending = this.state?.pendingRelease
     if (!pending) return
     const key = this.state?.key
     const current = () => this.state?.key === key && this.state?.pendingRelease === pending
-    const remaining: string[] = []
-    for (const activationId of pending.activationIds) {
-      try {
-        await this.call("deactivate", { key: pending.key, activationId }, current)
-      } catch (error) {
-        if (error instanceof StaleLicenseRequest) return
-        if (!(error instanceof LicenseDenied)) {
-          // The replaced key stays bound to that activation until it is released here or in the
-          // customer portal; it no longer licenses anything on this machine.
-          console.warn(`[license] Previous key activation ${activationId} not released: ${errorText(error)}`)
-          remaining.push(activationId)
+    const remaining: NonNullable<StoredLicense["pendingRelease"]> = []
+    let stopped = false
+    for (const entry of pending) {
+      const left: string[] = []
+      for (const activationId of entry.activationIds) {
+        if (stopped) {
+          left.push(activationId)
+          continue
+        }
+        try {
+          await this.call("deactivate", { key: entry.key, activationId }, current)
+        } catch (error) {
+          if (error instanceof StaleLicenseRequest) return
+          if (!(error instanceof LicenseDenied)) {
+            // The replaced key stays bound to that activation until it is released here or in the
+            // customer portal; it no longer licenses anything on this machine.
+            console.warn(`[license] Previous key activation ${activationId} not released: ${errorText(error)}`)
+            left.push(activationId)
+            stopped = true
+          }
         }
       }
+      if (left.length > 0) remaining.push({ key: entry.key, activationIds: left })
     }
     if (!current() || !this.state) return
-    if (remaining.length > 0) this.state.pendingRelease = { key: pending.key, activationIds: remaining }
+    if (remaining.length > 0) this.state.pendingRelease = remaining
     else delete this.state.pendingRelease
     try {
       this.save()
@@ -1215,9 +1243,12 @@ export class LicenseService {
     this.load()
     return this.mutate([...this.tenantMutations.keys(), ...Object.keys(this.state?.activations ?? {})], true, async () => {
       if (!this.state) return
-      // A replaced key's activations are released first; the state with their record is gone after.
+      // A replaced key's activations are released first. One that cannot be released keeps the
+      // machine's state, its record included, so the release is not forgotten.
       await this.releasePrevious()
-      let failure: unknown = null
+      let failure: unknown = this.state?.pendingRelease
+        ? new Error("A license key this machine used before could not be released. Check your network and try again.")
+        : null
       const key = this.state.key
       for (const [tenantId, entry] of Object.entries(this.state.activations)) {
         const current = this.requestGuard(tenantId, false)
