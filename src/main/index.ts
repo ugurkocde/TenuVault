@@ -172,7 +172,18 @@ async function bootstrap(): Promise<void> {
   }
 
   const accounts = accountStore(appStore)
+  // MSAL token traffic goes through the bridged fetch, which is only created below (it needs
+  // the license and token plumbing that auth feeds). AuthManager is handed this late-bound
+  // delegate instead: it is first used for a sign-in, long after bootstrap assigns the bridge.
+  // Token requests must stay on the bridge, which license-checks them and registers storage
+  // tokens there; calling Chromium directly would skip both.
+  let bridgedFetchImpl: typeof fetch | null = null
+  const bridgedFetchLater: typeof fetch = (input, init) => {
+    if (!bridgedFetchImpl) throw new Error("TenuVault is still starting. Try again in a moment.")
+    return bridgedFetchImpl(input, init)
+  }
   const auth = new AuthManager({
+    fetch: bridgedFetchLater,
     cachePlugin: (clientId) => secureCachePlugin(tokenStore, clientId),
     openBrowser: (url) => {
       if (!isMicrosoftLoginUrl(url)) {
@@ -260,6 +271,7 @@ async function bootstrap(): Promise<void> {
     },
   })
   globalThis.fetch = bridgedFetch
+  bridgedFetchImpl = bridgedFetch
   setNativeFrameworkAuthorization(async tenantId => {
     if (!accounts.get(tenantId)) throw new Error("Sign in to this tenant before opening framework history.")
     return license.requireEntitlement(tenantId)
@@ -300,7 +312,7 @@ async function bootstrap(): Promise<void> {
   const failedAttempts = new FailedAttemptLog(appStore)
   // The Backup Reader's tokens reach only the backup engine: never the fetch bridge, tokenFor or a
   // portal route, so no restore, revert or other change can ever run with them.
-  const backupReader = new BackupReaderService(tokenStore)
+  const backupReader = new BackupReaderService(tokenStore, { fetch: bridgedFetch })
   const moduleSettings = new ModuleSettings(appStore)
   const engine = new BackupEngine({
     fetch: bridgedFetch,
@@ -1080,7 +1092,7 @@ async function bootstrap(): Promise<void> {
     // With a trial key, the checkout is created for the trial's customer; if that fails,
     // the plain checkout still opens.
     const trialToken = target === "checkout" ? license.trialCheckoutToken() : null
-    const forTrial = trialToken ? await trialCheckoutUrl(LICENSE_API_BASE, trialToken, options ?? {}) : null
+    const forTrial = trialToken ? await trialCheckoutUrl(LICENSE_API_BASE, trialToken, options ?? {}, chromiumFetch) : null
     const url = target === "buy"
       ? licenseBuyUrl(LICENSE_BUY_URL, options?.source)
       : target === "checkout"
@@ -1091,7 +1103,7 @@ async function bootstrap(): Promise<void> {
   })
 
   handleTrusted("license:startTrial", (_event, email: unknown, options?: { source?: unknown }) =>
-    requestTrialKey(LICENSE_API_BASE, email, options?.source))
+    requestTrialKey(LICENSE_API_BASE, email, options?.source, chromiumFetch))
   // While a trial key is on its way, the renderer asks for a key the admin copied from the email.
   handleTrusted("license:clipboardKey", () => {
     const key = licenseKeyFromClipboard(clipboard.readText())
