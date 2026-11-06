@@ -63,6 +63,12 @@ TenuVault connects to the global Microsoft cloud endpoints below over HTTPS (TCP
 
 TenuVault uses the device's proxy settings, including a proxy auto-config (PAC) file, and the operating system's trusted certificates. Behind HTTPS inspection, it works when the inspection certificate is trusted by Windows or macOS, as it is for Microsoft Edge.
 
+### Proxies that require authentication
+
+When the proxy asks for a sign-in (HTTP 407), TenuVault asks once per proxy for a user name and password, then uses them for sign-in, license checks, backups and updates. Requests that meet the proxy while the dialog is open wait for that one answer. **Remember on this computer** is on by default and saves the credentials encrypted for your Windows or macOS account, so they survive a restart; without operating system encryption they are kept only until TenuVault quits. If the proxy refuses them, TenuVault forgets them and asks again, at most three times in a row. To remove them, open **Settings** > **Sign-in** and select **Forget proxy sign-in**.
+
+A proxy that signs in with your Windows account (NTLM or Kerberos) usually needs no prompt. If the sign-in is cancelled or refused, errors name proxy authentication, for example `HTTP 407` or `ERR_PROXY_AUTH_REQUESTED`. Allowing the destinations above without proxy authentication avoids the prompt, which also keeps scheduled backups from waiting for an answer while nobody is at the computer.
+
 If GitHub is blocked, updates and baseline packs fail, but backup and restore keep working. For what is sent to each destination, see [Network connections and data flows](/security/data-flows/).
 
 If your storage account uses firewall rules, the computer running TenuVault must be allowed through them. Otherwise TenuVault reports that the storage account rejected the request from this network.

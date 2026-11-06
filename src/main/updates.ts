@@ -88,6 +88,12 @@ export class Updates {
   private installing = false
   private quitAfterInstallError = false
 
+  /** Answers authentication challenges of update checks and downloads, such as a proxy that asks for a sign-in. */
+  onLogin(listener: (authInfo: Electron.AuthInfo, callback: (username?: string, password?: string) => void) => void): void {
+    // Empty credentials cancel the challenge, as calling Electron's callback without any does.
+    autoUpdater.on("login", (authInfo, callback) => listener(authInfo, (username, password) => callback(username ?? "", password ?? "")))
+  }
+
   constructor(private readonly notify: (status: UpdateStatus) => void) {
     // Downloads start from update-available, only for a check of the current channel.
     autoUpdater.autoDownload = false
