@@ -88,6 +88,21 @@ describe("purchase key pickup", () => {
     expect(state.replaceKey).toHaveBeenCalledTimes(1)
   })
 
+  it("replaces an active key the service never flagged as a trial, after its checkout", async () => {
+    // The misclassified trial: an active key with no trial flag. The buyer pays and copies the
+    // paid key; without pickup there is no way in short of deactivating the machine.
+    state.status = active
+    state.clipboard = "TENU-PAID-0002"
+    state.replaceKey.mockResolvedValue(active)
+    mount("/license")
+    await focus()
+    expect(state.replaceKey).not.toHaveBeenCalled()
+    await act(async () => { await openCheckout("license-page") })
+    await focus()
+    expect(state.replaceKey).toHaveBeenCalledWith("TENU-PAID-0002")
+    expect(state.toast).toHaveBeenCalledWith("Your new license is active.", "success")
+  })
+
   it("saves the key when none is saved, and stops after a refused key", async () => {
     state.status = { ...trial, hasKey: false, trial: false, plan: null }
     state.clipboard = "TENU-PAID-0002"
@@ -139,11 +154,19 @@ describe("when a copied key counts as the purchase", () => {
     expect(watchesPurchaseKey(ended, null, "/portal/dashboard", now)).toBe(false)
   })
 
-  it("never swaps a paid key, and leaves the License page to its own check without a key", () => {
-    expect(watchesPurchaseKey(paid, now - HOUR, "/portal/dashboard", now)).toBe(false)
-    expect(watchesPurchaseKey(paid, now - HOUR, "/license", now)).toBe(false)
+  it("watches any saved key only inside the checkout window, never on a stray copy outside it", () => {
+    // A trial key the service did not flag as a trial looks exactly like this paid key, so the
+    // window after opening a checkout here is the only safe signal that a copied key is the
+    // purchase. Outside it, an active key is never swapped by clipboard content.
+    expect(watchesPurchaseKey(paid, now - HOUR, "/portal/dashboard", now)).toBe(true)
+    expect(watchesPurchaseKey(paid, now - HOUR, "/license", now)).toBe(true)
+    expect(watchesPurchaseKey(paid, null, "/portal/dashboard", now)).toBe(false)
+    expect(watchesPurchaseKey(paid, null, "/license", now)).toBe(false)
+    expect(watchesPurchaseKey(paid, now - 7 * HOUR, "/portal/dashboard", now)).toBe(false)
     expect(watchesPurchaseKey(none, now - HOUR, "/portal/dashboard", now)).toBe(true)
-    expect(watchesPurchaseKey(none, now - HOUR, "/license", now)).toBe(false)
+    // A first-time buyer who returns to the License page gets the pickup there too.
+    expect(watchesPurchaseKey(none, now - HOUR, "/license", now)).toBe(true)
+    expect(watchesPurchaseKey(none, null, "/license", now)).toBe(false)
     expect(watchesPurchaseKey(null, now - HOUR, "/license", now)).toBe(false)
   })
 })

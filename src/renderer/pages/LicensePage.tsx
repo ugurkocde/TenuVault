@@ -303,6 +303,7 @@ export default function LicensePage() {
   const [key, setKey] = useState("")
   const keyInput = useRef<HTMLInputElement>(null)
   const [trialKeyHint, setTrialKeyHint] = useState(false)
+  const [replacingActive, setReplacingActive] = useState(false)
   const trialEmail = useRef<HTMLInputElement>(null)
   const { busy, error, notice, run } = useAction()
   const checkedOnOpen = useRef(false)
@@ -485,11 +486,20 @@ export default function LicensePage() {
           {status.hasKey && !status.trial && status.keyState !== "active" && <InactiveKeyReplacement status={status} busy={busy} onReplace={replaceKey} />}
 
           {status.hasKey ? (
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-gray-50 px-5 py-4">
-              <div>
-                <div className="text-xs font-medium text-gray-500">License key</div>
-                <div className="mt-1 font-mono text-sm text-gray-900">{status.keyHint}</div>
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-gray-50 px-5 py-4">
+                <div>
+                  <div className="text-xs font-medium text-gray-500">License key</div>
+                  <div className="mt-1 font-mono text-sm text-gray-900">{status.keyHint}</div>
+                </div>
+                {status.keyState === "active" && !status.trial && !replacingActive && (
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setReplacingActive(true)}>
+                    <KeyRound className="mr-2 h-4 w-4" aria-hidden="true" />
+                    Use a different key
+                  </Button>
+                )}
               </div>
+              {replacingActive && <ReplaceKeyForm busy={busy} onReplace={replaceKey} />}
             </div>
           ) : (
             <form
