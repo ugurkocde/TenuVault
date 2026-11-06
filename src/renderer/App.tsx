@@ -113,6 +113,7 @@ export function App() {
                       {["governance", "changes", "operations", "reports"].map((hub) => (
                         <Route key={hub} path={`${hub}/:tabId?`} element={<HubPage hubId={hub} />} />
                       ))}
+                      <Route path="alerts/:tabId?" element={<HubPage hubId="alerts" />} />
                       <Route path="oib" element={<OibPage />} />
                       <Route path="oib/:flow" element={<OibPage />} />
                     </Route>

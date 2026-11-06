@@ -21,9 +21,8 @@ vi.mock("../../src/renderer/features/notifications/api", async (original) => ({
   },
 }))
 vi.mock("../../src/renderer/lib/toast", () => ({ toast: () => undefined }))
-vi.mock("../../src/renderer/components/UpgradeNote", () => ({ UpgradeNote: () => null }))
 
-import { NotificationsPanel } from "../../src/renderer/features/notifications/NotificationsPanel"
+import { WatchingTab } from "../../src/renderer/features/notifications/NotificationsPanel"
 
 const roots: Root[] = []
 afterEach(() => {
@@ -52,7 +51,7 @@ describe("Intune change watching form", () => {
     roots.push(root)
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const tenant = { id: 1, name: "Contoso", credentials: { tenantId: "tenant" } } as unknown as Tenant
-    act(() => root.render(createElement(QueryClientProvider, { client }, createElement(NotificationsPanel, { tenant }))))
+    act(() => root.render(createElement(QueryClientProvider, { client }, createElement(WatchingTab, { tenant, plan: "pro", allowed: true }))))
     const tile = await waitFor(() => container.querySelector('[aria-labelledby="notifications-audit-heading"]'))
     const interval = tile.querySelector("select")!
     act(() => {

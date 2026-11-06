@@ -2,7 +2,7 @@ import type { WriteRecord } from "../../main/storage/restore-journal"
 import { getAppearance, setAppearance, type Appearance } from "../lib/appearance"
 import { useEffect, useId, useRef, useState, type ReactNode } from "react"
 import { Link, useLocation, useSearchParams } from "react-router-dom"
-import { Bell, Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, Palette, RefreshCw, Save, ShieldCheck, SunMoon, Upload, type LucideIcon } from "lucide-react"
+import { Bell, Download, FolderOpen, HardDrive, Info, KeyRound, Loader2, Lock, MonitorCog, Palette, RefreshCw, Save, ShieldCheck, Siren, SunMoon, Upload, type LucideIcon } from "lucide-react"
 import { cn } from "~/lib/utils"
 import { useTenantOperations, useTenants, type Tenant } from "~/contexts/TenantContext"
 import { Button } from "~/components/ui/button"
@@ -11,7 +11,7 @@ import { Dialog, DialogAnimationProvider, DialogContent, DialogDescription, Dial
 import { storageLabel } from "~/lib/storage-label"
 import type { AppInfo, AppPreferences, SignedInAccount, UpdateStatus } from "../../shared/ipc"
 import { LOCAL_STORAGE_PREFIX } from "../../shared/constants"
-import { allows, COMMUNITY_RETENTION_DAYS, effectiveRetentionDays, type Feature } from "../../shared/plans"
+import { COMMUNITY_RETENTION_DAYS, effectiveRetentionDays, type Feature } from "../../shared/plans"
 import { isGuid } from "../../shared/security"
 import { LicenseAgreementLink } from "../components/LicenseAgreementDialog"
 import { StorageChooser, type StorageChooserDraft } from "../components/StorageChooser"
@@ -29,7 +29,6 @@ import { PlanBadge } from "../components/UpgradeNote"
 import { PdfBrandingSettings } from "../components/PdfBrandingSettings"
 import { BackupReaderSettings } from "../components/BackupReaderSettings"
 import { ServicesSettings } from "../components/ServicesSettings"
-import { NotificationsPanel } from "../features/notifications/NotificationsPanel"
 import { WhatsNewDialog, WhatsNewEntryNotes } from "../components/WhatsNewDialog"
 import { useWhatsNew } from "../lib/whats-new"
 import { useConfirm } from "~/components/ConfirmDialog"
@@ -211,37 +210,25 @@ function TenantRestoreWrites({ tenantId, active }: { tenantId: string; active: b
   )
 }
 
-function NotificationSettings({ active }: { active: boolean }) {
-  const tenants = useTenants().filter(tenant => tenant.credentials?.tenantId)
-  const { status: licenseStatus } = useLicense()
-  const [selected, setSelected] = useState("")
-  const tenant = tenants.find(candidate => candidate.credentials?.tenantId === selected) ?? tenants[0]
-  if (!tenant?.credentials) {
-    return (
-      <Card>
-        <CardContent className="pt-6">Connect and sign in to a tenant to set up notifications.</CardContent>
-      </Card>
-    )
-  }
-  const tenantId = tenant.credentials.tenantId
-  const plan = tenantPlan(licenseStatus?.tenants.find(entry => entry.tenantId.toLowerCase() === tenantId.toLowerCase()))
-  const locked = plan !== null && !allows(plan, "notifications")
+/** Notifications moved to the Alerts page in the sidebar; this section points there. */
+function NotificationSettings() {
   return (
     <div className="space-y-4">
       <div>
         <h2 className="flex items-center gap-3 text-xl font-medium text-gray-900">
           <span className="flex size-10 items-center justify-center rounded-full bg-secondary" aria-hidden="true"><Bell className="h-[18px] w-[18px]" /></span> Notifications
-          {locked && <PlanBadge feature="notifications" />}
         </h2>
-        <p className="mt-2 text-sm text-gray-500">Backup, restore, drift, Intune and Conditional Access change alerts to this computer, a webhook, a Teams channel or email, for the policies and settings you pick. Settings are kept per tenant.</p>
+        <p className="mt-2 text-sm text-gray-500">Alerts, channels, change watching and deliveries have their own page in the sidebar, for the tenant selected there.</p>
       </div>
-      <label className="block text-sm">
-        Notifications tenant
-        <select className="ml-3 rounded border bg-background p-2" value={tenantId} onChange={event => setSelected(event.target.value)}>
-          {tenants.map(candidate => <option key={candidate.id} value={candidate.credentials!.tenantId}>{candidate.name}</option>)}
-        </select>
-      </label>
-      <NotificationsPanel key={tenantId} tenant={tenant} active={active} />
+      <Card>
+        <CardContent className="flex flex-wrap items-center justify-between gap-4 pt-6">
+          <p className="max-w-2xl text-sm text-gray-600">Send backup, restore, drift and policy change alerts to Teams, email, a webhook or this computer, and pick which policies and settings count.</p>
+          <Link className="inline-flex h-10 items-center gap-2 rounded-full bg-primary px-5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90" to="/portal/alerts">
+            <Siren className="h-4 w-4" aria-hidden="true" />
+            Open Alerts
+          </Link>
+        </CardContent>
+      </Card>
     </div>
   )
 }
@@ -914,7 +901,7 @@ export default function SettingsPage() {
           {panel("services", <ServicesSettings />)}
           {panel("storage", <div className="space-y-6"><BackupsOnDevice /><RestoreWrites active={section === "storage"} /></div>)}
           {panel("background", <div className="space-y-6"><BackgroundAndRetention /><BackupReaderSettings /></div>)}
-          {panel("notifications", <NotificationSettings active={section === "notifications"} />)}
+          {panel("notifications", <NotificationSettings />)}
           {panel("branding", <PdfBrandingSettings />)}
           {panel("updates", <Updates />)}
           {panel("appearance", <AppearanceSettings />)}

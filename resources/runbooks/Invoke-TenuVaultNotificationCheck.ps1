@@ -2446,7 +2446,7 @@ try {
     # AuditLog.Read.All application role (setup -IncludeConditionalAccess).
     $watchConditionalAccessValue = Get-TvAutomationVariable "TenuVaultWatchConditionalAccess"
     $watchConditionalAccess = $watchConditionalAccessValue -match "^(true|1|yes)$"
-    # The Teams card layout copied from TenuVault (Settings > Notifications > Teams card).
+    # The Teams card layout copied from TenuVault (Alerts > Channels > Teams card).
     # Unreadable JSON falls back to the standard card instead of stopping deliveries.
     $teamsCardLayout = $null
     $teamsCardLayoutValue = Get-TvAutomationVariable "TenuVaultTeamsCardLayout"
@@ -2457,7 +2457,7 @@ try {
 
     if (-not $tenantId) { throw "Automation variable TenuVaultTenantId is not set." }
     if (-not $storageAccount) { throw "Automation variable TenuVaultStorageAccount is not set." }
-    # The alerts copied from TenuVault (Settings > Notifications > Alerts > Copy for Azure watcher).
+    # The alerts copied from TenuVault (Alerts page > Copy for Azure watcher).
     # Without them every event goes to every destination. An unreadable value does the same and
     # says so, because sending too much is safer than silently sending nothing.
     $watcherAlerts = $null

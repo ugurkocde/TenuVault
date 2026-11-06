@@ -21,7 +21,7 @@ export interface Hub {
   tabs: HubTab[]
 }
 
-/** The roadmap workflows, grouped into hubs so the sidebar stays short. */
+/** The roadmap workflows and alerts, grouped into hubs so the sidebar stays short. */
 export const HUBS: Hub[] = [
   {
     id: "reports",
@@ -138,6 +138,49 @@ export const HUBS: Hub[] = [
         summary: "A scheduled review of stale backups, pending upgrades, conflicts, deviations and stale scores, with opt-in notifications.",
         points: ["Notifications go only to an endpoint you configure, with a preview of what is sent.", "No tokens, credentials or policy content are sent.", "Runs only while TenuVault runs; the last review time is always shown."],
         Component: lazy(() => import("./health-review/HealthReviewTab")),
+      },
+    ],
+  },
+  {
+    id: "alerts",
+    title: "Alerts",
+    description: "Backup, restore, drift and policy change alerts to Teams, email, a webhook or this computer. Pick which policies and settings count, and send each change on its own.",
+    tabs: [
+      {
+        id: "alerts",
+        label: "Alerts",
+        feature: "notifications",
+        path: "/api/notifications",
+        summary: "Alerts that send backup, restore and drift events and Intune and Conditional Access changes to your channels, narrowed to the policies, change types and settings you pick, one summary per check or one message per change.",
+        points: ["Names the settings an update changed; setting values are compared on this computer and never sent.", "Send test shows exactly what an alert sends.", "Copy your alerts to the Azure watcher for alerts while this computer is off."],
+        Component: lazy(() => import("./notifications/NotificationsPanel").then((module) => ({ default: module.AlertsTab }))),
+      },
+      {
+        id: "channels",
+        label: "Channels",
+        feature: "notifications",
+        path: "/api/notifications",
+        summary: "Where alerts go: a Teams channel through Workflows, email through Microsoft Graph, a signed webhook, or this computer, with your own Teams card layout.",
+        points: ["URLs and secrets are stored on this computer and never shown again.", "Webhooks receive a signed JSON event with the changed settings as fields.", "Send test and Preview event on every channel."],
+        Component: lazy(() => import("./notifications/NotificationsPanel").then((module) => ({ default: module.ChannelsTab }))),
+      },
+      {
+        id: "watching",
+        label: "Change watching",
+        feature: "notifications",
+        path: "/api/notifications",
+        summary: "Reads the Intune and Conditional Access audit logs on a schedule and hands new changes to your alerts.",
+        points: ["Only names, change types, times and changed setting names are used.", "Changes made through TenuVault itself are ignored by default.", "An Azure watcher can take over while this computer is off."],
+        Component: lazy(() => import("./notifications/NotificationsPanel").then((module) => ({ default: module.WatchingTab }))),
+      },
+      {
+        id: "deliveries",
+        label: "Deliveries",
+        feature: "notifications",
+        path: "/api/notifications",
+        summary: "Every alert sent to every channel, with failures and retries.",
+        points: ["Undelivered alerts stay queued and retry with backoff.", "Each event has a stable id, so receivers can drop duplicates."],
+        Component: lazy(() => import("./notifications/NotificationsPanel").then((module) => ({ default: module.DeliveriesTab }))),
       },
     ],
   },
