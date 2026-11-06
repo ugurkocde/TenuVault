@@ -1664,6 +1664,23 @@ describe("LicenseService key replacement", () => {
       vi.restoreAllMocks()
     })
 
+    it("gives the new key's activations back even when a change listener throws", async () => {
+      storeLicense(trialToken())
+      vi.spyOn(console, "warn").mockImplementation(() => undefined)
+      answer = ({ action }) => (action === "activate" ? granted("act-2") : Response.json({ success: true }))
+      const license = service({ onChange: () => { throw new Error("listener failed") } })
+      license.status([TENANT])
+      const set = store.set
+      store.set = (key, value) => {
+        if (key === "license.state") throw new Error("disk full")
+        set(key, value)
+      }
+      await expect(license.replaceKey("TENU-PAID-KEY-0001", [TENANT])).rejects.toThrow("Your current license is unchanged")
+      store.set = set
+      expect(releases("TENU-PAID-KEY-0001").map(({ body }) => body.activationId)).toEqual(["act-2"])
+      vi.restoreAllMocks()
+    })
+
     it("does not undo a saved replacement when a change listener throws", async () => {
       storeLicense(trialToken())
       vi.spyOn(console, "warn").mockImplementation(() => undefined)

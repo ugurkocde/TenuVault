@@ -431,8 +431,12 @@ export class LicenseService {
       else this.options.store.delete(STATE_KEY)
       this.savedSeen = this.state?.seen ?? 0
     }
-    // Only a failed write is a failed save: a listener that throws must not make a caller undo
-    // state that is already on disk.
+    this.notify()
+  }
+
+  // Only a failed write is a failed save: a listener that throws must not make a caller undo
+  // state that is already on disk, or interrupt a rollback.
+  private notify(): void {
     try {
       this.options.onChange?.()
     } catch (error) {
@@ -956,7 +960,7 @@ export class LicenseService {
       } catch (error) {
         // Nothing was released yet, so the previous key still holds every activation it had.
         this.state = previous
-        this.options.onChange?.()
+        this.notify()
         for (const { data } of accepted) {
           if (typeof data.activationId !== "string") continue
           await this.call("deactivate", { key: trimmed, activationId: data.activationId }, unchanged).catch((release: unknown) => {
