@@ -111,6 +111,8 @@ $alertsText = '{"schema":"tenuvault.watcher-alerts/v1","alerts":[{"id":"a1","tit
 try {
     switch ($Scenario) {
         "schedules" {
+            # A schedule of someone else with a similar name is never touched.
+            $global:TvSchedules["TenuVaultNotificationCheck-7"] = [pscustomobject]@{ Name = "TenuVaultNotificationCheck-7"; Frequency = "Hour"; Interval = 1; StartTime = [DateTimeOffset]::UtcNow.AddHours(1) }
             Invoke-Setup
             Invoke-Setup @{ ScheduleIntervalMinutes = 15 }
             Invoke-Setup @{ ScheduleIntervalMinutes = 15 }

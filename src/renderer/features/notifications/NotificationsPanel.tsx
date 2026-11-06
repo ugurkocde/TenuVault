@@ -698,8 +698,12 @@ function WatcherSyncCard({ tenant, data, onChanged }: { tenant: Tenant; data: No
   const ranWithout = sentAndWaiting && Boolean(lastRunAt && sync?.pushedAt && Date.parse(lastRunAt) > Date.parse(sync.pushedAt))
   const sentNotRun = sentAndWaiting && !ranWithout
   const failedAfterPush = Boolean(sync?.error && (!sync.pushedAt || (sync.errorAt ?? "") > sync.pushedAt))
+  const stale = data.auditWatch.watcherCheck?.stale === true
+  // A stale heartbeat says nothing about what the watcher runs now, so it comes first.
   const state: { tone: "success" | "warning" | "neutral"; chip: string; text: string } =
-    oldRunbook
+    stale
+      ? { tone: "warning", chip: "Not running", text: lastRunAt ? `The watcher last ran ${formatTime(lastRunAt)}, so what it reported then may no longer hold. Check its schedule and job history in the Automation account.` : "The watcher has not written a heartbeat yet. Check its schedule and job history in the Automation account." }
+    : oldRunbook
       ? { tone: "warning", chip: "Needs a setup rerun", text: `The watcher runs runbook ${sync?.runbookVersion}, which takes its alerts only from its setup. Rerun the watcher setup script once with the current release to upgrade it. After that, Update watcher sends your alerts from here.` }
       : ranWithout
         ? { tone: "warning", chip: "Not using the update", text: `The watcher ran ${formatTime(lastRunAt!)}, after these alerts were sent, but still runs ${sync?.source === "setup" ? "the alerts from its setup" : reported === "none" ? "no alerts" : "other alerts"}. It may not be able to read alerts.json: check the job output in the Automation account, or rerun its setup with -AlertRulesPath.` }

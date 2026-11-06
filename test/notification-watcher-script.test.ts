@@ -137,9 +137,15 @@ describe("Azure notification watcher scripts", () => {
 
   it.runIf(Boolean(pwsh))("setup spreads runs faster than hourly over extra hourly schedules and cleans them up", () => {
     const script = fileURLToPath(new URL("./fixtures/notifications/setup-harness.ps1", import.meta.url))
-    const runs = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-Scenario", "schedules"], { encoding: "utf8" }).trim().split(/\r?\n/).map((line) => JSON.parse(line))
     type Schedule = { name: string; interval: number; minute: number; linked: boolean }
+    // The harness adds an unrelated TenuVaultNotificationCheck-7 first; it must survive every run, -Remove included.
+    const runs = execFileSync(pwsh!, ["-NoProfile", "-File", script, "-Scenario", "schedules"], { encoding: "utf8" }).trim().split(/\r?\n/).map((line) => JSON.parse(line)).map((run) => {
+      expect(run.schedules.some((schedule: Schedule) => schedule.name === "TenuVaultNotificationCheck-7")).toBe(true)
+      return { ...run, schedules: run.schedules.filter((schedule: Schedule) => schedule.name !== "TenuVaultNotificationCheck-7") }
+    })
     const names = (run: { schedules: Schedule[] }) => run.schedules.map((schedule) => schedule.name)
+    // The countdown to the first run moves with the clock; everything else must be identical.
+    const stable = (run: { schedules: Array<Schedule & { startsInMinutes?: number }>; links: string[] }) => ({ links: run.links, schedules: run.schedules.map(({ startsInMinutes: _countdown, ...rest }) => rest) })
     const [hourly, quarter, again, half, back, fourHours, twenty, removed] = runs
     expect(names(hourly)).toEqual(["TenuVaultNotificationCheck"])
     const base = hourly.schedules[0].minute
@@ -151,9 +157,9 @@ describe("Azure notification watcher scripts", () => {
     expect(quarter.schedules.map((schedule: Schedule) => schedule.minute)).toEqual([0, 15, 30, 45].map((offset) => (base + offset) % 60))
     expect(quarter.schedules.every((schedule: Schedule) => schedule.interval === 1 && schedule.linked)).toBe(true)
     // A rerun with the same interval changes nothing.
-    expect(again).toEqual(quarter)
+    expect(stable(again)).toEqual(stable(quarter))
     expect(half.schedules.map((schedule: Schedule) => [schedule.name, schedule.minute])).toEqual([["TenuVaultNotificationCheck", base], ["TenuVaultNotificationCheck-2", (base + 30) % 60]])
-    expect(back).toEqual(hourly)
+    expect(stable(back)).toEqual(stable(hourly))
     expect(fourHours.schedules).toMatchObject([{ name: "TenuVaultNotificationCheck", interval: 4, linked: true }])
     expect(twenty.schedules.map((schedule: Schedule) => schedule.interval)).toEqual([1, 1, 1])
     const twentyBase = twenty.schedules[0].minute
@@ -185,13 +191,13 @@ describe("Azure notification watcher scripts", () => {
     const dir = mkdtempSync(join(tmpdir(), "tv-run-"))
     const document: WatcherAlerts = { schema: WATCHER_ALERTS_SCHEMA, alerts: [{ id: "exact", title: "Exact", eventTypes: ["intune.change"], minSeverity: "info", destinations: ["webhook"], delivery: "each", conditions: { changeTypes: [], categories: [], policyNames: ["tv-alerts-test compliance"], policyNameMatch: "exact", settingNames: [], excludeActors: [] } }] }
     const older: WatcherAlerts = { schema: WATCHER_ALERTS_SCHEMA, alerts: [{ id: "teams", title: "Teams", eventTypes: ["intune.change"], minSeverity: "info", destinations: ["teams"], delivery: "digest", conditions: null }] }
-    const run = (blob: string, variable: string) => {
+    const run = (blob: string, variable: string, readFails = false) => {
       const blobPath = join(dir, `blob-${Math.random()}.json`)
       const variablePath = join(dir, `variable-${Math.random()}.json`)
       writeFileSync(blobPath, blob)
       writeFileSync(variablePath, variable)
       const script = fileURLToPath(new URL("./fixtures/notifications/run-watcher.ps1", import.meta.url))
-      return JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script, "-AlertsBlobPath", blobPath, "-AlertsVariablePath", variablePath], { encoding: "utf8" }).trim()) as { posts: Array<{ host: string; title: string }>; heartbeat: Record<string, unknown>; output: string[] }
+      return JSON.parse(execFileSync(pwsh!, ["-NoProfile", "-File", script, "-AlertsBlobPath", blobPath, "-AlertsVariablePath", variablePath, ...(readFails ? ["-AlertsReadFails"] : [])], { encoding: "utf8" }).trim()) as { posts: Array<{ host: string; title: string }>; heartbeat: Record<string, unknown>; output: string[] }
     }
     // alerts.json wins over the variable, written by the app as pretty JSON with a byte order mark.
     const fromFile = run(`\ufeff${JSON.stringify(document, null, 2)}\n`, JSON.stringify(older))
@@ -207,6 +213,16 @@ describe("Azure notification watcher scripts", () => {
     expect(unreadable.heartbeat).toMatchObject({ alertsSource: "storage", alertsHash: "unreadable" })
     expect(new Set(unreadable.posts.map((post) => post.host))).toEqual(new Set(["hooks.example.test", "contoso.webhook.office.com"]))
     expect(unreadable.output.join("\n")).toContain("alerts.json could not be read; every event goes to every destination")
+    // An empty file says so and sends everything, like a damaged one.
+    const blank = run(" \n", JSON.stringify(older))
+    expect(blank.heartbeat).toMatchObject({ alertsSource: "storage", alertsHash: "unreadable" })
+    expect(blank.output.join("\n")).toContain("alerts.json could not be read; every event goes to every destination")
+    expect(new Set(blank.posts.map((post) => post.host))).toEqual(new Set(["hooks.example.test", "contoso.webhook.office.com"]))
+    // A file that cannot be read never brings back the older setup alerts: everything goes everywhere.
+    const failedRead = run(JSON.stringify(document), JSON.stringify(older), true)
+    expect(failedRead.heartbeat).toMatchObject({ alertsSource: "storage", alertsHash: "unreadable", lastError: null })
+    expect(failedRead.output.join("\n")).toContain("alerts.json could not be read (")
+    expect(new Set(failedRead.posts.map((post) => post.host))).toEqual(new Set(["hooks.example.test", "contoso.webhook.office.com"]))
     const none = run("", "")
     expect(none.heartbeat).toMatchObject({ alertsSource: "none", alertsHash: "none" })
     expect(new Set(none.posts.map((post) => post.host))).toEqual(new Set(["hooks.example.test", "contoso.webhook.office.com"]))

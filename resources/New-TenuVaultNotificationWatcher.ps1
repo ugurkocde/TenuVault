@@ -364,10 +364,12 @@ function Set-TenuVaultAutomationVariable {
     }
 }
 
-# The watcher schedules this script owns: the base schedule and the extra -2 to -4 ones.
+# The watcher schedules this script owns: the base schedule and the extra -2 to -4 ones. Other
+# schedules, even with similar names, are never touched.
 function Get-TenuVaultWatcherSchedules {
+    $owned = @($scheduleName) + @(2..4 | ForEach-Object { "$scheduleName-$_" })
     @(Get-AzAutomationSchedule -ResourceGroupName $ResourceGroupName -AutomationAccountName $AutomationAccountName -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -ceq $scheduleName -or $_.Name -cmatch "^$([regex]::Escape($scheduleName))-[0-9]+$" })
+        Where-Object { $owned -ccontains $_.Name })
 }
 
 # Unlinks the runbook from one schedule and deletes the schedule.

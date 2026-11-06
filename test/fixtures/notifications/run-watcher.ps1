@@ -4,7 +4,8 @@
 # runbook output. The watcher tests use it to check where the alerts come from.
 param(
     [Parameter(Mandatory)][string]$AlertsBlobPath,
-    [Parameter(Mandatory)][string]$AlertsVariablePath
+    [Parameter(Mandatory)][string]$AlertsVariablePath,
+    [switch]$AlertsReadFails
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,6 +31,7 @@ if ($variableText) { $global:TvRunVariables["TenuVaultAlertRules"] = $variableTe
 $global:TvRunBlobs = @{}
 $blobText = Get-Content -LiteralPath $AlertsBlobPath -Raw
 if ($blobText) { $global:TvRunBlobs["tenuvault-notification-state/alerts.json"] = $blobText }
+$global:TvRunAlertsReadFails = [bool]$AlertsReadFails
 $global:TvRunPosts = [System.Collections.Generic.List[object]]::new()
 $global:TvRunAudit = $fixture.intune
 
@@ -57,6 +59,7 @@ function global:Invoke-WebRequest {
             return (& $response 201 "")
         }
         if ($Method -eq "Delete") { $global:TvRunBlobs.Remove($path); return (& $response 202 "") }
+        if ($global:TvRunAlertsReadFails -and $path -eq "tenuvault-notification-state/alerts.json") { throw [TvHttpError]::new(403) }
         if ($global:TvRunBlobs.ContainsKey($path)) { return (& $response 200 $global:TvRunBlobs[$path]) }
         throw [TvHttpError]::new(404)
     }

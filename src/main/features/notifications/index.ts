@@ -553,7 +553,8 @@ export function pushWatcherAlerts(deps: FeatureDeps, tenantId: string, actor: st
   const key = tenantId.toLowerCase()
   const run = (pushQueues.get(key) ?? Promise.resolve()).catch(() => undefined).then(() => pushNow(deps, tenantId, actor))
   pushQueues.set(key, run)
-  void run.finally(() => { if (pushQueues.get(key) === run) pushQueues.delete(key) })
+  // The caller handles a failure of run; this cleanup must not raise it a second time.
+  run.finally(() => { if (pushQueues.get(key) === run) pushQueues.delete(key) }).catch(() => undefined)
   return run
 }
 

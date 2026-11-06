@@ -2521,7 +2521,8 @@ try {
     # The alerts copied from TenuVault. The desktop app writes them to alerts.json next to the
     # state (Alerts page > Update watcher), and setup -AlertRulesPath writes the same file, so
     # alerts change without touching the Automation account. A watcher set up before that keeps
-    # the TenuVaultAlertRules variable until alerts.json exists.
+    # the TenuVaultAlertRules variable until alerts.json exists. The variable is used only when
+    # the file does not exist: a file that cannot be read never brings back older alerts.
     # Without alerts every event goes to every destination. An unreadable file or value does the
     # same and says so, because sending too much is safer than silently sending nothing.
     $alertsSource = "none"
@@ -2532,9 +2533,14 @@ try {
             $alertsSource = "storage"
             $alertRulesValue = $alertsBlobText.Trim([char]0xFEFF, ' ', "`t", "`r", "`n")
             if ($alertRulesValue.Length -gt 1000000) { $alertRulesValue = "too large" }
+            # An empty file is unreadable, not "no alerts": it must say so like a damaged one.
+            if (-not $alertRulesValue) { $alertRulesValue = "empty" }
         }
     } catch {
-        Write-Output "alerts.json could not be read ($(Get-TvSafeError $_.Exception.Message)); using the alerts from setup for this run."
+        # Sending too much is safer than filtering with alerts that may be out of date.
+        $alertsSource = "storage"
+        $alertRulesValue = "read failed"
+        Write-Output "alerts.json could not be read ($(Get-TvSafeError $_.Exception.Message))."
     }
     if ($alertsSource -eq "none" -and $alertRulesVariable) { $alertsSource = "setup"; $alertRulesValue = $alertRulesVariable }
     $alertsLabel = if ($alertsSource -eq "storage") { "alerts.json" } else { "TenuVaultAlertRules" }

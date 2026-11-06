@@ -198,6 +198,14 @@ describe("the Azure watcher card", () => {
     container = await render(AlertsTab, true)
     expect(card(container).textContent).toContain("Needs a setup rerun")
     expect(card(container).textContent).toContain("runbook 1.1.0")
+    for (const root of roots.splice(0)) act(() => root.unmount())
+    // A stale heartbeat comes first: what it reported may no longer hold.
+    const stale = watched({ reported: "new" })
+    stale.auditWatch!.watcherCheck = { ...stale.auditWatch!.watcherCheck!, stale: true }
+    state.status = stale
+    container = await render(AlertsTab, true)
+    expect(card(container).textContent).toContain("Not running")
+    expect(card(container).textContent).not.toContain("Up to date")
   })
 })
 
