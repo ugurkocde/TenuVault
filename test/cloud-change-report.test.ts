@@ -120,7 +120,8 @@ describe.runIf(Boolean(pwsh))("cloud change reports match the desktop app", () =
     expect(write!.body).not.toMatch(/hunter2|old-key|new-key|old-secret|new-secret/)
     // Setting names come from Graph, read one definition at a time.
     expect(note.files[1].content).toContain("| Allow Cloud Protection | Allowed. Turns on Cloud Protection. | Not allowed. Turns off Cloud Protection. |")
-    expect(run.output.join("\n")).toContain("Left a change report for the notification watcher")
+    // Read past the empty first audit page Graph answers with: the changes still have actors.
+    expect(run.output.join("\n")).toContain("Left a change report for the notification watcher: 6 changed, 2 added, 1 deleted; 3 of 9 with matching audit events.")
   }, 60_000)
 
   it("leaves values out at the names level", () => {

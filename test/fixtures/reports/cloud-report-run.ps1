@@ -39,6 +39,12 @@ function Invoke-TvHttp {
     }
     if ($Uri -like "https://graph.microsoft.com/beta/deviceManagement/auditEvents*") {
         if ($Uri -notlike "*activityDateTime%20gt%202026-11-05T02%3A00%3A00.000Z%20and%20activityDateTime%20le%202026-11-06T02%3A00%3A00.000Z*") { throw "Unexpected audit window: $Uri" }
+        if ($Uri -like "*orderby*") { throw "The audit read must not order: Graph then scans the whole history first." }
+        # Graph answers with empty pages while it moves through its partitions.
+        if ($Uri -notlike "*skiptoken=page2*") {
+            $text = ConvertTo-TvJsJson ([ordered]@{ value = @(); "@odata.nextLink" = "$Uri&`$skiptoken=page2" })
+            return @{ Status = 200; Text = $text; Bytes = [Text.Encoding]::UTF8.GetBytes($text) }
+        }
         $text = ConvertTo-TvJsJson ([ordered]@{ value = $fixture.audit })
         return @{ Status = 200; Text = $text; Bytes = [Text.Encoding]::UTF8.GetBytes($text) }
     }

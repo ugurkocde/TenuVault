@@ -2167,16 +2167,18 @@ function Read-TvSettingDefinitions {
     return $definitions
 }
 
-# Intune audit events between the two backups, like readAudit in the desktop app.
+# Intune audit events between the two backups, like readAudit in the desktop app. No $orderby:
+# with it, Graph scans the whole audit history from the oldest event and answers with empty
+# pages until it reaches the window; the report sorts the events itself.
 function Read-TvReportAudit {
     param([Parameter(Mandatory)][string]$From, [Parameter(Mandatory)][string]$To, [Parameter(Mandatory)][string]$GraphToken)
     $select = "id,displayName,componentName,actor,activity,activityDateTime,activityType,activityOperationType,activityResult,category,resources"
     $filter = [uri]::EscapeDataString("activityDateTime gt $From and activityDateTime le $To and activityOperationType ne 'Get' and activityOperationType ne 'Search'")
-    $next = "$script:GraphBeta/deviceManagement/auditEvents?`$select=$select&`$filter=$filter&`$orderby=activityDateTime&`$top=200"
+    $next = "$script:GraphBeta/deviceManagement/auditEvents?`$select=$select&`$filter=$filter&`$top=200"
     $changes = [System.Collections.Generic.List[object]]::new()
     $pages = 0
     try {
-        while ($next -and $pages -lt 20 -and $changes.Count -lt 2000) {
+        while ($next -and $pages -lt 200 -and $changes.Count -le 2000) {
             $pages++
             $page = Invoke-TvGraphGet $next $GraphToken
             foreach ($raw in @(Get-TvProp $page "value")) { $change = ConvertFrom-TvAuditEvent $raw; if ($change) { $changes.Add($change) } }
@@ -2186,8 +2188,12 @@ function Read-TvReportAudit {
         if ($_.Exception.Status -eq 403) { return @{ Error = "Microsoft Graph returned 403 for the Intune audit log. The cloud backup identity needs DeviceManagementApps.Read.All." } }
         return @{ Error = "The Intune audit log could not be read: $(Get-TvSafeError $_.Exception.Message)" }
     }
-    $note = if ($next -or $changes.Count -gt 2000) { "More than 2000 Intune audit events in this window; the newest were not read." } else { $null }
-    return @{ Changes = @($changes | Select-Object -First 2000); Note = $note }
+    $note = $null
+    if ($changes.Count -gt 2000) { $note = "More than 2000 Intune audit events in this window; not all of them were read, so some changes may have no actors." }
+    elseif ($next) { $note = "The Intune audit log was not read to the end of this window, so some changes may have no actors." }
+    # Unordered pages: the oldest events are kept, so the report still names who started the changes.
+    $kept = @($changes | Sort-Object -Property @{ Expression = { [string]$_.at } } -Stable | Select-Object -First 2000)
+    return @{ Changes = $kept; Note = $note }
 }
 
 # After a successful backup: the report of what changed since the previous complete backup,
