@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { afterScheduledBackup, MAX_AUDIT_EVENTS, MAX_REPORTS, readAudit, routes } from "../src/main/features/reports"
+import { afterScheduledBackup, MAX_AUDIT_EVENTS, MAX_REPORTS, readAudit, retentionStart, routes } from "../src/main/features/reports"
 import { DOMAINS } from "../src/main/features/domains"
 import type { Drift, DriftResult } from "../src/shared/intune/drift"
 import { call, fakeDeps, TENANT_A, TENANT_B } from "./feature-helpers"
@@ -97,8 +97,45 @@ describe("change reports route", () => {
     const drift = driftResult()
     drift.drifts[0]!.type = "Conditional Access policies"
     const audit = await readAudit(deps, TENANT_A, drift)
-    expect(audit).toMatchObject({ note: `More than ${MAX_AUDIT_EVENTS} Conditional Access audit events in this window; the newest were not read.` })
+    expect(audit).toMatchObject({ note: `More than ${MAX_AUDIT_EVENTS} Conditional Access audit events in this window; not all of them were read, so some changes may have no actors.` })
     expect("changes" in audit && audit.changes).toHaveLength(MAX_AUDIT_EVENTS)
+  })
+
+  it("reads the audit log without ordering and follows empty pages to the events, as Graph pages through its partitions", async () => {
+    const paths: string[] = []
+    const deps = fakeDeps({
+      graph: (() => async (_method: string, path: string) => {
+        paths.push(path)
+        const page = paths.length
+        if (page < 35) return { status: 200, body: { value: [], "@odata.nextLink": `https://graph.microsoft.com/beta/deviceManagement/auditEvents?$skiptoken=${page}` } }
+        return { status: 200, body: { value: [{ id: "a1", activityDateTime: "2026-11-05T10:00:00Z", activity: "Patch", activityOperationType: "Patch", activityResult: "Success", actor: { userPrincipalName: "admin@contoso.test" }, resources: [{ displayName: "Defender", resourceId: "p-1" }] }] } }
+      }) as never,
+    })
+    const audit = await readAudit(deps, TENANT_A, driftResult())
+    expect(decodeURIComponent(paths[0]!)).not.toContain("$orderby")
+    expect(paths).toHaveLength(35)
+    expect(audit).toMatchObject({ note: null })
+    expect("changes" in audit && audit.changes.map((change) => change.resourceId)).toEqual(["p-1"])
+  })
+
+  it("reads Conditional Access changes Entra still keeps when the window starts before its retention", async () => {
+    const filters: string[] = []
+    const deps = fakeDeps({
+      graph: (() => async (_method: string, path: string) => {
+        if (!path.startsWith("auditLogs/")) return { status: 200, body: { value: [] } }
+        const filter = decodeURIComponent(path)
+        filters.push(filter)
+        if (filter.includes("gt 2026-11-05T02:00:00.000Z")) return { status: 400, body: { error: { code: "UnknownError", message: "Specified argument was out of the range of valid values. (Parameter 'Minimum allowed time for activityDateTime is 11/5/2026 12:00:00 PM')" } } }
+        return { status: 200, body: { value: [] } }
+      }) as never,
+    })
+    const drift = driftResult()
+    drift.drifts[0]!.type = "Conditional Access policies"
+    const audit = await readAudit(deps, TENANT_A, drift)
+    expect(filters[1]).toContain("activityDateTime gt 2026-11-05T12:00:00.000Z and activityDateTime le 2026-11-06T02:00:00.000Z")
+    expect(audit).toMatchObject({ note: "Entra keeps Conditional Access audit events only since 2026-11-05, so earlier Conditional Access changes have no actors." })
+    expect(retentionStart("Minimum allowed time for activityDateTime is 10/6/2026 12:00:00 AM")).toBe("2026-10-06T00:00:00.000Z")
+    expect(retentionStart("Something else")).toBeNull()
   })
 
   it("keeps the report without actors when the audit log is closed", async () => {
