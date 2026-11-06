@@ -31,6 +31,9 @@ export default defineConfig(({ mode }) => {
         include: ["src/**"],
         exclude: ["src/**/*.html"],
         thresholds: {
+          // Licensing must never break in a release: it holds a higher floor than the rest of
+          // the main process (see tasks/license-activation-reliability-2026-11-06.md).
+          "src/main/license/**": { lines: 90, branches: 85 },
           "src/main/**": { lines: 84 },
           "src/shared/**": { lines: 91 },
           "src/portal/**": { lines: 47 },
