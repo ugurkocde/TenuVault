@@ -39,6 +39,23 @@ export class GraphError extends Error {
 export class GraphPauseError extends Error {}
 
 export class StorageError extends Error {}
+/**
+ * Local storage refused because files in the backup folder are damaged: a backup that is
+ * unavailable, or a delete while damage is present. The message says what and how to recover.
+ */
+export class InventoryDamagedError extends StorageError {}
+
+/** The error for a failed storage response, keeping the local store's damage refusals apart. */
+export async function storageFailure(response: Response, account: string): Promise<StorageError> {
+  const code = response.headers.get("x-ms-error-code")
+  if (code === "InventoryIncomplete" || code === "BackupUnavailable") {
+    const text = await response.text()
+    const message = /<Message>([^<]+)<\/Message>/.exec(text)?.[1]
+    const decoded = (message ?? "Files in the backup folder could not be read.").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
+    return new InventoryDamagedError(decoded)
+  }
+  return new StorageError(await storageError(response, account))
+}
 /** The create-only claim for a backup folder found the marker already there. */
 export class BlobClaimError extends StorageError {}
 /** The storage request ended with a network error response (status 0) instead of an HTTP status. */

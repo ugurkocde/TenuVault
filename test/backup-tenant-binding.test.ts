@@ -149,7 +149,13 @@ describe("local store format compatibility", () => {
     const file = writeV1(root, master, ACCOUNT, CONTAINER, "backup-2026-09-01-020000/metadata.json", "{}")
     const dir = join(root, ACCOUNT, CONTAINER)
     copyFileSync(join(dir, file), join(dir, `${"0".repeat(40)}.tvb`))
-    await expect(new LocalBlobStore(root, [master]).list(ACCOUNT, CONTAINER)).rejects.toBeInstanceOf(IncompleteInventoryError)
+    // Neither file is trusted: the blob is left out and its backup is unavailable.
+    const store = new LocalBlobStore(root, [master])
+    expect(await store.list(ACCOUNT, CONTAINER)).toEqual([])
+    await expect(store.list(ACCOUNT, CONTAINER, "backup-2026-09-01-020000/")).rejects.toBeInstanceOf(IncompleteInventoryError)
+    await expect(store.get(ACCOUNT, CONTAINER, "backup-2026-09-01-020000/metadata.json")).rejects.toBeInstanceOf(IncompleteInventoryError)
+    const damage = await store.damage(ACCOUNT, CONTAINER)
+    expect(damage.files.map(({ file: name, backup }) => [name, backup]).sort()).toEqual([[`${"0".repeat(40)}.tvb`, "backup-2026-09-01-020000"], [file, "backup-2026-09-01-020000"]].sort())
   })
 })
 
@@ -177,7 +183,11 @@ describe("version 2 binds files to their tenant", () => {
     const from = join(root, localStorageAccountName(OTHER), CONTAINER)
     const [file] = readdirSync(from)
     copyFileSync(join(from, file!), join(root, ACCOUNT, CONTAINER, file!))
-    await expect(new LocalBlobStore(root, [master]).list(ACCOUNT, CONTAINER)).rejects.toBeInstanceOf(IncompleteInventoryError)
+    // The copy is never read. It cannot be traced to a backup, so the backup without a manifest is unavailable.
+    const store = new LocalBlobStore(root, [master])
+    expect((await store.list(ACCOUNT, CONTAINER)).map((blob) => blob.name)).toEqual(["backup-2026-09-30-020000/metadata.json"])
+    await expect(store.get(ACCOUNT, CONTAINER, "backup-2026-09-30-020000/metadata.json")).rejects.toBeInstanceOf(IncompleteInventoryError)
+    expect(await store.damage(ACCOUNT, CONTAINER)).toMatchObject({ files: [{ file, backup: null }], unattributed: 1 })
   })
 
   it("does not read a file that was renamed or moved to another container", async () => {
@@ -188,7 +198,10 @@ describe("version 2 binds files to their tenant", () => {
     renameSync(join(dir, first!), join(dir, "swap"))
     renameSync(join(dir, second!), join(dir, first!))
     renameSync(join(dir, "swap"), join(dir, second!))
-    await expect(new LocalBlobStore(root, [master]).list(ACCOUNT, CONTAINER)).rejects.toBeInstanceOf(IncompleteInventoryError)
+    // A header is bound to its file name, so neither swapped file is read.
+    const swapped = new LocalBlobStore(root, [master])
+    expect(await swapped.list(ACCOUNT, CONTAINER)).toEqual([])
+    expect((await swapped.damage(ACCOUNT, CONTAINER)).files).toHaveLength(2)
 
     const other = join(root, ACCOUNT, "tenant-metadata")
     mkdirSync(other)

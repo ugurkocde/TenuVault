@@ -3,7 +3,7 @@ import { typeForFolder } from "../../../../shared/intune/registry"
 import { describeScope } from "../../../../shared/intune/scope"
 import { comparable, compareBackups, summarize, type BackupFingerprint, type ChangeSummary } from "../../../../shared/intune/backup-changes"
 import { blobPath } from "../../../../shared/security"
-import { BACKUP_OWNER_FILE } from "../../../../shared/constants"
+import { BACKUP_OWNER_FILE, LOCAL_STORAGE_PREFIX } from "../../../../shared/constants"
 import { mapLimit } from "../../../../shared/map-limit"
 import { MetadataCache } from "~/lib/storage/metadata-cache"
 import { manifestStatus } from "../../../../shared/intune/backup-status"
@@ -21,7 +21,17 @@ function formatBytes(bytes: number): string {
 
 const storageHeaders = (token: string) => ({ 'x-ms-version': '2021-12-02', 'x-ms-date': new Date().toUTCString(), Authorization: `Bearer ${token}` })
 
-interface MetadataRead { metadata: any; metadataError?: string }
+interface MetadataRead { metadata: any; metadataError?: string; unavailable?: boolean }
+
+/**
+ * Why a backup on this device is unavailable, from the local store's refusal: damaged or
+ * unreadable files traced to it (BackupUnavailable). Null for every other failure, including a
+ * blob that may only be in a file that could not be traced: that does not make the backup unavailable.
+ */
+function unavailableReason(status: number, body: string): string | null {
+  if (status !== 409 || !body.includes('<Code>BackupUnavailable</Code>')) return null
+  return decodeXml(/<Message>([^<]*)<\/Message>/.exec(body)?.[1] ?? 'Files of this backup could not be read.')
+}
 const metadataCache = new MetadataCache<MetadataRead>(result => !!result.metadata && !result.metadataError)
 /**
  * What a folder's ownership marker says. `foreign` is a marker that cannot be opened or
@@ -45,6 +55,12 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
         if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) throw new Error('Invalid metadata')
         return { metadata }
       }
+      const body = response.status === 409 ? await response.text() : ''
+      const unavailable = unavailableReason(response.status, body)
+      if (unavailable) return { metadata: null, metadataError: unavailable, unavailable: true }
+      // A manifest that may only be in a file no backup can be traced to: the folder is treated as
+      // having none, so it shows as running or incomplete and is never used as a complete backup.
+      if (response.status === 409 && body.includes('<Code>InventoryIncomplete</Code>')) return { metadata: null }
       return { metadata: null, metadataError: response.status !== 404 ? `Backup metadata is unavailable (${response.status}).` : undefined }
     } catch (error) {
       // An encrypted backup that cannot be opened (another recovery key, damaged data, no key on this device) says why.
@@ -52,11 +68,25 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
       return { metadata: null, metadataError: 'Backup metadata could not be read or parsed.' }
     }
   }
+  // On this device a backup can become unavailable while its metadata.json stays unchanged (another
+  // of its files is damaged), so its metadata is read each time: the store checks it then.
+  const local = storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)
   const metadataRead: Promise<MetadataRead> = inventory?.version
-    ? metadataCache.read(inventory.cacheKey, inventory.version, readMetadata)
-    : inventory ? Promise.resolve({ metadata: null }) : readMetadata()
-  const filesRead = inventory ? Promise.resolve(inventory.text) : listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${name}/`)}`, accessToken).catch(() => { throw new Error(`Backup ${name} inventory is unavailable. Check storage access and retry.`) })
-  const [{ metadata, metadataError }, filesText] = await Promise.all([metadataRead, filesRead])
+    ? (local ? readMetadata() : metadataCache.read(inventory.cacheKey, inventory.version, readMetadata))
+    // On this device a listing leaves out a metadata.json it cannot read, so a folder listed without
+    // one is asked for it: the store answers 409 when damaged files made the backup unavailable.
+    : inventory ? (local ? readMetadata().then((read) => read.unavailable ? read : { metadata: null }) : Promise.resolve({ metadata: null })) : readMetadata()
+  // A backup made unavailable by damaged files is still listed, with the reason, so the others stay usable.
+  const filesRead: Promise<string | { unavailable: string }> = inventory ? Promise.resolve(inventory.text) : listBlobPages(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container&comp=list&prefix=${encodeURIComponent(`${name}/`)}`, accessToken).catch((error) => {
+    const unavailable = error instanceof BlobListError ? unavailableReason(error.status, error.body) : null
+    if (unavailable) return { unavailable }
+    throw new Error(`Backup ${name} inventory is unavailable. Check storage access and retry.`)
+  })
+  const [metadataResult, listing] = await Promise.all([metadataRead, filesRead])
+  const unavailable = typeof listing === 'string' ? (metadataResult.unavailable ? metadataResult.metadataError! : null) : listing.unavailable
+  const filesText = typeof listing === 'string' && !unavailable ? listing : ''
+  const metadata = unavailable ? null : metadataResult.metadata
+  const metadataError = unavailable ?? metadataResult.metadataError
   // A folder whose manifest does not name its tenant (none, unreadable, or from an older version)
   // is placed by its ownership marker, read just for those folders: the tenant filter applies to
   // it, and for a folder without a manifest the run id lets the Dashboard count a failed run once.
@@ -115,7 +145,7 @@ async function describeBackup(storageAccountName: string, name: string, accessTo
     type: typeof metadata?.Trigger === 'string' ? metadata.Trigger : typeof metadata?.trigger === 'string' ? metadata.trigger : null,
     // metadata.json is written last. Without it the backup is still running, or it stopped (for example
     // when the app quit) and holds only part of the tenant.
-    status: metadataError ? 'unknown' : metadata ? String(manifestStatus(metadata) ?? 'unknown') : legacy ? 'unknown' : Date.now() - Date.parse(timestamp) < 6 * 3600_000 ? 'running' : 'incomplete',
+    status: unavailable ? 'unavailable' : metadataError ? 'unknown' : metadata ? String(manifestStatus(metadata) ?? 'unknown') : legacy ? 'unknown' : Date.now() - Date.parse(timestamp) < 6 * 3600_000 ? 'running' : 'incomplete',
     configs: files,
     policyCount: totalPolicies,
     totalPolicies,
@@ -257,6 +287,15 @@ export async function POST(request: NextRequest) {
       }
     }
     const backupFolders = summary ? [...inventories.keys()] : backupFoldersIn(blobsText).map((folder) => folder.name)
+    // Backups on this device: the store says how many files in the folder could not be read, so
+    // the list can say that some backups may be missing from it or unavailable.
+    let damagedFiles = 0
+    let damagedFileNames: string[] = []
+    if (storageAccountName.startsWith(LOCAL_STORAGE_PREFIX)) {
+      const properties = await fetch(`https://${storageAccountName}.blob.core.windows.net/intune-backups?restype=container`, { headers: storageHeaders(accessToken) }).catch(() => null)
+      damagedFiles = Number(properties?.headers.get('x-tenuvault-unreadable-files') ?? 0) || 0
+      damagedFileNames = (properties?.headers.get('x-tenuvault-unreadable-file-names') ?? '').split(',').filter((name) => /^[0-9a-f]{1,64}\.tvb$/i.test(name))
+    }
     
     // Get details for each backup folder
     const backups: any[] = []
@@ -292,7 +331,7 @@ export async function POST(request: NextRequest) {
       delete backup.unresolved
     }
 
-    return NextResponse.json({ backups, unresolved })
+    return NextResponse.json({ backups, unresolved, ...(damagedFiles ? { damagedFiles, damagedFileNames } : {}) })
   } catch (error) {
     console.error("List backups error:", error)
     return NextResponse.json(

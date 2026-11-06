@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { BACKUP_CANCELLED_MESSAGE, BACKUP_OWNER_FILE } from "../../shared/constants"
 import { BlobWriter } from "./blob-writer"
 import { GraphSession, type GraphItem } from "./graph-session"
-import { GRAPH, BlobClaimError, GraphError, ProtectedBlobError, RequestTimeoutError, StorageError, TokenError, isUnreachable } from "./request"
+import { GRAPH, BlobClaimError, GraphError, InventoryDamagedError, ProtectedBlobError, RequestTimeoutError, StorageError, TokenError, isUnreachable } from "./request"
 import { isLocalAccount } from "../storage/blob-emulator"
 import { FetchApplicationError } from "../api/network-error"
 import { INTUNE_TYPES, itemName, type IntuneType, type Item } from "../../shared/intune/registry"
@@ -659,6 +659,9 @@ export class BackupEngine {
           this.write(job, "Retention was interrupted; older backups are cleaned up on the next run")
         } else if (retentionNetwork.signal.aborted) {
           this.write(job, "Old backups were not removed because the network stopped responding. They will be reconsidered on the next run.")
+        } else if (error instanceof InventoryDamagedError) {
+          // The local store refuses every delete while the backup folder holds damaged files.
+          this.write(job, `Retention is paused. ${error.message}`)
         } else {
           this.write(job, `Could not remove old backups: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, "")}. They will be reconsidered on the next run.`)
         }
@@ -747,9 +750,10 @@ export class BackupEngine {
       try {
         metadata = await storage.readJson(`${backup.prefix}metadata.json`)
       } catch (error) {
-        // Metadata that cannot be decrypted (a wrong or rotated key, damaged ciphertext) is
-        // unreadable: never ours, and it must not stop the cleanup of the other backups.
-        if (!(error instanceof FetchApplicationError)) throw error
+        // Metadata that cannot be decrypted (a wrong or rotated key, damaged ciphertext) or a local
+        // backup made unavailable by damaged files is unreadable: never ours, and it must not stop
+        // the review of the other backups.
+        if (!(error instanceof FetchApplicationError) && !(error instanceof InventoryDamagedError)) throw error
         unreadable.add(index)
         unreadableReason ||= error.message
         return
