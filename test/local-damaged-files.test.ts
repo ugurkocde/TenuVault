@@ -179,6 +179,27 @@ describe("damaged local backup files", () => {
     await expect(store.delete(account, CONTAINER, `${OLD}/metadata.json`)).rejects.toThrow("Nothing in the backup folder is deleted")
   })
 
+  it("still knows a damaged body after a restart, until the file is restored", async () => {
+    const { store, dir, root, key } = await setup()
+    await backup(store, OLD)
+    await backup(store, NEW)
+    const file = await fileOf(store, `${NEW}/CompliancePolicies/a.json`)
+    const original = damage(dir, file)
+    await expect(store.get(account, CONTAINER, `${NEW}/CompliancePolicies/a.json`)).rejects.toThrow("could not be read")
+    // A new store, as after a restart: the backup is still unavailable and nothing is deleted.
+    const restarted = new LocalBlobStore(root, [key])
+    await expect(restarted.list(account, CONTAINER, `${NEW}/`)).rejects.toThrow(`Backup ${NEW} is unavailable`)
+    expect((await restarted.damage(account, CONTAINER)).files).toMatchObject([{ file, backup: NEW }])
+    await expect(restarted.delete(account, CONTAINER, `${OLD}/metadata.json`)).rejects.toThrow("Nothing in the backup folder is deleted")
+    // The record holds file names only, and is never listed as a blob.
+    expect(readFileSync(join(dir, ".tenuvault-damaged.json"), "utf8")).not.toContain("CompliancePolicies")
+    expect((await restarted.list(account, CONTAINER)).every((blob) => blob.name.startsWith("backup-"))).toBe(true)
+    // Restored from a copy: the file changed, so the record is dropped and the backup is usable again.
+    writeFileSync(join(dir, file), original)
+    expect(await text(new LocalBlobStore(root, [key]), `${NEW}/CompliancePolicies/a.json`)).toBe('{"id":"a"}')
+    expect(readdirSync(dir)).not.toContain(".tenuvault-damaged.json")
+  })
+
   it("never writes over a damaged file", async () => {
     const { store, dir } = await setup()
     await backup(store, OLD)

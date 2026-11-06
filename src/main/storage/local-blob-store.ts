@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto"
 import type { BigIntStats } from "node:fs"
-import { link, mkdir, open, readdir, readFile, rename, rm, stat } from "node:fs/promises"
+import { link, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { BACKUP_CONTAINER, BACKUP_OWNER_FILE } from "../../shared/constants"
 import { mapLimit } from "../../shared/map-limit"
@@ -193,6 +193,12 @@ function unreadableReason(error: unknown): string {
   if (typeof code === "string" && /^E[A-Z]+$/.test(code)) return `it could not be read (${code})`
   return "it is damaged or incomplete"
 }
+
+/**
+ * Kept in the backup folder: the encrypted file names (no content) whose body could not be read,
+ * with their stamp and the reason. Inventories read only .tvb files, so it is never a blob.
+ */
+const BODY_DAMAGE_FILE = ".tenuvault-damaged.json"
 
 /** How long a delete trusts the last check of every file in its folder. */
 const DELETE_RECHECK_MS = 5_000
@@ -402,6 +408,11 @@ export class LocalBlobStore {
         damage.files.push({ file: entry.file, reason, backup: folder })
         if (folder && !damage.unavailable.has(folder)) damage.unavailable.set(folder, `one of its files could not be read: ${reason}.`)
         this.damagedStamps.get(entries)?.set(entry.file, entry.stamp)
+        // Remembered on disk too, so a rebuilt inventory or a restart still knows until the file changes.
+        const dir = this.dir(account, container)
+        const remembered = await this.readBodyDamage(dir)
+        remembered[entry.file] = { stamp: entry.stamp, reason }
+        await this.writeBodyDamage(dir, remembered).catch(() => undefined)
       }
       throw Object.assign(new IncompleteInventoryError(1, `${name} could not be read: ${reason}. ${RECOVERY}`), folder ? { backup: folder } : {})
     }
@@ -881,9 +892,50 @@ export class LocalBlobStore {
     if (damage.unattributed > 0) {
       for (const folder of legacy) unavailable(folder, "files in the backup folder could not be read, and this backup has no manifest to show that none of them are its own.")
     }
+    // Bodies found damaged when read earlier stay damaged until their file changes.
+    const remembered = await this.readBodyDamage(dir)
+    const entryOfFile = new Map([...entries.values()].map((entry) => [entry.file, entry]))
+    let forgotten = false
+    for (const [file, { stamp, reason }] of Object.entries(remembered)) {
+      const entry = entryOfFile.get(file)
+      if (!entry || entry.stamp !== stamp) {
+        delete remembered[file]
+        forgotten = true
+        continue
+      }
+      const folder = backupFolderOf(entry.name)
+      if (!damage.files.some((damaged) => damaged.file === file)) damage.files.push({ file, reason, backup: folder })
+      if (folder) unavailable(folder, `one of its files could not be read: ${reason}.`)
+    }
+    if (forgotten) await this.writeBodyDamage(dir, remembered).catch(() => undefined)
     this.damageOf.set(entries, damage)
     this.damagedStamps.set(entries, new Map(damage.files.map(({ file }) => [file, before.get(file) ?? "missing"])))
     return entries
+  }
+
+  /** Files whose body could not be read, by the stamp they had then; see BODY_DAMAGE_FILE. */
+  private async readBodyDamage(dir: string): Promise<Record<string, { stamp: string; reason: string }>> {
+    try {
+      const value = JSON.parse(await readFile(join(dir, BODY_DAMAGE_FILE), "utf8")) as unknown
+      if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+      return Object.fromEntries(Object.entries(value).filter((pair): pair is [string, { stamp: string; reason: string }] => {
+        const [file, record] = pair as [string, { stamp?: unknown; reason?: unknown } | null]
+        return file.endsWith(EXT) && !!record && typeof record.stamp === "string" && typeof record.reason === "string"
+      }))
+    } catch {
+      return {}
+    }
+  }
+
+  private async writeBodyDamage(dir: string, value: Record<string, { stamp: string; reason: string }>): Promise<void> {
+    const path = join(dir, BODY_DAMAGE_FILE)
+    if (Object.keys(value).length === 0) {
+      await rm(path, { force: true })
+      return
+    }
+    const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`
+    await writeFile(tmp, JSON.stringify(value), { mode: 0o600 })
+    await rename(tmp, path)
   }
 
   private decrypt(sealed: Buffer, aad: string): Buffer {
